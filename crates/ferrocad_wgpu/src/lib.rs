@@ -53,6 +53,7 @@ pub mod pick;
 pub mod pipeline;
 pub mod program;
 pub mod renderer;
+pub mod snapshot;
 pub mod textures;
 pub mod trace;
 pub mod uniforms;
@@ -60,6 +61,10 @@ pub mod uniforms;
 pub use adapter::{AdapterChoice, AdapterSummary};
 pub use context::GpuContext;
 pub use renderer::{RenderError, WgpuRenderer};
+pub use snapshot::{
+    SnapshotBox, SnapshotCamera, SnapshotDrawMode, SnapshotError, SnapshotGeometry, SnapshotMesh,
+    SnapshotShape, SnapshotSpec,
+};
 pub use trace::Tone;
 
 /// The axis-cross overlay's WGSL module. It declares the extended `Program`

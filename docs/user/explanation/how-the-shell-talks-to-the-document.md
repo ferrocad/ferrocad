@@ -74,7 +74,7 @@ The consequence is a rule for anything that adds a provider: **the switch that
 turns a feature on and off belongs to the feature, not to the provider.** When
 two stores disagree about "on", a toggle moves one of them and the other keeps
 drawing — the defect recorded in
-[`../../tasks/grid-visibility.md`](../../tasks/grid-visibility.md).
+[`../../record/tasks/grid-visibility.md`](../../record/tasks/grid-visibility.md).
 
 ## What this buys
 

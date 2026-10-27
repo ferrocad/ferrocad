@@ -20,7 +20,8 @@ SUMMARY = (
 )
 REQUIRES = [
     "the `ferrocad_toy` app script (it registers on import)",
-    "no GPU: the mesh is read before it would be drawn",
+    "no GPU: the mesh is read before it would be drawn (the snapshot is a "
+    "committed image)",
 ]
 
 
@@ -124,6 +125,50 @@ def run(cap):
         )
         cap.result("Response", response)
         cap.result("Placement.Base after the move", slab.Placement.Base)
+
+    with cap.step("What the manipulation looks like"):
+        cap.prose(
+            "The display provider answers with the mesh the viewport draws, built from "
+            "`Width`, `Depth`, `Height` and `Placement` at the moment you ask. After the "
+            "grip and the move that is 60 × 40 × 42 mm at x = 35 mm. The picture is "
+            "that mesh, rendered offscreen by the same renderer the viewport uses."
+        )
+        cap.exec(
+            """
+            wide = next(
+                mesh
+                for mesh in json.loads(ferrocad_shell.stage_meshes())
+                if mesh["object"] == "Wide"
+            )
+            wide_center = [
+                (min(p[i] for p in wide["positions"]) + max(p[i] for p in wide["positions"]))
+                / 2.0
+                for i in range(3)
+            ]
+            wide_eye = [
+                wide_center[0] - 100.0,
+                wide_center[1] - 140.0,
+                wide_center[2] + 95.0,
+            ]
+            """
+        )
+        cap.result("Mesh vertices", len(wide["positions"]))
+        cap.result("Mesh triangles", len(wide["triangles"]) // 3)
+        cap.image(
+            "toy-slab.png",
+            "The toy slab after the height grip and the move",
+            caption=(
+                "The `Wide` slab (60 × 40 × 42 mm at x = 35 mm), from "
+                "`stage_meshes()`."
+            ),
+            mesh=wide,
+            camera={
+                "eye": wide_eye,
+                "target": wide_center,
+                "up": [0.0, 0.0, 1.0],
+                "fov_y": 0.6,
+            },
+        )
 
     with cap.step("Undo the manipulation"):
         cap.prose(

@@ -69,4 +69,4 @@ ferrocad_shell.set_view_state(json.dumps(second["view"]))
 | Response | {"ok": true, "view": {"grid": false, "grid_alpha": 1.0, "grid_color": "#94a3b8", "grid_major": 100.0, "grid_minor": 10.0, "grid_radius": 0.0}} |
 | FerroCAD.Grid.enabled | false |
 
-> Every grid backend reads this one switch. A provider that kept its own copy would keep drawing after the toggle, which is exactly the defect `docs/tasks/grid-visibility.md` fixed.
+> Every grid backend reads this one switch. A provider that kept its own copy would keep drawing after the toggle, which is exactly the defect `docs/record/tasks/grid-visibility.md` fixed.

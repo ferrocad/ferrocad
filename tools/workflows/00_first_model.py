@@ -17,7 +17,10 @@ SUMMARY = (
     "document, a parameter, a second object that depends on it, a recompute, and the "
     "save that keeps it."
 )
-REQUIRES = ["the `FreeCAD` facade; no workbench module and no GPU"]
+REQUIRES = [
+    "the `FreeCAD` facade; no workbench module and no GPU (the snapshot is a "
+    "committed image)"
+]
 
 
 def run(cap):
@@ -86,6 +89,40 @@ def run(cap):
         )
         cap.result("Parameters.Length", str(parameters.Length))
         cap.result("Result.Width", str(result.Width))
+
+    with cap.step("See what the parameters describe"):
+        cap.prose(
+            "The document still holds no geometry — this tutorial never leaves the "
+            "`FreeCAD` facade, and a shape needs a workbench's display hook. The values "
+            "do describe a solid, though: the picture below is the box "
+            "`Result.Width` × 20 mm × 10 mm, rendered offscreen by the same renderer "
+            "the viewport uses. It is a real snapshot, produced by "
+            "`python3 tools/userdocs.py --capture`, not a diagram."
+        )
+        cap.exec(
+            """
+            box_size = (float(result.Width), 20.0, 10.0)
+            box_center = [value / 2.0 for value in box_size]
+            box_eye = [box_center[0] - 55.0, box_center[1] - 130.0, box_center[2] + 110.0]
+            """
+        )
+        cap.result("Box (width, depth, height)", box_size)
+        cap.image(
+            "first-model.png",
+            "A 105 by 20 by 10 millimetre box drawn in the viewport",
+            caption=(
+                "The box `Result.Width` × 20 mm × 10 mm describes, from the "
+                "viewport's offscreen renderer."
+            ),
+            shape={"box": {"size": list(box_size), "origin": [0.0, 0.0, 0.0]}},
+            color=[0.55, 0.57, 0.60, 1.0],
+            camera={
+                "eye": box_eye,
+                "target": box_center,
+                "up": [0.0, 0.0, 1.0],
+                "fov_y": 0.6,
+            },
+        )
 
     with cap.step("Save it"):
         cap.prose(

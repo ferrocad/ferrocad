@@ -9,7 +9,7 @@ A single pass from an empty interpreter to a saved, parametric document: a docum
 > Edit the workflow, not this page; `python3 tools/userdocs.py --check`
 > fails when the two disagree.
 
-**Requires:** the `FreeCAD` facade; no workbench module and no GPU.
+**Requires:** the `FreeCAD` facade; no workbench module and no GPU (the snapshot is a committed image).
 
 ## 1. Import the application
 
@@ -82,7 +82,25 @@ doc.recompute()
 | Parameters.Length | 35 mm |
 | Result.Width | 105 mm |
 
-## 6. Save it
+## 6. See what the parameters describe
+
+The document still holds no geometry — this tutorial never leaves the `FreeCAD` facade, and a shape needs a workbench's display hook. The values do describe a solid, though: the picture below is the box `Result.Width` × 20 mm × 10 mm, rendered offscreen by the same renderer the viewport uses. It is a real snapshot, produced by `python3 tools/userdocs.py --capture`, not a diagram.
+
+```python
+box_size = (float(result.Width), 20.0, 10.0)
+box_center = [value / 2.0 for value in box_size]
+box_eye = [box_center[0] - 55.0, box_center[1] - 130.0, box_center[2] + 110.0]
+```
+
+| Read back | Value |
+| --- | --- |
+| Box (width, depth, height) | [105.0, 20.0, 10.0] |
+
+![A 105 by 20 by 10 millimetre box drawn in the viewport](../images/first-model.png)
+
+*The box `Result.Width` × 20 mm × 10 mm describes, from the viewport's offscreen renderer.*
+
+## 7. Save it
 
 `saveAs` writes the document, including the expression. The path below is a temporary one; in your own script choose a real location. Opening it again gives back the same objects and the same values.
 
@@ -102,7 +120,7 @@ reopened = FreeCAD.open(path)
 | Objects after reopening | ["Parameters", "Result"] |
 | Width after reopening | 105 mm |
 
-## 7. Where to go next
+## 8. Where to go next
 
 That is the whole loop: create, parameterise, recompute, save. The how-to guides take each part further — properties and validation, undo and persistence in detail, and the workbench contracts that put objects on screen.
 

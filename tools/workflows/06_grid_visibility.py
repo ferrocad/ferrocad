@@ -77,7 +77,7 @@ def run(cap):
         cap.note(
             "Every grid backend reads this one switch. A provider that kept its own "
             "copy would keep drawing after the toggle, which is exactly the defect "
-            "`docs/tasks/grid-visibility.md` fixed."
+            "`docs/record/tasks/grid-visibility.md` fixed."
         )
 
 

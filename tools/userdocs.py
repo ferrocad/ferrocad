@@ -15,11 +15,18 @@ Usage::
 
     python3 tools/userdocs.py             # regenerate docs/user/
     python3 tools/userdocs.py --check     # fail if any page is stale
+    python3 tools/userdocs.py --capture   # render the image ops into docs/user/images/
     python3 tools/userdocs.py --list      # list the workflows
     python3 tools/userdocs.py --only toy-workbench
 
 Adding a workflow is adding a file: the index is rebuilt from the set of workflow
 scripts and the authored pages, so it is also the progress list.
+
+A workflow's ``cap.image(...)`` records a render spec; ``--capture`` turns that
+spec into a committed PNG with ``crates/ferrocad_wgpu/examples/snapshot.rs``. The
+normal run and ``--check`` only *read* those PNGs, so the CI gates stay cheap and
+GPU-free. A capture on a machine with no GPU adapter reports it and leaves the
+committed images alone.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -65,11 +73,12 @@ and an **explanation** page says why. Reference is the generated
 [Python API reference](../python-api/index.md).
 """
 
-INDEX_FOOTER = """## Regenerating
+INDEX_FOOTER = """## Regenerating and capturing
 
 ```sh
 python3 tools/userdocs.py            # refresh every page
 python3 tools/userdocs.py --check    # non-zero exit if a page is stale
+python3 tools/userdocs.py --capture  # re-render the images (needs a GPU adapter)
 python3 tools/build_book.py          # assemble the mdBook edition
 ```
 
@@ -77,14 +86,17 @@ The check is the part that matters: it is cheap, needs no GPU, and it is what
 keeps the pages honest in review and in CI. The mdBook edition is assembled from
 these pages, so it inherits the same guarantee.
 
-## What these pages are not
+## Screenshots and their limits
 
-- **Not rendered screenshots.** A page shows the mesh the viewport would draw,
-  summarised, but no pixels. Capturing a frame needs a GPU and an offscreen
-  render path the shell does not expose yet; the `image` hook in
-  `tools/workflows/_capture.py` is where that will attach.
-- **Not upstream parity.** Only what runs here is documented here; the gap is
-  measured by [`../workbenches/conformance.md`](../workbenches/conformance.md).
+The screenshots are real viewport pixels, captured by
+`python3 tools/userdocs.py --capture` from the render specs the workflows record
+and stored under `docs/user/images/`. Capturing needs a GPU adapter; the pages and
+the `--check` gate only read the committed PNGs, so CI stays cheap and GPU-free.
+On a machine with no adapter the capture says so and leaves the images untouched.
+
+What the pages are **not** is a claim of upstream parity. Only what runs here is
+documented here; the gap is measured by
+[`../workbenches/conformance.md`](../workbenches/conformance.md).
 """
 
 
@@ -229,7 +241,9 @@ def render_page(capture: dict, source: Path) -> str:
         elif kind == "json":
             lines += [f"*{op['label']}*", "", "```json", op["text"], "```", ""]
         elif kind == "image":
-            relative = f"images/{op['name']}"
+            # Pages live in `docs/user/<quadrant>/`; the committed images live in
+            # the sibling `docs/user/images/`.
+            relative = f"../images/{op['name']}"
             if (IMAGE_DIR / op["name"]).is_file():
                 lines += [f"![{op['alt']}]({relative})", ""]
                 if op.get("caption"):
@@ -323,13 +337,160 @@ def stale_generated(expected: set[Path]) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
+# Image capture
+# ---------------------------------------------------------------------------
+#: The example binary that renders one spec into one PNG.
+SNAPSHOT_EXAMPLE = "snapshot"
+
+#: The example's exit code for "this machine has no GPU adapter".
+SNAPSHOT_NO_ADAPTER = 3
+
+
+def _safe_image_name(name: str) -> str:
+    """Reject a name that would write outside ``docs/user/images/``."""
+    if (
+        not name
+        or name in (".", "..")
+        or Path(name).name != name
+        or "/" in name
+        or "\\" in name
+    ):
+        raise RuntimeError(f"image name {name!r} must be a plain file name")
+    if not name.endswith(".png"):
+        raise RuntimeError(f"image name {name!r} must end in .png")
+    return name
+
+
+def snapshot_binary(explicit: str | None = None) -> Path:
+    """The snapshot example binary, built first so it cannot be stale.
+
+    ``--snapshot-bin`` and ``FERROCAD_SNAPSHOT_BIN`` skip the build (the published
+    docs workflow sets neither; ``--capture`` is a local tool).
+    """
+    for source, value in (
+        ("--snapshot-bin", explicit),
+        ("FERROCAD_SNAPSHOT_BIN", os.environ.get("FERROCAD_SNAPSHOT_BIN")),
+    ):
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        if not path.is_file():
+            raise RuntimeError(f"{source}={value} is not a file")
+        return path
+
+    command = [
+        "cargo",
+        "build",
+        "--offline",
+        "-p",
+        "ferrocad_wgpu",
+        "--example",
+        SNAPSHOT_EXAMPLE,
+    ]
+    print("building the snapshot example: " + " ".join(command))
+    proc = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "could not build the snapshot example\n"
+            f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+        )
+    path = REPO / "target" / "debug" / "examples" / SNAPSHOT_EXAMPLE
+    if not path.is_file():
+        raise RuntimeError(f"cargo reported success but {path} does not exist")
+    return path
+
+
+def capture_images(captures: list[tuple[Path, dict]], binary: Path) -> tuple[int, int, bool]:
+    """Render every ``image`` op's spec into ``docs/user/images/``.
+
+    Returns ``(written, unchanged, degraded)``. ``degraded`` is true when the
+    machine has no GPU adapter: the capture stops before touching any file, so the
+    committed images survive and the normal gates still run.
+    """
+    pending = [
+        (op, capture["slug"])
+        for _source, capture in captures
+        for op in capture["ops"]
+        if op["kind"] == "image"
+    ]
+    if not pending:
+        print("no images to capture")
+        return 0, 0, False
+
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    written = 0
+    unchanged = 0
+    for op, slug in pending:
+        name = _safe_image_name(op["name"])
+        spec = op.get("spec")
+        if not spec:
+            print(
+                f"note: {name} ({slug}) has no render spec; leaving the committed "
+                "image alone"
+            )
+            continue
+
+        with tempfile.TemporaryDirectory(prefix="ferrocad-snapshot-") as tmp:
+            spec_path = Path(tmp) / "spec.json"
+            png_path = Path(tmp) / "out.png"
+            spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+            proc = subprocess.run(
+                [str(binary), str(spec_path), str(png_path)],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == SNAPSHOT_NO_ADAPTER:
+                print(
+                    "warning: no GPU adapter available; leaving docs/user/images/ "
+                    f"untouched ({len(pending)} image(s) not captured). "
+                    "The pages and `--check` only read the committed PNGs.",
+                    file=sys.stderr,
+                )
+                return written, unchanged, True
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"snapshot render failed for {name} ({slug}, exit "
+                    f"{proc.returncode})\n--- stdout ---\n{proc.stdout}\n"
+                    f"--- stderr ---\n{proc.stderr}"
+                )
+            data = png_path.read_bytes()
+
+        target = IMAGE_DIR / name
+        shown = target.relative_to(REPO)
+        if target.is_file() and target.read_bytes() == data:
+            unchanged += 1
+            print(f"unchanged {shown} ({len(data)} bytes)")
+        else:
+            # Write beside the target and rename, so an interrupted capture never
+            # leaves a half-written PNG that a later `--check` would read.
+            temporary = target.with_name(f".{name}.tmp")
+            temporary.write_bytes(data)
+            os.replace(temporary, target)
+            written += 1
+            print(f"wrote {shown} ({len(data)} bytes)")
+    return written, unchanged, False
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--check", action="store_true", help="fail if a page is stale")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="fail if a page is stale")
+    mode.add_argument(
+        "--capture",
+        action="store_true",
+        help="render the workflows' image ops into docs/user/images/ (needs a GPU)",
+    )
     parser.add_argument("--list", action="store_true", help="list the workflows")
     parser.add_argument("--only", metavar="SLUG", help="run one workflow by slug")
+    parser.add_argument(
+        "--snapshot-bin",
+        metavar="PATH",
+        help="use this snapshot renderer instead of building the example",
+    )
     args = parser.parse_args(argv)
 
     sources = discover()
@@ -355,6 +516,16 @@ def main(argv: list[str]) -> int:
     if not captures:
         print("error: no workflows found", file=sys.stderr)
         return 1
+
+    if args.capture:
+        try:
+            binary = snapshot_binary(args.snapshot_bin)
+            written, unchanged, degraded = capture_images(captures, binary)
+        except (RuntimeError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not degraded:
+            print(f"capture: {written} written, {unchanged} unchanged")
 
     # `--only` still writes just that page; the index and the orphan sweep need
     # the whole set, so they are skipped in that mode.

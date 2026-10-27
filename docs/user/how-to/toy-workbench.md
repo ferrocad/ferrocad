@@ -9,7 +9,7 @@ The toy workbench is the kernel-free reference edition. It shows the four things
 > Edit the workflow, not this page; `python3 tools/userdocs.py --check`
 > fails when the two disagree.
 
-**Requires:** the `ferrocad_toy` app script (it registers on import); no GPU: the mesh is read before it would be drawn.
+**Requires:** the `ferrocad_toy` app script (it registers on import); no GPU: the mesh is read before it would be drawn (the snapshot is a committed image).
 
 ## 1. Boot the edition
 
@@ -178,7 +178,38 @@ response = json.loads(
 | Response | {"ok": true} |
 | Placement.Base after the move | Vector (35, 0, 0) |
 
-## 6. Undo the manipulation
+## 6. What the manipulation looks like
+
+The display provider answers with the mesh the viewport draws, built from `Width`, `Depth`, `Height` and `Placement` at the moment you ask. After the grip and the move that is 60 × 40 × 42 mm at x = 35 mm. The picture is that mesh, rendered offscreen by the same renderer the viewport uses.
+
+```python
+wide = next(
+    mesh
+    for mesh in json.loads(ferrocad_shell.stage_meshes())
+    if mesh["object"] == "Wide"
+)
+wide_center = [
+    (min(p[i] for p in wide["positions"]) + max(p[i] for p in wide["positions"]))
+    / 2.0
+    for i in range(3)
+]
+wide_eye = [
+    wide_center[0] - 100.0,
+    wide_center[1] - 140.0,
+    wide_center[2] + 95.0,
+]
+```
+
+| Read back | Value |
+| --- | --- |
+| Mesh vertices | 24 |
+| Mesh triangles | 12 |
+
+![The toy slab after the height grip and the move](../images/toy-slab.png)
+
+*The `Wide` slab (60 × 40 × 42 mm at x = 35 mm), from `stage_meshes()`.*
+
+## 7. Undo the manipulation
 
 Because each interaction is a transaction, the document's own undo stack reverses them one at a time. No workbench-side history is needed.
 
@@ -201,7 +232,7 @@ slab.Document.recompute()
 | --- | --- |
 | Height after two undos | 30 mm |
 
-## 7. What the workbench registered
+## 8. What the workbench registered
 
 The commands in the list come from `FreeCADGui`, not from the shell. `enabled` is the command's `IsActive` evaluated against the current selection, which is why the edit commands are disabled right now.
 
@@ -220,7 +251,7 @@ commands = json.loads(ferrocad_shell.commands())
 
 > The shell never links a workbench. Everything on this page reaches the document through `FreeCAD`, `FreeCADGui` or the module hook the edition registered at import time.
 
-## 8. Close the document
+## 9. Close the document
 
 ```python
 FreeCAD.closeDocument('Toy')

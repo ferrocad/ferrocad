@@ -1299,7 +1299,7 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use ferrocad_graphics::{PickId, Topology, Viewport};
     use ferrocad_inventor::{Node, NodeKind, Scene, compile, compile_with_base};
@@ -1310,7 +1310,7 @@ mod tests {
     static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Acquire [`GPU_LOCK`], ignoring poisoning (a failed test already released it).
-    fn gpu_guard() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn gpu_guard() -> std::sync::MutexGuard<'static, ()> {
         GPU_LOCK.lock().unwrap_or_else(|poison| poison.into_inner())
     }
 

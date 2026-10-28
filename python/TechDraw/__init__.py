@@ -20,8 +20,6 @@ boundaries and faces with holes need no special casing.
 
 import math
 
-import Part
-
 __all__ = ["makeGeomHatch", "projectToSVG"]
 
 
@@ -194,6 +192,11 @@ def makeGeomHatch(face, scale, pattern, pat_file):
     rows = _read_patterns(pat_file).get(pattern)
     if not rows:
         raise ValueError("pattern '{}' is not declared in '{}'".format(pattern, pat_file))
+
+    # `Part` needs the combined extension, so it is imported here rather than at
+    # module scope: `projectToSVG` is a pure string function and must stay
+    # importable in an image that has only the App/`ferrocad` extension.
+    import Part
 
     scale = float(scale) or 1.0
     plane = face.findPlane()

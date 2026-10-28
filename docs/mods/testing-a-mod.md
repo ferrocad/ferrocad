@@ -12,6 +12,21 @@ Run the suite with:
 PYTHONPATH=python python3 -m unittest discover -s tests -v
 ```
 
+That command also runs in CI's `headless` job, which builds **only** the App
+extension (`ferrocad.abi3.so`) and fetches no kernel. `python/Part.py` therefore
+raises `ImportError` there, because `Part` needs the combined
+`ferrocad_combined` image. A test that touches `Part`, `Mesh`, `MeshPart` or a
+module that imports `Part` at module scope (for example `TechDraw`) must either
+skip when `Part` is unavailable or be made not to need it — otherwise it passes in
+a developer checkout, where `python/ferrocad_combined.abi3.so` is usually present,
+and fails only in CI. To reproduce the CI condition locally:
+
+```sh
+mv python/ferrocad_combined.abi3.so /tmp/
+PYTHONPATH=python python3 -m unittest discover -s tests
+mv /tmp/ferrocad_combined.abi3.so python/
+```
+
 ## What needs no GPU
 
 | You can test | How |

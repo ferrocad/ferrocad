@@ -6,6 +6,7 @@
 //!     cargo xtask occt [--occt-prefix DIR] [--offline]
 //!     cargo xtask python
 //!     cargo xtask mods [--freecad TAG] [--only WB,WB]
+//!     cargo xtask editions [--check|--write]
 //!     cargo xtask stage-payload [--python-only]
 //!     cargo xtask unstage-payload
 //!
@@ -36,8 +37,16 @@
 //! workspace root, shared across editions) are transiently staged, then cleaned
 //! up. The app crate's `build.rs` embeds them, so `cargo install ferrocad`
 //! produces a working app.
+//!
+//! `editions` checks the dependency closure of every edition against the layering
+//! rules (a kernel-free edition must not reach OCCT) and against the pinned
+//! `contracts/editions.json`. It reads `cargo metadata --no-deps`, so it needs no
+//! OCCT, no compilation and no network; `--write` regenerates the contract after
+//! a reviewed change. See [`editions`].
 
 mod closure;
+mod editions;
+mod json;
 mod occt;
 mod pe;
 
@@ -118,6 +127,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("editions") => {
+            if let Err(e) = editions::task(args) {
+                eprintln!("xtask: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("stage-payload") => {
             let python_only = args.any(|a| a == "--python-only");
             if let Err(e) = stage_payload(python_only) {
@@ -147,6 +162,7 @@ fn usage() {
     println!("cargo xtask occt [--occt-prefix DIR] [--offline]   # resolve/fetch OCCT 7.8.1");
     println!("cargo xtask python   # fetch a python-build-standalone runtime");
     println!("cargo xtask mods [--freecad TAG] [--only WB,WB]   # fetch workbench scripts");
+    println!("cargo xtask editions [--check|--write]   # check the per-edition dependency closure");
     println!("cargo xtask stage-payload [--python-only]   # stage the payload for publishing");
     println!("cargo xtask unstage-payload   # remove the staged payload");
 }

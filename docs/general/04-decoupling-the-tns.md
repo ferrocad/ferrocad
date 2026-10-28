@@ -8,29 +8,9 @@ For CAD architects who want to externalize the TNS into a **pluggable,
 engine-agnostic subsystem**, the in-object ledger can be refactored into an
 event-driven broker pattern:
 
-```text
-+--------------------------------------------------------+
-|               1. THE GEOMETRIC DRIVERS                 |
-|  Part::TopoShape (OCCT)  |  Mesh (triangle data)  | ... |
-+---------------------------+-----------------------------+
-                            | emits raw mutation events
-                            | (input ids, op type, kernel history)
-                            v
-+--------------------------------------------------------+
-|          2. THE ABSTRACT TNP BROKER (App core)         |
-|       ITopologicalNamingEngine (a proposed interface)  |
-+---------------------------+-----------------------------+
-                            | routes to the active strategy
-                            v
-+--------------------------------------------------------+
-|           3. PLUGGABLE TNS IMPLEMENTATIONS             |
-| +-------------------+ +-------------------+ +--------+ |
-| | Genealogy hasher  | | Spatial heuristic | | Hybrid | |
-| | (upstream         | | matcher           | | solver | |
-| |  ElementMap idea) | |                   | |        | |
-| +-------------------+ +-------------------+ +--------+ |
-+--------------------------------------------------------+
-```
+![The pluggable topological naming pattern: geometric drivers emit mutation events to an abstract broker, which routes to one of several naming strategies.](images/tns-broker.svg)
+
+*The broker pattern: geometry emits history; the naming strategy is a plug-in.*
 
 This is a design pattern, not the current FreeCAD API. Its three pillars are:
 

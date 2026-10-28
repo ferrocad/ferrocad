@@ -517,6 +517,19 @@ class TestBook(unittest.TestCase):
             build_book.book_toml("https://ferrocad.github.io/docs/"),
         )
 
+    def test_images_are_copied_but_not_listed_as_chapters(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            (src / "general" / "images").mkdir(parents=True)
+            (src / "general" / "README.md").write_text("# General\n")
+            (src / "general" / "page.md").write_text("# Page\n")
+            (src / "general" / "images" / "x.svg").write_text("<svg/>")
+            summary = build_book._summary(src)
+        self.assertIn("general/page.md", summary)
+        self.assertNotIn("x.svg", summary)
+
     def test_the_reference_landing_page_is_index(self):
         import tempfile
 

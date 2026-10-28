@@ -10,52 +10,9 @@ called **tessellation**.
 
 ### 2.1 The data pipeline
 
-```text
-       [ MATHEMATICAL DATA ]                              [ DISCRETE DATA ]
-     smooth / infinite / CPU-bound                     faceted / rigid / baked
+![The CAD data pipeline: NURBS and B-Rep are tessellated into a temporary mesh; a permanent mesh arrives from STL or OBJ; both feed the viewport scene graph and the GPU.](images/tessellation-pipeline.svg)
 
-  +-----------------------------+
-  |       1. NURBS DATA         |
-  |  control points & weights   |
-  |  polynomial equations       |
-  +--------------|--------------+
-                 | forms the surfaces of
-                 v
-  +-----------------------------+
-  |        2. B-REP DATA        |
-  |  geometry: NURBS / planes   |
-  |  topology: faces, edges,    |
-  |  vertex connectivity        |
-  +--------------|--------------+
-                 |
-           TESSELLATED TO
-                 v
-  +-----------------------------+                +-------------------------------+
-  |  3. TEMPORARY VISUAL MESH   |                |      4. PERMANENT MESH        |
-  |  discardable triangles      |                |  fixed triangle faces         |
-  |  regenerates whenever       |                |  static vertex array          |
-  |  B-Rep dimensions change    |                |  imported from STL / OBJ      |
-  +--------------|--------------+                +---------------|---------------+
-                 |                                               |
-                 +-----------------------+-----------------------+
-                                         |
-                                  both feed into
-                                         v
-                      +-------------------------------------+
-                      |       5. VIEWPORT SCENE GRAPH       |
-                      |           (Coin3D / Pivy)           |
-                      |  ingests meshes only                |
-                      |  SoIndexedFaceSet (mesh arrays)     |
-                      +------------------|------------------+
-                                         |
-                                         v
-                      +-------------------------------------+
-                      |       6. GPU HARDWARE PIPELINE      |
-                      |         (OpenGL / Vulkan)           |
-                      |  vertex shader: 3D -> screen        |
-                      |  fragment shader: lighting / color  |
-                      +-------------------------------------+
-```
+*The translation from mathematical geometry to triangles, and the two routes into the viewport.*
 
 ### 2.2 How FreeCAD workbenches differ
 

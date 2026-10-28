@@ -213,6 +213,7 @@ def _summary(src: Path) -> str:
             rel
             for _source, rel in _copied(src)
             if rel.as_posix().startswith(folder + "/")
+            and rel.suffix == ".md"
             and rel.name not in ("README.md", "index.md")
         ]
         if not pages:

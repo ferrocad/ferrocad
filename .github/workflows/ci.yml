@@ -76,12 +76,14 @@ jobs:
           PYTHONPATH=python python3 examples/mvp_workflow.py
 
       - name: Generated documentation is current
-        # The user guides are rendered by running real workflows, and the API
-        # reference is read from the live modules, so this is a behaviour check
-        # as well as a documentation one. See docs/project/documentation.md.
+        # The user guides are rendered by running real workflows, the API
+        # reference is read from the live modules, and the concept diagrams are
+        # generated SVG assets. So this is a behaviour check as well as a
+        # documentation one. See docs/project/documentation.md.
         run: |
           python3 tools/userdocs.py --check
           python3 tools/api_docs.py --check
+          python3 tools/generate_concept_diagrams.py --check
           python3 tools/build_book.py --check
           PYTHONPATH=python python3 tools/test_docs_tooling.py
           PYTHONPATH=python python3 tools/test_screenshot.py

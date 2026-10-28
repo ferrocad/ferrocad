@@ -26,14 +26,14 @@ runner hides the rest.
 
 An **edition** is the shipped bundle: binary, app script, defaults, branding and
 workbench set. An **extension set** is the test-side view of its workbench half:
-a set of names, not a file. It is also not a packaging: `ferrocad_combined` is
-the packaging `ferrocad_parametric` also uses, so `combined` names a module, not
-an edition.
+a set of names, not a file. It is also not a packaging: `ferrocad_combined` is the
+packaging `ferrocad_parametric` also uses, so it is not a name an extension set
+takes.
 
 | Extension set | Provides | What it is |
 | --- | --- | --- |
 | `base` | no workbench module: the `ferrocad` facade alone | Exactly what CI's `headless` job builds. Every workbench module — `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` — is unimportable. |
-| `workbenches` | `ferrocad_combined` plus `Part`, `Mesh` and `MeshPart` | App + Part + Mesh in one extension. Nothing is hidden; it needs OCCT. |
+| `workbenches` | `Part`, `Mesh` and `MeshPart` (over the `ferrocad_combined` packaging) | App + Part + Mesh in one extension. Nothing is hidden; it needs OCCT. |
 
 `base` is the important one for ordinary tests. It is not a reduced convenience
 build: it is the artifact the primary CI path produces, so a test that only passes
@@ -43,7 +43,9 @@ the workbench modules unimportable turns that into a local failure.
 `--extension` is repeatable, so a run can name modules individually instead of
 using a preset: `--extension Part --extension Mesh --extension MeshPart`. Naming
 any of `Part`, `Mesh` or `MeshPart` also provides `ferrocad_combined`: those
-modules are shims that import it.
+modules are shims that import it. `ferrocad_combined` is not itself an
+`--extension` value — it is packaging, not a workbench — and passing it is an
+unknown-extension error.
 
 ```sh
 python3 tools/run_tests.py --check                  # static contract check, no build (~0.06 s)
@@ -72,7 +74,7 @@ either `base` or `workbenches`:
   "schema": 2,
   "presets": {
     "base": [],
-    "workbenches": ["Mesh", "MeshPart", "Part", "ferrocad_combined"]
+    "workbenches": ["Mesh", "MeshPart", "Part"]
   },
   "suites": {
     "base": ["test_commands", "..."],

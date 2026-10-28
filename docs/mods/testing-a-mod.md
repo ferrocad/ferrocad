@@ -16,7 +16,7 @@ for everything else, so the set is enforced rather than inferred from whatever
 | Extension set | Provides | What it is |
 | --- | --- | --- |
 | `base` | no workbench module (`ferrocad` only) | the primary extension, exactly what CI's `headless` job builds. `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` are unimportable. |
-| `workbenches` | `ferrocad_combined`, `Part`, `Mesh`, `MeshPart` | every workbench module, for tests that need the kernel. |
+| `workbenches` | `Part`, `Mesh`, `MeshPart` (with the `ferrocad_combined` packaging) | every workbench module, for tests that need the kernel. |
 
 Run a mod test against `base`, the way CI will:
 
@@ -29,7 +29,9 @@ python3 tools/run_tests.py --extension workbenches  # 45 modules, 704 tests, 3 s
 `--extension base` makes `import Part` fail even on a developer checkout that has
 `ferrocad_combined.abi3.so`, so a test that needs the kernel cannot pass locally
 and fail only in CI. `workbenches` runs every suite and needs OCCT; use it only
-when you are testing a kernel-backed mod.
+when you are testing a kernel-backed mod. `ferrocad_combined` is packaging rather
+than a workbench, so it is not an `--extension` value: naming `Part`, `Mesh` or
+`MeshPart` provides it implicitly.
 
 The runner enforces one invariant: **pass or skip, never error**. A test that
 needs something the set does not provide is a failure, not a silent skip.

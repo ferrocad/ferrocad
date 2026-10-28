@@ -13,8 +13,10 @@ hides the rest. A typo in a hide-list would hide nothing and run green against
 the wrong build; a typo in a provide-list is a :class:`ValueError`.
 
 ``Part``, ``Mesh`` and ``MeshPart`` are shims over ``ferrocad_combined``, so
-providing one of them also provides that packaging extension: hiding it would
-make the very module that was provided unimportable.
+providing one of them also makes that packaging importable: hiding it would make
+the very module that was provided unimportable. The packaging is not itself a
+workbench module, so it is not a ``--extension`` value — it is importable exactly
+when a shim it implements is provided.
 
 An **edition** is the shipped bundle: binary, app script, defaults, branding and
 workbench set. An **extension set** is the test-side view of its workbench half:
@@ -28,7 +30,8 @@ Presets:
     Every workbench module is hidden.
 
 ``workbenches``
-    App + Part + Mesh in one extension (``ferrocad_combined``). Nothing hidden.
+    Every workbench module, with the packaging ``ferrocad_combined`` they are
+    built on. Nothing hidden.
 
 ``tools/api_docs.py`` is the other user: it generates the reference for the base
 facade, so it installs ``base`` and gets the same pages whether or not a
@@ -41,11 +44,18 @@ import os
 import sys
 
 #: The workbench modules an extension can provide, in a stable order.
-WORKBENCH_MODULES = ("ferrocad_combined", "Part", "Mesh", "MeshPart")
+WORKBENCH_MODULES = ("Part", "Mesh", "MeshPart")
 
-#: The shims that ``ferrocad_combined`` implements. Providing one of them makes
-#: the packaging importable too, because the shim imports it.
-_SHIM_MODULES = frozenset({"Part", "Mesh", "MeshPart"})
+#: The packaging extension those modules are shims over. Not a workbench module, so
+#: not a ``--extension`` value; importable exactly when a shim it implements is
+#: provided.
+_PACKAGING = "ferrocad_combined"
+
+#: Every module :func:`install` can hide: the workbench modules and the packaging.
+_HIDEABLE = frozenset(WORKBENCH_MODULES) | {_PACKAGING}
+
+#: The shims that ``ferrocad_combined`` implements.
+_SHIM_MODULES = frozenset(WORKBENCH_MODULES)
 
 #: Named presets, keyed by the set of workbench modules they **provide**.
 PRESETS: dict[str, frozenset[str]] = {
@@ -101,17 +111,22 @@ def provided(extensions) -> frozenset[str]:
 
 
 def _importable(extensions: frozenset[str]) -> frozenset[str]:
-    """``extensions`` plus ``ferrocad_combined`` if a shim it implements is provided."""
+    """``extensions`` plus the packaging if a shim it implements is provided."""
 
     if extensions & _SHIM_MODULES:
-        return extensions | {"ferrocad_combined"}
+        return extensions | {_PACKAGING}
     return extensions
 
 
 def hidden(extensions) -> frozenset[str]:
-    """The workbench modules an extension set providing ``extensions`` lacks."""
+    """Every module :func:`install` would make unimportable for ``extensions``.
 
-    return frozenset(WORKBENCH_MODULES) - _importable(provided(extensions))
+    This includes the packaging when no shim is provided: ``base`` must fail an
+    ``import ferrocad_combined`` as well as an ``import Part``, or a test could
+    reach the kernel through the packaging and pass on a developer checkout.
+    """
+
+    return _HIDEABLE - _importable(provided(extensions))
 
 
 def preset(name: str) -> frozenset[str]:
@@ -144,11 +159,12 @@ def install(extensions) -> None:
     starts a child interpreter can honour the same set.
     """
 
-    extensions = _importable(provided(extensions))
-    absent = frozenset(WORKBENCH_MODULES) - extensions
+    extensions = provided(extensions)
+    importable = _importable(extensions)
+    absent = _HIDEABLE - importable
     os.environ[ENV] = ",".join(sorted(extensions))
     sys.meta_path[:] = [
         finder for finder in sys.meta_path if not isinstance(finder, _HiddenModules)
     ]
     if absent:
-        sys.meta_path.insert(0, _HiddenModules(extensions, absent))
+        sys.meta_path.insert(0, _HiddenModules(importable, absent))

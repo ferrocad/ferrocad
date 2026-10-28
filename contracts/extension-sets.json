@@ -5,8 +5,7 @@
     "workbenches": [
       "Mesh",
       "MeshPart",
-      "Part",
-      "ferrocad_combined"
+      "Part"
     ]
   },
   "suites": {

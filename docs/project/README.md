@@ -16,6 +16,8 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
   program owns it.
 - [direction/rewrite-strategy.md](direction/rewrite-strategy.md) — the authoritative
   argument for the rewrite, the risk register and the shape of the work.
+- [ideation/intent-and-automation.md](ideation/intent-and-automation.md) — the product
+  thesis for making intent, lineage and automation first-class (speculative).
 - [record/milestones.md](record/milestones.md) — the compact timeline and the current
   assessment.
 
@@ -23,6 +25,8 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
 
 - [direction/](direction/) — why we are doing this: the strategy, the MVP path and the
   app-shell vision.
+- [ideation/](ideation/README.md) — exploratory product ideas. Nothing here is a
+  commitment; accepted ideas move to `developer/` or the backlog.
 - [research/](research/) — the spikes and assessments that shaped the design: OCCT
   history, geometry/topology, Coin3D reuse, GPU interop, the upstream dma-buf issue,
   Python UI research, the grid-overlay fixture and the SimpleCAD bring-up.
@@ -40,6 +44,10 @@ and the design argument move to [record/](record/) and are never deleted. When a
 research note becomes a stable design, the decision is written in
 [`../developer/`](../developer/README.md) and the research note stays here, linked
 rather than duplicated.
+
+[Ideation](ideation/README.md) is deliberately different: it holds hypotheses, not
+measurements. An idea is promoted only when it becomes a backlog item or a stable
+design; until then it is labelled speculative.
 
 The complete folder list is in [`../README.md`](../README.md); the file-by-file map is
 [`../INDEX.md`](../INDEX.md).

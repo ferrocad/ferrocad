@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "images": [
+    "app",
+    "combined"
+  ],
+  "suites": {
+    "app": [
+      "test_app_vector2d_material",
+      "test_appearance_presets",
+      "test_axis_overlay_coin",
+      "test_axis_settings",
+      "test_base_surface",
+      "test_codegen",
+      "test_commands",
+      "test_dialogs",
+      "test_draft_forms",
+      "test_draft_import_shims",
+      "test_draft_import_surface",
+      "test_draft_shim",
+      "test_draft_snapper",
+      "test_draft_tools",
+      "test_fc_core",
+      "test_flatmesh",
+      "test_gizmo_settings",
+      "test_gizmo_toggle",
+      "test_gpu_adapter",
+      "test_grid_api",
+      "test_grid_overlay_coin",
+      "test_grid_overlay_fork",
+      "test_grid_provider_facade",
+      "test_gui_document",
+      "test_gui_document_observers",
+      "test_gui_preview",
+      "test_gui_selection_object",
+      "test_gui_selection_write",
+      "test_gui_view_facade",
+      "test_manipulator_specs",
+      "test_mod_providers",
+      "test_mvp_workflow",
+      "test_namespace_separation",
+      "test_param_persistence",
+      "test_parity",
+      "test_qt_isolation",
+      "test_selection",
+      "test_settings_model",
+      "test_stage_py",
+      "test_ui_loader",
+      "test_view_tools"
+    ],
+    "kernel": [
+      "test_flatmesh_part",
+      "test_gui_snapping",
+      "test_packaged_modules",
+      "test_part"
+    ]
+  }
+}

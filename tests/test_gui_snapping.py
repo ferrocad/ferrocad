@@ -38,13 +38,11 @@ try:
 except ImportError:  # a build without the extension: every test skips
     stage = None
 
-try:
-    import Part
-except ImportError:  # the Part workbench is a separate build
-    Part = None
+# This module is in the `kernel` suite in `contracts/test-images.json`, so it
+# runs only in the combined image; the Part import is not a probe.
+import Part  # noqa: E402
 
 needs_stage = unittest.skipIf(stage is None, "the ferrocad_stage extension is not built")
-needs_part = unittest.skipIf(Part is None, "the Part workbench is not built")
 
 
 def _simplecad_snapping():
@@ -190,7 +188,6 @@ class RayTest(unittest.TestCase):
 
 
 @needs_stage
-@needs_part
 @needs_simplecad
 class SnapperTest(unittest.TestCase):
     """``Snapper`` ranks real kernel geometry through the facade's projection."""
@@ -273,7 +270,6 @@ class SnapperTest(unittest.TestCase):
 
 
 @needs_stage
-@needs_part
 @needs_simplecad
 class PickThroughTheStageTest(unittest.TestCase):
     """``snapping.pick`` resolves the facade's ranked hit to a kernel face."""

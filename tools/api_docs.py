@@ -26,6 +26,8 @@ import inspect
 import sys
 from pathlib import Path
 
+import test_images
+
 REPO = Path(__file__).resolve().parents[1]
 DOC_DIR = REPO / "docs" / "python-api"
 PYTHON_DIR = REPO / "python"
@@ -66,32 +68,14 @@ MODULES = [
 SKIP_NAMES = {"annotations"}
 SKIP_TYPES = (type(sys),)  # imported modules are structure, not surface
 
-# Workbench modules that a developer's build may leave in `python/` next to the
-# base facade. They are not part of these pages, and importing them changes the
-# facade's surface: `ferrocad_combined` publishes `Part`, whose sketches install
-# `addGeometry` on `ferrocad.DocumentObject`, and Part's own exception class
-# overwrites `ferrocad.CADKernelError`. CI's headless doc job builds only
-# `ferrocad_py`, so a page generated with those artifacts would not match there
-# (and `--check` would fail on exactly the machines that built the workbenches).
-_WORKBENCH_MODULES = frozenset({"ferrocad_combined", "Part", "Mesh", "MeshPart"})
-
-
-class _HideWorkbenches:
-    """A meta-path finder that makes the workbench modules unimportable.
-
-    The generated reference describes the base facade. Hiding the workbenches
-    keeps the output identical whether or not `ferrocad_combined.abi3.so` is in
-    `python/`; the workbench surfaces are measured by `tools/part_api_audit.py`.
-    """
-
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.partition(".")[0] in _WORKBENCH_MODULES:
-            raise ModuleNotFoundError(
-                f"{fullname} is a workbench module; the API reference is "
-                "generated from the base facade",
-                name=fullname,
-            )
-        return None
+# The generated reference describes the base facade. A developer's build may
+# leave workbench modules in `python/` next to it: `ferrocad_combined` publishes
+# `Part`, whose sketches install `addGeometry` on `ferrocad.DocumentObject`, and
+# Part's own exception class overwrites `ferrocad.CADKernelError`. CI's headless
+# doc job builds only `ferrocad_py`, so a page generated with those artifacts
+# would not match there (and `--check` would fail on exactly the machines that
+# built the workbenches). The `app` test image hides them; the workbench surfaces
+# are measured by `tools/part_api_audit.py`.
 
 INDEX_PREAMBLE = """# Python API reference
 
@@ -413,7 +397,7 @@ def main(argv: list[str]) -> int:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
 
-    sys.meta_path.insert(0, _HideWorkbenches())
+    test_images.install("app")
 
     descriptions = []
     for name, role, note in MODULES:

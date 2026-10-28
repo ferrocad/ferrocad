@@ -6,8 +6,10 @@ CPython with ``PYTHONPATH=python`` — exactly what a user does — and checks t
 shims reach the combined ``ferrocad_combined`` extension and that the four modules
 share one document registry.
 
-It skips when ``python/ferrocad_combined.abi3.so`` has not been built. Build it with
-``./build.sh`` (needs OCCT) or, for a quick local check::
+It belongs to the ``kernel`` suite in ``contracts/test-images.json``: the
+packaged modules only exist in the combined image, so ``tools/run_tests.py
+--image app`` does not run this module at all. Build the image with ``./build.sh``
+(needs OCCT) or, for a quick local check::
 
     cargo build -p ferrocad_combined_py --features ferrocad_combined_py/extension-module
     cp target/debug/libferrocad_combined_py.so python/ferrocad_combined.abi3.so
@@ -23,7 +25,12 @@ from pathlib import Path
 
 PYTHON_DIR = Path(__file__).resolve().parents[1] / "python"
 REPO = PYTHON_DIR.parent
-IMAGE = PYTHON_DIR / "ferrocad_combined.abi3.so"
+TOOLS = REPO / "tools"
+# The image model, not the presence of a `.so`, decides whether this module runs.
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+import test_images  # noqa: E402
+
 # The extension links OCCT, which ships no RUNPATH. The app launcher sets this
 # from the packaged `lib/`; a development checkout has the prefix in `.occt/`.
 OCCT_LIB = REPO / ".occt" / "prefix" / "lib"
@@ -118,8 +125,12 @@ def _run(source: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@unittest.skipUnless(
-    IMAGE.is_file(), "ferrocad_combined.abi3.so is not built; run ./build.sh"
+_ACTIVE_IMAGE = test_images.active()
+
+
+@unittest.skipIf(
+    _ACTIVE_IMAGE is not None and "Part" in test_images.excluded(_ACTIVE_IMAGE),
+    "the packaged modules are the combined image",
 )
 class PackagedModulesTests(unittest.TestCase):
     def assert_ok(self, source: str) -> None:

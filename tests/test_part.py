@@ -7,8 +7,10 @@ module cannot share its process-global core registry with a second ``.so``; the
 in-image composition is covered by
 ``crates/ferrocad_part_py/tests/part_boot.rs``.
 
-``Part`` may therefore be unimportable here; the tests skip rather than fail. They
-activate automatically once Part is bundled into the extension.
+This module is in the ``kernel`` suite in ``contracts/test-images.json``: it is
+never run in the app-only image, so it imports Part directly. Run it with
+``tools/run_tests.py --image combined``; plain ``unittest discover`` in an
+app-only checkout is not a supported way to run the suites.
 """
 
 from __future__ import annotations
@@ -16,15 +18,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 
-try:
-    import Part  # noqa: F401
-
-    HAVE_PART = True
-except ImportError:
-    HAVE_PART = False
+import Part
 
 
-@unittest.skipUnless(HAVE_PART, "Part is not in this extension build")
 class MakeBoxTests(unittest.TestCase):
     def test_make_box_returns_a_shape(self):
         shape = Part.makeBox(2, 3, 4)
@@ -38,7 +34,6 @@ class MakeBoxTests(unittest.TestCase):
         self.assertTrue(Part.makeBox(1, 1, 1).exportBrepToString())
 
 
-@unittest.skipUnless(HAVE_PART, "Part is not in this extension build")
 class ShapePropertyTests(unittest.TestCase):
     def test_a_part_feature_round_trips_its_shape(self):
         import FreeCAD

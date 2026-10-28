@@ -23,7 +23,7 @@ folders are what `tools/build_book.py` publishes at
 
 | I want to… | Start here |
 | --- | --- |
-| understand 3D CAD concepts | [general/cad-architecture.md](general/cad-architecture.md) |
+| understand 3D CAD concepts | [general/README.md](general/README.md) |
 | use the app's window (UI) | [user/README.md](user/README.md) and the [repository README](../README.md) |
 | use the Python console, a macro, or a script (API) | [UI users and API users](user/explanation/ui-and-api.md), then [user/README.md](user/README.md) and [python-api/index.md](python-api/index.md) |
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
@@ -38,8 +38,12 @@ Explanations of the ideas behind 3D CAD and FerroCAD. They serve a general audie
 UI users, API users and developers — and avoid task steps and crate internals except
 where the mapping needs them.
 
-- [general/README.md](general/README.md) — the concepts landing page and reading order.
-- [general/cad-architecture.md](general/cad-architecture.md) — NURBS/B-Rep vs meshes, tessellation and the GPU pipeline, topological naming, and how FerroCAD's crates map onto them.
+- [general/README.md](general/README.md) — the overview and reading order for the five chapters.
+- [general/01-the-dna-of-3d-geometry.md](general/01-the-dna-of-3d-geometry.md) — vectors, NURBS, B-Rep and meshes.
+- [general/02-the-great-translation.md](general/02-the-great-translation.md) — tessellation, Coin3D and the GPU pipeline.
+- [general/03-topological-naming.md](general/03-topological-naming.md) — parametric history and the topological naming problem.
+- [general/04-decoupling-the-tns.md](general/04-decoupling-the-tns.md) — an external, pluggable naming layer.
+- [general/05-how-ferrocad-organizes-this.md](general/05-how-ferrocad-organizes-this.md) — how FerroCAD's crates map onto each layer.
 
 ## User documentation
 

@@ -492,14 +492,18 @@ class TestBook(unittest.TestCase):
             "python-api/FreeCAD.md",
         )
         self.assertEqual(
-            build_book._book_path(build_book.GENERAL / "cad-architecture.md").as_posix(),
-            "general/cad-architecture.md",
+            build_book._book_path(
+                build_book.GENERAL / "01-the-dna-of-3d-geometry.md"
+            ).as_posix(),
+            "general/01-the-dna-of-3d-geometry.md",
         )
 
     def test_a_general_link_stays_inside_the_book(self):
         source = build_book.USER / "explanation" / "x.md"
-        out = build_book._rewrite_links("[x](../../general/cad-architecture.md)", source)
-        self.assertIn("(../general/cad-architecture.md)", out)
+        out = build_book._rewrite_links(
+            "[x](../../general/01-the-dna-of-3d-geometry.md)", source
+        )
+        self.assertIn("(../general/01-the-dna-of-3d-geometry.md)", out)
 
     def test_a_cross_section_link_is_recomputed_for_the_book_layout(self):
         source = build_book.USER / "how-to" / "x.md"

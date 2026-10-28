@@ -5,7 +5,7 @@ the published mdBook is the user and addon surface.
 
 Start with [architecture.md](architecture.md), the crate map and call paths every
 section links back to. If you are new to 3D CAD, read
-[A gentle introduction to 3D CAD architecture](../general/cad-architecture.md) first;
+[A gentle introduction to 3D CAD architecture](../general/README.md) first;
 its last chapter maps NURBS/B-Rep, tessellation and naming onto the crates described
 here. The research notes that shaped these designs live in
 [`../project/research/`](../project/research/README.md); once a result is stable, the

@@ -17,7 +17,7 @@ of it. The gentle introduction is
 
 Background that serves both readers:
 
-- [A gentle introduction to 3D CAD architecture](../general/cad-architecture.md) —
+- [A gentle introduction to 3D CAD architecture](../general/README.md) —
   NURBS/B-Rep vs meshes, tessellation and the GPU pipeline, topological naming, and
   how FerroCAD's crates map onto them.
 

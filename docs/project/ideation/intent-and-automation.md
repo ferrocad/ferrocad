@@ -2,7 +2,7 @@
 
 Status: ideation (2026-10-28). A product thesis, not a commitment. Companion to
 [`README.md`](README.md), [`../ROADMAP.md`](../ROADMAP.md), the
-[general CAD introduction](../../general/cad-architecture.md) and the
+[general CAD introduction](../../general/README.md) and the
 [developer architecture](../../developer/README.md).
 
 ## The thesis

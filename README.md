@@ -270,7 +270,7 @@ history, [`record/tasks/`](docs/project/record/tasks/README.md) for the closed d
 [`docs/INDEX.md`](docs/INDEX.md) is the complete document index: every note is listed
 once under **general**, **user**, **mods**, **python-api**, **developer**, or **project**.
 The [general concepts](docs/general/README.md) open with a
-[gentle introduction to 3D CAD architecture](docs/general/cad-architecture.md), which
+[gentle introduction to 3D CAD architecture](docs/general/README.md), which
 maps NURBS/B-Rep, tessellation and naming onto FerroCAD's crates. The user pages
 then open with [UI users and API users](docs/user/explanation/ui-and-api.md), which
 explains why the Python API is the contract and the window is one client of it.

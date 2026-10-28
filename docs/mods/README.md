@@ -144,7 +144,7 @@ should go through the functions above.
 
 ## Background
 
-- [`../general/cad-architecture.md`](../general/cad-architecture.md) — the geometry,
+- [`../general/README.md`](../general/README.md) — the geometry,
   tessellation and naming pipeline behind the API, and how FerroCAD's crates map onto
   it.
 - [`../user/explanation/how-the-shell-talks-to-the-document.md`](../user/explanation/how-the-shell-talks-to-the-document.md)

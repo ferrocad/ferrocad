@@ -1,19 +1,24 @@
-# General concepts
+# A gentle introduction to 3D CAD architecture
 
-Explanations of the ideas behind 3D CAD and FerroCAD. They are written for a general
-audience — useful to UI users, API users and developers — and they avoid task steps.
+*From mathematical curves to GPU silicon and parametric history.*
 
-- [A gentle introduction to 3D CAD architecture](cad-architecture.md) — the dual
-  identity of a CAD model (NURBS/B-Rep vs mesh), the tessellation and GPU pipeline,
-  and topological naming; the last chapter maps each layer to FerroCAD's crates.
+When you first open a 3D CAD program like FreeCAD, the 3D world on your screen looks
+unified and seamless. You can rotate a cylinder, click on its edges, and modify its
+size. Under the hood, the software is running a dual-identity system: it constantly
+translates pure, abstract mathematics into a visual language the hardware understands.
 
-## Related reading
+To use 3D design well — or to architect and script CAD software — it helps to
+understand the difference between what a 3D model *is* in memory, how its history is
+tracked, and how it is drawn.
 
-- [UI users and API users](../user/explanation/ui-and-api.md) — why the Python API is
-  the contract and the window is one client of it.
-- [Developer documentation](../developer/README.md) — the stable crate map and design
-  notes once you want the implementation details.
-- [Document index](../INDEX.md) — every note in the tree, grouped by folder.
+Chapters 1–4 are written against **FreeCAD**, because its vocabulary (OCCT, B-Rep,
+Coin3D, `Part::TopoShape`) is the one most CAD users and workbench authors already
+share. Chapter 5 maps each layer to **FerroCAD**'s crates.
 
-The published mdBook includes this section with the user, addon and reference
-material.
+## Chapters
+
+1. [The DNA of 3D geometry](01-the-dna-of-3d-geometry.md) — vectors, NURBS, B-Rep and meshes.
+2. [The great translation](02-the-great-translation.md) — tessellation, Coin3D and the GPU pipeline.
+3. [Topological naming](03-topological-naming.md) — parametric history and the topological naming problem.
+4. [Decoupling the TNS](04-decoupling-the-tns.md) — an external, pluggable naming layer.
+5. [How FerroCAD organizes this](05-how-ferrocad-organizes-this.md) — the crates behind each layer.

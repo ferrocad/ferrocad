@@ -40,7 +40,7 @@ a workbench command call the same functions.
 
 ## Start here
 
-- **New to 3D CAD?** — [A gentle introduction to 3D CAD architecture](general/cad-architecture.md):
+- **New to 3D CAD?** — [A gentle introduction to 3D CAD architecture](general/README.md):
   NURBS/B-Rep vs meshes, the tessellation and GPU pipeline, topological naming, and
   how FerroCAD's crates map onto them.
 - **Using the app (UI)** — [user/README.md](user/README.md) and the

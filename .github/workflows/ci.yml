@@ -5,6 +5,31 @@ on:
   pull_request:
 
 jobs:
+  # Preflight: the two cheapest gates, deliberately first. `cargo xtask editions`
+  # reads `cargo metadata` only (no compiler, no OCCT, ~30 ms) and
+  # `tools/run_tests.py --check` only reads `contracts/test-images.json` (no
+  # imports, no build, ~0.06 s). Both fail in seconds -- on a kernel crate leaking
+  # into `ferrocad`/`ferrocad_toy`/the UI crates (`contracts/editions.json`) or on
+  # a stale test-image contract -- before any job spends minutes compiling. The
+  # runner image already has `cargo` and `python3`; this job installs no desktop
+  # dependencies and builds no extension.
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Edition dependency rules (contracts/editions.json)
+        run: cargo xtask editions --check
+
+      - name: Test-image contract (contracts/test-images.json)
+        # Every `tests/test_*.py` must be listed exactly once; an unlisted or
+        # deleted module is a reviewed-diff error, not a silent skip.
+        run: python3 tools/run_tests.py --check
+
   # Headless tests: the primary validation path. ferrocad_core's unit tests and
   # the PyO3 tests run without a display server or GPU.
   headless:
@@ -41,10 +66,18 @@ jobs:
           cargo build -p ferrocad_py --features extension-module
           cp target/debug/libferrocad_py.so python/ferrocad.abi3.so
 
-      - name: Python facade, bindings and MVP workflow tests
+      - name: Python facade, bindings and MVP workflow tests (the `app` image)
+        # This job builds only the primary extension (`ferrocad.abi3.so`), so it
+        # is the `app` image and cannot run the kernel suites. `run_tests.py
+        # --image app` runs the 41 app modules listed in
+        # `contracts/test-images.json`. A bare `unittest discover` is no longer
+        # usable here: `test_part`, `test_packaged_modules` and
+        # `test_gui_snapping` now import the kernel unconditionally instead of
+        # guarding behind `HAVE_PART`, and fail to import without the combined
+        # image. The kernel suites run in the `geometry` job instead.
         run: |
           PYTHONPATH=python python3 tests/test_fc_core.py
-          PYTHONPATH=python python3 -m unittest discover -s tests
+          PYTHONPATH=python python3 tools/run_tests.py --image app
           PYTHONPATH=python python3 examples/mvp_workflow.py
 
       - name: Generated documentation is current
@@ -202,6 +235,21 @@ jobs:
           cargo build -p ferrocad_combined_py --features ferrocad_combined_py/extension-module
           cp target/debug/libferrocad_combined_py.so python/ferrocad_combined.abi3.so
           PYTHONPATH=python python3 tests/test_packaged_modules.py -v
+
+      - name: Kernel Python suites (the `combined` image)
+        # The kernel suites (`tests/test_part`, `test_packaged_modules`,
+        # `test_gui_snapping`, `test_flatmesh_part`, 31 tests) need the one extension
+        # that links App + Part + Mesh, so they were skipped in every job before the
+        # test-image split. This step runs all 45 modules against the artifact
+        # the previous step copied to `python/ferrocad_combined.abi3.so`; the
+        # full `LD_LIBRARY_PATH` is required because importing Part loads OCCT.
+        run: |
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+          export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
+          export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
+          export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
+          PYTHONPATH=python python3 tools/run_tests.py --image combined
 
       - name: Boot the edition and check its built-in kernel image
         # K1: the previous step leaves `python/ferrocad_combined.abi3.so` on disk,

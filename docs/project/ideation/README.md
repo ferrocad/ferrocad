@@ -11,6 +11,9 @@ to be ambitious and incomplete; it becomes real only when it is accepted into th
 - [Intent, lineage and safe automation](intent-and-automation.md) — the product thesis:
   make design intent, dependencies, failures and automation first-class while keeping
   the FreeCAD-compatible Python API and `.FCStd` interoperability.
+- [FreeCAD pain points and the FerroCAD response](freecad-pain-points.md) — a
+  consolidated review of recurring community pain points, their upstream root causes,
+  and the crate or layer that could carry each response.
 
 ## The rule
 

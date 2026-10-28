@@ -187,6 +187,7 @@ Exploratory product ideas. They are hypotheses, not commitments or accepted desi
 
 - [project/ideation/README.md](project/ideation/README.md) — the ideation landing page and the rule for promoting an idea.
 - [project/ideation/intent-and-automation.md](project/ideation/intent-and-automation.md) — the product thesis: design intent as a document object, lineage as explanations, constraint proposals, live context, and a local-first agent surface.
+- [project/ideation/freecad-pain-points.md](project/ideation/freecad-pain-points.md) — a consolidated review of 13 recurring FreeCAD pain points, their upstream root causes, the FerroCAD response, and a validation plan.
 
 ### Research notes
 

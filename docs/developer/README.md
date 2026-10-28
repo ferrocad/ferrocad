@@ -22,6 +22,8 @@ decision is written here and the research is linked.
   visual language.
 - [workbenches/](workbenches/) — the workbench command model, upstream bring-up,
   conformance and the screenshot tooling.
+- [testing.md](testing.md) — the two test images, the edition dependency-closure
+  contract and the CI order.
 
 ## How to use it
 

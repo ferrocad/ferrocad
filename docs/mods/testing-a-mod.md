@@ -1,31 +1,56 @@
 # Testing a mod
 
-Status: guide (2026-10-22).
+Status: guide (2026-10-28).
 
 Almost everything a mod does can be driven without a window or a GPU. The
 application's own tests do exactly that, by executing `InitGui.py` and calling
 the same functions the shell calls.
 
-Run the suite with:
+## Choose a test image
+
+A test run names an **image**: the set of modules that run must be able to import.
+The runner installs an import blocker, so the image is enforced rather than
+inferred from whatever `.so` files happen to be in `python/`.
+
+| Image | Contains | What it is |
+| --- | --- | --- |
+| `app` | `ferrocad` only | the primary extension, exactly what CI's `headless` job builds. `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` are unimportable. |
+| `combined` | App + Part + Mesh in `ferrocad_combined` | everything, for tests that need the kernel. |
+
+Run a mod test in the `app` image, the way CI will:
 
 ```sh
-PYTHONPATH=python python3 -m unittest discover -s tests -v
+python3 tools/run_tests.py --check            # static contract check, no build
+python3 tools/run_tests.py --image app        # 41 modules, 686 tests, 21 skipped
+python3 tools/run_tests.py --image combined   # 44 modules, 704 tests, 3 skipped
 ```
 
-That command also runs in CI's `headless` job, which builds **only** the App
-extension (`ferrocad.abi3.so`) and fetches no kernel. `python/Part.py` therefore
-raises `ImportError` there, because `Part` needs the combined
-`ferrocad_combined` image. A test that touches `Part`, `Mesh`, `MeshPart` or a
-module that imports `Part` at module scope (for example `TechDraw`) must either
-skip when `Part` is unavailable or be made not to need it — otherwise it passes in
-a developer checkout, where `python/ferrocad_combined.abi3.so` is usually present,
-and fails only in CI. To reproduce the CI condition locally:
+`--image app` makes `import Part` fail even on a developer checkout that has
+`ferrocad_combined.abi3.so`, so a test that needs the kernel cannot pass locally
+and fail only in CI. `combined` runs every suite and needs OCCT; use it only when
+you are testing a kernel-backed mod.
 
-```sh
-mv python/ferrocad_combined.abi3.so /tmp/
-PYTHONPATH=python python3 -m unittest discover -s tests
-mv /tmp/ferrocad_combined.abi3.so python/
-```
+The runner enforces one invariant: **pass or skip, never error**. A test that
+needs something the image does not have is a failure, not a silent skip.
+
+## The contract
+
+`contracts/test-images.json` classifies every test module as `app` or `kernel`.
+A module that silently acquires a kernel dependency changes that file, so the
+drift shows up in review. `python3 tools/run_tests.py --check` verifies the
+contract names every module exactly once; it imports nothing and takes about
+0.06 s.
+
+For a new test, add the file and run
+`python3 tools/run_tests.py --write-contract`. A test that needs `Part`, `Mesh`,
+`MeshPart`, or a module that imports one of them at module scope belongs in a
+module the contract classifies as `kernel`; import it directly there. Do not add
+a `HAVE_PART` guard or a `skipUnless` decorator: a guard turns the dependency
+into a skip, hides it from the contract, and is what made plain
+`unittest discover` unreliable in the first place.
+
+The rationale and the edition-side rules are in
+[`../developer/testing.md`](../developer/testing.md).
 
 ## What needs no GPU
 

@@ -313,6 +313,11 @@ declarative path used by the current viewport.
 | `ferrocad_parametric` | The edition binary: the base app plus the Part workbench. |
 | `python/FreeCAD`, `python/FerroCAD` | The pure-Python `FreeCAD`/`FerroCAD` facades layered over the extension. |
 
+Which of those artifacts an edition may link is enforced, not just described:
+`cargo xtask editions --check` pins each edition's transitive normal dependency
+closure, and `tools/run_tests.py` pins which Python tests are allowed to need the
+kernel. See [`testing.md`](../developer/testing.md).
+
 The Python API is the product surface; the window is one client of it. The same
 `FreeCAD` calls work in the console, a macro, a headless workflow, or the UI. That is
 the distinction [UI users and API users](../user/explanation/ui-and-api.md) explains.

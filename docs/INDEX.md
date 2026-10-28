@@ -102,6 +102,7 @@ here.
 
 - [developer/README.md](developer/README.md) — the folder landing page and reading order.
 - [developer/architecture.md](developer/architecture.md) — the crate graph, the call paths, the dependency rules and the C-ABI rationale.
+- [developer/testing.md](developer/testing.md) — the two test images, the edition dependency-closure contract and the CI order.
 
 ### Architecture and the crate map
 

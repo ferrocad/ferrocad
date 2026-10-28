@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
-"""Run the Python suites against an **explicitly named** edition image.
+"""Run the Python suites against an **explicitly named** extension set.
 
 ``unittest discover`` runs against whatever ``.so`` files happen to be in
 ``python/``, so a test that needs ``Part`` passes on a developer checkout that
 built ``ferrocad_combined.abi3.so`` and fails in CI, which builds only the
 primary extension. This runner removes the inference:
 
-* each run names its image (``app`` or ``combined``);
-* ``test_images.install(image)`` runs before discovery in a **fresh
+* each run names the workbench modules it is **provided** (``--extension``),
+  and ``extensions.install`` hides every workbench module it was not given;
+* ``extensions.install(modules)`` runs before discovery in a **fresh
   subprocess**, so imports (and any module-level caching) cannot leak between
-  images;
-* ``contracts/test-images.json`` records which suite a module belongs to, so
-  adding a kernel dependency to an app module changes a reviewed diff.
+  extension sets;
+* ``contracts/extension-sets.json`` records which suite a module belongs to, so
+  adding a workbench dependency to a base module changes a reviewed diff.
 
 Usage::
 
     python3 tools/run_tests.py --check            # contract check, no imports
-    python3 tools/run_tests.py --image app        # the app-only suites
-    python3 tools/run_tests.py --image combined   # every suite
+    python3 tools/run_tests.py --extension base   # the base suites
+    python3 tools/run_tests.py --extension workbenches   # every suite
     python3 tools/run_tests.py --write-contract   # re-derive the contract
 
-An *error* is a failure; a *skip* is not. In the ``app`` image a module may
-pass or skip, never error. ``--write-contract`` therefore classifies a module
-as ``kernel`` when it passes in ``combined`` and passes nothing in ``app``. A
-module that passes nothing in *either* image is ``app``: it skips for an
-optional artifact or checkout (``fc_gen``, the SimpleCAD tree), which is a
-different axis. So is a module with no ``unittest`` tests at all, such as
-``tests/test_fc_core.py``, which CI runs as a script.
+An *error* is a failure; a *skip* is not. In the ``base`` set a module may pass
+or skip, never error. ``--write-contract`` therefore classifies a module as
+``workbenches`` when it passes with the workbench modules provided and passes
+nothing in ``base``. A module that passes nothing in *either* set is ``base``:
+it skips for an optional artifact or checkout (``fc_gen``, the SimpleCAD tree),
+which is a different axis. So is a module with no ``unittest`` tests at all,
+such as ``tests/test_fc_core.py``, which CI runs as a script.
 """
 
 from __future__ import annotations
@@ -39,16 +40,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-import test_images
+import extensions
 
 REPO = Path(__file__).resolve().parents[1]
 TESTS = REPO / "tests"
 TOOLS = REPO / "tools"
 PYTHON_DIR = REPO / "python"
-CONTRACT = REPO / "contracts" / "test-images.json"
+CONTRACT = REPO / "contracts" / "extension-sets.json"
 
-SCHEMA = 1
-SUITES = ("app", "kernel")
+SCHEMA = 2
+SUITES = tuple(extensions.PRESETS)
 _COMBINED_GLOB = "ferrocad_combined.abi3.*"
 
 _BUILD_HINT = (
@@ -82,21 +83,26 @@ def validate_contract(contract, modules: list[str]) -> list[str]:
 
     problems: list[str] = []
 
-    images = contract.get("images")
-    if not isinstance(images, list) or not all(
-        isinstance(name, str) for name in images
-    ):
-        problems.append("`images` must be a list of image names")
+    presets = contract.get("presets")
+    if not isinstance(presets, dict):
+        problems.append("`presets` must be an object mapping preset to modules")
     else:
-        known = set(test_images.IMAGES)
-        unknown = sorted(set(images) - known)
+        known = set(extensions.PRESETS)
+        unknown = sorted(set(presets) - known)
         if unknown:
-            problems.append(f"unknown image(s) in `images`: {', '.join(unknown)}")
-        missing = sorted(known - set(images))
+            problems.append(f"unknown preset(s) in `presets`: {', '.join(unknown)}")
+        missing = sorted(known - set(presets))
         if missing:
-            problems.append(f"missing image(s) in `images`: {', '.join(missing)}")
-        if len(images) != len(set(images)):
-            problems.append("`images` lists an image more than once")
+            problems.append(f"missing preset(s) in `presets`: {', '.join(missing)}")
+        for name, expected in extensions.PRESETS.items():
+            if name not in presets:
+                continue
+            listed = _module_list(presets[name], f"`presets.{name}`", problems)
+            if isinstance(presets[name], list) and listed != sorted(expected):
+                problems.append(
+                    f"`presets.{name}` must list exactly "
+                    f"{sorted(expected)}, not {listed}"
+                )
 
     suites = contract.get("suites")
     if not isinstance(suites, dict):
@@ -159,7 +165,7 @@ def check() -> int:
         for problem in problems:
             print(f"error: {problem}", file=sys.stderr)
         print(
-            "error: the test-image contract is out of date; run "
+            "error: the extension-set contract is out of date; run "
             "`python3 tools/run_tests.py --write-contract`",
             file=sys.stderr,
         )
@@ -167,15 +173,15 @@ def check() -> int:
 
     suites = contract["suites"]
     print(
-        "test-image contract is current "
-        f"({len(modules)} modules: {len(suites['app'])} app, "
-        f"{len(suites['kernel'])} kernel)"
+        "extension-set contract is current "
+        f"({len(modules)} modules: {len(suites['base'])} base, "
+        f"{len(suites['workbenches'])} workbenches)"
     )
     return 0
 
 
 # ---------------------------------------------------------------------------
-# Running one image
+# Running one extension set
 # ---------------------------------------------------------------------------
 def _combined_artifact() -> Path | None:
     matches = sorted(PYTHON_DIR.glob(_COMBINED_GLOB))
@@ -216,18 +222,19 @@ def _module_record(name: str) -> dict:
 
 
 def _child(request_path: Path) -> int:
-    """Run the request's modules against its image. Subprocess entry point only."""
+    """Run the request's modules against its extension set. Subprocess entry point only."""
 
     import unittest
 
     request = json.loads(request_path.read_text())
-    image = request["image"]
+    provided = frozenset(request["extensions"])
     verbosity = request["verbosity"]
     modules = request["modules"]
 
-    # Install the image *before* discovery/importing, so a module that needs a
-    # hidden kernel module cannot be satisfied by a stale ``sys.modules`` entry.
-    test_images.install(image)
+    # Install the extension set *before* discovery/importing, so a module that
+    # needs a hidden workbench module cannot be satisfied by a stale
+    # ``sys.modules`` entry.
+    extensions.install(provided)
 
     if str(TESTS) not in sys.path:
         sys.path.insert(0, str(TESTS))
@@ -240,7 +247,7 @@ def _child(request_path: Path) -> int:
     # Import every module before running any test, which is what
     # ``unittest discover`` does. Running one module at a time would let a test
     # that mutates ``sys.modules`` change a *later* module's import-time
-    # decisions, so the image would not be the only variable.
+    # decisions, so the extension set would not be the only variable.
     records = [_module_record(name) for name in modules]
     suites = {}
     for record in records:
@@ -266,7 +273,9 @@ def _child(request_path: Path) -> int:
         record["failures"] = len(result.failures)
         record["errors"] = len(result.errors)
 
-    Path(request["result"]).write_text(json.dumps({"image": image, "modules": records}))
+    Path(request["result"]).write_text(
+        json.dumps({"extensions": sorted(provided), "modules": records})
+    )
     failed = any(
         record["errors"] or record["failures"] or record["load_error"]
         for record in records
@@ -274,7 +283,9 @@ def _child(request_path: Path) -> int:
     return 1 if failed else 0
 
 
-def _run(image: str, modules: list[str], verbosity: int) -> tuple[list[dict] | None, int]:
+def _run(
+    provided: frozenset[str], modules: list[str], verbosity: int
+) -> tuple[list[dict] | None, int]:
     """Run ``modules`` in one fresh subprocess and return its records."""
 
     with tempfile.TemporaryDirectory(prefix="ferrocad-tests-") as directory:
@@ -284,7 +295,7 @@ def _run(image: str, modules: list[str], verbosity: int) -> tuple[list[dict] | N
         request_path.write_text(
             json.dumps(
                 {
-                    "image": image,
+                    "extensions": sorted(provided),
                     "verbosity": verbosity,
                     "modules": modules,
                     "result": str(result_path),
@@ -299,8 +310,9 @@ def _run(image: str, modules: list[str], verbosity: int) -> tuple[list[dict] | N
         ]
         process = subprocess.run(argv, cwd=REPO, env=_child_env())
         if not result_path.is_file():
+            label = ", ".join(sorted(provided)) or "base"
             print(
-                f"error: the {image!r} test process exited with "
+                f"error: the {label!r} extension-set process exited with "
                 f"{process.returncode} before reporting results",
                 file=sys.stderr,
             )
@@ -322,8 +334,8 @@ def _status(record: dict) -> str:
     return "ok"
 
 
-def _summarise(image: str, records: list[dict]) -> None:
-    print(f"\nimage: {image}")
+def _summarise(label: str, records: list[dict]) -> None:
+    print(f"\nextension set: {label}")
     print(f"{'module':<34} {'tests':>6} {'skip':>6} {'fail':>6} {'err':>6}  status")
     for record in records:
         print(
@@ -340,11 +352,13 @@ def _summarise(image: str, records: list[dict]) -> None:
     )
 
 
-def run_image(image: str, verbosity: int) -> int:
-    if image == "combined" and _combined_artifact() is None:
+def run_set(modules: frozenset[str], verbosity: int) -> int:
+    if modules and _combined_artifact() is None:
         artifact = _COMBINED_GLOB.replace(".*", ".so")
+        provided = ", ".join(sorted(modules))
         print(
-            f"error: image 'combined' needs python/{artifact}, which is not built.\n"
+            f"error: the extension set {provided!r} needs python/{artifact}, "
+            "which is not built.\n"
             f"       Run {_BUILD_HINT}.",
             file=sys.stderr,
         )
@@ -367,29 +381,31 @@ def run_image(image: str, verbosity: int) -> int:
         for problem in problems:
             print(f"error: {problem}", file=sys.stderr)
         print(
-            "error: the test-image contract is out of date; run "
+            "error: the extension-set contract is out of date; run "
             "`python3 tools/run_tests.py --write-contract`",
             file=sys.stderr,
         )
         return 2
 
     suites = contract["suites"]
-    modules = list(suites["app"])
-    if image == "combined":
-        modules += list(suites["kernel"])
+    selected = list(suites["base"])
+    if modules:
+        selected += list(suites["workbenches"])
     else:
-        not_run = len(suites["kernel"])
+        not_run = len(suites["workbenches"])
         if not_run:
             print(
-                f"note: {not_run} kernel module(s) are not run in the app image; "
-                "`--image combined` runs them",
+                f"note: {not_run} workbench module(s) are not run without an "
+                "extension; provide them with `--extension Part --extension Mesh "
+                "--extension MeshPart` (or `--extension workbenches`)",
                 file=sys.stderr,
             )
 
-    records, code = _run(image, modules, verbosity)
+    label = ", ".join(sorted(modules)) or "nothing (base)"
+    records, code = _run(modules, selected, verbosity)
     if records is None:
         return code
-    _summarise(image, records)
+    _summarise(label, records)
 
     failed = [
         record
@@ -399,7 +415,7 @@ def run_image(image: str, verbosity: int) -> int:
     if failed:
         print(
             f"\nerror: {len(failed)} module(s) errored or failed in the "
-            f"{image!r} image",
+            f"extension set {label!r}",
             file=sys.stderr,
         )
         return 1
@@ -422,8 +438,8 @@ def write_contract(verbosity: int) -> int:
     if _combined_artifact() is None:
         artifact = _COMBINED_GLOB.replace(".*", ".so")
         print(
-            "error: `--write-contract` runs every module in the combined image, "
-            f"so python/{artifact} must exist.\n"
+            "error: `--write-contract` runs every module with the workbenches "
+            f"extension set, so python/{artifact} must exist.\n"
             f"       Run {_BUILD_HINT}.",
             file=sys.stderr,
         )
@@ -432,47 +448,50 @@ def write_contract(verbosity: int) -> int:
     modules = discovered_modules()
     print(f"deriving the contract from {len(modules)} modules\n", file=sys.stderr)
 
-    combined, code = _run("combined", modules, verbosity)
-    if combined is None:
+    workbenches, code = _run(extensions.preset("workbenches"), modules, verbosity)
+    if workbenches is None:
         return code
     broken = [
         record
-        for record in combined
+        for record in workbenches
         if record["errors"] or record["failures"] or record["load_error"]
     ]
     if broken:
-        _summarise("combined", combined)
+        _summarise("workbenches", workbenches)
         print(
-            "\nerror: the combined image is not green, so the contract cannot be "
-            "derived; fix these modules first",
+            "\nerror: the workbenches extension set is not green, so the contract "
+            "cannot be derived; fix these modules first",
             file=sys.stderr,
         )
         return 1
 
-    app, code = _run("app", modules, verbosity)
-    if app is None:
+    base, code = _run(extensions.preset("base"), modules, verbosity)
+    if base is None:
         return code
 
-    combined_by_module = {record["module"]: record for record in combined}
+    workbenches_by_module = {record["module"]: record for record in workbenches}
     suites: dict[str, list[str]] = {suite: [] for suite in SUITES}
-    for record in app:
-        # A module that passes any test in the app image is an app module. A
-        # module that passes nothing in *either* image is not kernel-dependent:
+    for record in base:
+        # A module that passes any test in the base set is a base module. A
+        # module that passes nothing in *either* set is not workbench-dependent:
         # it selects for an optional artifact or checkout (fc_gen, the SimpleCAD
-        # tree). Kernel means it works in `combined` and cannot in `app`.
+        # tree). Workbenches means it works with the workbench modules and
+        # cannot in `base`.
         if _passes_any(record) or not _passes_any(
-            combined_by_module[record["module"]]
+            workbenches_by_module[record["module"]]
         ):
-            suites["app"].append(record["module"])
+            suites["base"].append(record["module"])
         else:
-            suites["kernel"].append(record["module"])
+            suites["workbenches"].append(record["module"])
 
     for suite in suites:
         suites[suite].sort()
 
     contract = {
         "schema": SCHEMA,
-        "images": list(test_images.IMAGES),
+        "presets": {
+            name: sorted(provided) for name, provided in extensions.PRESETS.items()
+        },
         "suites": suites,
     }
     text = json.dumps(contract, indent=2) + "\n"
@@ -480,7 +499,7 @@ def write_contract(verbosity: int) -> int:
     if old == text:
         print(
             f"\n{CONTRACT.relative_to(REPO)} is unchanged "
-            f"({len(suites['app'])} app, {len(suites['kernel'])} kernel)"
+            f"({len(suites['base'])} base, {len(suites['workbenches'])} workbenches)"
         )
         return 0
 
@@ -488,7 +507,7 @@ def write_contract(verbosity: int) -> int:
     CONTRACT.write_text(text)
     print(
         f"\nwrote {CONTRACT.relative_to(REPO)} "
-        f"({len(suites['app'])} app, {len(suites['kernel'])} kernel)"
+        f"({len(suites['base'])} base, {len(suites['workbenches'])} workbenches)"
     )
     return 0
 
@@ -496,6 +515,28 @@ def write_contract(verbosity: int) -> int:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+def _resolve_extension_set(parser, values: list[str]) -> frozenset[str]:
+    """The workbench modules the run is provided, from the ``--extension`` flags."""
+
+    if not values:
+        return extensions.preset("base")
+
+    presets = [value for value in values if value in extensions.PRESETS]
+    if presets:
+        if len(values) > 1:
+            parser.error(
+                f"--extension {presets[0]} is a preset and cannot be combined "
+                "with other --extension values; name the modules it provides "
+                "instead"
+            )
+        return extensions.preset(presets[0])
+
+    try:
+        return extensions.provided(frozenset(values))
+    except ValueError as error:
+        parser.error(str(error))
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
@@ -505,37 +546,42 @@ def main(argv: list[str]) -> int:
     group.add_argument(
         "--check",
         action="store_true",
-        help="validate contracts/test-images.json against tests/test_*.py (no imports)",
+        help="validate contracts/extension-sets.json against tests/test_*.py "
+        "(no imports)",
     )
     group.add_argument(
-        "--image",
-        choices=sorted(test_images.IMAGES),
-        help="run the suites for one image",
+        "--extension",
+        action="append",
+        metavar="NAME",
+        help="a workbench module this run is provided (repeatable), or a preset "
+        f"({', '.join(sorted(extensions.PRESETS))})",
     )
     group.add_argument(
         "--write-contract",
         action="store_true",
-        help="run each module in both images and re-derive the contract",
+        help="run each module in both extension sets and re-derive the contract",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="verbose unittest output"
     )
     parser.add_argument(
-        "--_child", metavar="REQUEST", help="internal: run one image in a subprocess"
+        "--_child",
+        metavar="REQUEST",
+        help="internal: run one extension set in a subprocess",
     )
     args = parser.parse_args(argv)
-
-    if args._child:
-        return _child(Path(args._child))
-
-    if not (args.check or args.image or args.write_contract):
-        parser.error("one of --check, --image or --write-contract is required")
 
     if args.check:
         return check()
     if args.write_contract:
         return write_contract(2 if args.verbose else 1)
-    return run_image(args.image, 2 if args.verbose else 1)
+    if args._child:
+        return _child(Path(args._child))
+
+    if not args.extension:
+        parser.error("one of --check, --extension or --write-contract is required")
+    verbosity = 2 if args.verbose else 1
+    return run_set(_resolve_extension_set(parser, args.extension), verbosity)
 
 
 if __name__ == "__main__":

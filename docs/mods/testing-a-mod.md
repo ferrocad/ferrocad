@@ -6,46 +6,47 @@ Almost everything a mod does can be driven without a window or a GPU. The
 application's own tests do exactly that, by executing `InitGui.py` and calling
 the same functions the shell calls.
 
-## Choose a test image
+## Choose an extension set
 
-A test run names an **image**: the set of modules that run must be able to import.
-The runner installs an import blocker, so the image is enforced rather than
-inferred from whatever `.so` files happen to be in `python/`.
+A test run names an **extension set**: the workbench modules it is **provided**.
+`--extension` names what is provided, and the runner installs an import blocker
+for everything else, so the set is enforced rather than inferred from whatever
+`.so` files happen to be in `python/`.
 
-| Image | Contains | What it is |
+| Extension set | Provides | What it is |
 | --- | --- | --- |
-| `app` | `ferrocad` only | the primary extension, exactly what CI's `headless` job builds. `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` are unimportable. |
-| `combined` | App + Part + Mesh in `ferrocad_combined` | everything, for tests that need the kernel. |
+| `base` | no workbench module (`ferrocad` only) | the primary extension, exactly what CI's `headless` job builds. `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` are unimportable. |
+| `workbenches` | `ferrocad_combined`, `Part`, `Mesh`, `MeshPart` | every workbench module, for tests that need the kernel. |
 
-Run a mod test in the `app` image, the way CI will:
+Run a mod test against `base`, the way CI will:
 
 ```sh
-python3 tools/run_tests.py --check            # static contract check, no build
-python3 tools/run_tests.py --image app        # 41 modules, 686 tests, 21 skipped
-python3 tools/run_tests.py --image combined   # 44 modules, 704 tests, 3 skipped
+python3 tools/run_tests.py --check                  # static contract check, no build
+python3 tools/run_tests.py --extension base         # 41 modules, 673 tests, 8 skipped
+python3 tools/run_tests.py --extension workbenches  # 45 modules, 704 tests, 3 skipped
 ```
 
-`--image app` makes `import Part` fail even on a developer checkout that has
+`--extension base` makes `import Part` fail even on a developer checkout that has
 `ferrocad_combined.abi3.so`, so a test that needs the kernel cannot pass locally
-and fail only in CI. `combined` runs every suite and needs OCCT; use it only when
-you are testing a kernel-backed mod.
+and fail only in CI. `workbenches` runs every suite and needs OCCT; use it only
+when you are testing a kernel-backed mod.
 
 The runner enforces one invariant: **pass or skip, never error**. A test that
-needs something the image does not have is a failure, not a silent skip.
+needs something the set does not provide is a failure, not a silent skip.
 
 ## The contract
 
-`contracts/test-images.json` classifies every test module as `app` or `kernel`.
-A module that silently acquires a kernel dependency changes that file, so the
-drift shows up in review. `python3 tools/run_tests.py --check` verifies the
-contract names every module exactly once; it imports nothing and takes about
-0.06 s.
+`contracts/extension-sets.json` classifies every test module as `base` or
+`workbenches`. A module that silently acquires a workbench dependency changes
+that file, so the drift shows up in review. `python3 tools/run_tests.py --check`
+verifies the contract names every module exactly once and that its `presets`
+match `tools/extensions.py`; it imports nothing and takes about 0.06 s.
 
 For a new test, add the file and run
 `python3 tools/run_tests.py --write-contract`. A test that needs `Part`, `Mesh`,
 `MeshPart`, or a module that imports one of them at module scope belongs in a
-module the contract classifies as `kernel`; import it directly there. Do not add
-a `HAVE_PART` guard or a `skipUnless` decorator: a guard turns the dependency
+module the contract classifies as `workbenches`; import it directly there. Do not
+add a `HAVE_PART` guard or a `skipUnless` decorator: a guard turns the dependency
 into a skip, hides it from the contract, and is what made plain
 `unittest discover` unreliable in the first place.
 

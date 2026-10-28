@@ -201,9 +201,10 @@ cargo test -q -p ferrocad_stage -p ferrocad_stage_py --offline
 cargo test -q -p ferrocad_part_py --test draft_tools --offline   # real Part kernel
 ```
 
-The standalone pytest image has no `Part`, so the creation tests use a documented
-`Part.makePolygon` stub; the in-image Rust test is the same Python suite with the real
-kernel. The surface and its gaps are in [`draft-tools.md`](draft-tools.md).
+A standalone pytest run has no `Part` unless the workbench modules are
+provided, so the creation tests use a documented `Part.makePolygon` stub; the
+in-process Rust test is the same Python suite with the real kernel. The surface
+and its gaps are in [`draft-tools.md`](draft-tools.md).
 
 ### Reading the report
 

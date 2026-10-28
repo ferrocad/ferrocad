@@ -102,7 +102,7 @@ here.
 
 - [developer/README.md](developer/README.md) — the folder landing page and reading order.
 - [developer/architecture.md](developer/architecture.md) — the crate graph, the call paths, the dependency rules and the C-ABI rationale.
-- [developer/testing.md](developer/testing.md) — the two test images, the edition dependency-closure contract and the CI order.
+- [developer/testing.md](developer/testing.md) — extension sets, the edition dependency-closure contract and the CI order.
 
 ### Architecture and the crate map
 
@@ -176,6 +176,13 @@ than deleted.
 - [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md) — the authoritative direction: why a Rust reimplementation, the risk register and the shape of the work.
 - [project/direction/mvp-path.md](project/direction/mvp-path.md) — the headless engine MVP: definition, acceptance script and the A/B/C/D slice plan.
 - [project/direction/app-shell-vision.md](project/direction/app-shell-vision.md) — the interactive window: the five pillars, the architecture and S1–S6.
+
+### Ideation
+
+Exploratory product ideas. They are hypotheses, not commitments or accepted designs.
+
+- [project/ideation/README.md](project/ideation/README.md) — the ideation landing page and the rule for promoting an idea.
+- [project/ideation/intent-and-automation.md](project/ideation/intent-and-automation.md) — the product thesis: design intent as a document object, lineage as explanations, constraint proposals, live context, and a local-first agent surface.
 
 ### Research notes
 

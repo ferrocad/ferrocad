@@ -38,8 +38,9 @@ try:
 except ImportError:  # a build without the extension: every test skips
     stage = None
 
-# This module is in the `kernel` suite in `contracts/test-images.json`, so it
-# runs only in the combined image; the Part import is not a probe.
+# This module is in the `workbenches` suite in `contracts/extension-sets.json`, so
+# it runs only when the workbench modules are provided; the Part import is not a
+# probe.
 import Part  # noqa: E402
 
 needs_stage = unittest.skipIf(stage is None, "the ferrocad_stage extension is not built")

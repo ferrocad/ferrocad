@@ -2,7 +2,7 @@
 //!
 //! Every edition is a crate in this workspace, and the cheap editions must not
 //! grow a geometry kernel by accident: `ferrocad_toy` is documented as
-//! kernel-free, `ferrocad_py` is the App-only image, and the GUI/renderer layer
+//! kernel-free, `ferrocad_py` is the App-only extension, and the GUI/renderer layer
 //! sits below Part. Nothing enforced that before, so a single ordinary
 //! `[dependencies]` line could pull OCCT into the toy build unnoticed.
 //!
@@ -172,7 +172,7 @@ const RULES: &[Rule] = &[
     },
     Rule {
         package: "ferrocad_py",
-        reason: "the standalone Python image is App-only",
+        reason: "the standalone Python extension is App-only",
         forbidden: &["ferrocad_part_py", "ferrocad_mesh_py", "ferrocad_occt"],
         required: &[],
     },
@@ -184,7 +184,7 @@ const RULES: &[Rule] = &[
     },
     Rule {
         package: "ferrocad_combined_py",
-        reason: "the combined image links Part and Mesh",
+        reason: "the combined extension links Part and Mesh",
         forbidden: &[],
         required: &["ferrocad_part_py", "ferrocad_mesh_py"],
     },

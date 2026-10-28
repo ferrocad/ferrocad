@@ -19,7 +19,7 @@ render. Reopen that file in the shell with `--open`, or render it headlessly:
     cargo run -p ferrocad_parametric -- --open target/demo/headless.FCStd
     cargo run -p ferrocad_parametric -- --open target/demo/headless.FCStd --render target/demo/reopened.png
 
-The `Part` API and these operations are covered by the in-image suites
+The `Part` API and these operations are covered by the in-process suites
 (`cargo test -p ferrocad_part_py --test part_shape_ops`).
 """
 

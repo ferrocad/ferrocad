@@ -262,12 +262,12 @@ PYTHONPATH=python python3 -m pytest tests/test_draft_snapper.py tests/test_draft
 # The stage bindings (embedded Python acceptance suite + Rust units)
 cargo test -q -p ferrocad_stage -p ferrocad_stage_py --offline
 
-# The line/wire suite against the real Part kernel (the standalone pytest image has no Part)
+# The line/wire suite against the real Part kernel (a standalone pytest run has no Part)
 cargo test -q -p ferrocad_part_py --test draft_tools --offline
 ```
 
 The standalone pytest run uses a documented `Part.makePolygon` stub for the creation
-tests; the in-image Rust test is the one that proves the real kernel path.
+tests; the in-process Rust test is the one that proves the real kernel path.
 
 ## 9. File map
 

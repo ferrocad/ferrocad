@@ -1,16 +1,17 @@
 """The Part workbench module (``import Part``).
 
-These run against a build that includes ``ferrocad_part_py`` in the same image as
-the ``ferrocad`` bindings (the app / a wheel that bundles Part). The standalone
-``ferrocad.abi3.so`` produced by ``build.sh`` does not, because a Python extension
-module cannot share its process-global core registry with a second ``.so``; the
-in-image composition is covered by
+These run against a build that includes ``ferrocad_part_py`` in the same
+extension as the ``ferrocad`` bindings (the app / a wheel that bundles Part). The
+standalone ``ferrocad.abi3.so`` produced by ``build.sh`` does not, because a
+Python extension module cannot share its process-global core registry with a
+second ``.so``; the composition inside one extension is covered by
 ``crates/ferrocad_part_py/tests/part_boot.rs``.
 
-This module is in the ``kernel`` suite in ``contracts/test-images.json``: it is
-never run in the app-only image, so it imports Part directly. Run it with
-``tools/run_tests.py --image combined``; plain ``unittest discover`` in an
-app-only checkout is not a supported way to run the suites.
+This module is in the ``workbenches`` suite in
+``contracts/extension-sets.json``: it is never run in the base extension set, so
+it imports Part directly. Run it with
+``tools/run_tests.py --extension workbenches``; plain ``unittest discover`` in a
+base-only checkout is not a supported way to run the suites.
 """
 
 from __future__ import annotations

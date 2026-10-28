@@ -1,9 +1,9 @@
 """Geometry helpers shared by the ``flatmesh`` tests.
 
-The app-image tests (``test_flatmesh``) and the kernel tests
+The base tests (``test_flatmesh``) and the workbenches tests
 (``test_flatmesh_part``) both measure the unwrapper's output, so the four small
 measures live here rather than in one of them. The runner's contract
-(``contracts/test-images.json``) only classifies ``test_*.py`` files, so a
+(``contracts/extension-sets.json``) only classifies ``test_*.py`` files, so a
 helper module is not a suite.
 """
 

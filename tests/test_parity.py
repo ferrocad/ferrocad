@@ -71,8 +71,8 @@ class TestDocumentObject(unittest.TestCase):
         first = self.doc.addObject("App::FeaturePython")
         self.assertEqual(first.Name, "FeaturePython")
         # A different type takes its own default name; `App::Part` rather than
-        # `Part::Box` so the test runs in the App-only image the headless CI job
-        # builds (`Part` needs the combined extension and a kernel).
+        # `Part::Box` so the test runs in the `base` extension set the headless
+        # CI job builds (`Part` needs the workbench modules and a kernel).
         second = self.doc.addObject("App::Part")
         self.assertEqual(second.Name, "Part")
         third = self.doc.addObject("App::FeaturePython")

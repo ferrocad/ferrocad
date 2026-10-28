@@ -1,6 +1,6 @@
-//! In-image run of `tests/test_draft_tools.py`.
+//! In-process run of `tests/test_draft_tools.py`.
 //!
-//! The standalone pytest image has no `Part`, so that suite installs a documented
+//! A standalone pytest run has no `Part`, so that suite installs a documented
 //! `Part.makePolygon` stub for its creation tests. Here `ferrocad`, `Part` and
 //! `ferrocad.stage` share one interpreter (the app's composition), so the same
 //! suite runs against the real kernel: the line/wire tools create a real

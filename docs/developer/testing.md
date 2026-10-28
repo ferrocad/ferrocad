@@ -7,7 +7,7 @@ test can start needing the geometry kernel, and a lightweight Rust edition can
 start linking it. Neither shows up as a behaviour change in the line that caused
 it. Two cheap static checks pin both:
 
-- `tools/run_tests.py` answers "which artifact is this test allowed to need?";
+- `tools/run_tests.py` answers "which modules may this test need?";
 - `cargo xtask editions --check` answers "which crates may this edition link?".
 
 They are separate because they guard different failures. Under plain
@@ -16,82 +16,100 @@ checkout that happens to have `ferrocad_combined.abi3.so`, and fails only in CI'
 App-only build. A single ordinary `[dependencies]` line can pull OCCT into
 `ferrocad_toy` without changing any code the toy tests execute.
 
-## 1. The two test images
+## 1. Extension sets: what a test run may import
 
-A test run names an **image**: the set of modules that run must be able to import.
-The runner installs a meta-path finder that makes everything else unimportable, so
-the image is enforced by construction rather than inferred from whatever the
-developer has built.
+A test run states which workbench modules it is **provided**: an **extension
+set**. The runner installs a meta-path finder that makes every other workbench
+module unimportable, so the set is enforced by construction rather than inferred
+from whatever the developer has built. `--extension` names what is provided; the
+runner hides the rest.
 
-| Image | Importable | What it is |
+An **edition** is the shipped bundle: binary, app script, defaults, branding and
+workbench set. An **extension set** is the test-side view of its workbench half:
+a set of names, not a file. It is also not a packaging: `ferrocad_combined` is
+the packaging `ferrocad_parametric` also uses, so `combined` names a module, not
+an edition.
+
+| Extension set | Provides | What it is |
 | --- | --- | --- |
-| `app` | `ferrocad` (the primary extension) | Exactly what CI's `headless` job builds. `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` are unimportable. |
-| `combined` | `ferrocad`, `Part`, `Mesh`, `MeshPart` in `ferrocad_combined` | App + Part + Mesh in one extension. Nothing is hidden; it needs OCCT. |
+| `base` | no workbench module: the `ferrocad` facade alone | Exactly what CI's `headless` job builds. Every workbench module — `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` — is unimportable. |
+| `workbenches` | `ferrocad_combined` plus `Part`, `Mesh` and `MeshPart` | App + Part + Mesh in one extension. Nothing is hidden; it needs OCCT. |
 
-`app` is the important one for ordinary tests. It is not a reduced convenience
+`base` is the important one for ordinary tests. It is not a reduced convenience
 build: it is the artifact the primary CI path produces, so a test that only passes
 when `Part` is present is a test that would pass locally and fail in CI. Making
-the combined extension unimportable turns that into a local failure.
+the workbench modules unimportable turns that into a local failure.
+
+`--extension` is repeatable, so a run can name modules individually instead of
+using a preset: `--extension Part --extension Mesh --extension MeshPart`. Naming
+any of `Part`, `Mesh` or `MeshPart` also provides `ferrocad_combined`: those
+modules are shims that import it.
 
 ```sh
-python3 tools/run_tests.py --check            # static contract check, no build (~0.06 s)
-python3 tools/run_tests.py --image app        # 41 modules, 686 tests, 21 skipped
-python3 tools/run_tests.py --image combined   # 44 modules, 704 tests, 3 skipped
+python3 tools/run_tests.py --check                  # static contract check, no build (~0.06 s)
+python3 tools/run_tests.py --extension base         # 41 modules, 673 tests, 8 skipped
+python3 tools/run_tests.py --extension workbenches  # 45 modules, 704 tests, 3 skipped
 ```
 
-Each image runs in a fresh subprocess, with `tools/test_images.install(image)`
+Each extension set runs in a fresh subprocess, with `tools/extensions.install`
 called before discovery. Import caches and module-level registration therefore
-cannot leak from one image to the next. `combined` also exports the local OCCT
-library path when `.occt/prefix` exists, so it works from a plain shell as well as
-from `build.sh`.
+cannot leak from one set to the next. A set that provides workbench modules also
+exports the local OCCT library path when `.occt/prefix` exists, so it works from
+a plain shell as well as from `build.sh`.
 
 The invariant the runner enforces is **pass or skip, never error**. A test that
-needs something the image does not have is a failure, not a silent skip. In
-`app`, `import Part` raises, so an App module that acquired a kernel dependency
-errors the run instead of disappearing from it.
+needs something the set does not provide is a failure, not a silent skip. In
+`base`, `import Part` raises, so a base module that acquired a workbench
+dependency errors the run instead of disappearing from it.
 
-## 2. The test-image contract
+## 2. The extension-set contract
 
-`contracts/test-images.json` classifies every `tests/test_*.py` module as either
-`app` or `kernel`:
+`contracts/extension-sets.json` classifies every `tests/test_*.py` module as
+either `base` or `workbenches`:
 
 ```json
 {
-  "images": ["app", "combined"],
+  "schema": 2,
+  "presets": {
+    "base": [],
+    "workbenches": ["Mesh", "MeshPart", "Part", "ferrocad_combined"]
+  },
   "suites": {
-    "app": ["test_commands", "..."],
-    "kernel": ["test_part", "..."]
+    "base": ["test_commands", "..."],
+    "workbenches": ["test_part", "..."]
   }
 }
 ```
 
 The runner reads this file; `--check` verifies that it names every discovered
-module exactly once and that every named module exists. It imports nothing, so it
-is the first check a contributor can run.
+module exactly once and that every named module exists. It also pins `presets`
+against `tools/extensions.py`, so adding a workbench module is a reviewed diff.
+It imports nothing, so it is the first check a contributor can run.
 
-This is a contract rather than a decorator for a reason. If an App module silently
-acquires a kernel dependency, it moves from the `app` suite to the `kernel` suite,
-which changes this file, which shows up as a reviewed diff. The classification is
-also materialised by the run: in `app` the module errors; in `combined` it
-passes. `--write-contract` uses exactly that signal: a module that passes in
-`combined` and passes nothing in `app` is `kernel`. A module that passes nothing
-in either image stays `app`, because it skips for an unrelated optional artifact
-(`fc_gen`, the SimpleCAD tree) rather than for the kernel.
+This is a contract rather than a decorator for a reason. If a base module silently
+acquires a workbench dependency, it moves from the `base` suite to the
+`workbenches` suite, which changes this file, which shows up as a reviewed diff.
+The classification is also materialised by the run: in `base` the module errors;
+with the workbench modules provided it passes. `--write-contract` uses exactly
+that signal: a module that passes with the workbench modules and passes nothing
+in `base` is `workbenches`. A module that passes nothing in either set stays
+`base`, because it skips for an unrelated optional artifact (`fc_gen`, the
+SimpleCAD tree) rather than for the kernel.
 
 ### Adding a test
 
 1. Add `tests/test_something.py` and run
-   `python3 tools/run_tests.py --write-contract`; the module starts in `app`
-   unless its tests only pass in `combined`.
-2. Run `python3 tools/run_tests.py --image app`. The module must pass or skip,
-   never error.
+   `python3 tools/run_tests.py --write-contract`; the module starts in `base`
+   unless its tests only pass with the workbench modules.
+2. Run `python3 tools/run_tests.py --extension base`. The module must pass or
+   skip, never error.
 3. If the test needs `Part`, `Mesh`, `MeshPart`, or a module that imports one of
    them at module scope, it belongs in a module the contract classifies as
-   `kernel`. Import it directly there; the kernel suite is only run against
-   `combined`.
+   `workbenches`. Import it directly there; the workbenches suite is only run
+   when those modules are provided.
 
 Do **not** add a `HAVE_PART` guard or a `skipUnless` decorator to keep a kernel
-test in an App module. The guard converts the rule into a skip, so the dependency
+test in a base module. The guard converts the rule into a skip, so the dependency
 disappears from the contract and the test can rot without anyone noticing. It is
 also the reason the old `unittest discover` workflow was unreliable: the same
 guard skipped on an App-only checkout and passed on a developer machine.
@@ -115,13 +133,13 @@ The rules themselves live in `crates/xtask/src/editions.rs`:
 | --- | --- |
 | `ferrocad` (base), `ferrocad_toy` | must not reach `ferrocad_occt`, `ferrocad_part`, `ferrocad_part_py`, `ferrocad_part_gui`, `ferrocad_mesh`, `ferrocad_mesh_py`, `opencascade-sys` |
 | `ferrocad_gpui`, `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_wgpu`, `ferrocad_ui` | the same list, for the same reason: they sit below Part |
-| `ferrocad_py` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_occt` (the App-only image) |
+| `ferrocad_py` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_occt` (the App-only extension) |
 | `ferrocad_parametric` | must reach `ferrocad_part_py` and `ferrocad_occt` |
 | `ferrocad_combined_py` | must reach `ferrocad_part_py` and `ferrocad_mesh_py` |
 
 The purpose is narrow and deliberate: a lightweight edition must not silently
 start bundling OCCT. `ferrocad_toy` is documented as kernel-free, `ferrocad_py`
-is the App-only image, and the shell/renderer layer sits below Part. The check
+is the App-only extension, and the shell/renderer layer sits below Part. The check
 walks transitive edges, not just direct ones, because "the crate I added does not
 mention OCCT" is not the same as "OCCT is not reachable from my edition".
 
@@ -150,10 +168,11 @@ preflight -> headless -> geometry
   `cargo xtask editions --check`. Neither builds; contract drift is caught before
   a compiler or OCCT is involved.
 - **headless** builds the primary App extension and runs
-  `python3 tools/run_tests.py --image app`. This is where a test that needs the
-  kernel shows up.
+  `python3 tools/run_tests.py --extension base`. This is where a test that needs
+  the kernel shows up.
 - **geometry** fetches OCCT 7.8.1, builds and tests the OCCT-backed crates, builds
-  `ferrocad_combined_py`, and runs the combined image for the `kernel` suites.
+  `ferrocad_combined_py`, and runs the `workbenches` suite with the modules that
+  build provides (`--extension Part --extension Mesh --extension MeshPart`).
 
 The order is not only about speed. Each stage is allowed to need strictly more
 than the one before, so a preflight failure means the later stages would have been
@@ -163,9 +182,9 @@ testing the wrong artifact.
 
 | File | What it owns |
 | --- | --- |
-| [`tools/test_images.py`](../../tools/test_images.py) | the image definitions and the import blocker |
-| [`tools/run_tests.py`](../../tools/run_tests.py) | discovery, per-image subprocesses, `--check`, `--write-contract` |
-| [`contracts/test-images.json`](../../contracts/test-images.json) | which suite each test module belongs to |
+| [`tools/extensions.py`](../../tools/extensions.py) | the extension sets and the import blocker |
+| [`tools/run_tests.py`](../../tools/run_tests.py) | discovery, per-set subprocesses, `--check`, `--write-contract` |
+| [`contracts/extension-sets.json`](../../contracts/extension-sets.json) | which suite each test module belongs to |
 | [`crates/xtask/src/editions.rs`](../../crates/xtask/src/editions.rs) | the per-edition forbidden/required rules and the seam |
 | [`contracts/editions.json`](../../contracts/editions.json) | the pinned transitive closure per edition |
 

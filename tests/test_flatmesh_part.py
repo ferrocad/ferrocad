@@ -1,9 +1,9 @@
 """The kernel-dependent ``flatmesh`` tests: unwrapping real ``Part`` faces.
 
-Split from ``test_flatmesh`` so the App-only image runs the stub-based tests and
-skips nothing: a module is classified as ``kernel`` in
-``contracts/test-images.json`` and CI runs it in the ``combined`` image, where
-``Part`` exists.
+Split from ``test_flatmesh`` so the base extension set runs the stub-based tests
+and skips nothing: a module is classified as ``workbenches`` in
+``contracts/extension-sets.json`` and CI runs it with the workbench modules
+provided, where ``Part`` exists.
 """
 
 from __future__ import annotations

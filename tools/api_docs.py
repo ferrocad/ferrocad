@@ -26,7 +26,7 @@ import inspect
 import sys
 from pathlib import Path
 
-import test_images
+import extensions
 
 REPO = Path(__file__).resolve().parents[1]
 DOC_DIR = REPO / "docs" / "python-api"
@@ -74,8 +74,8 @@ SKIP_TYPES = (type(sys),)  # imported modules are structure, not surface
 # Part's own exception class overwrites `ferrocad.CADKernelError`. CI's headless
 # doc job builds only `ferrocad_py`, so a page generated with those artifacts
 # would not match there (and `--check` would fail on exactly the machines that
-# built the workbenches). The `app` test image hides them; the workbench surfaces
-# are measured by `tools/part_api_audit.py`.
+# built the workbenches). The `base` extension set hides them; the workbench
+# surfaces are measured by `tools/part_api_audit.py`.
 
 INDEX_PREAMBLE = """# Python API reference
 
@@ -397,7 +397,8 @@ def main(argv: list[str]) -> int:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
 
-    test_images.install("app")
+    # Generation is independent of a developer's built workbenches.
+    extensions.install(extensions.preset("base"))
 
     descriptions = []
     for name, role, note in MODULES:

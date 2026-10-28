@@ -1,11 +1,16 @@
 {
-  "schema": 1,
-  "images": [
-    "app",
-    "combined"
-  ],
+  "schema": 2,
+  "presets": {
+    "base": [],
+    "workbenches": [
+      "Mesh",
+      "MeshPart",
+      "Part",
+      "ferrocad_combined"
+    ]
+  },
   "suites": {
-    "app": [
+    "base": [
       "test_app_vector2d_material",
       "test_appearance_presets",
       "test_axis_overlay_coin",
@@ -48,7 +53,7 @@
       "test_ui_loader",
       "test_view_tools"
     ],
-    "kernel": [
+    "workbenches": [
       "test_flatmesh_part",
       "test_gui_snapping",
       "test_packaged_modules",

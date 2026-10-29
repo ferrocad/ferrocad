@@ -1,8 +1,9 @@
 # Workplane (`WP`): specification and interaction model
 
 Status: design (2026-10-29). The state model, the `WP` menu, the three-point pick, the
-offset dialog and `Save as datum plane` are built; the **visual hierarchy** (§7–§12,
-selection, triads, grid extent, datum objects) is specified and parked — see
+offset dialog and `Save as datum plane` are built, and **W1 — the visual hierarchy** (§7–§12:
+selection, triads, grid extent, hover bloom) is built. The datum-plane object (`W3`), the
+offset gizmo (`W2`) and the Coin-grid uniform (`W4`) are specified and parked — see
 [`../../project/tasks/workplanes.md`](../../project/tasks/workplanes.md) §8 for the work
 list. Companion to [`axis-origin-grid.md`](axis-origin-grid.md) (the triad, the
 ground/workplane grids, face frames), [`visual-language.md`](visual-language.md) (tokens
@@ -210,14 +211,13 @@ selection. It adds no setting, no token and no user-visible switch.
 ### 8.1 One primary cross
 
 At the default plane, the world triad **is** the active cross, so there is one. When a
-non-default plane is active, the world triad recedes to a ghost — 15 % opacity (a
-`WORLD_TRIAD_GHOST` constant beside the existing `WORLD_TRIAD_DIM`), 12 px stems, no
-labels — and the active plane's cross is the only full-strength one. Both are derived
-from the existing `AxisStyle` (`scaled_opacity`, `length`, `labels`), so nothing new is a
-*style*: the two opacity constants are internal drawing values, not settings. `WORLD_TRIAD_DIM` (0.30) remains only for the *hover preview* case, where
-the world plane is still the active plane and the extra grid is a hint, not a binding.
-`• Axes` still owns the whole layer: turning it off removes the ghost, the active cross
-and the origin node together.
+non-default plane is active, the world triad recedes to `WORLD_TRIAD_DIM` (30 %) and the
+active plane's cross is the only full-strength one; the origin node stays, so absolute
+zero is still marked. The value is derived from the existing `AxisStyle`
+(`scaled_opacity`), so nothing new is styled and there is no setting. The same constant
+is used for the hover preview, so one rule covers both cases: a local layer makes the
+world cross recede. `• Axes` still owns the whole layer — turning it off removes the world
+cross, the active cross and the origin node together.
 
 ### 8.2 No normal stem on a face
 
@@ -243,8 +243,11 @@ still gets the body triad — no click is ever left with zero handles.
 
 Only the **shared** triad (the one at the body datum, `ShapeItem::anchor`) yields. A
 workbench gizmo anchored elsewhere — the toy's height grip on the top centre — is
-untouched. That is also why the toy keeps working with the face-pick rule it just gained:
-a face pick shows the height grip and no triads; a double click brings the triad back.
+untouched. The toy is the reference case for both branches: a click on the **top** face
+arms `HeightGrip` (and the triad yields); a click on a side or bottom face claims nothing
+(a height handle dragged from a side face would change a dimension the user did not point
+at), so the triad stays and the body can be moved or rotated from that face. A double
+click always selects the whole body.
 
 ### 8.4 A verb is an explicit request
 
@@ -255,15 +258,16 @@ suppression is therefore a *default*, not a lock — which is what keeps body tr
 reachable from any selection. The Move HUD keeps anchoring at the body datum, the same
 point the triad uses.
 
-### 8.5 The hover bloom is tool-scoped (proposal)
+### 8.5 The hover bloom is tool-scoped
 
-The hover bloom (a local grid on the face under the pointer) currently appears whenever
-the grid is on and the pointer rests on a face. It should appear only while a **creation
-tool** is active, because that is when it previews something a click will actually do
-(bind the plane for the session). Without a tool, hovering keeps the face *tint* (the
-selection feedback for the click) but adds no second grid; `Set WP` in the wheel is one
-gesture away and needs no preview. This removes the fifth collision — two grids at once —
-and is inferred from the tool state, not configured.
+The hover bloom (a local grid on the face under the pointer) appears only when a
+**creation tool** is active **and** the active plane is still the default — because that
+is when it previews something a click will actually do (bind the plane for the session).
+Once the tool's first click binds a face, the plane is no longer the default, so the bloom
+stops and later hovers during the session add no competing grids. With no tool, hovering
+keeps the face *tint* (the click feedback) and the `HoverReport`, but adds no second grid;
+`Set WP` in the wheel is one gesture away and needs no preview. The predicate is inferred
+from the tool and plane state — nothing is configured.
 
 ## 9. Grid extent: one generator, inferred extent
 
@@ -328,6 +332,8 @@ pickable, renameable, saveable and bindable today. The full model still needs th
 | Move / rotate the body | body click → triad; face click → double click, or wheel `Move`/`Rotate`, or `Ctrl+Shift+M`/`R` | verb override (§8.4) |
 | Push/pull a face | face click → the stem | §8.2 frees the normal, §8.3 drops the triad |
 | Fillet/chamfer an edge | edge click → the arc | §8.3 |
+| Adjust the toy slab's height | click its **top** face | §8.3: the grip claims it, so it is the only handle |
+| Move/rotate the toy slab from a side face | click a side/bottom face | §8.3 fallback: nothing claims it, so the triad stays |
 | Save a datum plane | menu / wheel | unchanged |
 | Bind WP to a datum plane | select it → `Set from selection` | one named face |
 | Hide/show an object | `Visibility` property now; tree `Space` parked | the tree is always reachable |

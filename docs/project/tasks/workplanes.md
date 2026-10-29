@@ -432,8 +432,8 @@ Verified: `ferrocad_stage` 195, `ferrocad_viewport` 176, `ferrocad_gpui --lib` 2
 
 ## 8. Reflection (2026-10-29): visual hierarchy and parked work
 
-**Design only — no code changed with this section.** The full rationale is in
-[`../../developer/interaction/workplanes.md`](../../developer/interaction/workplanes.md)
+**The hierarchy rules are design; slice 1 below has since landed.** The full rationale is
+in [`../../developer/interaction/workplanes.md`](../../developer/interaction/workplanes.md)
 §7–§12.
 
 Decided in the reflection:
@@ -454,13 +454,21 @@ Decided in the reflection:
 - **A datum plane is a document object**, not a gizmo: tree row, `Visibility`, undo,
   save, whole-area pick, and a normal/tilt handle when selected.
 
-Parked (in order, each independently shippable; none blocks another):
+The four slices, in order (each independently shippable):
 
-1. **Triad/grid hierarchy** — the six display rules. Touches `ActiveWorkplane` (an
-   inferred `extent`), `axis::triad` (an in-plane variant for faces), `sync_grid`
-   (ghost + patch) and the shell's arming (`arm`: does an element-anchored handle exist).
-   Confirm §8.5 (tool-scoped hover bloom) while doing it. This is the slice that answers
-   the overloaded screenshot.
+1. **Triad/grid hierarchy — landed 2026-10-29.** `ActiveWorkplane`
+   carries an inferred `extent`; a face plane emits a 2D `U/V` bracket; the world cross
+   recedes to `WORLD_TRIAD_DIM`; `active_grid` uses `max(3 × face, 2 × major)`
+   with no world clamp; the hover bloom is tool-scoped; and the shell drops the shared
+   body triad when a manipulator claims the element, unless a `Move`/`Rotate` verb asked
+   for it. Acceptance tests: `a_face_workplane_emits_uv_without_normal_stem`,
+   `a_face_workplane_clamps_grid_radius_to_face_extent`,
+   `hovering_a_face_while_idle_does_not_bloom_a_grid`,
+   `hovering_a_face_with_an_active_tool_blooms_only_at_world_default`,
+   `a_claimed_sub_element_suppresses_the_shared_body_triad`,
+   `an_unclaimed_sub_element_keeps_the_body_triad`,
+   `a_move_verb_arms_the_body_triad_on_a_face_selection`. The toy now claims its **top**
+   face only (a side or bottom face is the fallback case), and `b811401` is kept.
 2. **`Offset Workplane…` as a gizmo** — a 1D axis handle along `+N` plus the floating HUD;
    the menu row and its one-field dialog are already there.
 3. **`Part::DatumPlane`** — the object type, glass rendering, normal/tilt manipulator and

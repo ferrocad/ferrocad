@@ -346,6 +346,11 @@ pub struct InventorViewport<V: InventorView> {
     grid_alpha: f32,
     /// The active local workplane (G3): sticky until `Esc` or another activation.
     active_workplane: ActiveWorkplane,
+    /// The plane to restore when an **ephemeral** binding ends: the first click of a
+    /// creation tool on a planar face binds that face for the session (there is no
+    /// explicit activation step), and finishing or cancelling restores this.
+    /// `None` means no ephemeral binding is in force.
+    ephemeral_restore: Option<ActiveWorkplane>,
     /// The face under the pointer, resolved from the stage's display tessellation. Its
     /// grid blooms after [`FACE_DWELL`].
     hover_face: Option<FaceHover>,
@@ -998,6 +1003,7 @@ impl<V: InventorView> InventorViewport<V> {
             grid_color: grid::GRID_COLOR,
             grid_alpha: 1.0,
             active_workplane: ActiveWorkplane::world(),
+            ephemeral_restore: None,
             hover_face: None,
             grid_queue: RenderQueue::default(),
             grid_overlay: false,
@@ -1058,10 +1064,23 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn set_tool(&mut self, tool: Option<Box<dyn Tool>>) {
         if tool.is_none() {
             self.set_snap_feedback(None, None);
+            self.restore_ephemeral_workplane();
         }
         self.tool_state = tool.as_ref().map(|tool| tool.status());
         self.tool = tool;
         self.rebuild_transient();
+    }
+
+    /// End an ephemeral workplane binding, if one is in force.
+    ///
+    /// The first click of a creation tool on a planar face binds that face for the
+    /// session; ending the session puts the previous plane back (usually world `XY`).
+    /// An explicit binding never sets this, so it survives a tool.
+    fn restore_ephemeral_workplane(&mut self) -> bool {
+        let Some(previous) = self.ephemeral_restore.take() else {
+            return false;
+        };
+        self.set_active_workplane(previous)
     }
 
     /// The active tool, if any.
@@ -1090,6 +1109,7 @@ impl<V: InventorView> InventorViewport<V> {
         let status = tool.status().ended();
         tool.cancel();
         self.tool = None;
+        self.restore_ephemeral_workplane();
         self.set_snap_feedback(None, None);
         self.rebuild_transient();
         self.tool_state = Some(status);
@@ -1110,6 +1130,7 @@ impl<V: InventorView> InventorViewport<V> {
         // The tool owns its geometry until it ends; this is where it hands it over.
         self.interaction_commit = tool.finish();
         self.tool = None;
+        self.restore_ephemeral_workplane();
         self.set_snap_feedback(None, None);
         self.rebuild_transient();
         self.tool_state = Some(status);
@@ -2465,6 +2486,20 @@ impl<V: InventorView> InventorViewport<V> {
             PointerKind::Up
         };
         let hit = self.pick(device);
+        // Tier 1: a creation tool that starts on a planar face binds that face for the
+        // session, with no explicit activation step. Only the session's **first** press
+        // binds — a later click on another face must not slide the plane out from under
+        // points already placed. An explicitly bound plane is sticky and is never
+        // overridden by a click.
+        if down
+            && button == 1
+            && self.active_workplane.is_default()
+            && self.tool.as_ref().is_some_and(|tool| tool.status().points == 0)
+            && let Some(frame) = hit.as_ref().and_then(|hit| self.face_frame_at(hit))
+        {
+            self.ephemeral_restore = Some(self.active_workplane.clone());
+            self.set_workplane(Some(frame));
+        }
         let mut changed = self.dispatch_tool(kind, device, stage_button(button), hit.as_ref());
         let event = Event::MouseButton {
             position: device,
@@ -3631,6 +3666,29 @@ impl<V: InventorView> InventorViewport<V> {
         mesh.emit(&mut self.grid_queue);
     }
 
+    /// The planar face under `hit`, resolved to a frame, when the hit is a planar part.
+    fn face_frame_at(&self, hit: &Hit) -> Option<FaceFrame> {
+        self.face_frame_for(hit.id.0, hit.part)
+    }
+
+    /// Item `entity`'s part `part`, resolved to a frame when that part is planar.
+    fn face_frame_for(&self, entity: u32, part: u32) -> Option<FaceFrame> {
+        let item = self
+            .stage
+            .items()
+            .iter()
+            .find(|item| item.entity_id() == entity)?;
+        let name = item.part_name(part)?;
+        FaceFrame::resolve(
+            entity,
+            name,
+            item.positions(),
+            item.triangles(),
+            item.parts(),
+            part,
+        )
+    }
+
     /// Resolve the face under the pointer into a [`FaceFrame`], keeping the dwell timer
     /// across frames unless the face (or its geometry) actually changed.
     fn refresh_hover_face(&mut self) {
@@ -3658,15 +3716,7 @@ impl<V: InventorView> InventorViewport<V> {
         };
         self.hover_face = key.and_then(|(entity, part)| {
             let item = item?;
-            let name = item.part_name(part)?;
-            let frame = FaceFrame::resolve(
-                entity,
-                name,
-                item.positions(),
-                item.triangles(),
-                item.parts(),
-                part,
-            )?;
+            let frame = self.face_frame_for(entity, part)?;
             Some(FaceHover {
                 entity,
                 part,
@@ -9003,5 +9053,102 @@ mod tests {
         assert!(view.activate_hovered_workplane());
         assert!(view.clear_workplane(), "a bound plane resets");
         assert!(view.active_workplane().is_default());
+    }
+
+    #[test]
+    fn a_tool_binds_the_face_it_starts_on_and_restores_it_afterwards() {
+        let mut view = tool_view();
+        let _ = view.take_tool_state();
+
+        // The first click lands on the slab's left face (z = 0.5): the face becomes the
+        // session's plane, with no explicit activation step.
+        view.handle_pointer([30.0, 50.0]);
+        view.handle_button([30.0, 50.0], 1, true);
+        view.handle_button([30.0, 50.0], 1, false);
+        let active = view.active_workplane();
+        assert!(!active.is_default(), "the click bound the face");
+        assert_eq!(active.label, "Face1");
+        assert!((active.plane.origin.z - 0.5).abs() < 1e-6);
+
+        // A click in empty space still projects onto that plane, so both committed
+        // points keep the face's z.
+        view.handle_pointer([10.0, 10.0]);
+        view.handle_button([10.0, 10.0], 1, true);
+        assert_eq!(view.tool_status().expect("an active tool").points, 2);
+
+        assert!(view.handle_key(&key("enter")));
+        let commit = view.take_interaction_commit().expect("a commit");
+        assert_eq!(commit.values.len(), 6, "two points");
+        for z in [commit.values[2], commit.values[5]] {
+            assert!(
+                (z - 0.5).abs() < 1e-6,
+                "both points lie on the face plane: {z}"
+            );
+        }
+
+        // Finishing restores the plane the session started from.
+        assert!(view.active_workplane().is_default());
+    }
+
+    #[test]
+    fn a_later_click_does_not_move_the_session_plane() {
+        let mut view = tool_view();
+        let _ = view.take_tool_state();
+
+        // The session starts on Face1…
+        view.handle_pointer([30.0, 50.0]);
+        view.handle_button([30.0, 50.0], 1, true);
+        assert_eq!(view.active_workplane().label, "Face1");
+
+        // …and a click on the neighbouring face mid-session must not rebind: the points
+        // already placed belong to the first plane.
+        view.handle_pointer([70.0, 50.0]);
+        view.handle_button([70.0, 50.0], 1, true);
+        assert_eq!(view.active_workplane().label, "Face1");
+        assert_eq!(view.tool_status().expect("an active tool").points, 2);
+    }
+
+    #[test]
+    fn a_tool_started_in_empty_space_never_binds_a_face() {
+        let mut view = tool_view();
+        let _ = view.take_tool_state();
+        // Snapping is what lets an empty-space click land on the plane at all; without
+        // it a click off geometry places nothing and the session has not really begun.
+        view.set_snap_grid(Some(0.25));
+
+        view.handle_pointer([10.0, 10.0]);
+        view.handle_button([10.0, 10.0], 1, true);
+        assert!(
+            view.active_workplane().is_default(),
+            "the first click was empty, so the session stays on World XY"
+        );
+
+        view.handle_pointer([30.0, 50.0]);
+        view.handle_button([30.0, 50.0], 1, true);
+        assert!(
+            view.active_workplane().is_default(),
+            "the first point settles the session's plane"
+        );
+    }
+
+    #[test]
+    fn an_explicit_plane_survives_a_tool_session() {
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane());
+        let explicit = view.active_workplane().clone();
+
+        // A tool started while a plane is bound does not re-bind, and finishing leaves
+        // the explicit plane alone.
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        view.handle_pointer([70.0, 50.0]);
+        view.handle_button([70.0, 50.0], 1, true);
+        assert_eq!(
+            view.active_workplane(),
+            &explicit,
+            "an explicit plane is sticky"
+        );
+        assert!(view.handle_key(&key("enter")));
+        assert_eq!(view.active_workplane(), &explicit);
     }
 }

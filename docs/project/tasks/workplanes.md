@@ -92,20 +92,23 @@ is a state change, not copy: make the world plane a first-class active plane and
 
 ### 2.1 Tier 1 — ephemeral plane during a creation tool
 
-The visual half exists (hover face + local grid). What is missing is binding:
+**Landed (2026-10-29, see §7).** A creation tool that starts on a planar face binds that
+face for the session, and the plane it started from is restored when the tool ends:
 
 - While a creation tool is active and the pointer is over a **planar face**, the hovered
   frame becomes the tool's provisional plane (the grid already blooms there).
-- The **first click** on that face binds the plane *for the session*; later clicks in
-  empty space project onto that frame rather than onto world XY.
+- The **first press** on that face binds the plane *for the session*; later clicks in
+  empty space project onto that frame rather than onto world XY. Only the first press
+  binds — a later click on a different face must not slide the plane out from under the
+  points already placed.
 - Finishing or cancelling the tool returns the active plane to what it was before the
-  session (usually world), unless the user bound it explicitly in Tier 2.
-- The tool's `SnapContext` already carries a `Workplane`; this tier is a matter of
-  choosing it per session rather than reading the viewport's global one.
+  session (usually world), unless the user bound it explicitly in Tier 2. An explicit
+  binding is sticky and a click never overrides it.
+- The tool's `SnapContext` already carries a `Workplane`; this tier chooses it once per
+  session rather than reading the viewport's global one for every event.
 
-Design question: is the binding *per tool session* (my recommendation) or per click? Per
-session matches "the moment Polyline finishes, the workplane returns to World XY" and
-keeps one plane for the whole shape.
+The binding is **per tool session** (not per click): one plane for the whole shape, and
+`Polyline` finishing returns the workplane to World XY.
 
 ### 2.2 Tier 2 — explicit binding from the context wheel
 
@@ -209,7 +212,8 @@ Everything here already has the pieces; this is the map to connect them.
 1. **State type:** `Option<FaceFrame>` → an enum (`World | Datum(name) | Face{..} |
    Custom{frame}`) or `Option<Workplane>` with `WorkplaneKind` doing the naming? The
    second reuses the existing kind and needs no new enum.
-2. **Ephemeral binding:** per tool session (recommended) or per click.
+2. **Ephemeral binding:** per tool session (decided, §2.1) — one plane for the whole
+   shape, first press only.
 3. **Does the `WP` pill body toggle to world or clear?** They are the same thing once
    world is representable — decide the wording.
 4. **Datum planes:** `WorkplaneKind::Datum` exists with no document object behind it. Add
@@ -228,7 +232,9 @@ Everything here already has the pieces; this is the map to connect them.
 
 ## 7. What landed (2026-10-29)
 
-The state model and the pill — the prerequisite for all three tiers.
+### 7.1 The state model and the pill
+
+The prerequisite for all three tiers.
 
 - The viewport's plane is `ActiveWorkplane { plane, label }`, **not** `Option<FaceFrame>`:
   it starts at world `XY` (`label: "XY"`) and is never absent. `set_active_workplane`
@@ -256,9 +262,34 @@ tests: default plane, face label, no-op reset), `ferrocad_gpui --lib` 216, plus 
 assertions that the default pill has no state dot and that a click on its label opens
 the menu.
 
+### 7.2 Tier 1 — the ephemeral session plane
+
+The first click of a creation tool on a planar face binds that face for the session, with
+no explicit activation step:
+
+- The viewport holds `ephemeral_restore: Option<ActiveWorkplane>`, the plane to put back
+  when the session ends. It is set only by the first press, only while the active plane
+  is the default and only while the tool has placed no point yet (`status().points == 0`),
+  so a later click on another face cannot move the plane under the points already placed.
+- `set_tool(None)`, `cancel_tool` and `finish_tool` all call `restore_ephemeral_workplane`,
+  so `Esc`, `Enter` and the HUD's **Finish**/*Cancel* all return to the pre-session plane.
+  An explicit binding never sets `ephemeral_restore`, so it survives a tool session.
+- Face resolution is shared with the hover bloom (`face_frame_for`), so the click and the
+  dwell preview can never disagree about what “the face under the pointer” is.
+
+The pressed point and everything after it project onto the bound frame, because
+`snap_context()` reads the active plane; the hover preview stops showing the face already
+bound. The `WP` pill follows automatically: the shell reads the plane from the viewport
+while rendering, so it shows `WP: Face1` for the session and returns to `WP: XY` when the
+tool ends.
+
+Verified: `ferrocad_viewport` 167 (four Tier 1 tests: bind-and-restore; a later click does
+not rebind; an empty-space start never binds; an explicit plane survives a session),
+`ferrocad_gpui --lib` 216, `ferrocad_toy` 18 + round trips.
+
 **Still open:** the dropdown's standard planes (`XZ`/`YZ`), view plane, 3-point pick and
-offset HUD; the ephemeral binding during a tool (§2.1); the wheel verb (§2.2); the Python
-“set” verb (§4); and the datum-plane object question.
+offset HUD; the wheel verb (§2.2); the Python “set” verb (§4); and the datum-plane object
+question.
 
 ## 8. Non-goals
 

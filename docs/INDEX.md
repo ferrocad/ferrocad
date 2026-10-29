@@ -56,8 +56,10 @@ is assembled from these pages and the addon pages below.
 - [user/tutorials/first-model.md](user/tutorials/first-model.md) — build your first model, one pass end to end.
 - [user/how-to/documents-and-properties.md](user/how-to/documents-and-properties.md) — create a document and edit its properties.
 - [user/how-to/grid-visibility.md](user/how-to/grid-visibility.md) — turn the reference grid on and off.
+- [user/how-to/model-a-nurbs-surface.md](user/how-to/model-a-nurbs-surface.md) — build a clamped B-spline patch with `Part.BSplineSurface`.
 - [user/how-to/parametric-recompute.md](user/how-to/parametric-recompute.md) — wire two objects together with an expression.
 - [user/how-to/selection-and-commands.md](user/how-to/selection-and-commands.md) — drive a command from the selection.
+- [user/how-to/solid-from-a-nurbs-surface.md](user/how-to/solid-from-a-nurbs-surface.md) — extrude a B-spline face or cap a closed surface to make a solid.
 - [user/how-to/toy-workbench.md](user/how-to/toy-workbench.md) — create, display and manipulate an object in the toy edition.
 - [user/how-to/undo-and-persistence.md](user/how-to/undo-and-persistence.md) — undo an edit and reload the document.
 - [user/explanation/how-the-shell-talks-to-the-document.md](user/explanation/how-the-shell-talks-to-the-document.md) — why the shell is a client of the facade, and why dialogs are data.

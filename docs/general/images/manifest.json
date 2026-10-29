@@ -1,7 +1,67 @@
 {
   "generator": "tools/generate_general_figures.py",
-  "generator_sha256": "b6a9ed9457c99dc6aa165cccea8dc5a6be98cd981f624f54edc159cf22b27eac",
+  "generator_sha256": "bd6a0b8497f1de5a2ff3f644d1dd08c7ba8cace80471efd00940d9fc194d4bfd",
   "images": {
+    "bspline-flat.png": {
+      "bytes": 4775,
+      "figure": "bspline-flat",
+      "png_sha256": "2616024ff459aa0ba3ce1965f97399de4425d8823f9d4eef176fd7102ff66167",
+      "size": [
+        960,
+        520
+      ],
+      "spec_sha256": "879bd7d579d6900f5bc7b40dd833856939d735ed81ef11841c1030146d67a882"
+    },
+    "bspline-patch.png": {
+      "bytes": 39362,
+      "figure": "bspline-patch",
+      "png_sha256": "dac932babe55f6fa42469ccb7c0a6a8e022739292e101bceffdfe573f504d644",
+      "size": [
+        960,
+        520
+      ],
+      "spec_sha256": "fe8ddbbe6bed40a8e703bfd3d059b5ce80f3c4a5822a3be2214d58eece960dc4"
+    },
+    "bspline-slab.png": {
+      "bytes": 33822,
+      "figure": "bspline-slab",
+      "png_sha256": "4b6c7cfbbd71284fd820634a07b9c85da4dd9d2b7f06d73794c01d185845abd8",
+      "size": [
+        960,
+        520
+      ],
+      "spec_sha256": "95a12b8a191c6d957d15fb15232aca824c26041fbe4330e882bde78b33438559"
+    },
+    "bspline-solid-tube.png": {
+      "bytes": 16029,
+      "figure": "bspline-solid-tube",
+      "png_sha256": "cb0bc6ec5143a89842f0f6bf3888b8000bced0a71ba9b978bf9177dbf7a6890b",
+      "size": [
+        960,
+        520
+      ],
+      "spec_sha256": "1bb7dc44a38315e15d73443258151d4baacc74f163043f0c6dfe0977c2d44a55"
+    },
+    "bspline-tube.png": {
+      "bytes": 16355,
+      "figure": "bspline-tube",
+      "png_sha256": "175f8f7edda1c06abd6f8287b493a8577ecfc74ecba2af32c58d8fceafaed4a5",
+      "size": [
+        960,
+        520
+      ],
+      "spec_sha256": "c1b6f630072e89942199cf6ce520709937f13f5d572eecf3cc6a99efb004b3e4"
+    },
+    "bspline-wavy.png": {
+      "bytes": 27780,
+      "figure": "bspline-wavy",
+      "png_sha256": "5c57c29983246aa6607e8a48a0705074f2991f500be72e07a748c39ed2c6fbf8",
+      "size": [
+        960,
+        520
+      ],
+      "spec_sha256": "e89e51e6b67155f544cb991fbf4047d59a216a6735c7087c7de3b7fdbe70314d"
+    },
     "sphere-mesh-vs-brep.png": {
       "bytes": 42168,
       "figure": "sphere-mesh-vs-brep",

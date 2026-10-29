@@ -81,6 +81,36 @@ def _flat_edges(facets) -> list[int]:
     return [index for pair in sorted(pairs) for index in pair]
 
 
+def _smooth_normals(positions, triangles) -> list[list[float]]:
+    """Area-weighted vertex normals for a flat triangle-index array.
+
+    The kernel's display mesh has positions and triangles but no normals; the
+    renderer uses per-vertex normals for smooth shading. Edge-only positions get
+    a zero normal (the renderer ignores it for lines).
+    """
+    accumulated = [[0.0, 0.0, 0.0] for _ in positions]
+    for index in range(0, len(triangles), 3):
+        a, b, c = triangles[index], triangles[index + 1], triangles[index + 2]
+        pa, pb, pc = positions[a], positions[b], positions[c]
+        u = [pb[k] - pa[k] for k in range(3)]
+        v = [pc[k] - pa[k] for k in range(3)]
+        cross = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ]
+        for corner in (a, b, c):
+            accumulated[corner] = [
+                accumulated[corner][k] + cross[k] for k in range(3)
+            ]
+
+    normals = []
+    for normal in accumulated:
+        length = math.sqrt(sum(component * component for component in normal)) or 1.0
+        normals.append([component / length for component in normal])
+    return normals
+
+
 # ---------------------------------------------------------------------------
 # Figure builders
 # ---------------------------------------------------------------------------
@@ -163,6 +193,320 @@ def sphere_mesh_vs_brep() -> dict:
     return _quantize(spec)
 
 
+def _octahedron(center, radius: float) -> tuple[list[list[float]], list[int]]:
+    """A small diamond marker: 6 vertices and 8 outward-wound triangles."""
+    cx, cy, cz = center
+    positions = [
+        [cx + radius, cy, cz],
+        [cx - radius, cy, cz],
+        [cx, cy + radius, cz],
+        [cx, cy - radius, cz],
+        [cx, cy, cz + radius],
+        [cx, cy, cz - radius],
+    ]
+    triangles = [
+        0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4,
+        2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5,
+    ]
+    return positions, triangles
+
+
+def _surface_spec(
+    surface,
+    *,
+    eye,
+    target,
+    cage: bool,
+    size=(960, 520),
+) -> dict:
+    """A shaded surface, optionally with its control cage and pole markers."""
+    display = surface.toShape().mesh(0.05, 0.1)
+    positions = display["positions"]
+    triangles = display["triangles"]
+
+    shapes = [
+        {
+            "geometry": {
+                "mesh": {
+                    "positions": positions,
+                    "normals": _smooth_normals(positions, triangles),
+                    "triangles": triangles,
+                    "edges": [],
+                }
+            },
+            "color": [0.42, 0.62, 0.88, 1.0],
+            "draw_mode": "shaded",
+        }
+    ]
+
+    if cage:
+        # The cage: the poles the surface was built from, joined in U and V.
+        grid = [[(point.x, point.y, point.z) for point in row] for row in surface.getPoles()]
+        rows, columns = len(grid), len(grid[0])
+        cage_positions = [list(point) for row in grid for point in row]
+        cage_edges: list[int] = []
+        for u in range(rows):
+            for v in range(columns):
+                index = u * columns + v
+                if v + 1 < columns:
+                    cage_edges += [index, index + 1]
+                if u + 1 < rows:
+                    cage_edges += [index, index + columns]
+
+        marker_positions: list[list[float]] = []
+        marker_triangles: list[int] = []
+        for point in cage_positions:
+            corners, faces = _octahedron(point, 0.13)
+            base = len(marker_positions)
+            marker_positions += corners
+            marker_triangles += [base + index for index in faces]
+
+        shapes.append(
+            {
+                "geometry": {
+                    "mesh": {
+                        "positions": cage_positions,
+                        "triangles": [],
+                        "edges": cage_edges,
+                    }
+                },
+                "color": [0.82, 0.86, 0.92, 1.0],
+                "edge_color": [0.82, 0.86, 0.92, 1.0],
+                "draw_mode": "wireframe",
+            }
+        )
+        shapes.append(
+            {
+                "geometry": {
+                    "mesh": {
+                        "positions": marker_positions,
+                        "triangles": marker_triangles,
+                        "edges": [],
+                    }
+                },
+                "color": [0.82, 0.86, 0.92, 1.0],
+                "draw_mode": "shaded",
+            }
+        )
+
+    return _quantize(
+        {
+            "size": list(size),
+            "camera": {"eye": list(eye), "target": list(target), "fov_y": 0.62},
+            "shapes": shapes,
+        }
+    )
+
+
+def bspline_patch() -> dict:
+    """A clamped bicubic B-spline patch and its control cage.
+
+    The surface is a 4x4 grid of poles with degrees 3/3; the knot vectors are
+    ``[0, 1]`` with multiplicity 4 at each end, which is the clamped form (the
+    surface interpolates its corner poles). The cage is ``surface.getPoles()``
+    joined along U and V, with a small marker at every pole. This is the figure
+    the how-to guide builds step by step.
+    """
+    import Part
+
+    poles = [
+        [[0, 0, 0], [0, 3, 2], [0, 6, 2], [0, 9, 0]],
+        [[3, 0, 2], [3, 3, 3], [3, 6, 3], [3, 9, 2]],
+        [[6, 0, 2], [6, 3, 3], [6, 6, 3], [6, 9, 2]],
+        [[9, 0, 0], [9, 3, 2], [9, 6, 2], [9, 9, 0]],
+    ]
+    surface = Part.BSplineSurface()
+    surface.buildFromPolesMultsKnots(
+        poles, [4, 4], [4, 4], [0.0, 1.0], [0.0, 1.0], False, False, 3, 3
+    )
+    return _surface_spec(
+        surface, cage=True, eye=[11.5, -12.5, 9.5], target=[4.5, 4.5, 1.5]
+    )
+
+
+def bspline_flat() -> dict:
+    """A bilinear patch: four poles, degree 1, flat."""
+    import Part
+
+    surface = Part.BSplineSurface()
+    surface.buildFromPolesMultsKnots(
+        [[[0, 0, 0], [2, 0, 0]], [[0, 1, 0], [2, 1, 0]]],
+        [2, 2],
+        [2, 2],
+        [0.0, 1.0],
+        [0.0, 1.0],
+        False,
+        False,
+        1,
+        1,
+    )
+    return _surface_spec(
+        surface, cage=False, eye=[3.0, -3.4, 2.6], target=[1.0, 0.5, 0.0]
+    )
+
+
+def _shape_spec(
+    shape,
+    *,
+    eye,
+    target,
+    edges: bool = False,
+    size=(960, 520),
+) -> dict:
+    """A shaded closed shape (a solid), optionally with its edges drawn."""
+    display = shape.mesh(0.05, 0.1)
+    positions = display["positions"]
+    triangles = display["triangles"]
+    mesh = {
+        "positions": positions,
+        "normals": _smooth_normals(positions, triangles),
+        "triangles": triangles,
+        "edges": display["edges"] if edges else [],
+    }
+    return _quantize(
+        {
+            "size": list(size),
+            "camera": {"eye": list(eye), "target": list(target), "fov_y": 0.62},
+            "shapes": [
+                {
+                    "geometry": {"mesh": mesh},
+                    "color": [0.42, 0.62, 0.88, 1.0],
+                    "edge_color": [0.10, 0.30, 0.65, 1.0],
+                    "draw_mode": "shaded_edges" if edges else "shaded",
+                }
+            ],
+        }
+    )
+
+
+def bspline_slab() -> dict:
+    """The wavy sheet extruded into a solid."""
+    import math
+
+    import Part
+
+    poles = [
+        [[u, v * 3.0, math.sin(2 * math.pi * u / 8) * 2.0] for v in range(4)]
+        for u in range(8)
+    ]
+    surface = Part.BSplineSurface()
+    surface.buildFromPolesMultsKnots(
+        poles,
+        [4, 2, 2, 4],
+        [4, 4],
+        [0.0, 1 / 3, 2 / 3, 1.0],
+        [0.0, 1.0],
+        False,
+        False,
+        3,
+        3,
+    )
+    solid = surface.toShape().extrude((0.0, 0.0, 3.0))
+    return _shape_spec(solid, eye=[14.0, -10.0, 12.0], target=[4.0, 4.5, 1.5], edges=True)
+
+
+def bspline_solid_tube() -> dict:
+    """The closed tube capped at both ends and turned into a solid."""
+    import math
+
+    import Part
+
+    poles = [
+        [
+            [
+                2.0 * math.cos(2 * math.pi * v / 8),
+                2.0 * math.sin(2 * math.pi * v / 8),
+                u * 2.0,
+            ]
+            for v in range(8)
+        ]
+        for u in range(4)
+    ]
+    surface = Part.BSplineSurface()
+    surface.buildFromPolesMultsKnots(
+        poles,
+        [4, 4],
+        [1] * 9,
+        [0.0, 1.0],
+        [index / 8 for index in range(9)],
+        False,
+        True,
+        3,
+        3,
+    )
+    tube = surface.toShape()
+    caps = [Part.Face(Part.Wire([edge])) for edge in tube.Edges if edge.isClosed()]
+    # The surface face points inward; reversing it makes the solid's normals
+    # face outward, so the volume is positive instead of -61.
+    shell = Part.makeShell([tube.reversed(), *caps])
+    solid = Part.makeSolid(shell)
+    return _shape_spec(solid, eye=[9.0, -11.0, 9.0], target=[0.0, 0.0, 3.0], edges=True)
+
+
+def bspline_wavy() -> dict:
+    """A wavy sheet from a generated 4 by 8 pole grid (degree 3/3)."""
+    import math
+
+    import Part
+
+    poles = [
+        [
+            [u, v * 3.0, math.sin(2 * math.pi * u / 8) * 2.0]
+            for v in range(4)
+        ]
+        for u in range(8)
+    ]
+    surface = Part.BSplineSurface()
+    surface.buildFromPolesMultsKnots(
+        poles,
+        [4, 2, 2, 4],
+        [4, 4],
+        [0.0, 1 / 3, 2 / 3, 1.0],
+        [0.0, 1.0],
+        False,
+        False,
+        3,
+        3,
+    )
+    return _surface_spec(
+        surface, cage=False, eye=[14.0, -10.0, 10.0], target=[4.0, 4.5, 0.0]
+    )
+
+
+def bspline_tube() -> dict:
+    """A closed tube: periodic in V, clamped in U."""
+    import math
+
+    import Part
+
+    poles = [
+        [
+            [
+                2.0 * math.cos(2 * math.pi * v / 8),
+                2.0 * math.sin(2 * math.pi * v / 8),
+                u * 2.0,
+            ]
+            for v in range(8)
+        ]
+        for u in range(4)
+    ]
+    surface = Part.BSplineSurface()
+    surface.buildFromPolesMultsKnots(
+        poles,
+        [4, 4],
+        [1] * 9,
+        [0.0, 1.0],
+        [index / 8 for index in range(9)],
+        False,
+        True,
+        3,
+        3,
+    )
+    return _surface_spec(
+        surface, cage=False, eye=[9.0, -11.0, 9.0], target=[0.0, 0.0, 3.0]
+    )
+
+
 @dataclass(frozen=True)
 class Figure:
     name: str
@@ -175,6 +519,36 @@ FIGURES = (
         "sphere-mesh-vs-brep.png",
         "A sphere stored as an 80-triangle mesh, next to the same sphere kept as B-Rep.",
         sphere_mesh_vs_brep,
+    ),
+    Figure(
+        "bspline-patch.png",
+        "A clamped bicubic B-spline patch built with Part.BSplineSurface, with its cage.",
+        bspline_patch,
+    ),
+    Figure(
+        "bspline-flat.png",
+        "A flat bilinear B-spline patch: four poles, degree 1.",
+        bspline_flat,
+    ),
+    Figure(
+        "bspline-wavy.png",
+        "A wavy B-spline sheet from a generated 4 by 8 pole grid.",
+        bspline_wavy,
+    ),
+    Figure(
+        "bspline-tube.png",
+        "A B-spline tube, clamped along U and periodic in V.",
+        bspline_tube,
+    ),
+    Figure(
+        "bspline-slab.png",
+        "The wavy B-spline sheet extruded into a solid.",
+        bspline_slab,
+    ),
+    Figure(
+        "bspline-solid-tube.png",
+        "The closed tube capped and turned into a solid.",
+        bspline_solid_tube,
     ),
 )
 

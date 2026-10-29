@@ -33,13 +33,16 @@ dots. It uses formulas — the same idea as vector paths, in three dimensions:
   axis and a radius. In OCCT these are described by classes such as `gp_Cylinder`,
   `gp_Plane` and `Geom_CylindricalSurface`.
 - **NURBS (the freeform splines).** For organic shapes such as car bodies or ergonomic
-  handles, CAD uses **NURBS** (non-uniform rational B-splines). A NURBS curve can be
-  read as a chain of rational Bézier segments, so it is a freeform curve like a Bézier,
-  with weights and knots added. The weights let it represent a conic (a circle, an
-  ellipse) as a conic rather than as a polynomial approximation. Bézier curves and NURBS
-  curves exist in 2D and 3D; the 3D surface is the case used here. OCCT names them
-  `Geom_BSplineCurve` and `Geom_BSplineSurface`, and the Part workbench exposes them
-  through the `Part.BSplineCurve` and `Part.BSplineSurface` classes.
+  handles, CAD commonly uses **NURBS** — non-uniform rational B-splines. A NURBS curve
+  can be represented as a chain of rational Bézier segments; its knots and their
+  multiplicities define the segment boundaries and the continuity between them. Like a
+  Bézier curve it is a freeform parametric curve, but on top of the control points it
+  carries weights and a knot vector. The weights allow conic sections — circular arcs
+  and ellipses — to be represented exactly, rather than only as polynomial
+  approximations. Bézier and NURBS curves exist in both 2D and 3D; NURBS surfaces extend
+  the same ideas to surfaces parameterized by U and V. In OCCT these are
+  `Geom_BSplineCurve` and `Geom_BSplineSurface`; FreeCAD's Part workbench exposes them
+  through `Part.BSplineCurve` and `Part.BSplineSurface`.
 - **No pixel grid.** Because the shape is stored as control data rather than a grid,
   zooming in does not reveal pixels. How smooth it *looks* is a question for the
   display mesh, not for the model.
@@ -120,8 +123,8 @@ the way it does. It has amnesia about features, not just about curves.
   pad, drilling a hole or rounding an edge is a kernel operation; the kernel returns
   new topology, not a picture.
 - **NURBS.** Non-uniform rational B-splines: piecewise rational curves and surfaces
-  defined by control points, weights and knots; each span can be read as a rational
-  Bézier segment. `Geom_BSplineCurve` and `Geom_BSplineSurface` carry them; the weights
+  defined by control points, weights and knots; each span can be represented as a
+  rational Bézier segment. `Geom_BSplineCurve` and `Geom_BSplineSurface` carry them; the weights
   let a NURBS represent a circle or an ellipse as a conic, not as a polynomial
   approximation.
 - **B-Rep (carried by `STEP` files).** The surface-based representation used while
@@ -148,7 +151,7 @@ For readers who want the usual terms, without the analogies:
   analytically and the coordinates are floating point; shared boundaries are identified
   within tolerance, so "watertight" means closed within tolerance.
 - **NURBS** is a piecewise rational B-spline: degree, knots, control points and
-  weights; each span can be read as a rational Bézier segment. The weights let it
+  weights; each span can be represented as a rational Bézier segment. The weights let it
   represent a conic (a circle, an ellipse) as a conic rather than as a polynomial
   approximation. Between knots the continuity is `C^(p−m)`, where `p` is the degree and
   `m` the knot multiplicity; saying a surface is "smooth" is a claim about that

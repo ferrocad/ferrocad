@@ -51,6 +51,9 @@ Task-oriented: do one specific thing.
 | [Drive a command from the selection](how-to/selection-and-commands.md) | Selection is UI state the shell pushes into the facade, and a command reads it when the shell asks whether it is enabled. This page runs a command with no selection, selects an object, opens a dialog and accepts it, and deletes the selection. | the `ferrocad_toy` app script (it registers on import); no window: the shell's pushes are ordinary function calls |
 | [Turn the reference grid on and off](how-to/grid-visibility.md) | The Grid command is checkable and presentation-only. This page runs it with no window, shows the view request it returns, and reads the one switch every grid backend agrees on. | the `FerroCAD` facade and `ferrocad_shell`; no GPU and no window |
 
+- [Model a NURBS surface](how-to/model-a-nurbs-surface.md) — `Part.BSplineSurface` is the surface counterpart of `Part.BSplineCurve`. It holds the whole control-point description — poles, weights, knot vectors with multiplicities, and the two degrees — and turns it into a face with `toShape()`.
+- [Make a solid from a NURBS surface](how-to/solid-from-a-nurbs-surface.md) — `Part.BSplineSurface.toShape()` returns a **face** — a surface with a boundary. A solid needs a closed shell. There are two common ways to get there: extrude the face, or cap its open ends and sew the pieces into a shell.
+
 ## Reference
 
 Generated from the live modules by `tools/api_docs.py`:

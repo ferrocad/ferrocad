@@ -52,6 +52,133 @@ class TessellationTests(unittest.TestCase):
                 shape.tessellate(1.0, angular)
 
 
+class BSplineSurfaceTests(unittest.TestCase):
+    POLES = [
+        [[0, 0, 0], [0, 3, 2], [0, 6, 2], [0, 9, 0]],
+        [[3, 0, 2], [3, 3, 3], [3, 6, 3], [3, 9, 2]],
+        [[6, 0, 2], [6, 3, 3], [6, 6, 3], [6, 9, 2]],
+        [[9, 0, 0], [9, 3, 2], [9, 6, 2], [9, 9, 0]],
+    ]
+
+    def test_a_clamped_bicubic_patch(self):
+        # The how-to guide's example: 4x4 poles, degree 3, clamped knots.
+        surface = Part.BSplineSurface()
+        surface.buildFromPolesMultsKnots(
+            self.POLES, [4, 4], [4, 4], [0.0, 1.0], [0.0, 1.0], False, False, 3, 3
+        )
+        self.assertEqual(surface.TypeId, "Part::GeomBSplineSurface")
+        self.assertEqual((surface.UDegree, surface.VDegree), (3, 3))
+        self.assertEqual(len(surface.getPoles()), 4)
+        self.assertEqual(len(surface.getPoles()[0]), 4)
+        self.assertEqual(surface.getUKnots(), [0.0, 1.0])
+        self.assertEqual(surface.getUMultiplicities(), [4, 4])
+        self.assertEqual(surface.getWeights()[0], [1.0, 1.0, 1.0, 1.0])
+
+        face = surface.toShape()
+        self.assertTrue(face.isValid())
+        self.assertAlmostEqual(face.Area, 87.45840756478856, places=6)
+        self.assertEqual(face.Surface.TypeId, "Part::GeomBSplineSurface")
+
+    def test_an_interpolated_grid_builds_a_face(self):
+        # interpolate keeps the grid, so it can build the face and report
+        # bounds/knot sequences; the pole and degree getters need an explicit build.
+        surface = Part.BSplineSurface()
+        surface.interpolate(
+            [
+                [[0, 0, 0], [0, 3, 1], [0, 6, 0], [0, 9, 1]],
+                [[3, 0, 1], [3, 3, 2], [3, 6, 2], [3, 9, 1]],
+                [[6, 0, 0], [6, 3, 1], [6, 6, 1], [6, 9, 0]],
+            ]
+        )
+        self.assertEqual(surface.bounds(), (0.0, 1.0, 0.0, 1.0))
+        self.assertEqual(len(surface.UKnotSequence), 9)
+        face = surface.toShape()
+        self.assertTrue(face.isValid())
+        self.assertGreater(face.Area, 0.0)
+
+
+    def test_a_flat_bilinear_patch(self):
+        surface = Part.BSplineSurface()
+        surface.buildFromPolesMultsKnots(
+            [[[0, 0, 0], [2, 0, 0]], [[0, 1, 0], [2, 1, 0]]],
+            [2, 2], [2, 2], [0.0, 1.0], [0.0, 1.0], False, False, 1, 1,
+        )
+        self.assertEqual((surface.UDegree, surface.VDegree), (1, 1))
+        face = surface.toShape()
+        self.assertTrue(face.isValid())
+        self.assertAlmostEqual(face.Area, 2.0, places=9)
+
+    def test_a_wavy_sheet_from_a_generated_grid(self):
+        surface = self.wavy_surface()
+        face = surface.toShape()
+        self.assertTrue(face.isValid())
+        self.assertAlmostEqual(face.Area, 83.071692, places=5)
+
+    def test_a_periodic_tube(self):
+        surface = self.tube_surface()
+        self.assertTrue(surface.isVPeriodic())
+        face = surface.toShape()
+        self.assertTrue(face.isValid())
+        self.assertAlmostEqual(face.Area, 67.995767, places=5)
+
+    @staticmethod
+    def wavy_surface():
+        import math
+
+        poles = [
+            [[u, v * 3.0, math.sin(2 * math.pi * u / 8) * 2.0] for v in range(4)]
+            for u in range(8)
+        ]
+        surface = Part.BSplineSurface()
+        surface.buildFromPolesMultsKnots(
+            poles,
+            [4, 2, 2, 4], [4, 4],
+            [0.0, 1 / 3, 2 / 3, 1.0], [0.0, 1.0],
+            False, False, 3, 3,
+        )
+        return surface
+
+    @staticmethod
+    def tube_surface():
+        import math
+
+        poles = [
+            [
+                [
+                    2.0 * math.cos(2 * math.pi * v / 8),
+                    2.0 * math.sin(2 * math.pi * v / 8),
+                    u * 2.0,
+                ]
+                for v in range(8)
+            ]
+            for u in range(4)
+        ]
+        surface = Part.BSplineSurface()
+        surface.buildFromPolesMultsKnots(
+            poles,
+            [4, 4], [1] * 9,
+            [0.0, 1.0], [index / 8 for index in range(9)],
+            False, True, 3, 3,
+        )
+        return surface
+
+    def test_extruding_a_face_makes_a_solid(self):
+        slab = self.wavy_surface().toShape().extrude((0.0, 0.0, 3.0))
+        self.assertEqual(slab.ShapeType, "Solid")
+        self.assertTrue(slab.isValid())
+        self.assertAlmostEqual(slab.Volume, 190.4042448629122, places=5)
+
+    def test_capping_a_closed_surface_makes_a_solid(self):
+        tube = self.tube_surface().toShape()
+        caps = [Part.Face(Part.Wire([edge])) for edge in tube.Edges if edge.isClosed()]
+        self.assertEqual(len(caps), 2)
+        shell = Part.makeShell([tube.reversed(), *caps])
+        solid = Part.makeSolid(shell)
+        self.assertEqual(solid.ShapeType, "Solid")
+        self.assertTrue(solid.isValid())
+        self.assertAlmostEqual(solid.Volume, 61.31958336992129, places=5)
+
+
 class FaceTests(unittest.TestCase):
     def test_a_face_from_an_open_wire_is_invalid(self):
         # Wires may be open (most sketches are), but only a closed wire bounds a

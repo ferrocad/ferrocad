@@ -3829,6 +3829,26 @@ impl<V: InventorView> InventorViewport<V> {
         self.set_active_workplane(ActiveWorkplane::standard(plane))
     }
 
+    /// Activate an **explicit frame**: `origin` plus the in-plane axes `u` and `v` (the
+    /// normal is their cross product), labelled `Custom`. Returns whether the plane
+    /// changed; a degenerate frame (a zero axis, or parallel axes) is refused and leaves
+    /// the active plane alone.
+    ///
+    /// This is the seam behind the `"set"` workplane request and any picking tool that
+    /// resolves three points: the caller owns the math, the viewport owns the state.
+    pub fn set_workplane_frame(
+        &mut self,
+        origin: Vector3,
+        u: Vector3,
+        v: Vector3,
+    ) -> bool {
+        let Some(frame) = Workplane::new(origin, u, v, ferrocad_stage::WorkplaneKind::Custom)
+        else {
+            return false;
+        };
+        self.set_active_workplane(ActiveWorkplane::custom(frame, "Custom"))
+    }
+
     /// Shift the **active plane** along its own normal by `delta` mm — the `Offset
     /// Workplane…` action. The plane keeps its name and orientation; the label gains the
     /// offset (`XY +25`) so the pill says where the grid actually is. Returns whether
@@ -9211,6 +9231,36 @@ mod tests {
         assert!(view.set_standard_plane(StandardPlane::Top));
         assert!(view.active_workplane().is_default());
         assert!(!view.set_standard_plane(StandardPlane::Top), "already there");
+    }
+
+    #[test]
+    fn an_explicit_frame_is_labelled_custom_and_a_degenerate_one_is_refused() {
+        let mut view = slab_view();
+        assert!(view.set_workplane_frame(
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        ));
+        let active = view.active_workplane();
+        assert_eq!(active.label, "Custom");
+        assert_eq!(active.plane.origin, Vector3::new(1.0, 2.0, 3.0));
+        // `u × v = Y × X = -Z`, so the frame is right-handed as given.
+        assert_eq!(active.plane.n, Vector3::new(0.0, 0.0, -1.0));
+        assert!(!active.is_default());
+
+        // The axes are normalized; a zero or parallel pair is not a plane.
+        let bound = view.active_workplane().clone();
+        assert!(!view.set_workplane_frame(
+            Vector3::zero(),
+            Vector3::zero(),
+            Vector3::new(0.0, 1.0, 0.0),
+        ));
+        assert!(!view.set_workplane_frame(
+            Vector3::zero(),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+        ));
+        assert_eq!(view.active_workplane(), &bound, "a refusal changes nothing");
     }
 
     #[test]

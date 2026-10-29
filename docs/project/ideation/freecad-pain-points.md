@@ -4,7 +4,7 @@ Status: ideation/analysis (2026-10-28). A qualitative consolidation of
 community-reported pain points and an architectural review; not a benchmark or a
 commitment. Companion to [`README.md`](README.md),
 [`intent-and-automation.md`](intent-and-automation.md), the
-[backlog](../TODO-27-10-2026.md) and the
+[backlog](../TODO-29-10-2026.md) and the
 [developer architecture](../../developer/architecture.md).
 
 This note collects the recurring FreeCAD pain points that a FerroCAD host could

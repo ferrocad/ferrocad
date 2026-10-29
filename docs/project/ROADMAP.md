@@ -1,7 +1,7 @@
 # FerroCAD roadmap
 
-Status: roadmap (2026-10-27). The actionable backlog is
-[`TODO-27-10-2026.md`](TODO-27-10-2026.md); the measured history is
+Status: roadmap (2026-10-29). The actionable backlog is
+[`TODO-29-10-2026.md`](TODO-29-10-2026.md); the measured history is
 [`record/milestones.md`](record/milestones.md); the letters used below (`H1`, `P4`,
 `S4`, `M3` …) are indexed in [`labels.md`](labels.md).
 
@@ -14,20 +14,18 @@ serializers are independent; and topological naming is a lineage layer rather th
 kernel concern.
 
 The bottleneck is no longer geometry. It is the **breadth of the workbench API** and the
-**last interaction surface** on top of it. The Part audit covers **220 of 408 upstream
-method names (53.9%)** in the committed tree; the uncommitted fifth round raises that to
-**248/408 (60.8%)** and adds the SimpleCAD S4.1–S4.3 view facade, ranked pick and
-selection object. SimpleCAD's integrated baseline is **702 passed / 44 failed / 368
-errored / 2 skipped over 88/88 modules**; that number predates the fifth round and is now
-a lower bound.
+**interaction surface** on top of it. The Part audit covers **252 of 408 upstream method
+names (61.8%)**, and the SimpleCAD S4.1–S4.3 view facade, ranked pick and selection object
+are in the tree. SimpleCAD's integrated baseline is **966 passed / 64 failed / 29 errored
+/ 2 skipped over 88/88 modules** (2026-10-27).
 
 ## The three horizons
 
 | Horizon | Goal | Exit criteria | Backlog |
 | --- | --- | --- | --- |
-| **H1 — Finish Part/OCCT** (closed) | Complete the Part contract honestly | Zero Part failures (achieved); every reachable guarded map size enabled; no “not implemented” left in the seam for advertised API | P1 (optional tail only) |
-| **H2 — Workbench platform** (in progress) | Make Part a platform Draft/BIM/SimpleCAD can build on | `Part::FeaturePython` executes and persists; Draft M2–M5 run headless; Q0–Q5 done | P2 |
-| **H3 — Proof by use** (active) | Prove the platform end to end | SimpleCAD S0–S5 baseline; a published `Parametric` edition; a headless BIM subset | P4, P5 |
+| **H1 — Finish Part/OCCT** (closed) | Complete the Part contract honestly | Zero Part failures (achieved); every reachable guarded map size enabled; no “not implemented” left in the seam for advertised API | P5 (optional tail only) |
+| **H2 — Workbench platform** (in progress) | Make Part a platform Draft/BIM/SimpleCAD can build on | `Part::FeaturePython` executes and persists; Draft M2–M5 run headless; Q0–Q5 done | P2 (Draft), P5 |
+| **H3 — Proof by use** (active) | Prove the platform end to end | SimpleCAD S0–S5 baseline; a published `Parametric` edition; a headless BIM subset | P1, P3, P6 |
 
 ### H1 — Finish Part/OCCT (closed 2026-10-27)
 

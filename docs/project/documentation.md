@@ -24,7 +24,7 @@ never have to duplicate a fact across them.
 | 3 | **API users** — Python console, macros, scripts | drive the same model from Python | [`user/explanation/ui-and-api.md`](../user/explanation/ui-and-api.md), [`user/`](../user/README.md) (generated API workflows) and [`python-api/`](../python-api/index.md) | generated from executable workflows + generated reference |
 | 4 | **Addon authors** — mod and workbench writers, AI agents, MCP servers | the contract and the JSON boundary | [`mods/`](../mods/README.md) and [`python-api/`](../python-api/index.md) | authored contract guide + generated reference |
 | 5 | **Developers of FerroCAD** — including upstream-compatibility work | why it is shaped this way, and what to build next | [`developer/`](../developer/README.md): [`architecture.md`](../developer/architecture.md), `architecture/`, `viewport/`, `interaction/`, `workbenches/`; rustdoc | authored notes + the executable conformance harness |
-| 6 | **Process and research** — maintainers and contributors | the plan, the measurements, and the argument behind a decision | [`ROADMAP.md`](ROADMAP.md), [`TODO-27-10-2026.md`](TODO-27-10-2026.md), `direction/`, `record/`, `tasks/`, [`labels.md`](labels.md) | authored notes and records |
+| 6 | **Process and research** — maintainers and contributors | the plan, the measurements, and the argument behind a decision | [`ROADMAP.md`](ROADMAP.md), [`TODO-29-10-2026.md`](TODO-29-10-2026.md), `direction/`, `record/`, `tasks/`, [`labels.md`](labels.md) | authored notes and records |
 
 The complete file-by-file map is [`../INDEX.md`](../INDEX.md): every note appears once,
 under its primary audience, with a one-line description. This table is the policy

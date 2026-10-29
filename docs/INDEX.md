@@ -1,6 +1,6 @@
 # Document index
 
-Status: index (2026-10-27). Every Markdown note under `docs/`, grouped by the folder
+Status: index (2026-10-29). Every Markdown note under `docs/`, grouped by the folder
 and audience it serves. The folders are split by **audience and stability** (see
 [project/documentation.md](project/documentation.md)); this page is the complete map,
 and [README.md](README.md) is the short tour.
@@ -29,7 +29,7 @@ folders are what `tools/build_book.py` publishes at
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
 | drive `FreeCAD` from another program | [mods/README.md#the-json-boundary-for-automated-clients](mods/README.md#the-json-boundary-for-automated-clients) and [python-api/ferrocad_shell.md](python-api/ferrocad_shell.md) |
 | change FerroCAD | [developer/README.md](developer/README.md) and [developer/architecture.md](developer/architecture.md) |
-| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-27-10-2026.md](project/TODO-27-10-2026.md) |
+| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-29-10-2026.md](project/TODO-29-10-2026.md) |
 | find what a label means | [project/labels.md](project/labels.md) |
 
 ## General concepts
@@ -169,7 +169,7 @@ than deleted.
 
 - [project/README.md](project/README.md) — the folder landing page, reading order and the record rule.
 - [project/ROADMAP.md](project/ROADMAP.md) — the three horizons and their exit criteria.
-- [project/TODO-27-10-2026.md](project/TODO-27-10-2026.md) — the active backlog.
+- [project/TODO-29-10-2026.md](project/TODO-29-10-2026.md) — the active backlog: the minimum SimpleCAD surface, solids and booleans, surface/subdivision, and constraints with a bound solver.
 - [project/labels.md](project/labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which program owns it.
 
 ### Documentation system
@@ -210,6 +210,7 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Closed history
 
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
+- [project/record/TODO-27-10-2026.md](project/record/TODO-27-10-2026.md) — the closed 2026-10-27 backlog: the kernel regimes, the SimpleCAD reconstruction fixes, the Draft import closure and the extension-set/CI split.
 - [project/record/TODO-26-10-2026.md](project/record/TODO-26-10-2026.md) — the closed 2026-10-26 backlog: the interaction/gizmo layer, Draft, SimpleCAD and Mesh.
 - [project/record/TODO-24-10-2026.md](project/record/TODO-24-10-2026.md) — the closed 2026-10-24 backlog: the element map, the OCCT seam, feature proxies and Qt Q0–Q5.
 - [project/record/TODO-23-10-2026.md](project/record/TODO-23-10-2026.md) — the closed 2026-10-23 backlog: serializers, lineage, Links and Qt Q0–Q3b.

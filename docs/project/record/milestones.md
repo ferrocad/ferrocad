@@ -81,8 +81,8 @@ breadth, not more Part surface for its own sake.
 
 ## Where the detail lives
 
-- [`../TODO-27-10-2026.md`](../TODO-27-10-2026.md) — the active backlog and the fifth
-  round's state.
+- [`TODO-27-10-2026.md`](TODO-27-10-2026.md) — the closed 2026-10-27 backlog and the fifth
+  to eighth rounds' state.
 - [`TODO-26-10-2026.md`](TODO-26-10-2026.md) — the compact closed 2026-10-25/27 record;
   the full round detail (interaction, Draft, SimpleCAD, Mesh and kernel state) is in
   [`archive/TODO-26-detail-2026-10-26.md`](archive/TODO-26-detail-2026-10-26.md).

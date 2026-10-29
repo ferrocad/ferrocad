@@ -25,7 +25,7 @@ workbenches are deliberately out of scope; the measured subset is stated with ev
 number.
 
 **Roadmap.** [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md) is the three-horizon summary and
-[`docs/project/TODO-27-10-2026.md`](docs/project/TODO-27-10-2026.md) the active backlog. The measured
+[`docs/project/TODO-29-10-2026.md`](docs/project/TODO-29-10-2026.md) the active backlog. The measured
 history is [`docs/project/record/milestones.md`](docs/project/record/milestones.md); the labels
 (`S1`, `P4`, `D0`, …) are indexed in [`docs/project/labels.md`](docs/project/labels.md). Screenshot
 handling (generated viewport snapshots and manual app captures) is in
@@ -263,7 +263,7 @@ the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and 
 against the facade, and [`docs/python-api/`](docs/python-api/index.md) is a signature reference read
 from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
 can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)):
-[`ROADMAP.md`](docs/project/ROADMAP.md) for the horizons, [`TODO-27-10-2026.md`](docs/project/TODO-27-10-2026.md)
+[`ROADMAP.md`](docs/project/ROADMAP.md) for the horizons, [`TODO-29-10-2026.md`](docs/project/TODO-29-10-2026.md)
 for the active backlog, [`record/milestones.md`](docs/project/record/milestones.md) for the measured
 history, [`record/tasks/`](docs/project/record/tasks/README.md) for the closed design specs, and
 [`labels.md`](docs/project/labels.md) for every `S1`/`P4`/`D0`.
@@ -413,7 +413,7 @@ S4.1–S4.3 are in the worktree, and the next step is to rebuild the extension a
 re-measure before deciding the next Part cluster. Packaging is on v0.1.4; macOS is the
 open distribution leg.
 
-The active backlog is [`docs/project/TODO-27-10-2026.md`](docs/project/TODO-27-10-2026.md); the
+The active backlog is [`docs/project/TODO-29-10-2026.md`](docs/project/TODO-29-10-2026.md); the
 three-horizon summary is [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md). The shell is no longer a
 spike: `cargo run -p ferrocad_toy` (the kernel-free edition) or
 `cargo run -p ferrocad_parametric` (with Part) opens the current window; the headless

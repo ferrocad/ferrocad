@@ -14,6 +14,11 @@ to be ambitious and incomplete; it becomes real only when it is accepted into th
 - [FreeCAD pain points and the FerroCAD response](freecad-pain-points.md) — a
   consolidated review of recurring community pain points, their upstream root causes,
   and the crate or layer that could carry each response.
+- [Surface, freeform and cage modelling](surface-and-freeform-modelling.md) — what the
+  built-in Surface workbench contains at the pinned upstream commit, the single
+  `Body::isAllowed` check that keeps surfaces out of `PartDesign`, the fragmentation
+  across Surface, MeshPart, Part, Sketcher and Curves, and options for cage editing and
+  surface-to-solid features.
 
 ## The rule
 

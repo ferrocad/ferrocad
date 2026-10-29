@@ -53,8 +53,8 @@ impl Surface {
             "radial" | "wheel" => Some(Self::Radial),
             "mods" | "header:mods" => Some(Self::Mods),
             // A capability surface with no chrome of its own: the gizmo's settings are
-            // reached through the transform tool's options (the dock's `Move ▾`) and
-            // the Settings tree, never as a standalone toolbar entry.
+            // reached through the wheel's `Move`/`Rotate` verbs and the Settings tree,
+            // never as a standalone toolbar entry.
             "gizmo" | "header:gizmo" => Some(Self::Hidden),
             "dock" => Some(Self::Dock),
             "hidden" => Some(Self::Hidden),

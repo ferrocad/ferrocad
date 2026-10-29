@@ -37,7 +37,7 @@ impl Shell {
                 }
             }
         }
-        // The dock's gizmo menu is provider-aware like Grid and Axes: the rows are the
+        // The header's gizmo menu is provider-aware like Grid and Axes: the rows are the
         // registered `gizmo` backends, so read the registry once when it opens. Without
         // this the menu showed only its config rows and the two providers (native and
         // shader) were invisible.

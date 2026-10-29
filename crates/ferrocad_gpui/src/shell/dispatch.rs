@@ -650,8 +650,8 @@ impl Shell {
                 cx.notify();
                 viewport.take_tool_state()
             });
-            // The gizmo is gone for the session, so the dock's contextual control
-            // goes with it.
+            // The gizmo is gone for the session, so the keyboard escalation (Tab or a
+            // typed number) goes with it.
             self.model.lock().unwrap().gizmo_armed = false;
         }
         if let Some(status) = pending {

@@ -62,8 +62,9 @@ pub fn run_edition(app_name: &str, entry_module: &str) {
 /// workplane pick.
 ///
 /// A whole-object selection arms a translate gizmo, so the shipped app has an
-/// interactive move tool out of the box (the dock's `Move` arms it for the current
-/// selection). The `workplane_points` tool is what `App_Workplane3Points` starts: the
+/// interactive move tool out of the box (the wheel's `Move`, or `Ctrl+Shift+M`, arms it
+/// for the current selection). The `workplane_points` tool is what `App_Workplane3Points`
+/// starts: the
 /// command names a registry id, so the tool ships with the app rather than with a
 /// workbench. Workbench manipulators — the Part edge dress-up arc, a height grip —
 /// stay with the edition that links them, which is why this is a default and not a

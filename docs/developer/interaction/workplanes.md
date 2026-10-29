@@ -252,7 +252,8 @@ click always selects the whole body.
 ### 8.4 A verb is an explicit request
 
 Move and Rotate arm the body triad for the selected **body** even while a face is
-selected: from the wheel, `Ctrl+Shift+M` / `Ctrl+Shift+R`, or the dock's `Move ▾`. When
+selected: from the radial wheel, or `Ctrl+Shift+M` / `Ctrl+Shift+R` (a global
+accelerator, so it does not need a visible button). When
 the session ends or the selection changes, the default (suppressed) state returns. The
 suppression is therefore a *default*, not a lock — which is what keeps body transforms
 reachable from any selection. The Move HUD keeps anchoring at the body datum, the same

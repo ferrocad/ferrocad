@@ -367,7 +367,9 @@ Four things the first real session found:
    (`Face1`…`Face6`, with the matching `triangle_parts`/`segment_parts`), so the hover
    bloom, Tier 1, `Set from selection` and the wheel's `Set WP` all work in the sample
    edition too. A single click now selects the face; a double click still promotes to
-   the whole body.
+   the whole body. The toy's height grip and move gizmo accept a face pick as well (a
+   box's height and placement are properties of the body), so the handles do not
+   disappear when the click lands on a face.
 4. **The wheel could not offer a non-radial command.** Covered in §7.4
    (`FerroCAD_Wheel`).
 

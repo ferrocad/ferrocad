@@ -786,15 +786,14 @@ fn bounds(item: &ShapeItem) -> Option<(Vector3, Vector3)> {
 /// The toy workbench's gizmo factory: a **whole-object** selection arms an
 /// axis-handle [`HeightGizmo`] over the item's top centre.
 ///
-/// Unlike the Part factory (which wants an `EdgeN`), the toy has no sub-elements, so it
-/// claims whole-object selections only. The adapter is the proof that the grip really
+/// The grip stays whole-object even though the toy's mesh now names its faces: a box's
+/// height is a property of the body, so a face pick is enough to *offer* the grip but the
+/// edit still applies to the object. (The Part factory is the one that wants an `EdgeN`.)
+/// The adapter is the proof that the grip really
 /// is a single-axis translate gizmo: it answers with [`GizmoKind::Translate`],
 /// [`GizmoHandle::AxisZ`] and a [`GizmoTarget`], while keeping the grip's readout and
 /// `toy_height` commit.
 pub fn height_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<HeightGizmo> {
-    if !selection.is_whole() {
-        return None;
-    }
     let item = stage.item(selection.object)?;
     let (min, max) = bounds(item)?;
     let top = Vector3::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, max.z);
@@ -815,19 +814,19 @@ pub fn height_grip(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Ma
     Some(Box::new(height_gizmo(selection, stage)?))
 }
 
-/// The toy workbench's gizmo factory: a **whole-object** selection gets a translate
+/// The toy workbench's gizmo factory: a selection on a displayed item gets a translate
 /// gizmo at the item's own origin.
 ///
-/// The gizmo is the generic move handle; whether an object responds is the workbench's
+/// A **face** pick is enough: the commit applies to the object, and a click that selects
+/// a face must not quietly remove the handles (double-click still promotes the selection
+/// to the whole body). The
+/// gizmo is the generic move handle; whether an object responds is the workbench's
 /// decision. The toy offers translation (its document provider composes the committed
 /// matrix with the object's placement). The datum is the same one the base edition uses
 /// ([`ferrocad_stage::ShapeItem::anchor`]): the placement origin when the provider reports
 /// it, otherwise the bounding box's base corner — so the triad doubles as an origin
 /// indicator.
 pub fn move_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<TransformGizmo> {
-    if !selection.is_whole() {
-        return None;
-    }
     let item = stage.item(selection.object)?;
     let origin = item.anchor()?;
     Some(TransformGizmo::translate(selection.object, origin))
@@ -1162,9 +1161,12 @@ mod tests {
     }
 
     #[test]
-    fn a_sub_element_or_unknown_selection_arms_nothing() {
+    fn a_face_pick_still_offers_the_grip_but_an_unknown_selection_does_not() {
         let stage = slab(7);
-        assert!(height_grip(&SelectionRef::element(7, "Edge1"), &stage).is_none());
+        assert!(
+            height_grip(&SelectionRef::element(7, "Face3"), &stage).is_some(),
+            "a face pick keeps the height grip: the height is the body's"
+        );
         assert!(height_grip(&SelectionRef::whole(9), &stage).is_none());
         assert!(height_grip(&SelectionRef::whole(7), &Stage::new()).is_none());
     }
@@ -1178,7 +1180,10 @@ mod tests {
         assert!((origin.x + 20.0).abs() < 1e-9, "x = {}", origin.x);
         assert!((origin.y + 20.0).abs() < 1e-9, "y = {}", origin.y);
         assert!(origin.z.abs() < 1e-9, "z = {}", origin.z);
-        assert!(move_gizmo(&SelectionRef::element(7, "Face1"), &stage).is_none());
+        assert!(
+            move_gizmo(&SelectionRef::element(7, "Face1"), &stage).is_some(),
+            "a face pick keeps the handles"
+        );
     }
 
     #[test]

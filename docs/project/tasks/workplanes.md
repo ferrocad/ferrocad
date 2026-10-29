@@ -1,6 +1,8 @@
 # Workplanes: one model, three ways in
 
-Status: task spec (2026-10-29). A proposal, not built. Companion to
+Status: task spec (2026-10-29). **Partially built on 2026-10-29**: the state model, the
+same-grid change and the `WP` pill have landed (§7); the three tiers' entry points remain.
+Companion to
 [`../../developer/interaction/selection-gizmos-and-forms.md`](../../developer/interaction/selection-gizmos-and-forms.md)
 (the context wheel, §2.2), [`../../developer/interaction/gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
 (frames and the triad), [`../../developer/interaction/visual-language.md`](../../developer/interaction/visual-language.md)
@@ -224,7 +226,41 @@ Everything here already has the pieces; this is the map to connect them.
 8. **World layer.** Keep it dimmed behind a bound plane (recommended — it is the absolute
    datum) or hide it while a plane is active?
 
-## 7. Non-goals
+## 7. What landed (2026-10-29)
+
+The state model and the pill — the prerequisite for all three tiers.
+
+- The viewport's plane is `ActiveWorkplane { plane, label }`, **not** `Option<FaceFrame>`:
+  it starts at world `XY` (`label: "XY"`) and is never absent. `set_active_workplane`
+  takes an explicit plane; `set_workplane(Some(frame))` labels the frame from its
+  `WorkplaneKind` (`Face1`), and `set_workplane(None)` / `clear_workplane()` reset to
+  world. `active_workplane()` returns `&ActiveWorkplane`; `is_default()` is the pill's
+  dot test.
+- **The grid is the origin grid, moved.** The active plane uses the same generator, the
+  same steps (`grid_minor`/`grid_major`), the same ink and the camera-following radius;
+  snapping uses those steps too, so the drawn grid and the snap agree. The finer 1 mm/10 mm
+  style now survives only in the *hover* preview, where it is a hint about the face.
+- `view_workplane()` always succeeds: at the default it is the top view (down `-Z`).
+- The `WP` control is a **selector, not a toggle**: it has no state dot at all, its label
+  reads `WP: XY` / `WP: Face1` in normal ink and switches to `CHROME_ACTIVE` when the plane
+  is non-default, and a click anywhere on it opens the datum menu (there is no primary
+  action to misfire at the default). The shell reads the plane from the viewport entity
+  while rendering, so there is no mirrored state to go stale.
+- `ManipulatorFrame::of_workplane` converts the plane to the gizmo/overlay frame
+  (`basis = [u, v, n]`), so the overlays and future handles can solve in the plane.
+- Status messages no longer deny a plane: `Clear` reports “workplane reset to World XY”
+  (or “already World XY”), `Activate` names the plane, `View` names what it looks down.
+
+Verified: `ferrocad_stage` 186 (the frame conversion), `ferrocad_viewport` 163 (three new
+tests: default plane, face label, no-op reset), `ferrocad_gpui --lib` 216, plus shell
+assertions that the default pill has no state dot and that a click on its label opens
+the menu.
+
+**Still open:** the dropdown's standard planes (`XZ`/`YZ`), view plane, 3-point pick and
+offset HUD; the ephemeral binding during a tool (§2.1); the wheel verb (§2.2); the Python
+“set” verb (§4); and the datum-plane object question.
+
+## 8. Non-goals
 
 - Datum-plane *objects* with expressions and attachment (that is `Part::Datum` and the
   constraint work; this task only needs a frame and a label).

@@ -306,10 +306,23 @@ fn gizmo_rows(feature: Option<&ProviderFeature>, commands: &[CommandInfo]) -> Ve
 /// It occludes, so a press on the glass does not start an orbit/drag on the canvas
 /// beneath it. Its popovers are `deferred(anchored(..))` overlays with their own
 /// hitboxes, so they still receive pointer events.
+/// The active construction plane, for the `WP` control.
+///
+/// A viewport always has one — the world `XY` plane is the default — so this is
+/// present whenever a viewport exists. The dot appears only for a non-default plane.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WorkplaneBadge {
+    /// What the plane is called (`"XY"`, `"Face3"`, `"Datum"`, `"XZ"`).
+    pub label: String,
+    /// Whether it is anything other than the default world `XY` plane.
+    pub custom: bool,
+}
+
 pub(crate) fn viewport_header(
     model: &ShellModel,
     grid: Option<&GridSummary>,
     axis: Option<&AxisSummary>,
+    workplane: Option<&WorkplaneBadge>,
     open: Option<&str>,
     anchor: Option<Point<Pixels>>,
     cx: &mut Context<Shell>,
@@ -372,21 +385,8 @@ pub(crate) fn viewport_header(
             cx,
         ));
     }
-    if let Some(command) = commands::find(&model.commands, WORKPLANE) {
-        controls = controls.child(split_button(
-            "wp",
-            "WP",
-            WORKPLANE,
-            Surface::Workplane,
-            wp_open,
-            Vec::new(),
-            Vec::new(),
-            anchor,
-            false,
-            command,
-            model,
-            cx,
-        ));
+    if commands::find(&model.commands, WORKPLANE).is_some() {
+        controls = controls.child(workplane_button(workplane, wp_open, anchor, model, cx));
     }
     // The gizmo is a capability like the grid and axis cross: its label toggles
     // visibility and its caret exposes the provider switch and settings. It sits
@@ -529,9 +529,102 @@ pub(crate) fn app_menu(
 /// it. Clicking the same caret while open keeps it open (use `Esc` or a click
 /// elsewhere to dismiss). A right-click on the label opens it too, and never runs the
 /// command.
+/// The `WP` control: a **selector**, not a toggle.
+///
+/// It has no state dot — `Grid`, `Axes`, `Gizmo` and `Snap` are capabilities that can be
+/// off, while a workplane always exists — and no primary action: the label carries the
+/// state (`WP: XY` in normal ink, `WP: Face1` in `CHROME_ACTIVE`) and a click anywhere on
+/// the button opens the datum menu. A split button would leave a dead primary click at the
+/// default and a dot that is always lit.
+fn workplane_button(
+    badge: Option<&WorkplaneBadge>,
+    open: bool,
+    anchor: Option<Point<Pixels>>,
+    model: &ShellModel,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let custom = badge.is_some_and(|badge| badge.custom);
+    let label: SharedString = match badge {
+        Some(badge) => format!("WP: {}", badge.label).into(),
+        None => "WP".into(),
+    };
+    let rows: Vec<PopoverRow> =
+        commands::popover_commands(&model.commands, Surface::Workplane, WORKPLANE)
+            .into_iter()
+            .map(PopoverRow::of)
+            .collect();
+
+    let mut control = div()
+        .relative()
+        .flex()
+        .flex_row()
+        .items_center()
+        .rounded_sm()
+        .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
+
+    control = control.child(
+        div()
+            .id("wp-label")
+            .debug_selector(|| "wp-label".to_string())
+            .px_2()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(if custom { CHROME_ACTIVE } else { FG }))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL)))
+            .child(label)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+                    this.set_popover_anchor(event.position);
+                }),
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.open_popover("wp", cx);
+            })),
+    );
+    control = control.child(
+        div()
+            .id("wp-caret")
+            .debug_selector(|| "wp-caret".to_string())
+            .px_1()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(MUTED))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL)))
+            .child("▾")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+                    this.set_popover_anchor(event.position);
+                }),
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.open_popover("wp", cx);
+            })),
+    );
+    if open {
+        let position = anchor
+            .map(|pointer| point(pointer.x, pointer.y + px(18.)))
+            .unwrap_or_else(|| point(px(0.), px(28.)));
+        control = control.child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::TopLeft)
+                    .position(position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(popover_with_info("wp", Vec::new(), rows, cx)),
+            )
+            .with_priority(1),
+        );
+    }
+    control
+}
+
 fn split_button(
     key: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     primary: &'static str,
     surface: Surface,
     open: bool,
@@ -570,7 +663,7 @@ fn split_button(
 /// list is not a summary. The visual language is identical.
 fn split_button_with_rows(
     key: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     primary: &'static str,
     open: bool,
     info: Vec<PopoverInfo>,
@@ -580,6 +673,7 @@ fn split_button_with_rows(
     command: &CommandInfo,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
+    let label: SharedString = label.into();
     // Dielectric: the pill's glass is the surface and the 6 px state dot carries
     // on/off in `ACTIVE_ACCENT` (one ink with the popover rows). A checked control
     // used to fill with `ACCENT`, which pulled the eye away from the model (the
@@ -619,7 +713,7 @@ fn split_button_with_rows(
                             .bg(rgb(if command.checked { ACTIVE_ACCENT } else { MUTED })),
                     )
                 })
-                .child(label),
+                .child(label.clone()),
         )
         .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
             this.set_popover_anchor(event.position);

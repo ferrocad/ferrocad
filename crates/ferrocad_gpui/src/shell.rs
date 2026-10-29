@@ -1195,6 +1195,15 @@ impl Render for Shell {
         // The pane is the canvas now: the environment controls float over it as a
         // compact pill (see `chrome::viewport_header`) instead of taking a header row,
         // so the scene reaches the title bar.
+        // The active plane is viewport state, so read it here rather than mirroring it
+        // into the model: there is always a plane, and this cannot go stale.
+        let workplane = self.viewport.as_ref().map(|viewport| {
+            let active = viewport.read(cx).active_workplane();
+            crate::chrome::WorkplaneBadge {
+                label: active.label.clone(),
+                custom: !active.is_default(),
+            }
+        });
         let viewport = div()
             .flex()
             .flex_col()
@@ -1253,6 +1262,7 @@ impl Render for Shell {
                         &model,
                         self.grid_summary.as_ref(),
                         self.axis_summary.as_ref(),
+                        workplane.as_ref(),
                         self.open_popover.as_deref(),
                         self.popover_anchor,
                         cx,

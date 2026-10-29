@@ -430,6 +430,16 @@ pub struct ManipulatorFrame {
 }
 
 impl ManipulatorFrame {
+    /// The workplane as a manipulator frame: the plane's `u`/`v`/`n` are the frame's
+    /// `basis`. This is the one conversion a gizmo or an overlay needs to solve in the
+    /// active plane's coordinates instead of the world's.
+    pub fn of_workplane(plane: &crate::workplane::Workplane) -> Self {
+        Self {
+            origin: plane.origin,
+            basis: [plane.u, plane.v, plane.n],
+        }
+    }
+
     /// The global, axis-aligned frame at `origin`.
     pub fn world(origin: Vector3) -> Self {
         Self {

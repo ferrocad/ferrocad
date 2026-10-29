@@ -94,6 +94,10 @@ fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppCont
     let grid = cx.debug_bounds("grid-label").expect("the Grid label");
     let axis = cx.debug_bounds("axis-label").expect("the Axes label");
     let wp = cx.debug_bounds("wp-label").expect("the WP label");
+    assert!(
+        cx.debug_bounds("wp-state-dot").is_none(),
+        "the default world XY plane shows no dot"
+    );
     assert!(grid.origin.x < axis.origin.x);
     assert!(axis.origin.x < wp.origin.x);
     assert!(
@@ -237,6 +241,16 @@ fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppCont
     assert!(cx.debug_bounds("grid-popover").is_none());
     assert!(cx.debug_bounds("wp-row-App_ActivateWorkplane").is_some());
     assert!(cx.debug_bounds("wp-row-App_ClearWorkplane").is_some());
+
+    // A plain click on the WP label opens the same menu: `WP` is a selector, not a
+    // command, so it has no primary action and no state dot.
+    cx.simulate_click(gpui::point(px(200.), px(300.)), gpui::Modifiers::default());
+    draw(&mut cx);
+    assert!(!cx.update(|_window, cx| shell.read(cx).popover_open("wp")));
+    click_at(&mut cx, "wp-label");
+    assert!(cx.update(|_window, cx| shell.read(cx).popover_open("wp")));
+    cx.simulate_click(gpui::point(px(200.), px(300.)), gpui::Modifiers::default());
+    draw(&mut cx);
 
     // The label runs the primary command in one click and closes the menu.
     click_at(&mut cx, "grid-label");

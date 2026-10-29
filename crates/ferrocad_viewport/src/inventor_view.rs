@@ -167,6 +167,53 @@ pub enum ViewportEvent {
     ToolState(ToolStatus),
 }
 
+/// The viewport's active construction plane: the plane plus what to call it.
+///
+/// There is **always** an active plane — the world `XY` plane is the default and is
+/// present from the first frame. `None` never means “no workplane”; it means “the world
+/// plane”, which is why this is not an `Option`.
+///
+/// `label` is what the `WP` pill and the status line show (`"XY"`, `"Face3"`,
+/// `"Datum"`); `plane.kind` stays the semantic source (the label is presentation, and a
+/// world-aligned `XZ`/`YZ` plane keeps `kind = World` while reading `"XZ"`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActiveWorkplane {
+    /// The plane: origin plus in-plane axes (the normal is `u × v`).
+    pub plane: Workplane,
+    /// The presentation label for the pill and the status line.
+    pub label: String,
+}
+
+impl ActiveWorkplane {
+    /// The default plane: world `XY` at the origin.
+    pub fn world() -> Self {
+        Self {
+            plane: Workplane::world(),
+            label: "XY".to_string(),
+        }
+    }
+
+    /// The plane of a resolved face, labelled by its element (`Face3`) or datum name.
+    pub fn of(frame: &FaceFrame) -> Self {
+        let label = match &frame.plane.kind {
+            ferrocad_stage::WorkplaneKind::Face { element, .. } if !element.is_empty() => {
+                element.clone()
+            }
+            ferrocad_stage::WorkplaneKind::Datum(name) => name.clone(),
+            _ => "Face".to_string(),
+        };
+        Self {
+            plane: frame.plane.clone(),
+            label,
+        }
+    }
+
+    /// Whether this is the default world `XY` plane (the pill shows no dot).
+    pub fn is_default(&self) -> bool {
+        self.label == "XY" && matches!(self.plane.kind, ferrocad_stage::WorkplaneKind::World)
+    }
+}
+
 /// A gpui view that presents an [`InventorView`] (image path) and routes pointer
 /// events into the scene.
 pub struct InventorViewport<V: InventorView> {
@@ -298,7 +345,7 @@ pub struct InventorViewport<V: InventorView> {
     /// A multiplier over the token alphas (`FerroCAD.Grid.opacity`).
     grid_alpha: f32,
     /// The active local workplane (G3): sticky until `Esc` or another activation.
-    active_workplane: Option<FaceFrame>,
+    active_workplane: ActiveWorkplane,
     /// The face under the pointer, resolved from the stage's display tessellation. Its
     /// grid blooms after [`FACE_DWELL`].
     hover_face: Option<FaceHover>,
@@ -732,6 +779,33 @@ fn local_grid(camera: &Camera, frame: &FaceFrame) -> (GridSpec, GridStyle) {
     )
 }
 
+/// The grid for the active plane: the **same generator and the same steps** as the
+/// world grid, with the camera-following radius, so a bound plane reads as the same
+/// grid moved rather than a finer local patch.
+fn active_grid(
+    camera: &Camera,
+    plane: &Workplane,
+    minor: f64,
+    major: f64,
+    color: [f32; 4],
+    alpha: f32,
+) -> (GridSpec, GridStyle) {
+    let (minor, major) = grid::effective_steps(camera, plane, minor, major);
+    let mut style = GridStyle::default();
+    style.color = color;
+    style.minor_alpha *= alpha;
+    style.major_alpha *= alpha;
+    (
+        GridSpec {
+            workplane: plane.clone(),
+            minor,
+            major,
+            radius: GridSpec::radius_for(camera),
+        },
+        style,
+    )
+}
+
 /// Apply the user's ink and alpha multiplier to an existing style. The multiplier scales
 /// the token alphas, so a workplane keeps its `1:2` minor:major ratio.
 fn with_grid_ink(mut style: GridStyle, color: [f32; 4], alpha: f32) -> GridStyle {
@@ -923,7 +997,7 @@ impl<V: InventorView> InventorViewport<V> {
             grid_radius: None,
             grid_color: grid::GRID_COLOR,
             grid_alpha: 1.0,
-            active_workplane: None,
+            active_workplane: ActiveWorkplane::world(),
             hover_face: None,
             grid_queue: RenderQueue::default(),
             grid_overlay: false,
@@ -3462,17 +3536,16 @@ impl<V: InventorView> InventorViewport<V> {
         // origin node and labels step aside while the claim stands.
         let cross = self.axis.enabled && !self.axis.overlay;
         let active = self.active_workplane.clone();
+        // The default world `XY` plane is drawn by the world layer; only a non-default
+        // plane gets a layer of its own (and hides the coplanar world ground).
+        let local = !active.is_default();
         // Do not preview the face that is already active.
         let hover = self
             .hover_face
             .as_ref()
             .filter(|_| grid_on)
             .filter(|face| face.since.elapsed() >= FACE_DWELL)
-            .filter(|face| {
-                active
-                    .as_ref()
-                    .is_none_or(|active| active.plane.kind != face.frame.plane.kind)
-            })
+            .filter(|face| active.plane.kind != face.frame.plane.kind)
             .map(|face| face.frame.clone());
 
         let world_plane = Workplane::world();
@@ -3490,7 +3563,7 @@ impl<V: InventorView> InventorViewport<V> {
         };
         // A local frame is present when its grid is on, or (for the triad alone) when the
         // axis cross is on with an active workplane.
-        let local_present = (grid_on && hover.is_some()) || active.is_some();
+        let local_present = (grid_on && hover.is_some()) || local;
         let mut world_style = GridStyle::default();
         world_style.color = self.grid_color;
         world_style.minor_alpha *= self.grid_alpha;
@@ -3502,31 +3575,25 @@ impl<V: InventorView> InventorViewport<V> {
             world_style.dim = grid::WORLD_DIM;
             world_axis = world_axis.scaled_opacity(grid::WORLD_TRIAD_DIM);
         }
-        let active_layer = active.as_ref().and_then(|frame| {
-            (grid_on || cross).then(|| {
-                let (spec, style) = local_grid(&self.camera, frame);
-                (
-                    spec,
-                    with_grid_ink(style, self.grid_color, self.grid_alpha),
-                    grid_on,
-                )
-            })
+        let active_layer = (local && (grid_on || cross)).then(|| {
+            let (spec, style) = active_grid(
+                &self.camera,
+                &active.plane,
+                self.grid_minor,
+                self.grid_major,
+                self.grid_color,
+                self.grid_alpha,
+            );
+            (spec, style, grid_on)
         });
         let hover_layer = hover
             .as_ref()
             .map(|frame| local_grid(&self.camera, frame))
             .map(|(spec, style)| (spec, with_grid_ink(style, self.grid_color, self.grid_alpha)));
-        // The origin node sits on the active workplane, or under the world triad.
-        let origin_plane = active
-            .as_ref()
-            .map(|frame| frame.plane.clone())
-            .unwrap_or_else(Workplane::world);
+        // The origin node sits on the active workplane (the world origin at the default).
+        let origin_plane = active.plane.clone();
         let bloomed = self.origin_bloomed();
-        let origin_bias = if active.is_some() {
-            WIRE_DEPTH_BIAS
-        } else {
-            0.0
-        };
+        let origin_bias = if local { WIRE_DEPTH_BIAS } else { 0.0 };
 
         let world = LayerSpec {
             spec: &world_spec,
@@ -3611,23 +3678,32 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// The active local workplane and its grid extent, if one is active.
-    pub fn active_workplane(&self) -> Option<&FaceFrame> {
-        self.active_workplane.as_ref()
+    pub fn active_workplane(&self) -> &ActiveWorkplane {
+        &self.active_workplane
     }
 
-    /// Activate `frame` as the workplane, or clear it with `None`. Returns whether the
-    /// active plane changed.
-    ///
-    /// The plane is **sticky**: it survives pointer moves and empty-space clicks, and is
-    /// only replaced by another activation or cleared by `Esc`.
-    pub fn set_workplane(&mut self, frame: Option<FaceFrame>) -> bool {
-        if self.active_workplane == frame {
+    /// Set the active plane directly (`World`, a `XZ`/`YZ` standard, or a custom frame).
+    /// Returns whether the active plane changed.
+    pub fn set_active_workplane(&mut self, plane: ActiveWorkplane) -> bool {
+        if self.active_workplane == plane {
             return false;
         }
-        self.active_workplane = frame;
+        self.active_workplane = plane;
         self.hover_face = None;
         self.recompile();
         true
+    }
+
+    /// Activate `frame` as the workplane, or return to the world `XY` plane with `None`.
+    /// Returns whether the active plane changed.
+    ///
+    /// The plane is **sticky**: it survives pointer moves and empty-space clicks, and is
+    /// only replaced by another activation or reset by `Esc`.
+    pub fn set_workplane(&mut self, frame: Option<FaceFrame>) -> bool {
+        match frame {
+            Some(frame) => self.set_active_workplane(ActiveWorkplane::of(&frame)),
+            None => self.set_active_workplane(ActiveWorkplane::world()),
+        }
     }
 
     /// Activate the face under the pointer, if one resolved. Returns whether a workplane
@@ -3640,8 +3716,8 @@ impl<V: InventorView> InventorViewport<V> {
         self.set_workplane(Some(frame))
     }
 
-    /// Drop the active workplane, returning to the world ground. Returns whether one was
-    /// active.
+    /// Reset the active workplane to the world `XY` plane. Returns whether it was
+    /// anything else (resetting at the default is a no-op).
     pub fn clear_workplane(&mut self) -> bool {
         self.set_workplane(None)
     }
@@ -3650,10 +3726,9 @@ impl<V: InventorView> InventorViewport<V> {
     /// up (the `View → Workplane` command, G5). The camera keeps its eye distance and
     /// animates there. Returns whether a workplane is active.
     pub fn view_workplane(&mut self) -> bool {
-        let Some(frame) = self.active_workplane.as_ref() else {
-            return false;
-        };
-        let plane = &frame.plane;
+        // There is always an active plane: at the default this looks down world `-Z`,
+        // which is the top view.
+        let plane = &self.active_workplane.plane;
         let n = plane.n;
         // Roll-free: the screen up is the world vertical (`+Z`, the axis the navicube
         // canonicalises on) projected into the plane. Looking down a face whose normal is
@@ -3692,9 +3767,10 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.axis.enabled || self.axis.overlay || !self.axis.labels {
             return Vec::new();
         }
-        let (plane, letters) = match &self.active_workplane {
-            Some(frame) => (frame.plane.clone(), ['U', 'V', 'N']),
-            None => (Workplane::world(), ['X', 'Y', 'Z']),
+        let (plane, letters) = if self.active_workplane.is_default() {
+            (Workplane::world(), ['X', 'Y', 'Z'])
+        } else {
+            (self.active_workplane.plane.clone(), ['U', 'V', 'N'])
         };
         let colors = self.axis.colors.map(packed_srgb);
         let alpha = (self.axis.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -3722,14 +3798,17 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// The snap plane: the active workplane when one is set, else the world grid.
     fn snap_context(&self) -> Option<SnapContext> {
-        match &self.active_workplane {
-            Some(frame) => Some(SnapContext {
-                workplane: frame.plane.clone(),
-                minor: grid::LOCAL_MINOR_STEP,
-                major: grid::LOCAL_MAJOR_STEP,
-            }),
-            None => self.snap_grid.map(SnapContext::world),
+        if self.active_workplane.is_default() {
+            // The default plane keeps the world grid's steps (and honours the snap-grid
+            // switch); a bound plane uses the finer local steps.
+            return self.snap_grid.map(SnapContext::world);
         }
+        Some(SnapContext {
+            workplane: self.active_workplane.plane.clone(),
+            // Match the drawn grid exactly: the same steps as the world grid.
+            minor: self.grid_minor,
+            major: self.grid_major,
+        })
     }
 
     /// Whether a hovered face's grid is still waiting out [`FACE_DWELL`]. The renderer
@@ -3799,11 +3878,7 @@ impl<V: InventorView> InventorViewport<V> {
                 }
             }
         }
-        let origin = self
-            .active_workplane
-            .as_ref()
-            .map(|frame| frame.plane.origin)
-            .unwrap_or_else(|| Workplane::world().origin);
+        let origin = self.active_workplane.plane.origin;
         candidates.push(SnapCandidate {
             point: origin,
             kind: SnapKind::Origin,
@@ -3926,11 +4001,7 @@ impl<V: InventorView> InventorViewport<V> {
         let Some(device) = self.pointer else {
             return false;
         };
-        let origin = self
-            .active_workplane
-            .as_ref()
-            .map(|frame| frame.plane.origin)
-            .unwrap_or_else(|| Workplane::world().origin);
+        let origin = self.active_workplane.plane.origin;
         project_device(&self.camera, origin).is_some_and(|projected| {
             (projected[0] - f64::from(device[0])).hypot(projected[1] - f64::from(device[1]))
                 <= feedback::ORIGIN_PROXIMITY_PIXELS
@@ -8354,7 +8425,7 @@ mod tests {
         view.handle_pointer([30.0, 50.0]);
         assert!(view.activate_hovered_workplane());
 
-        let active = view.active_workplane().expect("an active workplane");
+        let active = view.active_workplane();
         assert_eq!(
             active.plane.kind,
             WorkplaneKind::Face {
@@ -8364,20 +8435,31 @@ mod tests {
         );
         let context = view.snap_context().expect("a snap plane");
         assert_eq!(context.workplane.kind, active.plane.kind);
-        assert_eq!(context.minor, grid::LOCAL_MINOR_STEP);
-        assert_eq!(context.major, grid::LOCAL_MAJOR_STEP);
+        // The bound plane snaps on the same steps the world grid draws, so the grid and
+        // the snapping agree (the plane is the same grid, moved).
+        assert_eq!(context.minor, grid::MINOR_STEP);
+        assert_eq!(context.major, grid::MAJOR_STEP);
 
         // The active plane is drawn without a dwell, and hovering it adds no second
-        // layer.
-        assert_eq!(view.grid_queue.len(), 8);
+        // layer. (The packet count is an implementation detail; what matters is that a
+        // second sync with the pointer still on the face adds nothing.)
+        let active_packets = view.grid_queue.len();
+        assert!(
+            active_packets > 5,
+            "the bound plane adds a layer: {active_packets}"
+        );
         view.handle_pointer([30.0, 50.0]);
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 8, "the active face is not previewed");
+        assert_eq!(
+            view.grid_queue.len(),
+            active_packets,
+            "the active face is not previewed"
+        );
 
         // Esc clears it: snapping returns to the world and the world layer brightens.
         let dimmed = max_alpha(&view.grid_queue.packets[0]);
         assert!(view.handle_key(&escape_key()));
-        assert!(view.active_workplane().is_none());
+        assert!(view.active_workplane().is_default());
         assert!(
             view.snap_context().is_none(),
             "no world grid snapping by default"
@@ -8674,11 +8756,14 @@ mod tests {
         // The first Escape ends the tool and leaves the workplane.
         assert!(view.handle_key(&escape_key()));
         assert!(view.tool().is_none());
-        assert!(view.active_workplane().is_some(), "the tool was cancelled first");
+        assert!(
+            !view.active_workplane().is_default(),
+            "the tool was cancelled first"
+        );
 
-        // The second Escape reaches the fallback and clears the workplane.
+        // The second Escape reaches the fallback and resets the workplane.
         assert!(view.handle_key(&escape_key()));
-        assert!(view.active_workplane().is_none());
+        assert!(view.active_workplane().is_default());
     }
 
     #[test]
@@ -8811,7 +8896,7 @@ mod tests {
             .expect("a camera snap")
             .target()
             .to_matrix();
-        let normal = view.active_workplane().expect("a plane").plane.n;
+        let normal = view.active_workplane().plane.n;
         let in_view = target.transform(&normal);
         assert!(
             (in_view.z - 1.0).abs() < 1e-6 && in_view.x.abs() < 1e-6 && in_view.y.abs() < 1e-6,
@@ -8884,5 +8969,39 @@ mod tests {
         view.set_workplane(Some(FaceFrame { plane, radius: 5.0 }));
         let texts: Vec<char> = view.axis_labels().iter().map(|label| label.text).collect();
         assert_eq!(texts, vec!['U', 'V', 'N']);
+    }
+
+    #[test]
+    fn the_default_workplane_is_the_world_xy_plane() {
+        let mut view = slab_view();
+        let active = view.active_workplane();
+        assert!(active.is_default(), "the world XY plane is the default");
+        assert_eq!(active.label, "XY");
+        assert_eq!(active.plane.origin, Vector3::zero());
+        assert_eq!(active.plane.n, Vector3::new(0.0, 0.0, 1.0));
+
+        // Looking down the default plane is the top view, not a failure.
+        assert!(view.view_workplane());
+        assert!(view.active_workplane().is_default());
+    }
+
+    #[test]
+    fn a_bound_face_is_labelled_by_its_element_name() {
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane());
+        let active = view.active_workplane();
+        assert!(!active.is_default(), "a bound face is not the default plane");
+        assert_eq!(active.label, "Face1", "the slab's element name");
+    }
+
+    #[test]
+    fn resetting_the_default_plane_is_a_no_op() {
+        let mut view = slab_view();
+        assert!(!view.clear_workplane(), "already at World XY");
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane());
+        assert!(view.clear_workplane(), "a bound plane resets");
+        assert!(view.active_workplane().is_default());
     }
 }

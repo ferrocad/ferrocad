@@ -148,6 +148,7 @@ here.
 - [developer/interaction/topology-selection.md](developer/interaction/topology-selection.md) — the topology/selection seam, the tessellation contract and the F0 plan.
 - [developer/interaction/transform-ux.md](developer/interaction/transform-ux.md) — transform modes, pivots, re-pivoting and push/pull.
 - [developer/interaction/visual-language.md](developer/interaction/visual-language.md) — the tokens, the type scale, strokes and the idle → hover → drag state model.
+- [developer/interaction/workplanes.md](developer/interaction/workplanes.md) — the workplane as a first-class state, the `WP` selector (no dot, label carries the state) and the three ways to bind a plane.
 
 ### Workbenches and tooling
 

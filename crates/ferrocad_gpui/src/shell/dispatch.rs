@@ -490,24 +490,23 @@ impl Shell {
             let summary = match action {
                 WorkplaneAction::Activate => {
                     if viewport.activate_hovered_workplane() {
-                        "workplane activated".to_string()
+                        // There is always a plane: name it rather than saying "active".
+                        format!("workplane: {}", viewport.active_workplane().label)
                     } else {
                         "no face under the pointer".to_string()
                     }
                 }
                 WorkplaneAction::Clear => {
                     if viewport.clear_workplane() {
-                        "workplane cleared".to_string()
+                        "workplane reset to World XY".to_string()
                     } else {
-                        "no active workplane".to_string()
+                        "workplane is already World XY".to_string()
                     }
                 }
                 WorkplaneAction::View => {
-                    if viewport.view_workplane() {
-                        "looking down the workplane".to_string()
-                    } else {
-                        "no active workplane".to_string()
-                    }
+                    // Always possible: the default plane's normal is world -Z (top view).
+                    viewport.view_workplane();
+                    format!("looking down {}", viewport.active_workplane().label)
                 }
             };
             cx.notify();

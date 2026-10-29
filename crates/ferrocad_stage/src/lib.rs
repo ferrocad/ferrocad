@@ -68,6 +68,7 @@ pub mod gizmo;
 pub mod grid;
 pub mod input;
 pub mod interaction;
+pub mod plane_points;
 pub mod screen;
 pub mod shape;
 pub mod snap;
@@ -87,6 +88,7 @@ pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator
 pub use grid::{GridGeometry, GridSpec, GridStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use interaction::{InteractionCommit, Manipulator};
+pub use plane_points::PlanePointsTool;
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};
 /// The GPU-side visual tokens (also available as `ferrocad_graphics::theme`).

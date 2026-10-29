@@ -1177,10 +1177,21 @@ impl<V: InventorView> InventorViewport<V> {
             return false;
         };
         let status = tool.status().ended();
+        // A picker may resolve a *frame* instead of geometry (the three-point
+        // workplane). Read it off the tool before `finish` ends the session, and apply
+        // it below: `finish` still runs and returns nothing for such a tool.
+        let plane = tool.workplane();
         // The tool owns its geometry until it ends; this is where it hands it over.
         self.interaction_commit = tool.finish();
         self.tool = None;
         self.restore_ephemeral_workplane();
+        if let Some(plane) = plane {
+            // This does not fight `restore_ephemeral_workplane` above: that restore only
+            // fires when `ephemeral_restore` is set, which only the first-press face
+            // binding sets. The resolved frame is an explicit pick, so it is applied
+            // after the session's own binding has been undone.
+            self.set_workplane_frame(plane.origin, plane.u, plane.v);
+        }
         self.set_snap_feedback(None, None);
         self.rebuild_transient();
         self.tool_state = Some(status);
@@ -2540,11 +2551,15 @@ impl<V: InventorView> InventorViewport<V> {
         // session, with no explicit activation step. Only the session's **first** press
         // binds — a later click on another face must not slide the plane out from under
         // points already placed. An explicitly bound plane is sticky and is never
-        // overridden by a click.
+        // overridden by a click. A **plane-picking** tool is excluded: its points are the
+        // input, so binding the first face would flatten the other two onto its plane.
         if down
             && button == 1
             && self.active_workplane.is_default()
-            && self.tool.as_ref().is_some_and(|tool| tool.status().points == 0)
+            && self
+                .tool
+                .as_ref()
+                .is_some_and(|tool| tool.status().points == 0 && !tool.picks_workplane())
             && let Some(frame) = hit.as_ref().and_then(|hit| self.face_frame_at(hit))
         {
             self.ephemeral_restore = Some(self.active_workplane.clone());
@@ -8957,6 +8972,86 @@ mod tests {
         view.set_tool(None);
         let _ = view.take_tool_state();
         assert!(!view.handle_key(&key("backspace")));
+    }
+
+    /// A viewport with the three-point workplane pick active. The snap grid is on (at a
+    /// quarter unit) so presses over empty space still resolve a world point.
+    fn plane_points_view() -> InventorViewport<FakeView> {
+        let mut view = identity_viewport(Scene::default());
+        view.set_snap_grid(Some(0.25));
+        view.set_tool(Some(Box::new(ferrocad_stage::PlanePointsTool::new())));
+        view.refresh();
+        view
+    }
+
+    /// Press the three corners of an axis-aligned triangle in the world `XY` plane.
+    fn pick_triangle(view: &mut InventorViewport<FakeView>) {
+        for corner in [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25]] {
+            view.handle_button(identity_logical(corner), 1, true);
+        }
+    }
+
+    #[test]
+    fn picking_three_points_makes_a_custom_workplane_without_a_commit() {
+        let mut view = plane_points_view();
+        let _ = view.take_tool_state();
+        pick_triangle(&mut view);
+        assert_eq!(view.tool_status().expect("an active tool").points, 3);
+        assert!(!view.transient.is_empty(), "the pick is drawn");
+
+        // Enter ends the session and applies the frame it resolved.
+        assert!(view.handle_key(&key("enter")));
+        assert!(view.tool().is_none());
+        assert!(
+            view.take_interaction_commit().is_none(),
+            "a plane pick writes no geometry"
+        );
+
+        let active = view.active_workplane();
+        assert_eq!(active.label, "Custom");
+        assert_eq!(active.plane.kind, ferrocad_stage::WorkplaneKind::Custom);
+        assert!(
+            (active.plane.n.x).abs() < 1e-6
+                && (active.plane.n.y).abs() < 1e-6
+                && (active.plane.n.z - 1.0).abs() < 1e-6,
+            "the triangle lies in the world XY plane: {:?}",
+            active.plane.n
+        );
+        assert!(!active.is_default(), "the pick replaced the world plane");
+    }
+
+    #[test]
+    fn a_plane_pick_does_not_bind_the_face_it_starts_on() {
+        let mut view = tool_view();
+        view.set_tool(Some(Box::new(ferrocad_stage::PlanePointsTool::new())));
+        let _ = view.take_tool_state();
+
+        // The first pick lands on the slab's face, but a picking tool must not adopt it:
+        // its points are the input, so the other two must not be flattened onto that
+        // face's plane.
+        view.handle_pointer([30.0, 50.0]);
+        view.handle_button([30.0, 50.0], 1, true);
+        assert!(
+            view.active_workplane().is_default(),
+            "a plane pick leaves the session plane alone"
+        );
+        assert_eq!(view.tool_status().expect("an active tool").points, 1);
+    }
+
+    #[test]
+    fn escaping_the_three_point_pick_keeps_the_world_plane_and_commits_nothing() {
+        let mut view = plane_points_view();
+        let _ = view.take_tool_state();
+        pick_triangle(&mut view);
+
+        assert!(view.handle_key(&escape_key()));
+        assert!(view.tool().is_none());
+        assert!(
+            view.active_workplane().is_default(),
+            "a cancelled pick leaves the world plane"
+        );
+        assert!(view.take_interaction_commit().is_none());
+        assert!(view.transient.is_empty(), "no transient geometry survives");
     }
 
     #[test]

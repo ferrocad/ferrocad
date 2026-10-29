@@ -9,6 +9,7 @@ use crate::input::{MouseButton, PointerEvent, PointerKind};
 use crate::interaction::InteractionCommit;
 use crate::shape::{DrawMode, ShapeItem};
 use crate::snap::Snap;
+use crate::workplane::Workplane;
 
 /// A tool's live status, for the host's tool strip.
 ///
@@ -117,6 +118,23 @@ pub trait Tool {
     fn finish(&mut self) -> Option<InteractionCommit> {
         None
     }
+
+    /// A workplane this tool resolved, if it resolved one instead of geometry. The host
+    /// applies it when the session ends; `finish` still runs and typically returns
+    /// nothing.
+    fn workplane(&self) -> Option<Workplane> {
+        None
+    }
+
+    /// Whether this tool **picks** a workplane rather than drawing on one.
+    ///
+    /// A creation tool that starts on a planar face binds that face for its session
+    /// (the ephemeral workplane). A picking tool must not: its points are the input, so
+    /// every point must land where the pointer hit, not be flattened onto the first
+    /// face's plane.
+    fn picks_workplane(&self) -> bool {
+        false
+    }
 }
 
 /// The polyline tool's id in its status (the host's registry id is separate).
@@ -148,10 +166,10 @@ pub const VERTEX_PIXELS: f64 = 8.0;
 /// it is a click (select), not a drag (adjust).
 pub const DRAG_THRESHOLD_PIXELS: f64 = 5.0;
 
-/// The default colour of the committed polyline.
-const COMMITTED_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-/// The default colour of the in-progress band and the snap marker.
-const CURSOR_COLOR: [f32; 4] = [1.0, 0.2, 1.0, 1.0];
+/// The default colour of the committed polyline (and of a plotted point).
+pub(crate) const COMMITTED_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+/// The default colour of the in-progress band, marker and plane preview.
+pub(crate) const CURSOR_COLOR: [f32; 4] = [1.0, 0.2, 1.0, 1.0];
 
 /// A left press on a placed vertex, remembered until the release that ends the gesture.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -512,7 +530,7 @@ fn pixels_between(a: [i32; 2], b: [i32; 2]) -> f64 {
 }
 
 /// A non-selectable wireframe item (a transient visual never takes part in picking).
-fn wire_item(color: [f32; 4]) -> ShapeItem {
+pub(crate) fn wire_item(color: [f32; 4]) -> ShapeItem {
     ShapeItem::new(0)
         .with_draw_mode(DrawMode::Wireframe)
         .with_edge_color(color)
@@ -521,7 +539,7 @@ fn wire_item(color: [f32; 4]) -> ShapeItem {
 
 /// Rewrite `item` as polyline `points` (`edges = [0,1,1,2,…]`). Fewer than two points
 /// clears it.
-fn set_polyline(item: &mut ShapeItem, points: &[[f32; 3]]) {
+pub(crate) fn set_polyline(item: &mut ShapeItem, points: &[[f32; 3]]) {
     let mut edges = Vec::new();
     for i in 0..points.len().saturating_sub(1) {
         edges.push(i as u32);

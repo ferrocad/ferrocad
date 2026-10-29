@@ -36,6 +36,9 @@ path = "src/main.rs"
 
 [dependencies]
 ferrocad_gpui.workspace = true
+# The base contribution registry names the stage's native tools, so the app links the
+# stage directly (it used to be a test-only dependency).
+ferrocad_stage.workspace = true
 # The PyO3 bindings, linked in so `import ferrocad` resolves to a built-in module
 # (no separate platform-specific extension file to ship).
 ferrocad_py.workspace = true
@@ -46,10 +49,9 @@ pyo3 = { version = "0.25", features = ["auto-initialize"] }
 include_dir = { workspace = true, optional = true }
 
 [dev-dependencies]
-# The regression test for `base_contributions` builds a one-item stage; neither crate
-# is needed by the library itself.
+# The regression test for `base_contributions` builds a one-item stage; the library
+# already links the stage itself.
 ferrocad_geom.workspace = true
-ferrocad_stage.workspace = true
 
 [features]
 default = ["embedded-payload"]

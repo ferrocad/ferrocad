@@ -58,11 +58,14 @@ pub fn run_edition(app_name: &str, entry_module: &str) {
     run_edition_with(app_name, entry_module, base_contributions());
 }
 
-/// The general edition's contributions: the generic transform handle.
+/// The general edition's contributions: the generic transform handle and the native
+/// workplane pick.
 ///
 /// A whole-object selection arms a translate gizmo, so the shipped app has an
 /// interactive move tool out of the box (the dock's `Move` arms it for the current
-/// selection). Workbench manipulators — the Part edge dress-up arc, a height grip —
+/// selection). The `workplane_points` tool is what `App_Workplane3Points` starts: the
+/// command names a registry id, so the tool ships with the app rather than with a
+/// workbench. Workbench manipulators — the Part edge dress-up arc, a height grip —
 /// stay with the edition that links them, which is why this is a default and not a
 /// global registration in the shell.
 ///
@@ -74,7 +77,11 @@ pub fn run_edition(app_name: &str, entry_module: &str) {
 ///     .with_manipulator(ferrocad_part_gui::fillet_manipulator);
 /// ```
 pub fn base_contributions() -> Contributions {
-    Contributions::new().with_gizmo(ferrocad_gpui::translate_gizmo)
+    Contributions::new()
+        .with_gizmo(ferrocad_gpui::translate_gizmo)
+        .with_tool("workplane_points", || {
+            Box::new(ferrocad_stage::PlanePointsTool::new()) as Box<dyn ferrocad_stage::Tool>
+        })
 }
 
 /// [`run_edition`] with the workbench contributions the edition registers.

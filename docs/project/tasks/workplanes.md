@@ -387,9 +387,48 @@ view can show a mod grid at the origin plus the native grid at the plane. Making
 overlay follow the plane needs a `Frame` uniform (the `inv_view_proj` block already
 exists for programs) and a mod-side update; it is not a native-grid bug.
 
-**Still open:** `Pick 3 points…` and `Offset workplane…` (the 1D axis gizmo + floating
-HUD); the Python “set” verb for an arbitrary frame (§4); and the datum-plane object
-question.
+**Still open after §7.5:** an `Offset workplane…` **gizmo** (the menu row and its
+one-field dialog landed here; the 1D axis handle + floating HUD did not) and a proper
+datum-plane object type (a `Part::Feature` face stands in for it, §7.6).
+
+### 7.6 `Pick 3 points`, an arbitrary frame, and the datum plane (2026-10-29)
+
+- **`App_Workplane3Points` → the native `workplane_points` tool.** Three left clicks
+  (snap-preferred) plot the points; `Backspace` drops the last; `Enter` resolves the
+  triangle into the active plane; `Esc` cancels. The frame travels through two new
+  defaulted `Tool` methods: `workplane()` (what the picker resolved) and
+  `picks_workplane()` (this tool's points are input, not a sketch). `finish_tool` reads
+  `workplane()` before ending the session and applies it with `set_workplane_frame`
+  **only on finish** — `cancel_tool` never applies it, and the ephemeral restore cannot
+  fight it (that restore only fires for a session that bound a face).
+  `picks_workplane()` also excludes the tool from the first-press ephemeral binding;
+  without it the second and third picks would be flattened onto the first face's plane.
+  The tool ships in `ferrocad::base_contributions()`, so every edition has it, and the
+  command is a `workplane`-surface row (`Pick 3 points…`).
+- **An arbitrary frame from a request.** `ViewRequest` gained
+  `{"workplane": "set", "workplane_frame": {"origin": [x,y,z], "u": [...], "v": [...]}}`.
+  The parser checks shape and finiteness (three components each; an orphan `frame` and a
+  missing one are refused); whether the axes actually span a plane is
+  `InventorViewport::set_workplane_frame`'s call, and a degenerate frame is reported as
+  such. This is the script/mod path to a frame, and the same seam the picker uses.
+- **Selectable datum plane.** `App_SaveDatumPlane` (`Save as datum plane`, short
+  `Save WP`, in the `WP` menu and the radial wheel) is a document command with a
+  transient half: the shell reads the **live** frame and calls the entry module's
+  `add_datum_plane(payload)`, which builds a 100 mm square face **from the frame's own
+  points** (no rotation math) in one `"Datum plane"` transaction as a `Part::Feature`,
+  cyan, `ShadedWithEdges`. Its mesh names the face `Face1`, so `Set from selection` /
+  `Set WP` binds it immediately; it is pickable, movable, undoable and saved with the
+  document. The Python half lives in the edition that links `Part`
+  (`ferrocad_parametric`); the shell names no workbench, only the command id. A headless
+  run reports “the shell owns this command”, and a build whose edition has no
+  `add_datum_plane` reports the bridge's error rather than failing the command.
+  The real object type (`Part::DatumPlane` with attachment/expressions) remains open;
+  this is a plain face, which is exactly what `Set WP` needs.
+
+Verified: `ferrocad_stage` 195, `ferrocad_viewport` 176, `ferrocad_gpui --lib` 222,
+`ferrocad_toy` 18, Python `tools/run_tests.py --extension Part` 721 passed / 3 skipped
+(7 new datum-plane tests, and the new module is in the extension-set contract),
+`cargo check -p ferrocad`.
 
 ## 8. Non-goals
 

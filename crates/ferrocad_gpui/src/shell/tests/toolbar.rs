@@ -254,6 +254,7 @@ fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppCont
     assert!(cx.debug_bounds("wp-row-App_WorkplaneCamera").is_some());
     assert!(cx.debug_bounds("wp-row-App_SetWorkplane").is_some());
     assert!(cx.debug_bounds("wp-row-App_OffsetWorkplane").is_some());
+    assert!(cx.debug_bounds("wp-row-App_Workplane3Points").is_some());
     assert!(
         cx.debug_bounds("wp-row-App_ViewWorkplane").is_some(),
         "WP has no primary action, so `Align camera to WP` is a row like the rest"

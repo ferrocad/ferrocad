@@ -2099,6 +2099,28 @@ def _apply_workplane_offset(values):
     return {"view": {"workplane": "offset", "workplane_offset": distance}}
 
 
+class _ThreePointWorkplaneCommand:
+    """``App_Workplane3Points`` — work on the plane through three picked points.
+
+    The picks go to a native tool (``workplane_points``): a left-click plots a point,
+    Backspace drops the last one, and Enter makes the picked triangle the workplane.
+    Nothing is written to the document; the plane is transient viewport state.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Pick 3 points…",
+            "ToolTip": "Draw the workplane through three picked points",
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_Workplane",
+        }
+
+    def Activated(self):
+        return {"tool": "workplane_points"}
+
+
 FreeCADGui.addCommand("App_ViewWorkplane", _ViewWorkplaneCommand())
 FreeCADGui.addCommand(
     "App_WorkplaneXY",
@@ -2115,6 +2137,7 @@ FreeCADGui.addCommand(
 FreeCADGui.addCommand("App_WorkplaneCamera", _ViewPlaneWorkplaneCommand())
 FreeCADGui.addCommand("App_SetWorkplane", _SetWorkplaneCommand())
 FreeCADGui.addCommand("App_OffsetWorkplane", _OffsetWorkplaneCommand())
+FreeCADGui.addCommand("App_Workplane3Points", _ThreePointWorkplaneCommand())
 FreeCADGui.addCommand("App_ActivateWorkplane", _ActivateWorkplaneCommand())
 FreeCADGui.addCommand("App_ClearWorkplane", _ClearWorkplaneCommand())
 

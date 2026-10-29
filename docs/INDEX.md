@@ -248,4 +248,6 @@ The folder landing page is the reading order for the spikes and assessments.
 
 ### Active task specs
 
-- [project/tasks/README.md](project/tasks/README.md) — the active-spec policy; there are none today, so the backlog tracks the work.
+- [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
+- [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.
+- [project/tasks/workplanes.md](project/tasks/workplanes.md) — one workplane state (the world plane is a real plane), ephemeral face binding while drawing, and the `WP` menu as plane choices rather than plumbing.

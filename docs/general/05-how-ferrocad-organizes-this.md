@@ -20,6 +20,11 @@ The `Part` path follows the vector workflow: OCCT holds NURBS and B-Rep, and
 the bitmap workflow: `ferrocad_mesh` holds triangles and never links OCCT. Both paths
 meet in the document core, not in the kernel.
 
+The mesh path is reachable from Python without the kernel. `Mesh.Mesh((points, facets))`
+builds a mesh from raw triangles, and `MeshPart.meshFromShape` produces one from any
+shape with a `tessellate` method (duck-typed, so the mesh crate still has no OCCT
+dependency). Either result can be carried by `Mesh::Feature`.
+
 ### 5.2 Documents and recompute
 
 `ferrocad_core` owns the document graph, properties, transactions and the recompute

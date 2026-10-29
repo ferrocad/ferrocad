@@ -13,7 +13,7 @@ tracked, and how it is drawn.
 
 ## The short version
 
-- A CAD part is stored as **exact math** (analytic surfaces and NURBS), trimmed and
+- A CAD part is stored as **formulas** (analytic surfaces and NURBS), trimmed and
   stitched into a **B-Rep** solid. A mesh (STL) is a bag of triangles with no memory of
   how it was made.
 - What you see on screen is a **temporary triangle preview** (tessellation). A circle

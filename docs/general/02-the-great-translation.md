@@ -1,7 +1,7 @@
 # Chapter 2: The great translation (workbenches, viewports and GPUs)
 
 Here is the fundamental limitation that shapes every CAD viewport: **graphics APIs
-consume triangles.** A B-Rep or a NURBS surface has to become triangles before the GPU
+consume triangles.** A B-Rep shape or a NURBS surface has to become triangles before the GPU
 can draw it. (Modern hardware can do more than rasterise triangles — hardware
 subdivision, compute shaders — but a CAD viewport still wants a stable mesh it can
 shade, highlight and pick against.)
@@ -55,11 +55,21 @@ still curved. The geometry is faceted; the *shading* is smooth. The illusion fai
 the silhouette and at the edges, which is why increasing the display quality adds
 triangles rather than changing the model.
 
+### 2.4 Preview quality is a setting, not a model change
+
+![The mathematical cylinder the kernel holds, beside an eight-sided coarse preview and a fine preview of the same shape.](images/tessellation-levels.svg)
+
+*The kernel holds one mathematical cylinder. Tessellation produces a preview mesh: the
+coarse setting is fast and visibly faceted; the fine setting is smoother and costs more
+triangles. Both describe the same model, and neither changes the shape or the exported
+geometry.*
+
 The model is never replaced by the mesh. Tessellation is a view of the model, produced
 on demand and thrown away on the next recompute.
 
 > **Why this matters to you.** If a circle looks slightly jagged on your screen, your
-> part is still exact. You are looking at the preview mesh, not the model. The shape's
+> part is still defined analytically, not by those triangles. You are looking at the
+> preview mesh, not the model. The shape's
 > View properties **Deviation** (linear deflection) and **Angular Deflection** control
 > the trade-off: smaller values produce a finer preview at the cost of triangles and
 > frame time, and neither value changes the geometry you export.

@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="660" viewBox="0 0 1120 660" role="img" aria-labelledby="title desc">
+<title id="title">The topological naming problem</title>
+<desc id="desc">Two rows: a square extruded and filleted on edge 4; then a hexagon extruded, where positional numbering moves edge 4 to the bottom and the fillet lands on the wrong edge.</desc>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+  </marker>
+</defs>
+<rect width="1120" height="660" fill="#f8fafc"/>
+<text x="40" y="30" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="700" fill="#0f172a" text-anchor="start">A. The original recipe</text>
+<text x="40" y="340" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="17" font-weight="700" fill="#0f172a" text-anchor="start">B. Edit step 1, rebuild the rest</text>
+<rect x="40" y="50" width="330" height="240" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="56" y="78" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="start">1. Square sketch</text>
+<text x="56" y="100" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">4 edges</text>
+<text x="56" y="274" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">one outline</text>
+<polygon points="247.4,227.4 162.6,227.4 162.6,142.6 247.4,142.6" fill="#eff6ff" stroke="#0f172a" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="247.4" cy="227.4" r="4" fill="#2563eb"/>
+<circle cx="162.6" cy="227.4" r="4" fill="#2563eb"/>
+<circle cx="162.6" cy="142.6" r="4" fill="#2563eb"/>
+<circle cx="247.4" cy="142.6" r="4" fill="#2563eb"/>
+<rect x="410" y="50" width="330" height="240" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="426" y="78" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="start">2. Extrude — 12 edges</text>
+<text x="426" y="100" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">#4 is the top-right edge</text>
+<text x="426" y="274" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">edges numbered in traversal order</text>
+<polygon points="560.0,160.0 660.0,160.0 660.0,244.0 560.0,244.0" fill="#dbeafe" stroke="none"/>
+<polygon points="560.0,160.0 586.0,134.0 686.0,134.0 660.0,160.0" fill="#eff6ff" stroke="none"/>
+<polygon points="660.0,160.0 686.0,134.0 686.0,218.0 660.0,244.0" fill="#bfdbfe" stroke="none"/>
+<line x1="560.0" y1="160.0" x2="660.0" y2="160.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="660.0" y1="160.0" x2="660.0" y2="244.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="660.0" y1="244.0" x2="560.0" y2="244.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="560.0" y1="244.0" x2="560.0" y2="160.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="560.0" y1="160.0" x2="586.0" y2="134.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="586.0" y1="134.0" x2="686.0" y2="134.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="686.0" y1="134.0" x2="686.0" y2="218.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="686.0" y1="218.0" x2="660.0" y2="244.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="560.0" y1="244.0" x2="586.0" y2="218.0" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 4"/>
+<line x1="586.0" y1="218.0" x2="686.0" y2="218.0" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 4"/>
+<line x1="586.0" y1="134.0" x2="586.0" y2="218.0" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 4"/>
+<circle cx="636.0" cy="122.0" r="9" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
+<text x="636.0" y="125.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="middle">1</text>
+<circle cx="559.0" cy="147.0" r="9" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
+<text x="559.0" y="150.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="middle">2</text>
+<circle cx="610.0" cy="148.0" r="9" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
+<text x="610.0" y="151.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="middle">3</text>
+<line x1="660.0" y1="160.0" x2="686.0" y2="134.0" stroke="#2563eb" stroke-width="6" stroke-linecap="round"/>
+<circle cx="687.0" cy="147.0" r="9" fill="#ffffff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="687.0" y="150.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#2563eb" text-anchor="middle">4</text>
+<rect x="780" y="50" width="330" height="240" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="796" y="78" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="start">3. Fillet Edge #4</text>
+<text x="796" y="100" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">lands on the intended edge</text>
+<text x="796" y="274" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">the recipe holds</text>
+<polygon points="930.0,160.0 1030.0,160.0 1030.0,244.0 930.0,244.0" fill="#dbeafe" stroke="none"/>
+<polygon points="930.0,160.0 956.0,134.0 1056.0,134.0 1030.0,160.0" fill="#eff6ff" stroke="none"/>
+<polygon points="1030.0,160.0 1056.0,134.0 1056.0,218.0 1030.0,244.0" fill="#bfdbfe" stroke="none"/>
+<line x1="930.0" y1="160.0" x2="1030.0" y2="160.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="1030.0" y1="160.0" x2="1030.0" y2="244.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="1030.0" y1="244.0" x2="930.0" y2="244.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="930.0" y1="244.0" x2="930.0" y2="160.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="930.0" y1="160.0" x2="956.0" y2="134.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="956.0" y1="134.0" x2="1056.0" y2="134.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="1056.0" y1="134.0" x2="1056.0" y2="218.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="1056.0" y1="218.0" x2="1030.0" y2="244.0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round"/>
+<line x1="930.0" y1="244.0" x2="956.0" y2="218.0" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 4"/>
+<line x1="956.0" y1="218.0" x2="1056.0" y2="218.0" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 4"/>
+<line x1="956.0" y1="134.0" x2="956.0" y2="218.0" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 4"/>
+<circle cx="1006.0" cy="122.0" r="9" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
+<text x="1006.0" y="125.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="middle">1</text>
+<circle cx="929.0" cy="147.0" r="9" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
+<text x="929.0" y="150.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="middle">2</text>
+<circle cx="980.0" cy="148.0" r="9" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
+<text x="980.0" y="151.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="middle">3</text>
+<line x1="1030.0" y1="160.0" x2="1056.0" y2="134.0" stroke="#16a34a" stroke-width="6" stroke-linecap="round"/>
+<circle cx="1057.0" cy="147.0" r="9" fill="#ffffff" stroke="#16a34a" stroke-width="1.5"/>
+<text x="1057.0" y="150.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#16a34a" text-anchor="middle">4</text>
+<polyline points="1065.0,129.0 1070.0,135.0 1080.0,120.0" fill="none" stroke="#16a34a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="40" y="360" width="330" height="240" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="56" y="388" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="start">1. Hexagon sketch</text>
+<text x="56" y="410" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">6 edges</text>
+<text x="56" y="584" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">a small edit</text>
+<polygon points="265.0,495.0 235.0,547.0 175.0,547.0 145.0,495.0 175.0,443.0 235.0,443.0" fill="#eff6ff" stroke="#0f172a" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="265.0" cy="495.0" r="4" fill="#2563eb"/>
+<circle cx="235.0" cy="547.0" r="4" fill="#2563eb"/>
+<circle cx="175.0" cy="547.0" r="4" fill="#2563eb"/>
+<circle cx="145.0" cy="495.0" r="4" fill="#2563eb"/>
+<circle cx="175.0" cy="443.0" r="4" fill="#2563eb"/>
+<circle cx="235.0" cy="443.0" r="4" fill="#2563eb"/>
+<rect x="410" y="360" width="330" height="240" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="426" y="388" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="start">2. Extrude — 18 edges</text>
+<text x="426" y="410" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">everything is renumbered</text>
+<text x="426" y="584" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">the same edge is now #9</text>
+<polygon points="505.00,445.00 505.00,540.00 540.00,557.32 610.00,557.32 645.00,540.00 645.00,445.00" fill="#dbeafe" stroke="none"/><line x1="610.00" y1="462.32" x2="610.00" y2="557.32" stroke="#64748b" stroke-width="1.2" opacity="0.7"/><line x1="540.00" y1="462.32" x2="540.00" y2="557.32" stroke="#64748b" stroke-width="1.2" opacity="0.7"/><polyline points="505.00,540.00 540.00,557.32 610.00,557.32 645.00,540.00" fill="none" stroke="#2563eb" stroke-width="2.5"/><line x1="505" y1="445" x2="505" y2="540" stroke="#2563eb" stroke-width="2.5"/><line x1="645" y1="445" x2="645" y2="540" stroke="#2563eb" stroke-width="2.5"/><polygon points="645.00,445.00 610.00,462.32 540.00,462.32 505.00,445.00 540.00,427.68 610.00,427.68" fill="#eff6ff" stroke="#2563eb" stroke-width="2.5"/>
+<line x1="540.0" y1="557.3" x2="505.0" y2="540.0" stroke="#dc2626" stroke-width="6" stroke-linecap="round"/>
+<circle cx="522.5" cy="530.6602540378444" r="9" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+<text x="522.5" y="534.1602540378444" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#dc2626" text-anchor="middle">4</text>
+<line x1="610.0" y1="427.7" x2="645.0" y2="445.0" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="5 4"/>
+<circle cx="639.5" cy="430.3397459621556" r="9" fill="#ffffff" stroke="#64748b" stroke-width="1.5"/>
+<text x="639.5" y="433.8397459621556" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#64748b" text-anchor="middle">9</text>
+<rect x="780" y="360" width="330" height="240" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="796" y="388" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="start">3. Fillet Edge #4</text>
+<text x="796" y="410" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">lands on the wrong edge</text>
+<text x="796" y="584" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">a silent wrong edge</text>
+<polygon points="875.00,445.00 875.00,540.00 910.00,557.32 980.00,557.32 1015.00,540.00 1015.00,445.00" fill="#dbeafe" stroke="none"/><line x1="980.00" y1="462.32" x2="980.00" y2="557.32" stroke="#64748b" stroke-width="1.2" opacity="0.7"/><line x1="910.00" y1="462.32" x2="910.00" y2="557.32" stroke="#64748b" stroke-width="1.2" opacity="0.7"/><polyline points="875.00,540.00 910.00,557.32 980.00,557.32 1015.00,540.00" fill="none" stroke="#2563eb" stroke-width="2.5"/><line x1="875" y1="445" x2="875" y2="540" stroke="#2563eb" stroke-width="2.5"/><line x1="1015" y1="445" x2="1015" y2="540" stroke="#2563eb" stroke-width="2.5"/><polygon points="1015.00,445.00 980.00,462.32 910.00,462.32 875.00,445.00 910.00,427.68 980.00,427.68" fill="#eff6ff" stroke="#2563eb" stroke-width="2.5"/>
+<line x1="910.0" y1="557.3" x2="875.0" y2="540.0" stroke="#dc2626" stroke-width="6" stroke-linecap="round"/>
+<circle cx="892.5" cy="530.6602540378444" r="9" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+<text x="892.5" y="534.1602540378444" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="10.5" font-weight="600" fill="#dc2626" text-anchor="middle">4</text>
+<polygon points="916.5,517.6602540378444 928.5,537.6602540378444 904.5,537.6602540378444" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+<text x="916.5" y="533.6602540378444" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13" font-weight="700" fill="#dc2626" text-anchor="middle">!</text>
+<line x1="374" y1="170" x2="406" y2="170" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="744" y1="170" x2="776" y2="170" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="374" y1="480" x2="406" y2="480" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="744" y1="480" x2="776" y2="480" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="40" y="636" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13" font-weight="400" fill="#475569" text-anchor="start">The recipe is unchanged; the reference is not. Numbers are illustrative — FreeCAD derives them from traversal order.</text>
+</svg>

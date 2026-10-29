@@ -1,0 +1,17 @@
+{
+  "generator": "tools/generate_general_figures.py",
+  "generator_sha256": "b6a9ed9457c99dc6aa165cccea8dc5a6be98cd981f624f54edc159cf22b27eac",
+  "images": {
+    "sphere-mesh-vs-brep.png": {
+      "bytes": 42168,
+      "figure": "sphere-mesh-vs-brep",
+      "png_sha256": "99c4c4aeb1d6e9f5c6374daa7dada7492f03c479376050c58a436e91e32809f4",
+      "size": [
+        960,
+        420
+      ],
+      "spec_sha256": "b8468d01cb9e2a93fc0d565b1df7694b0e25fa9623779417186e694ecd160874"
+    }
+  },
+  "version": 1
+}

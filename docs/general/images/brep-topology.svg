@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1150" height="350" viewBox="0 0 1150 350" role="img" aria-labelledby="title desc">
+<title id="title">The B-Rep topology ladder</title>
+<desc id="desc">A vertex becomes an edge, edges form a closed wire, the wire trims a face, and a closed shell of faces bounds a solid. An open chain of edges is still a wire, but only a closed wire bounds a valid face.</desc>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+  </marker>
+</defs>
+<rect width="1150" height="350" fill="#f8fafc"/>
+<rect x="30" y="74" width="196" height="250" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="128.0" y="58" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="middle">1. Vertex</text>
+<circle cx="128.0" cy="184" r="17" fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="3 4"/>
+<circle cx="128.0" cy="184" r="6" fill="#2563eb"/>
+<text x="128.0" y="284" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">corner point</text>
+<line x1="230" y1="199" x2="250" y2="199" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="254" y="74" width="196" height="250" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="352.0" y="58" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="middle">2. Edge</text>
+<line x1="292" y1="184" x2="412" y2="184" stroke="#0f172a" stroke-width="3" stroke-linecap="round"/>
+<circle cx="292" cy="184" r="5" fill="#2563eb"/>
+<circle cx="412" cy="184" r="5" fill="#2563eb"/>
+<text x="352.0" y="284" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">curve between</text>
+<text x="352.0" y="301" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">two corners</text>
+<line x1="454" y1="199" x2="474" y2="199" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="478" y="74" width="196" height="250" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="576.0" y="58" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="middle">3. Wire</text>
+<rect x="526.0" y="132" width="100" height="100" fill="none" stroke="#0f172a" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="526.0" cy="132" r="5" fill="#2563eb"/>
+<circle cx="626.0" cy="132" r="5" fill="#2563eb"/>
+<circle cx="626.0" cy="232" r="5" fill="#2563eb"/>
+<circle cx="526.0" cy="232" r="5" fill="#2563eb"/>
+<text x="576.0" y="284" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">closed chain of edges</text>
+<text x="576.0" y="301" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">an open chain is still a wire</text>
+<line x1="678" y1="199" x2="698" y2="199" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="702" y="74" width="196" height="250" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="800.0" y="58" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="middle">4. Face</text>
+<rect x="750.0" y="132" width="100" height="100" fill="#dbeafe"/>
+<line x1="750.0" y1="232" x2="850.0" y2="132" stroke="#93c5fd" stroke-width="2"/>
+<line x1="750.0" y1="202" x2="820.0" y2="132" stroke="#93c5fd" stroke-width="2"/>
+<line x1="750.0" y1="172" x2="790.0" y2="132" stroke="#93c5fd" stroke-width="2"/>
+<rect x="750.0" y="132" width="100" height="100" fill="none" stroke="#0f172a" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="750.0" cy="132" r="5" fill="#2563eb"/>
+<circle cx="850.0" cy="132" r="5" fill="#2563eb"/>
+<circle cx="850.0" cy="232" r="5" fill="#2563eb"/>
+<circle cx="750.0" cy="232" r="5" fill="#2563eb"/>
+<text x="800.0" y="284" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">surface trimmed</text>
+<text x="800.0" y="301" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">by a wire</text>
+<line x1="902" y1="199" x2="922" y2="199" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="926" y="74" width="196" height="250" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="1024.0" y="58" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="#0f172a" text-anchor="middle">5. Solid</text>
+<polygon points="968,174 1056,174 1056,256 968,256" fill="#dbeafe" stroke="none"/>
+<polygon points="968,174 992,150 1080,150 1056,174" fill="#eff6ff" stroke="none"/>
+<polygon points="1056,174 1080,150 1080,232 1056,256" fill="#bfdbfe" stroke="none"/>
+<polyline points="968,174 1056,174 1056,256 968,256 968,174" fill="none" stroke="#0f172a" stroke-width="2.5" stroke-linejoin="round"/>
+<polyline points="968,174 992,150 1080,150 1056,174" fill="none" stroke="#0f172a" stroke-width="2.5" stroke-linejoin="round"/>
+<polyline points="1056,174 1080,150 1080,232 1056,256" fill="none" stroke="#0f172a" stroke-width="2.5" stroke-linejoin="round"/>
+<polyline points="968,256 992,232 1080,232" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="992" y1="150" x2="992" y2="232" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+<text x="1024.0" y="284" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">closed shell</text>
+<text x="1024.0" y="301" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">with an inside</text>
+</svg>

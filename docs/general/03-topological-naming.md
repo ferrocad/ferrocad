@@ -19,6 +19,14 @@ the model breaks completely.
 That is the **topological naming problem**: sub-element names are positions in a result,
 not identities of a feature.
 
+![Two rows: a square extruded and filleted on edge 4; below, the same recipe after the square becomes a hexagon, where edge 4 lands on a bottom edge and the fillet goes to the wrong edge.](images/topological-naming.svg)
+
+*The recipe is unchanged — sketch, extrude, round the fourth edge — but the names are
+not. Editing step 1 rebuilds the shape, and positional numbering is assigned afresh:
+`Edge4` can move to the bottom while the edge you meant becomes `Edge9`. The numbers
+here are illustrative; FreeCAD derives them from traversal order, which is exactly why
+they cannot be trusted across a rebuild.*
+
 ### 3.2 How the topological naming system helps, and why it is hard
 
 To stop features from jumping around, FreeCAD uses a **topological naming system
@@ -64,9 +72,9 @@ of the hardest problems in CAD software:
   names.
 
 Because there is no mathematically perfect way to predict what a human designer *meant*
-when a shape changes drastically, topological naming is always a best-effort detective
-game, not a magic bullet. Good CAD software aims to fail loudly and locally — a broken
-reference you can repair — rather than to move a fillet silently.
+when a shape changes drastically, topological naming is in practice a best-effort
+detective game, not a magic bullet. Good CAD software aims to fail loudly and locally —
+a broken reference you can repair — rather than to move a fillet silently.
 
 FerroCAD takes the same stance in Rust: `ferrocad_lineage` records element references,
 per-operation history and forward/reverse name maps, and Part refuses to rebind a name

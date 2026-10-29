@@ -162,6 +162,13 @@ exception is `user/explanation/`, which is authored: it has no runnable subject.
 - `python3 tools/userdocs.py --check` — every user page matches a fresh run of its
   workflow.
 - `python3 tools/api_docs.py --check` — every API page matches the live modules.
+- `python3 tools/generate_concept_diagrams.py --check` — the hand-authored concept
+  SVGs are byte-identical to their generator.
+- `python3 tools/generate_general_figures.py --check` — the general chapters' viewport
+  PNGs match `docs/general/images/manifest.json`. When `Part` is importable it also
+  rebuilds each render spec from real geometry and compares the digest; without a
+  kernel it checks the manifest, the PNG bytes and the generator digest. `--capture`
+  (local, needs a GPU adapter) regenerates the PNGs.
 - `python3 tools/part_api_audit.py --check` — the Part/OCCT surface, the registered object
   types and the honest gap markers still match the pinned contract (self-skips without
   the upstream checkout).
@@ -189,6 +196,12 @@ Python modules: `build_book.py` only assembles the committed `docs/user/`,
 `docs/python-api/` and `docs/mods/` pages, so publishing cannot invent content. It
 builds from a shallow copy of `main`, and the freshness guarantee comes from this
 repository's `headless` job, which checks the generated pages on every push.
+
+The general chapters have two image generators. The SVG diagrams are pure geometry
+(`tools/generate_concept_diagrams.py`, no kernel, no GPU). The viewport figures are
+rendered by `ferrocad_snapshot` from specs built out of `Part`/`Mesh`
+(`tools/generate_general_figures.py`); the check is GPU- and kernel-free because the
+manifest pins the spec and PNG digests, so the `headless` job can run it too.
 
 The generator also pins the **modules**, not just the interpreter. It makes
 `ferrocad_combined`, `Part`, `Mesh` and `MeshPart` unimportable while it runs, so a

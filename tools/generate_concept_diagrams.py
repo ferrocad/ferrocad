@@ -14,6 +14,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -326,9 +327,418 @@ def tns_broker() -> str:
     )
 
 
+def brep_topology() -> str:
+    """The B-Rep ladder: vertex, edge, wire, trimmed face, closed solid."""
+    names = ["Vertex", "Edge", "Wire", "Face", "Solid"]
+    captions = [
+        ["corner point"],
+        ["curve between", "two corners"],
+        ["closed chain of edges", "an open chain is still a wire"],
+        ["surface trimmed", "by a wire"],
+        ["closed shell", "with an inside"],
+    ]
+    panel_w, panel_h, gap = 196, 250, 28
+    x0, y0 = 30, 74
+    body = []
+
+    for index, (name, caption) in enumerate(zip(names, captions)):
+        x = x0 + index * (panel_w + gap)
+        cx = x + panel_w / 2
+        body.append(
+            f'<rect x="{x}" y="{y0}" width="{panel_w}" height="{panel_h}" rx="10" '
+            f'fill="#ffffff" stroke="{STROKE}" stroke-width="1.5"/>'
+        )
+        body.append(
+            _text(cx, y0 - 16, f"{index + 1}. {name}", size=15, fill=INK, weight="600", anchor="middle")
+        )
+
+        if index == 0:
+            body.append(
+                f'<circle cx="{cx}" cy="{y0 + 110}" r="17" fill="none" stroke="{STROKE}" '
+                'stroke-width="1.5" stroke-dasharray="3 4"/>'
+            )
+            body.append(f'<circle cx="{cx}" cy="{y0 + 110}" r="6" fill="{ACCENT}"/>')
+        elif index == 1:
+            body.append(
+                f'<line x1="{x + 38}" y1="{y0 + 110}" x2="{x + panel_w - 38}" y2="{y0 + 110}" '
+                f'stroke="{INK}" stroke-width="3" stroke-linecap="round"/>'
+            )
+            for end in (x + 38, x + panel_w - 38):
+                body.append(f'<circle cx="{end}" cy="{y0 + 110}" r="5" fill="{ACCENT}"/>')
+        elif index in (2, 3):
+            left, top, size = cx - 50, y0 + 58, 100
+            if index == 3:
+                body.append(
+                    f'<rect x="{left}" y="{top}" width="{size}" height="{size}" fill="#dbeafe"/>'
+                )
+                for offset in (0, 30, 60):
+                    body.append(
+                        f'<line x1="{left}" y1="{top + size - offset}" '
+                        f'x2="{left + size - offset}" y2="{top}" stroke="#93c5fd" stroke-width="2"/>'
+                    )
+            body.append(
+                f'<rect x="{left}" y="{top}" width="{size}" height="{size}" fill="none" '
+                f'stroke="{INK}" stroke-width="3" stroke-linejoin="round"/>'
+            )
+            for corner_x, corner_y in (
+                (left, top),
+                (left + size, top),
+                (left + size, top + size),
+                (left, top + size),
+            ):
+                body.append(f'<circle cx="{corner_x}" cy="{corner_y}" r="5" fill="{ACCENT}"/>')
+        else:
+            # An isometric box: front, top and right faces, with the three hidden
+            # edges dashed (a closed shell, not a flat card).
+            fx, fy = x + 42, y0 + 100
+            width, height, depth = 88, 82, 24
+            body.append(
+                f'<polygon points="{fx},{fy} {fx + width},{fy} {fx + width},{fy + height} {fx},{fy + height}" '
+                'fill="#dbeafe" stroke="none"/>'
+            )
+            body.append(
+                f'<polygon points="{fx},{fy} {fx + depth},{fy - depth} {fx + width + depth},{fy - depth} '
+                f'{fx + width},{fy}" fill="#eff6ff" stroke="none"/>'
+            )
+            body.append(
+                f'<polygon points="{fx + width},{fy} {fx + width + depth},{fy - depth} '
+                f'{fx + width + depth},{fy + height - depth} {fx + width},{fy + height}" fill="#bfdbfe" stroke="none"/>'
+            )
+            for edge in (
+                f'{fx},{fy} {fx + width},{fy} {fx + width},{fy + height} {fx},{fy + height} {fx},{fy}',
+                f'{fx},{fy} {fx + depth},{fy - depth} {fx + width + depth},{fy - depth} '
+                f'{fx + width},{fy}',
+                f'{fx + width},{fy} {fx + width + depth},{fy - depth} '
+                f'{fx + width + depth},{fy + height - depth} {fx + width},{fy + height}',
+            ):
+                body.append(
+                    f'<polyline points="{edge}" fill="none" stroke="{INK}" stroke-width="2.5" '
+                    'stroke-linejoin="round"/>'
+                )
+            # The hidden back corner.
+            body.append(
+                f'<polyline points="{fx},{fy + height} {fx + depth},{fy + height - depth} '
+                f'{fx + width + depth},{fy + height - depth}" fill="none" stroke="#94a3b8" '
+                'stroke-width="1.5" stroke-dasharray="4 4"/>'
+            )
+            body.append(
+                f'<line x1="{fx + depth}" y1="{fy - depth}" x2="{fx + depth}" y2="{fy + height - depth}" '
+                'stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 4"/>'
+            )
+
+        for line_index, line in enumerate(caption):
+            body.append(
+                _text(cx, y0 + panel_h - 40 + line_index * 17, line, size=12, anchor="middle")
+            )
+
+        if index < len(names) - 1:
+            body.append(_arrow(x + panel_w + 4, y0 + 125, x + panel_w + gap - 4, y0 + 125))
+
+    return _svg(
+        1150,
+        350,
+        "The B-Rep topology ladder",
+        "A vertex becomes an edge, edges form a closed wire, the wire trims a face, and "
+        "a closed shell of faces bounds a solid. An open chain of edges is still a wire, "
+        "but only a closed wire bounds a valid face.",
+        "\n".join(body),
+    )
+
+
+def _cylinder(
+    cx: float,
+    top: float,
+    rx: float,
+    ry: float,
+    height: float,
+    sides: int,
+    *,
+    body: str = "#dbeafe",
+    cap: str = "#eff6ff",
+    stroke: str = ACCENT,
+    facet: str | None = "#93c5fd",
+) -> str:
+    """A front-view cylinder whose rim is an `sides`-gon.
+
+    The silhouette is exact (vertical sides); the faceting shows on the rim and in
+    the vertical seams, which is what a tessellated preview looks like. `facet=None`
+    draws the smooth reference shape.
+    """
+    angles = [2 * math.pi * index / sides for index in range(sides)]
+    # The rim nearest the viewer is the half with sin(t) >= 0.
+    front = [angle for angle in angles if math.sin(angle) >= -1e-9]
+
+    def rim(angle: float, y: float) -> tuple[float, float]:
+        return cx + rx * math.cos(angle), y + ry * math.sin(angle)
+
+    top_rim = [rim(angle, top) for angle in front]
+    bottom_rim = [rim(angle, top + height) for angle in front]
+
+    body_points = [(cx - rx, top), *reversed(bottom_rim), (cx + rx, top)]
+    body_coords = " ".join(f"{x:.2f},{y:.2f}" for x, y in body_points)
+    parts = [f'<polygon points="{body_coords}" fill="{body}" stroke="none"/>']
+
+    if facet is not None:
+        for angle in front[1:-1]:
+            x, y = rim(angle, top)
+            parts.append(
+                f'<line x1="{x:.2f}" y1="{y:.2f}" x2="{x:.2f}" y2="{y + height:.2f}" '
+                f'stroke="{facet}" stroke-width="1.2" opacity="0.7"/>'
+            )
+
+    outline = " ".join(f"{x:.2f},{y:.2f}" for x, y in reversed(bottom_rim))
+    parts.append(
+        f'<polyline points="{outline}" fill="none" stroke="{stroke}" stroke-width="2.5"/>'
+    )
+    parts.append(
+        f'<line x1="{cx - rx}" y1="{top}" x2="{cx - rx}" y2="{top + height}" '
+        f'stroke="{stroke}" stroke-width="2.5"/>'
+    )
+    parts.append(
+        f'<line x1="{cx + rx}" y1="{top}" x2="{cx + rx}" y2="{top + height}" '
+        f'stroke="{stroke}" stroke-width="2.5"/>'
+    )
+
+    cap_points = " ".join(f"{rim(angle, top)[0]:.2f},{rim(angle, top)[1]:.2f}" for angle in angles)
+    parts.append(
+        f'<polygon points="{cap_points}" fill="{cap}" stroke="{stroke}" stroke-width="2.5"/>'
+    )
+    return "".join(parts)
+
+
+def tessellation_levels() -> str:
+    body = []
+
+    body.append(_text(40, 36, "What FreeCAD's math engine knows", size=16, fill=INK, weight="700"))
+    body.append(_text(40, 56, "one exact cylinder — 100% round"))
+    body.append(
+        f'<rect x="40" y="76" width="330" height="310" rx="10" fill="#ffffff" '
+        f'stroke="{STROKE}" stroke-width="1.5"/>'
+    )
+    body.append(_cylinder(205, 150, 110, 22, 170, 96, facet=None))
+
+    body.append(_arrow(384, 230, 496, 230))
+    body.append(_text(440, 206, "Tessellation", size=14, fill=ACCENT, weight="600", anchor="middle"))
+    body.append(_text(440, 256, "on demand", size=12, anchor="middle"))
+
+    body.append(_text(500, 36, "What your graphics card draws", size=16, fill=INK, weight="700"))
+    body.append(_text(500, 56, "triangles only — never the formula"))
+
+    body.append(
+        f'<rect x="500" y="76" width="286" height="310" rx="10" fill="#ffffff" '
+        f'stroke="{STROKE}" stroke-width="1.5"/>'
+    )
+    body.append(_text(643, 108, "Coarse preview", size=16, fill=INK, weight="600", anchor="middle"))
+    body.append(_text(643, 130, "fast — visibly faceted", size=12, anchor="middle"))
+    body.append(_cylinder(643, 170, 90, 18, 150, 8, facet="#64748b"))
+
+    body.append(
+        f'<rect x="806" y="76" width="274" height="310" rx="10" fill="#ffffff" '
+        f'stroke="{STROKE}" stroke-width="1.5"/>'
+    )
+    body.append(_text(943, 108, "Fine preview", size=16, fill=INK, weight="600", anchor="middle"))
+    body.append(_text(943, 130, "smooth — more triangles", size=12, anchor="middle"))
+    body.append(_cylinder(943, 170, 90, 18, 150, 32, facet="#bfdbfe"))
+
+    body.append(
+        _text(
+            40,
+            424,
+            "One exact shape in memory. Only the preview mesh changes: the model stays round, "
+            "and so does the exported geometry.",
+            size=13,
+        )
+    )
+
+    return _svg(
+        1120,
+        460,
+        "Tessellation levels",
+        "An exact cylinder beside a coarse and a fine tessellated preview. Only the "
+        "discrete previews are drawn by the GPU; the exact shape is unchanged.",
+        "\n".join(body),
+    )
+
+
+def topological_naming() -> str:
+    body = []
+
+    def badge(x, y, label, color=INK):
+        body.append(
+            f'<circle cx="{x}" cy="{y}" r="9" fill="#ffffff" stroke="{color}" stroke-width="1.5"/>'
+        )
+        body.append(
+            _text(x, y + 3.5, label, size=10.5, fill=color, weight="600", anchor="middle")
+        )
+
+    def panel(x, y, title, sub, note):
+        body.append(
+            f'<rect x="{x}" y="{y}" width="330" height="240" rx="10" fill="#ffffff" '
+            f'stroke="{STROKE}" stroke-width="1.5"/>'
+        )
+        body.append(_text(x + 16, y + 28, title, size=15, fill=INK, weight="600"))
+        body.append(_text(x + 16, y + 50, sub, size=12))
+        body.append(_text(x + 16, y + 224, note, size=11.5))
+
+    def sketch(cx, cy, sides, radius):
+        start = math.pi / 4 if sides == 4 else 0.0
+        points = [
+            (cx + radius * math.cos(start + 2 * math.pi * i / sides),
+             cy + radius * math.sin(start + 2 * math.pi * i / sides))
+            for i in range(sides)
+        ]
+        coords = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+        body.append(
+            f'<polygon points="{coords}" fill="#eff6ff" stroke="{INK}" stroke-width="3" '
+            'stroke-linejoin="round"/>'
+        )
+        for x, y in points:
+            body.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{ACCENT}"/>')
+
+    def box(fx, fy, w, h, d, *, target=None, color=ACCENT, check=False, warn=False):
+        ftl, ftr = (fx, fy), (fx + w, fy)
+        fbl, fbr = (fx, fy + h), (fx + w, fy + h)
+        btl, btr = (fx + d, fy - d), (fx + w + d, fy - d)
+        bbl = (fx + d, fy + h - d)
+
+        def poly(points, fill):
+            coords = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+            body.append(f'<polygon points="{coords}" fill="{fill}" stroke="none"/>')
+
+        def line(a, b, stroke=INK, width=2.5, dash=None):
+            extra = f' stroke-dasharray="{dash}"' if dash else ""
+            body.append(
+                f'<line x1="{a[0]:.1f}" y1="{a[1]:.1f}" x2="{b[0]:.1f}" y2="{b[1]:.1f}" '
+                f'stroke="{stroke}" stroke-width="{width}" stroke-linecap="round"{extra}/>'
+            )
+
+        poly([ftl, ftr, fbr, fbl], "#dbeafe")
+        poly([ftl, btl, btr, ftr], "#eff6ff")
+        poly([ftr, btr, (btr[0], btr[1] + h), fbr], "#bfdbfe")
+
+        line(ftl, ftr)
+        line(ftr, fbr)
+        line(fbr, fbl)
+        line(fbl, ftl)
+        line(ftl, btl)
+        line(btl, btr)
+        line(btr, (btr[0], btr[1] + h))
+        line((btr[0], btr[1] + h), fbr)
+
+        line(fbl, bbl, stroke="#94a3b8", width=1.5, dash="4 4")
+        line(bbl, (btr[0], btr[1] + h), stroke="#94a3b8", width=1.5, dash="4 4")
+        line(btl, bbl, stroke="#94a3b8", width=1.5, dash="4 4")
+
+        # The four top edges are 1..4 in this illustration; #4 is top-right.
+        edges = {1: (btl, btr), 2: (btl, ftl), 3: (ftl, ftr), 4: (ftr, btr)}
+        labels = {1: (0, -12), 2: (-14, 0), 3: (0, -12), 4: (14, 0)}
+        for number, (a, b) in edges.items():
+            mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            if target == number:
+                line(a, b, stroke=color, width=6)
+            dx, dy = labels[number]
+            badge(mid[0] + dx, mid[1] + dy, str(number), color=color if target == number else INK)
+
+        if target is not None:
+            a, b = edges[target]
+            mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            if check:
+                x, y = mid[0] + 22, mid[1] - 18
+                body.append(
+                    f'<polyline points="{x},{y} {x + 5},{y + 6} {x + 15},{y - 9}" fill="none" '
+                    f'stroke="#16a34a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>'
+                )
+            if warn:
+                x, y = mid[0] + 26, mid[1] - 16
+                body.append(
+                    f'<polygon points="{x},{y - 11} {x + 12},{y + 9} {x - 12},{y + 9}" '
+                    'fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>'
+                )
+                body.append(_text(x, y + 5, "!", size=13, fill="#dc2626", weight="700", anchor="middle"))
+
+    def prism(cx, top, rx, ry, height, *, target_bottom=None, intended_top=None, warn=False):
+        sides = 6
+
+        def point(angle, y):
+            return (cx + rx * math.cos(angle), y + ry * math.sin(angle))
+
+        body.append(_cylinder(cx, top, rx, ry, height, sides, facet="#64748b"))
+
+        # The bottom-front rim edge that a positional #4 now selects.
+        a, b = point(2 * math.pi / 3, top + height), point(math.pi, top + height)
+        if target_bottom:
+            body.append(
+                f'<line x1="{a[0]:.1f}" y1="{a[1]:.1f}" x2="{b[0]:.1f}" y2="{b[1]:.1f}" '
+                'stroke="#dc2626" stroke-width="6" stroke-linecap="round"/>'
+            )
+            mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            badge(mid[0], mid[1] - 18, "4", color="#dc2626")
+            if warn:
+                x, y = mid[0] + 24, mid[1] - 20
+                body.append(
+                    f'<polygon points="{x},{y - 11} {x + 12},{y + 9} {x - 12},{y + 9}" '
+                    'fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>'
+                )
+                body.append(_text(x, y + 5, "!", size=13, fill="#dc2626", weight="700", anchor="middle"))
+
+        # The physical edge that #4 used to name, now a different number.
+        c, d = point(5 * math.pi / 3, top), point(0, top)
+        if intended_top:
+            body.append(
+                f'<line x1="{c[0]:.1f}" y1="{c[1]:.1f}" x2="{d[0]:.1f}" y2="{d[1]:.1f}" '
+                'stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="5 4"/>'
+            )
+            badge((c[0] + d[0]) / 2 + 12, (c[1] + d[1]) / 2 - 6, "9", color="#64748b")
+
+    body.append(_text(40, 30, "A. The original recipe", size=17, fill=INK, weight="700"))
+    body.append(_text(40, 340, "B. Edit step 1, rebuild the rest", size=17, fill=INK, weight="700"))
+
+    y_a = 50
+    panel(40, y_a, "1. Square sketch", "4 edges", "one outline")
+    sketch(205, y_a + 135, 4, 60)
+    panel(410, y_a, "2. Extrude — 12 edges", "#4 is the top-right edge", "edges numbered in traversal order")
+    box(560, y_a + 110, 100, 84, 26, target=4, color=ACCENT)
+    panel(780, y_a, "3. Fillet Edge #4", "lands on the intended edge", "the recipe holds")
+    box(930, y_a + 110, 100, 84, 26, target=4, color="#16a34a", check=True)
+
+    y_b = 360
+    panel(40, y_b, "1. Hexagon sketch", "6 edges", "a small edit")
+    sketch(205, y_b + 135, 6, 60)
+    panel(410, y_b, "2. Extrude — 18 edges", "everything is renumbered", "the same edge is now #9")
+    prism(575, y_b + 85, 70, 20, 95, target_bottom=True, intended_top=True)
+    panel(780, y_b, "3. Fillet Edge #4", "lands on the wrong edge", "a silent wrong edge")
+    prism(945, y_b + 85, 70, 20, 95, target_bottom=True, warn=True)
+
+    for row_y in (y_a, y_b):
+        body.append(_arrow(374, row_y + 120, 406, row_y + 120))
+        body.append(_arrow(744, row_y + 120, 776, row_y + 120))
+
+    body.append(
+        _text(
+            40,
+            636,
+            "The recipe is unchanged; the reference is not. Numbers are illustrative — FreeCAD derives them from traversal order.",
+            size=13,
+        )
+    )
+
+    return _svg(
+        1120,
+        660,
+        "The topological naming problem",
+        "Two rows: a square extruded and filleted on edge 4; then a hexagon extruded, "
+        "where positional numbering moves edge 4 to the bottom and the fillet lands "
+        "on the wrong edge.",
+        "\n".join(body),
+    )
+
+
 DIAGRAMS = [
     (GENERAL_IMAGES, "tessellation-pipeline.svg", pipeline),
+    (GENERAL_IMAGES, "tessellation-levels.svg", tessellation_levels),
     (GENERAL_IMAGES, "element-map-layers.svg", element_map_layers),
+    (GENERAL_IMAGES, "brep-topology.svg", brep_topology),
+    (GENERAL_IMAGES, "topological-naming.svg", topological_naming),
     (RESEARCH_IMAGES, "tns-broker.svg", tns_broker),
 ]
 

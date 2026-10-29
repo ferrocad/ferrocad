@@ -198,6 +198,11 @@ impl ViewRequest {
     /// The validated workplane action, when the request carries one.
     pub fn workplane_action(&self) -> Result<Option<WorkplaneAction>, String> {
         let Some(text) = self.workplane.as_deref() else {
+            if self.workplane_offset.is_some() {
+                return Err(
+                    "`workplane_offset` needs `workplane: \"offset\"`".to_string()
+                );
+            }
             return Ok(None);
         };
         if text.trim().eq_ignore_ascii_case("offset") {
@@ -1419,6 +1424,12 @@ mod tests {
                 "{text} with {value:?} is refused"
             );
         }
+        // A value without the action is a mistake, not a presentation change.
+        let orphan = ViewRequest {
+            workplane_offset: Some(5.0),
+            ..Default::default()
+        };
+        assert!(orphan.workplane_action().is_err());
 
         let bad = ViewRequest {
             grid: Some(true),

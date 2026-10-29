@@ -53,6 +53,7 @@
       "test_view_tools"
     ],
     "workbenches": [
+      "test_datum_plane",
       "test_flatmesh_part",
       "test_gui_snapping",
       "test_packaged_modules",

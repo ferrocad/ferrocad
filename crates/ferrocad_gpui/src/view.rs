@@ -54,14 +54,32 @@ pub struct ViewRequest {
     #[serde(default)]
     pub grid_overlay: Option<bool>,
     /// A workplane action: `"activate"`, `"clear"`, `"view"`, a standard plane
-    /// (`"world:xy"`, `"world:xz"`, `"world:yz"`), `"camera"`, `"selection"` or
-    /// `"offset"` (which needs [`workplane_offset`](Self::workplane_offset)).
+    /// (`"world:xy"`, `"world:xz"`, `"world:yz"`), `"camera"`, `"selection"`,
+    /// `"offset"` (which needs [`workplane_offset`](Self::workplane_offset)) or
+    /// `"set"` (which needs [`workplane_frame`](Self::workplane_frame)).
     #[serde(default)]
     pub workplane: Option<String>,
     /// The distance, in millimetres, to shift the active plane along its normal
     /// (`WorkplaneAction::Offset`). Positive is along `n`.
     #[serde(default)]
     pub workplane_offset: Option<f64>,
+    /// An explicit frame for the `"set"` workplane action: the plane's world origin
+    /// and its two in-plane axes (the normal is `u × v`), in millimetres.
+    #[serde(default)]
+    pub workplane_frame: Option<WorkplaneFrameRequest>,
+}
+
+/// An explicit workplane frame (`view.workplane_frame`): the origin and the two
+/// in-plane axes, in millimetres. `origin`, `u` and `v` each need exactly three
+/// finite components; the viewport normalizes the axes and derives the normal.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct WorkplaneFrameRequest {
+    #[serde(default)]
+    pub origin: Vec<f64>,
+    #[serde(default)]
+    pub u: Vec<f64>,
+    #[serde(default)]
+    pub v: Vec<f64>,
 }
 
 /// A parameterized axis-cross change (`view.axis`). Every field is optional; an
@@ -173,6 +191,12 @@ pub enum WorkplaneAction {
     Selection,
     /// Shift the active plane along its normal, in mm (`"offset"` plus a value).
     Offset(f64),
+    /// Activate an explicit frame (`"set"` plus a [`WorkplaneFrameRequest`]).
+    Set {
+        origin: [f64; 3],
+        u: [f64; 3],
+        v: [f64; 3],
+    },
 }
 
 impl WorkplaneAction {
@@ -203,8 +227,25 @@ impl ViewRequest {
                     "`workplane_offset` needs `workplane: \"offset\"`".to_string()
                 );
             }
+            if self.workplane_frame.is_some() {
+                return Err(
+                    "`workplane_frame` needs `workplane: \"set\"`".to_string()
+                );
+            }
             return Ok(None);
         };
+        if text.trim().eq_ignore_ascii_case("set") {
+            // The parser only checks shape: whether the axes are degenerate is the
+            // viewport's call, because that is what owns the active plane.
+            let frame = self.workplane_frame.as_ref().ok_or_else(|| {
+                "a workplane `set` needs `workplane_frame`".to_string()
+            })?;
+            return Ok(Some(WorkplaneAction::Set {
+                origin: frame_vector("origin", &frame.origin)?,
+                u: frame_vector("u", &frame.u)?,
+                v: frame_vector("v", &frame.v)?,
+            }));
+        }
         if text.trim().eq_ignore_ascii_case("offset") {
             let delta = self
                 .workplane_offset
@@ -737,6 +778,20 @@ impl ViewState {
             changes.join(", ")
         })
     }
+}
+
+/// One `[x, y, z]` vector of a [`WorkplaneFrameRequest`]. Exactly three finite
+/// components; a missing or malformed frame is a request error, not an action.
+fn frame_vector(name: &str, values: &[f64]) -> Result<[f64; 3], String> {
+    let [x, y, z] = values else {
+        return Err(format!(
+            "the workplane frame's `{name}` must have exactly three components"
+        ));
+    };
+    if !(x.is_finite() && y.is_finite() && z.is_finite()) {
+        return Err(format!("the workplane frame's `{name}` must be finite"));
+    }
+    Ok([*x, *y, *z])
 }
 
 /// A compact number for a status line (`10`, not `10.0`).
@@ -1439,6 +1494,88 @@ mod tests {
         assert!(state.apply(&bad).is_err());
         assert!(!state.grid, "nothing was applied");
         assert!(bad.workplane_action().is_err());
+    }
+
+    #[test]
+    fn a_workplane_set_needs_a_well_formed_frame() {
+        let frame = WorkplaneFrameRequest {
+            origin: vec![1.0, 2.0, 3.0],
+            u: vec![0.0, 1.0, 0.0],
+            v: vec![0.0, 0.0, 2.0],
+        };
+        // The command carries the action and the frame; the arrays are passed through
+        // exactly, so the viewport can normalize them itself.
+        let request = ViewRequest {
+            workplane: Some(" Set ".to_string()),
+            workplane_frame: Some(frame.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            request.workplane_action().unwrap(),
+            Some(WorkplaneAction::Set {
+                origin: [1.0, 2.0, 3.0],
+                u: [0.0, 1.0, 0.0],
+                v: [0.0, 0.0, 2.0],
+            })
+        );
+
+        // The action and its frame are one request: neither half stands alone.
+        let missing = ViewRequest {
+            workplane: Some("set".to_string()),
+            ..Default::default()
+        };
+        assert!(missing.workplane_action().is_err());
+        let orphan = ViewRequest {
+            workplane_frame: Some(frame.clone()),
+            ..Default::default()
+        };
+        assert!(orphan.workplane_action().is_err());
+
+        // Exactly three finite components per vector.
+        for bad in [
+            WorkplaneFrameRequest {
+                origin: vec![0.0, 0.0],
+                ..frame.clone()
+            },
+            WorkplaneFrameRequest {
+                u: vec![0.0, 0.0, 0.0, 0.0],
+                ..frame.clone()
+            },
+            WorkplaneFrameRequest {
+                v: vec![0.0, f64::INFINITY, 0.0],
+                ..frame.clone()
+            },
+            WorkplaneFrameRequest {
+                u: Vec::new(),
+                ..frame.clone()
+            },
+        ] {
+            let request = ViewRequest {
+                workplane: Some("set".to_string()),
+                workplane_frame: Some(bad.clone()),
+                ..Default::default()
+            };
+            assert!(request.workplane_action().is_err(), "{bad:?}");
+        }
+
+        // A degenerate frame is well-formed: refusing it is the viewport's call.
+        let degenerate = ViewRequest {
+            workplane: Some("set".to_string()),
+            workplane_frame: Some(WorkplaneFrameRequest {
+                origin: vec![0.0, 0.0, 0.0],
+                u: vec![1.0, 0.0, 0.0],
+                v: vec![2.0, 0.0, 0.0],
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            degenerate.workplane_action().unwrap(),
+            Some(WorkplaneAction::Set {
+                origin: [0.0, 0.0, 0.0],
+                u: [1.0, 0.0, 0.0],
+                v: [2.0, 0.0, 0.0],
+            })
+        );
     }
 
     #[test]

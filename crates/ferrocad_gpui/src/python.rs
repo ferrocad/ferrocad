@@ -18,6 +18,7 @@ use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
 use serde::Deserialize;
 
 use ferrocad_inventor::{Directives, Event, EventListener, Hit, Scene};
+use ferrocad_types::Vector3;
 
 /// The Python module the shell boots and then calls. It is the app's script, so
 /// the library ships no copy; [`configure`] sets it before boot.
@@ -754,6 +755,39 @@ pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResu
             .map_err(|e| e.to_string())
     })?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// The answer [`add_datum_plane`] reads back: the created object's name, or why not.
+#[derive(Debug, Clone, Deserialize)]
+struct DatumPlaneOutcome {
+    ok: bool,
+    #[serde(default)]
+    object: String,
+    #[serde(default)]
+    error: String,
+}
+
+/// Ask the entry module to create a selectable datum plane at `origin`/`u`/`v`.
+///
+/// The frame is the viewport's active workplane, which the shell owns; the document
+/// object is the edition's. The payload carries the three vectors in millimetres and
+/// the answer names the object it created, or why it could not.
+pub fn add_datum_plane(origin: Vector3, u: Vector3, v: Vector3) -> Result<String, String> {
+    let payload = serde_json::json!({
+        "origin": [origin.x, origin.y, origin.z],
+        "u": [u.x, u.y, u.z],
+        "v": [v.x, v.y, v.z],
+    })
+    .to_string();
+    let outcome: DatumPlaneOutcome = call_json("add_datum_plane", Some(&payload))?;
+    if !outcome.ok {
+        return Err(if outcome.error.is_empty() {
+            "the edition did not create the plane".to_string()
+        } else {
+            outcome.error
+        });
+    }
+    Ok(outcome.object)
 }
 
 /// The `pivy.coin` script that builds the demo cube, the way a workbench would.

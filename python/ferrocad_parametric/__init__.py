@@ -3,7 +3,7 @@
 The base app's script (`ferrocad_shell`) is deliberately geometry-free: it knows the
 document model and nothing about kernels. This edition links the Part workbench, so
 it registers the two **module hooks** Part needs, seeds the demo solid, and offers
-one creation command:
+these commands:
 
 * `FerroCAD.register_display_provider` — how a `Part` object is tessellated for the
   viewport;
@@ -12,7 +12,10 @@ one creation command:
   `push_pull` / `extrude` / `pocket`, and the generic gizmo's `transform` / `apply` as
   a placement change);
 * `Part_Box` — a dock command that creates a box in one transaction, the way the toy
-  workbench's `Toy_MakeSlab` does.
+  workbench's `Toy_MakeSlab` does;
+* `App_SaveDatumPlane` — a view command that saves the shell's live workplane as a
+  selectable `Part::Feature` face, so it can be picked, moved and bound with
+  `Set WP`.
 
 Objects this script creates carry `DisplayMode` and `Color` dynamic properties. A
 `Part::Feature` has no view provider here, so the display hook reads those properties
@@ -31,6 +34,7 @@ it must re-export every entry point the shell calls.
 
 from __future__ import annotations
 
+import json
 import math
 
 import FreeCAD
@@ -398,6 +402,103 @@ def makeBox(
     return box
 
 
+def _datum_axis(frame, key):
+    """One finite ``[x, y, z]`` axis from a datum-plane payload."""
+    value = frame.get(key) if isinstance(frame, dict) else None
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"datum plane {key} must be three numbers")
+    try:
+        components = tuple(float(component) for component in value)
+    except (TypeError, ValueError):
+        raise ValueError(f"datum plane {key} must be three numbers") from None
+    if not all(math.isfinite(component) for component in components):
+        raise ValueError(f"datum plane {key} must be finite")
+    return components
+
+
+def add_datum_plane(payload: str) -> str:
+    """Create a selectable datum plane from the active workplane frame.
+
+    The workplane is transient viewport state, so the shell owns the live frame and
+    passes it here when ``App_SaveDatumPlane`` runs: ``origin`` is the plane marker
+    in world millimetres, ``u``/``v`` are its in-plane axes and ``u × v`` its
+    normal. The face is built from four corners along those axes rather than from a
+    rotation, so the frame is used verbatim.
+
+    The object is added in one undoable transaction. The reply is
+    ``{"ok": true, "object": <name>}``, or ``{"ok": false, "error": "..."}`` for a
+    malformed or degenerate frame (a zero-length or parallel ``u``/``v``) or a
+    kernel failure.
+    """
+    try:
+        frame = json.loads(payload)
+        origin = _datum_axis(frame, "origin")
+        u = _datum_axis(frame, "u")
+        v = _datum_axis(frame, "v")
+    except (TypeError, ValueError) as exc:
+        return json.dumps({"ok": False, "error": str(exc)})
+
+    length_u = math.sqrt(sum(component * component for component in u))
+    length_v = math.sqrt(sum(component * component for component in v))
+    if length_u <= 1e-12 or length_v <= 1e-12:
+        return json.dumps(
+            {"ok": False, "error": "datum plane u and v must be non-zero"}
+        )
+    normal = (
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    )
+    cross = math.sqrt(sum(component * component for component in normal))
+    if cross <= 1e-9 * length_u * length_v:
+        return json.dumps(
+            {"ok": False, "error": "datum plane u and v must not be parallel"}
+        )
+
+    # 100 mm across, the corners ordered u then v. The closing point repeats the
+    # first, as a polygon wire expects; `makePolygon` skips the coincident vertex.
+    half = 50.0
+    corners = (
+        (-half, -half),
+        (half, -half),
+        (half, half),
+        (-half, half),
+        (-half, -half),
+    )
+    points = [
+        FreeCAD.Vector(
+            origin[0] + u[0] * a + v[0] * b,
+            origin[1] + u[1] * a + v[1] * b,
+            origin[2] + u[2] * a + v[2] * b,
+        )
+        for a, b in corners
+    ]
+    try:
+        face = Part.Face(Part.makePolygon(points))
+    except Exception as exc:
+        return json.dumps({"ok": False, "error": str(exc)})
+
+    doc = FreeCAD.ActiveDocument
+    if doc is None:
+        doc = FreeCAD.newDocument("Unnamed")
+    doc.openTransaction("Datum plane")
+    try:
+        obj = doc.addObject("Part::Feature", "DatumPlane")
+        obj.Shape = face
+        obj.Label = "DatumPlane"
+        # A bare `Part::Feature` has neither property, and its `DisplayMode` write
+        # would reach the upstream-shaped view object, which has no
+        # `ShadedWithEdges` mode. `Color` is a colour list, so the cyan is one entry.
+        _add_appearance(obj)
+        obj.Color = [(0.22, 0.74, 0.97, 1.0)]
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return json.dumps({"ok": False, "error": str(exc)})
+    return json.dumps({"ok": True, "object": obj.Name})
+
+
 class _MakeBoxCommand:
     """``Part_Box`` — add a box to the document."""
 
@@ -419,6 +520,37 @@ class _MakeBoxCommand:
 
 
 FreeCADGui.addCommand("Part_Box", _MakeBoxCommand())
+
+
+class _SaveDatumPlaneCommand:
+    """``App_SaveDatumPlane`` — save the active workplane as a selectable face.
+
+    The plane itself is transient viewport state: the shell reads the live frame and
+    calls :func:`add_datum_plane`. A headless run has no viewport, so running the
+    command there only reports who owns it.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Save as datum plane",
+            "ToolTip": "Create a selectable plane at the active workplane",
+            "Group": "View",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_Workplane",
+            "FerroCAD_Short": "Save WP",
+            "FerroCAD_Wheel": True,
+            "FerroCAD_Tone": "additive",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def Activated(self):
+        return {"status": "save datum plane: the shell owns this command"}
+
+
+FreeCADGui.addCommand("App_SaveDatumPlane", _SaveDatumPlaneCommand())
 
 
 def bootstrap(doc_name: str = "Shell") -> str:

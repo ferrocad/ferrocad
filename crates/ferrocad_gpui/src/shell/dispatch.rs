@@ -14,6 +14,13 @@ use super::*;
 /// edition's Rust tool registry and the Python bridge share one lookup.
 pub(super) const PYTHON_TOOL_PREFIX: &str = "python:";
 
+/// The edition's `App_SaveDatumPlane` command id.
+///
+/// The document object belongs to the Python edition (`add_datum_plane`); the frame
+/// belongs to the shell, which owns the viewport. The shell intercepts the id and
+/// reads the live workplane before calling across, so the two never disagree.
+const SAVE_DATUM_PLANE: &str = "App_SaveDatumPlane";
+
 /// Build the Python-backed tool `name` through the shell bridge.
 ///
 /// The bridge is a `ferrocad.stage.Tool` instance; [`ferrocad_stage_py::PyTool`]
@@ -226,6 +233,17 @@ impl Shell {
         // Running any command dismisses the open popover: its menu has served its
         // purpose, and a new dialog should not sit under a still-open menu.
         self.open_popover = None;
+        // Saving the active workplane as a datum plane is a frame the shell owns plus a
+        // document object the edition owns; the interpreter function does not exist in
+        // every build, so this path reports its error rather than going through the
+        // registry's `run_command`.
+        if id == SAVE_DATUM_PLANE {
+            let status = self.save_datum_plane(cx);
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
         // A provider row is generated chrome, not a registry command: its id names
         // the feature and backend to switch to.
         if let Some(rest) = id.strip_prefix("ferrocad-provider:") {
@@ -401,6 +419,29 @@ impl Shell {
         }
     }
 
+    /// Save the active workplane as a selectable datum plane (`App_SaveDatumPlane`).
+    ///
+    /// The viewport owns the live frame and the edition owns the document object, so
+    /// the shell reads the frame and hands it across. A build whose edition has no
+    /// `add_datum_plane` reports the bridge's error instead of failing the command.
+    fn save_datum_plane(&mut self, cx: &mut Context<Self>) -> String {
+        let Some(viewport) = self.viewport.clone() else {
+            return "datum plane: no viewport".to_string();
+        };
+        let (origin, u, v) = {
+            let plane = viewport.read(cx).active_workplane().plane.clone();
+            (plane.origin, plane.u, plane.v)
+        };
+        match python::add_datum_plane(origin, u, v) {
+            Ok(name) => {
+                self.refresh(cx);
+                self.sync_stage(cx);
+                format!("datum plane: {name}")
+            }
+            Err(error) => format!("datum plane: {error}"),
+        }
+    }
+
     /// Apply a command's presentation request (A5, G5): perform a workplane action, or
     /// update the shell's view state, mirror it to `FerroCADGui.ViewState`, and apply it
     /// to the viewport when one exists. Returns a one-line summary for the status bar.
@@ -557,6 +598,19 @@ impl Shell {
                         )
                     } else {
                         "the workplane offset is unchanged".to_string()
+                    }
+                }
+                WorkplaneAction::Set { origin, u, v } => {
+                    // The parser only checked the shape; the viewport owns whether the
+                    // axes actually span a plane.
+                    if viewport.set_workplane_frame(
+                        Vector3::new(origin[0], origin[1], origin[2]),
+                        Vector3::new(u[0], u[1], u[2]),
+                        Vector3::new(v[0], v[1], v[2]),
+                    ) {
+                        format!("workplane: {}", viewport.active_workplane().display_label())
+                    } else {
+                        "that frame is degenerate".to_string()
                     }
                 }
             };

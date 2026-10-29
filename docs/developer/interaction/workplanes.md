@@ -1,9 +1,10 @@
 # Workplane (`WP`): specification and interaction model
 
-Status: design (2026-10-29). The state model and the `WP` label are built; the three
-workflows are specified and not yet complete (see
-[`../../project/tasks/workplanes.md`](../../project/tasks/workplanes.md) for the work
-list). Companion to [`axis-origin-grid.md`](axis-origin-grid.md) (the triad, the
+Status: design (2026-10-29). The state model, the `WP` menu, the three-point pick, the
+offset dialog and `Save as datum plane` are built; the **visual hierarchy** (§7–§12,
+selection, triads, grid extent, datum objects) is specified and parked — see
+[`../../project/tasks/workplanes.md`](../../project/tasks/workplanes.md) §8 for the work
+list. Companion to [`axis-origin-grid.md`](axis-origin-grid.md) (the triad, the
 ground/workplane grids, face frames), [`visual-language.md`](visual-language.md) (tokens
 and chrome), [`gizmo-manipulators.md`](gizmo-manipulators.md) (`ManipulatorFrame` and the
 G3a handles) and [`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md) (the
@@ -162,3 +163,185 @@ While a creation tool is active and the plane is at the default:
 - **Ephemeral:** with a tool active, the first click on a tilted face binds it, a
   subsequent click in empty space lands on that plane, and finishing restores the previous
   plane.
+
+## 7. Selection: what a click means (verified 2026-10-29)
+
+There are no selection **modes**, and none are added. The whole state machine is:
+
+| Gesture | What it selects |
+| --- | --- |
+| hover | **nothing** — `HoverReport { target, through }` plus `hover_anchor()`; the shell tints the thing under the pointer and logs `clicked through: …` |
+| left click on a named part | that sub-element (`Face4`, `Edge6`) |
+| left click on an unnamed part | the whole object (a mesh with no part names) |
+| double click | the whole body (`click_target` promotes at `click_count >= 2`) |
+| tree click | the whole body (the tree has no sub-element rows) |
+| Ctrl/Shift+click | toggles whole objects by name; **no multi-element selection** |
+| right-click | a *context target* for the wheel; the selection is untouched until a verb runs |
+
+So the answer to “does hover select a face while a click selects the object?” is **no**:
+hover only reports; a single click selects the face; a double click selects the body.
+Both editions report `FaceN`, because the stage's part names are the kernel's element
+names (the toy names one part per box face; `Part` passes `Shape.mesh()["parts"]`).
+
+Why this matters for the rules below: everything they key on — “the selection has an
+element”, “a manipulator claims it”, “a session verb is active” — already exists in this
+one state. No mode switch is needed to know whether the user is working on a body or a
+face; the double click *is* the switch.
+
+Deliberately not added: a body/face/edge/vertex filter toolbar, marquee selection,
+multi-element selection and named selection sets. Every shipped consumer of a sub-element
+(`Set WP`, push/pull, fillet) takes exactly one, and the tree covers “select the body when
+the face keeps winning”. These are limits, not omissions.
+
+## 8. One active triad: the suppression hierarchy
+
+The overload in a dense scene is four **roles** at one anchor, not four styles. The
+hierarchy is inferred from (a) the active plane's `WorkplaneKind` and (b) what claims the
+selection. It adds no setting, no token and no user-visible switch.
+
+| Role | Drawn when | Anchor | Ink |
+| --- | --- | --- | --- |
+| Active axis cross (`U/V/N`) | `• Axes` on | active plane origin | the axis tokens; **no `N` for a face** (§8.2) |
+| World origin ghost | `• Axes` on and a non-default plane active | world `(0,0,0)` | `WORLD_TRIAD_GHOST` = 0.15, 12 px stems, no labels, plus the origin node |
+| Body transform triad | no element-anchored handle claims the selection, **or** a Move/Rotate session (§8.3, §8.4) | the body datum | `GizmoStyle` |
+| Sub-element handle | a registered manipulator claims the selection's element | the element | `GizmoStyle` |
+| Grid | `• Grid` on | the active plane | the grid tokens; extent per §9 |
+
+### 8.1 One primary cross
+
+At the default plane, the world triad **is** the active cross, so there is one. When a
+non-default plane is active, the world triad recedes to a ghost — 15 % opacity (a
+`WORLD_TRIAD_GHOST` constant beside the existing `WORLD_TRIAD_DIM`), 12 px stems, no
+labels — and the active plane's cross is the only full-strength one. Both are derived
+from the existing `AxisStyle` (`scaled_opacity`, `length`, `labels`), so nothing new is a
+*style*: the two opacity constants are internal drawing values, not settings. `WORLD_TRIAD_DIM` (0.30) remains only for the *hover preview* case, where
+the world plane is still the active plane and the extra grid is a hint, not a binding.
+`• Axes` still owns the whole layer: turning it off removes the ghost, the active cross
+and the origin node together.
+
+### 8.2 No normal stem on a face
+
+A face-bound plane draws a **2D `U/V` bracket** (two stems and two tags) in the face and
+no `+N` stem. Two reasons: the solid already says which side is outside (so `N` is
+redundant there), and the normal direction is exactly what a face manipulator owns — the
+push/pull stem and the offset HUD. Two arrows on one line is the collision.
+
+Planes with no surface behind them — world standards, `View`, a 3-point frame, and an
+offset of any of those — keep `U/V/N`, because nothing else shows which side is `+N`.
+`AxisStyle` is unchanged (same ink, width, opacity, tags); the active layer simply does
+not emit the third stem. An offset of a *face* plane keeps the face kind, so it stays a
+`U/V` bracket; the offset's sign is shown by the HUD/gizmo while it is being changed, and
+by the amount in the pill afterwards.
+
+### 8.3 The body triad yields to a sub-element handle
+
+A selection with an element shows **only** the handles that claim that element (Part:
+push/pull on a face, the dress-up arc on an edge). The shared body triad is armed only
+when *no* element-anchored handle exists. The test is “is there a handle for this
+element”, not “is an element selected”, so a face of an object with no workbench grips
+still gets the body triad — no click is ever left with zero handles.
+
+Only the **shared** triad (the one at the body datum, `ShapeItem::anchor`) yields. A
+workbench gizmo anchored elsewhere — the toy's height grip on the top centre — is
+untouched. That is also why the toy keeps working with the face-pick rule it just gained:
+a face pick shows the height grip and no triads; a double click brings the triad back.
+
+### 8.4 A verb is an explicit request
+
+Move and Rotate arm the body triad for the selected **body** even while a face is
+selected: from the wheel, `Ctrl+Shift+M` / `Ctrl+Shift+R`, or the dock's `Move ▾`. When
+the session ends or the selection changes, the default (suppressed) state returns. The
+suppression is therefore a *default*, not a lock — which is what keeps body transforms
+reachable from any selection. The Move HUD keeps anchoring at the body datum, the same
+point the triad uses.
+
+### 8.5 The hover bloom is tool-scoped (proposal)
+
+The hover bloom (a local grid on the face under the pointer) currently appears whenever
+the grid is on and the pointer rests on a face. It should appear only while a **creation
+tool** is active, because that is when it previews something a click will actually do
+(bind the plane for the session). Without a tool, hovering keeps the face *tint* (the
+selection feedback for the click) but adds no second grid; `Set WP` in the wheel is one
+gesture away and needs no preview. This removes the fifth collision — two grids at once —
+and is inferred from the tool state, not configured.
+
+## 9. Grid extent: one generator, inferred extent
+
+The grid stays one generator; only its **extent** is inferred from what the plane is bound
+to:
+
+- **A plane bound to a finite surface** (a face today; a datum plane once it exists) gets
+  a face-sized patch: `radius = max(3 × in-plane radius, 2 × major step)`. The world
+  clamp (`RADIUS_RANGE`, 500–5000 mm) is **not** applied to it — it exists so the world
+  ground does not collapse when zoomed in, and applying it would force a 40 mm face to
+  carry a 500 mm grid.
+- **Every other plane** (world, standard, `View`, 3-point, an offset of those) keeps the
+  camera-following extent, `GridSpec::radius_for(camera)` — unchanged.
+- **The fade is already there.** `grid::ground` fades alpha smoothly from
+  `FADE_START × radius` to `0` at `radius`, so a smaller radius *is* the localized patch.
+  No shader change, no `GridStyle` field, no new setting.
+- **What the identity keeps:** same generator, same minor/major steps, same ink, same
+  `1:2` ratio, same snapping steps. Only the extent says “this grid belongs to that
+  face”, which is exactly the information a wall-of-grid was hiding.
+
+State: `ActiveWorkplane` carries the bound surface's in-plane radius (`FaceFrame.radius`,
+already computed when the face resolves) so the grid rebuilds without re-resolving the
+stage; it survives `Offset` (the patch stays face-sized). This is inferred state, not a
+preference — the pill never mentions it. The hover preview uses the hovered face's radius
+with the same rule.
+
+## 10. Datum planes: a document object with a handle (parked)
+
+A datum plane is a **document object** that gets a manipulator when selected, not a
+special always-on gizmo. It:
+
+- lives in the tree with a name, `Visibility` (already a persisted view property that the
+  display provider honours) and one undo step per edit;
+- renders as a bounded planar item — a translucent fill from the theme's glass token at
+  low alpha with the glass/top rim, through the existing `with_blended_surface()`; no new
+  token, no shader;
+- is picked through its whole area. A rim-only pick (an earlier idea) would make the
+  middle unclickable, which contradicts “click it to move it”; hiding is one keystroke
+  and the tree row always selects it, even behind geometry;
+- when selected, arms a normal/angle manipulator through the same workbench seam push/pull
+  uses (`+N` drag offsets it, a ring tilts it); both are placement edits, one transaction
+  each;
+- is a valid `Set WP` target, because it is a plane with one named face (`Face1`).
+
+Why not a gizmo: a gizmo has no lifetime, no tree row, no name, no visibility, no undo, no
+save, and there can be many planes. FreeCAD already types this as
+`App::Plane`/`PartDesign::Plane`; matching it keeps the kernel model.
+
+Interim: `Save as datum plane` already creates a `Part::Feature` face at the live frame —
+pickable, renameable, saveable and bindable today. The full model still needs the
+`Part::DatumPlane` type, its glass rendering, the normal/tilt handle, and the tree's
+`Space`-to-hide shortcut.
+
+## 11. Reachability: every workflow survives the hierarchy
+
+| Workflow | Entry | Why the hierarchy cannot strand it |
+| --- | --- | --- |
+| Set WP from a face | wheel `Set WP`; menu `Set from selection` | display-only rules |
+| Set WP from 3 points | menu `Pick 3 points…` | a tool, not display |
+| Standards / view / offset / reset / align | `WP` menu | untouched |
+| Draw on a face | a creation tool's first click | the bloom previews the bind (§8.5) |
+| Move / rotate the body | body click → triad; face click → double click, or wheel `Move`/`Rotate`, or `Ctrl+Shift+M`/`R` | verb override (§8.4) |
+| Push/pull a face | face click → the stem | §8.2 frees the normal, §8.3 drops the triad |
+| Fillet/chamfer an edge | edge click → the arc | §8.3 |
+| Save a datum plane | menu / wheel | unchanged |
+| Bind WP to a datum plane | select it → `Set from selection` | one named face |
+| Hide/show an object | `Visibility` property now; tree `Space` parked | the tree is always reachable |
+| Snap (grid / vertex / edge / face) | `Snap` menu | independent of the drawn layers |
+| Navigate | orbit / pan / zoom | the grid patch no longer walls the view (§9) |
+
+## 12. What this deliberately does not add
+
+- **No appearance configuration.** No per-plane style, no `WP` appearance submenu, no
+  axis-visibility switches: every rule above reads the plane's kind, the selection's
+  granularity and whether a handle claims it.
+- **No new tokens.** The ghost and face-bracket values are derived from `AxisStyle`; the
+  datum glass reuses the theme's glass inks.
+- **No selection modes**, marquee or multi-element selection (§7).
+- **No new grid renderer or shader.** The extent is a `GridSpec.radius`; the fade already
+  exists (§9).
+- **No `view.workplane.backend` claim** (§5).

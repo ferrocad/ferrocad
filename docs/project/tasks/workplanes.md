@@ -430,7 +430,45 @@ Verified: `ferrocad_stage` 195, `ferrocad_viewport` 176, `ferrocad_gpui --lib` 2
 (7 new datum-plane tests, and the new module is in the extension-set contract),
 `cargo check -p ferrocad`.
 
-## 8. Non-goals
+## 8. Reflection (2026-10-29): visual hierarchy and parked work
+
+**Design only — no code changed with this section.** The full rationale is in
+[`../../developer/interaction/workplanes.md`](../../developer/interaction/workplanes.md)
+§7–§12.
+
+Decided in the reflection:
+
+- **Selection needs no new mode.** Hover reports only; one click selects the sub-element;
+  a double click selects the body; a tree click selects bodies. Every suppression rule
+  keys on that existing state, so no body/face filter is added.
+- **One active axis cross.** A bound plane's cross is the only full-strength one; the
+  world origin becomes a 15 %, 12 px ghost with no labels (the origin node stays).
+- **A face-bound plane draws a 2D `U/V` bracket**, not `U/V/N`: the normal belongs to the
+  face manipulator. Floating planes keep `N`.
+- **The body triad yields to an element-anchored handle** (Part face → push/pull only;
+  Part edge → arc only). Move/Rotate arm it explicitly, so suppression is a default, not
+  a lock. A face with no handle keeps the triad.
+- **A face-bound grid is a face-sized patch** (`max(3 × face radius, 2 × major step)`),
+  not a wall. Only the `GridSpec.radius` changes; the generator's existing fade is the
+  edge. No shader, style or setting is added.
+- **A datum plane is a document object**, not a gizmo: tree row, `Visibility`, undo,
+  save, whole-area pick, and a normal/tilt handle when selected.
+
+Parked (in order, each independently shippable; none blocks another):
+
+1. **Triad/grid hierarchy** — the six display rules. Touches `ActiveWorkplane` (an
+   inferred `extent`), `axis::triad` (an in-plane variant for faces), `sync_grid`
+   (ghost + patch) and the shell's arming (`arm`: does an element-anchored handle exist).
+   Confirm §8.5 (tool-scoped hover bloom) while doing it. This is the slice that answers
+   the overloaded screenshot.
+2. **`Offset Workplane…` as a gizmo** — a 1D axis handle along `+N` plus the floating HUD;
+   the menu row and its one-field dialog are already there.
+3. **`Part::DatumPlane`** — the object type, glass rendering, normal/tilt manipulator and
+   the tree's `Space`-to-hide. Today `Save as datum plane` creates a `Part::Feature` face.
+4. **Coin-grid workplane uniform** — the overlay `Frame` block plus a mod release; the
+   native grid already follows the plane.
+
+## 9. Non-goals
 
 - Datum-plane *objects* with expressions and attachment (that is `Part::Datum` and the
   constraint work; this task only needs a frame and a label).

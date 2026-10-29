@@ -105,13 +105,15 @@ def _slab_mesh(width: float, depth: float, height: float, placement) -> dict:
     return {
         "positions": positions,
         "triangles": triangles,
-        # One untagged part: a click selects the whole object (the toy's rule).
-        "triangle_parts": [0] * (len(triangles) // 3),
+        # One part per box face, named like a kernel's sub-elements: a click selects the
+        # face (double-click promotes to the whole slab), and the viewport can bind a
+        # workplane to it the same way it binds a `Part` face.
+        "triangle_parts": [face for face in range(len(_FACES)) for _ in range(2)],
         "edges": edges,
-        "segment_parts": [0] * (len(edges) // 2),
+        "segment_parts": [face for face in range(len(_FACES)) for _ in range(4)],
         "vertices": [],
         "vertex_parts": [],
-        "parts": [],
+        "parts": ["Face%d" % (face + 1) for face in range(len(_FACES))],
         # The object's own origin: the triad hugs it and doubles as an origin
         # indicator, and a rotate pivot would turn about it.
         "origin": (placement.Base.x, placement.Base.y, placement.Base.z),

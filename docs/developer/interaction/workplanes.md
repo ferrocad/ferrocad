@@ -68,7 +68,7 @@ With a bound plane:
 | --- | --- |
 | **Grid** | The **same** grid, rotated and moved into the plane: same generator, same steps, same ink, camera-following radius. It is not a clipped local patch. |
 | **Axes** | The triad moves to `frame.origin` and its stems are the plane's `U`, `V`, `N`. |
-| **Global origin** | The world ground and the world triad stay, dimmed (`WORLD_DIM = 0.25` on the ground, `WORLD_TRIAD_DIM = 0.30` on the triad), plus the origin node. The absolute zero never disappears. |
+| **Global origin** | The world **ground is not drawn** (there is one grid, and it is the active plane's). The world triad stays at `(0, 0, 0)`, dimmed (`WORLD_TRIAD_DIM = 0.30`), plus the origin node. The absolute zero never disappears, but it never doubles the grid either. |
 | **Status bar** | Never a persistent "no active workplane". The line carries transient command output and the hover report. |
 
 The finer 1 mm / 10 mm workplane style (`GridStyle::workplane()`) belongs to the **hover

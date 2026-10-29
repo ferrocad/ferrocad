@@ -224,3 +224,89 @@ fn the_workplane_rows_reach_the_viewport(cx: &mut TestAppContext) {
         assert!(viewport.read(cx).active_workplane().is_default());
     });
 }
+
+/// G5/Tier 2: a **selected face** is what `Set from selection` binds. This is the whole
+/// chain — the display element name, `entity_of`, `part_names`, the face frame — so it is
+/// the test that catches a name that does not line up. Skips without a GPU adapter.
+#[gpui::test]
+fn a_selected_face_becomes_the_workplane(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    let attached = cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.enable_viewport(cx);
+            shell.viewport.is_some()
+        })
+    });
+    if !attached {
+        eprintln!("no GPU adapter available; skipping face-selection test");
+        return;
+    }
+
+    // A displayed slab with two named faces: the whole chain (display map, element
+    // name, `entity_of`, `part_name`, face frame) runs for real, without depending on
+    // which edition's startup document booted.
+    let element = "Face2";
+    let mesh: crate::display::StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Slab",
+            "positions": [
+                [-0.5, -0.5, 0.5], [0.0, -0.5, 0.5], [0.0, 0.5, 0.5], [-0.5, 0.5, 0.5],
+                [0.0, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [0.0, 0.5, 0.5]
+            ],
+            "triangles": [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            "triangle_parts": [0, 0, 1, 1],
+            "edges": [],
+            "parts": ["Face1", "Face2"]
+        }"#,
+    )
+    .expect("the test mesh");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let stage = shell.display.build(vec![mesh]);
+            if let Some(viewport) = shell.viewport.clone() {
+                viewport.update(cx, |viewport, _cx| viewport.set_stage(stage));
+            }
+            cx.notify();
+        })
+    });
+
+    // Select the face exactly as a single click does (the pick carries the element).
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.replace_selection(
+                vec![SelectionItem::with_elements("Slab", vec![element.to_string()])],
+                cx,
+            )
+        })
+    });
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_SetWorkplane", cx))
+    });
+    assert_eq!(model.lock().unwrap().status, format!("workplane: {element}"));
+    cx.update(|_window, cx| {
+        let active = shell
+            .read(cx)
+            .viewport
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .active_workplane()
+            .clone();
+        assert_eq!(active.label, element);
+        assert!(!active.is_default());
+        assert!((active.plane.origin.x - 0.25).abs() < 1e-9, "Face2's centroid");
+    });
+}

@@ -164,9 +164,11 @@ decisions remain, and none of them needs a new renderer:
    Either keep the world steps (truly identical), or keep the finer steps *and* say so in
    the pill (`WP: Face3 · 1 mm`). Preference: keep the world steps, and let zoom reveal
    detail through the existing `MINOR_PIXELS` decade rule.
-3. **The world layer.** Keep it, dimmed: `WORLD_DIM = 0.25` on the ground and
-   `WORLD_TRIAD_DIM = 0.30` on the triad already produce the “muted absolute datum” the
-   brief asks for, so the world origin stays locatable without a new element.
+3. **The world layer.** Do **not** keep the ground: it would be a second grid. The world
+   ground is not drawn while a non-default plane is active; the triad stays, dimmed
+   (`WORLD_TRIAD_DIM = 0.30`), with the origin node, so absolute zero is still locatable.
+   (`WORLD_DIM` survives only for the hover preview, where the world plane is still the
+   **active** plane and the preview is a hint on top of it.)
 
 Because the grid is a spec, switching planes is a state swap, not a mode. If the swap is
 animated (120 ms, per the brief), animate the spec's plane and radius; the camera only
@@ -234,8 +236,8 @@ Everything here already has the pieces; this is the map to connect them.
    the phrase was only ever a command result, and that is now gone (§7.1).
 7. **Grid steps — decided (§7.1).** A bound plane keeps the world steps; the finer
    `GridStyle::workplane()` style survives only as the hover preview.
-8. **World layer.** Keep it dimmed behind a bound plane (recommended — it is the absolute
-   datum) or hide it while a plane is active?
+8. **World layer — decided (§7.5).** The world *ground* is hidden behind a bound plane
+   (one grid); the world *triad* stays, dimmed.
 
 ## 7. What landed (2026-10-29)
 
@@ -335,10 +337,53 @@ row to `Surface::Radial` would hide it from the menu. `FerroCAD_Wheel: true` (fo
 `radial_slots` includes `radial`-surface commands *or* `wheel: true` ones.
 
 Verified: `ferrocad_stage` 187 (the three standards' axes and right-handedness),
-`ferrocad_viewport` 170 (three new tests: standard planes, view plane, face-by-element),
-`ferrocad_gpui --lib` 217 (the datum rows render in the popover, `Set WP` is flagged for
+`ferrocad_viewport` 172 (three new tests: standard planes, view plane, face-by-element),
+`ferrocad_gpui --lib` 218 (the datum rows render in the popover, `Set WP` is flagged for
 the wheel, and a GPU-gated end-to-end test drives `App_WorkplaneXZ` →
 `App_SetWorkplane` → `App_WorkplaneXY` through a real viewport).
+
+### 7.5 Fixes from the first hands-on pass (2026-10-29)
+
+Four things the first real session found:
+
+1. **Two grids.** The world ground was still drawn (dimmed to `WORLD_DIM`) under the
+   active plane's grid, so selecting a plane looked like *adding* a grid rather than
+   moving it. `sync_grid` now hides the world ground entirely while a non-default plane
+   is active: one grid, at the plane. The world **triad** still recedes to
+   `WORLD_TRIAD_DIM` and the origin node stays, so absolute zero is still marked. The
+   hover preview keeps the world ground (the default plane is still active then) and
+   dims it.
+2. **No origin control.** `ActiveWorkplane` gained `offset` (mm along the plane's own
+   normal) and `display_label()` (`XY +25`, `Face3 -4`); `offset_workplane(delta)` moves
+   the origin and accumulates the offset, and `is_default()` is only true at zero offset
+   on world `XY`. `App_OffsetWorkplane` is the menu row: it opens a one-field quantity
+   dialog and returns `{"view": {"workplane": "offset", "workplane_offset": mm}}`;
+   `ViewRequest` validates the pair (a missing or non-finite value is refused), and the
+   pill shows the shifted label.
+3. **No face to bind in the toy edition.** `Set from selection` needs a **named**
+   sub-element, and the toy slab's mesh tagged every triangle as one untagged part, so
+   there was never a `FaceN` to bind (the Part edition's `Shape.mesh()` does name
+   faces, which is why it works there). The toy slab now emits one part per box face
+   (`Face1`…`Face6`, with the matching `triangle_parts`/`segment_parts`), so the hover
+   bloom, Tier 1, `Set from selection` and the wheel's `Set WP` all work in the sample
+   edition too. A single click now selects the face; a double click still promotes to
+   the whole body.
+4. **The wheel could not offer a non-radial command.** Covered in §7.4
+   (`FerroCAD_Wheel`).
+
+Verified: `ferrocad_viewport` 172 (the one-grid packet count and the offset's origin,
+label and default state), `ferrocad_gpui --lib` 218 (a full face-selection →
+`App_SetWorkplane` chain over a real stage item, and `App_OffsetWorkplane` in the
+popover), `ferrocad_toy` 18.
+
+**Known limitation (Coin grid).** A mod-authored grid overlay is a world-ground shader;
+its ABI has no workplane uniform
+([`grid-overlay-plan.md`](../../developer/workbenches/grid-overlay-plan.md) §3.3 keeps the
+workplane out of `FerroCAD.Grid` deliberately). With the Coin grid active the native
+*plane* grid still draws at the plane, but the overlay itself stays at world `XY`, so the
+view can show a mod grid at the origin plus the native grid at the plane. Making the
+overlay follow the plane needs a `Frame` uniform (the `inv_view_proj` block already
+exists for programs) and a mod-side update; it is not a native-grid bug.
 
 **Still open:** `Pick 3 points…` and `Offset workplane…` (the 1D axis gizmo + floating
 HUD); the Python “set” verb for an arbitrary frame (§4); and the datum-plane object

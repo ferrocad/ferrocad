@@ -180,8 +180,11 @@ pub enum ViewportEvent {
 pub struct ActiveWorkplane {
     /// The plane: origin plus in-plane axes (the normal is `u × v`).
     pub plane: Workplane,
-    /// The presentation label for the pill and the status line.
+    /// The presentation label **without** the offset: the datum, face or `View`.
     pub label: String,
+    /// The distance the plane has been shifted along its own normal, in mm, from the
+    /// frame it was bound to. `0` is that frame itself.
+    pub offset: f64,
 }
 
 impl ActiveWorkplane {
@@ -190,6 +193,7 @@ impl ActiveWorkplane {
         Self {
             plane: Workplane::world(),
             label: "XY".to_string(),
+            offset: 0.0,
         }
     }
 
@@ -207,6 +211,7 @@ impl ActiveWorkplane {
         Self {
             plane: frame.plane.clone(),
             label,
+            offset: 0.0,
         }
     }
 
@@ -215,6 +220,7 @@ impl ActiveWorkplane {
         Self {
             plane: ferrocad_stage::Workplane::standard(plane),
             label: plane.label().to_string(),
+            offset: 0.0,
         }
     }
 
@@ -224,12 +230,37 @@ impl ActiveWorkplane {
         Self {
             plane: frame,
             label: label.into(),
+            offset: 0.0,
         }
+    }
+
+    /// What the pill and the status line show: the name, plus the offset when the plane
+    /// was shifted along its normal (`XY +25`, `Face3 -4`).
+    pub fn display_label(&self) -> String {
+        if self.offset == 0.0 {
+            return self.label.clone();
+        }
+        let amount = format_offset(self.offset);
+        let sign = if self.offset > 0.0 { "+" } else { "" };
+        format!("{} {sign}{amount}", self.label)
     }
 
     /// Whether this is the default world `XY` plane (the only state that is “unbound”).
     pub fn is_default(&self) -> bool {
-        self.label == "XY" && matches!(self.plane.kind, ferrocad_stage::WorkplaneKind::World)
+        self.offset == 0.0
+            && self.label == "XY"
+            && matches!(self.plane.kind, ferrocad_stage::WorkplaneKind::World)
+    }
+}
+
+/// A millimetre amount for a label: up to three decimals, trailing zeros trimmed.
+fn format_offset(amount: f64) -> String {
+    let rounded = format!("{amount:.3}");
+    let trimmed = rounded.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-0" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -3571,8 +3602,12 @@ impl<V: InventorView> InventorViewport<V> {
     ///
     /// Three layers can contribute: the world layer, the active workplane and a hovered
     /// face (each when present). `App_ToggleGrid` owns the ground fields, the axis-cross
-    /// flag owns the triads and the origin node, so they can be shown independently. A
-    /// local layer dims the world level so the local frame reads first. When the shader
+    /// flag owns the triads and the origin node, so they can be shown independently.
+    /// There is **one grid**, moved: while a non-default plane is active the world ground
+    /// is not drawn at all (the active layer replaces it), and only the world **triad**
+    /// recedes to [`grid::WORLD_TRIAD_DIM`] so the global origin stays locatable. A hover
+    /// preview (the default plane still active) keeps the ground and dims it instead.
+    /// When the shader
     /// grid overlay is on, the **world ground** is hidden (two coplanar line grids
     /// z-fight); the triad, the workplane's own grid and the origin node stay. The
     /// packets go to their own queue ([`grid_queue`](Self::grid_queue)) so nothing here
@@ -3623,7 +3658,8 @@ impl<V: InventorView> InventorViewport<V> {
         world_style.minor_alpha *= self.grid_alpha;
         world_style.major_alpha *= self.grid_alpha;
         // The world triad uses the same style as a local one, receding when a local frame
-        // is present (the ground dims through `GridStyle::dim`).
+        // is present. The world **ground** is not drawn then (see `world` below): one
+        // grid, at the active plane, is the whole point of moving the plane.
         let mut world_axis = self.axis.clone();
         if local_present {
             world_style.dim = grid::WORLD_DIM;
@@ -3653,7 +3689,9 @@ impl<V: InventorView> InventorViewport<V> {
             spec: &world_spec,
             style: &world_style,
             axis: &world_axis,
-            ground: grid_on && !self.grid_overlay,
+            // One grid: a non-default active plane *is* the grid, so the world ground
+            // steps aside entirely rather than stacking a second, dimmer grid under it.
+            ground: grid_on && !self.grid_overlay && !local,
             triad: cross,
         };
         let active = active_layer
@@ -3789,6 +3827,20 @@ impl<V: InventorView> InventorViewport<V> {
     /// Returns whether the active plane changed.
     pub fn set_standard_plane(&mut self, plane: ferrocad_stage::StandardPlane) -> bool {
         self.set_active_workplane(ActiveWorkplane::standard(plane))
+    }
+
+    /// Shift the **active plane** along its own normal by `delta` mm — the `Offset
+    /// Workplane…` action. The plane keeps its name and orientation; the label gains the
+    /// offset (`XY +25`) so the pill says where the grid actually is. Returns whether
+    /// the plane changed.
+    pub fn offset_workplane(&mut self, delta: f64) -> bool {
+        if !delta.is_finite() || delta == 0.0 {
+            return false;
+        }
+        let mut next = self.active_workplane.clone();
+        next.plane.origin = next.plane.origin.add(&next.plane.n.scale(delta));
+        next.offset += delta;
+        self.set_active_workplane(next)
     }
 
     /// Adopt the camera's **view plane**: `u` is screen-right, `v` is screen-up, and the
@@ -8572,6 +8624,16 @@ mod tests {
             active_packets > 5,
             "the bound plane adds a layer: {active_packets}"
         );
+        // The world ground steps aside: one grid, at the bound plane, not two stacked.
+        assert_eq!(
+            view.grid_queue
+                .packets
+                .iter()
+                .filter(|packet| packet.topology == Topology::Points)
+                .count(),
+            1,
+            "only the bound plane's grid is drawn"
+        );
         view.handle_pointer([30.0, 50.0]);
         view.sync_grid();
         assert_eq!(
@@ -8580,8 +8642,7 @@ mod tests {
             "the active face is not previewed"
         );
 
-        // Esc clears it: snapping returns to the world and the world layer brightens.
-        let dimmed = max_alpha(&view.grid_queue.packets[0]);
+        // Esc clears it: snapping returns to the world and its ground comes back.
         assert!(view.handle_key(&escape_key()));
         assert!(view.active_workplane().is_default());
         assert!(
@@ -8589,7 +8650,15 @@ mod tests {
             "no world grid snapping by default"
         );
         assert_eq!(view.grid_queue.len(), 5);
-        assert!(max_alpha(&view.grid_queue.packets[0]) > dimmed);
+        assert_eq!(
+            view.grid_queue
+                .packets
+                .iter()
+                .filter(|packet| packet.topology == Topology::Points)
+                .count(),
+            1,
+            "the world ground is the only grid again"
+        );
     }
 
     /// A slab viewport with a tool active, so pointer moves resolve a snap.
@@ -9145,6 +9214,25 @@ mod tests {
     }
 
     #[test]
+    fn moving_the_plane_moves_the_only_grid() {
+        use ferrocad_stage::StandardPlane;
+
+        let mut view = slab_view();
+        // The cross off: the grid alone draws its dots and major lines.
+        assert!(view.set_axis_cross(false));
+        assert_eq!(view.grid_queue.len(), 2, "the world ground");
+
+        // The plane moving must not stack a second, dimmer grid underneath it: the
+        // active plane *is* the one grid, so the packet count stays the same.
+        assert!(view.set_standard_plane(StandardPlane::Front));
+        assert_eq!(
+            view.grid_queue.len(),
+            2,
+            "one grid, moved — not the world ground plus a local one"
+        );
+    }
+
+    #[test]
     fn the_view_plane_follows_the_camera() {
         use ferrocad_types::{Placement, Rotation, Vector3};
 
@@ -9236,6 +9324,37 @@ mod tests {
 
         // Finishing restores the plane the session started from.
         assert!(view.active_workplane().is_default());
+    }
+
+    #[test]
+    fn offsetting_the_plane_moves_its_origin_and_says_so() {
+        use ferrocad_stage::StandardPlane;
+
+        let mut view = slab_view();
+        assert!(!view.offset_workplane(0.0), "zero moves nothing");
+        assert!(!view.offset_workplane(f64::NAN), "a NaN is refused");
+
+        assert!(view.offset_workplane(25.0));
+        let active = view.active_workplane();
+        assert_eq!(active.plane.origin, Vector3::new(0.0, 0.0, 25.0));
+        assert_eq!(active.label, "XY", "the datum keeps its name");
+        assert_eq!(active.display_label(), "XY +25");
+        assert!(!active.is_default(), "a shifted plane is not the default");
+
+        // Offsetting back to zero restores the default state exactly.
+        assert!(view.offset_workplane(-25.0));
+        assert!(view.active_workplane().is_default());
+        assert_eq!(view.active_workplane().display_label(), "XY");
+
+        // A standard plane offsets along **its own** normal (`XZ` looks along `+Y`, so
+        // its normal is `-Y`).
+        assert!(view.set_standard_plane(StandardPlane::Front));
+        assert!(view.offset_workplane(4.0));
+        assert_eq!(
+            view.active_workplane().plane.origin,
+            Vector3::new(0.0, -4.0, 0.0)
+        );
+        assert_eq!(view.active_workplane().display_label(), "XZ +4");
     }
 
     #[test]

@@ -2050,6 +2050,55 @@ class _ViewWorkplaneCommand:
         return {"view": {"workplane": "view"}}
 
 
+class _OffsetWorkplaneCommand:
+    """``App_OffsetWorkplane`` — shift the active plane along its own normal.
+
+    The plane keeps its orientation and its name; the origin moves along `n` (positive
+    is along the normal, so `XY +25` is 25 mm up). This is the only way to move a
+    standard datum off the global origin without binding a face, and it is what
+    "offset from the origin" means for a plane.
+
+    With a `distance` argument it applies directly (scripts); with none it opens a
+    one-field dialog, so the geometry stays visible while the number is typed.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Offset workplane…",
+            "ToolTip": "Move the active workplane along its normal",
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_Workplane",
+        }
+
+    def Activated(self, distance=None):
+        if distance is not None:
+            return {"view": {"workplane": "offset", "workplane_offset": float(distance)}}
+        return {
+            "title": "Offset workplane",
+            "accept": "Offset",
+            "fields": [
+                {
+                    "name": "distance",
+                    "label": "Offset along normal (mm)",
+                    "kind": "quantity",
+                    "value": 0.0,
+                },
+            ],
+            "on_accept": _apply_workplane_offset,
+        }
+
+
+def _apply_workplane_offset(values):
+    """Apply the offset dialog's one value as a view request."""
+    try:
+        distance = float(values.get("distance") or 0.0)
+    except (TypeError, ValueError):
+        return {"status": "offset workplane: a number is required"}
+    return {"view": {"workplane": "offset", "workplane_offset": distance}}
+
+
 FreeCADGui.addCommand("App_ViewWorkplane", _ViewWorkplaneCommand())
 FreeCADGui.addCommand(
     "App_WorkplaneXY",
@@ -2065,6 +2114,7 @@ FreeCADGui.addCommand(
 )
 FreeCADGui.addCommand("App_WorkplaneCamera", _ViewPlaneWorkplaneCommand())
 FreeCADGui.addCommand("App_SetWorkplane", _SetWorkplaneCommand())
+FreeCADGui.addCommand("App_OffsetWorkplane", _OffsetWorkplaneCommand())
 FreeCADGui.addCommand("App_ActivateWorkplane", _ActivateWorkplaneCommand())
 FreeCADGui.addCommand("App_ClearWorkplane", _ClearWorkplaneCommand())
 

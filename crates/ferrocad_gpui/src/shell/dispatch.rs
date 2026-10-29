@@ -502,7 +502,7 @@ impl Shell {
                 WorkplaneAction::Activate => {
                     if viewport.activate_hovered_workplane() {
                         // There is always a plane: name it rather than saying "active".
-                        format!("workplane: {}", viewport.active_workplane().label)
+                        format!("workplane: {}", viewport.active_workplane().display_label())
                     } else {
                         "no face under the pointer".to_string()
                     }
@@ -517,7 +517,10 @@ impl Shell {
                 WorkplaneAction::View => {
                     // Always possible: the default plane's normal is world -Z (top view).
                     viewport.view_workplane();
-                    format!("looking down {}", viewport.active_workplane().label)
+                    format!(
+                        "looking down {}",
+                        viewport.active_workplane().display_label()
+                    )
                 }
                 WorkplaneAction::Standard(plane) => {
                     if viewport.set_standard_plane(plane) {
@@ -528,7 +531,7 @@ impl Shell {
                 }
                 WorkplaneAction::Camera => {
                     if viewport.set_view_plane() {
-                        format!("workplane: {}", viewport.active_workplane().label)
+                        format!("workplane: {}", viewport.active_workplane().display_label())
                     } else {
                         "the camera has no view plane".to_string()
                     }
@@ -536,13 +539,26 @@ impl Shell {
                 WorkplaneAction::Selection => match target {
                     Some((entity, element)) => {
                         if viewport.set_workplane_from_element(entity, Some(&element)) {
-                            format!("workplane: {}", viewport.active_workplane().label)
+                            format!(
+                                "workplane: {}",
+                                viewport.active_workplane().display_label()
+                            )
                         } else {
-                            format!("{} is not a planar face", element)
+                            format!("{element} is not a planar face")
                         }
                     }
                     None => "select a planar face first".to_string(),
                 },
+                WorkplaneAction::Offset(delta) => {
+                    if viewport.offset_workplane(delta) {
+                        format!(
+                            "workplane: {}",
+                            viewport.active_workplane().display_label()
+                        )
+                    } else {
+                        "the workplane offset is unchanged".to_string()
+                    }
+                }
             };
             cx.notify();
             summary

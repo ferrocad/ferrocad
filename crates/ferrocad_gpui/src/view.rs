@@ -54,9 +54,14 @@ pub struct ViewRequest {
     #[serde(default)]
     pub grid_overlay: Option<bool>,
     /// A workplane action: `"activate"`, `"clear"`, `"view"`, a standard plane
-    /// (`"world:xy"`, `"world:xz"`, `"world:yz"`), `"camera"` or `"selection"`.
+    /// (`"world:xy"`, `"world:xz"`, `"world:yz"`), `"camera"`, `"selection"` or
+    /// `"offset"` (which needs [`workplane_offset`](Self::workplane_offset)).
     #[serde(default)]
     pub workplane: Option<String>,
+    /// The distance, in millimetres, to shift the active plane along its normal
+    /// (`WorkplaneAction::Offset`). Positive is along `n`.
+    #[serde(default)]
+    pub workplane_offset: Option<f64>,
 }
 
 /// A parameterized axis-cross change (`view.axis`). Every field is optional; an
@@ -152,7 +157,7 @@ pub struct GizmoRequest {
 }
 
 /// A workplane action carried by a [`ViewRequest`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WorkplaneAction {
     /// Activate the face under the pointer.
     Activate,
@@ -166,9 +171,14 @@ pub enum WorkplaneAction {
     Camera,
     /// Activate the selected planar face.
     Selection,
+    /// Shift the active plane along its normal, in mm (`"offset"` plus a value).
+    Offset(f64),
 }
 
 impl WorkplaneAction {
+    /// Parse a plain action. `"offset"` is not here: it needs the request's
+    /// [`workplane_offset`](ViewRequest::workplane_offset), so it is resolved in
+    /// [`ViewRequest::workplane_action`].
     pub fn parse(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
             "activate" => Ok(Self::Activate),
@@ -187,10 +197,19 @@ impl WorkplaneAction {
 impl ViewRequest {
     /// The validated workplane action, when the request carries one.
     pub fn workplane_action(&self) -> Result<Option<WorkplaneAction>, String> {
-        self.workplane
-            .as_deref()
-            .map(WorkplaneAction::parse)
-            .transpose()
+        let Some(text) = self.workplane.as_deref() else {
+            return Ok(None);
+        };
+        if text.trim().eq_ignore_ascii_case("offset") {
+            let delta = self
+                .workplane_offset
+                .ok_or_else(|| "a workplane offset needs `workplane_offset`".to_string())?;
+            if !delta.is_finite() {
+                return Err("the workplane offset must be a finite number".to_string());
+            }
+            return Ok(Some(WorkplaneAction::Offset(delta)));
+        }
+        Ok(Some(WorkplaneAction::parse(text)?))
     }
 }
 
@@ -1377,6 +1396,28 @@ mod tests {
             ("selection", WorkplaneAction::Selection),
         ] {
             assert_eq!(WorkplaneAction::parse(text).unwrap(), action, "{text}");
+        }
+
+        // An offset is an action **and** a value; the value is what makes it valid.
+        let offset = ViewRequest {
+            workplane: Some("Offset".to_string()),
+            workplane_offset: Some(25.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            offset.workplane_action().unwrap(),
+            Some(WorkplaneAction::Offset(25.0))
+        );
+        for (text, value) in [("offset", None), ("offset", Some(f64::NAN))] {
+            let bad = ViewRequest {
+                workplane: Some(text.to_string()),
+                workplane_offset: value,
+                ..Default::default()
+            };
+            assert!(
+                bad.workplane_action().is_err(),
+                "{text} with {value:?} is refused"
+            );
         }
 
         let bad = ViewRequest {

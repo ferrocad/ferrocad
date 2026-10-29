@@ -1200,7 +1200,7 @@ impl Render for Shell {
         let workplane = self.viewport.as_ref().map(|viewport| {
             let active = viewport.read(cx).active_workplane();
             crate::chrome::WorkplaneBadge {
-                label: active.label.clone(),
+                label: active.display_label(),
                 custom: !active.is_default(),
             }
         });

@@ -33,7 +33,8 @@ use ferrocad_stage::{
     AxisStyle, FaceFrame, GizmoCommitEvent, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle,
     GizmoTarget, GizmoValue, GridSpec, GridStyle, InteractionCommit, Manipulator,
     MouseButton as StageButton, PointerEvent, PointerKind, SnapCandidate, SnapContext, SnapKind,
-    Tool, ToolStatus, TransformGizmo, Workplane, axis, feedback, grid, snap_to_geometry_with,
+    Tool, ToolStatus, TransformGizmo, ViewProjection, Workplane, axis, feedback, grid,
+    snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
@@ -1021,15 +1022,19 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
-    /// Finish the active tool (the `Enter` path): end the session and clear its
-    /// transient visuals. Committing the drawn geometry to a document is a host
-    /// concern and is not part of the session, so nothing is written and no
-    /// [`InteractionCommit`] is produced. Returns whether a session was active.
+    /// Finish the active tool (the `Enter` / **Finish** path): end the session, clear its
+    /// transient visuals, and hand the geometry the tool wants committed to the host
+    /// ([`take_interaction_commit`](Self::take_interaction_commit)).
+    ///
+    /// A tool that produces nothing returns no commit, so finishing an empty or
+    /// single-point session still writes nothing. Returns whether a session was active.
     pub fn finish_tool(&mut self) -> bool {
-        let Some(tool) = self.tool.as_ref() else {
+        let Some(tool) = self.tool.as_mut() else {
             return false;
         };
         let status = tool.status().ended();
+        // The tool owns its geometry until it ends; this is where it hands it over.
+        self.interaction_commit = tool.finish();
         self.tool = None;
         self.set_snap_feedback(None, None);
         self.rebuild_transient();
@@ -1438,6 +1443,7 @@ impl<V: InventorView> InventorViewport<V> {
             position: device,
             button: None,
             hit: hit.copied(),
+            projection: Some(ViewProjection::from_camera(&self.camera)),
         };
         let candidates = self.snap_candidates(hit);
         let context = self.snap_context();
@@ -1470,8 +1476,25 @@ impl<V: InventorView> InventorViewport<V> {
                 self.clear_workplane()
             }
             "enter" => self.finish_tool(),
-            _ => false,
+            key => self.tool_key(key, event.keystroke.modifiers.control),
         }
+    }
+
+    /// Forward an editing key the viewport does not own (`Backspace`/`Delete`,
+    /// `Ctrl+Z`, …) to the active tool. A tool that ignores it leaves the key to the
+    /// host, so a document-level binding still works when no tool session cares.
+    fn tool_key(&mut self, key: &str, ctrl: bool) -> bool {
+        let Some(tool) = self.tool.as_mut() else {
+            return false;
+        };
+        if !tool.on_key(key, ctrl) {
+            return false;
+        }
+        self.rebuild_transient();
+        if let Some(tool) = self.tool.as_ref() {
+            self.tool_state = Some(tool.status());
+        }
+        true
     }
 
     /// The highest-priority hosted gizmo, mutably (e.g. to move its origin).
@@ -2567,6 +2590,9 @@ impl<V: InventorView> InventorViewport<V> {
             position: device,
             button,
             hit: hit.copied(),
+            // A tool hit-tests its own geometry through this (screen space, so the
+            // threshold is zoom-independent).
+            projection: Some(ViewProjection::from_camera(&self.camera)),
         };
         let before_status = self.tool.as_ref().map(|tool| tool.status());
         let context = self.snap_context();
@@ -8520,13 +8546,30 @@ mod tests {
         view.handle_pointer(identity_logical([0.1, 0.1]));
         assert!(view.take_tool_state().is_none(), "a cursor move is not a state change");
 
-        // Enter finishes: the session is gone and the status is inactive.
+        // Enter finishes: the session is gone, the status is inactive, and the two
+        // points are handed over as a *creating* commit.
         assert!(view.handle_key(&key("enter")));
         assert!(view.tool().is_none());
         let finished = view.take_tool_state().expect("a finish status");
         assert!(!finished.active);
         assert_eq!(finished.points, 0);
-        assert!(view.take_interaction_commit().is_none(), "finishing never commits");
+        let commit = view
+            .take_interaction_commit()
+            .expect("a finished polyline hands its points over");
+        assert!(commit.creates, "the host creates the object, it does not edit one");
+        assert_eq!(commit.manipulator, "polyline");
+        assert_eq!(commit.action, "create");
+        assert_eq!(commit.values.len(), 6, "two world-space points");
+
+        // One point is not a polyline: finishing it writes nothing.
+        view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+        let _ = view.take_tool_state();
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        assert!(view.handle_key(&key("enter")));
+        assert!(
+            view.take_interaction_commit().is_none(),
+            "a single click commits nothing"
+        );
 
         // Cancelling a fresh session reports an inactive status too.
         view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
@@ -8560,6 +8603,65 @@ mod tests {
 
         // With no tool, Escape falls through to the old behaviour.
         assert!(!view.handle_key(&escape_key()));
+    }
+
+    /// A keystroke with the control modifier held.
+    fn ctrl_key(key: &str) -> KeyDownEvent {
+        KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: key.to_string(),
+                modifiers: gpui::Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            is_held: false,
+            prefer_character_input: false,
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_placed_vertex_selects_it_instead_of_appending() {
+        let mut view = tool_view();
+        let _ = view.take_tool_state();
+
+        // One point, placed and released.
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, false);
+        assert_eq!(view.tool_status().expect("an active tool").points, 1);
+
+        // The same click again lands on the placed vertex: the projection the host
+        // attaches lets the tool hit-test its own point and select rather than append.
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, false);
+        let status = view.tool_status().expect("an active tool");
+        assert_eq!(status.points, 1, "a click on a vertex never appends");
+        assert!(
+            status.hint.contains("Backspace to delete"),
+            "the selected point is reported: {}",
+            status.hint
+        );
+    }
+
+    #[test]
+    fn backspace_and_ctrl_z_reach_the_active_tool() {
+        let mut view = tool_view();
+        let _ = view.take_tool_state();
+        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        view.handle_button(identity_logical([0.25, 0.25]), 1, true);
+        assert_eq!(view.tool_status().expect("an active tool").points, 2);
+
+        assert!(view.handle_key(&key("backspace")), "the tool takes Backspace");
+        assert_eq!(view.tool_status().expect("an active tool").points, 1);
+
+        assert!(view.handle_key(&ctrl_key("z")), "the tool takes Ctrl+Z");
+        assert_eq!(view.tool_status().expect("an active tool").points, 2);
+
+        // With no tool installed the key is left to the host.
+        view.set_tool(None);
+        let _ = view.take_tool_state();
+        assert!(!view.handle_key(&key("backspace")));
     }
 
     #[test]

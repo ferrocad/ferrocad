@@ -703,7 +703,13 @@ impl Shell {
             let _ = commands::cancel(&dialog.token);
             self.clear_dialog_preview(cx);
         }
-        let Some(object) = self.display.object_of(commit.target).map(str::to_string) else {
+        let Some(object) = (if commit.creates {
+            // A *creating* commit has no entity yet: the workbench makes the object,
+            // so there is nothing to look up and the hook receives no name.
+            Some(String::new())
+        } else {
+            self.display.object_of(commit.target).map(str::to_string)
+        }) else {
             let status = format!("no document object for entity {}", commit.target);
             self.model.lock().unwrap().status = status.clone();
             self.console_line(status, cx);

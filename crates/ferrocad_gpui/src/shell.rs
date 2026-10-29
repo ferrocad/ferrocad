@@ -786,6 +786,49 @@ impl Shell {
             .map(|viewport| viewport.read(cx).view().adapter_info())
     }
 
+    /// Finish the active tool session from the active-action surface's **Finish**
+    /// button and from the shell's `Enter` path.
+    ///
+    /// A Python-backed session commits through its own `doCommand` and ends through
+    /// [`finish_tool`](Self::finish_tool). A native session ends through the
+    /// viewport's `finish_tool`, which is the same operation `Enter` reaches when the
+    /// viewport owns focus. Both the button and the key call this one handler, so they
+    /// cannot drift. Returns whether a session was active.
+    pub fn finish_active_tool(&mut self, cx: &mut Context<Self>) -> bool {
+        if self
+            .active_tool
+            .as_deref()
+            .is_some_and(|id| id.starts_with(dispatch::PYTHON_TOOL_PREFIX))
+        {
+            return self.finish_tool(cx);
+        }
+        let had_tool = self.active_tool.is_some() || self.model.lock().unwrap().tool.is_some();
+        if let Some(viewport) = self.viewport.clone() {
+            let (status, commit) = viewport.update(cx, |viewport, cx| {
+                let finished = viewport.finish_tool();
+                if finished {
+                    cx.notify();
+                }
+                (
+                    viewport.take_tool_state(),
+                    viewport.take_interaction_commit(),
+                )
+            });
+            if let Some(status) = status {
+                self.on_viewport_event(&ViewportEvent::ToolState(status), cx);
+            }
+            // A tool that produced geometry hands it over on finish; route it exactly
+            // like a manipulator commit so the workbench creates it in one transaction.
+            if let Some(commit) = commit {
+                self.on_interaction(&commit, cx);
+            }
+        }
+        self.active_tool = None;
+        self.model.lock().unwrap().tool = None;
+        cx.notify();
+        had_tool
+    }
+
     /// The shell's global key path, shared by both windows.
     ///
     /// `cancel_dialog` is enabled when the event comes from the Dev Tools window: the
@@ -868,17 +911,14 @@ impl Shell {
                 return true;
             }
         }
-        // Enter accepts a Python-backed tool session (Draft's Line/Wire collect
-        // points there). The tool commits through its own `doCommand`; the shell
-        // then drops the native session. Rust tools keep their own Enter handling
-        // in the viewport.
+        // Enter finishes the active tool session. A Python-backed tool commits
+        // through its own `doCommand`; a native tool ends the same way the viewport's
+        // own `Enter` path ends it. This is the handler the HUD's Finish button calls.
         if event.keystroke.key == "enter"
             && !self.modal_open()
-            && self.active_tool.as_deref().is_some_and(|id| {
-                id.starts_with(dispatch::PYTHON_TOOL_PREFIX)
-            })
+            && self.active_tool.is_some()
         {
-            self.finish_tool(cx);
+            self.finish_active_tool(cx);
             return true;
         }
         // Fast escalation (P3): while a TransformGizmo is armed, `Tab` or a numeric
@@ -1163,15 +1203,12 @@ impl Render for Shell {
             .h_full()
             .bg(rgb(BG))
             .debug_selector(|| "main-viewport".to_string());
-        // The tool strip is transient session feedback, not chrome; it stays a normal
-        // row above the canvas and vanishes when the tool finishes or is cancelled.
-        let viewport = match model.tool.as_ref().filter(|tool| tool.is_active()) {
-            Some(tool) => viewport.child(tool_strip(tool, cx)),
-            None => viewport,
-        };
+        // The active tool's surface is an overlay in the canvas' bottom-centre slot (see
+        // `tool_strip`), not a row above it: it must not change the canvas rectangle.
+        let active_tool = model.tool.as_ref().filter(|tool| tool.is_active());
         // The canvas hosts the viewport, the floating control pill (top-left) and the
-        // action dock (bottom-centre), which both have their own hitboxes so the scene
-        // still receives pointer events around them.
+        // bottom-centre surface, which both have their own hitboxes so the scene still
+        // receives pointer events around them.
         let canvas = div()
             .relative()
             .flex()
@@ -1221,7 +1258,12 @@ impl Render for Shell {
                         cx,
                     )),
             )
-            .child(crate::chrome::action_dock(&model, cx))
+            // Swap, do not stack: while a session runs the bottom-centre slot shows
+            // the tool surface, so a second command cannot be started underneath it.
+            .child(match active_tool {
+                Some(tool) => tool_strip(tool, cx).into_any_element(),
+                None => crate::chrome::action_dock(&model, cx).into_any_element(),
+            })
             .child(self.wheel.clone().into_any_element());
         let viewport = viewport.child(canvas);
 

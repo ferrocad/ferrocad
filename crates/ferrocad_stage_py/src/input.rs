@@ -115,6 +115,9 @@ impl PointerEvent {
                 position: [position.0, position.1],
                 button: button.map(Into::into),
                 hit: hit.map(|hit| hit.inner),
+                // The Python surface has no camera to offer; a scripted tool that needs
+                // screen-space geometry hit-testing gets it from a native host instead.
+                projection: None,
             },
             snap: None,
         }

@@ -54,6 +54,13 @@ pub struct InteractionCommit {
     pub values: Vec<f64>,
     /// The human readout, for the status line (`R 3.50 mm`).
     pub readout: String,
+    /// Whether this commit **creates** a new document object instead of editing
+    /// [`target`](Self::target).
+    ///
+    /// A manipulator edits what it grabbed, so it always has a target. A tool that
+    /// finishes a shape has none yet — the host must route such a commit to the
+    /// workbench without resolving an entity first (see [`InteractionCommit::creating`]).
+    pub creates: bool,
 }
 
 impl InteractionCommit {
@@ -69,7 +76,17 @@ impl InteractionCommit {
             action: action.into(),
             values: Vec::new(),
             readout: String::new(),
+            creates: false,
         }
+    }
+
+    /// Mark this commit as creating a new object rather than editing `target`.
+    ///
+    /// The host routes it to the workbench's `interaction` hook without looking the
+    /// entity up; the workbench owns the creation (and its transaction).
+    pub fn creating(mut self) -> Self {
+        self.creates = true;
+        self
     }
 
     /// The builder form of the sub-element.

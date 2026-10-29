@@ -5,12 +5,20 @@
 
 use super::*;
 
-/// The tool status strip: the active tool's label, point count, hint and a **Cancel**
-/// button. It is drawn above the viewport only while a tool session is active (see
-/// `ShellModel::tool`).
+/// The active-action surface: the active tool's label, point count, hint and a
+/// **Cancel** / **Finish** pair, as one dielectric pill over the bottom of the canvas.
+///
+/// It is absolutely positioned in the same bottom-centre slot as the idle action dock
+/// (see `chrome::action_dock`), so opening a tool never moves the canvas. The shell
+/// swaps this for the dock while a session runs; the two are never stacked.
+///
+/// **Cancel** is neutral (no accent fill) and ends the session through
+/// [`Shell::cancel_tool`]; **Finish** is the accent action and takes the same host path
+/// as `Enter` ([`Shell::finish_active_tool`]), so the button and the key cannot drift.
 pub(super) fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl IntoElement {
-    div()
+    let pill = div()
         .id("tool-strip")
+        .debug_selector(|| "tool-strip".to_string())
         .occlude()
         .flex()
         .flex_row()
@@ -18,9 +26,10 @@ pub(super) fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl I
         .gap_3()
         .px_2()
         .py_1()
-        .bg(rgb(PANEL_ALT))
+        .rounded_md()
+        .bg(rgba(WHEEL_GLASS))
         .border_1()
-        .border_color(rgba(0xffffff14))
+        .border_color(rgba(DOCK_BORDER))
         .text_xs()
         .child(div().text_color(rgb(FG)).child(status.label.clone()))
         .child(div().text_color(rgb(MUTED)).child(format!(
@@ -30,27 +39,57 @@ pub(super) fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl I
         )))
         .child(
             div()
-                .flex_1()
                 .min_w_0()
                 .truncate()
                 .text_color(rgb(MUTED))
                 .child(status.hint.clone()),
         )
+        // The abort action is neutral: the accent fill belongs to Finish.
         .child(
             div()
                 .id("tool-cancel")
+                .debug_selector(|| "tool-cancel".to_string())
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(PANEL))
+                .text_color(rgb(FG))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(PANEL_ALT)))
+                .child("Cancel")
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.cancel_tool(cx);
+                })),
+        )
+        // Finish is a real button, not a hint: a trackpad user can end the session
+        // without finding `Enter`. It calls the same host path as the key.
+        .child(
+            div()
+                .id("tool-finish")
+                .debug_selector(|| "tool-finish".to_string())
                 .px_2()
                 .py_1()
                 .rounded_sm()
                 .bg(rgb(ACCENT))
                 .text_color(rgb(FG))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(PANEL)))
-                .child("Cancel")
+                .hover(|style| style.bg(rgb(PANEL_ALT)))
+                .child("Finish")
                 .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.cancel_tool(cx);
+                    this.finish_active_tool(cx);
                 })),
-        )
+        );
+
+    // The same bottom-centre overlay the dock uses: absolute, so it takes no space in
+    // the viewport column and the canvas keeps its full rectangle.
+    div()
+        .absolute()
+        .left(px(0.))
+        .right(px(0.))
+        .bottom(px(12.))
+        .flex()
+        .justify_center()
+        .child(pill)
 }
 
 /// The window margin a floating HUD keeps from every edge.

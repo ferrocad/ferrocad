@@ -687,14 +687,22 @@ def interaction(
     implies belongs to the workbench (``FerroCAD.register_interaction_provider``). This
     function only resolves the object and marshals the request; the shell names no
     workbench and links no kernel. Returns ``{"ok": ...}``.
+
+    An **empty** ``object_name`` marks a *creating* commit (a tool that finished a
+    shape): there is no object to resolve yet, so the provider receives ``None`` and
+    creates it.
     """
     try:
         doc = _active_doc()
     except Exception as exc:
         return _json({"ok": False, "error": str(exc)})
-    base = doc.getObject(object_name)
-    if base is None:
-        return _json({"ok": False, "error": f"no object named {object_name}"})
+    # A *creating* commit (a tool finishing a shape) has no object yet: the workbench
+    # makes it, and the Rust host passes an empty name for exactly that case.
+    base = None
+    if object_name:
+        base = doc.getObject(object_name)
+        if base is None:
+            return _json({"ok": False, "error": f"no object named {object_name}"})
     try:
         values = [float(value) for value in json.loads(values_json)]
     except Exception as exc:

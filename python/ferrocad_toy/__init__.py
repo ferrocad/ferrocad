@@ -4,10 +4,12 @@ The kernel-free reference edition. It demonstrates the four things a workbench d
 with no geometry kernel behind any of them:
 
 1. **Create objects** — :func:`makeSlab` adds a typed, property-bearing
-   ``App::FeaturePython`` inside one named transaction (so it is undoable).
+   ``App::FeaturePython`` inside one named transaction (so it is undoable). A finished
+   drawing tool creates the same way: its *creating* commit carries the points and the
+   ``polyline`` handler below adds the object.
 2. **Represent them** — the display provider builds the mesh from the object's
    ``Width``/``Depth``/``Height``/``Placement`` and honours its ``Color`` and
-   ``DisplayMode`` properties.
+   ``DisplayMode`` properties; a polyline object is drawn from its ``Points`` as edges.
 3. **Manipulate them** — two generic mechanisms drive the same document:
    the ``toy_height`` interaction (the Rust ``HeightGrip`` manipulator) and the
    ``transform`` interaction (the Rust ``TransformGizmo``, applied as a placement).
@@ -116,8 +118,46 @@ def _slab_mesh(width: float, depth: float, height: float, placement) -> dict:
     }
 
 
+def _polyline_mesh(obj, points):
+    """Edge-only mesh for a drawn polyline (`Points` holds x, y, z triples)."""
+    try:
+        placement = getattr(obj, "Placement", None)
+        if placement is None:
+            placement = FreeCAD.Placement()
+        values = [float(value) for value in points]
+        corners = [
+            placement.multVec(FreeCAD.Vector(values[i], values[i + 1], values[i + 2]))
+            for i in range(0, len(values) - 2, 3)
+        ]
+        if len(corners) < 2:
+            return None
+        positions = [(corner.x, corner.y, corner.z) for corner in corners]
+        edges = []
+        for index in range(len(positions) - 1):
+            edges.extend((index, index + 1))
+        base = placement.Base
+        return {
+            "positions": positions,
+            "triangles": [],
+            "triangle_parts": [],
+            "edges": edges,
+            "segment_parts": [0] * (len(edges) // 2),
+            "vertices": [],
+            "vertex_parts": [],
+            "parts": [],
+            "origin": (base.x, base.y, base.z),
+            "display": "wireframe",
+            "color": list(DEFAULT_COLOR),
+        }
+    except Exception:
+        return None
+
+
 def _display_mesh(obj):
-    """The slab mesh for a toy object, or ``None`` for anything else."""
+    """The mesh for a toy object, or ``None`` for anything else."""
+    points = getattr(obj, "Points", None)
+    if points is not None:
+        return _polyline_mesh(obj, points)
     width = getattr(obj, "Width", None)
     if width is None:
         return None
@@ -151,18 +191,50 @@ def _transaction(obj, name: str, apply):
     return {"ok": True}
 
 
-def _interaction(obj, manipulator, action, element, values):
-    """Apply a manipulator commit.
+def _create_polyline(values):
+    """Create a polyline object from a finished tool commit.
 
-    Two operations reach this workbench:
+    ``values`` are the world-space x, y, z triples the tool collected; there is no
+    target object yet, so this is the one commit path that creates rather than edits.
+    """
+    if len(values) < 6 or len(values) % 3:
+        return {"ok": False, "error": "a polyline needs at least two complete points"}
+    doc = FreeCAD.ActiveDocument
+    if doc is None:
+        doc = FreeCAD.newDocument("Unnamed")
+    points = [float(value) for value in values]
+    doc.openTransaction("Polyline")
+    try:
+        line = doc.addObject("App::FeaturePython", "Polyline")
+        line.addProperty(
+            "App::PropertyFloatList", "Points", "Toy", "World-space vertices"
+        )
+        line.addProperty("App::PropertyPlacement", "Placement", "Toy", "Placement")
+        line.Points = points
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+def _interaction(obj, manipulator, action, element, values):
+    """Apply a manipulator or tool commit.
+
+    Three operations reach this workbench:
 
     * ``toy_height`` / ``set`` — the Rust ``HeightGrip``; ``values[0]`` is the height.
     * ``transform`` / ``apply`` — the generic ``TransformGizmo``; ``values`` are the 16
       row-major elements of the world-space transform and are composed with the
       object's current placement.
+    * ``polyline`` / ``create`` — the finished polyline tool; ``values`` are the
+      world-space x, y, z triples. There is no object yet, so ``obj`` is ``None``.
 
-    Both are one transaction, so both are undoable.
+    All three are one transaction, so all three are undoable.
     """
+    if manipulator == "polyline" and action == "create":
+        return _create_polyline(values)
     if manipulator == "toy_height" and action == "set" and values:
         return _transaction(
             obj, "Height", lambda: setattr(obj, "Height", float(values[0]))

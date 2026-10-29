@@ -85,7 +85,7 @@ pub use gizmo::{
 pub use axis::AxisStyle;
 pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};
 pub use grid::{GridGeometry, GridSpec, GridStyle};
-pub use input::{MouseButton, PointerEvent, PointerKind};
+pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use interaction::{InteractionCommit, Manipulator};
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use shape::{DrawMode, ShapeItem};

@@ -76,6 +76,7 @@ recorder = Recorder()
             position: [10, 20],
             button: None,
             hit: None,
+            projection: None,
         };
         tool.on_event(&event, None);
 

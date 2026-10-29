@@ -250,6 +250,29 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
     let x = number(&evaluate("doc.getObject('Slab').Placement.Base.x"));
     assert!(x.abs() < 1e-9, "undo restores the placement: {x}");
 
+    // --- 3c. A *creating* commit: a finished tool's geometry ----------------------
+    // The polyline tool hands its points over as a creating commit (it has no target
+    // entity); the shell passes an empty object name and the edition creates the
+    // object in one transaction.
+    let commit = ferrocad_stage::InteractionCommit::new("polyline", 0, "create")
+        .with_values([-20.0, -10.0, 0.0, 20.0, -10.0, 0.0, 20.0, 10.0, 0.0])
+        .with_readout("3 points")
+        .creating();
+    let result = python::apply_interaction(&commit, "").expect("the hook ran");
+    assert!(result.ok, "polyline failed: {}", result.error);
+    let displayed = meshes();
+    let line = find(&displayed, "Polyline");
+    assert!(line.triangles.is_empty(), "a polyline has no faces");
+    assert_eq!(line.edges.len(), 4, "two segments");
+    assert_eq!(line.display.as_deref(), Some("wireframe"));
+
+    // Creation is one undoable transaction.
+    evaluate("doc.undo()");
+    assert!(
+        meshes().iter().all(|mesh| mesh.object != "Polyline"),
+        "undo removes the created polyline"
+    );
+
     // --- 4. Persistence ----------------------------------------------------------
     let path = std::env::temp_dir().join("ferrocad_toy_round_trip.ferrocad");
     let _ = std::fs::remove_file(&path);

@@ -277,6 +277,7 @@ mod tests {
             position,
             button: None,
             hit,
+            projection: None,
         }
     }
 

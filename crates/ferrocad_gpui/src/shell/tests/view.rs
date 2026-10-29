@@ -384,3 +384,130 @@ fn the_tool_strip_renders_without_a_display(cx: &mut TestAppContext) {
         let _ = window.draw(cx);
     });
 }
+
+/// §2.1: the active tool surface is an overlay in the canvas' bottom-centre slot, so
+/// the canvas rect is identical to the idle case, and the idle action dock is swapped
+/// out rather than stacked under it.
+#[gpui::test]
+fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    draw(&mut cx);
+
+    let idle_canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    assert!(cx.debug_bounds("action-dock").is_some(), "the idle dock");
+    assert!(
+        cx.debug_bounds("tool-strip").is_none(),
+        "no active-action surface while idle"
+    );
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(Contributions::new().with_tool("test_polyline", || {
+                Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+            }));
+        })
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("test_polyline", cx);
+        })
+    });
+    draw(&mut cx);
+
+    // No layout shift: the canvas keeps the same origin and size.
+    let active_canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    assert_eq!(active_canvas.origin.x, idle_canvas.origin.x);
+    assert_eq!(active_canvas.origin.y, idle_canvas.origin.y);
+    assert_eq!(active_canvas.size.width, idle_canvas.size.width);
+    assert_eq!(active_canvas.size.height, idle_canvas.size.height);
+
+    // Swap, do not stack: the idle dock is gone, the active surface is present.
+    assert!(
+        cx.debug_bounds("action-dock").is_none(),
+        "the idle action dock is not rendered during a session"
+    );
+    let strip = cx.debug_bounds("tool-strip").expect("the active-action surface");
+    assert!(cx.debug_bounds("tool-cancel").is_some(), "Cancel is a button");
+    assert!(cx.debug_bounds("tool-finish").is_some(), "Finish is a button");
+
+    // Bottom-centre and inside the canvas: it overlays the scene, it does not sit above
+    // it in the column.
+    let strip_centre = strip.origin.x.0 + strip.size.width.0 / 2.0;
+    let canvas_centre = active_canvas.origin.x.0 + active_canvas.size.width.0 / 2.0;
+    assert!(
+        (strip_centre - canvas_centre).abs() <= 1.0,
+        "the surface is centred (strip {strip:?}, canvas {active_canvas:?})"
+    );
+    assert!(
+        strip.origin.y >= active_canvas.origin.y
+            && strip.origin.y + strip.size.height
+                <= active_canvas.origin.y + active_canvas.size.height,
+        "the surface stays inside the canvas (strip {strip:?}, canvas {active_canvas:?})"
+    );
+}
+
+/// §2.2/§3.5: the HUD's Finish button and the shell's `Enter` path end the session
+/// through the same handler. Neither produces a geometry commit yet (the host finish
+/// path is unchanged), so the status line is untouched.
+#[gpui::test]
+fn finish_and_enter_end_the_tool_through_the_same_path(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(Contributions::new().with_tool("test_polyline", || {
+                Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+            }));
+        })
+    });
+
+    // The button ends the session and leaves the document/status alone.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("test_polyline", cx);
+        })
+    });
+    let status_before = model.lock().unwrap().status.clone();
+    draw(&mut cx);
+    click_at(&mut cx, "tool-finish");
+    assert!(model.lock().unwrap().tool.is_none(), "Finish ends the session");
+    assert!(cx.update(|_window, cx| shell.read(cx).active_tool.is_none()));
+    assert_eq!(
+        model.lock().unwrap().status,
+        status_before,
+        "Finish commits nothing, so the status line is untouched"
+    );
+
+    // Enter reaches the same handler from the shell's key path.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("test_polyline", cx);
+        })
+    });
+    draw(&mut cx);
+    let root = shell.read_with(&cx, |shell, _| shell.root_focus_handle());
+    cx.update(|window, cx| window.focus(&root, cx));
+    cx.simulate_keystrokes("enter");
+    assert!(model.lock().unwrap().tool.is_none(), "Enter ends the session");
+    assert!(cx.update(|_window, cx| shell.read(cx).active_tool.is_none()));
+    assert_eq!(model.lock().unwrap().status, status_before);
+}

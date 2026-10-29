@@ -42,17 +42,33 @@ pub fn camera_up(camera: &Camera) -> Vector3 {
 /// `None` when the point is on (or behind) the camera's `w = 0` plane: a point behind a
 /// perspective eye would otherwise project to a mirrored screen position.
 pub fn project_device(camera: &Camera, point: Vector3) -> Option<[f64; 2]> {
-    let m = camera.view_projection().m;
+    project_device_with(
+        &camera.view_projection(),
+        camera.viewport.device_size(),
+        point,
+    )
+}
+
+/// Project a world point to device pixels through an explicit world → clip matrix and
+/// device-pixel viewport size (the copyable form a tool carries, see
+/// [`ViewProjection`](crate::input::ViewProjection)).
+///
+/// `None` when the point is on (or behind) the camera's `w = 0` plane.
+pub fn project_device_with(
+    matrix: &Matrix4,
+    device_size: [u32; 2],
+    point: Vector3,
+) -> Option<[f64; 2]> {
+    let m = matrix.m;
     let w = m[12] * point.x + m[13] * point.y + m[14] * point.z + m[15];
     if w <= 1e-9 {
         return None;
     }
     let x = (m[0] * point.x + m[1] * point.y + m[2] * point.z + m[3]) / w;
     let y = (m[4] * point.x + m[5] * point.y + m[6] * point.z + m[7]) / w;
-    let [width, height] = camera.viewport.device_size();
     Some([
-        (x * 0.5 + 0.5) * f64::from(width),
-        (y * 0.5 + 0.5) * f64::from(height),
+        (x * 0.5 + 0.5) * f64::from(device_size[0].max(1)),
+        (y * 0.5 + 0.5) * f64::from(device_size[1].max(1)),
     ])
 }
 

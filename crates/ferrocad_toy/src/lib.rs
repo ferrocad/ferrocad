@@ -795,6 +795,17 @@ fn bounds(item: &ShapeItem) -> Option<(Vector3, Vector3)> {
 /// `toy_height` commit.
 pub fn height_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<HeightGizmo> {
     let item = stage.item(selection.object)?;
+    // A **face** pick arms the grip only on an up-facing face. The grip is the height
+    // handle; dragging it from a side face would change a dimension the user did not
+    // point at. Any other face pick claims nothing, so the shell's fallback ("an
+    // unclaimed sub-element keeps the body triad") applies and the slab can be moved or
+    // rotated from that face instead.
+    if let Some(name) = selection.elements.first() {
+        let normal = face_normal(item, name)?;
+        if normal.z <= 0.9 {
+            return None;
+        }
+    }
     let (min, max) = bounds(item)?;
     let top = Vector3::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5, max.z);
     Some(HeightGizmo::new(
@@ -802,6 +813,40 @@ pub fn height_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<HeightGiz
         top,
         max.z - min.z,
     ))
+}
+
+/// The outward unit normal of `item`'s named part, computed from its triangles.
+///
+/// The toy's mesh names one part per face (the same names the picker reports), so this
+/// is the whole of its face resolution; a curved or unnamed part has no single normal and
+/// returns `None`.
+fn face_normal(item: &ShapeItem, name: &str) -> Option<Vector3> {
+    let part = item
+        .part_names()
+        .iter()
+        .position(|candidate| candidate == name)? as u32;
+    let parts = item.parts();
+    let positions = item.positions();
+    let triangles = item.triangles();
+    let mut sum = Vector3::zero();
+    for corner in triangles.chunks_exact(3) {
+        let [a, b, c] = [corner[0], corner[1], corner[2]];
+        if [a, b, c]
+            .iter()
+            .any(|index| parts.get(*index as usize).copied().unwrap_or(0) != part)
+        {
+            continue;
+        }
+        let point = |index: u32| -> Option<Vector3> {
+            let [x, y, z] = *positions.get(index as usize)?;
+            Some(Vector3::new(f64::from(x), f64::from(y), f64::from(z)))
+        };
+        let (Some(pa), Some(pb), Some(pc)) = (point(a), point(b), point(c)) else {
+            continue;
+        };
+        sum = sum.add(&pb.sub(&pa).cross(&pc.sub(&pa)).scale(0.5));
+    }
+    (sum.length() > 1e-12).then(|| sum.normalize())
 }
 
 /// The toy workbench's manipulator factory: the axis-handle gizmo, registered through
@@ -864,7 +909,8 @@ mod tests {
         }
     }
 
-    /// A 40 × 40 × 20 slab from z = 0, centred on the origin in x/y.
+    /// A 40 × 40 × 20 slab from z = 0, centred on the origin in x/y, with its bottom and
+    /// top faces named the way the edition's display mesh names them (`Face1`, `Face2`).
     fn slab(entity: u32) -> Stage {
         use ferrocad_geom::Tessellation;
 
@@ -880,13 +926,15 @@ mod tests {
                 [-20.0, 20.0, 20.0],
             ],
             normals: Vec::new(),
-            triangles: vec![0, 1, 2, 0, 2, 3],
-            triangle_parts: vec![0, 0],
-            edges: vec![0, 1],
-            segment_parts: vec![0],
+            // Face1 is wound downward, Face2 upward, so their area-weighted normals tell
+            // the grip which one is the top.
+            triangles: vec![0, 3, 2, 0, 2, 1, 4, 5, 6, 4, 6, 7],
+            triangle_parts: vec![0, 0, 1, 1],
+            edges: vec![0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4],
+            segment_parts: vec![0, 0, 0, 0, 1, 1, 1, 1],
             vertices: Vec::new(),
             vertex_parts: Vec::new(),
-            parts: Vec::new(),
+            parts: vec!["Face1".to_string(), "Face2".to_string()],
         };
         Stage::new().with_item(ShapeItem::from_tessellation(entity, &mesh))
     }
@@ -1161,11 +1209,15 @@ mod tests {
     }
 
     #[test]
-    fn a_face_pick_still_offers_the_grip_but_an_unknown_selection_does_not() {
+    fn only_an_up_facing_face_offers_the_grip() {
         let stage = slab(7);
         assert!(
-            height_grip(&SelectionRef::element(7, "Face3"), &stage).is_some(),
-            "a face pick keeps the height grip: the height is the body's"
+            height_grip(&SelectionRef::element(7, "Face2"), &stage).is_some(),
+            "the top face is the height handle"
+        );
+        assert!(
+            height_grip(&SelectionRef::element(7, "Face1"), &stage).is_none(),
+            "a face that does not face up falls back to the body triad"
         );
         assert!(height_grip(&SelectionRef::whole(9), &stage).is_none());
         assert!(height_grip(&SelectionRef::whole(7), &Stage::new()).is_none());
@@ -1182,7 +1234,7 @@ mod tests {
         assert!(origin.z.abs() < 1e-9, "z = {}", origin.z);
         assert!(
             move_gizmo(&SelectionRef::element(7, "Face1"), &stage).is_some(),
-            "a face pick keeps the handles"
+            "an unclaimed face keeps the handles (the shell drops the body triad only\n             when an element-anchored handle claims it)"
         );
     }
 

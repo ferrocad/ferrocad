@@ -58,8 +58,11 @@ impl Shell {
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
         self.wheel_target = None;
-        // A new selection is a new pivot subject: the session user origin goes away.
+        // A new selection is a new pivot subject: the session user origin goes away, and
+        // so does an explicit body-transform request (the handles go back to yielding to
+        // a claimed sub-element).
         self.user_origin = None;
+        self.transform_verb = false;
         if self
             .dialog
             .as_ref()

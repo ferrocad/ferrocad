@@ -301,7 +301,12 @@ impl Shell {
         // `Move` returns `translate` (its Δ fields and the visible arrows must
         // agree) and opens the HUD in the same run.
         if let Some(mode) = outcome.gizmo.clone() {
+            // A verb is an explicit request for the **body** control, so it overrides the
+            // rule that a claimed sub-element hides the shared triad (workplanes note,
+            // §3.3.3). Re-arm so the triad appears even when the mode did not change.
+            self.transform_verb = true;
             self.set_gizmo_mode(&mode, cx);
+            self.rearm_selection(cx);
         }
 
         if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
@@ -631,6 +636,9 @@ impl Shell {
         };
         let status = tool.status();
         self.active_tool = Some(id.to_string());
+        // A tool session owns the pointer, so an explicit body-transform request does not
+        // outlive it: the handles go back to their inferred default when it ends.
+        self.transform_verb = false;
         self.model.lock().unwrap().tool = status.is_active().then_some(status);
         let mut pending = None;
         if let Some(viewport) = self.viewport.clone() {

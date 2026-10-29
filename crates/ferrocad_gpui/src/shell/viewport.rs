@@ -520,8 +520,10 @@ impl Shell {
     ) -> (Vec<Box<dyn Manipulator>>, GizmoSet) {
         let mut manipulators: Vec<Box<dyn Manipulator>> = Vec::new();
         let mut gizmos = GizmoSet::default();
+        let mut body_datum: Option<Vector3> = None;
         if let Some(viewport) = self.viewport.as_ref() {
             let stage = viewport.read(cx).stage().clone();
+            body_datum = stage.item(reference.object).and_then(ShapeItem::anchor);
             if !self.contributions.is_empty() {
                 if let Some(manipulator) = self.contributions.manipulator_for(reference, &stage) {
                     manipulators.push(manipulator);
@@ -562,6 +564,21 @@ impl Shell {
             Err(error) => {
                 self.console_line(format!("manipulator specs unavailable: {error}"), cx);
             }
+        }
+
+        // A claimed sub-element owns the handles (workplanes note, §3.3): Part's face
+        // gets its extrude stem and its edge the fillet arc, so the shared whole-body
+        // triad — the entry anchored at the body datum — steps aside. Only the *shared*
+        // triad yields: a workbench gizmo anchored elsewhere (a grip on the top face)
+        // stays. When nothing claims the element the triad stays too, so a click never
+        // ends up with no handles. `Move`/`Rotate` are explicit requests for the body
+        // control and override the default until the selection changes.
+        if !self.transform_verb && reference.elements.first().is_some() && !manipulators.is_empty() {
+            let pivot = self.user_origin;
+            gizmos = gizmos.retain(|gizmo| {
+                let origin = gizmo.origin();
+                Some(origin) != body_datum && Some(origin) != pivot
+            });
         }
 
         (manipulators, gizmos)

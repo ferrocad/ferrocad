@@ -185,6 +185,13 @@ pub struct ActiveWorkplane {
     /// The distance the plane has been shifted along its own normal, in mm, from the
     /// frame it was bound to. `0` is that frame itself.
     pub offset: f64,
+    /// The in-plane radius of the **finite surface** the plane is bound to, if any.
+    ///
+    /// This is the grid's extent rule, not a preference: a plane on a face draws a patch
+    /// around that face instead of the camera-following ground, so a tilted plane cannot
+    /// fill the view with a wall of lines. `None` for every plane with no surface behind
+    /// it (world, standard, view, three points).
+    pub extent: Option<f64>,
 }
 
 impl ActiveWorkplane {
@@ -194,6 +201,7 @@ impl ActiveWorkplane {
             plane: Workplane::world(),
             label: "XY".to_string(),
             offset: 0.0,
+            extent: None,
         }
     }
 
@@ -212,6 +220,8 @@ impl ActiveWorkplane {
             plane: frame.plane.clone(),
             label,
             offset: 0.0,
+            // A face is the one bound surface with a real in-plane size to draw.
+            extent: Some(frame.radius),
         }
     }
 
@@ -221,6 +231,7 @@ impl ActiveWorkplane {
             plane: ferrocad_stage::Workplane::standard(plane),
             label: plane.label().to_string(),
             offset: 0.0,
+            extent: None,
         }
     }
 
@@ -231,6 +242,7 @@ impl ActiveWorkplane {
             plane: frame,
             label: label.into(),
             offset: 0.0,
+            extent: None,
         }
     }
 
@@ -722,9 +734,21 @@ impl GridLayer {
             self.ground_generation = Generation(self.ground_generation.0 + 1);
             self.ground_key = Some(key);
         }
-        let key = axis::triad_key(&spec.workplane, camera, axis);
+        let key = axis::triad_key(
+            &spec.workplane,
+            camera,
+            axis,
+            matches!(spec.workplane.kind, ferrocad_stage::WorkplaneKind::Face { .. }),
+        );
         if self.triad_key != Some(key) {
-            let (vertices, indices) = axis::triad(&spec.workplane, camera, axis);
+            // A plane on a face shows the in-plane `U`/`V` bracket: the normal is the
+            // face manipulator's to draw (workplanes note, §3.2).
+            let (vertices, indices) = match spec.workplane.kind {
+                ferrocad_stage::WorkplaneKind::Face { .. } => {
+                    axis::triad_in_plane(&spec.workplane, camera, axis)
+                }
+                _ => axis::triad(&spec.workplane, camera, axis),
+            };
             self.triad_ghost = axis::ghost(&vertices, axis.ghost_alpha);
             self.triad = vertices;
             self.triad_indices = indices;
@@ -844,6 +868,7 @@ fn active_grid(
     major: f64,
     color: [f32; 4],
     alpha: f32,
+    extent: Option<f64>,
 ) -> (GridSpec, GridStyle) {
     let (minor, major) = grid::effective_steps(camera, plane, minor, major);
     let mut style = GridStyle::default();
@@ -855,10 +880,26 @@ fn active_grid(
             workplane: plane.clone(),
             minor,
             major,
-            radius: GridSpec::radius_for(camera),
+            radius: active_radius(camera, extent, major),
         },
         style,
     )
+}
+
+/// The extent of a plane's grid: a patch when the plane is bound to a finite surface,
+/// the camera-following ground otherwise.
+///
+/// A face-bound plane gets `max(3 × face radius, 2 × major step)` so the patch reads as a
+/// construction area around the face and cannot become a wall that fills the view. It is
+/// deliberately **not** clamped to [`grid::RADIUS_RANGE`]: that range exists so the world
+/// ground does not collapse when zoomed in, and applying it would force a 40 mm face to
+/// carry a 500 mm grid. The generator's own smooth fade gives the patch its soft edge, so
+/// this is a radius, not a style.
+fn active_radius(camera: &Camera, extent: Option<f64>, major: f64) -> f64 {
+    match extent {
+        Some(extent) if extent.is_finite() && extent > 0.0 => (3.0 * extent).max(2.0 * major),
+        _ => GridSpec::radius_for(camera),
+    }
 }
 
 /// Apply the user's ink and alpha multiplier to an existing style. The multiplier scales
@@ -3643,11 +3684,15 @@ impl<V: InventorView> InventorViewport<V> {
         // The default world `XY` plane is drawn by the world layer; only a non-default
         // plane gets a layer of its own (and hides the coplanar world ground).
         let local = !active.is_default();
-        // Do not preview the face that is already active.
+        // Do not preview the face that is already active, and do not bloom at all unless a
+        // click could act on it: the preview is the Tier 1 auto-workplane hint, so it needs
+        // an open creation tool **and** the default plane (once a tool binds a face, the
+        // plane is no longer the default and the bloom stops). Idle hovering only reports
+        // the face; it never adds a second grid.
         let hover = self
             .hover_face
             .as_ref()
-            .filter(|_| grid_on)
+            .filter(|_| grid_on && self.tool.is_some() && active.is_default())
             .filter(|face| face.since.elapsed() >= FACE_DWELL)
             .filter(|face| active.plane.kind != face.frame.plane.kind)
             .map(|face| face.frame.clone());
@@ -3688,6 +3733,7 @@ impl<V: InventorView> InventorViewport<V> {
                 self.grid_major,
                 self.grid_color,
                 self.grid_alpha,
+                active.extent,
             );
             (spec, style, grid_on)
         });
@@ -3985,7 +4031,17 @@ impl<V: InventorView> InventorViewport<V> {
         };
         let colors = self.axis.colors.map(packed_srgb);
         let alpha = (self.axis.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let axes = [plane.u, plane.v, plane.n];
+        // A face-bound plane shows the in-plane `U`/`V` bracket only, matching the stems
+        // drawn by the grid layer; the `N` letter would label a stem that is not there.
+        let in_plane = matches!(
+            self.active_workplane.plane.kind,
+            ferrocad_stage::WorkplaneKind::Face { .. }
+        );
+        let axes: &[Vector3] = if in_plane {
+            &[plane.u, plane.v]
+        } else {
+            &[plane.u, plane.v, plane.n]
+        };
         // A hair beyond the ribbon tip, so the glyph does not sit on the stem.
         let length = scale_for(&self.camera, plane.origin, self.axis.length * 1.08);
         axes.iter()
@@ -4025,9 +4081,14 @@ impl<V: InventorView> InventorViewport<V> {
     /// Whether a hovered face's grid is still waiting out [`FACE_DWELL`]. The renderer
     /// requests frames while this holds, so the bloom arrives without pointer motion.
     fn face_dwell_pending(&self) -> bool {
-        self.hover_face
-            .as_ref()
-            .is_some_and(|face| face.since.elapsed() < FACE_DWELL)
+        // Only the tool-scoped bloom waits out a dwell, so idle hovering must not ask for
+        // frames: nothing is going to appear.
+        let bloom_pending = self.tool.is_some() && self.active_workplane.is_default();
+        bloom_pending
+            && self
+                .hover_face
+                .as_ref()
+                .is_some_and(|face| face.since.elapsed() < FACE_DWELL)
     }
 
     /// The candidates the pointer may snap to: the hovered item's topological vertices
@@ -8532,7 +8593,8 @@ mod tests {
     fn hovering_a_face_resolves_its_workplane_and_blooms_a_grid() {
         use ferrocad_stage::WorkplaneKind;
 
-        let mut view = slab_view();
+        // The bloom is the Tier 1 preview, so it needs an open creation tool.
+        let mut view = tool_view();
         assert!(view.handle_pointer([30.0, 50.0]), "the hover changed");
 
         // The frame is resolved from the tessellation: centroid, normal, and the part
@@ -8584,8 +8646,149 @@ mod tests {
     }
 
     #[test]
-    fn crossing_to_another_face_restarts_the_dwell() {
+    fn a_face_workplane_emits_uv_without_normal_stem() {
+        use ferrocad_stage::{AxisStyle, GridSpec, GridStyle, WorkplaneKind};
+
+        // The layer's own emitter decides the stem count from the plane's provenance, so
+        // the same frame drawn as a face and as a floating datum differs by exactly one
+        // stem (four vertices, six indices). A three-quarter camera keeps every stem
+        // visible: an axis-aligned view drops the view-parallel one.
+        let camera = gizmo_camera([100, 100]);
+        let frame = |kind| {
+            Workplane::new(
+                Vector3::new(0.0, 0.0, 0.5),
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(0.0, 1.0, 0.0),
+                kind,
+            )
+            .expect("a frame")
+        };
+        let spec = |kind| GridSpec {
+            workplane: frame(kind),
+            minor: 1.0,
+            major: 10.0,
+            radius: 10.0,
+        };
+        let style = GridStyle::default();
+        let axis = AxisStyle::default();
+
+        let mut face = GridLayer::new(0.0);
+        face.sync(
+            &camera,
+            &spec(WorkplaneKind::Face {
+                entity: 7,
+                element: "Face1".into(),
+            }),
+            &style,
+            &axis,
+        );
+        let mut floating = GridLayer::new(0.0);
+        floating.sync(&camera, &spec(WorkplaneKind::Datum("Sheet".into())), &style, &axis);
+
+        assert_eq!(face.triad.len() + 4, floating.triad.len(), "no `+N` stem on a face");
+        assert_eq!(face.triad_indices.len() + 6, floating.triad_indices.len());
+        assert!(!face.triad.is_empty(), "the `U`/`V` bracket is still there");
+    }
+
+    #[test]
+    fn a_face_workplane_clamps_grid_radius_to_face_extent() {
+        // A realistic camera and pinned steps: the identity camera's degenerate
+        // projection escalates the effective major step, which would mask the patch.
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(ferrocad_stage::Stage::new().with_item(named_slab()));
+        view.camera = perspective_camera([100, 100]);
+        view.set_grid(true);
+        view.set_grid_steps(1.0, 10.0);
+        view.refresh();
+        assert!(view.set_workplane_from_element(7, Some("Face1")));
+
+        let extent = view.active_workplane().extent.expect("a face has an extent");
+        assert!(extent > 0.0 && extent < 1.0, "the slab's half-face radius: {extent}");
+
+        // The grid's own effective steps, so the patch is the one the layer really used.
+        let plane = view.active_workplane().plane.clone();
+        let (_, major) = grid::effective_steps(&view.camera, &plane, 1.0, 10.0);
+        assert!((major - 10.0).abs() < 1e-9, "the pinned major step: {major}");
+
+        // The patch is `max(3 × extent, 2 × major)`, and it deliberately ignores the world
+        // ground's `RADIUS_RANGE` floor (which would force a 500 mm grid here).
+        let patch = active_radius(&view.camera, Some(extent), major);
+        assert!(
+            (patch - (3.0 * extent).max(2.0 * major)).abs() < 1e-9,
+            "the patch is `max(3 × face, 2 × major)`: {patch}"
+        );
+        assert!(
+            patch < grid::RADIUS_RANGE.0,
+            "a small face keeps a small patch: {patch}"
+        );
+        assert!(
+            (active_radius(&view.camera, None, major) - GridSpec::radius_for(&view.camera)).abs()
+                < 1e-9
+        );
+
+        // Every vertex of the bound plane's grid lies inside that patch (in-plane).
+        let origin = plane.origin;
+        for packet in view
+            .grid_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.state.depth_bias > 0.0)
+        {
+            for vertex in &packet.geometry.as_ref().unwrap().vertices {
+                let point = Vector3::new(
+                    f64::from(vertex.position[0]),
+                    f64::from(vertex.position[1]),
+                    f64::from(vertex.position[2]),
+                );
+                let local = plane.project(point);
+                assert!(
+                    local[0].hypot(local[1]) <= patch + 1e-6,
+                    "the grid stays inside the patch: {local:?} > {patch}"
+                );
+                assert!((point.z - origin.z).abs() < 1e-4, "it lies on the face");
+            }
+        }
+    }
+
+    #[test]
+    fn hovering_a_face_while_idle_does_not_bloom_a_grid() {
         let mut view = slab_view();
+        assert!(view.handle_pointer([30.0, 50.0]));
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+
+        // Hovering with no tool would bind nothing, so it must not add a second grid —
+        // but the face is still resolved, so `Set WP` and the hover report keep working.
+        assert_eq!(view.grid_queue.len(), 5, "idle hover adds no second grid");
+        assert!(view.hover_face.is_some(), "the face is still resolved");
+        assert!(view.active_workplane().is_default());
+    }
+
+    #[test]
+    fn hovering_a_face_with_an_active_tool_blooms_only_at_world_default() {
+        let mut view = tool_view();
+        view.handle_pointer([30.0, 50.0]);
+        view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
+        view.sync_grid();
+        assert_eq!(view.grid_queue.len(), 8, "the default plane previews the bind");
+
+        // Bind the face (the click the bloom is previewing), then hover the other face:
+        // a bound plane does not preview a different one.
+        assert!(view.activate_hovered_workplane());
+        let bound = view.grid_queue.len();
+        assert!(view.handle_pointer([70.0, 50.0]));
+        view.sync_grid();
+        assert_eq!(
+            view.grid_queue.len(),
+            bound,
+            "a bound plane never previews another face"
+        );
+    }
+
+    #[test]
+    fn crossing_to_another_face_restarts_the_dwell() {
+        // The bloom is the Tier 1 preview, so it needs an open creation tool.
+        let mut view = tool_view();
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
@@ -8600,7 +8803,8 @@ mod tests {
 
     #[test]
     fn a_second_bloom_reuses_the_local_mesh_ids() {
-        let mut view = slab_view();
+        // The bloom is the Tier 1 preview, so it needs an open creation tool.
+        let mut view = tool_view();
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();

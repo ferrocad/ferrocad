@@ -361,6 +361,12 @@ pub struct Shell {
     /// setting: it survives re-selection and re-arming, and a `Move` resets it to
     /// translate because that command's fields describe a translation.
     gizmo_mode: GizmoMode,
+    /// Whether the user has explicitly asked for a **body** transform since the last
+    /// selection change (`Move`, `Rotate`). The shared body triad yields to a claimed
+    /// sub-element handle by default (a face's extrude stem, an edge's fillet arc); a
+    /// verb is an explicit request for the body control, so it overrides the default
+    /// until the selection changes or a tool starts. Not a document property.
+    transform_verb: bool,
     /// The session pivot the user dragged the origin handle to. It is applied instead of
     /// the object origin while set; it is not undoable and not a document property. A
     /// selection change or a wheel promotion clears it, and `Esc` restores the object
@@ -712,6 +718,7 @@ impl Shell {
             gpu_adapters: None,
             settings_card: None,
             gizmo_mode: GizmoMode::Translate,
+            transform_verb: false,
             user_origin: None,
             row_popup: None,
             scrub: None,

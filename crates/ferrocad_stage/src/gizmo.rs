@@ -1779,6 +1779,26 @@ impl GizmoSet {
         &mut self.gizmos
     }
 
+    /// Drop the entries that do not pass `keep`, preserving order and each entry's
+    /// registered kind.
+    ///
+    /// The shell uses this to let a claimed sub-element own the handles: the shared
+    /// body triad (the entry at the body datum) is removed, while a workbench gizmo
+    /// anchored elsewhere stays.
+    pub fn retain(mut self, mut keep: impl FnMut(&TransformGizmo) -> bool) -> Self {
+        let mut gizmos = Vec::with_capacity(self.gizmos.len());
+        let mut registered = Vec::with_capacity(self.registered.len());
+        for (gizmo, kind) in self.gizmos.into_iter().zip(self.registered) {
+            if keep(&gizmo) {
+                gizmos.push(gizmo);
+                registered.push(kind);
+            }
+        }
+        self.gizmos = gizmos;
+        self.registered = registered;
+        self
+    }
+
     /// The entry at `index`, mutably.
     pub fn gizmo_mut(&mut self, index: usize) -> Option<&mut TransformGizmo> {
         self.gizmos.get_mut(index)

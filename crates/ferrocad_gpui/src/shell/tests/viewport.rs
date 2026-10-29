@@ -482,3 +482,229 @@ fn a_selected_face_becomes_the_workplane(cx: &mut TestAppContext) {
         assert!((active.plane.origin.x - 0.25).abs() < 1e-9, "Face2's centroid");
     });
 }
+
+// ---------------------------------------------------------------------------
+// W1: the triad hierarchy (workplanes note, §3.3)
+// ---------------------------------------------------------------------------
+
+/// A manipulator that claims `Face*` elements (the test's stand-in for Part's push/pull
+/// stem). It draws and commits nothing: only the claiming rule is under test.
+struct FaceClaim;
+
+impl ferrocad_stage::Manipulator for FaceClaim {
+    fn id(&self) -> &str {
+        "face_claim"
+    }
+
+    fn items(&self) -> &[ferrocad_stage::ShapeItem] {
+        &[]
+    }
+
+    fn hit(&self, _camera: &ferrocad_inventor::Camera, _device: [i32; 2]) -> bool {
+        false
+    }
+
+    fn drag_begin(&mut self, _camera: &ferrocad_inventor::Camera, _device: [i32; 2]) -> bool {
+        false
+    }
+
+    fn drag_update(&mut self, _camera: &ferrocad_inventor::Camera, _device: [i32; 2]) -> bool {
+        false
+    }
+
+    fn drag_end(&mut self) -> Option<ferrocad_stage::InteractionCommit> {
+        None
+    }
+
+    fn drag_cancel(&mut self) -> bool {
+        false
+    }
+
+    fn is_dragging(&self) -> bool {
+        false
+    }
+
+    fn set_hovered(&mut self, _hovered: bool) -> bool {
+        false
+    }
+
+    fn refresh(&mut self, _camera: &ferrocad_inventor::Camera) -> bool {
+        false
+    }
+}
+
+/// The `FaceClaim` factory (a plain `fn`: the `ManipulatorFactory` bound needs a
+/// higher-ranked function, which a closure with elided lifetimes does not satisfy).
+fn claim_face(
+    selection: &ferrocad_geom::SelectionRef,
+    _stage: &ferrocad_stage::Stage,
+) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
+    selection
+        .elements
+        .first()
+        .filter(|element| element.starts_with("Face"))
+        .map(|_| Box::new(FaceClaim) as Box<dyn ferrocad_stage::Manipulator>)
+}
+
+/// A shell with a GPU viewport, one two-faced slab on the stage and a manipulator that
+/// claims `Face*`. `None` without a GPU adapter. The viewport is read back through
+/// `shell.viewport`, so its concrete renderer type stays unnamed here.
+fn face_claim_shell(
+    cx: &mut TestAppContext,
+    model: Arc<Mutex<ShellModel>>,
+) -> Option<(VisualTestContext, Entity<Shell>)> {
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut vcx).unwrap();
+    let attached = vcx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_contributions(
+                crate::Contributions::new()
+                    .with_gizmo(crate::translate_gizmo)
+                    .with_manipulator(claim_face),
+            );
+            shell.enable_viewport(cx);
+            shell.viewport.is_some()
+        })
+    });
+    if !attached {
+        eprintln!("no GPU adapter available; skipping triad-hierarchy test");
+        return None;
+    }
+    // The stage the shell would build from its display meshes: a two-face slab.
+    let mesh: crate::display::StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Slab",
+            "positions": [
+                [-0.5, -0.5, 0.5], [0.0, -0.5, 0.5], [0.0, 0.5, 0.5], [-0.5, 0.5, 0.5],
+                [0.0, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [0.0, 0.5, 0.5]
+            ],
+            "triangles": [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            "triangle_parts": [0, 0, 1, 1],
+            "edges": [],
+            "parts": ["Face1", "Face2"]
+        }"#,
+    )
+    .expect("the test mesh");
+    vcx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let stage = shell.display.build(vec![mesh]);
+            if let Some(viewport) = shell.viewport.clone() {
+                viewport.update(cx, |viewport, _cx| viewport.set_stage(stage));
+            }
+            cx.notify();
+        })
+    });
+    Some((vcx, shell))
+}
+
+/// Select `reference` the way a click does, so the shell re-arms the handles.
+fn click_select(cx: &mut VisualTestContext, shell: &Entity<Shell>, reference: ferrocad_geom::SelectionRef) {
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_selection(
+                &SelectionEvent::Picked {
+                    reference,
+                    anchor: None,
+                    click_count: 1,
+                },
+                cx,
+            )
+        })
+    });
+}
+
+/// W1 §3.3: a sub-element that a manipulator claims owns the handles, so the shared body
+/// triad steps aside. Skips without a GPU adapter.
+#[gpui::test]
+fn a_claimed_sub_element_suppresses_the_shared_body_triad(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Face2"),
+    );
+    cx.update(|_window, cx| {
+        let viewport = shell.read(cx).viewport.clone().unwrap();
+        let viewport = viewport.read(cx);
+        assert!(
+            viewport.gizmos().is_empty(),
+            "the face's stem owns the handles, so the body triad yields"
+        );
+        assert_eq!(
+            viewport.manipulators().len(),
+            1,
+            "the claiming manipulator is armed"
+        );
+    });
+}
+
+/// W1 §3.3.2: an element **no** manipulator claims keeps the body triad, so a click never
+/// leaves the user without handles. Skips without a GPU adapter.
+#[gpui::test]
+fn an_unclaimed_sub_element_keeps_the_body_triad(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Edge1"),
+    );
+    cx.update(|_window, cx| {
+        let viewport = shell.read(cx).viewport.clone().unwrap();
+        let viewport = viewport.read(cx);
+        assert!(
+            !viewport.gizmos().is_empty(),
+            "an unclaimed element falls back to the body triad"
+        );
+        assert!(viewport.manipulators().is_empty());
+    });
+}
+
+/// W1 §3.3.3: `Move` is an explicit request for the body control, so it arms the triad
+/// even while a face is selected. Skips without a GPU adapter.
+#[gpui::test]
+fn a_move_verb_arms_the_body_triad_on_a_face_selection(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let face = ferrocad_geom::SelectionRef::element(7, "Face2");
+    click_select(&mut cx, &shell, face);
+    cx.update(|_window, cx| {
+        assert!(shell
+            .read(cx)
+            .viewport
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .gizmos()
+            .is_empty());
+    });
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_Move", cx))
+    });
+    cx.update(|_window, cx| {
+        let viewport = shell.read(cx).viewport.clone().unwrap();
+        assert!(
+            !viewport.read(cx).gizmos().is_empty(),
+            "the verb overrides the element suppression"
+        );
+    });
+}

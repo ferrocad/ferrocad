@@ -94,6 +94,30 @@ impl AxisStyle {
 /// [`style.width`](AxisStyle::width) wide, in device pixels, and each vertex's alpha
 /// is `style.colors[i][3] * style.opacity`.
 pub fn triad(workplane: &Workplane, camera: &Camera, style: &AxisStyle) -> (Vec<Vertex>, Vec<u32>) {
+    triad_axes(workplane, camera, style, 3)
+}
+
+/// The in-plane bracket: the `U` and `V` stems only, with no `+N` stem.
+///
+/// This is the triad for a plane bound to a **face**. The solid already says which side
+/// is outside, and the normal direction is the face manipulator's to show (the push/pull
+/// stem sits at the same centroid and points the same way), so a third stem there would
+/// draw two arrows on one line. A plane with no surface behind it keeps the full triad,
+/// because nothing else says which side is `+N`.
+pub fn triad_in_plane(
+    workplane: &Workplane,
+    camera: &Camera,
+    style: &AxisStyle,
+) -> (Vec<Vertex>, Vec<u32>) {
+    triad_axes(workplane, camera, style, 2)
+}
+
+fn triad_axes(
+    workplane: &Workplane,
+    camera: &Camera,
+    style: &AxisStyle,
+    count: usize,
+) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::with_capacity(12);
     let mut indices = Vec::with_capacity(18);
     let forward = camera_forward(camera);
@@ -105,7 +129,7 @@ pub fn triad(workplane: &Workplane, camera: &Camera, style: &AxisStyle) -> (Vec<
         (workplane.v, style.colors[1]),
         (workplane.n, style.colors[2]),
     ];
-    for (axis, mut color) in axes {
+    for (axis, mut color) in axes.into_iter().take(count) {
         color[3] *= style.opacity;
         let tip = origin.add(&axis.scale(length));
         let Some(quad) = screen_ribbon(origin, tip, half_width, forward) else {
@@ -146,8 +170,18 @@ pub fn ghost(vertices: &[Vertex], alpha: f32) -> Vec<Vertex> {
 /// `enabled`/`overlay`/`origin`/`labels` are visibility flags, not geometry, so they
 /// are not part of the key. `ghost_alpha` is, because the ghost pass is cached beside
 /// the lit one.
-pub fn triad_key(workplane: &Workplane, camera: &Camera, style: &AxisStyle) -> u64 {
+/// A cache key for the triad: the frame, the camera, the ink and the stem count.
+///
+/// `in_plane` is part of the key because the same frame and ink draw different geometry
+/// as a 2-stem bracket and as a 3-stem triad.
+pub fn triad_key(
+    workplane: &Workplane,
+    camera: &Camera,
+    style: &AxisStyle,
+    in_plane: bool,
+) -> u64 {
     let mut parts = Vec::with_capacity(24 + 16 + 16);
+    parts.push(u64::from(in_plane));
     for color in style.colors {
         parts.extend(color.iter().map(|value| u64::from(value.to_bits())));
     }
@@ -301,11 +335,28 @@ mod tests {
     }
 
     #[test]
+    fn an_in_plane_bracket_drops_the_normal_stem() {
+        let plane = Workplane::world();
+        let camera = tilted_camera();
+        let style = AxisStyle::default();
+
+        let (full, full_indices) = triad(&plane, &camera, &style);
+        let (bracket, bracket_indices) = triad_in_plane(&plane, &camera, &style);
+        assert_eq!(full.len(), bracket.len() + 4, "one stem is four vertices");
+        assert_eq!(full_indices.len(), bracket_indices.len() + 6);
+        // The key must distinguish them: same frame, same ink, different geometry.
+        assert_ne!(
+            triad_key(&plane, &camera, &style, true),
+            triad_key(&plane, &camera, &style, false)
+        );
+    }
+
+    #[test]
     fn the_key_tracks_the_geometry_and_the_colour_but_not_the_flags() {
         let plane = Workplane::world();
         let camera = tilted_camera();
         let style = AxisStyle::default();
-        let key = triad_key(&plane, &camera, &style);
+        let key = triad_key(&plane, &camera, &style, false);
 
         // Visibility flags are not geometry.
         let mut flags = style.clone();
@@ -313,7 +364,7 @@ mod tests {
         flags.overlay = true;
         flags.origin = false;
         flags.labels = false;
-        assert_eq!(triad_key(&plane, &camera, &flags), key);
+        assert_eq!(triad_key(&plane, &camera, &flags, false), key);
 
         for mutate in [
             (|s: &mut AxisStyle| s.colors[1][0] += 0.01) as fn(&mut AxisStyle),
@@ -324,7 +375,7 @@ mod tests {
         ] {
             let mut changed = style.clone();
             mutate(&mut changed);
-            assert_ne!(triad_key(&plane, &camera, &changed), key);
+            assert_ne!(triad_key(&plane, &camera, &changed, false), key);
         }
     }
 

@@ -24,7 +24,15 @@ not identities of a feature.
 To stop features from jumping around, FreeCAD uses a **topological naming system
 (TNS)**. Instead of relying on `Edge4`, it tries to give every face and edge a
 **genealogical name** based on how it was created — for example, *"the top edge created
-when `SketchLine2` was extruded in `Pad1`"*.
+when `SketchLine2` was extruded in `Pad1`"*. Think of it as a family tree for geometry,
+kept alongside the recipe.
+
+The names are not a Part Design detail; every workbench that refers to a sub-element
+needs them:
+
+- **Part Design** keeps fillets, pockets and datums attached to the right faces.
+- **TechDraw** keeps 2D blueprint dimensions attached when the 3D model changes.
+- **Assembly** keeps joints mated to the parts they were created against.
 
 The raw material is a per-operation history. When OCCT performs an extrusion or a
 boolean, it can report which old shapes were *modified*, *generated* or *removed* to
@@ -67,3 +75,9 @@ the failure visible and testable without the kernel in the loop. Chapter 5 shows
 that layer sits, and
 [`tns-decoupling.md`](../project/research/tns-decoupling.md) records what is still
 open.
+
+> **Practical habits.** Add fillets, chamfers and other cosmetic dress-up late in the
+> recipe, so the features below them change less often. Prefer references to sketches
+> and datum geometry over references to faces that another feature generated. And when
+> a reference does break, expect to repair it; that is the naming system working as
+> designed, not a sign that the model is unsalvageable.

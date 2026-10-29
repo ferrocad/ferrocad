@@ -1,12 +1,14 @@
 # Chapter 2: The great translation (workbenches, viewports and GPUs)
 
-Here is the fundamental limitation of modern computer hardware: **graphics cards cannot
-read or draw B-Rep or mathematical surfaces directly.**
+Here is the fundamental limitation that shapes every CAD viewport: **graphics APIs
+consume triangles.** A B-Rep or a NURBS surface has to become triangles before the GPU
+can draw it. (Modern hardware can do more than rasterise triangles — hardware
+subdivision, compute shaders — but a CAD viewport still wants a stable mesh it can
+shade, highlight and pick against.)
 
-Low-level graphics APIs such as **OpenGL** and **Vulkan** are built to do one thing at
-blistering speed: process millions of flat triangles in parallel. To display a
-mathematical CAD model, the software must translate it on the fly. That translation is
-called **tessellation**.
+Low-level graphics APIs such as **OpenGL** and **Vulkan** are built to process millions
+of flat triangles in parallel. To display a mathematical CAD model, the software must
+translate it on the fly. That translation is called **tessellation**.
 
 ### 2.1 The data pipeline
 
@@ -55,3 +57,9 @@ triangles rather than changing the model.
 
 The model is never replaced by the mesh. Tessellation is a view of the model, produced
 on demand and thrown away on the next recompute.
+
+> **Why this matters to you.** If a circle looks slightly jagged on your screen, your
+> part is still exact. You are looking at the preview mesh, not the model. The shape's
+> View properties **Deviation** (linear deflection) and **Angular Deflection** control
+> the trade-off: smaller values produce a finer preview at the cost of triangles and
+> frame time, and neither value changes the geometry you export.

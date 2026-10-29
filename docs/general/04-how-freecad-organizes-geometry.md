@@ -1,9 +1,8 @@
 # Chapter 4: How FreeCAD organizes geometry under the hood
 
-Every workbench in FreeCAD needs stable geometry names. **Part Design** needs them so
-fillets stay put, **TechDraw** needs them so 2D dimensions do not detach when the 3D
-model updates, and **Assembly** needs them so joints stay mated. The names are therefore
-not a Part Design detail; they are shared infrastructure.
+Chapter 3 showed why stable names are needed across workbenches and why keeping them is
+detective work. This chapter shows where FreeCAD puts the machinery — and why it cannot
+simply be lifted onto a different kernel.
 
 ### 4.1 The two-layer architecture (`App` versus `Part`)
 

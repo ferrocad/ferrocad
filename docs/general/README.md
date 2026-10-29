@@ -11,6 +11,19 @@ To use 3D design well — or to architect and script CAD software — it helps t
 understand the difference between what a 3D model *is* in memory, how its history is
 tracked, and how it is drawn.
 
+## The short version
+
+- A CAD part is stored as **exact math** (analytic surfaces and NURBS), trimmed and
+  stitched into a **B-Rep** solid. A mesh (STL) is a bag of triangles with no memory of
+  how it was made.
+- What you see on screen is a **temporary triangle preview** (tessellation). A circle
+  that looks slightly jagged is still a perfect circle in the model.
+- A parametric model is a **recipe**, not a sculpture. Editing an early step rebuilds
+  everything that follows.
+- Rebuilding produces new topology, so FreeCAD names elements by **family tree** (the
+  topological naming system) rather than by position — and even that can fail, so a
+  broken reference should fail loudly rather than move silently.
+
 Chapters 1–4 are written against **FreeCAD**, because its vocabulary (OCCT, B-Rep,
 Coin3D, `Data::ComplexGeoData`, `Part::TopoShape`) is the one most CAD users and
 workbench authors already share. Chapter 5 maps each layer to **FerroCAD**'s crates.

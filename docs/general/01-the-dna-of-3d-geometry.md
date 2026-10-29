@@ -66,7 +66,13 @@ an OCCT `TopoDS_Shape`, and Python sees it as `Part.Shape` with `.Faces`, `.Edge
 surface patch is a face, and an imported sheet is a shell.
 
 Because B-Rep preserves exact geometry and boundaries, formats such as **STEP (.stp)**
-are the usual exchange format for CNC machining and mechanical engineering.
+are the usual exchange format for CNC machining and mechanical engineering. The
+representation is B-Rep; STEP is one file format that can carry it.
+
+A useful test of what B-Rep buys you: a hole is stored as *a cylinder of radius 5 mm
+intersecting this face*, not as a ring of triangles. That is why you can select the hole
+later, change it to 6 mm, and measure it for a drawing. A mesh would only contain the
+triangles that were left after the hole was cut.
 
 ### 1.3 Polygon meshes: the 3D bitmap
 
@@ -81,4 +87,21 @@ dense web of flat polygons, usually triangles.
   by hundreds of anonymous triangles.
 
 That is the trade: a mesh is simple and universal, and it forgets why the shape looks
-the way it does.
+the way it does. It has amnesia about features, not just about curves.
+
+### 1.4 Terms you will see
+
+- **CAD kernel (Open CASCADE / OCCT).** The math engine underneath FreeCAD. Extruding a
+  pad, drilling a hole or rounding an edge is a kernel operation; the kernel returns
+  new topology, not a picture.
+- **B-Rep (`STEP` files).** The exact representation used while designing. Because the
+  shape keeps its surfaces and boundaries, features remain editable and measurable.
+- **Topology.** The anatomy of a B-Rep shape: **vertices** (corner points), **edges**
+  (curves between corners), **wires** (chains of edges, open or closed), **faces**
+  (surface patches trimmed by a wire), **shells** (faces joined along edges) and
+  **solids** (closed shells with an inside and an outside).
+- **Mesh (`STL` / `OBJ` files).** The triangle representation used for 3D printing,
+  exchange and display. A round hole becomes dozens of flat triangle walls, and its
+  diameter is no longer a parameter you can edit.
+- **Tessellation.** The temporary mesh a viewport makes from an exact shape so the GPU
+  can draw it. It is a preview, not a conversion of the model.

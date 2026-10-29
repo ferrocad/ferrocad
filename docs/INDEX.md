@@ -190,7 +190,7 @@ Exploratory product ideas. They are hypotheses, not commitments or accepted desi
 - [project/ideation/README.md](project/ideation/README.md) — the ideation landing page and the rule for promoting an idea.
 - [project/ideation/intent-and-automation.md](project/ideation/intent-and-automation.md) — the product thesis: design intent as a document object, lineage as explanations, constraint proposals, live context, and a local-first agent surface.
 - [project/ideation/freecad-pain-points.md](project/ideation/freecad-pain-points.md) — a consolidated review of 13 recurring FreeCAD pain points, their upstream root causes, the FerroCAD response, and a validation plan.
-- [project/ideation/surface-and-freeform-modelling.md](project/ideation/surface-and-freeform-modelling.md) — the built-in Surface workbench at the pinned upstream commit, the `Body` allow-list that keeps surfaces out of `PartDesign`, the fragmentation of surfacing across modules, and options for cage editing and surface-to-solid features.
+- [project/ideation/surface-and-freeform-modelling.md](project/ideation/surface-and-freeform-modelling.md) — the built-in Surface workbench at the pinned upstream commit, the `Body` allow-list that keeps surfaces out of `PartDesign`, the fragmentation of surfacing across modules, upstream's draft FEP-0014 (Forms) cage workbench, and host/bundle/native options for shipping a freeform edition.
 
 ### Research notes
 

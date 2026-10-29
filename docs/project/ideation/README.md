@@ -17,8 +17,9 @@ to be ambitious and incomplete; it becomes real only when it is accepted into th
 - [Surface, freeform and cage modelling](surface-and-freeform-modelling.md) — what the
   built-in Surface workbench contains at the pinned upstream commit, the single
   `Body::isAllowed` check that keeps surfaces out of `PartDesign`, the fragmentation
-  across Surface, MeshPart, Part, Sketcher and Curves, and options for cage editing and
-  surface-to-solid features.
+  across Surface, MeshPart, Part, Sketcher and Curves, upstream's draft FEP-0014
+  (Forms) cage workbench, and host/bundle/native options for shipping a freeform
+  edition.
 
 ## The rule
 

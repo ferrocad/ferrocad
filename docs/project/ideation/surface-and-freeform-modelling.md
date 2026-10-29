@@ -1,16 +1,18 @@
 # Surface, freeform and cage modelling
 
 Status: ideation (2026-10-29). Exploratory product ideas. Nothing here is a
-commitment, a roadmap, or an accepted design. Companion to [`README.md`](README.md),
-[`freecad-pain-points.md`](freecad-pain-points.md) (section 6),
-[`intent-and-automation.md`](intent-and-automation.md), the
+commitment, a roadmap, or an accepted design. Companion to [`README.md`](README.md), [`freecad-pain-points.md`](freecad-pain-points.md) (section 6),
+[`intent-and-automation.md`](intent-and-automation.md),
+[`app-shell-vision.md`](../direction/app-shell-vision.md), the
 [backlog](../TODO-27-10-2026.md) and the
 [developer architecture](../../developer/architecture.md).
 
 Freeform modelling is the place where FreeCAD's answers are spread across the most
 modules while the underlying geometry has been capable for over a decade. This note
-separates the two, because they lead to different questions: the *kernel* question is
-mostly settled, and the *ownership* question is not.
+separates three questions that are usually mixed together: the *kernel* question is
+mostly settled, the *ownership* question (which object regenerates the surface) is not,
+and the *distribution* question (native workbench, bundled add-ons, or host) is where
+the editions fit in.
 
 Two cautions:
 
@@ -142,15 +144,45 @@ Fragmentation is concrete here, not rhetorical:
 - **Part** owns the non-parametric surface primitives and document types
   (`Part::RuledSurface`, `Part::Extrusion` in FerroCAD; the `Part` module generally).
 - **Sketcher** owns the 2D curves that most sections and boundaries come from.
-- **Curves** is not in `src/Mod` at all — it is an external add-on, and therefore its
-  status and API are outside the tree verified here.
+- **Curves** is not in `src/Mod` at all — it is an external add-on, so its source is
+  outside the tree verified here (section 7 lists what the add-on index says about it,
+  not what its code does).
 - **`Part::FeaturePython`** absorbs whatever the above do not cover, with each script
   inventing its own properties, dependencies and recompute conventions.
+
+### The upstream attempt: FEP-0014 (Forms)
+
+Upstream's current proposal for the missing piece is a new workbench, not a
+consolidation. FEP-0014 ("Forms", `FreeCAD/FreeCAD-Enhancement-Proposals` PR #59,
+opened 2026-08-20, labelled `Stage: Draft`, still open when checked on 2026-10-29)
+proposes interactive subdivision-surface modelling on a low-resolution polygonal control
+cage: the cage is stored parametrically in the document and converted during recompute
+into an OCCT BRep surface or solid, so the output stays ordinary BRep geometry.
+
+The thread is the clearest public record of the questions this note is asking:
+
+- **The name is not settled.** Forms (Fusion 360), Free-form / subdivision modelling
+  (Solid Edge), Sculpt, Subdivision, FreeForm (SolidWorks) and Shape and Imagine (CATIA)
+  are all proposed in the thread. An edition that ships this experience inherits that
+  naming problem.
+- **Subdivision or T-splines?** The proposal uses subdivision; one reviewer's
+  understanding is that Rhino switched to subdivision from T-splines after Autodesk
+  acquired T-splines, and that the two are not fully interchangeable for BRep output.
+- **Where does it live?** A reviewer recommends shipping it as an add-on first; the author
+  declines, on the grounds that it "relies on changes to PartDesign so it actually cannot
+  be done" as an add-on, and that another add-on adds to the fragmentation.
+- **How does it compose?** A user describes the Fusion flow: create a form body, edit it
+  without caring about history, combine it with parametric bodies, and keep editing it
+  from the timeline with the change propagating downstream.
+
+The PartDesign dependency the author names is the allow-list from section 3, seen from
+the other side: a cage workbench cannot enter a Body until `Body` admits its type.
 
 ### Design question
 
 **One canonical freeform feature system, or a compatibility union?** The upstream model
-is a union: several modules, some parametric, some not, one redirect, two orphan icons.
+is a union: several modules, some parametric, some not, one redirect, two orphan icons —
+and the 2026 answer to the gap is another workbench rather than a consolidation.
 
 ### FerroCAD posture
 
@@ -172,27 +204,41 @@ through `GeomAPI_PointsToBSplineSurface`, and turns the result into a face with
 and [Make a solid from a NURBS surface](../../user/how-to/solid-from-a-nurbs-surface.md) —
 work from that data.
 
-What neither offers is **direct manipulation of the cage as a document operation**:
-dragging a pole, watching the surface and curvature respond, and committing one undoable
-transaction.
+What neither upstream's built-ins nor FerroCAD offer is **direct manipulation of the cage
+as a document operation**: dragging a pole, watching the surface and curvature respond,
+and committing one undoable transaction. A third-party workbench now claims exactly that
+(section 7), which turns "is this possible?" into "where should it live?".
+
+FEP-0014 answers half of this already: its cage is document data, rebuilt at recompute.
+It leaves the other half open — the thread asks whether cages should be driven by
+dimensions and constraints, and whether editing should preserve history.
 
 ### Design question
 
 **Is cage editing a geometry feature or a viewport interaction over an existing
-feature?** If it is a feature, every drag is a document edit and the cage becomes part of
-the parametric model. If it is an interaction, the cage is a view over the feature's
-poles and the commit writes them back once.
+feature?** These are separable: *storage* decides whether the cage is a recomputing
+property, *editing* decides whether a drag is one document edit or a preview that commits
+once.
 
 ### FerroCAD posture
 
-The second. `ferrocad_stage` already compiles viewport items to GPU batches,
-`ferrocad_viewport`/`ferrocad_gpui` own gizmos and preview phases, and `mods/GizmoOverlay`
-is the existing overlay precedent; `ferrocad_core` provides the transactions that make a
-drag one undo step. The honest architectural gap is that **`ferrocad_curves` is curves
-only** (`curve.rs`, `wire.rs`) — there is no pure-Rust surface algebra. Surface
-evaluation currently comes from OCCT through `GeometryBackend`. So a live cage preview
-that evaluates thousands of surface points per frame has to decide between kernel calls
-with caching and a small Rust evaluator for the display mesh.
+Both, in that order. Store the cage as a property of a recomputing feature (the FEP's
+choice), and make the drag an interaction rather than a transaction per frame:
+`ferrocad_stage` already compiles viewport items to GPU batches, `ferrocad_viewport`
+already separates `PreviewPhase` from `InteractionCommit`, `ferrocad_gpui` hosts the
+gizmos, and `mods/GizmoOverlay` is the existing overlay precedent; `ferrocad_core`
+provides the transactions that make the commit one undo step. The honest architectural
+gap is that **`ferrocad_curves` is curves only** (`curve.rs`, `wire.rs`) — there is no
+pure-Rust surface algebra. Surface evaluation currently comes from OCCT through
+`GeometryBackend`. So a live cage preview that evaluates thousands of surface points per
+frame has to decide between kernel calls with caching and a small Rust evaluator for the
+display mesh.
+
+The reference implementation in section 7 is also a useful shape: it splits the job into
+two document objects — the cage, and a `Part::FeaturePython` solid with an
+`App::PropertyLink` back to it that rebuilds `Shape` in `execute()` — rather than one
+large feature. That is the decomposition to copy, because the linkage is what carries the
+lineage from cage edits to the solid.
 
 ## 6. Solids from freeform surfaces
 
@@ -220,7 +266,94 @@ feature whose tolerances and options are properties and whose result stays edita
 rather than a `makeSolid` call that produces a frozen shape. Until then the how-to is the
 correct home for it, because it is accurate about the function-level API.
 
-## 7. Capability matrix
+## 7. Three ways to ship freeform: host, bundle, native
+
+Rhino keeps coming up as the comparison. Underneath the branding it is four
+capabilities — NURBS surfacing, subdivision modelling, mesh handling and a node-based
+workflow. All four now exist as FreeCAD workbenches, but not in the same place: the
+official index (`FreeCAD/Addons`, `Data/Index.json`, 180 entries on 2026-10-29) has the
+NURBS, mesh and node tools, while the only subdivision workbench is installed from a
+custom repository. These are the entries that map onto the freeform story:
+
+| Add-on | Repository | GitHub description |
+| --- | --- | --- |
+| `Curves` | `tomate44/CurvesWB` | "Experiments for a FreeCAD Surface workbench" |
+| `Silk` | `edwardvmills/Silk` | "NURBS Surface modeling tools focused on low degree and seam continuity" |
+| `nurbs` | `microelly2/freecad-nurbs` | *(none)* |
+| `CurvedShapes` | `chbergmann/CurvedShapesWorkbench` | "Workbench for creating 3D shapes from 2D curves" |
+| `ImportNURBS` | `KeithSloan/ImportNURBS` | "Add Import of 3DM files to FreeCAD" |
+| `MeshRemodel` | `mwganson/MeshRemodel` | "used to aid in manually remodeling mesh objects" |
+| `Nodes` | `j8sr0230/Nodes` | "Visual scripting workbench" |
+| `Ship` | `FreeCAD/freecad.ship` | "aiding in naval vessel design" |
+| `SubD Modeler` | `sedatkrn/FcSubDModelerWB` | LightWave/Blender-style cage modelling in the 3D view, converted to a B-rep solid — **not in the official index** |
+
+The last one is worth reading closely, because it is the closest thing to a worked answer
+to sections 5 and 6. Its source:
+
+- stores the cage on a `Mesh::FeaturePython` object (`CagePoints` + `CageFaces`) and
+  previews the Catmull-Clark surface as a mesh;
+- builds each quad as an untrimmed patch with
+  `Part.BSplineSurface.buildFromPolesMultsKnots(...)` + `toShape()`;
+- assembles the patches with `Part.Shell(faces)`, `shell.sewShape(...)`, and
+  `Part.Solid(...)` when exactly one closed shell comes back;
+- wraps the result in a second object, a `Part::FeaturePython` with an `App::PropertyLink`
+  back to the cage plus `Samples` and `Tolerance`, which rebuilds `Shape` in `execute()`
+  and follows the cage's `Placement`.
+
+FerroCAD already answers every geometry call in that list — `Part.BSplineSurface`,
+`Part.Shell`, `Part.Solid`, `Shape.sewShape`, `Part.makeFace`. The one thing it lacks is
+the document type the cage lives on: its `Mesh` module registers `Mesh.Mesh` and
+`MeshPart`, but not `Mesh::FeaturePython`. So the cost of hosting this particular
+workbench is a document type, not geometry.
+
+Two caveats before treating it as the answer. It is early — version 0.2.0, first commit
+2026-10-27, MIT — and the accuracy figures (about 0.02 mm deviation at its G0 preset,
+below 0.0001 mm at G1/G2) are the author's README claims, not something this note
+measured. And its solid being a `Part::FeaturePython` means it is exactly the type §3's
+commented-out allow-list line excludes, so it reaches a Body only through a binder.
+
+None of them is in `src/Mod` at `33adf61`. So the question is not whether the capability
+exists in the ecosystem — it does, several times over — but how a FerroCAD distribution
+should present it. Three tiers, not mutually exclusive:
+
+| Tier | What it is | What it costs in FerroCAD | What it cannot do |
+| --- | --- | --- | --- |
+| **Host** | run the existing Python workbenches through the facade | the Qt shim already used for Draft ([`qt-strategy.md`](../../developer/workbenches/qt-strategy.md)), plus `pivy.coin` (answered by `ferrocad_inventor_py`); a workbench whose objects live on a type FerroCAD does not register needs that type first | no new manipulation UX; each add-on's document objects arrive with its own conventions |
+| **Bundle** | an edition that pre-installs a chosen set and brands the experience | a payload plus a `HostConfig`: an edition that only changes config, scripts or branding shares a binary ([`edition-publishing.md`](../../developer/architecture/edition-publishing.md) §1) | cannot close gaps that need new Rust; the add-ons' licences and maintenance become the edition's |
+| **Native** | freeform features and cage tools owned by FerroCAD | a linked module with new document types and a manipulator contributed by the edition — its own binary, like `ferrocad_parametric` | slowest, and duplicates geometry an add-on already solved |
+
+The bundle tier is cheap because of a decision already made: the base app is published to
+crates.io and stays kernel-free, editions are thin binaries that register modules
+(`ferrocad_combined_py::register_builtins()`) and contribute manipulators
+(`Contributions::with_manipulator`), and `HostConfig` carries the app name, entry module
+and Python paths. A `Sculpt` (or `Freeform`) edition that bundles `Curves`, `Silk`,
+`CurvedShapes`, `Nodes` and `SubD Modeler` needs no new Rust composition; a *native* cage
+tool does. The SubD workbench is MIT, which at least removes the licence question from
+that set.
+
+### Design question
+
+**Does FerroCAD compete at the feature level or the composition level?** Feature-level
+means more commands than `Curves` or `Silk`; composition-level means the same commands
+behave better because they share a document model, lineage and one undo stack.
+
+### FerroCAD posture
+
+Composition. The differentiator is not a longer command list; it is that a bundled
+add-on's operations gain FerroCAD interaction — cage gizmos, live preview, one-undo
+drags, lineage — instead of a Qt dialog and a frozen shape. Sequence it host first
+(cheapest, and it proves the facade against real code), bundle second (a named edition
+with a curated set), native third and only for the gaps the first two cannot reach:
+the membership rule in section 3, cage editing in section 5, and the parametric
+surface-to-solid features in section 6.
+
+Two caveats. Bundling third-party workbenches makes their licences and their upstream
+maintenance part of the edition's support surface; that needs a per-add-on review this
+note does not do. And in the FEP thread the third-party add-on route is exactly the
+thing some commenters call fragmentation, so an edition that bundles add-ons is a
+distribution choice, not an answer to the upstream design argument.
+
+## 8. Capability matrix
 
 The upstream columns are source-verified for `33adf61`; the FerroCAD column is this
 repository today, not a target.
@@ -235,10 +368,12 @@ repository today, not a target.
 | Trim surfaces against each other | `Surface::Cut` | booleans | booleans | exists |
 | Curve blend with continuity | `Surface::FeatureBlendCurve` | `Part.BSplineCurve`, hand-built | no blend-curve feature | candidate |
 | Surface in a `PartDesign::Body` | not allowed (`Body::isAllowed`) | via `SubShapeBinder` | no membership rule yet | declared capability |
-| Direct cage manipulation | — | — | — | viewport interaction |
+| Direct cage manipulation | — | `SubD Modeler` (unindexed) | — | viewport interaction |
+| Subdivision cage → BRep | FEP-0014 (draft, unmerged) | `SubD Modeler` (unindexed, MIT, Python) | not present | bundle first, then native |
+| Freeform experience out of the box | `Surface` only (seven features) | 180-entry index plus unindexed workbenches | editions choose modules and payload | bundle |
 | Curvature comb / zebra | — | — | — | `ferrocad_stage` display |
 
-## 8. What to validate next
+## 9. What to validate next
 
 1. **Read `BRepFill_Filling`'s actual constraint behaviour** through `Surface::Filling`
    on a real model: which `BoundaryOrder` values are accepted for edges versus faces,
@@ -256,5 +391,19 @@ repository today, not a target.
 5. **Check `.FCStd` round-tripping of the surface types** FerroCAD already registers
    (`Part::RuledSurface`, `Part::Extrusion`) before adding `Surface::*` types, so the new
    types land on a tested serialisation path.
-6. **Confirm the Curves workbench's licence and dependency surface** before referencing
-   it as prior art in any accepted design; it is outside the tree verified here.
+6. **Review the licence and dependency surface of the bundle set** (`Curves`, `Silk`,
+   `CurvedShapes`, `Nodes`) before any edition ships them; they are outside the tree
+   verified here, and bundling makes their licences and maintenance part of the edition's
+   support surface.
+7. **Host spike: `Curves`, `Silk` and `SubD Modeler`.** Load them through the facade, run
+   their non-GUI objects headlessly, and record which `Part`/`PartGui` calls they make
+   that FerroCAD does not answer. For the SubD workbench, also check whether registering
+   `Mesh::FeaturePython` is enough or whether its in-viewport Qt overlay needs shim work.
+8. **Watch FEP-0014 and its AstoCAD implementation.** If Forms lands upstream, decide
+   whether FerroCAD hosts it or bundles its own; do not design a native cage format in
+   advance of that decision.
+9. **Choose the cage-to-BRep technology** — subdivision (Rhinoceros and Blender
+   interchange), T-splines (Fusion lineage, Autodesk-encumbered) or NURBS only — because
+   the choice constrains both what a cage can express and what a bundled add-on can
+   exchange with it. `SubD Modeler` has already picked subdivision with per-quad bicubic
+   patches, so evaluate that implementation before inventing another.

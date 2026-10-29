@@ -5680,3 +5680,71 @@ mod geometry_query_tests {
         assert!(backend.surface_data(&edge).is_none());
     }
 }
+
+#[cfg(test)]
+mod tessellation_tests {
+    //! Both deflections decide the mesh. OCCT only ever received the linear value,
+    //! so `Shape.tessellate(deflection, angular)` ignored `angular` and every coarse
+    //! deflection of a sphere produced the same 304-triangle mesh.
+
+    use ferrocad_geom::TessellationOptions;
+
+    use super::*;
+
+    fn sphere() -> Shape {
+        OcctBackend::new()
+            .make_sphere(10.0, Vector3::new(0.0, 0.0, 0.0))
+            .expect("a sphere")
+    }
+
+    fn triangle_count(linear: f64, angular: f64) -> usize {
+        OcctBackend::new()
+            .tessellate(
+                &sphere(),
+                &TessellationOptions {
+                    linear_deflection: Some(linear),
+                    angular_deflection: angular,
+                    relative: false,
+                },
+            )
+            .expect("a tessellation")
+            .triangles
+            .len()
+            / 3
+    }
+
+    #[test]
+    fn angular_deflection_changes_the_triangle_count() {
+        // A fresh shape each time: OCCT stores the triangulation on the shape and
+        // keeps it when the next request is not finer, so reusing one shape would
+        // measure the cache, not the deflection.
+        let coarse = triangle_count(2.0, 2.0);
+        // The display mesh keeps the two degenerate pole triangles the Python
+        // `tessellate` weld drops, so this is 48, not the 46 facets a script sees.
+        assert!(coarse < 100, "a coarse sphere must be small, got {coarse}");
+        assert!(
+            triangle_count(2.0, 1.0) > coarse,
+            "a smaller angular deflection must refine the mesh"
+        );
+        assert!(
+            triangle_count(0.5, 0.2) > triangle_count(2.0, 1.0),
+            "a tighter linear deflection must refine the mesh"
+        );
+    }
+
+    #[test]
+    fn a_non_positive_angular_deflection_is_rejected() {
+        let shape = sphere();
+        for angular in [0.0, -0.5, f64::NAN, std::f64::consts::PI] {
+            let result = OcctBackend::new().tessellate(
+                &shape,
+                &TessellationOptions {
+                    linear_deflection: Some(1.0),
+                    angular_deflection: angular,
+                    relative: false,
+                },
+            );
+            assert!(result.is_err(), "angular {angular} must be rejected");
+        }
+    }
+}

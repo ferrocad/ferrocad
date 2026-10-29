@@ -1470,7 +1470,9 @@ impl PartShape {
     /// host can draw the shape **and** map a pick back to `Face6`/`Edge3`.
     ///
     /// `deflection` is the linear deflection in model units; `angular` is the angular
-    /// deflection in radians.
+    /// deflection in radians. Both decide the triangle count. OCCT stores the
+    /// triangulation on the shape and keeps it when the next request is not finer, so
+    /// compare settings on fresh shapes.
     #[pyo3(signature = (deflection = 0.5, angular = 0.5))]
     fn mesh(&self, py: Python<'_>, deflection: f64, angular: f64) -> PyResult<Py<PyAny>> {
         let shape = self
@@ -1511,7 +1513,9 @@ impl PartShape {
     /// shape.
     ///
     /// `deflection` is the linear deflection in model units; `angular` is the
-    /// angular deflection in radians.
+    /// angular deflection in radians. Both decide the triangle count. OCCT stores the
+    /// triangulation on the shape and keeps it when the next request is not finer, so
+    /// compare settings on fresh shapes.
     #[pyo3(signature = (deflection = 0.5, angular = 0.5))]
     fn tessellate(
         &self,

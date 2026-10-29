@@ -35,6 +35,41 @@ class MakeBoxTests(unittest.TestCase):
         self.assertTrue(Part.makeBox(1, 1, 1).exportBrepToString())
 
 
+class TessellationTests(unittest.TestCase):
+    def test_angular_deflection_changes_the_triangle_count(self):
+        # A fresh shape per call: OCCT stores the triangulation on the shape and
+        # reuses it when the next request is not finer.
+        coarse = Part.makeSphere(10).tessellate(2.0, 2.0)[1]
+        fine = Part.makeSphere(10).tessellate(2.0, 1.0)[1]
+        tighter = Part.makeSphere(10).tessellate(0.5, 0.2)[1]
+        self.assertLess(len(coarse), len(fine))
+        self.assertLess(len(fine), len(tighter))
+
+    def test_a_non_positive_angular_deflection_is_rejected(self):
+        shape = Part.makeSphere(10)
+        for angular in (0.0, -0.5):
+            with self.assertRaises(Exception):
+                shape.tessellate(1.0, angular)
+
+
+class FaceTests(unittest.TestCase):
+    def test_a_face_from_an_open_wire_is_invalid(self):
+        # Wires may be open (most sketches are), but only a closed wire bounds a
+        # valid face. OCCT's MakeFace still returns a face; it is marked invalid and
+        # cannot be used in a solid. This is the behaviour the introduction describes.
+        bottom = Part.makeLine((0, 0, 0), (10, 0, 0))
+        side = Part.makeLine((10, 0, 0), (10, 10, 0))
+        open_wire = Part.Wire([bottom, side])
+        self.assertFalse(open_wire.isClosed())
+        self.assertFalse(Part.Face(open_wire).isValid())
+
+        top = Part.makeLine((10, 10, 0), (0, 10, 0))
+        left = Part.makeLine((0, 10, 0), (0, 0, 0))
+        closed_wire = Part.Wire([bottom, side, top, left])
+        self.assertTrue(closed_wire.isClosed())
+        self.assertTrue(Part.Face(closed_wire).isValid())
+
+
 class ShapePropertyTests(unittest.TestCase):
     def test_a_part_feature_round_trips_its_shape(self):
         import FreeCAD

@@ -352,7 +352,7 @@ fn main() {
     print_counts("box", shape);
 
     println!("\n== meshing (deflection 0.5) ==");
-    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(shape, 0.5);
+    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(shape, 0.5, false, 0.5);
     assert!(mesh.IsDone(), "BRepMesh_IncrementalMesh succeeded");
     let (faces, triangles, min_node, has_normals, reversed, identity) = report_face_meshes(shape);
 

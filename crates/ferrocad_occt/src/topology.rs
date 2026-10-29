@@ -101,6 +101,33 @@ fn deflection(s: &TopoDS_Shape, options: &TessellationOptions) -> f64 {
     }
 }
 
+/// The validated `(linear, angular)` deflections for OCCT's mesher.
+///
+/// OCCT takes a linear chord deflection and a maximum angular deviation; both
+/// decide the triangle count. Passing the linear value alone would leave OCCT's
+/// default angular deflection (0.5 rad) in charge, which is why a sphere keeps the
+/// same mesh for every coarse linear value.
+fn mesh_deflections(
+    s: &TopoDS_Shape,
+    options: &TessellationOptions,
+) -> Result<(f64, f64), GeomError> {
+    let linear = deflection(s, options);
+    let angular = options.angular_deflection;
+    if !linear.is_finite() || linear <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "linear deflection must be positive and finite",
+        }
+        .into());
+    }
+    if !angular.is_finite() || angular <= 0.0 || angular >= std::f64::consts::PI {
+        return Err(OcctError::InvalidInput {
+            what: "angular deflection must be in (0, pi) radians",
+        }
+        .into());
+    }
+    Ok((linear, angular))
+}
+
 /// Tessellate `shape` into one mesh whose triangles, segments and vertices carry
 /// their sub-element part id.
 ///
@@ -116,8 +143,8 @@ pub(crate) fn tessellate(
         .as_ref()
         .ok_or(OcctError::InvalidInput { what: "null shape" })?;
 
-    let deflection = deflection(s, options);
-    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, deflection);
+    let (linear, angular) = mesh_deflections(s, options)?;
+    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, linear, false, angular);
     if !mesh.IsDone() {
         return Err(OcctError::NotDone {
             operation: "tessellate",
@@ -192,7 +219,7 @@ pub(crate) fn tessellate(
         let edge = TopoDS::Edge(edges.FindKey(edge_index));
         let curve = ffi::b_rep_adaptor::BRepAdaptor_Curve_new(edge);
         let sampler =
-            ffi::gc_pnts::TangentialDeflection_new(&curve, options.angular_deflection, deflection);
+            ffi::gc_pnts::TangentialDeflection_new(&curve, angular, linear);
         let points = sampler.NbPoints();
         if points < 2 {
             continue;
@@ -241,7 +268,8 @@ pub(crate) fn tessellate_points(
         .as_ref()
         .ok_or(OcctError::InvalidInput { what: "null shape" })?;
 
-    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, deflection(s, options));
+    let (linear, angular) = mesh_deflections(s, options)?;
+    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, linear, false, angular);
     if !mesh.IsDone() {
         return Err(OcctError::NotDone {
             operation: "tessellate",

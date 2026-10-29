@@ -12,6 +12,8 @@ mod inner {
         fn IncrementalMesh_new(
             shape: &TopoDS_Shape,
             deflection: f64,
+            is_relative: bool,
+            angular_deflection: f64,
         ) -> UniquePtr<BRepMesh_IncrementalMesh>;
         fn Shape(self: &BRepMesh_IncrementalMesh) -> &TopoDS_Shape;
         fn IsDone(self: &BRepMesh_IncrementalMesh) -> bool;

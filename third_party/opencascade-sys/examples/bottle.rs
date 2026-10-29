@@ -239,7 +239,7 @@ pub fn main() {
 
     // Export to an STL file
     let mut stl_writer = ffi::stl_api::StlAPI_Writer_new();
-    let triangulation = ffi::b_rep_mesh::IncrementalMesh_new(&final_shape, 0.01);
+    let triangulation = ffi::b_rep_mesh::IncrementalMesh_new(&final_shape, 0.01, false, 0.5);
     let success = ffi::stl_api::write_stl(
         stl_writer.pin_mut(),
         triangulation.Shape(),

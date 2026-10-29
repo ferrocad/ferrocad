@@ -5,7 +5,8 @@ fn it_can_access_mesh_triangulation() {
     let origin = opencascade_sys::gp::new_point(0., 0., 0.);
     let mut cube = opencascade_sys::b_rep_prim_api::BRepPrimAPI_MakeBox_new(&origin, 10., 10., 10.);
 
-    let mut mesh = opencascade_sys::b_rep_mesh::IncrementalMesh_new(cube.pin_mut().Shape(), 0.01);
+    let mut mesh =
+        opencascade_sys::b_rep_mesh::IncrementalMesh_new(cube.pin_mut().Shape(), 0.01, false, 0.5);
 
     let mut triangle_corners = 0;
 

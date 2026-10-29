@@ -11,7 +11,7 @@ explicit seams. The first four chapters describe the concepts; this chapter maps
 | `ferrocad_curves` | Analytic curves and wires that do not need OCCT. |
 | `ferrocad_geom` | The geometry seam: opaque `Shape`, lineage re-exports and the `GeometryBackend` trait. |
 | `ferrocad_occt` | The OCCT backend: implements `GeometryBackend`, owns the OCCT 7.8 types, operations and operation history. |
-| `ferrocad_part` | The Part workbench: registers `Part::Feature` and `Part::PropertyPartShape` on top of the backend. |
+| `ferrocad_part` | The Part workbench: registers `Part::Feature` and `Part::PropertyPartShape` on top of the backend (and injects the OCCT backend from this crate). |
 | `ferrocad_mesh` | The triangle-mesh core: STL/bms, analysis/editing and `Mesh::Feature`. **No OCCT.** |
 | `ferrocad_core` | Documents, properties, links, expressions and the recompute DAG. No kernel and no UI. |
 
@@ -30,27 +30,42 @@ This is also why the edition and the combined Python extension can share one cor
 [`kernel-state-sharing.md`](../developer/architecture/kernel-state-sharing.md) records
 the one-core invariant and the compositions that enforce it.
 
-### 5.3 Naming: the externalized TNS
+### 5.3 Naming: the lineage layer
 
-This is where FerroCAD differs most from upstream FreeCAD.
+This is where FerroCAD's layering differs most from upstream. Upstream already keeps the
+map type in the base layer (`Data::ComplexGeoData`) and derives names inside the Part
+wrapper (`Part::TopoShape`), as Chapter 4 describes. FerroCAD makes the vocabulary a
+kernel-independent crate and separates the three concerns into three places:
 
-Upstream keeps `ElementMap` inside `Part::TopoShape`. FerroCAD separates the concerns:
-
-- **`ferrocad_lineage`** owns the payload-generic vocabulary: element references,
-  operation history and stable-name maps. It knows nothing about OCCT or Part.
+- **`ferrocad_lineage` owns the payload-generic vocabulary.** `ElementRef<T>`,
+  `ElementId`, `OperandId`, `Provenance`, `History<T>`, `ElementMap<T>`, `ReverseMap`,
+  `Lineage<T>`, `MapVersion` and the `NamePolicy` trait. It has no workspace
+  dependencies and knows nothing about OCCT or Part.
 - **The kernel reports provenance.** `ferrocad_occt` translates OCCT's operation
-  history into lineage records.
-- **Part stores and applies the policy.** `ferrocad_part` persists the lineage maps
-  and resolves names at the document boundary.
+  history into `History<Shape>` and folds it into a `Lineage`
+  (`Lineage::from_history`). `ferrocad_geom` re-exports the vocabulary with `Shape` as
+  the payload, so downstream code does not name the lineage crate directly.
+- **Part stores and applies the policy.** `ferrocad_part` persists the lineage in
+  `ShapeProperty`, folds the backend history after boolean and dress-up operations, and
+  resolves stored sub-element names through the map first. A name absent from a
+  non-empty map is reported as retired; it is not silently rebound to a positional
+  neighbour.
 
-That is the "pluggable TNS" idea from Chapter 4, realized as a layer rather than an
-event-broker interface. The naming policy can evolve without changing the geometry
-kernel, and a different kernel can supply provenance without adopting OCCT's
-`ElementMap`.
+Two things follow, and they are worth keeping apart:
+
+- **The storage and types are kernel-neutral.** A `Lineage<String>` has no geometry in
+  it, and the vocabulary is covered by unit tests that never link OCCT.
+- **The naming semantics are still OCCT-shaped.** The backend mirrors OCCT's history
+  behaviour on purpose. No second kernel has been run through the layer, and a
+  pluggable naming *engine* is not implemented. That remains an open research
+  question, written up in
+  [`tns-decoupling.md`](../project/research/tns-decoupling.md); do not read the crate
+  boundary as a promise of kernel portability.
 
 See [`lineage-and-naming.md`](../developer/architecture/lineage-and-naming.md) for the
-design and [`geometry-and-topology.md`](../project/research/geometry-and-topology.md)
-for the research behind it.
+implemented design, [`tns-decoupling.md`](../project/research/tns-decoupling.md) for
+the open question, and [`geometry-and-topology.md`](../project/research/geometry-and-topology.md)
+for the earlier research.
 
 ### 5.4 Presentation
 
@@ -101,7 +116,7 @@ the distinction [UI users and API users](../user/explanation/ui-and-api.md) expl
 | Scene graph | Coin3D / Pivy | `ferrocad_inventor` and `ferrocad_stage`; `ferrocad_inventor_py` is the `pivy.coin` facade |
 | GPU | OpenGL | `ferrocad_wgpu` (wgpu over Vulkan/Metal/DX12/GL) |
 | Offscreen image | — | `ferrocad_wgpu::snapshot` / `ferrocad_snapshot` |
-| Naming | `Part::TopoShape`'s `ElementMap` | `ferrocad_lineage` plus the Part policy |
+| Naming | `Data::ElementMap` on `ComplexGeoData`, filled by `Part::TopoShape` | `ferrocad_lineage` vocabulary, filled by `ferrocad_occt` provenance and persisted by `ferrocad_part` |
 | App / document | `App::Application` | `ferrocad_core::Application` / `kernel()` |
 
 The renderer is kernel-free: a producer tessellates a shape in its own process, and the
@@ -116,6 +131,8 @@ documentation screenshots are reproducible without a running app.
   — the analytic/B-Rep split and the Part/Draft layers.
 - [`../developer/architecture/lineage-and-naming.md`](../developer/architecture/lineage-and-naming.md)
   — the lineage layer in detail.
+- [`../project/research/tns-decoupling.md`](../project/research/tns-decoupling.md) — why
+  kernel-portable topology is an open problem rather than a shipped feature.
 - [`../developer/architecture/kernel-state-sharing.md`](../developer/architecture/kernel-state-sharing.md)
   — the one-core invariant behind the Python modules.
 - [`../developer/viewport/stage.md`](../developer/viewport/stage.md) and

@@ -39,10 +39,10 @@ UI users, API users and developers — and avoid task steps and crate internals 
 where the mapping needs them.
 
 - [general/README.md](general/README.md) — the overview and reading order for the five chapters.
-- [general/01-the-dna-of-3d-geometry.md](general/01-the-dna-of-3d-geometry.md) — vectors, NURBS, B-Rep and meshes.
+- [general/01-the-dna-of-3d-geometry.md](general/01-the-dna-of-3d-geometry.md) — analytic surfaces, NURBS, B-Rep and meshes.
 - [general/02-the-great-translation.md](general/02-the-great-translation.md) — tessellation, Coin3D and the GPU pipeline.
-- [general/03-topological-naming.md](general/03-topological-naming.md) — parametric history and the topological naming problem.
-- [general/04-decoupling-the-tns.md](general/04-decoupling-the-tns.md) — an external, pluggable naming layer.
+- [general/03-topological-naming.md](general/03-topological-naming.md) — parametric history, splits and merges, and the naming problem.
+- [general/04-how-freecad-organizes-geometry.md](general/04-how-freecad-organizes-geometry.md) — the `App`/`Part` split and why kernels cannot simply be swapped.
 - [general/05-how-ferrocad-organizes-this.md](general/05-how-ferrocad-organizes-this.md) — how FerroCAD's crates map onto each layer.
 
 ## User documentation
@@ -195,6 +195,7 @@ The folder landing page is the reading order for the spikes and assessments.
 
 - [project/research/README.md](project/research/README.md) — the research landing page and reading order.
 - [project/research/geometry-and-topology.md](project/research/geometry-and-topology.md) — topological sorting vs topological naming, and the seam for a future geometry engine.
+- [project/research/tns-decoupling.md](project/research/tns-decoupling.md) — whether naming can be decoupled from the kernel: what is kernel-neutral today, what is unproven, and the criteria to promote it.
 - [project/research/occt-history-spike.md](project/research/occt-history-spike.md) — the first OCCT history spike: what FreeCAD depends on and what it implies for the trait.
 - [project/research/coin-bridge-reuse-assessment.md](project/research/coin-bridge-reuse-assessment.md) — the evidence behind the Coin3D and scene-graph decisions.
 - [project/research/gpu-interop-assessment.md](project/research/gpu-interop-assessment.md) — zero-copy GPU presentation: the dma-buf hand-off, the fallback and the platform matrix.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the SVG diagrams used by the general CAD chapters.
+"""Generate the SVG diagrams used by the general CAD chapters and the TNS note.
 
 The diagrams are committed assets, but their geometry is generated here so the two
 views cannot drift into hand-edited styles. Run without arguments to write them, or
@@ -18,7 +18,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-OUT = REPO / "docs" / "general" / "images"
+GENERAL_IMAGES = REPO / "docs" / "general" / "images"
+RESEARCH_IMAGES = REPO / "docs" / "project" / "research" / "images"
 
 BG = "#f8fafc"
 INK = "#0f172a"
@@ -121,7 +122,16 @@ def pipeline() -> str:
     body.append(_text(560, 30, "DISCRETE DATA", size=18, fill=INK, weight="700"))
     body.append(_text(560, 52, "faceted · rigid · baked", size=14))
 
-    body.append(_box(40, 80, 400, 100, "1. NURBS data", ["control points & weights", "polynomial equations"]))
+    body.append(
+        _box(
+            40,
+            80,
+            400,
+            100,
+            "1. Mathematical geometry",
+            ["analytic surfaces + NURBS", "control points & weights", "polynomial equations"],
+        )
+    )
     body.append(_arrow(240, 180, 240, 212))
     body.append(_text(255, 200, "forms the surfaces of", size=13, fill=ACCENT, weight="600", family=MONO))
 
@@ -132,7 +142,7 @@ def pipeline() -> str:
             400,
             120,
             "2. B-Rep data",
-            ["geometry: NURBS / planes", "topology: faces, edges,", "vertex connectivity"],
+            ["geometry: surfaces", "topology: faces, edges, wires", "tolerances seal the seams"],
         )
     )
     body.append(_arrow(240, 340, 240, 392))
@@ -192,28 +202,105 @@ def pipeline() -> str:
         1040,
         880,
         "The CAD data pipeline",
-        "NURBS and B-Rep are tessellated into a temporary mesh; a permanent mesh arrives "
-        "from STL or OBJ; both feed the viewport scene graph and the GPU.",
+        "Analytic surfaces and NURBS are tessellated into a temporary mesh; a permanent mesh "
+        "arrives from STL or OBJ; both feed the viewport scene graph and the GPU.",
+        "\n".join(body),
+    )
+
+
+def element_map_layers() -> str:
+    body = []
+
+    body.append(
+        _box(
+            60,
+            40,
+            600,
+            130,
+            "App layer  (src/App)",
+            [
+                "Data::ComplexGeoData: base for shape payloads",
+                "Data::ElementMap: stable name -> sub-shape",
+                "getElementMapVersion(): versioned contract",
+            ],
+            fill=SOFT,
+        )
+    )
+    body.append(_arrow(360, 226, 360, 176))
+    body.append(_text(375, 206, "names written into the map", size=13, fill=ACCENT, weight="600", family=MONO))
+    body.append(_arrow(120, 176, 120, 226))
+    body.append(_text(134, 206, "resolve name → sub-shape", size=13, fill=ACCENT, weight="600", family=MONO))
+
+    body.append(
+        _box(
+            60,
+            230,
+            600,
+            140,
+            "Part layer  (src/Mod/Part)",
+            [
+                "Part::TopoShape wraps OCCT's TopoDS_Shape",
+                "Part::TopoShapeMapper / TopoShapeExpansion.cpp",
+                "derives names from the kernel's history",
+            ],
+        )
+    )
+    body.append(_arrow(360, 426, 360, 376))
+    body.append(_text(375, 406, "raw history", size=13, fill=ACCENT, weight="600", family=MONO))
+    body.append(_arrow(120, 376, 120, 426))
+    body.append(_text(134, 406, "evaluate an operation", size=13, fill=ACCENT, weight="600", family=MONO))
+
+    body.append(
+        _box(
+            60,
+            430,
+            600,
+            120,
+            "OCCT kernel",
+            [
+                "BRepTools_History: Modified / Generated / Removed",
+                "periodic faces carry a seam edge",
+                "reports relationships only",
+            ],
+        )
+    )
+
+    body.append(_text(720, 60, "Identity", size=15, fill=INK, weight="600"))
+    body.append(_lines(720, 84, ["OCCT never reports a name;", "FreeCAD generates one from", "the relationship graph."], size=13))
+
+    body.append(_text(720, 200, "Persistence", size=15, fill=INK, weight="600"))
+    body.append(_lines(720, 224, ["PropertyPartShape saves the", "shape with its map and", "ElementMapVersion. A mismatch", "re-derives instead of trusting", "stale names."], size=13))
+
+    body.append(_text(720, 380, "Not portable", size=15, fill=INK, weight="600"))
+    body.append(_lines(720, 404, ["Names depend on kernel", "topology (seam edges) and", "FreeCAD's boolean wrappers.", "A different kernel would", "re-derive, not reuse them."], size=13))
+
+    return _svg(
+        1040,
+        600,
+        "FreeCAD's topological naming split",
+        "The App layer stores and versions the element map; the Part layer consumes OCCT "
+        "history and derives names; OCCT reports relationships, never names.",
         "\n".join(body),
     )
 
 
 def tns_broker() -> str:
     body = []
-    body.append('<rect x="80" y="40" width="840" height="120" rx="10" fill="#ffffff" stroke="%s" stroke-width="1.5"/>' % STROKE)
-    body.append(_text(98, 68, "1. The geometric drivers", size=17, fill=INK, weight="600"))
-    body.append(_chip(110, 82, 240, 52, "Part::TopoShape", "OCCT"))
-    body.append(_chip(380, 82, 240, 52, "Mesh", "triangle data"))
-    body.append(_chip(650, 82, 240, 52, "Other kernels", "..."))
+    body.append(_text(40, 28, "RESEARCH SKETCH — no such interface exists in the workspace", size=13, fill="#b45309", weight="600", family=MONO))
+    body.append('<rect x="80" y="60" width="840" height="120" rx="10" fill="#ffffff" stroke="%s" stroke-width="1.5"/>' % STROKE)
+    body.append(_text(98, 88, "1. The geometric drivers", size=17, fill=INK, weight="600"))
+    body.append(_chip(110, 102, 240, 52, "Part::TopoShape", "OCCT"))
+    body.append(_chip(380, 102, 240, 52, "Mesh", "triangle data"))
+    body.append(_chip(650, 102, 240, 52, "Other kernels", "..."))
 
-    body.append(_arrow(500, 160, 500, 222))
-    body.append(_text(520, 190, "emits raw mutation events", size=13, fill=ACCENT, weight="600", family=MONO))
-    body.append(_text(520, 208, "(input ids, op type, kernel history)", size=12, family=MONO))
+    body.append(_arrow(500, 180, 500, 242))
+    body.append(_text(520, 210, "emits raw mutation events", size=13, fill=ACCENT, weight="600", family=MONO))
+    body.append(_text(520, 228, "(input ids, op type, kernel history)", size=12, family=MONO))
 
     body.append(
         _box(
             180,
-            230,
+            250,
             640,
             100,
             "2. The abstract TNP broker (App core)",
@@ -221,28 +308,29 @@ def tns_broker() -> str:
             fill=SOFT,
         )
     )
-    body.append(_arrow(500, 330, 500, 392))
-    body.append(_text(520, 365, "routes to the active strategy", size=13, fill=ACCENT, weight="600", family=MONO))
+    body.append(_arrow(500, 350, 500, 412))
+    body.append(_text(520, 385, "routes to the active strategy", size=13, fill=ACCENT, weight="600", family=MONO))
 
-    body.append('<rect x="80" y="400" width="840" height="220" rx="10" fill="#ffffff" stroke="%s" stroke-width="1.5"/>' % STROKE)
-    body.append(_text(98, 428, "3. Pluggable TNS implementations", size=17, fill=INK, weight="600"))
-    body.append(_box(110, 460, 240, 120, "Genealogy hasher", ["upstream ElementMap", "idea"], title_size=15, body_size=13, leading=18))
-    body.append(_box(380, 460, 240, 120, "Spatial heuristic", ["matcher"], title_size=15, body_size=13, leading=18))
-    body.append(_box(650, 460, 240, 120, "Hybrid solver", ["solver"], title_size=15, body_size=13, leading=18))
+    body.append('<rect x="80" y="420" width="840" height="220" rx="10" fill="#ffffff" stroke="%s" stroke-width="1.5"/>' % STROKE)
+    body.append(_text(98, 448, "3. Pluggable TNS implementations", size=17, fill=INK, weight="600"))
+    body.append(_box(110, 480, 240, 120, "Genealogy hasher", ["upstream ElementMap", "idea"], title_size=15, body_size=13, leading=18))
+    body.append(_box(380, 480, 240, 120, "Spatial heuristic", ["matcher"], title_size=15, body_size=13, leading=18))
+    body.append(_box(650, 480, 240, 120, "Hybrid solver", ["solver"], title_size=15, body_size=13, leading=18))
     return _svg(
         1000,
-        660,
-        "The pluggable topological naming pattern",
-        "Geometric drivers emit raw mutation events to an abstract broker, which routes "
-        "to one of several naming strategies.",
+        680,
+        "A proposed broker for topological naming (research sketch)",
+        "Geometric drivers would emit raw mutation events to an abstract broker, which would "
+        "route to one of several naming strategies. No such interface exists in the workspace.",
         "\n".join(body),
     )
 
 
-DIAGRAMS = {
-    "tessellation-pipeline.svg": pipeline,
-    "tns-broker.svg": tns_broker,
-}
+DIAGRAMS = [
+    (GENERAL_IMAGES, "tessellation-pipeline.svg", pipeline),
+    (GENERAL_IMAGES, "element-map-layers.svg", element_map_layers),
+    (RESEARCH_IMAGES, "tns-broker.svg", tns_broker),
+]
 
 
 def main(argv: list[str]) -> int:
@@ -250,11 +338,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--check", action="store_true", help="verify the committed SVGs are current")
     args = parser.parse_args(argv)
 
-    OUT.mkdir(parents=True, exist_ok=True)
     problems = []
-    for name, build in DIAGRAMS.items():
+    for directory, name, build in DIAGRAMS:
+        directory.mkdir(parents=True, exist_ok=True)
         content = build()
-        path = OUT / name
+        path = directory / name
         if args.check:
             if not path.is_file():
                 problems.append(f"missing {path.relative_to(REPO)}")

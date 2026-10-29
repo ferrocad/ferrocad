@@ -7,6 +7,8 @@ result becomes a stable design, the decision is written in
 
 - [geometry-and-topology.md](geometry-and-topology.md) — topological sorting vs
   topological naming, and the seam for a future geometry engine.
+- [tns-decoupling.md](tns-decoupling.md) — whether naming can be decoupled from the
+  kernel: what is kernel-neutral today, and what would have to be demonstrated.
 - [occt-history-spike.md](occt-history-spike.md) — the first OCCT history spike: what
   FreeCAD depends on and what it implies for the trait.
 - [coin-bridge-reuse-assessment.md](coin-bridge-reuse-assessment.md) — the evidence

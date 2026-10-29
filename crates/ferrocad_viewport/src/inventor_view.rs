@@ -36,7 +36,7 @@ use ferrocad_stage::{
     Tool, ToolStatus, TransformGizmo, ViewProjection, Workplane, axis, feedback, grid,
     snap_to_geometry_with,
 };
-use ferrocad_stage::screen::{project_device, scale_for};
+use ferrocad_stage::screen::{camera_position, project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
@@ -199,8 +199,10 @@ impl ActiveWorkplane {
             ferrocad_stage::WorkplaneKind::Face { element, .. } if !element.is_empty() => {
                 element.clone()
             }
+            ferrocad_stage::WorkplaneKind::Face { .. } => "Face".to_string(),
             ferrocad_stage::WorkplaneKind::Datum(name) => name.clone(),
-            _ => "Face".to_string(),
+            ferrocad_stage::WorkplaneKind::World => "XY".to_string(),
+            ferrocad_stage::WorkplaneKind::Custom => "Custom".to_string(),
         };
         Self {
             plane: frame.plane.clone(),
@@ -208,7 +210,24 @@ impl ActiveWorkplane {
         }
     }
 
-    /// Whether this is the default world `XY` plane (the pill shows no dot).
+    /// One of the three world-standard axis planes, labelled `XY`/`XZ`/`YZ`.
+    pub fn standard(plane: ferrocad_stage::StandardPlane) -> Self {
+        Self {
+            plane: ferrocad_stage::Workplane::standard(plane),
+            label: plane.label().to_string(),
+        }
+    }
+
+    /// A transient custom frame (the camera's view plane, an offset, a 3-point pick),
+    /// labelled `label`.
+    pub fn custom(frame: ferrocad_stage::Workplane, label: impl Into<String>) -> Self {
+        Self {
+            plane: frame,
+            label: label.into(),
+        }
+    }
+
+    /// Whether this is the default world `XY` plane (the only state that is “unbound”).
     pub fn is_default(&self) -> bool {
         self.label == "XY" && matches!(self.plane.kind, ferrocad_stage::WorkplaneKind::World)
     }
@@ -3761,6 +3780,61 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn activate_hovered_workplane(&mut self) -> bool {
         self.refresh_hover_face();
         let Some(frame) = self.hover_face.as_ref().map(|face| face.frame.clone()) else {
+            return false;
+        };
+        self.set_workplane(Some(frame))
+    }
+
+    /// Activate one of the three world-standard axis planes (`XY`, `XZ`, `YZ`).
+    /// Returns whether the active plane changed.
+    pub fn set_standard_plane(&mut self, plane: ferrocad_stage::StandardPlane) -> bool {
+        self.set_active_workplane(ActiveWorkplane::standard(plane))
+    }
+
+    /// Adopt the camera's **view plane**: `u` is screen-right, `v` is screen-up, and the
+    /// normal points at the viewer, through the point the camera looks at. Returns
+    /// whether the active plane changed.
+    ///
+    /// This is the plane a 2D sketch drawn “on the screen” lives on, so it is only as
+    /// stable as the camera; `Set WP` from a face is the durable way in.
+    pub fn set_view_plane(&mut self) -> bool {
+        let m = &self.camera.view.m;
+        // The view matrix stores the screen basis in its rows (row-major, translation in
+        // the fourth column): `right`, `up` and `toward the viewer`.
+        let right = Vector3::new(m[0], m[1], m[2]);
+        let up = Vector3::new(m[4], m[5], m[6]);
+        let toward_viewer = Vector3::new(m[8], m[9], m[10]);
+        let eye = camera_position(&self.camera.view);
+        // The camera orbits a pivot on its own view axis; put the plane through it so a
+        // panned or zoomed view still sketches where the user is looking.
+        let origin = eye.sub(&toward_viewer.scale(self.camera.eye_distance()));
+        let Some(frame) =
+            ferrocad_stage::Workplane::new(origin, right, up, ferrocad_stage::WorkplaneKind::Custom)
+        else {
+            return false;
+        };
+        self.set_active_workplane(ActiveWorkplane::custom(frame, "View"))
+    }
+
+    /// Activate `entity`'s named element (`"Face6"`) as the workplane, when that element
+    /// is a planar face. Returns whether a workplane became active.
+    ///
+    /// This is the explicit path (“Set from Selection”): the frame comes from the face's
+    /// own centroid and normal, not from where the pointer happened to click.
+    pub fn set_workplane_from_element(&mut self, entity: u32, element: Option<&str>) -> bool {
+        let Some(element) = element else {
+            return false;
+        };
+        let Some(part) = self
+            .stage
+            .items()
+            .iter()
+            .find(|item| item.entity_id() == entity)
+            .and_then(|item| item.part_names().iter().position(|name| name == element))
+        else {
+            return false;
+        };
+        let Some(frame) = self.face_frame_for(entity, part as u32) else {
             return false;
         };
         self.set_workplane(Some(frame))
@@ -9043,6 +9117,80 @@ mod tests {
         let active = view.active_workplane();
         assert!(!active.is_default(), "a bound face is not the default plane");
         assert_eq!(active.label, "Face1", "the slab's element name");
+    }
+
+    #[test]
+    fn the_standard_planes_are_named_placed_and_reset() {
+        use ferrocad_stage::StandardPlane;
+
+        let mut view = slab_view();
+        assert!(view.set_standard_plane(StandardPlane::Front));
+        let active = view.active_workplane();
+        assert_eq!(active.label, "XZ");
+        assert_eq!(active.plane.origin, Vector3::zero());
+        assert_eq!(active.plane.u, Vector3::new(1.0, 0.0, 0.0));
+        assert_eq!(active.plane.v, Vector3::new(0.0, 0.0, 1.0));
+        assert_eq!(active.plane.n, Vector3::new(0.0, -1.0, 0.0));
+        assert!(!active.is_default(), "XZ is a standard, not the default");
+
+        assert!(view.set_standard_plane(StandardPlane::Right));
+        let active = view.active_workplane();
+        assert_eq!(active.label, "YZ");
+        assert_eq!(active.plane.n, Vector3::new(1.0, 0.0, 0.0));
+
+        // `Top` is the world `XY` plane, so it is the default even via this path.
+        assert!(view.set_standard_plane(StandardPlane::Top));
+        assert!(view.active_workplane().is_default());
+        assert!(!view.set_standard_plane(StandardPlane::Top), "already there");
+    }
+
+    #[test]
+    fn the_view_plane_follows_the_camera() {
+        use ferrocad_types::{Placement, Rotation, Vector3};
+
+        // A camera at `+Y` looking toward the origin: its screen-right is `+X`,
+        // screen-up is `-Z`, so the plane's normal points back at the viewer (`+Y`).
+        let camera = Camera {
+            view: Placement::new(
+                Vector3::new(0.0, 0.0, -5.0),
+                Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), 90.0_f64.to_radians()),
+            )
+            .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0f64.to_radians(),
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+        };
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+
+        assert!(view.set_view_plane());
+        let active = view.active_workplane();
+        assert_eq!(active.label, "View");
+        assert_eq!(active.plane.origin, Vector3::zero(), "the camera looks at the origin");
+        assert!(active.plane.u.is_equal(&Vector3::new(1.0, 0.0, 0.0), 1e-9));
+        assert!(active.plane.v.is_equal(&Vector3::new(0.0, 0.0, -1.0), 1e-9));
+        assert!(active.plane.n.is_equal(&Vector3::new(0.0, 1.0, 0.0), 1e-9));
+        assert!(!active.is_default());
+        assert_eq!(active.plane.kind, ferrocad_stage::WorkplaneKind::Custom);
+    }
+
+    #[test]
+    fn a_selected_face_becomes_the_workplane() {
+        let mut view = slab_view();
+        assert!(view.set_workplane_from_element(7, Some("Face2")));
+        let active = view.active_workplane();
+        assert_eq!(active.label, "Face2");
+        // The slab's right half sits at `x = 0.25` on the `z = 0.5` top.
+        assert!((active.plane.origin.x - 0.25).abs() < 1e-9);
+        assert!((active.plane.origin.z - 0.5).abs() < 1e-9);
+
+        // An edge is not a plane, and an unselected body has no single plane.
+        assert!(!view.set_workplane_from_element(7, Some("Edge1")));
+        assert!(!view.set_workplane_from_element(7, None));
+        assert!(!view.set_workplane_from_element(99, Some("Face1")));
+        assert_eq!(view.active_workplane().label, "Face2", "a failure changes nothing");
     }
 
     #[test]

@@ -308,10 +308,14 @@ impl Shell {
                 .is_some_and(|name| model.selection.iter().any(|item| item.object == name))
         });
         let pending = target.is_some() && !target_selected;
-        let mut slots: Vec<WheelSlot> = groups
-            .radial
+        let mut slots: Vec<WheelSlot> = model
+            .commands
             .iter()
             .filter(|command| !command.dev_only)
+            .filter(|command| {
+                command.wheel
+                    || commands::Surface::parse(&command.surface) == Some(commands::Surface::Radial)
+            })
             .map(|command| WheelSlot {
                 id: command.id.clone().into(),
                 label: command.short_label().into(),

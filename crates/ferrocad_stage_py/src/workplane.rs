@@ -14,10 +14,12 @@ use pyo3::types::PyType;
 
 /// Where a [`Workplane`] came from (`ferrocad_stage::WorkplaneKind`).
 ///
-/// `WorkplaneKind.World` is the world `XY` plane; `WorkplaneKind.Datum(name)` and
-/// `WorkplaneKind.Face(entity, element)` name a document datum or a planar face. The
-/// readable form is the `kind` property: `"World"`, `("Datum", name)` or
-/// `("Face", entity, element)`.
+/// `WorkplaneKind.World` is a world-standard axis plane (`XY`, `XZ`, `YZ`);
+/// `WorkplaneKind.Datum(name)` and `WorkplaneKind.Face(entity, element)` name a document
+/// datum or a planar face, and `WorkplaneKind.Custom` is a transient frame (the view
+/// plane, an offset, a 3-point pick) with no document object behind it. The readable form
+/// is the `kind` property: `"World"`, `("Datum", name)`, `("Face", entity, element)` or
+/// `"Custom"`.
 #[pyclass(eq, module = "ferrocad_stage", name = "WorkplaneKind")]
 #[derive(Clone, PartialEq, Eq)]
 pub struct WorkplaneKind {
@@ -26,12 +28,21 @@ pub struct WorkplaneKind {
 
 #[pymethods]
 impl WorkplaneKind {
-    /// The world `XY` plane's kind.
+    /// The world-standard axis plane's kind (`XY` by default; `XZ`/`YZ` share it).
     #[classattr]
     #[pyo3(name = "World")]
     fn world() -> Self {
         Self {
             inner: fs::WorkplaneKind::World,
+        }
+    }
+
+    /// A transient custom frame with no document object behind it.
+    #[classattr]
+    #[pyo3(name = "Custom")]
+    fn custom() -> Self {
+        Self {
+            inner: fs::WorkplaneKind::Custom,
         }
     }
 
@@ -53,7 +64,8 @@ impl WorkplaneKind {
         }
     }
 
-    /// The readable value: `"World"`, `("Datum", name)` or `("Face", entity, element)`.
+    /// The readable value: `"World"`, `("Datum", name)`, `("Face", entity, element)`
+    /// or `"Custom"`.
     #[getter]
     fn kind(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use pyo3::IntoPyObjectExt;
@@ -63,6 +75,7 @@ impl WorkplaneKind {
             fs::WorkplaneKind::Face { entity, element } => {
                 ("Face", *entity, element.as_str()).into_py_any(py)
             }
+            fs::WorkplaneKind::Custom => "Custom".into_py_any(py),
         }
     }
 
@@ -73,6 +86,7 @@ impl WorkplaneKind {
             fs::WorkplaneKind::Face { entity, element } => {
                 format!("WorkplaneKind.Face({entity}, {element:?})")
             }
+            fs::WorkplaneKind::Custom => "WorkplaneKind.Custom".to_string(),
         }
     }
 }

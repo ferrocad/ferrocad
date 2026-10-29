@@ -9,7 +9,9 @@
 //! the active workplane. The shell performs it on the viewport and reports the outcome.
 
 use ferrocad_stage::grid;
-use ferrocad_stage::{AxisStyle, GizmoStyle, MAX_GHOST_ALPHA, MIN_HIT_RADIUS_PX};
+use ferrocad_stage::{
+    AxisStyle, GizmoStyle, MAX_GHOST_ALPHA, MIN_HIT_RADIUS_PX, StandardPlane,
+};
 use serde::Deserialize;
 
 /// A presentation change a command returns. Never undoable, never a document edit.
@@ -51,7 +53,8 @@ pub struct ViewRequest {
     /// overlays draw regardless; this flag is about the native ground.
     #[serde(default)]
     pub grid_overlay: Option<bool>,
-    /// A workplane action: `"activate"`, `"clear"` or `"view"`.
+    /// A workplane action: `"activate"`, `"clear"`, `"view"`, a standard plane
+    /// (`"world:xy"`, `"world:xz"`, `"world:yz"`), `"camera"` or `"selection"`.
     #[serde(default)]
     pub workplane: Option<String>,
 }
@@ -157,6 +160,12 @@ pub enum WorkplaneAction {
     Clear,
     /// Look down the active workplane's normal.
     View,
+    /// Activate one of the three world-standard axis planes.
+    Standard(StandardPlane),
+    /// Adopt the camera's view plane.
+    Camera,
+    /// Activate the selected planar face.
+    Selection,
 }
 
 impl WorkplaneAction {
@@ -165,6 +174,11 @@ impl WorkplaneAction {
             "activate" => Ok(Self::Activate),
             "clear" => Ok(Self::Clear),
             "view" => Ok(Self::View),
+            "world:xy" | "xy" => Ok(Self::Standard(StandardPlane::Top)),
+            "world:xz" | "xz" => Ok(Self::Standard(StandardPlane::Front)),
+            "world:yz" | "yz" => Ok(Self::Standard(StandardPlane::Right)),
+            "camera" | "view-plane" | "viewplane" => Ok(Self::Camera),
+            "selection" | "selected" => Ok(Self::Selection),
             other => Err(format!("unknown workplane action {other:?}")),
         }
     }
@@ -1350,6 +1364,20 @@ mod tests {
             request.workplane_action().unwrap(),
             Some(WorkplaneAction::Activate)
         );
+
+        // The datum rows and the in-situ verbs parse from the same single string the
+        // Python command returns, case- and whitespace-insensitively.
+        for (text, action) in [
+            ("world:xy", WorkplaneAction::Standard(StandardPlane::Top)),
+            (" World:XZ ", WorkplaneAction::Standard(StandardPlane::Front)),
+            ("world:yz", WorkplaneAction::Standard(StandardPlane::Right)),
+            ("yz", WorkplaneAction::Standard(StandardPlane::Right)),
+            ("camera", WorkplaneAction::Camera),
+            ("view-plane", WorkplaneAction::Camera),
+            ("selection", WorkplaneAction::Selection),
+        ] {
+            assert_eq!(WorkplaneAction::parse(text).unwrap(), action, "{text}");
+        }
 
         let bad = ViewRequest {
             grid: Some(true),

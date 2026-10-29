@@ -44,6 +44,10 @@ pub const AXIS: &str = "App_ToggleAxisCross";
 /// The gizmo split control's primary command: show or hide the transform gizmo.
 pub const GIZMO: &str = "App_ToggleGizmo";
 pub const WORKPLANE: &str = "App_ViewWorkplane";
+/// The `WP` popover's grouping key. `WP` is a **selector**, not a command: it has no
+/// primary action to run, so its rows group under a surface name rather than under a
+/// primary command id (`WORKPLANE` above is only the control's registry gate).
+pub const WORKPLANE_GROUP: &str = "App_Workplane";
 /// The global snap switch. The six `Draft_Snap_*` modes declare this id as their
 /// `FerroCAD_Parent`, so they appear in its popover instead of in the dock.
 pub const SNAP: &str = "Draft_Snap_Lock";
@@ -549,7 +553,7 @@ fn workplane_button(
         None => "WP".into(),
     };
     let rows: Vec<PopoverRow> =
-        commands::popover_commands(&model.commands, Surface::Workplane, WORKPLANE)
+        commands::popover_commands(&model.commands, Surface::Workplane, WORKPLANE_GROUP)
             .into_iter()
             .map(PopoverRow::of)
             .collect();

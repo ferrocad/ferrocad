@@ -60,8 +60,17 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         Some("App_ToggleGrid")
     );
     assert_eq!(
-        find("App_ActivateWorkplane").parent(),
-        Some("App_ViewWorkplane")
+        find("App_SetWorkplane").parent(),
+        Some("App_Workplane")
+    );
+    assert!(
+        find("App_SetWorkplane").wheel,
+        "Set WP also rides in the radial menu"
+    );
+    assert_eq!(
+        find("App_ActivateWorkplane").surface(),
+        Surface::Hidden,
+        "the pointer-hover verb is script-only; a menu click moves the pointer away"
     );
     assert_eq!(find("Test_Unannotated").surface(), Surface::Dock);
 }
@@ -239,8 +248,19 @@ fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppCont
     draw(&mut cx);
     assert!(cx.debug_bounds("wp-popover").is_some());
     assert!(cx.debug_bounds("grid-popover").is_none());
-    assert!(cx.debug_bounds("wp-row-App_ActivateWorkplane").is_some());
-    assert!(cx.debug_bounds("wp-row-App_ClearWorkplane").is_some());
+    assert!(cx.debug_bounds("wp-row-App_WorkplaneXY").is_some());
+    assert!(cx.debug_bounds("wp-row-App_WorkplaneXZ").is_some());
+    assert!(cx.debug_bounds("wp-row-App_WorkplaneYZ").is_some());
+    assert!(cx.debug_bounds("wp-row-App_WorkplaneCamera").is_some());
+    assert!(cx.debug_bounds("wp-row-App_SetWorkplane").is_some());
+    assert!(
+        cx.debug_bounds("wp-row-App_ViewWorkplane").is_some(),
+        "WP has no primary action, so `Align camera to WP` is a row like the rest"
+    );
+    assert!(
+        cx.debug_bounds("wp-row-App_ClearWorkplane").is_none(),
+        "World XY (Top) is the reset; Clear is script-only now"
+    );
 
     // A plain click on the WP label opens the same menu: `WP` is a selector, not a
     // command, so it has no primary action and no state dot.

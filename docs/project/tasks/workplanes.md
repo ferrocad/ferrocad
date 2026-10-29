@@ -112,37 +112,43 @@ The binding is **per tool session** (not per click): one plane for the whole sha
 
 ### 2.2 Tier 2 — explicit binding from the context wheel
 
-The context wheel already has a per-selection target (`selection-gizmos-and-forms.md`
-§2.2). Add **Set WP** as a wheel verb on a planar face:
+**Landed (2026-10-29, §7.4).** `Set WP` is a wheel verb for the selected planar face:
 
-- Calls `set_workplane(Some(frame))` — already sticky, so it survives pointer moves and
-  empty-space clicks.
-- The grid, axes and origin node animate to the face (they already render at the active
+- `App_SetWorkplane` (`Set from selection` in the `WP` menu, `Set WP` in the wheel) calls
+  `set_workplane_from_element(entity, element)`, which resolves the face's own centroid
+  and normal rather than the click point, then `set_workplane(Some(frame))`.
+- The binding is **sticky**: it survives pointer moves and empty-space clicks.
+- The grid, axes and origin node move to the frame (they already render at the active
   plane; the animation is presentation).
-- **Align view to WP** is `view_workplane()`, which already looks down the normal with a
-  roll-free up vector; wire it to a wheel verb and to double-clicking the `WP` pill.
+- **Align camera to WP** is `App_ViewWorkplane` → `view_workplane()`, which looks down the
+  normal with a roll-free up vector.
 
 ### 2.3 Tier 3 — the `WP` dropdown
 
-Replace the three plumbing commands with plane choices (the commands stay reachable, but
-they are no longer the menu):
+**The datum rows landed (2026-10-29, §7.3); the two creating rows are still open.**
+The menu is the plane choice, not the plumbing:
 
 ```text
-[ • WP: Top (XY) ▾ ]
-  Top (World XY) · Front (World XZ) · Right (World YZ) · View plane
+[ • WP: XY ▾ ]
+  World XY (Top) · World XZ (Front) · World YZ (Right) · View plane (Camera)
   ─────────────────────────────────────────────────────────────
-  Pick face… · Pick 3 points… · Offset workplane… · Align camera to WP
+  Set from selection · Align camera to WP
 ```
 
-- The three world planes are `Workplane::new(...)` frames with `WorkplaneKind::World` (or
-  a new `Standard` kind so the label can name them).
-- **View plane** is a frame from the camera's view direction at the current pivot.
-- **Pick face…** is the existing activate-hovered path, made explicit rather than
-  implicit.
-- **Pick 3 points…** is `Workplane::new(origin, p1-p0, p2-p0)`, which already rejects
-  degenerate input.
-- **Offset workplane…** moves the frame along `n` and should use the single-axis `Z`
-  gizmo with the floating HUD (`Offset ΔZ [ 0.0 ] mm`), like the existing transform form.
+- The three world planes are `Workplane::standard(StandardPlane)` frames with
+  `WorkplaneKind::World`; the label (`XY`/`XZ`/`YZ`) comes from the plane, and only `XY`
+  is the default.
+- **View plane** is the camera's own basis (`u` = screen right, `v` = screen up, `n`
+  toward the viewer) through the point the camera looks at, with `WorkplaneKind::Custom`
+  and the label `View`.
+- **Set from selection** is Tier 2's command (it lives in the menu too).
+- `Activate workplane` and `Clear workplane` stay **callable** (`FerroCAD_Surface:
+  "hidden"`) but are no longer menu rows: a menu click moves the pointer off the face, so
+  the hover verb could only fail there, and `World XY (Top)` already is the reset.
+- **Pick 3 points… (open).** `Workplane::new(origin, p1-p0, p2-p0)` already rejects
+  degenerate input; the missing part is the three-click picking verb.
+- **Offset workplane… (open).** It moves the frame along `n` with the single-axis gizmo
+  and the floating HUD (`Offset ΔZ [ 0.0 ] mm`), like the transform form.
 
 ### 2.4 The grid: one generator, no patch
 
@@ -168,13 +174,14 @@ moves when `view_workplane()` is invoked.
 
 ## 3. The `WP` pill and the status bar
 
-- **The pill shows the plane, not the plumbing:** `WP: XY` when world, `• WP: Face3 ×`
-  when bound (cyan `#38BDF8` dot for non-world, per the accent table), `WP: Datum…` once
-  datums exist.
-- **The main body toggles** back to the world plane when a custom plane is active — the
-  same "label is the switch" rule as Grid/Axes/Snap — and the `×` clears to world.
-- **The status line keeps the hover report.** `"no active workplane"` disappears with
-  the state change; `Clear` at the world default becomes a no-op rather than a message.
+- **The pill shows the plane, not the plumbing:** `WP: XY` when world, `WP: Face3` in
+  cyan `CHROME_ACTIVE` when bound, `WP: View` for the camera plane. There is no state
+  dot: `Grid`/`Axes`/`Gizmo`/`Snap` can be off, while a workplane always exists.
+- **No primary action.** A click anywhere on the control opens the datum menu; the
+  label is the state, and `World XY (Top)` is the reset. (An earlier draft toggled the
+  body back to world; that is a second, hidden meaning on the same click.)
+- **The status line keeps the hover report.** `"no active workplane"` is gone; a `Clear`
+  at the world default reports “already World XY” rather than failing.
 
 ## 4. Wiring: plane → frame → gizmo → tools
 
@@ -209,24 +216,24 @@ Everything here already has the pieces; this is the map to connect them.
 
 ## 6. Open decisions
 
-1. **State type:** `Option<FaceFrame>` → an enum (`World | Datum(name) | Face{..} |
-   Custom{frame}`) or `Option<Workplane>` with `WorkplaneKind` doing the naming? The
-   second reuses the existing kind and needs no new enum.
+1. **State type — decided (§7.1).** `ActiveWorkplane { plane: Workplane, label }`, with
+   `WorkplaneKind` doing the provenance naming and `is_default()` as the only “unbound”
+   test.
 2. **Ephemeral binding:** per tool session (decided, §2.1) — one plane for the whole
    shape, first press only.
-3. **Does the `WP` pill body toggle to world or clear?** They are the same thing once
-   world is representable — decide the wording.
+3. **The `WP` pill's click — decided (§7.1, §3).** There is no primary action and no
+   state dot: a click anywhere opens the datum menu, and `World XY (Top)` is the reset.
+   A body-click toggle would be a second, hidden meaning on the same control.
 4. **Datum planes:** `WorkplaneKind::Datum` exists with no document object behind it. Add
    `Part::DatumPlane` as part of this task, or keep the dropdown to faces/world/view
    until P4 SK1's constraint work needs datum objects?
 5. **The Python verb:** extend `ViewRequest` with `{"workplane": {"set": {...}}}` (no new
    public class) or expose `FreeCADGui.ActiveDocument.ActiveView` workplane accessors?
    The first keeps one validation path.
-6. **The status text.** Confirm the `"no active workplane"` the brief cites: in this
-   tree it is the Clear/View result message (`dispatch.rs:498–510`), not a persistent
-   readout. If a newer build has a persistent one, fix that too.
-7. **Grid steps.** Keep the world steps on a bound plane (identical grid) or keep the
-   finer `GridStyle::workplane()` steps and label them in the pill?
+6. **The status text.** Confirmed: the tree has no persistent `"no active workplane"`;
+   the phrase was only ever a command result, and that is now gone (§7.1).
+7. **Grid steps — decided (§7.1).** A bound plane keeps the world steps; the finer
+   `GridStyle::workplane()` style survives only as the hover preview.
 8. **World layer.** Keep it dimmed behind a bound plane (recommended — it is the absolute
    datum) or hide it while a plane is active?
 
@@ -287,8 +294,54 @@ Verified: `ferrocad_viewport` 167 (four Tier 1 tests: bind-and-restore; a later 
 not rebind; an empty-space start never binds; an explicit plane survives a session),
 `ferrocad_gpui --lib` 216, `ferrocad_toy` 18 + round trips.
 
-**Still open:** the dropdown's standard planes (`XZ`/`YZ`), view plane, 3-point pick and
-offset HUD; the wheel verb (§2.2); the Python “set” verb (§4); and the datum-plane object
+### 7.3 Tier 3 — the datum rows
+
+`WP ▾` now lists planes, not plumbing:
+
+- `ferrocad_stage::StandardPlane` (`Top`/`Front`/`Right`) plus
+  `Workplane::standard(...)` build the three axis planes at the origin (`XY`, `XZ` with
+  `n = -Y`, `YZ` with `n = +X`). `WorkplaneKind::World` means “a world-standard plane”,
+  so the enum gains no variant for them; a new `WorkplaneKind::Custom` covers frames with
+  no document object behind them, and the Python mirror gains `WorkplaneKind.Custom`.
+- `ActiveWorkplane::standard(...)` labels them `XY`/`XZ`/`YZ`; only `XY` is `is_default()`.
+- `set_view_plane()` reads the camera's own basis out of the view matrix's rows (screen
+  right/up/toward-viewer), puts the plane through the point the camera looks at, and
+  labels it `View` with `WorkplaneKind::Custom`.
+- `set_workplane_from_element(entity, "Face6")` resolves the face by element name and
+  reuses `face_frame_for`, so the explicit binding and the hover bloom agree.
+- `WorkplaneAction` gained `Standard`, `Camera` and `Selection`, all parsed from the same
+  one string a Python command returns (`"world:xz"`, `"camera"`, `"selection"`).
+- New registry rows: `App_WorkplaneXY`/`XZ`/`YZ` (`World XY (Top)` …),
+  `App_WorkplaneCamera` (`View plane (Camera)`) and `App_ViewWorkplane` (`Align camera
+  to WP`). `App_ActivateWorkplane` and `App_ClearWorkplane` stay registered but are
+  `"hidden"`: a menu click moves the pointer off the face, so the hover verb could only
+  fail there, and `World XY (Top)` is the reset.
+- The `WP` popover groups under `chrome::WORKPLANE_GROUP` (`"App_Workplane"`), not under a
+  primary command: `WP` is a selector with no primary action, so there is no command to
+  hide the rows behind. `chrome::WORKPLANE` (`"App_ViewWorkplane"`) stays the control's
+  registry gate.
+
+### 7.4 Tier 2 — `Set WP`
+
+`App_SetWorkplane` is one command with two homes: `Set from selection` in the `WP` menu
+and `Set WP` in the radial wheel. It uses the **selected** planar face's own centroid and
+normal (not the click point), so the frame is stable however the pointer arrived, and it
+is sticky like any explicit binding. `IsActive()` requires a sub-element selection, so the
+wheel still falls back to the dock verbs over empty space.
+
+The wheel had no way to host a command that belongs to another surface, and moving this
+row to `Surface::Radial` would hide it from the menu. `FerroCAD_Wheel: true` (forwarded as
+`CommandInfo::wheel`) offers a command in the wheel **in addition to** its own surface;
+`radial_slots` includes `radial`-surface commands *or* `wheel: true` ones.
+
+Verified: `ferrocad_stage` 187 (the three standards' axes and right-handedness),
+`ferrocad_viewport` 170 (three new tests: standard planes, view plane, face-by-element),
+`ferrocad_gpui --lib` 217 (the datum rows render in the popover, `Set WP` is flagged for
+the wheel, and a GPU-gated end-to-end test drives `App_WorkplaneXZ` →
+`App_SetWorkplane` → `App_WorkplaneXY` through a real viewport).
+
+**Still open:** `Pick 3 points…` and `Offset workplane…` (the 1D axis gizmo + floating
+HUD); the Python “set” verb for an arbitrary frame (§4); and the datum-plane object
 question.
 
 ## 8. Non-goals

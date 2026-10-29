@@ -162,3 +162,65 @@ fn a_workplane_request_needs_a_viewport(cx: &mut TestAppContext) {
     });
     assert_eq!(model.lock().unwrap().status, "view: no viewport");
 }
+
+/// G5: the `WP` menu's datum rows and `Set from selection` reach the viewport, and a
+/// request that cannot bind says why without moving the plane. Skips without a GPU.
+#[gpui::test]
+fn the_workplane_rows_reach_the_viewport(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    let attached = cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.enable_viewport(cx);
+            shell.viewport.is_some()
+        })
+    });
+    if !attached {
+        eprintln!("no GPU adapter available; skipping workplane-to-viewport test");
+        return;
+    }
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_WorkplaneXZ", cx))
+    });
+    assert_eq!(model.lock().unwrap().status, "workplane: XZ");
+    cx.update(|_window, cx| {
+        let active = viewport.read(cx).active_workplane().clone();
+        assert_eq!(active.label, "XZ");
+        assert!(active.plane.n.is_equal(&ferrocad_types::Vector3::new(0.0, -1.0, 0.0), 1e-9));
+    });
+
+    // Asking for the plane already active is reported, not faked as a change.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_WorkplaneXZ", cx))
+    });
+    assert_eq!(model.lock().unwrap().status, "workplane is already XZ");
+
+    // Nothing planar is selected: the command explains itself and keeps the plane.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_SetWorkplane", cx))
+    });
+    assert_eq!(model.lock().unwrap().status, "select a planar face first");
+    cx.update(|_window, cx| {
+        assert_eq!(viewport.read(cx).active_workplane().label, "XZ");
+    });
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_WorkplaneXY", cx))
+    });
+    assert_eq!(model.lock().unwrap().status, "workplane: XY");
+    cx.update(|_window, cx| {
+        assert!(viewport.read(cx).active_workplane().is_default());
+    });
+}

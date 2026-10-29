@@ -790,6 +790,8 @@ def commands() -> str:
         entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
         entry["short"] = str(resources.get("FerroCAD_Short") or "")
         entry["tone"] = str(resources.get("FerroCAD_Tone") or "")
+        # Also offer this command in the radial menu, beside the object verbs.
+        entry["wheel"] = bool(resources.get("FerroCAD_Wheel"))
         # A command that reports checked state is a toggle even when it predates the
         # `Checkable` key (upstream workbenches define `IsChecked`, not the resource).
         entry["checkable"] = bool(resources.get("Checkable")) or callable(
@@ -1903,17 +1905,108 @@ class _ReloadGridSettingsCommand:
 FreeCADGui.addCommand("App_ReloadGridSettings", _ReloadGridSettingsCommand())
 
 
+class _StandardWorkplaneCommand:
+    """One of the world-standard axis planes (``App_WorkplaneXY`` and siblings).
+
+    The engine is Z-up, so the three standards are `XY` (top), `XZ` (front) and `YZ`
+    (right), all anchored at the world origin. These are the explicit datum rows of
+    the `WP` menu; the pill keeps showing which one is active.
+    """
+
+    def __init__(self, action, label, tooltip):
+        self._action = action
+        self._label = label
+        self._tooltip = tooltip
+
+    def GetResources(self):
+        return {
+            "MenuText": self._label,
+            "ToolTip": self._tooltip,
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_Workplane",
+        }
+
+    def Activated(self):
+        return {"view": {"workplane": self._action}}
+
+
+class _ViewPlaneWorkplaneCommand:
+    """``App_WorkplaneCamera`` — adopt the camera's view plane.
+
+    This is the “screen plane”: sketch the way the view is framed right now. It is a
+    transient frame, so it follows the camera only until the next binding.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "View plane (Camera)",
+            "ToolTip": "Work on the plane facing the camera",
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_Workplane",
+        }
+
+    def Activated(self):
+        return {"view": {"workplane": "camera"}}
+
+
+def _selected_subelements() -> list:
+    """The selected sub-element names (empty when nothing below an object is picked)."""
+    names = []
+    for item in FreeCADGui.Selection.getSelectionEx():
+        names.extend(getattr(item, "SubElementNames", None) or [])
+    return names
+
+
+class _SetWorkplaneCommand:
+    """``App_SetWorkplane`` — make the selected planar face the workplane.
+
+    The explicit counterpart of the ephemeral binding a creation tool makes when it
+    starts on a face: it uses the face's own centroid and normal, so the plane is
+    stable however the pointer got there. It also rides in the radial menu (``Set
+    WP``), which is the in-situ way to bind the face under the cursor.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Set from selection",
+            "FerroCAD_Short": "Set WP",
+            "ToolTip": "Use the selected planar face as the workplane",
+            "Group": "View",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_Workplane",
+            "FerroCAD_Wheel": True,
+            "FerroCAD_Tone": "structural",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selected_subelements())
+
+    def Activated(self):
+        return {"view": {"workplane": "selection"}}
+
+
 class _ActivateWorkplaneCommand:
-    """``App_ActivateWorkplane`` — make the face under the pointer the workplane."""
+    """``App_ActivateWorkplane`` — make the face under the pointer the workplane.
+
+    Kept callable for scripts that bind the plane **while the pointer is over a
+    face**, but it is not a menu row: a menu click moves the pointer off the face
+    first, so the row could only ever report “no face under the pointer”. `Set from
+    selection` is the menu path; the creation tools bind the same way on their first
+    click with no command at all.
+    """
 
     def GetResources(self):
         return {
             "MenuText": "Activate workplane",
-            "ToolTip": "Sketch on the face under the pointer",
+            "ToolTip": "Bind the face under the pointer (script use)",
             "Group": "View",
             "CmdType": "ForView",
-            "FerroCAD_Surface": "workplane",
-            "FerroCAD_Parent": "App_ViewWorkplane",
+            "FerroCAD_Surface": "hidden",
         }
 
     def Activated(self):
@@ -1921,16 +2014,19 @@ class _ActivateWorkplaneCommand:
 
 
 class _ClearWorkplaneCommand:
-    """``App_ClearWorkplane`` — return to the world ground plane."""
+    """``App_ClearWorkplane`` — return to the world `XY` plane.
+
+    Callable for scripts; not a menu row, because `World XY (Top)` is the reset and two
+    names for one action on the same menu is the plumbing this menu is replacing.
+    """
 
     def GetResources(self):
         return {
             "MenuText": "Clear workplane",
-            "ToolTip": "Return to the world frame",
+            "ToolTip": "Return to the world XY plane",
             "Group": "View",
             "CmdType": "ForView",
-            "FerroCAD_Surface": "workplane",
-            "FerroCAD_Parent": "App_ViewWorkplane",
+            "FerroCAD_Surface": "hidden",
         }
 
     def Activated(self):
@@ -1942,20 +2038,35 @@ class _ViewWorkplaneCommand:
 
     def GetResources(self):
         return {
-            "MenuText": "View workplane",
+            "MenuText": "Align camera to WP",
             "ToolTip": "Look down the active workplane's normal",
             "Group": "View",
             "CmdType": "ForView",
             "FerroCAD_Surface": "workplane",
+            "FerroCAD_Parent": "App_Workplane",
         }
 
     def Activated(self):
         return {"view": {"workplane": "view"}}
 
 
+FreeCADGui.addCommand("App_ViewWorkplane", _ViewWorkplaneCommand())
+FreeCADGui.addCommand(
+    "App_WorkplaneXY",
+    _StandardWorkplaneCommand("world:xy", "World XY (Top)", "Work on the world XY plane"),
+)
+FreeCADGui.addCommand(
+    "App_WorkplaneXZ",
+    _StandardWorkplaneCommand("world:xz", "World XZ (Front)", "Work on the world XZ plane"),
+)
+FreeCADGui.addCommand(
+    "App_WorkplaneYZ",
+    _StandardWorkplaneCommand("world:yz", "World YZ (Right)", "Work on the world YZ plane"),
+)
+FreeCADGui.addCommand("App_WorkplaneCamera", _ViewPlaneWorkplaneCommand())
+FreeCADGui.addCommand("App_SetWorkplane", _SetWorkplaneCommand())
 FreeCADGui.addCommand("App_ActivateWorkplane", _ActivateWorkplaneCommand())
 FreeCADGui.addCommand("App_ClearWorkplane", _ClearWorkplaneCommand())
-FreeCADGui.addCommand("App_ViewWorkplane", _ViewWorkplaneCommand())
 
 
 class _DevToggleToolsCommand:

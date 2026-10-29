@@ -112,6 +112,12 @@ pub struct CommandInfo {
     /// command offered in that control's popover (P0.6 extension).
     #[serde(default)]
     pub parent: String,
+    /// `GetResources()["FerroCAD_Wheel"]` — also offer this command in the radial
+    /// menu, beside the `radial`-surface object verbs (P0.6 extension). A view-only
+    /// action that still belongs to the geometry under the pointer (`Set WP`) is not
+    /// an object verb, but it is exactly what the wheel is for.
+    #[serde(default)]
+    pub wheel: bool,
     /// `IsActive()`.
     #[serde(default)]
     pub enabled: bool,

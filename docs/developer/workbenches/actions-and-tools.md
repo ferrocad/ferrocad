@@ -164,10 +164,15 @@ def commands() -> str:
         entry["surface"] = str(resources.get("FerroCAD_Surface") or "")
         entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
         entry["short"] = str(resources.get("FerroCAD_Short") or "")
+        entry["tone"] = str(resources.get("FerroCAD_Tone") or "")
+        # A view action that is still about the geometry under the pointer (Set WP)
+        # rides in the radial menu without becoming an object verb.
+        entry["wheel"] = bool(resources.get("FerroCAD_Wheel"))
         entry["checkable"] = bool(resources.get("Checkable"))
     return _json(entries)                             # [{id, menu, tooltip, accel, group,
                                                       #   enabled, checked, checkable,
-                                                      #   cmd_type, surface, parent, short}, ...]
+                                                      #   cmd_type, surface, parent, short,
+                                                      #   tone, wheel}, ...]
 
 def run_command(name: str) -> str:
     """Invoke a command; returns {ok, status?, dialog?, token?, view?, tool?}."""
@@ -439,6 +444,12 @@ return {"tool": "toy_measure"}                         # starts a registered too
   `FerroCAD_Tone: "additive" | "destructive"`), which removes it from the dock and
   makes it a wedge in the wheel. The built-ins today are `App_Move` and
   `App_Rotate` (structural) and `App_Delete` (destructive).
+
+  `FerroCAD_Wheel: true` also offers a command in the wheel **without** moving it off
+  its own surface. `App_SetWorkplane` uses it: the row belongs in the `WP` menu, but
+  `Set WP` is exactly the in-situ verb the wheel exists for. The flag changes where a
+  command is *offered*, not who owns it; `IsActive()` still gates the wedge, and the
+  target is promoted to the selection only when a verb is chosen.
 
   | Gesture | Effect |
   | --- | --- |

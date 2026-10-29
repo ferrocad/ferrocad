@@ -17,12 +17,41 @@ pub const PLANAR_TOLERANCE: f32 = 0.999;
 /// Where a frame came from (for the UI and the grid's extent rule).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkplaneKind {
-    /// The world `XY` plane at the origin.
+    /// A world-standard axis plane at the origin: `XY` (the default), `XZ` or `YZ`.
     World,
     /// A named datum plane from the document.
     Datum(String),
     /// A planar face of a displayed object.
     Face { entity: u32, element: String },
+    /// A transient custom frame with no document object behind it: the camera's view
+    /// plane, an offset of another plane, or a 3-point pick.
+    Custom,
+}
+
+/// One of the three world-standard axis planes.
+///
+/// The engine is Z-up, so `Top` is `XY`, `Front` is `XZ` and `Right` is `YZ`. Each is
+/// anchored at the world origin; unlike a datum or a face, nothing in the document owns
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandardPlane {
+    /// World `XY`: `u = +X`, `v = +Y`, `n = +Z` (the default plane).
+    Top,
+    /// World `XZ`: `u = +X`, `v = +Z`, `n = -Y` (looking along `+Y`).
+    Front,
+    /// World `YZ`: `u = +Y`, `v = +Z`, `n = +X` (looking along `-X`).
+    Right,
+}
+
+impl StandardPlane {
+    /// The pill label: `XY`, `XZ` or `YZ`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Top => "XY",
+            Self::Front => "XZ",
+            Self::Right => "YZ",
+        }
+    }
 }
 
 /// A right-handed planar frame.
@@ -38,11 +67,29 @@ pub struct Workplane {
 impl Workplane {
     /// The world `XY` plane: `origin = 0`, `u = +X`, `v = +Y`, `n = +Z`.
     pub fn world() -> Self {
+        Self::standard(StandardPlane::Top)
+    }
+
+    /// One of the three world-standard axis planes at the origin.
+    pub fn standard(plane: StandardPlane) -> Self {
+        let x = Vector3::new(1.0, 0.0, 0.0);
+        let y = Vector3::new(0.0, 1.0, 0.0);
+        let z = Vector3::new(0.0, 0.0, 1.0);
+        let (u, v) = match plane {
+            StandardPlane::Top => (x, y),
+            StandardPlane::Front => (x, z),
+            StandardPlane::Right => (y, z),
+        };
         Self {
             origin: Vector3::zero(),
-            u: Vector3::new(1.0, 0.0, 0.0),
-            v: Vector3::new(0.0, 1.0, 0.0),
-            n: Vector3::new(0.0, 0.0, 1.0),
+            u,
+            v,
+            // Each pair is a right-handed world basis, so this is exact.
+            n: match plane {
+                StandardPlane::Top => z,
+                StandardPlane::Front => y.scale(-1.0),
+                StandardPlane::Right => x,
+            },
             kind: WorkplaneKind::World,
         }
     }
@@ -226,6 +273,25 @@ mod tests {
         let p = world.point(12.0, -4.0);
         assert_eq!(p, Vector3::new(12.0, -4.0, 0.0));
         assert_eq!(world.project(p), [12.0, -4.0]);
+    }
+
+    #[test]
+    fn the_standard_planes_are_the_three_world_axes() {
+        // Z-up, so `Top` is XY, `Front` is XZ (normal -Y) and `Right` is YZ (normal +X).
+        for (plane, label, normal) in [
+            (StandardPlane::Top, "XY", Vector3::new(0.0, 0.0, 1.0)),
+            (StandardPlane::Front, "XZ", Vector3::new(0.0, -1.0, 0.0)),
+            (StandardPlane::Right, "YZ", Vector3::new(1.0, 0.0, 0.0)),
+        ] {
+            let frame = Workplane::standard(plane);
+            assert_eq!(plane.label(), label);
+            assert_eq!(frame.origin, Vector3::zero(), "standards sit at the origin");
+            assert_eq!(frame.n, normal, "{label}");
+            assert_eq!(frame.kind, WorkplaneKind::World);
+            // Right-handed: `u × v` is the stored normal.
+            assert_eq!(frame.u.cross(&frame.v), normal, "{label}");
+        }
+        assert_eq!(Workplane::standard(StandardPlane::Top), Workplane::world());
     }
 
     #[test]

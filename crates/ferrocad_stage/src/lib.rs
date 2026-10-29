@@ -97,4 +97,4 @@ pub use snap::{
 };
 pub use stage::Stage;
 pub use tool::{PolylineTool, Tool, ToolStatus};
-pub use workplane::{FaceFrame, Workplane, WorkplaneKind};
+pub use workplane::{FaceFrame, StandardPlane, Workplane, WorkplaneKind};

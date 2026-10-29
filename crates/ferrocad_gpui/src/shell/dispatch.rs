@@ -486,6 +486,17 @@ impl Shell {
         let Some(viewport) = self.viewport.clone() else {
             return Err("no viewport".to_string());
         };
+        // `Selection` needs the document-side selection, which the viewport does not own;
+        // resolve it to a display entity first, so the closure borrows nothing from `self`.
+        let target = if action == WorkplaneAction::Selection {
+            let model = self.model.lock().unwrap();
+            model.selection.iter().find_map(|item| {
+                let element = item.elements.first()?;
+                Some((self.display.entity_of(&item.object)?, element.clone()))
+            })
+        } else {
+            None
+        };
         Ok(viewport.update(cx, |viewport, cx| {
             let summary = match action {
                 WorkplaneAction::Activate => {
@@ -508,6 +519,30 @@ impl Shell {
                     viewport.view_workplane();
                     format!("looking down {}", viewport.active_workplane().label)
                 }
+                WorkplaneAction::Standard(plane) => {
+                    if viewport.set_standard_plane(plane) {
+                        format!("workplane: {}", plane.label())
+                    } else {
+                        format!("workplane is already {}", plane.label())
+                    }
+                }
+                WorkplaneAction::Camera => {
+                    if viewport.set_view_plane() {
+                        format!("workplane: {}", viewport.active_workplane().label)
+                    } else {
+                        "the camera has no view plane".to_string()
+                    }
+                }
+                WorkplaneAction::Selection => match target {
+                    Some((entity, element)) => {
+                        if viewport.set_workplane_from_element(entity, Some(&element)) {
+                            format!("workplane: {}", viewport.active_workplane().label)
+                        } else {
+                            format!("{} is not a planar face", element)
+                        }
+                    }
+                    None => "select a planar face first".to_string(),
+                },
             };
             cx.notify();
             summary

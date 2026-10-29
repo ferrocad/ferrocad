@@ -297,6 +297,23 @@ for edge in parallel.Edges:
 perspective = face.makePerspectiveProjection(wire, V(5, 5, 20))
 assert len(perspective.Edges) == 2
 assert perspective.BoundBox.DiagonalLength > 0
+
+# `Shape.project` is the *normal* projection: it lays the tools on the target
+# along the target's own normals (upstream's `BRepAlgo_NormalProjection`).
+normal = face.project([wire])
+assert len(normal.Edges) == 2, len(normal.Edges)
+for edge in normal.Edges:
+    for vertex in edge.Vertexes:
+        assert abs(vertex.Point.z) < 1e-9, vertex.Point
+
+# On a curved target a fixed direction would not do: every point must land on
+# the cylinder's radius.
+cylinder = [f for f in Part.makeCylinder(10, 20).Faces if f.Surface.TypeId != "Part::GeomPlane"][0]
+curved = cylinder.project([Part.makeLine(V(0, 20, 5), V(10, 20, 5))])
+assert len(curved.Edges) == 1, len(curved.Edges)
+for vertex in curved.Edges[0].Vertexes:
+    radius = (vertex.Point.x ** 2 + vertex.Point.y ** 2) ** 0.5
+    assert abs(radius - 10) < 1e-6, (vertex.Point, radius)
 "#,
         );
     });

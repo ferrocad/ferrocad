@@ -1294,6 +1294,44 @@ Like `freecad-upstream`, it is a **sibling checkout outside version control**:
 - A CI job that needs it must clone at the pinned commit in that job; normal PR CI
   stays hermetic and the harness self-skips.
 
+### 7.3 Run records
+
+**2026-10-29 — P1.1 re-measure (`TODO-29 P1`).** `tools/conformance.py --simplecad`
+against `../simplecad` @ `9180c4b` (0.38.0), combined extension rebuilt from `751d315`:
+**1061 tests in 88 files, 966 passed, 64 failed, 29 errored, 2 skipped, 0 load errors** —
+the 2026-10-27 baseline reproduced exactly, as expected with no code change in between.
+
+The 29 errors, by the cause the harness prints:
+
+| Cause | Count |
+| --- | --- |
+| `TypeError: QApplication() takes no arguments` (all in `setUpClass`) | 5 |
+| `ModuleNotFoundError: PartDesign` | 4 |
+| wrap: “the wrapped drawing could not be laid on the face” | 4 |
+| boolean returned `None` (`'NoneType' … 'ShapeType'`) | 3 |
+| “would create invalid geometry” | 2 |
+| chamfered-hole loop · joint as two solids · fitted-face coverage · union not connected | 4 |
+| `Toroid.parameter` · `Mesh.decimate` · `Shape.Point` · deleted-object `Name` · pole-less `BSplineSurface` · `Cylinder(Circle)` · `cut` did not complete | 7 |
+
+The five `QApplication()` failures are not a one-line fix: the constructor is only the
+first missing name, and the tests then build `QWidget`/`QDialog`/`QTreeWidget` objects the
+shim refuses by design (16 tests sit behind the four failing `setUpClass` hooks). They are
+GUI tests; this group measures the API surface, so they should be classified rather than
+chased until a Qt-free widget layer exists.
+
+**Fixed in the same round — `Shape.project` was the wrong algorithm.** The seam’s
+`project` was a planar-only identity, and an earlier note here called the missing piece
+`BRepProj_Projection`. Upstream’s `TopoShapePy::project` is actually
+`BRepAlgo_NormalProjection` with `Compute3d(true)`, `SetLimit(true)` and
+`SetParams(1e-6, 1e-6, GeomAbs_C1, 14, 10000)`; `BRepProj_Projection` backs
+`makeParallelProjection`/`makePerspectiveProjection`, which were already implemented. The
+bridge now exposes `fc_project_normal` and the backend calls it.
+
+Result: **969 passed, 64 failed, 26 errored, 2 skipped, 0 load errors**. Two `WrapTests`
+and the wrapped-text case pass that did not before. The one remaining wrap error is a
+different check — `FlatMap.to_surface` returning `None` for a drawing that crosses the
+seam — so it is not a projection problem.
+
 ---
 
 ## 8. Draft vs SimpleCAD

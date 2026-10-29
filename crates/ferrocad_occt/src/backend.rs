@@ -2221,21 +2221,38 @@ impl GeometryBackend for OcctBackend {
     }
 
     fn project(&self, shape: &Shape, tools: &[Shape]) -> Result<Shape, GeomError> {
-        // This slice supports a planar target only, where a tool that already
-        // lies in the target's plane projects onto itself. Other surfaces need
-        // `BRepAlgo_NormalProjection`, which the seam does not expose yet.
-        if self.surface_type(shape).as_deref() != Some("Part::GeomPlane") {
-            return Err(unsupported(
-                "project: only a planar target is supported (projection is the identity on it)",
-            ));
-        }
+        // Upstream's `Shape.project` is a *normal* projection
+        // (`BRepAlgo_NormalProjection`), not a parallel one: it lays each tool on
+        // the target along the target's own normals, which is what wrapping a
+        // sketch onto a curved face needs.
         if tools.is_empty() {
             return Err(OcctError::InvalidInput {
                 what: "project needs at least one tool shape",
             }
             .into());
         }
-        self.make_compound(tools)
+        let target = downcast(shape)?;
+        let guard = target.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let mut list = ffi::top_tools::new_list_of_shape();
+        for tool in tools {
+            let occt = downcast(tool)?;
+            let tool_guard = occt.borrow();
+            let piece = tool_guard
+                .as_ref()
+                .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+            list.pin_mut().Append(piece);
+        }
+        let projected = bridge::fc_project_normal(inner, &list);
+        match projected.as_ref() {
+            Some(projected) => Ok(erase(projected)),
+            None => Err(OcctError::NotDone {
+                operation: "project",
+            }
+            .into()),
+        }
     }
 
     fn make_offset(&self, shape: &Shape, distance: f64, join: i32) -> Result<Shape, GeomError> {

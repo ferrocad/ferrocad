@@ -2582,9 +2582,10 @@ impl PartShape {
 
     /// `Shape.project(shapes)` — project `shapes` onto this shape.
     ///
-    /// This slice supports a **planar** target only: a tool that already lies in
-    /// the target's plane projects onto itself, so the result is a compound of the
-    /// tools. Projecting onto any other surface raises `Part.OCCError`.
+    /// This is upstream's normal projection (`BRepAlgo_NormalProjection`): each
+    /// tool is laid on this shape along its normals, which is how SimpleCAD wraps
+    /// an outline onto a curved face. A target that cannot receive the projection
+    /// raises `Part.OCCError`.
     fn project(&self, shapes: &Bound<'_, PyAny>) -> PyResult<PartShape> {
         let shape = self.named_shape()?;
         let tools = shape_sequence(shapes)?;

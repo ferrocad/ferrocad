@@ -888,6 +888,13 @@ mod ffi {
             parallel: bool,
         ) -> UniquePtr<TopoDS_Shape>;
 
+        /// Project every tool onto `target` along its normals
+        /// (`BRepAlgo_NormalProjection`), as upstream's `Shape.project`.
+        fn fc_project_normal(
+            target: &TopoDS_Shape,
+            tools: &TopTools_ListOfShape,
+        ) -> UniquePtr<TopoDS_Shape>;
+
         /// Remove faces and heal the gap (`BRepAlgoAPI_Defeaturing`), or null.
         fn fc_defeature(
             shape: &TopoDS_Shape,

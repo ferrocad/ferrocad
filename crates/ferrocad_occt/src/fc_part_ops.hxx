@@ -17,6 +17,7 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgo_Image.hxx>
+#include <BRepAlgo_NormalProjection.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -44,6 +45,7 @@
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom2d_Curve.hxx>
 #include <GeomAbs_JoinType.hxx>
+#include <GeomAbs_Shape.hxx>
 #include <GeomProjLib.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_TrimmedCurve.hxx>
@@ -1206,6 +1208,35 @@ inline std::unique_ptr<TopoDS_Shape> fc_project_shape(const TopoDS_Shape& tool,
         }
         BRepProj_Projection made(tool, target, gp_Pnt(x, y, z));
         return std::make_unique<TopoDS_Shape>(made.Shape());
+    }
+    catch (...) {
+        return nullptr;
+    }
+}
+
+// `Shape.project(tools)`: project every tool onto `target` along the target's
+// normals (`BRepAlgo_NormalProjection`). This is the call that lays a wrapped
+// outline onto a curved face; upstream uses the same parameters in
+// `TopoShapePy::project`.
+inline std::unique_ptr<TopoDS_Shape> fc_project_normal(const TopoDS_Shape& target,
+                                                       const TopTools_ListOfShape& tools)
+{
+    if (target.IsNull() || tools.IsEmpty())
+        return nullptr;
+    try {
+        BRepAlgo_NormalProjection projection(target);
+        for (TopTools_ListIteratorOfListOfShape it(tools); it.More(); it.Next())
+            projection.Add(it.Value());
+        projection.Compute3d(Standard_True);
+        projection.SetLimit(Standard_True);
+        projection.SetParams(1.e-6, 1.e-6, GeomAbs_C1, 14, 10000);
+        projection.Build();
+        if (!projection.IsDone())
+            return nullptr;
+        const TopoDS_Shape projected = projection.Projection();
+        if (projected.IsNull())
+            return nullptr;
+        return std::make_unique<TopoDS_Shape>(projected);
     }
     catch (...) {
         return nullptr;

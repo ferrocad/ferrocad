@@ -101,6 +101,7 @@ fn main() {
             camera: &camera,
             rect: None,
             overlay: false,
+            workplane: None,
         }])
         .expect("draw the skinned triangle");
     let skinned = centre(&mut renderer);
@@ -114,6 +115,7 @@ fn main() {
             camera: &camera,
             rect: None,
             overlay: false,
+            workplane: None,
         }])
         .expect("draw the placeholder");
     let placeholder = centre(&mut renderer);

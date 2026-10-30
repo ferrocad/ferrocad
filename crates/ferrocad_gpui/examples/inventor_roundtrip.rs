@@ -194,6 +194,7 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
             camera: &camera,
             rect: None,
             overlay: false,
+            workplane: None,
         },
         navicube.view(),
     ];

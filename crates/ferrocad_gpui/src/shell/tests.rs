@@ -257,6 +257,7 @@ fn command_checked(id: &str) -> bool {
 }
 
 mod boot;
+mod tree;
 mod interaction;
 mod forms;
 mod view;

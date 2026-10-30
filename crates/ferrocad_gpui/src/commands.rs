@@ -304,6 +304,20 @@ pub struct CommandOutcome {
     /// the wheel's `Rotate` returns `rotate`.
     #[serde(default)]
     pub gizmo: Option<String>,
+    /// Arm the active plane's `+N` offset stem (`WorkplaneStem`).
+    ///
+    /// `Offset Workplane…` returns this with its floating HUD: the stem is the
+    /// gesture half of one session and the dialog is the typed half. It is transient
+    /// viewport state — no document object, no transaction, no undo step — so the
+    /// shell intercepts the stem's commit instead of routing it through the app
+    /// script.
+    ///
+    /// The Python facade forwards this key, and `Offset Workplane…` sends it beside
+    /// its HUD; the older `gizmo: "workplane_offset"` spelling still rides along and
+    /// `Shell::run_command` accepts either, so a facade and a shell of different
+    /// vintages still open the same session.
+    #[serde(default)]
+    pub workplane_stem: bool,
 }
 
 /// The registered commands, with their live state.
@@ -386,6 +400,16 @@ mod tests {
 
         let bare: CommandOutcome = serde_json::from_str(r#"{"ok": true}"#).unwrap();
         assert!(bare.select.is_none(), "select is optional");
+    }
+
+    #[test]
+    fn a_workplane_stem_directive_deserializes() {
+        let outcome: CommandOutcome =
+            serde_json::from_str(r#"{"ok": true, "workplane_stem": true}"#).unwrap();
+        assert!(outcome.workplane_stem, "the offset command asks for the stem");
+
+        let bare: CommandOutcome = serde_json::from_str(r#"{"ok": true}"#).unwrap();
+        assert!(!bare.workplane_stem, "the directive is opt-in");
     }
 
     fn command(id: &str, surface: &str, parent: &str) -> CommandInfo {

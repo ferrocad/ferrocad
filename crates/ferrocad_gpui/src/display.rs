@@ -56,7 +56,8 @@ pub struct StageMesh {
     /// The object's RGBA surface colour (linear, 0..1), if the provider supplies one.
     #[serde(default)]
     pub color: Option<[f32; 4]>,
-    /// How to draw it: `"shaded"`, `"wireframe"` or `"shaded_edges"` (the default).
+    /// How to draw it: `"shaded"`, `"wireframe"`, `"shaded_edges"` (the default)
+    /// or the opt-in `"glass"` card (a datum plane).
     #[serde(default)]
     pub display: Option<String>,
 }
@@ -76,6 +77,29 @@ impl StageMesh {
             parts: self.parts.clone(),
         }
     }
+}
+
+/// The alpha of the datum card's glass fill.
+///
+/// The fill ink is the theme's glass-top token; only its alpha is lowered, so a
+/// datum plane reads as a bounded card rather than a solid face. The rim uses
+/// the front-edge token so the boundary stays readable where the fill fades.
+const GLASS_FILL_ALPHA: f32 = 0.18;
+
+/// The provider's opt-in name for a translucent card (`Part::DatumPlane`).
+///
+/// It reuses the existing `display` field, so a provider that omits it (every
+/// solid in the document) keeps the opaque path unchanged.
+const GLASS_CARD: &str = "glass";
+
+/// The translucent fill of a datum card.
+fn glass_fill() -> [f32; 4] {
+    [
+        theme::GLASS_TOP[0],
+        theme::GLASS_TOP[1],
+        theme::GLASS_TOP[2],
+        GLASS_FILL_ALPHA,
+    ]
 }
 
 /// The entity → document-object map, kept in step with the displayed stage.
@@ -108,19 +132,31 @@ impl DisplaySync {
             }
             let mut item = ShapeItem::from_tessellation(mesh.entity, &mesh.tessellation())
                 .with_draw_mode(display_mode(mesh.display.as_deref()))
-                .with_origin(mesh.origin)
-                // Document solids get the V1 occluded-edge ghost; overlays do not.
-                .with_ghost_edges();
-            if mesh.color.is_none() {
-                // V2b: up-facing facets use the glass-top ink, the rest the shade.
+                .with_origin(mesh.origin);
+            if mesh.display.as_deref() == Some(GLASS_CARD) {
+                // A datum card: a low-alpha glass fill plus the front-edge rim, in
+                // the blended pass. No occluded ghost edges — the card is meant to
+                // be read through, and its rim is the whole boundary cue.
                 item = item
-                    .with_surface_color(theme::GLASS_TOP)
-                    .with_shade_color(theme::GLASS_SHADE);
-            }
-            if let Some(color) = mesh.color {
-                // The edge colour follows the surface, so a wireframe shows the same
-                // colour as the shaded item. A workbench colour stays single-tone.
-                item = item.with_surface_color(color).with_edge_color(color);
+                    .with_blended_surface()
+                    .with_surface_color(glass_fill())
+                    .with_shade_color(glass_fill())
+                    .with_edge_color(theme::EDGE_FRONT);
+            } else {
+                // Document solids get the V1 occluded-edge ghost; overlays do not.
+                item = item.with_ghost_edges();
+                if mesh.color.is_none() {
+                    // V2b: up-facing facets use the glass-top ink, the rest the shade.
+                    item = item
+                        .with_surface_color(theme::GLASS_TOP)
+                        .with_shade_color(theme::GLASS_SHADE);
+                }
+                if let Some(color) = mesh.color {
+                    // The edge colour follows the surface, so a wireframe shows the
+                    // same colour as the shaded item. A workbench colour stays
+                    // single-tone.
+                    item = item.with_surface_color(color).with_edge_color(color);
+                }
             }
             self.objects.insert(mesh.entity, mesh.object);
             stage.add_item(item);
@@ -218,6 +254,30 @@ mod tests {
             theme::GLASS_SHADE,
             "the side facets carry the glass shade"
         );
+    }
+
+    #[test]
+    fn a_blended_mesh_is_a_glass_card_with_a_rim() {
+        let mut display = DisplaySync::new();
+        let mut datum = slab(7, "DatumPlane");
+        datum.display = Some(GLASS_CARD.to_string());
+        let stage = display.build(vec![datum]);
+        let item = stage.item(7).expect("the item");
+
+        // The fill is the glass-top ink at the card's low alpha, in the blended
+        // pass; the rim is the front-edge token, and no occluded ghost is emitted.
+        assert_eq!(item.surface_color(), glass_fill());
+        assert_eq!(item.surface_color()[3], GLASS_FILL_ALPHA);
+        assert_eq!(item.edge_color(), theme::EDGE_FRONT);
+        assert!(!item.ghost_edges(), "a card has one crisp rim, not a ghost");
+        assert_eq!(item.draw_mode(), DrawMode::ShadedWithEdges);
+
+        // The same mesh without the opt-in keeps the opaque solid path.
+        let stage = display.build(vec![slab(8, "Box")]);
+        let solid = stage.item(8).expect("the solid");
+        assert!(solid.ghost_edges());
+        assert_eq!(solid.surface_color(), theme::GLASS_TOP);
+        assert_ne!(solid.surface_color()[3], GLASS_FILL_ALPHA);
     }
 
     #[test]

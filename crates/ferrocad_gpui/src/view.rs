@@ -40,6 +40,20 @@ pub struct ViewRequest {
     /// The world grid's major step, in millimetres.
     #[serde(default)]
     pub grid_major: Option<f64>,
+    /// Whether the grid's step follows the plane's extent (the scene's for the world
+    /// ground, a face's for a bound plane) instead of the configured steps.
+    #[serde(default)]
+    pub grid_adaptive: Option<bool>,
+    /// The minor level's form: `"dots"` (intersection dots) or `"lines"` (a lattice at
+    /// the minor step).
+    #[serde(default)]
+    pub grid_minor_style: Option<String>,
+    /// The major lines' stroke width, in device pixels (`1` is the hairline).
+    #[serde(default)]
+    pub grid_major_width: Option<f64>,
+    /// The minor lattice's stroke width, in device pixels.
+    #[serde(default)]
+    pub grid_minor_width: Option<f64>,
     /// A fixed world-grid extent (mm). Omitted keeps it camera-derived.
     #[serde(default)]
     pub grid_radius: Option<f64>,
@@ -299,6 +313,16 @@ pub struct ViewState {
     pub grid_minor: f64,
     /// The world grid's major step (mm).
     pub grid_major: f64,
+    /// Whether grid spacing is adaptive: derived from the extent the layer covers — the
+    /// ground disc's radius, or the bound surface's in-plane radius for a face patch —
+    /// instead of [`grid_minor`](Self::grid_minor) and [`grid_major`](Self::grid_major).
+    pub grid_adaptive: bool,
+    /// Whether the minor level is a line lattice rather than intersection dots.
+    pub grid_minor_style: grid::MinorStyle,
+    /// The major lines' stroke width, in device pixels.
+    pub grid_major_width: f64,
+    /// The minor lattice's stroke width, in device pixels.
+    pub grid_minor_width: f64,
     /// A fixed world-grid extent (mm); `None` keeps it camera-derived.
     pub grid_radius: Option<f64>,
     /// The world grid's linear ink (alpha is carried by the per-vertex fade).
@@ -322,6 +346,10 @@ impl Default for ViewState {
             projection: ProjectionName::Perspective,
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
+            grid_adaptive: true,
+            grid_minor_style: grid::MinorStyle::Dots,
+            grid_major_width: 1.0,
+            grid_minor_width: 1.0,
             grid_radius: None,
             grid_color: grid::GRID_COLOR,
             grid_alpha: 1.0,
@@ -367,6 +395,23 @@ impl ViewState {
         if let Some(alpha) = request.grid_alpha {
             if !(alpha.is_finite() && (0.0..=1.0).contains(&alpha)) {
                 return Err(format!("grid alpha must be between 0 and 1, got {alpha}"));
+            }
+        }
+        let minor_style = request
+            .grid_minor_style
+            .as_deref()
+            .map(grid::MinorStyle::parse)
+            .transpose()?;
+        for (name, width) in [
+            ("major", request.grid_major_width),
+            ("minor", request.grid_minor_width),
+        ] {
+            if let Some(width) = width {
+                if !(width.is_finite() && width > 0.0) {
+                    return Err(format!(
+                        "the grid {name} line width must be positive, got {width}"
+                    ));
+                }
             }
         }
         // The axis style is validated up front too, so a bad colour (or a degenerate
@@ -727,6 +772,35 @@ impl ViewState {
                 changes.push(format!("grid major {}", trim(major)));
             }
         }
+        if let Some(adaptive) = request.grid_adaptive {
+            if self.grid_adaptive != adaptive {
+                self.grid_adaptive = adaptive;
+                changes.push(format!(
+                    "grid adaptive {}",
+                    if adaptive { "on" } else { "off" }
+                ));
+            }
+        }
+        if let Some(minor_style) = minor_style {
+            if self.grid_minor_style != minor_style {
+                self.grid_minor_style = minor_style;
+                changes.push(format!("grid minor style {}", minor_style.as_str()));
+            }
+        }
+        for (name, requested, current) in [
+            ("major", request.grid_major_width, &mut self.grid_major_width),
+            ("minor", request.grid_minor_width, &mut self.grid_minor_width),
+        ] {
+            if let Some(width) = requested {
+                // Clamp rather than refuse: a width is a rendering preference, and an
+                // out-of-range value would otherwise reject the whole request.
+                let width = width.clamp(grid::MIN_STROKE_PIXELS, grid::MAX_STROKE_PIXELS);
+                if (*current - width).abs() > 1e-9 {
+                    *current = width;
+                    changes.push(format!("grid {name} width {}", trim(width)));
+                }
+            }
+        }
         if let Some(radius) = request.grid_radius {
             // Zero means "back to the camera-derived extent".
             let next = (radius > 0.0).then_some(radius);
@@ -835,6 +909,7 @@ mod tests {
         assert_eq!(state.projection.as_str(), "persp");
         assert_eq!(state.grid_minor, grid::MINOR_STEP);
         assert_eq!(state.grid_major, grid::MAJOR_STEP);
+        assert!(state.grid_adaptive, "spacing follows the plane's extent by default");
         assert_eq!(state.grid_radius, None);
         assert_eq!(state.grid_color, grid::GRID_COLOR);
         assert_eq!(state.grid_alpha, 1.0);
@@ -1335,6 +1410,68 @@ mod tests {
         };
         assert_eq!(state.apply(&auto).unwrap(), "grid radius auto");
         assert_eq!(state.grid_radius, None);
+    }
+
+    #[test]
+    fn the_adaptive_switch_applies_and_summarises() {
+        let mut state = ViewState::default();
+        assert!(state.grid_adaptive, "adaptive spacing is the shipped default");
+
+        let off = ViewRequest {
+            grid_adaptive: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&off).unwrap(), "grid adaptive off");
+        assert!(!state.grid_adaptive);
+
+        // The same value again is not a change, so nothing is reported.
+        assert_eq!(state.apply(&off).unwrap(), "view unchanged");
+        assert_eq!(
+            state
+                .apply(&ViewRequest {
+                    grid_adaptive: Some(true),
+                    ..Default::default()
+                })
+                .unwrap(),
+            "grid adaptive on"
+        );
+    }
+
+    #[test]
+    fn the_grid_stroke_applies_and_summarises() {
+        let mut state = ViewState::default();
+        assert_eq!(state.grid_minor_style, grid::MinorStyle::Dots);
+        assert_eq!((state.grid_major_width, state.grid_minor_width), (1.0, 1.0));
+
+        let request = ViewRequest {
+            grid_minor_style: Some("Lines".to_string()),
+            grid_major_width: Some(3.0),
+            grid_minor_width: Some(2.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            state.apply(&request).unwrap(),
+            "grid minor style lines, grid major width 3, grid minor width 2"
+        );
+        assert_eq!(state.grid_minor_style, grid::MinorStyle::Lines);
+
+        // An unknown form is a request error; a width is a preference and is clamped.
+        assert!(state
+            .apply(&ViewRequest {
+                grid_minor_style: Some("dashes".to_string()),
+                ..Default::default()
+            })
+            .is_err());
+        assert_eq!(
+            state
+                .apply(&ViewRequest {
+                    grid_major_width: Some(40.0),
+                    ..Default::default()
+                })
+                .unwrap(),
+            format!("grid major width {}", grid::MAX_STROKE_PIXELS)
+        );
+        assert_eq!(state.grid_major_width, grid::MAX_STROKE_PIXELS);
     }
 
     #[test]

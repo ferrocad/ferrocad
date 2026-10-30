@@ -104,6 +104,16 @@ impl Shell {
     /// commit. Text that does not parse yet previews as zero rather than flashing an
     /// error mid-keystroke.
     pub(super) fn preview_dialog(&mut self, cx: &mut Context<Self>) {
+        let workplane_offset = self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.drives_workplane_offset());
+        if workplane_offset {
+            // The typed half of the offset session: the field moves the plane (and its
+            // stem) live, so typing and dragging describe the same pending offset.
+            self.preview_workplane_offset(cx);
+            return;
+        }
         let delta = {
             let Some(dialog) = self.dialog.as_ref() else {
                 return;

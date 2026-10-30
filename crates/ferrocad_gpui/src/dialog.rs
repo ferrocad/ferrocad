@@ -35,7 +35,9 @@ pub struct DialogSpec {
     /// A live preview the shell drives while the dialog is edited.
     ///
     /// `"translation"` previews the `dx`/`dy`/`dz` fields on the selection without
-    /// touching the document. Empty means no preview.
+    /// touching the document. `"workplane_offset"` is the `Offset Workplane…` HUD:
+    /// the shell drives its one field from the active plane's `+N` stem, and the two
+    /// end together. Empty means no preview.
     #[serde(default)]
     pub preview: String,
 }
@@ -66,6 +68,16 @@ impl DialogSpec {
     /// Whether the spec asks for a live translation preview.
     pub fn previews_translation(&self) -> bool {
         self.preview == "translation"
+    }
+
+    /// Whether this is the `Offset Workplane…` HUD, the typed half of the workplane
+    /// stem's session (`ferrocad_stage::WORKPLANE_OFFSET_ID`).
+    ///
+    /// It rides in [`preview`](Self::preview), which the Python facade already forwards
+    /// with the rest of the spec; a separate key would have to be added to the facade's
+    /// whitelist first.
+    pub fn drives_workplane_offset(&self) -> bool {
+        self.preview == ferrocad_stage::WORKPLANE_OFFSET_ID
     }
 }
 

@@ -106,6 +106,7 @@ pub fn run(
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .map_err(|error| format!("draw failed: {error}"))?;
         let image = renderer

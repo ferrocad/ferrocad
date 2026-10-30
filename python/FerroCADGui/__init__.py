@@ -291,8 +291,10 @@ def registerProvider(
     ``settings`` is the optional schema the provider advertises: a list of
     dicts, each with a non-empty ``name`` and a ``kind`` (``text``, ``bool``,
     ``int``, ``float``, ``quantity``, ``enum``, ``color``), plus ``label``,
-    ``default``, ``min``/``max``, ``unit``, ``choices`` and optional ``get``/
-    ``set`` callables. It is validated here and stored; **no default is written**
+    ``default``, ``min``/``max``, ``unit``, ``choices``, optional ``get``/
+    ``set`` callables and an optional ``status`` (a chip shown beside the value:
+    a string, or a zero-argument callable for one that depends on other knobs).
+    It is validated here and stored; **no default is written**
     at registration, so importing a mod stays free of side effects. An unknown
     kind is allowed and reported once; its row is read-only. See
     ``docs/project/record/tasks/settings-model.md`` S0.
@@ -834,6 +836,14 @@ def _validate_settings(feature, backend, settings) -> list:
                     f"'{hook}' is not callable"
                 )
             spec[hook] = callback
+        status = entry.get("status")
+        if status is not None:
+            if not isinstance(status, str) and not callable(status):
+                raise TypeError(
+                    f"provider {feature!r}/{backend!r} setting {name!r} "
+                    "'status' must be a string or a callable"
+                )
+            spec["status"] = status
         if "default" in entry:
             default = entry["default"]
             if spec["kind"] in _SETTING_KINDS:
@@ -1025,6 +1035,24 @@ def _write_setting(spec, group, value) -> None:
         group.SetString(name, str(value))
 
 
+def _setting_status(spec: dict, fallback: str) -> str:
+    """The row's chip: a schema ``status`` (a string or a callable) or the read status.
+
+    A callable lets a row describe a *relationship* between knobs — the grid's
+    ``minor``/``major`` say ``adaptive`` while the drawn step is derived from the view,
+    so a pane row that is not the drawn value says so.
+    """
+    override = spec.get("status")
+    if override is None:
+        return fallback
+    if callable(override):
+        try:
+            return str(override())
+        except Exception:  # noqa: BLE001 - a broken chip is not fatal
+            return fallback
+    return str(override)
+
+
 def settings(feature: str, backend=None) -> list:
     """The settings rows of ``feature``'s active provider (or ``backend``).
 
@@ -1057,6 +1085,7 @@ def settings(feature: str, backend=None) -> list:
         except Exception as exc:  # noqa: BLE001 - one broken knob is not fatal
             _report_setting(feature, backend, spec["name"], exc)
             raw, status = spec["default"], "error"
+        status = _setting_status(spec, status)
         kind = spec["kind"]
         has_get = spec.get("get") is not None
         has_set = spec.get("set") is not None
@@ -1619,9 +1648,11 @@ class _ViewState:
 
     ``grid`` is the reference-grid flag, ``axis_cross`` the world triad's, ``projection``
     is ``"persp"`` or ``"ortho"``, ``grid_minor``/``grid_major`` are the world grid's
-    steps (mm) and ``grid_radius`` is a fixed extent (mm, or ``None`` for the
-    camera-derived one). A checkable command reads these in ``IsChecked``, which is what
-    makes a ``{"view": …}`` request close the loop.
+    steps (mm), ``grid_adaptive`` says whether the step follows the plane's extent,
+    ``grid_minor_style`` is ``"dots"`` or ``"lines"``, the two widths are in device
+    pixels, and ``grid_radius`` is a fixed extent (mm, or ``None`` for the camera-derived
+    one). A checkable command reads these in ``IsChecked``, which is what makes a
+    ``{"view": …}`` request close the loop.
     """
 
     grid = False
@@ -1629,6 +1660,10 @@ class _ViewState:
     projection = "persp"
     grid_minor = 10.0
     grid_major = 100.0
+    grid_adaptive = True
+    grid_minor_style = "dots"
+    grid_major_width = 1.0
+    grid_minor_width = 1.0
     grid_radius = None
 
 

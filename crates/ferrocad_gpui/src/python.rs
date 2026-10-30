@@ -613,6 +613,10 @@ pub fn set_view_state(state: &crate::view::ViewState) -> Result<(), String> {
         "projection": state.projection.as_str(),
         "grid_minor": state.grid_minor,
         "grid_major": state.grid_major,
+        "grid_adaptive": state.grid_adaptive,
+        "grid_minor_style": state.grid_minor_style.as_str(),
+        "grid_major_width": state.grid_major_width,
+        "grid_minor_width": state.grid_minor_width,
         "grid_radius": state.grid_radius,
     })
     .to_string();
@@ -689,6 +693,15 @@ pub fn set_provider(
 ) -> Result<crate::commands::CommandOutcome, String> {
     let payload = serde_json::json!({"feature": feature, "backend": backend}).to_string();
     call_json("set_provider", Some(&payload))
+}
+
+/// Re-read a feature's active provider, returning the `view` request it claims.
+///
+/// A provider's `activate` runs on a document activation inside Python, and the
+/// shell never sees the request it returns. This is the shell's way to ask the
+/// same backend again once a viewport exists, without switching providers.
+pub fn refresh_providers(feature: &str) -> Result<crate::commands::CommandOutcome, String> {
+    call_json("refresh_providers", Some(feature))
 }
 
 /// The WGSL skin the active provider of `feature` supplies, if any.

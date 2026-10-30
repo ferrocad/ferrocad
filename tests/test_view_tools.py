@@ -94,6 +94,28 @@ class ViewAndToolTests(unittest.TestCase):
         self.assertEqual(result["tool"], "some_tool")
         json.dumps(result)  # the callable (if any) must never reach the payload
 
+    def test_a_workplane_stem_directive_survives_the_payload(self):
+        # The offset HUD asks for the viewport's `+N` stem with a top-level
+        # `workplane_stem`, not a dialog key: the facade must forward it beside the
+        # spec. The older `gizmo` spelling still travels for a shell that predates it.
+        result = FreeCADGui._run("App_OffsetWorkplane")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["workplane_stem"])
+        self.assertEqual(result["gizmo"], "workplane_offset")
+        self.assertEqual(result["dialog"]["preview"], "workplane_offset")
+        self.assertTrue(result["token"])
+        json.dumps(result)  # the callable must never reach the payload
+
+    def test_a_legacy_gizmo_request_still_survives_the_payload(self):
+        class _Legacy:
+            def Activated(self):
+                return {"gizmo": "workplane_offset"}
+
+        self.add("Test_WorkplaneStemLegacy", _Legacy())
+        result = FreeCADGui._run("Test_WorkplaneStemLegacy")
+        self.assertEqual(result["gizmo"], "workplane_offset")
+        self.assertNotIn("workplane_stem", result)
+
     def test_a_view_request_and_a_status_can_coexist(self):
         class _Both:
             def Activated(self):
@@ -103,6 +125,20 @@ class ViewAndToolTests(unittest.TestCase):
         result = FreeCADGui._run("Test_Both")
         self.assertEqual(result["status"], "toggled")
         self.assertEqual(result["view"], {"projection": "ortho"})
+
+    def test_the_standard_workplane_rows_name_planes_not_views(self):
+        """`YZ` is the **Side** plane; `Right` is a camera view, not a plane.
+
+        Upstream `WorkingPlane.set_to_side` is the preset, and the YZ plane is `x = 0`
+        — it is not "the plane on the right of the model". Calling the row `(Right)`
+        conflated the plane preset with `Std_ViewRight`, which reads as if the plane
+        had moved to the right of the geometry.
+        """
+        entries = {entry["id"]: entry for entry in json.loads(ferrocad_shell.commands())}
+        self.assertEqual(entries["App_WorkplaneXY"]["menu"], "World XY (Top)")
+        self.assertEqual(entries["App_WorkplaneXZ"]["menu"], "World XZ (Front)")
+        self.assertEqual(entries["App_WorkplaneYZ"]["menu"], "World YZ (Side)")
+        self.assertEqual(entries["App_ViewWorkplane"]["menu"], "Align camera to WP")
 
 
 if __name__ == "__main__":

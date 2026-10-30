@@ -1414,6 +1414,50 @@ fn a_bool_row_is_a_toggle_that_commits(cx: &mut TestAppContext) {
     reset_grid_state();
 }
 
+/// A grid step row in `Settings/Grid` reaches the drawn policy. The row commits through
+/// the same path as the dialog, and `apply_view` is what mirrors it into the shell's view
+/// state — so an edit that never repaints would show up here as an unchanged state.
+#[gpui::test]
+fn a_grid_step_row_commits_and_reaches_the_view_state(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    reset_grid_state();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("View_GridSettings", cx))
+    });
+    draw(&mut cx);
+
+    // The configured pair only shapes the drawing when adaptive spacing is off, so the
+    // row that matters first is `adaptive`.
+    shell.update(&mut cx, |shell, cx| {
+        shell.commit_property("Settings/Grid.adaptive", "false", cx);
+        shell.commit_property("Settings/Grid.minor", "20", cx);
+        shell.commit_property("Settings/Grid.major", "200", cx);
+    });
+    draw(&mut cx);
+
+    let (minor, major, adaptive) = shell.read_with(&cx, |shell, _| {
+        let state = shell.model.lock().unwrap().view.clone();
+        (state.grid_minor, state.grid_major, state.grid_adaptive)
+    });
+    assert_eq!(
+        (minor, major, adaptive),
+        (20.0, 200.0, false),
+        "the rows reach the drawn policy"
+    );
+
+    reset_grid_state();
+}
+
 /// An enumeration setting is a select box; a pick commits through the same
 /// property path as typing.
 #[gpui::test]

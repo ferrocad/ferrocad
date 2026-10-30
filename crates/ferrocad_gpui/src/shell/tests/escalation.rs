@@ -63,6 +63,28 @@ fn fields(shell: &Entity<Shell>, cx: &VisualTestContext) -> [f64; 3] {
 }
 
 #[gpui::test]
+fn typing_in_the_settings_card_does_not_open_the_move_hud(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    shell.update(&mut cx, |shell, cx| {
+        shell.open_settings_card("Settings/Grid", cx);
+    });
+    draw(&mut cx);
+
+    // A spacing edit starts with a digit; it must land in the field, not in `dx`.
+    press_root(&mut cx, &shell, "5");
+
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.dialog.is_none()),
+        "a digit typed in the settings card must not open the Move HUD"
+    );
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
+        "the drag session stays live: no escalation happened"
+    );
+}
+
+#[gpui::test]
 fn tab_with_an_armed_gizmo_opens_the_move_hud_at_zero(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (mut cx, shell, _model) = armed_window(cx);

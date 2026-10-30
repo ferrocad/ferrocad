@@ -4,7 +4,12 @@
 
 use super::*;
 use super::picking::click_target;
-use ferrocad_stage::{GizmoSet, ShapeItem, Stage};
+use ferrocad_stage::{
+    GizmoSet, ShapeItem, Stage, WorkplaneLive, WorkplaneStem, WORKPLANE_OFFSET_ID,
+};
+
+/// The `Offset Workplane…` HUD's field that mirrors the session's pending offset.
+const WORKPLANE_FIELD: &str = "offset";
 
 impl Shell {
     /// Re-read the document's shapes into the viewport's stage.
@@ -64,6 +69,14 @@ impl Shell {
     /// the drawn stage would keep the old visual. The generation check is a mutex read;
     /// only a real change clones the document stage.
     pub(super) fn sync_previews(&mut self, cx: &mut Context<Self>) {
+        // A `Offset Workplane…` HUD that closed without accepting has cancelled its
+        // session: put the plane back. This runs before the cheap generation check
+        // because a repaint is the first moment after Esc that the shell sees.
+        self.reconcile_workplane_session(cx);
+        // The stem's tick has already landed by the time a frame is painted (the
+        // viewport observation runs first); this covers a drag that finished between
+        // frames so the field never lags a release.
+        self.sync_workplane_drag(cx);
         let generation = ferrocad_stage_py::preview_generation();
         if generation == self.preview_generation {
             return;
@@ -241,6 +254,14 @@ impl Shell {
     /// A click: select the object in the inspector, and arm the manipulators and gizmo
     /// the edition's workbenches and mods contribute for that selection.
     pub(super) fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
+        // A selection change is a competing interaction: it closes the offset HUD and
+        // puts the plane back where the session started (`selection-gizmos-and-forms.md`
+        // §5.3). A `float` is not dismissed by clicking the canvas, so this is the
+        // selection event, not the click.
+        if self.workplane_hud_open() {
+            self.cancel_dialog(cx);
+            self.end_workplane_session(false, cx);
+        }
         // A selection change invalidates the object verbs the wheel was built for.
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
@@ -712,6 +733,13 @@ impl Shell {
     /// A manipulator drag ended: apply the commit through the app script's
     /// `interaction` hook, recompute, and re-read the shapes.
     pub(super) fn on_interaction(&mut self, commit: &InteractionCommit, cx: &mut Context<Self>) {
+        // The active plane's offset stem is transient viewport state: the shell applies
+        // it itself, before any entity lookup and without the `interaction` hook. No
+        // document object is involved and nothing is written.
+        if commit.manipulator == WORKPLANE_OFFSET_ID {
+            self.on_workplane_offset(commit, cx);
+            return;
+        }
         // Any document interaction supersedes a pending Move HUD: the height grip may
         // have resized the body, and the pending delta is stale. Close the dialog (and
         // its token) so it cannot apply on top of the committed change.
@@ -789,6 +817,15 @@ impl Shell {
     /// selection against the new stage. The factory re-reads the object's origin, so the
     /// triad tracks the geometry without any shell-side bookkeeping.
     pub(super) fn rearm_selection(&mut self, cx: &mut Context<Self>) {
+        // The offset session owns the pointer while its HUD is open: keep its stem on
+        // the live plane instead of handing the handles back to the selection.
+        if self.workplane_hud_open() {
+            self.arm_workplane_stem(cx);
+            return;
+        }
+        // An accepted `Offset Workplane…` HUD ends its session here: the value is
+        // already applied, so the plane keeps it and only the stem goes away.
+        self.end_workplane_session(true, cx);
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
@@ -840,4 +877,274 @@ impl Shell {
         }
     }
 
+    // -- W2: the `Offset Workplane…` session (stem + floating HUD) -------------
+
+    /// Arm the active plane's `+N` stem (the `workplane_stem` directive).
+    ///
+    /// The stem is the gesture half of the offset session and the HUD is the typed
+    /// half; both live in the viewport's transient state. A re-arm after a commit —
+    /// the plane moved, so the stem must sit on it again — keeps the session's base;
+    /// a fresh command starts a new one.
+    pub(super) fn arm_workplane_stem(&mut self, cx: &mut Context<Self>) {
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let (plane, offset) = {
+            let active = viewport.read(cx).active_workplane();
+            (active.plane.clone(), active.offset)
+        };
+        let continuing = self.workplane_hud_open();
+        let base = match (continuing, self.workplane_session.as_ref()) {
+            (true, Some(session)) => session.base,
+            _ => offset,
+        };
+        // The stem measures from the total the HUD shows: a drag tick is
+        // `armed total + travel`, so the field mirrors the whole session rather than
+        // the last gesture (a second drag continues the first one's number).
+        let total = offset - base;
+        let live = WorkplaneLive::new(total);
+        self.workplane_session = Some(WorkplaneSession {
+            base,
+            live: live.clone(),
+            field: Some(total),
+        });
+        viewport.update(cx, |viewport, cx| {
+            viewport.set_manipulators(vec![Box::new(WorkplaneStem::tracked(&plane, live))]);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// The offset the live `Offset Workplane…` session started from, if one is open.
+    pub(super) fn workplane_session_base(&self) -> Option<f64> {
+        self.workplane_session.as_ref().map(|session| session.base)
+    }
+
+    /// Whether the open dialog is the `Offset Workplane…` HUD.
+    fn workplane_hud_open(&self) -> bool {
+        self.dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.drives_workplane_offset())
+    }
+
+    /// Mirror the session's pending offset into the HUD's field.
+    ///
+    /// `TextInput::set_text` is programmatic, so this cannot re-emit a change event
+    /// and loop back into the field.
+    fn set_workplane_hud_value(&mut self, total: f64, cx: &mut Context<Self>) {
+        if !self.workplane_hud_open() {
+            return;
+        }
+        let input = {
+            let Some(dialog) = self.dialog.as_ref() else {
+                return;
+            };
+            let Some(index) = dialog
+                .spec
+                .fields
+                .iter()
+                .position(|field| field.name == WORKPLANE_FIELD)
+            else {
+                return;
+            };
+            dialog.inputs.get(index).and_then(Option::as_ref).cloned()
+        };
+        if let Some(input) = input {
+            let text = format!("{total:.2}");
+            input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+        if let Some(session) = self.workplane_session.as_mut() {
+            session.field = Some(total);
+        }
+    }
+
+    /// Mirror a live stem drag into the HUD's field (the drag→field half).
+    ///
+    /// The stem writes its tick total into the session's [`WorkplaneLive`], and the
+    /// shell calls this from the viewport observation (a drag tick notifies the
+    /// viewport but emits no event) and from the render path. The field is written
+    /// only when the displayed total actually changes, and `set_text` is programmatic,
+    /// so this cannot loop back through the input's change event.
+    pub(super) fn sync_workplane_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(total) = self.workplane_session.as_ref().and_then(|s| s.live.total()) else {
+            return;
+        };
+        let Some(shown) = self.workplane_session.as_ref().and_then(|s| s.field) else {
+            return;
+        };
+        // The field is rendered with two decimals; a smaller move cannot change it.
+        if (shown - total).abs() < 5e-3 {
+            return;
+        }
+        if !self.workplane_hud_open() {
+            return;
+        }
+        self.set_workplane_hud_value(total, cx);
+    }
+
+    /// Drive the plane from the offset HUD's typed total (the field→stem half).
+    ///
+    /// Typing moves the plane live, like the Move HUD's translation preview: the
+    /// value is transient viewport state, so nothing is written and `Esc` still
+    /// restores the session's base. Text that does not parse yet (a lone `-`, an
+    /// empty field) leaves the plane where it is rather than snapping it back to the
+    /// session base on every keystroke.
+    pub(super) fn preview_workplane_offset(&mut self, cx: &mut Context<Self>) {
+        let Some(base) = self.workplane_session_base() else {
+            return;
+        };
+        let Some(total) = self.workplane_field_total(cx) else {
+            return;
+        };
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let (changed, plane, offset) = viewport.update(cx, |viewport, cx| {
+            let current = viewport.active_workplane().offset;
+            let changed = viewport.offset_workplane(base + total - current);
+            if changed {
+                cx.notify();
+            }
+            let active = viewport.active_workplane();
+            (changed, active.plane.clone(), active.offset)
+        });
+        if !changed {
+            return;
+        }
+        // The stem sits on the plane it offsets, so a typed move takes it along. Keep
+        // the session's live handle: a later drag continues from the typed total.
+        if let Some(live) = self.workplane_session.as_ref().map(|s| s.live.clone()) {
+            live.set_base(offset - base);
+            viewport.update(cx, |viewport, cx| {
+                viewport.set_manipulators(vec![Box::new(WorkplaneStem::tracked(&plane, live))]);
+                cx.notify();
+            });
+        }
+        if let Some(session) = self.workplane_session.as_mut() {
+            session.field = Some(offset - base);
+        }
+        cx.notify();
+    }
+
+    /// The offset HUD's field as a number, while its text parses.
+    fn workplane_field_total(&self, cx: &App) -> Option<f64> {
+        let dialog = self.dialog.as_ref()?;
+        let index = dialog
+            .spec
+            .fields
+            .iter()
+            .position(|field| field.name == WORKPLANE_FIELD)?;
+        let input = dialog.inputs.get(index).and_then(Option::as_ref)?;
+        let text = input.read(cx).text().trim().to_string();
+        let value: f64 = text.parse().ok()?;
+        value.is_finite().then_some(value)
+    }
+
+    /// A workplane stem was released: apply its signed distance to the active plane.
+    ///
+    /// This is the one manipulator commit the shell applies itself. The offset is
+    /// viewport state, so there is no entity to resolve (`commit.target` is therefore
+    /// never used) and no `interaction` hook to call.
+    fn on_workplane_offset(&mut self, commit: &InteractionCommit, cx: &mut Context<Self>) {
+        let delta = commit.values.first().copied().unwrap_or(0.0);
+        let Some(viewport) = self.viewport.clone() else {
+            let status = "workplane: no viewport".to_string();
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        };
+        let (applied, label, offset, plane) = viewport.update(cx, |viewport, cx| {
+            let applied = viewport.offset_workplane(delta);
+            if applied {
+                cx.notify();
+            }
+            let active = viewport.active_workplane();
+            (
+                applied,
+                active.display_label(),
+                active.offset,
+                active.plane.clone(),
+            )
+        });
+        // The stem sits on the plane it offsets, so it follows the moved origin; the
+        // next drag measures from there. The session's live handle survives the re-arm,
+        // re-based on the new total, so the next drag keeps mirroring into the field.
+        if let Some(live) = self.workplane_session.as_ref().map(|session| session.live.clone()) {
+            if let Some(base) = self.workplane_session_base() {
+                live.set_base(offset - base);
+            }
+            viewport.update(cx, |viewport, cx| {
+                viewport.set_manipulators(vec![Box::new(WorkplaneStem::tracked(&plane, live))]);
+                cx.notify();
+            });
+        }
+        // The HUD shows the session's total, so a drag and a typed number describe the
+        // same pending offset.
+        if let Some(base) = self.workplane_session_base() {
+            self.set_workplane_hud_value(offset - base, cx);
+        }
+        let status = if applied {
+            format!("workplane: {label}")
+        } else {
+            "the workplane offset is unchanged".to_string()
+        };
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+    }
+
+    /// End the `Offset Workplane…` session.
+    ///
+    /// `keep` is the accept path: the offset is already applied, so only the stem
+    /// goes. Otherwise (a cancelled HUD, `Esc`) the plane returns to the offset the
+    /// session began with. Returns whether a session was active.
+    pub(super) fn end_workplane_session(&mut self, keep: bool, cx: &mut Context<Self>) -> bool {
+        let base = self.workplane_session.take().map(|session| session.base);
+        let Some(base) = base else {
+            return false;
+        };
+        let Some(viewport) = self.viewport.clone() else {
+            return true;
+        };
+        let restored = viewport.update(cx, |viewport, cx| {
+            let changed = if keep {
+                false
+            } else {
+                let current = viewport.active_workplane().offset;
+                viewport.offset_workplane(base - current)
+            };
+            if changed {
+                cx.notify();
+            }
+            // The stem belonged to the session; the selection's handles come back on
+            // the next arm.
+            viewport.set_manipulators(Vec::new());
+            cx.notify();
+            changed.then(|| viewport.active_workplane().display_label())
+        });
+        if let Some(label) = restored {
+            let status = format!("workplane: {label}");
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+        }
+        true
+    }
+
+    /// End a session whose HUD closed without accepting.
+    ///
+    /// `Esc` (and any other dismissal) drops the dialog through the shell's shared
+    /// cancel path, which the shell cannot intercept itself; the next repaint is the
+    /// first moment it can, and a transient viewport value restored then is never
+    /// drawn out of place.
+    pub(super) fn reconcile_workplane_session(&mut self, cx: &mut Context<Self>) {
+        if self.workplane_session_base().is_none() {
+            return;
+        }
+        if self.workplane_hud_open() {
+            return;
+        }
+        self.end_workplane_session(false, cx);
+    }
 }

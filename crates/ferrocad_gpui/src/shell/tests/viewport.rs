@@ -119,6 +119,10 @@ import FerroCAD
 grid = FerroCAD.Grid
 grid.minor = 2.0
 grid.major = 20.0
+grid.adaptive = False
+grid.minor_style = "lines"
+grid.major_width = 4.0
+grid.minor_width = 3.0
 grid.radius = 750.0
 "#;
     let evaluated = cx.update(|_window, _cx| crate::python::evaluate(script));
@@ -131,10 +135,14 @@ grid.radius = 750.0
 
     assert_eq!(
         model.lock().unwrap().status,
-        "grid minor 2, grid major 20, grid radius 750"
+        "grid minor 2, grid major 20, grid adaptive off, grid minor style lines, \
+         grid major width 4, grid minor width 3, grid radius 750"
     );
     assert_eq!(model.lock().unwrap().view.grid_minor, 2.0);
     assert_eq!(model.lock().unwrap().view.grid_major, 20.0);
+    assert!(!model.lock().unwrap().view.grid_adaptive);
+    assert_eq!(model.lock().unwrap().view.grid_major_width, 4.0);
+    assert_eq!(model.lock().unwrap().view.grid_minor_width, 3.0);
     assert_eq!(model.lock().unwrap().view.grid_radius, Some(750.0));
 
     if !attached {
@@ -144,6 +152,12 @@ grid.radius = 750.0
     let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
     cx.update(|_window, cx| {
         assert_eq!(viewport.read(cx).grid_steps(), (2.0, 20.0));
+        assert!(!viewport.read(cx).grid_adaptive());
+        assert_eq!(
+            viewport.read(cx).grid_stroke(),
+            (ferrocad_stage::grid::MinorStyle::Lines, 4.0, 3.0),
+            "the stroke reaches the viewport"
+        );
         assert_eq!(viewport.read(cx).grid_radius(), Some(750.0));
     });
 }
@@ -707,4 +721,596 @@ fn a_move_verb_arms_the_body_triad_on_a_face_selection(cx: &mut TestAppContext) 
             "the verb overrides the element suppression"
         );
     });
+}
+
+// ---------------------------------------------------------------------------
+// W2: `Offset Workplane…` — the `+N` stem and its floating HUD
+// ---------------------------------------------------------------------------
+
+/// A windowed shell with a GPU viewport and the booted document, or `None` when no
+/// adapter is available. The viewport is always read back through `shell.viewport`,
+/// so its concrete renderer type stays unnamed here.
+fn offset_shell(
+    cx: &mut TestAppContext,
+) -> Option<(VisualTestContext, Entity<Shell>, Arc<Mutex<ShellModel>>)> {
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut vcx).unwrap();
+    let attached = vcx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.enable_viewport(cx);
+            shell.viewport.is_some()
+        })
+    });
+    if !attached {
+        eprintln!("no GPU adapter available; skipping the workplane stem test");
+        return None;
+    }
+    Some((vcx, shell, model))
+}
+
+/// The armed manipulators' ids, in draw order.
+fn armed_ids(cx: &mut VisualTestContext, shell: &Entity<Shell>) -> Vec<String> {
+    cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .viewport
+            .as_ref()
+            .expect("a viewport")
+            .read(cx)
+            .manipulators()
+            .iter()
+            .map(|manipulator| manipulator.id().to_string())
+            .collect()
+    })
+}
+
+/// The active plane's transient offset.
+fn active_offset(cx: &mut VisualTestContext, shell: &Entity<Shell>) -> f64 {
+    cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .viewport
+            .as_ref()
+            .expect("a viewport")
+            .read(cx)
+            .active_workplane()
+            .offset
+    })
+}
+
+/// The active plane's origin.
+fn active_origin(cx: &mut VisualTestContext, shell: &Entity<Shell>) -> ferrocad_types::Vector3 {
+    cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .viewport
+            .as_ref()
+            .expect("a viewport")
+            .read(cx)
+            .active_workplane()
+            .plane
+            .origin
+            .clone()
+    })
+}
+
+/// Drag the armed `+N` stem `pixels` to the right through the viewport's own pointer
+/// path, and take the commit it produced.
+fn drag_stem(
+    cx: &mut VisualTestContext,
+    shell: &Entity<Shell>,
+    pixels: i32,
+) -> Option<ferrocad_stage::InteractionCommit> {
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    let (grab, release) = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let camera = viewport.camera().clone();
+        let plane = viewport.active_workplane().plane.clone();
+        // The stem's own geometry against the live camera is exactly what the overlay
+        // draws, so this is where the pointer must grab it.
+        let (_, tip) = ferrocad_stage::WorkplaneStem::new(&plane)
+            .handle_points(&camera)
+            .expect("a projected stem");
+        let grab = [tip[0].round() as i32, tip[1].round() as i32];
+        let release = [grab[0] + pixels, grab[1]];
+        (
+            camera.viewport.to_logical(grab),
+            camera.viewport.to_logical(release),
+        )
+    });
+    cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, _cx| {
+            assert!(viewport.handle_button(grab, 1, true), "the stem is grabbable");
+            viewport.handle_pointer(release);
+            assert!(
+                viewport.handle_button(release, 1, false),
+                "releasing the stem commits"
+            );
+            viewport.take_interaction_commit()
+        })
+    })
+}
+
+/// Route a commit the way the window handlers do.
+fn feed_commit(
+    cx: &mut VisualTestContext,
+    shell: &Entity<Shell>,
+    commit: ferrocad_stage::InteractionCommit,
+) {
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_viewport_event(&ViewportEvent::Interaction(commit), cx)
+        })
+    });
+}
+
+/// Focus the shell root and press `Esc`, then repaint (the dismiss path the HUD uses).
+fn press_escape(cx: &mut VisualTestContext, shell: &Entity<Shell>) {
+    let root = shell.read_with(&*cx, |shell, _| shell.root_focus.clone());
+    cx.update(|window, cx| window.focus(&root, cx));
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+}
+
+/// W2: `App_OffsetWorkplane` arms the active plane's `+N` stem **and** opens its
+/// floating one-field HUD, so the same offset can be dragged or typed. Skips without
+/// a GPU adapter.
+#[gpui::test]
+fn offset_workplane_arms_the_stem_and_opens_a_floating_hud(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((mut cx, shell, _model)) = offset_shell(cx) else {
+        return;
+    };
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_OffsetWorkplane", cx))
+    });
+
+    assert_eq!(
+        armed_ids(&mut cx, &shell),
+        vec![ferrocad_stage::WORKPLANE_OFFSET_ID.to_string()],
+        "the plane's `+N` stem is the armed handle"
+    );
+    let (open, floating, field, fields) = cx.update(|_window, cx| {
+        let shell = shell.read(cx);
+        let dialog = shell.dialog.as_ref().expect("the offset HUD");
+        (
+            true,
+            dialog.spec.is_floating(),
+            dialog_field(shell, cx, "offset"),
+            dialog.spec.fields.len(),
+        )
+    });
+    assert!(open && floating, "the offset HUD floats beside the stem");
+    assert_eq!(fields, 1, "one quantity field");
+    assert_eq!(field.parse::<f64>().unwrap_or(f64::NAN), 0.0, "seeded at zero");
+    assert!(
+        !cx.update(|_window, cx| shell.read(cx).gizmo_deferred),
+        "an offset is applied as it is dragged, never deferred to accept"
+    );
+}
+
+/// W2: a stem drag commits `workplane_offset`, the shell applies it to the active
+/// plane itself (no document object lookup, no `interaction` hook), and the HUD's
+/// field mirrors the session's total. Skips without a GPU adapter.
+#[gpui::test]
+fn a_stem_drag_offsets_the_plane_without_the_interaction_hook(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((mut cx, shell, model)) = offset_shell(cx) else {
+        return;
+    };
+
+    // A `workplane_offset` commit must never reach the app script's hook.
+    let stub = r#"
+import ferrocad_shell
+ferrocad_shell._w2_original_interaction = ferrocad_shell.interaction
+ferrocad_shell._w2_calls = []
+def _w2_recording_interaction(*args):
+    ferrocad_shell._w2_calls.append(list(args))
+    return '{"ok": true}'
+ferrocad_shell.interaction = _w2_recording_interaction
+"#;
+    let installed = cx.update(|_window, _cx| crate::python::evaluate(stub));
+    assert!(installed.expect("the stub installs").ok, "stub failed");
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_OffsetWorkplane", cx))
+    });
+
+    let before_origin = active_origin(&mut cx, &shell);
+    let normal = cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .viewport
+            .as_ref()
+            .expect("a viewport")
+            .read(cx)
+            .active_workplane()
+            .plane
+            .n
+    });
+    let commit = drag_stem(&mut cx, &shell, 24).expect("the drag commits");
+
+    assert_eq!(commit.manipulator, ferrocad_stage::WORKPLANE_OFFSET_ID);
+    assert_eq!(commit.action, ferrocad_stage::WORKPLANE_OFFSET_ACTION);
+    assert!(commit.element.is_none(), "the plane is not a sub-element");
+    assert!(!commit.creates, "an offset creates nothing");
+    assert_eq!(commit.values.len(), 1);
+    let delta = commit.values[0];
+    assert!(delta.abs() > 1e-6, "the drag travelled: {delta}");
+
+    feed_commit(&mut cx, &shell, commit);
+
+    // The app script's hook was never called...
+    let restored = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            "import ferrocad_shell as s\n\
+             calls = s._w2_calls\n\
+             s.interaction = s._w2_original_interaction\n\
+             del s._w2_original_interaction\n\
+             del s._w2_calls\n\
+             assert not calls, calls\n",
+        )
+    });
+    assert!(
+        restored.expect("the harness reads back").ok,
+        "the offset commit reached the app script's interaction hook"
+    );
+
+    // ...and the plane moved along `+N`.
+    assert_eq!(active_offset(&mut cx, &shell), delta, "the offset is the delta");
+    let after_origin = active_origin(&mut cx, &shell);
+    assert!(
+        after_origin.is_equal(&before_origin.add(&normal.scale(delta)), 1e-9),
+        "the origin moved along `+N`: {after_origin:?} from {before_origin:?}"
+    );
+    let status = model.lock().unwrap().status.clone();
+    assert!(status.starts_with("workplane: "), "status: {status}");
+    assert!(
+        !status.contains("no document object"),
+        "the commit never resolves an entity: {status}"
+    );
+    let field: f64 = cx.update(|_window, cx| dialog_field(shell.read(cx), cx, "offset"))
+        .parse()
+        .unwrap_or(f64::NAN);
+    assert!(
+        (field - delta).abs() < 0.01,
+        "the HUD field follows the drag: {field} vs {delta}"
+    );
+}
+
+/// W2: `Esc` with the HUD open restores the offset the drag started from and removes
+/// the stem. Skips without a GPU adapter.
+#[gpui::test]
+fn escape_restores_the_pre_drag_workplane_offset(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((mut cx, shell, _model)) = offset_shell(cx) else {
+        return;
+    };
+
+    // A session that starts from a non-zero offset, so "restore" is not just "zero".
+    // The sample camera looks from `+(1, -1, 1)`, so a negative `+Z` offset stays in
+    // front of the eye (and therefore projects).
+    let seeded = crate::view::ViewRequest {
+        workplane: Some("offset".to_string()),
+        workplane_offset: Some(-7.0),
+        ..Default::default()
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let _ = shell.apply_view(&seeded, cx);
+            shell.run_command("App_OffsetWorkplane", cx)
+        })
+    });
+    let base = active_offset(&mut cx, &shell);
+    assert_eq!(base, -7.0, "the session starts from a shifted plane");
+    let commit = drag_stem(&mut cx, &shell, 24).expect("the drag commits");
+    feed_commit(&mut cx, &shell, commit);
+    assert_ne!(active_offset(&mut cx, &shell), base, "the drag moved the plane");
+
+    press_escape(&mut cx, &shell);
+
+    assert_eq!(
+        active_offset(&mut cx, &shell),
+        base,
+        "Esc is a true cancel: the pre-drag offset is restored"
+    );
+    assert!(
+        armed_ids(&mut cx, &shell).is_empty(),
+        "the stem ends with the HUD"
+    );
+    assert!(
+        cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
+        "Esc closes the HUD"
+    );
+}
+
+/// W2: a drag still in flight applies nothing, so `Esc` during it leaves the plane at
+/// the offset the drag began with (`Esc` cancels the drag, not just the HUD). Skips
+/// without a GPU adapter.
+#[gpui::test]
+fn escape_during_a_stem_drag_keeps_the_pre_drag_offset(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((mut cx, shell, _model)) = offset_shell(cx) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_OffsetWorkplane", cx))
+    });
+    let base = active_offset(&mut cx, &shell);
+
+    // Press on the stem and move, but do not release.
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    let (grab, move_to) = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let camera = viewport.camera().clone();
+        let plane = viewport.active_workplane().plane.clone();
+        let (_, tip) = ferrocad_stage::WorkplaneStem::new(&plane)
+            .handle_points(&camera)
+            .expect("a projected stem");
+        let grab = [tip[0].round() as i32, tip[1].round() as i32];
+        (
+            camera.viewport.to_logical(grab),
+            camera.viewport.to_logical([grab[0] + 24, grab[1]]),
+        )
+    });
+    let dragging = cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, _cx| {
+            assert!(viewport.handle_button(grab, 1, true));
+            viewport.handle_pointer(move_to);
+            viewport.manipulator(ferrocad_stage::WORKPLANE_OFFSET_ID)
+                .is_some_and(|manipulator| manipulator.is_dragging())
+        })
+    });
+    assert!(dragging, "the stem is mid-drag");
+
+    // `Esc`: the viewport cancels the drag, the shell cancels the HUD.
+    cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, _cx| {
+            assert!(
+                viewport.cancel_manipulator_drag(),
+                "the drag is cancelled, not committed"
+            );
+            assert!(
+                viewport.take_interaction_commit().is_none(),
+                "a cancelled drag commits nothing"
+            );
+        })
+    });
+    press_escape(&mut cx, &shell);
+
+    assert_eq!(
+        active_offset(&mut cx, &shell),
+        base,
+        "a drag that never released applied nothing"
+    );
+    assert!(armed_ids(&mut cx, &shell).is_empty(), "the stem is gone");
+}
+
+/// W2: accepting the HUD keeps the offset the drag applied, and a typed value is the
+/// session's offset as well. Skips without a GPU adapter.
+#[gpui::test]
+fn accepting_the_offset_hud_keeps_the_offset(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((mut cx, shell, _model)) = offset_shell(cx) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_OffsetWorkplane", cx))
+    });
+
+    let commit = drag_stem(&mut cx, &shell, 24).expect("the drag commits");
+    feed_commit(&mut cx, &shell, commit);
+    let applied = active_offset(&mut cx, &shell);
+    assert!(applied.abs() > 1e-6, "the drag applied an offset");
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.accept_dialog(cx))
+    });
+
+    assert_eq!(
+        active_offset(&mut cx, &shell),
+        applied,
+        "accept keeps the offset the drag already applied"
+    );
+    assert!(
+        cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
+        "the HUD closed"
+    );
+    assert!(
+        armed_ids(&mut cx, &shell).is_empty(),
+        "the stem ended with the session"
+    );
+
+    // The typed half applies the same offset the drag would: a second session starts
+    // from `applied`, and typing `20` asks for 20 mm further along `+N`.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_OffsetWorkplane", cx))
+    });
+    let input = cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .dialog
+            .as_ref()
+            .expect("the offset HUD")
+            .inputs
+            .first()
+            .and_then(Option::as_ref)
+            .cloned()
+            .expect("one text field")
+    });
+    input.update(&mut cx, |input, cx| input.set_text("20".to_string(), cx));
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.accept_dialog(cx))
+    });
+    assert!(
+        (active_offset(&mut cx, &shell) - (applied + 20.0)).abs() < 1e-6,
+        "a typed value drives the same offset: {}",
+        active_offset(&mut cx, &shell)
+    );
+    assert!(armed_ids(&mut cx, &shell).is_empty(), "the stem is gone");
+}
+
+/// W2: the offset session is two-way. A stem drag mirrors its live total into the HUD
+/// field on **every tick** (not only on release), and typing a total moves the plane
+/// and the stem with it. Skips without a GPU adapter.
+#[gpui::test]
+fn offsetting_a_workplane_drags_and_types_along_normal(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((mut cx, shell, _model)) = offset_shell(cx) else {
+        return;
+    };
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("App_OffsetWorkplane", cx))
+    });
+    // Paint once so the viewport has adopted the window's real size: the drag points
+    // below are device pixels, and a resize between the ticks would remap them.
+    draw(&mut cx);
+    let base = active_offset(&mut cx, &shell);
+    let base_origin = active_origin(&mut cx, &shell);
+    let normal = cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .viewport
+            .as_ref()
+            .expect("a viewport")
+            .read(cx)
+            .active_workplane()
+            .plane
+            .n
+    });
+
+    // Press on the stem and travel half the drag, without releasing.
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    let (grab, mid, far) = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let camera = viewport.camera().clone();
+        let plane = viewport.active_workplane().plane.clone();
+        let (_, tip) = ferrocad_stage::WorkplaneStem::new(&plane)
+            .handle_points(&camera)
+            .expect("a projected stem");
+        let grab = [tip[0].round() as i32, tip[1].round() as i32];
+        (
+            camera.viewport.to_logical(grab),
+            camera.viewport.to_logical([grab[0] + 400, grab[1]]),
+            camera.viewport.to_logical([grab[0] + 800, grab[1]]),
+        )
+    });
+
+    // The drag tick: the viewport handler notifies the entity on a changed tick, which
+    // is what wakes the shell's observation (the same path the camera mirror uses).
+    let dragging = cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, cx| {
+            assert!(viewport.handle_button(grab, 1, true), "the stem is grabbable");
+            assert!(
+                viewport.handle_pointer(mid),
+                "the drag tick moved the stem"
+            );
+            cx.notify();
+            viewport
+                .manipulator(ferrocad_stage::WORKPLANE_OFFSET_ID)
+                .is_some_and(|manipulator| manipulator.is_dragging())
+        })
+    });
+    assert!(dragging, "the stem is mid-drag, not released");
+
+    let mid_field: f64 = cx.update(|_window, cx| dialog_field(shell.read(cx), cx, "offset"))
+        .parse()
+        .unwrap_or(f64::NAN);
+    assert!(
+        mid_field > 0.0 && mid_field.is_finite(),
+        "the field already tracks the drag before release: {mid_field}"
+    );
+    assert_eq!(
+        active_offset(&mut cx, &shell),
+        base,
+        "an in-flight drag still applies nothing"
+    );
+
+    // Release: the commit applies the whole drag and the field keeps the total.
+    let commit = cx
+        .update(|_window, cx| {
+            viewport.update(cx, |viewport, cx| {
+                assert!(viewport.handle_pointer(far));
+                assert!(
+                    viewport.handle_button(far, 1, false),
+                    "releasing the stem commits"
+                );
+                cx.notify();
+                viewport.take_interaction_commit()
+            })
+        })
+        .expect("the drag commits");
+    feed_commit(&mut cx, &shell, commit);
+    let dragged = active_offset(&mut cx, &shell) - base;
+    assert!(
+        dragged > mid_field,
+        "the drag continued past the tick: {dragged} vs {mid_field}"
+    );
+    let released_field: f64 =
+        cx.update(|_window, cx| dialog_field(shell.read(cx), cx, "offset"))
+            .parse()
+            .unwrap_or(f64::NAN);
+    assert!(
+        (released_field - dragged).abs() < 0.01,
+        "the released field keeps the drag's total: {released_field} vs {dragged}"
+    );
+    // The mid-tick value is its own number, not a rounded copy of the release: the
+    // field was written during the drag and written again when the drag ended.
+    assert!(
+        (released_field - mid_field).abs() > 0.02,
+        "the field kept tracking after the mid tick: {mid_field} vs {released_field}"
+    );
+
+    // Typing the total is the other direction: the field drives the plane, and the
+    // stem is re-armed on the plane it just moved.
+    let typed = 5.0;
+    let input = cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .dialog
+            .as_ref()
+            .expect("the offset HUD")
+            .inputs
+            .first()
+            .and_then(Option::as_ref)
+            .cloned()
+            .expect("one text field")
+    });
+    input.update(&mut cx, |input, cx| input.set_text(typed.to_string(), cx));
+    // The dialog's change subscription is what a real keystroke calls; `set_text` is
+    // programmatic and emits nothing, so drive the same entry point.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.preview_dialog(cx)));
+
+    let typed_offset = active_offset(&mut cx, &shell);
+    assert!(
+        (typed_offset - (base + typed)).abs() < 1e-9,
+        "typing drives the plane: {typed_offset}"
+    );
+    let origin = active_origin(&mut cx, &shell);
+    assert!(
+        origin.is_equal(&base_origin.add(&normal.scale(typed)), 1e-9),
+        "the plane moved along `+N` by the typed value: {origin:?}"
+    );
+    let anchor = cx.update(|_window, cx| {
+        viewport
+            .read(cx)
+            .manipulator(ferrocad_stage::WORKPLANE_OFFSET_ID)
+            .and_then(|manipulator| manipulator.anchor())
+    });
+    assert!(
+        anchor
+            .expect("the stem has an anchor")
+            .is_equal(&origin, 1e-9),
+        "typing moves the stem with the plane"
+    );
 }

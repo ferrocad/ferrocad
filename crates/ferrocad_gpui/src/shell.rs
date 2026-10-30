@@ -22,7 +22,7 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo,
+    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo, WorkplaneLive,
 };
 use ferrocad_types::Vector3;
 use ferrocad_ui::Form;
@@ -400,6 +400,12 @@ pub struct Shell {
     /// The accumulated delta of the deferred drag, mirrored from the last
     /// [`TransformPreview`]. It seeds an escalation when there is no viewport to ask.
     gizmo_drag: Option<GizmoSeed>,
+    /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
+    ///
+    /// A workplane offset is **transient viewport state** with no document object and
+    /// no undo step, and the session lives exactly as long as its HUD. It is owned per
+    /// window: two shells cannot share a stem, its base or its live drag.
+    workplane_session: Option<WorkplaneSession>,
     /// The floating HUD's last painted rect (window coordinates). It is the hit-test
     /// for "is the pointer over the HUD" and supplies the real size for clamping.
     hud_rect: Option<Bounds<Pixels>>,
@@ -424,7 +430,9 @@ pub struct Shell {
     _viewport_events: Option<Subscription>,
     /// The viewport's **notification** observation: a wheel zoom or an orbit moves the
     /// camera without emitting an event, and the facade's next `getCameraNode` must see
-    /// the camera that gesture produced (not the one the last render published).
+    /// the camera that gesture produced (not the one the last render published). The
+    /// same effect mirrors an `Offset Workplane…` stem drag, whose tick also only
+    /// notifies the viewport.
     _viewport_camera: Option<Subscription>,
     /// The document stage as last built, so a transient preview change can redraw
     /// without re-reading the tessellations from the kernel (S4.6).
@@ -439,6 +447,22 @@ struct PropInput {
     state: Entity<TextInput>,
     seeded: String,
     _submit: Subscription,
+}
+
+/// The `Offset Workplane…` session one window hosts (W2).
+///
+/// The stem is a viewport overlay and the floating HUD is a shell surface, so the
+/// session is split: the shell owns the base and the field mirror, the stem owns the
+/// gesture and writes its live total into `live`. Nothing here is process-wide, so a
+/// second window opens its own session and neither can drive the other.
+struct WorkplaneSession {
+    /// The plane offset the session opened at; a cancelled session restores it.
+    base: f64,
+    /// The armed stem's live drag read (see `ferrocad_stage::WorkplaneLive`).
+    live: WorkplaneLive,
+    /// The session total last written into the HUD field. A tick that did not move
+    /// the stem writes nothing, and a typed value is not overwritten by a stale one.
+    field: Option<f64>,
 }
 
 /// One tracked scroll handle per Dev Tools pane.
@@ -729,6 +753,7 @@ impl Shell {
             drag_baseline: None,
             gizmo_deferred: false,
             gizmo_drag: None,
+            workplane_session: None,
             hud_rect: None,
             hud_lock: None,
             dev_tools: None,
@@ -884,16 +909,26 @@ impl Shell {
             self.cancel_dialog(cx);
             return true;
         }
-        // Space on a selection opens the object-verb wheel at the last pointer
-        // position (or the window centre for a keyboard-only session). It is the
+        // Typing belongs to the editor that owns the keyboard. The settings card is
+        // modeless and a Dev Tools pane (console, properties, tree) takes keys in its own
+        // window, so neither may have a digit stolen to open the Move HUD or an `Enter`
+        // stolen to finish a tool. Before this, typing a spacing in `Grid settings`
+        // opened the Move HUD and the rest of the number went into `dx`.
+        let editing = self.settings_card.is_some() || cancel_dialog;
+        // Space in the **tree** window toggles the selected object's `Visibility`
+        // (the tree is a Dev Tools pane, so its key press has `cancel_dialog` set).
+        // In the main window Space opens the object-verb wheel at the last pointer
+        // position (or the window centre for a keyboard-only session); it is the
         // main window's gesture, so a Dev Tools key press does not open it off-screen.
-        if !cancel_dialog
-            && event.keystroke.key == "space"
+        if event.keystroke.key == "space"
             && self.dialog.is_none()
             && self.palette.is_none()
             && self.settings_card.is_none()
             && self.active_tool.is_none()
         {
+            if cancel_dialog {
+                return self.toggle_visibility(cx);
+            }
             return self.space_radial(window, cx);
         }
         if event.keystroke.key == "escape" && self.close_popover(cx) {
@@ -922,6 +957,7 @@ impl Shell {
         // through its own `doCommand`; a native tool ends the same way the viewport's
         // own `Enter` path ends it. This is the handler the HUD's Finish button calls.
         if event.keystroke.key == "enter"
+            && !editing
             && !self.modal_open()
             && self.active_tool.is_some()
         {
@@ -933,7 +969,8 @@ impl Shell {
         // whatever happened to be focused. It is seeded with the live drag delta
         // (zero when idle) and focuses the field for the armed handle. A modal keeps
         // its own keys, so `Tab` still cycles an open dialog's fields.
-        if !self.modal_open()
+        if !editing
+            && !self.modal_open()
             && self.model.lock().unwrap().gizmo_armed
             && let Some(typed) = escalation_key(event)
         {
@@ -947,6 +984,79 @@ impl Shell {
             return true;
         }
         false
+    }
+
+    /// Toggle the selected object's `Visibility` (the tree's `Space`).
+    ///
+    /// The write is one named transaction, so it is one undo step. `Visibility` is
+    /// the object's own `App::PropertyBool` when it declares one; an object that
+    /// does not get it added on the first toggle. That is deliberate: a bare
+    /// view-state write is not recorded in the undo engine, while a document
+    /// property is — and the Part display hook reads `obj.Visibility`, which
+    /// resolves to the added property, so the toggle reaches the display path and
+    /// `undo` restores it.
+    ///
+    /// Returns whether an object was toggled (a `Settings/...` node or no
+    /// selection is not).
+    pub(super) fn toggle_visibility(&mut self, cx: &mut Context<Self>) -> bool {
+        let object = match self.model.lock().unwrap().selected.clone() {
+            Some(object) if !object.starts_with("Settings/") => object,
+            _ => return false,
+        };
+        let Some(name) = serde_json::to_string(&object).ok() else {
+            return false;
+        };
+        // `{name}` is a JSON string literal, so a document name cannot inject code.
+        let script = format!(
+            r#"
+import json
+import FreeCAD
+doc = FreeCAD.ActiveDocument
+obj = doc.getObject({name}) if doc is not None else None
+if obj is None:
+    print(json.dumps({{"ok": False, "visible": False, "error": "no object"}}))
+else:
+    doc.openTransaction("Toggle visibility")
+    try:
+        if "Visibility" in obj.PropertiesList:
+            current = bool(obj.Visibility)
+        else:
+            # The view state is the only visibility before the first toggle. A
+            # freshly added `App::PropertyBool` defaults to false, so read the
+            # current value first and write the toggle explicitly.
+            current = bool(obj.ViewObject.Visibility)
+            obj.addProperty("App::PropertyBool", "Visibility", "Base", "Whether the object is shown")
+        obj.Visibility = not current
+        doc.commitTransaction()
+        doc.recompute()
+        print(json.dumps({{"ok": True, "visible": bool(obj.Visibility)}}))
+    except Exception as exc:
+        doc.abortTransaction()
+        print(json.dumps({{"ok": False, "visible": False, "error": str(exc)}}))
+"#
+        );
+        let outcome = crate::python::evaluate(&script);
+        let (status, ok) = match outcome {
+            Ok(result) if result.ok => {
+                let value: serde_json::Value =
+                    serde_json::from_str(result.output.trim()).unwrap_or_default();
+                let visible = value["visible"].as_bool().unwrap_or(false);
+                let ok = value["ok"].as_bool().unwrap_or(false);
+                let verb = if visible { "show" } else { "hide" };
+                (format!("{verb} {object}"), ok)
+            }
+            Ok(result) => (format!("visibility: {}", result.output), false),
+            Err(error) => (format!("visibility: {error}"), false),
+        };
+        if ok {
+            self.refresh(cx);
+            self.sync_stage(cx);
+            self.rearm_selection(cx);
+        }
+        self.console_line(status.clone(), cx);
+        self.model.lock().unwrap().status = status;
+        cx.notify();
+        ok
     }
 
     /// The persisted adapter choice, falling back to [`AdapterChoice::Auto`] with a
@@ -1052,6 +1162,12 @@ impl Shell {
             // `axis.enabled` before it reaches the state).
             viewport.set_axis_style(state.axis.clone());
             viewport.set_grid_steps(state.grid_minor, state.grid_major);
+            viewport.set_grid_adaptive(state.grid_adaptive);
+            viewport.set_grid_stroke(
+                state.grid_minor_style,
+                state.grid_major_width,
+                state.grid_minor_width,
+            );
             viewport.set_grid_radius(state.grid_radius);
             viewport.set_grid_overlay(state.grid_overlay);
             // The gizmo style is host policy too: a gizmo disabled or restyled before
@@ -1089,10 +1205,45 @@ impl Shell {
         // at the last render's. Observing the notification republishes it in the same
         // effect cycle as the gesture. The render path (`publish_view`) still covers
         // the animation-driven moves (inertia, a snap that settles between frames).
-        let camera = cx.observe(&viewport, |this, _viewport, cx| this.publish_camera(cx));
+        let camera = cx.observe(&viewport, |this, _viewport, cx| {
+            this.publish_camera(cx);
+            // An `Offset Workplane…` stem drag changes the plane and notifies the
+            // viewport each tick, but a manipulator has no preview event stream; the
+            // session's live read is how that tick reaches the HUD's field.
+            this.sync_workplane_drag(cx);
+        });
         self.viewport = Some(viewport);
         self._viewport_events = Some(events);
         self._viewport_camera = Some(camera);
+        self.bootstrap_providers(cx);
+    }
+
+    /// Deliver the declared providers' `view` claims once a viewport exists.
+    ///
+    /// A provider's `activate` runs on a document activation **inside Python**, and the
+    /// `{"view": …}` request it returns never reaches the shell. A persisted Coin grid
+    /// was therefore selected in the popover but never claimed `grid_overlay`: the native
+    /// grid kept drawing underneath it, and the overlay was never pulled. Re-reading
+    /// through `refreshProviders` delivers the same claim without switching providers;
+    /// it is idempotent, so a later switch or toggle supersedes it.
+    fn bootstrap_providers(&mut self, cx: &mut Context<Self>) {
+        for feature in crate::python::provider_features().unwrap_or_default() {
+            if !feature.providers.iter().any(|provider| provider.active) {
+                continue;
+            }
+            match crate::python::refresh_providers(&feature.feature) {
+                Ok(outcome) => {
+                    if let Some(request) = outcome.view.as_ref() {
+                        if let Err(error) = self.apply_view(request, cx) {
+                            self.console_line(format!("{}: {error}", feature.feature), cx);
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.console_line(format!("{}: {error}", feature.feature), cx);
+                }
+            }
+        }
     }
 
     /// Append a line to the console transcript.

@@ -14,8 +14,8 @@ these commands:
 * `Part_Box` — a dock command that creates a box in one transaction, the way the toy
   workbench's `Toy_MakeSlab` does;
 * `App_SaveDatumPlane` — a view command that saves the shell's live workplane as a
-  selectable `Part::Feature` face, so it can be picked, moved and bound with
-  `Set WP`.
+  persistent `Part::DatumPlane`, so it can be picked, moved, hidden, saved and
+  bound with `Set WP`.
 
 Objects this script creates carry `DisplayMode` and `Color` dynamic properties. A
 `Part::Feature` has no view provider here, so the display hook reads those properties
@@ -94,6 +94,11 @@ def _display_mesh(obj):
         mesh["color"] = list(colors[0]) if colors else list(DEFAULT_COLOR)
         mode = str(getattr(obj, "DisplayMode", "") or "")
         mesh["display"] = _DISPLAY_KEYS.get(mode, "shaded_edges")
+        # A datum plane is a bounded translucent card, not a solid face. `glass`
+        # is the display hook's opt-in (the host's DisplaySync picks the blended
+        # pass); every other Part object keeps its opaque surface.
+        if str(getattr(obj, "TypeId", "") or "") == "Part::DatumPlane":
+            mesh["display"] = "glass"
         return mesh
     except Exception:
         return None
@@ -416,14 +421,21 @@ def _datum_axis(frame, key):
     return components
 
 
+def _datum_unit(vector):
+    """`vector` scaled to unit length (the caller has already rejected zero)."""
+    length = math.sqrt(sum(component * component for component in vector))
+    return tuple(component / length for component in vector)
+
+
 def add_datum_plane(payload: str) -> str:
     """Create a selectable datum plane from the active workplane frame.
 
     The workplane is transient viewport state, so the shell owns the live frame and
     passes it here when ``App_SaveDatumPlane`` runs: ``origin`` is the plane marker
     in world millimetres, ``u``/``v`` are its in-plane axes and ``u × v`` its
-    normal. The face is built from four corners along those axes rather than from a
-    rotation, so the frame is used verbatim.
+    normal. The frame becomes the object's ``Placement`` (origin + a rotation whose
+    local X/Y/Z are ``u``/``v``/``n``); ``Part::DatumPlane.execute`` derives the
+    square ``Face1`` from that placement and ``Size`` on recompute.
 
     The object is added in one undoable transaction. The reply is
     ``{"ok": true, "object": <name>}``, or ``{"ok": false, "error": "..."}`` for a
@@ -455,26 +467,23 @@ def add_datum_plane(payload: str) -> str:
             {"ok": False, "error": "datum plane u and v must not be parallel"}
         )
 
-    # 100 mm across, the corners ordered u then v. The closing point repeats the
-    # first, as a polygon wire expects; `makePolygon` skips the coincident vertex.
-    half = 50.0
-    corners = (
-        (-half, -half),
-        (half, -half),
-        (half, half),
-        (-half, half),
-        (-half, -half),
+    # The object's `Placement` is the single source of truth: its rotation maps the
+    # local X/Y plane onto this frame. Normalize the basis (the viewport already
+    # does, but a script/mod payload need not) and take local Y = n x u, which is
+    # right-handed even if the payload's `v` was slightly off-plane.
+    u = _datum_unit(u)
+    normal = _datum_unit(normal)
+    v_unit = (
+        normal[1] * u[2] - normal[2] * u[1],
+        normal[2] * u[0] - normal[0] * u[2],
+        normal[0] * u[1] - normal[1] * u[0],
     )
-    points = [
-        FreeCAD.Vector(
-            origin[0] + u[0] * a + v[0] * b,
-            origin[1] + u[1] * a + v[1] * b,
-            origin[2] + u[2] * a + v[2] * b,
-        )
-        for a, b in corners
-    ]
     try:
-        face = Part.Face(Part.makePolygon(points))
+        rotation = FreeCAD.Rotation(
+            FreeCAD.Vector(*u),
+            FreeCAD.Vector(*v_unit),
+            FreeCAD.Vector(*normal),
+        )
     except Exception as exc:
         return json.dumps({"ok": False, "error": str(exc)})
 
@@ -483,14 +492,12 @@ def add_datum_plane(payload: str) -> str:
         doc = FreeCAD.newDocument("Unnamed")
     doc.openTransaction("Datum plane")
     try:
-        obj = doc.addObject("Part::Feature", "DatumPlane")
-        obj.Shape = face
+        obj = doc.addObject("Part::DatumPlane", "DatumPlane")
         obj.Label = "DatumPlane"
-        # A bare `Part::Feature` has neither property, and its `DisplayMode` write
-        # would reach the upstream-shaped view object, which has no
-        # `ShadedWithEdges` mode. `Color` is a colour list, so the cyan is one entry.
-        _add_appearance(obj)
-        obj.Color = [(0.22, 0.74, 0.97, 1.0)]
+        obj.Placement = FreeCAD.Placement(FreeCAD.Vector(*origin), rotation)
+        # `Size` is an `App::PropertyLength`: the side of the square. The object's
+        # `execute` derives the `Face1` shape from `Placement` + `Size` on recompute.
+        obj.Size = "100 mm"
         doc.recompute()
         doc.commitTransaction()
     except Exception as exc:

@@ -1345,8 +1345,8 @@ def _payload(result) -> dict:
     token, and the spec goes out under ``dialog`` (the callable must never reach
     The shell-facing keys are ``title``, ``fields``, ``accept``, ``cancel``,
     ``presentation`` and ``preview``; ``status``, ``value``, ``view``, ``tool``,
-    ``select`` and ``gizmo`` stay top-level; everything else is ignored until a
-    later slice gives it meaning.
+    ``select``, ``gizmo`` and ``workplane_stem`` stay top-level; everything else is
+    ignored until a later slice gives it meaning.
     """
     payload = {"ok": True}
     if not isinstance(result, dict):
@@ -1380,6 +1380,8 @@ def _payload(result) -> dict:
         payload["select"] = result["select"]
     if "gizmo" in result:
         payload["gizmo"] = result["gizmo"]
+    if "workplane_stem" in result:
+        payload["workplane_stem"] = bool(result["workplane_stem"])
     return payload
 
 

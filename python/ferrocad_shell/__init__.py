@@ -1011,6 +1011,10 @@ def set_view_state(state_json: str) -> str:
     FerroCADGui.ViewState.projection = str(state.get("projection", "persp"))
     FerroCADGui.ViewState.grid_minor = float(state.get("grid_minor", 10.0))
     FerroCADGui.ViewState.grid_major = float(state.get("grid_major", 100.0))
+    FerroCADGui.ViewState.grid_adaptive = bool(state.get("grid_adaptive", True))
+    FerroCADGui.ViewState.grid_minor_style = str(state.get("grid_minor_style", "dots"))
+    FerroCADGui.ViewState.grid_major_width = float(state.get("grid_major_width", 1.0))
+    FerroCADGui.ViewState.grid_minor_width = float(state.get("grid_minor_width", 1.0))
     radius = state.get("grid_radius")
     FerroCADGui.ViewState.grid_radius = None if radius is None else float(radius)
     return _json({"ok": True})
@@ -1460,6 +1464,32 @@ def set_provider(payload_json: str) -> str:
             "error": "; ".join(str(error) for error in errors),
             "status": str(result.get("status") or ""),
             "view": dict(result.get("view") or {}),
+        }
+    )
+
+
+def refresh_providers(feature: str) -> str:
+    """Ask a feature's active backend to re-read the shared state.
+
+    The shell calls this once its viewport exists. A provider's ``activate`` runs
+    on a document activation *inside* Python, and the ``{"view": …}`` request it
+    returns never reaches the shell — so a persisted Coin grid was selected but
+    never claimed ``grid_overlay``, and the native grid kept drawing underneath it.
+    ``refreshProviders`` re-runs the same callback without switching providers, so
+    the claim arrives at the viewport that will use it. Idempotent: a later switch
+    or toggle simply supersedes it.
+    """
+    try:
+        refreshed = FerroCADGui.refreshProviders(str(feature or ""))
+    except Exception as exc:  # noqa: BLE001 - a result, not a crash
+        return _json({"ok": False, "error": str(exc), "status": "", "view": {}})
+    errors = refreshed.get("errors") or []
+    return _json(
+        {
+            "ok": bool(refreshed.get("ok", True)),
+            "error": "; ".join(str(error) for error in errors),
+            "status": str(refreshed.get("status") or ""),
+            "view": dict(refreshed.get("view") or {}),
         }
     )
 
@@ -2059,7 +2089,10 @@ class _OffsetWorkplaneCommand:
     "offset from the origin" means for a plane.
 
     With a `distance` argument it applies directly (scripts); with none it opens a
-    one-field dialog, so the geometry stays visible while the number is typed.
+    floating one-field HUD **and** asks the shell for the active plane's `+N` stem, so
+    the same offset can be dragged or typed. The HUD's value is the session's total
+    offset from where it opened: a drag has already applied part of it, so accepting a
+    dragged value keeps the plane where the drag left it.
     """
 
     def GetResources(self):
@@ -2078,9 +2111,20 @@ class _OffsetWorkplaneCommand:
         return {
             "title": "Offset workplane",
             "accept": "Offset",
+            # One transparent HUD beside the stem, no backdrop: the plane and the model
+            # stay visible while the number is typed or dragged.
+            "presentation": "float",
+            # The shell's workplane-offset session (`ferrocad_stage::WORKPLANE_OFFSET_ID`):
+            # it arms the `+N` stem, mirrors the drag into the field below, and ends the
+            # stem with the HUD. `workplane_stem` is the structured directive; the older
+            # `gizmo` spelling stays so a shell and facade of different vintages still
+            # agree on which session this opens.
+            "preview": "workplane_offset",
+            "workplane_stem": True,
+            "gizmo": "workplane_offset",
             "fields": [
                 {
-                    "name": "distance",
+                    "name": "offset",
                     "label": "Offset along normal (mm)",
                     "kind": "quantity",
                     "value": 0.0,
@@ -2091,11 +2135,18 @@ class _OffsetWorkplaneCommand:
 
 
 def _apply_workplane_offset(values):
-    """Apply the offset dialog's one value as a view request."""
+    """Apply the offset HUD's one value as a view request.
+
+    The value is the session's total offset, and a stem drag has already applied part
+    of it: the shell applies only the remainder. Zero is a plain "keep what is there"
+    and asks for nothing at all.
+    """
     try:
-        distance = float(values.get("distance") or 0.0)
+        distance = float(values.get("offset") or 0.0)
     except (TypeError, ValueError):
         return {"status": "offset workplane: a number is required"}
+    if distance == 0.0:
+        return {"status": "workplane offset is unchanged"}
     return {"view": {"workplane": "offset", "workplane_offset": distance}}
 
 
@@ -2132,7 +2183,7 @@ FreeCADGui.addCommand(
 )
 FreeCADGui.addCommand(
     "App_WorkplaneYZ",
-    _StandardWorkplaneCommand("world:yz", "World YZ (Right)", "Work on the world YZ plane"),
+    _StandardWorkplaneCommand("world:yz", "World YZ (Side)", "Work on the world YZ plane"),
 )
 FreeCADGui.addCommand("App_WorkplaneCamera", _ViewPlaneWorkplaneCommand())
 FreeCADGui.addCommand("App_SetWorkplane", _SetWorkplaneCommand())

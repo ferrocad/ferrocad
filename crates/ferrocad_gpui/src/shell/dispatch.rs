@@ -297,16 +297,30 @@ impl Shell {
             return;
         }
 
+        // `Offset Workplane…` asks for the active plane's `+N` stem as well as its
+        // HUD: the gesture and the typed value are one transient session (W2). The
+        // stem is armed before the dialog opens so a drag works from the first frame.
+        // The directive is `workplane_stem`; the older `gizmo: "workplane_offset"`
+        // spelling still rides along, so both are accepted (see `commands.rs`).
+        let workplane_stem = outcome.workplane_stem
+            || outcome.gizmo.as_deref() == Some(ferrocad_stage::WORKPLANE_OFFSET_ID);
+        if workplane_stem {
+            self.arm_workplane_stem(cx);
+        }
+
         // A gizmo-mode directive is session tool state. Apply it before a dialog:
         // `Move` returns `translate` (its Δ fields and the visible arrows must
         // agree) and opens the HUD in the same run.
         if let Some(mode) = outcome.gizmo.clone() {
-            // A verb is an explicit request for the **body** control, so it overrides the
-            // rule that a claimed sub-element hides the shared triad (workplanes note,
-            // §3.3.3). Re-arm so the triad appears even when the mode did not change.
-            self.transform_verb = true;
-            self.set_gizmo_mode(&mode, cx);
-            self.rearm_selection(cx);
+            if mode != ferrocad_stage::WORKPLANE_OFFSET_ID {
+                // A verb is an explicit request for the **body** control, so it
+                // overrides the rule that a claimed sub-element hides the shared
+                // triad (workplanes note, §3.3.3). Re-arm so the triad appears even
+                // when the mode did not change.
+                self.transform_verb = true;
+                self.set_gizmo_mode(&mode, cx);
+                self.rearm_selection(cx);
+            }
         }
 
         if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
@@ -491,6 +505,12 @@ impl Shell {
             let (minor, major, radius) = (state.grid_minor, state.grid_major, state.grid_radius);
             let (color, alpha) = (state.grid_color, state.grid_alpha);
             let grid_overlay = state.grid_overlay;
+            let grid_adaptive = state.grid_adaptive;
+            let (minor_style, major_width, minor_width) = (
+                state.grid_minor_style,
+                state.grid_major_width,
+                state.grid_minor_width,
+            );
             let gizmo = state.gizmo.clone();
             viewport.update(cx, |viewport, cx| {
                 let mut changed = viewport.set_orthographic(orthographic);
@@ -501,6 +521,8 @@ impl Shell {
                     viewport.set_axis_cross(axis_cross)
                 };
                 changed |= viewport.set_grid_steps(minor, major);
+                changed |= viewport.set_grid_adaptive(grid_adaptive);
+                changed |= viewport.set_grid_stroke(minor_style, major_width, minor_width);
                 changed |= viewport.set_grid_radius(radius);
                 changed |= viewport.set_grid_color(color);
                 changed |= viewport.set_grid_alpha(alpha);
@@ -596,7 +618,16 @@ impl Shell {
                     None => "select a planar face first".to_string(),
                 },
                 WorkplaneAction::Offset(delta) => {
-                    if viewport.offset_workplane(delta) {
+                    // While the `Offset Workplane…` HUD is open its field holds the
+                    // session's **total** offset, and a stem drag already applied part
+                    // of it: apply only the remainder so accepting a drag's value keeps
+                    // the plane where the drag left it.
+                    let session = self.workplane_session_base();
+                    let delta = match session {
+                        Some(base) => delta - (viewport.active_workplane().offset - base),
+                        None => delta,
+                    };
+                    if viewport.offset_workplane(delta) || session.is_some() {
                         format!(
                             "workplane: {}",
                             viewport.active_workplane().display_label()

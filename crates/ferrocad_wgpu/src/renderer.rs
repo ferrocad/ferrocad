@@ -17,7 +17,7 @@ use std::fmt;
 
 use ferrocad_graphics::{
     Camera, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId,
-    PickId, Rect, RenderQueue, ShaderProgram, StateSnapshot, Topology, theme,
+    PickId, Rect, RenderQueue, ShaderProgram, StateSnapshot, Topology, WorkplaneFrame, theme,
 };
 use ferrocad_inventor::{ImageData, InventorView, ViewSpec};
 use ferrocad_types::{Matrix4, Vector3};
@@ -295,11 +295,32 @@ impl WgpuRenderer {
     /// Fresh geometry (cache misses) is uploaded first; each packet is then drawn
     /// with its [`StateSnapshot`](ferrocad_graphics::StateSnapshot) bound and
     /// `camera`'s view-projection.
+    ///
+    /// A single-view draw has no [`ViewSpec`] to carry a plane, so this is the world
+    /// `XY` ground. A host whose view is on a plane calls
+    /// [`render_with_workplane`](Self::render_with_workplane) instead; nothing about
+    /// this call changes when the plane is world.
     pub fn render<B: DrawBatch>(
         &mut self,
         target: &wgpu::TextureView,
         camera: &Camera,
         batches: &[B],
+    ) -> Result<(), RenderError> {
+        self.render_with_workplane(target, camera, batches, WorkplaneFrame::world())
+    }
+
+    /// [`render`](Self::render) with the host's active construction plane written into
+    /// each program's `Frame` uniform. Passing [`WorkplaneFrame::world`] is exactly
+    /// [`render`](Self::render).
+    ///
+    /// `encode_views` gets the same information per view from
+    /// [`ViewSpec::workplane`]; this is the explicit seam for the single-view path.
+    pub fn render_with_workplane<B: DrawBatch>(
+        &mut self,
+        target: &wgpu::TextureView,
+        camera: &Camera,
+        batches: &[B],
+        workplane: WorkplaneFrame,
     ) -> Result<(), RenderError> {
         let count = batches.len() as u32;
         let programs = batches
@@ -350,7 +371,7 @@ impl WgpuRenderer {
         self.programs
             .ensure_frame_capacity(&self.context.device, 1);
         self.programs
-            .write_frame(&self.context.queue, 0, camera, self.size);
+            .write_frame_with_workplane(&self.context.queue, 0, camera, self.size, workplane);
         for batch in batches {
             let snapshot = batch.state();
             if let Some(program) = snapshot.program.as_ref() {
@@ -619,8 +640,22 @@ impl WgpuRenderer {
         self.programs
             .ensure_frame_capacity(&self.context.device, views.len() as u32);
         for (view_index, view) in views.iter().enumerate() {
-            self.programs
-                .write_frame(&self.context.queue, view_index as u32, view.camera, self.size);
+            let frame_slot = view_index as u32;
+            match frame_workplane(view) {
+                Some(workplane) => self.programs.write_frame_with_workplane(
+                    &self.context.queue,
+                    frame_slot,
+                    view.camera,
+                    self.size,
+                    workplane,
+                ),
+                None => self.programs.write_frame(
+                    &self.context.queue,
+                    frame_slot,
+                    view.camera,
+                    self.size,
+                ),
+            }
             for batch in &view.queue.packets {
                 let snapshot = batch.state();
                 if let Some(program) = snapshot.program.as_ref() {
@@ -1157,6 +1192,17 @@ fn supports_samples(adapter: &wgpu::Adapter, count: u32) -> bool {
             .sample_count_supported(count)
 }
 
+/// The workplane a view asks the program `Frame` to use, or `None` for the world `XY`
+/// ground.
+///
+/// Pure so the host→renderer transport can be checked without a GPU: the caller
+/// picks `write_frame_with_workplane` exactly when this is `Some`.
+fn frame_workplane(view: &ViewSpec<'_>) -> Option<WorkplaneFrame> {
+    // A degenerate radius is sanitised where the `Frame` is packed, so the carrier can
+    // stay a plain value here.
+    view.workplane
+}
+
 /// The topology ordinal the pick shader writes to the normal target's `w` channel.
 fn topology_ordinal(topology: Topology) -> u32 {
     match topology {
@@ -1301,6 +1347,7 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::program::Frame;
     use ferrocad_graphics::{DepthCompare, PickId, Topology, Viewport};
     use ferrocad_inventor::{Node, NodeKind, Scene, compile, compile_with_base};
 
@@ -1308,6 +1355,55 @@ pub(crate) mod tests {
     /// and the (software) adapter can fault when several `wgpu` devices are driven at
     /// once, so every GPU test holds this for its duration.
     static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// W4's transport: a view that carries a plane writes the workplane tail, and a
+    /// view without one keeps the world `XY` ground (`radius == 0`). The bytes are the
+    /// ones `program::tests::the_frame_packs_the_active_workplane` pins.
+    #[test]
+    fn a_view_workplane_reaches_the_program_frame() {
+        let camera = Camera::identity();
+        let queue = RenderQueue::default();
+        let mut view = ViewSpec {
+            queue: &queue,
+            camera: &camera,
+            rect: None,
+            overlay: false,
+            workplane: None,
+        };
+        assert_eq!(frame_workplane(&view), None, "no plane = world ground");
+
+        view.workplane = Some(WorkplaneFrame {
+            origin: [1.5, -2.0, 3.25],
+            u: [0.0, 1.0, 0.0],
+            v: [0.0, 0.0, 1.0],
+            n: [1.0, 0.0, 0.0],
+            minor: 2.5,
+            major: 25.0,
+            radius: 200.0,
+            minor_alpha: 0.15,
+            major_alpha: 0.3,
+            minor_lines: true,
+            major_width: 0.6,
+            minor_width: 0.3,
+        });
+        let workplane = frame_workplane(&view).expect("the view selects the workplane path");
+        let frame = Frame::from_camera_and_workplane(&camera, [640, 480], workplane);
+        assert_eq!(frame.workplane_origin, [1.5, -2.0, 3.25, 200.0]);
+        assert_eq!(frame.workplane_u, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(frame.workplane_v, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(frame.workplane_n, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(frame.workplane_steps, [2.5, 25.0, 0.15, 0.3]);
+        assert_eq!(frame.grid_stroke, [1.0, 0.6, 0.3, 0.0]);
+
+        // A degenerate radius is no patch, sanitised where the `Frame` is packed.
+        view.workplane = Some(WorkplaneFrame {
+            radius: -1.0,
+            ..WorkplaneFrame::world()
+        });
+        let plane = frame_workplane(&view).expect("still a plane");
+        let frame = Frame::from_camera_and_workplane(&camera, [640, 480], plane);
+        assert_eq!(frame.workplane_origin[3], 0.0, "a negative radius is no patch");
+    }
 
     /// Acquire [`GPU_LOCK`], ignoring poisoning (a failed test already released it).
     pub(crate) fn gpu_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -1364,6 +1460,192 @@ pub(crate) mod tests {
             texel(32, 32),
             texel(0, 0),
             "the triangle should cover the centre but not the corner"
+        );
+    }
+
+    /// The native grid's wide stroke is geometry, not a hint: the same lattice drawn with
+    /// a stroke covers several times the pixels of the hairline line it replaces. This is
+    /// the end-to-end check of `GridStyle::major_width` through the real draw path.
+    #[test]
+    fn a_wide_grid_stroke_covers_more_pixels() {
+        use ferrocad_graphics::{Geometry, Projection, Vertex};
+        use ferrocad_stage::grid::{self, GridGeometry, GridSpec, GridStyle, MinorStyle};
+        use ferrocad_stage::Workplane;
+        use ferrocad_types::{Placement, Rotation};
+
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([128, 128]) else {
+            eprintln!("no GPU adapter available; skipping wide-stroke test");
+            return;
+        };
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -200.0), Rotation::identity()).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 60.0f64.to_radians(),
+                near: 0.1,
+                far: 2_000.0,
+            },
+            viewport: Viewport::new([128, 128], 1.0),
+        };
+        let spec = GridSpec {
+            workplane: Workplane::world(),
+            minor: 20.0,
+            major: 40.0,
+            radius: 100.0,
+        };
+        let style = |major_width: f64| GridStyle {
+            color: [1.0; 4],
+            minor_alpha: 1.0,
+            major_alpha: 1.0,
+            major_width,
+            minor_style: MinorStyle::Dots,
+            ..GridStyle::default()
+        };
+        // Each draw needs its own mesh identity: the renderer caches by `(view, mesh)` and
+        // a reused id would keep the previous generation's buffer.
+        let mut mesh = 700u64;
+        let mut lit = |width: f64| -> usize {
+            let GridGeometry { lines, line_indices, .. } = grid::build(&spec, &style(width), &camera);
+            mesh += 1;
+            let mut packet = pick_packet(mesh, 0, 0, Topology::Triangles, Vec::new(), Vec::new());
+            let (topology, indices, ribbon) = if line_indices.is_empty() {
+                (Topology::Lines, (0..lines.len() as u32).collect(), false)
+            } else {
+                (Topology::Triangles, line_indices, true)
+            };
+            packet.topology = topology;
+            packet.geometry = Some(Geometry {
+                vertices: lines
+                    .iter()
+                    .map(|vertex| Vertex {
+                        normal: vertex.normal,
+                        ..*vertex
+                    })
+                    .collect(),
+                indices,
+            });
+            packet.state.ribbon = ribbon;
+            packet.state.pickable = false;
+            let mut queue = RenderQueue::default();
+            queue.packets.push(packet);
+            renderer.draw(&queue, &camera).expect("draw");
+            let image = renderer.image().expect("readback");
+            image
+                .rgba
+                .chunks(4)
+                .filter(|pixel| pixel[0] > 128)
+                .count()
+        };
+        // The host asks in **pixels** and converts at the plane origin, so `8` here is
+        // the same 8 px the setting means at that depth.
+        let eight_px = ferrocad_stage::scale_for(&camera, Workplane::world().origin, 8.0);
+        let hairline = lit(0.0);
+        let wide = lit(eight_px);
+        assert!(hairline > 0, "the hairline lattice draws: {hairline}");
+        assert!(
+            wide > hairline * 3,
+            "an 8 px stroke covers far more than a hairline: {wide} vs {hairline}"
+        );
+    }
+
+    /// A wide grid stroke's ink is its per-vertex alpha, which is what carries
+    /// `Grid.opacity`, the radial patch fade and the edge-on fade. The opaque scene
+    /// pipeline is `BlendState::REPLACE`, so a quad drawn through it ignored all three:
+    /// lowering the opacity dimmed the dots and hairlines but **not** a wide stroke, which
+    /// read as "opacity only applies to the minor grid". The stroke asks for
+    /// `BLENDED_DEPTH`, the renderer's blended scene-triangle variant. Skips without a GPU.
+    #[test]
+    fn a_wide_grid_stroke_blends_its_ink() {
+        use ferrocad_graphics::{Geometry, Projection, Vertex};
+        use ferrocad_stage::grid::{self, GridGeometry, GridSpec, GridStyle, MinorStyle};
+        use ferrocad_stage::shape::BLENDED_DEPTH;
+        use ferrocad_stage::Workplane;
+        use ferrocad_types::{Placement, Rotation};
+
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([128, 128]) else {
+            eprintln!("no GPU adapter available; skipping stroke-ink test");
+            return;
+        };
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -200.0), Rotation::identity()).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 60.0f64.to_radians(),
+                near: 0.1,
+                far: 2_000.0,
+            },
+            viewport: Viewport::new([128, 128], 1.0),
+        };
+        let spec = GridSpec {
+            workplane: Workplane::world(),
+            minor: 20.0,
+            major: 40.0,
+            radius: 100.0,
+        };
+        let wide = ferrocad_stage::scale_for(&camera, Workplane::world().origin, 6.0);
+        let mut mesh = 800u64;
+        // The **major** level only, as the viewport emits it: a 6 px quad whose alpha is
+        // the ink.
+        let mut ink = |alpha: f32| -> u64 {
+            let style = GridStyle {
+                color: [1.0; 4],
+                minor_alpha: alpha,
+                major_alpha: alpha,
+                major_width: wide,
+                minor_style: MinorStyle::Dots,
+                ..GridStyle::default()
+            };
+            let GridGeometry {
+                lines,
+                line_indices,
+                ..
+            } = grid::build(&spec, &style, &camera);
+            mesh += 1;
+            let mut packet = pick_packet(mesh, 0, 0, Topology::Triangles, Vec::new(), Vec::new());
+            let (topology, indices, depth) = if line_indices.is_empty() {
+                (
+                    Topology::Lines,
+                    (0..lines.len() as u32).collect(),
+                    DepthState::default(),
+                )
+            } else {
+                (Topology::Triangles, line_indices, BLENDED_DEPTH)
+            };
+            packet.topology = topology;
+            packet.state.depth = depth;
+            packet.geometry = Some(Geometry {
+                vertices: lines
+                    .iter()
+                    .map(|vertex| Vertex {
+                        normal: vertex.normal,
+                        ..*vertex
+                    })
+                    .collect(),
+                indices,
+            });
+            let mut queue = RenderQueue::default();
+            queue.packets.push(packet);
+            renderer.draw(&queue, &camera).expect("draw");
+            let image = renderer.image().expect("readback");
+            image.rgba.chunks(4).map(|pixel| u64::from(pixel[1])).sum()
+        };
+
+        let background = ink(0.0);
+        let full = ink(1.0);
+        let half = ink(0.5);
+        assert!(
+            full > background + 10_000,
+            "the stroke draws at full ink: {full} vs {background}"
+        );
+        assert!(
+            half > background + 2_000,
+            "half ink is still visible: {half} vs {background}"
+        );
+        // Over a dark canvas, half the ink is materially dimmer — the exact thing the
+        // opaque pipeline refused to do.
+        assert!(
+            half < background + (full - background) * 9 / 10,
+            "half the ink is dimmer: {half} vs {full} (background {background})"
         );
     }
 
@@ -1587,12 +1869,14 @@ pub(crate) mod tests {
                 camera: &main_camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             },
             ViewSpec {
                 queue: &cube,
                 camera: &cube_camera,
                 rect: Some(rect),
                 overlay: true,
+                workplane: None,
             },
         ];
         renderer.draw_frame(&views).expect("draw_frame");
@@ -1694,12 +1978,14 @@ pub(crate) mod tests {
                     camera: &main_camera,
                     rect: None,
                     overlay: false,
+                    workplane: None,
                 },
                 ViewSpec {
                     queue: &overlay_queue,
                     camera: &cube_camera,
                     rect: Some(rect),
                     overlay: true,
+                    workplane: None,
                 },
             ])
             .expect("draw_frame");
@@ -1822,6 +2108,7 @@ pub(crate) mod tests {
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .expect("frame 1");
         let uploaded = renderer.mesh_cache.len();
@@ -1836,6 +2123,7 @@ pub(crate) mod tests {
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .expect("frame 2");
         assert_eq!(
@@ -1903,6 +2191,7 @@ pub(crate) mod tests {
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .expect("draw");
         let image = renderer.image().expect("readback");
@@ -1959,6 +2248,7 @@ pub(crate) mod tests {
                     camera: &camera,
                     rect: None,
                     overlay: false,
+                    workplane: None,
                 }])
                 .expect("draw");
             assert_eq!(
@@ -2049,6 +2339,7 @@ pub(crate) mod tests {
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .expect("draw");
 
@@ -2119,6 +2410,7 @@ pub(crate) mod tests {
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .expect("draw");
 
@@ -2229,6 +2521,7 @@ pub(crate) mod tests {
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .expect("draw");
 
@@ -2422,6 +2715,7 @@ pub(crate) mod tests {
                 camera: &camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             }])
             .expect("draw");
 
@@ -2480,6 +2774,81 @@ pub(crate) mod tests {
         );
     }
 
+    /// The host's ink reaches **both** levels of the Coin grid, not just the minor one.
+    /// A shader that used the claim for the dots and its own parameter for the major
+    /// lines would look like "opacity only dims the minor grid". Skips without a GPU.
+    #[test]
+    fn the_coin_grid_applies_the_host_ink_to_both_levels() {
+        let _gpu = gpu_guard();
+        let camera = program_camera();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping coin ink test");
+            return;
+        };
+        let Some(source) = crate::grid_overlay_source() else {
+            eprintln!("the workspace mods/ tree is absent; skipping coin ink test");
+            return;
+        };
+        let (queue, _) = compile(&program_scene(false, &source));
+
+        // 16 px per world unit: a 0.5 minor step is every 8 px (column 40), a 1.0 major
+        // step every 16 px (column 48). Rows 24 and 28 are off the horizontal lines.
+        let plane = |ink: f32| WorkplaneFrame {
+            minor: 0.5,
+            major: 1.0,
+            radius: 0.0,
+            minor_alpha: ink,
+            major_alpha: ink,
+            ..WorkplaneFrame::world()
+        };
+        let shot = |renderer: &mut WgpuRenderer, ink: f32| {
+            renderer
+                .draw_frame(&[ViewSpec {
+                    queue: &queue,
+                    camera: &camera,
+                    rect: None,
+                    overlay: false,
+                    workplane: Some(plane(ink)),
+                }])
+                .expect("draw");
+            renderer.image().expect("readback")
+        };
+        // The brightest green in a 3x3 window around a sample.
+        let peak = |image: &ImageData, x: u32, y: u32| {
+            let mut best = 0u8;
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    best = best.max(texel(image, x - 1 + dx, y - 1 + dy)[1]);
+                }
+            }
+            best
+        };
+
+        let full = shot(&mut renderer, 0.6);
+        let dim = shot(&mut renderer, 0.3);
+        let background = peak(&full, 36, 28);
+
+        let major = (peak(&full, 48, 28), peak(&dim, 48, 28));
+        let dot = (peak(&full, 40, 24), peak(&dim, 40, 24));
+        assert!(
+            major.0 > background + 20 && dot.0 > background + 20,
+            "both levels draw: background {background}, major {major:?}, dot {dot:?}"
+        );
+        assert!(major.0 > major.1, "the major line dims: {major:?}");
+        assert!(dot.0 > dot.1, "the minor dot dims: {dot:?}");
+        // Both levels dim by the same factor: the claim is one law, not two.
+        let delta = |(full, dim): (u8, u8)| (f64::from(full) - f64::from(background)) / (f64::from(dim) - f64::from(background));
+        let (major_ratio, dot_ratio) = (delta(major), delta(dot));
+        assert!(
+            (major_ratio - dot_ratio).abs() < 0.15 * major_ratio.max(dot_ratio),
+            "both levels dim alike: major {major:?} x{major_ratio:.2}, dot {dot:?} x{dot_ratio:.2}"
+        );
+        assert!(
+            dot.1 > background && major.1 > background,
+            "still visible at half the ink: background {background}, major {major:?}, dot {dot:?}"
+        );
+    }
+
     /// The viewport's real shape: the scene and the program queue are **separate
     /// views**, the program pipeline is cached across frames, and the element is
     /// resized between them. Every frame must draw the grid, not a cleared or black
@@ -2517,18 +2886,21 @@ pub(crate) mod tests {
                     camera: &camera,
                     rect: None,
                     overlay: false,
+                    workplane: None,
                 },
                 ViewSpec {
                     queue: &program,
                     camera: &camera,
                     rect: None,
                     overlay: false,
+                    workplane: None,
                 },
                 ViewSpec {
                     queue: &cube,
                     camera: &cube_camera,
                     rect: Some(rect),
                     overlay: true,
+                    workplane: None,
                 },
             ];
             renderer.draw_frame(&views).expect("draw_frame");

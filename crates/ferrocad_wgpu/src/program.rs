@@ -25,7 +25,7 @@
 //!
 //! | binding | block | size | contents |
 //! | --- | --- | ---: | --- |
-//! | 0 | `Frame` | 160 B | `view_proj`, `inv_view_proj`, world-space `eye`, `flags = [perspective, width, height, 0]` |
+//! | 0 | `Frame` | 256 B | `view_proj`, `inv_view_proj`, world-space `eye`, `flags = [perspective, width, height, 0]`, then the host workplane: `workplane_origin = [x, y, z, patch_radius]`, `workplane_u`, `workplane_v`, `workplane_n`, `workplane_steps = [minor, major, 0, 0]`, `grid_stroke = [minor_lines, major_width, minor_width, 0]` |
 //! | 1 | `Program` | 1392 B | `grid_color.rgb` (+ spare), `values = [base_spacing, minor_alpha, major_alpha, shadow_opacity]`, `counts = [shadow_count, 0, 0, 0]`, 80 zero `vec4`s, then the axis extension: `axis_y`, `axis_z`, `axis_values = [length, width, opacity, ghost_alpha]`, `axis_flags = [origin, labels, 0, 0]` |
 //!
 //! Binding 0 is a dynamic-offset uniform (one slot per view, so several cameras share
@@ -33,6 +33,14 @@
 //! draw binds group 2 — ordinary draws bind [`ProgramPipeline::default_group`], a
 //! zeroed `Frame`/`Program` pair — so the bind-group index never shifts between a
 //! program pipeline and the scene pipeline.
+//!
+//! The workplane tail is **host-supplied**, not a program parameter: the viewport owns
+//! the active construction plane, so a mod cannot claim a plane the view is not on. The
+//! shader builds its grid in `workplane_u`/`workplane_v` around `workplane_origin` and,
+//! when `workplane_origin.w` is non-zero, fades it out radially at that radius (the
+//! native grid's patch). A zero radius means "no patch": the unbounded ground, which
+//! with the default frame (origin 0, `u = +X`, `v = +Y`, `n = +Z`) is exactly the world
+//! `XY` grid the shader drew before the field existed.
 //!
 //! Shadows are populated by the scene producer (`ferrocad_graphics::apply_shadows`):
 //! the `Program` block carries up to 64 slots of `(centre, half-extent, blur)` and
@@ -46,18 +54,35 @@ use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 use ferrocad_graphics::{
-    Camera, DepthCompare, DepthState, ProgramParameters, ShaderProgram, Topology,
+    Camera, DepthCompare, DepthState, ProgramParameters, ShaderProgram, Topology, WorkplaneFrame,
 };
 use ferrocad_types::{Matrix4, Vector3};
 
 use crate::pipeline::DEPTH_FORMAT;
 
-/// The `Frame` block's size (the WGSL layout: two matrices, then two `vec4`s).
-pub const FRAME_SIZE: u64 = 160;
+/// The `Frame` block's size (the WGSL layout: two matrices, seven `vec4`s).
+pub const FRAME_SIZE: u64 = 256;
 /// The `Program` block's size (three `vec4`s, 80 shadow `vec4`s, and four axis `vec4`s).
 pub const PROGRAM_SIZE: u64 = 1_392;
 
 /// The per-view `Frame` uniform (group 2, binding 0).
+///
+/// Byte layout (all members are 16-byte aligned, so the block is a plain `repr(C)`
+/// prefix with no implicit padding):
+///
+/// | offset | bytes | field |
+/// | ---: | ---: | --- |
+/// | 0 | 64 | `view_proj` |
+/// | 64 | 64 | `inv_view_proj` |
+/// | 128 | 16 | `eye` |
+/// | 144 | 16 | `flags` |
+/// | 160 | 16 | `workplane_origin` (`xyz` world origin, `w` patch radius) |
+/// | 176 | 16 | `workplane_u` |
+/// | 192 | 16 | `workplane_v` |
+/// | 208 | 16 | `workplane_n` |
+/// | 224 | 16 | `workplane_steps` (`x` minor, `y` major, world units; `z`/`w` the levels' base ink) |
+/// | 240 | 16 | `grid_stroke` (`x` 1 = minor lines, `y` major width, `z` minor width) |
+/// | 256 | — | end (16-byte aligned) |
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct Frame {
@@ -69,6 +94,46 @@ pub struct Frame {
     pub eye: [f32; 4],
     /// `[perspective? 1 : 0, target width, target height, 0]`.
     pub flags: [f32; 4],
+    /// `[origin.x, origin.y, origin.z, patch_radius]` of the active plane. A radius of
+    /// `0` means "no patch": the shader draws the unbounded ground.
+    pub workplane_origin: [f32; 4],
+    /// The plane's in-plane `u` axis (the grid's `x`), `w` reserved.
+    pub workplane_u: [f32; 4],
+    /// The plane's in-plane `v` axis (the grid's `y`), `w` reserved.
+    pub workplane_v: [f32; 4],
+    /// The plane's unit normal (`u × v`), `w` reserved.
+    pub workplane_n: [f32; 4],
+    /// `[minor, major, minor_alpha, major_alpha]`: the plane's steps in world units and
+    /// the **base ink** of its two levels, as the host resolved them (the native grid's
+    /// effective steps and alphas). The grid shader draws these instead of deriving
+    /// decades from screen density and using its own alpha, so both backends show the
+    /// same lattice at the same weight. An alpha of `0` means "no claim": the shader
+    /// falls back to the program's own `values.y`/`values.z`.
+    pub workplane_steps: [f32; 4],
+    /// `[minor_lines ? 1 : 0, major_width, minor_width, 0]`: the minor level's form and
+    /// the two stroke widths in **world units**, as the native generator draws them. A
+    /// width of `0` is the shader's own 1 px hairline, so an unset host keeps the old
+    /// look. The strokes lie in the plane, which is what the native quads do.
+    pub grid_stroke: [f32; 4],
+}
+
+/// The active construction plane a program draw builds its grid in (host-supplied).
+///
+/// This is **not** part of the program parameter ABI: the viewport owns the active
+/// plane, so it fills [`Frame`]'s workplane tail from `ActiveWorkplane` instead of a
+/// mod's `SoShaderParameter*` nodes. A mod therefore cannot claim a plane the view is
+/// not on. The default is world `XY` with radius `0` (the unbounded ground).
+///
+/// The carrier itself is [`WorkplaneFrame`] from `ferrocad_graphics`, because a view
+/// and a backend share it; this module only owns how it is packed.
+
+/// A host's ink claim: a positive finite alpha, else `0` ("no claim").
+fn claim(alpha: f32) -> f32 {
+    if alpha.is_finite() && alpha > 0.0 {
+        alpha
+    } else {
+        0.0
+    }
 }
 
 impl Frame {
@@ -80,6 +145,19 @@ impl Frame {
     /// to be a real projection than a parallel one. A singular view-projection gets an
     /// identity inverse, which makes the shader's rays degenerate rather than NaN.
     pub fn from_camera(camera: &Camera, size: [u32; 2]) -> Self {
+        Self::from_camera_and_workplane(camera, size, WorkplaneFrame::world())
+    }
+
+    /// [`from_camera`](Self::from_camera) with the host's active construction plane.
+    ///
+    /// The plane is **not** part of the program parameter ABI: the viewport owns it, so
+    /// it arrives on the view and is written here with the frame. A mod therefore cannot
+    /// claim a plane the view is not on.
+    pub fn from_camera_and_workplane(
+        camera: &Camera,
+        size: [u32; 2],
+        workplane: WorkplaneFrame,
+    ) -> Self {
         let view_proj = camera.view_projection();
         let inverse = view_proj.inverse().unwrap_or_else(Matrix4::identity);
         let eye = camera
@@ -95,6 +173,30 @@ impl Frame {
                 if camera.is_orthographic() { 0.0 } else { 1.0 },
                 size[0] as f32,
                 size[1] as f32,
+                0.0,
+            ],
+            workplane_origin: [
+                workplane.origin[0],
+                workplane.origin[1],
+                workplane.origin[2],
+                workplane.patch_radius(),
+            ],
+            workplane_u: [workplane.u[0], workplane.u[1], workplane.u[2], 0.0],
+            workplane_v: [workplane.v[0], workplane.v[1], workplane.v[2], 0.0],
+            workplane_n: [workplane.n[0], workplane.n[1], workplane.n[2], 0.0],
+            workplane_steps: [
+                workplane.minor,
+                workplane.major,
+                // A host that does not claim the ink leaves `0` here (and a negative or
+                // non-finite claim is treated the same way), which the shader reads as
+                // "use the program's parameter" — the pre-ink ABI.
+                claim(workplane.minor_alpha),
+                claim(workplane.major_alpha),
+            ],
+            grid_stroke: [
+                if workplane.minor_lines { 1.0 } else { 0.0 },
+                workplane.major_width,
+                workplane.minor_width,
                 0.0,
             ],
         }
@@ -401,7 +503,7 @@ impl ProgramPipeline {
         self.groups.clear();
     }
 
-    /// Write the `Frame` block for the view in slot `index`.
+    /// Write the `Frame` block for the view in slot `index` (world `XY`, no patch).
     pub fn write_frame(
         &self,
         queue: &wgpu::Queue,
@@ -409,11 +511,34 @@ impl ProgramPipeline {
         camera: &Camera,
         size: [u32; 2],
     ) {
+        self.write_frame_with_workplane(
+            queue,
+            index,
+            camera,
+            size,
+            WorkplaneFrame::world(),
+        );
+    }
+
+    /// Write the `Frame` block for the view in slot `index`, with the view's active
+    /// construction plane.
+    ///
+    /// The workplane is host state, so it is written here with the frame rather than
+    /// through the program's parameter block. Views drawn without one keep
+    /// [`write_frame`](Self::write_frame)'s world `XY` default.
+    pub fn write_frame_with_workplane(
+        &self,
+        queue: &wgpu::Queue,
+        index: u32,
+        camera: &Camera,
+        size: [u32; 2],
+        workplane: WorkplaneFrame,
+    ) {
         let offset = u64::from(index) * u64::from(self.frame_stride);
         queue.write_buffer(
             &self.frames,
             offset,
-            bytemuck::bytes_of(&Frame::from_camera(camera, size)),
+            bytemuck::bytes_of(&Frame::from_camera_and_workplane(camera, size, workplane)),
         );
     }
 
@@ -647,7 +772,88 @@ mod tests {
     fn the_uniform_blocks_match_the_wgsl_abi() {
         assert_eq!(size_of::<Frame>() as u64, FRAME_SIZE);
         assert_eq!(size_of::<ProgramBlock>() as u64, PROGRAM_SIZE);
+        assert_eq!(FRAME_SIZE % 16, 0, "uniform blocks are 16-byte aligned");
         assert_eq!(PROGRAM_SIZE % 16, 0, "uniform blocks are 16-byte aligned");
+    }
+
+    /// The host's active plane reaches the exact bytes the WGSL `Frame` declares.
+    #[test]
+    fn the_frame_packs_the_active_workplane() {
+        // A tilted face-like plane: origin off the world origin, axes swapped.
+        let plane = WorkplaneFrame {
+            origin: [1.5, -2.0, 3.25],
+            u: [0.0, 1.0, 0.0],
+            v: [0.0, 0.0, 1.0],
+            n: [1.0, 0.0, 0.0],
+            minor: 2.5,
+            major: 25.0,
+            radius: 200.0,
+            minor_alpha: 0.15,
+            major_alpha: 0.3,
+            minor_lines: true,
+            major_width: 0.4,
+            minor_width: 0.2,
+        };
+        let frame = Frame::from_camera_and_workplane(&Camera::identity(), [640, 480], plane);
+        assert_eq!(frame.workplane_origin, [1.5, -2.0, 3.25, 200.0]);
+        assert_eq!(frame.workplane_u, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(frame.workplane_v, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(frame.workplane_n, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            frame.workplane_steps,
+            [2.5, 25.0, 0.15, 0.3],
+            "steps and the base ink travel together"
+        );
+        assert_eq!(frame.grid_stroke, [1.0, 0.4, 0.2, 0.0]);
+
+        // The offsets are the documented ABI: the workplane tail starts after `flags`
+        // (160 B) and each field is one 16-byte `vec4`.
+        let bytes = bytemuck::bytes_of(&frame);
+        assert_eq!(&bytes[160..176], bytemuck::bytes_of(&frame.workplane_origin));
+        assert_eq!(&bytes[176..192], bytemuck::bytes_of(&frame.workplane_u));
+        assert_eq!(&bytes[192..208], bytemuck::bytes_of(&frame.workplane_v));
+        assert_eq!(&bytes[208..224], bytemuck::bytes_of(&frame.workplane_n));
+        assert_eq!(&bytes[224..240], bytemuck::bytes_of(&frame.workplane_steps));
+        assert_eq!(&bytes[240..256], bytemuck::bytes_of(&frame.grid_stroke));
+
+        // The pre-workplane fields keep their offsets: the extension is a suffix.
+        assert_eq!(&bytes[128..144], bytemuck::bytes_of(&frame.eye));
+        assert_eq!(&bytes[144..160], bytemuck::bytes_of(&frame.flags));
+    }
+
+    /// No host plane means world `XY` and no patch: the shader's original behaviour.
+    #[test]
+    fn a_world_workplane_is_the_unbounded_ground() {
+        let frame = Frame::from_camera(&Camera::identity(), [640, 480]);
+        assert_eq!(frame.workplane_origin, [0.0, 0.0, 0.0, 0.0], "radius 0 = no patch");
+        assert_eq!(frame.workplane_u, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(frame.workplane_v, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(frame.workplane_n, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(frame.workplane_steps, [10.0, 100.0, 0.0, 0.0]);
+        assert_eq!(frame.grid_stroke, [0.0, 0.0, 0.0, 0.0], "dots, hairlines");
+        assert_eq!(WorkplaneFrame::world().radius, 0.0);
+    }
+
+    /// A degenerate host radius must draw the ground, not a zero-width patch.
+    #[test]
+    fn a_degenerate_patch_radius_is_no_patch() {
+        for radius in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+            let plane = WorkplaneFrame {
+                radius,
+                ..WorkplaneFrame::world()
+            };
+            let frame = Frame::from_camera_and_workplane(&Camera::identity(), [640, 480], plane);
+            assert_eq!(
+                frame.workplane_origin[3], 0.0,
+                "radius {radius} should mean no patch"
+            );
+        }
+        let plane = WorkplaneFrame {
+            radius: 12.5,
+            ..WorkplaneFrame::world()
+        };
+        let frame = Frame::from_camera_and_workplane(&Camera::identity(), [640, 480], plane);
+        assert_eq!(frame.workplane_origin[3], 12.5);
     }
 
     #[test]

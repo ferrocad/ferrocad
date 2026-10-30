@@ -5,7 +5,9 @@
 // (location 0 only; the other attributes are unused) and only their sign matters:
 // each corner picks a screen corner. The vertex stage emits the world-space near/far
 // points of that corner's view ray; the fragment stage intersects the ray with the
-// z = 0 plane, per pixel, and derives the decade LOD from screen-space derivatives.
+// active plane (the host's workplane tail of `Frame`, default world `XY`), per pixel,
+// and draws the host's two steps in that plane: dots at the minor step, lines at the
+// major one.
 //
 // Deviations from the reference, all deliberate (`docs/grid-overlay-plan.md` §3.4):
 //
@@ -18,6 +20,21 @@
 //    layout is the fixed ABI: group 2 binding 0 is `Frame` (per frame), binding 1 is
 //    `Program` (per program). Groups 0 and 1 are layout-only; this module declares
 //    no bindings there, so the shared pipeline layout keeps working.
+//  * The grid is built in the **active construction plane's** `u`/`v` frame, not world
+//    `XY`. That plane is host state (`Frame.workplane_*`), never a mod parameter: a mod
+//    cannot claim a plane the viewport is not on. The default frame is world `XY` at
+//    the origin with radius 0, so an unset workplane is exactly the old ground.
+//  * The host sends the native grid's **extent** (a face patch, or the camera-following
+//    ground), so the plane is bounded before it reaches its horizon. A radius of 0 still
+//    means "unbounded", but the viewport no longer sends it.
+//  * The edge-on fade uses the **camera's** angle to the plane, not the per-pixel ray
+//    angle: the ray varies across the view, and its zero-crossing is the plane's own
+//    horizon line, which draws as a soft band through the model.
+//  * A non-zero patch radius fades the grid out radially around the plane origin,
+//    using the native grid's `smoothstep(0.55 r, r)` law.
+//  * Ground shadows are **plane-relative**: the host projects each item onto the
+//    active plane and sends the `(u, v)` AABB, so the shader reads `(pu, pv)`. A
+//    world-`(x, y)` footprint would land off to the side on a vertical workplane.
 //  * Our tokens replace the addon's hard-coded colours: the axis hues are the
 //    linear-token values of #F87171 / #4ADE80, and the ink arrives as `grid_color`.
 //  * Shadows are deferred. The block and its loop are present, compiled and
@@ -34,6 +51,26 @@ struct Frame {
     // x = 1 for a perspective projection (an explicit host flag; do NOT infer it
     // from the matrix), yz = target resolution in physical pixels, w reserved.
     flags: vec4<f32>,
+    // The active construction plane, supplied by the host (not by a parameter node):
+    // xyz = the plane's world origin, w = the patch radius (0 = no patch, the
+    // unbounded ground).
+    workplane_origin: vec4<f32>,
+    // The in-plane unit axes: u is the grid's x, v its y. w is reserved.
+    workplane_u: vec4<f32>,
+    workplane_v: vec4<f32>,
+    // The unit plane normal (u x v). w is reserved. The default is world XY:
+    // origin 0, u = +X, v = +Y, n = +Z, radius 0.
+    workplane_n: vec4<f32>,
+    // xy = the plane's minor and major steps in **world units**, as the host resolved
+    // them for this camera (the native grid's effective steps). zw = the two levels'
+    // **base ink** (the native token alphas times the user's opacity); 0 means the host
+    // does not claim it and `program.values.yz` is used.
+    workplane_steps: vec4<f32>,
+    // The host's stroke: x = 1 when the minor level is a line lattice (0 = intersection
+    // dots), y/z = the major/minor stroke widths in **world units** (0 = the 1 px
+    // hairline below). The native generator paints the same in-plane strokes, so the two
+    // backends show the same line weight.
+    grid_stroke: vec4<f32>,
 };
 
 struct Program {
@@ -51,8 +88,10 @@ struct Program {
 @group(2) @binding(0) var<uniform> frame: Frame;
 @group(2) @binding(1) var<uniform> program: Program;
 
-const MIN_PX: f32 = 8.0; // finest visible line spacing in pixels (approx.)
 const DEPTH_BIAS: f32 = 1e-6; // push the grid slightly back so coplanar faces win
+// The fraction of a patch's radius that stays at full alpha; beyond it the grid fades
+// to nothing at the radius. Matches `ferrocad_stage::grid::FADE_START`.
+const PATCH_FADE_START: f32 = 0.55;
 const X_AXIS: vec3<f32> = vec3<f32>(0.939, 0.165, 0.165); // #F87171, linear
 const Y_AXIS: vec3<f32> = vec3<f32>(0.069, 0.730, 0.216); // #4ADE80, linear
 const SHADOW_MAX: u32 = 64u;
@@ -94,32 +133,62 @@ fn fwidth(v: f32) -> f32 {
     return abs(dpdx(v)) + abs(dpdy(v));
 }
 
-// Coverage of a ~1px line at integer values of c. d = cells per pixel.
-fn line_cov(c: f32, d: f32) -> f32 {
+// The host's base ink for a level, or the program's own strength when the host does not
+// claim it (a pre-ink `Frame` tail). Using the host's alphas is what makes the two
+// backends' lines the same weight: a shader drawing 4x the ink reads as a thicker line
+// at the same width.
+fn ink_for(host: f32, fallback: f32) -> f32 {
+    return select(fallback, host, host > 0.0);
+}
+
+// Coverage of a line at integer values of c. `d` is cells per pixel for this axis, `step`
+// the level's world step and `width` the stroke's width in world units (0 = 1 px).
+fn line_cov(c: f32, d: f32, step: f32, width: f32) -> f32 {
     let cells = max(d, 1e-12);
     let dist_px = abs(fract(c - 0.5) - 0.5) / cells;
-    let cov = 1.0 - clamp(dist_px, 0.0, 1.0);
+    // The stroke is measured in the plane's units, exactly like the native quads, then
+    // converted to pixels on this axis so its edge can be feathered over one pixel.
+    let half_px = max(0.5, 0.5 * width / (cells * step));
+    let cov = 1.0 - clamp(dist_px - (half_px - 0.5), 0.0, 1.0);
     // Fade out when cells get too dense to resolve (kills moire).
     return cov * (1.0 - smoothstep(0.25, 0.5, cells));
 }
 
-// Lines perpendicular to one world axis, with its own decade LOD.
-// w = coordinate in base units, dw = its screen-space derivative.
-fn axis_grid(w: f32, dw: f32) -> f32 {
-    let d = max(dw, 1e-12);
-    let l = log(d * MIN_PX) * 0.4342944819; // log10
-    let e = floor(l);
-    let f = l - e; // 0..1 blend between decades
-    let s0 = pow(10.0, e + 1.0);
-    let s1 = s0 * 10.0;
-    let s2 = s1 * 10.0;
-
-    let minor = program.values.y;
-    let major = program.values.z;
-    let a0 = (1.0 - f) * minor * line_cov(w / s0, d / s0);
-    let a1 = mix(major, minor, f) * line_cov(w / s1, d / s1);
-    let a2 = f * major * line_cov(w / s2, d / s2);
-    return max(a0, max(a1, a2));
+// The grid's coverage in the plane's frame: the minor level (intersection **dots**, or a
+// full lattice with `grid_stroke.x`) and **lines** at the major step — the native
+// `grid::ground` look.
+//
+// The reference shader drew a line lattice at every level it picked. With the host's
+// steps that means a line mesh at the minor step, which on a small face patch is ~10x
+// the native grid's fragments (and reads as a dense cage). Drawing the minor level as
+// dots keeps the two backends identical: the product of both axes' coverage is a dot.
+fn grid_alpha(pu: f32, pv: f32, dwu: f32, dwv: f32) -> f32 {
+    var minor_step = frame.workplane_steps.x;
+    var major_step = frame.workplane_steps.y;
+    if (minor_step <= 0.0 || major_step <= 0.0) {
+        // A host that predates the step tail: fall back to the parameter's base spacing.
+        let base = max(program.values.x, 1e-6);
+        minor_step = base;
+        major_step = base * 10.0;
+    }
+    let minor_width = max(frame.grid_stroke.z, 0.0);
+    let major_width = max(frame.grid_stroke.y, 0.0);
+    let minor_ink = ink_for(frame.workplane_steps.z, program.values.y);
+    let major_ink = ink_for(frame.workplane_steps.w, program.values.z);
+    let minor_u = line_cov(pu / minor_step, dwu / minor_step, minor_step, minor_width);
+    let minor_v = line_cov(pv / minor_step, dwv / minor_step, minor_step, minor_width);
+    // Dots at the minor intersections (both axes on a line at once), or the lattice the
+    // user asked for (`minor_style: lines`).
+    var minor = minor_u * minor_v;
+    if (frame.grid_stroke.x > 0.5) {
+        minor = max(minor_u, minor_v);
+    }
+    let dots = minor * minor_ink;
+    // Lines at the major step, along either axis.
+    let major_u = line_cov(pu / major_step, dwu / major_step, major_step, major_width);
+    let major_v = line_cov(pv / major_step, dwv / major_step, major_step, major_width);
+    let lines = max(major_u, major_v) * major_ink;
+    return max(dots, lines);
 }
 
 fn axis_line(w: f32, dw: f32) -> f32 {
@@ -134,29 +203,49 @@ fn shadow_at(index: u32) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> FragmentOutput {
+    // The active construction plane. The host writes unit axes; the default frame is
+    // world XY, which reproduces the pre-workplane ground exactly.
+    let plane_origin = frame.workplane_origin.xyz;
+    let plane_u = frame.workplane_u.xyz;
+    let plane_v = frame.workplane_v.xyz;
+    let plane_n = frame.workplane_n.xyz;
+    let patch_radius = frame.workplane_origin.w;
+
     // Ray through this pixel. Perspective rays start at the camera, so the grid is
     // NOT limited to the renderer's near/far range; orthographic rays are parallel,
-    // so any t along them is valid.
+    // so any t along them is valid. Intersect the ray with the plane, not z = 0.
     let dir = normalize(input.far_point - input.near_point);
     let persp = frame.flags.x > 0.5;
     let origin = select(input.near_point, frame.eye.xyz, persp);
-    var dz = dir.z;
-    if (abs(dz) < 1e-8) {
-        dz = 1e-8;
+    let nd = dot(dir, plane_n);
+    var denom = nd;
+    if (abs(denom) < 1e-8) {
+        denom = 1e-8;
     }
-    let t = -origin.z / dz;
+    let t = dot(plane_origin - origin, plane_n) / denom;
     let p = origin + t * dir;
+    // The world point in the plane's own frame (world units around its origin).
+    let rel = p - plane_origin;
+    let pu = dot(rel, plane_u);
+    let pv = dot(rel, plane_v);
 
     // All derivatives first, so the discards below cannot corrupt them.
-    let w = p.xy / program.values.x;
-    let dw = vec2<f32>(fwidth(w.x), fwidth(w.y));
-    let gx = axis_grid(w.x, dw.x);
-    let gy = axis_grid(w.y, dw.y);
-    let ax = axis_line(p.y, fwidth(p.y)); // x axis (y == 0)
-    let ay = axis_line(p.x, fwidth(p.x)); // y axis (x == 0)
+    let g = grid_alpha(pu, pv, fwidth(pu), fwidth(pv));
+    let ax = axis_line(pv, fwidth(pv)); // u axis (v == 0)
+    let ay = axis_line(pu, fwidth(pu)); // v axis (u == 0)
 
-    // Fade toward the horizon where the plane goes edge-on.
-    let grazing = smoothstep(0.0, 0.08, abs(dir.z));
+    // Fade the **whole plane** as the camera goes edge-on to it. This is a property of
+    // the camera, not of the pixel: `dir` varies per fragment, so `abs(dot(dir, n))`
+    // reaches zero along the plane's own horizon line and paints a soft band across the
+    // view — a vertical one on a `YZ` plane, straight through the model. The centre ray
+    // is the same for every fragment, so the fade is uniform.
+    let centre = vec2<f32>(0.0);
+    let centre_dir = select(
+        normalize(unproject(centre, 1.0) - unproject(centre, 0.0)),
+        normalize(unproject(centre, 1.0) - frame.eye.xyz),
+        persp,
+    );
+    let grazing = smoothstep(0.0, 0.08, abs(dot(centre_dir, plane_n)));
 
     let clip = frame.view_proj * vec4<f32>(p, 1.0);
     // Perspective: t < 0 means the plane is behind the camera (sky).
@@ -164,17 +253,26 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
         discard;
     }
 
-    var a = max(gx, gy);
+    var a = g;
+    let major_ink = ink_for(frame.workplane_steps.w, program.values.z);
+    // The grid dims edge-on; the two axis lines keep their ink, because they are what
+    // still says where the plane is when the view runs along it.
+    a = a * grazing;
+    // A face-bound plane is a finite patch: fade it out radially around the plane
+    // origin (the native grid's law). Radius 0 is the unbounded ground.
+    if (patch_radius > 0.0) {
+        let distance = length(vec2<f32>(pu, pv));
+        a = a * (1.0 - smoothstep(PATCH_FADE_START * patch_radius, patch_radius, distance));
+    }
     var rgb = program.grid_color.rgb;
     rgb = mix(rgb, X_AXIS, ax);
-    a = max(a, ax * program.values.z);
+    a = max(a, ax * major_ink);
     rgb = mix(rgb, Y_AXIS, ay);
-    a = max(a, ay * program.values.z);
-    a = a * grazing;
+    a = max(a, ay * major_ink);
 
-    // Soft per-object ground shadows, composited under the lines in the same pass
-    // and depth test as the grid. Deferred: `shadow_count` is 0 in this slice, so
-    // the loop is compiled and validated but never entered (plan §3.5).
+    // Soft per-object shadows, composited under the lines in the same pass and depth
+    // test as the grid. The footprints are in the active plane's `(u, v)` frame, so a
+    // bound workplane is shaded too.
     var sa = 0.0;
     if (program.values.w > 0.0 && program.counts.x > 0.5) {
         for (var i: u32 = 0u; i < SHADOW_MAX; i = i + 1u) {
@@ -185,7 +283,9 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
             let c = vec2<f32>(shadow_at(o), shadow_at(o + 1u));
             let h = vec2<f32>(shadow_at(o + 2u), shadow_at(o + 3u));
             let blur = max(shadow_at(o + 4u), 1e-6);
-            let q = p.xy - c;
+            // A footprint is an `(u, v)` rectangle in the active plane's frame (the host
+            // projects each item onto that plane), so `q` is its own coordinate there.
+            let q = vec2<f32>(pu, pv) - c;
             // Approximate signed distance to an axis-aligned ellipse.
             let k0 = length(q / h);
             let k1 = length(q / (h * h));

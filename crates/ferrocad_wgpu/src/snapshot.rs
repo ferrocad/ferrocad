@@ -464,6 +464,7 @@ pub fn render(spec: &SnapshotSpec) -> Result<ImageData, SnapshotError> {
         camera: &camera,
         rect: None,
         overlay: false,
+        workplane: None,
     }])?;
     Ok(renderer.image()?)
 }

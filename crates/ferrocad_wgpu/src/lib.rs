@@ -236,9 +236,11 @@ mod tests {
             .update(module.to_ctx())
             .expect("WGSL uniform layouts");
 
-        // Frame: view_proj + inv_view_proj (2 x 64) + eye + flags (2 x 16).
+        // Frame: view_proj + inv_view_proj (2 x 64) + eye + flags (2 x 16), then the
+        // host workplane tail: origin + patch radius, u, v, n, steps, stroke (6 x 16).
         let frame = struct_by_name(&module, "Frame");
-        assert_eq!(layouter[frame].size, 160);
+        assert_eq!(layouter[frame].size, 256);
+        assert_eq!(layouter[frame].size, super::program::FRAME_SIZE as u32);
         // Program: 3 x vec4 plus 80 shadow vec4s (64 slots x 5 floats, re-packed).
         let program = struct_by_name(&module, "Program");
         assert_eq!(layouter[program].size, 1_328);

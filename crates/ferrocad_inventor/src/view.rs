@@ -23,7 +23,7 @@
 use crate::batch::RenderQueue;
 use crate::camera::Camera;
 use crate::pixels::Rect;
-use ferrocad_graphics::Hit;
+use ferrocad_graphics::{Hit, WorkplaneFrame};
 
 /// A CPU-side RGBA8 image, row-major, top-left origin.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -118,4 +118,10 @@ pub struct ViewSpec<'a> {
     /// Whether this is an overlay: drawn on top of the main view with depth off and
     /// alpha blending, and not clearing the target.
     pub overlay: bool,
+    /// The plane this view's programs are drawn on; `None` is the world `XY` ground.
+    ///
+    /// Only the program packets in `queue` read it — scene draws ignore it — and a
+    /// radius of `0` means "unbounded", so `None` and
+    /// [`WorkplaneFrame::world`] describe the same ground.
+    pub workplane: Option<WorkplaneFrame>,
 }

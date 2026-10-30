@@ -26,6 +26,7 @@ pub mod pixels;
 pub mod ribbon;
 pub mod state;
 pub mod theme;
+pub mod workplane;
 
 pub use batch::{DrawBatch, DrawPacket, Generation, MeshId, PickId, RenderQueue};
 pub use camera::{Camera, Projection};
@@ -38,3 +39,4 @@ pub use state::{
     DepthCompare, DepthState, ProgramParameters, SHADOW_MAX, SHADOW_STRIDE, SHADOW_VECS,
     ShadowFootprint, ShaderProgram, StateSnapshot, apply_shadows,
 };
+pub use workplane::WorkplaneFrame;

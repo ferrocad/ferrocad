@@ -244,6 +244,7 @@ impl NaviCube {
             camera: &self.camera,
             rect: Some(self.rect),
             overlay: true,
+            workplane: None,
         }
     }
 

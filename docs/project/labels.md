@@ -1,6 +1,6 @@
 # Label index — every `S1`, `P4`, `D0`, …
 
-Status: reference (2026-10-27). This is the index for the slice and work-item labels
+Status: reference (2026-10-30). This is the index for the slice and work-item labels
 used across the notes, the backlogs and the code comments. If a label is not here, it is
 not a project label (it may be an upstream name, an OCCT class, a file name or a
 version).
@@ -20,6 +20,9 @@ owner a label belongs to.
 | `P2` | the solids/booleans/Draft section of the current backlog · the workbench-platform section of the 2026-10-27 backlog · the Python feature-proxy slices (`P2a`–`P2e`) · the architecture slices (`P2.1`–`P2.5`) | the suffix or the backlog date; bare `P2` is the current backlog section |
 | `P1` | the minimum-SimpleCAD-API section of the current backlog · the OCCT seam tail in the 2026-10-27 backlog | cite the backlog date |
 | `SK1`–`SK6` | the free-sketcher slices in the current backlog ([`TODO-30-10-2026.md`](TODO-30-10-2026.md) §P4) | `SK` is sketch-only; not SimpleCAD's `S1`–`S5` |
+| `SC0`–`SC8` | the SimpleCAD bring-up slices ([`tasks/simplecad-bringup.md`](tasks/simplecad-bringup.md)) | `SC` is the 2026-10-30 cut; `S1`–`S5` remain the SimpleCAD stage names |
+| `U1`–`U7` | the UX research questions ([`tasks/ux-research.md`](tasks/ux-research.md)) | one letter, one spec |
+| `X1`–`X4` | the creation-tool ownership decision slices ([`tasks/creation-tools-ownership.md`](tasks/creation-tools-ownership.md)) | decision task, not implementation |
 | `D0` | the headless Draft import task | there is only one `D0` |
 | `D1` | Dev Tools window slice · NaviCube GPUI slice · MVP demo slice | the note's subject |
 | `T4` | the stage G-buffer pick pass · the toolbar-chrome slice · the spatial transactor | the note's subject |

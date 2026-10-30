@@ -32,7 +32,8 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
   Python UI research, the grid-overlay fixture and the SimpleCAD bring-up.
 - [record/](record/) — closed history: compact milestones, closed backlogs, closed task
   specs, incidents, and `archive/` for the full detail.
-- [tasks/](tasks/) — active task specs (the workplane hierarchy, the polyline/HUD spec and
+- [tasks/](tasks/) — active task specs (the SimpleCAD bring-up cut, the UX research plan,
+  the creation-tool ownership decision, the workplane hierarchy, the polyline/HUD spec and
   the stroke-unit decision); the backlog tracks the work, and finished specs move to
   [`record/tasks/`](record/tasks/README.md).
 - [documentation.md](documentation.md) — the documentation decision: audiences,

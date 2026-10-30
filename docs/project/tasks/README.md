@@ -1,10 +1,18 @@
 # Active task specs
 
-Status: index (2026-10-30). Two active specs and one recorded decision:
+Status: index (2026-10-30). Five active specs and one recorded decision:
 
+- [simplecad-bringup.md](simplecad-bringup.md) — the **SC0–SC8** cut of the SimpleCAD
+  bring-up: triage the 64 failures, exact `ShapeType`, `makeWireString` on `skrifa`/
+  `harfrust`, the GUI classification, the S4.4–S4.6 view half, and the workflow acceptance.
+- [ux-research.md](ux-research.md) — the interaction questions **U1–U7** (draw path, active
+  action, snap feedback, plane affordances, wheel verbs, numeric entry, walkthroughs), each
+  with a method and an acceptance, and a decision log to fill.
+- [creation-tools-ownership.md](creation-tools-ownership.md) — should a polyline be a core
+  default that mods can override, or an edition/mod choice? A decision task (**X1–X4**).
 - [polyline-vertex-editing-and-active-tool-hud.md](polyline-vertex-editing-and-active-tool-hud.md)
   — edit a placed vertex while the tool is still open, and replace the split
-tool-strip/floating-form presentation with one dielectric active-action surface.
+  tool-strip/floating-form presentation with one dielectric active-action surface.
 - [workplanes.md](workplanes.md) — make the world plane a real state, bind a face
   ephemerally during a creation tool, and replace the `WP` plumbing menu with plane
   choices.

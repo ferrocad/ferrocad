@@ -73,9 +73,9 @@
       "spec_sha256": "b8468d01cb9e2a93fc0d565b1df7694b0e25fa9623779417186e694ecd160874"
     },
     "text-3d.png": {
-      "bytes": 16822,
+      "bytes": 16654,
       "figure": "text-3d",
-      "png_sha256": "2c9953b4fffb2b01b4aa3924d7edc099fe6d75d8a7b1b2ce7fffc33d4be0894c",
+      "png_sha256": "5d91be84a30cade66e5f508adb0eb16f3803006ca5b11fb35e27dda4876fd3be",
       "size": [
         960,
         320

@@ -1,6 +1,11 @@
 # The tool loadout: slots, the `Select ▾` filter, and hover-to-arm
 
 Status: **design and plan (2026-10-30).** *Plan only — nothing here is built.*
+Read against the tree in
+[`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
+which found the loadout **smaller** than this note first assumed: only one compiled manipulator
+is hosted per selection already, and both arm seams take the element — so narrowing is a
+filtered `SelectionRef`, not a new manipulator kind.
 
 This is the **tool half** of the 2026-10-30 transform synthesis. The other half — the explicit
 uncommitted edit, the one cumulative session, the pill and the 3-D tape — is
@@ -80,7 +85,23 @@ creation dock (`Create Box | Search (Ctrl+K)`):
 - one pill per slot, labelled with the hotkey and the tool (`[1 Move] [2 Push/Pull]
   [3 Fillet]`), so the hotkey is discoverable without the wheel.
 
-### 1.4 What a slot change does to a live session
+### 1.4 How the narrowing is implemented
+
+At the **arm seam**, not in the manipulator trait. One selection already hosts at most one
+compiled manipulator plus whatever a mod declares, and both calls take the element:
+
+| Call | Where | What the slot does to it |
+| --- | --- | --- |
+| `contributions.manipulator_for(reference, stage)` | `shell/viewport.rs:534-536` | only called for the slots that want a manipulator (2 and 3) |
+| `python::manipulator_specs(object, element)` | `shell/viewport.rs:568` | receives the slot-filtered element, so a mod's face handle cannot arm under Slot 1 |
+| `arm_gizmos(reference, stage)` | `shell/viewport.rs:542` | only called for Slot 1 |
+
+`GizmoSet::set_session` is **not** the narrowing mechanism: it selects a gizmo's *kind*
+(Translate/Rotate/Universal), which is Slot 1's mode, not which class is in the hand. The
+`transform_verb` heuristic that retires the body triad today
+(`shell/viewport.rs:597-603`) is what the slot's filter replaces.
+
+### 1.5 What a slot change does to a live session
 
 A slot change is a **context exit**: if the transform session is dirty it commits first
 (`transform-session.md` §1.2, invariant 2), then the new slot narrows the hosted set and the
@@ -193,7 +214,7 @@ before U2/U3, i.e. the loadout can arrive before the pill and the tape.
 
 | Stage | Deliverable | Why this order | Spec updated |
 | --- | --- | --- | --- |
-| **U4** | loadout slots, `Select ▾` filter, `1`/`2`/`3` keys, the bottom-left bar, and `GizmoSet`/manipulator narrowing | Needs one session to narrow to | §4.1, §4.2 |
+| **U4** | loadout slots, `Select ▾` filter, `1`/`2`/`3` keys, the bottom-left bar, and the two arm calls gated by the slot (no trait change) | Needs one session to narrow to; no `ManipulatorKind` is required | §4.1, §4.2 |
 | **U5** | hover-to-arm and zero-click drag on `HoverReport::target` | Needs U4's filter: "movable body" is the slot's contract | §4.3 |
 | **U6** | this note's share of the sweep: spec text final, dead code (`transform_verb` and the claim rule it replaced) gone, user-docs page for the loadout | Converges with the session half | all of §4 |
 
@@ -215,6 +236,7 @@ before U2/U3, i.e. the loadout can arrive before the pill and the tape.
 | --- | --- |
 | Stripping sub-elements in `Body` breaks a face workflow the user expects | The filter is visible and overridable in the header, and `Face` is one click away — the same distance as today's wheel |
 | Three slots is the wrong number | The bar is data-driven; a slot is a `(filter, session kind, key)` triple, so adding or reordering is configuration |
+| Narrowing only the compiled manipulator leaves a mod's declared face handle armed | The slot filters the `SelectionRef` **before** both arm calls, so the declared-handle path sees no element under Slot 1 |
 | Slot state and the file's `Select ▾` can disagree | One store, two views: the bar writes the same `SelectFilter` the header shows, never a copy |
 | Hover-to-arm picks the wrong body in a dense view | The armed triad is a *preview* only: pressing a handle is what promotes the selection, so the worst case is one stray press, and `Esc`/`[1]` gives it back |
 | The bar collides with the creation dock at small widths | Same row as the dock, anchored left; the dock is centred, so they only meet on very narrow windows — clamp the bar's width and let the dock shift |

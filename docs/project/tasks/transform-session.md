@@ -1,6 +1,11 @@
 # The transform session: explicit uncommitted state, one move, no undo-as-cancel
 
 Status: **design and plan (2026-10-30).** *Plan only — nothing below A0 is built yet.*
+Read against the tree in
+[`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
+which corrected two things here: the display stage carries **world-space** geometry with an
+identity placement (so the session datum is a world point, not a `Placement`), and the shell has
+no document handle (so A0 must also add a facade surface for the pending edit).
 
 This is the **session half** of the 2026-10-30 transform synthesis. The other half — the
 loadout slots, the `Select ▾` topology filter and hover-to-arm — is
@@ -122,6 +127,10 @@ composed by the viewport, forgotten at commit, and restored by an overlay snapsh
 
 ### 2.2 `PendingEdit` (new, `ferrocad_core::document::pending`)
 
+The type needs a name that is not `pending`: `TransactionManager` already has
+a `pending` meaning "booked but not active" (`document/transaction.rs:96-148`), so either this
+type or that field should be renamed (`StagedEdit` is the obvious pairing).
+
 ```rust
 pub struct PendingEdit {
     id: PendingId,
@@ -166,9 +175,13 @@ impl<'a> EditView<'a> {
 impl Document { pub fn view(&self) -> EditView<'_>; pub fn view_with(&self, id: PendingId) -> EditView<'_>; }
 ```
 
-The display/stage pass reads `view()`; snapping and hit testing read `view()` (so you snap to
+- The display/stage pass reads `view()`; snapping and hit testing read `view()` (so you snap to
 what you see); exporters and save read the document. This is what stops the next preview from
 re-introducing a second source of truth.
+- ⚠️ It is **not enforceable yet**: `Document::object_mut()` still hands out the raw store
+(`document/mod.rs:215-221`). A0 makes `EditView` the path the display and snap code takes; it
+does not make it the only possible one. That would need `object_mut` to become crate-private,
+which is a larger change than this stage should carry.
 
 ### 2.4 `TransformSession` (new, `ferrocad_stage::session`)
 
@@ -178,7 +191,7 @@ parametric editions and the headless tests all share it:
 ```rust
 pub struct TransformSession {
     target: u32,              // stage entity
-    base: Placement,          // the committed placement at begin (the ghost datum)
+    datum: Vector3,           // world-space origin at begin (the ghost ring)
     delta: Vector3,           // accumulated translation
     mode: GizmoMode,          // translate | rotate (rotation wired after U3)
     dirty: bool,
@@ -188,20 +201,29 @@ impl TransformSession {
     pub fn set_translation(&mut self, delta: Vector3);
     pub fn translate_axis(&mut self, axis: Axis, value: f64);   // absolute along the axis
     pub fn delta(&self) -> Vector3;
-    pub fn base(&self) -> Placement;
-    pub fn effective(&self) -> Placement;                       // base ∘ delta
-    pub fn checkpoint(&mut self, placement: Placement);         // Enter: new datum, Δ = 0
+    pub fn datum(&self) -> Vector3;                             // the ghost's base
+    pub fn transform(&self) -> Matrix4;                         // what the item is drawn with
+    pub fn checkpoint(&mut self, datum: Vector3);               // Enter: new datum, Δ = 0
     pub fn is_dirty(&self) -> bool;
 }
 ```
 
-One owner: the shell holds it; the viewport **renders** it. That deletes the three-way split —
-`preview_translation`, `apply_gizmo_preview` and the dialog's mirrored delta all become *reads*
-of the session, and `set_gizmo_preview(deferred)` disappears because there is only one mode.
+The datum is a **world point from `ShapeItem::origin`** (falling back to `anchor()`), not a
+`Placement`: document items arrive as world-space tessellations with an identity placement, and
+the triad already hugs `origin`. The delta is a matrix so rotation is expressible before any
+`Placement` is involved — only the commit needs the object, which the facade owns.
+
+One owner: the shell holds it; the viewport **renders** it (`set_session`). That deletes the
+three-way split — `preview_translation`, `apply_gizmo_preview` and the dialog's mirrored delta
+all become *reads* of the session, and `set_gizmo_preview(deferred)` disappears because there is
+only one mode. `preview_home` survives for gizmo and manipulator anchors; only its item-transform
+branch goes.
 
 The session is also the `PendingEdit`'s writer: a translate stages `Placement` on the target
-(`pending.stage_property(target, "Placement", base ∘ delta)`). So the same structure feeds the
-display and, at commit, the transaction.
+(`pending.stage_property(target, "Placement", base ∘ delta)`). Because the shell has no
+`Document`, that goes through the facade as an opaque handle (A0):
+`transform_begin(name) -> id`, `transform_stage(id, delta)`, `transform_commit(id)`,
+`transform_abort(id)` — the same shape as a dialog token.
 
 ### 2.5 Commit, checkpoint, rollback — mapped to the model
 
@@ -216,23 +238,29 @@ display and, at commit, the transaction.
 ### 2.6 What the renderer needs
 
 - `ShapeItem` keeps `temporary_transform` as the *rendering* of a staged transform (no public
-  API change), but it is now written in exactly one place, from `session.effective()`.
+  API change), but it is now written in exactly one place, from `session.transform()`.
 - A new overlay, `ferrocad_stage::measure_tape`, builds the ghost disc and the stair-step legs
-  from `(session.base(), session.effective())`. It is a `RenderQueue` like `workplane_stem`:
+  from `(session.datum(), session.transform())`. It is a `RenderQueue` like `workplane_stem`:
   depth off, never picked, rebuilt when the session changes.
 - The tape needs no new renderer feature. Every element is a 1 px line or a screen-facing
   ribbon, both of which exist.
+- The ghost's *base* geometry is already in memory: the shell keeps the un-previewed stage
+  (`last_stage`) and merges overlays over it, so a faded "uncommitted" rendering needs no new
+  data, only a second draw.
 
 ### 2.7 Compatibility
 
+- **Facade.** The shell has no document handle, so the pending edit is reached as an opaque id
+  (`transform_begin`/`stage`/`commit`/`abort`, A0), exactly like a dialog token. Scripts do not
+  need to know it exists.
 - **Python.** `App_Move` keeps its argument form (`Activated(dx, dy, dz)`); only its
   no-argument form stops returning a dialog (U1). `FreeCADGui.Preview` keeps its channel.
   `Document` gains `begin_pending`/`commit_pending`/`abort_pending` only if a script needs
   them — not in A0.
 - **Upstream scripts.** Unchanged: they call `openTransaction`/`commitTransaction` themselves,
   which is the *committed* path and is untouched.
-- **`.ferrocad` / `.FCStd`.** A pending edit is never serialized; save with a live session
-  commits it first (D4).
+- **`.ferrocad` / `.FCStd`.** A pending edit is never serialized (persistence reads
+  `SavedDocument`, not `Document`); save with a live session commits it first (D4).
 - **Editions.** A mod that supplies a manipulator keeps working: manipulators commit through
   the same session, so they get preview and rollback for free once A3 lands.
 
@@ -327,9 +355,9 @@ shared convergence sweep.
 
 | Stage | Deliverable | Why this order | Spec updated |
 | --- | --- | --- | --- |
-| **A0** | `PendingEdit` + `EditView` in `ferrocad_core`, with tests. No callers. | The model the rest stands on; pure addition, zero risk | — |
-| **A1** | `TransformSession` in `ferrocad_stage`; the viewport renders it; the shell owns it | One owner for the pending delta before any behaviour changes | — |
-| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, `preview_home`'s transform branch, and `OpenDialog::translation` | Removes the three-way split that caused the 2026-10-30 defect | — |
+| **A0** | `PendingEdit` + `EditView` in `ferrocad_core`, **plus the facade handle** (`transform_begin/stage/commit/abort`) and tests. | The model the rest stands on, and the shell's only way to reach it — without the handle the stage has no caller | — |
+| **A1** | `TransformSession` in `ferrocad_stage` (world datum + matrix delta); the viewport renders it via `set_session`; the shell owns it | One owner for the pending delta before any behaviour changes | — |
+| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, `preview_home`'s **item-transform** branch, and `OpenDialog::translation`. Keep the gizmo/manipulator half of `preview_home` | Removes the three-way split that caused the 2026-10-30 defect | — |
 | **A3** | route the push/pull stem and the dress-up scrubber through the session + `PendingEdit` (they preview too, not just commit) | Proves the model generalises beyond `Placement` | §4.2 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 |
 | **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 |
@@ -341,7 +369,8 @@ shared convergence sweep.
 - **A0** — a pending edit stages, aborts (document byte-identical, `undo_names()` unchanged)
   and commits (one entry named by the session label, one recompute). `EditView` returns the
   staged value for reads and the committed value for ghosts. Round-trip through `.ferrocad`
-  never persists a pending edit.
+  never persists a pending edit. The facade handle drives the same three operations from an
+  object name, so the shell has a consumer for the type on day one.
 - **A1** — session arithmetic (cumulative translation, checkpoint, dirty) and one viewport test
   that renders a session and asserts the emitted item transforms.
 - **A2** — grep-level: `gizmo_deferred` and `preview_home` are gone; every preview entry point
@@ -363,8 +392,9 @@ shared convergence sweep.
 
 | Risk | Mitigation |
 | --- | --- |
-| A0 drifts from what the display needs and becomes unused scaffolding | Land A1 immediately after; A0's tests exercise `Placement` staging, which is A1's exact use |
+| A0 drifts from what the display needs and becomes unused scaffolding | A0 already ships the facade handle the shell calls, so its consumer exists from day one |
 | The `EditView` migration touches every read site | Migrate only the display/stage/snap paths in A0–A3; the view is additive |
+| `object_mut()` still lets a caller bypass the view | Accept it in A0 (the guarantee is "the display and snap paths use the view"); making it enforceable means making `object_mut` crate-private, which never happens in this plan |
 | Recomputed ghosts (a fillet's *shape*) need a recompute preview the DAG cannot do without mutating | Out of scope for A3: it previews the properties already shown, and the rebuild waits for commit. Decide in U6 whether a second DAG pass is worth it |
 | Auto-commit on context exit surprises a user who expected to lose the drag | The inverse of today's data loss; the tape and pill make the pending state explicit, and one undo removes it |
 | Dropping the dialog breaks scripts or tests that accept it | `App_Move` keeps the argument form; only the no-arg dialog goes, and its callers are in-tree |

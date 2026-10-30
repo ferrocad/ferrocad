@@ -164,6 +164,8 @@ cargo run -p ferrocad_parametric -- --script examples/headless_part.py \
 # full demo: headless script → .FCStd + PNG + STL
 cargo run -p ferrocad_parametric -- --script examples/headless_gear.py \
     --render target/demo/gear.png --stl target/demo/gear.stl --size 1400x900
+cargo run -p ferrocad_parametric -- --script examples/headless_text.py \
+    --stl target/demo/text.stl --size 1200x900               # extruded "ferrocad"
 # open the saved file in the viewer
 cargo run -p ferrocad_parametric -- --open target/demo/gear.FCStd
 # or reopen and render/export it without a window
@@ -187,8 +189,9 @@ tree, properties and 3D view follow the file), and with `--render` it renders th
 file. `--stl <path>` writes the same tessellation as a binary STL (it needs no GPU
 and can be combined with `--render`). The generated `examples/toy_headless.png` is
 the Toy edition's slab rendered this way; `examples/headless_part.py` is the Part
-demo script, and `examples/headless_gear.py` builds the two-gear train shown in
-`examples/gear_headless.png`.
+demo script, `examples/headless_gear.py` builds the two-gear train shown in
+`examples/gear_headless.png`, and `examples/headless_text.py` extrudes the word
+"ferrocad" into a raised solid with `Draft.make_shape_string`.
 
 The Parametric edition needs OCCT 7.8. Fetch the 7.8.1 prefix CI uses into
 `.occt/prefix` once (recipe in

@@ -122,6 +122,32 @@ both. On the word **`ferrocad`**:
 5. **Etched:** `plate.cut(text)` placed 1 mm into the plate removes exactly half the
    text volume (2 mm deep, 1 mm overlapping).
 
+### 6.1 From a `ferrocad_parametric` script
+
+The object form works in the edition's `--script` path unchanged: the script runs
+after bootstrap with `python/` on `sys.path`, `import Draft` resolves, and the
+proxy's `execute` runs through the ordinary recompute.
+
+```sh
+cargo run -p ferrocad_parametric -- \
+  --script examples/headless_text.py --stl target/demo/text.stl --size 1200x900
+# ferrocad: 1 object(s) [Text3D] from Text3D
+# ferrocad: wrote STL target/demo/text.stl (2146 triangles)
+```
+
+[`examples/headless_text.py`](../../../examples/headless_text.py) is the minimal
+script: `Draft.make_shape_string`, extrude the faces, fuse, raise on a plate, keep
+one `Part::Feature`. It is the same wire→face→solid rule as above; a bare wire
+would extrude to a shell.
+
+One host fix came out of running it: the headless report used to name the
+*bootstrap* document, so a script that called `newDocument` printed
+"from Shell" while writing to its own document. The report now asks for the
+active document (`ferrocad_shell.active_document`), which is also the document
+`stage_meshes` reads.
+
+### 6.2 Two traps the demo pins
+
 Two traps the test pins:
 
 - `Shape.translate` **mutates in place** (upstream semantics), so the two placements must

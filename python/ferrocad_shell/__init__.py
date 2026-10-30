@@ -678,6 +678,19 @@ def stage_meshes() -> str:
     return _json(meshes)
 
 
+def active_document() -> str:
+    """The active document's name, as JSON (``""`` when none is open).
+
+    A ``--script`` run may create or switch documents after the edition's
+    bootstrap, so the host asks for the active one instead of assuming the
+    document the bootstrap made.
+    """
+    try:
+        return _json({"document": _active_doc().Name})
+    except Exception:
+        return _json({"document": ""})
+
+
 def interaction(
     object_name: str, manipulator: str, action: str, element: str, values_json: str
 ) -> str:

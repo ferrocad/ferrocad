@@ -35,7 +35,8 @@ pub struct StlReport {
 /// What a headless run produced, for the caller to print.
 #[derive(Debug, Clone)]
 pub struct RenderReport {
-    /// The document the app script bootstrapped (or `--open` loaded).
+    /// The document the app script bootstrapped (or `--open` loaded), or the
+    /// active document after a `--script` run — whichever the meshes came from.
     pub document: String,
     /// The document objects that contributed a mesh, in draw order.
     pub objects: Vec<String>,
@@ -87,8 +88,11 @@ pub fn run(
     let objects: Vec<String> = meshes.iter().map(|mesh| mesh.object.clone()).collect();
     let stl = stl.map(|path| write_stl(&meshes, path)).transpose()?;
 
+    // The script may have created or switched documents; the meshes came from
+    // the active one, so name that rather than the bootstrap's document.
+    let document = python::active_document().unwrap_or(boot.document);
     let mut report = RenderReport {
-        document: boot.document,
+        document,
         objects,
         size: None,
         stl,

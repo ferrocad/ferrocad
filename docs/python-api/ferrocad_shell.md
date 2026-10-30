@@ -13,6 +13,7 @@ _Every entry point returns a JSON string._
 
 | Function | Summary |
 | --- | --- |
+| `active_document() -> str` | The active document's name, as JSON (``""`` when none is open). |
 | `add_namespace(name: str, value) -> None` | Expose ``value`` to the console under ``name``. |
 | `appearance_view() -> str` | The appearance policy the shell should apply at boot, as JSON. |
 | `axis_summary() -> str` | The axis's provider and stem size for the shell's popover. |

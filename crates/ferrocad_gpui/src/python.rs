@@ -491,6 +491,20 @@ pub fn stage_meshes() -> Result<Vec<crate::display::StageMesh>, String> {
     call_json("stage_meshes", None)
 }
 
+/// The active document's name after a script ran, if there is one.
+///
+/// `bootstrap` reports the document it created, but a `--script` file may create
+/// or switch documents; the meshes (`stage_meshes`) come from the *active* one, so
+/// a report should name that one too.
+pub fn active_document() -> Option<String> {
+    #[derive(Deserialize)]
+    struct ActiveDocument {
+        document: String,
+    }
+    let report: ActiveDocument = call_json("active_document", None).ok()?;
+    (!report.document.is_empty()).then_some(report.document)
+}
+
 /// Execute a Python file in the embedded interpreter (the `--script` path).
 ///
 /// The file runs with `__name__ == "__main__"`, after the edition's `bootstrap`

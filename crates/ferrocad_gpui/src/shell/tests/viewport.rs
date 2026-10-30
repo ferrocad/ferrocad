@@ -723,6 +723,62 @@ fn a_move_verb_arms_the_body_triad_on_a_face_selection(cx: &mut TestAppContext) 
     });
 }
 
+/// A deferred HUD drag must carry the triad with the previewed object, not leave it
+/// at the datum it started from. Skips without a GPU adapter.
+#[gpui::test]
+fn a_deferred_hud_drag_moves_the_triad_with_the_object(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+    let origin = |cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, cx| {
+            shell
+                .viewport
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .gizmos()
+                .gizmos()[0]
+                .origin()
+        })
+    };
+    let start = origin(&cx);
+
+    // Open the Move HUD directly: `run_command` resyncs the synthetic stage.
+    let outcome = crate::commands::run("App_Move").expect("App_Move");
+    let spec = outcome.dialog.clone().expect("a dialog");
+    let token = outcome.token.clone().expect("a token");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
+    });
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
+        "the HUD defers the drag to its own commit"
+    );
+
+    let preview = |phase, x: f64, y: f64, z: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::translation(x, y, z),
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0, 0.0, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0, 0.0, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::End, 5.0, 0.0, 0.0), cx);
+        });
+    });
+
+    let end = origin(&cx);
+    assert!(
+        (end.x - (start.x + 5.0)).abs() < 1e-6 && (end.y - start.y).abs() < 1e-6,
+        "the triad follows the previewed object: {start:?} -> {end:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // W2: `Offset Workplane…` — the `+N` stem and its floating HUD
 // ---------------------------------------------------------------------------

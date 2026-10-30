@@ -8044,6 +8044,28 @@ mod tests {
             view.gizmo().expect("a gizmo").display_offset().is_some(),
             "the drawn triad is glued to the moved surface"
         );
+        // The host mirrors the tick into its fields and previews the selection; the
+        // drawn handles must carry the preview offset, not just the frame record it.
+        let drag = [
+            update.total_transform.m[3],
+            update.total_transform.m[7],
+            update.total_transform.m[11],
+        ];
+        assert!(view.preview_translation(&[42], drag));
+        let drawn = view
+            .gizmo()
+            .expect("a gizmo")
+            .items()
+            .iter()
+            .filter_map(|item| item.temporary_transform())
+            .map(|matrix| (matrix.m[3], matrix.m[7], matrix.m[11]))
+            .find(|offset| {
+                offset.0.abs() > 1e-9 || offset.1.abs() > 1e-9 || offset.2.abs() > 1e-9
+            });
+        assert!(
+            drawn.is_some(),
+            "the drawn handles are offset with the previewed object"
+        );
 
         view.handle_button(viewport.to_logical(release), 1, false);
         let end = view.take_transform_preview().expect("an end");

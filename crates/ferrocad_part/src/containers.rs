@@ -10,6 +10,7 @@
 use ferrocad_core::object_registry::ObjectType;
 use ferrocad_core::{Document, ObjectId, Property, prop_status};
 use ferrocad_geom::{History, Lineage, MapVersion, Shape};
+use ferrocad_types::Placement;
 
 use crate::shape_property::{ShapeProperty, make_shape_property, shape_of};
 
@@ -83,9 +84,27 @@ fn link_properties() -> Vec<(String, Property, u32)> {
             prop_status::NONE,
         ),
         ("Refine".to_string(), Property::Bool(false), prop_status::NONE),
+        // Upstream derives every Part feature from `Part::Feature`, so a boolean carries
+        // a `Placement` too. Without it the shell has no anchor for the object (no move
+        // gizmo) and a move commit has no property to write.
+        placement_property(),
         output_property(),
     ]
 }
+
+/// The `Placement` every Part feature-shaped object carries.
+///
+/// It is applied by the display hook, not by `execute`: a boolean's operands are read
+/// in their own frames, and the result is placed when it is drawn (the same contract a
+/// `Part::Feature` has).
+fn placement_property() -> (String, Property, u32) {
+    (
+        "Placement".to_string(),
+        Property::Placement(Placement::identity()),
+        prop_status::NONE,
+    )
+}
+
 
 impl ObjectType for Boolean {
     fn default_properties(&self) -> Vec<(String, Property, u32)> {
@@ -124,6 +143,7 @@ impl ObjectType for Multi {
                 Property::LinkList(Vec::new()),
                 prop_status::NONE,
             ),
+            placement_property(),
             output_property(),
         ]
     }
@@ -169,6 +189,7 @@ impl ObjectType for Compound {
                 Property::LinkList(Vec::new()),
                 prop_status::NONE,
             ),
+            placement_property(),
             output_property(),
         ]
     }

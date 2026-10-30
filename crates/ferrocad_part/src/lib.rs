@@ -833,6 +833,27 @@ mod tests {
         assert!(doc.object(id).unwrap().invalid);
     }
 
+    #[test]
+    fn a_boolean_and_a_compound_carry_a_placement() {
+        setup();
+        let mut doc = Document::new();
+        for type_id in [
+            containers::FUSE_TYPE,
+            containers::CUT_TYPE,
+            containers::COMMON_TYPE,
+            containers::MULTIFUSE_TYPE,
+            containers::MULTICOMMON_TYPE,
+            containers::COMPOUND_TYPE,
+        ] {
+            let id = doc.add_object(type_id, type_id);
+            let placement = doc.object(id).unwrap().properties.get("Placement");
+            assert!(
+                matches!(placement, Some(Property::Placement(_))),
+                "{type_id} has no Placement, so the shell cannot anchor or move it"
+            );
+        }
+    }
+
     /// Two overlapping 10 mm boxes, recomputed and ready to link.
     fn two_boxes(doc: &mut Document) {
         two_boxes_at(doc, 5.0, 0.0);

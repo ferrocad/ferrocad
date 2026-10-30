@@ -124,8 +124,11 @@ composed by the viewport, forgotten at commit, and restored by an overlay snapsh
   expressed except by re-deriving it from the same matrix that draws the live one.
 - The pending value lives in as many places as there are ways to edit it (field text, session
   delta, overlay snapshot), which is exactly how the 2026-10-30 defect happened.
-- Only transforms can preview. A fillet radius, an extrusion length or a sketch point has no
-  preview channel at all — `DressUpScrubber` and `PushPullStem` commit to see anything.
+- Only transforms could preview. A fillet radius, an extrusion length or a sketch point had
+  no preview channel at all — `DressUpScrubber` and `PushPullStem` committed to see
+  anything. A3 gives them a **display-only property preview** (the face at the pending
+  depth, the edge swath at the pending radius); the exact recomputed shape still waits for
+  the commit.
 
 ### 2.2 `PendingEdit` — designed, **deferred** (D0)
 
@@ -404,7 +407,7 @@ sweep.
 | **A1b** | `InventorViewport::preview_transform(entities, Option<Matrix4>)`, the **one** owner of item-preview writes: `preview_translation` becomes a wrapper over it and `apply_gizmo_preview` routes through the same helper | One write path for the item preview, so A1c has a single seam to push a session into and A2 has one thing — not three — to delete | — (**done 2026-10-30**: `ferrocad_viewport` 201, including a rotation-carrying matrix and the no-stranded-ghost rule) |
 | **A1c** | shell wiring: the shell owns one session, opens it at `TransformPreview::Begin` from the un-previewed stage (`Shell::last_stage`), feeds it every tick, prefers it over the Δ fields for preview and commit, and drops it with the HUD | Puts the owner on the commit path without changing the commit's route: see §2.8 on why the HUD's accept still goes through `App_Move` until the session carries a selection | — (**done 2026-10-30**: the drag test asserts the session's delta and datum and that cancelling drops it; the commit still reads the command's callback) |
 | **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — (**done 2026-10-31**: `set_gizmo_preview`/`gizmo_deferred`, `preview_translation` and `PendingMove` are gone; a translation drag is preview-only through `preview_transform`, while rotation keeps the viewport's direct preview/commit because it has no session yet. `preview_home` untouched. viewport 202, gpui 256) |
-| **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
+| **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 — **done 2026-10-31**: `Manipulator::preview_items` is the manipulator half of the same unpickable display-only contract as `FreeCADGui.Preview`; the push/pull stem ghosts the face at the pending depth and the dress-up scrubber ghosts the edge swath at the pending radius. The viewport draws them only while dragging; no document write and no recompute. part_gui 30, viewport 204 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it, and the session is the selection's (742aee7). The no-arg form now opens the U2 pill, not the buttoned dialog |
 | **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31**: `shell::pill::PillState` drives the Move HUD (compact readout during a drag; expanded Δ fields on `Tab`/`Shift+Tab`/a digit/a click; `Enter` commits, `Esc` rolls back), the `Cancel`/`Move` buttons are gone, and a typed-only edit opens the session from `last_stage`. gpui 256 |
 | **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 — **done 2026-10-31**: `ferrocad_stage::measure_tape` builds the ring, dashed legs and 6 px ticks from `TransformTape`; the viewport draws them depth-off and never picked, and the tape follows the session through the release. Stage 236, viewport 203 |
@@ -436,7 +439,11 @@ sweep.
   `a_drag_reports_previews_and_never_commits`) and the rotation path
   (`a_rotation_drag_previews_and_commits_directly`) pass.
 - **A3** — dragging a fillet radius or a stem previews a ghost shape, and `Esc` leaves
-  `undo_names()` unchanged.
+  `undo_names()` unchanged. **Built 2026-10-31**:
+  `a_push_pull_drag_ghosts_the_face_at_the_pending_distance`,
+  `a_dress_up_drag_ghosts_the_swath_at_the_pending_radius` and
+  `a_manipulator_preview_is_drawn_only_while_dragging` cover the ghost and its lifetime;
+  the preview is a display-only item and `Esc` routes no commit, so history is untouched.
 - **U1** — drag, release, drag again, `Enter`: one undo entry; `Esc` after any drag: zero undo
   entries and the original pose; selecting another object mid-session keeps the move.
 - **U2** — `Tab` on an armed object expands the pill, typing moves the preview, `Enter`

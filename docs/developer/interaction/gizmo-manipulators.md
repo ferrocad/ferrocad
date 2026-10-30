@@ -326,8 +326,8 @@ its padded outline/area is pickable.
 | **T3 — modifiers and readout** | gpui modifier/key plumbing, `GizmoValue` on the event, projected numeric tag, Esc cancel, linear grid snapping | ✅ built |
 | **T4 — visual language** | cyan/slate tokens, filled arrowheads, glass planes, shared 2 px feathered ribbon | ✅ built |
 | **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, parametric feature objects | ✅ built (F0.1–F0.6) |
-| **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit | ✅ built |
-| **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook | ✅ built (2026-10-26) |
+| **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit, and (A3) a display-only swath preview at the pending radius | ✅ built |
+| **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook, and (A3) a face ghost at the pending depth | ✅ built (2026-10-26) |
 | **R — re-pivot origin handle** | `GizmoTarget::Origin`, 10 px disc, snap through the viewport's candidates, `GizmoOrigin` + session user origin | ✅ built (2026-10-26) |
 | **K — kinds and set hosting** | `GizmoKind`, `GizmoFactory::kinds`, `Contributions::gizmos_for`, `GizmoSet` hosted by the viewport, session re-narrowing, the grip's shared commit | ✅ built (2026-10-27) |
 
@@ -393,7 +393,9 @@ its padded outline/area is pickable.
   as local Z. The commit is `push_pull` + `extrude`/`pocket` + the element + the signed
   distance; the edition's `_interaction` hook owns the `Part::Extrusion` and the
   boolean. The factory returns `None` for an edge, so it composes with the dress-up
-  factory in the same `Contributions` registry.
+  factory in the same `Contributions` registry. **A3 preview (2026-10-31):** while the
+  drag is live it also draws a translucent ghost of the face at the pending distance
+  (`Manipulator::preview_items`); display-only, unpickable, no recompute.
 
 ## 10. T1 as built (2026-10-20)
 
@@ -552,6 +554,10 @@ stage, and **not** the shell; see `architecture.md` §10):
   `update(camera)` rebuilds only when the view or the value changed.
 - **Readout.** `readout_anchor(camera)` projects the apex; the viewport renders the pill
   as a plain gpui text layer (no hitbox).
+- **Preview (A3, 2026-10-31).** While the scrub is live, `preview_items()` publishes a
+  translucent screen-facing swath along the edge whose half-width is the pending radius.
+  The viewport draws it only while the drag is active, never picks it, and drops it on
+  release or `Esc`; the feature rebuild still happens at commit.
 
 `ferrocad_viewport` (generic: it names no manipulator):
 

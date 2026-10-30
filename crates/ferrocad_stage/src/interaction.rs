@@ -112,9 +112,9 @@ impl InteractionCommit {
 ///
 /// This is the second extension point beside [`Tool`](crate::Tool). A tool reacts
 /// to pointer events and draws a preview; a manipulator owns a **grab target**, a
-/// **drag** and a **commit**. The viewport dispatches pointer events to the
-/// manipulators in reverse registration order (the most recently armed one wins),
-/// then to the gizmo, the tool and the scene.
+/// **drag**, an optional display-only **preview** and a **commit**. The viewport
+/// dispatches pointer events to the manipulators in reverse registration order (the most
+/// recently armed one wins), then to the gizmo, the tool and the scene.
 ///
 /// Implementors live in a workbench's presentation crate (for example
 /// `ferrocad_part_gui`), never in this crate and never in the viewport.
@@ -128,6 +128,18 @@ pub trait Manipulator {
 
     /// The overlay items, in draw order. They are drawn on top with depth off.
     fn items(&self) -> &[ShapeItem];
+
+    /// Display-only items for the pending edit while a drag is active.
+    ///
+    /// This is the manipulator's half of the same contract as `FreeCADGui.Preview`:
+    /// transient geometry drawn over the scene, never picked and never written to the
+    /// document. The viewport shows them only while [`is_dragging`](Self::is_dragging) is
+    /// true, so a release or a cancel removes the ghost without an undo step. The default
+    /// is empty: a manipulator whose pending property cannot be shown honestly draws only
+    /// its handle.
+    fn preview_items(&self) -> &[ShapeItem] {
+        &[]
+    }
 
     /// Whether `device` is on a grab target. An unclaimed press falls through to
     /// the gizmo, the tool and the scene.

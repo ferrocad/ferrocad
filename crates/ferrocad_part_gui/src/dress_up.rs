@@ -29,6 +29,11 @@
 //! arc plus the tick are the only pick targets — the interior between the edge and the
 //! arc is transparent, so a click there still reaches the scene.
 //!
+//! While the scrub is live the scrubber also publishes a translucent swath along the
+//! edge whose half-width is the pending radius
+//! ([`preview_items`](DressUpScrubber::preview_items)). It is display-only and unpickable;
+//! the exact fillet surface waits for the commit.
+//!
 //! This module is pure math and geometry: no `pyo3`, no kernel, no document. The host
 //! (the viewport) routes pointer events and hands the committed value to a feature.
 //!
@@ -168,6 +173,8 @@ pub struct DressUpScrubber {
     dirty: bool,
     /// The draw order: the halo (a wider arc in the outline ink) first, the stroke on top.
     items: [ShapeItem; 2],
+    /// The pending-radius swath along the edge, shown only while a drag is active.
+    preview: ShapeItem,
 }
 
 impl DressUpScrubber {
@@ -215,6 +222,11 @@ impl DressUpScrubber {
                     .with_ghost_alpha(ghost_alpha)
                     .with_ribbon_aa(),
             ],
+            preview: ShapeItem::new(DRESS_UP_PICK_ID + 2)
+                .with_draw_mode(DrawMode::Shaded)
+                .with_selectable(false)
+                .with_blended_surface()
+                .with_ribbon_aa(),
         }
     }
 
@@ -327,6 +339,11 @@ impl DressUpScrubber {
         &self.items
     }
 
+    /// The display-only swath of the pending radius, shown only while a drag is active.
+    pub fn preview_items(&self) -> &[ShapeItem] {
+        std::slice::from_ref(&self.preview)
+    }
+
     /// Highlight (or un-highlight) the arc. Returns whether the visuals changed.
     pub fn set_hovered(&mut self, hovered: bool) -> bool {
         if self.hovered == hovered {
@@ -388,6 +405,14 @@ impl DressUpScrubber {
         self.items[0].set_surface_color(outline);
         self.items[0].set_edge_color(outline);
         self.items[0].set_ghost_alpha(self.style.ghost_alpha);
+        let preview = [
+            self.style.active[0],
+            self.style.active[1],
+            self.style.active[2],
+            0.30,
+        ];
+        self.preview.set_surface_color(preview);
+        self.preview.set_edge_color(preview);
     }
 
     /// The world point the arc is centred on: the midpoint of the edge's middle segment.
@@ -476,6 +501,8 @@ impl DressUpScrubber {
             for item in &mut self.items {
                 item.set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
             }
+            self.preview
+                .set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
             return;
         };
         let forward = camera_forward(camera);
@@ -536,6 +563,34 @@ impl DressUpScrubber {
             Vec::new(),
             stroke_uvs,
             stroke_triangles,
+            Vec::new(),
+        );
+        self.apply_color();
+        self.build_preview(camera);
+    }
+
+    /// Build the pending-radius swath: a screen-facing ribbon along the edge whose
+    /// half-width is the current value. It is a property preview, not the recomputed
+    /// fillet surface — the exact shape waits for the commit.
+    fn build_preview(&mut self, camera: &Camera) {
+        let forward = camera_forward(camera);
+        let half = self.value.max(0.0);
+        let mut positions = Vec::new();
+        let mut uvs = Vec::new();
+        let mut triangles = Vec::new();
+        for pair in self.points.windows(2) {
+            push_ribbon_uv(
+                &mut positions,
+                &mut uvs,
+                &mut triangles,
+                ferrocad_graphics::screen_ribbon(pair[0], pair[1], half, forward),
+            );
+        }
+        self.preview.set_shape_uv(
+            positions,
+            Vec::new(),
+            uvs,
+            triangles,
             Vec::new(),
         );
         self.apply_color();
@@ -721,6 +776,10 @@ impl Manipulator for DressUpScrubber {
         DressUpScrubber::items(self)
     }
 
+    fn preview_items(&self) -> &[ShapeItem] {
+        DressUpScrubber::preview_items(self)
+    }
+
     fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
         DressUpScrubber::hit(self, camera, device)
     }
@@ -865,6 +924,49 @@ mod tests {
             [apex[0].round() as i32, apex[1].round() as i32],
             [dx / length, dy / length],
         )
+    }
+
+    /// The band's cross-width in the test camera (the edge runs along X, so the swath
+    /// widens along Y).
+    fn band_width(item: &ShapeItem) -> f64 {
+        let ys: Vec<f64> = item.positions().iter().map(|point| f64::from(point[1])).collect();
+        match (
+            ys.iter().cloned().reduce(f64::min),
+            ys.iter().cloned().reduce(f64::max),
+        ) {
+            (Some(min), Some(max)) => max - min,
+            _ => 0.0,
+        }
+    }
+
+    #[test]
+    fn a_dress_up_drag_ghosts_the_swath_at_the_pending_radius() {
+        let camera = camera(5.0);
+        let mut scrubber = scrubber(DressUpMode::Fillet);
+        assert!(scrubber.update(&camera));
+        let narrow = band_width(&scrubber.preview_items()[0]);
+        assert!(narrow > 0.0, "the swath is drawn at the current radius");
+
+        scrubber.set_value(1.0);
+        assert!(scrubber.update(&camera));
+        let wide = band_width(&scrubber.preview_items()[0]);
+        assert!(
+            wide > narrow,
+            "the swath follows the radius: {narrow} -> {wide}"
+        );
+
+        // A drag changes the value; the host's refresh rebuilds the swath at it.
+        let (grab, direction) = grip(&camera, &scrubber);
+        assert!(scrubber.begin_drag(&camera, grab));
+        let far = [
+            grab[0] + (direction[0] * 40.0) as i32,
+            grab[1] + (direction[1] * 40.0) as i32,
+        ];
+        let before = scrubber.value();
+        assert!(scrubber.drag_to(&camera, far).is_some(), "the scrub changes");
+        assert!(scrubber.value() > before, "the drag grows the value");
+        assert!(scrubber.update(&camera));
+        assert!(band_width(&scrubber.preview_items()[0]) > 0.0);
     }
 
     #[test]

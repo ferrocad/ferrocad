@@ -29,6 +29,11 @@
 //! `InteractionCommit::new("push_pull", entity, "extrude" | "pocket")` with the face
 //! element and `[distance]`. The app script owns what that means for the document.
 //!
+//! While the drag is live the stem also publishes a translucent ghost of the selected
+//! face at the pending distance ([`preview_items`](PushPullStem::preview_items)). It is
+//! display-only and unpickable: the exact solid waits for the commit, so the ghost does
+//! not need a kernel recompute.
+//!
 //! This module is pure presentation: no `pyo3`, no kernel, no document.
 
 use ferrocad_geom::SelectionRef;
@@ -142,6 +147,11 @@ pub struct PushPullStem {
     dirty: bool,
     /// The draw order: the halo (a wider stem in the outline ink) first, the stem on top.
     items: [ShapeItem; 2],
+    /// The pending-depth ghost of the selected face, shown only while a drag is active.
+    preview: ShapeItem,
+    /// The face's flat mesh (three vertices per triangle), captured from the stage item.
+    face_positions: Vec<[f32; 3]>,
+    face_triangles: Vec<u32>,
 }
 
 impl PushPullStem {
@@ -196,12 +206,32 @@ impl PushPullStem {
                     .with_ghost_alpha(ghost_alpha)
                     .with_ribbon_aa(),
             ],
+            preview: ShapeItem::new(PUSH_PULL_PICK_ID + 2)
+                .with_draw_mode(DrawMode::Shaded)
+                .with_selectable(false)
+                .with_blended_surface(),
+            face_positions: Vec::new(),
+            face_triangles: Vec::new(),
         })
     }
 
     /// The entity the stem targets.
     pub fn target_id(&self) -> u32 {
         self.target_id
+    }
+
+    /// Give the stem the selected face's flat mesh, so its drag can ghost the face at the
+    /// pending depth. The factory supplies it from the stage item; a stem built directly
+    /// with [`new`](Self::new) has no ghost geometry and simply draws its handle.
+    pub fn set_face_geometry(&mut self, positions: Vec<[f32; 3]>, triangles: Vec<u32>) {
+        self.face_positions = positions;
+        self.face_triangles = triangles;
+        self.rebuild_preview();
+    }
+
+    /// The display-only ghost of the face at [`distance`](Self::distance).
+    pub fn preview_items(&self) -> &[ShapeItem] {
+        std::slice::from_ref(&self.preview)
     }
 
     /// The selected face's name (`Face6`).
@@ -364,6 +394,7 @@ impl PushPullStem {
             return None;
         }
         self.distance = applied;
+        self.rebuild_preview();
         Some(self.change())
     }
 
@@ -384,7 +415,38 @@ impl PushPullStem {
         self.distance = self.press_distance;
         self.dirty = true;
         self.apply_color();
+        self.rebuild_preview();
         true
+    }
+
+    /// Rebuild the face ghost at the current distance (world space; no camera needed).
+    fn rebuild_preview(&mut self) {
+        if self.face_positions.is_empty() || self.face_triangles.is_empty() || self.distance == 0.0 {
+            self.preview
+                .set_shape(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            return;
+        }
+        let offset = self.normal.scale(self.distance);
+        let (dx, dy, dz) = (offset.x as f32, offset.y as f32, offset.z as f32);
+        let positions = self
+            .face_positions
+            .iter()
+            .map(|point| [point[0] + dx, point[1] + dy, point[2] + dz])
+            .collect();
+        self.preview.set_shape(
+            positions,
+            Vec::new(),
+            self.face_triangles.clone(),
+            Vec::new(),
+        );
+        let color = [
+            PUSH_PULL_COLOR[0],
+            PUSH_PULL_COLOR[1],
+            PUSH_PULL_COLOR[2],
+            0.30,
+        ];
+        self.preview.set_surface_color(color);
+        self.preview.set_edge_color(color);
     }
 
     /// Where the dimension pill is anchored, in device pixels: the reused axis
@@ -510,6 +572,10 @@ impl Manipulator for PushPullStem {
         PushPullStem::items(self)
     }
 
+    fn preview_items(&self) -> &[ShapeItem] {
+        PushPullStem::preview_items(self)
+    }
+
     fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
         PushPullStem::hit(self, camera, device)
     }
@@ -578,8 +644,20 @@ pub fn push_pull_stem_for(selection: &SelectionRef, stage: &Stage) -> Option<Pus
         return None;
     }
     let item = stage.item(selection.object)?;
-    let (centroid, normal) = face_frame(item, face)?;
-    PushPullStem::new(selection.object, face.clone(), centroid, normal)
+    let (centroid, normal, triangles) = face_frame(item, face)?;
+    let mut stem = PushPullStem::new(selection.object, face.clone(), centroid, normal)?;
+    // A flat mesh (three vertices per triangle) is enough for the translucent ghost; it
+    // needs no normals because the preview is a flat-shaded face.
+    let mut positions = Vec::with_capacity(triangles.len() * 3);
+    let mut indices = Vec::with_capacity(triangles.len() * 3);
+    for triangle in &triangles {
+        for point in triangle {
+            indices.push(positions.len() as u32);
+            positions.push([point.x as f32, point.y as f32, point.z as f32]);
+        }
+    }
+    stem.set_face_geometry(positions, indices);
+    Some(stem)
 }
 
 /// The Part GUI's push/pull factory: a planar-face selection arms the stem.
@@ -602,7 +680,7 @@ pub fn push_pull_manipulator(
 /// triangle normal agrees with the summed normal **and** every vertex lies in that
 /// plane; otherwise there is no honest direction to extrude along and `None` is
 /// returned.
-fn face_frame(item: &ShapeItem, name: &str) -> Option<(Vector3, Vector3)> {
+fn face_frame(item: &ShapeItem, name: &str) -> Option<(Vector3, Vector3, Vec<[Vector3; 3]>)> {
     let part = item
         .part_names()
         .iter()
@@ -672,7 +750,7 @@ fn face_frame(item: &ShapeItem, name: &str) -> Option<(Vector3, Vector3)> {
         }
     }
 
-    Some((centroid, normal))
+    Some((centroid, normal, triangles_of_face))
 }
 
 /// The manipulator frame at `origin` with the face normal as its local Z.
@@ -807,6 +885,44 @@ mod tests {
         let inward =
             push_pull_stem_for(&SelectionRef::element(7, "Face1"), &stage).expect("a stem");
         assert!((inward.normal().x + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_push_pull_drag_ghosts_the_face_at_the_pending_distance() {
+        let camera = camera(5.0);
+        let mut stem = stem();
+        assert!(
+            stem.preview_items()[0].positions().is_empty(),
+            "no ghost at rest"
+        );
+
+        let grab = grab(&camera, &stem);
+        assert!(stem.begin_drag(&camera, grab));
+        let change = stem
+            .drag_to(&camera, [grab[0] + 20, grab[1]])
+            .expect("a change");
+        assert!(change.distance.abs() > 1e-9);
+
+        let ghost = &stem.preview_items()[0];
+        assert!(
+            !ghost.positions().is_empty(),
+            "the face ghosts at the pending depth"
+        );
+        let expected = change.distance as f32;
+        assert!(
+            ghost
+                .positions()
+                .iter()
+                .all(|point| (point[0] - expected).abs() < 1e-5),
+            "the ghost sits on the face's pending plane: {:?}",
+            ghost.positions()
+        );
+
+        assert!(stem.cancel_drag());
+        assert!(
+            stem.preview_items()[0].positions().is_empty(),
+            "the cancel removes the ghost"
+        );
     }
 
     #[test]

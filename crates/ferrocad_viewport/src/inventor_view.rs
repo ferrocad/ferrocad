@@ -441,6 +441,9 @@ pub struct InventorViewport<V: InventorView> {
     manipulators: Vec<Box<dyn Manipulator>>,
     /// Their compiled overlay, rebuilt when any of them reports a change.
     manipulator_queue: RenderQueue,
+    /// The active manipulator's display-only preview (the pending property), drawn under
+    /// the handles and only while a drag is active.
+    manipulator_preview_queue: RenderQueue,
     /// The last manipulator commit, for the host to apply.
     interaction_commit: Option<InteractionCommit>,
     /// The viewport's focus handle, created on the first paint. The Esc handler and the
@@ -1512,6 +1515,7 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo_commit: None,
             manipulators: Vec::new(),
             manipulator_queue: RenderQueue::default(),
+            manipulator_preview_queue: RenderQueue::default(),
             interaction_commit: None,
             focus: None,
             gizmo_value: None,
@@ -3409,6 +3413,21 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
         self.manipulator_queue = queue;
+
+        // A manipulator's pending edit is a property preview: display-only, unpickable,
+        // and shown only while the gesture is live (a release or cancel drops it).
+        let mut preview = RenderQueue::default();
+        if self.gizmo_style.enabled {
+            for manipulator in &self.manipulators {
+                if !manipulator.is_dragging() {
+                    continue;
+                }
+                for item in manipulator.preview_items() {
+                    item.emit(&mut preview);
+                }
+            }
+        }
+        self.manipulator_preview_queue = preview;
     }
 
     /// The gizmo's numeric pill: the active drag's readout text and its logical anchor.
@@ -5062,6 +5081,16 @@ impl<V: InventorView> InventorViewport<V> {
             // The session tape is a measurement: depth-off, and behind the controls.
             views.push(ViewSpec {
                 queue: &self.tape_queue,
+                camera: &self.camera,
+                rect: None,
+                overlay: true,
+                workplane: None,
+            });
+        }
+        if !self.manipulator_preview_queue.is_empty() {
+            // A manipulator's property preview sits under the controls but over the scene.
+            views.push(ViewSpec {
+                queue: &self.manipulator_preview_queue,
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
@@ -7896,6 +7925,8 @@ mod tests {
         hovered: bool,
         view: Option<Matrix4>,
         item: ShapeItem,
+        /// A trivial pending-property ghost, so the viewport's preview queue has geometry.
+        preview: ShapeItem,
         /// The world anchor a preview offsets (a stand-in for a real grip).
         anchor: Option<Vector3>,
         /// The last workspace style the viewport handed it, shared with the test so it
@@ -7920,6 +7951,18 @@ mod tests {
                     item: ShapeItem::new(777)
                         .with_draw_mode(DrawMode::Wireframe)
                         .with_selectable(false),
+                    preview: {
+                        let mut preview = ShapeItem::new(778)
+                            .with_draw_mode(DrawMode::Wireframe)
+                            .with_selectable(false);
+                        preview.set_shape(
+                            vec![[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]],
+                            Vec::new(),
+                            Vec::new(),
+                            vec![0, 1],
+                        );
+                        preview
+                    },
                     anchor: Some(Vector3::zero()),
                     style: style.clone(),
                 },
@@ -7947,6 +7990,10 @@ mod tests {
 
         fn items(&self) -> &[ShapeItem] {
             std::slice::from_ref(&self.item)
+        }
+
+        fn preview_items(&self) -> &[ShapeItem] {
+            std::slice::from_ref(&self.preview)
         }
 
         fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool {
@@ -8045,6 +8092,40 @@ mod tests {
             .with_manipulator(Box::new(FakeManipulator::new()));
         view.refresh();
         (view, viewport)
+    }
+
+    #[test]
+    fn a_manipulator_preview_is_drawn_only_while_dragging() {
+        let (mut view, viewport) = manipulator_view();
+        assert!(
+            view.manipulator_preview_queue.is_empty(),
+            "no pending property at rest"
+        );
+
+        assert!(view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(
+            !view.manipulator_preview_queue.is_empty(),
+            "the drag draws the pending property"
+        );
+        assert!(view.handle_button(viewport.to_logical([70, 50]), 1, false));
+        assert!(
+            view.manipulator_preview_queue.is_empty(),
+            "the release drops the ghost"
+        );
+        assert!(
+            view.take_interaction_commit().is_some(),
+            "the release commits the value"
+        );
+
+        // Esc is the rollback: it must drop the ghost too.
+        assert!(view.handle_button(viewport.to_logical([50, 50]), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical([70, 50])));
+        assert!(view.handle_key(&escape_key()));
+        assert!(
+            view.manipulator_preview_queue.is_empty(),
+            "Esc drops the ghost without a commit"
+        );
+        assert!(view.last_interaction_commit().is_none(), "nothing committed");
     }
 
     #[test]

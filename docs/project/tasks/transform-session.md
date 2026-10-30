@@ -216,9 +216,9 @@ only one mode. `preview_home` is unaffected: it anchors gizmos and manipulators,
 
 How that owner arrives is split across three stages: **A1a** builds this type and its
 arithmetic, **A1b** makes `preview_transform` the one write path for the item preview, and
-**A1c** wires the shell (one session, fed by `TransformPreview`, committed through the existing
-interaction). The wholesale replacement of the other writers — the `set_session` input above —
-is A2.
+**A1c** wires the shell (one session, opened at the press, fed every tick, preferred over the Δ
+fields). The wholesale replacement of the other writers — the `set_session` input above — is A2,
+and so is moving the HUD's commit onto the interaction route (§2.8).
 
 The session does **not** write the document. A translate never stages a `Placement`: the
 uncommitted value is the session's own delta, and at commit the shell hands it to the mod layer
@@ -280,6 +280,16 @@ The vision check the decision was made against: workbenches own edits, so an edi
 through one. The performance cost is real but it is paid **once per session**, not once per
 frame — and the expensive half of it (`recompute`) was always there because the document has to
 be rebuilt to show the result.
+
+**Where it stands after A1c (2026-10-30).** The gizmo's own release already goes through the
+interaction provider (`to_interaction_with` → `apply_interaction`), but the **Move HUD's** accept
+still goes through the command callback (`App_Move.on_accept` → `_move_selection`), and that is
+deliberate for now: the parametric `transform` provider moves the object it is handed, while
+`_move_selection` moves the whole **selection**. Switching the HUD to the interaction route
+before the session can carry a set of targets would silently narrow a multi-object move to one
+object. The unification is U1's, when the session owns the selection (see §5, *Explicitly
+deferred*). Until then the session is the value and the command is the writer — both on the mod
+side of the boundary, which is what D0 is about.
 
 What this deliberately does **not** add:
 
@@ -385,7 +395,7 @@ sweep.
 | **A0** | ~~`PendingEdit` + `EditView` + facade handle~~ — **deferred by D0**. The design stays in §2.2–§2.3; nothing on the critical path needs it. Trigger: the first non-display consumer (a script reading a pending value, save-with-live-session, or a preview the document must hold) | Building it now would be scaffolding with no caller — the recon showed the shell cannot even reach it | — |
 | **A1a** | `TransformSession` in `ferrocad_stage` (`session`): the world datum from `ShapeItem::anchor()` (which already applies the `origin` → bounding-box-minimum fallback), the accumulated translation, `transform()`, `checkpoint`, dirty. No consumer yet | The arithmetic lands before anything calls it, so it is tested headless in the crate the toy and Parametric editions already share, and no behaviour can move with it | — (**done 2026-10-30**: 9 unit tests + a doctest, `ferrocad_stage` 225) |
 | **A1b** | `InventorViewport::preview_transform(entities, Option<Matrix4>)`, the **one** owner of item-preview writes: `preview_translation` becomes a wrapper over it and `apply_gizmo_preview` routes through the same helper | One write path for the item preview, so A1c has a single seam to push a session into and A2 has one thing — not three — to delete | — (**done 2026-10-30**: `ferrocad_viewport` 201, including a rotation-carrying matrix and the no-stranded-ghost rule) |
-| **A1c** | shell wiring: the shell owns one session, feeds it from the `TransformPreview` ticks it already handles, mirrors it into `Shell::pending_move` (the Δ fields' existing source), and commits through the existing `InteractionCommit` (`to_interaction_with("transform", "apply", <matrix elements>)` → `python::apply_interaction`) | Puts the owner on the commit path first — the committed values are the session's `transform()` — while the preview paths stay as they are until A2 | — (the spec changes are U1/U2/U3) |
+| **A1c** | shell wiring: the shell owns one session, opens it at `TransformPreview::Begin` from the un-previewed stage (`Shell::last_stage`), feeds it every tick, prefers it over the Δ fields for preview and commit, and drops it with the HUD | Puts the owner on the commit path without changing the commit's route: see §2.8 on why the HUD's accept still goes through `App_Move` until the session carries a selection | — (**done 2026-10-30**: the drag test asserts the session's delta and datum and that cancelling drops it; the commit still reads the command's callback) |
 | **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 |
@@ -407,9 +417,10 @@ sweep.
 - **A1b** — a rotation matrix pushed through `preview_transform` lands on the target item and
   clears when the argument is `None`; the existing preview tests are unchanged, because
   `preview_translation` and the gizmo route became wrappers rather than moving code.
-- **A1c** — the values on the commit equal the session's `transform()` (asserted on the number
-  and the target, not on a snapshot), and **no new facade method exists**: the route is the one
-  `python::apply_interaction` already serves.
+- **A1c** — the session holds the drag's accumulated delta and the pose the gesture started
+  from (the item's world anchor at `Begin`), the Δ fields and the commit read through it, and
+  cancelling drops it together with the ghost. Asserted in
+  `a_move_hud_drag_survives_its_release`; the commit's *route* is unchanged (§2.8).
 - **A2** — grep-level: `gizmo_deferred` and the viewport's item-preview writes are gone
   (`preview_home` keeps its gizmo/manipulator anchors); every preview entry point takes a
   session snapshot. The 2026-10-30 regression tests

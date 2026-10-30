@@ -142,8 +142,12 @@ impl Shell {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
+        // The session supplies the matrix; it is a translation today, but the input is the
+        // one A1b made the single owner of item previews, so a rotation needs no second
+        // path later. The endpoints are identical to the old `preview_translation` call.
+        let transform = Matrix4::translation(delta[0], delta[1], delta[2]);
         viewport.update(cx, |viewport, cx| {
-            if viewport.preview_translation(&entities, delta) {
+            if viewport.preview_transform(&entities, Some(transform)) {
                 cx.notify();
             }
         });
@@ -155,6 +159,7 @@ impl Shell {
     /// Drop a typed preview without changing the document (cancel or dismiss).
     pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
         self.pending_move.reset();
+        self.session = None;
         // Also releases the deferred drag session, so an escalated HUD restores the
         // gizmo's normal commit-on-release path when it is cancelled.
         self.defer_gizmo_preview(false, cx);
@@ -162,7 +167,7 @@ impl Shell {
             return;
         };
         viewport.update(cx, |viewport, cx| {
-            if viewport.preview_translation(&[], [0.0; 3]) {
+            if viewport.preview_transform(&[], None) {
                 cx.notify();
             }
         });
@@ -294,13 +299,21 @@ impl Shell {
 
     /// The pending translation a Move session will commit.
     ///
-    /// [`PendingMove`] holds the exact delta a drag produced; the Δ fields are only a
-    /// rounded view of it. Typing replaces it, so the fields are authoritative once the
-    /// user edits them. `None` when the spec asks for no translation.
+    /// The session is the authority when a drag set the value: it holds the exact delta and
+    /// the datum it was measured from. [`PendingMove`] is the HUD's view and remains the
+    /// fallback for a shell with no stage (headless tests, or a target whose item has not
+    /// arrived yet), where a session cannot be opened; the Δ fields are authoritative only
+    /// after a typed edit. `None` when the spec asks for no translation.
     pub(super) fn pending_translation(&self, cx: &App) -> Option<[f64; 3]> {
         let dialog = self.dialog.as_ref()?;
         if !dialog.spec.previews_translation() {
             return None;
+        }
+        if self.pending_move.is_dragged()
+            && let Some(session) = self.session
+        {
+            let delta = session.delta();
+            return Some([delta.x, delta.y, delta.z]);
         }
         self.pending_move
             .dragged()
@@ -369,10 +382,12 @@ impl Shell {
                 // Without a HUD the tick was only a seed for a keyboard escalation, and
                 // the release has already committed: it must not seed the *next* HUD.
                 self.pending_move.reset();
+                self.session = None;
                 return;
             }
             // The accumulated value is the pending move; the fields are its rounded view.
-            self.set_translation_fields(self.pending_move.dragged().unwrap_or_default(), cx);
+            let delta = self.pending_move.dragged().unwrap_or_default();
+            self.set_translation_fields(delta, cx);
             self.preview_dialog(cx);
             return;
         }
@@ -381,8 +396,19 @@ impl Shell {
             // A drag reports its transform relative to its own press, so successive
             // drags accumulate onto whatever the move already held.
             self.pending_move.begin_drag();
+            // The session is the uncommitted value; `PendingMove` is its view. It opens
+            // here, at the press, so the datum is the pose the gesture started from — the
+            // stage the shell keeps is the un-previewed one, so the anchor is that pose and
+            // not a previous preview's.
+            self.session = self
+                .last_stage
+                .as_ref()
+                .and_then(|stage| TransformSession::begin(stage, preview.target_id));
         }
-        self.pending_move.tick(drag);
+        let delta = self.pending_move.tick(drag);
+        if let Some(session) = self.session.as_mut() {
+            session.set_translation(Vector3::new(delta[0], delta[1], delta[2]));
+        }
         if !previews {
             return;
         }
@@ -437,7 +463,12 @@ impl Shell {
         // A Move HUD's Δ fields are a rounded view of the drag; the callback must get
         // the exact delta the user saw, or accepting a drag commits a nearby pose. Only
         // a **drag** overrides the fields — typed text keeps `collect`'s validation.
-        if let Some(delta) = self.pending_move.dragged() {
+        let dragged = if self.pending_move.is_dragged() {
+            self.pending_translation(cx)
+        } else {
+            None
+        };
+        if let Some(delta) = dragged {
             for (field, state) in spec.fields.iter().zip(states.iter_mut()) {
                 let slot = match field.name.as_str() {
                     "dx" => 0,

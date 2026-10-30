@@ -23,9 +23,9 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo, WorkplaneLive,
+    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo, TransformSession, WorkplaneLive,
 };
-use ferrocad_types::Vector3;
+use ferrocad_types::{Matrix4, Vector3};
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{
@@ -283,7 +283,9 @@ impl PendingMove {
     }
 
     /// Apply a drag tick's own delta (`Begin`/`Update`/`End` report it from the press).
-    fn tick(&mut self, drag: [f64; 3]) {
+    ///
+    /// Returns the accumulated value, which is what a drag tick means for the session.
+    fn tick(&mut self, drag: [f64; 3]) -> [f64; 3] {
         let baseline = self.baseline.unwrap_or([0.0; 3]);
         self.dragged = Some([
             baseline[0] + drag[0],
@@ -291,11 +293,20 @@ impl PendingMove {
             baseline[2] + drag[2],
         ]);
         self.axis = axis_of(drag);
+        self.dragged.unwrap_or([0.0; 3])
     }
 
     /// A typed edit: the Δ fields win from now on.
     fn typed(&mut self) {
         self.dragged = None;
+    }
+
+    /// Whether a drag set the current value (as opposed to a typed edit or nothing).
+    ///
+    /// This is what decides whether the commit overrides the Δ fields with the exact value
+    /// and whether the session, rather than the field text, is authoritative.
+    fn is_dragged(&self) -> bool {
+        self.dragged.is_some()
     }
 
     fn reset(&mut self) {
@@ -478,6 +489,17 @@ pub struct Shell {
     /// loadout plan deletes the HUD entirely, see
     /// `docs/project/tasks/transform-session.md`).
     pending_move: PendingMove,
+    /// The live transform session, when a Move drag has opened one.
+    ///
+    /// [`PendingMove`] is the HUD's view (the Δ fields, the drag baseline); this is the
+    /// uncommitted value itself: the datum the gesture started from, the accumulated
+    /// translation, and the matrix the item would be drawn with. The shell owns it because
+    /// the commit and the eventual ghost tape both belong to the session, not to the form
+    /// — and because a second window must not start a second session on the same object.
+    ///
+    /// It is `None` until a drag begins on an item the shell has a stage for: a session
+    /// with no datum would have to invent one (see `TransformSession::begin`).
+    session: Option<TransformSession>,
     /// Whether the current gizmo drag is deferred to the Move HUD. This mirrors the
     /// viewport's `set_gizmo_preview` so the shell can answer Esc/cancel without a
     /// viewport (headless tests, or before `enable_viewport`).
@@ -835,6 +857,7 @@ impl Shell {
             wheel_target: None,
             last_pointer: None,
             pending_move: PendingMove::default(),
+            session: None,
             gizmo_deferred: false,
             workplane_session: None,
             hud_rect: None,

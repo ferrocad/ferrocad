@@ -610,9 +610,10 @@ fn face_claim_shell(
     vcx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             let stage = shell.display.build(vec![mesh]);
-            if let Some(viewport) = shell.viewport.clone() {
-                viewport.update(cx, |viewport, _cx| viewport.set_stage(stage));
-            }
+            // Through the shell, not the viewport: `Shell::set_stage` also keeps the
+            // un-previewed document stage, which is where a transform session takes its
+            // datum from.
+            shell.set_stage(stage, cx);
             cx.notify();
         })
     });
@@ -915,6 +916,21 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
         (pending[0] - dragged[0]).abs() < 1e-12,
         "the HUD keeps the exact delta for the commit: {pending:?} vs {dragged:?}"
     );
+    // 4. The session is the uncommitted value behind that: it holds the same delta and
+    //    the datum the gesture started from (the slab's world anchor, 7 sits at -0.5).
+    let (session_delta, datum) = shell.read_with(&cx, |shell, _| {
+        let session = shell.session.expect("a live session");
+        let delta = session.delta();
+        (delta, session.datum())
+    });
+    assert!(
+        (session_delta.x - dragged[0]).abs() < 1e-12,
+        "the session holds the drag: {session_delta:?} vs {dragged:?}"
+    );
+    assert!(
+        (datum.x - start.x).abs() < 1e-6 && (datum.y - start.y).abs() < 1e-6,
+        "the session datum is the pose the drag started from: {datum:?} vs {start:?}"
+    );
     // 3. The object is still previewed at the drag, not snapped back.
     let previewed = cx.update(|_window, cx| {
         let viewport = viewport.read(cx);
@@ -931,6 +947,24 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
         (previewed.0 - dragged[0]).abs() < 1e-9,
         "the object is still previewed where the drag ended: {previewed:?} vs {dragged:?}"
     );
+
+    // 5. Cancelling drops the live value and its preview: `Esc` is a rollback of the
+    //    session, not an undo step (nothing was ever written to the document).
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.cancel_dialog(cx)));
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "the session is gone with the HUD"
+    );
+    let previewed = cx.update(|_window, cx| {
+        viewport
+            .read(cx)
+            .stage()
+            .items()
+            .iter()
+            .find(|item| item.entity_id() == 7)
+            .and_then(|item| item.temporary_transform())
+    });
+    assert_eq!(previewed, None, "the ghost is gone with the session");
 }
 
 // ---------------------------------------------------------------------------

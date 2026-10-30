@@ -211,7 +211,7 @@ needs the object — which is the facade's job already.
 | 2 | `PendingEdit` + `EditView` in `Document` | deferred by D0 (design only; no caller yet) |
 | 3 | Pending edit reachable from the shell | **not needed** — D0 routes the commit through the existing interaction provider |
 | 4 | Session datum is world-space; delta is a matrix | **done** — `ferrocad_stage::session::TransformSession` (A1a): datum from `anchor()`, absolute delta, `transform()`, `checkpoint`, dirty; 9 unit tests + a doctest |
-| 5 | `viewport.set_session`, and the viewport stops writing item previews | **half done** — A1b landed the matrix input (`preview_transform`) and made it the single owner of item writes; the `set_session` replacement and the deletion of the wrapper routes are A2 |
+| 5 | `viewport.set_session`, and the viewport stops writing item previews | **half done** — A1b landed the matrix input (`preview_transform`) and made it the single owner of item writes; A1c feeds a live session into it from the shell. The `set_session` replacement and the deletion of the wrapper routes are A2 |
 
 The shell-side half of the split-brain was also consolidated in preparation: the pending move
 (`OpenDialog::translation` + `Shell::gizmo_drag` + `Shell::drag_baseline`) now has one home,

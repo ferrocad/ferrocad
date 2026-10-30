@@ -1505,6 +1505,16 @@ impl<V: InventorView> InventorViewport<V> {
             .map(|presenter| presenter.borrow().status())
     }
 
+    /// The presenter's technical reason for using the image path, if it fell back.
+    ///
+    /// The shell shows this in its copyable diagnostics notice. `None` while the
+    /// presenter is pending or accelerated.
+    pub fn presenter_note(&self) -> Option<String> {
+        self.presenter
+            .as_ref()
+            .and_then(|presenter| presenter.borrow().status_note().map(str::to_owned))
+    }
+
     /// Show a navigation cube in the viewport corner.
     pub fn with_navicube(mut self, navicube: NaviCube) -> Self {
         self.navicube = Some(navicube);
@@ -3461,8 +3471,12 @@ impl<V: InventorView> InventorViewport<V> {
             } else {
                 // A gizmo is the control: freeze its interaction frame and move only the
                 // drawing, so the triad stays glued to the surface without feeding back
-                // into the drag math.
-                gizmo.set_display_offset(Some(delta));
+                // into the drag math. `delta` is measured from the captured home, and the
+                // frame may already sit at a previous drag's end (a deferred HUD keeps the
+                // preview between drags), so offset by where the preview puts the triad
+                // from where it actually is — not by `delta` again.
+                let draw = origin.add(&delta);
+                gizmo.set_display_offset(Some(draw.sub(&gizmo.origin())));
             }
             changed = true;
         }
@@ -8053,6 +8067,30 @@ mod tests {
             view.gizmo().expect("a gizmo").origin(),
             Vector3::new(delta[0], delta[1], delta[2])
         );
+
+        // A second drag on the same deferred HUD: the host sends the accumulated delta
+        // back as the new baseline, so the frame must not drift by it again. The draw
+        // offset is measured from where the frame already is, not from `delta`.
+        let grab2 = axis_x_grab(&view);
+        view.handle_button(viewport.to_logical(grab2), 1, true);
+        let begin2 = view.take_transform_preview().expect("a second begin");
+        assert_eq!(begin2.phase, PreviewPhase::Begin);
+        assert!(view.preview_translation(&[42], delta));
+        assert_eq!(
+            view.gizmo().expect("a gizmo").origin(),
+            Vector3::new(delta[0], delta[1], delta[2]),
+            "the frame stays where the first drag left it"
+        );
+        let offset = view
+            .gizmo()
+            .expect("a gizmo")
+            .display_offset()
+            .expect("a draw offset");
+        assert!(
+            offset.length() < 1e-9,
+            "the accumulated baseline is not applied twice: {offset:?}"
+        );
+        view.handle_button(viewport.to_logical(grab2), 1, false);
         assert!(view.preview_translation(&[], [0.0; 3]));
 
         // Leaving deferred mode restores the ordinary commit path.

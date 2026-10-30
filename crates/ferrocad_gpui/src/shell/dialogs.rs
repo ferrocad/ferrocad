@@ -433,6 +433,18 @@ impl Shell {
     ) {
         match result {
             Ok(outcome) if outcome.ok => {
+                // A translation HUD is a Move session. Accepting it ends the session, so
+                // its shared triad goes with it (upstream closes the task panel's
+                // handles too); a wizard that replaces the dialog keeps it alive.
+                if outcome.dialog.is_none()
+                    && self
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|dialog| dialog.spec.previews_translation())
+                {
+                    self.transform_verb = false;
+                    self.triad_dismissed = true;
+                }
                 // The pending move is now applied (or replaced by a wizard): release
                 // the deferred gizmo and drop the ghost before the stage rebuild.
                 self.clear_dialog_preview(cx);

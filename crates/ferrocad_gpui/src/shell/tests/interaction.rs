@@ -173,6 +173,61 @@ fn the_move_hud_disables_the_origin_handle(cx: &mut TestAppContext) {
     );
 }
 
+/// The copyable report names the reason and the settings that usually fix it, so a
+/// pasted notice is actionable on its own.
+#[test]
+fn the_gpu_notice_report_names_the_reason_and_the_fix() {
+    let details = crate::shell::gpu_notice_details(
+        "dma-buf ring: an exported wgpu surface needs a Vulkan wgpu device",
+    );
+    assert!(details.contains("image path"));
+    assert!(details.contains("Reason:"));
+    assert!(details.contains("needs a Vulkan wgpu device"));
+    assert!(details.contains("VK_ICD_FILENAMES"));
+    assert!(details.contains("ZED_DEVICE_ID"));
+}
+
+/// Accepting the Move HUD ends the session it opened: the verb is cleared and the
+/// shared triad is dismissed until the next verb or selection.
+#[gpui::test]
+fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+    shell.update(cx, |shell, cx| shell.select("Params", cx));
+    shell.update(cx, |shell, cx| shell.run_command("App_Move", cx));
+    assert!(
+        shell.read_with(cx, |shell, _| shell.transform_verb),
+        "Move is an explicit body-control request"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.dialog.is_some()),
+        "Move opens its HUD"
+    );
+
+    shell.update(cx, |shell, cx| shell.accept_dialog(cx));
+    assert!(
+        shell.read_with(cx, |shell, _| shell.dialog.is_none()),
+        "the HUD closes on accept"
+    );
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.transform_verb),
+        "the verb session ended with the move"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.triad_dismissed),
+        "the triad stays down until the next verb or selection"
+    );
+
+    // A new selection re-arms the handles normally.
+    shell.update(cx, |shell, cx| shell.select("Params", cx));
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.triad_dismissed),
+        "a new selection is a new session"
+    );
+}
+
 /// A3: a command's dialog is validated in the shell, accepted once, and a bad
 /// value keeps the modal open. The command is registered through the console,
 /// so the test exercises the same registry a workbench uses.

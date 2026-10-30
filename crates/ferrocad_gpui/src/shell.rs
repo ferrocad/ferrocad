@@ -12,10 +12,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
-    ScrollHandle, SharedString, Size, Subscription, Window, WindowHandle, WindowId, anchored,
-    canvas, deferred, div, point, prelude::*, px, rgb, rgba, size,
+    Anchor, AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable,
+    FontWeight, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, ScrollHandle, SharedString, Size, Subscription, Window,
+    WindowHandle, WindowId, anchored, canvas, deferred, div, point, prelude::*, px, rgb, rgba,
+    size,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -355,6 +356,12 @@ pub struct Shell {
     /// Every adapter the machine offers, for the GPU panel. Enumerated when the Dev
     /// Tools window opens, never per frame. `None` until the first open.
     gpu_adapters: Option<Vec<AdapterSummary>>,
+    /// The viewport fell back to the CPU image path: the technical reason, shown as a
+    /// dismissible notice with a copy action. `None` while presentation is accelerated
+    /// (or before the first paint has negotiated with the window device).
+    gpu_notice: Option<String>,
+    /// The user dismissed [`gpu_notice`](Self::gpu_notice) for this session.
+    gpu_notice_dismissed: bool,
     /// The modeless settings card, opened for a `Settings/<Feature>` node.
     settings_card: Option<SettingsCard>,
     /// Which handles the transform gizmo shows. Session tool state, not a document
@@ -367,6 +374,10 @@ pub struct Shell {
     /// verb is an explicit request for the body control, so it overrides the default
     /// until the selection changes or a tool starts. Not a document property.
     transform_verb: bool,
+    /// A finished Move session dismissed the shared body triad: it stays down until the
+    /// next explicit verb or a new selection, like closing upstream's task panel. Not a
+    /// document property.
+    triad_dismissed: bool,
     /// The session pivot the user dragged the origin handle to. It is applied instead of
     /// the object origin while set; it is not undoable and not a document property. A
     /// selection change or a wheel promotion clears it, and `Esc` restores the object
@@ -740,9 +751,12 @@ impl Shell {
             provider_features: None,
             gpu_preference: None,
             gpu_adapters: None,
+            gpu_notice: None,
+            gpu_notice_dismissed: false,
             settings_card: None,
             gizmo_mode: GizmoMode::Translate,
             transform_verb: false,
+            triad_dismissed: false,
             user_origin: None,
             row_popup: None,
             scrub: None,
@@ -806,6 +820,25 @@ impl Shell {
     /// Empty until the Dev Tools window has been opened once.
     pub(crate) fn gpu_adapters(&self) -> &[AdapterSummary] {
         self.gpu_adapters.as_deref().unwrap_or(&[])
+    }
+
+    /// Notice when the viewport fell back to the CPU image path.
+    ///
+    /// The presenter negotiates with the window's device on its first paint, so this
+    /// polls each render until there is an answer; `Dismiss` keeps it quiet for the
+    /// session. The card carries the copyable technical report.
+    fn poll_gpu_notice(&mut self, cx: &mut Context<Self>) {
+        if self.gpu_notice.is_some() || self.gpu_notice_dismissed {
+            return;
+        }
+        let note = self
+            .viewport
+            .as_ref()
+            .and_then(|viewport| viewport.read(cx).presenter_note());
+        if let Some(note) = note {
+            self.gpu_notice = Some(note);
+            cx.notify();
+        }
     }
 
     /// The adapter the viewport's own renderer runs on, if there is a viewport.
@@ -1297,11 +1330,118 @@ else:
 }
 
 
+/// The copyable technical report behind the software-rendering notice.
+///
+/// Plain text on purpose: the user pastes it into a bug report or a chat. It names
+/// the transport, the reason the presenter rejected the window device, what the
+/// fallback costs, and the two settings that usually fix it.
+pub(crate) fn gpu_notice_details(note: &str) -> String {
+    format!(
+        "FerroCAD — the viewport is presenting through the image path.\n\
+         Hardware acceleration is unavailable for this window.\n\
+         \n\
+         Reason:\n\
+         {note}\n\
+         \n\
+         What this means:\n\
+         Every frame is rendered offscreen at the viewport's physical size, copied back\n\
+         to the CPU as a full RGBA image, colour-swapped and uploaded for the window\n\
+         renderer to composite. That is why the window is slow and one core stays busy\n\
+         while it paints.\n\
+         \n\
+         How to fix it:\n\
+         The zero-copy presenter exports a dma-buf from the window's wgpu device, so that\n\
+         device must be Vulkan. On a hybrid laptop the window renderer has to run on the\n\
+         display GPU's Vulkan adapter. Restricting the Vulkan loader to one ICD (for\n\
+         example VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json) hides the\n\
+         display GPU's driver and forces the GL fallback; leave VK_ICD_FILENAMES unset\n\
+         for the windowed app (the offscreen capture tools still need it).\n\
+         ZED_DEVICE_ID=<pci device id> pins GPUI's window GPU when several adapters are\n\
+         present.\n"
+    )
+}
+
+/// The software-rendering notice: a dismissible card with a copy action.
+fn gpu_notice_banner(note: String, cx: &mut Context<Shell>) -> AnyElement {
+    let details = gpu_notice_details(&note);
+    div()
+        .id("gpu-notice")
+        .debug_selector(|| "gpu-notice".to_string())
+        .absolute()
+        .bottom_2()
+        .left_2()
+        .max_w(px(460.))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .bg(rgb(PANEL))
+        .border_1()
+        .border_color(rgb(0x8a6a2a))
+        .text_xs()
+        .text_color(rgb(FG))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Software rendering"),
+                )
+                .child(
+                    div()
+                        .id("gpu-notice-dismiss")
+                        .cursor_pointer()
+                        .px_1()
+                        .rounded_sm()
+                        .hover(|style| style.bg(rgb(PANEL_ALT)))
+                        .on_click(cx.listener(|this, _event, _window, cx| {
+                            this.gpu_notice = None;
+                            this.gpu_notice_dismissed = true;
+                            cx.notify();
+                        }))
+                        .child("Dismiss"),
+                ),
+        )
+        .child(
+            div().text_color(rgb(MUTED)).child(
+                "Hardware acceleration is unavailable; frames are read back and \
+                 composited on the CPU.",
+            ),
+        )
+        .child(
+            div()
+                .id("gpu-notice-copy")
+                .mt_1()
+                .cursor_pointer()
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(PANEL_ALT))
+                .hover(|style| style.bg(rgb(ACCENT)))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(details.clone()));
+                    this.model.lock().unwrap().status =
+                        "viewport diagnostics copied to the clipboard".to_string();
+                    cx.notify();
+                }))
+                .child("Copy details"),
+        )
+        .into_any_element()
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // A script's transient previews (S4.6) change without a document edit; the
         // generation check is a mutex read, and only a real change rebuilds the stage.
         self.sync_previews(cx);
+        self.poll_gpu_notice(cx);
         let model = self.snapshot();
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);
@@ -1376,7 +1516,7 @@ impl Render for Shell {
         // The canvas hosts the viewport, the floating control pill (top-left) and the
         // bottom-centre surface, which both have their own hitboxes so the scene still
         // receives pointer events around them.
-        let canvas = div()
+        let mut canvas = div()
             .relative()
             .flex()
             .flex_1()
@@ -1433,6 +1573,9 @@ impl Render for Shell {
                 None => crate::chrome::action_dock(&model, cx).into_any_element(),
             })
             .child(self.wheel.clone().into_any_element());
+        if let Some(note) = self.gpu_notice.clone() {
+            canvas = canvas.child(gpu_notice_banner(note, cx));
+        }
         let viewport = viewport.child(canvas);
 
         let hover = self.hover_line(cx);

@@ -129,6 +129,9 @@ pub struct GpuiInteropPresenter {
     /// over. Retiring here rather than in `draw` is what keeps the current paint
     /// from rendering an empty canvas.
     disable_after_present: Option<&'static str>,
+    /// The technical reason the image path is in use, when it is. Shown in the shell's
+    /// copyable diagnostics notice; `None` while the presenter is accelerated.
+    note: Option<String>,
 }
 
 impl GpuiInteropPresenter {
@@ -152,6 +155,7 @@ impl GpuiInteropPresenter {
             presented: None,
             pending_reason: None,
             disable_after_present: None,
+            note: None,
         }
     }
 
@@ -183,6 +187,7 @@ impl GpuiInteropPresenter {
                 ),
                 Err(error) => {
                     eprintln!("ferrocad: dma-buf ring resize failed: {error:#}");
+                    self.note = Some(format!("dma-buf ring resize: {error:#}"));
                     self.status = PresenterStatus::Unsupported;
                     trace::presenter_disabled("ring resize failed");
                 }
@@ -202,6 +207,7 @@ impl GpuiInteropPresenter {
                 Ok(_) => trace::presenter_ring("same-device view", 1, self.size, false),
                 Err(error) => {
                     eprintln!("ferrocad: same-device view resize failed: {error:#}");
+                    self.note = Some(format!("same-device surface resize: {error:#}"));
                     self.status = PresenterStatus::Unsupported;
                     trace::presenter_disabled("surface resize failed");
                 }
@@ -236,6 +242,10 @@ impl Presenter for GpuiInteropPresenter {
         self.status
     }
 
+    fn status_note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+
     fn set_size(&mut self, size: [u32; 2]) {
         let size = [size[0].max(1), size[1].max(1)];
         if size == self.size {
@@ -254,11 +264,22 @@ impl Presenter for GpuiInteropPresenter {
 
         // The window's renderer, and so its device, exists only during paint.
         let Ok(interop) = attach(gpu.try_device::<WindowRenderer>()) else {
+            self.note = Some(
+                "the window renderer lent no GPU device (gpui's window renderer is not wgpu)"
+                    .to_string(),
+            );
             self.status = PresenterStatus::Unsupported;
+            trace::presenter_disabled("no window device");
             return;
         };
         let Some((device, queue)) = interop.adapter().wgpu() else {
+            self.note = Some(
+                "the window renderer's device is not a wgpu device, so it cannot export a \
+                 dma-buf or sample the producer's target"
+                    .to_string(),
+            );
             self.status = PresenterStatus::Unsupported;
+            trace::presenter_disabled("window device is not wgpu");
             return;
         };
 
@@ -290,6 +311,7 @@ impl Presenter for GpuiInteropPresenter {
                         "ferrocad: dma-buf viewport unavailable ({error:#}); \
                          using the image path"
                     );
+                    self.note = Some(format!("dma-buf ring: {error:#}"));
                     self.status = PresenterStatus::Unsupported;
                     trace::presenter_disabled("dma-buf ring unavailable");
                     return;
@@ -310,6 +332,7 @@ impl Presenter for GpuiInteropPresenter {
                         "ferrocad: same-device viewport unavailable ({error:#}); \
                          using the image path"
                     );
+                    self.note = Some(format!("same-device surface: {error:#}"));
                     self.status = PresenterStatus::Unsupported;
                     trace::presenter_disabled("surface allocation failed");
                     return;
@@ -320,6 +343,7 @@ impl Presenter for GpuiInteropPresenter {
         self.device = Some(device);
         self.queue = Some(queue);
         self.renderer = Some(renderer);
+        self.note = None;
         self.status = PresenterStatus::Ready;
     }
 

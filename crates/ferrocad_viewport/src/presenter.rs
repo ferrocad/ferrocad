@@ -82,4 +82,12 @@ pub trait Presenter {
     fn supports_pick(&self) -> bool {
         false
     }
+
+    /// Why the presenter is not drawing, when it has fallen back to the image path.
+    ///
+    /// This is technical text (the device/transport error), not a user sentence: the
+    /// host shows it in a copyable diagnostics notice.
+    fn status_note(&self) -> Option<&str> {
+        None
+    }
 }

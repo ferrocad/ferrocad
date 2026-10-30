@@ -9,7 +9,7 @@ Companion to
 (frames and the triad), [`../../developer/interaction/visual-language.md`](../../developer/interaction/visual-language.md)
 (the accent/glass tokens), [`polyline-vertex-editing-and-active-tool-hud.md`](polyline-vertex-editing-and-active-tool-hud.md)
 (the active-action surface this shares a slot with) and
-[`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) P4 SK4.
+[`../TODO-31-10-2026.md`](../TODO-31-10-2026.md) P4 SK4.
 
 The workplane should be **invisible when it is the world plane and obvious when it is
 not**. Today it is the reverse: the default state is unrepresented, the only way to

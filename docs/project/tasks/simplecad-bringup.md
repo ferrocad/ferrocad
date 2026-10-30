@@ -1,6 +1,6 @@
 # SimpleCAD bring-up: the closing cut
 
-Status: task spec (2026-10-30). Cut from [`../TODO-30-10-2026.md`](../TODO-30-10-2026.md)
+Status: task spec (2026-10-30). Cut from [`../TODO-31-10-2026.md`](../TODO-31-10-2026.md)
 §P1 after the [fan-out](../record/2026-10-30-fan-out-todo-30.md). The measurement it
 starts from is [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7.3;
 the round's closed backdrop is

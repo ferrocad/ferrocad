@@ -1,7 +1,7 @@
 # FerroCAD roadmap
 
 Status: roadmap (2026-10-30). The actionable backlog is
-[`TODO-30-10-2026.md`](TODO-30-10-2026.md); the measured history is
+[`TODO-31-10-2026.md`](TODO-31-10-2026.md); the measured history is
 [`record/milestones.md`](record/milestones.md); the letters used below (`H1`, `P4`,
 `S4`, `M3` …) are indexed in [`labels.md`](labels.md).
 

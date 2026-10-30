@@ -7,7 +7,7 @@ wire or an extrusion Part, and what happened to DPI and points. The executable d
 
 Related: [`simplecad-bringup.md`](simplecad-bringup.md) SC2 (the font pipeline),
 [`creation-tools-ownership.md`](creation-tools-ownership.md) (who owns a creation tool),
-[`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) P4 SK4.
+[`../TODO-31-10-2026.md`](../TODO-31-10-2026.md) P4 SK4.
 
 ## 1. What is kernel, and what is not
 

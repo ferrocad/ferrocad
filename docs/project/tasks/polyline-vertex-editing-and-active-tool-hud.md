@@ -7,7 +7,7 @@ entry and the hover rim remain — see §6. Companion to
 (the form/gizmo state machines, §5.2 and §6.1 below),
 [`../../developer/interaction/visual-language.md`](../../developer/interaction/visual-language.md)
 (the dielectric-glass contract), [`../../developer/interaction/transform-ux.md`](../../developer/interaction/transform-ux.md)
-(the gadget/HUD split) and [`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) P4 SK4.
+(the gadget/HUD split) and [`../TODO-31-10-2026.md`](../TODO-31-10-2026.md) P4 SK4.
 
 Two UX defects, one root cause each:
 

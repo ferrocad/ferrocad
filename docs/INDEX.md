@@ -29,7 +29,7 @@ folders are what `tools/build_book.py` publishes at
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
 | drive `FreeCAD` from another program | [mods/README.md#the-json-boundary-for-automated-clients](mods/README.md#the-json-boundary-for-automated-clients) and [python-api/ferrocad_shell.md](python-api/ferrocad_shell.md) |
 | change FerroCAD | [developer/README.md](developer/README.md) and [developer/architecture.md](developer/architecture.md) |
-| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-30-10-2026.md](project/TODO-30-10-2026.md) |
+| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-31-10-2026.md](project/TODO-31-10-2026.md) |
 | find what a label means | [project/labels.md](project/labels.md) |
 
 ## General concepts
@@ -171,7 +171,7 @@ than deleted.
 
 - [project/README.md](project/README.md) — the folder landing page, reading order and the record rule.
 - [project/ROADMAP.md](project/ROADMAP.md) — the three horizons and their exit criteria.
-- [project/TODO-30-10-2026.md](project/TODO-30-10-2026.md) — the active backlog: the minimum SimpleCAD surface, solids and booleans, surface/subdivision, and constraints with a bound solver.
+- [project/TODO-31-10-2026.md](project/TODO-31-10-2026.md) — the active backlog: the minimum SimpleCAD surface, solids and booleans, surface/subdivision, and constraints with a bound solver.
 - [project/labels.md](project/labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which program owns it.
 
 ### Documentation system
@@ -215,6 +215,8 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/record/TODO-29-10-2026.md](project/record/TODO-29-10-2026.md) — the closed 2026-10-29 backlog: the workplane hierarchy, datum planes, the grid and the SimpleCAD P1 closure.
 - [project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md](project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md) — the round log for the workplane and grid work, including the four grid defects and their mechanisms.
 - [project/record/2026-10-30-fan-out-todo-30.md](project/record/2026-10-30-fan-out-todo-30.md) — the six-stream fan-out over the 2026-10-30 backlog: seven corrected claims, the evidence-sized slices and the open unknowns.
+- [project/record/2026-10-30-viewport-pick-and-fixed-pitch-grid.md](project/record/2026-10-30-viewport-pick-and-fixed-pitch-grid.md) — the 2026-10-30 code round: the unrenderable pick format, the image-path cost, the fixed-pitch grid fade and the Move session.
+- [project/record/TODO-30-10-2026.md](project/record/TODO-30-10-2026.md) — the closed 2026-10-30 backlog: the SimpleCAD bring-up slices, the 3-D text workflow, the fan-out's re-filed sections and the platform remainder.
 - [project/record/TODO-27-10-2026.md](project/record/TODO-27-10-2026.md) — the closed 2026-10-27 backlog: the kernel regimes, the SimpleCAD reconstruction fixes, the Draft import closure and the extension-set/CI split.
 - [project/record/TODO-26-10-2026.md](project/record/TODO-26-10-2026.md) — the closed 2026-10-26 backlog: the interaction/gizmo layer, Draft, SimpleCAD and Mesh.
 - [project/record/TODO-24-10-2026.md](project/record/TODO-24-10-2026.md) — the closed 2026-10-24 backlog: the element map, the OCCT seam, feature proxies and Qt Q0–Q5.

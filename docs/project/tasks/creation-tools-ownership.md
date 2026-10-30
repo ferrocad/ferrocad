@@ -4,7 +4,7 @@ Status: task spec / decision (2026-10-30). Raised while cutting the SK4 draw pat
 edition has a working polyline prototype, and it is not obvious whether that belongs in the
 core as a default that mods can override, or stays an edition/mod choice. Relates to
 [`simplecad-bringup.md`](simplecad-bringup.md) (SC7 uses the same primitives) and
-[`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) §P4 SK4.
+[`../TODO-31-10-2026.md`](../TODO-31-10-2026.md) §P4 SK4.
 
 **This is a decision task, not a build task.** The output is a written decision plus the
 smallest test that pins it.

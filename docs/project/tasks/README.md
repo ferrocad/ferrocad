@@ -25,7 +25,7 @@ Status: index (2026-10-30). Six active specs and one recorded decision:
 
 Every other spec written so far has landed and moved to
 [`../record/tasks/`](../record/tasks/README.md); the open
-work is tracked in [`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) and the standing
+work is tracked in [`../TODO-31-10-2026.md`](../TODO-31-10-2026.md) and the standing
 design notes under `architecture/`, `interaction/`, `viewport/` and `workbenches/`.
 
 A new spec belongs here when work is large enough to need its own design, checklist and

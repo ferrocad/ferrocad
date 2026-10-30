@@ -5,7 +5,7 @@ a roadmap, or an accepted design.
 
 This folder is for hypotheses about what FerroCAD could become. An idea here is allowed
 to be ambitious and incomplete; it becomes real only when it is accepted into the
-[backlog](../TODO-30-10-2026.md) for work, or written up as a stable design in
+[backlog](../TODO-31-10-2026.md) for work, or written up as a stable design in
 [developer/](../../developer/README.md).
 
 - [Intent, lineage and safe automation](intent-and-automation.md) — the product thesis:

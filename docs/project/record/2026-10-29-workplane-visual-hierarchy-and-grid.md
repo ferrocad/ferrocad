@@ -95,7 +95,7 @@ baseline. The Part audit moved by exactly the one type it should have.
 ## Pointers
 
 - The closed backlog is [`TODO-29-10-2026.md`](TODO-29-10-2026.md); the open remainder is
-  [`../TODO-30-10-2026.md`](../TODO-30-10-2026.md).
+  [`../TODO-30-10-2026.md`](TODO-30-10-2026.md).
 - The specs are still active (each has a named tail):
   [`../tasks/workplanes.md`](../tasks/workplanes.md) §8,
   [`../tasks/polyline-vertex-editing-and-active-tool-hud.md`](../tasks/polyline-vertex-editing-and-active-tool-hud.md) §6.

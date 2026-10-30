@@ -62,6 +62,11 @@ fn body_stage(origin: [f32; 3]) -> Stage {
 fn a_single_click_keeps_scope_and_a_double_click_upgrades_to_the_body(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (shell, model) = shell_with_stage(cx, [2.0, 3.0, 4.0]);
+    // This test is about the pick's scope, so ask for the pre-loadout behaviour: the
+    // default `Select: Body` filter would rewrite every face click to its body.
+    shell.update(cx, |shell, cx| {
+        shell.set_select_filter(SelectFilter::Auto, cx)
+    });
 
     // First click: the face is selected, not the body.
     shell.update(cx, |shell, cx| shell.on_selection(&picked(1), cx));
@@ -220,6 +225,11 @@ fn the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad(cx: &mut TestA
 fn a_scripted_selection_reaches_the_shell(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (shell, model) = shell_with_stage(cx, [0.0, 0.0, 0.0]);
+    // The facade path reports what the script asked for; `Auto` keeps this test about
+    // the write path rather than about the loadout's `Body` rewrite.
+    shell.update(cx, |shell, cx| {
+        shell.set_select_filter(SelectFilter::Auto, cx)
+    });
 
     // Start from an empty selection with an empty queue.
     let reset = crate::python::evaluate(

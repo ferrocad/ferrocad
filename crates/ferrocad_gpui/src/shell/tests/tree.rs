@@ -17,14 +17,6 @@ fn rebuild_display(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     });
 }
 
-/// The undo depth of the active document.
-fn undo_count() -> usize {
-    let result = crate::python::evaluate("FreeCAD.ActiveDocument.getAvailableUndos()")
-        .expect("read the undo count");
-    assert!(result.ok, "{}", result.output);
-    result.output.trim().parse().expect("an integer undo count")
-}
-
 /// `true`/`false` for one object's `Visibility`.
 fn visible(object: &str) -> bool {
     let name = serde_json::to_string(object).unwrap();

@@ -789,16 +789,8 @@ impl Shell {
                 // A translation HUD is a Move session. Accepting it ends the session, but
                 // the triad **stays** on the object: `sync_stage`/`rearm_selection` below
                 // rebuild it at the moved anchor, so the user keeps a handle to nudge
-                // something they just placed. (Dismissing it left them with no handles
-                // and no way back except re-selecting.)
-                if outcome.dialog.is_none()
-                    && self
-                        .dialog
-                        .as_ref()
-                        .is_some_and(|dialog| dialog.spec.previews_translation())
-                {
-                    self.transform_verb = true;
-                }
+                // something they just placed. The Move hand is already equipped (a
+                // translation HUD is opened by `Move`), so no extra request is needed.
                 // The pending move is now applied (or replaced by a wizard): release
                 // the session and the ghost before the stage rebuild.
                 self.discard_pending(cx);

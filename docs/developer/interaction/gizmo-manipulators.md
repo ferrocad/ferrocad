@@ -366,6 +366,15 @@ its padded outline/area is pickable.
   the workbench reads. A stem that points at the eye cannot be scrubbed by the axis
   solver, so the grip falls back to the pointer's vertical screen travel with the same
   commit.
+- **The loadout narrows the host (U4, built 2026-10-31).** The shell hosts **one
+  hand**: Slot 1 (`1`, Move) arms `GizmoSet` and no manipulator; Slots 2/3 (`2`
+  Push/Pull, `3` Fillet) arm the compiled `Manipulator` and any mod-declared handle,
+  with no gizmo. Both seams receive the slot-filtered `SelectionRef` (Slot 1's `Body`
+  filter passes no element). The old claim heuristic — retire the shared triad when a
+  manipulator claims the element, keep it otherwise, let `transform_verb` override —
+  is deleted: an unclaimed element in Slot 2 now arms nothing, and `1` is the explicit
+  way back to the body control. Switching slot or filter with a dirty transform session
+  commits it first.
 - **Covered by** `ferrocad_stage`'s
   `the_session_offers_one_kind_per_control_and_keeps_the_others_hosted`,
   `the_kind_order_decides_which_gizmo_answers_the_pointer`,
@@ -375,7 +384,14 @@ its padded outline/area is pickable.
   `the_highest_priority_gizmo_takes_the_press`; `ferrocad_gpui`'s
   `the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad`; and
   `ferrocad_toy`'s `the_height_drag_commits_the_shared_gizmo_event` and
-  `a_head_on_stem_still_commits_a_gizmo_event`.
+  `a_head_on_stem_still_commits_a_gizmo_event`. The U4 seams are `ferrocad_gpui`'s
+  `a_face_click_selects_the_body_in_the_move_slot`,
+  `the_slot_sets_the_filter_and_select_overrides_it`,
+  `the_wheel_verbs_equip_the_move_slot`,
+  `switching_the_slot_commits_a_pending_drag_first`, and (with a GPU)
+  `a_face_click_in_the_move_slot_arms_only_the_triad`,
+  `a_claimed_sub_element_suppresses_the_shared_body_triad` /
+  `an_unclaimed_sub_element_leaves_the_face_slot_empty`.
 
 ### 9.1 Re-pivot and push/pull as built (2026-10-26)
 
@@ -393,7 +409,9 @@ its padded outline/area is pickable.
   as local Z. The commit is `push_pull` + `extrude`/`pocket` + the element + the signed
   distance; the edition's `_interaction` hook owns the `Part::Extrusion` and the
   boolean. The factory returns `None` for an edge, so it composes with the dress-up
-  factory in the same `Contributions` registry. **A3 preview (2026-10-31):** while the
+  factory in the same `Contributions` registry; **under the loadout (U4, 2026-10-31) it
+  is hosted only in Slot 2**, against the `Face`-filtered reference. **A3 preview
+  (2026-10-31):** while the
   drag is live it also draws a translucent ghost of the face at the pending distance
   (`Manipulator::preview_items`); display-only, unpickable, no recompute.
 
@@ -954,6 +972,16 @@ so a spec can carry its own metadata.
 
 ### Where the control lives
 
+The **hand** is visible and chosen explicitly (U4, built 2026-10-31):
+
+- The bottom-left bar over the canvas is `[1 Move] [2 Push/Pull] [3 Fillet]`; the
+  active slot is accented over `CHROME_ACTIVE_BG`, and a click equips exactly what its
+  key does. It shares the creation dock's baseline and glass.
+- The header carries a `Select: <filter> ▾` selector between `Gizmo ▾` and `Snap ▾`.
+  The filter is the slot's preset (`Body` / `Face` / `Edge`) unless overridden; the
+  label turns `CHROME_ACTIVE` while it differs from the slot's default. Both the bar
+  and this control write the same `Shell::loadout` store.
+
 The **handles** are a transient tool handle, not a persistent scene helper, so they are
 not a dock row: object verbs moved to the wheel
 ([`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md) §2), and the dock is
@@ -969,11 +997,9 @@ a scene helper you can toggle in an empty scene. See
 - The triad **hugs the selected object's own origin** (the placement base point,
   reported by the display provider, else the bounding-box base corner) and pivots about
   it in every mode. The base edition registers
-  `ferrocad_gpui::translate_gizmo`, so this exists in the shipped app. It claims **any
-displayed item**, including a selection that names a sub-element (`Face1`): a Part click
-is tagged by the OCCT tessellation, so it always resolves to an element, and declining
-those left the Parametric edition with no triad at all while the toy's untagged mesh
-showed one. The gizmo still targets the whole body; the origin doubles as an indicator.
+  `ferrocad_gpui::translate_gizmo`, so this exists in the shipped app. The **loadout's
+  `Body` filter** (Slot 1) makes a face click report the whole body before the triad is
+  built, so the shipped Move hand no longer relies on the claim heuristic.
 - Choosing **`Move`** in the wheel promotes its context target and arms the triad (the
   `translate` mode directive); the floating `ΔX/ΔY/ΔZ` HUD open beside it is a **view of
   the pending session**, not a mode. The keys remain the gizmo's: `Enter` commits the

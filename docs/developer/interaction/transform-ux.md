@@ -13,7 +13,8 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 > discussion are replaced by one cumulative transform session with explicit commit,
 > checkpoint and rollback — no deferred mode, no undo-as-cancel, and a first-class
 > uncommitted edit in the model. Which control a selection arms stays context-driven, but the
-> *inference* is replaced by a visible loadout slot. See
+> *inference* is replaced by a visible loadout slot (U4, built 2026-10-31: `1`/`2`/`3`, the
+> bottom-left bar and the `Select ▾` filter). See
 > [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) and
 > [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md); the mode set,
 > pivots, re-pivoting and push/pull behaviour here stay authoritative.

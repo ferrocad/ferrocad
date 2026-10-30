@@ -51,6 +51,16 @@ impl Shell {
     /// The push happens **before** the commands are listed, so `IsActive` sees the
     /// selection the user just made.
     pub(super) fn replace_selection(&mut self, items: Vec<SelectionItem>, cx: &mut Context<Self>) {
+        // The topology filter is applied where the shell **reports** the selection, so
+        // the tree, the facade and the arm seam all see the same scope: `Select: Body`
+        // rewrites a `Face6` pick to its whole body, `Auto`/`Face`/`Edge` keep the
+        // element. The pick itself still reports the sub-element (hover and snapping
+        // need it); only the reported selection is narrowed.
+        let filter = self.loadout.filter();
+        let items: Vec<SelectionItem> = items
+            .into_iter()
+            .map(|item| filter.apply_item(item))
+            .collect();
         // A pending transform is **committed** before the context changes: losing a drag
         // because the user clicked something else is the defect the session exists to
         // remove. It has to happen first, while the old selection is still the selection —
@@ -65,11 +75,9 @@ impl Shell {
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
         self.wheel_target = None;
-        // A new selection is a new pivot subject: the session user origin goes away, and
-        // so does an explicit body-transform request (the handles go back to yielding to
-        // a claimed sub-element).
+        // A new selection is a new pivot subject: the session user origin goes away.
+        // The loadout slot is a tool choice, not a selection property, so it stays.
         self.user_origin = None;
-        self.transform_verb = false;
         if self
             .dialog
             .as_ref()

@@ -31,12 +31,13 @@ use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
 use ferrocad_widgets::scroll::scroll_area;
 
 use ferrocad_theme::ui::{
-    ACTIVE_ACCENT, CHROME_ACTIVE, CHROME_LINE, DOCK_BG, DOCK_BORDER, GLASS, ROW_HOVER,
+    ACTIVE_ACCENT, CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, DOCK_BG, DOCK_BORDER, GLASS,
+    ROW_HOVER,
 };
 
 use crate::commands::{self, CommandInfo, Surface};
 use crate::python::{AxisSummary, GridSummary, ProviderFeature};
-use crate::shell::{ACCENT, FG, MUTED, PANEL, PANEL_ALT, Shell, ShellModel};
+use crate::shell::{ACCENT, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell, ShellModel, Slot};
 
 /// The header controls' primary command ids.
 pub const GRID: &str = "App_ToggleGrid";
@@ -327,6 +328,7 @@ pub(crate) fn viewport_header(
     grid: Option<&GridSummary>,
     axis: Option<&AxisSummary>,
     workplane: Option<&WorkplaneBadge>,
+    loadout: Loadout,
     open: Option<&str>,
     anchor: Option<Point<Pixels>>,
     cx: &mut Context<Shell>,
@@ -409,6 +411,9 @@ pub(crate) fn viewport_header(
             cx,
         ));
     }
+    // The topology filter: which element a click reports. It is a selector, not a
+    // toggle, and it writes the same store as the bottom-left loadout bar.
+    controls = controls.child(select_button(loadout, open == Some("select"), anchor, cx));
     // Snapping is ambient spatial state, so it belongs beside Grid/Axes/WP rather
     // than in the dock next to the selection verbs. The label is the global switch;
     // the six modes live in the popover.
@@ -624,6 +629,164 @@ fn workplane_button(
         );
     }
     control
+}
+
+/// The `Select ▾` topology filter control (U4).
+///
+/// A **selector**, like `WP`: it has no primary action, because equipping a slot is
+/// what the bottom-left bar and the `1`/`2`/`3` keys do. The label carries the current
+/// filter, accented when it overrides the slot's default, and the rows are the four
+/// filters. A row id is synthetic (`select:<filter>`), intercepted by
+/// [`Shell::run_command`] before the registry.
+fn select_button(
+    loadout: Loadout,
+    open: bool,
+    anchor: Option<Point<Pixels>>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let filter = loadout.filter();
+    let rows: Vec<PopoverRow> = SelectFilter::ALL
+        .into_iter()
+        .map(|candidate| PopoverRow {
+            id: format!("select:{}", candidate.label().to_ascii_lowercase()),
+            label: candidate.label().to_string(),
+            enabled: true,
+            checked: candidate == filter,
+            // A radio set: the dot follows the active filter and the menu stays open
+            // for a comparison, like a provider group.
+            toggle: true,
+            keep_open: true,
+            accel: String::new(),
+            divider_before: false,
+        })
+        .collect();
+    let label: SharedString = format!("Select: {}", filter.label()).into();
+
+    let mut control = div()
+        .relative()
+        .flex()
+        .flex_row()
+        .items_center()
+        .rounded_sm()
+        .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
+
+    control = control.child(
+        div()
+            .id("select-label")
+            .debug_selector(|| "select-label".to_string())
+            .px_2()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(if loadout.overridden() {
+                CHROME_ACTIVE
+            } else {
+                FG
+            }))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL)))
+            .child(label)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+                    this.set_popover_anchor(event.position);
+                }),
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.open_popover("select", cx);
+            })),
+    );
+    control = control.child(
+        div()
+            .id("select-caret")
+            .debug_selector(|| "select-caret".to_string())
+            .px_1()
+            .py_1()
+            .text_xs()
+            .text_color(rgb(MUTED))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL)))
+            .child("▾")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
+                    this.set_popover_anchor(event.position);
+                }),
+            )
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.open_popover("select", cx);
+            })),
+    );
+    if open {
+        let position = anchor
+            .map(|pointer| point(pointer.x, pointer.y + px(18.)))
+            .unwrap_or_else(|| point(px(0.), px(28.)));
+        control = control.child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::TopLeft)
+                    .position(position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(popover_with_info("select", Vec::new(), rows, cx)),
+            )
+            .with_priority(1),
+        );
+    }
+    control
+}
+
+/// The loadout bar (U4): `[1 Move] [2 Push/Pull] [3 Fillet]` over the canvas'
+/// bottom-left corner.
+///
+/// It shares the creation dock's baseline and glass. The active slot is accented over
+/// `CHROME_ACTIVE_BG`; a click equips it exactly as its key does, so the hotkey stays
+/// discoverable without opening the wheel.
+pub(crate) fn loadout_bar(loadout: Loadout, cx: &mut Context<Shell>) -> impl IntoElement {
+    let mut panel = div()
+        .id("loadout-bar")
+        .debug_selector(|| "loadout-bar".to_string())
+        .occlude()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgba(DOCK_BG))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .text_xs();
+
+    for slot in Slot::ALL {
+        let active = loadout.slot() == slot;
+        let key = slot.key();
+        let mut button = div()
+            .id(SharedString::from(format!("loadout-{key}")))
+            .debug_selector(move || format!("loadout-{key}"))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .text_color(rgb(if active { CHROME_ACTIVE } else { FG }))
+            .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgba(ROW_HOVER)))
+            .child(div().text_color(rgb(MUTED)).child(key))
+            .child(slot.label());
+        button = button.on_click(cx.listener(move |this, _event, _window, cx| {
+            this.set_loadout_slot(slot, cx);
+        }));
+        panel = panel.child(button);
+    }
+
+    div()
+        .absolute()
+        .bottom(px(12.))
+        .left(px(16.))
+        .child(panel)
 }
 
 fn split_button(
@@ -1829,10 +1992,13 @@ mod tests {
         assert!(cx.debug_bounds("viewport-header").is_some());
         let wp = cx.debug_bounds("wp-label").expect("the workplane control");
         let gizmo = cx.debug_bounds("gizmo-label").expect("the gizmo control");
+        let select = cx.debug_bounds("select-label").expect("the select control");
         let snap = cx.debug_bounds("snap-label").expect("the snap control");
         assert!(
-            wp.origin.x < gizmo.origin.x && gizmo.origin.x < snap.origin.x,
-            "Gizmo sits between WP and Snap"
+            wp.origin.x < gizmo.origin.x
+                && gizmo.origin.x < select.origin.x
+                && select.origin.x < snap.origin.x,
+            "Select sits between Gizmo and Snap"
         );
         assert!(
             cx.debug_bounds("gizmo-state-dot").is_some(),
@@ -1862,6 +2028,26 @@ mod tests {
                     .debug_bounds("gizmo-row-GizmoOverlayShader_Settings")
                     .is_some(),
             "the active backend's settings row is rendered"
+        );
+
+        // The topology filter is a selector: its caret opens the four filters, and the
+        // current one carries the radio dot.
+        click_at(&mut cx, "select-caret");
+        draw(&mut cx);
+        for selector in [
+            "select-row-select:auto",
+            "select-row-select:body",
+            "select-row-select:face",
+            "select-row-select:edge",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
+        }
+        assert!(
+            cx.debug_bounds("select-row-select:body-dot").is_some(),
+            "Slot 1's Body filter is checked at rest"
         );
     }
 }

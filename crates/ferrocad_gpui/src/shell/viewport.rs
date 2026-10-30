@@ -534,19 +534,28 @@ impl Shell {
     ///
     /// The stage is cloned out of the viewport before anything is updated: a re-entrant
     /// `update` on the same entity panics.
+    ///
+    /// The **loadout** narrows both seams (U4): the slot decides which control may be
+    /// hosted (the triad in Slot 1, the selection's manipulator in Slots 2 and 3), and
+    /// the topology filter decides the [`SelectionRef`] both calls see. A face click in
+    /// Slot 1 therefore selects and arms the body; the old claim heuristic that retired
+    /// the triad behind a sub-element is gone.
     pub(super) fn arm(
         &mut self,
         reference: &SelectionRef,
         cx: &mut Context<Self>,
     ) -> (Vec<Box<dyn Manipulator>>, GizmoSet) {
+        let reference = self.loadout.narrow(reference);
+        let slot = self.loadout.slot();
         let mut manipulators: Vec<Box<dyn Manipulator>> = Vec::new();
         let mut gizmos = GizmoSet::default();
-        let mut body_datum: Option<Vector3> = None;
         if let Some(viewport) = self.viewport.as_ref() {
             let stage = viewport.read(cx).stage().clone();
-            body_datum = stage.item(reference.object).and_then(ShapeItem::anchor);
             if !self.contributions.is_empty() {
-                if let Some(manipulator) = self.contributions.manipulator_for(reference, &stage) {
+                if slot.wants_manipulator()
+                    && let Some(manipulator) =
+                        self.contributions.manipulator_for(&reference, &stage)
+                {
                     manipulators.push(manipulator);
                 }
                 // The factory owns the datum: the triad hugs the object's own origin
@@ -554,52 +563,42 @@ impl Shell {
                 // pivot a rotate gizmo needs. A click point is deliberately not used —
                 // for translation the pivot does not change the result, and re-pivoting
                 // will be an explicit, snapped gesture (see transform-ux.md).
-                gizmos = self.arm_gizmos(reference, &stage);
+                if slot.wants_gizmo() {
+                    gizmos = self.arm_gizmos(&reference, &stage);
+                }
             }
         }
 
         // Mod-declared handles come after the compiled one. The selection's object
-        // name and first sub-element are what a provider needs to decide.
-        let object = self
-            .display
-            .object_of(reference.object)
-            .unwrap_or_default()
-            .to_string();
-        let element = reference.elements.first().map(String::as_str);
-        match python::manipulator_specs(&object, element) {
-            Ok(specs) => {
-                let mut errors = Vec::new();
-                for spec in specs {
-                    match manipulators::handle_from_value(&spec, reference.object) {
-                        Ok((target, handle)) => {
-                            manipulators
-                                .push(Box::new(DeclarativeManipulator::new(target, handle)));
+        // name and first sub-element are what a provider needs to decide, so Slot 1
+        // passes no element and a mod's face handle cannot arm under it.
+        if slot.wants_manipulator() {
+            let object = self
+                .display
+                .object_of(reference.object)
+                .unwrap_or_default()
+                .to_string();
+            let element = reference.elements.first().map(String::as_str);
+            match python::manipulator_specs(&object, element) {
+                Ok(specs) => {
+                    let mut errors = Vec::new();
+                    for spec in specs {
+                        match manipulators::handle_from_value(&spec, reference.object) {
+                            Ok((target, handle)) => {
+                                manipulators
+                                    .push(Box::new(DeclarativeManipulator::new(target, handle)));
+                            }
+                            Err(error) => errors.push(error),
                         }
-                        Err(error) => errors.push(error),
+                    }
+                    for error in errors {
+                        self.console_line(error, cx);
                     }
                 }
-                for error in errors {
-                    self.console_line(error, cx);
+                Err(error) => {
+                    self.console_line(format!("manipulator specs unavailable: {error}"), cx);
                 }
             }
-            Err(error) => {
-                self.console_line(format!("manipulator specs unavailable: {error}"), cx);
-            }
-        }
-
-        // A claimed sub-element owns the handles (workplanes note, §3.3): Part's face
-        // gets its extrude stem and its edge the fillet arc, so the shared whole-body
-        // triad — the entry anchored at the body datum — steps aside. Only the *shared*
-        // triad yields: a workbench gizmo anchored elsewhere (a grip on the top face)
-        // stays. When nothing claims the element the triad stays too, so a click never
-        // ends up with no handles. `Move`/`Rotate` are explicit requests for the body
-        // control and override the default until the selection changes.
-        if !self.transform_verb && reference.elements.first().is_some() && !manipulators.is_empty() {
-            let pivot = self.user_origin;
-            gizmos = gizmos.retain(|gizmo| {
-                let origin = gizmo.origin();
-                Some(origin) != body_datum && Some(origin) != pivot
-            });
         }
 
         (manipulators, gizmos)

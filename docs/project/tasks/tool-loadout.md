@@ -1,6 +1,10 @@
 # The tool loadout: slots, the `Select ▾` filter, and hover-to-arm
 
-Status: **design and plan (2026-10-30).** *Plan only — nothing here is built.*
+Status: **U4 built (2026-10-31); U5 and U6 planned (design 2026-10-30).** U4 is in the
+tree: Slot 1 hosts the triad, Slots 2 and 3 host the selection's manipulator, the
+`Select ▾` filter rewrites the reported selection, `1`/`2`/`3` and the bottom-left bar
+equip a slot, and a slot or filter change commits a dirty session first. **U5
+(hover-to-arm) and U6 (the sweep and the user page) are not built.**
 Read against the tree in
 [`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
 which found the loadout **smaller** than this note first assumed: only one compiled manipulator
@@ -98,8 +102,11 @@ compiled manipulator plus whatever a mod declares, and both calls take the eleme
 
 `GizmoSet::set_session` is **not** the narrowing mechanism: it selects a gizmo's *kind*
 (Translate/Rotate/Universal), which is Slot 1's mode, not which class is in the hand. The
-`transform_verb` heuristic that retires the body triad today
-(`shell/viewport.rs:597-603`) is what the slot's filter replaces.
+`transform_verb` heuristic that used to retire the body triad is **gone (U4,
+2026-10-31)**: the slot's two calls decide, and `Arm` passes a slot-filtered
+`SelectionRef` to both. The old "a claimed sub-element hides the triad, otherwise the
+triad stays" fallback is deliberately replaced: Slot 2 on an unclaimed element arms
+nothing, and the fixed bar says why (`[1 Move]` is one key away).
 
 ### 1.5 What a slot change does to a live session
 
@@ -107,6 +114,36 @@ A slot change is a **context exit**: if the transform session is dirty it commit
 (`transform-session.md` §1.2, invariant 2), then the new slot narrows the hosted set and the
 topology filter. The one exception is the "equip a verb into the current slot" case (Rotate),
 which keeps the session and changes its mode.
+
+### 1.6 As built (2026-10-31)
+
+- `Shell::loadout` (`shell/loadout.rs`) is the one store: a `Slot` and a
+  `SelectFilter`. `Loadout::set_slot` also resets the filter to the slot's preset;
+  `Loadout::set_filter` is the header override. `Shell::loadout` sits beside
+  `gizmo_mode` because both are tool state, not document state (D2).
+- The bottom-left bar (`chrome::loadout_bar`, `[1 Move] [2 Push/Pull] [3 Fillet]`) and
+  the header selector (`chrome::select_button`, `Select: Body ▾` between `Gizmo` and
+  `Snap`) both call the same setters; `1`/`2`/`3` do too. The selector's row ids are
+  synthetic (`select:<filter>`) and `run_command` intercepts them before the registry.
+- `Shell::arm` narrows the `SelectionRef` once and then calls **either**
+  `arm_gizmos` (Slot 1) **or** `manipulator_for` + `manipulator_specs` (Slots 2/3).
+  `replace_selection` applies the same filter to every item, so the tree, the facade
+  and the arm seam agree (`Body` strips the element).
+- `transform_verb` is deleted. `Move`/`Rotate` from the wheel and `App_Move` equip
+  Slot 1; the old "claimed element suppresses the triad" rule and its fallback are
+  both gone. A tool session does not change the hand.
+- A slot or filter change commits a dirty session first (`commit_session`), then
+  rearms. The slot keys sit below the compact pill's typing path and above the digit
+  escalation: `2` on an armed triad equips the face hand, and typing `2` into a value
+  starts with `Tab`.
+- Covered by `ferrocad_gpui`'s `a_face_click_selects_the_body_in_the_move_slot`,
+  `the_slot_sets_the_filter_and_select_overrides_it`,
+  `the_wheel_verbs_equip_the_move_slot`,
+  `the_loadout_bar_renders_and_equips_a_slot`,
+  `switching_the_slot_commits_a_pending_drag_first`, and the GPU-only
+  `a_face_click_in_the_move_slot_arms_only_the_triad`,
+  `a_claimed_sub_element_suppresses_the_shared_body_triad` /
+  `an_unclaimed_sub_element_leaves_the_face_slot_empty`.
 
 ---
 
@@ -214,9 +251,9 @@ before U2/U3, i.e. the loadout can arrive before the pill and the tape.
 
 | Stage | Deliverable | Why this order | Spec updated |
 | --- | --- | --- | --- |
-| **U4** | loadout slots, `Select ▾` filter, `1`/`2`/`3` keys, the bottom-left bar, and the two arm calls gated by the slot (no trait change) | Needs one session to narrow to; no `ManipulatorKind` is required | §4.1, §4.2 |
-| **U5** | hover-to-arm and zero-click drag on `HoverReport::target` | Needs U4's filter: "movable body" is the slot's contract | §4.3 |
-| **U6** | this note's share of the sweep: spec text final, dead code (`transform_verb` and the claim rule it replaced) gone, user-docs page for the loadout | Converges with the session half | all of §4 |
+| **U4** | loadout slots, `Select ▾` filter, `1`/`2`/`3` keys, the bottom-left bar, and the two arm calls gated by the slot (no trait change) | Needs one session to narrow to; no `ManipulatorKind` is required | §4.1, §4.2 — **built 2026-10-31**; `transform_verb` retired |
+| **U5** | hover-to-arm and zero-click drag on `HoverReport::target` | Needs U4's filter: "movable body" is the slot's contract | §4.3 — planned |
+| **U6** | this note's share of the sweep: spec text final, the user-docs page for the loadout, and any claim the tree no longer makes | Converges with the session half | all of §4 — planned. `transform_verb` is already deleted by U4, so the sweep no longer owns it |
 
 ### Stage acceptance
 
@@ -255,7 +292,7 @@ before U2/U3, i.e. the loadout can arrive before the pill and the tape.
 
 | # | Question | Needed by | Leaning |
 | --- | --- | --- | --- |
-| D2 | Where does the loadout slot live — view state (per window) or document state (per document)? | U4 | View state, beside `Gizmo ▾`, because it is a tool, not a model property |
-| D5 | Does `FreeCADGui.Preview` keep pushing items directly, or become pending-backed? | U4 | Keep the channel; back it with a pending edit so a script's preview and the UI's preview cannot disagree |
+| D2 | Where does the loadout slot live — view state (per window) or document state (per document)? | U4 | **Resolved by U4 (2026-10-31): view state**, `Shell::loadout` beside `gizmo_mode`; it is a tool, not a model property |
+| D5 | Does `FreeCADGui.Preview` keep pushing items directly, or become pending-backed? | U4 | **Unchanged by U4:** the channel stays. `Manipulator::preview_items` (A3) is the display-only native half; a pending-backed script preview is still the leaning, not built |
 
 The session note owns D1, D3, D4 and D6.

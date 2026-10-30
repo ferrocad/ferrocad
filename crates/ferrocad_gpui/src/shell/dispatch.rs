@@ -244,6 +244,15 @@ impl Shell {
             cx.notify();
             return;
         }
+        // A topology-filter row is the same kind of generated chrome: the id names the
+        // `Select ▾` value to apply. It is shell view state, not a registry command.
+        if let Some(name) = id.strip_prefix("select:") {
+            match SelectFilter::parse(name) {
+                Some(filter) => self.set_select_filter(filter, cx),
+                None => self.console_line(format!("select: unknown filter {name:?}"), cx),
+            }
+            return;
+        }
         // A provider row is generated chrome, not a registry command: its id names
         // the feature and backend to switch to.
         if let Some(rest) = id.strip_prefix("ferrocad-provider:") {
@@ -313,11 +322,10 @@ impl Shell {
         // agree) and opens the HUD in the same run.
         if let Some(mode) = outcome.gizmo.clone() {
             if mode != ferrocad_stage::WORKPLANE_OFFSET_ID {
-                // A verb is an explicit request for the **body** control, so it
-                // overrides the rule that a claimed sub-element hides the shared
-                // triad (workplanes note, §3.3.3). Re-arm so the triad appears even
-                // when the mode did not change.
-                self.transform_verb = true;
+                // A verb is an explicit request for the **body** control: it equips
+                // Slot 1, whose hand is the triad, so a claimed sub-element cannot
+                // keep the handles. Re-arm even when the mode did not change.
+                self.set_loadout_slot(Slot::Move, cx);
                 self.set_gizmo_mode(&mode, cx);
                 self.rearm_selection(cx);
             }
@@ -667,9 +675,9 @@ impl Shell {
         };
         let status = tool.status();
         self.active_tool = Some(id.to_string());
-        // A tool session owns the pointer, so an explicit body-transform request does not
-        // outlive it: the handles go back to their inferred default when it ends.
-        self.transform_verb = false;
+        // A tool session owns the pointer, but it is not a loadout change: the hand the
+        // user equipped is still there when the tool ends, so the handles come back as
+        // the slot defines them.
         self.model.lock().unwrap().tool = status.is_active().then_some(status);
         let mut pending = None;
         if let Some(viewport) = self.viewport.clone() {

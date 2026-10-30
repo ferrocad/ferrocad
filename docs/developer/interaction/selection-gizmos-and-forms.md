@@ -75,6 +75,14 @@ command/dialog protocol).
   multi-selection; it remains part of it.
 - The selection is the *only* thing a command reads through
   `FreeCADGui.Selection`. It is pushed before command enablement is listed.
+- **Topology filter (U4, built 2026-10-31).** The active loadout slot presets a
+  `SelectFilter` (`Auto`/`Body`/`Face`/`Edge`; see
+  [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md)). The filter
+  is applied where the shell **reports** the selection, not at the pick: `Body` rewrites
+  `Face6` to its whole body, while `Auto`/`Face`/`Edge` keep the element. Hover and
+  snapping still see the sub-element. The header's `Select ▾` overrides the slot's
+  preset; the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet]` bar and `1`/`2`/`3`
+  equip the slot.
 
 ### 2.2 Context target (the wheel)
 
@@ -381,14 +389,18 @@ grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
 | HUD clamp + freeze | `place_hud`, `clamp_hud`, `dialog_overlay` (`on_children_prepainted`) | `a_floating_hud_is_clamped_into_the_safe_area`, `a_focused_floating_hud_freezes_in_place` |
 | selection-scoped form | `Shell::replace_selection`, `Shell::refresh` | `a_selection_change_closes_the_move_hud`, `a_competing_interaction_closes_the_move_hud` |
 | grip follows preview | `Manipulator::{anchor, set_anchor}` | `a_typed_preview_moves_the_gizmo_and_the_grips`, `a_grip_anchor_follows_the_object` |
+| topology filter (U4, 2026-10-31) | `shell/loadout.rs`, `Shell::replace_selection` | `a_face_click_selects_the_body_in_the_move_slot`, `the_slot_sets_the_filter_and_select_overrides_it`, `a_scripted_selection_reaches_the_shell` (with `Select: Auto`) |
+| loadout host + chrome (U4, 2026-10-31) | `Shell::arm`, `chrome::{loadout_bar, select_button}` | `the_loadout_bar_renders_and_equips_a_slot`, `the_wheel_verbs_equip_the_move_slot`, `switching_the_slot_commits_a_pending_drag_first`, `a_face_click_in_the_move_slot_arms_only_the_triad` |
 
 ## 10. Open decisions
 
 - **Sub-element gizmos.** The event carries the anchor and the element, but the generic
   gizmo targets a whole object and `GizmoCommitEvent` does not name the element. Face
   push-pull / UV translation needs a target-aware interaction commit (and a workbench
-  that accepts it). Until then, a face selection gets the workbench manipulator, not
-  the triad.
+  that accepts it). Until then, the **loadout** decides (U4): Slot 1's `Body` filter
+  reports the whole body and arms the triad; Slot 2 keeps the face and arms the
+  workbench manipulator. A face-scoped *transform* (the triad acting on `Face6`) is
+  still not built.
 - **Anchor orientation.** `SelectionAnchor.normal` is carried but the triad stays
   world-aligned; aligning a face gizmo to its normal is available once the
   sub-element commit exists.

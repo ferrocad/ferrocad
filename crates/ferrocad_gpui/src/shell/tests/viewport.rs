@@ -469,6 +469,11 @@ fn a_selected_face_becomes_the_workplane(cx: &mut TestAppContext) {
     });
 
     // Select the face exactly as a single click does (the pick carries the element).
+    // The workplane command needs the face, so ask for the face scope: the default
+    // `Select: Body` filter would report the whole slab.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_select_filter(SelectFilter::Face, cx));
+    });
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             shell.replace_selection(
@@ -640,8 +645,42 @@ fn click_select(cx: &mut VisualTestContext, shell: &Entity<Shell>, reference: fe
     });
 }
 
-/// W1 §3.3: a sub-element that a manipulator claims owns the handles, so the shared body
-/// triad steps aside. Skips without a GPU adapter.
+/// U4: Slot 1 is the body hand. A face click is reported as the whole body, so the
+/// face-claiming manipulator is never offered and only the triad arms. Skips without a
+/// GPU adapter.
+#[gpui::test]
+fn a_face_click_in_the_move_slot_arms_only_the_triad(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.slot()),
+        Slot::Move,
+        "the app starts in the body hand"
+    );
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Face2"),
+    );
+    cx.update(|_window, cx| {
+        let viewport = shell.read(cx).viewport.clone().unwrap();
+        let viewport = viewport.read(cx);
+        assert!(
+            !viewport.gizmos().is_empty(),
+            "Slot 1 arms the body triad"
+        );
+        assert!(
+            viewport.manipulators().is_empty(),
+            "the face stem is unoffered in the Move hand"
+        );
+    });
+}
+
+/// W1 §3.3 → U4: Slot 2 hosts only the selection's manipulator, so a claimed face
+/// arms the stem and the shared body triad is absent. Skips without a GPU adapter.
 #[gpui::test]
 fn a_claimed_sub_element_suppresses_the_shared_body_triad(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -649,6 +688,9 @@ fn a_claimed_sub_element_suppresses_the_shared_body_triad(cx: &mut TestAppContex
     let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
         return;
     };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::PushPull, cx));
+    });
     click_select(
         &mut cx,
         &shell,
@@ -659,7 +701,7 @@ fn a_claimed_sub_element_suppresses_the_shared_body_triad(cx: &mut TestAppContex
         let viewport = viewport.read(cx);
         assert!(
             viewport.gizmos().is_empty(),
-            "the face's stem owns the handles, so the body triad yields"
+            "Slot 2 hosts the stem, not the body triad"
         );
         assert_eq!(
             viewport.manipulators().len(),
@@ -669,15 +711,19 @@ fn a_claimed_sub_element_suppresses_the_shared_body_triad(cx: &mut TestAppContex
     });
 }
 
-/// W1 §3.3.2: an element **no** manipulator claims keeps the body triad, so a click never
-/// leaves the user without handles. Skips without a GPU adapter.
+/// U4: the loadout replaced the claim-heuristic fallback. In Slot 2 an element no
+/// manipulator claims leaves the hand empty (press `1` for the triad); it does not
+/// silently arm the body control. Skips without a GPU adapter.
 #[gpui::test]
-fn an_unclaimed_sub_element_keeps_the_body_triad(cx: &mut TestAppContext) {
+fn an_unclaimed_sub_element_leaves_the_face_slot_empty(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell();
     let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
         return;
     };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::PushPull, cx));
+    });
     click_select(
         &mut cx,
         &shell,
@@ -687,15 +733,18 @@ fn an_unclaimed_sub_element_keeps_the_body_triad(cx: &mut TestAppContext) {
         let viewport = shell.read(cx).viewport.clone().unwrap();
         let viewport = viewport.read(cx);
         assert!(
-            !viewport.gizmos().is_empty(),
-            "an unclaimed element falls back to the body triad"
+            viewport.gizmos().is_empty(),
+            "Slot 2 never falls back to the body triad"
         );
-        assert!(viewport.manipulators().is_empty());
+        assert!(
+            viewport.manipulators().is_empty(),
+            "nothing claims an edge face-manipulator slot"
+        );
     });
 }
 
-/// W1 §3.3.3: `Move` is an explicit request for the body control, so it arms the triad
-/// even while a face is selected. Skips without a GPU adapter.
+/// U4: `Move` equips Slot 1, so it arms the triad even while a face is selected.
+/// Skips without a GPU adapter.
 #[gpui::test]
 fn a_move_verb_arms_the_body_triad_on_a_face_selection(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -703,27 +752,37 @@ fn a_move_verb_arms_the_body_triad_on_a_face_selection(cx: &mut TestAppContext) 
     let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
         return;
     };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::PushPull, cx));
+    });
     let face = ferrocad_geom::SelectionRef::element(7, "Face2");
     click_select(&mut cx, &shell, face);
     cx.update(|_window, cx| {
-        assert!(shell
-            .read(cx)
-            .viewport
-            .as_ref()
-            .unwrap()
-            .read(cx)
-            .gizmos()
-            .is_empty());
+        let viewport = shell.read(cx).viewport.clone().unwrap();
+        assert!(
+            viewport.read(cx).gizmos().is_empty(),
+            "the face hand has no triad"
+        );
+        assert_eq!(
+            viewport.read(cx).manipulators().len(),
+            1,
+            "the face hand hosts the stem"
+        );
     });
 
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| shell.run_command("App_Move", cx))
     });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.slot()),
+        Slot::Move,
+        "Move equips the body hand"
+    );
     cx.update(|_window, cx| {
         let viewport = shell.read(cx).viewport.clone().unwrap();
         assert!(
             !viewport.read(cx).gizmos().is_empty(),
-            "the verb overrides the element suppression"
+            "the verb arms the triad"
         );
     });
 }

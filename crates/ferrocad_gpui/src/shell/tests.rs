@@ -164,6 +164,64 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
+/// The undo depth of the active document.
+fn undo_count() -> usize {
+    let result = crate::python::evaluate("FreeCAD.ActiveDocument.getAvailableUndos()")
+        .expect("read the undo count");
+    assert!(result.ok, "{}", result.output);
+    result.output.trim().parse().expect("an integer undo count")
+}
+
+/// A windowed shell with a selected real object and a stage whose entity 7 is it.
+///
+/// The base app links no viewport/workbench, so `arm` cannot build a triad headlessly.
+/// `ShellModel::gizmo_armed` is the shell's own "a TransformGizmo is hosted" state and
+/// is what the key path consults. The stage gives a transform session its datum.
+fn armed_window(
+    cx: &mut TestAppContext,
+) -> (VisualTestContext, Entity<Shell>, Arc<Mutex<ShellModel>>) {
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut visual).unwrap();
+    let mesh: StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Params",
+            "positions": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            "triangles": [0, 1, 2],
+            "triangle_parts": [0, 0, 0],
+            "edges": [],
+            "parts": []
+        }"#,
+    )
+    .expect("the test mesh");
+    visual.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let stage = shell.display.build(vec![mesh]);
+            shell.set_stage(stage, cx);
+            shell.select("Params", cx);
+            shell.model.lock().unwrap().gizmo_armed = true;
+        });
+    });
+    draw(&mut visual);
+    (visual, shell, model)
+}
+
+/// Put the keyboard on the shell root and press `keys`.
+fn press_root(cx: &mut VisualTestContext, shell: &Entity<Shell>, keys: &str) {
+    let root = shell.read_with(&*cx, |shell, _| shell.root_focus.clone());
+    cx.update(|window, cx| window.focus(&root, cx));
+    cx.simulate_keystrokes(keys);
+    draw(cx);
+}
+
 /// Click the centre of the element with `selector` (it must have been drawn).
 fn click_at(cx: &mut VisualTestContext, selector: &'static str) {
     let bounds = cx
@@ -269,3 +327,4 @@ mod viewport;
 
 mod picking;
 mod escalation;
+mod loadout;

@@ -66,6 +66,9 @@ mod forms;
 mod picking;
 mod pill;
 mod properties;
+mod loadout;
+
+pub(crate) use loadout::{Loadout, SelectFilter, Slot};
 
 
 mod render;
@@ -373,12 +376,10 @@ pub struct Shell {
     /// setting: it survives re-selection and re-arming, and a `Move` resets it to
     /// translate because that command's fields describe a translation.
     gizmo_mode: GizmoMode,
-    /// Whether the user has explicitly asked for a **body** transform since the last
-    /// selection change (`Move`, `Rotate`). The shared body triad yields to a claimed
-    /// sub-element handle by default (a face's extrude stem, an edge's fillet arc); a
-    /// verb is an explicit request for the body control, so it overrides the default
-    /// until the selection changes or a tool starts. Not a document property.
-    transform_verb: bool,
+    /// The active tool loadout (U4): the slot in the user's hand and the topology
+    /// filter both the bottom-left bar and the header's `Select ▾` write. View state,
+    /// not a document property.
+    loadout: Loadout,
     /// The session pivot the user dragged the origin handle to. It is applied instead of
     /// the object origin while set; it is not undoable and not a document property. A
     /// selection change or a wheel promotion clears it, and `Esc` restores the object
@@ -763,7 +764,7 @@ impl Shell {
             gpu_notice_dismissed: false,
             settings_card: None,
             gizmo_mode: GizmoMode::Translate,
-            transform_verb: false,
+            loadout: Loadout::default(),
             user_origin: None,
             row_popup: None,
             scrub: None,
@@ -984,6 +985,23 @@ impl Shell {
             {
                 return true;
             }
+        }
+        // The loadout slots: `1`/`2`/`3` equip Move / Push-Pull / Fillet. They sit
+        // below the pill path (a digit typed into a compact readout belongs to the
+        // typing) and above the gizmo escalation below, so `2` on an armed triad
+        // equips the face hand instead of seeding the Move HUD with 2. Typing a value
+        // that starts with a slot digit therefore begins with `Tab`.
+        if !editing
+            && !self.modal_open()
+            && self.active_tool.is_none()
+            && !self.wheel.read(cx).is_open()
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && let Some(slot) = Slot::from_key(&event.keystroke.key)
+        {
+            self.set_loadout_slot(slot, cx);
+            return true;
         }
         // Space in the **tree** window toggles the selected object's `Visibility`
         // (the tree is a Dev Tools pane, so its key press has `cancel_dialog` set).
@@ -1617,11 +1635,15 @@ impl Render for Shell {
                         self.grid_summary.as_ref(),
                         self.axis_summary.as_ref(),
                         workplane.as_ref(),
+                        self.loadout,
                         self.open_popover.as_deref(),
                         self.popover_anchor,
                         cx,
                     )),
             )
+            // The hand is visible over the canvas, bottom-left, on the dock's baseline:
+            // the loadout is switchable by key, click and the wheel alike.
+            .child(crate::chrome::loadout_bar(self.loadout, cx))
             // Swap, do not stack: while a session runs the bottom-centre slot shows
             // the tool surface, so a second command cannot be started underneath it.
             .child(match active_tool {

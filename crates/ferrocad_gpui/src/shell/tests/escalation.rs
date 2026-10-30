@@ -2,58 +2,6 @@
 
 use super::*;
 
-/// A windowed shell with a selected object and the gizmo "armed".
-///
-/// The base app links no viewport/workbench, so `arm` cannot build a triad headlessly.
-/// `ShellModel::gizmo_armed` is the shell's own "a TransformGizmo is hosted" state and
-/// is what the key path consults.
-fn armed_window(
-    cx: &mut TestAppContext,
-) -> (VisualTestContext, Entity<Shell>, Arc<Mutex<ShellModel>>) {
-    let model = boot_shell();
-    let window = cx.update(|cx| {
-        let model = model.clone();
-        cx.open_window(Default::default(), move |_window, cx| {
-            cx.new(|cx| Shell::from_model(model.clone(), cx))
-        })
-        .unwrap()
-    });
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    let shell: Entity<Shell> = window.root(&mut visual).unwrap();
-    // A stage gives the session its datum: the pill opens one from `last_stage`, and a
-    // drag tick needs it to publish the pending value.
-    let mesh: StageMesh = serde_json::from_str(
-        r#"{
-            "entity": 7,
-            "object": "Params",
-            "positions": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            "triangles": [0, 1, 2],
-            "triangle_parts": [0, 0, 0],
-            "edges": [],
-            "parts": []
-        }"#,
-    )
-    .expect("the test mesh");
-    visual.update(|_window, cx| {
-        shell.update(cx, |shell, cx| {
-            let stage = shell.display.build(vec![mesh]);
-            shell.set_stage(stage, cx);
-            shell.select("Params", cx);
-            shell.model.lock().unwrap().gizmo_armed = true;
-        });
-    });
-    draw(&mut visual);
-    (visual, shell, model)
-}
-
-/// Put the keyboard on the shell root and press `keys`.
-fn press_root(cx: &mut VisualTestContext, shell: &Entity<Shell>, keys: &str) {
-    let root = shell.read_with(&*cx, |shell, _| shell.root_focus.clone());
-    cx.update(|window, cx| window.focus(&root, cx));
-    cx.simulate_keystrokes(keys);
-    draw(cx);
-}
-
 /// The focus handle of a dialog field by position.
 fn axis_focus(shell: &Entity<Shell>, index: usize, cx: &VisualTestContext) -> FocusHandle {
     shell

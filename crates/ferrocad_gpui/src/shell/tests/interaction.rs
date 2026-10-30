@@ -197,9 +197,10 @@ fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
 
     shell.update(cx, |shell, cx| shell.select("Params", cx));
     shell.update(cx, |shell, cx| shell.run_command("App_Move", cx));
-    assert!(
-        shell.read_with(cx, |shell, _| shell.transform_verb),
-        "Move is an explicit body-control request"
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.loadout.slot()),
+        Slot::Move,
+        "Move equips the body hand"
     );
     assert!(
         shell.read_with(cx, |shell, _| shell.dialog.is_some()),
@@ -211,16 +212,19 @@ fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
         shell.read_with(cx, |shell, _| shell.dialog.is_none()),
         "the HUD closes on accept"
     );
-    assert!(
-        shell.read_with(cx, |shell, _| shell.transform_verb),
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.loadout.slot()),
+        Slot::Move,
         "the triad stays armed on the object that was just moved"
     );
 
-    // A new selection re-arms the handles normally.
+    // A new selection keeps the hand: the loadout is a tool choice, not a selection
+    // property.
     shell.update(cx, |shell, cx| shell.select("Params", cx));
-    assert!(
-        !shell.read_with(cx, |shell, _| shell.transform_verb),
-        "a new selection is a new session"
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.loadout.slot()),
+        Slot::Move,
+        "a new selection does not change the hand"
     );
 }
 

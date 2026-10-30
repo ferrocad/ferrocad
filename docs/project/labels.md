@@ -16,10 +16,10 @@ owner a label belongs to.
 | --- | --- | --- |
 | `S1` | the app-shell skeleton · the SimpleCAD headless baseline · the lineage type extraction · the settings schema | the note's subject; `S1` alone is ambiguous |
 | `S4` | SimpleCAD interaction parity · app-shell property editor · Coin events + pick · lineage provenance | the note's subject |
-| `P4` | the constraints/sketches section of the current backlog · the SimpleCAD section of the 2026-10-27 backlog | always cite the backlog date: `TODO-29 P4` is not `TODO-27 P4` |
+| `P4` | the constraints/sketches section of the current backlog · the SimpleCAD section of the 2026-10-27 backlog | always cite the backlog date: `TODO-30 P4` is not `TODO-27 P4` |
 | `P2` | the solids/booleans/Draft section of the current backlog · the workbench-platform section of the 2026-10-27 backlog · the Python feature-proxy slices (`P2a`–`P2e`) · the architecture slices (`P2.1`–`P2.5`) | the suffix or the backlog date; bare `P2` is the current backlog section |
 | `P1` | the minimum-SimpleCAD-API section of the current backlog · the OCCT seam tail in the 2026-10-27 backlog | cite the backlog date |
-| `SK1`–`SK6` | the free-sketcher slices in the current backlog ([`TODO-29-10-2026.md`](TODO-29-10-2026.md) §P1) | `SK` is sketch-only; not SimpleCAD's `S1`–`S5` |
+| `SK1`–`SK6` | the free-sketcher slices in the current backlog ([`TODO-30-10-2026.md`](TODO-30-10-2026.md) §P4) | `SK` is sketch-only; not SimpleCAD's `S1`–`S5` |
 | `D0` | the headless Draft import task | there is only one `D0` |
 | `D1` | Dev Tools window slice · NaviCube GPUI slice · MVP demo slice | the note's subject |
 | `T4` | the stage G-buffer pick pass · the toolbar-chrome slice · the spatial transactor | the note's subject |
@@ -44,7 +44,7 @@ owner a label belongs to.
 | `H1` | [`ROADMAP.md`](ROADMAP.md) | Finish Part/OCCT honestly: zero Part failures and no “not implemented” in the advertised seam. | ✅ (optional alias counts only) |
 | `H2` | [`ROADMAP.md`](ROADMAP.md) | The workbench platform: Python feature proxies, Draft M2–M5, the Qt-free tool layer. | ◐ |
 | `H3` | [`ROADMAP.md`](ROADMAP.md) | Proof by use: SimpleCAD, a published edition, a BIM subset. | ◐ |
-| `P0`–`P6` | the active backlog ([`TODO-29-10-2026.md`](TODO-29-10-2026.md)) | Section priorities, reused on every rotation. `P0` is the element-map/naming priority in old backlogs; the current sections start at `P1`. Always cite the backlog date. | the current backlog is open; older `P*` are ⊘ history |
+| `P0`–`P6` | the active backlog ([`TODO-30-10-2026.md`](TODO-30-10-2026.md)) | Section priorities, reused on every rotation. `P0` is the element-map/naming priority in old backlogs; the current sections start at `P1`. Always cite the backlog date. | the current backlog is open; older `P*` are ⊘ history |
 | `P0.5`, `P0.6`, `P0.7`, `P0.8` | [`record/TODO-22-10-2026.md`](record/TODO-22-10-2026.md) | Numbered items in the 2026-10-22 backlog (Dev Tools, chrome, settings, event routing). Not the same as a `P0` section. | ⊘ |
 | `M0`–`M4` | [`record/milestones.md`](record/milestones.md) | Project phases: M0 hello-world, M1/M2 the core and Python surface, M3 the binding inventory and conformance, M4 the App/Base surface (16 slices). | ✅ |
 

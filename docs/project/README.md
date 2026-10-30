@@ -11,7 +11,7 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
 ## Where to start
 
 - [ROADMAP.md](ROADMAP.md) — the three horizons and their exit criteria.
-- [TODO-29-10-2026.md](TODO-29-10-2026.md) — the active backlog.
+- [TODO-30-10-2026.md](TODO-30-10-2026.md) — the active backlog.
 - [labels.md](labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which
   program owns it.
 - [direction/rewrite-strategy.md](direction/rewrite-strategy.md) — the authoritative
@@ -32,8 +32,9 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
   Python UI research, the grid-overlay fixture and the SimpleCAD bring-up.
 - [record/](record/) — closed history: compact milestones, closed backlogs, closed task
   specs, incidents, and `archive/` for the full detail.
-- [tasks/](tasks/) — active task specs. There are none today; the backlog tracks the
-  work, and finished specs move to [`record/tasks/`](record/tasks/README.md).
+- [tasks/](tasks/) — active task specs (the workplane hierarchy, the polyline/HUD spec and
+  the stroke-unit decision); the backlog tracks the work, and finished specs move to
+  [`record/tasks/`](record/tasks/README.md).
 - [documentation.md](documentation.md) — the documentation decision: audiences,
   Diátaxis, rustdoc-first and the folder rules behind this layout.
 

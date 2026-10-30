@@ -1,6 +1,6 @@
 # Milestones — high-level history
 
-Status: record (compact, 2026-10-27). This page is the timeline and the current
+Status: record (compact, 2026-10-30). This page is the timeline and the current
 assessment. The per-slice detail — every slice's design, measurements and follow-ups —
 is archived in
 [`archive/milestones-detail-2026-10.md`](archive/milestones-detail-2026-10.md). The
@@ -27,8 +27,12 @@ labels are disambiguated in [`../labels.md`](../labels.md).
 | 2026-10-26 | **Mesh and SimpleCAD S1** | `ferrocad_mesh`, `ferrocad_mesh_py`, `Part.Shape.tessellate`, `BOPTools.SplitAPI`; the first 88-module SimpleCAD baseline and the one-extension packaging fix. |
 | 2026-10-27 | **Part breadth, Draft M3, gizmo set** | The Part shape-member batch (`isInside`, `hashCode`, tolerance family, `Shape.read`, `exportStl`, …), Draft M3's first slice, the gizmo **set** host with session re-narrowing, the `.FCStd` mesh member, and the S2–S3 SimpleCAD baseline (**702/44/368/2**, 88/88). |
 | 2026-10-27 (in the tree) | **Fifth fan-out** | SimpleCAD S4.1 view facade, S4.2 ranked pick, S4.3 `SelectionObject`; the Draft M4 import round (`test_modification` **31/0/2**); the Part `part_ops` batch (248/408); the offscreen snapshot path, the `ferrocad_snapshot` renderer and the `tools/screenshot.py` viewport/chrome/desktop scopes, and the first user-doc images with a spec/PNG manifest; the Draft conformance harness. Uncommitted; the full suite is **631/3/4**, and the three failures are test expectations the round has not updated. |
+| 2026-10-29/30 | **Workplanes, datum planes and the grid** | The world plane as a real state and `WP` as a selector, three-point pick, `Part::DatumPlane` and `Save as datum plane`, the offset stem, the workplane carried in the program frame, adaptive grid spacing with a minor style and stroke widths, in-flight polyline vertex editing with one active-action HUD and a creating `finish`; four grid defects fixed with regression tests. SimpleCAD **969/64/26/2** over 88/88; Rust lib tests **1169** ([round log](2026-10-29-workplane-visual-hierarchy-and-grid.md)). |
 
-## Current state (2026-10-27)
+## Current state (2026-10-27 baseline)
+
+The 2026-10-27 snapshot below is kept as the delta's starting point; the current numbers
+are in [`TODO-29-10-2026.md`](TODO-29-10-2026.md) §0 (2026-10-30).
 
 | Surface | Then | Now |
 | --- | --- | --- |
@@ -81,6 +85,11 @@ breadth, not more Part surface for its own sake.
 
 ## Where the detail lives
 
+- [`TODO-29-10-2026.md`](TODO-29-10-2026.md) — the closed 2026-10-29 backlog and the
+  workplane/grid round's state.
+- [`2026-10-29-workplane-visual-hierarchy-and-grid.md`](2026-10-29-workplane-visual-hierarchy-and-grid.md)
+  — the round log: what landed, the four grid defects and their mechanisms, the deferred
+  stroke-unit decision, and the measurements at close.
 - [`TODO-27-10-2026.md`](TODO-27-10-2026.md) — the closed 2026-10-27 backlog and the fifth
   to eighth rounds' state.
 - [`TODO-26-10-2026.md`](TODO-26-10-2026.md) — the compact closed 2026-10-25/27 record;

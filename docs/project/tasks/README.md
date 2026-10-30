@@ -14,7 +14,7 @@ tool-strip/floating-form presentation with one dielectric active-action surface.
 
 Every other spec written so far has landed and moved to
 [`../record/tasks/`](../record/tasks/README.md); the open
-work is tracked in [`../TODO-29-10-2026.md`](../TODO-29-10-2026.md) and the standing
+work is tracked in [`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) and the standing
 design notes under `architecture/`, `interaction/`, `viewport/` and `workbenches/`.
 
 A new spec belongs here when work is large enough to need its own design, checklist and

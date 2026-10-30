@@ -190,6 +190,7 @@ of the flag. Clearing the claim (`false`, the default) restores the native drawi
 | Colour | `#94A3B8` | `#94A3B8` |
 | Alpha at the origin | 0.15 | minor 0.15, major 0.30 |
 | Extent | disc of radius `R_max` around the camera pivot | the parent face's extent, or `R_max` for a datum |
+| Minor extent | clipped to what the dot field or line lattice can afford (`minor_radius`); the pitch never changes | same |
 | Depth | normal depth test | coplanar + `WIRE_DEPTH_BIAS` |
 
 **Radial falloff.** Every grid vertex carries
@@ -202,14 +203,21 @@ with `FADE_START = 0.55`: full alpha out to `0.55 · R_max`, then a cubic smooth
 falloff to zero at `R_max`. The flat inner disc keeps the near field readable, and
 the smooth band removes the visible ring where a linear fade met the rim; beyond
 `R_max` there is nothing to draw, so the horizon does not end on a hard line. `R_max` is
-`2.5 × max(|eye − pivot|, scene radius)`, clamped to 0.5–5 m; the grid is regenerated
-only when the pivot moves by more than 10 % of `R_max` (not every frame).
+`2.5 × max(|eye − pivot|, scene radius)`, clamped to `RADIUS_RANGE` (**1 mm – 5 m**); the
+low bound is deliberately tiny so a small part's grid is not forced onto a disc whose
+adaptive step would then be coarser than the part. The grid is regenerated only when the
+pivot moves by more than 10 % of `R_max` (not every frame).
 
-**Screen-space culling.** Below ~4 px of projected spacing a level is dropped, and the
-surviving step is the next decade (`10 → 100`). This is what keeps a top-down
-orthographic view crisp and a low-angle horizon view from turning into moiré: at a low
-pitch the ground grid naturally compresses into a thin band, and the falloff closes it
-off.
+**Screen-space culling.** Below ~4 px of projected spacing (`MINOR_PIXELS`) a level cannot
+be resolved. The **major** lattice climbs by decades (`MAX_PROMOTIONS = 12`) until it is
+resolvable; the **minor** level is coarsened up the 1-2-5 ladder (`coarser_step`) to the
+smallest resolvable step, and collapses onto the major only when nothing finer draws. The
+**extent rules never touch the pitch**: with `adaptive` off the configured pair is what is
+drawn, a level that would be too dense is clipped in *extent* (`minor_radius`: 512
+columns of lines, 112 of dots) rather than coarsened or dropped, and the ~4 px cull above
+is the only rule that can still promote a level. That distinction is what keeps a far zoom
+from changing the subdivisions the user set, while a top-down orthographic view stays
+crisp and a low-angle horizon view does not turn into moiré.
 
 ### 3.3 Active workplane grid
 

@@ -1332,6 +1332,12 @@ and the wrapped-text case pass that did not before. The one remaining wrap error
 different check — `FlatMap.to_surface` returning `None` for a drawing that crosses the
 seam — so it is not a projection problem.
 
+**2026-10-30 — re-measured at the `TODO-29` close (`TODO-30 P1`).** Same command, same
+checkouts, after the workplane/datum-plane/grid round: **969 passed, 64 failed, 26
+errored, 2 skipped, 0 load errors**, identical to the run above. The round added a document
+object type and a grid rewrite, neither of which SimpleCAD exercises, so an unchanged
+baseline is the expected result and is recorded as such rather than as a no-op.
+
 ---
 
 ## 8. Draft vs SimpleCAD

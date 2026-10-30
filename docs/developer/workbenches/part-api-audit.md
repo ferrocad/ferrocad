@@ -97,10 +97,10 @@ the same trees produce byte-identical JSON.
   classes we do not expose at all.
 - `coverage.methods` — the headline number: how many of upstream's distinct
   declared names exist on at least one of our Python classes, the fraction, and
-  the shared-class count. At the 2026-10-27 worktree pin it is **248 of 408 names
-  (60.8%) across 21 shared classes**; the per-class gaps are the SimpleCAD/Draft work
-  list. The previous committed pin was 220/408 (53.9%); always say which tree and which
-  extension build produced the figure.
+  the shared-class count. At the 2026-10-30 pin it is **252 of 408 names
+  (61.8%) across 21 shared classes**; the per-class gaps are the SimpleCAD/Draft work
+  list. Earlier pins were 248/408 (60.8%) and 220/408 (53.9%); always say which tree and
+  which extension build produced the figure.
 - `extra` — our names that upstream does not have in `Part/App` (for example
   `App::Link*`, `Sketcher::SketchObject`, `PartDesign::Body`, `Part.Precision`).
 - `ours.gap_markers` — every honest gap, with `file:line`, kind and source text.

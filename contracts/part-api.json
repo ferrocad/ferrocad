@@ -1275,9 +1275,9 @@
         "crates/ferrocad_part/src",
         "crates/ferrocad_part_py/src"
       ],
-      "files": 14,
-      "constants": 38,
-      "registered": 39,
+      "files": 15,
+      "constants": 39,
+      "registered": 40,
       "names": [
         "App::Link",
         "App::LinkElement",
@@ -1290,6 +1290,7 @@
         "Part::Cone",
         "Part::Cut",
         "Part::Cylinder",
+        "Part::DatumPlane",
         "Part::Extrusion",
         "Part::Feature",
         "Part::FeaturePython",
@@ -1330,6 +1331,7 @@
         "CONE_TYPE": "Part::Cone",
         "CUT_TYPE": "Part::Cut",
         "CYLINDER_TYPE": "Part::Cylinder",
+        "DATUM_PLANE_TYPE": "Part::DatumPlane",
         "ELEMENT_TYPE": "App::LinkElement",
         "EXTRUSION_TYPE": "Part::Extrusion",
         "FEATURE_PYTHON_TYPE": "Part::FeaturePython",
@@ -3429,49 +3431,49 @@
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 8593,
+          "line": 8647,
           "text": "\"Part.{what} is not available in this slice (the seam exposes no such query)\""
         },
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9092,
+          "line": 9146,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 33,
+          "line": 34,
           "text": "//! `NotImplementedError` rather than a silent `None`: an infinite `Line` has no"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 51,
+          "line": 52,
           "text": "PyException, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 4844,
+          "line": 4845,
           "text": "PyNotImplementedError::new_err(format!("
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 4854,
+          "line": 4855,
           "text": "/// `NotImplementedError`."
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9805,
+          "line": 9859,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9813,
+          "line": 9867,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
@@ -3507,7 +3509,7 @@
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 3719,
+          "line": 3728,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
@@ -3593,7 +3595,6 @@
       "Part::CustomFeaturePython",
       "Part::Datum",
       "Part::DatumLine",
-      "Part::DatumPlane",
       "Part::DatumPoint",
       "Part::Ellipse",
       "Part::Ellipsoid",

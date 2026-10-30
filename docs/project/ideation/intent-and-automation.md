@@ -185,7 +185,7 @@ measured market fact.
 ## 6. A FerroCAD-specific roadmap
 
 These are product phases for the thesis. They do not replace the sequenced work in the
-[TODO backlog](../TODO-29-10-2026.md) or the horizons in the [roadmap](../ROADMAP.md).
+[TODO backlog](../TODO-30-10-2026.md) or the horizons in the [roadmap](../ROADMAP.md).
 
 ### Phase 1 — Make the familiar layer excellent
 

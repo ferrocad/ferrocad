@@ -4,7 +4,7 @@ Status: ideation (2026-10-29). Exploratory product ideas. Nothing here is a
 commitment, a roadmap, or an accepted design. Companion to [`README.md`](README.md), [`freecad-pain-points.md`](freecad-pain-points.md) (section 6),
 [`intent-and-automation.md`](intent-and-automation.md),
 [`app-shell-vision.md`](../direction/app-shell-vision.md), the
-[backlog](../TODO-29-10-2026.md) and the
+[backlog](../TODO-30-10-2026.md) and the
 [developer architecture](../../developer/architecture.md).
 
 Freeform modelling is the place where FreeCAD's answers are spread across the most

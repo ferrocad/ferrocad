@@ -29,7 +29,7 @@ folders are what `tools/build_book.py` publishes at
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
 | drive `FreeCAD` from another program | [mods/README.md#the-json-boundary-for-automated-clients](mods/README.md#the-json-boundary-for-automated-clients) and [python-api/ferrocad_shell.md](python-api/ferrocad_shell.md) |
 | change FerroCAD | [developer/README.md](developer/README.md) and [developer/architecture.md](developer/architecture.md) |
-| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-29-10-2026.md](project/TODO-29-10-2026.md) |
+| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-30-10-2026.md](project/TODO-30-10-2026.md) |
 | find what a label means | [project/labels.md](project/labels.md) |
 
 ## General concepts
@@ -170,7 +170,7 @@ than deleted.
 
 - [project/README.md](project/README.md) — the folder landing page, reading order and the record rule.
 - [project/ROADMAP.md](project/ROADMAP.md) — the three horizons and their exit criteria.
-- [project/TODO-29-10-2026.md](project/TODO-29-10-2026.md) — the active backlog: the minimum SimpleCAD surface, solids and booleans, surface/subdivision, and constraints with a bound solver.
+- [project/TODO-30-10-2026.md](project/TODO-30-10-2026.md) — the active backlog: the minimum SimpleCAD surface, solids and booleans, surface/subdivision, and constraints with a bound solver.
 - [project/labels.md](project/labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which program owns it.
 
 ### Documentation system
@@ -211,6 +211,8 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Closed history
 
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
+- [project/record/TODO-29-10-2026.md](project/record/TODO-29-10-2026.md) — the closed 2026-10-29 backlog: the workplane hierarchy, datum planes, the grid and the SimpleCAD P1 closure.
+- [project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md](project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md) — the round log for the workplane and grid work, including the four grid defects and their mechanisms.
 - [project/record/TODO-27-10-2026.md](project/record/TODO-27-10-2026.md) — the closed 2026-10-27 backlog: the kernel regimes, the SimpleCAD reconstruction fixes, the Draft import closure and the extension-set/CI split.
 - [project/record/TODO-26-10-2026.md](project/record/TODO-26-10-2026.md) — the closed 2026-10-26 backlog: the interaction/gizmo layer, Draft, SimpleCAD and Mesh.
 - [project/record/TODO-24-10-2026.md](project/record/TODO-24-10-2026.md) — the closed 2026-10-24 backlog: the element map, the OCCT seam, feature proxies and Qt Q0–Q5.
@@ -252,3 +254,4 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
 - [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.
 - [project/tasks/workplanes.md](project/tasks/workplanes.md) — one workplane state (the world plane is a real plane), ephemeral face binding while drawing, and the `WP` menu as plane choices rather than plumbing.
+- [project/tasks/stroke-units.md](project/tasks/stroke-units.md) — the recorded decision that viewport strokes are device pixels, the rejected logical-pixel option, and the plan for reopening it.

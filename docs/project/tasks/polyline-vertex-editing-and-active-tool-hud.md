@@ -7,7 +7,7 @@ entry and the hover rim remain — see §6. Companion to
 (the form/gizmo state machines, §5.2 and §6.1 below),
 [`../../developer/interaction/visual-language.md`](../../developer/interaction/visual-language.md)
 (the dielectric-glass contract), [`../../developer/interaction/transform-ux.md`](../../developer/interaction/transform-ux.md)
-(the gadget/HUD split) and [`../TODO-29-10-2026.md`](../TODO-29-10-2026.md) P4 SK4.
+(the gadget/HUD split) and [`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) P4 SK4.
 
 Two UX defects, one root cause each:
 
@@ -33,8 +33,9 @@ Read from this checkout; the descriptions in the brief that follow are checked a
   available to a tool, so it cannot project its own points to screen space.
 - **The `Tool` trait has three jobs, not four.** `on_event`, `items`, `status`, `cancel`
   (`tool.rs:79`). There is no `finish`: `Enter` ends the session in the host
-  (`crates/ferrocad_gpui/src/shell/dispatch.rs:599`), and — per `TODO-29` — it currently
-  produces no `InteractionCommit`, so finishing draws nothing.
+  (`crates/ferrocad_gpui/src/shell/dispatch.rs:599`), and it produced no `InteractionCommit`,
+  so finishing drew nothing. *(Superseded 2026-10-29: `Tool::finish` exists and returns a
+  creating commit; see §6.)*
 - **Tool visuals are never selectable**, which is the property to preserve:
   `wire_item` sets `with_selectable(false)` (`tool.rs:243`).
 - **The strip is an opaque flex row above the canvas with an accent Cancel.** `tool_strip`

@@ -9,7 +9,7 @@ Companion to
 (frames and the triad), [`../../developer/interaction/visual-language.md`](../../developer/interaction/visual-language.md)
 (the accent/glass tokens), [`polyline-vertex-editing-and-active-tool-hud.md`](polyline-vertex-editing-and-active-tool-hud.md)
 (the active-action surface this shares a slot with) and
-[`../TODO-29-10-2026.md`](../TODO-29-10-2026.md) P4 SK4.
+[`../TODO-30-10-2026.md`](../TODO-30-10-2026.md) P4 SK4.
 
 The workplane should be **invisible when it is the world plane and obvious when it is
 not**. Today it is the reverse: the default state is unrepresented, the only way to
@@ -488,7 +488,7 @@ The four slices, in order (each independently shippable):
    the plane live), the session is a `Shell` field rather than process-global state, and
    `workplane_stem` reaches Python. Evidence: `offsetting_a_workplane_drags_and_types_along_normal`
    and `a_tracked_stem_reports_its_live_total_each_tick`.
-3. **`Part::DatumPlane` — built in the working tree (2026-10-29), with gaps.** A
+3. **`Part::DatumPlane` — landed (2026-10-29), with gaps.** A
    persistent object with `Placement` and `Size`, a derived `Face1`, the `"glass"`
    display opt-in and `Visibility`; `Save as datum plane` (`App_SaveDatumPlane`) creates
    it, superseding §7.6's `Part::Feature` face. Gaps: there is no bespoke normal/tilt
@@ -497,9 +497,10 @@ The four slices, in order (each independently shippable):
    the main window keeps `Space` for the object-verb wheel. Attachment and expressions
    stay a non-goal (§9).
 4. **Coin-grid workplane uniform — built (2026-10-29).**
-   The shader, the `Frame` layout and the host transport are done: `Frame` is 240 B, with
+   The shader, the `Frame` layout and the host transport are done: `Frame` is 256 B, with
    `workplane_origin` (`w` = patch radius), `workplane_u`, `workplane_v` and
-   `workplane_n` at offsets 160/176/192/208; `ferrocad_graphics::WorkplaneFrame` +
+   `workplane_n` at offsets 160/176/192/208, `workplane_steps` at 224 and `grid_stroke` at
+   240; `ferrocad_graphics::WorkplaneFrame` +
    `write_frame_with_workplane` carry it, `ViewSpec::workplane` selects it, and the
    viewport fills it from
    `ActiveWorkplane` with the same `max(3 × extent, 2 × major)` radius (and the same

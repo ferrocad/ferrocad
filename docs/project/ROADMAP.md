@@ -1,7 +1,7 @@
 # FerroCAD roadmap
 
-Status: roadmap (2026-10-29). The actionable backlog is
-[`TODO-29-10-2026.md`](TODO-29-10-2026.md); the measured history is
+Status: roadmap (2026-10-30). The actionable backlog is
+[`TODO-30-10-2026.md`](TODO-30-10-2026.md); the measured history is
 [`record/milestones.md`](record/milestones.md); the letters used below (`H1`, `P4`,
 `S4`, `M3` …) are indexed in [`labels.md`](labels.md).
 
@@ -16,8 +16,9 @@ kernel concern.
 The bottleneck is no longer geometry. It is the **breadth of the workbench API** and the
 **interaction surface** on top of it. The Part audit covers **252 of 408 upstream method
 names (61.8%)**, and the SimpleCAD S4.1–S4.3 view facade, ranked pick and selection object
-are in the tree. SimpleCAD's integrated baseline is **966 passed / 64 failed / 29 errored
-/ 2 skipped over 88/88 modules** (2026-10-27).
+are in the tree. SimpleCAD's integrated baseline is **969 passed / 64 failed / 26 errored
+/ 2 skipped over 88/88 modules** (2026-10-30). The 2026-10-29 round closed the workplane's
+visual hierarchy and the grid: the spatial reference is no longer the visible defect.
 
 ## The three horizons
 

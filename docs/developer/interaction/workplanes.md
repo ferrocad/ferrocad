@@ -3,7 +3,7 @@
 Status: design, built in slices (2026-10-29). The state model, the `WP` menu, the
 three-point pick, the offset gizmo and `Save as datum plane` are built. **W1 — the visual
 hierarchy** (§7–§12: selection, triads, grid extent, hover bloom) landed in `127e131`;
-**W2 — the offset gizmo** and **W3 — `Part::DatumPlane`** are built in the working tree;
+**W2 — the offset gizmo** and **W3 — `Part::DatumPlane`** landed in `0faeb76`;
 **W4 — the Coin-grid workplane uniform** is built end to end, including the
 host→renderer transport (`ViewSpec::workplane` → `write_frame_with_workplane`). W2 and
 W3 keep named gaps (§4.3, §10). See

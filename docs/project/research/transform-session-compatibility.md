@@ -167,8 +167,10 @@ overlay), the *model* half is feasible but has no caller from the shell today (t
 2. **Add `pending` to `Document` and `EditView` as the read path** — additive; do not try to
    make it enforceable in A0 (that needs `object_mut` to become crate-private).
 3. **Make the pending edit reachable from the shell through the facade**, as an opaque handle
-   (`transform_begin/stage/commit/abort`). Without this, A0 has no caller: the shell has no
-   document handle by design (`ferrocad_py` + `python/ferrocad_shell`).
+   (`transform_begin/stage/commit/abort`). Without something like this, A0 has no caller: the
+   shell has no document handle by design (`ferrocad_py` + `python/ferrocad_shell`).
+   **Superseded the same day by D0** (see §8): the commit goes through the existing interaction
+   provider, so no staging call is needed and A0 is deferred rather than extended.
 4. **Give the session a world-space datum and a matrix delta**, not `Placement`: document items
    are world-space with an identity placement, and `origin` is the datum the triad already uses.
 5. **Add `viewport.set_session(Option<Snapshot>)` and delete the viewport's own item-preview
@@ -183,7 +185,7 @@ Plus one deletion, not a change: **`transform_verb`** is subsumed by the loadout
 
 | Stage | Effect of the recon |
 | --- | --- |
-| **A0** | same type work, plus a **Python surface** (item 3) — schedule the facade in A0, not in U1, or the stage has no consumer |
+| **A0** | deferred by D0: the commit is the existing `InteractionCommit`, so nothing needs the core type yet |
 | **A1** | session takes `(origin, delta: Vector3, matrix)` instead of `Placement` (item 4); no `ShapeItem` API change |
 | **A2** | smaller: `set_gizmo_preview` and the item-transform branch die; `preview_home`'s gizmo/manipulator half stays |
 | **A3** | unchanged in scope; the stem/scrubber already preview nothing, so this is mostly the pending edit and a ghost look |

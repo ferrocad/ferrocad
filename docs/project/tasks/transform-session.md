@@ -125,11 +125,15 @@ composed by the viewport, forgotten at commit, and restored by an overlay snapsh
 - Only transforms can preview. A fillet radius, an extrusion length or a sketch point has no
   preview channel at all — `DressUpScrubber` and `PushPullStem` commit to see anything.
 
-### 2.2 `PendingEdit` (new, `ferrocad_core::document::pending`)
+### 2.2 `PendingEdit` — designed, **deferred** (D0)
 
-The type needs a name that is not `pending`: `TransactionManager` already has
-a `pending` meaning "booked but not active" (`document/transaction.rs:96-148`), so either this
-type or that field should be renamed (`StagedEdit` is the obvious pairing).
+This is the general document-side representation of an uncommitted edit: a `staged` map beside a
+captured `base`, no document write, `abort` as a drop, `commit` as one named transaction.
+It is **not on the critical path** and is not built in A1–A3. The reasons are in §6 (D0): the
+commit already goes through the mod layer as an `InteractionCommit`, and nothing in the document
+reads a pending value yet. The design is kept here because it is what the *next* consumer will
+need, and because writing it down is the check that the session is genuinely a special case of
+it rather than a parallel mechanism.
 
 ```rust
 pub struct PendingEdit {
@@ -138,29 +142,11 @@ pub struct PendingEdit {
     base: BTreeMap<(ObjectId, String), Option<Property>>,   // committed values, captured once
     staged: BTreeMap<(ObjectId, String), Property>,         // what the user is changing
 }
-
-impl Document {
-    pub fn begin_pending(&mut self, label: &str) -> PendingId;
-    pub fn stage_property(&mut self, id: PendingId, object: ObjectId, name: &str, value: Property)
-        -> Result<(), String>;
-    pub fn unstage(&mut self, id: PendingId, object: ObjectId, name: &str);
-    pub fn pending(&self, id: PendingId) -> Option<&PendingEdit>;
-    pub fn commit_pending(&mut self, id: PendingId) -> bool;  // one named transaction + one recompute
-    pub fn abort_pending(&mut self, id: PendingId) -> bool;   // drop it; no history entry, no recompute
-}
 ```
 
-Properties:
-
-- **`stage_property` never writes the document**, so there is nothing to undo.
-- **`abort_pending` is a `drop`, not a revert.**
-- **`commit_pending` applies the staged values through the ordinary `set_property` path inside
-  one named transaction**, so the undo entry is created exactly once, with the session's label,
-  at the moment the user confirms.
-- `base` exists both for rollback and for the ghost (it is the value the tape measures *from*).
-- One pending edit is active per document. A second `begin_pending` while one is open commits
-  the first if dirty (invariant 2) — the same rule the UI applies, enforced in the model so no
-  caller can invent a third state.
+When it is built, it needs a name that is not `pending`: `TransactionManager` already has a
+`pending` meaning "booked but not active" (`document/transaction.rs:96-148`), so either this
+type or that field should be renamed (`StagedEdit` is the obvious pairing).
 
 ### 2.3 `EditView` — one read path for "what the user sees"
 
@@ -229,10 +215,10 @@ The session is also the `PendingEdit`'s writer: a translate stages `Placement` o
 
 | User action | Session | PendingEdit | History |
 | --- | --- | --- | --- |
-| drag / type | `set_translation` | `stage_property` (display only) | **no entry** |
-| `Esc` | dropped | `abort_pending` (a `drop`) | **no entry** |
-| `Enter` | `checkpoint` (new datum, Δ = 0) | commit → new pending at the new base | **exactly one** named entry |
-| selection / slot / tool change while dirty | committed first | commit | one entry, then the change |
+| drag / type | `set_translation` | nothing leaves the process | **no entry** |
+| `Esc` | dropped | — | **no entry** |
+| `Enter` | `checkpoint` (new datum, Δ = 0) | one `InteractionCommit` → the mod's transaction | **exactly one** named entry |
+| selection / slot / tool change while dirty | committed first | one `InteractionCommit` | one entry, then the change |
 | `Ctrl+Z` after any of the above | — | — | reverts the *committed* step; a live preview is untouched because it was never in history |
 
 ### 2.6 What the renderer needs
@@ -250,9 +236,10 @@ The session is also the `PendingEdit`'s writer: a translate stages `Placement` o
 
 ### 2.7 Compatibility
 
-- **Facade.** The shell has no document handle, so the pending edit is reached as an opaque id
-  (`transform_begin`/`stage`/`commit`/`abort`, A0), exactly like a dialog token. Scripts do not
-  need to know it exists.
+- **Facade.** Nothing new is needed on the critical path: the commit is the
+  `InteractionCommit` the gizmo already produces (`to_interaction_with("transform", "apply",
+  matrix, readout)`), routed by the shell through `python::apply_interaction` to the edition's
+  provider. The session replaces *how the delta is accumulated*, not how it is applied.
 - **Python.** `App_Move` keeps its argument form (`Activated(dx, dy, dz)`); only its
   no-argument form stops returning a dialog (U1). `FreeCADGui.Preview` keeps its channel.
   `Document` gains `begin_pending`/`commit_pending`/`abort_pending` only if a script needs
@@ -263,6 +250,30 @@ The session is also the `PendingEdit`'s writer: a translate stages `Placement` o
   `SavedDocument`, not `Document`); save with a live session commits it first (D4).
 - **Editions.** A mod that supplies a manipulator keeps working: manipulators commit through
   the same session, so they get preview and rollback for free once A3 lands.
+
+### 2.8 The commit boundary (D0, decided 2026-10-30)
+
+**Previews stay in Rust; the commit goes through the mod layer.** This is the whole boundary,
+and it is worth stating as a rule because both directions look tempting:
+
+| | Where | Why |
+| --- | --- | --- |
+| Drag tick, typed Δ, `Esc` | `ferrocad_stage::TransformSession` + the viewport's display transform | 60–120/s. Crossing into Python per tick would put the GIL on the interaction path, and `apply_interaction` also recomputes — a kernel operation — which is why it must happen once, not per tick |
+| Commit (Enter, auto-commit, checkpoint) | The mod layer, as an `InteractionCommit` | One crossing per commit. The module owns the transaction name, the status text, the recompute, and any veto or derived feature; a built-in `_move_selection` and a mod's own move are then the same code path |
+
+The vision check the decision was made against: workbenches own edits, so an edit must pass
+through one. The performance cost is real but it is paid **once per session**, not once per
+frame — and the expensive half of it (`recompute`) was always there because the document has to
+be rebuilt to show the result.
+
+What this deliberately does **not** add:
+
+- no new facade method for the session (`transform_begin`/`stage`/`commit` are gone from the
+  plan) — the existing interaction route already carries a matrix;
+- no core `PendingEdit` on the critical path (see §2.2 and the trigger in §5);
+- no per-tick callback into Python, and no synchronous mod callbacks for anything phrased in
+  frames. The mod-facing event surface is a separate, small, low-frequency contract in
+  [`mod-events.md`](mod-events.md) (stage **E1**).
 
 ---
 
@@ -349,16 +360,17 @@ section is superseded by §1 here, and its pending-mode discussion by §2. Add t
 
 ## 5. Stages
 
-A0–A3 are invisible (no user-visible change, existing tests stay green). U1–U3 are this note's
-share of the UX overhaul; U4–U5 belong to [`tool-loadout.md`](tool-loadout.md) and U6 is the
-shared convergence sweep.
+A1–A3 are invisible (no user-visible change, existing tests stay green). U1–U3 are this note's
+share of the UX overhaul; U4–U5 belong to [`tool-loadout.md`](tool-loadout.md), E1 is the
+mod-facing event contract ([`mod-events.md`](mod-events.md)), and U6 is the shared convergence
+sweep.
 
 | Stage | Deliverable | Why this order | Spec updated |
 | --- | --- | --- | --- |
-| **A0** | `PendingEdit` + `EditView` in `ferrocad_core`, **plus the facade handle** (`transform_begin/stage/commit/abort`) and tests. | The model the rest stands on, and the shell's only way to reach it — without the handle the stage has no caller | — |
-| **A1** | `TransformSession` in `ferrocad_stage` (world datum + matrix delta); the viewport renders it via `set_session`; the shell owns it | One owner for the pending delta before any behaviour changes | — |
+| **A0** | ~~`PendingEdit` + `EditView` + facade handle~~ — **deferred by D0**. The design stays in §2.2–§2.3; nothing on the critical path needs it. Trigger: the first non-display consumer (a script reading a pending value, save-with-live-session, or a preview the document must hold) | Building it now would be scaffolding with no caller — the recon showed the shell cannot even reach it | — |
+| **A1** | `TransformSession` in `ferrocad_stage` (world datum + matrix delta); the viewport renders it via `set_session`; the shell owns it; the commit is the existing `InteractionCommit` → mod layer | One owner for the pending delta before any behaviour changes | — |
 | **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, `preview_home`'s **item-transform** branch, and `OpenDialog::translation`. Keep the gizmo/manipulator half of `preview_home` | Removes the three-way split that caused the 2026-10-30 defect | — |
-| **A3** | route the push/pull stem and the dress-up scrubber through the session + `PendingEdit` (they preview too, not just commit) | Proves the model generalises beyond `Placement` | §4.2 |
+| **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 |
 | **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 |
 | **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 |
@@ -366,20 +378,21 @@ shared convergence sweep.
 
 ### Stage acceptance
 
-- **A0** — a pending edit stages, aborts (document byte-identical, `undo_names()` unchanged)
-  and commits (one entry named by the session label, one recompute). `EditView` returns the
-  staged value for reads and the committed value for ghosts. Round-trip through `.ferrocad`
-  never persists a pending edit. The facade handle drives the same three operations from an
-  object name, so the shell has a consumer for the type on day one.
+- **A0** — deferred; acceptance moves with the trigger. When it is built: a pending edit stages,
+  aborts (document byte-identical, `undo_names()` unchanged) and commits (one entry named by the
+  session label, one recompute); `EditView` returns the staged value for reads and the committed
+  value for ghosts; a `.ferrocad` round-trip never persists a pending edit.
 - **A1** — session arithmetic (cumulative translation, checkpoint, dirty) and one viewport test
-  that renders a session and asserts the emitted item transforms.
+  that renders a session and asserts the emitted item transforms. The commit produces the same
+  `InteractionCommit` the deferred release produces today (asserted on the values, not on a
+  snapshot).
 - **A2** — grep-level: `gizmo_deferred` and `preview_home` are gone; every preview entry point
   takes a session snapshot. The 2026-10-30 regression tests
   (`a_move_hud_drag_survives_its_release`,
   `a_deferred_drag_reports_previews_and_never_commits`'s successor) pass unchanged in
   behaviour.
-- **A3** — a fillet-radius session previews a ghost shape and rolls back without a history
-  entry; the stem does the same.
+- **A3** — dragging a fillet radius or a stem previews a ghost shape, and `Esc` leaves
+  `undo_names()` unchanged.
 - **U1** — drag, release, drag again, `Enter`: one undo entry; `Esc` after any drag: zero undo
   entries and the original pose; selecting another object mid-session keeps the move.
 - **U2** — `Tab` on an armed object expands the pill, typing moves the preview, `Enter`
@@ -392,9 +405,9 @@ shared convergence sweep.
 
 | Risk | Mitigation |
 | --- | --- |
-| A0 drifts from what the display needs and becomes unused scaffolding | A0 already ships the facade handle the shell calls, so its consumer exists from day one |
-| The `EditView` migration touches every read site | Migrate only the display/stage/snap paths in A0–A3; the view is additive |
-| `object_mut()` still lets a caller bypass the view | Accept it in A0 (the guarantee is "the display and snap paths use the view"); making it enforceable means making `object_mut` crate-private, which never happens in this plan |
+| Deferring A0 leaves the document with no "uncommitted" concept, and the next feature reintroduces a private one | The session is the uncommitted value for transforms, and §2.2/§2.3 are the written contract for the general case; the trigger for building it is named, not left to taste |
+| The commit-per-session crossing is slower than a Rust write | It is one crossing per commit against 60–120 ticks/s of breathing room, and the recompute it does was always required. Measure it in U1 with `FERROCAD_TRACE=1` and record the number |
+| A mod that owns `transform` can make a commit slow or blocking | It already can (the non-deferred release goes through the same route), and the fix belongs to that mod; the shell reports the status text it returns |
 | Recomputed ghosts (a fillet's *shape*) need a recompute preview the DAG cannot do without mutating | Out of scope for A3: it previews the properties already shown, and the rebuild waits for commit. Decide in U6 whether a second DAG pass is worth it |
 | Auto-commit on context exit surprises a user who expected to lose the drag | The inverse of today's data loss; the tape and pill make the pending state explicit, and one undo removes it |
 | Dropping the dialog breaks scripts or tests that accept it | `App_Move` keeps the argument form; only the no-arg dialog goes, and its callers are in-tree |
@@ -411,13 +424,15 @@ shared convergence sweep.
 
 ---
 
-## 6. Open decisions
+## 6. Decisions
 
-| # | Question | Needed by | Leaning |
+| # | Question | State | Decision |
 | --- | --- | --- | --- |
-| D1 | Does a commit go through the Python command callback (status, naming, mod extensibility) or straight through `PendingEdit::commit`? | A1 | The command callback, with the pending edit supplying the exact values: extensions can still veto/transform, and the transaction name stays the command's |
-| D3 | One session per shell or per viewport? | A1 | Per shell; the viewport is a view, and a second window must not start a second session on the same object |
-| D4 | Save with a live session: commit or abort? | U1 | Commit, and say so in the status line: losing a drag to `Ctrl+S` is the same defect class as losing it to a selection change |
-| D6 | Does the tape appear for a typed-only session (no drag)? | U3 | Yes, once a delta is non-zero — typing is a gesture too |
+| **D0** | Where is the commit boundary — Rust or the mod layer? | **decided 2026-10-30** | **The mod layer**, one `InteractionCommit` per commit. Previews never cross: no per-tick GIL, no per-tick recompute (§2.8). The vision wins where it is cheap, the frame budget wins where it is not |
+| **D1** | Through the command **dialog** callback or the interaction provider? | **closed by D0** | The interaction provider: it is the same seam a workbench gizmo already uses (`to_interaction_with`), so a `Part::Fillet` and a `Move` share one commit route. The Move *command* keeps its dialog only for scripts that call it with arguments |
+| D3 | One session per shell or per viewport? | open, A1 | Per shell; the viewport is a view, and a second window must not start a second session on the same object |
+| D4 | Save with a live session: commit or abort? | open, U1 | Commit, and say so in the status line: losing a drag to `Ctrl+S` is the same defect class as losing it to a selection change |
+| D6 | Does the tape appear for a typed-only session (no drag)? | open, U3 | Yes, once a delta is non-zero — typing is a gesture too |
 
-The loadout note owns D2 and D5.
+The loadout note owns D2 and D5. The mod-facing event contract is [`mod-events.md`](mod-events.md)
+(stage E1), which also records what was **not** built: a mod-to-mod event bus.

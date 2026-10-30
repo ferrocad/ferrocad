@@ -1,6 +1,11 @@
 # Active task specs
 
-Status: index (2026-10-30). Eight active specs and one recorded decision:
+Status: index (2026-10-30). Nine active specs and one recorded decision:
+
+- [mod-events.md](mod-events.md) — **the mod boundary, planned not built**: a fixed
+  low-frequency event set the host advertises, explicit `FerroCAD.subscribe`, and why a
+  mod-to-mod bus (capability graph, ordering, teardown) is deferred with a named trigger.
+  Stage **E1**.
 
 - [transform-session.md](transform-session.md) — **the transform overhaul, planned not built**:
   explicit uncommitted state (`PendingEdit` + `EditView` in `ferrocad_core`), one cumulative

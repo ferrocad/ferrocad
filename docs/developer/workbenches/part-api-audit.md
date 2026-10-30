@@ -5,7 +5,7 @@ Part/OCCT?". It counts the Python surface of `crates/ferrocad_part_py` and the
 object types registered by both `crates/ferrocad_part` and
 `crates/ferrocad_part_py`, compares them with a sibling `freecad-upstream`
 checkout, then pins both in [`contracts/part-api.json`](../../../contracts/part-api.json).
-At the 2026-10-27 pin our surface is 38 functions / 60 classes / 39 object types against
+At the 2026-10-30 pin our surface is 39 functions / 60 classes / 40 object types against
 upstream's 50 / 96 / 80; the headline is the method coverage, not those totals.
 The contract is the source of truth: `--check` re-derives it and fails on any
 surface change, so the roadmap does not have to rely on prose.

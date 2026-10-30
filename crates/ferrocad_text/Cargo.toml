@@ -1,0 +1,24 @@
+[package]
+name = "ferrocad_text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD text outlines: a font's glyphs as 2-D contours in millimetres (no kernel)"
+keywords = ["cad", "freecad", "font", "outline", "text"]
+categories = ["science", "mathematics"]
+documentation = "https://docs.rs/ferrocad_text"
+
+[lib]
+name = "ferrocad_text"
+
+[dependencies]
+# Both are already resolved in the workspace lock through `cosmic-text` (itself a
+# dependency of the GPUI renderer), so this adds no download and no C build. Pin
+# `skrifa` 0.40 rather than the 0.44 copy the lock also carries, so this crate has
+# one version in its graph.
+skrifa = "0.40"
+read-fonts = "0.37"

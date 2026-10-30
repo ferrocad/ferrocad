@@ -10,7 +10,7 @@ The goal is one scripted session that **draws on a face, extrudes, push/pulls, c
 and exports** without hitting a missing member, plus a tree that is green enough for the
 remaining failures to be named rather than counted. Current state: **985 passed / 49
 failed / 23 errored / 2 skipped** over 88/88 modules (2026-10-30, after SC0 and SC1; the cut
-started from 969 / 64 / 26 / 2).
+started from 969 / 64 / 26 / 2), and SC2 has closed the last missing `Part.*` name.
 
 Slices are numbered `SC*`. They are ordered so each one is independently shippable and
 independently testable; `SC1` and `SC2` are the only ones that change the Python surface.
@@ -61,7 +61,12 @@ failure is left as "other". **Size:** S (measurement only).
 **Acceptance:** the three SimpleCAD `NoneType` errors clear, no conformance test regresses,
 and the new test fails on the old getter. **Size:** S (~35 lines + fallout).
 
-## SC2 — `Part.makeWireString` on the Rust text stack
+## SC2 — `Part.makeWireString` on the Rust text stack — done 2026-10-30
+
+**Landed:** `crates/ferrocad_text` (9 unit tests + a doctest) and
+`crates/ferrocad_part_py/src/text.rs` (6 integration tests + 5 Python tests). All 42 of
+SimpleCAD's `Part.*` names now resolve. What follows is the decision and the design as
+written before the code, with the outcome recorded at the end ([§Outcome](#outcome-2026-10-30)).
 
 **Decision (2026-10-30): no FreeType, no new C/C++ dependency.** The outlines are a font
 problem, not a kernel one, and the workspace already resolves the stack:
@@ -184,28 +189,39 @@ is deliberate: a constant advance makes the bounding-box assertion non-tautologi
 
 ### Work items
 
-- [ ] Put the outline extraction in a kernel-free crate (recommended: `ferrocad_text`,
-      modelled on `ferrocad_curves`: no OCCT, no Python). It takes `(text, font bytes,
-      height, tracking)` and returns per-glyph contours of move/line/quad/cubic commands plus
-      the advance sum.
-- [ ] `ferrocad_part_py` maps those contours to OCCT: lines → `MakeEdge`, quadratic/cubic →
-      `Geom_BezierCurve`/`Geom_BSplineCurve` via the existing seam, then `MakeWire`; one wire
-      per closed contour, and **the return shape is upstream's `list[list[Wire]]`** — one
-      inner list per character, in text order (`AppPartPy.cpp:2399`; the consumer flattens it
-      with `[w for letter in letters for w in letter]`, `simplecad/surfaces/edit.py:239`).
-- [ ] Advance/kerning: use `skrifa` metrics first (upstream applies per-char advance plus a
-      kerning pair, no complex shaping). Use `harfrust` only if the fixture shows the naive
-      path is wrong; record which was chosen.
-- [ ] Font source: the caller's path. SimpleCAD's default (`osifont-lgpl3fe.ttf`) is **not in
-      this tree**, so decide whether we ship a font (licence: OFL only) or let the text tool
-      raise a clear "choose a font" error. Do **not** add `osifont` without a licence review.
-- [ ] Test fixture: there is no hermetic font in the repo. Vendor one small OFL font (or a
-      subset) under a test fixture directory with its licence, and pin the expected advance
-      width; a system-font path is not acceptable in a test.
-- [ ] Acceptance: `Part.makeWireString("AB", dir, file, 10.0)` returns a **list of two
-      lists of wires** (one per character) whose combined bounding box matches the expected
-      advance; the name appears in the `Part.*` audit; SimpleCAD's text tool stops raising
-      `AttributeError`.
+- [x] Put the outline extraction in a kernel-free crate (`ferrocad_text`, modelled on
+      `ferrocad_curves`: no OCCT, no Python). `outline_text(font_bytes, text, height,
+      tracking) -> TextOutline`.
+- [x] `ferrocad_part_py` maps contours to OCCT: lines → `LineSegment`/`MakeEdge`,
+      quad/cubic → `BezierCurve` → `make_edge` (exact, no seam change), then `make_wire`;
+      one wire per closed contour. **The return shape is upstream's `list[list[Wire]]`.**
+- [x] Advance/kerning: `skrifa` metrics plus the legacy `kern` table (what
+      `FT_Get_Kerning` reads). No shaping: `harfrust` is unused, and the fixture confirms
+      the naive path.
+- [x] Font source: the caller's `(dir, fontfile)`, joined; a missing file raises
+      `Part.OCCError`. No `osifont` is added.
+- [x] Test fixture: **Liberation Mono** (OFL-1.1, 319 KB) vendored unmodified under
+      `crates/ferrocad_text/tests/fixtures/fonts/` with `OFL.txt` and a provenance README.
+- [x] Acceptance: `makeWireString("AB", dir, file, 10.0)` returns two inner lists of
+      closed `Wire`s; tracking shifts the second glyph by exactly its value; the name is in
+      the `Part.*` audit; the text tool no longer raises `AttributeError`.
+
+### Outcome (2026-10-30)
+
+| Where | What |
+| --- | --- |
+| `crates/ferrocad_text` | `font.rs` (metrics, charmap, `kern`, outlines) and `outline.rs` (pen, public types, `outline_text`); **9 unit tests + 1 doctest** |
+| `crates/ferrocad_part_py/src/text.rs` | `makeWireString`, contour → edges → wire, `list[list[Wire]]`; **6 integration tests** |
+| `tests/test_part.py` | 5 Python cases (shape, space, tracking, missing font, zero height) |
+| `contracts/part-api.json` | re-pinned: 39 functions (was 38), 252/408 methods unchanged |
+
+Measured: Part extension set **743 / 3** (was 738 / 3), base unchanged at **687 / 8**,
+SimpleCAD **985 / 49 / 23 / 2** (unchanged — the suite does not exercise the text tool).
+
+**Still open:** whether upstream's `/ 10` is a bug (the scale is reproduced as-is, so
+SimpleCAD gets the same size it would from upstream); `.ttc` indices and Type 1 `.pfb`
+(the fixture is a plain `.ttf`); and `Draft`'s own `ShapeString` rescale, which is not part
+of this slice.
 
 **Acceptance:** the 42nd name resolves with a real implementation, and the test uses a
 vendored font. **Size:** M (~300–450 lines across a new crate + binding, plus a fixture).

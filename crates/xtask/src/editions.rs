@@ -75,6 +75,7 @@ const KERNEL_FREE: &[&str] = &[
     "ferrocad_part_py",
     "ferrocad_part_gui",
     "ferrocad_curves",
+    "ferrocad_text",
     "ferrocad_mesh",
     "ferrocad_mesh_py",
     "opencascade-sys",

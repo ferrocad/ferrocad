@@ -65,12 +65,12 @@ create_exception!(
 );
 
 /// Map a curve-construction failure to the Python exception.
-fn curve_error(error: CurveError) -> PyErr {
+pub(crate) fn curve_error(error: CurveError) -> PyErr {
     OCCError::new_err(error.to_string())
 }
 
 /// Map a kernel failure to the Python exception.
-fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
+pub(crate) fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
     OCCError::new_err(error.to_string())
 }
 
@@ -134,7 +134,7 @@ fn py_vector2d(py: Python<'_>, value: (f64, f64)) -> PyResult<PyObject> {
     Ok(module.getattr("Vector2d")?.call1(value)?.unbind())
 }
 
-fn shape_from_curve(curve: &EdgeCurve) -> PyResult<Shape> {
+pub(crate) fn shape_from_curve(curve: &EdgeCurve) -> PyResult<Shape> {
     backend().make_edge(curve).map_err(kernel_error)
 }
 

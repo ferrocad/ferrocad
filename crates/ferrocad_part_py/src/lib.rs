@@ -42,6 +42,7 @@ mod link;
 mod link_array;
 mod shape_fix;
 mod solids;
+mod text;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -4465,6 +4466,7 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(makeCone, m)?)?;
     m.add_function(wrap_pyfunction!(makeSplitShape, m)?)?;
     m.add_function(wrap_pyfunction!(makeSweepSurface, m)?)?;
+    m.add_function(wrap_pyfunction!(text::makeWireString, m)?)?;
     m.add_function(wrap_pyfunction!(show, m)?)?;
     m.add_function(wrap_pyfunction!(read, m)?)?;
     m.add_function(wrap_pyfunction!(open, m)?)?;

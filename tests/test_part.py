@@ -16,6 +16,8 @@ base-only checkout is not a supported way to run the suites.
 
 from __future__ import annotations
 
+import os
+import pathlib
 import tempfile
 import unittest
 
@@ -230,6 +232,52 @@ class ShapePropertyTests(unittest.TestCase):
                 FreeCAD.closeDocument(doc.Name)
                 if reopened is not None:
                     FreeCAD.closeDocument(reopened.Name)
+
+
+class MakeWireStringTests(unittest.TestCase):
+    """`Part.makeWireString` on the Rust text stack (no FreeType)."""
+
+    FONT_DIR = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "crates"
+        / "ferrocad_text"
+        / "tests"
+        / "fixtures"
+        / "fonts"
+    )
+    FONT = "LiberationMono-Regular.ttf"
+
+    def make(self, text, height=10.0, tracking=0.0):
+        return Part.makeWireString(text, str(self.FONT_DIR) + os.sep, self.FONT, height, tracking)
+
+    def test_one_list_of_closed_wires_per_character(self):
+        letters = self.make("AB")
+        self.assertEqual(len(letters), 2)
+        for wires in letters:
+            self.assertTrue(wires)
+            for wire in wires:
+                self.assertTrue(wire.isClosed())
+                self.assertEqual(wire.ShapeType, "Wire")
+
+    def test_a_space_is_an_empty_list(self):
+        self.assertEqual(self.make(" "), [[]])
+
+    def test_tracking_offsets_the_next_character(self):
+        def x_min(letters, index):
+            return Part.makeCompound(letters[index]).BoundBox.XMin
+
+        plain = self.make("AB")
+        tracked = self.make("AB", tracking=1.0)
+        self.assertAlmostEqual(x_min(tracked, 1) - x_min(plain, 1), 1.0, places=9)
+        self.assertAlmostEqual(x_min(tracked, 0), x_min(plain, 0), places=12)
+
+    def test_a_missing_font_raises_occerror(self):
+        with self.assertRaises(Part.OCCError):
+            Part.makeWireString("A", str(self.FONT_DIR) + os.sep, "missing.ttf", 10.0)
+
+    def test_a_non_positive_height_is_refused(self):
+        with self.assertRaises(Part.OCCError):
+            self.make("A", height=0.0)
 
 
 if __name__ == "__main__":

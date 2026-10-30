@@ -2448,6 +2448,7 @@ dependencies = [
  "ferrocad_part",
  "ferrocad_py",
  "ferrocad_stage_py",
+ "ferrocad_text",
  "ferrocad_types",
  "pyo3",
  "serde_json",
@@ -2487,6 +2488,14 @@ dependencies = [
  "ferrocad_stage",
  "ferrocad_types",
  "pyo3",
+]
+
+[[package]]
+name = "ferrocad_text"
+version = "0.1.4"
+dependencies = [
+ "read-fonts 0.37.0",
+ "skrifa 0.40.0",
 ]
 
 [[package]]

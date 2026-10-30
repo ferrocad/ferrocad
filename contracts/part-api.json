@@ -1147,10 +1147,10 @@
   },
   "ours": {
     "source": "crates/ferrocad_part_py/src",
-    "files": 10,
+    "files": 11,
     "functions": {
-      "registered": 38,
-      "defined": 39,
+      "registered": 39,
+      "defined": 40,
       "names": [
         "Part.Precision::angular",
         "Part.Precision::confusion",
@@ -1189,13 +1189,15 @@
         "Part::open",
         "Part::read",
         "Part::show",
-        "Part::sortEdges"
+        "Part::sortEdges",
+        "Part::text"
       ],
       "defined_not_registered": [
+        "makeWireString",
         "sketch_add_geometry"
       ],
       "by_module": {
-        "Part": 34,
+        "Part": 35,
         "Part.Precision": 4
       }
     },
@@ -1275,7 +1277,7 @@
         "crates/ferrocad_part/src",
         "crates/ferrocad_part_py/src"
       ],
-      "files": 15,
+      "files": 16,
       "constants": 39,
       "registered": 40,
       "names": [
@@ -3479,37 +3481,37 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1347,
+          "line": 1334,
           "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1351,
+          "line": 1338,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1360,
+          "line": 1347,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1369,
+          "line": 1356,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1376,
+          "line": 1363,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 3728,
+          "line": 3715,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
@@ -3779,7 +3781,8 @@
       "Part.Precision::angular",
       "Part.Precision::confusion",
       "Part.Precision::infinite",
-      "Part.Precision::isInfinite"
+      "Part.Precision::isInfinite",
+      "Part::text"
     ],
     "classes": [
       "Part::ConeFace",

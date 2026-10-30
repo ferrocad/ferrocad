@@ -33,6 +33,7 @@ crate-type = ["cdylib", "rlib"]
 ferrocad_core.workspace = true
 ferrocad_geom.workspace = true
 ferrocad_curves.workspace = true
+ferrocad_text.workspace = true
 ferrocad_occt.workspace = true
 ferrocad_part.workspace = true
 ferrocad_py.workspace = true

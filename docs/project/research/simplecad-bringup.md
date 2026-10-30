@@ -1418,6 +1418,16 @@ The two biggest real roots are therefore a **path-closure predicate** in surface
 splitting and a **missing degenerate-input rejection**, not the compound kind that SC1 fixed.
 Re-filing these into SC4–SC7/P2/P4 is SC0's last open item.
 
+**2026-10-30 — SC2: `Part.makeWireString` lands, and the name surface closes.** All 42 of
+SimpleCAD's `Part.*` names now resolve. The implementation is a new kernel-free
+`ferrocad_text` crate on `skrifa`/`read-fonts` (both already in the lock through
+`cosmic-text`), not a FreeType port; the binding turns contours into exact Bézier edges and
+returns upstream's `list[list[Wire]]`. Measured: Part extension set **743 / 3** (was
+738 / 3), base **687 / 8**, SimpleCAD **985 / 49 / 23 / 2** (unchanged — the suite does not
+exercise the text tool, so the win is the resolved name, not the count). The scale is
+upstream's `/ 10` formula, reproduced deliberately; see
+[`../tasks/simplecad-bringup.md`](../tasks/simplecad-bringup.md) SC2.
+
 ---
 
 ## 8. Draft vs SimpleCAD

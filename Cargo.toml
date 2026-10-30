@@ -11,6 +11,7 @@ members = [
     "crates/ferrocad_types",
     "crates/ferrocad_theme",
     "crates/ferrocad_curves",
+    "crates/ferrocad_text",
     "crates/ferrocad_core",
     "crates/ferrocad_lineage",
     "crates/ferrocad_geom",
@@ -56,6 +57,7 @@ default-members = [
     "crates/ferrocad_types",
     "crates/ferrocad_theme",
     "crates/ferrocad_curves",
+    "crates/ferrocad_text",
     "crates/ferrocad_core",
     "crates/ferrocad_geom",
     "crates/ferrocad_mesh",
@@ -89,7 +91,8 @@ unicode-segmentation = "1"
 # Internal crates carry both a `path` (for development) and a `version` (which
 # crates.io requires). Publish them in dependency order: `ferrocad_types`,
 # `ferrocad_theme`, `ferrocad_graphics`, `ferrocad_core`, `ferrocad_geom`, `ferrocad_mesh`,
-# `ferrocad_occt`, `ferrocad_part`, `ferrocad_py`, `ferrocad_mesh_py`, `ferrocad_part_py`,
+# `ferrocad_curves`, `ferrocad_text`, `ferrocad_occt`, `ferrocad_part`, `ferrocad_py`,
+# `ferrocad_mesh_py`, `ferrocad_part_py`,
 # `ferrocad_stage`,
 # `ferrocad_part_gui`, `ferrocad_stage_py`, `ferrocad_viewport`, `ferrocad_widgets`,
 # `ferrocad_gpui` and finally the `ferrocad` app. See docs/developer/architecture/releasing.md.
@@ -102,6 +105,7 @@ unicode-segmentation = "1"
 ferrocad_types = { path = "crates/ferrocad_types", version = "0.1.4" }
 ferrocad_theme = { path = "crates/ferrocad_theme", version = "0.1.4" }
 ferrocad_curves = { path = "crates/ferrocad_curves", version = "0.1.4" }
+ferrocad_text = { path = "crates/ferrocad_text", version = "0.1.4" }
 ferrocad_lineage = { path = "crates/ferrocad_lineage", version = "0.1.4" }
 ferrocad_core = { path = "crates/ferrocad_core", version = "0.1.4" }
 ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.4" }

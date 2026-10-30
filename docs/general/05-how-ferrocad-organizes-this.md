@@ -9,6 +9,7 @@ explicit seams. The first four chapters describe the concepts; this chapter maps
 | --- | --- |
 | `ferrocad_types` | The value vocabulary: `Vector`, `Placement`, `Quantity`, units and matrices. No geometry kernel. |
 | `ferrocad_curves` | Analytic curves and wires that do not need OCCT. |
+| `ferrocad_text` | Font outlines as 2-D contours in millimetres, for `Part.makeWireString`. **No OCCT, no Python.** |
 | `ferrocad_geom` | The geometry seam: opaque `Shape`, lineage re-exports and the `GeometryBackend` trait. |
 | `ferrocad_occt` | The OCCT backend: implements `GeometryBackend`, owns the OCCT 7.8 types, operations and operation history. |
 | `ferrocad_part` | The Part workbench: registers `Part::Feature` and `Part::PropertyPartShape` on top of the backend (and injects the OCCT backend from this crate). |

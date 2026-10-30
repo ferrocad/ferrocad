@@ -215,8 +215,10 @@ is deliberate: a constant advance makes the bounding-box assertion non-tautologi
 | `tests/test_part.py` | 5 Python cases (shape, space, tracking, missing font, zero height) |
 | `contracts/part-api.json` | re-pinned: 39 functions (was 38), 252/408 methods unchanged |
 
-Measured: Part extension set **743 / 3** (was 738 / 3), base unchanged at **687 / 8**,
-SimpleCAD **985 / 49 / 23 / 2** (unchanged — the suite does not exercise the text tool).
+Measured: Part extension set **743 / 3** at SC2 (was 738 / 3), now **750 / 3** with the 3-D
+text workflow ([`tests/test_text_workflow.py`](../../../tests/test_text_workflow.py)); base
+unchanged at **687 / 8**; SimpleCAD **985 / 49 / 23 / 2** (unchanged — the suite does not
+exercise the text tool).
 
 **Still open:** whether upstream's `/ 10` is a bug (the scale is reproduced as-is, so
 SimpleCAD gets the same size it would from upstream); `.ttc` indices and Type 1 `.pfb`

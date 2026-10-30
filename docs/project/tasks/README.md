@@ -1,10 +1,13 @@
 # Active task specs
 
-Status: index (2026-10-30). Five active specs and one recorded decision:
+Status: index (2026-10-30). Six active specs and one recorded decision:
 
 - [simplecad-bringup.md](simplecad-bringup.md) — the **SC0–SC8** cut of the SimpleCAD
   bring-up: triage the 64 failures, exact `ShapeType`, `makeWireString` on `skrifa`/
   `harfrust`, the GUI classification, the S4.4–S4.6 view half, and the workflow acceptance.
+- [text-and-3d-text.md](text-and-3d-text.md) — what is kernel-free about text, why the toy
+  can only preview it, why a wire extrudes to a shell but a face to a solid, and why there
+  is no DPI or point size in the geometry path. The demo is `tests/test_text_workflow.py`.
 - [ux-research.md](ux-research.md) — the interaction questions **U1–U7** (draw path, active
   action, snap feedback, plane affordances, wheel verbs, numeric entry, walkthroughs), each
   with a method and an acceptance, and a decision log to fill.

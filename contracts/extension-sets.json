@@ -57,7 +57,8 @@
       "test_flatmesh_part",
       "test_gui_snapping",
       "test_packaged_modules",
-      "test_part"
+      "test_part",
+      "test_text_workflow"
     ]
   }
 }

@@ -254,6 +254,7 @@ The folder landing page is the reading order for the spikes and assessments.
 
 - [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
 - [project/tasks/simplecad-bringup.md](project/tasks/simplecad-bringup.md) — the SC0–SC8 cut of the SimpleCAD bring-up, including `makeWireString` on the Rust text stack.
+- [project/tasks/text-and-3d-text.md](project/tasks/text-and-3d-text.md) — text boundaries: kernel-free outlines vs Part wires/faces, the wire→shell vs face→solid rule, and why there is no DPI or point size.
 - [project/tasks/ux-research.md](project/tasks/ux-research.md) — the interaction questions U1–U7, their evidence sources and the decision log.
 - [project/tasks/creation-tools-ownership.md](project/tasks/creation-tools-ownership.md) — whether creation tools are a core default or an edition/mod choice, and how override precedence works.
 - [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.

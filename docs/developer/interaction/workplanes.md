@@ -388,6 +388,14 @@ policy — one value for the world ground, the face patches and both backends:
   merely too fine, so tilting cannot re-space the visible lattice (the old
   promotion-of-both-levels rule did, which read as the grid re-spacing itself under the
   camera).
+- **A configured pitch dissolves instead of stepping.** `effective_steps` is for a step
+  *derived from an extent*, which can be decades finer than the view. A step the user set
+  (`adaptive` off) is the setting, so `fixed_steps` returns it unchanged and `resolve_fade`
+  takes the level's ink to zero between `MINOR_PIXELS` and half of it rather than promoting
+  it. That closes the "still coarsens as I zoom out with adaptive off" report: a pinned
+  10/100 lattice used to jump to 100/1000 as the camera pulled back. The Coin shader
+  already drew it this way (`line_cov`'s `1 - smoothstep(0.25, 0.5, cells)`), so both
+  backends dissolve a level at the same zoom.
 - **A level the generator cannot cover is clipped, not coarsened.** A dot field costs one
   vertex per intersection and a line lattice one row per column, so a fine step cannot
   cover an arbitrarily large disc. `grid::minor_radius` bounds the **minor level's

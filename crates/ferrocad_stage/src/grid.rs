@@ -298,18 +298,19 @@ const MAX_PROMOTIONS: usize = 12;
 /// property of the view, not of the plane: a step that is fine relative to a 10 mm part
 /// but sub-pixel from a metre away is promoted until it draws, and a step that is
 /// already resolved never moves.
+///
+/// This is only for a step **derived from an extent**. A step the user configured is drawn
+/// exactly ([`fixed_steps`]) and [fades](resolve_fade) when it outgrows the view, because
+/// promoting it would re-space the lattice the user pinned — the "still coarsens with
+/// adaptive off" report.
 pub fn effective_steps(
     camera: &Camera,
     workplane: &Workplane,
     minor: f64,
     major: f64,
 ) -> (f64, f64) {
-    let spacing = |step: f64| -> Option<f64> {
-        let a = project_device(camera, workplane.point(0.0, 0.0))?;
-        let b = project_device(camera, workplane.point(step, 0.0))?;
-        Some((a[0] - b[0]).hypot(a[1] - b[1]))
-    };
-    let resolved = |step: f64| spacing(step).is_some_and(|pixels| pixels >= MINOR_PIXELS);
+    let resolved =
+        |step: f64| projected_step(camera, workplane, step).is_some_and(|px| px >= MINOR_PIXELS);
     let mut major = major.max(minor);
     for _ in 0..MAX_PROMOTIONS {
         if resolved(major) {
@@ -325,6 +326,48 @@ pub fn effective_steps(
         minor = coarser_step(minor).min(major);
     }
     (minor, major)
+}
+
+/// The projected spacing of `step` on `workplane`, in device pixels.
+///
+/// `None` when either end of the step does not project (behind the eye, or on a plane the
+/// camera is edge-on to): a level then cannot be resolved at all.
+pub fn projected_step(camera: &Camera, workplane: &Workplane, step: f64) -> Option<f64> {
+    let a = project_device(camera, workplane.point(0.0, 0.0))?;
+    let b = project_device(camera, workplane.point(step, 0.0))?;
+    Some((a[0] - b[0]).hypot(a[1] - b[1]))
+}
+
+/// A configured pitch, unchanged: what a layer draws when spacing is **not** adaptive.
+///
+/// The screen-space cull in [`effective_steps`] exists because a step derived from an
+/// extent (a face patch, the ground disc) can be decades finer than the view, and promoting
+/// it is the only way to keep any lattice on screen. A step the *user* set is a different
+/// promise: it is the pitch they asked for, so it must not move under the camera. A layer
+/// whose configured level outgrows the view is faded out by [`resolve_fade`] instead —
+/// the lattice dissolves rather than re-spacing a decade as the camera pulls back.
+pub fn fixed_steps(minor: f64, major: f64) -> (f64, f64) {
+    let major = major.max(minor);
+    (minor.max(1e-9).min(major), major)
+}
+
+/// How much of a level's ink survives when the view can no longer resolve its pitch.
+///
+/// `1` at [`MINOR_PIXELS`] of projected spacing and above, `0` at half that, smoothstepped
+/// between. It is the counterpart of [`effective_steps`] for a [fixed](fixed_steps) pair:
+/// where the cull may re-space an extent-derived step, a configured step keeps its pitch
+/// and loses its ink instead, so zooming out never changes the subdivisions the user set.
+///
+/// The Coin shader already draws the grid this way (`line_cov`'s
+/// `1 - smoothstep(0.25, 0.5, cells)` is this band, expressed in cells per pixel), so both
+/// backends dissolve a level at the same zoom.
+pub fn resolve_fade(camera: &Camera, workplane: &Workplane, step: f64) -> f32 {
+    let Some(pixels) = projected_step(camera, workplane, step) else {
+        return 0.0;
+    };
+    let half = MINOR_PIXELS * 0.5;
+    let t = ((pixels - half) / half).clamp(0.0, 1.0);
+    (t * t * (3.0 - 2.0 * t)) as f32
 }
 
 /// The next step up the 1-2-5 ladder: the smallest `1`, `2` or `5` × a decade that is
@@ -1234,6 +1277,51 @@ mod tests {
             (500.0, 1000.0),
             "the lattice moved a decade and the minor coarsened to the last step that \
              still draws (the 1-2-5 ladder, not a blind collapse onto the major)"
+        );
+    }
+
+    /// A configured pitch is the user's setting, so it never moves: a level the view
+    /// cannot resolve [dissolves](resolve_fade) instead of stepping up a decade. The
+    /// promotion in [`effective_steps`] used to fire here as well, which is what made a
+    /// pinned lattice re-space under the camera ("still coarsens as I zoom out with
+    /// adaptive off").
+    #[test]
+    fn a_fixed_pitch_dissolves_instead_of_re_spacing() {
+        assert_eq!(fixed_steps(10.0, 100.0), (10.0, 100.0));
+        assert_eq!(
+            fixed_steps(10.0, 10.0),
+            (10.0, 10.0),
+            "a degenerate pair is left as configured, not re-spaced"
+        );
+        let world = Workplane::world();
+        let at = |z: f64| Camera {
+            view: ferrocad_types::Placement::new(
+                Vector3::new(0.0, 0.0, -z),
+                ferrocad_types::Rotation::identity(),
+            )
+            .to_matrix(),
+            ..camera()
+        };
+
+        // Near: both levels read (~139 px and ~14 px at 0.3 m), full ink.
+        assert!((resolve_fade(&at(300.0), &world, 100.0) - 1.0).abs() < 1e-6);
+        assert!((resolve_fade(&at(300.0), &world, 10.0) - 1.0).abs() < 1e-6);
+
+        // 3 m: the 100 mm lattice still reads, the 10 mm minor is ~1.4 px and has gone.
+        assert!((resolve_fade(&at(3_000.0), &world, 100.0) - 1.0).abs() < 1e-6);
+        assert_eq!(resolve_fade(&at(3_000.0), &world, 10.0), 0.0);
+
+        // 30 m: the 100 mm lattice is ~1.4 px. It keeps its pitch and dissolves, where
+        // `effective_steps` would have jumped it to 1 m.
+        assert_eq!(
+            resolve_fade(&at(30_000.0), &world, 100.0),
+            0.0,
+            "a pinned lattice dissolves instead of re-spacing"
+        );
+        assert_eq!(
+            effective_steps(&at(30_000.0), &world, 10.0, 100.0),
+            (500.0, 1000.0),
+            "the adaptive path is unchanged: it still promotes"
         );
     }
 

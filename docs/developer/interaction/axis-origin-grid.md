@@ -209,15 +209,24 @@ adaptive step would then be coarser than the part. The grid is regenerated only 
 pivot moves by more than 10 % of `R_max` (not every frame).
 
 **Screen-space culling.** Below ~4 px of projected spacing (`MINOR_PIXELS`) a level cannot
-be resolved. The **major** lattice climbs by decades (`MAX_PROMOTIONS = 12`) until it is
-resolvable; the **minor** level is coarsened up the 1-2-5 ladder (`coarser_step`) to the
-smallest resolvable step, and collapses onto the major only when nothing finer draws. The
-**extent rules never touch the pitch**: with `adaptive` off the configured pair is what is
-drawn, a level that would be too dense is clipped in *extent* (`minor_radius`: 512
-columns of lines, 112 of dots) rather than coarsened or dropped, and the ~4 px cull above
-is the only rule that can still promote a level. That distinction is what keeps a far zoom
-from changing the subdivisions the user set, while a top-down orthographic view stays
-crisp and a low-angle horizon view does not turn into moiré.
+be resolved. What happens then depends on where the step came from:
+
+- An **adaptive** (extent-derived) step goes through `effective_steps`: the **major**
+  lattice climbs by decades (`MAX_PROMOTIONS = 12`) until it is resolvable, and the
+  **minor** level is coarsened up the 1-2-5 ladder (`coarser_step`), collapsing onto the
+  major only when nothing finer draws.
+- A **configured** step (`adaptive` off) is the user's setting, so it **never moves**.
+  `fixed_steps` returns it unchanged, and a level the view cannot resolve *dissolves*:
+  `resolve_fade` is `1` at `MINOR_PIXELS` and above and
+  falls to `0` at half that, so the lattice fades out instead of jumping a decade as the
+  camera pulls back. The Coin shader already draws that way (`line_cov`'s
+  `1 - smoothstep(0.25, 0.5, cells)`), so both backends dissolve a level at the same zoom.
+
+The **extent rules never touch the pitch**: a level that would be too dense is clipped in
+*extent* (`minor_radius`: 512 columns of lines, 112 of dots) rather than coarsened or
+dropped. Between them, the cull/fade and the clip keep a far zoom from changing the
+subdivisions the user set, while a top-down orthographic view stays crisp and a low-angle
+horizon view does not turn into moiré.
 
 ### 3.3 Active workplane grid
 
@@ -504,7 +513,12 @@ landed in G5.)
     axis colours at 65 %, scaled by `dim`.
   - `effective_steps` — coarsens the minor level up the 1-2-5 ladder while its projected
     spacing is below 4 px, and promotes the major a decade at a time until it draws. The
-    major never moves for a minor that is merely too fine.
+    major never moves for a minor that is merely too fine. It is only for an
+    extent-derived step (see `fixed_steps` / `resolve_fade` below).
+  - `fixed_steps` / `resolve_fade` (2026-10-30) — a configured pair is drawn exactly; a
+    level that outgrows the view fades to nothing between 4 px and 2 px of projected
+    spacing instead of being promoted, so `adaptive = off` never re-spaces under the
+    camera.
   - **Unlit by construction:** every vertex's normal is the shader's light direction,
     so the diffuse term is exactly 1 and the per-vertex colour reaches the screen.
 - **`ferrocad_viewport`** — `GridMesh` (now three `GridLayer`s since G3) owns nine mesh

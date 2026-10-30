@@ -323,7 +323,7 @@ impl ActiveWorkplane {
         fixed: Option<f64>,
     ) -> (f64, f64) {
         let (minor, major) = plane_steps(self.extent, ground_radius(camera, fixed), policy);
-        grid::effective_steps(camera, &self.plane, minor, major)
+        drawn_steps(camera, &self.plane, minor, major, policy)
     }
 
     /// The patch radius for an already-effective `major` step.
@@ -1067,7 +1067,7 @@ fn stroke_width(camera: &Camera, plane: &Workplane, pixels: f64) -> f64 {
 /// same patch as the plane once it is active, so binding it does not jump the grid.
 fn local_grid(camera: &Camera, frame: &FaceFrame, policy: GridPolicy) -> (GridSpec, GridStyle) {
     let (minor, major) = plane_steps(Some(frame.radius), 0.0, policy);
-    let (minor, major) = grid::effective_steps(camera, &frame.plane, minor, major);
+    let (minor, major) = drawn_steps(camera, &frame.plane, minor, major, policy);
     (
         GridSpec {
             workplane: frame.plane.clone(),
@@ -1075,11 +1075,17 @@ fn local_grid(camera: &Camera, frame: &FaceFrame, policy: GridPolicy) -> (GridSp
             major,
             radius: patch_radius(Some(frame.radius), major).unwrap_or(frame.radius),
         },
-        with_stroke(
-            level_style(Some(frame.radius)),
+        with_resolution(
+            with_stroke(
+                level_style(Some(frame.radius)),
+                camera,
+                &frame.plane,
+                policy,
+            ),
             camera,
             &frame.plane,
-            policy,
+            minor,
+            major,
         ),
     )
 }
@@ -1103,12 +1109,13 @@ fn active_grid(
     ground_radius: f64,
 ) -> (GridSpec, GridStyle) {
     let (minor, major) = plane_steps(patch_extent, ground_radius, policy);
-    let (minor, major) = grid::effective_steps(camera, plane, minor, major);
+    let (minor, major) = drawn_steps(camera, plane, minor, major, policy);
     let mut style = level_style(patch_extent);
     style.color = color;
     style.minor_alpha *= alpha;
     style.major_alpha *= alpha;
     style = with_stroke(style, camera, plane, policy);
+    style = with_resolution(style, camera, plane, minor, major);
     (
         GridSpec {
             workplane: plane.clone(),
@@ -1182,7 +1189,9 @@ fn nice_step(value: f64) -> f64 {
 /// **Non-adaptive** uses the configured steps on every plane, exactly: the drawn pitch is
 /// the setting, whatever the zoom. A step too fine to cover the whole disc is not
 /// coarsened — [`grid::ground`] clips the minor level's *extent* instead (see
-/// [`grid::minor_radius`]), so the subdivisions never change under the camera.
+/// [`grid::minor_radius`]) — and it is not promoted by the screen-space cull either
+/// ([`drawn_steps`]): it [dissolves](grid::resolve_fade) when the view cannot resolve it,
+/// so the subdivisions never change under the camera.
 ///
 /// This is the single source of truth for the drawn grid, the hover preview, the program
 /// (Coin) patch and [`snap_context`](InventorViewport::snap_context), so a snap always
@@ -1273,6 +1282,46 @@ fn with_grazing(mut style: GridStyle, camera: &Camera, plane: &Workplane) -> Gri
     style.minor_alpha *= grazing;
     style.major_alpha *= grazing;
     style
+}
+
+/// Dissolve each level the view cannot resolve, at the pitch it is drawn at.
+///
+/// A configured pair never moves (see [`drawn_steps`]), so the level that outgrows the
+/// view loses its ink instead of re-spacing: `1` at the cull threshold and above, `0` at
+/// half of it. An **adaptive** step arrives here already promoted by
+/// [`grid::effective_steps`], so its fade is `1` and this is a no-op for it.
+fn with_resolution(
+    mut style: GridStyle,
+    camera: &Camera,
+    plane: &Workplane,
+    minor: f64,
+    major: f64,
+) -> GridStyle {
+    style.minor_alpha *= grid::resolve_fade(camera, plane, minor);
+    style.major_alpha *= grid::resolve_fade(camera, plane, major);
+    style
+}
+
+/// The steps a layer actually draws with, after the screen-space rules for its policy.
+///
+/// **Adaptive** steps come from an extent, which can be decades finer than the view, so
+/// they go through [`grid::effective_steps`], whose cull promotes a level until it draws.
+/// A **configured** pair is the user's setting: it is drawn exactly
+/// ([`grid::fixed_steps`]) and a level too fine for the view is
+/// [faded](grid::resolve_fade) instead of promoted, so zooming out never re-spaces a
+/// pinned lattice.
+fn drawn_steps(
+    camera: &Camera,
+    plane: &Workplane,
+    minor: f64,
+    major: f64,
+    policy: GridPolicy,
+) -> (f64, f64) {
+    if policy.adaptive {
+        grid::effective_steps(camera, plane, minor, major)
+    } else {
+        grid::fixed_steps(minor, major)
+    }
 }
 
 /// The face under the pointer, resolved to a workplane the pointer may activate.
@@ -4164,8 +4213,7 @@ impl<V: InventorView> InventorViewport<V> {
         let policy = self.grid_policy();
         let world_radius = ground_radius(&self.camera, self.grid_radius);
         let (minor, major) = plane_steps(None, world_radius, policy);
-        let (minor, major) =
-            grid::effective_steps(&self.camera, &world_plane, minor, major);
+        let (minor, major) = drawn_steps(&self.camera, &world_plane, minor, major, policy);
         let world_spec = GridSpec {
             workplane: world_plane,
             minor,
@@ -4184,6 +4232,13 @@ impl<V: InventorView> InventorViewport<V> {
         world_style.color = self.grid_color;
         world_style.minor_alpha *= self.grid_alpha * grid::grazing(&self.camera, &world_spec.workplane);
         world_style.major_alpha *= self.grid_alpha * grid::grazing(&self.camera, &world_spec.workplane);
+        world_style = with_resolution(
+            world_style,
+            &self.camera,
+            &world_spec.workplane,
+            world_spec.minor,
+            world_spec.major,
+        );
         // The world triad uses the same style as a local one, receding when a local frame
         // is present. The world **ground** is not drawn then (see `world` below): one
         // grid, at the active plane, is the whole point of moving the plane.
@@ -10625,7 +10680,13 @@ mod tests {
         let (minor, major) = plane_steps(None, radius, view.grid_policy());
         assert_eq!((minor, major), (1.0, 10.0), "the configured pair, uncoarsened");
         assert_eq!(
-            grid::effective_steps(&view.camera, &Workplane::world(), minor, major),
+            drawn_steps(
+                &view.camera,
+                &Workplane::world(),
+                minor,
+                major,
+                view.grid_policy()
+            ),
             (1.0, 10.0),
             "a 1 mm step is ~30 px here, so the cull leaves it alone"
         );
@@ -10681,6 +10742,79 @@ mod tests {
                 "eye {eye}: the minor level still draws (clipped, not dropped)"
             );
         }
+    }
+
+    /// With `adaptive` **off** the configured pair is the lattice at every distance: a
+    /// level the view can no longer resolve **dissolves** instead of being promoted a
+    /// decade. The promotion used to fire here as well, so a pinned 10/100 grid jumped to
+    /// 100/1000 as the camera pulled back — the "still coarsens as I zoom out with adaptive
+    /// off" report. The steps are the setting, so the ink has to be what gives.
+    #[test]
+    fn a_configured_pitch_dissolves_instead_of_re_spacing() {
+        use ferrocad_graphics::Projection;
+        use ferrocad_types::{Placement, Rotation, Vector3};
+
+        let mut view = grid_view();
+        view.camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -40.0), Rotation::identity()).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0f64.to_radians(),
+                near: 0.1,
+                far: 1_000_000.0,
+            },
+            viewport: ferrocad_graphics::Viewport::new([1000, 1000], 1.0),
+        };
+        assert!(view.set_grid_adaptive(false));
+        assert!(
+            view.set_grid_steps(20.0, 200.0),
+            "the pair is not the default, so it must change"
+        );
+        assert!(view.set_axis_cross(false));
+
+        // The major lattice's ink, as drawn: the widest `Lines` packet the layer emits.
+        let ink = |view: &InventorViewport<FakeView>| {
+            view.grid_queue
+                .packets
+                .iter()
+                .filter(|packet| packet.topology == Topology::Lines)
+                .filter_map(|packet| packet.geometry.as_ref())
+                .flat_map(|geometry| geometry.vertices.iter())
+                .map(|vertex| vertex.color[3])
+                .fold(0.0f32, f32::max)
+        };
+
+        let mut drawn = Vec::new();
+        for (eye, keeps_ink) in [(300.0, true), (3_000.0, true), (200_000.0, false)] {
+            view.camera.view = Placement::new(Vector3::new(0.0, 0.0, -eye), Rotation::identity())
+                .to_matrix();
+            view.refresh();
+
+            let policy = view.grid_policy();
+            let radius = ground_radius(&view.camera, view.grid_radius);
+            let (minor, major) = plane_steps(None, radius, policy);
+            assert_eq!((minor, major), (20.0, 200.0), "eye {eye}: the setting");
+            assert_eq!(
+                drawn_steps(&view.camera, &Workplane::world(), minor, major, policy),
+                (20.0, 200.0),
+                "eye {eye}: the configured pair is drawn exactly"
+            );
+
+            let alpha = ink(&view);
+            if keeps_ink {
+                assert!(alpha > 0.0, "eye {eye}: the lattice draws");
+            } else {
+                assert_eq!(
+                    alpha, 0.0,
+                    "eye {eye}: an unresolvable lattice dissolves rather than re-spacing"
+                );
+            }
+            drawn.push(alpha);
+        }
+        assert_eq!(
+            drawn[0], drawn[1],
+            "a resolvable lattice is drawn at full ink at any distance: {drawn:?}"
+        );
+        assert_eq!(drawn[2], 0.0, "and it is gone once the pitch is unreadable");
     }
 
     #[test]

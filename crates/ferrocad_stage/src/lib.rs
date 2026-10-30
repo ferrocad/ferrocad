@@ -75,6 +75,7 @@ pub mod snap;
 pub mod stage;
 pub mod tool;
 pub mod workplane;
+pub mod workplane_stem;
 
 pub use gizmo::{
     DEFAULT_GHOST_ALPHA, DEFAULT_HALO_WIDTH, DEFAULT_HIT_RADIUS_PX, DEFAULT_HOVER_SCALE,
@@ -85,7 +86,7 @@ pub use gizmo::{
 };
 pub use axis::AxisStyle;
 pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};
-pub use grid::{GridGeometry, GridSpec, GridStyle};
+pub use grid::{GridGeometry, GridSpec, GridStyle, Ground, MinorStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use interaction::{InteractionCommit, Manipulator};
 pub use plane_points::PlanePointsTool;
@@ -100,3 +101,7 @@ pub use snap::{
 pub use stage::Stage;
 pub use tool::{PolylineTool, Tool, ToolStatus};
 pub use workplane::{FaceFrame, StandardPlane, Workplane, WorkplaneKind};
+pub use workplane_stem::{
+    STEM_PIXELS, WORKPLANE_ENTITY, WORKPLANE_OFFSET_ACTION, WORKPLANE_OFFSET_ID,
+    WORKPLANE_STEM_PICK_ID, WorkplaneLive, WorkplaneStem,
+};

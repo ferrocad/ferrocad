@@ -40,6 +40,9 @@ pub enum StandardPlane {
     /// World `XZ`: `u = +X`, `v = +Z`, `n = -Y` (looking along `+Y`).
     Front,
     /// World `YZ`: `u = +Y`, `v = +Z`, `n = +X` (looking along `-X`).
+    ///
+    /// Upstream's `WorkingPlane.set_to_side`, and the `WP` row reads `World YZ (Side)`:
+    /// `Side` is the plane preset, `Right` (`Std_ViewRight`) is the camera view.
     Right,
 }
 

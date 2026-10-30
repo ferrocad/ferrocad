@@ -4,6 +4,7 @@ use ferrocad_graphics::{RenderQueue, ShadowFootprint};
 use ferrocad_types::Vector3;
 
 use crate::shape::ShapeItem;
+use crate::workplane::Workplane;
 
 /// A collection of declarative visual items.
 ///
@@ -79,13 +80,25 @@ impl Stage {
         queue
     }
 
-    /// The ground-shadow footprint of each item, in **world** `(x, y)`, for the fixed
+    /// The ground-shadow footprint of each item, in world `(x, y)`, for the fixed
+    /// program ABI's shadow block.
+    ///
+    /// Shorthand for [`shadow_footprints_on`](Self::shadow_footprints_on) with the world
+    /// `XY` plane. A host that draws a bound workplane should pass that plane instead, so
+    /// the shadow lands on the plane the grid is drawn on.
+    pub fn shadow_footprints(&self) -> Vec<ShadowFootprint> {
+        self.shadow_footprints_on(&Workplane::world())
+    }
+
+    /// The ground-shadow footprint of each item **in `plane`'s `(u, v)` frame**, for the fixed
     /// program ABI's shadow block.
     ///
     /// One slot per item that has positions; an empty stage yields an empty list (the
-    /// shader's loop then does not run). The footprint is the world-space AABB of the
-    /// item's displayed vertices (its placement composed with any temporary preview
-    /// transform), flattened onto `z = 0`: the shader casts shadows on the ground plane.
+    /// shader's loop then does not run). Each vertex of the item's displayed geometry (its
+    /// placement composed with any temporary preview transform) is projected onto the
+    /// plane, and the footprint is the `(u, v)` AABB: on the world `XY` ground that is the
+    /// familiar `(x, y)` box, and on a vertical plane it is that plane's own extent. The
+    /// shader therefore shades whatever plane the grid is on, not only the ground.
     ///
     /// `blur` is derived from the footprint, not supplied: a quarter of the larger
     /// half-extent (at least [`SHADOW_MIN_BLUR`] world units), so a small part gets a
@@ -93,7 +106,7 @@ impl Stage {
     ///
     /// Feed the result to [`ferrocad_graphics::apply_shadows`], which enforces the
     /// 64-slot cap and writes `shadow_count`.
-    pub fn shadow_footprints(&self) -> Vec<ShadowFootprint> {
+    pub fn shadow_footprints_on(&self, plane: &Workplane) -> Vec<ShadowFootprint> {
         let mut footprints = Vec::with_capacity(self.items.len());
         for item in &self.items {
             let positions = item.positions();
@@ -112,10 +125,13 @@ impl Stage {
                     f64::from(position[1]),
                     f64::from(position[2]),
                 ));
-                min[0] = min[0].min(point.x);
-                min[1] = min[1].min(point.y);
-                max[0] = max[0].max(point.x);
-                max[1] = max[1].max(point.y);
+                let relative = point.sub(&plane.origin);
+                let u = relative.dot(&plane.u);
+                let v = relative.dot(&plane.v);
+                min[0] = min[0].min(u);
+                min[1] = min[1].min(v);
+                max[0] = max[0].max(u);
+                max[1] = max[1].max(v);
             }
             let half = [
                 ((max[0] - min[0]) * 0.5) as f32,
@@ -228,6 +244,42 @@ mod tests {
                 .is_empty(),
             "an item with no tessellation casts no shadow"
         );
+    }
+
+    /// A footprint is measured in the plane's own frame, so a vertical workplane shades
+    /// with its `(u, v)` extents rather than the world `(x, y)` box.
+    #[test]
+    fn a_footprint_is_measured_in_the_planes_frame() {
+        use crate::StandardPlane;
+
+        // A 2 × 4 × 6 box from the origin.
+        let item = ShapeItem::new(1).with_shape(
+            vec![
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [2.0, 4.0, 0.0],
+                [0.0, 4.0, 0.0],
+                [0.0, 0.0, 6.0],
+                [2.0, 0.0, 6.0],
+                [2.0, 4.0, 6.0],
+                [0.0, 4.0, 6.0],
+            ],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let stage = Stage::new().with_item(item);
+
+        let ground = stage.shadow_footprints();
+        assert_eq!(ground[0].center, [1.0, 2.0], "world XY: the (x, y) box");
+
+        let front = stage.shadow_footprints_on(&Workplane::standard(StandardPlane::Front));
+        assert_eq!(front[0].center, [1.0, 3.0], "XZ: u = x, v = z");
+        assert_eq!(front[0].half_extent, [1.0, 3.0]);
+
+        let side = stage.shadow_footprints_on(&Workplane::standard(StandardPlane::Right));
+        assert_eq!(side[0].center, [2.0, 3.0], "YZ: u = y, v = z");
+        assert_eq!(side[0].half_extent, [2.0, 3.0]);
     }
 
     #[test]

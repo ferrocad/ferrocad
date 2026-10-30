@@ -5,6 +5,8 @@
 //!
 //! - **`Part::Feature`** — an object type with a `Shape` and a `Placement`, via
 //!   [`ferrocad_core::object_registry::ObjectType`];
+//! - **`Part::DatumPlane`** — a persistent selectable plane: its `Shape` (one
+//!   planar face named `Face1`) is derived from `Placement` + `Size` on recompute;
 //! - **`Part::Fillet`** / **`Part::Chamfer`** — parametric dress-up features whose
 //!   `execute` resolves their selected edge names through the base shape's lineage
 //!   first and the backend's positional names second, expands them to tangent chains,
@@ -25,6 +27,7 @@
 //! still need OCCT 7.8+; the crate is **not** a default member.
 
 mod containers;
+mod datum;
 mod dress_up;
 mod shape_property;
 
@@ -38,6 +41,7 @@ use ferrocad_core::property_types;
 use ferrocad_geom::{GeometryBackend, Shape};
 use ferrocad_types::{Placement, Vector3};
 
+pub use datum::DATUM_PLANE_TYPE;
 pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
 pub use containers::{
     COMMON_TYPE, COMPOUND_TYPE, CUT_TYPE, FUSE_TYPE, MULTICOMMON_TYPE, MULTIFUSE_TYPE,
@@ -247,6 +251,7 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     shape_property::register();
     register_shape_list();
     object_registry::register("Part::Feature", Arc::new(Feature));
+    object_registry::register(DATUM_PLANE_TYPE, Arc::new(datum::DatumPlane));
     object_registry::register(BOX_TYPE, Arc::new(BoxPrimitive));
     object_registry::register(CYLINDER_TYPE, Arc::new(CylinderPrimitive));
     object_registry::register(SPHERE_TYPE, Arc::new(SpherePrimitive));

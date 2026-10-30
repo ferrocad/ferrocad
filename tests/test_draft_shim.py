@@ -1,9 +1,11 @@
 """Tests for the minimal ``Draft`` compatibility shim (``python/Draft``).
 
 The shim exists so the upstream Part tests (``TestPartMirror.py`` and, through
-it, ``TestPartApp.py``) can *load*: they only need ``Draft.make_clone``. It is
-deliberately not the Draft workbench, so these tests pin down the implemented
-surface and the loud failures outside it.
+it, ``TestPartApp.py``) can *load*: they only need ``Draft.make_clone``. It also
+implements the scripted ``Draft ShapeString`` (``make_shape_string`` and its
+deprecated aliases), whose geometry needs ``Part`` but whose module import does
+not. It is deliberately not the Draft workbench, so these tests pin down the
+implemented surface and the loud failures outside it.
 
 ``make_clone`` builds an ``App::Link``. In this standalone Python environment
 the ``Part`` module is not loaded, so the link has no ``Shape`` output; the
@@ -32,9 +34,19 @@ class _NoActiveDocument:
 
 
 class DraftShimSurfaceTests(unittest.TestCase):
-    def test_only_make_clone_is_exported(self):
-        self.assertEqual(Draft.__all__, ["make_clone"])
-        self.assertTrue(callable(Draft.make_clone))
+    def test_the_implemented_surface_is_exported(self):
+        self.assertEqual(
+            Draft.__all__,
+            [
+                "make_clone",
+                "make_shape_string",
+                "make_shapestring",
+                "makeShapeString",
+                "ShapeString",
+            ],
+        )
+        for name in Draft.__all__:
+            self.assertTrue(callable(getattr(Draft, name)), name)
 
     def test_a_missing_draft_name_raises_and_names_the_shim(self):
         with self.assertRaises(AttributeError) as caught:

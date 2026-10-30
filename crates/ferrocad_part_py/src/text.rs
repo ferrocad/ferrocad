@@ -11,14 +11,15 @@
 //! orientation. Outer and inner contours are both reversed, so the relative
 //! orientation (what a fill reads) is unchanged; we keep the font's direction.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ferrocad_curves::{BezierCurve, EdgeCurve, LineSegment, Vector3};
 use ferrocad_geom::Shape;
 use ferrocad_part::backend;
 use ferrocad_text::{Contour, PathCommand, Point2};
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyList, PyString};
 
 use crate::PartShape;
 use crate::curves::{OCCError, curve_error, kernel_error, shape_from_curve};
@@ -27,27 +28,34 @@ use crate::curves::{OCCError, curve_error, kernel_error, shape_from_curve};
 /// `ferrocad_text`'s contour builder.
 const SAME_POINT: f64 = 1e-9;
 
-/// `Part.makeWireString(text, dir, fontfile, height, tracking=0)`.
+/// `Part.makeWireString(text, dir, fontfile, height, tracking=0)` or
+/// `Part.makeWireString(text, fontspec, height, tracking=0)`.
 ///
 /// Returns one list per character, in text order, each holding that character's
 /// closed wires — upstream's `list[list[Wire]]`. A character with no outline (a
 /// space) gives an empty inner list.
+///
+/// Upstream accepts **two** argument shapes (`AppPartPy.cpp:2341`): the old
+/// `(text, dir, fontfile, height[, tracking])`, and the newer
+/// `(text, fontspec, height[, tracking])` where `fontspec` is a full path. Draft's
+/// ShapeString uses the second, so both are supported here and the choice is made
+/// by the type of the second argument (a string file name, or a number).
 #[pyfunction]
-#[pyo3(signature = (text, dir, fontfile, height, tracking = 0.0))]
+#[pyo3(signature = (text, a, b, c = None, d = None))]
 pub(crate) fn makeWireString<'py>(
     py: Python<'py>,
     text: &str,
-    dir: &str,
-    fontfile: &str,
-    height: f64,
-    tracking: f64,
+    a: &Bound<'py, PyAny>,
+    b: &Bound<'py, PyAny>,
+    c: Option<&Bound<'py, PyAny>>,
+    d: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyList>> {
+    let (path, height, tracking) = font_and_size(a, b, c, d)?;
     if !height.is_finite() || height <= 0.0 {
         return Err(OCCError::new_err(
             "makeWireString: the text height must be greater than zero",
         ));
     }
-    let path = Path::new(dir).join(fontfile);
     let bytes = std::fs::read(&path).map_err(|error| {
         OCCError::new_err(format!(
             "makeWireString: cannot read the font file {}: {error}",
@@ -70,6 +78,60 @@ pub(crate) fn makeWireString<'py>(
         characters.append(wires)?;
     }
     Ok(characters)
+}
+
+/// Resolve upstream's two argument shapes to `(path, height, tracking)`.
+fn font_and_size(
+    a: &Bound<'_, PyAny>,
+    b: &Bound<'_, PyAny>,
+    c: Option<&Bound<'_, PyAny>>,
+    d: Option<&Bound<'_, PyAny>>,
+) -> PyResult<(PathBuf, f64, f64)> {
+    let as_string = |value: &Bound<'_, PyAny>, what: &str| -> PyResult<String> {
+        value
+            .extract::<String>()
+            .map_err(|_| PyTypeError::new_err(format!("makeWireString: {what} must be a string")))
+    };
+    let as_number = |value: &Bound<'_, PyAny>, what: &str| -> PyResult<f64> {
+        value
+            .extract::<f64>()
+            .map_err(|_| PyTypeError::new_err(format!("makeWireString: {what} must be a number")))
+    };
+    let optional_number = |value: Option<&Bound<'_, PyAny>>, what: &str| -> PyResult<f64> {
+        match value {
+            Some(value) => as_number(value, what),
+            None => Ok(0.0),
+        }
+    };
+
+    if b.is_instance_of::<PyString>() {
+        // (text, dir, fontfile, height[, tracking])
+        let dir = as_string(a, "the font directory")?;
+        let file = as_string(b, "the font file name")?;
+        let Some(height) = c else {
+            return Err(PyTypeError::new_err(
+                "makeWireString: missing height (dir, fontfile, height)",
+            ));
+        };
+        Ok((
+            Path::new(&dir).join(file),
+            as_number(height, "height")?,
+            optional_number(d, "tracking")?,
+        ))
+    } else {
+        // (text, fontspec, height[, tracking])
+        if d.is_some() {
+            return Err(PyTypeError::new_err(
+                "makeWireString takes at most four arguments as (fontspec, height, tracking)",
+            ));
+        }
+        let spec = as_string(a, "the font file")?;
+        Ok((
+            PathBuf::from(spec),
+            as_number(b, "height")?,
+            optional_number(c, "tracking")?,
+        ))
+    }
 }
 
 /// One contour as a closed wire, placed at `origin`.

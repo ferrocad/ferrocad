@@ -17,6 +17,7 @@ Related: [`simplecad-bringup.md`](simplecad-bringup.md) SC2 (the font pipeline),
 | Wires | closed loops of edges | `Part.Wire`, `backend.make_wire` | yes |
 | Faces | planar faces with counters (holes) | `Part.Face(wires, "Part::FaceMakerBullseye")` | yes |
 | Extrusion | `Shape.extrude(Vector)` / `Part::Extrusion` | `ferrocad_part_py`, `ferrocad_occt` | yes |
+| **ShapeString object** | a `Part::Part2DObjectPython` whose proxy rebuilds the text on every recompute | `python/Draft/__init__.py` | yes |
 
 **Text is not an OCCT concept.** A string is a set of 2-D contours, which is a font problem;
 `ferrocad_text` produces them with `skrifa`/`read-fonts` and no kernel. The moment a contour
@@ -89,15 +90,37 @@ concept: it converts a length to pixels. B-Rep text has no pixels.
 
 ## 6. The minimal demo
 
-`tests/test_text_workflow.py` runs the whole thing on the word **`ferrocad`**:
+**The object form is `Draft.make_shape_string`.** Upstream's Draft ShapeString was
+checked before writing anything, and it was not implemented here: the tree had the
+`TaskShapeString.ui` **form** (loaded and tested by the Qt-reduction work) but no
+`make_shape_string`, no object type and no command. It now exists as a scripted
+`Part::Part2DObjectPython` proxy in `python/Draft/__init__.py` (the Draft shim):
 
-1. `Part.makeWireString("ferrocad", dir, "LiberationMono-Regular.ttf", 100.0)` → 8 lists of
-   wires; contour counts are `[1, 2, 1, 1, 2, 1, 2, 2]` (`e`, `o`, `a`, `d` have counters).
+```python
+doc = App.newDocument()
+obj = Draft.make_shape_string("ferrocad", "/path/to/font.ttf", 20, 1.0)
+obj.Shape                       # compound of 8 faces (MakeFace defaults to True)
+obj.Shape.Faces[0].extrude(App.Vector(0, 0, 2)).ShapeType   # "Solid"
+obj.String = "AB"; doc.recompute()                          # rebuilds
+```
+
+Properties implemented: `String`, `FontFile`, `Size`, `Tracking`, `MakeFace`,
+`ScaleToSize`, `Justification`, `JustificationReference`, `KeepLeftMargin`,
+`ObliqueAngle`. `make_shapestring`/`makeShapeString` are the deprecated aliases.
+The proxy survives a native `.ferrocad` save/reopen (the restore path finds
+`Draft.ShapeString` and re-runs `execute` on the next edit).
+
+The low-level workflow is still worth knowing, and `tests/test_text_workflow.py` runs
+both. On the word **`ferrocad`**:
+
+1. `Part.makeWireString("ferrocad", dir, "LiberationMono-Regular.ttf", 100.0)` → 8
+   lists of wires; contour counts are `[1, 2, 1, 1, 2, 1, 2, 2]` (`e`, `o`, `a`, `d`
+   have counters).
 2. `Part.Face(wires, "Part::FaceMakerBullseye")` → one planar face per glyph.
 3. `face.extrude(Vector(0, 0, 2))` → 8 closed, valid solids.
 4. **Raised:** `plate.fuse(text)` adds exactly `text.Volume`.
-5. **Etched:** `plate.cut(text)` placed 1 mm into the plate removes exactly half the text
-   volume (2 mm deep, 1 mm overlapping).
+5. **Etched:** `plate.cut(text)` placed 1 mm into the plate removes exactly half the
+   text volume (2 mm deep, 1 mm overlapping).
 
 Two traps the test pins:
 
@@ -109,12 +132,23 @@ Two traps the test pins:
 ## 7. Open questions
 
 1. **`/ 10`**: confirm upstream's own `YMax("M")` at a nominal height; if it is 10× off, fix
-   it as its own change with SimpleCAD in the loop.
-2. **A text object.** Today text is a script: build wires, face them, extrude. Should there
-   be a `Part::Feature` (or `Draft::ShapeString`-shaped) document object that owns the
-   string, font and height and rebuilds on edit? That is the natural next step and it
-   belongs with P4 SK4's creation-command work.
-3. **Shaping**, if a non-Latin or ligature requirement appears.
-4. **Paragraph layout**, only when a real multi-line use case exists.
-5. **`ferrocad_parametric_toy`**: rejected here; reopen only if a kernel-free edition needs
+   it as its own change with SimpleCAD in the loop. (`Draft.make_shape_string` sidesteps it
+   with `ScaleToSize`, which is why SimpleCAD — which does not rescale — is the place to
+   see it.)
+2. **`Part.makeWireString` has two call forms**: `(text, dir, fontfile, height[, tracking])`
+   and `(text, fontspec, height[, tracking])`. Both are implemented; Draft uses the second,
+   and a script that passes a full path in the first form would have failed before this was
+   added.
+3. **ShapeString gaps**, deliberate for now: `Fuse` (needs Draft's
+   `faces.concatenate`) and the sticky-font probe that disables `MakeFace` for fonts whose
+   contours cannot be filled. Neither is declared as a property, so a script that sets them
+   fails loudly rather than silently doing nothing.
+4. **A GUI command**: `TaskShapeString.ui` is already loaded by the shell's form host; the
+   command that would drive it (`Draft_ShapeString`) is not registered.
+5. **`.FCStd` persistence**: the object's proxy survives a native `.ferrocad` save, but the
+   `.FCStd` writer drops proxy state (a known limitation), so a reopened `.FCStd` keeps the
+   last `Shape` but will not rebuild on edit.
+6. **Shaping**, if a non-Latin or ligature requirement appears.
+7. **Paragraph layout**, only when a real multi-line use case exists.
+8. **`ferrocad_parametric_toy`**: rejected here; reopen only if a kernel-free edition needs
    editable 2-D text, which would be a toy tool, not a new edition.

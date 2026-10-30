@@ -21,8 +21,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import tempfile
 import unittest
 
+import Draft
+import FreeCAD
 import Part
 from FreeCAD import Vector
 
@@ -130,6 +133,79 @@ class TextIntoAPlateTests(unittest.TestCase):
         self.assertIs(moved, self.text)
         self.assertAlmostEqual(moved.Volume, before, places=9)
         self.assertAlmostEqual(moved.BoundBox.ZMin, 10.0, places=9)
+
+
+class DraftShapeStringTests(unittest.TestCase):
+    """Upstream's object form: `Draft.make_shape_string`."""
+
+    def setUp(self):
+        self.doc = FreeCAD.newDocument("ShapeStringTests")
+
+    def tearDown(self):
+        if self.doc.Name in FreeCAD.listDocuments():
+            FreeCAD.closeDocument(self.doc.Name)
+
+    def make(self, text="ferrocad", size=20.0, tracking=1.0):
+        return Draft.make_shape_string(text, str(FONT_DIR / FONT), size, tracking)
+
+    def test_it_builds_one_face_per_glyph(self):
+        obj = self.make()
+        self.assertEqual(obj.String, "ferrocad")
+        self.assertEqual(len(obj.Shape.Faces), 8)
+        self.assertTrue(obj.Shape.isValid())
+        for face in obj.Shape.Faces:
+            solid = face.extrude(Vector(0, 0, DEPTH))
+            self.assertEqual(solid.ShapeType, "Solid")
+            self.assertTrue(solid.isClosed())
+
+    def test_scale_to_size_makes_size_the_cap_height(self):
+        """Upstream's `ScaleToSize` plus `Bottom-Left`/`Cap Height`."""
+        obj = self.make("M", size=20.0, tracking=0.0)
+        box = obj.Shape.BoundBox
+        self.assertAlmostEqual(box.YMin, 0.0, places=6)
+        self.assertAlmostEqual(box.YMax, 20.0, places=6)
+        self.assertAlmostEqual(box.XMin, 0.0, places=6)
+
+    def test_make_face_off_gives_wires_and_shells(self):
+        obj = self.make("o")
+        obj.MakeFace = False
+        self.doc.recompute()
+        self.assertEqual(len(obj.Shape.Faces), 0)
+        self.assertEqual(len(obj.Shape.Wires), 2)
+        shell = obj.Shape.Wires[0].extrude(Vector(0, 0, DEPTH))
+        self.assertEqual(shell.ShapeType, "Shell")
+
+    def test_editing_the_string_rebuilds(self):
+        obj = self.make()
+        obj.String = "AB"
+        self.doc.recompute()
+        self.assertEqual(len(obj.Shape.Faces), 2)
+
+    def test_the_deprecated_aliases_return_the_same_object(self):
+        obj = Draft.make_shapestring("A", str(FONT_DIR / FONT), 10, 0)
+        self.assertEqual(obj.String, "A")
+        other = Draft.makeShapeString("B", str(FONT_DIR / FONT), 10, 0)
+        self.assertEqual(other.String, "B")
+
+    def test_it_round_trips_through_a_native_save(self):
+        obj = self.make()
+        self.assertEqual(len(obj.Shape.Faces), 8)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/text.ferrocad"
+            self.doc.saveAs(path)
+            FreeCAD.closeDocument(self.doc.Name)
+            reopened = FreeCAD.openDocument(path)
+            try:
+                copy = reopened.getObject("ShapeString")
+                self.assertIsNotNone(copy)
+                self.assertEqual(copy.String, "ferrocad")
+                self.assertEqual(len(copy.Shape.Faces), 8)
+                # The proxy came back, so an edit rebuilds the shape.
+                copy.String = "A"
+                reopened.recompute()
+                self.assertEqual(len(copy.Shape.Faces), 1)
+            finally:
+                FreeCAD.closeDocument(reopened.Name)
 
 
 if __name__ == "__main__":

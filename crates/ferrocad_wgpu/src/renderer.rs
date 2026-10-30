@@ -156,6 +156,10 @@ pub struct WgpuRenderer {
     /// The pick targets, allocated lazily on the first [`pick_at`](Self::pick_at) and
     /// dropped on resize (they track the target size).
     pick_targets: Option<PickTargets>,
+    /// The reusable readback staging buffer for the image path (dropped on resize).
+    readback: Option<wgpu::Buffer>,
+    /// The byte size [`readback`](Self::readback) was allocated for.
+    readback_bytes: u64,
 }
 
 impl WgpuRenderer {
@@ -214,6 +218,8 @@ impl WgpuRenderer {
             mesh_cache: HashMap::new(),
             pick_pipelines,
             pick_targets: None,
+            readback: None,
+            readback_bytes: 0,
         }
     }
 
@@ -277,6 +283,8 @@ impl WgpuRenderer {
         trace::resized(self.size, size, self.targets.sample_count);
         self.targets = Targets::new(&self.context.device, size, self.targets.sample_count);
         self.pick_targets = None; // re-allocated at the new size on the next pick
+        self.readback = None; // re-allocated at the new size on the next readback
+        self.readback_bytes = 0;
         self.size = size;
     }
 
@@ -928,7 +936,7 @@ impl WgpuRenderer {
             gpu_queue,
             &targets.normal,
             wgpu::TextureAspect::All,
-            16,
+            pick::NORMAL_FORMAT.block_copy_size(None).unwrap_or(8),
             origin,
         )
         .ok()?;
@@ -950,12 +958,9 @@ impl WgpuRenderer {
         }
         let entity = entity_raw - 1;
         let part = read_u32(&ids[4..])?;
-        let normal = [
-            read_f32(&normals)?,
-            read_f32(&normals[4..])?,
-            read_f32(&normals[8..])?,
-        ];
-        let topology = topology_from_ordinal(read_f32(&normals[12..])? as u32);
+        let decoded = pick::read_normal(&normals, pick::NORMAL_FORMAT)?;
+        let normal = [decoded[0], decoded[1], decoded[2]];
+        let topology = topology_from_ordinal(decoded[3] as u32);
         let depth = read_f32(&depths)?;
 
         let [width_f, height_f] = [f64::from(width), f64::from(height)];
@@ -1069,24 +1074,36 @@ impl WgpuRenderer {
     }
 
     /// Read `texture` back into RGBA8, stripping the row padding wgpu requires.
-    fn read_back(&self, texture: &wgpu::Texture) -> Result<ImageData, RenderError> {
+    ///
+    /// The staging buffer is kept between frames (and dropped on resize): the fallback
+    /// path runs at the viewport's physical size, so allocating ~13 MB per paint was a
+    /// real cost on top of the copy itself.
+    fn read_back(&mut self, texture: &wgpu::Texture) -> Result<ImageData, RenderError> {
         let [width, height] = self.size;
         let unpadded = width * 4;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded = unpadded.div_ceil(align) * align;
+        let bytes = u64::from(padded) * u64::from(height);
 
-        let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ferrocad readback"),
-            size: u64::from(padded) * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let buffer = match self.readback.take() {
+            Some(buffer) if self.readback_bytes == bytes => buffer,
+            _ => {
+                self.readback_bytes = bytes;
+                self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("ferrocad readback"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            }
+        };
 
-        let mut encoder = self.context.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("ferrocad readback"),
-            },
-        );
+            });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture,
@@ -1118,13 +1135,20 @@ impl WgpuRenderer {
             .map_err(|_| RenderError::Readback("device poll failed"))?;
 
         let view = slice.get_mapped_range();
-        let mut rgba = Vec::with_capacity((unpadded * height) as usize);
-        for row in 0..height {
-            let start = (row * padded) as usize;
-            rgba.extend_from_slice(&view[start..start + unpadded as usize]);
-        }
+        // An aligned row is already the image: one memcpy instead of one per row.
+        let rgba = if padded == unpadded {
+            view.to_vec()
+        } else {
+            let mut rgba = Vec::with_capacity((unpadded * height) as usize);
+            for row in 0..height {
+                let start = (row * padded) as usize;
+                rgba.extend_from_slice(&view[start..start + unpadded as usize]);
+            }
+            rgba
+        };
         drop(view);
         buffer.unmap();
+        self.readback = Some(buffer);
 
         // Black-frame probe: only runs where a readback already exists, so it costs an
         // atomic load when tracing is off.
@@ -1167,7 +1191,8 @@ impl InventorView for WgpuRenderer {
     }
 
     fn image(&mut self) -> Result<ImageData, Self::Error> {
-        self.read_back(&self.targets.color)
+        let color = self.targets.color.clone();
+        self.read_back(&color)
     }
 
     fn supports_pick(&self) -> bool {
@@ -1788,12 +1813,14 @@ pub(crate) mod tests {
         };
         let top = texel(16, 32);
         let side = texel(48, 32);
+        // Golden values for the current three-point rig: the top facet takes
+        // `color`, the side facet `shade`, and both are lit by the same rig.
         assert!(
-            near(top, [77, 83, 93]),
+            near(top, [73, 79, 88]),
             "the up-facing facet is glass-top: {top:?}"
         );
         assert!(
-            near(side, [13, 17, 24]),
+            near(side, [13, 17, 25]),
             "the side facet is glass-shade: {side:?}"
         );
     }

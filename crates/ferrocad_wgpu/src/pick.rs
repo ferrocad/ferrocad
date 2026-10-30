@@ -9,7 +9,9 @@
 //! Two colour targets are written:
 //!
 //! - [`ID_FORMAT`] `Rg32Uint` — `[entity_id, part_idx]`, the identity the caller needs.
-//! - [`NORMAL_FORMAT`] `Rgba32Float` — `[normal.xyz, topology]`, the surface normal and
+//! - [`normal_format`](NORMAL_FORMAT) `Rgba16Float` — `[normal.xyz, topology]`. 16-bit
+//!   float is renderable on Vulkan, GL and WebGPU; `Rgba32Float` is not everywhere
+//!   (Intel's Mesa Vulkan driver rejects it), which silently disabled GPU picking.
 //!   which primitive kind was hit.
 //! - [`DEPTH_FORMAT`](crate::pipeline::DEPTH_FORMAT)-style depth as a **`R32Float` colour
 //!   target**, so the host can copy a single texel: a depth *attachment* cannot be
@@ -30,7 +32,12 @@ use crate::pipeline::DEPTH_FORMAT;
 /// The pick id/detail target format: `[entity_id, part_idx]`.
 pub const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Uint;
 /// The pick normal/topology target format: `[normal.xyz, topology]`.
-pub const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+///
+/// 16-bit float rather than 32-bit: a 128-bit float colour attachment is optional and
+/// Intel's Mesa Vulkan driver refuses it, which failed every pick pipeline at creation
+/// and silently disabled GPU picking. Half floats are renderable everywhere wgpu runs
+/// and are ample for a unit normal plus a topology ordinal.
+pub const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The pick depth target format (a colour target the host can copy, not the attachment).
 pub const DEPTH_VALUE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
@@ -198,6 +205,57 @@ impl PickPipelines {
     }
 }
 
+/// Decode a normal/topology texel in `format` into `[nx, ny, nz, topology]`.
+pub fn read_normal(bytes: &[u8], format: wgpu::TextureFormat) -> Option<[f32; 4]> {
+    match format {
+        wgpu::TextureFormat::Rgba32Float => Some([
+            read_f32(bytes, 0)?,
+            read_f32(bytes, 4)?,
+            read_f32(bytes, 8)?,
+            read_f32(bytes, 12)?,
+        ]),
+        wgpu::TextureFormat::Rgba16Float => Some([
+            f16_to_f32(read_u16(bytes, 0)?),
+            f16_to_f32(read_u16(bytes, 2)?),
+            f16_to_f32(read_u16(bytes, 4)?),
+            f16_to_f32(read_u16(bytes, 6)?),
+        ]),
+        wgpu::TextureFormat::Rgba8Snorm => Some([
+            snorm8(*bytes.get(0)?),
+            snorm8(*bytes.get(1)?),
+            snorm8(*bytes.get(2)?),
+            snorm8(*bytes.get(3)?),
+        ]),
+        _ => None,
+    }
+}
+
+fn read_f32(bytes: &[u8], at: usize) -> Option<f32> {
+    Some(f32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
+fn read_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
+}
+
+fn snorm8(byte: u8) -> f32 {
+    (byte as i8) as f32 / 127.0
+}
+
+/// IEEE 754 binary16 to f32 (no external crate).
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exponent = (bits >> 10) & 0x1f;
+    let mantissa = bits & 0x3ff;
+    let magnitude = match exponent {
+        0 => mantissa as f32 * 2f32.powi(-24),
+        0x1f if mantissa == 0 => f32::INFINITY,
+        0x1f => f32::NAN,
+        _ => (1.0 + mantissa as f32 / 1024.0) * 2f32.powi(exponent as i32 - 15),
+    };
+    sign * magnitude
+}
+
 /// Copy a single texel of `texture` back to the CPU as its raw bytes.
 ///
 /// `bytes_per_texel` is the format's texel size (4 or 8). wgpu requires
@@ -256,4 +314,46 @@ pub fn read_texel(
     drop(view);
     buffer.unmap();
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_half_float_decodes() {
+        assert_eq!(f16_to_f32(0x0000), 0.0);
+        assert_eq!(f16_to_f32(0x3c00), 1.0);
+        assert_eq!(f16_to_f32(0xbc00), -1.0);
+        assert_eq!(f16_to_f32(0xc000), -2.0);
+        assert!((f16_to_f32(0x3555) - 0.33325).abs() < 1e-4);
+        assert_eq!(f16_to_f32(0x7c00), f32::INFINITY);
+    }
+
+    #[test]
+    fn the_normal_texel_decodes_in_each_format() {
+        let half: Vec<u8> = [0x3c00u16, 0x0000, 0xbc00, 0x0000]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(
+            read_normal(&half, wgpu::TextureFormat::Rgba16Float),
+            Some([1.0, 0.0, -1.0, 0.0])
+        );
+
+        let full: Vec<u8> = [0.5f32, -0.5, 1.0, 2.0]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        assert_eq!(
+            read_normal(&full, wgpu::TextureFormat::Rgba32Float),
+            Some([0.5, -0.5, 1.0, 2.0])
+        );
+
+        let normals = read_normal(&[127, 0, 0x81, 0x7f], wgpu::TextureFormat::Rgba8Snorm)
+            .expect("snorm decodes");
+        assert!((normals[0] - 1.0).abs() < 1e-6);
+        assert_eq!(normals[1], 0.0);
+        assert!((normals[2] + 1.0).abs() < 1e-6);
+    }
 }

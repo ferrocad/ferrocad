@@ -240,12 +240,13 @@ and `the_gizmo_interior_falls_through_to_the_scene` (viewport).
 
 ### 7. Lifecycle and modifiers
 
-**One mode (built 2026-10-30).** There is no separate *normal* and *deferred* drag: the shell
-enables the viewport's preview mode once at startup, so a release reports a preview and never
-commits. The shell owns a `TransformSession`; `Enter` commits it as one transaction, `Esc`
-rolls it back, and a selection change commits a dirty session first. The commit route is still
-the `App_Move` callback (`_move_selection` is the writer); moving it to the interaction
-provider is planned.
+**One mode (built 2026-10-30; the flag removed 2026-10-31).** There is no separate *normal*
+and *deferred* drag and no viewport mode flag. A **translation** drag reports previews and
+never commits: the shell owns a `TransformSession`; `Enter` commits it as one transaction,
+`Esc` rolls it back, and a selection change commits a dirty session first. **Rotation** has no
+session yet, so a ring drag keeps the viewport's direct preview and commit. The commit route for
+translation is still the `App_Move` callback (`_move_selection` is the writer); moving it to
+the interaction provider is planned.
 
 ```mermaid
 stateDiagram-v2

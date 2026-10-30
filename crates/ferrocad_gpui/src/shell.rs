@@ -219,11 +219,11 @@ fn snap_name(kind: SnapKind) -> &'static str {
     }
 }
 
-/// The translation a gizmo drag is already showing, used to seed the Move HUD when
+/// The translation a gizmo drag is already showing, used to seed the Move pill when
 /// escalation starts.
 ///
-/// `axis` is the field the HUD should focus (0 = X, 1 = Y, 2 = Z); a plane drag
-/// focuses X, matching the typed-field order. Built by [`PendingMove::seed`].
+/// `axis` is the field the pill should focus (0 = X, 1 = Y, 2 = Z); a plane drag
+/// focuses X, matching the typed-field order. Built by [`Shell::gizmo_seed`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct GizmoSeed {
     pub axis: usize,
@@ -239,93 +239,6 @@ fn axis_of(delta: [f64; 3]) -> usize {
         (false, true, false) => 1,
         (false, false, true) => 2,
         _ => 0,
-    }
-}
-
-/// The Move session's pending translation — one home for the value.
-///
-/// Three things used to describe it separately: the dialog's exact delta
-/// (`OpenDialog::translation`), the last deferred-drag tick (`Shell::gizmo_drag`) and the
-/// Δ fields at the drag's start (`Shell::drag_baseline`). They are states of one value, and
-/// keeping them apart is how a release could commit something the user never saw. The
-/// fields are a rounded **view** of [`dragged`](Self::dragged); they become authoritative
-/// only when the user types.
-///
-/// It is deliberately not part of the dialog: the unified session replaces the HUD and
-/// keeps the pending move (see `docs/project/tasks/transform-session.md`).
-/// It is deliberately **translation only**: the only deferred path is the Move HUD
-/// (`DialogSpec::previews_translation`), and `Rotate` opens no dialog
-/// (`_RotateCommand.Activated` returns a status, `python/ferrocad_shell/__init__.py`), so a
-/// ring drag never emits a `TransformPreview` — the viewport previews and commits it from the
-/// full matrix itself. There is therefore no shell-side rotation state to hold. When a
-/// rotate *session* exists it is `TransformSession`'s (see
-/// `docs/project/tasks/transform-session.md` §2.4), which carries `mode` and a matrix.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct PendingMove {
-    /// The exact delta a drag produced. `None` when the Δ fields are authoritative
-    /// (nothing has been dragged since the HUD opened, or the user typed since).
-    dragged: Option<[f64; 3]>,
-    /// The value the running drag started from. `Some` only between its `Begin` and its
-    /// `End`, so successive drags accumulate into one move.
-    baseline: Option<[f64; 3]>,
-    /// The field a keyboard escalation should focus.
-    axis: usize,
-}
-
-impl PendingMove {
-    /// Start a drag: `current` is the pending value the drag adds to (the session's delta,
-    /// or zero when there is none).
-    fn begin_drag(&mut self, current: [f64; 3]) {
-        self.baseline = Some(current);
-    }
-
-    /// End the drag. The accumulated value stays — that is the pending move.
-    fn end_drag(&mut self) {
-        self.baseline = None;
-    }
-
-    /// Apply a drag tick's own delta (`Begin`/`Update`/`End` report it from the press).
-    ///
-    /// Returns the accumulated value, which is what a drag tick means for the session.
-    fn tick(&mut self, drag: [f64; 3]) -> [f64; 3] {
-        let baseline = self.baseline.unwrap_or([0.0; 3]);
-        self.dragged = Some([
-            baseline[0] + drag[0],
-            baseline[1] + drag[1],
-            baseline[2] + drag[2],
-        ]);
-        self.axis = axis_of(drag);
-        self.dragged.unwrap_or([0.0; 3])
-    }
-
-    /// A typed edit: the Δ fields win from now on.
-    fn typed(&mut self) {
-        self.dragged = None;
-    }
-
-    /// Whether a drag set the current value (as opposed to a typed edit or nothing).
-    ///
-    /// This is what decides whether the commit overrides the Δ fields with the exact value
-    /// and whether the session, rather than the field text, is authoritative.
-    fn is_dragged(&self) -> bool {
-        self.dragged.is_some()
-    }
-
-    fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    /// The exact delta the session would commit, when a drag set it.
-    fn dragged(&self) -> Option<[f64; 3]> {
-        self.dragged
-    }
-
-    /// What a keyboard escalation seeds the HUD with, when there is no viewport to ask.
-    fn seed(&self) -> GizmoSeed {
-        GizmoSeed {
-            axis: self.axis,
-            delta: self.dragged.unwrap_or_default(),
-        }
     }
 }
 
@@ -487,24 +400,22 @@ pub struct Shell {
     /// The last pointer position in window coordinates. Space opens the wheel
     /// there; a keyboard-only session falls back to the window centre.
     last_pointer: Option<Point<Pixels>>,
-    /// The Move session's pending translation. One home for the value: the exact delta a
-    /// drag produced, the value that drag started from, and the axis to focus. The Δ
-    /// fields are a rounded *view* of it; they are authoritative only after a typed edit.
-    ///
-    /// It lives here rather than in the dialog because the session outlives a HUD (the
-    /// loadout plan deletes the HUD entirely, see
-    /// `docs/project/tasks/transform-session.md`).
-    pending_move: PendingMove,
+    /// The running gizmo drag's baseline: the pending value at its press. `None` between
+    /// drags. The value itself lives in [`session`](Self::session); this only accumulates
+    /// the viewport's per-drag transform onto the session's absolute delta.
+    drag_start: Option<[f64; 3]>,
     /// The live transform session, when a Move drag has opened one.
     ///
-    /// [`PendingMove`] is the HUD's view (the Δ fields, the drag baseline); this is the
-    /// uncommitted value itself: the datum the gesture started from, the accumulated
-    /// translation, and the matrix the item would be drawn with. The shell owns it because
-    /// the commit and the eventual ghost tape both belong to the session, not to the form
-    /// — and because a second window must not start a second session on the same object.
+    /// This is the uncommitted value: the datum the gesture started from, the accumulated
+    /// translation, and the matrix the item would be drawn with. The Δ fields are a rounded
+    /// **view** of it and write parsed values back; a drag updates it from the exact
+    /// viewport transform. The shell owns it because the commit and the eventual ghost
+    /// tape both belong to the session, not to the form — and because a second window
+    /// must not start a second session on the same object.
     ///
-    /// It is `None` until a drag begins on an item the shell has a stage for: a session
-    /// with no datum would have to invent one (see `TransformSession::begin`).
+    /// It is `None` until a Move pill opens or a drag begins on an item the shell has a
+    /// stage for: a session with no datum would have to invent one (see
+    /// `TransformSession::begin`).
     session: Option<TransformSession>,
     /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
     ///
@@ -859,7 +770,7 @@ impl Shell {
             _wheel_events: wheel_events,
             wheel_target: None,
             last_pointer: None,
-            pending_move: PendingMove::default(),
+            drag_start: None,
             session: None,
             workplane_session: None,
             hud_rect: None,
@@ -1352,10 +1263,6 @@ else:
             // armed later.
             viewport.set_gizmo_style(state.gizmo.clone());
             viewport.set_gizmo_skin(gizmo_skin);
-            // One mode: a drag reports previews and never commits. The session owns the
-            // commit, so there is no "normal vs deferred" split and no release-time
-            // transaction to lose or double-apply.
-            viewport.set_gizmo_preview(true);
         }
         // A tool started before the viewport existed (a script, a command while no
         // GPU was available) is applied now that there is one. A Python-backed

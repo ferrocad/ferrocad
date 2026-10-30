@@ -20,8 +20,24 @@ fn armed_window(
     });
     let mut visual = VisualTestContext::from_window(window.into(), cx);
     let shell: Entity<Shell> = window.root(&mut visual).unwrap();
+    // A stage gives the session its datum: the pill opens one from `last_stage`, and a
+    // drag tick needs it to publish the pending value.
+    let mesh: StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Params",
+            "positions": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            "triangles": [0, 1, 2],
+            "triangle_parts": [0, 0, 0],
+            "edges": [],
+            "parts": []
+        }"#,
+    )
+    .expect("the test mesh");
     visual.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
+            let stage = shell.display.build(vec![mesh]);
+            shell.set_stage(stage, cx);
             shell.select("Params", cx);
             shell.model.lock().unwrap().gizmo_armed = true;
         });
@@ -91,11 +107,14 @@ fn tab_with_an_armed_gizmo_opens_the_move_hud_at_zero(cx: &mut TestAppContext) {
 
     press_root(&mut cx, &shell, "tab");
 
-    let (open, session) = shell.read_with(&cx, |shell, _| {
-        (shell.dialog.is_some(), shell.session.is_some())
+    let (open, dirty) = shell.read_with(&cx, |shell, _| {
+        (
+            shell.dialog.is_some(),
+            shell.session.as_ref().is_some_and(|session| session.is_dirty()),
+        )
     });
     assert!(open, "Tab opens the Move HUD while a gizmo is armed");
-    assert!(!session, "no drag yet, so no pending move");
+    assert!(!dirty, "no drag yet, so the session is clean");
     assert_eq!(
         fields(&shell, &cx),
         [0.0, 0.0, 0.0],
@@ -119,9 +138,13 @@ fn a_digit_opens_the_hud_and_types_the_digit(cx: &mut TestAppContext) {
         shell.read_with(&cx, |shell, _| shell.dialog.is_some()),
         "a digit opens the Move HUD"
     );
-    assert!(
-        shell.read_with(&cx, |shell, _| shell.session.is_none()),
-        "the HUD opens with no pending move"
+    let delta = shell.read_with(&cx, |shell, _| {
+        shell.session.as_ref().map(|session| session.delta())
+    });
+    assert_eq!(
+        delta,
+        Some(Vector3::new(5.0, 0.0, 0.0)),
+        "the typed digit is the session's delta"
     );
     // Natural entry replaces the selected `0.00` seed.
     assert_eq!(
@@ -161,7 +184,10 @@ fn a_mid_drag_escalation_seeds_the_drag_and_defers(cx: &mut TestAppContext) {
         "Tab opens the HUD mid-drag"
     );
     assert!(
-        shell.read_with(&cx, |shell, _| shell.pending_move.is_dragged()),
+        shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| session.is_dirty())),
         "the live drag is pending and cannot commit on release"
     );
     assert_eq!(
@@ -291,8 +317,8 @@ fn a_drag_collapses_the_pill_and_tab_expands_it(cx: &mut TestAppContext) {
     );
 }
 
-/// U2b: a typed-only edit opens the session. Before this, typing lived in `PendingMove`
-/// until a drag, so the session (the model's pending value) did not exist yet.
+/// U2b: a typed-only edit opens the session. Before this, typing had no session of its
+/// own until a drag.
 #[gpui::test]
 fn a_typed_edit_opens_the_session(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());

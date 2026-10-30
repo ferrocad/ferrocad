@@ -81,14 +81,16 @@ impl Shell {
             self.pill = PillState::compact();
         }
         self.focus_dialog = true;
+        self.sync_gizmo_origin(cx);
         cx.notify();
     }
 
     /// Open the session behind an open Move pill, when the selection has a stage.
     ///
-    /// A shell with no stage (headless, or an object whose item has not arrived yet)
-    /// keeps the [`PendingMove`] fallback: there is no datum to publish. The session
-    /// starts clean at the selection's current pose and is updated by typing or a drag.
+    /// A shell with no stage (headless, or an object whose item has not arrived yet) has no
+    /// datum to publish, so the fields and the accept callback remain the fallback. The
+    /// session starts clean at the selection's current pose and is updated by typing or a
+    /// drag.
     fn open_move_session(&mut self, _cx: &mut Context<Self>) {
         if self.session.is_some() {
             return;
@@ -113,7 +115,6 @@ impl Shell {
     /// A typed edit in the Move fields: the fields win, and the session (when one can be
     /// opened) carries the value from now on.
     fn on_move_typed(&mut self, cx: &mut Context<Self>) {
-        self.pending_move.typed();
         if let Some(delta) = self.translation_in_fields(cx) {
             self.open_move_session(cx);
             if let Some(session) = self.session.as_mut() {
@@ -147,7 +148,8 @@ impl Shell {
         if !self.move_pill_open() {
             return false;
         }
-        self.pill.set_focus(self.pending_move.axis);
+        let delta = self.pending_delta(cx).unwrap_or_default();
+        self.pill.set_focus(axis_of(delta));
         let expanded = self.pill.expand();
         self.focus_pill_field(window, cx);
         cx.notify();
@@ -259,7 +261,7 @@ impl Shell {
         };
         // The session supplies the matrix; it is a translation today, but the input is the
         // one A1b made the single owner of item previews, so a rotation needs no second
-        // path later. The endpoints are identical to the old `preview_translation` call.
+        // path later.
         let transform = Matrix4::translation(delta[0], delta[1], delta[2]);
         let Some(viewport) = self.viewport.clone() else {
             return;
@@ -276,17 +278,18 @@ impl Shell {
 
     /// Drop the ghost and the session without changing the document.
     ///
-    /// It deliberately leaves [`PendingMove`] alone: opening the HUD mid-drag calls this
-    /// first, and the drag's value is what seeds the form. Discarding that value is an
-    /// explicit act — [`discard_pending`](Self::discard_pending).
+    /// Opening the HUD mid-drag calls this first; the seed comes from the viewport's live
+    /// readout ([`gizmo_seed`](Self::gizmo_seed)), so the drag's value is not lost. The
+    /// baseline is cleared because the next tick starts a fresh accumulation from the seed.
     pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
         self.session = None;
+        self.drag_start = None;
         self.clear_preview_items(cx);
     }
 
     /// Drop the pending value entirely (cancel, accept, or a competing interaction).
     pub(super) fn discard_pending(&mut self, cx: &mut Context<Self>) {
-        self.pending_move.reset();
+        self.drag_start = None;
         self.pill = PillState::compact();
         self.clear_dialog_preview(cx);
     }
@@ -312,11 +315,11 @@ impl Shell {
     /// and only picks the focus from the handle under the pointer.
     pub(super) fn gizmo_seed(&self, cx: &App) -> GizmoSeed {
         let Some(viewport) = self.viewport.as_ref() else {
-            return self.pending_move.seed();
+            return self.seed_from_session();
         };
         let viewport = viewport.read(cx);
         let Some(gizmo) = viewport.gizmo() else {
-            return self.pending_move.seed();
+            return self.seed_from_session();
         };
         let mut seed = GizmoSeed::default();
         if let Some(value) = viewport.gizmo_value() {
@@ -420,27 +423,50 @@ impl Shell {
         true
     }
 
+    /// The session's delta, when a session is live.
+    fn session_delta(&self) -> Option<[f64; 3]> {
+        self.session.as_ref().map(|session| {
+            let delta = session.delta();
+            [delta.x, delta.y, delta.z]
+        })
+    }
+
+    /// The pending translation a Move pill would show: the session when it is dirty, else
+    /// the parsed fields. A clean session carries no value the fields do not (a typed zero,
+    /// or a drag that returned to the datum), so the fields stay authoritative for
+    /// validation.
+    fn pending_delta(&self, cx: &App) -> Option<[f64; 3]> {
+        self.session
+            .as_ref()
+            .filter(|session| session.is_dirty())
+            .map(|session| {
+                let delta = session.delta();
+                [delta.x, delta.y, delta.z]
+            })
+            .or_else(|| self.translation_in_fields(cx))
+    }
+
+    /// What a keyboard escalation seeds the HUD with, when there is no viewport to ask.
+    fn seed_from_session(&self) -> GizmoSeed {
+        let delta = self.session_delta().unwrap_or_default();
+        GizmoSeed {
+            axis: axis_of(delta),
+            delta,
+        }
+    }
+
     /// The pending translation a Move session will commit.
     ///
-    /// The session is the authority when a drag set the value: it holds the exact delta and
-    /// the datum it was measured from. [`PendingMove`] is the HUD's view and remains the
-    /// fallback for a shell with no stage (headless tests, or a target whose item has not
-    /// arrived yet), where a session cannot be opened; the Δ fields are authoritative only
-    /// after a typed edit. `None` when the spec asks for no translation.
+    /// The session is the authority while it holds a non-zero value: it has the exact
+    /// delta and the datum it was measured from. A clean session falls back to the Δ
+    /// fields, which keeps validation (a half-typed `-` is an error on `Enter`, not a
+    /// silent zero). `None` when the spec asks for no translation.
     pub(super) fn pending_translation(&self, cx: &App) -> Option<[f64; 3]> {
         let dialog = self.dialog.as_ref()?;
         if !dialog.spec.previews_translation() {
             return None;
         }
-        if self.pending_move.is_dragged()
-            && let Some(session) = self.session.as_ref()
-        {
-            let delta = session.delta();
-            return Some([delta.x, delta.y, delta.z]);
-        }
-        self.pending_move
-            .dragged()
-            .or_else(|| self.translation_in_fields(cx))
+        self.pending_delta(cx)
     }
 
     /// The Δ values currently in the fields, when the spec previews a translation.
@@ -508,25 +534,17 @@ impl Shell {
                 self.pill.collapse();
             }
             // A drag reports its transform from its own press, so it adds to whatever the
-            // session already holds — a second drag on a pending move continues it.
-            // The value the drag adds to: the session's delta when there is a stage to
-            // open one from, otherwise the HUD's own mirror (a headless shell).
-            let current = self
-                .session
-                .as_ref()
-                .map(|session| {
-                    let delta = session.delta();
-                    [delta.x, delta.y, delta.z]
-                })
-                .or_else(|| self.pending_move.dragged())
-                .unwrap_or_default();
-            self.pending_move.begin_drag(current);
-            // The session opens at the press, from the un-previewed stage, so its datum is
-            // the pose the gesture started from.
+            // session already holds — a second drag on a pending move continues it. The
+            // session opens from the un-previewed stage, so its datum is the pose the
+            // gesture started from.
+            self.drag_start = Some(self.session_delta().unwrap_or_default());
+        }
+        if self.session.is_none() {
             // The session is the **selection's** pending move: every selected entity
             // previews and moves together, and the datum is the primary's anchor (the
             // gizmo's target, which is what the triad hugs). The preview's own target is
-            // the fallback when the selection does not map onto the stage yet.
+            // the fallback when the selection does not map onto the stage yet. A tick
+            // without a `Begin` (a harness, or a host that missed it) still opens it.
             let mut targets: Vec<u32> = {
                 let model = self.model.lock().unwrap();
                 model
@@ -543,21 +561,25 @@ impl Shell {
                 .as_ref()
                 .and_then(|stage| TransformSession::begin(stage, &targets));
         }
-        let delta = self.pending_move.tick(drag);
+        let baseline = self.drag_start.unwrap_or_default();
+        let delta = [
+            baseline[0] + drag[0],
+            baseline[1] + drag[1],
+            baseline[2] + drag[2],
+        ];
         if let Some(session) = self.session.as_mut() {
             session.set_translation(Vector3::new(delta[0], delta[1], delta[2]));
         }
         if preview.phase == PreviewPhase::End {
-            self.pending_move.end_drag();
+            self.drag_start = None;
         }
         if previews {
-            self.set_translation_fields(self.pending_move.dragged().unwrap_or_default(), cx);
+            self.set_translation_fields(delta, cx);
             self.preview_dialog(cx);
-        } else if let Some(session) = self.session.as_ref() {
+        } else if self.session.is_some() {
             // No HUD: the session still owns the preview, so a plain drag shows the same
             // ghost the open form would.
-            let delta = session.delta();
-            self.preview_selection(Some([delta.x, delta.y, delta.z]), cx);
+            self.preview_selection(Some(delta), cx);
         }
     }
 
@@ -594,7 +616,7 @@ impl Shell {
         // The move is applied (or replaced by the command's own dialog): the pending value
         // is spent either way, and the ghost goes with it before the stage rebuild.
         self.session = None;
-        self.pending_move.reset();
+        self.drag_start = None;
         self.pill = PillState::compact();
         self.clear_preview_items(cx);
         self.finish_dialog(result, cx);
@@ -607,7 +629,7 @@ impl Shell {
             return false;
         }
         self.session = None;
-        self.pending_move.reset();
+        self.drag_start = None;
         self.pill = PillState::compact();
         self.clear_preview_items(cx);
         self.model.lock().unwrap().status = status.to_string();
@@ -691,15 +713,22 @@ impl Shell {
         let token = dialog.token.clone();
         let spec = dialog.spec.clone();
         let mut states = self.dialog_states(cx);
-        // A Move HUD's Δ fields are a rounded view of the drag; the callback must get
-        // the exact delta the user saw, or accepting a drag commits a nearby pose. Only
-        // a **drag** overrides the fields — typed text keeps `collect`'s validation.
-        let dragged = if self.pending_move.is_dragged() {
-            self.pending_translation(cx)
+        // A Move HUD's Δ fields are a rounded view of the session; the callback must get
+        // the exact delta the user saw, or accepting a drag commits a nearby pose. A clean
+        // session has no value the fields do not, so it keeps `collect`'s validation (a
+        // half-typed field is an error, not a silent zero).
+        let exact = if spec.previews_translation() {
+            self.session
+                .as_ref()
+                .filter(|session| session.is_dirty())
+                .map(|session| {
+                    let delta = session.delta();
+                    [delta.x, delta.y, delta.z]
+                })
         } else {
             None
         };
-        if let Some(delta) = dragged {
+        if let Some(delta) = exact {
             for (field, state) in spec.fields.iter().zip(states.iter_mut()) {
                 let slot = match field.name.as_str() {
                     "dx" => 0,
@@ -805,6 +834,7 @@ impl Shell {
         let _ = commands::cancel(&dialog.token);
         self.pill = PillState::compact();
         self.discard_pending(cx);
+        self.sync_gizmo_origin(cx);
         self.model.lock().unwrap().status = "dialog cancelled".to_string();
         cx.notify();
     }

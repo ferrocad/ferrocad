@@ -295,8 +295,6 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
                 move_pill_compact(
                     delta,
                     shell.pill.focus(),
-                    shell.pending_move.axis,
-                    shell.pending_move.is_dragged(),
                     cx,
                 )
             };
@@ -458,14 +456,8 @@ pub(super) fn dialog_buttons(
 ///
 /// Only the moved components appear (`ΔX +24.50`, or `ΔX +24.50  ΔY +10.00` for a
 /// plane drag); an idle pill names the focused field. Clicking it expands the fields.
-fn move_pill_compact(
-    delta: [f64; 3],
-    focus: usize,
-    drag_axis: usize,
-    dragged: bool,
-    cx: &mut Context<Shell>,
-) -> AnyElement {
-    let axis = if dragged { drag_axis } else { focus }.min(2);
+fn move_pill_compact(delta: [f64; 3], focus: usize, cx: &mut Context<Shell>) -> AnyElement {
+    let axis = focus.min(2);
     let mut shown: Vec<usize> = (0..3).filter(|slot| delta[*slot].abs() > 0.0005).collect();
     if shown.is_empty() {
         shown.push(axis);

@@ -206,24 +206,24 @@ The datum is a **world point from `ShapeItem::origin`** (falling back to `anchor
 the triad already hugs `origin`. The delta is a matrix so rotation is expressible before any
 `Placement` is involved — only the commit needs the object, which the facade owns.
 
-**Rotation has no shell-side state today, and does not need one yet.** Only a translation HUD
-defers a drag (`queue_transform_preview` returns early when `gizmo_deferred` is off), and
-`Rotate` opens no dialog (`_RotateCommand.Activated` returns a status), so a ring drag never
-emits a `TransformPreview`: the viewport previews it from the full matrix
-(`apply_gizmo_preview`) and commits the matrix through `to_interaction_with`. The `mode` field
-below, and the matrix delta, are where that state moves if a rotate session (with a pill or a
-form) ever exists — which is why the session is a `Transform` session rather than a `Move` one.
+**Rotation has no shell-side state and keeps the viewport's direct path.** A translation
+drag is preview-only: the viewport queues `Begin`/`Update`/`End` and the shell owns the value.
+A rotation drag has no HUD or session, so the viewport previews it directly
+(`apply_gizmo_preview`) and commits the matrix through `to_interaction_with`;
+`queue_transform_preview` is not called for a rotation handle. The `mode` field below, and
+the matrix delta, are where that state moves if a rotate session (with a pill or a form) ever
+exists — which is why the session is a `Transform` session rather than a `Move` one.
 
-One owner: the shell holds it; the viewport **renders** it (`set_session`). That deletes the
-three-way split — `preview_translation`, `apply_gizmo_preview` and the dialog's mirrored delta
-all become *reads* of the session, and `set_gizmo_preview(deferred)` disappears because there is
-only one mode. `preview_home` is unaffected: it anchors gizmos and manipulators, not items.
+One owner: the shell holds it; the viewport **renders** it. A2 deleted the three-way split:
+translation previews go through `preview_transform`, and the separate `PendingMove`, the
+dialog's mirrored field delta and `set_gizmo_preview`/`gizmo_deferred` are gone. Rotation
+still uses the viewport's `apply_gizmo_preview` because it has no session yet. `preview_home`
+is unaffected: it anchors gizmos and manipulators, not items.
 
-How that owner arrives is split across three stages: **A1a** builds this type and its
-arithmetic, **A1b** makes `preview_transform` the one write path for the item preview, and
-**A1c** wires the shell (one session, opened at the press, fed every tick, preferred over the Δ
-fields). The wholesale replacement of the other writers — the `set_session` input above — is A2,
-and so is moving the HUD's commit onto the interaction route (§2.8).
+How that owner arrived: **A1a** built this type and its arithmetic, **A1b** made
+`preview_transform` the one translation write path, **A1c** wired the shell (one session,
+opened at the press, fed every tick, preferred over the Δ fields), and **A2** deleted the other
+writers. Moving the HUD's commit onto the interaction route (§2.8) remains open.
 
 The session does **not** write the document. A translate never stages a `Placement`: the
 uncommitted value is the session's own delta, and at commit the shell hands it to the mod layer
@@ -401,7 +401,7 @@ sweep.
 | **A1a** | `TransformSession` in `ferrocad_stage` (`session`): the world datum from `ShapeItem::anchor()` (which already applies the `origin` → bounding-box-minimum fallback), the accumulated translation, `transform()`, `checkpoint`, dirty. No consumer yet | The arithmetic lands before anything calls it, so it is tested headless in the crate the toy and Parametric editions already share, and no behaviour can move with it | — (**done 2026-10-30**: 9 unit tests + a doctest, `ferrocad_stage` 225) |
 | **A1b** | `InventorViewport::preview_transform(entities, Option<Matrix4>)`, the **one** owner of item-preview writes: `preview_translation` becomes a wrapper over it and `apply_gizmo_preview` routes through the same helper | One write path for the item preview, so A1c has a single seam to push a session into and A2 has one thing — not three — to delete | — (**done 2026-10-30**: `ferrocad_viewport` 201, including a rotation-carrying matrix and the no-stranded-ghost rule) |
 | **A1c** | shell wiring: the shell owns one session, opens it at `TransformPreview::Begin` from the un-previewed stage (`Shell::last_stage`), feeds it every tick, prefers it over the Δ fields for preview and commit, and drops it with the HUD | Puts the owner on the commit path without changing the commit's route: see §2.8 on why the HUD's accept still goes through `App_Move` until the session carries a selection | — (**done 2026-10-30**: the drag test asserts the session's delta and datum and that cancelling drops it; the commit still reads the command's callback) |
-| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — |
+| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — (**done 2026-10-31**: `set_gizmo_preview`/`gizmo_deferred`, `preview_translation` and `PendingMove` are gone; a translation drag is preview-only through `preview_transform`, while rotation keeps the viewport's direct preview/commit because it has no session yet. `preview_home` untouched. viewport 202, gpui 256) |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it, and the session is the selection's (742aee7). The no-arg form now opens the U2 pill, not the buttoned dialog |
 | **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31**: `shell::pill::PillState` drives the Move HUD (compact readout during a drag; expanded Δ fields on `Tab`/`Shift+Tab`/a digit/a click; `Enter` commits, `Esc` rolls back), the `Cancel`/`Move` buttons are gone, and a typed-only edit opens the session from `last_stage`. gpui 256 |
@@ -426,12 +426,13 @@ sweep.
   from (the item's world anchor at `Begin`), the Δ fields and the commit read through it, and
   cancelling drops it together with the ghost. Asserted in
   `a_move_hud_drag_survives_its_release`; the commit's *route* is unchanged (§2.8).
-- **A2** — grep-level: `gizmo_deferred` and the viewport's item-preview writes are gone
-  (`preview_home` keeps its gizmo/manipulator anchors); every preview entry point takes a
-  session snapshot. The 2026-10-30 regression tests
+- **A2** — grep-level: `gizmo_deferred`, `set_gizmo_preview`, `preview_translation` and
+  `PendingMove` are gone; `preview_transform` is the only **translation** item writer
+  (`apply_gizmo_preview` remains for rotation, which has no session) and `preview_home` keeps
+  its gizmo/manipulator anchors. The 2026-10-30 regression tests
   (`a_move_hud_drag_survives_its_release`,
-  `a_deferred_drag_reports_previews_and_never_commits`'s successor) pass unchanged in
-  behaviour.
+  `a_drag_reports_previews_and_never_commits`) and the rotation path
+  (`a_rotation_drag_previews_and_commits_directly`) pass.
 - **A3** — dragging a fillet radius or a stem previews a ghost shape, and `Esc` leaves
   `undo_names()` unchanged.
 - **U1** — drag, release, drag again, `Enter`: one undo entry; `Esc` after any drag: zero undo

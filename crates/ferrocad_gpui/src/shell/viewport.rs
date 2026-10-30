@@ -677,6 +677,20 @@ impl Shell {
             .is_some_and(|dialog| dialog.spec.previews_translation())
     }
 
+    /// Push the session's origin-handle policy into the viewport.
+    ///
+    /// The shell owns the policy (the pivot handle is disabled while the translation pill
+    /// is open); the viewport only hosts the handle, so it must be told when a dialog opens
+    /// or closes outside a re-arm.
+    pub(super) fn sync_gizmo_origin(&mut self, cx: &mut Context<Self>) {
+        let enabled = self.gizmo_origin_enabled();
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, _cx| {
+                viewport.set_gizmo_origin_enabled(enabled);
+            });
+        }
+    }
+
     /// Drop the session pivot and rebuild the selection's triad at the object origin.
     /// Returns whether a user origin was set.
     pub(super) fn clear_user_origin(&mut self, cx: &mut Context<Self>) -> bool {

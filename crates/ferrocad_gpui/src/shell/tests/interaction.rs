@@ -566,8 +566,23 @@ fn a_gizmo_drag_updates_the_move_fields(cx: &mut TestAppContext) {
     });
     let mut cx = VisualTestContext::from_window(window.into(), cx);
     let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    // A stage is what a drag publishes into; the session takes its datum from it.
+    let mesh: StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Params",
+            "positions": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            "triangles": [0, 1, 2],
+            "triangle_parts": [0, 0, 0],
+            "edges": [],
+            "parts": []
+        }"#,
+    )
+    .expect("the test mesh");
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
+            let stage = shell.display.build(vec![mesh]);
+            shell.set_stage(stage, cx);
             shell.select("Params", cx);
             shell.run_command("App_Move", cx);
         })

@@ -169,12 +169,13 @@ Absent ──selection with a target──► Idle ◄──document edit: re-ar
 | selection change while dirty | auto-commit first, then change context |
 | `Esc` / cancel | rollback: drop the session and its ghost; no undo entry is spent |
 
-**Changed 2026-10-30 (U1).** The separate *normal* and *deferred* drag columns are gone. The
-shell turns on the viewport's preview mode **once at startup**, so every drag reports
-`Begin`/`Update`/`End`, every release keeps its preview, and `Shell::gizmo_deferred` no longer
-exists. The session already carries the whole selection; the commit route is still the
-`App_Move` callback (`_move_selection` is the writer), and moving it to the interaction
-provider is **planned**.
+**Changed 2026-10-30 (U1), unified 2026-10-31 (A2).** There is one mode: a **translation**
+drag always reports `Begin`/`Update`/`End` and never commits on release. The viewport has no
+deferral flag — `set_gizmo_preview`/`gizmo_deferred` are gone — and the drag kind decides:
+translation is preview-only (the shell's session owns the value), while rotation, which has no
+session yet, keeps the viewport's direct preview and commit. The session already carries the
+whole selection; the commit route is still the `App_Move` callback (`_move_selection` is the
+writer), and moving it to the interaction provider is **planned**.
 
 ### 4.3 The display offset invariant
 

@@ -31,7 +31,8 @@ use ferrocad_inventor::{
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
-    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle,
+    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoMode, GizmoModifiers, GizmoSet,
+    GizmoStyle,
     GizmoTarget, GizmoValue, GridSpec, GridStyle, InteractionCommit, Manipulator,
     MouseButton as StageButton, PointerEvent, PointerKind, SnapCandidate, SnapContext, SnapKind,
     Tool, ToolStatus, TransformGizmo, ViewProjection, Workplane, axis, feedback, grid,
@@ -147,11 +148,12 @@ pub enum ViewportEvent {
     Selection(SelectionEvent),
     /// A workbench manipulator committed a value for the host to apply.
     Interaction(InteractionCommit),
-    /// A gizmo drag ended. The host converts it with
-    /// [`GizmoCommitEvent::to_interaction`] and routes it like any other commit.
+    /// A **rotation** gizmo drag ended. Translation drags are preview-only
+    /// ([`TransformPreview`](Self::TransformPreview)) and the host commits their session;
+    /// rotation has no session yet, so it commits here.
     Transform(GizmoCommitEvent),
-    /// A gizmo drag tick while the host has deferred the commit. The host mirrors the
-    /// delta into its editable values and previews the whole selection itself.
+    /// A translation gizmo drag tick. The host mirrors the delta into its editable values
+    /// and previews the whole selection itself; it commits when its own editor accepts.
     TransformPreview(TransformPreview),
     /// The origin/centre handle was dragged and released. `point` is the snapped world
     /// pivot and `kind` names the snap that won. This is **not** a transform commit: the
@@ -430,7 +432,8 @@ pub struct InventorViewport<V: InventorView> {
     /// crate stays GPU- and source-agnostic: the viewport only knows that a skin
     /// program was injected.
     gizmo_skin: Option<Arc<ShaderProgram>>,
-    /// The last gizmo commit, for the host to apply to the document.
+    /// The last gizmo commit, for the host to apply to the document. Only a rotation
+    /// drag uses it: translation is preview-only and the host commits its session.
     gizmo_commit: Option<GizmoCommitEvent>,
     /// The workbench manipulators (the edge fillet arc, a thickness grip, …), in
     /// registration order. They are the most specific overlays: dispatched in reverse
@@ -447,10 +450,6 @@ pub struct InventorViewport<V: InventorView> {
     gizmo_value: Option<GizmoValue>,
     /// The logical pointer position of the latest gizmo drag tick (the ring tag anchor).
     gizmo_pointer: Option<[f32; 2]>,
-    /// While set, a gizmo drag reports [`ViewportEvent::TransformPreview`] and never
-    /// commits on release: the host previews the whole selection and commits when its
-    /// own editor accepts. Set by the host while a translation HUD is open.
-    gizmo_deferred: bool,
     /// The in-progress re-pivot: the frame origin at the press (for `Esc`) and the
     /// snapped point/kind under the pointer.
     gizmo_origin_drag: Option<GizmoOriginDrag>,
@@ -1474,7 +1473,6 @@ impl<V: InventorView> InventorViewport<V> {
             focus: None,
             gizmo_value: None,
             gizmo_pointer: None,
-            gizmo_deferred: false,
             gizmo_origin_drag: None,
             gizmo_origin: None,
             transform_preview: None,
@@ -1722,11 +1720,9 @@ impl<V: InventorView> InventorViewport<V> {
         for gizmo in gizmos.gizmos_mut() {
             gizmo.set_linear_snap(self.snap_grid);
             gizmo.set_style(&self.gizmo_style);
-            gizmo.set_origin_enabled(!self.gizmo_deferred);
         }
         gizmos.set_session(session);
         self.gizmos = gizmos;
-        self.gizmo_commit = None;
         self.gizmo_value = None;
         self.gizmo_pointer = None;
         self.gizmo_origin_drag = None;
@@ -1835,22 +1831,6 @@ impl<V: InventorView> InventorViewport<V> {
         changed
     }
 
-    /// Defer a gizmo drag's commit to the host.
-    ///
-    /// While set, a drag reports [`ViewportEvent::TransformPreview`] for each tick and
-    /// on release instead of setting [`ViewportEvent::Transform`]. A host uses this
-    /// while an editable HUD is open: it mirrors the delta into its values and previews
-    /// the **whole** selection itself, then commits once when the user accepts.
-    pub fn set_gizmo_preview(&mut self, deferred: bool) {
-        self.gizmo_deferred = deferred;
-        if !deferred {
-            self.transform_preview = None;
-        }
-        // The Move HUD is anchored to the visible origin, so the pivot handle is
-        // disabled while its translation form is open; closing it re-enables the handle.
-        self.set_gizmo_origin_enabled(!deferred);
-    }
-
     /// Enable or disable the hosted gizmos' origin/centre handle.
     ///
     /// A host disables it while the floating Move HUD is open: the HUD is anchored to
@@ -1880,11 +1860,6 @@ impl<V: InventorView> InventorViewport<V> {
         self.gizmo_origin.take()
     }
 
-    /// Whether a gizmo drag is currently deferred to the host.
-    pub fn gizmo_preview(&self) -> bool {
-        self.gizmo_deferred
-    }
-
     /// Take the queued drag tick (a gpui handler emits it as a
     /// [`ViewportEvent::TransformPreview`]).
     pub fn take_transform_preview(&mut self) -> Option<TransformPreview> {
@@ -1901,11 +1876,12 @@ impl<V: InventorView> InventorViewport<V> {
         }
     }
 
-    /// Queue a drag tick for the host, when deferral is on.
+    /// Queue a drag tick for the host.
+    ///
+    /// Every **translation** drag is previewed: the host owns the uncommitted value and
+    /// decides when (or whether) to apply it, so a release never commits here. Rotation is
+    /// not queued; it keeps the direct path in [`apply_gizmo_preview`](Self::apply_gizmo_preview).
     fn queue_transform_preview(&mut self, phase: PreviewPhase, total_transform: Matrix4) {
-        if !self.gizmo_deferred {
-            return;
-        }
         let Some(target_id) = self
             .gizmos
             .dragging()
@@ -1961,7 +1937,9 @@ impl<V: InventorView> InventorViewport<V> {
             cancelled |= gizmo.cancel_drag();
         }
         if cancelled || origin {
-            self.apply_gizmo_preview(None);
+            // The host owns translation previews; clearing the whole stage also restores
+            // the overlay anchors the drag captured. A rotation preview is cleared here too.
+            self.preview_transform(&[], None);
             self.gizmo_commit = None;
             self.gizmo_value = None;
             self.gizmo_pointer = None;
@@ -2127,12 +2105,12 @@ impl<V: InventorView> InventorViewport<V> {
         self.gizmos.gizmo_mut(index)
     }
 
-    /// The last gizmo commit (a drag's final transform), if a drag has ended.
+    /// The last rotation commit (a drag's final transform), if one has ended.
     pub fn last_gizmo_commit(&self) -> Option<&GizmoCommitEvent> {
         self.gizmo_commit.as_ref()
     }
 
-    /// Take the last gizmo commit, for the host to route to the document.
+    /// Take the last rotation commit, for the host to route to the document.
     pub fn take_gizmo_commit(&mut self) -> Option<GizmoCommitEvent> {
         self.gizmo_commit.take()
     }
@@ -2712,8 +2690,12 @@ impl<V: InventorView> InventorViewport<V> {
                 .gizmo_mut(index)
                 .and_then(|gizmo| gizmo.drag_to_with_modifiers(&self.camera, device, modifiers));
             if let Some(event) = event {
-                self.apply_gizmo_preview(Some(event.total_transform));
-                self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
+                if matches!(&event.value, GizmoValue::Angular { .. }) {
+                    // Rotation is not a session yet: the viewport previews it directly.
+                    self.apply_gizmo_preview(Some(event.total_transform));
+                } else {
+                    self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
+                }
                 self.gizmo_value = Some(event.value);
                 self.gizmo_pointer = Some(logical);
                 self.hover_report = HoverReport::default();
@@ -2982,7 +2964,17 @@ impl<V: InventorView> InventorViewport<V> {
                                 )
                             });
                         if started {
-                            self.queue_transform_preview(PreviewPhase::Begin, Matrix4::identity());
+                            // Translation is preview-only. Rotation has no session yet, so
+                            // it keeps the viewport's direct preview/commit path.
+                            if !matches!(
+                                handle,
+                                GizmoHandle::RotateX | GizmoHandle::RotateY | GizmoHandle::RotateZ
+                            ) {
+                                self.queue_transform_preview(
+                                    PreviewPhase::Begin,
+                                    Matrix4::identity(),
+                                );
+                            }
                             self.rebuild_gizmo_queue();
                             return true;
                         }
@@ -2994,15 +2986,14 @@ impl<V: InventorView> InventorViewport<V> {
                     .gizmo_mut(index)
                     .and_then(|gizmo| gizmo.end_drag());
                 if let Some(commit) = commit {
-                    if self.gizmo_deferred {
-                        // The host owns the commit: leave its preview in place and let
-                        // it decide when (or whether) to apply the delta.
-                        self.queue_transform_preview(PreviewPhase::End, commit.total_transform);
-                    } else {
+                    if matches!(&commit.value, GizmoValue::Angular { .. }) {
+                        // Rotation commits directly: there is no shell session to apply it.
                         self.gizmo_commit = Some(commit);
-                        // The host applies the committed transform to the document; clear
-                        // the preview it was showing.
                         self.apply_gizmo_preview(None);
+                    } else {
+                        // Translation: the host owns the commit; leave its preview in place
+                        // and let it decide when (or whether) to apply the delta.
+                        self.queue_transform_preview(PreviewPhase::End, commit.total_transform);
                     }
                     self.rebuild_gizmo_queue();
                     return true;
@@ -3479,19 +3470,6 @@ impl<V: InventorView> InventorViewport<V> {
         changed
     }
 
-    /// Preview a world-space translation on the given entity ids without touching
-    /// the document.
-    ///
-    /// A thin wrapper over [`preview_transform`](Self::preview_transform), for callers
-    /// that only have a delta. The contract is identical: an empty `entities` clears
-    /// the preview, and the return value says whether the stage changed.
-    pub fn preview_translation(&mut self, entities: &[u32], delta: [f64; 3]) -> bool {
-        self.preview_transform(
-            entities,
-            Some(Matrix4::translation(delta[0], delta[1], delta[2])),
-        )
-    }
-
     /// Write `transform` onto exactly the listed items, or clear every item's
     /// temporary transform when `transform` is `None`.
     ///
@@ -3590,6 +3568,10 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Preview `transform` on the gizmo's target stage item (or clear the preview).
+    ///
+    /// This is the **rotation** path only: a rotation drag has no shell session yet, so the
+    /// viewport previews and commits it directly. A translation drag is preview-only and the
+    /// host writes that item through [`preview_transform`](Self::preview_transform).
     fn apply_gizmo_preview(&mut self, transform: Option<Matrix4>) {
         let Some(target) = self
             .gizmos
@@ -3667,8 +3649,12 @@ impl<V: InventorView> InventorViewport<V> {
                 .gizmo_mut(index)
                 .and_then(|gizmo| gizmo.drag_to_with_modifiers(&self.camera, device, modifiers));
             if let Some(event) = event {
-                self.apply_gizmo_preview(Some(event.total_transform));
-                self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
+                if matches!(&event.value, GizmoValue::Angular { .. }) {
+                    // Rotation is not a session yet: the viewport previews it directly.
+                    self.apply_gizmo_preview(Some(event.total_transform));
+                } else {
+                    self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
+                }
                 self.gizmo_value = Some(event.value);
                 self.gizmo_pointer = Some(logical);
                 return true;
@@ -6185,7 +6171,7 @@ mod tests {
         );
         view.refresh();
 
-        assert!(view.preview_translation(&[7], [5.0, 2.0, 0.0]));
+        assert!(view.preview_transform(&[7], Some(Matrix4::translation(5.0, 2.0, 0.0))));
         let preview = view
             .stage
             .item(7)
@@ -6204,7 +6190,7 @@ mod tests {
         );
 
         // Clearing is the cancel path: no temp transform survives.
-        assert!(view.preview_translation(&[], [0.0; 3]));
+        assert!(view.preview_transform(&[], None));
         assert!(
             view.stage
                 .item(7)
@@ -6291,7 +6277,7 @@ mod tests {
         view.refresh();
 
         // Path A: a typed preview on 7.
-        assert!(view.preview_translation(&[7], [5.0, 0.0, 0.0]));
+        assert!(view.preview_transform(&[7], Some(Matrix4::translation(5.0, 0.0, 0.0))));
         // Path B: something else (a stale HUD, a cancelled drag) wrote item 8.
         view.stage
             .items_mut()
@@ -7548,21 +7534,31 @@ mod tests {
                 .and_then(|item| item.temporary_transform())
         };
 
-        // Press on the handle, then drag right: the target shows a live preview.
+        // Press on the handle, then drag right: the viewport reports a live transform
+        // (the host writes the item preview).
         assert!(view.handle_button(viewport.to_logical(grab), 1, true));
         assert!(view.gizmo().expect("gizmo").is_dragging());
         assert!(view.handle_pointer(viewport.to_logical([grab[0] + 12, grab[1]])));
-        assert!(preview(&view).is_some(), "the drag previews a transform");
-        assert!(view.last_gizmo_commit().is_none());
+        let update = view.take_transform_preview().expect("an update");
+        assert_eq!(update.phase, PreviewPhase::Update);
+        assert!(
+            preview(&view).is_none(),
+            "the viewport no longer owns the item preview"
+        );
 
-        // Release: a commit is recorded and the preview cleared.
+        // The host mirrors the tick; then the target shows a live preview.
+        assert!(view.preview_transform(&[42], Some(update.total_transform)));
+        assert!(preview(&view).is_some(), "the host's preview lands");
+
+        // Release reports the end of the drag and leaves the host's preview in place.
         assert!(view.handle_button(viewport.to_logical([grab[0] + 12, grab[1]]), 1, false));
-        assert!(view.last_gizmo_commit().is_some());
-        assert!(preview(&view).is_none(), "the preview is cleared on commit");
+        let end = view.take_transform_preview().expect("an end");
+        assert_eq!(end.phase, PreviewPhase::End);
+        assert!(preview(&view).is_some(), "the host keeps the preview");
         assert_eq!(
             view.take_selection(),
             None,
-            "a gizmo commit is not a click selection"
+            "a gizmo drag is not a click selection"
         );
     }
 
@@ -7665,7 +7661,7 @@ mod tests {
         let (point, kind) = view.take_gizmo_origin().expect("a pivot event");
         assert_eq!(kind, SnapKind::Grid);
         assert_eq!(view.gizmo().expect("a gizmo").origin(), point);
-        assert!(view.take_gizmo_commit().is_none(), "not a transform commit");
+        assert!(view.take_gizmo_origin().is_none(), "the pivot was already taken");
         assert!(view.take_selection().is_none(), "not a click selection");
     }
 
@@ -7696,7 +7692,7 @@ mod tests {
     }
 
     #[test]
-    fn the_move_hud_disables_the_origin_handle() {
+    fn the_host_can_disable_the_origin_handle() {
         let (mut view, _viewport) = translate_gizmo_view();
         let origin = GizmoTarget::ALL
             .iter()
@@ -7704,7 +7700,7 @@ mod tests {
             .expect("the origin target");
         assert_eq!(view.gizmo_target_at([50, 50]), Some(GizmoTarget::Origin));
 
-        view.set_gizmo_preview(true);
+        view.set_gizmo_origin_enabled(false);
         assert_eq!(
             view.gizmo_target_at([50, 50]),
             None,
@@ -7717,7 +7713,7 @@ mod tests {
             "the disabled origin is not drawn"
         );
 
-        view.set_gizmo_preview(false);
+        view.set_gizmo_origin_enabled(true);
         assert_eq!(view.gizmo_target_at([50, 50]), Some(GizmoTarget::Origin));
         assert!(
             !view.gizmo().expect("a gizmo").items()[origin]
@@ -8195,16 +8191,28 @@ mod tests {
         panic!("the X axis handle should be pickable");
     }
 
-    /// Deferred mode reports a drag's `Begin`/`Update`/`End` instead of committing,
-    /// so a host HUD can mirror the delta and own the commit.
+    /// The first device position whose analytic hit test lands on `handle`.
+    fn ring_grab(view: &InventorViewport<FakeView>, handle: GizmoHandle) -> [i32; 2] {
+        use ferrocad_stage::GizmoTarget;
+        let gizmo = view.gizmo().expect("a gizmo");
+        for x in 0..100 {
+            for y in 0..100 {
+                if gizmo.hit(&view.camera, [x, y]) == Some(GizmoTarget::Handle(handle)) {
+                    return [x, y];
+                }
+            }
+        }
+        panic!("the {handle:?} ring should be pickable");
+    }
+
+    /// A drag reports its `Begin`/`Update`/`End` and never commits, so a host HUD can
+    /// mirror the delta and own the commit.
     #[test]
-    fn a_deferred_drag_reports_previews_and_never_commits() {
+    fn a_drag_reports_previews_and_never_commits() {
         let (mut view, viewport) = translate_gizmo_view();
         let grab = axis_x_grab(&view);
         let release = [grab[0] + 12, grab[1]];
 
-        view.set_gizmo_preview(true);
-        assert!(view.gizmo_preview());
         view.handle_button(viewport.to_logical(grab), 1, true);
         let begin = view.take_transform_preview().expect("a begin");
         assert_eq!(begin.phase, PreviewPhase::Begin);
@@ -8222,18 +8230,25 @@ mod tests {
             Vector3::zero(),
             "the interaction frame stays at the grab point"
         );
+        // The viewport no longer writes the item or the draw-only offset: the host does,
+        // from the tick it was just handed.
         assert!(
-            view.gizmo().expect("a gizmo").display_offset().is_some(),
-            "the drawn triad is glued to the moved surface"
+            view.gizmo().expect("a gizmo").display_offset().is_none(),
+            "the host has not previewed yet"
         );
-        // The host mirrors the tick into its fields and previews the selection; the
-        // drawn handles must carry the preview offset, not just the frame record it.
         let drag = [
             update.total_transform.m[3],
             update.total_transform.m[7],
             update.total_transform.m[11],
         ];
-        assert!(view.preview_translation(&[42], drag));
+        assert!(view.preview_transform(
+            &[42],
+            Some(Matrix4::translation(drag[0], drag[1], drag[2]))
+        ));
+        assert!(
+            view.gizmo().expect("a gizmo").display_offset().is_some(),
+            "the drawn triad is glued to the moved surface"
+        );
         let drawn = view
             .gizmo()
             .expect("a gizmo")
@@ -8253,10 +8268,6 @@ mod tests {
         let end = view.take_transform_preview().expect("an end");
         assert_eq!(end.phase, PreviewPhase::End);
         assert_eq!(end.total_transform, update.total_transform);
-        assert!(
-            view.take_gizmo_commit().is_none(),
-            "the host owns the commit"
-        );
 
         // The host applies its accumulated delta: the frozen frame moves to the new
         // surface and the draw-only offset goes away.
@@ -8265,21 +8276,27 @@ mod tests {
             end.total_transform.m[7],
             end.total_transform.m[11],
         ];
-        assert!(view.preview_translation(&[42], delta));
+        assert!(view.preview_transform(
+            &[42],
+            Some(Matrix4::translation(delta[0], delta[1], delta[2]))
+        ));
         assert!(view.gizmo().expect("a gizmo").display_offset().is_none());
         assert_eq!(
             view.gizmo().expect("a gizmo").origin(),
             Vector3::new(delta[0], delta[1], delta[2])
         );
 
-        // A second drag on the same deferred HUD: the host sends the accumulated delta
+        // A second drag on the same pending move: the host sends the accumulated delta
         // back as the new baseline, so the frame must not drift by it again. The draw
         // offset is measured from where the frame already is, not from `delta`.
         let grab2 = axis_x_grab(&view);
         view.handle_button(viewport.to_logical(grab2), 1, true);
         let begin2 = view.take_transform_preview().expect("a second begin");
         assert_eq!(begin2.phase, PreviewPhase::Begin);
-        assert!(view.preview_translation(&[42], delta));
+        assert!(view.preview_transform(
+            &[42],
+            Some(Matrix4::translation(delta[0], delta[1], delta[2]))
+        ));
         assert_eq!(
             view.gizmo().expect("a gizmo").origin(),
             Vector3::new(delta[0], delta[1], delta[2]),
@@ -8295,24 +8312,52 @@ mod tests {
             "the accumulated baseline is not applied twice: {offset:?}"
         );
         view.handle_button(viewport.to_logical(grab2), 1, false);
-        assert!(view.preview_translation(&[], [0.0; 3]));
+        let end2 = view.take_transform_preview().expect("a second end");
+        assert_eq!(end2.phase, PreviewPhase::End);
+        assert!(view.preview_transform(&[], None));
+    }
 
-        // Leaving deferred mode restores the ordinary commit path.
-        view.set_gizmo_preview(false);
-        assert!(!view.gizmo_preview());
-        view.handle_button(viewport.to_logical(grab), 1, true);
-        view.handle_pointer(viewport.to_logical(release));
+    #[test]
+    fn a_rotation_drag_previews_and_commits_directly() {
+        use ferrocad_stage::{GizmoHandle, GizmoMode, TransformGizmo};
+
+        let (mut view, viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Rotate,
+        ));
+        let grab = ring_grab(&view, GizmoHandle::RotateZ);
+        let release = [grab[0] + 8, grab[1]];
+
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
         assert!(
-            view.gizmo().expect("a gizmo").display_offset().is_some(),
-            "even a normal drag draws the triad on the surface"
+            view.take_transform_preview().is_none(),
+            "rotation is not preview-deferred"
         );
-        view.handle_button(viewport.to_logical(release), 1, false);
+        assert!(view.handle_pointer(viewport.to_logical(release)));
         assert!(
-            view.gizmo().expect("a gizmo").display_offset().is_none(),
-            "the release restores the frozen drawing"
+            view.take_transform_preview().is_none(),
+            "rotation queues no host tick"
         );
-        assert!(view.take_gizmo_commit().is_some(), "a normal drag commits");
-        assert!(view.take_transform_preview().is_none());
+        assert!(
+            view.stage()
+                .item(42)
+                .and_then(|item| item.temporary_transform())
+                .is_some(),
+            "the viewport previews the rotation itself"
+        );
+        assert!(matches!(view.gizmo_value(), Some(GizmoValue::Angular { .. })));
+
+        assert!(view.handle_button(viewport.to_logical(release), 1, false));
+        let commit = view.take_gizmo_commit().expect("a direct rotation commit");
+        assert!(matches!(commit.value, GizmoValue::Angular { .. }));
+        assert!(
+            view.stage()
+                .item(42)
+                .and_then(|item| item.temporary_transform())
+                .is_none(),
+            "the preview is cleared on commit"
+        );
     }
 
     #[test]
@@ -8328,7 +8373,10 @@ mod tests {
             .expect("an anchor");
         let delta = Vector3::new(5.0, 2.0, 0.0);
 
-        assert!(view.preview_translation(&[42], [delta.x, delta.y, delta.z]));
+        assert!(view.preview_transform(
+            &[42],
+            Some(Matrix4::translation(delta.x, delta.y, delta.z))
+        ));
         assert_eq!(
             view.gizmo().expect("a gizmo").origin(),
             gizmo_before.add(&delta)
@@ -8340,7 +8388,7 @@ mod tests {
         );
 
         // Cancelling restores both to the document pose.
-        assert!(view.preview_translation(&[], [0.0; 3]));
+        assert!(view.preview_transform(&[], None));
         assert_eq!(view.gizmo().expect("a gizmo").origin(), gizmo_before);
         assert_eq!(
             view.manipulator("fake").expect("the grip").anchor(),
@@ -8506,7 +8554,7 @@ mod tests {
     }
 
     #[test]
-    fn a_skinned_gizmo_still_hits_and_commits_through_the_native_gizmo() {
+    fn a_skinned_gizmo_still_hits_and_previews_through_the_native_gizmo() {
         use ferrocad_stage::{GizmoHandle, GizmoTarget};
 
         let (mut view, viewport) = translate_gizmo_view();
@@ -8531,16 +8579,17 @@ mod tests {
         assert!(view.handle_button(viewport.to_logical(grab), 1, true));
         assert!(view.gizmo().expect("gizmo").is_dragging());
         assert!(view.handle_pointer(viewport.to_logical([grab[0] + 12, grab[1]])));
-        assert!(preview(&view).is_some(), "the drag previews the target");
+        let update = view.take_transform_preview().expect("an update");
+        assert_eq!(update.phase, PreviewPhase::Update);
         assert!(view.gizmo_value().is_some(), "the readout still tracks the drag");
-        assert!(view.last_gizmo_commit().is_none());
+        assert!(
+            preview(&view).is_none(),
+            "the host owns the item preview"
+        );
 
         assert!(view.handle_button(viewport.to_logical([grab[0] + 12, grab[1]]), 1, false));
-        assert!(
-            view.last_gizmo_commit().is_some(),
-            "the native gizmo still commits"
-        );
-        assert!(preview(&view).is_none(), "the preview is cleared on commit");
+        let end = view.take_transform_preview().expect("an end");
+        assert_eq!(end.phase, PreviewPhase::End);
     }
 
     #[test]
@@ -8628,7 +8677,10 @@ mod tests {
         let release = [grab[0] + 12, grab[1]];
         assert!(view.handle_button(viewport.to_logical(grab), 1, true));
         assert!(view.handle_pointer(viewport.to_logical(release)));
-        assert!(preview(&view).is_some(), "the drag previews a transform");
+        // The host mirrors the tick into its preview; Esc must clear it as well.
+        let update = view.take_transform_preview().expect("an update");
+        assert!(view.preview_transform(&[42], Some(update.total_transform)));
+        assert!(preview(&view).is_some(), "the host's preview is live");
         assert!(view.gizmo_value().is_some());
 
         let escape = KeyDownEvent {
@@ -8651,7 +8703,6 @@ mod tests {
         assert!(!view.gizmo().expect("gizmo").is_dragging());
         assert!(preview(&view).is_none(), "the preview is restored");
         assert!(view.gizmo_value().is_none());
-        assert!(view.last_gizmo_commit().is_none());
     }
 
     #[test]
@@ -8674,17 +8725,14 @@ mod tests {
 
         assert!(view.handle_button(viewport.to_logical(release), 1, false));
         assert!(view.gizmo_value().is_none(), "the tag clears on release");
-        let commit = view.last_gizmo_commit().expect("a commit");
-        assert!(matches!(commit.value, GizmoValue::Linear { .. }));
-        assert!(commit.value.readout().contains("ΔX"));
 
-        // The host route: take it, then convert it to the neutral commit.
-        let commit = view.take_gizmo_commit().expect("a taken commit");
-        let interaction = commit.to_interaction();
-        assert_eq!(interaction.manipulator, ferrocad_stage::TRANSFORM_ID);
-        assert_eq!(interaction.action, "apply");
-        assert_eq!(interaction.values.len(), 16);
-        assert!(view.last_gizmo_commit().is_none(), "taking consumes it");
+        // The release is the end of the host's drag, not a commit.
+        let end = view.take_transform_preview().expect("an end");
+        assert_eq!(end.phase, PreviewPhase::End);
+        assert!(
+            end.total_transform.m[3].abs() > 1e-9,
+            "the end carries the drag: {end:?}"
+        );
     }
 
     #[test]

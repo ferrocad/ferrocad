@@ -213,6 +213,7 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
 - [project/record/TODO-29-10-2026.md](project/record/TODO-29-10-2026.md) — the closed 2026-10-29 backlog: the workplane hierarchy, datum planes, the grid and the SimpleCAD P1 closure.
 - [project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md](project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md) — the round log for the workplane and grid work, including the four grid defects and their mechanisms.
+- [project/record/2026-10-30-fan-out-todo-30.md](project/record/2026-10-30-fan-out-todo-30.md) — the six-stream fan-out over the 2026-10-30 backlog: seven corrected claims, the evidence-sized slices and the open unknowns.
 - [project/record/TODO-27-10-2026.md](project/record/TODO-27-10-2026.md) — the closed 2026-10-27 backlog: the kernel regimes, the SimpleCAD reconstruction fixes, the Draft import closure and the extension-set/CI split.
 - [project/record/TODO-26-10-2026.md](project/record/TODO-26-10-2026.md) — the closed 2026-10-26 backlog: the interaction/gizmo layer, Draft, SimpleCAD and Mesh.
 - [project/record/TODO-24-10-2026.md](project/record/TODO-24-10-2026.md) — the closed 2026-10-24 backlog: the element map, the OCCT seam, feature proxies and Qt Q0–Q5.

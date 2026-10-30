@@ -1,6 +1,6 @@
 {
   "generator": "tools/generate_general_figures.py",
-  "generator_sha256": "bd6a0b8497f1de5a2ff3f644d1dd08c7ba8cace80471efd00940d9fc194d4bfd",
+  "generator_sha256": "8e32f2849213e3c7130011d04e212781e63a9bbe8aa9683dc4ffc3416660bc99",
   "images": {
     "bspline-flat.png": {
       "bytes": 4775,
@@ -71,6 +71,16 @@
         420
       ],
       "spec_sha256": "b8468d01cb9e2a93fc0d565b1df7694b0e25fa9623779417186e694ecd160874"
+    },
+    "text-3d.png": {
+      "bytes": 16822,
+      "figure": "text-3d",
+      "png_sha256": "2c9953b4fffb2b01b4aa3924d7edc099fe6d75d8a7b1b2ce7fffc33d4be0894c",
+      "size": [
+        960,
+        320
+      ],
+      "spec_sha256": "9d9010c46939543065f528b7c95f62ba72375859b379b958fbeb0524d3d3646d"
     }
   },
   "version": 1

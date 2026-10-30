@@ -60,6 +60,7 @@ is assembled from these pages and the addon pages below.
 - [user/how-to/parametric-recompute.md](user/how-to/parametric-recompute.md) — wire two objects together with an expression.
 - [user/how-to/selection-and-commands.md](user/how-to/selection-and-commands.md) — drive a command from the selection.
 - [user/how-to/solid-from-a-nurbs-surface.md](user/how-to/solid-from-a-nurbs-surface.md) — extrude a B-spline face or cap a closed surface to make a solid.
+- [user/how-to/text-to-3d.md](user/how-to/text-to-3d.md) — turn a font into 3-D text with `Draft.make_shape_string`, then extrude, raise or etch it.
 - [user/how-to/toy-workbench.md](user/how-to/toy-workbench.md) — create, display and manipulate an object in the toy edition.
 - [user/how-to/undo-and-persistence.md](user/how-to/undo-and-persistence.md) — undo an edit and reload the document.
 - [user/explanation/how-the-shell-talks-to-the-document.md](user/explanation/how-the-shell-talks-to-the-document.md) — why the shell is a client of the facade, and why dialogs are data.

@@ -53,6 +53,7 @@ Task-oriented: do one specific thing.
 
 - [Model a NURBS surface](how-to/model-a-nurbs-surface.md) — `Part.BSplineSurface` is the surface counterpart of `Part.BSplineCurve`. It holds the whole control-point description — poles, weights, knot vectors with multiplicities, and the two degrees — and turns it into a face with `toShape()`.
 - [Make a solid from a NURBS surface](how-to/solid-from-a-nurbs-surface.md) — `Part.BSplineSurface.toShape()` returns a **face** — a surface with a boundary. A solid needs a closed shell. There are two common ways to get there: extrude the face, or cap its open ends and sew the pieces into a shell.
+- [Make 3-D text from a font](how-to/text-to-3d.md) — `Draft.make_shape_string` turns a string and a font file into a flat, single-line **compound of faces**; the `Part` workbench extrudes those faces into letters and fuses them onto — or cuts them out of — a plate. This is upstream's Draft ShapeString in its scripted form, and it is the starting point for 3-D text.
 
 ## Reference
 

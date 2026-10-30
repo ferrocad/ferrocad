@@ -760,8 +760,8 @@ fn a_deferred_hud_drag_moves_the_triad_with_the_object(cx: &mut TestAppContext) 
         shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
     });
     assert!(
-        shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
-        "the HUD defers the drag to its own commit"
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "the HUD opens with no pending move"
     );
 
     let preview = |phase, x: f64, y: f64, z: f64| TransformPreview {
@@ -808,8 +808,8 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
         shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
     });
     assert!(
-        shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
-        "the HUD defers the drag to its own commit"
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "the HUD opens with no pending move"
     );
 
     let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
@@ -965,6 +965,85 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
             .and_then(|item| item.temporary_transform())
     });
     assert_eq!(previewed, None, "the ghost is gone with the session");
+}
+
+// ---------------------------------------------------------------------------
+// U1: one mode — a release is pending, `Enter` commits, `Esc` drops
+// ---------------------------------------------------------------------------
+
+/// With no HUD open, a drag still leaves a pending session and a live preview; `Enter`
+/// commits it and `Esc` drops it without writing. This is the behaviour change the
+/// split-brain reports asked for. Skips without a GPU adapter.
+#[gpui::test]
+fn a_plain_drag_is_pending_until_enter_or_escape(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+
+    let preview = |phase, x: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+    };
+    let drag = |cx: &mut VisualTestContext, x: f64| {
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::Update, x), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::End, x), cx);
+            });
+        });
+    };
+    let state = |cx: &mut VisualTestContext| {
+        let viewport = shell.read_with(cx, |shell, _| shell.viewport.clone()).expect("a viewport");
+        cx.update(|_window, cx| {
+            let session = shell.read(cx).session;
+            let ghost = viewport
+                .read(cx)
+                .stage()
+                .items()
+                .iter()
+                .find(|item| item.entity_id() == 7)
+                .and_then(|item| item.temporary_transform());
+            (session.map(|s| s.is_dirty()), ghost.is_some())
+        })
+    };
+
+    // A release is not a commit: the session is dirty and the ghost is still drawn.
+    drag(&mut cx, 4.0);
+    assert_eq!(
+        state(&mut cx),
+        (Some(true), true),
+        "the release leaves a pending move, not a committed one"
+    );
+
+    // Esc is the rollback: the pending move and its ghost go, nothing was written.
+    let root = shell.read_with(&cx, |shell, _| shell.root_focus.clone());
+    cx.update(|window, cx| window.focus(&root, cx));
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert_eq!(
+        state(&mut cx),
+        (None, false),
+        "Esc dropped the pending move without a commit"
+    );
+
+    // A second drag is a fresh session, and Enter spends it. (This runs last: the
+    // harness's commit re-syncs the stage from the boot document, which is not the
+    // synthetic slab, so the target only exists until the first commit.)
+    drag(&mut cx, 4.0);
+    assert_eq!(state(&mut cx), (Some(true), true));
+    cx.update(|window, cx| window.focus(&root, cx));
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    assert_eq!(
+        state(&mut cx),
+        (None, false),
+        "Enter checkpointed the move and released the ghost"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,8 +1216,8 @@ fn offset_workplane_arms_the_stem_and_opens_a_floating_hud(cx: &mut TestAppConte
     assert_eq!(fields, 1, "one quantity field");
     assert_eq!(field.parse::<f64>().unwrap_or(f64::NAN), 0.0, "seeded at zero");
     assert!(
-        !cx.update(|_window, cx| shell.read(cx).gizmo_deferred),
-        "an offset is applied as it is dragged, never deferred to accept"
+        !cx.update(|_window, cx| shell.read(cx).session.is_some()),
+        "an offset is applied as it is dragged, never held as a transform session"
     );
 }
 

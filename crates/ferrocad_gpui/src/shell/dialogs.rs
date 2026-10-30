@@ -17,7 +17,6 @@ impl Shell {
         self.hud_lock = None;
         // A dialog outranks the transient wheel.
         let _ = self.close_radial(cx);
-        let previews_translation = spec.previews_translation();
         let mut states = Vec::with_capacity(spec.fields.len());
         let mut inputs = Vec::with_capacity(spec.fields.len());
         let mut submits = Vec::new();
@@ -68,11 +67,6 @@ impl Shell {
             _changes: changes,
         });
         self.focus_dialog = true;
-        if previews_translation {
-            // A gizmo drag now reports previews instead of committing: the fields and
-            // the handles describe one pending move until the dialog accepts.
-            self.defer_gizmo_preview(true, cx);
-        }
         cx.notify();
     }
 
@@ -139,13 +133,13 @@ impl Shell {
                 .filter_map(|item| self.display.entity_of(&item.object))
                 .collect()
         };
-        let Some(viewport) = self.viewport.clone() else {
-            return;
-        };
         // The session supplies the matrix; it is a translation today, but the input is the
         // one A1b made the single owner of item previews, so a rotation needs no second
         // path later. The endpoints are identical to the old `preview_translation` call.
         let transform = Matrix4::translation(delta[0], delta[1], delta[2]);
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
         viewport.update(cx, |viewport, cx| {
             if viewport.preview_transform(&entities, Some(transform)) {
                 cx.notify();
@@ -156,13 +150,24 @@ impl Shell {
         cx.notify();
     }
 
-    /// Drop a typed preview without changing the document (cancel or dismiss).
+    /// Drop the ghost and the session without changing the document.
+    ///
+    /// It deliberately leaves [`PendingMove`] alone: opening the HUD mid-drag calls this
+    /// first, and the drag's value is what seeds the form. Discarding that value is an
+    /// explicit act — [`discard_pending`](Self::discard_pending).
     pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
-        self.pending_move.reset();
         self.session = None;
-        // Also releases the deferred drag session, so an escalated HUD restores the
-        // gizmo's normal commit-on-release path when it is cancelled.
-        self.defer_gizmo_preview(false, cx);
+        self.clear_preview_items(cx);
+    }
+
+    /// Drop the pending value entirely (cancel, accept, or a competing interaction).
+    pub(super) fn discard_pending(&mut self, cx: &mut Context<Self>) {
+        self.pending_move.reset();
+        self.clear_dialog_preview(cx);
+    }
+
+    /// Clear every item's preview transform (and the overlay offsets that came with it).
+    fn clear_preview_items(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
@@ -171,20 +176,6 @@ impl Shell {
                 cx.notify();
             }
         });
-    }
-
-    /// Enable or disable the viewport's deferred gizmo commit.
-    pub(super) fn defer_gizmo_preview(&mut self, deferred: bool, cx: &mut Context<Self>) {
-        self.gizmo_deferred = deferred;
-        if !deferred {
-            // The drag snapshot belonged to the deferred session; cancel/dismiss has
-            // restored the normal commit path.
-            self.pending_move.end_drag();
-        }
-        let Some(viewport) = self.viewport.clone() else {
-            return;
-        };
-        viewport.update(cx, |viewport, _cx| viewport.set_gizmo_preview(deferred));
     }
 
     /// The current drag translation to seed the Move HUD from.
@@ -270,9 +261,8 @@ impl Shell {
         if !dialog.spec.previews_translation() {
             return true;
         }
-        // `open_dialog_state` already defers a translation spec; repeat it here so the
-        // escalation owns the requirement and a mid-drag release can never commit.
-        self.defer_gizmo_preview(true, cx);
+        // Deferral is the one mode and is set when the viewport is created, so an
+        // escalation inherits it; nothing here has to switch it.
         self.set_translation_fields(seed.delta, cx);
         let name = AXIS_FIELDS[seed.axis.min(AXIS_FIELDS.len() - 1)];
         let Some(input) = self.dialog_input(name) else {
@@ -362,44 +352,38 @@ impl Shell {
         }
     }
 
-    /// A live gizmo drag while a translation HUD is open: mirror the accumulated delta
-    /// into the Δ fields and keep the whole selection previewing. Nothing reaches the
-    /// document, so the drag and the typed values describe the same pending move.
+    /// A live gizmo drag: accumulate it into the session, mirror it into the Δ fields, and
+    /// keep the selection previewing. Nothing reaches the document, so the drag and the
+    /// typed values describe the same pending move.
+    ///
+    /// There is **one mode**: the release never commits, with or without a HUD. The session
+    /// stays live until `Enter` commits it, `Esc` drops it, or the context changes.
     pub(super) fn on_transform_preview(&mut self, preview: &TransformPreview, cx: &mut Context<Self>) {
         let m = &preview.total_transform.m;
-        // A translation is all this can be: only a translation HUD defers a drag
-        // (`queue_transform_preview` returns early otherwise), so a ring drag never
-        // reaches the host and rotation stays the viewport's own business.
+        // A translation is all this can be: a rotate drag never emits a preview (the
+        // viewport previews and commits it from the full matrix itself).
         let drag = [m[3], m[7], m[11]];
         let previews = self
             .dialog
             .as_ref()
             .is_some_and(|dialog| dialog.spec.previews_translation());
 
-        if preview.phase == PreviewPhase::End {
-            self.pending_move.end_drag();
-            if !previews {
-                // Without a HUD the tick was only a seed for a keyboard escalation, and
-                // the release has already committed: it must not seed the *next* HUD.
-                self.pending_move.reset();
-                self.session = None;
-                return;
-            }
-            // The accumulated value is the pending move; the fields are its rounded view.
-            let delta = self.pending_move.dragged().unwrap_or_default();
-            self.set_translation_fields(delta, cx);
-            self.preview_dialog(cx);
-            return;
-        }
-
-        if preview.phase == PreviewPhase::Begin && previews {
-            // A drag reports its transform relative to its own press, so successive
-            // drags accumulate onto whatever the move already held.
-            self.pending_move.begin_drag();
-            // The session is the uncommitted value; `PendingMove` is its view. It opens
-            // here, at the press, so the datum is the pose the gesture started from — the
-            // stage the shell keeps is the un-previewed one, so the anchor is that pose and
-            // not a previous preview's.
+        if preview.phase == PreviewPhase::Begin {
+            // A drag reports its transform from its own press, so it adds to whatever the
+            // session already holds — a second drag on a pending move continues it.
+            // The value the drag adds to: the session's delta when there is a stage to
+            // open one from, otherwise the HUD's own mirror (a headless shell).
+            let current = self
+                .session
+                .map(|session| {
+                    let delta = session.delta();
+                    [delta.x, delta.y, delta.z]
+                })
+                .or_else(|| self.pending_move.dragged())
+                .unwrap_or_default();
+            self.pending_move.begin_drag(current);
+            // The session opens at the press, from the un-previewed stage, so its datum is
+            // the pose the gesture started from.
             self.session = self
                 .last_stage
                 .as_ref()
@@ -409,11 +393,93 @@ impl Shell {
         if let Some(session) = self.session.as_mut() {
             session.set_translation(Vector3::new(delta[0], delta[1], delta[2]));
         }
-        if !previews {
-            return;
+        if preview.phase == PreviewPhase::End {
+            self.pending_move.end_drag();
         }
-        self.set_translation_fields(self.pending_move.dragged().unwrap_or_default(), cx);
-        self.preview_dialog(cx);
+        if previews {
+            self.set_translation_fields(self.pending_move.dragged().unwrap_or_default(), cx);
+            self.preview_dialog(cx);
+        } else if let Some(session) = self.session {
+            // No HUD: the session still owns the preview, so a plain drag shows the same
+            // ghost the open form would.
+            let delta = session.delta();
+            self.preview_selection(Some([delta.x, delta.y, delta.z]), cx);
+        }
+    }
+
+    /// Commit the pending session as **one** transaction, through the command a script uses.
+    ///
+    /// `App_Move` with no arguments hands back its spec and a token; accepting that token
+    /// with the session's delta runs `_move_selection`, which owns the transaction, the
+    /// recompute and the status line. The HUD is only that command's form — the session does
+    /// not need it to exist, which is why the route is unchanged by U1.
+    ///
+    /// Returns whether anything was committed.
+    pub(super) fn commit_session(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(session) = self.session.filter(|session| session.is_dirty()) else {
+            return false;
+        };
+        let delta = session.delta();
+        let outcome = match commands::run("App_Move") {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.console_line(format!("move: {error}"), cx);
+                return false;
+            }
+        };
+        let Some(token) = outcome.token.clone() else {
+            self.console_line("move: App_Move returned no token".to_string(), cx);
+            return false;
+        };
+        let values = serde_json::json!({"dx": delta.x, "dy": delta.y, "dz": delta.z});
+        let result = commands::accept(&token, &values);
+        // The move is applied (or replaced by the command's own dialog): the pending value
+        // is spent either way, and the ghost goes with it before the stage rebuild.
+        self.session = None;
+        self.pending_move.reset();
+        self.clear_preview_items(cx);
+        self.finish_dialog(result, cx);
+        true
+    }
+
+    /// Drop the pending session without writing anything (`Esc`).
+    pub(super) fn drop_session(&mut self, status: &str, cx: &mut Context<Self>) -> bool {
+        if self.session.is_none() {
+            return false;
+        }
+        self.session = None;
+        self.pending_move.reset();
+        self.clear_preview_items(cx);
+        self.model.lock().unwrap().status = status.to_string();
+        cx.notify();
+        true
+    }
+
+    /// Preview the current selection at `delta` without touching the document.
+    ///
+    /// This is the session's display half; it is the same write `preview_dialog` used to
+    /// do inline, so a drag with no HUD open previews exactly like one with it.
+    fn preview_selection(&mut self, delta: Option<[f64; 3]>, cx: &mut Context<Self>) {
+        let entities: Vec<u32> = {
+            let model = self.model.lock().unwrap();
+            model
+                .selection
+                .iter()
+                .filter_map(|item| self.display.entity_of(&item.object))
+                .collect()
+        };
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let transform = delta.map(|d| Matrix4::translation(d[0], d[1], d[2]));
+        viewport.update(cx, |viewport, cx| {
+            if viewport.preview_transform(&entities, transform) {
+                cx.notify();
+            }
+        });
+        // The gizmo (and therefore the HUD anchor) follows the previewed object, so
+        // re-render the shell to keep the panel beside it.
+        cx.notify();
     }
 
     /// Where a floating dialog should sit: beside the gizmo, else under the live
@@ -517,8 +583,8 @@ impl Shell {
                     self.transform_verb = true;
                 }
                 // The pending move is now applied (or replaced by a wizard): release
-                // the deferred gizmo and drop the ghost before the stage rebuild.
-                self.clear_dialog_preview(cx);
+                // the session and the ghost before the stage rebuild.
+                self.discard_pending(cx);
                 if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
                     self.open_dialog_state(token, spec, cx);
                 } else {
@@ -572,7 +638,7 @@ impl Shell {
             return;
         };
         let _ = commands::cancel(&dialog.token);
-        self.clear_dialog_preview(cx);
+        self.discard_pending(cx);
         self.model.lock().unwrap().status = "dialog cancelled".to_string();
         cx.notify();
     }

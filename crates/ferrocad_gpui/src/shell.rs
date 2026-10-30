@@ -272,9 +272,10 @@ pub(super) struct PendingMove {
 }
 
 impl PendingMove {
-    /// Start a drag: the accumulated value is what this drag adds to.
-    fn begin_drag(&mut self) {
-        self.baseline = Some(self.dragged.unwrap_or_default());
+    /// Start a drag: `current` is the pending value the drag adds to (the session's delta,
+    /// or zero when there is none).
+    fn begin_drag(&mut self, current: [f64; 3]) {
+        self.baseline = Some(current);
     }
 
     /// End the drag. The accumulated value stays — that is the pending move.
@@ -500,10 +501,6 @@ pub struct Shell {
     /// It is `None` until a drag begins on an item the shell has a stage for: a session
     /// with no datum would have to invent one (see `TransformSession::begin`).
     session: Option<TransformSession>,
-    /// Whether the current gizmo drag is deferred to the Move HUD. This mirrors the
-    /// viewport's `set_gizmo_preview` so the shell can answer Esc/cancel without a
-    /// viewport (headless tests, or before `enable_viewport`).
-    gizmo_deferred: bool,
     /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
     ///
     /// A workplane offset is **transient viewport state** with no document object and
@@ -858,7 +855,6 @@ impl Shell {
             last_pointer: None,
             pending_move: PendingMove::default(),
             session: None,
-            gizmo_deferred: false,
             workplane_session: None,
             hud_rect: None,
             hud_lock: None,
@@ -1077,6 +1073,25 @@ impl Shell {
             if self.clear_user_origin(cx) {
                 return true;
             }
+            // A pending transform is the user's work: Esc is its **rollback** — the
+            // session is dropped and the preview with it, and nothing was ever written,
+            // so no undo entry is spent. (`Esc` on a clean session falls through, so a
+            // second press still clears the selection.)
+            if self.session.is_some() {
+                self.drop_session("move cancelled", cx);
+                return true;
+            }
+        }
+        // Enter commits a pending transform as its own checkpoint. It runs before the
+        // tool branch because a pending move outranks finishing a tool, and after the
+        // modal checks so a dialog's Enter still accepts the dialog.
+        if event.keystroke.key == "enter"
+            && !editing
+            && !self.modal_open()
+            && self.session.is_some_and(|session| session.is_dirty())
+        {
+            self.commit_session(cx);
+            return true;
         }
         // Enter finishes the active tool session. A Python-backed tool commits
         // through its own `doCommand`; a native tool ends the same way the viewport's
@@ -1300,6 +1315,10 @@ else:
             // armed later.
             viewport.set_gizmo_style(state.gizmo.clone());
             viewport.set_gizmo_skin(gizmo_skin);
+            // One mode: a drag reports previews and never commits. The session owns the
+            // commit, so there is no "normal vs deferred" split and no release-time
+            // transaction to lose or double-apply.
+            viewport.set_gizmo_preview(true);
         }
         // A tool started before the viewport existed (a script, a command while no
         // GPU was available) is applied now that there is one. A Python-backed

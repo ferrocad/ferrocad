@@ -750,7 +750,7 @@ impl Shell {
             && let Some(dialog) = self.dialog.take()
         {
             let _ = commands::cancel(&dialog.token);
-            self.clear_dialog_preview(cx);
+            self.discard_pending(cx);
         }
         let Some(object) = (if commit.creates {
             // A *creating* commit has no entity yet: the workbench makes the object,

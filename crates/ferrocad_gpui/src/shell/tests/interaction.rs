@@ -212,10 +212,6 @@ fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
         "the HUD closes on accept"
     );
     assert!(
-        !shell.read_with(cx, |shell, _| shell.gizmo_deferred),
-        "the drag commits normally again once the HUD is gone"
-    );
-    assert!(
         shell.read_with(cx, |shell, _| shell.transform_verb),
         "the triad stays armed on the object that was just moved"
     );

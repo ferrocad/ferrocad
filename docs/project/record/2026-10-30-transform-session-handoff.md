@@ -48,7 +48,7 @@ Everything below is true at `ef33987`, working tree clean, `main` level with `or
 | **A1c** — shell wiring | **done** (`shell.rs`, `shell/dialogs.rs`) |
 | **A2** — delete the alternative preview paths | **open**, next |
 | **A3** — stem/scrubber preview via the mod `Preview` channel | open |
-| **U1** — one drag mode: release keeps, `Enter` checkpoint, `Esc` rollback, auto-commit, HUD gone | **open, the next user-visible change** |
+| **U1** — one drag mode: release keeps, `Enter` checkpoint, `Esc` rollback, auto-commit, HUD gone | **partial** — the mode, `Enter`, `Esc` and the selection-change commit landed (same day, after this note was first written); the HUD removal and the commit-route move are left |
 | **U2** — two-stage pill | open |
 | **U3** — 3-D measuring tape + `SESSION_HOLD` | open |
 | **U4** — loadout slots + `Select ▾` filter (needs U1) | open |

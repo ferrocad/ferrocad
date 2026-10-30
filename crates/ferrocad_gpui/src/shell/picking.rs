@@ -51,6 +51,13 @@ impl Shell {
     /// The push happens **before** the commands are listed, so `IsActive` sees the
     /// selection the user just made.
     pub(super) fn replace_selection(&mut self, items: Vec<SelectionItem>, cx: &mut Context<Self>) {
+        // A pending transform is **committed** before the context changes: losing a drag
+        // because the user clicked something else is the defect the session exists to
+        // remove. It has to happen first, while the old selection is still the selection —
+        // the commit is `_move_selection`, which reads it.
+        if self.session.is_some_and(|session| session.is_dirty()) {
+            self.commit_session(cx);
+        }
         // Opening menus never mutates the selection. A **new** selection, however,
         // invalidates both an open wheel (its context target no longer matches the
         // selection) and a pending translation form (its delta was measured against
@@ -70,7 +77,7 @@ impl Shell {
             && let Some(dialog) = self.dialog.take()
         {
             let _ = commands::cancel(&dialog.token);
-            self.clear_dialog_preview(cx);
+            self.discard_pending(cx);
         }
         let primary = items.last().map(|item| item.object.clone());
         let properties = primary
@@ -209,7 +216,7 @@ impl Shell {
                 && let Some(dialog) = self.dialog.take()
             {
                 let _ = commands::cancel(&dialog.token);
-                self.clear_dialog_preview(cx);
+                self.discard_pending(cx);
             }
         }
         let properties = primary

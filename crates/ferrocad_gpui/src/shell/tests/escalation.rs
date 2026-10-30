@@ -79,8 +79,8 @@ fn typing_in_the_settings_card_does_not_open_the_move_hud(cx: &mut TestAppContex
         "a digit typed in the settings card must not open the Move HUD"
     );
     assert!(
-        !shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
-        "the drag session stays live: no escalation happened"
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "no session was opened: no escalation happened"
     );
 }
 
@@ -91,11 +91,11 @@ fn tab_with_an_armed_gizmo_opens_the_move_hud_at_zero(cx: &mut TestAppContext) {
 
     press_root(&mut cx, &shell, "tab");
 
-    let (open, deferred) = shell.read_with(&cx, |shell, _| {
-        (shell.dialog.is_some(), shell.gizmo_deferred)
+    let (open, session) = shell.read_with(&cx, |shell, _| {
+        (shell.dialog.is_some(), shell.session.is_some())
     });
     assert!(open, "Tab opens the Move HUD while a gizmo is armed");
-    assert!(deferred, "the drag session switched to deferred mode");
+    assert!(!session, "no drag yet, so no pending move");
     assert_eq!(
         fields(&shell, &cx),
         [0.0, 0.0, 0.0],
@@ -120,8 +120,8 @@ fn a_digit_opens_the_hud_and_types_the_digit(cx: &mut TestAppContext) {
         "a digit opens the Move HUD"
     );
     assert!(
-        shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
-        "the HUD defers the drag"
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "the HUD opens with no pending move"
     );
     // Natural entry replaces the selected `0.00` seed.
     assert_eq!(
@@ -161,8 +161,8 @@ fn a_mid_drag_escalation_seeds_the_drag_and_defers(cx: &mut TestAppContext) {
         "Tab opens the HUD mid-drag"
     );
     assert!(
-        shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
-        "the live drag is now deferred and cannot commit on release"
+        shell.read_with(&cx, |shell, _| shell.pending_move.is_dragged()),
+        "the live drag is pending and cannot commit on release"
     );
     assert_eq!(
         fields(&shell, &cx),
@@ -217,21 +217,20 @@ fn escape_cancels_the_escalated_hud_and_restores_the_gizmo(cx: &mut TestAppConte
 
     press_root(&mut cx, &shell, "tab");
     assert!(shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
-    assert!(shell.read_with(&cx, |shell, _| shell.gizmo_deferred));
 
     // The existing cancel path: the field does not own Esc, so it bubbles to the HUD
     // and the shell.
     cx.simulate_keystrokes("escape");
     draw(&mut cx);
 
-    let (open, deferred, armed) = shell.read_with(&cx, |shell, _| {
+    let (open, session, armed) = shell.read_with(&cx, |shell, _| {
         (
             shell.dialog.is_some(),
-            shell.gizmo_deferred,
+            shell.session.is_some(),
             shell.model.lock().unwrap().gizmo_armed,
         )
     });
     assert!(!open, "Esc closes the escalated HUD");
-    assert!(!deferred, "the gizmo returns to its normal commit-on-release path");
+    assert!(!session, "Esc drops the pending session too");
     assert!(armed, "the gizmo stays armed");
 }

@@ -51,13 +51,18 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // The key light is authored in the Z-up world frame: mostly overhead, offset in
-    // +X/+Y so the four side facets still separate from each other.
-    let light_dir = normalize(vec3<f32>(0.4, 0.6, 0.8));
+    // A three-point rig, authored in the Z-up world frame. The key separates the four
+    // side facets; the fill comes from the opposite side so the faces the key leaves
+    // dark keep some form; the rim comes from behind to pick the silhouette out of the
+    // background. The weights sum to one, so `ambient + (1 - ambient) * diffuse` still
+    // maps to [0, 1].
     let normal = normalize(input.normal);
     // Two-sided: culling is off for the POC, so accept either face orientation.
-    let diffuse = abs(dot(normal, light_dir));
-    let ambient = 0.25;
+    let key = abs(dot(normal, normalize(vec3<f32>(0.40, 0.60, 0.80))));
+    let fill = abs(dot(normal, normalize(vec3<f32>(-0.70, 0.20, 0.35))));
+    let rim = abs(dot(normal, normalize(vec3<f32>(-0.15, -0.85, 0.50))));
+    let diffuse = 0.72 * key + 0.20 * fill + 0.08 * rim;
+    let ambient = 0.18;
     // The texture (the default is opaque white) and the per-vertex colour both
     // multiply into the packet colour.
     let albedo = globals.color * input.color * textureSample(shape_texture, shape_sampler, input.uv);

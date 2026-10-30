@@ -53,7 +53,11 @@ DEFAULT_WIDTH = 20.0
 DEFAULT_HEIGHT = 20.0
 # RGBA in the 0..1 range; alpha is unused. This is the opaque CAD grey the edition
 # has always given Part objects, now also the default of their `Color` property.
-DEFAULT_COLOR = (0.66, 0.72, 0.80, 1.0)
+#
+# The renderer treats this as **linear** albedo and writes to an sRGB target, so a
+# light linear value encodes to near-white on screen. The old (0.66, 0.72, 0.80)
+# was 0.87 sRGB once lit; this mid tone stays a readable steel grey.
+DEFAULT_COLOR = (0.30, 0.34, 0.40, 1.0)
 
 _DISPLAY_MODES = ("Shaded", "ShadedWithEdges", "Wireframe")
 _DISPLAY_KEYS = {
@@ -323,9 +327,9 @@ FerroCAD.register_interaction_provider(_interaction)
 
 #: The parametric edition's appearance preset (declared, not yet materialised).
 #:
-#: Parametric is the neutral edition: Part objects are the opaque grey
-#: ``(0.66, 0.72, 0.80)`` (linear ``Y = 0.716``), so the gizmo has no blue object
-#: to fight. The preset deliberately pins today's tokens rather than changing
+#: Parametric is the neutral edition: no workbench supplies its own surface colour,
+#: so Part objects are the opaque steel grey in `DEFAULT_COLOR` (linear
+#: ``Y = 0.376``), and the gizmo has no blue object to fight. The preset deliberately pins today's tokens rather than changing
 #: them, so a reset restores the familiar look even if a shared default moves
 #: later. Declaring the values also documents that the grey edition owns a
 #: neutral palette, unlike the toy's contrast preset.

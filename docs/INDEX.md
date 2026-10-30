@@ -258,7 +258,8 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
 - [project/tasks/simplecad-bringup.md](project/tasks/simplecad-bringup.md) — the SC0–SC8 cut of the SimpleCAD bring-up, including `makeWireString` on the Rust text stack.
 - [project/tasks/text-and-3d-text.md](project/tasks/text-and-3d-text.md) — text boundaries: kernel-free outlines vs Part wires/faces, the wire→shell vs face→solid rule, and why there is no DPI or point size.
-- [project/tasks/transform-session.md](project/tasks/transform-session.md) — the transform session: explicit uncommitted state (`PendingEdit`/`EditView`), one cumulative move session, loadout slots, hover-to-arm, the 3-D tape and the staged plan A0–U6.
+- [project/tasks/transform-session.md](project/tasks/transform-session.md) — the transform session, planned not built: explicit uncommitted state (`PendingEdit`/`EditView`), one cumulative move session, the pill and the 3-D tape. Stages A0–A3 then U1–U3.
+- [project/tasks/tool-loadout.md](project/tasks/tool-loadout.md) — the tool loadout, planned not built: slots, the `Select ▾` topology filter, the bottom-left bar, manipulator narrowing and hover-to-arm. Stages U4–U5.
 - [project/tasks/ux-research.md](project/tasks/ux-research.md) — the interaction questions U1–U7, their evidence sources and the decision log.
 - [project/tasks/creation-tools-ownership.md](project/tasks/creation-tools-ownership.md) — whether creation tools are a core default or an edition/mod choice, and how override precedence works.
 - [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.

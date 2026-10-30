@@ -9,9 +9,12 @@ Move form surviving the loss of its selection.
 > **Superseded in part (2026-10-30).** The pending-transform lifecycle — the normal versus
 deferred drag split, the floating Move dialog and its `Cancel`/`Move` buttons, and the
 "silently cancelled on context loss" transition — is being replaced by one cumulative
-session with explicit commit/checkpoint/rollback. The plan and the staged rewrites of §2.1,
-§4.2, §5.1–5.2 and §7 are in
-[`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md);
+session with explicit commit/checkpoint/rollback. The selection half (a topology filter that
+lets a loadout slot decide whether a click selects a body or a sub-element) changes §2.1.
+Plans and staged rewrites:
+[`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
+(§4.2, §5.1–5.2, §7) and
+[`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (§2.1);
 everything else here stays authoritative until the stage that rewrites a section lands.
 
 Companions: [`gizmo-manipulators.md`](gizmo-manipulators.md) (manipulator math and

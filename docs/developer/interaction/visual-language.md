@@ -11,9 +11,11 @@ already does, because the tokens currently live in four places with three differ
 conventions.
 
 > **Amended (2026-10-30).** The translation HUD's `Cancel`/`Move` chrome is being replaced by
-> a two-stage pill (compact ↔ expanded) and a 3-D measuring tape, and the state machine grows
-> a hover-to-arm case and a post-drag `SESSION_HOLD`. The plan and the rewrites of §1.5 and §5
-> are in [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md);
+> a two-stage pill (compact ↔ expanded) and a 3-D measuring tape (§1.5), and the state machine
+> grows a hover-to-arm case and a post-drag `SESSION_HOLD` (§5). Plans:
+> [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
+> (pill, tape, `SESSION_HOLD`) and
+> [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (hover-to-arm);
 > every token and stroke rule here stays authoritative.
 
 ---

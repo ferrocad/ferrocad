@@ -135,6 +135,53 @@ removed and `etched.Volume == plate.Volume - text.Volume / 2`.
 `Shape.translate` returns the same shape and mutates it, so a second placement needs a
 copy — otherwise the first placement is applied twice.
 
+## Keep it parametric
+
+The construction above is **baked**: `text.copy()`, `multiFuse` and `fuse` produce one
+`Part::Feature`, and the ShapeString's properties no longer drive anything. To keep the
+text editable, link a `Part::Extrusion` to the ShapeString and fuse the objects:
+
+```python
+DEPTH = 2.0
+text = doc.addObject("Part::Extrusion", "Text")
+text.Base = string
+text.DirMode = "Custom"
+text.Dir = FreeCAD.Vector(0, 0, 1)
+text.Solid = True
+text.LengthFwd = DEPTH
+
+bound = string.Shape.BoundBox
+plate = doc.addObject("Part::Box", "Plate")
+plate.Length = bound.XLength + 4
+plate.Width = bound.YLength + 4
+plate.Height = 3.0
+plate.Placement.Base = FreeCAD.Vector(bound.XMin - 2, bound.YMin - 2, -3.0)
+
+raised = doc.addObject("Part::Fuse", "Raised")
+raised.Base = plate
+raised.Tool = text
+
+for obj in (string, text, plate):
+    obj.Visibility = False
+doc.recompute()
+
+string.String = "FerroCAD"
+doc.recompute()          # the extrusion and the fuse rebuild
+```
+
+The extrusion reads `Base.Shape` on every recompute and the fuse reads its two
+operands, so editing `String`, `Size`, `Tracking` or `FontFile` rebuilds the letters
+through the whole chain. A saved document keeps that graph: reopen it, change
+`String`, and `ShapeString` → `Text` → `Raised` recompute in order. The plate is a
+`Part::Box`, so its dimensions stay editable too, but it does not follow the text
+automatically.
+
+The plate is placed **below** `z = 0` here, so the letters — extruded upward from the
+ShapeString's plane — stand on its top face. Keep `MakeFace` on: `Part::Extrusion`
+sweeps the ShapeString's faces (one per glyph, counters as holes). The wire-only form
+(`MakeFace = False`) hands every glyph's wires to one face maker, which is only right
+for a single contour.
+
 ## Sizing: there is no DPI
 
 `Size` is a length in the document's units, not a point size, and nothing in the pipeline

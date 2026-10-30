@@ -91,10 +91,13 @@ overlay), the *model* half is feasible but has no caller from the shell today (t
   (`handle_pointer_with_modifiers` → `apply_gizmo_preview(Some(…))` → `apply_preview_overlays`
   → `set_temporary_transform`), and *also* re-applied when a host sends a snapshot
   (`preview_translation`). Two writers already exist; the shell's dialog is a third.
-- `preview_home` is broader than transforms: it snapshots **gizmo origins and manipulator
-  anchors** as well as item transforms (`inventor_view.rs:3490-3535`). So A2 cannot delete it
-  wholesale — only its item-transform branch. Gizmo/manipulator anchoring keeps working through
-  the existing overlay path, which is what the stem and the grips use.
+- `preview_home` snapshots only **overlay anchors** — gizmo origins and manipulator anchors
+  (`struct PreviewHome { gizmos, manipulators }`, `inventor_view.rs:133-137`) — not item
+  transforms: those are written straight onto the stage items by two separate call sites
+  (`preview_translation` and `apply_gizmo_preview`). So A2 deletes those item writes and leaves
+  `preview_home` alone; the overlay half is what the stem and the grips already use.
+  *(Corrected 2026-10-30: an earlier draft of this note claimed `preview_home` held item
+  transforms too.)*
 - ⚠️ **Ownership and latency.** The pointer is handled in the viewport, so a shell-owned session
   must be fed a tick and pushed back. The round trip already exists and is proven
   (`ViewportEvent::TransformPreview` is emitted from the release path at
@@ -199,3 +202,19 @@ The one thing the plan got materially wrong is the *shape of the pending value*:
 `Placement` because that is what `_move_selection` writes, but the display path never sees one.
 The session can measure and draw in world space with no placement at all, and only the commit
 needs the object — which is the facade's job already.
+
+## 9. Status of the structural changes (2026-10-30)
+
+| # | Change | State |
+| --- | --- | --- |
+| 1 | Rename the transaction's `pending` to `booked` | **done** — `TransactionManager::{booked, has_booked}`, matching FreeCAD's `getBookedTransactionID`, so the name is free for an uncommitted *edit* (`ferrocad_core`) |
+| 2 | `PendingEdit` + `EditView` in `Document` | deferred by D0 (design only; no caller yet) |
+| 3 | Pending edit reachable from the shell | **not needed** — D0 routes the commit through the existing interaction provider |
+| 4 | Session datum is world-space; delta is a matrix | pending (A1) — pinned by `a_document_item_is_world_space_with_an_identity_placement`, which asserts a document item's `placement()` is identity and `anchor()` is the world origin |
+| 5 | `viewport.set_session`, and the viewport stops writing item previews | pending (A1/A2) |
+
+The shell-side half of the split-brain was also consolidated in preparation: the pending move
+(`OpenDialog::translation` + `Shell::gizmo_drag` + `Shell::drag_baseline`) now has one home,
+`Shell::pending_move` (`PendingMove`, `shell.rs`), with the Δ fields demoted to a rounded view.
+Behaviour is unchanged — the 244 `ferrocad_gpui` tests pass, including
+`a_move_hud_drag_survives_its_release`.

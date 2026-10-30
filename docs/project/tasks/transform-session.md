@@ -202,8 +202,7 @@ the triad already hugs `origin`. The delta is a matrix so rotation is expressibl
 One owner: the shell holds it; the viewport **renders** it (`set_session`). That deletes the
 three-way split — `preview_translation`, `apply_gizmo_preview` and the dialog's mirrored delta
 all become *reads* of the session, and `set_gizmo_preview(deferred)` disappears because there is
-only one mode. `preview_home` survives for gizmo and manipulator anchors; only its item-transform
-branch goes.
+only one mode. `preview_home` is unaffected: it anchors gizmos and manipulators, not items.
 
 The session is also the `PendingEdit`'s writer: a translate stages `Placement` on the target
 (`pending.stage_property(target, "Placement", base ∘ delta)`). Because the shell has no
@@ -369,7 +368,7 @@ sweep.
 | --- | --- | --- | --- |
 | **A0** | ~~`PendingEdit` + `EditView` + facade handle~~ — **deferred by D0**. The design stays in §2.2–§2.3; nothing on the critical path needs it. Trigger: the first non-display consumer (a script reading a pending value, save-with-live-session, or a preview the document must hold) | Building it now would be scaffolding with no caller — the recon showed the shell cannot even reach it | — |
 | **A1** | `TransformSession` in `ferrocad_stage` (world datum + matrix delta); the viewport renders it via `set_session`; the shell owns it; the commit is the existing `InteractionCommit` → mod layer | One owner for the pending delta before any behaviour changes | — |
-| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, `preview_home`'s **item-transform** branch, and `OpenDialog::translation`. Keep the gizmo/manipulator half of `preview_home` | Removes the three-way split that caused the 2026-10-30 defect | — |
+| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the item-transform writes in `preview_translation`/`apply_gizmo_preview`, and the shell's mirrored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 |
 | **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 |

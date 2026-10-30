@@ -47,9 +47,7 @@ impl Shell {
                 let change = cx.subscribe(
                     &input,
                     |this: &mut Shell, _emitter, _event: &ChangeEvent, cx| {
-                        if let Some(dialog) = this.dialog.as_mut() {
-                            dialog.translation = None;
-                        }
+                        this.pending_move.typed();
                         this.preview_dialog(cx);
                     },
                 );
@@ -65,7 +63,6 @@ impl Shell {
             spec,
             states,
             inputs,
-            translation: None,
             error: None,
             _submits: submits,
             _changes: changes,
@@ -157,10 +154,7 @@ impl Shell {
 
     /// Drop a typed preview without changing the document (cancel or dismiss).
     pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
-        self.drag_baseline = None;
-        if let Some(dialog) = self.dialog.as_mut() {
-            dialog.translation = None;
-        }
+        self.pending_move.reset();
         // Also releases the deferred drag session, so an escalated HUD restores the
         // gizmo's normal commit-on-release path when it is cancelled.
         self.defer_gizmo_preview(false, cx);
@@ -180,7 +174,7 @@ impl Shell {
         if !deferred {
             // The drag snapshot belonged to the deferred session; cancel/dismiss has
             // restored the normal commit path.
-            self.gizmo_drag = None;
+            self.pending_move.end_drag();
         }
         let Some(viewport) = self.viewport.clone() else {
             return;
@@ -197,11 +191,11 @@ impl Shell {
     /// and only picks the focus from the handle under the pointer.
     pub(super) fn gizmo_seed(&self, cx: &App) -> GizmoSeed {
         let Some(viewport) = self.viewport.as_ref() else {
-            return self.gizmo_drag.unwrap_or_default();
+            return self.pending_move.seed();
         };
         let viewport = viewport.read(cx);
         let Some(gizmo) = viewport.gizmo() else {
-            return self.gizmo_drag.unwrap_or_default();
+            return self.pending_move.seed();
         };
         let mut seed = GizmoSeed::default();
         if let Some(value) = viewport.gizmo_value() {
@@ -300,17 +294,16 @@ impl Shell {
 
     /// The pending translation a Move session will commit.
     ///
-    /// A drag records the exact delta on the dialog ([`OpenDialog::translation`]); the
-    /// Δ fields are only a rounded view of it. Typing replaces that value, so the fields
-    /// are the authority once the user edits them. `None` when the spec asks for no
-    /// translation.
+    /// [`PendingMove`] holds the exact delta a drag produced; the Δ fields are only a
+    /// rounded view of it. Typing replaces it, so the fields are authoritative once the
+    /// user edits them. `None` when the spec asks for no translation.
     pub(super) fn pending_translation(&self, cx: &App) -> Option<[f64; 3]> {
         let dialog = self.dialog.as_ref()?;
         if !dialog.spec.previews_translation() {
             return None;
         }
-        dialog
-            .translation
+        self.pending_move
+            .dragged()
             .or_else(|| self.translation_in_fields(cx))
     }
 
@@ -362,38 +355,36 @@ impl Shell {
     pub(super) fn on_transform_preview(&mut self, preview: &TransformPreview, cx: &mut Context<Self>) {
         let m = &preview.total_transform.m;
         let drag = [m[3], m[7], m[11]];
-        // Mirror the pending drag even before a HUD is open, so an escalation from the
-        // keyboard can seed itself from the tick that is already on screen.
-        self.gizmo_drag = (preview.phase != PreviewPhase::End)
-            .then(|| GizmoSeed::from_translation(drag));
-        if !self
+        let previews = self
             .dialog
             .as_ref()
-            .is_some_and(|dialog| dialog.spec.previews_translation())
-        {
+            .is_some_and(|dialog| dialog.spec.previews_translation());
+
+        if preview.phase == PreviewPhase::End {
+            self.pending_move.end_drag();
+            if !previews {
+                // Without a HUD the tick was only a seed for a keyboard escalation, and
+                // the release has already committed: it must not seed the *next* HUD.
+                self.pending_move.reset();
+                return;
+            }
+            // The accumulated value is the pending move; the fields are its rounded view.
+            self.set_translation_fields(self.pending_move.dragged().unwrap_or_default(), cx);
+            self.preview_dialog(cx);
             return;
         }
-        if preview.phase == PreviewPhase::Begin {
-            // A drag reports its transform relative to its own start; the fields keep
-            // whatever they held, so successive drags accumulate into the same move.
-            self.drag_baseline = self.pending_translation(cx);
+
+        if preview.phase == PreviewPhase::Begin && previews {
+            // A drag reports its transform relative to its own press, so successive
+            // drags accumulate onto whatever the move already held.
+            self.pending_move.begin_drag();
         }
-        let baseline = self.drag_baseline.unwrap_or([0.0; 3]);
-        let delta = [
-            baseline[0] + drag[0],
-            baseline[1] + drag[1],
-            baseline[2] + drag[2],
-        ];
-        // The drag is the authority while it runs: keep the **exact** delta beside the
-        // rounded fields so the release previews where the pointer actually is.
-        if let Some(dialog) = self.dialog.as_mut() {
-            dialog.translation = Some(delta);
+        self.pending_move.tick(drag);
+        if !previews {
+            return;
         }
-        self.set_translation_fields(delta, cx);
+        self.set_translation_fields(self.pending_move.dragged().unwrap_or_default(), cx);
         self.preview_dialog(cx);
-        if preview.phase == PreviewPhase::End {
-            self.drag_baseline = None;
-        }
     }
 
     /// Where a floating dialog should sit: beside the gizmo, else under the live
@@ -443,7 +434,7 @@ impl Shell {
         // A Move HUD's Δ fields are a rounded view of the drag; the callback must get
         // the exact delta the user saw, or accepting a drag commits a nearby pose. Only
         // a **drag** overrides the fields — typed text keeps `collect`'s validation.
-        if let Some(delta) = dialog.translation {
+        if let Some(delta) = self.pending_move.dragged() {
             for (field, state) in spec.fields.iter().zip(states.iter_mut()) {
                 let slot = match field.name.as_str() {
                     "dx" => 0,

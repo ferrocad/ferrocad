@@ -222,23 +222,90 @@ fn snap_name(kind: SnapKind) -> &'static str {
 /// escalation starts.
 ///
 /// `axis` is the field the HUD should focus (0 = X, 1 = Y, 2 = Z); a plane drag
-/// focuses X, matching the typed-field order.
+/// focuses X, matching the typed-field order. Built by [`PendingMove::seed`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct GizmoSeed {
     pub axis: usize,
     pub delta: [f64; 3],
 }
 
-impl GizmoSeed {
-    /// Seed from a world-space translation, deriving the axis from the component
-    /// that moved (a plane or an unmoved drag focuses X).
-    fn from_translation(delta: [f64; 3]) -> Self {
-        let axis = match (delta[0] != 0.0, delta[1] != 0.0, delta[2] != 0.0) {
-            (false, true, false) => 1,
-            (false, false, true) => 2,
-            _ => 0,
-        };
-        Self { axis, delta }
+/// The field a world-space translation should focus (0 = X, 1 = Y, 2 = Z).
+///
+/// Only one component moving focuses it; a plane drag and an unmoved drag both
+/// focus X, matching the Δ field order.
+fn axis_of(delta: [f64; 3]) -> usize {
+    match (delta[0] != 0.0, delta[1] != 0.0, delta[2] != 0.0) {
+        (false, true, false) => 1,
+        (false, false, true) => 2,
+        _ => 0,
+    }
+}
+
+/// The Move session's pending translation — one home for the value.
+///
+/// Three things used to describe it separately: the dialog's exact delta
+/// (`OpenDialog::translation`), the last deferred-drag tick (`Shell::gizmo_drag`) and the
+/// Δ fields at the drag's start (`Shell::drag_baseline`). They are states of one value, and
+/// keeping them apart is how a release could commit something the user never saw. The
+/// fields are a rounded **view** of [`dragged`](Self::dragged); they become authoritative
+/// only when the user types.
+///
+/// It is deliberately not part of the dialog: the unified session replaces the HUD and
+/// keeps the pending move (see `docs/project/tasks/transform-session.md`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct PendingMove {
+    /// The exact delta a drag produced. `None` when the Δ fields are authoritative
+    /// (nothing has been dragged since the HUD opened, or the user typed since).
+    dragged: Option<[f64; 3]>,
+    /// The value the running drag started from. `Some` only between its `Begin` and its
+    /// `End`, so successive drags accumulate into one move.
+    baseline: Option<[f64; 3]>,
+    /// The field a keyboard escalation should focus.
+    axis: usize,
+}
+
+impl PendingMove {
+    /// Start a drag: the accumulated value is what this drag adds to.
+    fn begin_drag(&mut self) {
+        self.baseline = Some(self.dragged.unwrap_or_default());
+    }
+
+    /// End the drag. The accumulated value stays — that is the pending move.
+    fn end_drag(&mut self) {
+        self.baseline = None;
+    }
+
+    /// Apply a drag tick's own delta (`Begin`/`Update`/`End` report it from the press).
+    fn tick(&mut self, drag: [f64; 3]) {
+        let baseline = self.baseline.unwrap_or([0.0; 3]);
+        self.dragged = Some([
+            baseline[0] + drag[0],
+            baseline[1] + drag[1],
+            baseline[2] + drag[2],
+        ]);
+        self.axis = axis_of(drag);
+    }
+
+    /// A typed edit: the Δ fields win from now on.
+    fn typed(&mut self) {
+        self.dragged = None;
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// The exact delta the session would commit, when a drag set it.
+    fn dragged(&self) -> Option<[f64; 3]> {
+        self.dragged
+    }
+
+    /// What a keyboard escalation seeds the HUD with, when there is no viewport to ask.
+    fn seed(&self) -> GizmoSeed {
+        GizmoSeed {
+            axis: self.axis,
+            delta: self.dragged.unwrap_or_default(),
+        }
     }
 }
 
@@ -396,17 +463,18 @@ pub struct Shell {
     /// The last pointer position in window coordinates. Space opens the wheel
     /// there; a keyboard-only session falls back to the window centre.
     last_pointer: Option<Point<Pixels>>,
-    /// The Δ fields at the moment a gizmo drag began. A drag reports its transform
-    /// relative to its own start, so this is what makes successive drags accumulate
-    /// into the same editable values.
-    drag_baseline: Option<[f64; 3]>,
+    /// The Move session's pending translation. One home for the value: the exact delta a
+    /// drag produced, the value that drag started from, and the axis to focus. The Δ
+    /// fields are a rounded *view* of it; they are authoritative only after a typed edit.
+    ///
+    /// It lives here rather than in the dialog because the session outlives a HUD (the
+    /// loadout plan deletes the HUD entirely, see
+    /// `docs/project/tasks/transform-session.md`).
+    pending_move: PendingMove,
     /// Whether the current gizmo drag is deferred to the Move HUD. This mirrors the
     /// viewport's `set_gizmo_preview` so the shell can answer Esc/cancel without a
     /// viewport (headless tests, or before `enable_viewport`).
     gizmo_deferred: bool,
-    /// The accumulated delta of the deferred drag, mirrored from the last
-    /// [`TransformPreview`]. It seeds an escalation when there is no viewport to ask.
-    gizmo_drag: Option<GizmoSeed>,
     /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
     ///
     /// A workplane offset is **transient viewport state** with no document object and
@@ -596,13 +664,6 @@ struct OpenDialog {
     states: Vec<ValueState>,
     /// The text input for a text-like field; `None` for a bool/enum row.
     inputs: Vec<Option<Entity<TextInput>>>,
-    /// The exact pending translation of a Move session, when a gizmo drag set it.
-    ///
-    /// The Δ fields are a **view** of this value: they are written with two decimals,
-    /// so reading the drag back out of their text rounded it and snapped the object
-    /// (and the triad) to the rounded delta on release — to zero for a small drag.
-    /// Typing in a field replaces this value, so a typed move is still exact.
-    translation: Option<[f64; 3]>,
     /// The first validation or callback error, shown inside the modal.
     error: Option<String>,
     /// Keep the per-field submit subscriptions alive for the dialog's lifetime.
@@ -766,9 +827,8 @@ impl Shell {
             _wheel_events: wheel_events,
             wheel_target: None,
             last_pointer: None,
-            drag_baseline: None,
+            pending_move: PendingMove::default(),
             gizmo_deferred: false,
-            gizmo_drag: None,
             workplane_session: None,
             hud_rect: None,
             hud_lock: None,

@@ -94,8 +94,12 @@ pub struct Transaction {
 }
 
 /// A transaction requested by `open`, not yet made active by a change.
+///
+/// FreeCAD calls this the **booked** transaction (`getBookedTransactionID`); the name
+/// matters here because "pending" is reserved for an uncommitted *edit*
+/// (`PendingEdit`, see `docs/project/tasks/transform-session.md`).
 #[derive(Debug)]
-struct Pending {
+struct Booked {
     name: String,
     id: usize,
 }
@@ -103,7 +107,7 @@ struct Pending {
 #[derive(Debug, Default)]
 pub struct TransactionManager {
     /// A transaction requested by `open`, not yet made active by a change.
-    pending: Option<Pending>,
+    booked: Option<Booked>,
     active: Option<Transaction>,
     /// Stack of committed transactions (oldest first; newest on top).
     undo: Vec<Transaction>,
@@ -117,26 +121,26 @@ impl TransactionManager {
     /// active it is committed when the *next* change arrives, mirroring FreeCAD's
     /// pending-transaction model.
     pub fn open_named(&mut self, name: &str) {
-        self.pending = Some(Pending {
+        self.booked = Some(Booked {
             name: name.to_string(),
             id: new_transaction_id(),
         });
     }
 
-    /// Make the pending transaction active and return its name (once).
+    /// Make the booked transaction active and return its name (once).
     ///
     /// Any already-active transaction is committed first (so consecutive
     /// `openTransaction` calls without an explicit commit still produce separate
     /// undo entries), and a new active transaction invalidates the redo stack.
     pub fn begin(&mut self) -> Option<String> {
-        if let Some(pending) = self.pending.take() {
+        if let Some(booked) = self.booked.take() {
             if let Some(previous) = self.active.take() {
                 self.undo.push(previous);
             }
             self.redo.clear();
-            let name = pending.name.clone();
+            let name = booked.name.clone();
             self.active = Some(Transaction {
-                id: pending.id,
+                id: booked.id,
                 name: name.clone(),
                 changes: Vec::new(),
             });
@@ -145,8 +149,10 @@ impl TransactionManager {
         None
     }
 
-    pub fn has_pending(&self) -> bool {
-        self.pending.is_some()
+    /// Whether a transaction is booked but not yet active (FreeCAD's "pending
+    /// transaction").
+    pub fn has_booked(&self) -> bool {
+        self.booked.is_some()
     }
 
     pub fn is_active(&self) -> bool {
@@ -180,8 +186,8 @@ impl TransactionManager {
     /// The currently booked transaction id, or 0 if none is open
     /// (FreeCAD `getBookedTransactionID`).
     pub fn booked_transaction_id(&self) -> usize {
-        if let Some(pending) = &self.pending {
-            return pending.id;
+        if let Some(booked) = &self.booked {
+            return booked.id;
         }
         self.active.as_ref().map(|t| t.id).unwrap_or(0)
     }
@@ -235,7 +241,7 @@ impl TransactionManager {
 
     /// Commit the active transaction; returns whether one was committed.
     pub fn commit(&mut self) -> bool {
-        self.pending = None;
+        self.booked = None;
         match self.active.take() {
             Some(active) => {
                 self.undo.push(active);
@@ -247,7 +253,7 @@ impl TransactionManager {
 
     /// Discard the active transaction (the caller reverts its changes).
     pub fn abort(&mut self) -> Option<Transaction> {
-        self.pending = None;
+        self.booked = None;
         self.active.take()
     }
 
@@ -312,7 +318,7 @@ impl Document {
 
     /// Whether a transaction is pending or active.
     pub fn is_in_transaction(&self) -> bool {
-        self.tx.has_pending() || self.tx.is_active()
+        self.tx.has_booked() || self.tx.is_active()
     }
 
     // -- metadata ------------------------------------------------------------
@@ -355,7 +361,7 @@ impl Document {
     /// active (edits outside a transaction are not undoable). Called by the
     /// object-model mutators in the parent module.
     pub(super) fn record_change(&mut self, change: Change) {
-        if self.tx.is_active() || self.tx.has_pending() {
+        if self.tx.is_active() || self.tx.has_booked() {
             self.tx.record(change);
         }
     }

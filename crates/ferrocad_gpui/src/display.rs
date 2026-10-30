@@ -241,6 +241,33 @@ mod tests {
         assert_eq!(display.len(), 1);
     }
 
+    /// A document item carries **world-space** geometry and an identity placement.
+    ///
+    /// The provider bakes the object's `Placement` into the mesh and reports its base as
+    /// `origin` (`python/ferrocad_parametric/__init__.py:86-93`), so `placement` is not
+    /// the object's transform — `origin` is the datum a gizmo (and the future transform
+    /// session) hugs. Anything that reads `placement()` as "where the object is" would be
+    /// wrong, which is why this is pinned.
+    #[test]
+    fn a_document_item_is_world_space_with_an_identity_placement() {
+        let mut display = DisplaySync::new();
+        let mut mesh = slab(7, "Box");
+        mesh.positions = vec![[5.0, 0.0, 0.0], [15.0, 0.0, 0.0], [5.0, 10.0, 0.0]];
+        mesh.origin = Some([5.0, 0.0, 0.0]);
+        let stage = display.build(vec![mesh]);
+        let item = &stage.items()[0];
+        assert_eq!(
+            item.placement(),
+            ferrocad_types::Placement::identity(),
+            "a document item's placement is not the object's transform"
+        );
+        assert_eq!(
+            item.anchor(),
+            Some(ferrocad_types::Vector3::new(5.0, 0.0, 0.0)),
+            "the datum is the world-space origin, not the placement's base"
+        );
+    }
+
     #[test]
     fn a_default_surface_is_the_two_tone_glass() {
         let mut display = DisplaySync::new();

@@ -317,6 +317,26 @@ fn a_drag_collapses_the_pill_and_tab_expands_it(cx: &mut TestAppContext) {
     );
 }
 
+/// U3: a selection change is a new session even when the old one is clean, so the next
+/// drag cannot inherit its datum or targets (and its tape cannot outlive the selection).
+#[gpui::test]
+fn a_selection_change_drops_a_clean_session(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+
+    shell.update(&mut cx, |shell, cx| shell.run_command("App_Move", cx));
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.is_some()),
+        "the pill opens a session"
+    );
+
+    shell.update(&mut cx, |shell, cx| shell.select("Derived", cx));
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "a new selection drops even a clean session"
+    );
+}
+
 /// U2b: a typed-only edit opens the session. Before this, typing had no session of its
 /// own until a drag.
 #[gpui::test]

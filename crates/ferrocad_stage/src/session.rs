@@ -235,6 +235,54 @@ impl TransformSession {
     }
 }
 
+/// The measuring tape's model: where a session started and how far it has moved.
+///
+/// The viewport turns this into screen-invariant geometry each paint (a ghost ring at the
+/// datum and dashed stair-step legs to the previewed origin). It is a **copy**, not a
+/// borrow: the tape outlives the shell update that produced it and a later tick must not
+/// mutate geometry that is already queued. The shell builds it from the live session; the
+/// viewport owns the drawing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TransformTape {
+    datum: Vector3,
+    delta: Vector3,
+}
+
+impl TransformTape {
+    pub fn new(datum: Vector3, delta: Vector3) -> Self {
+        Self { datum, delta }
+    }
+
+    /// Snapshot a live session: its datum is the tape's anchor and its absolute delta is
+    /// the offset.
+    pub fn from_session(session: &TransformSession) -> Self {
+        Self {
+            datum: session.datum(),
+            delta: session.delta(),
+        }
+    }
+
+    /// The world point the tape starts at (the session datum).
+    pub fn datum(&self) -> Vector3 {
+        self.datum
+    }
+
+    /// The absolute offset from the datum.
+    pub fn delta(&self) -> Vector3 {
+        self.delta
+    }
+
+    /// The previewed origin the tape ends at.
+    pub fn current(&self) -> Vector3 {
+        self.datum.add(&self.delta)
+    }
+
+    /// Whether there is an offset worth drawing. A clean session has no tape.
+    pub fn is_visible(&self) -> bool {
+        self.delta.x != 0.0 || self.delta.y != 0.0 || self.delta.z != 0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +484,35 @@ mod tests {
             Matrix4::translation(1.0, 0.0, 0.0),
             "rotation joins the matrix when a ring gesture exists, not before"
         );
+    }
+
+    #[test]
+    fn a_tape_snapshots_the_session_datum_and_delta() {
+        let stage = Stage::new().with_item(block(1, [2.0, 3.0, 0.0]));
+        let mut session = TransformSession::begin(&stage, &[1]).unwrap();
+        session.set_translation(Vector3::new(5.0, 0.0, 0.0));
+
+        let tape = TransformTape::from_session(&session);
+
+        assert_eq!(tape.datum(), Vector3::new(2.0, 3.0, 0.0));
+        assert_eq!(tape.delta(), Vector3::new(5.0, 0.0, 0.0));
+        assert_eq!(
+            tape.current(),
+            Vector3::new(7.0, 3.0, 0.0),
+            "the tape ends at the previewed origin"
+        );
+    }
+
+    #[test]
+    fn a_tape_is_visible_only_with_a_nonzero_delta() {
+        let clean = TransformTape::new(Vector3::new(1.0, 2.0, 3.0), Vector3::zero());
+        assert!(!clean.is_visible());
+        for delta in [
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(0.0, 0.0, 0.5),
+        ] {
+            assert!(TransformTape::new(Vector3::zero(), delta).is_visible());
+        }
     }
 }

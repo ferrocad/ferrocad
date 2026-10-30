@@ -23,7 +23,8 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo, TransformSession, WorkplaneLive,
+    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo, TransformSession, TransformTape,
+    WorkplaneLive,
 };
 use ferrocad_types::{Matrix4, Vector3};
 use ferrocad_ui::Form;

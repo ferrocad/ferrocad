@@ -245,9 +245,10 @@ method to add.
 
 - `ShapeItem` keeps `temporary_transform` as the *rendering* of a staged transform (no public
   API change), but it is now written in exactly one place, from `session.transform()`.
-- A new overlay, `ferrocad_stage::measure_tape`, builds the ghost disc and the stair-step legs
-  from `(session.datum(), session.transform())`. It is a `RenderQueue` like `workplane_stem`:
-  depth off, never picked, rebuilt when the session changes.
+- A new overlay, `ferrocad_stage::measure_tape` (**built 2026-10-31**), builds the ghost
+  disc and the stair-step legs from `TransformTape` (the session's datum and absolute
+  delta). It is a `RenderQueue` like `workplane_stem`: depth off, never picked, rebuilt
+  when the session changes.
 - The tape needs no new renderer feature. Every element is a 1 px line or a screen-facing
   ribbon, both of which exist.
 - The ghost's *base* geometry is already in memory: the shell keeps the un-previewed stage
@@ -315,8 +316,9 @@ two-stage pill in the gpui overlay.
 
 ### 3.1 Stage: the 3-D measuring tape
 
-While a session has a non-zero offset from its datum `O_start` to the previewed origin
-`O_current`:
+**Built 2026-10-31** in `ferrocad_stage::measure_tape`; the viewport draws its three line
+packets under the controls. While a session has a non-zero offset from its datum `O_start`
+to the previewed origin `O_current`:
 
 - **Ghost origin disc** — a 10 px ring at `O_start` in `gizmo::INACTIVE_COLOR` (#94A3B8 @ 0.50),
   marking where the body started.
@@ -325,14 +327,14 @@ While a session has a non-zero offset from its datum `O_start` to the previewed 
   `O_start ──(ΔX, #F87171)──► P_x ──(ΔY, #4ADE80)──► P_xy ──(ΔZ, #38BDF8)──► O_current`,
   with perpendicular 6 px end-ticks at each corner. Depth-off, never picked, rebuilt from the
   session each frame (the same contract as `workplane_stem`).
-- A **`SESSION_HOLD`** state keeps the tape and the pill live after the pointer is released,
-  until `Enter`, a context switch or `Esc`.
+- A **`SESSION_HOLD`** keeps the tape and the pill live after the pointer is released, until
+  `Enter`, a context switch or `Esc`. It is not a separate state: the session already
+  survives the release (U1), and the tape/pill simply render it until it commits or drops.
 
 ### 3.2 gpui: the expandable pill
 
-One pill anchored to the active measurement (`readout_anchor` during a drag, clamped near
-`O_current` when expanded) replaces both the separate Move dialog spec and the separate
-`GizmoValue` readout.
+**Built 2026-10-31** (U2b). One pill anchored to the active measurement replaces both the
+separate Move dialog spec and the separate `GizmoValue` readout.
 
 - **Compact** (during a drag, and lingering in `SESSION_HOLD`) shows only the constrained value
   in 12 px semibold tabular monospace on `ui::WHEEL_GLASS` with a `ui::CHROME_LINE` border:
@@ -405,7 +407,7 @@ sweep.
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it, and the session is the selection's (742aee7). The no-arg form now opens the U2 pill, not the buttoned dialog |
 | **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31**: `shell::pill::PillState` drives the Move HUD (compact readout during a drag; expanded Δ fields on `Tab`/`Shift+Tab`/a digit/a click; `Enter` commits, `Esc` rolls back), the `Cancel`/`Move` buttons are gone, and a typed-only edit opens the session from `last_stage`. gpui 256 |
-| **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 |
+| **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 — **done 2026-10-31**: `ferrocad_stage::measure_tape` builds the ring, dashed legs and 6 px ticks from `TransformTape`; the viewport draws them depth-off and never picked, and the tape follows the session through the release. Stage 236, viewport 203 |
 | **U6** | this note's share of the sweep: spec text final, dead code gone, user-docs Move page | Converges with the loadout half | all of §4 |
 
 ### Stage acceptance
@@ -443,7 +445,11 @@ sweep.
   compact stage is asserted after a drag and `a_typed_edit_opens_the_session` covers the
   typed-only entry.
 - **U3** — the tape's legs are proportional to the non-zero delta components, the ghost disc
-  sits at the datum, and nothing is pickable.
+  sits at the datum, and nothing is pickable. **Built 2026-10-31**:
+  `the_legs_follow_only_the_nonzero_axes_in_order`,
+  `the_ghost_ring_sits_at_the_datum` and
+  `a_transform_tape_draws_lines_and_is_never_pickable` cover the three; the shell test
+  `a_move_session_draws_the_tape_until_it_ends` covers `SESSION_HOLD`.
 
 ### Risks and mitigations
 
@@ -476,7 +482,7 @@ sweep.
 | **D1** | Through the command **dialog** callback or the interaction provider? | **closed by D0** | The interaction provider: it is the same seam a workbench gizmo already uses (`to_interaction_with`), so a `Part::Fillet` and a `Move` share one commit route. The Move *command* keeps its dialog only for scripts that call it with arguments |
 | D3 | One session per shell or per viewport? | **decided 2026-10-30** | **One session per shell.** It is driven by pointer events the shell already receives as `TransformPreview` ticks, the pending value already lives in `Shell::pending_move`, and a second window must not start a second session on the same object. The viewport stays a view: it renders a session snapshot and never owns one |
 | D4 | Save with a live session: commit or abort? | **decided 2026-10-30** | **Commit it first, and say so** — the status line reads `saved, pending move committed`. Losing a drag to `Ctrl+S` is the same defect class as losing it to a selection change, and `Esc` remains the only way to discard. The implementation point is the **save command in `python/ferrocad_shell`**, not the session: the command commits the pending value before it writes, and reports that in its status line; the session itself never knows a save happened |
-| D6 | Does the tape appear for a typed-only session (no drag)? | open, U3 | Yes, once a delta is non-zero — typing is a gesture too |
+| D6 | Does the tape appear for a typed-only session (no drag)? | **decided 2026-10-31** | Yes, once a delta is non-zero — typing is a gesture too. The tape is the session's view, and a typed edit updates the session.
 
 The loadout note owns D2 and D5. The mod-facing event contract is [`mod-events.md`](mod-events.md)
 (stage E1), which also records what was **not** built: a mod-to-mod event bus.

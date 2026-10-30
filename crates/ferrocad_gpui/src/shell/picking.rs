@@ -79,6 +79,12 @@ impl Shell {
             let _ = commands::cancel(&dialog.token);
             self.discard_pending(cx);
         }
+        // A new selection is a new session. A dirty one was committed above; a clean one
+        // still carries a datum and targets for the old objects, so it is dropped with its
+        // tape rather than reused by the next drag.
+        self.session = None;
+        self.drag_start = None;
+        self.sync_transform_tape(cx);
         let primary = items.last().map(|item| item.object.clone());
         let properties = primary
             .as_deref()

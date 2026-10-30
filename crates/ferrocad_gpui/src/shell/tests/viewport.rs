@@ -1053,6 +1053,80 @@ fn a_plain_drag_is_pending_until_enter_or_escape(cx: &mut TestAppContext) {
 }
 
 // ---------------------------------------------------------------------------
+// U3: the session's measuring tape and SESSION_HOLD
+// ---------------------------------------------------------------------------
+
+/// A pending session hands the viewport its tape, the release keeps both (SESSION_HOLD),
+/// and the rollback drops them together. Skips without a GPU adapter.
+#[gpui::test]
+fn a_move_session_draws_the_tape_until_it_ends(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+
+    // The real HUD spec opens the session (clean) and anchors it on the slab.
+    let outcome = crate::commands::run("App_Move").expect("App_Move");
+    let spec = outcome.dialog.clone().expect("a dialog");
+    let token = outcome.token.clone().expect("a token");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
+    });
+    let viewport = cx.update(|_window, cx| {
+        shell
+            .read(cx)
+            .viewport
+            .clone()
+            .expect("a viewport")
+    });
+    assert!(
+        cx.update(|_window, cx| viewport.read(cx).transform_tape())
+            .is_none(),
+        "a clean session has no tape"
+    );
+
+    let preview = |phase, x: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::End, 5.0), cx);
+        });
+    });
+
+    let tape = cx
+        .update(|_window, cx| viewport.read(cx).transform_tape())
+        .expect("the session's tape is drawn");
+    assert_eq!(tape.delta().x, 5.0);
+    assert!(
+        (tape.current().x - (tape.datum().x + 5.0)).abs() < 1e-12,
+        "the tape ends at the previewed origin"
+    );
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.as_ref().is_some_and(|s| s.is_dirty())),
+        "SESSION_HOLD: the release left the session live"
+    );
+
+    // The rollback drops the session and its tape together.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.drop_session("move cancelled", cx);
+        });
+    });
+    assert!(
+        cx.update(|_window, cx| viewport.read(cx).transform_tape())
+            .is_none(),
+        "Esc's drop hides the tape"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // W2: `Offset Workplane…` — the `+N` stem and its floating HUD
 // ---------------------------------------------------------------------------
 

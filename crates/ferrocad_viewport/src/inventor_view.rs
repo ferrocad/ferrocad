@@ -29,13 +29,13 @@ use ferrocad_inventor::{
     Scene, ViewSpec, compile_diagnostic,
 };
 use ferrocad_stage::Stage;
-use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, WIRE_DEPTH_BIAS};
+use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, OVERLAY_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
     AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoMode, GizmoModifiers, GizmoSet,
     GizmoStyle,
     GizmoTarget, GizmoValue, GridSpec, GridStyle, InteractionCommit, Manipulator,
     MouseButton as StageButton, PointerEvent, PointerKind, SnapCandidate, SnapContext, SnapKind,
-    Tool, ToolStatus, TransformGizmo, ViewProjection, Workplane, axis, feedback, grid,
+    Tool, ToolStatus, TransformGizmo, TransformTape, ViewProjection, Workplane, axis, feedback, grid,
     snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{camera_position, project_device, scale_for};
@@ -576,6 +576,13 @@ pub struct InventorViewport<V: InventorView> {
     /// Stable meshes for the feedback, so a per-frame rebuild re-uploads rather than
     /// leaking a mesh identity.
     feedback_meshes: FeedbackMeshes,
+    /// The transform session's measuring tape, when a pending offset is live. The shell
+    /// owns the session and hands a copy here; the viewport draws it every paint.
+    tape: Option<TransformTape>,
+    /// The tape's line packets, rebuilt from the session and the camera each paint.
+    tape_queue: RenderQueue,
+    /// Stable meshes for the tape rebuild.
+    tape_meshes: TapeMeshes,
     frame: Option<Arc<RenderImage>>,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
@@ -1368,6 +1375,28 @@ impl FeedbackMeshes {
     }
 }
 
+/// Stable mesh identities for the session's measuring tape.
+struct TapeMeshes {
+    ring: MeshId,
+    legs: MeshId,
+    ticks: MeshId,
+    generation: Generation,
+}
+
+impl TapeMeshes {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1 << 39);
+        let next = || MeshId(NEXT.fetch_add(1, Ordering::Relaxed));
+        Self {
+            ring: next(),
+            legs: next(),
+            ticks: next(),
+            generation: Generation(0),
+        }
+    }
+}
+
 /// A cap on the tessellated edge segments considered for an edge-midpoint snap; beyond
 /// it the mesh is too dense for a midpoint to mean anything.
 const MAX_EDGE_CANDIDATES: usize = 1024;
@@ -1425,6 +1454,20 @@ fn feedback_packet(
             program: None,
         },
     }
+}
+
+/// A draw packet for the measuring tape: untagged (never picked) and always-on-top, so
+/// a measurement stays readable even when the object is inside the model.
+fn tape_packet(
+    mesh_id: MeshId,
+    generation: Generation,
+    topology: Topology,
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+) -> DrawPacket {
+    let mut packet = feedback_packet(mesh_id, generation, topology, vertices, indices);
+    packet.state.depth = OVERLAY_DEPTH;
+    packet
 }
 
 /// How quickly a released orbit slows down (the velocity's time constant).
@@ -1521,6 +1564,9 @@ impl<V: InventorView> InventorViewport<V> {
             snap_feedback: None,
             feedback_queue: RenderQueue::default(),
             feedback_meshes: FeedbackMeshes::new(),
+            tape: None,
+            tape_queue: RenderQueue::default(),
+            tape_meshes: TapeMeshes::new(),
             frame: None,
             presenter: None,
             presenter_frames: 0,
@@ -3470,6 +3516,25 @@ impl<V: InventorView> InventorViewport<V> {
         changed
     }
 
+    /// Hand the viewport the session's measuring tape, or clear it.
+    ///
+    /// The shell owns the session; the viewport only draws. The tape is rebuilt from this
+    /// snapshot and the camera each paint, so a camera orbit keeps the dash and tick sizes
+    /// screen-invariant. Returns whether the stored tape changed.
+    pub fn set_transform_tape(&mut self, tape: Option<TransformTape>) -> bool {
+        if self.tape == tape {
+            return false;
+        }
+        self.tape = tape;
+        self.rebuild_tape_queue();
+        true
+    }
+
+    /// The tape the viewport is drawing, if it has a non-zero offset.
+    pub fn transform_tape(&self) -> Option<TransformTape> {
+        self.tape.filter(|tape| tape.is_visible())
+    }
+
     /// Write `transform` onto exactly the listed items, or clear every item's
     /// temporary transform when `transform` is `None`.
     ///
@@ -4784,6 +4849,42 @@ impl<V: InventorView> InventorViewport<V> {
         self.feedback_queue = queue;
     }
 
+    /// Rebuild the session's measuring tape.
+    ///
+    /// The dash, tick and ring sizes are screen-invariant, so this runs each paint (a
+    /// handful of line vertices, like the feedback overlay).
+    fn rebuild_tape_queue(&mut self) {
+        let Some(tape) = self.tape.filter(|tape| tape.is_visible()) else {
+            self.tape_queue = RenderQueue::default();
+            return;
+        };
+        let geometry = ferrocad_stage::measure_tape::build(&tape, &self.camera);
+        if geometry.is_empty() {
+            self.tape_queue = RenderQueue::default();
+            return;
+        }
+        self.tape_meshes.generation = Generation(self.tape_meshes.generation.0 + 1);
+        let generation = self.tape_meshes.generation;
+        let mut queue = RenderQueue::default();
+        let mut push = |mesh, vertices: Vec<Vertex>| {
+            if vertices.is_empty() {
+                return;
+            }
+            let indices = (0..vertices.len() as u32).collect();
+            queue.packets.push(tape_packet(
+                mesh,
+                generation,
+                Topology::Lines,
+                vertices,
+                indices,
+            ));
+        };
+        push(self.tape_meshes.ring, geometry.ring);
+        push(self.tape_meshes.legs, geometry.legs);
+        push(self.tape_meshes.ticks, geometry.ticks);
+        self.tape_queue = queue;
+    }
+
     /// Whether the aurora is still in its acquisition flash (the renderer keeps asking
     /// for frames until it settles).
     fn feedback_flash_pending(&self) -> bool {
@@ -4865,6 +4966,7 @@ impl<V: InventorView> InventorViewport<V> {
         // The aurora's flash decays over 120 ms and the camera sets its size, so the
         // feedback is rebuilt per paint (a handful of vertices).
         self.rebuild_feedback();
+        self.rebuild_tape_queue();
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
         }
@@ -4950,6 +5052,16 @@ impl<V: InventorView> InventorViewport<V> {
             // The aurora and its rays are pointer feedback: depth-free, on top.
             views.push(ViewSpec {
                 queue: &self.feedback_queue,
+                camera: &self.camera,
+                rect: None,
+                overlay: true,
+                workplane: None,
+            });
+        }
+        if !self.tape_queue.is_empty() {
+            // The session tape is a measurement: depth-off, and behind the controls.
+            views.push(ViewSpec {
+                queue: &self.tape_queue,
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
@@ -8358,6 +8470,34 @@ mod tests {
                 .is_none(),
             "the preview is cleared on commit"
         );
+    }
+
+    #[test]
+    fn a_transform_tape_draws_lines_and_is_never_pickable() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        let tape = TransformTape::new(Vector3::zero(), Vector3::new(5.0, 2.0, 0.0));
+
+        assert!(view.set_transform_tape(Some(tape)));
+        assert_eq!(view.transform_tape(), Some(tape));
+        assert_eq!(view.tape_queue.packets.len(), 3, "ring, legs and ticks");
+        for packet in &view.tape_queue.packets {
+            assert_eq!(packet.topology, Topology::Lines);
+            assert!(!packet.state.pickable, "the tape is never picked");
+            assert_eq!(packet.state.id, PickId(0));
+            assert_eq!(packet.state.depth, OVERLAY_DEPTH);
+        }
+        assert!(
+            !view.set_transform_tape(Some(tape)),
+            "the same snapshot is a no-op"
+        );
+
+        // A clean snapshot draws nothing, and `None` clears the stored snapshot.
+        let clean = TransformTape::new(Vector3::zero(), Vector3::zero());
+        assert!(view.set_transform_tape(Some(clean)));
+        assert!(view.tape_queue.is_empty());
+        assert_eq!(view.transform_tape(), None);
+        assert!(view.set_transform_tape(None), "clears the stored snapshot");
+        assert!(!view.set_transform_tape(None), "already empty");
     }
 
     #[test]

@@ -95,7 +95,17 @@ impl Shell {
         if self.session.is_some() {
             return;
         }
-        let targets: Vec<u32> = {
+        self.begin_drag_session(None);
+    }
+
+    /// Open (or replace) the session for the current selection from the un-previewed stage.
+    ///
+    /// The datum is the primary's anchor and the targets are the selection, so a drag always
+    /// accumulates against the current document pose and the current objects — a stage
+    /// rebuild cannot leave a stale datum behind. `fallback` is the preview's target, used
+    /// when the selection does not map onto the stage yet.
+    fn begin_drag_session(&mut self, fallback: Option<u32>) {
+        let mut targets: Vec<u32> = {
             let model = self.model.lock().unwrap();
             model
                 .selection
@@ -103,8 +113,10 @@ impl Shell {
                 .filter_map(|item| self.display.entity_of(&item.object))
                 .collect()
         };
-        if targets.is_empty() {
-            return;
+        if targets.is_empty()
+            && let Some(fallback) = fallback
+        {
+            targets.push(fallback);
         }
         self.session = self
             .last_stage
@@ -122,6 +134,7 @@ impl Shell {
             }
         }
         self.preview_dialog(cx);
+        self.sync_transform_tape(cx);
     }
 
     /// Whether the open dialog is the Move pill.
@@ -285,6 +298,7 @@ impl Shell {
         self.session = None;
         self.drag_start = None;
         self.clear_preview_items(cx);
+        self.sync_transform_tape(cx);
     }
 
     /// Drop the pending value entirely (cancel, accept, or a competing interaction).
@@ -511,6 +525,27 @@ impl Shell {
         }
     }
 
+    /// Push the session's tape snapshot into the viewport, or clear it.
+    ///
+    /// The tape is the **view** of the session; the session itself never knows it is
+    /// drawn. A clean session has no tape, and clearing the session (commit, `Esc`, a
+    /// context change) hides it with the ghost.
+    pub(super) fn sync_transform_tape(&mut self, cx: &mut Context<Self>) {
+        let tape = self
+            .session
+            .as_ref()
+            .filter(|session| session.is_dirty())
+            .map(TransformTape::from_session);
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        viewport.update(cx, |viewport, cx| {
+            if viewport.set_transform_tape(tape) {
+                cx.notify();
+            }
+        });
+    }
+
     /// A live gizmo drag: accumulate it into the session, mirror it into the Δ fields, and
     /// keep the selection previewing. Nothing reaches the document, so the drag and the
     /// typed values describe the same pending move.
@@ -535,31 +570,14 @@ impl Shell {
             }
             // A drag reports its transform from its own press, so it adds to whatever the
             // session already holds — a second drag on a pending move continues it. The
-            // session opens from the un-previewed stage, so its datum is the pose the
-            // gesture started from.
+            // session is re-opened from the un-previewed stage so its datum and targets are
+            // the current document pose; the pending value is carried in `drag_start`.
             self.drag_start = Some(self.session_delta().unwrap_or_default());
+            self.begin_drag_session(Some(preview.target_id));
         }
         if self.session.is_none() {
-            // The session is the **selection's** pending move: every selected entity
-            // previews and moves together, and the datum is the primary's anchor (the
-            // gizmo's target, which is what the triad hugs). The preview's own target is
-            // the fallback when the selection does not map onto the stage yet. A tick
-            // without a `Begin` (a harness, or a host that missed it) still opens it.
-            let mut targets: Vec<u32> = {
-                let model = self.model.lock().unwrap();
-                model
-                    .selection
-                    .iter()
-                    .filter_map(|item| self.display.entity_of(&item.object))
-                    .collect()
-            };
-            if targets.is_empty() {
-                targets.push(preview.target_id);
-            }
-            self.session = self
-                .last_stage
-                .as_ref()
-                .and_then(|stage| TransformSession::begin(stage, &targets));
+            // A tick without a `Begin` (a harness, or a host that missed it) still opens it.
+            self.begin_drag_session(Some(preview.target_id));
         }
         let baseline = self.drag_start.unwrap_or_default();
         let delta = [
@@ -581,6 +599,9 @@ impl Shell {
             // ghost the open form would.
             self.preview_selection(Some(delta), cx);
         }
+        // The tape follows the session, including after the release (SESSION_HOLD): it is
+        // cleared by the commit/Esc/context paths, not by the end of the pointer gesture.
+        self.sync_transform_tape(cx);
     }
 
     /// Commit the pending session as **one** transaction, through the command a script uses.
@@ -619,6 +640,7 @@ impl Shell {
         self.drag_start = None;
         self.pill = PillState::compact();
         self.clear_preview_items(cx);
+        self.sync_transform_tape(cx);
         self.finish_dialog(result, cx);
         true
     }
@@ -632,6 +654,7 @@ impl Shell {
         self.drag_start = None;
         self.pill = PillState::compact();
         self.clear_preview_items(cx);
+        self.sync_transform_tape(cx);
         self.model.lock().unwrap().status = status.to_string();
         cx.notify();
         true

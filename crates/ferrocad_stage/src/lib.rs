@@ -32,6 +32,9 @@
 //! previews on the target item without touching the document; a manipulator is a
 //! **workbench's own** draggable overlay (the edge fillet arc is one, in
 //! `ferrocad_part_gui`), and it commits neutral data the workbench interprets.
+//! A [`TransformSession`] is the pending value of one cumulative transform gesture — the
+//! datum, the delta from it and the mode — held by the shell and rendered by the viewport
+//! instead of being written onto the display item.
 //! Everything in this crate is workbench-agnostic: it names no kernel, no document and
 //! no module.
 //!
@@ -70,6 +73,7 @@ pub mod input;
 pub mod interaction;
 pub mod plane_points;
 pub mod screen;
+pub mod session;
 pub mod shape;
 pub mod snap;
 pub mod stage;
@@ -91,6 +95,7 @@ pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use interaction::{InteractionCommit, Manipulator};
 pub use plane_points::PlanePointsTool;
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
+pub use session::TransformSession;
 pub use shape::{DrawMode, ShapeItem};
 /// The GPU-side visual tokens (also available as `ferrocad_graphics::theme`).
 pub use ferrocad_graphics::{ShaderProgram, theme};

@@ -458,7 +458,7 @@ pub struct InventorViewport<V: InventorView> {
     gizmo_origin: Option<(Vector3, SnapKind)>,
     /// A drag tick waiting for the next gpui handler to emit it.
     transform_preview: Option<TransformPreview>,
-    /// The overlay anchors a live preview offsets from (see [`Self::preview_translation`]).
+    /// The overlay anchors a live preview offsets from (see [`Self::preview_transform`]).
     preview_home: Option<PreviewHome>,
     queue: RenderQueue,
     /// The semantic directives the last compile produced (active `SoEventCallback` ids,
@@ -3439,36 +3439,33 @@ impl<V: InventorView> InventorViewport<V> {
             .or_else(|| self.manipulator_readout().map(|(text, _)| text))
     }
 
-    /// Preview a world-space translation on the given entity ids without touching
-    /// the document.
+    /// Preview a world-space transform on the given entity ids without touching the
+    /// document.
     ///
     /// This is the typed twin of a gizmo drag: it composes a temporary transform after
     /// each item's placement, so nothing is re-uploaded and nothing enters the undo
-    /// stack. An empty `entities` clears the preview. Returns whether the stage
-    /// changed (the caller still decides when to repaint).
-    pub fn preview_translation(&mut self, entities: &[u32], delta: [f64; 3]) -> bool {
-        let active = !entities.is_empty();
-        let mut changed = if active {
-            let target = Vector3::new(delta[0], delta[1], delta[2]);
-            // The gizmos are the control while one is being dragged; otherwise they
-            // travel with the previewed object. Grips always follow.
-            let include_gizmo = self.gizmos.dragging().is_none();
-            self.apply_preview_overlays(target, include_gizmo)
-        } else {
-            self.restore_preview_overlays()
-        };
-        let transform = active.then(|| Matrix4::translation(delta[0], delta[1], delta[2]));
-        let mut touched = false;
-        for item in self.stage.items_mut() {
-            if entities.contains(&item.entity_id()) {
-                item.set_temporary_transform(transform);
-                touched = true;
-            } else if transform.is_none() {
-                // Clearing the preview also drops a temporary transform another path
-                // left behind, so a cancelled HUD cannot strand a ghost.
-                item.set_temporary_transform(None);
+    /// stack. The matrix form (rather than a bare delta) exists so a transform session
+    /// can preview a rotation, not just a translation. An empty `entities` or `None`
+    /// clears the preview. Returns whether the stage changed (the caller still decides
+    /// when to repaint).
+    pub fn preview_transform(&mut self, entities: &[u32], transform: Option<Matrix4>) -> bool {
+        // An empty selection is a cancel, even when a matrix was supplied.
+        let transform = transform.filter(|_| !entities.is_empty());
+        let mut changed = match &transform {
+            Some(transform) => {
+                // Overlay anchoring is translation-only for now: the handles sit where
+                // the translation component puts them. Rotating the gizmo with the
+                // object is the transform session's later job — doing it here would
+                // feed a rotated interaction frame back into the drag math.
+                let delta = Vector3::new(transform.m[3], transform.m[7], transform.m[11]);
+                // The gizmos are the control while one is being dragged; otherwise
+                // they travel with the previewed object. Grips always follow.
+                let include_gizmo = self.gizmos.dragging().is_none();
+                self.apply_preview_overlays(delta, include_gizmo)
             }
-        }
+            None => self.restore_preview_overlays(),
+        };
+        let touched = self.set_items_transform(entities, transform);
         if touched || transform.is_none() {
             self.stage_dirty = true;
             changed = true;
@@ -3480,6 +3477,40 @@ impl<V: InventorView> InventorViewport<V> {
             self.rebuild_manipulator_queue();
         }
         changed
+    }
+
+    /// Preview a world-space translation on the given entity ids without touching
+    /// the document.
+    ///
+    /// A thin wrapper over [`preview_transform`](Self::preview_transform), for callers
+    /// that only have a delta. The contract is identical: an empty `entities` clears
+    /// the preview, and the return value says whether the stage changed.
+    pub fn preview_translation(&mut self, entities: &[u32], delta: [f64; 3]) -> bool {
+        self.preview_transform(
+            entities,
+            Some(Matrix4::translation(delta[0], delta[1], delta[2])),
+        )
+    }
+
+    /// Write `transform` onto exactly the listed items, or clear every item's
+    /// temporary transform when `transform` is `None`.
+    ///
+    /// This is the single owner of item-preview writes, so a preview started by one
+    /// path cannot leak into another. Clearing deliberately sweeps the whole stage
+    /// rather than only `entities`: a cancelled preview must also drop a temporary
+    /// transform another path left behind, otherwise it strands a ghost. Returns
+    /// whether any listed entity was touched (the stage-dirty signal).
+    fn set_items_transform(&mut self, entities: &[u32], transform: Option<Matrix4>) -> bool {
+        let mut touched = false;
+        for item in self.stage.items_mut() {
+            if entities.contains(&item.entity_id()) {
+                item.set_temporary_transform(transform);
+                touched = true;
+            } else if transform.is_none() {
+                item.set_temporary_transform(None);
+            }
+        }
+        touched
     }
 
     /// Offset the overlays from the pose captured when the preview began.
@@ -3576,13 +3607,9 @@ impl<V: InventorView> InventorViewport<V> {
             }
             None => self.restore_preview_overlays(),
         };
-        let mut touched = false;
-        for item in self.stage.items_mut() {
-            if item.entity_id() == target {
-                item.set_temporary_transform(transform);
-                touched = true;
-            }
-        }
+        // One-element slice: the gizmo's target is the only item it previews, but the
+        // write itself belongs to the same owner as a typed preview.
+        let touched = self.set_items_transform(&[target], transform);
         if touched {
             self.stage_dirty = true;
             changed = true;
@@ -6184,6 +6211,106 @@ mod tests {
                 .and_then(|item| item.temporary_transform())
                 .is_none()
         );
+    }
+
+    /// The matrix input carries rotation, not just an offset: the whole matrix lands on
+    /// the item, and an empty selection (with a matrix supplied) is still a cancel.
+    #[test]
+    fn a_matrix_preview_lands_with_its_rotation() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(
+            Stage::new()
+                .with_item(named_slab_for(7))
+                .with_item(named_slab_for(8)),
+        );
+        view.refresh();
+
+        // A quarter turn about Z plus an offset: a translation-only implementation
+        // would drop the off-diagonal entries.
+        let turn = Rotation::from_axis_angle(
+            &Vector3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .to_matrix();
+        let transform = Matrix4::translation(2.0, 3.0, 0.0).mul(&turn);
+        assert_ne!(turn.m[1], 0.0, "the fixture really rotates");
+
+        assert!(view.preview_transform(&[7], Some(transform)));
+        let preview = view
+            .stage
+            .item(7)
+            .and_then(|item| item.temporary_transform())
+            .expect("the target previews");
+        assert_eq!(preview, transform, "the whole matrix reaches the item");
+        assert_ne!(
+            preview.m[1], 0.0,
+            "the rotation entries survive, not just the offset"
+        );
+        assert_eq!((preview.m[3], preview.m[7], preview.m[11]), (2.0, 3.0, 0.0));
+        assert!(
+            view.stage
+                .item(8)
+                .and_then(|item| item.temporary_transform())
+                .is_none(),
+            "an unlisted item is untouched"
+        );
+
+        // `None` clears, and so does an empty selection: both are the cancel path.
+        assert!(view.preview_transform(&[7], None));
+        assert!(
+            view.stage
+                .item(7)
+                .and_then(|item| item.temporary_transform())
+                .is_none()
+        );
+        assert!(view.preview_transform(&[7], Some(transform)));
+        assert!(view.preview_transform(&[], Some(transform)));
+        assert!(
+            view.stage
+                .item(7)
+                .and_then(|item| item.temporary_transform())
+                .is_none(),
+            "an empty selection cancels even with a matrix"
+        );
+    }
+
+    /// Clearing a preview sweeps the whole stage, so a transform another path wrote
+    /// cannot survive a cancel and strand a ghost.
+    #[test]
+    fn clearing_a_preview_drops_a_transform_another_path_left_behind() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(
+            Stage::new()
+                .with_item(named_slab_for(7))
+                .with_item(named_slab_for(8)),
+        );
+        view.refresh();
+
+        // Path A: a typed preview on 7.
+        assert!(view.preview_translation(&[7], [5.0, 0.0, 0.0]));
+        // Path B: something else (a stale HUD, a cancelled drag) wrote item 8.
+        view.stage
+            .items_mut()
+            .iter_mut()
+            .find(|item| item.entity_id() == 8)
+            .expect("item 8")
+            .set_temporary_transform(Some(Matrix4::translation(9.0, 9.0, 9.0)));
+
+        // Cancelling the preview must drop 8's transform too, not just 7's.
+        assert!(view.preview_transform(&[], None));
+        for entity in [7, 8] {
+            assert!(
+                view.stage
+                    .item(entity)
+                    .and_then(|item| item.temporary_transform())
+                    .is_none(),
+                "entity {entity} must not keep a ghost transform"
+            );
+        }
     }
 
     #[test]

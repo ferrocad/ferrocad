@@ -1,11 +1,13 @@
 # The transform session: explicit uncommitted state, one move, no undo-as-cancel
 
-Status: **design and plan (2026-10-30).** *Plan only — nothing below A0 is built yet.*
+Status: **design and plan (2026-10-30).** *Plan only — A1a and A1b are the only pieces with
+code behind them.*
 Read against the tree in
 [`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
-which corrected two things here: the display stage carries **world-space** geometry with an
-identity placement (so the session datum is a world point, not a `Placement`), and the shell has
-no document handle (so A0 must also add a facade surface for the pending edit).
+which corrected the pending value's shape: the display stage carries **world-space** geometry
+with an identity placement, so the session datum is a world point, not a `Placement`. The
+recon also expected a facade handle for a core pending edit; **D0 removed that need** (the
+commit goes through the existing interaction provider) and A0 is deferred.
 
 This is the **session half** of the 2026-10-30 transform synthesis. The other half — the
 loadout slots, the `Select ▾` topology filter and hover-to-arm — is
@@ -93,9 +95,9 @@ stateDiagram-v2
 ### 1.2 The four invariants
 
 1. **Cumulative deltas.** When a session begins, the shell pins the selection's starting
-   placement as the *session datum*. Drag X +15 mm, release, drag Y +20 mm, release, then type
-   `16.5` into ΔX: all four adjust the same live preview relative to that datum and collapse
-   into one transaction.
+   **world origin** as the *session datum*. Drag X +15 mm, release, drag Y +20 mm, release, then
+   type `16.5` into ΔX: all four adjust the same live preview relative to that datum and
+   collapse into one transaction.
 2. **Implicit auto-commit on context exit.** If the accumulated delta is non-zero, switching
    slot, choosing a wheel verb, selecting another object or clicking empty space commits the
    preview as one transaction *before* changing context. The user cannot lose a drag by
@@ -129,7 +131,7 @@ composed by the viewport, forgotten at commit, and restored by an overlay snapsh
 
 This is the general document-side representation of an uncommitted edit: a `staged` map beside a
 captured `base`, no document write, `abort` as a drop, `commit` as one named transaction.
-It is **not on the critical path** and is not built in A1–A3. The reasons are in §6 (D0): the
+It is **not on the critical path** and is not built in A1a–A3. The reasons are in §6 (D0): the
 commit already goes through the mod layer as an `InteractionCommit`, and nothing in the document
 reads a pending value yet. The design is kept here because it is what the *next* consumer will
 need, and because writing it down is the check that the session is genuinely a special case of
@@ -212,11 +214,17 @@ three-way split — `preview_translation`, `apply_gizmo_preview` and the dialog'
 all become *reads* of the session, and `set_gizmo_preview(deferred)` disappears because there is
 only one mode. `preview_home` is unaffected: it anchors gizmos and manipulators, not items.
 
-The session is also the `PendingEdit`'s writer: a translate stages `Placement` on the target
-(`pending.stage_property(target, "Placement", base ∘ delta)`). Because the shell has no
-`Document`, that goes through the facade as an opaque handle (A0):
-`transform_begin(name) -> id`, `transform_stage(id, delta)`, `transform_commit(id)`,
-`transform_abort(id)` — the same shape as a dialog token.
+How that owner arrives is split across three stages: **A1a** builds this type and its
+arithmetic, **A1b** makes `preview_transform` the one write path for the item preview, and
+**A1c** wires the shell (one session, fed by `TransformPreview`, committed through the existing
+interaction). The wholesale replacement of the other writers — the `set_session` input above —
+is A2.
+
+The session does **not** write the document. A translate never stages a `Placement`: the
+uncommitted value is the session's own delta, and at commit the shell hands it to the mod layer
+as the `InteractionCommit` the gizmo already produces (§2.8). That is why D0 let A0 — the
+core `PendingEdit` — be deferred rather than extended: there is nothing to stage, and no facade
+method to add.
 
 ### 2.5 Commit, checkpoint, rollback — mapped to the model
 
@@ -367,7 +375,7 @@ section is superseded by §1 here, and its pending-mode discussion by §2. Add t
 
 ## 5. Stages
 
-A1–A3 are invisible (no user-visible change, existing tests stay green). U1–U3 are this note's
+A1a–A3 are invisible (no user-visible change, existing tests stay green). U1–U3 are this note's
 share of the UX overhaul; U4–U5 belong to [`tool-loadout.md`](tool-loadout.md), E1 is the
 mod-facing event contract ([`mod-events.md`](mod-events.md)), and U6 is the shared convergence
 sweep.
@@ -375,8 +383,10 @@ sweep.
 | Stage | Deliverable | Why this order | Spec updated |
 | --- | --- | --- | --- |
 | **A0** | ~~`PendingEdit` + `EditView` + facade handle~~ — **deferred by D0**. The design stays in §2.2–§2.3; nothing on the critical path needs it. Trigger: the first non-display consumer (a script reading a pending value, save-with-live-session, or a preview the document must hold) | Building it now would be scaffolding with no caller — the recon showed the shell cannot even reach it | — |
-| **A1** | `TransformSession` in `ferrocad_stage` (world datum + matrix delta); the viewport renders it via `set_session`; the shell owns it; the commit is the existing `InteractionCommit` → mod layer | One owner for the pending delta before any behaviour changes | — |
-| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the item-transform writes in `preview_translation`/`apply_gizmo_preview`, and the shell's mirrored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — |
+| **A1a** | `TransformSession` in `ferrocad_stage` (`session`): the world datum from `ShapeItem::anchor()` (which already applies the `origin` → bounding-box-minimum fallback), the accumulated translation, `transform()`, `checkpoint`, dirty. No consumer yet | The arithmetic lands before anything calls it, so it is tested headless in the crate the toy and Parametric editions already share, and no behaviour can move with it | — (**done 2026-10-30**: 9 unit tests + a doctest, `ferrocad_stage` 225) |
+| **A1b** | `InventorViewport::preview_transform(entities, Option<Matrix4>)`, the **one** owner of item-preview writes: `preview_translation` becomes a wrapper over it and `apply_gizmo_preview` routes through the same helper | One write path for the item preview, so A1c has a single seam to push a session into and A2 has one thing — not three — to delete | — (**done 2026-10-30**: `ferrocad_viewport` 201, including a rotation-carrying matrix and the no-stranded-ghost rule) |
+| **A1c** | shell wiring: the shell owns one session, feeds it from the `TransformPreview` ticks it already handles, mirrors it into `Shell::pending_move` (the Δ fields' existing source), and commits through the existing `InteractionCommit` (`to_interaction_with("transform", "apply", <matrix elements>)` → `python::apply_interaction`) | Puts the owner on the commit path first — the committed values are the session's `transform()` — while the preview paths stay as they are until A2 | — (the spec changes are U1/U2/U3) |
+| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 |
 | **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 |
@@ -389,12 +399,20 @@ sweep.
   aborts (document byte-identical, `undo_names()` unchanged) and commits (one entry named by the
   session label, one recompute); `EditView` returns the staged value for reads and the committed
   value for ghosts; a `.ferrocad` round-trip never persists a pending edit.
-- **A1** — session arithmetic (cumulative translation, checkpoint, dirty) and one viewport test
-  that renders a session and asserts the emitted item transforms. The commit produces the same
-  `InteractionCommit` the deferred release produces today (asserted on the values, not on a
-  snapshot).
-- **A2** — grep-level: `gizmo_deferred` and `preview_home` are gone; every preview entry point
-  takes a session snapshot. The 2026-10-30 regression tests
+- **A1a** — unit tests for the session's arithmetic: `begin` pins the datum from `anchor()`;
+  consecutive drags and typed values accumulate against that datum; `checkpoint` moves the
+  datum and zeroes Δ; `transform()` is the matrix a commit would carry; `dirty` is false at
+  begin, set by an accumulation and reset by `checkpoint`. No consumer: the module is tested but
+  nothing calls it, so no viewport or shell test changes.
+- **A1b** — a rotation matrix pushed through `preview_transform` lands on the target item and
+  clears when the argument is `None`; the existing preview tests are unchanged, because
+  `preview_translation` and the gizmo route became wrappers rather than moving code.
+- **A1c** — the values on the commit equal the session's `transform()` (asserted on the number
+  and the target, not on a snapshot), and **no new facade method exists**: the route is the one
+  `python::apply_interaction` already serves.
+- **A2** — grep-level: `gizmo_deferred` and the viewport's item-preview writes are gone
+  (`preview_home` keeps its gizmo/manipulator anchors); every preview entry point takes a
+  session snapshot. The 2026-10-30 regression tests
   (`a_move_hud_drag_survives_its_release`,
   `a_deferred_drag_reports_previews_and_never_commits`'s successor) pass unchanged in
   behaviour.
@@ -421,11 +439,11 @@ sweep.
 
 ### Explicitly deferred
 
-- Rotation sessions (`GizmoMode::Rotate`) — the session carries the mode from A1 but only
+- Rotation sessions (`GizmoMode::Rotate`) — the session carries the mode from A1a but only
   translation is wired until after U3.
 - Sub-element (face/edge) transforms — they need the loadout's filter and their own reference
   model.
-- Multi-selection sessions — A1 takes one target; a set is a later widening (the `PendingEdit`
+- Multi-selection sessions — A1a takes one target; a set is a later widening (the `PendingEdit`
   already handles many properties).
 - A real ghost *recompute* for parametric shapes (see the risk row).
 
@@ -437,8 +455,8 @@ sweep.
 | --- | --- | --- | --- |
 | **D0** | Where is the commit boundary — Rust or the mod layer? | **decided 2026-10-30** | **The mod layer**, one `InteractionCommit` per commit. Previews never cross: no per-tick GIL, no per-tick recompute (§2.8). The vision wins where it is cheap, the frame budget wins where it is not |
 | **D1** | Through the command **dialog** callback or the interaction provider? | **closed by D0** | The interaction provider: it is the same seam a workbench gizmo already uses (`to_interaction_with`), so a `Part::Fillet` and a `Move` share one commit route. The Move *command* keeps its dialog only for scripts that call it with arguments |
-| D3 | One session per shell or per viewport? | open, A1 | Per shell; the viewport is a view, and a second window must not start a second session on the same object |
-| D4 | Save with a live session: commit or abort? | open, U1 | Commit, and say so in the status line: losing a drag to `Ctrl+S` is the same defect class as losing it to a selection change |
+| D3 | One session per shell or per viewport? | **decided 2026-10-30** | **One session per shell.** It is driven by pointer events the shell already receives as `TransformPreview` ticks, the pending value already lives in `Shell::pending_move`, and a second window must not start a second session on the same object. The viewport stays a view: it renders a session snapshot and never owns one |
+| D4 | Save with a live session: commit or abort? | **decided 2026-10-30** | **Commit it first, and say so** — the status line reads `saved, pending move committed`. Losing a drag to `Ctrl+S` is the same defect class as losing it to a selection change, and `Esc` remains the only way to discard. The implementation point is the **save command in `python/ferrocad_shell`**, not the session: the command commits the pending value before it writes, and reports that in its status line; the session itself never knows a save happened |
 | D6 | Does the tape appear for a typed-only session (no drag)? | open, U3 | Yes, once a delta is non-zero — typing is a gesture too |
 
 The loadout note owns D2 and D5. The mod-facing event contract is [`mod-events.md`](mod-events.md)

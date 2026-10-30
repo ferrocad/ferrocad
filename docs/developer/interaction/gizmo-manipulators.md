@@ -243,7 +243,8 @@ and `the_gizmo_interior_falls_through_to_the_scene` (viewport).
 enables the viewport's preview mode once at startup, so a release reports a preview and never
 commits. The shell owns a `TransformSession`; `Enter` commits it as one transaction, `Esc`
 rolls it back, and a selection change commits a dirty session first. The commit route is still
-the `App_Move` callback until the session carries a selection (planned).
+the `App_Move` callback (`_move_selection` is the writer); moving it to the interaction
+provider is planned.
 
 ```mermaid
 stateDiagram-v2
@@ -966,10 +967,13 @@ displayed item**, including a selection that names a sub-element (`Face1`): a Pa
 is tagged by the OCCT tessellation, so it always resolves to an element, and declining
 those left the Parametric edition with no triad at all while the toy's untagged mesh
 showed one. The gizmo still targets the whole body; the origin doubles as an indicator.
-- Choosing **`Move`** in the wheel promotes its context target and opens the floating
-  `ΔX/ΔY/ΔZ` form in **deferred** mode: the keys are the gizmo's, the form's Accept is
-  the single commit. The same form is the target of the planned Tab/digit escalation
-  (§ *Fast escalation* in the interaction model).
+- Choosing **`Move`** in the wheel promotes its context target and arms the triad (the
+  `translate` mode directive); the floating `ΔX/ΔY/ΔZ` HUD open beside it is a **view of
+  the pending session**, not a mode. The keys remain the gizmo's: `Enter` commits the
+  session as one transaction through the `App_Move` token (`_move_selection` is the
+  writer), `Esc` rolls it back, and the HUD's Accept commits through the same command.
+  The HUD is also the target of the planned Tab/digit escalation (§ *Fast escalation* in
+  the interaction model).
 - The **provider rows** (`FerroCAD (native)` / `FerroCAD (shader)`), `Gizmo settings…`
   and `Reset to edition defaults` are in the header control above, and also reachable
   from **`Search (Ctrl+K)`**, **Dev Tools**, and the `Settings/Gizmo` tree. The settings

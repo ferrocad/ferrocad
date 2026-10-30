@@ -63,6 +63,7 @@ mod dispatch;
 mod dialogs;
 mod forms;
 mod picking;
+mod pill;
 mod properties;
 
 

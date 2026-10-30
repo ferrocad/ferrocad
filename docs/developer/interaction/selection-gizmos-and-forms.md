@@ -20,7 +20,8 @@ Move form surviving the loss of its selection.
 > [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
 > (§4.1, §5) and
 > [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (§2.1).
-> Elsewhere in this note, "deferred" wording predates the change and is not the built model.
+> Where this note records the retired *deferred* split (§4.2, §5.2), it is marked as
+> history rather than the built model.
 
 Companions: [`gizmo-manipulators.md`](gizmo-manipulators.md) (manipulator math and
 topology), [`topology-selection.md`](topology-selection.md) (the pick/selection seam),
@@ -39,9 +40,11 @@ command/dialog protocol).
    the wheel's armed/latched phases and overlay; the shell owns the selection, the
    command registry, the form and precedence; Python owns validation and the
    transaction.
-4. **Every pending state has an explicit cancel.** A form, a preview, a wheel and a
-   drag can all be abandoned without a partial edit, and losing their context
-   (selection, document, competing interaction) cancels them.
+4. **Every pending state has an explicit rollback.** A form, a preview, a wheel and a
+   drag can all be abandoned without a partial edit, and `Esc` is that rollback; it never
+   spends an undo entry. Context loss is a different rule: a dirty transform session is
+   **auto-committed** before the context changes, because losing a drag is data loss, not
+   a cancel. Only a delta that cannot be committed (its object was pruned) is discarded.
 5. **State is ink; background is only ever an additive hover.** (See the visual
    language.) The interaction model does not depend on a filled "active" surface.
 
@@ -56,8 +59,8 @@ command/dialog protocol).
 | **Manipulator** | A workbench handle contributed by a factory (the toy height grip, the Part fillet arc). | workbench crate |
 | **Wheel** | The radial marking menu (`WheelMenu`): armed/latched phases and its own anchored overlay. | `ferrocad_widgets` |
 | **Form** | A command dialog spec hosted by the shell: `modal` (centred, dimmed backdrop) or `float` (dielectric HUD, no backdrop). | `Shell` |
-| **Preview** | A temporary, non-document transform composed on the stage items. Never enters the undo stack. | `InventorViewport` |
-| **Deferred drag** | A gizmo drag that reports deltas to the host instead of committing on release; used while a translation form is open. | viewport + shell |
+| **Preview** | A temporary, non-document transform composed on the stage items. Never enters the undo stack. | `Shell` (`TransformSession`) → `InventorViewport` (`preview_transform`) |
+| **Pending session** | The selection's uncommitted transform: its targets, the primary's world anchor as datum, and the absolute accumulated translation. The shell owns the value; the viewport renders it. `Enter` commits it, `Esc` drops it. | `Shell` (`TransformSession`) |
 
 ## 2. Selection and the context target
 
@@ -169,8 +172,9 @@ Absent ──selection with a target──► Idle ◄──document edit: re-ar
 **Changed 2026-10-30 (U1).** The separate *normal* and *deferred* drag columns are gone. The
 shell turns on the viewport's preview mode **once at startup**, so every drag reports
 `Begin`/`Update`/`End`, every release keeps its preview, and `Shell::gizmo_deferred` no longer
-exists. The commit route is still the `App_Move` callback (`_move_selection` is the writer)
-until the session carries a selection; that move is **planned**.
+exists. The session already carries the whole selection; the commit route is still the
+`App_Move` callback (`_move_selection` is the writer), and moving it to the interaction
+provider is **planned**.
 
 ### 4.3 The display offset invariant
 
@@ -184,8 +188,10 @@ Therefore:
   offset.
 - `origin_anchor`/`readout_anchor` include it, so the HUD and numeric pill stay with the
   visible triad.
-- On release in deferred mode the viewport clears the offset and moves the real frame to
-  the new pose; after a normal commit the shell re-arms the selection.
+- On release the preview is **kept**: the viewport clears the draw-only offset and moves
+  the real frame to the previewed pose, so hit-testing agrees with the drawing while the
+  session stays pending. The shell re-arms the selection after a commit, in
+  `after_document_edit`.
 - Typed previews (no drag) move the real frame, so hit-testing agrees with the drawing.
 
 ### 4.4 Re-arming
@@ -279,10 +285,14 @@ Open ──selection pruned, competing interaction──► rollback (stale delt
 
 ### 5.3 Selection scope
 
-A form is scoped to the selection it was opened for. Replacing the selection (tree or
-viewport), clearing it, or pruning a deleted object **closes the form** and spends its
-token. A translation preview measured on the old selection must never be applied to a
-new one. (The wheel closes for the same reason.)
+A form is scoped to the selection it was opened for, and a pending session is scoped the
+same way. Replacing the selection (tree or viewport) or clearing it **commits a dirty
+session first** — while the old selection is still the selection, so the move lands on
+the objects the user dragged — and only then closes the form and changes the selection.
+A translation preview measured on the old selection is never applied to a new one. A
+form still open with no pending delta is cancelled and its token spent; pruning a
+deleted object cannot commit a stale delta, so it rolls the session back. (The wheel
+closes for the same reason.)
 
 ## 6. Precedence and ownership
 
@@ -326,8 +336,8 @@ grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
 | selection | `replace_selection` / `toggle_select` / `clear_selection` | commands, inspector, viewport arming |
 | context target | `open_radial` / `space_radial` | `commit_wheel`, `radial_slots` |
 | wheel phases | `WheelMenu` | shell (events) |
-| deferred flag | form open/close | viewport drag release |
-| preview transform | form field edits + deferred drags | stage items, overlays |
+| pending transform | `Shell` (`TransformSession`; `commit_session` / `drop_session`) | `preview_transform`, the Δ fields, the commit |
+| preview transform | `InventorViewport::preview_transform`, fed by the session | stage items, overlays |
 | interaction frame | gizmo drag/commit | commit math, hit test |
 
 ## 7. Invariants
@@ -353,7 +363,7 @@ grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
 | Symptom | Cause | Rule now |
 | --- | --- | --- |
 | Right-click auto-selected the object | `open_radial` called `select_under_pointer` before building slots | open resolves a **context target** only; `commit_wheel` promotes on choose |
-| Unselecting did not cancel the Move form | the form was only closed by its own Accept/Cancel/Esc | `replace_selection` and `refresh`'s prune path close a translation form (and the wheel) first |
+| Unselecting did not cancel the Move form **(history, 2026-10-25)** | the form was only closed by its own Accept/Cancel/Esc | **Superseded 2026-10-30:** a dirty session is *committed* before the selection changes, so the move survives. A form left open with no pending delta is cancelled, and a pruned object rolls the session back. The wheel closes for the same reason. |
 
 ## 9. As built and tested
 
@@ -364,7 +374,7 @@ grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
 | wheel phases/overlay | `ferrocad_widgets::wheel::WheelMenu` | `the_sidecar_latches_flicks_and_reports_events` |
 | gizmo anchor + re-arm | `Shell::arm`, `contributions::body_corner`, `rearm_selection` | `the_default_translate_gizmo_sits_at_a_whole_objects_base_corner`, `a_window_position_repicks_through_the_element_origin` |
 | display offset | `TransformGizmo::set_display_offset` | `a_display_offset_moves_the_drawing_not_the_drag_frame` |
-| preview + deferred drag | `InventorViewport::{preview_translation, set_gizmo_preview}`, `Shell::on_transform_preview` | `a_typed_translation_previews_only_the_named_entities`, `a_deferred_drag_reports_previews_and_never_commits`, `a_gizmo_drag_updates_the_move_fields` |
+| preview + pending session | `InventorViewport::preview_transform`, `Shell::on_transform_preview` (opens the shell's session) | `a_typed_translation_previews_only_the_named_entities`, `a_move_hud_drag_survives_its_release`, `a_plain_drag_is_pending_until_enter_or_escape`, `a_gizmo_drag_updates_the_move_fields` |
 | floating form | `Shell::{open_dialog_state, dialog_overlay}` | `the_move_dialog_floats_without_a_backdrop`, `the_command_dialog_renders_and_escape_cancels` |
 | HUD clamp + freeze | `place_hud`, `clamp_hud`, `dialog_overlay` (`on_children_prepainted`) | `a_floating_hud_is_clamped_into_the_safe_area`, `a_focused_floating_hud_freezes_in_place` |
 | selection-scoped form | `Shell::replace_selection`, `Shell::refresh` | `a_selection_change_closes_the_move_hud`, `a_competing_interaction_closes_the_move_hud` |

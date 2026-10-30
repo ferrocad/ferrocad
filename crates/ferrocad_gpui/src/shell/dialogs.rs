@@ -300,7 +300,7 @@ impl Shell {
             return None;
         }
         if self.pending_move.is_dragged()
-            && let Some(session) = self.session
+            && let Some(session) = self.session.as_ref()
         {
             let delta = session.delta();
             return Some([delta.x, delta.y, delta.z]);
@@ -375,6 +375,7 @@ impl Shell {
             // open one from, otherwise the HUD's own mirror (a headless shell).
             let current = self
                 .session
+                .as_ref()
                 .map(|session| {
                     let delta = session.delta();
                     [delta.x, delta.y, delta.z]
@@ -384,10 +385,25 @@ impl Shell {
             self.pending_move.begin_drag(current);
             // The session opens at the press, from the un-previewed stage, so its datum is
             // the pose the gesture started from.
+            // The session is the **selection's** pending move: every selected entity
+            // previews and moves together, and the datum is the primary's anchor (the
+            // gizmo's target, which is what the triad hugs). The preview's own target is
+            // the fallback when the selection does not map onto the stage yet.
+            let mut targets: Vec<u32> = {
+                let model = self.model.lock().unwrap();
+                model
+                    .selection
+                    .iter()
+                    .filter_map(|item| self.display.entity_of(&item.object))
+                    .collect()
+            };
+            if targets.is_empty() {
+                targets.push(preview.target_id);
+            }
             self.session = self
                 .last_stage
                 .as_ref()
-                .and_then(|stage| TransformSession::begin(stage, preview.target_id));
+                .and_then(|stage| TransformSession::begin(stage, &targets));
         }
         let delta = self.pending_move.tick(drag);
         if let Some(session) = self.session.as_mut() {
@@ -399,7 +415,7 @@ impl Shell {
         if previews {
             self.set_translation_fields(self.pending_move.dragged().unwrap_or_default(), cx);
             self.preview_dialog(cx);
-        } else if let Some(session) = self.session {
+        } else if let Some(session) = self.session.as_ref() {
             // No HUD: the session still owns the preview, so a plain drag shows the same
             // ghost the open form would.
             let delta = session.delta();
@@ -416,10 +432,14 @@ impl Shell {
     ///
     /// Returns whether anything was committed.
     pub(super) fn commit_session(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(session) = self.session.filter(|session| session.is_dirty()) else {
+        let Some(delta) = self
+            .session
+            .as_ref()
+            .filter(|session| session.is_dirty())
+            .map(TransformSession::delta)
+        else {
             return false;
         };
-        let delta = session.delta();
         let outcome = match commands::run("App_Move") {
             Ok(outcome) => outcome,
             Err(error) => {

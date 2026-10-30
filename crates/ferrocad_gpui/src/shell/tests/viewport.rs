@@ -919,7 +919,7 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
     // 4. The session is the uncommitted value behind that: it holds the same delta and
     //    the datum the gesture started from (the slab's world anchor, 7 sits at -0.5).
     let (session_delta, datum) = shell.read_with(&cx, |shell, _| {
-        let session = shell.session.expect("a live session");
+        let session = shell.session.as_ref().expect("a live session");
         let delta = session.delta();
         (delta, session.datum())
     });
@@ -1000,7 +1000,7 @@ fn a_plain_drag_is_pending_until_enter_or_escape(cx: &mut TestAppContext) {
     let state = |cx: &mut VisualTestContext| {
         let viewport = shell.read_with(cx, |shell, _| shell.viewport.clone()).expect("a viewport");
         cx.update(|_window, cx| {
-            let session = shell.read(cx).session;
+            let session = shell.read(cx).session.clone();
             let ghost = viewport
                 .read(cx)
                 .stage()

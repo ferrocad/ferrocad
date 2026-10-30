@@ -55,7 +55,7 @@ impl Shell {
         // because the user clicked something else is the defect the session exists to
         // remove. It has to happen first, while the old selection is still the selection —
         // the commit is `_move_selection`, which reads it.
-        if self.session.is_some_and(|session| session.is_dirty()) {
+        if self.session.as_ref().is_some_and(|session| session.is_dirty()) {
             self.commit_session(cx);
         }
         // Opening menus never mutates the selection. A **new** selection, however,

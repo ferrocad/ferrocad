@@ -178,14 +178,14 @@ parametric editions and the headless tests all share it:
 
 ```rust
 pub struct TransformSession {
-    target: u32,              // stage entity
+    targets: Vec<u32>,        // stage entities: the selection, not one object
     datum: Vector3,           // world-space origin at begin (the ghost ring)
     delta: Vector3,           // accumulated translation
     mode: GizmoMode,          // translate | rotate (rotation wired after U3)
     dirty: bool,
 }
 impl TransformSession {
-    pub fn begin(stage: &Stage, target: u32) -> Option<Self>;
+    pub fn begin(stage: &Stage, targets: &[u32]) -> Option<Self>;
     pub fn set_translation(&mut self, delta: Vector3);
     pub fn translate_axis(&mut self, axis: Axis, value: f64);   // absolute along the axis
     pub fn delta(&self) -> Vector3;
@@ -195,6 +195,11 @@ impl TransformSession {
     pub fn is_dirty(&self) -> bool;
 }
 ```
+
+A session is the **selection's** pending move, not one object's: `targets` keeps the selected
+entities (dropping any the stage has not got), and the datum is the **primary's** anchor — the
+entity the triad hugs — not an average or a bounding-box centre. This is what lets U1 commit a
+multi-object move as one value, and what unblocks moving the commit route off `_move_selection`.
 
 The datum is a **world point from `ShapeItem::origin`** (falling back to `anchor()`), not a
 `Placement`: document items arrive as world-space tessellations with an identity placement, and

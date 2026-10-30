@@ -12,10 +12,12 @@ Companions: [`stage.md`](../viewport/stage.md) (the stage gizmo), [`geometry-and
 kernel), and [`navicube-gpui-design.md`](navicube-gpui-design.md) (the overlay visual
 language this suite shares).
 
-> **Amended (2026-10-30).** How a manipulator is *offered*, *escalated* and *narrowed* is
-> changing: one cumulative transform session (no deferred mode), the readout pill becoming the
-> primary numeric surface (§5, §7), and a loadout slot deciding which manipulator class may
-> arm at all (§9.2, §14, §19). Plans:
+> **Amended (2026-10-30).** The session half is **built**: there is one drag mode (the shell
+> enables the viewport's preview mode once at startup, a release reports a preview and never
+> commits), the shell owns a `TransformSession`, `Enter` commits one transaction and `Esc`
+> rolls back without spending an undo entry. What is still **planned** is the readout pill
+> becoming the primary numeric surface (§5, §7) and a loadout slot deciding which manipulator
+> class may arm at all (§9.2, §14, §19). Plans:
 > [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) and
 > [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md); the maths,
 > hit-testing, modifier and ribbon sections here stay authoritative.
@@ -190,6 +192,13 @@ pass the step to `TransformGizmo::set_linear_snap`, and the transform uses the *
 likewise applied to the transform, and `GizmoValue::Angular` reports both raw and applied
 degrees.
 
+**Readout surface (session built, pill planned).** The numeric tag is a **view of the
+shell's `TransformSession`**: it mirrors `session.delta()` and writes absolute values back,
+so the gesture and the numbers describe one pending value. The **planned** primary surface
+(U2) is the in-place two-stage pill — compact during a drag, expanded by `Tab` or a digit,
+with no `Cancel`/`Move` buttons — which merges this readout with the translation Δ fields
+into two states of one overlay. Until it lands the floating Move HUD is that surface.
+
 ## 6. Analytic hit-testing and occlusion
 
 The gizmo uses an **analytic screen-space** hit test; the rasterised `gizmo_queue` is only
@@ -228,7 +237,13 @@ Tests: `the_triad_interior_passes_through`, `an_axis_is_pickable_along_its_stem`
 `the_origin_handle_wins_the_hit_priority`, `the_origin_target_is_appended_after_the_handles`,
 and `the_gizmo_interior_falls_through_to_the_scene` (viewport).
 
-## 7. Lifecycle and modifiers
+### 7. Lifecycle and modifiers
+
+**One mode (built 2026-10-30).** There is no separate *normal* and *deferred* drag: the shell
+enables the viewport's preview mode once at startup, so a release reports a preview and never
+commits. The shell owns a `TransformSession`; `Enter` commits it as one transaction, `Esc`
+rolls it back, and a selection change commits a dirty session first. The commit route is still
+the `App_Move` callback until the session carries a selection (planned).
 
 ```mermaid
 stateDiagram-v2
@@ -238,20 +253,25 @@ stateDiagram-v2
     Hover --> Armed: button down
     Armed --> Drag: move past threshold
     Armed --> Idle: button up (click)
-    Drag --> Commit: button up
-    Drag --> Cancel: Esc / focus loss
-    Commit --> Idle
-    Cancel --> Idle
+    Drag --> SessionLive: release (preview kept, nothing committed)
+    Drag --> Idle: Esc / focus loss (rollback)
+    SessionLive --> Idle: Enter (one commit) or Esc (rollback)
+    SessionLive --> Idle: selection change (commit if dirty, then switch)
 ```
 
+- Release — reports a preview and **never commits**; `Enter` is the commit and `Esc` the
+  rollback (built 2026-10-30).
 - `Shift` — plane override: `begin_drag_with_modifiers` turns an axis press into a drag
   in the plane spanned by that stem and the screen-horizontal.
 - `Ctrl` (or the platform's secondary modifier) — free rotation (15° detents are the
   default).
-- `Esc` — cancel the drag and restore the pre-drag preview. A re-pivot drag restores
-  the pre-drag **origin** (and the shell drops its session user origin).
-- `Tab` / a digit — focus the numeric tag for exact entry (still deferred; the tag is
-  read-only in T3).
+- `Esc` — rollback the session: drop the preview and return the geometry to the session
+  datum; no undo entry is spent. A re-pivot drag restores the pre-drag **origin** (and the
+  shell drops its session user origin).
+- `Tab` / a digit — focus the numeric surface for exact entry. The **planned** pill (U2)
+  makes this the primary mechanism; today it targets the floating Move HUD, which is a
+  view of the session and writes absolute values back. The tag remains read-only when no
+  session is open.
 - The viewport receives modifiers through `handle_pointer_with_modifiers`,
   `handle_button_with_modifiers` and `drag_move_with_modifiers`; the old methods delegate
   with no modifiers. The root element is focusable (`track_focus` + `focusable`) and the

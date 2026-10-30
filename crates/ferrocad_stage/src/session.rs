@@ -21,13 +21,18 @@
 //! already hugs, so the ghost ring, the measuring tape and the gizmo all agree about
 //! where "here" is.
 //!
+//! A session moves a **set** of stage entities, not one. A selection of several objects is
+//! one gesture: it accumulates one delta and, at commit, becomes one transaction. Keeping
+//! the set in the session is what lets the commit route stop saying "move the selection"
+//! item by item and start saying one commit per session.
+//!
 //! ```
 //! use ferrocad_stage::{ShapeItem, Stage, TransformSession};
 //!
 //! let item = ShapeItem::new(7).with_origin(Some([1.0, 2.0, 0.0]));
 //! let stage = Stage::new().with_item(item);
 //!
-//! let mut session = TransformSession::begin(&stage, 7).expect("the item is on the stage");
+//! let mut session = TransformSession::begin(&stage, &[7]).expect("the item is on the stage");
 //! session.translate_axis(0, 5.0);
 //! assert!(session.is_dirty());
 //! assert_eq!(session.delta().x, 5.0);
@@ -38,24 +43,30 @@ use ferrocad_types::{Matrix4, Vector3};
 use crate::gizmo::GizmoMode;
 use crate::stage::Stage;
 
-/// One cumulative transform gesture against one stage entity.
+/// One cumulative transform gesture against one or more stage entities.
 ///
 /// Consecutive handles, typed overrides and checkpoints all feed the same session, so a
-/// gesture that is adjusted four times is still one pending value and one commit. The
-/// delta is held as a vector rather than as the matrix it becomes, so
+/// gesture that is adjusted four times is still one pending value and one commit. The same
+/// holds across entities: a multi-object move is one session, so the commit route can
+/// produce one undo transaction for the whole selection instead of one per item. The delta
+/// is held as a vector rather than as the matrix it becomes, so
 /// [`translate_axis`](Self::translate_axis) can overwrite one component without
 /// decomposing anything.
 ///
 /// Rotation will join [`transform`](Self::transform) once a rotate gesture exists; it is
 /// deliberately absent now, because nothing emits one yet. See [`transform`](Self::transform).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct TransformSession {
-    /// The stage entity the gesture moves. The session names no document object — the
-    /// commit crosses that boundary through the facade, which is what keeps this crate
-    /// free of the document.
-    target: u32,
+    /// The stage entities the gesture moves, in selection order with the unknown ones
+    /// dropped. The session names no document object — the commit crosses that boundary
+    /// through the facade, which is what keeps this crate free of the document.
+    targets: Vec<u32>,
+    /// The entity that owns [`datum`](Self::datum): the first target that reports an
+    /// anchor. Kept beside the list rather than recomputed so [`targets`](Self::targets)
+    /// can stay a plain slice and the datum and the primary can never disagree.
+    primary: u32,
     /// The world-space origin captured at [`begin`](Self::begin). The ghost ring and the
-    /// measuring tape sit here, and a rollback returns the item here.
+    /// measuring tape sit here, and a rollback is measured from here.
     datum: Vector3,
     /// The accumulated translation from the datum, in world units (millimetres in this
     /// stack). Absolute, never per-tick: see [`set_translation`](Self::set_translation).
@@ -67,25 +78,48 @@ pub struct TransformSession {
 }
 
 impl TransformSession {
-    /// Open a session on `target`, pinning its anchor as the datum.
+    /// Open a session on `targets`, pinning the primary's anchor as the datum.
     ///
-    /// The datum comes from [`anchor`](crate::shape::ShapeItem::anchor), not from the
+    /// Ids are kept in the order the caller supplied them, and ids the stage has no item
+    /// for are dropped: a pick can name an entity the stage has not got yet, and a session
+    /// must not carry a target it cannot draw. An empty slice, or one whose entities are
+    /// all absent, has no session, because there would be nothing to move.
+    ///
+    /// The datum is the anchor of the first surviving target that reports one. That target
+    /// is the [`primary`](Self::primary): the selection is not a body, so there is no
+    /// single origin to use, and an average or a bounding-box centre would be a point the
+    /// user did not pick and cannot see. Anchoring on one real object's origin means the
+    /// triad, the ghost ring and the measuring tape hug something the user recognises, and
+    /// a single-object move behaves exactly as it always did.
+    ///
+    /// The anchor comes from [`anchor`](crate::shape::ShapeItem::anchor), not from the
     /// item's placement: document items are world-space tessellations with an identity
     /// placement, so the anchor is the world origin while the placement is always the
     /// identity.
     ///
-    /// `None` when the stage has no item carrying `target`, and also when that item reports
-    /// no anchor (no declared origin and no geometry). A session with no datum would have to
-    /// invent the world origin as one, and every readout and rollback would then be measured
-    /// from a place the object is not.
+    /// `None` when no surviving target reports an anchor (no declared origin and no
+    /// geometry). A session with no datum would have to invent the world origin as one, and
+    /// every readout and rollback would then be measured from a place the objects are not.
     ///
     /// The delta starts at zero, so a session opened and committed without a gesture
     /// produces no transaction.
-    pub fn begin(stage: &Stage, target: u32) -> Option<Self> {
-        let item = stage.item(target)?;
+    pub fn begin(stage: &Stage, targets: &[u32]) -> Option<Self> {
+        let mut surviving = Vec::with_capacity(targets.len());
+        let mut primary = None;
+        for &target in targets {
+            let Some(item) = stage.item(target) else {
+                continue;
+            };
+            surviving.push(target);
+            if primary.is_none() {
+                primary = item.anchor().map(|anchor| (target, anchor));
+            }
+        }
+        let (primary, datum) = primary?;
         Some(Self {
-            target,
-            datum: item.anchor()?,
+            targets: surviving,
+            primary,
+            datum,
             delta: Vector3::zero(),
             mode: GizmoMode::default(),
         })
@@ -127,9 +161,21 @@ impl TransformSession {
         self.delta = delta;
     }
 
-    /// The stage entity the session moves.
-    pub fn target(&self) -> u32 {
-        self.target
+    /// The stage entities the session moves, in the order they were supplied, with the
+    /// absent ones dropped at [`begin`](Self::begin).
+    pub fn targets(&self) -> &[u32] {
+        &self.targets
+    }
+
+    /// The entity whose anchor is the [`datum`](Self::datum): the first target that reports
+    /// one.
+    ///
+    /// Not guessed: this is the target the triad and the ghost hug, and the one a
+    /// single-object session has always named. Its anchor is also what a rollback returns
+    /// to. The slice is never empty and always contains the primary, so this needs no
+    /// `Option` — the session could not have been opened without one.
+    pub fn primary(&self) -> u32 {
+        self.primary
     }
 
     /// The world-space datum captured at [`begin`](Self::begin): the ghost's base, and the
@@ -149,14 +195,15 @@ impl TransformSession {
         self.mode
     }
 
-    /// The matrix the target item is drawn with during the session.
+    /// The matrix every target item is drawn with during the session.
     ///
-    /// It is a translation only, relative to the item's committed pose: the caller composes
-    /// it *after* the item's placement (the `temporary` slot of
+    /// It is a translation only, relative to each item's committed pose: the caller
+    /// composes it *after* the item's placement (the `temporary` slot of
     /// [`set_temporary_transform`](crate::shape::ShapeItem::set_temporary_transform)) and
-    /// leaves the geometry itself untouched until the commit. The datum is not part of it —
-    /// the geometry already sits at the datum in world space, so adding it would move the
-    /// item twice.
+    /// leaves the geometry itself untouched until the commit. It is the same matrix for the
+    /// whole selection because a gesture moves the selection rigidly; the datum is not part
+    /// of it — the geometry already sits where it is in world space, so adding the datum
+    /// would move the items twice.
     ///
     /// Rotation will be composed here once a gesture can produce one (`mode == Rotate`
     /// with a ring drag behind it). It is absent now on purpose: the session holds no
@@ -209,12 +256,48 @@ mod tests {
     #[test]
     fn begin_pins_the_items_anchor_as_the_datum() {
         let stage = Stage::new().with_item(block(4, [10.0, -2.0, 5.0]));
-        let session = TransformSession::begin(&stage, 4).expect("the entity is on the stage");
+        let session = TransformSession::begin(&stage, &[4]).expect("the entity is on the stage");
 
-        assert_eq!(session.target(), 4);
+        assert_eq!(session.targets(), &[4]);
+        assert_eq!(session.primary(), 4);
         assert_eq!(session.datum(), Vector3::new(10.0, -2.0, 5.0));
         assert_eq!(session.delta(), Vector3::zero());
         assert!(!session.is_dirty());
+    }
+
+    /// A multi-object move is one session, and the order the targets were picked in is the
+    /// order they are moved in. Unknown ids are dropped rather than carried: the session
+    /// cannot draw an entity the stage has not got.
+    #[test]
+    fn begin_keeps_the_targets_and_drops_the_unknown_ones() {
+        let stage = Stage::new()
+            .with_item(block(4, [0.0; 3]))
+            .with_item(block(7, [0.0; 3]));
+
+        let session = TransformSession::begin(&stage, &[7, 99, 4]).expect("two targets survive");
+
+        assert_eq!(session.targets(), &[7, 4]);
+        assert_eq!(session.primary(), 7, "the first surviving target owns the datum");
+    }
+
+    /// The datum is one real object's anchor, not a selection-wide average: the first target
+    /// that reports an anchor wins, even if an earlier target has none.
+    #[test]
+    fn the_datum_comes_from_the_first_target_with_an_anchor() {
+        let stage = Stage::new()
+            .with_item(ShapeItem::new(9))
+            .with_item(block(4, [3.0, 6.0, 9.0]))
+            .with_item(block(3, [-1.0, -1.0, -1.0]));
+
+        let session = TransformSession::begin(&stage, &[9, 4, 3]).expect("4 supplies the datum");
+
+        assert_eq!(
+            session.targets(),
+            &[9, 4, 3],
+            "a known item without an anchor is still moved, it just cannot own the datum"
+        );
+        assert_eq!(session.primary(), 4);
+        assert_eq!(session.datum(), Vector3::new(3.0, 6.0, 9.0));
     }
 
     /// No declared origin: the anchor falls back to the bounding box's base corner, and the
@@ -229,26 +312,38 @@ mod tests {
         );
         let stage = Stage::new().with_item(item);
 
-        let session = TransformSession::begin(&stage, 3).expect("the entity is on the stage");
+        let session = TransformSession::begin(&stage, &[3]).expect("the entity is on the stage");
         assert_eq!(session.datum(), Vector3::new(2.0, 3.0, 4.0));
+    }
+
+    #[test]
+    fn an_empty_selection_has_no_session() {
+        let stage = Stage::new().with_item(block(4, [0.0; 3]));
+        assert!(TransformSession::begin(&stage, &[]).is_none());
     }
 
     #[test]
     fn an_unknown_entity_has_no_session() {
         let stage = Stage::new().with_item(block(4, [0.0; 3]));
-        assert!(TransformSession::begin(&stage, 99).is_none());
+        assert!(TransformSession::begin(&stage, &[99]).is_none());
+    }
+
+    #[test]
+    fn only_unknown_entities_have_no_session() {
+        let stage = Stage::new().with_item(block(4, [0.0; 3]));
+        assert!(TransformSession::begin(&stage, &[98, 99]).is_none());
     }
 
     #[test]
     fn an_item_without_an_anchor_has_no_session() {
         let stage = Stage::new().with_item(ShapeItem::new(5));
-        assert!(TransformSession::begin(&stage, 5).is_none());
+        assert!(TransformSession::begin(&stage, &[5]).is_none());
     }
 
     #[test]
     fn the_delta_is_absolute_not_incremental() {
         let stage = Stage::new().with_item(block(1, [0.0; 3]));
-        let mut session = TransformSession::begin(&stage, 1).unwrap();
+        let mut session = TransformSession::begin(&stage, &[1]).unwrap();
 
         session.translate_axis(0, 15.0);
         session.translate_axis(0, 20.0);
@@ -278,7 +373,7 @@ mod tests {
     #[test]
     fn the_transform_is_the_accumulated_translation() {
         let stage = Stage::new().with_item(block(1, [0.0; 3]));
-        let mut session = TransformSession::begin(&stage, 1).unwrap();
+        let mut session = TransformSession::begin(&stage, &[1]).unwrap();
         assert_eq!(
             session.transform(),
             Matrix4::identity(),
@@ -298,7 +393,7 @@ mod tests {
     #[test]
     fn a_checkpoint_moves_the_datum_and_clears_the_delta() {
         let stage = Stage::new().with_item(block(1, [0.0; 3]));
-        let mut session = TransformSession::begin(&stage, 1).unwrap();
+        let mut session = TransformSession::begin(&stage, &[1]).unwrap();
         session.set_translation(Vector3::new(0.0, 0.0, 7.0));
 
         session.checkpoint(Vector3::new(10.0, 2.0, 12.0));
@@ -312,7 +407,7 @@ mod tests {
     #[test]
     fn a_zero_delta_is_clean_again() {
         let stage = Stage::new().with_item(block(1, [0.0; 3]));
-        let mut session = TransformSession::begin(&stage, 1).unwrap();
+        let mut session = TransformSession::begin(&stage, &[1]).unwrap();
 
         session.set_translation(Vector3::new(4.0, 0.0, 0.0));
         assert!(session.is_dirty());
@@ -325,7 +420,7 @@ mod tests {
     #[test]
     fn the_mode_is_recorded_without_changing_the_translation() {
         let stage = Stage::new().with_item(block(1, [0.0; 3]));
-        let mut session = TransformSession::begin(&stage, 1).unwrap();
+        let mut session = TransformSession::begin(&stage, &[1]).unwrap();
         assert_eq!(
             session.mode(),
             GizmoMode::Translate,

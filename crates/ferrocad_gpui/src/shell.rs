@@ -1088,7 +1088,7 @@ impl Shell {
         if event.keystroke.key == "enter"
             && !editing
             && !self.modal_open()
-            && self.session.is_some_and(|session| session.is_dirty())
+            && self.session.as_ref().is_some_and(|session| session.is_dirty())
         {
             self.commit_session(cx);
             return true;

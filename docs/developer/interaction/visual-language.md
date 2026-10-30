@@ -155,6 +155,25 @@ the shell bind the same constants.
 | Chrome active fill | `#1B2B38` @ 0.33 | `ui::CHROME_ACTIVE_BG` (the active projection segment) |
 | Error | `#EF4444` | dialog validation line |
 
+**Translation pill and measuring tape — planned (U2/U3).** The translation HUD's
+`Cancel`/`Move` button bar is to be replaced by two states of one in-place pill plus a
+stage-side tape:
+
+- **Compact** (during a drag, and lingering in `SESSION_HOLD`): only the constrained value,
+  12 px semibold tabular monospace on `ui::WHEEL_GLASS` with a `ui::CHROME_LINE` border —
+  `[ ΔX +24.50 mm ]`, or `[ ΔX +24.50  ΔY +10.00 mm ]` for a planar accumulation.
+- **Expanded** (via `Tab` or a digit `0–9`, `-`, `.`): unfolds in place to
+  `[ ΔX ( 24.50 )  ΔY ( 10.00 )  ΔZ ( 0.00 ) ]`; there are no `Move`/`Cancel` buttons —
+  `Enter` commits, `Tab`/`Shift+Tab` cycle the fields, `Esc` rolls back.
+- **Tape** (stage, not gpui): a 10 px ghost-origin ring in `INACTIVE_COLOR` at the session
+  datum, then dashed 1 px stair-step legs along the frame basis in the `AXIS_X`/`AXIS_Y`/
+  `AXIS_Z` tokens, with 6 px end-ticks; depth off, never picked, rebuilt from the session
+  each frame (the `workplane_stem` contract).
+
+This is **not built**: today the floating Move HUD is the numeric surface and a view of the
+`TransformSession` (built 2026-10-30). Authority for the specification:
+[`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) §3.
+
 **Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
 not a floating pill: a centred `380 px` panel on `rgba(22, 24, 29, 0.95)` with a
 `#FFFFFF26` border and a `rgba(15, 18, 24, 0.80)` backdrop. The backdrop blocks the
@@ -285,11 +304,22 @@ the glass-top/glass-shade pair.
 
 ```
 IDLE      ambient: wireframe 30 %, structural tokens, no labels
-  │  pointer within HOVER_RADIUS
+  │  pointer within HOVER_RADIUS        (hover-to-arm: planned, tool-loadout §3)
 HOVER     full luminosity, rim #48E5FF, crisp labels, no commit
   │  press on a grab target
 DRAG      solid handle, amber/cyan hull, tabular pill follows
+  │  release (built 2026-10-30: the preview survives, nothing commits)
+SESSION_HOLD   [planned] tape and pill stay live
+  │  Enter | context switch (auto-commit if dirty) | Esc (rollback)
+IDLE
 ```
+
+**`SESSION_HOLD` is planned (U3).** After a release the ghost preview is already kept (built
+2026-10-30), but the *visual* hold — the 3-D tape and the two-stage pill remaining on screen
+until `Enter`, a context switch or `Esc` — is planned. The pill and the tape's tokens are
+specified in §1.5. **Hover-to-arm is planned too** (tool-loadout §3): the `HOVER` transition
+above is pointer proximity to an already-armed handle; a loadout slot deciding whether
+proximity arms a body or a sub-element is not built.
 
 | Constant | Value | Notes |
 | --- | --- | --- |

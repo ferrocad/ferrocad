@@ -184,7 +184,7 @@ Everything below is true at `ef33987`, working tree clean, `main` level with `or
 
 | # | Question | Owner |
 | --- | --- | --- |
-| Q1 | Does U1 widen the session to a selection, or keep one target and `_move_selection` for multi-select? | U1, before touching the commit route |
+| Q1 | ~~Does U1 widen the session to a selection?~~ **Settled 2026-10-30: widened** — `TransformSession::begin(stage, &[u32])`, datum from the primary. The commit route may now move off `_move_selection` when a per-session commit exists | U1 done; route move still open |
 | Q2 | Does a rotate session get the same checkpoint/rollback contract? (It has no form, so nothing to checkpoint yet.) | U1/U2 |
 | Q3 | Save with a live session (D4) — the save command does not exist; build it first | P6/U1 |
 | Q4 | Does `FreeCADGui.Preview` become pending-backed (D5)? | A0, when it lands |

@@ -6,16 +6,21 @@ transform. It records the state machines as built, including the fixes for two r
 defects: right-click changing the selection merely by opening the wheel, and a pending
 Move form surviving the loss of its selection.
 
-> **Superseded in part (2026-10-30).** The pending-transform lifecycle — the normal versus
-deferred drag split, the floating Move dialog and its `Cancel`/`Move` buttons, and the
-"silently cancelled on context loss" transition — is being replaced by one cumulative
-session with explicit commit/checkpoint/rollback. The selection half (a topology filter that
-lets a loadout slot decide whether a click selects a body or a sub-element) changes §2.1.
-Plans and staged rewrites:
-[`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
-(§4.2, §5.1–5.2, §7) and
-[`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (§2.1);
-everything else here stays authoritative until the stage that rewrites a section lands.
+> **Lifecycle replaced (built 2026-10-30); selection filter still planned.** The
+> pending-transform lifecycle — the normal versus deferred drag split, the floating Move
+> dialog's ownership of the value, and the "silently cancelled on context loss" transition —
+> has been **replaced** by one cumulative `TransformSession` with explicit
+> commit/checkpoint/rollback: there is one drag mode (a release reports a preview and never
+> commits), `Enter` commits one transaction, `Esc` drops the session and its ghost without
+> spending an undo entry, and a selection change commits a dirty session first. §4.2 and
+> §5.1–5.2 describe the built flow and §7 its invariant; the floating Move HUD remains only
+> as the session's numeric surface, and the two-stage pill that replaces it is **planned**.
+> The selection half — a topology filter that lets a loadout slot decide whether a click
+> selects a body or a sub-element — is **still planned** and changes §2.1. Authority:
+> [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
+> (§4.1, §5) and
+> [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (§2.1).
+> Elsewhere in this note, "deferred" wording predates the change and is not the built model.
 
 Companions: [`gizmo-manipulators.md`](gizmo-manipulators.md) (manipulator math and
 topology), [`topology-selection.md`](topology-selection.md) (the pick/selection seam),
@@ -142,23 +147,30 @@ selection. The rule is therefore:
 ```text
 Absent ──selection with a target──► Idle ◄──document edit: re-arm at new geometry
                                      │  move: Hover(handle)
-                                     │  press on a handle
+                                     │  press on a handle → Begin (pin the world datum)
                                      ▼
-                                  Dragging ──deferred?──► reports Begin/Update/End
-                                     │                     (host previews + commits)
-                                     │  release (normal)
+                                  Dragging ──tick──► Update (absolute delta; preview + tape)
+                                     │  release → End (preview kept; nothing committed)
                                      ▼
-                              Commit emitted → host applies → re-arm
-                                     │  Esc / cancel
-                                     └────► restore frame and preview, Idle
+                              Session live ──Enter───────────────► commit one step, re-arm
+                                     ├── selection change, Δ ≠ 0 ─► commit, then switch
+                                     └── Esc ──────────────────────► drop session + ghost, Idle
 ```
 
-| Event | Normal drag | Deferred drag (translation form open) |
-| --- | --- | --- |
-| press on handle | starts drag; frame frozen at press | starts drag; emits `Begin`; shell captures the Δ-field baseline |
-| move | `drag_to`; target gets a temporary transform; **grips follow**; the triad's *drawing* is offset so it stays on the surface | same, plus emits `Update`; shell mirrors the accumulated delta into the fields and previews the whole selection |
-| release | `GizmoCommitEvent` → `"transform"/"apply"` → one transaction; the overlays re-arm at the new geometry | emits `End`; **no commit**; the form keeps the value; Accept applies it once |
-| Esc / cancel | frame and preview restored | frame and preview restored; form stays or closes by its own rule |
+| Event | Session flow |
+| --- | --- |
+| press on a handle | `Begin`: the frame is frozen at the press and the shell opens a `TransformSession` from the un-previewed stage, pinning the object's world origin (`ShapeItem::anchor`) as its datum |
+| move (tick) | `Update`: the shell accumulates the absolute delta and previews the whole selection; the target is drawn with `session.transform()`, **grips follow**, and the triad's *drawing* is offset so it stays on the surface |
+| release | `End`: the preview is **kept**; nothing is committed and no undo entry exists |
+| `Enter` | commit the accumulated delta as one transaction through `_move_selection` (the `App_Move` callback); the session and ghost are released and the triad re-arms at the new origin, so the next step starts there |
+| selection change while dirty | auto-commit first, then change context |
+| `Esc` / cancel | rollback: drop the session and its ghost; no undo entry is spent |
+
+**Changed 2026-10-30 (U1).** The separate *normal* and *deferred* drag columns are gone. The
+shell turns on the viewport's preview mode **once at startup**, so every drag reports
+`Begin`/`Update`/`End`, every release keeps its preview, and `Shell::gizmo_deferred` no longer
+exists. The commit route is still the `App_Move` callback (`_move_selection` is the writer)
+until the session carries a selection; that move is **planned**.
 
 ### 4.3 The display offset invariant
 
@@ -198,6 +210,13 @@ The selection is pruned first, so a delete leaves no handle for a dead object.
 | `modal` (default) | centred 380 px glass panel over a dimmed backdrop that occludes the canvas | only the panel | panel owns keys; `Enter` accepts, `Esc` cancels |
 | `float` | one-row dielectric HUD beside the gizmo, **no backdrop**; only the panel occludes | the canvas stays live (orbit, select, drag) | first field focused and selected; `Tab`/`Shift+Tab` cycle fields; `Enter` accepts; `Esc` cancels |
 
+**The translation HUD is a view, not an owner (built 2026-10-30).** The pending value for a
+move lives in the shell's `TransformSession`, not in the form: the Δ fields mirror
+`session.delta()` and an edit writes an absolute value back to the session. The session
+exists independently of the form, so a drag with no HUD open previews the same ghost. The
+two-stage pill (compact ↔ expanded, no `Cancel`/`Move` buttons) that replaces this HUD is
+**planned** (U2).
+
 A floating HUD may be repositioned when the gizmo moves; its anchor is recomputed from
 the visible gizmo origin (or the live pointer when no gizmo is armed) each frame it
 renders. **Position stability:** the HUD is
@@ -212,12 +231,12 @@ entering and leaving are judged against what the user actually saw.
 
 ```text
 Closed ──command returns a dialog spec──► Open
-Open ──field edit──► preview (if the spec asks) ──► Open
-Open ──deferred gizmo drag──► fields updated + preview ──► Open
+Open ──field edit──► session Δ updated + preview ──► Open
+Open ──gizmo drag──► fields mirror the session Δ + preview ──► Open
 Open ──Enter / Accept──► validate → callback → one transaction ──► Closed
-Open ──Esc / Cancel──► token cancelled, preview restored ──► Closed
-Open ──selection replaced/cleared, selection pruned, competing interaction──►
-     silently cancelled ──► Closed
+Open ──Esc / Cancel──► rollback: token cancelled, session dropped, preview restored ──► Closed
+Open ──selection replaced/cleared, Δ ≠ 0──► auto-commit ──► Closed
+Open ──selection pruned, competing interaction──► rollback (stale delta) ──► Closed
 ```
 
 - **One dialog at a time.** A second request is rejected while a dialog or a rendered
@@ -230,21 +249,33 @@ Open ──selection replaced/cleared, selection pruned, competing interaction�
   palette → wheel → command dialog → popover → tool → settings card. A floating form
   does not retain keyboard focus once the canvas is clicked, so the root fallback is
   what keeps `Esc` working everywhere.
-- **Preview ownership.** `preview: "translation"` composes a temporary transform from
-  `dx`/`dy`/`dz`. The form sets the viewport's **deferred** gizmo mode while open;
-  closing the form disables it, restores the overlays and clears the ghost.
-- **Two-way binding.** Typing → preview (only the parsed fields; unparsable text is
-  zero, never an error while typing). Deferred drag → fields, using the values at
-  `Begin` as a baseline so successive drags accumulate. Drag ticks are programmatic
-  `set_text`, which does not re-emit a change event, so the two directions cannot loop.
-- **Commit is single.** A deferred drag never commits; Accept runs the command callback
-  (one transaction). A typed preview never commits until Accept.
+- **Preview ownership is the session's (built 2026-10-30).** `preview: "translation"`
+  reads the shell's `TransformSession` rather than a value the form owns; a field edit
+  sets the session's absolute delta and the viewport renders `session.transform()`. The
+  form no longer toggles a deferred gizmo mode: the viewport's preview mode is enabled
+  once at startup. Closing the form restores the overlays and clears the ghost only
+  after the session has committed or been dropped.
+- **Two-way binding.** Typing → session Δ → preview (only the parsed fields; unparsable
+  text is zero, never an error while typing). A drag → session Δ → fields, using the
+  values at `Begin` as a baseline so successive drags accumulate. Drag ticks are
+  programmatic `set_text`, which does not re-emit a change event, so the two directions
+  cannot loop.
+- **Commit is single.** A drag never commits; `Enter`/Accept runs the command callback
+  (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
+  `Enter`.
+- **Context loss auto-commits when dirty (built 2026-10-30).** Replacing or clearing the
+  selection commits a non-zero pending delta as one transaction *before* the selection
+  changes; it is no longer "silently cancelled", because losing a drag is the defect the
+  session exists to remove. A slot or tool change will do the same once the loadout lands
+  (planned). A pruned selection or a competing document edit cannot commit a stale delta,
+  so it is rolled back. `Esc` is the only user-initiated rollback and spends no undo
+  entry.
 - **Fast escalation (planned, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
-  while a `TransformGizmo` is armed (idle or mid-drag) escalates the session into the
-  floating Move form: its `dx/dy/dz` seed from the current drag delta (or zero when
-  idle) and the active axis field takes focus. The drag switches to deferred mode, so
-the same gesture continues as exact entry instead of committing on release. Until this
-lands, the wheel's `Move` is the entry point and `Tab` only cycles an already-open form.
+  while a `TransformGizmo` is armed (idle or mid-drag) is the intended primary entry into
+  the numeric surface: the **planned** two-stage pill (U2) seeds its fields from the
+  current delta (or zero when idle) and takes focus, replacing the floating Move form.
+  Until the pill lands, the wheel's `Move` is the entry point and `Tab` only cycles an
+  already-open form.
 
 ### 5.3 Selection scope
 
@@ -304,8 +335,9 @@ grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
 1. Opening a wheel, hovering a wedge or showing a form changes no document state and no
    selection.
 2. A context target outside the selection is promoted **at commit**, never at open.
-3. Every pending form/preview has one owner and one cancel path; losing the selection,
-   the document object, or precedence cancels it.
+3. Every pending transform session has an explicit rollback (`Esc`), an explicit
+   checkpoint (`Enter`), and auto-commits a non-zero delta when the user deliberately
+   switches selection, slot or tool.
 4. A preview is never committed by a repaint, a camera move or a re-arm.
 5. A command runs only against a selection that contains its target.
 6. At most one pending preview exists; the last explicit interaction (typing or drag,

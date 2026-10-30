@@ -383,6 +383,10 @@ interactive tool without a second hook:
 return {"view": {"grid": False}}                       # applied by the shell, not undoable
 return {"view": {"axis_cross": False}}                 # the world triad, independent of the grid
 return {"view": {"grid_minor": 1.0, "grid_major": 10.0}}  # grid preferences (G5)
+return {"view": {"grid_adaptive": False}}              # configured steps on every plane
+return {"view": {"grid_minor_style": "lines",        # the minor level as a lattice
+                  "grid_major_width": 2.0,             # stroke widths in device pixels
+                  "grid_minor_width": 1.5}}
 return {"view": {"workplane": "activate"}}              # G5: the hovered face becomes the UCS
 return {"tool": "toy_measure"}                         # starts a registered tool session
 ```
@@ -392,9 +396,13 @@ return {"tool": "toy_measure"}                         # starts a registered too
   triad (they are independent — the grid is placement, the cross is orientation), and
   `{"projection": "ortho"}` switches the viewport's projection (framing preserved);
   `grid_minor`/`grid_major` (mm) / `grid_radius` (mm, 0 = camera-derived) change the world
-  grid's steps and extent. An unknown projection, a non-positive step or a major below
-  the minor is rejected and **nothing** is applied (`ViewState::apply` validates before it
-  mutates).
+  grid's steps and extent, `grid_adaptive` chooses between those steps and a step fitted
+  to the extent each grid layer covers, and `grid_minor_style` (`"dots"`/`"lines"`) with
+  `grid_major_width`/`grid_minor_width` (device pixels) choose the minor level's form and
+  the stroke weights. An unknown projection, an unknown minor style, a non-positive step
+  or a major below the minor is rejected and **nothing** is applied
+  (`ViewState::apply` validates before it mutates); a width outside the stroke range is
+  clamped, because it is a rendering preference rather than an edit.
 - A `workplane` request is an **action**, not state: `"activate"` (the face under the
   pointer), `"clear"` or `"view"` (look down the active normal). The shell performs it
   on the viewport and reports the outcome; without a viewport it reports

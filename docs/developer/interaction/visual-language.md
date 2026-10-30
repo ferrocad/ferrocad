@@ -92,6 +92,15 @@ the wgpu renderer gives it a **blended** scene-triangle variant; no depth write 
 the tint cannot hide the wire drawn after it. This is a targeted blend for one pass,
 not V2c ordered translucency: the body is still an opaque composite.
 
+**Exception: the grid's wide strokes.** A grid line wider than the 1 px hairline is an
+in-plane quad (`GridStyle.major_width`/`minor_width`), and its ink is the vertex alpha —
+the user's `Grid.opacity`, the radial patch fade and the edge-on fade. Those quads
+therefore ask for the same blended scene-triangle variant (`BLENDED_DEPTH`, test on /
+write off), because a `REPLACE` pipeline silently ignores the alpha: the dots and
+hairlines dimmed and the widely-stroked level did not. Blending in the same
+front-to-back pass is safe here because the strokes are thin, coplanar quads that write
+no depth — not the ordered translucency V2c is about.
+
 ### 1.4 Edges
 
 | Token | Value | Today |

@@ -188,7 +188,7 @@ of the flag. Clearing the claim (`false`, the default) restores the native drawi
 | Minor step | 10 mm dots | 1 mm dots |
 | Major step | 100 mm lines | 10 mm lines |
 | Colour | `#94A3B8` | `#94A3B8` |
-| Alpha at the origin | 0.15 | minor 0.15, major 0.35 |
+| Alpha at the origin | 0.15 | minor 0.15, major 0.30 |
 | Extent | disc of radius `R_max` around the camera pivot | the parent face's extent, or `R_max` for a datum |
 | Depth | normal depth test | coplanar + `WIRE_DEPTH_BIAS` |
 
@@ -391,7 +391,11 @@ the visual work can use it.
   20, grid radius 750`). The shell forwards them to `set_grid_steps` / `set_grid_radius`,
   which recompile the grid, so a change lands without a restart. `App_ReloadGridSettings`
   reads `User parameter:BaseApp/Preferences/View`, so a preference is a parameter write
-  plus one command.
+  plus one command. The later grid slices added `grid_adaptive` (the step fits the extent
+  each layer covers), `grid_minor_style` (`dots`/`lines`) and the two stroke widths in
+  pixels; see [`workplanes.md`](workplanes.md) §9 for the rules and
+  [`../workbenches/grid-overlay-plan.md`](../workbenches/grid-overlay-plan.md) §2.2 for
+  the store and wire mapping.
 - **Workplane commands** — `App_ActivateWorkplane`, `App_ClearWorkplane`,
   `App_ViewWorkplane` return `{"view": {"workplane": …}}`. The shell performs the
   action on the viewport (`activate_hovered_workplane` / `clear_workplane` /
@@ -484,12 +488,15 @@ landed in G5.)
   `world(minor)` is the `z = 0` case; `Snap { point, kind, local, major }`.
 - **`ferrocad_stage::grid`** — pure arithmetic, no kernel/gpui/Python:
   - `MINOR_STEP = 10`, `MAJOR_STEP = 100`, `TRIAD_PIXELS = 80`,
-    `RADIUS_RANGE = (500, 5_000)`, `MINOR_PIXELS = 4`, `MAX_DOTS = 40_000`.
+    `RADIUS_RANGE = (1, 5_000)`, `MINOR_PIXELS = 4`, `DOT_COLUMNS = 112`,
+    `MINOR_LINE_COLUMNS = 512`, `FADE_SEGMENTS = 24`.
   - `ground(spec, style)` — dots (skipping major lines) plus major lines subdivided at
     the minor step, alpha `α₀ · max(0, 1 − d / R)` per vertex.
   - `triad(workplane, camera, dim)` — three screen-facing ribbons via `screen_ribbon`,
     axis colours at 65 %, scaled by `dim`.
-  - `effective_steps` — drops the minor level below 4 projected px, promoting a decade.
+  - `effective_steps` — coarsens the minor level up the 1-2-5 ladder while its projected
+    spacing is below 4 px, and promotes the major a decade at a time until it draws. The
+    major never moves for a minor that is merely too fine.
   - **Unlit by construction:** every vertex's normal is the shader's light direction,
     so the diffuse term is exactly 1 and the per-vertex colour reaches the screen.
 - **`ferrocad_viewport`** — `GridMesh` (now three `GridLayer`s since G3) owns nine mesh
@@ -548,8 +555,13 @@ open.
 5. **Compass ring with a local plane.** Settled: the ring stays **world-locked**. A
    local frame is shown by its own triad and grid instead. (Upstream has no compass; a
    secondary tick at the local `U` remains an option if the ring ever needs it.)
-6. **`R_max` and regeneration.** Recommend `2.5 × camera distance`, clamped to 0.5–5 m,
-   regenerated at 10 % pivot movement.
+6. **`R_max` and regeneration.** `2.5 × camera distance`, capped at 5 m. The cap is
+   what matters: the visible frame reaches about `1.2 ×` the eye distance and the fade
+   starts at `0.55 × R_max`, so `2.5 ×` already keeps the fade off-screen and a *floor*
+   only adds geometry nobody sees. There used to be a 0.5 m floor, and because the
+   generator's density budget is counted on the disc it silently coarsened the finest
+   drawable minor step by up to 12× on a small model; the floor is now 1 mm, which only
+   keeps the radius finite. The ground is regenerated at 10 % pivot movement.
 7. **World grid under a local plane.** Recommend visible at 25 % alpha; a fully hidden
    world grid loses the global anchor.
 

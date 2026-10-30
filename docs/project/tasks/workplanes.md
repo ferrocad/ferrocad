@@ -1,7 +1,8 @@
 # Workplanes: one model, three ways in
 
-Status: task spec (2026-10-29). **Partially built on 2026-10-29**: the state model, the
-same-grid change and the `WP` pill have landed (§7); the three tiers' entry points remain.
+Status: task spec (2026-10-29). **Built**: the state model, the three tiers' entry points,
+`Pick 3 points`, `Save as datum plane` and the visual hierarchy are in the tree (§7); the
+four slices and their remaining gaps are recorded in §8.
 Companion to
 [`../../developer/interaction/selection-gizmos-and-forms.md`](../../developer/interaction/selection-gizmos-and-forms.md)
 (the context wheel, §2.2), [`../../developer/interaction/gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
@@ -125,15 +126,19 @@ The binding is **per tool session** (not per click): one plane for the whole sha
 
 ### 2.3 Tier 3 — the `WP` dropdown
 
-**The datum rows landed (2026-10-29, §7.3); the two creating rows are still open.**
+**The datum rows and the creating rows both landed (2026-10-29, §7.3, §8).**
 The menu is the plane choice, not the plumbing:
 
 ```text
 [ • WP: XY ▾ ]
-  World XY (Top) · World XZ (Front) · World YZ (Right) · View plane (Camera)
+  World XY (Top) · World XZ (Front) · World YZ (Side) · View plane (Camera)
   ─────────────────────────────────────────────────────────────
   Set from selection · Align camera to WP
+  Offset workplane… · Pick 3 points…
 ```
+
+`Save as datum plane` joins the same group when the Part workbench registers it (it is
+the Part module's command, not the shell's).
 
 - The three world planes are `Workplane::standard(StandardPlane)` frames with
   `WorkplaneKind::World`; the label (`XY`/`XZ`/`YZ`) comes from the plane, and only `XY`
@@ -145,10 +150,12 @@ The menu is the plane choice, not the plumbing:
 - `Activate workplane` and `Clear workplane` stay **callable** (`FerroCAD_Surface:
   "hidden"`) but are no longer menu rows: a menu click moves the pointer off the face, so
   the hover verb could only fail there, and `World XY (Top)` already is the reset.
-- **Pick 3 points… (open).** `Workplane::new(origin, p1-p0, p2-p0)` already rejects
-  degenerate input; the missing part is the three-click picking verb.
-- **Offset workplane… (open).** It moves the frame along `n` with the single-axis gizmo
-  and the floating HUD (`Offset ΔZ [ 0.0 ] mm`), like the transform form.
+- **Pick 3 points… — built.** A native `workplane_points` tool: left-click plots a
+  point, Backspace drops the last one, Enter makes the picked triangle the plane.
+  `Workplane::new(origin, p1-p0, p2-p0)` rejects degenerate input, so a collinear pick
+  leaves the active plane alone.
+- **Offset workplane… — built.** It moves the frame along `n` with the 1D normal stem and
+  the floating HUD (`Offset ΔN [ 0.0 ] mm`), two-way and one session per window.
 
 ### 2.4 The grid: one generator, no patch
 
@@ -163,7 +170,10 @@ decisions remain, and none of them needs a new renderer:
    stays at 10 mm/100 mm — that is what makes a bound grid look like a different object.
    Either keep the world steps (truly identical), or keep the finer steps *and* say so in
    the pill (`WP: Face3 · 1 mm`). Preference: keep the world steps, and let zoom reveal
-   detail through the existing `MINOR_PIXELS` decade rule.
+   detail through the existing `MINOR_PIXELS` decade rule. **Superseded:** the shipped
+   rule is `FerroCAD.Grid.adaptive` — the step fits the extent the layer covers (a face
+   patch, or the ground disc), so the two grids agree in density without a pill label.
+   See [`../../developer/interaction/workplanes.md`](../../developer/interaction/workplanes.md) §9.
 3. **The world layer.** Do **not** keep the ground: it would be a second grid. The world
    ground is not drawn while a non-default plane is active; the triad stays, dimmed
    (`WORLD_TRIAD_DIM = 0.30`), with the origin node, so absolute zero is still locatable.
@@ -432,8 +442,9 @@ Verified: `ferrocad_stage` 195, `ferrocad_viewport` 176, `ferrocad_gpui --lib` 2
 
 ## 8. Reflection (2026-10-29): visual hierarchy and parked work
 
-**The hierarchy rules are design; slice 1 below has since landed.** The full rationale is
-in [`../../developer/interaction/workplanes.md`](../../developer/interaction/workplanes.md)
+**The hierarchy rules are design; slices 1–4 below have since been built, with the gaps
+named in each.** The full rationale is in
+[`../../developer/interaction/workplanes.md`](../../developer/interaction/workplanes.md)
 §7–§12.
 
 Decided in the reflection:
@@ -448,9 +459,10 @@ Decided in the reflection:
 - **The body triad yields to an element-anchored handle** (Part face → push/pull only;
   Part edge → arc only). Move/Rotate arm it explicitly, so suppression is a default, not
   a lock. A face with no handle keeps the triad.
-- **A face-bound grid is a face-sized patch** (`max(3 × face radius, 2 × major step)`),
-  not a wall. Only the `GridSpec.radius` changes; the generator's existing fade is the
-  edge. No shader, style or setting is added.
+- **A face-bound grid is a face-sized patch** (`max(3 × face radius, 2 × major step)`) on
+  the face's **own** step (about ten major cells across it, 1-2-5 ladder), not a wall.
+  Only the `GridSpec.radius` changes; the generator's existing fade is
+  the edge. No shader, style or setting is added.
 - **A datum plane is a document object**, not a gizmo: tree row, `Visibility`, undo,
   save, whole-area pick, and a normal/tilt handle when selected.
 
@@ -458,8 +470,9 @@ The four slices, in order (each independently shippable):
 
 1. **Triad/grid hierarchy — landed 2026-10-29.** `ActiveWorkplane`
    carries an inferred `extent`; a face plane emits a 2D `U/V` bracket; the world cross
-   recedes to `WORLD_TRIAD_DIM`; `active_grid` uses `max(3 × face, 2 × major)`
-   with no world clamp; the hover bloom is tool-scoped; and the shell drops the shared
+   recedes to `WORLD_TRIAD_DIM`; `active_grid` uses `max(3 × face, 2 × major)` on the
+   plane's derived step (`nice_step(0.3 × extent)`, about ten major cells); the hover
+   bloom is tool-scoped; and the shell drops the shared
    body triad when a manipulator claims the element, unless a `Move`/`Rotate` verb asked
    for it. Acceptance tests: `a_face_workplane_emits_uv_without_normal_stem`,
    `a_face_workplane_clamps_grid_radius_to_face_extent`,
@@ -469,12 +482,31 @@ The four slices, in order (each independently shippable):
    `an_unclaimed_sub_element_keeps_the_body_triad`,
    `a_move_verb_arms_the_body_triad_on_a_face_selection`. The toy now claims its **top**
    face only (a side or bottom face is the fallback case), and `b811401` is kept.
-2. **`Offset Workplane…` as a gizmo** — a 1D axis handle along `+N` plus the floating HUD;
-   the menu row and its one-field dialog are already there.
-3. **`Part::DatumPlane`** — the object type, glass rendering, normal/tilt manipulator and
-   the tree's `Space`-to-hide. Today `Save as datum plane` creates a `Part::Feature` face.
-4. **Coin-grid workplane uniform** — the overlay `Frame` block plus a mod release; the
-   native grid already follows the plane.
+2. **`Offset Workplane…` as a gizmo — built (2026-10-29).** A 1D axis
+   stem along `+N` plus the floating HUD; the menu row and its one-field dialog landed in
+   §7.5. The field and the drag are two-way (the field follows every tick, typing moves
+   the plane live), the session is a `Shell` field rather than process-global state, and
+   `workplane_stem` reaches Python. Evidence: `offsetting_a_workplane_drags_and_types_along_normal`
+   and `a_tracked_stem_reports_its_live_total_each_tick`.
+3. **`Part::DatumPlane` — built in the working tree (2026-10-29), with gaps.** A
+   persistent object with `Placement` and `Size`, a derived `Face1`, the `"glass"`
+   display opt-in and `Visibility`; `Save as datum plane` (`App_SaveDatumPlane`) creates
+   it, superseding §7.6's `Part::Feature` face. Gaps: there is no bespoke normal/tilt
+   handle — a selected datum plane is moved and rotated by the standard gizmo through its
+   `Placement` — and tree `Space`-to-hide works only on the Dev Tools key path, because
+   the main window keeps `Space` for the object-verb wheel. Attachment and expressions
+   stay a non-goal (§9).
+4. **Coin-grid workplane uniform — built (2026-10-29).**
+   The shader, the `Frame` layout and the host transport are done: `Frame` is 240 B, with
+   `workplane_origin` (`w` = patch radius), `workplane_u`, `workplane_v` and
+   `workplane_n` at offsets 160/176/192/208; `ferrocad_graphics::WorkplaneFrame` +
+   `write_frame_with_workplane` carry it, `ViewSpec::workplane` selects it, and the
+   viewport fills it from
+   `ActiveWorkplane` with the same `max(3 × extent, 2 × major)` radius (and the same
+   derived step) the native grid uses (an unbound plane sends the camera-following ground
+   extent, `radius_for`, never `0`). Acceptance:
+   `coin_grid_mod_tracks_the_active_workplane_frame` (viewport) and
+   `a_view_workplane_reaches_the_program_frame` (wgpu byte layout).
 
 ## 9. Non-goals
 

@@ -73,12 +73,16 @@ The ``FerroCAD.Grid`` singleton (see the module docstring).
 
 | Member | Summary |
 | --- | --- |
+| `adaptive` (property) | Whether the grid's step follows the extent the layer covers. |
 | apply() -> dict | The ``{"view": …}`` request for the current settings. |
 | `axis_cross` (property) | Deprecated: moved to :attr:`FerroCAD.Axis.enabled`. |
 | `color` (property) | The grid ink as a canonical lowercase ``#rrggbb``. |
 | `enabled` (property) | Whether the world grid's ground layer is shown. |
 | `major` (property) | The world grid's major (line) step, in millimetres. |
+| `major_width` (property) | The major lines' stroke width, in device pixels (``1`` is the hairline). |
 | `minor` (property) | The world grid's minor (dot) step, in millimetres. |
+| `minor_style` (property) | The minor level's form: ``"dots"`` (intersection dots) or ``"lines"``. |
+| `minor_width` (property) | The minor level's stroke width, in device pixels. |
 | `opacity` (property) | A multiplier (``0..1``) over the token alphas. |
 | `radius` (property) | The fixed world-grid extent (mm); ``0`` is camera-derived. |
 | reset() -> None | Clear the grid store, including the pre-S4 legacy keys. |

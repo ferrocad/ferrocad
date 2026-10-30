@@ -126,7 +126,11 @@ exists.
 | --- | --- | --- | --- | --- | --- |
 | `enabled` | `bool` | `False` (the shell's default, `view.rs:113`) | `GridEnabled` | `view.grid` | world ground layer |
 | `color` | `"#rrggbb"` | `"#94a3b8"` = `grid::GRID_COLOR` (`grid.rs:33`) | `GridColor` | new `view.grid_color` | `GridStyle.color` |
-| `opacity` | `float` 0..1, **multiplier** | `1.0` | `GridOpacity` | new `view.grid_alpha` | `GridStyle.{minor,major}_alpha` × α |
+| `opacity` | `float` 0..1, **multiplier** | `1.0` | `GridOpacity` | new `view.grid_alpha` | `GridStyle.{minor,major}_alpha` × α, and the same product in `Frame.workplane_steps.zw` for the Coin shader |
+| `adaptive` | `bool` | `True` | `adaptive` (new) | new `view.grid_adaptive` | `plane_steps` (the host's step policy) |
+| `minor_style` | `enum`: `dots`/`lines` | `dots` | `minor_style` (new) | new `view.grid_minor_style` | `GridStyle.minor_style` (native) / `grid_stroke.x` (Coin) |
+| `major_width` | `float` px, 1..8 | `1.0` | `major_width` (new) | new `view.grid_major_width` | `GridStyle.major_width` / `grid_stroke.y` |
+| `minor_width` | `float` px, 1..8 | `1.0` | `minor_width` (new) | new `view.grid_minor_width` | `GridStyle.minor_width` / `grid_stroke.z` |
 | `spacing` | `float` mm > 0 | `10.0` | `GridMinorStep` + `GridMajorStep` (= spacing × 10) | `view.grid_minor` / `grid_major` | `GridSpec.{minor,major}` |
 | `minor` | `float` mm > 0 | `10.0` | `GridMinorStep` (existing key) | same | `GridSpec.minor` |
 | `major` | `float` mm ≥ minor | `100.0` | `GridMajorStep` (existing key) | same | `GridSpec.major` |
@@ -159,6 +163,13 @@ The addon's stored `opacity` (default `0.65`, `InitGui.py:134-141`) is therefore
 a `0.65×` multiplier — a 35 % reduction of the token alpha, not "alpha 0.65" — an
 explicit, documented deviation (§3.2, §3.4).
 
+The Coin shader receives the **product** (`token alpha × opacity`) in
+`Frame.workplane_steps.zw`; it no longer keeps a strength in `Program.values.yz` of its
+own. That is what makes the two backends' lines the same weight — the port originally
+pushed `minor_alpha = opacity × 0.35`, `major_alpha = opacity`, so its 1 px minor line
+drew 4× the native ink and read as thicker. A `0` in `zw` is the pre-ink ABI (the shader
+falls back to `values.yz`), which is also how a host that does not claim the ink behaves.
+
 `shadows` and `shadow_opacity` are exposed **only so the addon's dialog can be a thin
 client without lying about what exists**. They persist, they validate, and
 `snapshot()` reports them; nothing consumes them until a shadow producer exists
@@ -171,6 +182,33 @@ individually. That keeps the dot/line hierarchy the addon's `base_spacing` impli
 the native grid's 10:100 default. The last write wins, and `apply()` validates
 `major ≥ minor` instead of silently reordering two preferences the user set separately.
 
+`adaptive` (default on) is a **policy**, not a pair: when set, the viewport derives the
+step from the extent the layer covers — a bound surface's in-plane radius, or the ground
+disc's radius — so `minor`/`major` become the fallback for a plane with nothing behind it.
+Both backends read the resolved steps from the host (`Frame.workplane_steps`), so the
+switch cannot make the native and Coin grids disagree. While it is on, the property pane
+shows those two rows as `10 mm  [adaptive]`: the value is the configured fallback, not
+what is drawn, and the chip is what says so (the row's schema entry carries a `status`
+callable). Clearing `adaptive` draws exactly the pair, and the chip returns to
+`[provider]`.
+
+`minor_style` and the two widths are appearance, and the two backends implement them the
+same way:
+
+- `dots` draws a point at each minor intersection (the default). The native generator
+  emits a `Topology::Points` packet; the Coin shader takes the product of both axes'
+  coverage, which is a dot. `lines` draws the full lattice at the minor step instead.
+- A width of `1` is the hairline: the native generator keeps its `LineList`/`PointList`
+  (no quads at all) and the Coin shader its 1 px `line_cov`, so the default geometry and
+  cost are unchanged. A wider stroke is an **in-plane** stripe `width` wide — native
+  triangles through the *lit* stage (the ribbon stage's feather would eat half of a 2–4 px
+  line; the 4× MSAA target antialiases instead) and the same in-plane distance test in the
+  shader — with the host converting pixels to the plane's units at the plane origin
+  (`screen::scale_for`). In-plane is deliberate: a camera-facing ribbon would have to be
+  rebuilt on every orbit, and the ground's cache is keyed on the spec, not the camera.
+- `minor_width` sizes the **dot** too: above the hairline a dot is an in-plane square of
+  that size, which is the same square the shader's two-axis coverage draws.
+
 ### 2.3 Semantics
 
 | Question | Answer |
@@ -181,7 +219,7 @@ the native grid's 10:100 default. The last write wins, and `apply()` validates
 | Headless behaviour | **Works and no-ops.** Every setter validates and writes the store. `apply()` returns the dict and does not throw when `FreeCAD.GuiUp == 0`; there is simply no viewport to apply it to. This is testable in `python3` with no display, which is the point. |
 | Document close | Nothing. The grid is not document state; closing a document must not reset the user's ink or steps. |
 | Applying | **Through a command.** The shell applies a `{"view": …}` only from a command result (`shell.rs:534-543`) and mirrors the state back (`:745-774`). A bare property write in the console changes the *desired* policy but does not repaint — the same contract as writing a FreeCAD parameter and running `App_ReloadGridSettings`. `FerroCAD.Grid.apply()` is the single builder; `View_GridSettings` (new) and `App_ReloadGridSettings` (existing) both call it. |
-| Validation | Raise `ValueError` for a bad colour, a negative step, `major < minor`, or opacity outside 0..1. Silent clamping is the addon's local-dialog behaviour (`setting()`, `:146-160`); a public API should be loud, and the shell's `ViewState::apply` already validates-then-mutates (`view.rs:130-210`). |
+| Validation | Raise `ValueError` for a bad colour, a negative step, `major < minor`, or opacity outside 0..1. The two steps are a **subdivision** apart: a `major` equal to the `minor` lowers the minor by a decade (an equal pair has no minor rows to draw, so `minor_style` would look broken), and a stored `major <= minor` is healed by `apply()` and written back. Silent clamping is the addon's local-dialog behaviour (`setting()`, `:146-160`); a public API should be loud, and the shell's `ViewState::apply` already validates-then-mutates (`view.rs:130-210`). |
 
 **One shell gap must be closed for the dialog path.** `finish_dialog`
 (`crates/ferrocad_gpui/src/shell.rs:655-696`) refreshes the model and the stage but does
@@ -288,9 +326,9 @@ a workbench.
 | | **A1 — keep Coin, port the shader** | **A2 — thin client of Track C** |
 | --- | --- | --- |
 | What runs | The addon's tree: `SoSeparator` → `SoShaderProgram` → `SoFaceSet`, extracted and drawn | No tree, no shader; a dialog writes `FerroCAD.Grid` |
-| Knobs | All six, same defaults, same dialog meaning | Six (`enabled`, `color`, `opacity`, `spacing`, `shadows`, `shadow_opacity`); the two shadow knobs persist and validate but nothing draws them yet. `spacing` is the minor step and sets the major to its next decade. Defaults come from the native tokens, not the addon's `DEFAULTS` (`:134-141`) |
+| Knobs | All six, same defaults, same dialog meaning | Eight: the shared `FerroCAD.Grid` sizing rows (`minor`, `major`, `radius`) plus `enabled`, `color`, `opacity`, `shadows`, `shadow_opacity`; the two shadow knobs persist and validate, and now draw on the ground |
 | Per-document | Kept (overlay registered per active document) | Replaced by the global native grid — **documented intent change** |
-| Visual result | The addon's look (line-only, decade LOD at `MIN_PX = 8.0`, `frag:19`) | The native look (dots + major lines, LOD at `MINOR_PIXELS = 4.0`, `grid.rs:136`); `MIN_PX` must not be reused, or the visible LOD stops matching the snap grid |
+| Visual result | The addon's look (line-only, decade LOD at `MIN_PX = 8.0`, `frag:19`) | The native look: the host's effective minor/major steps, the same `MINOR_PIXELS = 4.0` cull, and a radial patch fade (`grid.rs:136`) |
 | Live updates | Re-addition after a change; no live field aliasing | The native grid re-emits from `ViewState` |
 | Depends on | G0, G1, G3, G4 | G2 (semantic API) |
 | Est. | 4–6 days for the Coin surface + 1.5–2 for the port + 1.5–2 for the renderer + 1 for the fork | 1–1.5 days |
@@ -360,6 +398,16 @@ requirement.** In both cases the discriminator is `FerroCAD.Grid`, not the prese
 not `FreeCAD.GuiUp` (which is 1 in both). Never probe private helpers such as
 `FreeCADGui._run`.
 
+**The workplane is host state, not a fork feature (2026-10-29).** Earlier revisions kept
+the active construction plane out of the program ABI: the `Frame` block carried only the
+camera, so an authored grid stayed on world `XY` while the native grid moved to the
+plane. That is now fixed in the **host** half of the contract, not by a Coin surface:
+`Frame` carries the plane's origin, `u`/`v`/`n` and a patch radius, all written by the
+viewport from `ActiveWorkplane`. A mod cannot supply it, so neither fork shape can claim
+a plane the view is not on, and no upstream compatibility behaviour changes — the field
+did not exist upstream either, and the shader's default (world `XY`, radius `0`) is the
+old ground.
+
 ### 3.4 The WGSL port
 
 The port is a rewrite of the 148 GLSL lines (23 vertex, 125 fragment; measured) into
@@ -376,7 +424,7 @@ and couple a per-frame value to a per-draw slot. Program draws get a third group
 | --- | --- | --- | --- | --- |
 | 0 | 0 | `Globals` (existing) | `view_proj`, `model`, `color`, `pick`, `topology`, `depth_bias` | per draw |
 | 1 | 0, 1 | texture + sampler (existing) | unused by the grid shader | per draw |
-| 2 | 0 | `Frame` (new) | `view_proj: mat4x4<f32>`, `inv_view_proj: mat4x4<f32>`, `eye: vec4<f32>`, `flags: vec4<f32>` (160 B) | per frame |
+| 2 | 0 | `Frame` (new) | `view_proj: mat4x4<f32>`, `inv_view_proj: mat4x4<f32>`, `eye: vec4<f32>`, `flags: vec4<f32>`, then the host workplane `workplane_origin: vec4<f32>` (`xyz` origin, `w` patch radius), `workplane_u`, `workplane_v`, `workplane_n`, `workplane_steps` (`minor`, `major`, and the two levels' **base ink**), `grid_stroke` (minor form, the two stroke widths) | per frame |
 | 2 | 1 | `Program` (new) | `grid_color: vec4<f32>`, `values: vec4<f32>` (`base_spacing`, `minor_alpha`, `major_alpha`, `shadow_opacity`), `counts: vec4<f32>` (`shadow_count`, …), `shadows: array<vec4<f32>, 80>`, then the axis extension `axis_y: vec4<f32>`, `axis_z: vec4<f32>`, `axis_values: vec4<f32>` (`length`, `width`, `opacity`, `ghost_alpha`), `axis_flags: vec4<f32>` (`origin`, `labels`, 0, 0) — 1,392 B total; the grid shader reads the first 1,328 B | per program |
 
 Group 2 is added to the **shared** pipeline layout with a default zeroed bind group, so
@@ -401,6 +449,39 @@ names. The axis tail is `axis_y`/`axis_z` (linear RGB stem ink, X reuses
 `grid_color`), `axis_values = [length, width, opacity, ghost_alpha]` and
 `axis_flags = [origin, labels, 0, 0]`. Style changes take part in the program
 fingerprint, so changing the axis look recreates the program buffer and pipeline.
+
+**Workplane extension (host-provided, 2026-10-29).** The `Frame` block grows from 160 to
+256 B with a tail the *viewport* writes; it is not a `Program` parameter, and not a
+`SoShaderParameter*` name, because the active plane is view state and a mod must not be
+able to lie about it:
+
+| Offset | Field | Contents |
+| ---: | --- | --- |
+| 160 | `workplane_origin: vec4<f32>` | `[origin.x, origin.y, origin.z, patch_radius]`; `w = 0` means "no patch", the unbounded ground |
+| 176 | `workplane_u: vec4<f32>` | the in-plane `u` axis (the grid's `x`), `w` reserved |
+| 192 | `workplane_v: vec4<f32>` | the in-plane `v` axis (the grid's `y`), `w` reserved |
+| 208 | `workplane_n: vec4<f32>` | the unit normal `u × v`, `w` reserved |
+| 224 | `workplane_steps: vec4<f32>` | `[minor, major, minor_alpha, major_alpha]`, the plane's effective steps in world units and the **base ink** of its two levels (the native token alphas × `opacity`); an alpha of `0` means "no claim" and the shader keeps `Program.values.yz` |
+| 240 | `grid_stroke: vec4<f32>` | `[minor_lines ? 1 : 0, major_width, minor_width, 0]`; widths are in the plane's units, `0` = the 1 px hairline |
+
+Each is one 16-byte `vec4`, so the block stays a plain `repr(C)` prefix with no implicit
+padding (`ferrocad_wgpu::program::Frame`, `FRAME_SIZE = 256`). The shader intersects the
+view ray with the plane (not `z = 0`) and draws the two host steps in
+`(dot(p, u), dot(p, v))` around the plane origin; a non-zero radius multiplies coverage by
+`1 - smoothstep(0.55 r, r, |p_uv|)`, the native `grid::FADE_START` law. **A zero radius
+is "no patch"**: the ground is unbounded, exactly as before. The default tail is world
+`XY` (origin 0, `u = +X`, `v = +Y`, `n = +Z`, radius 0), which reproduces the old
+`p.xy` shader numerically, so `axis_overlay.wgsl` and any program that ignores the tail
+keep working (the block is a suffix; the axis shader declares the 160-byte prefix).
+
+The radius is the viewport's rule, shared with the native layer:
+`max(3 × extent, 2 × major)` on the effective major step, `0` when `extent` is `None`
+(`ActiveWorkplane::program_patch_radius`). It is deliberately not clamped to
+`grid::RADIUS_RANGE`. **Remaining work:** the value is written by
+`ProgramPipeline::write_frame_with_workplane`; the view boundary (`ViewSpec` in
+`ferrocad_inventor`) has no workplane field yet, so `write_frame` still selects the world
+default and the Coin grid stays on world `XY` until the view carries it. That is a
+transport gap, not a shader or ABI gap.
 
 **Fixed parameter ABI — the limitation to state loudly.** Coin binds parameters *by
 name* into whatever the shader declared. WGSL uniform layouts are static, so an authored
@@ -451,7 +532,9 @@ added as a **dev-dependency** of `ferrocad_wgpu` (offline):
 - The fragment result contains `BuiltIn::FragDepth`.
 - The program module declares exactly `(2, 0)` and `(2, 1)`; groups 0 and 1 are
   layout-only, kept so the existing draw loop can bind them. The Rust writer's `Program`
-  bytes are 1,328 and its field offsets match a `bytemuck` size/offset test.
+  bytes are 1,328 and its field offsets match a `bytemuck` size/offset test. The `Frame`
+  bytes are 256 (the host workplane and stroke tail included) and the mod's `Frame` struct is checked
+  against `FRAME_SIZE` by the `naga` layouter test.
 - Optional GPU: a 256×256 readback of an empty scene shows the axis-coloured line at the
   expected pixels; a box at the origin occludes it; a pick over the quad returns nothing.
   Without an adapter the test skips, matching the existing `ferrocad_wgpu` convention.
@@ -470,11 +553,13 @@ exists but is a permanent `None` (`ferrocad_py/src/lib.rs:1912-1916`), so `_show
 would therefore be a claim about the document model, not the shader (bring-up §3.4).
 
 What the port keeps anyway: the `shadow_count`/`shadow_opacity` parameters and the
-80-slot block, with `shadow_count = 0`, so the shader's shadow branch is compiled and
-validated. A later slice (not scheduled here) adds a `ferrocad_stage` shadow producer
-that takes footprints from the display tessellation (the same source `FaceFrame` uses,
-`axis-origin-grid.md` §7) and feeds the block. That keeps the shader path free of
-document queries and gives the shadows a home even if A1 is cancelled.
+80-slot block, fed by a `ferrocad_stage` producer that takes footprints from the display
+tessellation (the same source `FaceFrame` uses, `axis-origin-grid.md` §7) and writes the
+block. A footprint is the item's AABB **in the active plane's `(u, v)` frame**
+(`Stage::shadow_footprints_on`), so the ground, `XZ` and `YZ` all shade correctly; a
+world-`(x, y)` box would land beside the model on a vertical plane. That keeps the
+shader path free of document queries and gives the shadows a home even if A1 is
+cancelled.
 
 ---
 
@@ -738,14 +823,55 @@ re-enables the native grid. The inactive command returns a status naming the
 active backend instead of opening its dialog. Neither implementation was
 removed.
 
+**Sizing (2026-10-29).** The Coin provider advertises the **shared** `FerroCAD.Grid`
+sizing rows: `minor`, `major` and `radius`. The host resolves the plane's effective steps
+(a face patch derives its own, the ground uses the configured pair) and sends them in
+`Frame.workplane_steps`; `radius` is the host patch radius — `program_patch_radius` now
+honours a fixed "Grid extent" for an unbound plane, exactly as the native ground does.
+Before this the rows were filtered out of the provider schema and the shader derived its
+own decade ladder from a private `base_spacing`, so the Coin grid had no sizing controls
+at all and the popover's spacing row described the native grid.
+
+**Ink and stroke parity (2026-10-30).** The Coin provider also advertises the shared
+`FerroCAD.Grid` appearance rows: `opacity`, `minor_style`, `major_width` and
+`minor_width`. The host resolves the native look — the token alphas times `opacity`, and
+the two widths converted from device pixels to the plane's units — and sends it in
+`Frame.workplane_steps.zw` and `Frame.grid_stroke`. The shader no longer carries a
+strength of its own (`minor_alpha = opacity × 0.35`, `major_alpha = opacity`), which drew
+the minor level at 4× the native ink and read as a thicker line at the same width; `0` in
+`workplane_steps.zw` remains the pre-ink fallback. Because both backends now read the
+same ink and the same in-plane widths, a DPR change moves them identically — the widths
+were already device pixels on both sides
+([`../../project/tasks/stroke-units.md`](../../project/tasks/stroke-units.md)).
+`the_coin_frame_carries_the_native_ink` and
+`a_stroke_is_measured_in_device_pixels_at_any_scale` pin the two halves.
+
+One native-only gap the same slice exposed: a **wide** native stroke is a triangle, and
+the opaque scene pipeline is `BlendState::REPLACE`, which ignores the vertex alpha that
+carries the opacity and both fades. `GridLayer::emit_level` now asks for `BLENDED_DEPTH`
+for the quad form, so the stroke dims like the dots and hairlines do
+(`a_wide_grid_stroke_blends_its_ink`). The Coin shader had no equivalent gap: it blends
+in the fragment stage.
+
+**Bootstrap (2026-10-29).** A provider's `activate` runs only when asked, and the
+document-activation ask happens *inside Python* — the `{"view": …}` request it returns
+never reaches the shell. A persisted Coin grid was therefore selected in the popover but
+never claimed `grid_overlay`: the built-in grid kept drawing underneath it, and the
+overlay was not pulled until some other command applied a view.
+`Shell::enable_viewport` now runs `refresh_providers` for every feature with an active
+backend, which re-reads the same backend through `refreshProviders` and applies its
+claim. `set_grid_overlay` hides the native ground on **every** plane, world and bound
+alike; only the transient hover bloom stays native, because it previews a frame the view
+is not on yet.
+
 **Deviations recorded.** `SoMFFloat` arrived with G3 rather than G0 (its consumer is
 `SoShaderParameterArray1f`). `spacing` sets `major = spacing × 10` so the dot/line
 decade survives; `snapshot()` reports the two deferred shadow knobs. `compile_with`
 remains the panicking convenience for tests and the navicube, but the viewport compiles
 through `compile_diagnostic`: a malformed program is dropped, the rest of the frame
 renders, and `take_shader_error` lets the shell write the reason to the console. Shadows
-are compiled and validated but `shadow_count` is 0 until a document-bounds producer
-exists.
+are cast from the stage's world-`XY` footprints while the world ground is the active
+plane (see §3.5).
 
 **Rendered check.** `cargo run -p ferrocad_gpui --example inventor_roundtrip --
 --coin-overlay frame.png` builds the A1 mod's tree through `pivy.coin`, registers it with
@@ -757,3 +883,21 @@ is the expected result for a plane through the model.
 **Test note.** The six affected crates pass serially (351 tests) and in parallel; a
 `ferrocad_gpui` SIGSEGV reported once during G4 did not reproduce on a clean parallel
 run. If it recurs, capture `coredumpctl` and the test name before changing code.
+
+**W4 — the plane in the ABI (2026-10-29).** `Frame` grew to 240 B with the host
+workplane tail (§3.4), then to 256 B for `grid_stroke` (`fix(grid)`/stroke slice). `ferrocad_graphics::WorkplaneFrame` is the neutral carrier;
+`Frame::from_camera_and_workplane` and `ProgramPipeline::write_frame_with_workplane`
+pack it, and `ProgramPipeline::write_frame` keeps the world `XY` default. The mod's
+`grid_overlay.wgsl` intersects the plane and fades a patch.
+`ActiveWorkplane::program_patch_radius` is the host half of the radius rule, and
+`InventorViewport::refresh` attaches the frame to the program queue's view through
+`ViewSpec::workplane`, so the transport is closed.
+
+The radius is the **native** grid's extent — a face patch, or `radius_for` for the
+ground — never `0`. An unbounded plane is cut only by the shader's edge-on fade, and that
+fade was per-pixel (`abs(dot(ray, n))`), whose zero-crossing is the plane's own horizon:
+on a `YZ` plane it painted a soft vertical band straight through the model. The fade is
+now the **camera's** angle to the plane (one value per frame). Ground shadows are the
+stage's footprints **in the active plane's `(u, v)` frame**, so every plane is shaded —
+a world-`(x, y)` box projected with `p.xy` used to draw a slab's "shadow" beside it on
+`XZ`.

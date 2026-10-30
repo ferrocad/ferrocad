@@ -1,12 +1,16 @@
 # Workplane (`WP`): specification and interaction model
 
-Status: design (2026-10-29). The state model, the `WP` menu, the three-point pick, the
-offset dialog and `Save as datum plane` are built, and **W1 — the visual hierarchy** (§7–§12:
-selection, triads, grid extent, hover bloom) is built. The datum-plane object (`W3`), the
-offset gizmo (`W2`) and the Coin-grid uniform (`W4`) are specified and parked — see
-[`../../project/tasks/workplanes.md`](../../project/tasks/workplanes.md) §8 for the work
-list. Companion to [`axis-origin-grid.md`](axis-origin-grid.md) (the triad, the
-ground/workplane grids, face frames), [`visual-language.md`](visual-language.md) (tokens
+Status: design, built in slices (2026-10-29). The state model, the `WP` menu, the
+three-point pick, the offset gizmo and `Save as datum plane` are built. **W1 — the visual
+hierarchy** (§7–§12: selection, triads, grid extent, hover bloom) landed in `127e131`;
+**W2 — the offset gizmo** and **W3 — `Part::DatumPlane`** are built in the working tree;
+**W4 — the Coin-grid workplane uniform** is built end to end, including the
+host→renderer transport (`ViewSpec::workplane` → `write_frame_with_workplane`). W2 and
+W3 keep named gaps (§4.3, §10). See
+[`../../project/tasks/workplanes.md`](../../project/tasks/workplanes.md) §8 for the slice
+states and acceptance tests. Companion to
+[`axis-origin-grid.md`](axis-origin-grid.md) (the triad, the ground/workplane grids, face
+frames), [`visual-language.md`](visual-language.md) (tokens
 and chrome), [`gizmo-manipulators.md`](gizmo-manipulators.md) (`ManipulatorFrame` and the
 G3a handles) and [`selection-gizmos-and-forms.md`](selection-gizmos-and-forms.md) (the
 wheel and the interaction state machine).
@@ -96,12 +100,14 @@ In `[ • Grid ▾ ][ • Axes ▾ ][ WP ▾ ][ • Gizmo ▾ ][ • Snap ▾ ]`
 ```text
 • World XY (Top)
 • World XZ (Front)
-• World YZ (Right)
+• World YZ (Side)
 • View Plane (Camera)
 ────────────────────────────
   Set from Selection
-  Offset Workplane…
   Align Camera to WP
+  Offset Workplane…
+  Pick 3 points…
+  Save as Datum Plane        (when the Part workbench is loaded)
 ```
 
 - Rows follow the menu matrix: transparent idle, additive `#FFFFFF14` hover, a
@@ -110,6 +116,10 @@ In `[ • Grid ▾ ][ • Axes ▾ ][ WP ▾ ][ • Gizmo ▾ ][ • Snap ▾ ]`
   replaces the ambiguous `Activate workplane` item, which required geometry to already be
   hovered but lived a full-screen pointer-travel away.
 - **World XY (Top)** is the reset; it replaces `Clear workplane`.
+- The standards are named after the **plane preset**, not the camera: `XZ` is the
+  Front plane and `YZ` the Side plane (upstream `WorkingPlane.set_to_side`). `Right`
+  names the *view* (`Std_ViewRight`), which is a camera move — `Align Camera to WP` —
+  so calling the plane "Right" read as "the plane on the right of the model".
 
 ## 4. The three workflows
 
@@ -135,8 +145,12 @@ While a creation tool is active and the plane is at the default:
 ### 4.3 Explicit datum and offset (the `WP` menu)
 
 1. Pick `World XY`, `World XZ`, `World YZ` or `View Plane`.
-2. **Offset Workplane…** spawns a single-axis manipulator along `+N` with the floating HUD
-   (`Offset ΔZ [ 0.0 ] mm`), moving `frame.origin` along `frame.basis[2]`.
+2. **Offset Workplane…** (built) spawns a single-axis manipulator along `+N` with the
+   floating HUD (`Offset ΔN [ 0.0 ] mm`), moving `frame.origin` along `frame.basis[2]`.
+   The drag and the field are two-way: the field follows the drag every tick, typing
+   moves the plane live, and the session lives on the `Shell` (one per window). The
+   structured `workplane_stem` payload crosses into Python; the legacy
+   `gizmo: "workplane_offset"` spelling still resolves.
 3. **Align Camera to WP** is `view_workplane()`: look down the plane's normal with a
    roll-free up vector (at the default this is the top view).
 
@@ -270,24 +284,133 @@ keeps the face *tint* (the click feedback) and the `HoverReport`, but adds no se
 `Set WP` in the wheel is one gesture away and needs no preview. The predicate is inferred
 from the tool and plane state — nothing is configured.
 
-## 9. Grid extent: one generator, inferred extent
+### 8.6 Review round, 2026-10-29
 
-The grid stays one generator; only its **extent** is inferred from what the plane is bound
-to:
+Three questions were put to the hierarchy and settled. They are recorded here because each
+one has a plausible “simplification” that would undo it.
 
-- **A plane bound to a finite surface** (a face today; a datum plane once it exists) gets
-  a face-sized patch: `radius = max(3 × in-plane radius, 2 × major step)`. The world
-  clamp (`RADIUS_RANGE`, 500–5000 mm) is **not** applied to it — it exists so the world
-  ground does not collapse when zoomed in, and applying it would force a 40 mm face to
-  carry a 500 mm grid.
-- **Every other plane** (world, standard, `View`, 3-point, an offset of those) keeps the
-  camera-following extent, `GridSpec::radius_for(camera)` — unchanged.
+- **Hover bloom (§8.5) — approved as specified.** The bloom is scoped to
+  `tool.is_some() && active_workplane.is_default()`, and it stops once the tool's first
+  click binds a plane. Idle hover keeps only the tint and the `HoverReport`.
+- **Toy slab face clicks — `b811401` is kept, not reverted.** A face click must not need a
+  double click to reach the height grip. The tightened variant is the rule: only the
+  **top** face claims `HeightGrip`; side and bottom faces are the unclaimed-sub-element
+  fallback that keeps the body triad (§8.3). The doc already says this — it is the
+  decision, not an accident, so do not “simplify” it back to all faces.
+- **`Move`/`Rotate` — wheel verbs plus global accelerators, never a dock button (§8.4).**
+  `App_Move`/`App_Rotate` are radial-surface verbs, also reachable with `Ctrl+Shift+M` /
+  `Ctrl+Shift+R`; the bottom dock holds only creation verbs. The menu and dock wording was
+  corrected in `196802b`, because older copies of the spec still said “dock”.
+
+## 9. Grid extent: one generator, one adaptive rule
+
+The grid stays one generator; only its **extent** is inferred from what the layer covers.
+`FerroCAD.Grid.adaptive` (default **on**) chooses between two laws, and it is host
+policy — one value for the world ground, the face patches and both backends:
+
+- **Adaptive (on) — the step fits the extent the layer covers.**
+  - A plane bound to a finite surface (a face or a datum plane) gets a face-sized patch:
+    `radius = max(3 × in-plane radius, 2 × major step)`, where the **major step is the
+    plane's own**, derived from the extent — about ten major cells across the patch, on
+    the 1-2-5 ladder (`major = nice_step(0.3 × extent)`, `minor = major / 10`). A 20 mm
+    face is `extent ≈ 15.6 mm`, `major 5 mm`, `radius 46.8 mm`; using the world's 100 mm
+    major instead let the `2 × major` floor dominate and carried a 200 mm wall across a
+    `20 mm box. The world clamp (`RADIUS_RANGE`, 1 mm–5 m) is **not** applied to it — it
+    exists so the world ground does not collapse when zoomed in, and applying it would
+    force a 40 mm face to carry a 500 mm grid.
+  - The ground (world, standard, `View`, 3-point — any plane with no surface behind it)
+    keeps the camera-following radius and takes its step from **that radius**, about
+    twenty-five major cells across the disc (`major = nice_step(radius / 25)`): about ten
+    across the visible frame, which is the configured grid's density at the default
+    zoom. Deriving it from the *scene* instead fails at both ends — a 10 mm part asks for
+    sub-millimetre cells across a 500 mm disc (hundreds of thousands of vertices, a
+    multi-second build), and a 1 m part inspected at a 10 mm feature asks for 300 mm
+    cells, i.e. an empty grid. Tilting does not change the radius, so the lattice still
+    cannot re-space under a tilt; zooming does, by a decade at a time.
+  - The **dot** level is coarsened to the generator's point budget (`DOT_COLUMNS`, 112 dots
+    across the radius) in adaptive mode, rather than left so fine that the clip would cut
+    it to a sliver of the disc. Coarsening the dots never moves the lines, and both
+    backends read the resolved pair, so the Coin dots sit at the same spacing as the
+    native ones.
+- **Not adaptive — the configured pair, everywhere.** `minor`/`major` are exactly what
+  the ground *and* a bound face draw, at any zoom; the extent still sizes the patch, so a
+  20 mm face then carries the configured 100 mm major and the `2 × major` floor's 200 mm
+  patch. A level too fine to cover the whole disc is **clipped in extent**, never
+  coarsened (see below).
+  The property pane marks the two rows `adaptive` while the switch is on
+  (`10 mm  [adaptive]`), so a row that is *not* the drawn step says so instead of looking
+  inert when it is edited.
+- **The minor level is dots or a lattice, and both levels have a stroke.**
+  `FerroCAD.Grid.minor_style` picks `dots` (the product of the two axes' coverage) or
+  `lines` (a full lattice at the minor step, skipping the major rows). The two widths are
+  in **device pixels**, `1` being the renderer's hairline: the generator emits its cheap
+  `LineList`/`PointList` and the Coin shader its 1 px coverage, so the default costs
+  exactly what it did. A wider stroke is an **in-plane** stripe (`width` across, host
+  converts pixels → plane units at the origin) drawn as plain triangles through the *lit*
+  stage — not the ribbon stage, whose feather would eat half of a 2–4 px line — with the
+  4× MSAA target antialiasing the edges; the Coin shader tests the same in-plane distance.
+  The quad asks for `BLENDED_DEPTH` (`ferrocad_stage::shape`), which selects the renderer's
+  alpha-blended scene-triangle variant: the opaque base pipeline is `BlendState::REPLACE`
+  and ignores a vertex's alpha, so a wide stroke drawn through it stayed at full strength
+  while the dots and hairlines dimmed — the grid's radial fade, its edge-on `grazing`
+  factor and `Grid.opacity` all live in that alpha.
+  A **dot** takes the same width as its diameter (an in-plane square, the product of two
+  stroked axes in the shader), so the setting thickens whichever form the minor level
+  takes. In-plane keeps the ground's cache camera-independent — a camera-facing ribbon
+  would rebuild on every orbit.
+- **One ink, both backends.** The Coin shader does **not** have a strength of its own: it
+  now reads the native token alphas (`0.15 / 0.15` for the ground, `0.15 / 0.30` for a
+  bound plane, both times `Grid.opacity`) from `Frame.workplane_steps.zw`. Before this it
+  pushed `minor_alpha = opacity × 0.35`, `major_alpha = opacity` — 4× the native minor
+  ink at the default `0.65` — and a 1 px line at 4× the alpha reads as a *thicker* line.
+  That, not the device-pixel ratio, was the visible native-vs-Coin difference; the
+  widths themselves were already in device pixels on both sides
+  (`ferrocad_stage::screen::scale_for` against the shader's `fwidth`). Retuning the ink to
+  the token removed the discrepancy without touching how a stroke is measured — see
+  [`../../project/tasks/stroke-units.md`](../../project/tasks/stroke-units.md) for the
+  units decision that was deferred while diagnosing it.
 - **The fade is already there.** `grid::ground` fades alpha smoothly from
   `FADE_START × radius` to `0` at `radius`, so a smaller radius *is* the localized patch.
   No shader change, no `GridStyle` field, no new setting.
-- **What the identity keeps:** same generator, same minor/major steps, same ink, same
-  `1:2` ratio, same snapping steps. Only the extent says “this grid belongs to that
-  face”, which is exactly the information a wall-of-grid was hiding.
+- **Edge-on fade, both backends.** A plane seen along its own surface dims by
+  `grid::grazing(camera, plane)` — one factor per frame from the camera's forward
+  direction (`smoothstep(0, 0.08, |forward · n|)`). The Coin shader applies the same law
+  to the same threshold, so the two grids behave alike; the triad keeps its ink either
+  way, because it is what still locates the plane when the view runs along it.
+- **The minor level is coarsened, never promoted.** `effective_steps` keeps the major
+  (line) step fixed and walks the **minor** step up the 1-2-5 ladder while its projected
+  spacing is below `MINOR_PIXELS` (4 px), collapsing it onto the major only when nothing
+  below the major draws. It used to collapse immediately, which is why the minor level
+  vanished on a face at a normal zoom: adaptive spacing puts the minor ~1/10 of the major
+  and the major ~1/10 of the patch, i.e. right at the cull. A collapsed minor is
+  **invisible with `minor_style = lines`** — a lattice at the major step has no minor rows
+  to draw — so the option looked broken. The major still never moves for a minor that is
+  merely too fine, so tilting cannot re-space the visible lattice (the old
+  promotion-of-both-levels rule did, which read as the grid re-spacing itself under the
+  camera).
+- **A level the generator cannot cover is clipped, not coarsened.** A dot field costs one
+  vertex per intersection and a line lattice one row per column, so a fine step cannot
+  cover an arbitrarily large disc. `grid::minor_radius` bounds the **minor level's
+  extent** (`DOT_COLUMNS` 112 columns for dots, `MINOR_LINE_COLUMNS` 512 for lines) and
+  the level fades out there; the pitch is never touched. That is what keeps the
+  subdivisions constant while the camera zooms out: with spacing **not adaptive** the
+  configured pair is exactly what is drawn, and the disc follows the eye distance
+  (`2.5 ×`) with only a 1 mm floor. A 500 mm floor made a Toy-sized model spend its whole
+  budget off-screen and coarsened a 1 mm minor to 5 mm. (Each line also caps its fade
+  samples, so the generator is linear in the column count rather than quadratic — a
+  1024-column lattice costs a few hundred microseconds instead of ~47 ms.) The Coin shader
+  needs no clip of its own: it rasterises per pixel, and `line_cov` already fades a level
+  out once a cell is sub-pixel, so both backends show the same pitch and both lose the
+  level at the same density.
+- **One rule, five consumers.** `plane_steps` decides the step for the drawn grid, the
+  hover preview, the program (Coin) patch, `snap_context` and the `Frame` uniform, so a
+  preview is the grid it binds and a snap lands on a line that is on screen.
+- **What the identity keeps:** same generator, same ink, same `1:2` ratio, same fade.
+  Only the extent and its step say “this grid belongs to that face”, which is exactly the
+  information a wall-of-grid was hiding. A bound plane takes the workplane style
+  (`level_style`), which is also what the hover preview and the Coin frame read, so
+  binding a face cannot change either level's ink — before this the native bound layer
+  started from the world's equal pair while the preview and the shader used `1:2`.
 
 State: `ActiveWorkplane` carries the bound surface's in-plane radius (`FaceFrame.radius`,
 already computed when the face resolves) so the grid rebuilds without re-resolving the
@@ -295,7 +418,7 @@ stage; it survives `Offset` (the patch stays face-sized). This is inferred state
 preference — the pill never mentions it. The hover preview uses the hovered face's radius
 with the same rule.
 
-## 10. Datum planes: a document object with a handle (parked)
+## 10. Datum planes: a document object (built; no bespoke handle yet)
 
 A datum plane is a **document object** that gets a manipulator when selected, not a
 special always-on gizmo. It:
@@ -308,19 +431,23 @@ special always-on gizmo. It:
 - is picked through its whole area. A rim-only pick (an earlier idea) would make the
   middle unclickable, which contradicts “click it to move it”; hiding is one keystroke
   and the tree row always selects it, even behind geometry;
-- when selected, arms a normal/angle manipulator through the same workbench seam push/pull
-  uses (`+N` drag offsets it, a ring tilts it); both are placement edits, one transaction
-  each;
+- when selected, is moved and rotated by the standard gizmo through its `Placement`, one
+  transaction per edit. A bespoke `+N` offset stem and tilt ring are specified but not
+  built;
 - is a valid `Set WP` target, because it is a plane with one named face (`Face1`).
 
 Why not a gizmo: a gizmo has no lifetime, no tree row, no name, no visibility, no undo, no
 save, and there can be many planes. FreeCAD already types this as
 `App::Plane`/`PartDesign::Plane`; matching it keeps the kernel model.
 
-Interim: `Save as datum plane` already creates a `Part::Feature` face at the live frame —
-pickable, renameable, saveable and bindable today. The full model still needs the
-`Part::DatumPlane` type, its glass rendering, the normal/tilt handle, and the tree's
-`Space`-to-hide shortcut.
+Built (2026-10-29). `Part::DatumPlane` is a persistent object with `Placement` and `Size`,
+a derived `Face1`, the `"glass"` display opt-in and `Visibility`; `Save as datum plane`
+(`App_SaveDatumPlane`) creates it at the live frame. One gap remains: there is no bespoke
+normal/tilt handle — a selected datum plane is moved and rotated by the standard gizmo
+through its `Placement`. The other half of the earlier note is settled: the model tree
+lives in the **Dev Tools** window, so `Space`-to-hide is that window's gesture and the
+main window keeps `Space` for the object-verb wheel; there is no main-window tree to bind
+it to yet. The whole-area pick and the `Set WP` binding from `Face1` are unchanged.
 
 ## 11. Reachability: every workflow survives the hierarchy
 
@@ -337,7 +464,7 @@ pickable, renameable, saveable and bindable today. The full model still needs th
 | Move/rotate the toy slab from a side face | click a side/bottom face | §8.3 fallback: nothing claims it, so the triad stays |
 | Save a datum plane | menu / wheel | unchanged |
 | Bind WP to a datum plane | select it → `Set from selection` | one named face |
-| Hide/show an object | `Visibility` property now; tree `Space` parked | the tree is always reachable |
+| Hide/show an object | `Visibility`; tree `Space` on the Dev Tools key path | the tree is always reachable; the main window keeps `Space` for the verb wheel |
 | Snap (grid / vertex / edge / face) | `Snap` menu | independent of the drawn layers |
 | Navigate | orbit / pan / zoom | the grid patch no longer walls the view (§9) |
 

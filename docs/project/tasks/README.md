@@ -1,6 +1,6 @@
 # Active task specs
 
-Status: index (2026-10-29). Two active specs:
+Status: index (2026-10-30). Two active specs and one recorded decision:
 
 - [polyline-vertex-editing-and-active-tool-hud.md](polyline-vertex-editing-and-active-tool-hud.md)
   — edit a placed vertex while the tool is still open, and replace the split
@@ -8,6 +8,9 @@ tool-strip/floating-form presentation with one dielectric active-action surface.
 - [workplanes.md](workplanes.md) — make the world plane a real state, bind a face
   ephemerally during a creation tool, and replace the `WP` plumbing menu with plane
   choices.
+- [stroke-units.md](stroke-units.md) — **decided, not open work**: viewport strokes are
+  device pixels (gpui interop); a logical-pixel/UI-scale option was considered and
+  deferred, with the reasons and the reopening plan.
 
 Every other spec written so far has landed and moved to
 [`../record/tasks/`](../record/tasks/README.md); the open

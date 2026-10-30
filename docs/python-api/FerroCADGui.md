@@ -42,8 +42,12 @@ The shell's presentation state, pushed by the shell (read-only here).
 | --- | --- |
 | `axis_cross` (attribute) | — |
 | `grid` (attribute) | — |
+| `grid_adaptive` (attribute) | — |
 | `grid_major` (attribute) | — |
+| `grid_major_width` (attribute) | — |
 | `grid_minor` (attribute) | — |
+| `grid_minor_style` (attribute) | — |
+| `grid_minor_width` (attribute) | — |
 | `grid_radius` (attribute) | — |
 | `projection` (attribute) | — |
 

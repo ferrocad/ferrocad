@@ -33,6 +33,7 @@ _Every entry point returns a JSON string._
 | `properties(object_name: str) -> str` | Property rows for one object, for the property editor pane. |
 | `provider_features() -> str` | Every registered provider feature, with its backends and active flag. |
 | `provider_skin(payload_json: str) -> str` | One feature's provider-supplied WGSL source, for the shell to build. |
+| `refresh_providers(feature: str) -> str` | Ask a feature's active backend to re-read the shared state. |
 | `run_command(name: str) -> str` | Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``. |
 | `set_gpu_adapter(payload_json: str) -> str` | Persist the viewport's GPU adapter choice from the Dev Tools panel. |
 | `set_property(object_name: str, prop: str, text: str) -> str` | Set one property from its editor string, in a named transaction. |

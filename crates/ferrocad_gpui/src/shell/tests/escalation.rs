@@ -234,3 +234,125 @@ fn escape_cancels_the_escalated_hud_and_restores_the_gizmo(cx: &mut TestAppConte
     assert!(!session, "Esc drops the pending session too");
     assert!(armed, "the gizmo stays armed");
 }
+
+/// U2b: the two stages. A drag folds the pill to its compact readout; `Tab` unfolds it
+/// again and then keeps cycling the fields, without losing the axis the drag moved.
+#[gpui::test]
+fn a_drag_collapses_the_pill_and_tab_expands_it(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    shell.update(&mut cx, |shell, cx| shell.run_command("App_Move", cx));
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.pill.is_expanded()),
+        "an explicitly opened Move pill shows its fields"
+    );
+    assert!(cx.debug_bounds("move-pill-expanded").is_some());
+
+    let preview = |phase, x: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::End, 5.0), cx);
+        });
+    });
+    draw(&mut cx);
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell.pill.is_expanded()),
+        "a drag is the compact stage"
+    );
+    assert!(cx.debug_bounds("move-pill-compact").is_some());
+    assert!(cx.debug_bounds("move-pill-expanded").is_none());
+
+    press_root(&mut cx, &shell, "tab");
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.pill.is_expanded()),
+        "Tab escalates the compact readout to the fields"
+    );
+    assert!(cx.debug_bounds("move-pill-expanded").is_some());
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.focus()),
+        0,
+        "escalation keeps the field the drag started on"
+    );
+
+    press_root(&mut cx, &shell, "tab");
+    draw(&mut cx);
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.focus()),
+        1,
+        "once expanded, Tab cycles X -> Y"
+    );
+}
+
+/// U2b: a typed-only edit opens the session. Before this, typing lived in `PendingMove`
+/// until a drag, so the session (the model's pending value) did not exist yet.
+#[gpui::test]
+fn a_typed_edit_opens_the_session(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    // A stage gives the session its datum; the object is the boot document's `Params`,
+    // so the command stays active and the selection is a real object.
+    let mesh: StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Params",
+            "positions": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            "triangles": [0, 1, 2],
+            "triangle_parts": [0, 0, 0],
+            "edges": [],
+            "parts": []
+        }"#,
+    )
+    .expect("the test mesh");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let stage = shell.display.build(vec![mesh]);
+            shell.set_stage(stage, cx);
+            shell.select("Params", cx);
+            shell.run_command("App_Move", cx);
+        })
+    });
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| !session.is_dirty())),
+        "opening the pill opens a clean session"
+    );
+
+    // The first field is focused and its seed is selected: `5` replaces it.
+    cx.simulate_keystrokes("5");
+    draw(&mut cx);
+    let delta = shell.read_with(&cx, |shell, _| shell.session.as_ref().map(|s| s.delta()));
+    assert_eq!(
+        delta,
+        Some(Vector3::new(5.0, 0.0, 0.0)),
+        "the typed value is the session's delta"
+    );
+
+    // `Esc` is the rollback: no document write, no session, no dialog.
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.is_none() && shell.dialog.is_none()),
+        "Esc drops the typed session and its pill"
+    );
+}

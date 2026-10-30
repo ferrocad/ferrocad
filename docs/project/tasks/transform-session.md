@@ -403,8 +403,8 @@ sweep.
 | **A1c** | shell wiring: the shell owns one session, opens it at `TransformPreview::Begin` from the un-previewed stage (`Shell::last_stage`), feeds it every tick, prefers it over the Δ fields for preview and commit, and drops it with the HUD | Puts the owner on the commit path without changing the commit's route: see §2.8 on why the HUD's accept still goes through `App_Move` until the session carries a selection | — (**done 2026-10-30**: the drag test asserts the session's delta and datum and that cancelling drops it; the commit still reads the command's callback) |
 | **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 |
-| **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **partial 2026-10-30**: the mode is unified (`set_gizmo_preview(true)` once, at viewport creation, and `gizmo_deferred` deleted), `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it. The HUD remains as the numeric surface (U2 removes it), and the commit route stays `App_Move` until the session carries a selection (§2.8) |
-| **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **partial 2026-10-30**: `shell::pill::PillState` (compact/expanded, focus, Tab/Shift+Tab) is built and tested headless. Left: render it, wire it, delete the HUD's buttons, and make a typed-only edit open a session (today it lives in `PendingMove` until a drag) |
+| **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it, and the session is the selection's (742aee7). The no-arg form now opens the U2 pill, not the buttoned dialog |
+| **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31**: `shell::pill::PillState` drives the Move HUD (compact readout during a drag; expanded Δ fields on `Tab`/`Shift+Tab`/a digit/a click; `Enter` commits, `Esc` rolls back), the `Cancel`/`Move` buttons are gone, and a typed-only edit opens the session from `last_stage`. gpui 256 |
 | **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 |
 | **U6** | this note's share of the sweep: spec text final, dead code gone, user-docs Move page | Converges with the loadout half | all of §4 |
 
@@ -438,7 +438,9 @@ sweep.
   entries and the original pose; selecting another object mid-session keeps the move.
 - **U2** — `Tab` on an armed object expands the pill, typing moves the preview, `Enter`
   commits; the old dialog buttons are absent; the headless harness can drive it without a
-  window (the pill is shell state, not gpui-only).
+  window (the pill is shell state, not gpui-only). **Built 2026-10-31** (gpui 256); the
+  compact stage is asserted after a drag and `a_typed_edit_opens_the_session` covers the
+  typed-only entry.
 - **U3** — the tape's legs are proportional to the non-zero delta components, the ghost disc
   sits at the datum, and nothing is pickable.
 

@@ -155,24 +155,23 @@ the shell bind the same constants.
 | Chrome active fill | `#1B2B38` @ 0.33 | `ui::CHROME_ACTIVE_BG` (the active projection segment) |
 | Error | `#EF4444` | dialog validation line |
 
-**Translation pill and measuring tape — planned (U2/U3).** The translation HUD's
-`Cancel`/`Move` button bar is to be replaced by two states of one in-place pill plus a
-stage-side tape:
+**Translation pill — built (U2); measuring tape — planned (U3).** The translation HUD's
+`Cancel`/`Move` button bar is replaced by two states of one in-place pill (built 2026-10-31),
+with the stage-side tape still to come:
 
-- **Compact** (during a drag, and lingering in `SESSION_HOLD`): only the constrained value,
-  12 px semibold tabular monospace on `ui::WHEEL_GLASS` with a `ui::CHROME_LINE` border —
-  `[ ΔX +24.50 mm ]`, or `[ ΔX +24.50  ΔY +10.00 mm ]` for a planar accumulation.
+- **Compact** (during a drag): only the constrained value, 12 px semibold tabular monospace
+  on `ui::WHEEL_GLASS` with a `ui::CHROME_LINE` border — `[ ΔX +24.50 mm ]`, or
+  `[ ΔX +24.50  ΔY +10.00 mm ]` for a planar accumulation.
 - **Expanded** (via `Tab` or a digit `0–9`, `-`, `.`): unfolds in place to
   `[ ΔX ( 24.50 )  ΔY ( 10.00 )  ΔZ ( 0.00 ) ]`; there are no `Move`/`Cancel` buttons —
   `Enter` commits, `Tab`/`Shift+Tab` cycle the fields, `Esc` rolls back.
-- **Tape** (stage, not gpui): a 10 px ghost-origin ring in `INACTIVE_COLOR` at the session
-  datum, then dashed 1 px stair-step legs along the frame basis in the `AXIS_X`/`AXIS_Y`/
-  `AXIS_Z` tokens, with 6 px end-ticks; depth off, never picked, rebuilt from the session
-  each frame (the `workplane_stem` contract).
+- **Tape** (stage, not gpui; planned U3): a 10 px ghost-origin ring in `INACTIVE_COLOR` at
+  the session datum, then dashed 1 px stair-step legs along the frame basis in the
+  `AXIS_X`/`AXIS_Y`/`AXIS_Z` tokens, with 6 px end-ticks; depth off, never picked, rebuilt
+  from the session each frame (the `workplane_stem` contract).
 
-This is **not built**: today the floating Move HUD is the numeric surface and a view of the
-`TransformSession` (built 2026-10-30). Authority for the specification:
-[`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) §3.
+The pill is built (`shell::pill::PillState`); the tape is not. Authority for the
+specification: [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) §3.
 
 **Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
 not a floating pill: a centred `380 px` panel on `rgba(22, 24, 29, 0.95)` with a

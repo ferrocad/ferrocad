@@ -231,6 +231,7 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
 
     let accept = spec.accept_label().to_string();
     let cancel = spec.cancel_label().to_string();
+    let move_pill = spec.previews_translation();
 
     if floating {
         let viewport = window.viewport_size();
@@ -282,8 +283,26 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
                     "tab" => this.cycle_dialog_focus(event.keystroke.modifiers.shift, window, cx),
                     _ => {}
                 }
-            }))
-            .child(
+            }));
+        // The Move HUD is the two-stage pill: a compact readout during a drag, the
+        // ΔX/ΔY/ΔZ fields once `Tab`, a digit or a click expands it. It has no title
+        // and no Cancel/Move buttons; `Enter` commits and `Esc` rolls back.
+        if move_pill {
+            let delta = dialog::translation_preview(&spec, &states).unwrap_or_default();
+            let body = if shell.pill.is_expanded() {
+                move_pill_expanded(&spec, &inputs)
+            } else {
+                move_pill_compact(
+                    delta,
+                    shell.pill.focus(),
+                    shell.pending_move.axis,
+                    shell.pending_move.is_dragged(),
+                    cx,
+                )
+            };
+            panel = panel.child(body);
+        } else {
+            panel = panel.child(
                 div()
                     .flex()
                     .flex_row()
@@ -298,6 +317,7 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
                     .child(fields)
                     .child(dialog_buttons(accept, cancel, true, cx)),
             );
+        }
         if let Some(error) = &error {
             panel = panel.child(
                 div()
@@ -432,6 +452,86 @@ pub(super) fn dialog_buttons(
                 .child(accept)
                 .on_click(cx.listener(|this, _event, _window, cx| this.accept_dialog(cx))),
         )
+}
+
+/// The compact stage of the Move pill: the value a drag is already showing.
+///
+/// Only the moved components appear (`ΔX +24.50`, or `ΔX +24.50  ΔY +10.00` for a
+/// plane drag); an idle pill names the focused field. Clicking it expands the fields.
+fn move_pill_compact(
+    delta: [f64; 3],
+    focus: usize,
+    drag_axis: usize,
+    dragged: bool,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let axis = if dragged { drag_axis } else { focus }.min(2);
+    let mut shown: Vec<usize> = (0..3).filter(|slot| delta[*slot].abs() > 0.0005).collect();
+    if shown.is_empty() {
+        shown.push(axis);
+    }
+    let text = shown
+        .iter()
+        .map(|slot| format!("Δ{} {}", ["X", "Y", "Z"][*slot], compact_delta(delta[*slot])))
+        .collect::<Vec<_>>()
+        .join("  ");
+    div()
+        .id("move-pill-compact")
+        .debug_selector(|| "move-pill-compact".to_string())
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .on_click(cx.listener(|this, _event, window, cx| {
+            this.expand_move_pill(window, cx);
+        }))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(FG))
+                .child(text),
+        )
+        .child(div().text_xs().text_color(rgb(MUTED)).child("mm"))
+        .into_any_element()
+}
+
+/// The expanded stage: one `ΔX ( value )` group per field, without the old button bar.
+fn move_pill_expanded(spec: &DialogSpec, inputs: &[Option<Entity<TextInput>>]) -> AnyElement {
+    let mut row = div()
+        .id("move-pill-expanded")
+        .debug_selector(|| "move-pill-expanded".to_string())
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1();
+    for (index, field) in spec.fields.iter().enumerate() {
+        let Some(input) = inputs.get(index).and_then(Option::as_ref) else {
+            continue;
+        };
+        row = row
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(axis_token(field)))
+                    .child(field.label().to_string()),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child("("))
+            .child(div().w(px(84.)).flex_shrink_0().child(input.clone()))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(")"));
+    }
+    row.child(div().text_xs().text_color(rgb(MUTED)).child("mm"))
+        .into_any_element()
+}
+
+/// A compact Δ value: an explicit sign for a movement, `0.00` for no movement.
+fn compact_delta(value: f64) -> String {
+    if value.abs() < 0.005 {
+        "0.00".to_string()
+    } else {
+        format!("{value:+.2}")
+    }
 }
 
 /// The command palette (Ctrl+K): a focused search field over the filtered registry.

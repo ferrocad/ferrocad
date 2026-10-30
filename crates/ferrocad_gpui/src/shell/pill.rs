@@ -11,9 +11,9 @@
 //!
 //! It is deliberately free of gpui types, [`Shell`](super::Shell) and the session. A
 //! window is not needed to decide that `Tab` expands a compact pill or that the third
-//! `Tab` wraps to X, so these transitions are unit-tested here and the next slice's
-//! renderer can stay a pure function of this state. §1.2's invariants describe what the
-//! *session* does; this state never commits, rolls back or moves a datum.
+//! `Tab` wraps to X, so these transitions are unit-tested here and the renderer is a pure
+//! function of this state. §1.2's invariants describe what the *session* does; this state
+//! never commits, rolls back or moves a datum.
 //!
 //! The focus is an axis index `0..=2` (X/Y/Z) rather than a field enum because it is
 //! handed straight to
@@ -21,12 +21,9 @@
 //! which takes the same index. The constructors and [`PillState::set_focus`] clamp it, so
 //! the range is an invariant every later caller can rely on instead of re-checking.
 //!
-//! [`Shell`](super::Shell) does not use any of this yet: U2's renderer is the first
-//! consumer, and until it lands the tests below are the only callers.
-
-// The next slice is the first non-test consumer; until then a non-test build would warn
-// on every item here, including the constructors the renderer will call.
-#![cfg_attr(not(test), allow(dead_code))]
+//! [`Shell`](super::Shell) owns one, renders it (`shell/render.rs`) and routes the
+//! escalation keys through it (`shell.rs`); it is also where a typed edit opens or
+//! updates the session.
 
 /// Which stage of the pill is showing, and which Δ field has the keyboard.
 ///

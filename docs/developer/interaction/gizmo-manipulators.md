@@ -192,12 +192,13 @@ pass the step to `TransformGizmo::set_linear_snap`, and the transform uses the *
 likewise applied to the transform, and `GizmoValue::Angular` reports both raw and applied
 degrees.
 
-**Readout surface (session built, pill planned).** The numeric tag is a **view of the
+**Readout surface (session and pill built).** The numeric tag is a **view of the
 shell's `TransformSession`**: it mirrors `session.delta()` and writes absolute values back,
-so the gesture and the numbers describe one pending value. The **planned** primary surface
-(U2) is the in-place two-stage pill — compact during a drag, expanded by `Tab` or a digit,
-with no `Cancel`/`Move` buttons — which merges this readout with the translation Δ fields
-into two states of one overlay. Until it lands the floating Move HUD is that surface.
+so the gesture and the numbers describe one pending value. Since 2026-10-31 the primary
+surface is the in-place two-stage pill (U2) — compact during a drag, expanded by `Tab`, a
+digit or a click, with no `Cancel`/`Move` buttons — which merges this readout with the
+translation Δ fields into two states of one overlay. A plain drag with no pill open still
+uses the read-only stage readout.
 
 ## 6. Analytic hit-testing and occlusion
 
@@ -269,10 +270,9 @@ stateDiagram-v2
 - `Esc` — rollback the session: drop the preview and return the geometry to the session
   datum; no undo entry is spent. A re-pivot drag restores the pre-drag **origin** (and the
   shell drops its session user origin).
-- `Tab` / a digit — focus the numeric surface for exact entry. The **planned** pill (U2)
-  makes this the primary mechanism; today it targets the floating Move HUD, which is a
-  view of the session and writes absolute values back. The tag remains read-only when no
-  session is open.
+- `Tab` / a digit — the primary entry into the numeric surface (U2, built 2026-10-31): a
+  compact pill expands, a digit opens it and replaces the focused field, and both write
+  absolute values back into the session. The tag remains read-only when no session is open.
 - The viewport receives modifiers through `handle_pointer_with_modifiers`,
   `handle_button_with_modifiers` and `drag_move_with_modifiers`; the old methods delegate
   with no modifiers. The root element is focusable (`track_focus` + `focusable`) and the

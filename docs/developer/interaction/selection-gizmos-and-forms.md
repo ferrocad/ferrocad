@@ -220,8 +220,9 @@ The selection is pruned first, so a delete leaves no handle for a dead object.
 move lives in the shell's `TransformSession`, not in the form: the Δ fields mirror
 `session.delta()` and an edit writes an absolute value back to the session. The session
 exists independently of the form, so a drag with no HUD open previews the same ghost. The
-two-stage pill (compact ↔ expanded, no `Cancel`/`Move` buttons) that replaces this HUD is
-**planned** (U2).
+two-stage pill (compact ↔ expanded, no `Cancel`/`Move` buttons) replaced this HUD on
+2026-10-31 (U2): a drag shows the compact readout, and `Tab`, a digit or a click unfolds
+the three Δ fields.
 
 A floating HUD may be repositioned when the gizmo moves; its anchor is recomputed from
 the visible gizmo origin (or the live pointer when no gizmo is armed) each frame it
@@ -236,9 +237,10 @@ entering and leaving are judged against what the user actually saw.
 ### 5.2 States
 
 ```text
-Closed ──command returns a dialog spec──► Open
+Closed ──command returns a dialog spec──► Open (expanded)
 Open ──field edit──► session Δ updated + preview ──► Open
-Open ──gizmo drag──► fields mirror the session Δ + preview ──► Open
+Open ──gizmo drag──► compact pill; fields mirror the session Δ + preview ──► Open
+Open ──Tab / digit / click──► expanded fields ──► Open
 Open ──Enter / Accept──► validate → callback → one transaction ──► Closed
 Open ──Esc / Cancel──► rollback: token cancelled, session dropped, preview restored ──► Closed
 Open ──selection replaced/cleared, Δ ≠ 0──► auto-commit ──► Closed
@@ -276,12 +278,11 @@ Open ──selection pruned, competing interaction──► rollback (stale delt
   (planned). A pruned selection or a competing document edit cannot commit a stale delta,
   so it is rolled back. `Esc` is the only user-initiated rollback and spends no undo
   entry.
-- **Fast escalation (planned, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
-  while a `TransformGizmo` is armed (idle or mid-drag) is the intended primary entry into
-  the numeric surface: the **planned** two-stage pill (U2) seeds its fields from the
-  current delta (or zero when idle) and takes focus, replacing the floating Move form.
-  Until the pill lands, the wheel's `Move` is the entry point and `Tab` only cycles an
-  already-open form.
+- **Fast escalation (built 2026-10-31, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
+  while a `TransformGizmo` is armed (idle or mid-drag) is the primary entry into the
+  numeric surface: the two-stage pill seeds its fields from the current delta (or zero
+  when idle) and takes focus. The wheel's `Move` still opens the same pill for a pointer
+  user; `Tab` cycles its fields once it is expanded.
 
 ### 5.3 Selection scope
 

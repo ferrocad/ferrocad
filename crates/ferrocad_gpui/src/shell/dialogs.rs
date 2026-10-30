@@ -3,6 +3,7 @@
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
 use super::*;
+use super::pill::PillState;
 
 /// The Δ field names in X/Y/Z order.
 const AXIS_FIELDS: [&str; 3] = ["dx", "dy", "dz"];
@@ -42,12 +43,11 @@ impl Shell {
                 );
                 // Every edit drives the spec's live preview (a no-op unless it asks
                 // for one). A typed value **is** the move, so it replaces the exact
-                // delta a drag left behind.
+                // delta a drag left behind and updates the session that owns it.
                 let change = cx.subscribe(
                     &input,
                     |this: &mut Shell, _emitter, _event: &ChangeEvent, cx| {
-                        this.pending_move.typed();
-                        this.preview_dialog(cx);
+                        this.on_move_typed(cx);
                     },
                 );
                 inputs.push(Some(input));
@@ -66,8 +66,132 @@ impl Shell {
             _submits: submits,
             _changes: changes,
         });
+        // A translation spec is the Move pill. It opens expanded on X (a keyboard
+        // escalation immediately re-focuses the armed axis) and, when the selection has
+        // a stage, opens the session right away: typing then edits the session instead
+        // of living only in the fields until a drag (U2b).
+        let translation = self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.previews_translation());
+        if translation {
+            self.pill = PillState::expanded_at(0);
+            self.open_move_session(cx);
+        } else {
+            self.pill = PillState::compact();
+        }
         self.focus_dialog = true;
         cx.notify();
+    }
+
+    /// Open the session behind an open Move pill, when the selection has a stage.
+    ///
+    /// A shell with no stage (headless, or an object whose item has not arrived yet)
+    /// keeps the [`PendingMove`] fallback: there is no datum to publish. The session
+    /// starts clean at the selection's current pose and is updated by typing or a drag.
+    fn open_move_session(&mut self, _cx: &mut Context<Self>) {
+        if self.session.is_some() {
+            return;
+        }
+        let targets: Vec<u32> = {
+            let model = self.model.lock().unwrap();
+            model
+                .selection
+                .iter()
+                .filter_map(|item| self.display.entity_of(&item.object))
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+        self.session = self
+            .last_stage
+            .as_ref()
+            .and_then(|stage| TransformSession::begin(stage, &targets));
+    }
+
+    /// A typed edit in the Move fields: the fields win, and the session (when one can be
+    /// opened) carries the value from now on.
+    fn on_move_typed(&mut self, cx: &mut Context<Self>) {
+        self.pending_move.typed();
+        if let Some(delta) = self.translation_in_fields(cx) {
+            self.open_move_session(cx);
+            if let Some(session) = self.session.as_mut() {
+                session.set_translation(Vector3::new(delta[0], delta[1], delta[2]));
+            }
+        }
+        self.preview_dialog(cx);
+    }
+
+    /// Whether the open dialog is the Move pill.
+    pub(super) fn move_pill_open(&self) -> bool {
+        self.dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.spec.previews_translation())
+    }
+
+    /// Focus the pill field the [`PillState`](PillState) names.
+    fn focus_pill_field(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let axis = self.pill.focus().min(AXIS_FIELDS.len() - 1);
+        if let Some(input) = self.dialog_input(AXIS_FIELDS[axis]) {
+            let handle = input.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+    }
+
+    /// Expand a compact pill at the axis the pending drag moved and focus that field.
+    ///
+    /// This is the click path; `Tab` keeps the [`PillState`](PillState)'s own
+    /// escalation (`tab`) so it never loses the user's place.
+    pub(super) fn expand_move_pill(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.move_pill_open() {
+            return false;
+        }
+        self.pill.set_focus(self.pending_move.axis);
+        let expanded = self.pill.expand();
+        self.focus_pill_field(window, cx);
+        cx.notify();
+        expanded
+    }
+
+    /// `Tab`/`Shift+Tab` on the pill: expand when compact, otherwise cycle the fields.
+    pub(super) fn cycle_pill_focus(
+        &mut self,
+        backward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.move_pill_open() {
+            return;
+        }
+        self.pill.tab(backward);
+        self.focus_pill_field(window, cx);
+        cx.notify();
+    }
+
+    /// A digit typed while the compact pill is showing: expand it and replace the
+    /// focused field, the same one-transition entry [`escalate_to_move_hud`] performs.
+    pub(super) fn type_into_move_pill(
+        &mut self,
+        typed: char,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.move_pill_open() {
+            return false;
+        }
+        self.pill.expand();
+        let axis = self.pill.focus().min(AXIS_FIELDS.len() - 1);
+        let Some(input) = self.dialog_input(AXIS_FIELDS[axis]) else {
+            return false;
+        };
+        input.update(cx, |input, cx| input.set_text(typed.to_string(), cx));
+        // `set_text` is programmatic (no change event), so update the session and drive
+        // the preview here.
+        self.on_move_typed(cx);
+        self.focus_pill_field(window, cx);
+        cx.notify();
+        true
     }
 
     /// The collected state of every field; the text inputs are authoritative.
@@ -163,6 +287,7 @@ impl Shell {
     /// Drop the pending value entirely (cancel, accept, or a competing interaction).
     pub(super) fn discard_pending(&mut self, cx: &mut Context<Self>) {
         self.pending_move.reset();
+        self.pill = PillState::compact();
         self.clear_dialog_preview(cx);
     }
 
@@ -264,6 +389,14 @@ impl Shell {
         // Deferral is the one mode and is set when the viewport is created, so an
         // escalation inherits it; nothing here has to switch it.
         self.set_translation_fields(seed.delta, cx);
+        // The pill is already the Move HUD; the escalation decides its stage and
+        // focused axis, and the seeded value edits the session the HUD opened.
+        self.pill = PillState::expanded_at(seed.axis);
+        if let Some(session) = self.session.as_mut() {
+            // The exact seed, not the two-decimal text above: rounding here is the
+            // 2026-10-30 bug (a release committed a value the user never saw).
+            session.set_translation(Vector3::new(seed.delta[0], seed.delta[1], seed.delta[2]));
+        }
         let name = AXIS_FIELDS[seed.axis.min(AXIS_FIELDS.len() - 1)];
         let Some(input) = self.dialog_input(name) else {
             return true;
@@ -277,7 +410,7 @@ impl Shell {
         if let Some(ch) = typed {
             input.update(cx, |input, cx| input.set_text(ch.to_string(), cx));
             // `set_text` is programmatic (no change event), so drive the preview here.
-            self.preview_dialog(cx);
+            self.on_move_typed(cx);
         } else {
             // Select the seed so the next keystroke replaces it (`0.00` + `5` must be
             // `5`, not `0.005`).
@@ -369,6 +502,11 @@ impl Shell {
             .is_some_and(|dialog| dialog.spec.previews_translation());
 
         if preview.phase == PreviewPhase::Begin {
+            // A drag is compact: the readout follows the pointer while the fields wait
+            // behind `Tab` (the pill expands again, on the same axis, on request).
+            if previews {
+                self.pill.collapse();
+            }
             // A drag reports its transform from its own press, so it adds to whatever the
             // session already holds — a second drag on a pending move continues it.
             // The value the drag adds to: the session's delta when there is a stage to
@@ -457,6 +595,7 @@ impl Shell {
         // is spent either way, and the ghost goes with it before the stage rebuild.
         self.session = None;
         self.pending_move.reset();
+        self.pill = PillState::compact();
         self.clear_preview_items(cx);
         self.finish_dialog(result, cx);
         true
@@ -469,6 +608,7 @@ impl Shell {
         }
         self.session = None;
         self.pending_move.reset();
+        self.pill = PillState::compact();
         self.clear_preview_items(cx);
         self.model.lock().unwrap().status = status.to_string();
         cx.notify();
@@ -513,8 +653,13 @@ impl Shell {
     }
 
     /// Move focus between a dialog's textual fields. `Tab` cycles forward; `Shift+Tab`
-    /// back. Fields without an input (bool/enum) are not stops.
+    /// back. Fields without an input (bool/enum) are not stops. The Move pill routes
+    /// through [`PillState`](PillState), so its compact stage expands instead.
     pub(super) fn cycle_dialog_focus(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.move_pill_open() {
+            self.cycle_pill_focus(backward, window, cx);
+            return;
+        }
         let Some(dialog) = self.dialog.as_ref() else {
             return;
         };
@@ -658,6 +803,7 @@ impl Shell {
             return;
         };
         let _ = commands::cancel(&dialog.token);
+        self.pill = PillState::compact();
         self.discard_pending(cx);
         self.model.lock().unwrap().status = "dialog cancelled".to_string();
         cx.notify();

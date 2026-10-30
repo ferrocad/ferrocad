@@ -432,8 +432,11 @@ fn the_move_dialog_floats_without_a_backdrop(cx: &mut TestAppContext) {
         cx.debug_bounds("dialog-backdrop").is_none(),
         "a float has no dimming backdrop"
     );
-    assert!(cx.debug_bounds("dialog-accept").is_some());
-    assert!(cx.debug_bounds("dialog-cancel").is_some());
+    // The Move HUD is the pill: expanded fields, and no Cancel/Move buttons.
+    assert!(cx.debug_bounds("move-pill-expanded").is_some());
+    assert!(cx.debug_bounds("move-pill-compact").is_none());
+    assert!(cx.debug_bounds("dialog-accept").is_none());
+    assert!(cx.debug_bounds("dialog-cancel").is_none());
 
     // The first delta field took focus; Tab moves to the second.
     let second = shell.read_with(&cx, |shell, cx| {

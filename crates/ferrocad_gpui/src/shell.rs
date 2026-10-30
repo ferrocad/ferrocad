@@ -399,6 +399,10 @@ pub struct Shell {
     dialog_focus: FocusHandle,
     /// Focus the modal on the next render (it is opened outside a window context).
     focus_dialog: bool,
+    /// The Move pill's stage and focused Δ field. The pill is the two-stage numeric
+    /// surface of the unified transform session: compact while a drag runs, expanded
+    /// once the user escalates it with `Tab`, a digit or a click (U2).
+    pill: pill::PillState,
     /// The rendered form dialog (`FreeCADGui.Control.showDialog`). It owns the
     /// keyboard while present; a command dialog and a form never share the shell.
     form_dialog: Option<Entity<FormDialog>>,
@@ -827,6 +831,7 @@ impl Shell {
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
+            pill: pill::PillState::compact(),
             form_dialog: None,
             form_events: None,
             focus_form: false,
@@ -1037,6 +1042,37 @@ impl Shell {
         // stolen to finish a tool. Before this, typing a spacing in `Grid settings`
         // opened the Move HUD and the rest of the number went into `dx`.
         let editing = self.settings_card.is_some() || cancel_dialog;
+        // The Move pill owns the escalation keys even when no field has focus: a
+        // compact pill is a readout, but `Enter` still commits it and `Tab`/a digit
+        // opens the fields. When an input is focused its own handlers run first; the
+        // paths converge on the same accept/cycle/type helpers. `input_focused` keeps
+        // the root from running a transition the field already ran.
+        if !editing && self.move_pill_open() {
+            let input_focused = self.dialog.as_ref().is_some_and(|dialog| {
+                dialog
+                    .inputs
+                    .iter()
+                    .flatten()
+                    .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+            });
+            match event.keystroke.key.as_str() {
+                "enter" if !input_focused => {
+                    self.accept_dialog(cx);
+                    return true;
+                }
+                "tab" if !input_focused => {
+                    self.cycle_pill_focus(event.keystroke.modifiers.shift, window, cx);
+                    return true;
+                }
+                _ => {}
+            }
+            if !self.pill.is_expanded()
+                && let Some(Some(typed)) = escalation_key(event)
+                && self.type_into_move_pill(typed, window, cx)
+            {
+                return true;
+            }
+        }
         // Space in the **tree** window toggles the selected object's `Visibility`
         // (the tree is a Dev Tools pane, so its key press has `cancel_dialog` set).
         // In the main window Space opens the object-verb wheel at the last pointer

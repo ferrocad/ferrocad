@@ -760,8 +760,11 @@ fn a_deferred_hud_drag_moves_the_triad_with_the_object(cx: &mut TestAppContext) 
         shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
     });
     assert!(
-        shell.read_with(&cx, |shell, _| shell.session.is_none()),
-        "the HUD opens with no pending move"
+        shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_none_or(|session| !session.is_dirty())),
+        "the HUD opens with a clean (not yet pending) session"
     );
 
     let preview = |phase, x: f64, y: f64, z: f64| TransformPreview {
@@ -808,8 +811,11 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
         shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
     });
     assert!(
-        shell.read_with(&cx, |shell, _| shell.session.is_none()),
-        "the HUD opens with no pending move"
+        shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_none_or(|session| !session.is_dirty())),
+        "the HUD opens with a clean (not yet pending) session"
     );
 
     let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));

@@ -42,10 +42,14 @@ impl Shell {
                     },
                 );
                 // Every edit drives the spec's live preview (a no-op unless it asks
-                // for one).
+                // for one). A typed value **is** the move, so it replaces the exact
+                // delta a drag left behind.
                 let change = cx.subscribe(
                     &input,
                     |this: &mut Shell, _emitter, _event: &ChangeEvent, cx| {
+                        if let Some(dialog) = this.dialog.as_mut() {
+                            dialog.translation = None;
+                        }
                         this.preview_dialog(cx);
                     },
                 );
@@ -61,6 +65,7 @@ impl Shell {
             spec,
             states,
             inputs,
+            translation: None,
             error: None,
             _submits: submits,
             _changes: changes,
@@ -121,8 +126,10 @@ impl Shell {
             if !dialog.spec.previews_translation() {
                 return;
             }
-            let states = self.dialog_states(cx);
-            let Some(delta) = dialog::translation_preview(&dialog.spec, &states) else {
+            // The exact delta, not the two-decimal text: rounding it here snapped the
+            // object and the triad back to a nearby pose (to the origin for a drag
+            // smaller than 0.005 mm).
+            let Some(delta) = self.pending_translation(cx) else {
                 return;
             };
             delta
@@ -151,6 +158,9 @@ impl Shell {
     /// Drop a typed preview without changing the document (cancel or dismiss).
     pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
         self.drag_baseline = None;
+        if let Some(dialog) = self.dialog.as_mut() {
+            dialog.translation = None;
+        }
         // Also releases the deferred drag session, so an escalated HUD restores the
         // gizmo's normal commit-on-release path when it is cancelled.
         self.defer_gizmo_preview(false, cx);
@@ -288,6 +298,22 @@ impl Shell {
         true
     }
 
+    /// The pending translation a Move session will commit.
+    ///
+    /// A drag records the exact delta on the dialog ([`OpenDialog::translation`]); the
+    /// Δ fields are only a rounded view of it. Typing replaces that value, so the fields
+    /// are the authority once the user edits them. `None` when the spec asks for no
+    /// translation.
+    pub(super) fn pending_translation(&self, cx: &App) -> Option<[f64; 3]> {
+        let dialog = self.dialog.as_ref()?;
+        if !dialog.spec.previews_translation() {
+            return None;
+        }
+        dialog
+            .translation
+            .or_else(|| self.translation_in_fields(cx))
+    }
+
     /// The Δ values currently in the fields, when the spec previews a translation.
     pub(super) fn translation_in_fields(&self, cx: &App) -> Option<[f64; 3]> {
         let dialog = self.dialog.as_ref()?;
@@ -350,7 +376,7 @@ impl Shell {
         if preview.phase == PreviewPhase::Begin {
             // A drag reports its transform relative to its own start; the fields keep
             // whatever they held, so successive drags accumulate into the same move.
-            self.drag_baseline = self.translation_in_fields(cx);
+            self.drag_baseline = self.pending_translation(cx);
         }
         let baseline = self.drag_baseline.unwrap_or([0.0; 3]);
         let delta = [
@@ -358,6 +384,11 @@ impl Shell {
             baseline[1] + drag[1],
             baseline[2] + drag[2],
         ];
+        // The drag is the authority while it runs: keep the **exact** delta beside the
+        // rounded fields so the release previews where the pointer actually is.
+        if let Some(dialog) = self.dialog.as_mut() {
+            dialog.translation = Some(delta);
+        }
         self.set_translation_fields(delta, cx);
         self.preview_dialog(cx);
         if preview.phase == PreviewPhase::End {
@@ -408,7 +439,21 @@ impl Shell {
         };
         let token = dialog.token.clone();
         let spec = dialog.spec.clone();
-        let states = self.dialog_states(cx);
+        let mut states = self.dialog_states(cx);
+        // A Move HUD's Δ fields are a rounded view of the drag; the callback must get
+        // the exact delta the user saw, or accepting a drag commits a nearby pose. Only
+        // a **drag** overrides the fields — typed text keeps `collect`'s validation.
+        if let Some(delta) = dialog.translation {
+            for (field, state) in spec.fields.iter().zip(states.iter_mut()) {
+                let slot = match field.name.as_str() {
+                    "dx" => 0,
+                    "dy" => 1,
+                    "dz" => 2,
+                    _ => continue,
+                };
+                *state = ValueState::Text(format!("{}", delta[slot]));
+            }
+        }
         match dialog::collect(&spec, &states) {
             Err(error) => {
                 if let Some(dialog) = self.dialog.as_mut() {
@@ -433,17 +478,18 @@ impl Shell {
     ) {
         match result {
             Ok(outcome) if outcome.ok => {
-                // A translation HUD is a Move session. Accepting it ends the session, so
-                // its shared triad goes with it (upstream closes the task panel's
-                // handles too); a wizard that replaces the dialog keeps it alive.
+                // A translation HUD is a Move session. Accepting it ends the session, but
+                // the triad **stays** on the object: `sync_stage`/`rearm_selection` below
+                // rebuild it at the moved anchor, so the user keeps a handle to nudge
+                // something they just placed. (Dismissing it left them with no handles
+                // and no way back except re-selecting.)
                 if outcome.dialog.is_none()
                     && self
                         .dialog
                         .as_ref()
                         .is_some_and(|dialog| dialog.spec.previews_translation())
                 {
-                    self.transform_verb = false;
-                    self.triad_dismissed = true;
+                    self.transform_verb = true;
                 }
                 // The pending move is now applied (or replaced by a wizard): release
                 // the deferred gizmo and drop the ghost before the stage rebuild.

@@ -187,8 +187,8 @@ fn the_gpu_notice_report_names_the_reason_and_the_fix() {
     assert!(details.contains("ZED_DEVICE_ID"));
 }
 
-/// Accepting the Move HUD ends the session it opened: the verb is cleared and the
-/// shared triad is dismissed until the next verb or selection.
+/// Accepting the Move HUD ends the session it opened — the HUD's token is spent — but the
+/// body triad **stays** armed, so the object the user just placed is still draggable.
 #[gpui::test]
 fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -212,18 +212,18 @@ fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
         "the HUD closes on accept"
     );
     assert!(
-        !shell.read_with(cx, |shell, _| shell.transform_verb),
-        "the verb session ended with the move"
+        !shell.read_with(cx, |shell, _| shell.gizmo_deferred),
+        "the drag commits normally again once the HUD is gone"
     );
     assert!(
-        shell.read_with(cx, |shell, _| shell.triad_dismissed),
-        "the triad stays down until the next verb or selection"
+        shell.read_with(cx, |shell, _| shell.transform_verb),
+        "the triad stays armed on the object that was just moved"
     );
 
     // A new selection re-arms the handles normally.
     shell.update(cx, |shell, cx| shell.select("Params", cx));
     assert!(
-        !shell.read_with(cx, |shell, _| shell.triad_dismissed),
+        !shell.read_with(cx, |shell, _| shell.transform_verb),
         "a new selection is a new session"
     );
 }

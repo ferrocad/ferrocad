@@ -63,7 +63,6 @@ impl Shell {
         // a claimed sub-element).
         self.user_origin = None;
         self.transform_verb = false;
-        self.triad_dismissed = false;
         if self
             .dialog
             .as_ref()

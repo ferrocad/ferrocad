@@ -602,17 +602,6 @@ impl Shell {
             });
         }
 
-        // An accepted Move ends its session and takes the shared triad with it (upstream
-        // closes the task panel's handles the same way). A workbench gizmo anchored
-        // elsewhere is not the session's, so it stays.
-        if self.triad_dismissed && !self.transform_verb {
-            let pivot = self.user_origin;
-            gizmos = gizmos.retain(|gizmo| {
-                let origin = gizmo.origin();
-                Some(origin) != body_datum && Some(origin) != pivot
-            });
-        }
-
         (manipulators, gizmos)
     }
 

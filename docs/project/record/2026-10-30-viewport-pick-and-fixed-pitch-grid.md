@@ -36,8 +36,13 @@ distance with a 1 mm floor.
 | Report | State |
 | --- | --- |
 | The deferred HUD's triad is glued to the datum instead of travelling with the object | **fixed** — the emitted handle items carry `display_offset`; `a_deferred_drag_reports_previews_and_never_commits` now asserts the drawn items, and `a_deferred_hud_drag_moves_the_triad_with_the_object` drives a whole shell drag |
-| Ending a Move with the button leaves the triad on screen | **fixed** — accepting the HUD ends the session (`transform_verb = false`) and sets `triad_dismissed` |
-| Still glued during a real app drag | **open** — both harness flows are green, so the next step is instrumentation against a real Part document: log `stage.item(target).anchor()` before and after `after_document_edit`, and say whether the drag went through the HUD or committed straight through |
+| Ending a Move with the button leaves the triad on screen | **reversed 2026-10-30 (second pass)** — the first pass *dismissed* the triad on accept (`triad_dismissed`), which left the user with a moved object and no handles. Accepting now keeps it armed: `sync_stage`/`rearm_selection` re-anchor it on the moved object, and `triad_dismissed` is gone |
+| Releasing a drag snaps the object and the triad back to the datum | **fixed** — the mechanism is a text round-trip, not the preview: `on_transform_preview` mirrored the drag into the Δ fields with `{:.2}`, read it back out of their text (0.04 for a 0.0434 mm drag, **0 for anything under 0.005**), and previewed the rounded value. The exact delta is now kept beside the fields (`OpenDialog::translation`), the fields are a view of it, a typed edit replaces it, and an accept sends it. Regression test: `a_move_hud_drag_survives_its_release` drives the real pointer path through the viewport (press, tick, release) |
+
+The reason the harness missed it is worth remembering: the old shell test injected
+`TransformPreview` events with the exact matrix, so nothing in it could observe the
+round-trip through the field text. The new test drives `handle_button`/`handle_pointer` on
+the real viewport, so `end_drag`, the display offset and the preview all run.
 
 ## Colour and the software path
 
@@ -66,7 +71,12 @@ re-captured after the lighting landed, because the first one showed the near-whi
 | `ferrocad_stage` | 216 passed |
 | `ferrocad_viewport` | 199 passed |
 | `ferrocad_wgpu` | 63 passed |
-| `ferrocad_gpui` | 242 passed |
+| `ferrocad_gpui` | 243 passed |
+
+`a_move_hud_drag_survives_its_release` is the second pass on the Move session: the first
+round's harness injected `TransformPreview` events with an exact matrix, so it could not see
+the round-trip through the Δ fields' two-decimal text. The new test drives the viewport's
+own press/tick/release, which is the path the application uses.
 | Docs gate | `userdocs --check`, `api_docs --check` and `build_book --check` clean (36 chapters); `test_docs_tooling.py` 47 passed |
 
 The Part/Python and upstream conformance rows were **not** re-run this round; the Part

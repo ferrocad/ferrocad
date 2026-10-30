@@ -318,7 +318,6 @@ impl Shell {
                 // triad (workplanes note, §3.3.3). Re-arm so the triad appears even
                 // when the mode did not change.
                 self.transform_verb = true;
-                self.triad_dismissed = false;
                 self.set_gizmo_mode(&mode, cx);
                 self.rearm_selection(cx);
             }

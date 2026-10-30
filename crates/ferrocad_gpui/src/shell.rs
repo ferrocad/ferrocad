@@ -374,10 +374,6 @@ pub struct Shell {
     /// verb is an explicit request for the body control, so it overrides the default
     /// until the selection changes or a tool starts. Not a document property.
     transform_verb: bool,
-    /// A finished Move session dismissed the shared body triad: it stays down until the
-    /// next explicit verb or a new selection, like closing upstream's task panel. Not a
-    /// document property.
-    triad_dismissed: bool,
     /// The session pivot the user dragged the origin handle to. It is applied instead of
     /// the object origin while set; it is not undoable and not a document property. A
     /// selection change or a wheel promotion clears it, and `Esc` restores the object
@@ -600,6 +596,13 @@ struct OpenDialog {
     states: Vec<ValueState>,
     /// The text input for a text-like field; `None` for a bool/enum row.
     inputs: Vec<Option<Entity<TextInput>>>,
+    /// The exact pending translation of a Move session, when a gizmo drag set it.
+    ///
+    /// The Δ fields are a **view** of this value: they are written with two decimals,
+    /// so reading the drag back out of their text rounded it and snapped the object
+    /// (and the triad) to the rounded delta on release — to zero for a small drag.
+    /// Typing in a field replaces this value, so a typed move is still exact.
+    translation: Option<[f64; 3]>,
     /// The first validation or callback error, shown inside the modal.
     error: Option<String>,
     /// Keep the per-field submit subscriptions alive for the dialog's lifetime.
@@ -756,7 +759,6 @@ impl Shell {
             settings_card: None,
             gizmo_mode: GizmoMode::Translate,
             transform_verb: false,
-            triad_dismissed: false,
             user_origin: None,
             row_popup: None,
             scrub: None,

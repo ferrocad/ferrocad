@@ -619,6 +619,10 @@ fn face_claim_shell(
     Some((vcx, shell))
 }
 
+// ---------------------------------------------------------------------------
+// The Move HUD's drag session, driven through the viewport's own pointer path
+// ---------------------------------------------------------------------------
+
 /// Select `reference` the way a click does, so the shell re-arms the handles.
 fn click_select(cx: &mut VisualTestContext, shell: &Entity<Shell>, reference: ferrocad_geom::SelectionRef) {
     cx.update(|_window, cx| {
@@ -776,6 +780,156 @@ fn a_deferred_hud_drag_moves_the_triad_with_the_object(cx: &mut TestAppContext) 
     assert!(
         (end.x - (start.x + 5.0)).abs() < 1e-6 && (end.y - start.y).abs() < 1e-6,
         "the triad follows the previewed object: {start:?} -> {end:?}"
+    );
+}
+
+/// The full Move-HUD session through the **viewport's own** pointer path: press a
+/// translate arrow, tick, release. Each queued preview is routed the way the window
+/// handlers route it. Releasing must leave the object previewed and the triad at the pose
+/// the drag reached — the report is that both snap back to the datum on release. Skips
+/// without a GPU adapter.
+#[gpui::test]
+fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
+    use ferrocad_stage::{GizmoHandle, GizmoTarget};
+
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+
+    // The real HUD spec is what turns a drag into a preview.
+    let outcome = crate::commands::run("App_Move").expect("App_Move");
+    let spec = outcome.dialog.clone().expect("a dialog");
+    let token = outcome.token.clone().expect("a token");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
+    });
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.gizmo_deferred),
+        "the HUD defers the drag to its own commit"
+    );
+
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    let (start, grab, release) = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let camera = viewport.camera().clone();
+        let gizmo = &viewport.gizmos().gizmos()[0];
+        let origin = gizmo.origin();
+        let device = ferrocad_stage::screen::project_device(&camera, origin)
+            .expect("the triad projects");
+        let mut hits = Vec::new();
+        for dx in -140..=140 {
+            for dy in -140..=140 {
+                let point = [device[0].round() as i32 + dx, device[1].round() as i32 + dy];
+                if gizmo.hit(&camera, point) == Some(GizmoTarget::Handle(GizmoHandle::AxisX)) {
+                    hits.push(point);
+                }
+            }
+        }
+        // The middle of the hit region, not its edge: a one-pixel rounding difference
+        // between the scan and the press must not miss the handle.
+        let grab = *hits.get(hits.len() / 2).expect("the X arrow is pickable");
+        let release = [grab[0] + 24, grab[1]];
+        (
+            origin,
+            camera.viewport.to_logical(grab),
+            camera.viewport.to_logical(release),
+        )
+    });
+
+    // Press, tick, release through the viewport, feeding each queued preview to the
+    // shell exactly as `InventorViewport::render`'s handlers do.
+    let feed = |cx: &mut VisualTestContext, preview: Option<TransformPreview>| {
+        let preview = preview.expect("a queued preview");
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_viewport_event(&ViewportEvent::TransformPreview(preview), cx)
+            });
+        });
+    };
+    let step = |cx: &mut VisualTestContext, at, down: bool| {
+        let preview = cx.update(|_window, cx| {
+            viewport.update(cx, |viewport, _cx| {
+                let taken = viewport.handle_button(at, 1, down);
+                assert!(taken, "the drag start and its release are both taken");
+                viewport.take_transform_preview()
+            })
+        });
+        feed(cx, preview);
+    };
+
+    step(&mut cx, grab, true);
+    let update = cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, _cx| {
+            viewport.handle_pointer(release);
+            viewport.take_transform_preview().expect("an update")
+        })
+    });
+    feed(&mut cx, Some(update.clone()));
+    step(&mut cx, release, false);
+
+    let dragged = [
+        update.total_transform.m[3],
+        update.total_transform.m[7],
+        update.total_transform.m[11],
+    ];
+    assert!(
+        dragged[0].abs() > 1e-9,
+        "the drag moved along X: {dragged:?}"
+    );
+
+    // 1. The triad sits where the drag ended, not back at the datum.
+    cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let origin = viewport.gizmos().gizmos()[0].origin();
+        assert!(
+            (origin.x - (start.x + dragged[0])).abs() < 1e-6
+                && (origin.y - (start.y + dragged[1])).abs() < 1e-6,
+            "the triad stays at the dragged pose: {start:?} -> {origin:?} (drag {dragged:?})"
+        );
+        assert!(
+            viewport.gizmos().gizmos()[0].display_offset().is_none(),
+            "the draw-only offset is folded into the frame, so hit-testing agrees"
+        );
+    });
+    // 2. The HUD's fields carry the drag, so accepting it repeats the move.
+    let fields = shell.read_with(&cx, |shell, cx| {
+        (
+            dialog_field(shell, cx, "dx"),
+            dialog_field(shell, cx, "dy"),
+            dialog_field(shell, cx, "dz"),
+        )
+    });
+    assert!(
+        fields.0.parse::<f64>().is_ok_and(|dx| (dx - dragged[0]).abs() < 0.01),
+        "the ΔX field is the drag, not zero: {fields:?} vs {dragged:?}"
+    );
+    // The field text is rounded to two decimals; the **commit** must use the exact
+    // drag, or accepting would place the object a little off from what was previewed.
+    let pending = shell
+        .read_with(&cx, |shell, cx| shell.pending_translation(cx))
+        .expect("a pending move");
+    assert!(
+        (pending[0] - dragged[0]).abs() < 1e-12,
+        "the HUD keeps the exact delta for the commit: {pending:?} vs {dragged:?}"
+    );
+    // 3. The object is still previewed at the drag, not snapped back.
+    let previewed = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let item = viewport
+            .stage()
+            .items()
+            .iter()
+            .find(|item| item.entity_id() == 7)
+            .expect("the slab");
+        let transform = item.temporary_transform().expect("a previewed object");
+        (transform.m[3], transform.m[7], transform.m[11])
+    });
+    assert!(
+        (previewed.0 - dragged[0]).abs() < 1e-9,
+        "the object is still previewed where the drag ended: {previewed:?} vs {dragged:?}"
     );
 }
 

@@ -34,12 +34,27 @@ VIEW_KEYS = {
     "grid",
     "grid_minor",
     "grid_major",
+    "grid_adaptive",
+    "grid_minor_style",
+    "grid_major_width",
+    "grid_minor_width",
     "grid_radius",
     "grid_color",
     "grid_alpha",
 }
 
-KNOBS = {"enabled", "color", "opacity", "spacing", "shadows", "shadow_opacity"}
+KNOBS = {
+    "enabled",
+    "color",
+    "opacity",
+    "spacing",
+    "adaptive",
+    "minor_style",
+    "major_width",
+    "minor_width",
+    "shadows",
+    "shadow_opacity",
+}
 
 _LOADED = None
 
@@ -103,6 +118,22 @@ class GridOverlayForkTests(unittest.TestCase):
         finally:
             self.mod.register_provider()
 
+    def test_a_settings_edit_reaches_the_shell_through_refresh(self):
+        """``enabled`` off must be *sent*, not only stored.
+
+        ``FerroCADGui.setSetting`` writes the knob and then asks the active backend
+        to re-read it. The native backend had no ``refresh`` hook, so the store said
+        "off" while the viewport kept drawing the grid it already had — the grid
+        stayed on screen with both backends disabled.
+        """
+        self.grid.enabled = False
+        result = FerroCADGui.refreshProviders("grid")
+        self.assertFalse(result["view"]["grid"], "off reaches the viewport")
+
+        self.grid.enabled = True
+        result = FerroCADGui.refreshProviders("grid")
+        self.assertTrue(result["view"]["grid"])
+
     def test_the_command_is_registered_with_the_upstream_resources(self):
         self.assertIn(COMMAND, FreeCADGui.listCommands())
         entry = next(
@@ -137,6 +168,10 @@ class GridOverlayForkTests(unittest.TestCase):
                 "color": "text",
                 "opacity": "float",
                 "spacing": "quantity",
+                "adaptive": "bool",
+                "minor_style": "enum",
+                "major_width": "float",
+                "minor_width": "float",
                 "shadows": "bool",
                 "shadow_opacity": "float",
             },
@@ -147,6 +182,10 @@ class GridOverlayForkTests(unittest.TestCase):
         self.assertEqual(fields["color"]["value"], snapshot["grid_color"])
         self.assertEqual(fields["opacity"]["value"], snapshot["grid_alpha"])
         self.assertEqual(fields["spacing"]["value"], snapshot["grid_minor"])
+        self.assertEqual(fields["adaptive"]["value"], snapshot["grid_adaptive"])
+        self.assertEqual(fields["minor_style"]["value"], snapshot["grid_minor_style"])
+        self.assertEqual(fields["major_width"]["value"], snapshot["grid_major_width"])
+        self.assertEqual(fields["minor_width"]["value"], snapshot["grid_minor_width"])
         self.assertEqual(fields["shadows"]["value"], self.grid.shadows)
         self.assertEqual(
             fields["shadow_opacity"]["value"], self.grid.shadow_opacity
@@ -158,6 +197,10 @@ class GridOverlayForkTests(unittest.TestCase):
         self.grid.opacity = 0.5
         self.grid.minor = 2.0
         self.grid.major = 20.0
+        self.grid.adaptive = False
+        self.grid.minor_style = "lines"
+        self.grid.major_width = 3.0
+        self.grid.minor_width = 2.0
         self.grid.shadows = True
         self.grid.shadow_opacity = 0.25
 
@@ -172,6 +215,10 @@ class GridOverlayForkTests(unittest.TestCase):
                 "color": "#123456",
                 "opacity": 0.5,
                 "spacing": 2.0,
+                "adaptive": False,
+                "minor_style": "lines",
+                "major_width": 3.0,
+                "minor_width": 2.0,
                 "shadows": True,
                 "shadow_opacity": 0.25,
             },
@@ -184,6 +231,10 @@ class GridOverlayForkTests(unittest.TestCase):
                 "color": "#f87171",
                 "opacity": 0.5,
                 "spacing": 2.0,
+                "adaptive": False,
+                "minor_style": "lines",
+                "major_width": 3.0,
+                "minor_width": 2.0,
                 "shadows": True,
                 "shadow_opacity": 0.25,
             }
@@ -198,6 +249,10 @@ class GridOverlayForkTests(unittest.TestCase):
         self.assertEqual(snapshot["grid_alpha"], 0.5)
         self.assertEqual(snapshot["grid_minor"], 2.0)
         self.assertEqual(snapshot["grid_major"], 20.0)
+        self.assertFalse(snapshot["grid_adaptive"])
+        self.assertEqual(snapshot["grid_minor_style"], "lines")
+        self.assertEqual(snapshot["grid_major_width"], 3.0)
+        self.assertEqual(snapshot["grid_minor_width"], 2.0)
         self.assertTrue(self.grid.shadows)
         self.assertEqual(self.grid.shadow_opacity, 0.25)
 
@@ -207,6 +262,10 @@ class GridOverlayForkTests(unittest.TestCase):
                 "grid": True,
                 "grid_minor": 2.0,
                 "grid_major": 20.0,
+                "grid_adaptive": False,
+                "grid_minor_style": "lines",
+                "grid_major_width": 3.0,
+                "grid_minor_width": 2.0,
                 "grid_radius": 0.0,
                 "grid_color": "#f87171",
                 "grid_alpha": 0.5,
@@ -261,6 +320,10 @@ class GridOverlayForkTests(unittest.TestCase):
                 "grid": False,
                 "grid_minor": 10.0,
                 "grid_major": 100.0,
+                "grid_adaptive": True,
+                "grid_minor_style": "dots",
+                "grid_major_width": 1.0,
+                "grid_minor_width": 1.0,
                 "grid_radius": None,
                 "grid_color": "#94a3b8",
                 "grid_alpha": 1.0,

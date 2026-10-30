@@ -23,12 +23,13 @@ use ferrocad_graphics::{
     RenderQueue, SHADOW_MAX, ShaderProgram, ShadowFootprint, StateSnapshot, Topology, Vertex,
     Viewport, apply_shadows, pick_at_hit,
 };
+use ferrocad_graphics::WorkplaneFrame;
 use ferrocad_inventor::{
     Directives, Event, EventListener, ImageData, InventorView, NaviCubeDirective, Node, NodeKind,
     Scene, ViewSpec, compile_diagnostic,
 };
 use ferrocad_stage::Stage;
-use ferrocad_stage::shape::{GHOST_DEPTH, WIRE_DEPTH_BIAS};
+use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
     AxisStyle, FaceFrame, GizmoCommitEvent, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle,
     GizmoTarget, GizmoValue, GridSpec, GridStyle, InteractionCommit, Manipulator,
@@ -167,7 +168,48 @@ pub enum ViewportEvent {
     ToolState(ToolStatus),
 }
 
-/// The viewport's active construction plane: the plane plus what to call it.
+/// The host's grid-step policy: the configured levels, and whether a plane's own extent
+/// may override them (the **adaptive** setting).
+///
+/// One policy serves every layer — the world ground, the bound plane, the hover preview,
+/// the program (Coin) frame and the snap context — so switching it cannot make two grids
+/// disagree about which step is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridPolicy {
+    /// The configured minor (dot) step, in world units.
+    pub minor: f64,
+    /// The configured major (line) step, in world units.
+    pub major: f64,
+    /// Adaptive spacing: derive the pair from the extent the layer covers — a bound
+    /// surface's in-plane radius, or the ground's disc radius.
+    pub adaptive: bool,
+    /// Whether the minor level is dots or a line lattice.
+    pub minor_style: grid::MinorStyle,
+    /// The major lines' stroke width, in device pixels.
+    pub major_width: f64,
+    /// The minor lattice's stroke width, in device pixels.
+    pub minor_width: f64,
+    /// The ink multiplier over the token alphas (`FerroCAD.Grid.opacity`). The resolved
+    /// level alphas travel with the Coin frame, so the shader draws the same weight as
+    /// the native generator instead of a strength of its own.
+    pub alpha: f32,
+}
+
+impl Default for GridPolicy {
+    fn default() -> Self {
+        Self {
+            minor: grid::MINOR_STEP,
+            major: grid::MAJOR_STEP,
+            adaptive: true,
+            minor_style: grid::MinorStyle::default(),
+            major_width: 1.0,
+            minor_width: 1.0,
+            alpha: 1.0,
+        }
+    }
+}
+
+// The viewport's active construction plane: the plane plus what to call it.
 ///
 /// There is **always** an active plane — the world `XY` plane is the default and is
 /// present from the first frame. `None` never means “no workplane”; it means “the world
@@ -243,6 +285,82 @@ impl ActiveWorkplane {
             label: label.into(),
             offset: 0.0,
             extent: None,
+        }
+    }
+
+    /// The program (Coin) grid's extent is the **same** radius the native grid draws, so the
+    /// two backends show the same patch.
+    ///
+    /// A bound plane gets `max(3 × extent, 2 × major)` on its own effective major step; an
+    /// unbound one gets the user's fixed extent when "Grid extent" is set, else the
+    /// camera-following ground — **never** `0`. A zero radius means "unbounded" in the
+    /// ABI, but sending it for a vertical or tilted plane left the plane cut only by the
+    /// shader's edge-on fade: the locus where the view ray is parallel to the plane drew
+    /// as a soft band straight through the model.
+    ///
+    /// The radius is host state, not a mod parameter, so a mod cannot claim a plane the
+    /// viewport is not on.
+    pub fn program_patch_radius(
+        &self,
+        camera: &Camera,
+        policy: GridPolicy,
+        fixed: Option<f64>,
+    ) -> f32 {
+        let (_, major) = self.effective_steps(camera, policy, fixed);
+        self.radius_for(camera, major, fixed)
+    }
+
+    /// The `(minor, major)` steps this plane draws with: a bound surface's own, the
+    /// ground's (adaptive) or the configured world steps otherwise, then the screen-space
+    /// cull.
+    ///
+    /// The Coin grid draws exactly these two levels, so this is also what the shader
+    /// receives in `Frame.workplane_steps`.
+    fn effective_steps(
+        &self,
+        camera: &Camera,
+        policy: GridPolicy,
+        fixed: Option<f64>,
+    ) -> (f64, f64) {
+        let (minor, major) = plane_steps(self.extent, ground_radius(camera, fixed), policy);
+        grid::effective_steps(camera, &self.plane, minor, major)
+    }
+
+    /// The patch radius for an already-effective `major` step.
+    fn radius_for(&self, camera: &Camera, major: f64, fixed: Option<f64>) -> f32 {
+        match patch_radius(self.extent, major) {
+            Some(patch) => patch as f32,
+            None => ground_radius(camera, fixed) as f32,
+        }
+    }
+
+    /// [`plane`](Self::plane) as the renderer-neutral [`WorkplaneFrame`] a [`ViewSpec`]
+    /// carries, with the program grid's patch radius as [`radius`](WorkplaneFrame::radius).
+    pub fn view_workplane(
+        &self,
+        camera: &Camera,
+        policy: GridPolicy,
+        fixed: Option<f64>,
+    ) -> WorkplaneFrame {
+        let (minor, major) = self.effective_steps(camera, policy, fixed);
+        let plane = &self.plane;
+        WorkplaneFrame {
+            origin: [
+                plane.origin.x as f32,
+                plane.origin.y as f32,
+                plane.origin.z as f32,
+            ],
+            u: [plane.u.x as f32, plane.u.y as f32, plane.u.z as f32],
+            v: [plane.v.x as f32, plane.v.y as f32, plane.v.z as f32],
+            n: [plane.n.x as f32, plane.n.y as f32, plane.n.z as f32],
+            minor: minor as f32,
+            major: major as f32,
+            radius: self.radius_for(camera, major, fixed),
+            minor_alpha: base_ink(self.extent, policy).0,
+            major_alpha: base_ink(self.extent, policy).1,
+            minor_lines: policy.minor_style == grid::MinorStyle::Lines,
+            major_width: stroke_width(camera, plane, policy.major_width) as f32,
+            minor_width: stroke_width(camera, plane, policy.minor_width) as f32,
         }
     }
 
@@ -396,10 +514,19 @@ pub struct InventorViewport<V: InventorView> {
     /// every hosted manipulator. It is also the host policy for `enabled` (draw/pick at
     /// all) and `show_readout` (the numeric pills).
     gizmo_style: GizmoStyle,
-    /// The world grid's minor and major steps (mm, G5 preferences; the local face grid
-    /// keeps its own 1/10 mm levels).
+    /// The world grid's minor and major steps (mm, G5 preferences). With adaptive spacing
+    /// these are the fallback, not the drawn step.
     grid_minor: f64,
     grid_major: f64,
+    /// Whether the step follows the plane's extent (`FerroCAD.Grid.adaptive`) instead of
+    /// the configured pair above.
+    grid_adaptive: bool,
+    /// The minor level's form (`FerroCAD.Grid.minor_style`).
+    grid_minor_style: grid::MinorStyle,
+    /// The major lines' stroke width, in device pixels (`FerroCAD.Grid.major_width`).
+    grid_major_width: f64,
+    /// The minor lattice's stroke width, in device pixels (`FerroCAD.Grid.minor_width`).
+    grid_minor_width: f64,
     /// A fixed world-grid extent (mm); `None` derives it from the camera.
     grid_radius: Option<f64>,
     /// The world grid's linear ink (`FerroCAD.Grid.color`).
@@ -671,9 +798,11 @@ fn sync_layer(layer: &mut GridLayer, camera: &Camera, spec: Option<LayerSpec<'_>
     }
 }
 
-/// One grid's cached geometry: dots, major lines and the triad at its origin.
+/// One grid's cached geometry: dots, the minor lattice, the major lines and the triad at
+/// its origin.
 struct GridLayer {
     dots_mesh: MeshId,
+    minor_mesh: MeshId,
     lines_mesh: MeshId,
     triad_mesh: MeshId,
     /// The occluded stem pass (depth `Greater`, no write, 10 % alpha).
@@ -684,7 +813,11 @@ struct GridLayer {
     ground_key: Option<u64>,
     triad_key: Option<u64>,
     dots: Vec<Vertex>,
+    dot_indices: Vec<u32>,
+    minor_lines: Vec<Vertex>,
+    minor_indices: Vec<u32>,
     lines: Vec<Vertex>,
+    line_indices: Vec<u32>,
     triad: Vec<Vertex>,
     triad_ghost: Vec<Vertex>,
     triad_indices: Vec<u32>,
@@ -706,6 +839,7 @@ impl GridLayer {
         let next = || MeshId(NEXT.fetch_add(1, Ordering::Relaxed));
         Self {
             dots_mesh: next(),
+            minor_mesh: next(),
             lines_mesh: next(),
             triad_mesh: next(),
             triad_ghost_mesh: next(),
@@ -715,7 +849,11 @@ impl GridLayer {
             ground_key: None,
             triad_key: None,
             dots: Vec::new(),
+            dot_indices: Vec::new(),
+            minor_lines: Vec::new(),
+            minor_indices: Vec::new(),
             lines: Vec::new(),
+            line_indices: Vec::new(),
             triad: Vec::new(),
             triad_ghost: Vec::new(),
             triad_indices: Vec::new(),
@@ -728,9 +866,13 @@ impl GridLayer {
     fn sync(&mut self, camera: &Camera, spec: &GridSpec, style: &GridStyle, axis: &AxisStyle) {
         let key = grid::ground_key(spec, style);
         if self.ground_key != Some(key) {
-            let (dots, lines) = grid::ground(spec, style);
-            self.dots = dots;
-            self.lines = lines;
+            let ground = grid::ground(spec, style);
+            self.dots = ground.dots;
+            self.dot_indices = ground.dot_indices;
+            self.minor_lines = ground.minor_lines;
+            self.minor_indices = ground.minor_indices;
+            self.lines = ground.lines;
+            self.line_indices = ground.line_indices;
             self.ground_generation = Generation(self.ground_generation.0 + 1);
             self.ground_key = Some(key);
         }
@@ -759,27 +901,10 @@ impl GridLayer {
     }
 
     fn emit(&self, queue: &mut RenderQueue) {
-        if self.show_ground && !self.dots.is_empty() {
-            let indices = (0..self.dots.len() as u32).collect();
-            queue.packets.push(self.packet(
-                self.dots_mesh,
-                self.ground_generation,
-                Topology::Points,
-                self.dots.clone(),
-                indices,
-                DepthState::default(),
-            ));
-        }
-        if self.show_ground && !self.lines.is_empty() {
-            let indices = (0..self.lines.len() as u32).collect();
-            queue.packets.push(self.packet(
-                self.lines_mesh,
-                self.ground_generation,
-                Topology::Lines,
-                self.lines.clone(),
-                indices,
-                DepthState::default(),
-            ));
+        if self.show_ground {
+            self.emit_level(queue, self.dots_mesh, &self.dots, &self.dot_indices, Topology::Points);
+            self.emit_level(queue, self.minor_mesh, &self.minor_lines, &self.minor_indices, Topology::Lines);
+            self.emit_level(queue, self.lines_mesh, &self.lines, &self.line_indices, Topology::Lines);
         }
         if self.show_triad && !self.triad.is_empty() {
             queue.packets.push(self.packet(
@@ -803,6 +928,51 @@ impl GridLayer {
                 ));
             }
         }
+    }
+
+    /// One grid level: its hairline form (`hairline`: a point per dot, two vertices per
+    /// line segment), or the triangles of a wide stroke (the
+    /// [geometry](grid::GridGeometry) says which by whether it carries indices).
+    ///
+    /// A wide stroke goes through the *lit* stage, not the ribbon one: the ribbon stage
+    /// feathers its last pixel on each side, which on a 2–4 px grid line eats half the
+    /// requested width. The quad is the width the user asked for, and the 4× MSAA target
+    /// antialiases its edges instead.
+    ///
+    /// A wide stroke also asks for [`BLENDED_DEPTH`], which selects the renderer's
+    /// alpha-blended scene-triangle variant. The opaque base pipeline is
+    /// `BlendState::REPLACE`, so a triangle drawn through it ignores its per-vertex alpha
+    /// — and every fade the grid has (the radial patch fade, the edge-on `grazing`
+    /// factor and the user's `Grid.opacity`) lives in that alpha. Hairlines and dots
+    /// already blend; without this they were the only levels that dimmed.
+    fn emit_level(
+        &self,
+        queue: &mut RenderQueue,
+        mesh: MeshId,
+        vertices: &[Vertex],
+        indices: &[u32],
+        hairline: Topology,
+    ) {
+        if vertices.is_empty() {
+            return;
+        }
+        let (topology, indices, depth) = if indices.is_empty() {
+            (
+                hairline,
+                (0..vertices.len() as u32).collect(),
+                DepthState::default(),
+            )
+        } else {
+            (Topology::Triangles, indices.to_vec(), BLENDED_DEPTH)
+        };
+        queue.packets.push(self.packet(
+            mesh,
+            self.ground_generation,
+            topology,
+            vertices.to_vec(),
+            indices,
+            depth,
+        ));
     }
 
     /// The grid is deliberately **not pickable**: it is emitted into its own queue that
@@ -831,6 +1001,8 @@ impl GridLayer {
                 id: PickId(0),
                 depth,
                 pickable: false,
+                // The grid never uses the ribbon stage: its strokes are geometry, and the
+                // MSAA target antialiases their edges without a per-pixel feather.
                 ribbon: false,
                 program: None,
             },
@@ -838,68 +1010,250 @@ impl GridLayer {
     }
 }
 
-/// The spec and style of a workplane's own grid: 1 mm dots, 10 mm lines, bounded by the
-/// face (plus its margin).
-fn local_grid(camera: &Camera, frame: &FaceFrame) -> (GridSpec, GridStyle) {
-    let (minor, major) = grid::effective_steps(
-        camera,
-        &frame.plane,
-        grid::LOCAL_MINOR_STEP,
-        grid::LOCAL_MAJOR_STEP,
-    );
+/// `style` with the host policy's stroke: its minor form, and its pixel widths converted
+/// to widths in the plane's own units.
+///
+/// A 1 px request is the renderer's hairline (`0.0`, a `LineList`), so the default look and
+/// its geometry are exactly what they were; anything wider becomes an in-plane stripe and
+/// is drawn through the anti-aliased ribbon stage.
+fn with_stroke(
+    mut style: GridStyle,
+    camera: &Camera,
+    plane: &Workplane,
+    policy: GridPolicy,
+) -> GridStyle {
+    style.minor_style = policy.minor_style;
+    style.major_width = stroke_width(camera, plane, policy.major_width);
+    style.minor_width = stroke_width(camera, plane, policy.minor_width);
+    style
+}
+
+/// The token style a plane's two levels start from.
+///
+/// A plane bound to a finite surface keeps the workplane's `1:2` minor:major ratio; the
+/// unbounded ground uses the world's equal pair. The hover preview, the native layer and
+/// the Coin frame all start here, so binding a face cannot change its ink and the two
+/// backends cannot disagree about it.
+fn level_style(extent: Option<f64>) -> GridStyle {
+    match extent {
+        Some(extent) if extent.is_finite() && extent > 0.0 => GridStyle::workplane(),
+        _ => GridStyle::default(),
+    }
+}
+
+/// The base ink of a plane's two levels: the token alphas the native generator starts
+/// from (a bound plane keeps its `1:2` minor:major ratio), times the user's opacity.
+///
+/// The Coin shader receives these instead of a strength of its own, so the two backends
+/// draw the same lattice at the same weight — a shader drawing 4× heavier ink reads as a
+/// thicker line even at the same width and colour.
+fn base_ink(extent: Option<f64>, policy: GridPolicy) -> (f32, f32) {
+    let style = level_style(extent);
+    (
+        style.minor_alpha * policy.alpha,
+        style.major_alpha * policy.alpha,
+    )
+}
+
+/// A stroke width in device pixels as a width in the plane's units.
+fn stroke_width(camera: &Camera, plane: &Workplane, pixels: f64) -> f64 {
+    if !(pixels.is_finite() && pixels > 1.0) {
+        return 0.0;
+    }
+    scale_for(camera, plane.origin, pixels)
+}
+
+/// The spec and style of the workplane a pointer is hovering: the same steps and the
+/// same patch as the plane once it is active, so binding it does not jump the grid.
+fn local_grid(camera: &Camera, frame: &FaceFrame, policy: GridPolicy) -> (GridSpec, GridStyle) {
+    let (minor, major) = plane_steps(Some(frame.radius), 0.0, policy);
+    let (minor, major) = grid::effective_steps(camera, &frame.plane, minor, major);
     (
         GridSpec {
             workplane: frame.plane.clone(),
             minor,
             major,
-            radius: frame.radius,
+            radius: patch_radius(Some(frame.radius), major).unwrap_or(frame.radius),
         },
-        GridStyle::workplane(),
+        with_stroke(
+            level_style(Some(frame.radius)),
+            camera,
+            &frame.plane,
+            policy,
+        ),
     )
 }
 
-/// The grid for the active plane: the **same generator and the same steps** as the
-/// world grid, with the camera-following radius, so a bound plane reads as the same
-/// grid moved rather than a finer local patch.
+/// The grid for the active plane: the same generator, the same fade and the same
+/// steps **for this plane**. A bound plane derives its step from the face (see
+/// [`plane_steps`]) when spacing is adaptive, so it reads as a construction patch around
+/// the face rather than the world grid stretched across it.
+///
+/// `step_extent` is what the *step* is derived from when the plane is bound to a surface;
+/// `patch_extent` is what the *radius* is derived from and is deliberately only ever a
+/// bound surface's, so an adaptive world ground stays camera-following rather than
+/// becoming a patch around the model.
 fn active_grid(
     camera: &Camera,
     plane: &Workplane,
-    minor: f64,
-    major: f64,
+    policy: GridPolicy,
     color: [f32; 4],
     alpha: f32,
-    extent: Option<f64>,
+    patch_extent: Option<f64>,
+    ground_radius: f64,
 ) -> (GridSpec, GridStyle) {
+    let (minor, major) = plane_steps(patch_extent, ground_radius, policy);
     let (minor, major) = grid::effective_steps(camera, plane, minor, major);
-    let mut style = GridStyle::default();
+    let mut style = level_style(patch_extent);
     style.color = color;
     style.minor_alpha *= alpha;
     style.major_alpha *= alpha;
+    style = with_stroke(style, camera, plane, policy);
     (
         GridSpec {
             workplane: plane.clone(),
             minor,
             major,
-            radius: active_radius(camera, extent, major),
+            radius: active_radius(camera, patch_extent, major),
         },
         style,
     )
+}
+
+/// The patch radius of a plane bound to a finite surface: `max(3 × extent, 2 × major)`,
+/// or `None` when no surface is behind the plane.
+///
+/// Shared by the native grid (which falls back to the camera-following ground) and the
+/// program grid's `Frame.workplane_origin.w` (which is `0`, "no patch"). It is
+/// deliberately **not** clamped to [`grid::RADIUS_RANGE`]: that range exists so the world
+/// ground does not collapse when zoomed in, and applying it would force a 40 mm face to
+/// carry a 500 mm grid.
+fn patch_radius(extent: Option<f64>, major: f64) -> Option<f64> {
+    extent
+        .filter(|extent| extent.is_finite() && *extent > 0.0)
+        .map(|extent| (3.0 * extent).max(2.0 * major))
+}
+
+/// The `(minor, major)` steps of a plane bound to a finite surface.
+///
+/// A bound plane is sized in world units by the face it sits on, so its **step** has to
+/// follow the face too: about ten major cells across the `3 × extent` patch, on the
+/// 1-2-5 ladder. Keeping the world's configured steps here (100 mm major) let the
+/// `2 × major` floor dominate the extent — a 20 mm face carried a 200 mm patch, which is
+/// the wall that fills the view when the plane is seen at a grazing angle.
+///
+/// This is also the step rule for the **scene** when spacing is adaptive: the world
+/// ground and a face patch then differ only in what `extent` means, so "ten cells across"
+/// is one law rather than two.
+fn patch_steps(extent: f64) -> (f64, f64) {
+    let major = nice_step(0.3 * extent);
+    (major / 10.0, major)
+}
+
+/// The smallest 1-2-5 step at or above `value`.
+///
+/// The ladder keeps a patch to a whole number of cells without an arbitrary constant: a
+/// face twice as large gets one step up, not twice the cells.
+fn nice_step(value: f64) -> f64 {
+    if !(value.is_finite() && value > 0.0) {
+        return grid::LOCAL_MAJOR_STEP;
+    }
+    let decade = 10f64.powf(value.log10().floor());
+    if !(decade.is_finite() && decade > 0.0) {
+        return grid::LOCAL_MAJOR_STEP;
+    }
+    let scaled = value / decade;
+    let mantissa = if scaled <= 1.0 {
+        1.0
+    } else if scaled <= 2.0 {
+        2.0
+    } else if scaled <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    mantissa * decade
+}
+
+/// The steps a grid layer uses, from the extent the layer covers and the host's policy.
+///
+/// **Adaptive** (the default) sizes the pair to the layer's own extent: a bound surface's
+/// in-plane radius ([`patch_steps`]) or the ground's disc radius ([`ground_steps`]).
+/// **Non-adaptive** uses the configured steps on every plane, exactly: the drawn pitch is
+/// the setting, whatever the zoom. A step too fine to cover the whole disc is not
+/// coarsened — [`grid::ground`] clips the minor level's *extent* instead (see
+/// [`grid::minor_radius`]), so the subdivisions never change under the camera.
+///
+/// This is the single source of truth for the drawn grid, the hover preview, the program
+/// (Coin) patch and [`snap_context`](InventorViewport::snap_context), so a snap always
+/// lands on a line that is on screen.
+fn plane_steps(extent: Option<f64>, ground_radius: f64, policy: GridPolicy) -> (f64, f64) {
+    if !policy.adaptive {
+        return (policy.minor, policy.major);
+    }
+    let (minor, major, radius) = match extent.filter(|extent| extent.is_finite() && *extent > 0.0)
+    {
+        Some(extent) => {
+            let (minor, major) = patch_steps(extent);
+            (minor, major, (3.0 * extent).max(2.0 * major))
+        }
+        None => {
+            let (minor, major) = ground_steps(ground_radius);
+            (minor, major, ground_radius)
+        }
+    };
+    // Adaptive dots are kept inside the generator's point budget: the dot level is
+    // coarsened (a ladder step, never finer than the line level) rather than left so fine
+    // that `grid::ground` would clip it away. Both backends receive the result, so the Coin
+    // dots and the native dots stay at the same spacing.
+    let budget = nice_step(radius / DOT_COLUMNS).min(major);
+    (minor.max(budget).min(major), major)
+}
+
+/// How many dots a layer may put across its radius before the level is coarsened.
+///
+/// `grid::ground` clips a dot field to `DOT_COLUMNS` columns, and the guard counts a disc,
+/// so a disc of radius `r` holds about `π · (r/minor)²` dots: 112 dot columns per radius is
+/// the largest field that fits the point budget. Coarsening the *dot* level keeps the lines
+/// where they are, which is what makes an adaptive grid still read as a grid.
+const DOT_COLUMNS: f64 = grid::DOT_COLUMNS;
+
+/// The adaptive steps for a ground disc of `radius`.
+///
+/// The world ground is drawn over a radius derived from the camera, not over the model's
+/// bounds, so *that* radius is the extent it covers — and it is the only scale the step
+/// can safely follow. Sizing it from the scene instead fails at both ends: a 10 mm part
+/// asks for sub-millimetre cells across a 500 mm disc (hundreds of thousands of
+/// vertices), and a 1 m part inspected at a 10 mm feature asks for 300 mm cells, i.e. an
+/// empty grid. Twenty-five major cells across the disc put about ten across the visible
+/// frame at the default field of view, so the ground keeps the configured grid's density
+/// at the default zoom without depending on the model's size.
+fn ground_steps(radius: f64) -> (f64, f64) {
+    let major = nice_step(radius / 25.0);
+    (major / 10.0, major)
 }
 
 /// The extent of a plane's grid: a patch when the plane is bound to a finite surface,
 /// the camera-following ground otherwise.
 ///
 /// A face-bound plane gets `max(3 × face radius, 2 × major step)` so the patch reads as a
-/// construction area around the face and cannot become a wall that fills the view. It is
-/// deliberately **not** clamped to [`grid::RADIUS_RANGE`]: that range exists so the world
-/// ground does not collapse when zoomed in, and applying it would force a 40 mm face to
-/// carry a 500 mm grid. The generator's own smooth fade gives the patch its soft edge, so
-/// this is a radius, not a style.
+/// construction area around the face and cannot become a wall that fills the view. The
+/// generator's own smooth fade gives the patch its soft edge, so this is a radius, not a
+/// style.
 fn active_radius(camera: &Camera, extent: Option<f64>, major: f64) -> f64 {
-    match extent {
-        Some(extent) if extent.is_finite() && extent > 0.0 => (3.0 * extent).max(2.0 * major),
-        _ => GridSpec::radius_for(camera),
-    }
+    patch_radius(extent, major).unwrap_or_else(|| ground_radius(camera, None))
+}
+
+/// The ground's disc radius for `camera`: the user's fixed "Grid extent", else the
+/// camera-following one, clamped to [`grid::RADIUS_RANGE`].
+///
+/// This is both the ground's drawn extent and the scale its adaptive step is sized from,
+/// so the two can never disagree about how large the ground is.
+fn ground_radius(camera: &Camera, fixed: Option<f64>) -> f64 {
+    fixed.map_or_else(
+        || GridSpec::radius_for(camera),
+        |radius| radius.clamp(grid::RADIUS_RANGE.0, grid::RADIUS_RANGE.1),
+    )
 }
 
 /// Apply the user's ink and alpha multiplier to an existing style. The multiplier scales
@@ -908,6 +1262,16 @@ fn with_grid_ink(mut style: GridStyle, color: [f32; 4], alpha: f32) -> GridStyle
     style.color = color;
     style.minor_alpha *= alpha;
     style.major_alpha *= alpha;
+    style
+}
+
+/// Dim a grid layer the way the Coin shader does: one factor for the whole plane, from
+/// the camera's angle to it. Only the **grid** dims — the triad keeps its ink, because
+/// it is what still tells you where the plane is when you are looking along it.
+fn with_grazing(mut style: GridStyle, camera: &Camera, plane: &Workplane) -> GridStyle {
+    let grazing = grid::grazing(camera, plane);
+    style.minor_alpha *= grazing;
+    style.major_alpha *= grazing;
     style
 }
 
@@ -1090,6 +1454,10 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo_style: GizmoStyle::default(),
             grid_minor: grid::MINOR_STEP,
             grid_major: grid::MAJOR_STEP,
+            grid_adaptive: GridPolicy::default().adaptive,
+            grid_minor_style: GridPolicy::default().minor_style,
+            grid_major_width: GridPolicy::default().major_width,
+            grid_minor_width: GridPolicy::default().minor_width,
             grid_radius: None,
             grid_color: grid::GRID_COLOR,
             grid_alpha: 1.0,
@@ -1864,7 +2232,8 @@ impl<V: InventorView> InventorViewport<V> {
         self.shader_error.take()
     }
 
-    /// The ground-shadow footprints (world `x`/`y`) the program packets will carry.
+    /// The ground-shadow footprints the program packets will carry, in the active
+    /// plane's `(u, v)` frame.
     ///
     /// By default they are derived from the [`stage`](Self::stage)'s items; a host on
     /// the legacy inventor path can replace them with
@@ -1874,7 +2243,8 @@ impl<V: InventorView> InventorViewport<V> {
         self.effective_shadow_footprints()
     }
 
-    /// Replace the derived stage footprints with explicit ones (world `x`/`y`).
+    /// Replace the derived stage footprints with explicit ones, **in the active plane's
+    /// `(u, v)` frame** (world `(x, y)` on the default plane).
     ///
     /// Use this when the document is not drawn as a [`Stage`] (the legacy inventor
     /// path), or when the host has better bounds than the display tessellation. The
@@ -1904,12 +2274,20 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
-    /// The explicit override when set, else the stage's per-item footprints. The list
-    /// is truncated to the ABI's [`SHADOW_MAX`] slots.
+    /// The explicit override when set, else the stage's per-item footprints **in the
+    /// active plane's `(u, v)` frame**. The list is truncated to the ABI's
+    /// [`SHADOW_MAX`] slots.
+    ///
+    /// The frame matters: the shader projects a footprint with `(pu, pv)`, so the same
+    /// world `(x, y)` box would land in the wrong place on a vertical workplane — a
+    /// slab's shadow appeared beside it on `XZ`. The producer projects into the plane,
+    /// so every plane gets its own footprint.
     fn effective_shadow_footprints(&self) -> Vec<ShadowFootprint> {
         let mut footprints = match &self.shadow_footprints {
             Some(footprints) => footprints.clone(),
-            None => self.stage.shadow_footprints(),
+            None => self
+                .stage
+                .shadow_footprints_on(&self.active_workplane.plane),
         };
         footprints.truncate(SHADOW_MAX);
         footprints
@@ -3565,8 +3943,78 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// The world grid's `(minor, major)` steps, in millimetres.
+    ///
+    /// These are the **configured** pair. With adaptive spacing the drawn step is derived
+    /// from the plane's extent instead; the request's step is what a plane with no extent
+    /// (an empty scene, a very small model) falls back to.
     pub fn grid_steps(&self) -> (f64, f64) {
         (self.grid_minor, self.grid_major)
+    }
+
+    /// Whether grid spacing follows the plane's extent (`FerroCAD.Grid.adaptive`).
+    ///
+    /// Returns whether the grid changed. This is a step policy, so only the grid layers
+    /// are rebuilt; the scene queue is untouched.
+    pub fn set_grid_adaptive(&mut self, adaptive: bool) -> bool {
+        if self.grid_adaptive == adaptive {
+            return false;
+        }
+        self.grid_adaptive = adaptive;
+        self.sync_grid();
+        true
+    }
+
+    /// Whether grid spacing is adaptive.
+    pub fn grid_adaptive(&self) -> bool {
+        self.grid_adaptive
+    }
+
+    /// Set the grid's stroke: the minor level's form and the two line widths, in device
+    /// pixels. Returns whether the grid changed.
+    pub fn set_grid_stroke(
+        &mut self,
+        minor_style: grid::MinorStyle,
+        major_width: f64,
+        minor_width: f64,
+    ) -> bool {
+        if !(major_width.is_finite() && minor_width.is_finite()) {
+            return false;
+        }
+        let major_width = major_width.clamp(grid::MIN_STROKE_PIXELS, grid::MAX_STROKE_PIXELS);
+        let minor_width = minor_width.clamp(grid::MIN_STROKE_PIXELS, grid::MAX_STROKE_PIXELS);
+        if self.grid_minor_style == minor_style
+            && (self.grid_major_width - major_width).abs() < 1e-9
+            && (self.grid_minor_width - minor_width).abs() < 1e-9
+        {
+            return false;
+        }
+        self.grid_minor_style = minor_style;
+        self.grid_major_width = major_width;
+        self.grid_minor_width = minor_width;
+        self.sync_grid();
+        true
+    }
+
+    /// The grid's stroke: `(minor_style, major_width_px, minor_width_px)`.
+    pub fn grid_stroke(&self) -> (grid::MinorStyle, f64, f64) {
+        (
+            self.grid_minor_style,
+            self.grid_major_width,
+            self.grid_minor_width,
+        )
+    }
+
+    /// The host's step policy, as the grid, the Coin frame and the snap context read it.
+    fn grid_policy(&self) -> GridPolicy {
+        GridPolicy {
+            minor: self.grid_minor,
+            major: self.grid_major,
+            adaptive: self.grid_adaptive,
+            minor_style: self.grid_minor_style,
+            major_width: self.grid_major_width,
+            minor_width: self.grid_minor_width,
+            alpha: self.grid_alpha,
+        }
     }
 
     /// Fix the world grid's extent (mm), or return to the camera-derived radius with
@@ -3637,9 +4085,10 @@ impl<V: InventorView> InventorViewport<V> {
         self.grid_overlay
     }
 
-    /// Select the authored grid: when `enabled`, the native world ground (dots and
-    /// lines) is hidden; the triad, the workplane and the origin node are unaffected.
-    /// Returns whether the flag changed.
+    /// Select the authored grid: when `enabled`, the native ground (dots and lines) is
+    /// hidden on every plane — the world ground and a bound workplane alike — while the
+    /// triad, the workplane frame and the origin node are unaffected. Returns whether the
+    /// flag changed.
     ///
     /// The flag does **not** gate the program packets. They are held in
     /// [`program_queue`](Self::program_queue) and drawn whenever non-empty — a
@@ -3698,25 +4147,29 @@ impl<V: InventorView> InventorViewport<V> {
             .map(|face| face.frame.clone());
 
         let world_plane = Workplane::world();
+        let policy = self.grid_policy();
+        let world_radius = ground_radius(&self.camera, self.grid_radius);
+        let (minor, major) = plane_steps(None, world_radius, policy);
         let (minor, major) =
-            grid::effective_steps(&self.camera, &world_plane, self.grid_minor, self.grid_major);
-        let radius = self.grid_radius.map_or_else(
-            || GridSpec::radius_for(&self.camera),
-            |radius| radius.clamp(grid::RADIUS_RANGE.0, grid::RADIUS_RANGE.1),
-        );
+            grid::effective_steps(&self.camera, &world_plane, minor, major);
         let world_spec = GridSpec {
             workplane: world_plane,
             minor,
             major,
-            radius,
+            radius: world_radius,
         };
         // A local frame is present when its grid is on, or (for the triad alone) when the
         // axis cross is on with an active workplane.
         let local_present = (grid_on && hover.is_some()) || local;
-        let mut world_style = GridStyle::default();
+        let mut world_style = with_stroke(
+            level_style(None),
+            &self.camera,
+            &world_spec.workplane,
+            policy,
+        );
         world_style.color = self.grid_color;
-        world_style.minor_alpha *= self.grid_alpha;
-        world_style.major_alpha *= self.grid_alpha;
+        world_style.minor_alpha *= self.grid_alpha * grid::grazing(&self.camera, &world_spec.workplane);
+        world_style.major_alpha *= self.grid_alpha * grid::grazing(&self.camera, &world_spec.workplane);
         // The world triad uses the same style as a local one, receding when a local frame
         // is present. The world **ground** is not drawn then (see `world` below): one
         // grid, at the active plane, is the whole point of moving the plane.
@@ -3729,18 +4182,25 @@ impl<V: InventorView> InventorViewport<V> {
             let (spec, style) = active_grid(
                 &self.camera,
                 &active.plane,
-                self.grid_minor,
-                self.grid_major,
+                policy,
                 self.grid_color,
                 self.grid_alpha,
                 active.extent,
+                world_radius,
             );
-            (spec, style, grid_on)
+            (spec, with_grazing(style, &self.camera, &active.plane), grid_on)
         });
-        let hover_layer = hover
-            .as_ref()
-            .map(|frame| local_grid(&self.camera, frame))
-            .map(|(spec, style)| (spec, with_grid_ink(style, self.grid_color, self.grid_alpha)));
+        let hover_layer = hover.as_ref().map(|frame| {
+            let (spec, style) = local_grid(&self.camera, frame, policy);
+            (
+                spec,
+                with_grazing(
+                    with_grid_ink(style, self.grid_color, self.grid_alpha),
+                    &self.camera,
+                    &frame.plane,
+                ),
+            )
+        });
         // The origin node sits on the active workplane (the world origin at the default).
         let origin_plane = active.plane.clone();
         let bloomed = self.origin_bloomed();
@@ -3761,13 +4221,19 @@ impl<V: InventorView> InventorViewport<V> {
                 spec,
                 style,
                 axis: &self.axis,
-                ground: *ground,
+                // The authored grid replaces the native ground on **every** plane, not
+                // only the world one: a bound plane is still the grid. The triad and the
+                // origin node stay, so the frame is still readable under the overlay.
+                ground: *ground && !self.grid_overlay,
                 triad: cross,
             });
         let hover = hover_layer.as_ref().map(|(spec, style)| LayerSpec {
             spec,
             style,
             axis: &self.axis,
+            // The one exception: a hover bloom previews a plane that does not exist yet,
+            // and a bound overlay cannot draw a frame the view is not on, so the preview
+            // stays native even while the overlay owns the rest.
             ground: true,
             triad: cross,
         });
@@ -4067,14 +4533,21 @@ impl<V: InventorView> InventorViewport<V> {
     fn snap_context(&self) -> Option<SnapContext> {
         if self.active_workplane.is_default() {
             // The default plane keeps the world grid's steps (and honours the snap-grid
-            // switch); a bound plane uses the finer local steps.
+            // switch); a bound plane uses the step derived from its face.
             return self.snap_grid.map(SnapContext::world);
         }
+        let (minor, major) = plane_steps(
+            self.active_workplane.extent,
+            ground_radius(&self.camera, self.grid_radius),
+            self.grid_policy(),
+        );
         Some(SnapContext {
             workplane: self.active_workplane.plane.clone(),
-            // Match the drawn grid exactly: the same steps as the world grid.
-            minor: self.grid_minor,
-            major: self.grid_major,
+            // The plane's own step, not the world's: a snap must land on a line the plane
+            // draws. The layer may cull a sub-pixel minor level for screen density, which
+            // changes pixels, not spacing.
+            minor,
+            major,
         })
     }
 
@@ -4338,6 +4811,16 @@ impl<V: InventorView> InventorViewport<V> {
             self.rebuild_manipulator_queue();
         }
 
+        // The program (Coin) grid is the only draw that reads the construction plane
+        // from the `Frame` uniform; the scene and the native grid already draw in world
+        // space. The extent is the native grid's (a face patch, the user's fixed
+        // "Grid extent", or the camera-following ground), never `0`.
+        let workplane = self.active_workplane.view_workplane(
+            &self.camera,
+            self.grid_policy(),
+            self.grid_radius,
+        );
+
         // One pass: the scene (legacy + stage) first, then the overlays (the tool's
         // transient visuals, the gizmo and the navigation cubes, depth off and on top).
         let mut views = Vec::with_capacity(7);
@@ -4346,6 +4829,7 @@ impl<V: InventorView> InventorViewport<V> {
             camera: &self.camera,
             rect: None,
             overlay: false,
+            workplane: None,
         });
         if !self.grid_queue.is_empty() {
             // A second non-overlay view: the same depth pass, so the grid occludes and is
@@ -4355,6 +4839,7 @@ impl<V: InventorView> InventorViewport<V> {
                 camera: &self.camera,
                 rect: None,
                 overlay: false,
+                workplane: None,
             });
         }
         if !self.program_queue.is_empty() {
@@ -4367,6 +4852,7 @@ impl<V: InventorView> InventorViewport<V> {
                 camera: &self.camera,
                 rect: None,
                 overlay: false,
+                workplane: Some(workplane),
             });
         }
         if !self.transient.is_empty() {
@@ -4375,6 +4861,7 @@ impl<V: InventorView> InventorViewport<V> {
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
+                workplane: None,
             });
         }
         if !self.feedback_queue.is_empty() {
@@ -4384,6 +4871,7 @@ impl<V: InventorView> InventorViewport<V> {
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
+                workplane: None,
             });
         }
         if !self.gizmo_queue.is_empty() {
@@ -4392,6 +4880,7 @@ impl<V: InventorView> InventorViewport<V> {
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
+                workplane: None,
             });
         }
         if !self.manipulator_queue.is_empty() {
@@ -4400,6 +4889,7 @@ impl<V: InventorView> InventorViewport<V> {
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
+                workplane: None,
             });
         }
         if let Some(cube) = self.navicube.as_ref() {
@@ -8060,6 +8550,38 @@ mod tests {
         assert!(viewport.pick([50, 50]).is_none());
     }
 
+    /// The native grid dims with the same edge-on law as the Coin shader: a plane seen
+    /// along its own surface stops drawing instead of becoming a wall of lines.
+    #[test]
+    fn the_native_grid_dims_when_the_plane_is_edge_on() {
+        let mut view = slab_view();
+        view.camera = perspective_camera([100, 100]);
+        view.refresh();
+        assert!(
+            max_alpha(&view.grid_queue.packets[0]) > 0.0,
+            "the face-on grid is drawn"
+        );
+
+        // Keep the camera's projection and viewport; only turn it to look along `−X`,
+        // which lies in the world `XY` plane.
+        let mut camera = view.camera;
+        camera.view = ferrocad_types::Matrix4 {
+            m: [
+                0.0, 1.0, 0.0, 0.0, // right = +Y
+                0.0, 0.0, 1.0, 0.0, // up    = +Z
+                1.0, 0.0, 0.0, 0.0, // back  = +X
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        view.camera = camera;
+        view.refresh();
+        assert_eq!(
+            max_alpha(&view.grid_queue.packets[0]),
+            0.0,
+            "a grid seen along its own plane is not drawn"
+        );
+    }
+
     #[test]
     fn set_grid_overlay_hides_the_native_ground_but_keeps_the_axis_cross() {
         let mut viewport = grid_view();
@@ -8077,6 +8599,30 @@ mod tests {
 
         assert!(viewport.set_grid_overlay(false));
         assert_eq!(viewport.grid_queue.len(), 5);
+    }
+
+    /// The authored grid replaces the native ground on a **bound** plane too, not only on
+    /// the world one. Missing this drew the Coin grid and the built-in face patch on top
+    /// of each other whenever a workplane was active.
+    #[test]
+    fn the_overlay_flag_hides_a_bound_plane_grid_too() {
+        let mut view = slab_view();
+        view.handle_pointer([30.0, 50.0]);
+        assert!(view.activate_hovered_workplane(), "a face plane is active");
+        view.refresh();
+        let native = view.grid_queue.len();
+        assert!(native > 0, "the bound plane draws its grid");
+
+        assert!(view.set_grid_overlay(true));
+        let under_overlay = view.grid_queue.len();
+        assert!(
+            under_overlay < native,
+            "the bound plane's ground steps aside: {under_overlay} of {native}"
+        );
+        assert!(
+            under_overlay > 0,
+            "the triad and the origin node stay under the overlay"
+        );
     }
 
     /// A scene whose only draw is a program packet (the program binds to the quad that
@@ -8232,9 +8778,22 @@ mod tests {
         assert!(viewport.overlays().is_empty());
     }
 
-    /// The viewport is where a scene's `ProgramParameters` are assembled for the
-    /// program queue, so it is where the shadow producer runs: the stage's two separated
-    /// boxes fill two slots, and an explicit host override replaces them.
+    /// The footprints follow the active plane. A world-`(x, y)` footprint projected onto
+    /// `XZ` used to land beside the slab; now the producer measures the item in the
+    /// plane's own `(u, v)`.
+    #[test]
+    fn a_bound_workplane_casts_a_footprint_in_its_own_frame() {
+        let mut view = slab_view();
+        let ground = view.shadow_footprints();
+        assert!(!ground.is_empty(), "the world ground casts the slab's shadow");
+
+        assert!(view.set_standard_plane(ferrocad_stage::StandardPlane::Front));
+        assert!(
+            !view.shadow_footprints().is_empty(),
+            "a vertical plane casts its own footprint"
+        );
+    }
+
     #[test]
     fn the_stage_supplies_the_program_shadow_block() {
         let camera = Camera {
@@ -8533,6 +9092,9 @@ mod tests {
     #[test]
     fn an_orbit_rebuilds_the_triad_but_not_the_ground() {
         let mut viewport = grid_view();
+        // A fixed extent, so the disc (which follows the camera's eye distance) cannot be
+        // what changes the ground: this test is about the camera *not* moving the lattice.
+        assert!(viewport.set_grid_radius(Some(500.0)));
         let generations = |viewport: &InventorViewport<FakeView>| {
             let packets = &viewport.grid_queue.packets;
             (
@@ -8578,6 +9140,18 @@ mod tests {
             .fold(0.0, f32::max)
     }
 
+    /// How many packets the **local** grid layers emit (a bound plane or a hover
+    /// preview). They are the only depth-biased producers, so this is the invariant a
+    /// grid-count assertion should use: a hidden minor level emits no dot packet, and
+    /// the adaptive step changes how many levels survive the cull.
+    fn local_packets(view: &InventorViewport<FakeView>) -> usize {
+        view.grid_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.state.depth_bias > 0.0)
+            .count()
+    }
+
     fn escape_key() -> KeyDownEvent {
         KeyDownEvent {
             keystroke: gpui::Keystroke {
@@ -8612,18 +9186,21 @@ mod tests {
         assert!((face.frame.plane.origin.x + 0.25).abs() < 1e-6);
         assert!((face.frame.plane.origin.z - 0.5).abs() < 1e-6);
 
-        // Before the dwell only the world layer is drawn, at full strength.
-        assert_eq!(view.grid_queue.len(), 5);
+        // Before the dwell only the world layer is drawn — no depth-biased local
+        // layer — at full strength. (Pin the dwell start: under a loaded test runner a
+        // scheduling pause longer than the dwell would bloom it before the assert.)
+        view.hover_face.as_mut().unwrap().since = std::time::Instant::now();
+        view.sync_grid();
+        assert_eq!(local_packets(&view), 0, "no face grid before the dwell");
         let world_alpha = max_alpha(&view.grid_queue.packets[0]);
 
         // Past the dwell the local layer blooms: coplanar with the face, depth-biased,
         // and the world level recedes.
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
-        assert_eq!(
-            view.grid_queue.len(),
-            8,
-            "the local layer adds its major lines and triad (front + ghost)"
+        assert!(
+            local_packets(&view) > 0,
+            "the local layer adds the face's own grid"
         );
         for packet in view
             .grid_queue
@@ -8705,49 +9282,669 @@ mod tests {
         let extent = view.active_workplane().extent.expect("a face has an extent");
         assert!(extent > 0.0 && extent < 1.0, "the slab's half-face radius: {extent}");
 
-        // The grid's own effective steps, so the patch is the one the layer really used.
+        // The plane's step comes from its extent, not from the pinned world steps: about
+        // ten major cells across the patch, on the 1-2-5 ladder. Keeping the world's
+        // 100 mm major here is what made a 20 mm face carry a 200 mm patch.
         let plane = view.active_workplane().plane.clone();
-        let (_, major) = grid::effective_steps(&view.camera, &plane, 1.0, 10.0);
-        assert!((major - 10.0).abs() < 1e-9, "the pinned major step: {major}");
+        let (minor, major) = plane_steps(
+            Some(extent),
+            ground_radius(&view.camera, view.grid_radius),
+            GridPolicy {
+                minor: 1.0,
+                major: 10.0,
+                ..GridPolicy::default()
+            },
+        );
+        assert_eq!(
+            (minor, major),
+            patch_steps(extent),
+            "a bound plane ignores the configured world steps"
+        );
+        let (_, effective_major) = grid::effective_steps(&view.camera, &plane, minor, major);
 
-        // The patch is `max(3 × extent, 2 × major)`, and it deliberately ignores the world
-        // ground's `RADIUS_RANGE` floor (which would force a 500 mm grid here).
-        let patch = active_radius(&view.camera, Some(extent), major);
+        // The patch is `max(3 × extent, 2 × major)` on the plane's own effective step, and
+        // it deliberately ignores the world ground's `RADIUS_RANGE` floor.
+        let patch = active_radius(&view.camera, Some(extent), effective_major);
         assert!(
-            (patch - (3.0 * extent).max(2.0 * major)).abs() < 1e-9,
+            (patch - (3.0 * extent).max(2.0 * effective_major)).abs() < 1e-9,
             "the patch is `max(3 × face, 2 × major)`: {patch}"
         );
+        // A face patch is its own size: it ignores the world disc, which at this camera
+        // is a different radius entirely.
         assert!(
-            patch < grid::RADIUS_RANGE.0,
-            "a small face keeps a small patch: {patch}"
+            patch < active_radius(&view.camera, None, major),
+            "a face patch is smaller than the world ground: {patch}"
         );
+        assert!(patch < 10.0 * extent, "the patch is a face, not a wall: {patch}");
         assert!(
             (active_radius(&view.camera, None, major) - GridSpec::radius_for(&view.camera)).abs()
                 < 1e-9
         );
 
-        // Every vertex of the bound plane's grid lies inside that patch (in-plane).
+        // The snap uses the plane's step, so it lands on a line the plane draws.
+        let context = view.snap_context().expect("the bound plane snaps");
+        assert_eq!((context.minor, context.major), patch_steps(extent));
+
+        // Every vertex of the bound plane's **ground** lies inside that patch. The
+        // triad is not part of it: its stems are screen-sized and longer than a small
+        // patch, so they are excluded by taking the largest line packet (the ground).
         let origin = plane.origin;
-        for packet in view
+        let ground = view
             .grid_queue
             .packets
             .iter()
-            .filter(|packet| packet.state.depth_bias > 0.0)
-        {
-            for vertex in &packet.geometry.as_ref().unwrap().vertices {
-                let point = Vector3::new(
-                    f64::from(vertex.position[0]),
-                    f64::from(vertex.position[1]),
-                    f64::from(vertex.position[2]),
-                );
-                let local = plane.project(point);
-                assert!(
-                    local[0].hypot(local[1]) <= patch + 1e-6,
-                    "the grid stays inside the patch: {local:?} > {patch}"
-                );
-                assert!((point.z - origin.z).abs() < 1e-4, "it lies on the face");
-            }
+            .filter(|packet| {
+                packet.topology == Topology::Lines && packet.state.depth_bias > 0.0
+            })
+            .max_by_key(|packet| packet.geometry.as_ref().map_or(0, |geometry| geometry.vertices.len()))
+            .expect("the bound plane's ground");
+        for vertex in &ground.geometry.as_ref().unwrap().vertices {
+            let point = Vector3::new(
+                f64::from(vertex.position[0]),
+                f64::from(vertex.position[1]),
+                f64::from(vertex.position[2]),
+            );
+            let local = plane.project(point);
+            assert!(
+                local[0].hypot(local[1]) <= patch + 1e-6,
+                "the grid stays inside the patch: {local:?} > {patch}"
+            );
+            assert!((point.z - origin.z).abs() < 1e-4, "it lies on the face");
         }
+    }
+
+    /// The 20 mm box from the report: a face patch is `3 × extent` with a 5 mm step, not
+    /// 200 mm of 100 mm cells. The ladder steps up with the face instead of adding cells.
+    #[test]
+    fn a_face_patch_scales_with_its_extent() {
+        let extent = 15.6;
+        let adaptive = GridPolicy {
+            minor: grid::MINOR_STEP,
+            major: grid::MAJOR_STEP,
+            ..GridPolicy::default()
+        };
+        let (minor, major) = plane_steps(Some(extent), 1000.0, adaptive);
+        assert!((major - 5.0).abs() < 1e-9, "the ladder picks 5 mm: {major}");
+        assert!((minor - 0.5).abs() < 1e-9, "a decade of minor cells: {minor}");
+        let patch = patch_radius(Some(extent), major).expect("a bound plane");
+        assert!((patch - 46.8).abs() < 1e-9, "3 × extent: {patch}");
+
+        assert_eq!(
+            nice_step(0.3 * 500.0),
+            200.0,
+            "a large face steps up rather than drawing 500 sub-millimetre cells"
+        );
+    }
+
+    /// The **adaptive** setting is one rule for every layer: the step fits the extent that
+    /// layer covers; turning it off uses the configured pair on every plane.
+    #[test]
+    fn adaptive_spacing_follows_the_extent_and_off_uses_the_configured_pair() {
+        let adaptive = GridPolicy {
+            minor: 10.0,
+            major: 100.0,
+            ..GridPolicy::default()
+        };
+        let configured = GridPolicy {
+            adaptive: false,
+            ..adaptive
+        };
+
+        // Adaptive: a face patch is sized from the face, the ground from its disc.
+        assert_eq!(plane_steps(Some(15.6), 500.0, adaptive), patch_steps(15.6));
+        assert_eq!(plane_steps(Some(86.6), 500.0, adaptive), patch_steps(86.6));
+        let (minor, major) = plane_steps(None, 500.0, adaptive);
+        assert_eq!(
+            major,
+            ground_steps(500.0).1,
+            "the ground's lines are the disc's ladder"
+        );
+        assert!(
+            minor >= ground_steps(500.0).0,
+            "the dot level is only coarsened, never refined"
+        );
+        assert!(
+            500.0 / minor <= DOT_COLUMNS + 1e-9,
+            "the dot field stays inside the point budget: {minor}"
+        );
+
+        // Not adaptive: one pair, everywhere, exactly. That is the point of the switch —
+        // the configured 10/100 is what the ground *and* a face draw, at any zoom. A step
+        // too fine for the disc is clipped in extent by `grid::ground`, never coarsened.
+        assert_eq!(plane_steps(Some(15.6), 500.0, configured), (10.0, 100.0));
+        assert_eq!(plane_steps(Some(86.6), 500.0, configured), (10.0, 100.0));
+        assert_eq!(plane_steps(None, 500.0, configured), (10.0, 100.0));
+
+        let fine = GridPolicy {
+            minor: 1.0,
+            major: 10.0,
+            adaptive: false,
+            ..GridPolicy::default()
+        };
+        assert_eq!(
+            plane_steps(None, 2_500.0, fine),
+            (1.0, 10.0),
+            "a fine pair is honoured on a large disc: the level clips, the pitch stays"
+        );
+
+        // The default is adaptive: the extent rule is the shipped look.
+        assert!(GridPolicy::default().adaptive);
+    }
+
+    /// The ground's step is sized from the disc it is drawn over — the only extent it
+    /// covers — so it stays legible at every zoom and its geometry stays bounded. A step
+    /// taken from a tiny model instead asked for ~800k vertices on a 500 mm ground.
+    #[test]
+    fn the_ground_step_follows_its_disc_and_stays_bounded() {
+        for radius in [500.0, 2500.0, 5000.0] {
+            let (minor, major) = ground_steps(radius);
+            let cells = radius / major;
+            assert!(
+                (12.0..=25.5).contains(&cells),
+                "about ten visible cells at {radius}: {cells}"
+            );
+            assert!(
+                minor >= major / 10.0,
+                "the dot level is a decade below at most"
+            );
+            // [`ground`](grid::ground) subdivides each line at the minor step, so the
+            // vertex count is ~`160 · cells²`; keep it in the same range as the
+            // configured grid's.
+            assert!(
+                160.0 * cells * cells <= 100_000.0,
+                "bounded geometry: {cells}"
+            );
+        }
+
+        // Zooming changes the ladder (adaptive), tilting does not (the radius follows the
+        // eye distance only).
+        assert_ne!(
+            ground_steps(500.0),
+            ground_steps(5000.0),
+            "a nearer ground gets a finer lattice"
+        );
+        assert_eq!(ground_steps(2500.0), (10.0, 100.0), "the default zoom's steps");
+    }
+
+    /// Adaptive spacing is viewport policy: the drawn ground uses the disc ladder, and
+    /// switching it off restores the configured pair without touching the scene.
+    #[test]
+    fn the_viewport_applies_the_adaptive_switch() {
+        let mut view = slab_view();
+        assert!(view.grid_adaptive(), "the default is adaptive");
+        let radius = ground_radius(&view.camera, view.grid_radius);
+        let (minor, major) = plane_steps(None, radius, view.grid_policy());
+        assert_eq!(major, ground_steps(radius).1);
+        assert!(minor >= ground_steps(radius).0);
+        assert!(
+            view.grid_queue
+                .packets
+                .iter()
+                .any(|packet| packet.topology == Topology::Points),
+            "the adaptive ground still draws its dots"
+        );
+
+        assert!(view.set_grid_adaptive(false));
+        assert_eq!(
+            plane_steps(None, radius, view.grid_policy()),
+            view.grid_steps(),
+            "off draws the configured pair"
+        );
+        assert!(!view.set_grid_adaptive(false), "a no-op reports no change");
+    }
+
+    /// A bound plane keeps a **drawable** minor level, so `minor_style = lines` really
+    /// draws a lattice. The minor level is a level of detail: it coarsens up the 1-2-5
+    /// ladder when its step is too small to read, and collapses onto the major only when
+    /// nothing below the major draws. Collapsing immediately (the older rule) left the
+    /// lattice with no rows at all — every row at the major step *is* a major row — so the
+    /// setting looked inert on any face at a normal zoom.
+    #[test]
+    fn a_bound_plane_draws_its_minor_lattice() {
+        let mut view = slab_view();
+        assert!(view.set_workplane_from_element(7, Some("Face1")));
+        assert!(view.set_grid_stroke(grid::MinorStyle::Lines, 1.0, 1.0));
+
+        let active = view.active_workplane();
+        let (spec, style) = active_grid(
+            &view.camera,
+            &active.plane,
+            view.grid_policy(),
+            [1.0; 4],
+            1.0,
+            active.extent,
+            ground_radius(&view.camera, view.grid_radius),
+        );
+        assert_eq!(style.minor_style, grid::MinorStyle::Lines);
+        assert!(
+            spec.minor < spec.major,
+            "the minor level survives the cull: {} vs {}",
+            spec.minor,
+            spec.major
+        );
+
+        let ground = grid::ground(&spec, &style);
+        assert!(
+            !ground.minor_lines.is_empty(),
+            "the lattice has rows that are not major rows"
+        );
+        assert!(
+            view.grid_queue.packets.iter().any(|packet| {
+                packet.topology == Topology::Lines
+                    && packet
+                        .geometry
+                        .as_ref()
+                        .is_some_and(|geometry| {
+                            geometry.vertices.len() == ground.minor_lines.len()
+                        })
+            }),
+            "the minor lattice reaches the queue"
+        );
+    }
+
+    /// The hover preview and the bound grid are the same grid — **including its ink** — so
+    /// binding a face cannot change how strong either level draws. They share
+    /// [`level_style`], which is also what the Coin frame reads.
+    #[test]
+    fn a_face_preview_is_the_grid_it_will_bind() {
+        let camera = perspective_camera([100, 100]);
+        let frame = FaceFrame {
+            plane: Workplane::world(),
+            radius: 15.6,
+        };
+        let policy = GridPolicy::default();
+        let (preview, preview_style) = local_grid(&camera, &frame, policy);
+        let (bound, bound_style) = active_grid(
+            &camera,
+            &frame.plane,
+            policy,
+            [1.0; 4],
+            1.0,
+            Some(frame.radius),
+            0.0,
+        );
+        assert_eq!(preview.minor, bound.minor, "the preview's step is the bound step");
+        assert_eq!(preview.major, bound.major, "the preview's step is the bound step");
+        assert_eq!(
+            preview.radius, bound.radius,
+            "the preview's patch is the bound patch"
+        );
+        assert!(
+            preview.radius < 100.0,
+            "a face-sized patch, not a wall: {}",
+            preview.radius
+        );
+        assert_eq!(
+            preview_style.minor_alpha, bound_style.minor_alpha,
+            "binding keeps the minor ink"
+        );
+        assert_eq!(
+            preview_style.major_alpha, bound_style.major_alpha,
+            "binding keeps the major ink"
+        );
+        // A bound plane keeps the workplane's 1:2 ratio; the ground's levels are equal.
+        assert!(
+            (bound_style.major_alpha - 2.0 * bound_style.minor_alpha).abs() < 1e-6,
+            "the workplane ratio: {} / {}",
+            bound_style.major_alpha,
+            bound_style.minor_alpha
+        );
+        let (_, ground_style) = active_grid(&camera, &frame.plane, policy, [1.0; 4], 1.0, None, 500.0);
+        assert!(
+            (ground_style.major_alpha - ground_style.minor_alpha).abs() < 1e-6,
+            "the world's levels are equal"
+        );
+    }
+
+    /// A fixed "Grid extent" bounds the program grid too, exactly as it bounds the
+    /// native ground: without this the Coin grid ignored the setting entirely.
+    #[test]
+    fn a_fixed_grid_radius_reaches_the_program_frame() {
+        let mut view = slab_view();
+        view.set_grid_radius(Some(800.0));
+        let radius = view.active_workplane().program_patch_radius(
+            &view.camera,
+            GridPolicy {
+                minor: 10.0,
+                major: 100.0,
+                ..GridPolicy::default()
+            },
+            Some(800.0),
+        );
+        assert!(
+            (f64::from(radius) - 800.0).abs() < 1e-6,
+            "the user's extent: {radius}"
+        );
+    }
+
+    /// The stroke setting reaches the drawn layer **and** the Coin frame: the minor level
+    /// switches form, and a width above the hairline becomes ribbon triangles.
+    #[test]
+    fn the_grid_stroke_reaches_the_layer_and_the_program_frame() {
+        let mut view = slab_view();
+        // The cross off, so the only triangles in the queue are a wide ground stroke.
+        assert!(view.set_axis_cross(false));
+        assert_eq!(
+            view.grid_stroke(),
+            (grid::MinorStyle::Dots, 1.0, 1.0),
+            "the default is dots at the hairline"
+        );
+        assert!(
+            view.grid_queue
+                .packets
+                .iter()
+                .all(|packet| packet.topology != Topology::Triangles),
+            "a hairline ground is lines and points, not quads"
+        );
+
+        assert!(view.set_grid_stroke(grid::MinorStyle::Lines, 3.0, 2.0));
+        let packets = &view.grid_queue.packets;
+        assert!(
+            packets.iter().all(|packet| packet.topology != Topology::Points),
+            "the lattice replaces the dots"
+        );
+        assert!(
+            packets
+                .iter()
+                .filter(|packet| packet.topology == Topology::Triangles)
+                .count()
+                >= 2,
+            "both levels are strokes"
+        );
+        assert!(
+            packets.iter().all(|packet| !packet.state.ribbon),
+            "a grid stroke is plain geometry, not a feathered ribbon"
+        );
+        // ...and it must **blend**: the opaque scene pipeline is `REPLACE`, so a triangle
+        // drawn through it ignores the per-vertex alpha that carries the opacity, the
+        // radial fade and the edge-on fade. `BLENDED_DEPTH` selects the blended variant.
+        assert!(
+            packets
+                .iter()
+                .filter(|packet| packet.topology == Topology::Triangles)
+                .all(|packet| packet.state.depth == BLENDED_DEPTH),
+            "a wide grid stroke blends its ink"
+        );
+        // The hairlines keep the depth-writing default: only the quads need the variant.
+        assert!(
+            packets
+                .iter()
+                .filter(|packet| packet.topology != Topology::Triangles)
+                .all(|packet| packet.state.depth == DepthState::default()),
+            "a hairline is unchanged"
+        );
+
+        // The same stroke reaches the Coin frame, in the plane's units.
+        let frame = view.active_workplane().view_workplane(
+            &view.camera,
+            view.grid_policy(),
+            view.grid_radius,
+        );
+        assert!(frame.minor_lines);
+        assert!(frame.major_width > frame.minor_width, "3 px vs 2 px");
+        assert!(frame.minor_width > 0.0);
+
+        assert!(
+            !view.set_grid_stroke(grid::MinorStyle::Lines, 3.0, 2.0),
+            "a no-op reports no change"
+        );
+    }
+
+    /// A wide stroke really is the requested width **on screen**: the host converts pixels
+    /// to the plane's units at the origin, so the ribbon projects to that many device
+    /// pixels where the plane meets its origin.
+    #[test]
+    fn a_wide_stroke_is_the_requested_pixel_width() {
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(ferrocad_stage::Stage::new().with_item(named_slab()));
+        view.camera = perspective_camera([100, 100]);
+        view.set_grid(true);
+        assert!(view.set_axis_cross(false));
+        assert!(view.set_grid_stroke(grid::MinorStyle::Dots, 6.0, 1.0));
+        view.refresh();
+
+        // The world axis line (`v = 0`) is the one at the origin's depth, so its quad's
+        // lateral corners are exactly 6 px apart.
+        let packet = view
+            .grid_queue
+            .packets
+            .iter()
+            .filter(|packet| packet.topology == Topology::Triangles)
+            .max_by_key(|packet| packet.geometry.as_ref().map_or(0, |g| g.vertices.len()))
+            .expect("the major stroke");
+        let vertices = &packet.geometry.as_ref().unwrap().vertices;
+        let at = |v: &Vertex| {
+            project_device(
+                &view.camera,
+                Vector3::new(
+                    f64::from(v.position[0]),
+                    f64::from(v.position[1]),
+                    f64::from(v.position[2]),
+                ),
+            )
+            .expect("a quad corner projects")
+        };
+        // Corners 0 and 3 are the two sides of the first segment.
+        let (a, b) = (at(&vertices[0]), at(&vertices[3]));
+        let width = (a[0] - b[0]).hypot(a[1] - b[1]);
+        assert!(
+            (width - 6.0).abs() < 0.5,
+            "6 px requested, {width} px drawn"
+        );
+    }
+
+    /// A stroke is measured in **device** pixels at any display scale: `scale_for` uses
+    /// the render target's device height, and the Coin shader's `fwidth` is per device
+    /// pixel too, so a device-pixel-ratio change cannot make the two backends disagree.
+    /// (It does mean the number is physical: on a 2× display "4 px" is 2 logical pixels,
+    /// in both backends.)
+    #[test]
+    fn a_stroke_is_measured_in_device_pixels_at_any_scale() {
+        use ferrocad_graphics::Viewport;
+
+        let camera = |device: [u32; 2], ratio: f32| Camera {
+            viewport: Viewport::new(device, ratio),
+            ..perspective_camera(device)
+        };
+        // The same 4-device-pixel stroke on a 1× and a 2× target: the 2× target doubles
+        // the device height, so the world width that projects to 4 device pixels halves.
+        let one = stroke_width(&camera([100, 100], 1.0), &Workplane::world(), 4.0);
+        let two = stroke_width(&camera([200, 200], 2.0), &Workplane::world(), 4.0);
+        assert!(one > 0.0 && two > 0.0);
+        assert!(
+            (one * 0.5 - two).abs() < 1e-9,
+            "4 device px is half the world width at 2×: {one} vs {two}"
+        );
+
+        // The hairline is the device-space hairline at every scale: one logical pixel on
+        // a 2× display is still drawn by the shader as one *device* pixel.
+        assert_eq!(stroke_width(&camera([100, 100], 1.0), &Workplane::world(), 1.0), 0.0);
+        assert_eq!(stroke_width(&camera([200, 200], 2.0), &Workplane::world(), 1.0), 0.0);
+    }
+
+    /// The Coin frame carries the **same ink** the native generator draws. A shader with
+    /// a strength of its own (the mod's 0.65) drew a 1 px line 4× heavier than the native
+    /// 0.15, which reads as a thicker line at the same width.
+    #[test]
+    fn the_coin_frame_carries_the_native_ink() {
+        let mut view = slab_view();
+        let ink = |view: &InventorViewport<FakeView>| {
+            let frame = view.active_workplane().view_workplane(
+                &view.camera,
+                view.grid_policy(),
+                view.grid_radius,
+            );
+            (frame.minor_alpha, frame.major_alpha)
+        };
+
+        // The world ground draws both levels at the token alpha.
+        let (minor, major) = ink(&view);
+        assert!((minor - grid::GRID_ALPHA).abs() < 1e-6, "{minor}");
+        assert!((major - grid::GRID_ALPHA).abs() < 1e-6, "{major}");
+
+        // A bound face keeps the workplane's 1:2 minor:major ratio.
+        assert!(view.set_workplane_from_element(7, Some("Face1")));
+        let (minor, major) = ink(&view);
+        assert!((minor - grid::GRID_ALPHA).abs() < 1e-6);
+        assert!((major - 2.0 * grid::GRID_ALPHA).abs() < 1e-6, "{major}");
+
+        // The user's opacity multiplies both, in the shader as in the generator.
+        assert!(view.set_grid_alpha(0.5));
+        let (minor, major) = ink(&view);
+        assert!((minor - 0.5 * grid::GRID_ALPHA).abs() < 1e-6, "{minor}");
+        assert!((major - grid::GRID_ALPHA).abs() < 1e-6, "{major}");
+    }
+
+    /// The program (Coin) grid's patch radius is the native grid's rule, and `0` for a
+    /// plane with no surface behind it: the host writes that one scalar into
+    /// `Frame.workplane_origin.w`, so the mod grid and the native layer agree.
+    #[test]
+    fn the_program_grid_patch_radius_matches_the_native_grid() {
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(ferrocad_stage::Stage::new().with_item(named_slab()));
+        view.camera = perspective_camera([100, 100]);
+        view.set_grid(true);
+        view.set_grid_steps(1.0, 10.0);
+        view.refresh();
+
+        // The world plane has no finite surface, so it gets the native ground's extent:
+        // the camera-following radius, never `0` (an unbounded plane is cut only by the
+        // shader's per-pixel horizon fade, which draws a band through the model).
+        assert_eq!(
+            view.active_workplane()
+                .program_patch_radius(&view.camera, view.grid_policy(), None),
+            GridSpec::radius_for(&view.camera) as f32
+        );
+
+        // A face binds a finite surface. The value is the native layer's patch, computed
+        // on the same effective major step.
+        assert!(view.set_workplane_from_element(7, Some("Face1")));
+        let active = view.active_workplane().clone();
+        let (minor, major) = plane_steps(
+            active.extent,
+            ground_radius(&view.camera, view.grid_radius),
+            view.grid_policy(),
+        );
+        let (_, major) = grid::effective_steps(&view.camera, &active.plane, minor, major);
+        let expected = (3.0 * active.extent.expect("a face has an extent")).max(2.0 * major) as f32;
+        let radius = active.program_patch_radius(&view.camera, view.grid_policy(), None);
+        assert!(
+            (radius - expected).abs() < 1e-6,
+            "the program patch is the native patch: {radius} vs {expected}"
+        );
+        assert!(radius > 0.0);
+
+        // A world-standard plane carries no surface, so it returns to the ground extent.
+        assert!(view.set_standard_plane(ferrocad_stage::StandardPlane::Top));
+        assert_eq!(
+            view.active_workplane()
+                .program_patch_radius(&view.camera, view.grid_policy(), None),
+            GridSpec::radius_for(&view.camera) as f32
+        );
+    }
+
+    /// A view that records the workplane carried by the frame's program view.
+    struct WorkplaneRecordingView {
+        frames: Rc<RefCell<Vec<Option<WorkplaneFrame>>>>,
+    }
+
+    impl InventorView for WorkplaneRecordingView {
+        type Surface = ();
+        type Error = std::io::Error;
+
+        fn size(&self) -> [u32; 2] {
+            [100, 100]
+        }
+        fn draw(&mut self, _queue: &RenderQueue, _camera: &Camera) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn borrow_surface(&self) -> Option<&()> {
+            None
+        }
+        fn image(&mut self) -> Result<ImageData, Self::Error> {
+            Ok(ImageData::default())
+        }
+        fn draw_frame(&mut self, views: &[ViewSpec<'_>]) -> Result<(), Self::Error> {
+            let program = views.iter().find(|view| {
+                view.queue
+                    .packets
+                    .iter()
+                    .any(|packet| packet.state.program.is_some())
+            });
+            self.frames
+                .borrow_mut()
+                .push(program.and_then(|view| view.workplane));
+            Ok(())
+        }
+    }
+
+    /// W4: the Coin grid reads the active workplane from the frame, not world `XY`. The
+    /// viewport hands the program view the plane **and the native grid's extent**, so the
+    /// shader draws the same patch the native layer would (an unbounded plane has no
+    /// extent to fade against, and its horizon shows as a band).
+    #[test]
+    fn coin_grid_mod_tracks_the_active_workplane_frame() {
+        let frames = Rc::new(RefCell::new(Vec::new()));
+        let camera = perspective_camera([100, 100]);
+        let mut viewport = InventorViewport::new(
+            WorkplaneRecordingView {
+                frames: frames.clone(),
+            },
+            camera,
+            empty_scene(),
+        );
+        viewport.set_overlays(vec![program_scene()]);
+        viewport.set_grid_steps(1.0, 10.0);
+
+        viewport.refresh();
+        let world = frames.borrow().last().cloned().expect("a program view");
+        let world = world.expect("the program view carries a plane");
+        assert_eq!(world.origin, [0.0, 0.0, 0.0]);
+        assert_eq!(world.u, [1.0, 0.0, 0.0]);
+        assert_eq!(world.v, [0.0, 1.0, 0.0]);
+        assert_eq!(world.n, [0.0, 0.0, 1.0]);
+        assert_eq!(
+            world.radius,
+            GridSpec::radius_for(&viewport.camera) as f32,
+            "the world plane carries the native ground's extent"
+        );
+
+        let frame = FaceFrame {
+            plane: Workplane::new(
+                Vector3::new(10.0, 20.0, 30.0),
+                Vector3::new(0.0, 1.0, 0.0),
+                Vector3::new(0.0, 0.0, 1.0),
+                ferrocad_stage::WorkplaneKind::Face {
+                    entity: 7,
+                    element: "Face1".to_owned(),
+                },
+            )
+            .expect("a right-handed face frame"),
+            radius: 15.0,
+        };
+        assert!(viewport.set_active_workplane(ActiveWorkplane::of(&frame)));
+        viewport.refresh();
+
+        let bound = frames.borrow().last().cloned().expect("a program view");
+        let bound = bound.expect("the program view carries a plane");
+        assert_eq!(bound.origin, [10.0, 20.0, 30.0]);
+        assert_eq!(bound.u, [0.0, 1.0, 0.0]);
+        assert_eq!(bound.v, [0.0, 0.0, 1.0]);
+        assert_eq!(bound.n, [1.0, 0.0, 0.0]);
+
+        let (minor, major) = {
+            let (minor, major) = plane_steps(Some(frame.radius), 0.0, viewport.grid_policy());
+            grid::effective_steps(&viewport.camera, &frame.plane, minor, major)
+        };
+        assert_eq!(bound.minor, minor as f32, "the host's minor step");
+        assert_eq!(bound.major, major as f32, "the host's major step");
+        let expected = (3.0 * frame.radius).max(2.0 * major) as f32;
+        assert!(
+            (bound.radius - expected).abs() < 1e-6,
+            "the face patch is the native rule: {} vs {expected}",
+            bound.radius
+        );
+        assert!(bound.radius > 0.0);
     }
 
     #[test]
@@ -8759,7 +9956,7 @@ mod tests {
 
         // Hovering with no tool would bind nothing, so it must not add a second grid —
         // but the face is still resolved, so `Set WP` and the hover report keep working.
-        assert_eq!(view.grid_queue.len(), 5, "idle hover adds no second grid");
+        assert_eq!(local_packets(&view), 0, "idle hover adds no second grid");
         assert!(view.hover_face.is_some(), "the face is still resolved");
         assert!(view.active_workplane().is_default());
     }
@@ -8770,7 +9967,10 @@ mod tests {
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 8, "the default plane previews the bind");
+        assert!(
+            local_packets(&view) > 0,
+            "the default plane previews the bind"
+        );
 
         // Bind the face (the click the bloom is previewing), then hover the other face:
         // a bound plane does not preview a different one.
@@ -8792,13 +9992,15 @@ mod tests {
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 8, "Face1 bloomed");
+        assert!(local_packets(&view) > 0, "Face1 bloomed");
 
-        // Face2 is a different part, so its grid must wait out its own dwell.
+        // Face2 is a different part, so its grid must wait out its own dwell. Pin the
+        // dwell start so a scheduling pause longer than the dwell cannot bloom it.
         assert!(view.handle_pointer([70.0, 50.0]));
+        view.hover_face.as_mut().unwrap().since = std::time::Instant::now();
         view.sync_grid();
         assert_eq!(view.hover_face.as_ref().unwrap().part, 1);
-        assert_eq!(view.grid_queue.len(), 5, "the new face has not rested yet");
+        assert_eq!(local_packets(&view), 0, "the new face has not rested yet");
     }
 
     #[test]
@@ -8823,7 +10025,7 @@ mod tests {
         // layers are allocated once, so a hover that comes and goes leaks nothing.
         assert!(view.handle_pointer([98.0, 2.0]));
         view.sync_grid();
-        assert_eq!(view.grid_queue.len(), 5);
+        assert_eq!(local_packets(&view), 0);
         view.handle_pointer([30.0, 50.0]);
         view.hover_face.as_mut().unwrap().since -= FACE_DWELL;
         view.sync_grid();
@@ -8834,7 +10036,6 @@ mod tests {
     #[test]
     fn activating_the_face_makes_it_the_snap_plane_and_escape_clears_it() {
         use ferrocad_stage::WorkplaneKind;
-        use ferrocad_stage::grid;
 
         let mut view = slab_view();
         view.handle_pointer([30.0, 50.0]);
@@ -8850,25 +10051,40 @@ mod tests {
         );
         let context = view.snap_context().expect("a snap plane");
         assert_eq!(context.workplane.kind, active.plane.kind);
-        // The bound plane snaps on the same steps the world grid draws, so the grid and
-        // the snapping agree (the plane is the same grid, moved).
-        assert_eq!(context.minor, grid::MINOR_STEP);
-        assert_eq!(context.major, grid::MAJOR_STEP);
+        // The bound plane snaps on the steps its own patch is drawn on, so the grid and
+        // the snapping agree.
+        let (minor, major) = patch_steps(active.extent.expect("a face has an extent"));
+        assert_eq!(context.minor, minor);
+        assert_eq!(context.major, major);
 
         // The active plane is drawn without a dwell, and hovering it adds no second
-        // layer. (The packet count is an implementation detail; what matters is that a
-        // second sync with the pointer still on the face adds nothing.)
+        // layer. (The packet count is an implementation detail — a hidden minor level
+        // emits no dot packet at all — what matters is that a second sync with the
+        // pointer still on the face adds nothing.)
         let active_packets = view.grid_queue.len();
         assert!(
-            active_packets > 5,
+            local_packets(&view) > 0,
             "the bound plane adds a layer: {active_packets}"
         );
+        view.sync_grid();
+        assert_eq!(
+            view.grid_queue.len(),
+            active_packets,
+            "no second grid accumulates"
+        );
         // The world ground steps aside: one grid, at the bound plane, not two stacked.
+        // A hidden minor level emits no dot packet, so the ground is identified by its
+        // line packets: exactly one depth-biased ground (the triad's ghost is 8
+        // vertices, the ground's line field is far larger).
         assert_eq!(
             view.grid_queue
                 .packets
                 .iter()
-                .filter(|packet| packet.topology == Topology::Points)
+                .filter(|packet| {
+                    packet.topology == Topology::Lines
+                        && packet.state.depth_bias > 0.0
+                        && packet.geometry.as_ref().is_some_and(|g| g.vertices.len() > 16)
+                })
                 .count(),
             1,
             "only the bound plane's grid is drawn"
@@ -8888,14 +10104,12 @@ mod tests {
             view.snap_context().is_none(),
             "no world grid snapping by default"
         );
-        assert_eq!(view.grid_queue.len(), 5);
-        assert_eq!(
+        assert_eq!(local_packets(&view), 0, "the bound plane's layer is gone");
+        assert!(
             view.grid_queue
                 .packets
                 .iter()
-                .filter(|packet| packet.topology == Topology::Points)
-                .count(),
-            1,
+                .any(|packet| packet.topology == Topology::Lines),
             "the world ground is the only grid again"
         );
     }
@@ -9281,6 +10495,12 @@ mod tests {
     #[test]
     fn the_grid_steps_are_a_preference() {
         let mut view = grid_view();
+        // A fixed extent: the identity camera sits at the origin, so its disc is
+        // degenerate. The configured pair is what this test is about anyway.
+        assert!(view.set_grid_radius(Some(500.0)));
+        // The configured pair is what this test is about, so turn adaptive spacing off:
+        // otherwise the drawn ground is sized from its disc, not from these numbers.
+        assert!(view.set_grid_adaptive(false));
         assert_eq!(
             view.grid_steps(),
             (
@@ -9308,6 +10528,99 @@ mod tests {
         assert!(!view.set_grid_steps(0.0, 100.0));
         assert!(!view.set_grid_steps(100.0, 10.0));
         assert_eq!(view.grid_steps(), (20.0, 200.0));
+    }
+
+    /// The reported case: a Toy-sized model, `adaptive` off, a **1 mm minor under a 10 mm
+    /// major**. The minor lattice has to appear at 1 mm. The ground's disc used to floor
+    /// at 500 mm whatever the camera was, and the generator's density budget
+    /// (`DOT_COLUMNS`) is counted on the disc — so a disc 5–12× larger than the view
+    /// silently coarsened the minor step (1 mm was drawn at 5 mm).
+    #[test]
+    fn a_fine_configured_minor_draws_on_a_small_model() {
+        use ferrocad_graphics::Projection;
+        use ferrocad_types::{Placement, Rotation, Vector3};
+
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -40.0), Rotation::identity())
+                .to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 45.0f64.to_radians(),
+                near: 0.1,
+                far: 1_000.0,
+            },
+            viewport: ferrocad_graphics::Viewport::new([1000, 1000], 1.0),
+        };
+        let mut view = grid_view();
+        view.camera = camera;
+        assert!(view.set_grid_adaptive(false));
+        assert!(view.set_grid_steps(1.0, 10.0));
+        assert!(view.set_grid_stroke(grid::MinorStyle::Lines, 1.0, 1.0));
+        assert!(view.set_axis_cross(false));
+
+        let radius = ground_radius(&view.camera, view.grid_radius);
+        assert!(
+            (radius - 100.0).abs() < 1e-6,
+            "2.5 × the eye distance, no 500 mm floor: {radius}"
+        );
+        let (minor, major) = plane_steps(None, radius, view.grid_policy());
+        assert_eq!((minor, major), (1.0, 10.0), "the configured pair, uncoarsened");
+        assert_eq!(
+            grid::effective_steps(&view.camera, &Workplane::world(), minor, major),
+            (1.0, 10.0),
+            "a 1 mm step is ~30 px here, so the cull leaves it alone"
+        );
+
+        // The cross is off, so the first packet is the minor lattice.
+        let lattice = view.grid_queue.packets[0]
+            .geometry
+            .as_ref()
+            .expect("fresh geometry");
+        assert!(!lattice.vertices.is_empty(), "the minor lattice draws");
+        // Every vertex sits on a row or a column at an integer millimetre, and a row is
+        // subdivided at the same pitch — so the set of integer coordinates *is* the set
+        // of row offsets. A coarsened step (5 mm, say) would leave about a fifth as many.
+        let mut offsets: Vec<i64> = Vec::new();
+        for vertex in &lattice.vertices {
+            for value in [
+                f64::from(vertex.position[0]),
+                f64::from(vertex.position[1]),
+            ] {
+                if (value - value.round()).abs() < 1e-6 {
+                    offsets.push(value.round() as i64);
+                }
+            }
+        }
+        offsets.sort_unstable();
+        offsets.dedup();
+        assert!(
+            offsets.len() > 120,
+            "rows one millimetre apart across a 100 mm radius, not five: {}",
+            offsets.len()
+        );
+
+        // Zooming out keeps the **pitch**: the disc grows with the eye distance, and the
+        // minor level is clipped in *extent* by the generator instead of being coarsened.
+        // This is the reported defect — the subdivisions used to change as the camera
+        // pulled back.
+        for eye in [100.0, 400.0, 1_000.0] {
+            view.camera.view = Placement::new(Vector3::new(0.0, 0.0, -eye), Rotation::identity())
+                .to_matrix();
+            view.refresh();
+            let radius = ground_radius(&view.camera, view.grid_radius);
+            assert_eq!(
+                plane_steps(None, radius, view.grid_policy()),
+                (1.0, 10.0),
+                "eye {eye}: the configured pair is not coarsened"
+            );
+            let lattice = view.grid_queue.packets[0]
+                .geometry
+                .as_ref()
+                .expect("fresh geometry");
+            assert!(
+                !lattice.vertices.is_empty(),
+                "eye {eye}: the minor level still draws (clipped, not dropped)"
+            );
+        }
     }
 
     #[test]
@@ -9418,6 +10731,64 @@ mod tests {
         // screen-x component in view space.
         let up = target.transform(&Vector3::new(0.0, 0.0, 1.0));
         assert!(up.x.abs() < 1e-9, "the horizon is level: {up:?}");
+    }
+
+    /// The standard planes are upstream's frames, right-handed, and the camera that
+    /// looks down them is not mirrored.
+    ///
+    /// Cross-reference: FreeCAD's `WorkingPlane.PlaneBase.set_to_top` / `_front` /
+    /// `_side` set `u`/`v`/`axis` to exactly these triples, and its right view (camera
+    /// at `+X`) shows `+Y` to the right with `+Z` up. The `(Right)` label names the
+    /// **viewpoint**, not the half of the canvas the plane is drawn on: the standard
+    /// rows move the plane, not the camera, so a plane can sit anywhere on screen.
+    #[test]
+    fn the_standard_planes_match_upstream_and_stay_right_handed() {
+        use ferrocad_stage::StandardPlane;
+
+        let x = Vector3::new(1.0, 0.0, 0.0);
+        let y = Vector3::new(0.0, 1.0, 0.0);
+        let z = Vector3::new(0.0, 0.0, 1.0);
+        let negative_y = y.scale(-1.0);
+
+        // `screen_right` / `screen_up`: the world axis the snapped view must put on the
+        // screen's right and top. `Top` looks down `+Z`, so its up is the plane's `+Y`.
+        let cases = [
+            (StandardPlane::Top, x, y, z, x, y),
+            (StandardPlane::Front, x, z, negative_y, x, z),
+            (StandardPlane::Right, y, z, x, y, z),
+        ];
+
+        for (spec, u, v, n, screen_right, screen_up) in cases {
+            let mut view = identity_viewport(Scene::default());
+            view.set_standard_plane(spec);
+            let plane = view.active_workplane().plane.clone();
+            assert!((plane.u.sub(&u)).length() < 1e-9, "{spec:?} u: {:?}", plane.u);
+            assert!((plane.v.sub(&v)).length() < 1e-9, "{spec:?} v: {:?}", plane.v);
+            assert!((plane.n.sub(&n)).length() < 1e-9, "{spec:?} n: {:?}", plane.n);
+            // Right-handed, exactly as upstream's `u`, `v`, `axis`.
+            assert!(
+                (plane.u.cross(&plane.v).sub(&n)).length() < 1e-9,
+                "{spec:?} must be right-handed"
+            );
+
+            assert!(view.view_workplane());
+            let target = view
+                .snap
+                .as_ref()
+                .expect("a camera snap")
+                .target()
+                .to_matrix();
+            let right = target.transform(&screen_right);
+            assert!(
+                (right.x - 1.0).abs() < 1e-6 && right.y.abs() < 1e-6 && right.z.abs() < 1e-6,
+                "{spec:?} mirrors: {screen_right:?} should be screen-right, got {right:?}"
+            );
+            let up = target.transform(&screen_up);
+            assert!(
+                (up.y - 1.0).abs() < 1e-6 && up.x.abs() < 1e-6 && up.z.abs() < 1e-6,
+                "{spec:?} should keep {screen_up:?} up, got {up:?}"
+            );
+        }
     }
 
     #[test]
@@ -9567,16 +10938,30 @@ mod tests {
         use ferrocad_stage::StandardPlane;
 
         let mut view = slab_view();
-        // The cross off: the grid alone draws its dots and major lines.
+        // A three-quarter view: the top view is edge-on to `XZ`, where the grid now
+        // (correctly) fades out.
+        view.camera = gizmo_camera([100, 100]);
+        view.refresh();
+        // The cross off: the grid alone draws its own levels (which ones survive the
+        // screen-space cull depends on the adaptive step, so count the layer, not the
+        // packets).
         assert!(view.set_axis_cross(false));
-        assert_eq!(view.grid_queue.len(), 2, "the world ground");
+        let world = view.grid_queue.len();
+        assert!(world >= 1, "the world ground");
+        assert!(
+            view.grid_queue
+                .packets
+                .iter()
+                .any(|packet| packet.topology == Topology::Lines),
+            "the world ground's major lines"
+        );
 
         // The plane moving must not stack a second, dimmer grid underneath it: the
         // active plane *is* the one grid, so the packet count stays the same.
         assert!(view.set_standard_plane(StandardPlane::Front));
         assert_eq!(
             view.grid_queue.len(),
-            2,
+            world,
             "one grid, moved — not the world ground plus a local one"
         );
     }

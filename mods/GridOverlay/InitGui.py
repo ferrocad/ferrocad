@@ -126,11 +126,26 @@ def deactivate():
     return grid.apply()
 
 
-def _state(grid):
-    """The six dialog seeds, read back through :meth:`FerroCAD.Grid.snapshot`.
+def refresh():
+    """Re-read the shared store and hand the viewport its request.
 
-    ``snapshot()`` carries the four applied knobs; the shadow preferences are
-    persisted but have no view field yet, so they are read directly.
+    ``FerroCADGui.setSetting`` writes a knob and then asks the active backend to
+    re-read it. The native backend **is** the store, so the answer is
+    ``FerroCAD.Grid.apply()``. Without this hook a Settings edit — notably the
+    ``enabled`` switch — updated the store but never reached the viewport, which
+    kept drawing the grid it already had.
+    """
+    grid = grid_api()
+    if grid is None:
+        return {"status": UPSTREAM_STATUS}
+    return grid.apply()
+
+
+def _state(grid):
+    """The dialog seeds, read back through :meth:`FerroCAD.Grid.snapshot`.
+
+    ``snapshot()`` carries the applied knobs; the shadow preferences are persisted but
+    have no view field yet, so they are read directly.
     """
     snapshot = grid.snapshot()
     return {
@@ -138,6 +153,10 @@ def _state(grid):
         "color": str(snapshot["grid_color"]),
         "opacity": float(snapshot["grid_alpha"]),
         "spacing": float(snapshot["grid_minor"]),
+        "adaptive": bool(snapshot["grid_adaptive"]),
+        "minor_style": str(snapshot["grid_minor_style"]),
+        "major_width": float(snapshot["grid_major_width"]),
+        "minor_width": float(snapshot["grid_minor_width"]),
         "shadows": bool(grid.shadows),
         "shadow_opacity": float(grid.shadow_opacity),
     }
@@ -171,6 +190,14 @@ def apply_settings(values):
         grid.opacity = float(values["opacity"])
     if "spacing" in values:
         grid.spacing = float(values["spacing"])
+    if "adaptive" in values:
+        grid.adaptive = bool(values["adaptive"])
+    if "minor_style" in values:
+        grid.minor_style = str(values["minor_style"])
+    if "major_width" in values:
+        grid.major_width = float(values["major_width"])
+    if "minor_width" in values:
+        grid.minor_width = float(values["minor_width"])
     if "shadows" in values:
         grid.shadows = bool(values["shadows"])
     if "shadow_opacity" in values:
@@ -227,6 +254,35 @@ class GridOverlayCommand:
                     state["spacing"],
                     min=0.001,
                 ),
+                _field(
+                    "adaptive",
+                    "Adaptive spacing",
+                    "bool",
+                    state["adaptive"],
+                ),
+                _field(
+                    "minor_style",
+                    "Minor grid style",
+                    "enum",
+                    state["minor_style"],
+                    choices=["dots", "lines"],
+                ),
+                _field(
+                    "major_width",
+                    "Line width (px)",
+                    "float",
+                    state["major_width"],
+                    min=1.0,
+                    max=8.0,
+                ),
+                _field(
+                    "minor_width",
+                    "Minor line width (px)",
+                    "float",
+                    state["minor_width"],
+                    min=1.0,
+                    max=8.0,
+                ),
                 _field("shadows", "Show ground shadow", "bool", state["shadows"]),
                 _field(
                     "shadow_opacity",
@@ -262,6 +318,7 @@ def register_provider():
         priority=10,
         activate=activate,
         deactivate=deactivate,
+        refresh=refresh,
         settings=_grid.SETTINGS_SCHEMA if _grid is not None else None,
     )
     return True

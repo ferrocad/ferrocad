@@ -37,6 +37,10 @@ ATTRIBUTES = {
     "enabled": False,
     "color": "#94a3b8",
     "opacity": 1.0,
+    "adaptive": True,
+    "minor_style": "dots",
+    "major_width": 1.0,
+    "minor_width": 1.0,
     "minor": 10.0,
     "major": 100.0,
     "radius": 0.0,
@@ -110,11 +114,17 @@ class GridProviderFacadeTests(unittest.TestCase):
         )
         for entry in _grid.SETTINGS_SCHEMA:
             self.assertEqual(entry["default"], ATTRIBUTES[entry["name"]], entry["name"])
-            self.assertIn(entry["kind"], ("bool", "color", "float", "quantity"))
+            self.assertIn(
+                entry["kind"], ("bool", "color", "enum", "float", "quantity")
+            )
 
         self.assertFalse(self.grid.enabled)
         self.assertEqual(self.grid.color, "#94a3b8")
         self.assertEqual(self.grid.opacity, 1.0)
+        self.assertTrue(self.grid.adaptive)
+        self.assertEqual(self.grid.minor_style, "dots")
+        self.assertEqual(self.grid.major_width, 1.0)
+        self.assertEqual(self.grid.minor_width, 1.0)
         self.assertEqual(self.grid.spacing, 10.0)
         self.assertEqual(self.grid.minor, 10.0)
         self.assertEqual(self.grid.major, 100.0)
@@ -148,6 +158,10 @@ class GridProviderFacadeTests(unittest.TestCase):
                 "enabled": "True",
                 "color": "#ff0000",
                 "opacity": "0.5",
+                "adaptive": "True",
+                "minor_style": "dots",
+                "major_width": "1.0",
+                "minor_width": "1.0",
                 "minor": "2.5 mm",
                 "major": "25 mm",
                 "radius": "750 mm",
@@ -192,6 +206,24 @@ class GridProviderFacadeTests(unittest.TestCase):
         self.assertFalse(rejected["ok"])
         self.assertIn("at most 1", rejected["error"])
         self.assertEqual(self.grid.opacity, 1.0, "a rejected row write changes nothing")
+
+    def test_the_spacing_rows_say_when_the_drawn_step_is_adaptive(self):
+        """The pane's chip: adaptive spacing derives the step, so the two rows say so.
+
+        ``minor``/``major`` are the *fallback* then, and a row that is not the drawn
+        value must not pretend otherwise.
+        """
+        self.register_native()
+        self.grid.adaptive = True
+        rows = self.rows()
+        self.assertEqual(rows["minor"]["status"], "adaptive")
+        self.assertEqual(rows["major"]["status"], "adaptive")
+        self.assertEqual(rows["enabled"]["status"], "provider")
+
+        self.grid.adaptive = False
+        rows = self.rows()
+        self.assertEqual(rows["minor"]["status"], "provider")
+        self.assertEqual(rows["major"]["status"], "provider")
 
     # -- providers -----------------------------------------------------------
     def test_a_provider_switch_changes_the_rows(self):

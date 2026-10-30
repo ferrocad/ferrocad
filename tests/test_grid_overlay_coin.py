@@ -35,6 +35,10 @@ KNOBS = {
     "color",
     "opacity",
     "base_spacing",
+    "adaptive",
+    "minor_style",
+    "major_width",
+    "minor_width",
     "shadow_enabled",
     "shadow_opacity",
 }
@@ -238,6 +242,9 @@ class GridOverlayCoinTests(unittest.TestCase):
         FerroCADGui.unregisterProvider("grid", "coin")
         FreeCADGui._cancel_all()
         close_documents()
+        # The shared grid store is process-global: a spacing or adaptive write here must
+        # not seed the next suite's dialog.
+        FerroCAD.Grid.reset()
 
     def spec(self):
         return FreeCADGui.runCommand(COMMAND)
@@ -272,6 +279,9 @@ class GridOverlayCoinTests(unittest.TestCase):
         # The switch is a stored preference, not something a provider sets, so seed
         # the "on" state explicitly before reading the dialog's rows.
         FerroCAD.Grid.enabled = True
+        # `opacity` is the **shared** `FerroCAD.Grid.opacity` (the host resolves both
+        # backends' ink from it), not this mod's private store.
+        FerroCAD.Grid.opacity = 0.4
         spec = self.fallback_spec()
         self.assertEqual(spec["title"], "Grid Overlay (Coin) Settings")
         self.assertEqual(spec["accept"], "Apply")
@@ -281,16 +291,30 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertEqual(set(fields), KNOBS)
         self.assertEqual(fields["enabled"]["value"], True)
         self.assertEqual(fields["color"]["value"], "#808080")
-        self.assertAlmostEqual(fields["opacity"]["value"], 0.65)
-        self.assertAlmostEqual(fields["base_spacing"]["value"], 1.0)
+        self.assertAlmostEqual(fields["opacity"]["value"], 0.4)
+        # `base_spacing` is the shader's ladder unit and now follows the shared
+        # `FerroCAD.Grid.minor` (10 mm by default), not a private 1.0.
+        self.assertAlmostEqual(fields["base_spacing"]["value"], 10.0)
+        # Adaptive spacing is the shared grid knob too: the host resolves the step, so
+        # the Coin dialog must not offer a private one.
+        self.assertEqual(fields["adaptive"]["value"], FerroCAD.Grid.adaptive)
+        self.assertEqual(fields["minor_style"]["value"], FerroCAD.Grid.minor_style)
+        self.assertAlmostEqual(fields["major_width"]["value"], FerroCAD.Grid.major_width)
+        self.assertAlmostEqual(fields["minor_width"]["value"], FerroCAD.Grid.minor_width)
         self.assertEqual(fields["shadow_enabled"]["value"], True)
         self.assertAlmostEqual(fields["shadow_opacity"]["value"], 0.30)
 
     def test_the_dialog_seeds_from_the_live_settings(self):
         FerroCAD.Grid.enabled = False
+        FerroCAD.Grid.minor = 2.0
+        FerroCAD.Grid.adaptive = False
+        FerroCAD.Grid.minor_style = "lines"
+        FerroCAD.Grid.major_width = 3.0
+        FerroCAD.Grid.minor_width = 2.0
         self.mod.SETTINGS.SetString("color", "#123456")
-        self.mod.SETTINGS.SetFloat("opacity", 0.5)
-        self.mod.SETTINGS.SetFloat("base_spacing", 2.0)
+        # `opacity` is the shared grid knob: the host resolves both backends' ink from
+        # it, so the mod's own parameter is no longer the authority.
+        FerroCAD.Grid.opacity = 0.5
         self.mod.SETTINGS.SetBool("shadow_enabled", False)
         self.mod.SETTINGS.SetFloat("shadow_opacity", 0.25)
 
@@ -305,6 +329,10 @@ class GridOverlayCoinTests(unittest.TestCase):
                 "color": "#123456",
                 "opacity": 0.5,
                 "base_spacing": 2.0,
+                "adaptive": False,
+                "minor_style": "lines",
+                "major_width": 3.0,
+                "minor_width": 2.0,
                 "shadow_enabled": False,
                 "shadow_opacity": 0.25,
             },
@@ -317,6 +345,10 @@ class GridOverlayCoinTests(unittest.TestCase):
                 "color": "#f87171",
                 "opacity": 0.5,
                 "base_spacing": 2.0,
+                "adaptive": False,
+                "minor_style": "lines",
+                "major_width": 3.0,
+                "minor_width": 2.0,
                 "shadow_enabled": True,
                 "shadow_opacity": 0.25,
             }
@@ -324,11 +356,19 @@ class GridOverlayCoinTests(unittest.TestCase):
 
         view = result["view"]
         self.assertTrue(view["grid"], "the one switch is on")
+        self.assertFalse(view["grid_adaptive"], "the shared knob reached the shell")
+        self.assertEqual(view["grid_minor_style"], "lines")
+        self.assertAlmostEqual(view["grid_major_width"], 3.0)
+        self.assertAlmostEqual(view["grid_minor_width"], 2.0)
         self.assertTrue(view["grid_overlay"], "the overlay hides the native ground")
         self.assertTrue(self.mod.setting("enabled"))
         self.assertEqual(self.mod.setting("color"), "#f87171")
         self.assertAlmostEqual(self.mod.setting("opacity"), 0.5)
         self.assertAlmostEqual(self.mod.setting("base_spacing"), 2.0)
+        self.assertFalse(self.mod.setting("adaptive"))
+        self.assertEqual(self.mod.setting("minor_style"), "lines")
+        self.assertAlmostEqual(self.mod.setting("major_width"), 3.0)
+        self.assertAlmostEqual(self.mod.setting("minor_width"), 2.0)
         self.assertTrue(self.mod.setting("shadow_enabled"))
         self.assertAlmostEqual(self.mod.setting("shadow_opacity"), 0.25)
 
@@ -345,6 +385,32 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertNotIn("fields", result)
 
     # -- the pull bridge ------------------------------------------------
+    def test_the_shells_bootstrap_gets_the_overlay_claim(self):
+        """``refresh_providers`` is how a persisted Coin grid claims the native ground.
+
+        The provider's ``activate`` runs on a document activation **inside Python**, and
+        the shell never sees the request it returns, so a selected Coin grid kept the
+        built-in grid drawn underneath it until some other command applied a view. The
+        shell re-reads the active backend through this bridge once it has a viewport.
+        """
+        import json
+
+        import ferrocad_shell
+
+        self.mod.SETTINGS.SetBool("enabled", True)
+        FerroCAD.Grid.enabled = True
+        result = json.loads(ferrocad_shell.refresh_providers("grid"))
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["view"]["grid_overlay"], "on claims the native ground")
+
+        self.mod.SETTINGS.SetBool("enabled", False)
+        FerroCAD.Grid.enabled = False
+        result = json.loads(ferrocad_shell.refresh_providers("grid"))
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(
+            result["view"]["grid_overlay"], "off releases the claim to the native grid"
+        )
+
     def test_enabling_registers_a_coin_switch_and_disabling_removes_it(self):
         grid = self.mod.ShaderGrid("Doc")
         with mock.patch.object(FerroCADGui, "addOverlay") as add, \
@@ -368,7 +434,9 @@ class GridOverlayCoinTests(unittest.TestCase):
             add.reset_mock()
             remove.reset_mock()
 
-            self.mod.SETTINGS.SetFloat("base_spacing", 2.0)
+            # The spacing is the shared `FerroCAD.Grid` knob when the semantic API
+            # exists (the private key is only the upstream fallback).
+            FerroCAD.Grid.minor = 2.0
             self.mod.SETTINGS.SetString("color", "#ff0000")
             grid.apply_settings()
 
@@ -393,6 +461,77 @@ class GridOverlayCoinTests(unittest.TestCase):
         )
         self.assertIn("shadow_data", names, "the deferred block is still carried")
 
+    def test_the_shader_reads_the_host_workplane_frame(self):
+        """The grid follows the active plane through `Frame`, not a mod parameter.
+
+        The workplane is host state (plan §3.4): a mod cannot claim a plane the
+        viewport is not on, so the shader reads `Frame.workplane_*` and the mod
+        declares no `SoShaderParameter*` for it.
+        """
+        source = MOD_WGSL.read_text(encoding="utf-8")
+        for name in (
+            "workplane_origin",
+            "workplane_u",
+            "workplane_v",
+            "workplane_n",
+        ):
+            self.assertIn(name, source)
+        # The patch radius rides the origin's `w` and fades radially when non-zero.
+        self.assertIn("frame.workplane_origin.w", source)
+        self.assertIn("PATCH_FADE_START", source)
+        # The grid is built in the plane's u/v frame, not world XY.
+        self.assertIn("dot(rel, plane_u)", source)
+        self.assertIn("dot(rel, plane_v)", source)
+        self.assertNotIn("p.xy / program.values.x", source)
+
+        grid = self.mod.ShaderGrid("Doc")
+        names = {parameter.name for parameter in grid.parameters}
+        for forbidden in (
+            "workplane_origin",
+            "workplane_u",
+            "workplane_v",
+            "workplane_n",
+            "patch_radius",
+        ):
+            self.assertNotIn(forbidden, names, "the plane is host-provided")
+
+    def test_the_sizing_rows_are_the_shared_grid_knobs(self):
+        """Spacing and extent are `FerroCAD.Grid` knobs, not a private Coin store.
+
+        The Coin shader's ladder is built in units of the minor step and its extent is
+        the host's patch radius, so both rows must be the shared ones: filtering them
+        out left the Coin grid with no sizing settings at all, and a private
+        ``base_spacing`` that nothing else could see.
+        """
+        rows = {entry["name"]: entry for entry in self.mod.settings_schema()}
+        self.assertIn("minor", rows, "the spacing row")
+        self.assertIn("major", rows, "the line-spacing row")
+        self.assertIn("radius", rows, "the extent row")
+        self.assertIn("adaptive", rows, "the adaptive-spacing row")
+        self.assertIn("minor_style", rows, "the minor-form row")
+        self.assertIn("major_width", rows, "the line-width row")
+        self.assertIn("minor_width", rows, "the minor-width row")
+
+        FerroCAD.Grid.minor = 25.0
+        self.assertAlmostEqual(rows["minor"]["get"](), 25.0)
+        rows["minor"]["set"](12.5)
+        self.assertAlmostEqual(FerroCAD.Grid.minor, 12.5)
+        self.assertAlmostEqual(
+            self.mod.setting("base_spacing"),
+            12.5,
+            "the shader's ladder unit follows the shared minor step",
+        )
+
+        rows["major"]["set"](125.0)
+        self.assertAlmostEqual(FerroCAD.Grid.major, 125.0)
+
+        FerroCAD.Grid.radius = 800.0
+        self.assertAlmostEqual(rows["radius"]["get"](), 800.0)
+        self.assertAlmostEqual(self.mod.setting("radius"), 800.0)
+
+        # Leave the shared store at its defaults for the next test.
+        FerroCAD.Grid.reset()
+
     def test_the_mod_uses_no_qt_and_no_live_scene_graph(self):
         for name in ("QtCore", "QtGui", "QtWidgets", "QDialog", "QSettings"):
             self.assertFalse(hasattr(self.mod, name), name)
@@ -401,6 +540,8 @@ class GridOverlayCoinTests(unittest.TestCase):
 
     # -- per document ---------------------------------------------------
     def test_only_the_active_document_keeps_an_overlay(self):
+        # `ensure_grid` binds only while the feature's shared switch is on.
+        FerroCAD.Grid.enabled = True
         with mock.patch.object(FerroCADGui, "addOverlay") as add, \
                 mock.patch.object(FerroCADGui, "removeOverlay") as remove:
             FreeCAD.newDocument("G5DocA")

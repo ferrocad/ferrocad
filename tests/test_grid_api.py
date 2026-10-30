@@ -19,6 +19,10 @@ VIEW_KEYS = {
     "grid",
     "grid_minor",
     "grid_major",
+    "grid_adaptive",
+    "grid_minor_style",
+    "grid_major_width",
+    "grid_minor_width",
     "grid_radius",
     "grid_color",
     "grid_alpha",
@@ -44,6 +48,12 @@ class GridApiTests(unittest.TestCase):
         self.assertFalse(self.grid.enabled)
         self.assertEqual(self.grid.color, "#94a3b8")
         self.assertEqual(self.grid.opacity, 1.0)
+        self.assertTrue(
+            self.grid.adaptive, "adaptive spacing is the shipped look"
+        )
+        self.assertEqual(self.grid.minor_style, "dots")
+        self.assertEqual(self.grid.major_width, 1.0)
+        self.assertEqual(self.grid.minor_width, 1.0)
         self.assertEqual(self.grid.spacing, 10.0)
         self.assertEqual(self.grid.minor, 10.0)
         self.assertEqual(self.grid.major, 100.0)
@@ -78,6 +88,27 @@ class GridApiTests(unittest.TestCase):
     def test_each_property_round_trips(self):
         self.grid.enabled = True
         self.assertTrue(self.grid.enabled)
+
+        self.grid.adaptive = False
+        self.assertFalse(self.grid.adaptive)
+        self.assertFalse(
+            self.prefs.GetBool("adaptive", True), "one typed key per knob"
+        )
+        self.assertFalse(self.grid.apply()["view"]["grid_adaptive"])
+        self.grid.adaptive = True
+        self.assertTrue(self.grid.apply()["view"]["grid_adaptive"])
+
+        self.grid.minor_style = "LINES"
+        self.assertEqual(self.grid.minor_style, "lines", "the form is normalised")
+        self.assertEqual(self.grid.apply()["view"]["grid_minor_style"], "lines")
+        self.grid.minor_style = "dots"
+
+        self.grid.major_width = 3
+        self.grid.minor_width = 2.5
+        self.assertEqual(self.grid.major_width, 3.0)
+        self.assertEqual(self.grid.minor_width, 2.5)
+        view = self.grid.apply()["view"]
+        self.assertEqual((view["grid_major_width"], view["grid_minor_width"]), (3.0, 2.5))
 
         self.grid.color = "#F00"
         self.assertEqual(self.grid.color, "#ff0000", "a short colour is expanded")
@@ -134,6 +165,18 @@ class GridApiTests(unittest.TestCase):
         self.assertAlmostEqual(self.grid.shadow_opacity, 0.30)
         self.assertEqual(self.grid.radius, 0.0)
 
+    def test_a_bad_stroke_raises_and_leaves_the_store_untouched(self):
+        for bad in ("dashes", "", "dot", 3, None):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                self.grid.minor_style = bad
+        self.assertEqual(self.grid.minor_style, "dots")
+
+        for value in (0, 0.5, 9, -2, float("nan"), float("inf")):
+            for name in ("major_width", "minor_width"):
+                with self.assertRaises(ValueError, msg="%s=%r" % (name, value)):
+                    setattr(self.grid, name, value)
+        self.assertEqual((self.grid.major_width, self.grid.minor_width), (1.0, 1.0))
+
     def test_apply_builds_only_the_keys_the_shell_understands(self):
         self.grid.enabled = True
         self.grid.color = "#f87171"
@@ -150,6 +193,10 @@ class GridApiTests(unittest.TestCase):
                     "grid": True,
                     "grid_minor": 2.0,
                     "grid_major": 20.0,
+                    "grid_adaptive": True,
+                    "grid_minor_style": "dots",
+                    "grid_major_width": 1.0,
+                    "grid_minor_width": 1.0,
                     "grid_radius": 750.0,
                     "grid_color": "#f87171",
                     "grid_alpha": 0.5,
@@ -159,6 +206,16 @@ class GridApiTests(unittest.TestCase):
         self.assertEqual(set(self.grid.apply()["view"]), VIEW_KEYS)
         self.assertNotIn("shadow", " ".join(self.grid.apply()["view"]))
 
+    def test_the_schema_advertises_adaptive_spacing(self):
+        # The Settings tree renders this row as a checkbox; the store key is the
+        # attribute's own name.
+        entry = next(
+            item for item in self.grid.schema() if item["name"] == "adaptive"
+        )
+        self.assertEqual(entry["kind"], "bool")
+        self.assertEqual(entry["label"], "Adaptive spacing")
+        self.assertTrue(entry["default"])
+
     def test_apply_defaults_are_the_token_state(self):
         self.assertEqual(
             self.grid.apply(),
@@ -167,6 +224,10 @@ class GridApiTests(unittest.TestCase):
                     "grid": False,
                     "grid_minor": 10.0,
                     "grid_major": 100.0,
+                    "grid_adaptive": True,
+                    "grid_minor_style": "dots",
+                    "grid_major_width": 1.0,
+                    "grid_minor_width": 1.0,
                     "grid_radius": 0.0,
                     "grid_color": "#94a3b8",
                     "grid_alpha": 1.0,
@@ -174,13 +235,60 @@ class GridApiTests(unittest.TestCase):
             },
         )
 
-    def test_apply_rejects_a_major_below_the_minor(self):
-        # Each step is valid on its own; the pair is what apply() refuses.
+    def test_a_major_below_the_minor_is_refused(self):
+        # Each step is valid on its own; the pair is what matters.
         self.grid.minor = 50.0
-        self.grid.major = 5.0
         with self.assertRaises(ValueError) as caught:
-            self.grid.apply()
+            self.grid.major = 5.0
         self.assertIn("major", str(caught.exception))
+        self.assertGreaterEqual(
+            self.grid.major, self.grid.minor, "a rejected write leaves the pair usable"
+        )
+
+    def test_an_inverted_store_is_healed_rather_than_refused(self):
+        # A legacy key or an external edit can leave the pair inverted. `apply()` must
+        # still answer: raising would send *no* view request, and the viewport would
+        # keep drawing whatever it had (a disabled grid staying on screen).
+        self.prefs.SetFloat("minor", 590.036)
+        self.prefs.SetFloat("major", 169.926)
+        view = self.grid.apply()["view"]
+        self.assertEqual(view["grid_minor"], 590.036)
+        self.assertGreaterEqual(view["grid_major"], view["grid_minor"])
+
+    def test_raising_the_minor_past_the_major_steps_the_major_up(self):
+        self.grid.minor = 10.0
+        self.grid.major = 100.0
+        self.grid.minor = 250.0
+        self.assertEqual(
+            self.grid.major, 2500.0, "the next decade, not a pair apply() would refuse"
+        )
+        self.grid.apply()  # never raises
+
+    def test_a_major_equal_to_the_minor_lowers_the_minor_a_decade(self):
+        """The levels are a subdivision apart, so `minor == major` is not a state.
+
+        A minor step equal to the major one has no rows of its own — every lattice row
+        at that step *is* a major row — so the minor level vanishes and `minor_style`
+        and `minor_width` silently do nothing. Typing the same number into the major
+        row means "a grid at this pitch, subdivided a decade below".
+        """
+        self.grid.minor = 10.0
+        self.grid.major = 10.0
+        self.assertEqual((self.grid.minor, self.grid.major), (1.0, 10.0))
+        view = self.grid.apply()["view"]
+        self.assertLess(view["grid_minor"], view["grid_major"])
+
+    def test_a_stored_degenerate_pair_is_healed_and_written_back(self):
+        # The same state can arrive from a legacy key or an external edit.
+        self.prefs.SetFloat("minor", 10.0)
+        self.prefs.SetFloat("major", 10.0)
+        view = self.grid.apply()["view"]
+        self.assertEqual((view["grid_minor"], view["grid_major"]), (1.0, 10.0))
+        self.assertEqual(
+            (self.grid.minor, self.grid.major),
+            (1.0, 10.0),
+            "the repair is durable, so the pane and the drawing agree",
+        )
 
     def test_apply_does_not_raise_headless(self):
         self.assertEqual(FreeCAD.GuiUp, 0, "this suite runs headless")
@@ -198,6 +306,7 @@ class GridApiTests(unittest.TestCase):
         self.assertFalse(snapshot["grid"])
         self.assertEqual(snapshot["grid_minor"], 10.0)
         self.assertEqual(snapshot["grid_major"], 100.0)
+        self.assertTrue(snapshot["grid_adaptive"])
         self.assertIsNone(snapshot["grid_radius"], "0 is the camera-derived extent")
         self.assertEqual(snapshot["grid_color"], "#94a3b8")
         self.assertEqual(snapshot["grid_alpha"], 1.0)

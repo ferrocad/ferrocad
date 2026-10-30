@@ -16,8 +16,15 @@ removed from and re-added to the bridge.
 
 There is no Qt, no ``QSettings``, no ``getMainWindow`` and no live scene graph.
 Settings live in ``FreeCAD.ParamGet`` (in-memory today). Ground shadows keep the
-upstream parameters and the 80-slot ABI block but draw nothing: ``shadow_count``
-is always 0 (plan §3.5).
+upstream parameters and the 80-slot ABI block; the host fills it with each item's
+``(u, v)`` bounds in the **active plane's** frame, so a bound workplane is shaded too.
+
+The drawn grid follows the host's **active construction plane**. The plane's origin,
+its ``u``/``v``/``n`` axes and the patch radius arrive in the ``Frame`` uniform the
+viewport writes, not in a ``SoShaderParameter``: a mod cannot claim a plane the view
+is not on, so this adds no knob and no provider claim. A zero patch radius is the
+unbounded ground (the pre-workplane behaviour); a non-zero one fades the grid out
+radially around the plane origin (plan §3.4).
 
 The mod declares itself as the ``"coin"`` backend of the ``"grid"`` feature
 (priority 0). ``mods/GridOverlay`` declares the same feature as ``"ferrocad"``;
@@ -89,6 +96,15 @@ COIN_SCHEMA_KEYS = {
     "enabled": "enabled",
     "color": "color",
     "opacity": "opacity",
+    # The sizing rows are the **shared** `FerroCAD.Grid` knobs, not private ones: the
+    # host resolves the plane's effective minor/major steps for both backends.
+    "adaptive": "adaptive",
+    "minor_style": "minor_style",
+    "major_width": "major_width",
+    "minor_width": "minor_width",
+    "minor": "base_spacing",
+    "major": "major",
+    "radius": "radius",
     "shadows": "shadow_enabled",
     "shadow_opacity": "shadow_opacity",
 }
@@ -115,15 +131,49 @@ def grid_api():
 def setting(key):
     """Read one knob, clamped exactly as the upstream ``setting()`` does.
 
-    ``enabled`` is the shared switch when the semantic API exists, not a knob of
-    this mod: the shell's grid toggle owns ``FerroCAD.Grid.enabled`` and the
-    overlay has to follow it. On upstream FreeCAD the private knob is the
-    fallback.
+    ``enabled``, ``base_spacing`` and ``radius`` are the **shared**
+    ``FerroCAD.Grid`` knobs when the semantic API exists, not knobs of this mod:
+    the shell's grid toggle owns ``FerroCAD.Grid.enabled``, the Settings tree's
+    spacing/extent rows own ``minor``/``radius``, and the overlay has to follow
+    them. On upstream FreeCAD the private knobs are the fallback.
     """
-    if key == "enabled":
+    if key in (
+        "enabled",
+        "adaptive",
+        "minor_style",
+        "major_width",
+        "minor_width",
+        "opacity",
+        "base_spacing",
+        "major",
+        "radius",
+    ):
         grid = grid_api()
         if grid is not None:
-            return bool(grid.enabled)
+            if key == "enabled":
+                return bool(grid.enabled)
+            if key == "adaptive":
+                return bool(grid.adaptive)
+            if key == "minor_style":
+                return str(grid.minor_style)
+            if key == "major_width":
+                return float(grid.major_width)
+            if key == "minor_width":
+                return float(grid.minor_width)
+            if key == "opacity":
+                return float(grid.opacity)
+            if key == "base_spacing":
+                return float(grid.minor)
+            if key == "major":
+                return float(grid.major)
+            return float(grid.radius)
+    if key == "adaptive":
+        # Upstream FreeCAD has no adaptive grid, so the private knob is inert there.
+        return bool(SETTINGS.GetBool(key, True))
+    if key == "minor_style":
+        return str(SETTINGS.GetString(key, "dots"))
+    if key in ("major_width", "minor_width"):
+        return float(SETTINGS.GetFloat(key, 1.0))
     if key in ("enabled", "shadow_enabled"):
         return bool(SETTINGS.GetBool(key, DEFAULTS[key]))
     if key == "color":
@@ -137,22 +187,61 @@ def setting(key):
 def save_settings(values):
     """Persist the six dialog values; unknown keys are ignored.
 
-    ``enabled`` is written to the shared switch when this build has it, so the
-    settings dialog, the toolbar toggle and the drawn grid move together; on
-    upstream FreeCAD it stays this mod's own knob.
+    ``enabled``, ``base_spacing`` and ``radius`` are written to the shared
+    ``FerroCAD.Grid`` when this build has it, so the settings dialog, the toolbar
+    toggle, the Settings tree and the drawn grid move together; on upstream
+    FreeCAD they stay this mod's own knobs.
     """
+    grid = grid_api()
     if "enabled" in values:
-        grid = grid_api()
         if grid is not None:
             grid.enabled = bool(values["enabled"])
         else:
             SETTINGS.SetBool("enabled", bool(values["enabled"]))
+    if "base_spacing" in values:
+        if grid is not None:
+            grid.minor = float(values["base_spacing"])
+        else:
+            SETTINGS.SetFloat("base_spacing", float(values["base_spacing"]))
+    if "major" in values:
+        if grid is not None:
+            grid.major = float(values["major"])
+        else:
+            SETTINGS.SetFloat("major", float(values["major"]))
+    if "adaptive" in values:
+        if grid is not None:
+            grid.adaptive = bool(values["adaptive"])
+        else:
+            SETTINGS.SetBool("adaptive", bool(values["adaptive"]))
+    if "minor_style" in values:
+        if grid is not None:
+            grid.minor_style = str(values["minor_style"])
+        else:
+            SETTINGS.SetString("minor_style", str(values["minor_style"]))
+    if "major_width" in values:
+        if grid is not None:
+            grid.major_width = float(values["major_width"])
+        else:
+            SETTINGS.SetFloat("major_width", float(values["major_width"]))
+    if "minor_width" in values:
+        if grid is not None:
+            grid.minor_width = float(values["minor_width"])
+        else:
+            SETTINGS.SetFloat("minor_width", float(values["minor_width"]))
+    if "radius" in values:
+        if grid is not None:
+            grid.radius = float(values["radius"])
+        else:
+            SETTINGS.SetFloat("radius", float(values["radius"]))
     if "color" in values:
         SETTINGS.SetString("color", str(values["color"]))
     if "opacity" in values:
-        SETTINGS.SetFloat("opacity", float(values["opacity"]))
-    if "base_spacing" in values:
-        SETTINGS.SetFloat("base_spacing", float(values["base_spacing"]))
+        if grid is not None:
+            # The ink multiplier is shared: the host resolves both backends' level alphas
+            # from it, so this row and the Settings tree's Opacity row are one knob.
+            grid.opacity = float(values["opacity"])
+        else:
+            SETTINGS.SetFloat("opacity", float(values["opacity"]))
     if "shadow_enabled" in values:
         SETTINGS.SetBool("shadow_enabled", bool(values["shadow_enabled"]))
     if "shadow_opacity" in values:
@@ -655,6 +744,35 @@ class GridOverlayCoinCommand:
                     max=100.0,
                 ),
                 _field(
+                    "adaptive",
+                    "Adaptive spacing",
+                    "bool",
+                    setting("adaptive"),
+                ),
+                _field(
+                    "minor_style",
+                    "Minor grid style",
+                    "enum",
+                    setting("minor_style"),
+                    choices=["dots", "lines"],
+                ),
+                _field(
+                    "major_width",
+                    "Line width (px)",
+                    "float",
+                    setting("major_width"),
+                    min=1.0,
+                    max=8.0,
+                ),
+                _field(
+                    "minor_width",
+                    "Minor line width (px)",
+                    "float",
+                    setting("minor_width"),
+                    min=1.0,
+                    max=8.0,
+                ),
+                _field(
                     "shadow_enabled",
                     "Show ground shadow",
                     "bool",
@@ -725,11 +843,12 @@ def refresh():
 
     The shell's grid toggle flips ``FerroCAD.Grid.enabled`` and then asks the
     registry for a refresh, so the overlay follows the one switch without a
-    second store. The ``grid_overlay`` claim in the result is what the toggle
-    folds into its view request.
+    second store. The result carries the **whole** grid request, not just the
+    ``grid_overlay`` claim: the viewport's ``grid`` flag is part of it, and
+    sending only the claim left the native ground drawing under a disabled grid.
     """
     manager.refresh()
-    return {"view": {"grid_overlay": bool(setting("enabled"))}}
+    return _grid_view(setting("enabled"))
 
 
 # Registration is idempotent across an add-on reload (the facade rejects a

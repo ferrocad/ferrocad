@@ -354,6 +354,9 @@ impl Shell {
     /// document, so the drag and the typed values describe the same pending move.
     pub(super) fn on_transform_preview(&mut self, preview: &TransformPreview, cx: &mut Context<Self>) {
         let m = &preview.total_transform.m;
+        // A translation is all this can be: only a translation HUD defers a drag
+        // (`queue_transform_preview` returns early otherwise), so a ring drag never
+        // reaches the host and rotation stays the viewport's own business.
         let drag = [m[3], m[7], m[11]];
         let previews = self
             .dialog

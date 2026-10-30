@@ -199,6 +199,14 @@ The datum is a **world point from `ShapeItem::origin`** (falling back to `anchor
 the triad already hugs `origin`. The delta is a matrix so rotation is expressible before any
 `Placement` is involved — only the commit needs the object, which the facade owns.
 
+**Rotation has no shell-side state today, and does not need one yet.** Only a translation HUD
+defers a drag (`queue_transform_preview` returns early when `gizmo_deferred` is off), and
+`Rotate` opens no dialog (`_RotateCommand.Activated` returns a status), so a ring drag never
+emits a `TransformPreview`: the viewport previews it from the full matrix
+(`apply_gizmo_preview`) and commits the matrix through `to_interaction_with`. The `mode` field
+below, and the matrix delta, are where that state moves if a rotate session (with a pill or a
+form) ever exists — which is why the session is a `Transform` session rather than a `Move` one.
+
 One owner: the shell holds it; the viewport **renders** it (`set_session`). That deletes the
 three-way split — `preview_translation`, `apply_gizmo_preview` and the dialog's mirrored delta
 all become *reads* of the session, and `set_gizmo_preview(deferred)` disappears because there is

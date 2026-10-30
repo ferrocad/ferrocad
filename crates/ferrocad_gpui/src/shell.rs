@@ -252,6 +252,13 @@ fn axis_of(delta: [f64; 3]) -> usize {
 ///
 /// It is deliberately not part of the dialog: the unified session replaces the HUD and
 /// keeps the pending move (see `docs/project/tasks/transform-session.md`).
+/// It is deliberately **translation only**: the only deferred path is the Move HUD
+/// (`DialogSpec::previews_translation`), and `Rotate` opens no dialog
+/// (`_RotateCommand.Activated` returns a status, `python/ferrocad_shell/__init__.py`), so a
+/// ring drag never emits a `TransformPreview` — the viewport previews and commits it from the
+/// full matrix itself. There is therefore no shell-side rotation state to hold. When a
+/// rotate *session* exists it is `TransformSession`'s (see
+/// `docs/project/tasks/transform-session.md` §2.4), which carries `mode` and a matrix.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct PendingMove {
     /// The exact delta a drag produced. `None` when the Δ fields are authoritative

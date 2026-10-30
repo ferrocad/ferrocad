@@ -1,6 +1,12 @@
 # Active task specs
 
-Status: index (2026-10-30). Six active specs and one recorded decision:
+Status: index (2026-10-30). Seven active specs and one recorded decision:
+
+- [transform-session.md](transform-session.md) — **the transform overhaul, planned not built**:
+  explicit uncommitted state (`PendingEdit` + `EditView` in `ferrocad_core`), one cumulative
+  `TransformSession`, loadout slots with a topology filter, hover-to-arm, the in-place pill
+  and the 3-D measuring tape. Stages **A0–A3** (invisible) then **U1–U6** (the UX), each with
+  an acceptance and the spec sections it rewrites.
 
 - [simplecad-bringup.md](simplecad-bringup.md) — the **SC0–SC8** cut of the SimpleCAD
   bring-up: triage the 64 failures, exact `ShapeType`, `makeWireString` on `skrifa`/

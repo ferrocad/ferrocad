@@ -9,6 +9,13 @@ Companions: [`gizmo-manipulators.md`](gizmo-manipulators.md) (triad math and hit
 drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 [`axis-origin-grid.md`](axis-origin-grid.md) (the face frame).
 
+> **Superseded in part (2026-10-30).** The session lifecycle in §3 and the pending-mode
+> discussion are replaced by one cumulative transform session with explicit commit,
+> checkpoint and rollback — no deferred mode, no undo-as-cancel, and a first-class
+> uncommitted edit in the model. See
+> [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md); the
+> mode set, pivots, re-pivoting and push/pull behaviour here stay authoritative.
+
 ## 0. What exists
 
 | Piece | State | Where |

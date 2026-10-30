@@ -12,6 +12,13 @@ Companions: [`stage.md`](../viewport/stage.md) (the stage gizmo), [`geometry-and
 kernel), and [`navicube-gpui-design.md`](navicube-gpui-design.md) (the overlay visual
 language this suite shares).
 
+> **Amended (2026-10-30).** How a manipulator is *offered* and *escalated* is changing: one
+> cumulative transform session (no deferred mode), the readout pill becoming the primary
+> numeric surface, and a loadout slot deciding which manipulator class may arm at all. The
+> plan and the rewrites of §5, §7, §9.2, §14 and §19 are in
+> [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md); the
+> maths, hit-testing, modifier and ribbon sections here stay authoritative.
+
 ## 0. Direction
 
 Manipulators are **context-driven, transient micro-manipulators**, not modal global

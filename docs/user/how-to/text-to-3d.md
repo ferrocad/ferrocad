@@ -150,8 +150,8 @@ needs a resolution:
 - `Part.makeWireString`'s own `height` is not a cap height. It is upstream's font-size
   scale (`height / (10 × line height)`), so `height = 100` gives a 5.81 mm cap height in
   Liberation Mono. `Draft.make_shape_string` passes `Size` through that scale and then
-  rescales; with `ScaleToSize = False` the text therefore comes out roughly a tenth of
-  the requested size.
+  rescales; with `ScaleToSize = False` the text therefore comes out at about 6 % of the
+  requested size.
 
 ## One line, left to right
 

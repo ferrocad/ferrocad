@@ -187,16 +187,33 @@ def simplecad_group(root: Path) -> Group:
     )
 
 
+def _is_unittest_frame(filename: str) -> bool:
+    """Whether ``filename`` belongs to the stdlib's ``unittest`` package."""
+    parts = Path(filename).parts
+    return "unittest" in parts
+
+
 def _short(err) -> str:
-    """Turn a unittest ``err`` tuple into a one-line, frame-tagged message."""
+    """Turn a unittest ``err`` tuple into a one-line, frame-tagged message.
+
+    The last frame is the raise site, which for an ``assertEqual`` failure is
+    ``unittest/case.py`` — a line that says nothing about the case. Prefer the
+    last frame that is *not* inside the stdlib ``unittest`` package, so the
+    reported location is the test's own ``test_*.py:NNN``.
+    """
     exc_type, exc_value, tb = err
     last = None
+    last_own = None
     while tb is not None:
-        last = (tb.tb_frame.f_code.co_filename, tb.tb_lineno)
+        frame = (tb.tb_frame.f_code.co_filename, tb.tb_lineno)
+        last = frame
+        if not _is_unittest_frame(frame[0]):
+            last_own = frame
         tb = tb.tb_next
     text = str(exc_value).strip()
     msg = text.splitlines()[0] if text else exc_type.__name__
-    loc = f"{Path(last[0]).name}:{last[1]}" if last else ""
+    where = last_own or last
+    loc = f"{Path(where[0]).name}:{where[1]}" if where else ""
     return f"{exc_type.__name__}: {msg}  ({loc})"[:300]
 
 

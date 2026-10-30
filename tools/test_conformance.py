@@ -44,6 +44,16 @@ class TestShort(unittest.TestCase):
         self.assertIn("ValueError", text)
         self.assertIn("nope", text)
 
+    def test_short_points_at_the_test_frame_not_unittest(self):
+        """An ``assertEqual`` failure must cite the test, not ``case.py``."""
+        try:
+            self.assertEqual(1, 2)
+        except AssertionError:
+            err = sys.exc_info()
+        text = conformance._short(err)
+        self.assertNotIn("case.py", text)
+        self.assertIn("test_conformance.py", text)
+
 
 class TestTotals(unittest.TestCase):
     def test_totals(self):

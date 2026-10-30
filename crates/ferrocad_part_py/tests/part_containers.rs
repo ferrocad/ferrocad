@@ -420,3 +420,52 @@ fn a_rotated_compound_rebuilds_from_its_current_children() {
         assert!((y_max - 1.0).abs() < 1e-9, "the edge must run along +y");
     });
 }
+
+/// `Shape.ShapeType` is the kernel's `TopoDS_Shape::ShapeType`, not a sub-shape
+/// count: a compound of one solid plus a loose edge is still a compound, and
+/// the edge stays reachable through the compound's element lists.
+///
+/// Getting this wrong makes SimpleCAD's `coincident.loose_edges` treat the
+/// push/pull remainder as a `Solid` and stop walking it at all.
+#[test]
+fn a_compound_of_one_solid_and_one_edge_is_still_a_compound() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let boxed = part.call_method1("makeBox", (2.0, 2.0, 2.0)).expect("box");
+        let edge = part
+            .call_method1("makeLine", ((5.0, 0.0, 0.0), (6.0, 0.0, 0.0)))
+            .expect("makeLine");
+
+        let compound = part
+            .getattr("Compound")
+            .unwrap()
+            .call1((PyList::new(py, [&boxed, &edge]).unwrap(),))
+            .expect("Part.Compound([box, edge])");
+
+        let kind = compound
+            .getattr("ShapeType")
+            .expect("Shape.ShapeType")
+            .extract::<String>()
+            .unwrap();
+        assert_eq!(kind, "Compound", "a one-solid compound is not a solid");
+
+        // The loose edge is still an element of the compound (the box adds twelve).
+        let edges = compound.getattr("Edges").expect("Compound.Edges");
+        assert_eq!(edges.len().unwrap(), 13);
+        let mut found = false;
+        for index in 0..edges.len().unwrap() {
+            let candidate = edges.get_item(index).unwrap();
+            if candidate
+                .call_method1("isSame", (&edge,))
+                .unwrap()
+                .extract::<bool>()
+                .unwrap()
+            {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "the loose edge must be reachable through .Edges");
+    });
+}

@@ -515,43 +515,29 @@ impl PartShape {
         self.epoch.load(Ordering::SeqCst)
     }
 
-    /// The shape's topological kind (`Shape.ShapeType`), inferred from its
-    /// sub-shape lists.
+    /// The shape's topological kind (`Shape.ShapeType`), exactly as the kernel
+    /// reports it.
     ///
-    /// The seam has no "what kind of shape is this" query, so this walks the
-    /// element lists from the highest dimension down and reports the first kind
-    /// that is present:
-    ///
-    /// - exactly one element of that kind → that kind's name (`Solid`, `Shell`,
-    ///   `Face`, `Wire`, `Edge`, `Vertex`);
-    /// - more than one element of that kind → `Compound` (a compound of two
-    ///   solids, two faces, …);
-    /// - no elements of any kind → `Compound` (this also covers the null shape).
-    ///
-    /// A box therefore reports `Solid` (its one solid wins over its six faces),
-    /// while a single edge reports `Edge`. The inference cannot tell a compound
-    /// that happens to hold exactly one solid from that solid itself, so the
-    /// former is reported as `Solid` — upstream would say `Compound`.
+    /// This is OCCT's `TopoDS_Shape::ShapeType`, not a walk over the sub-shape
+    /// lists: a compound that happens to hold exactly one solid is still a
+    /// `Compound`, and a box is a `Solid`. The answer is one of `Compound`,
+    /// `CompSolid`, `Solid`, `Shell`, `Face`, `Wire`, `Edge`, `Vertex`; a null
+    /// shape reports `Compound`, like a default-constructed `TopoDS_Shape`.
     fn shape_type(&self) -> &'static str {
-        let Some(shape) = self.shape() else {
-            return "Compound";
-        };
-        let backend = ferrocad_part::backend();
-        for (kind, name) in [
-            (ElementKind::Solid, "Solid"),
-            (ElementKind::Shell, "Shell"),
-            (ElementKind::Face, "Face"),
-            (ElementKind::Wire, "Wire"),
-            (ElementKind::Edge, "Edge"),
-            (ElementKind::Vertex, "Vertex"),
-        ] {
-            match backend.elements(&shape, kind).len() {
-                0 => continue,
-                1 => return name,
-                _ => return "Compound",
-            }
+        match self
+            .shape()
+            .and_then(|shape| ferrocad_occt::part_ops::shape_kind(&shape))
+        {
+            Some("CompSolid") => "CompSolid",
+            Some("Solid") => "Solid",
+            Some("Shell") => "Shell",
+            Some("Face") => "Face",
+            Some("Wire") => "Wire",
+            Some("Edge") => "Edge",
+            Some("Vertex") => "Vertex",
+            // The null shape, and the abstract `TopAbs_SHAPE`, are compounds.
+            _ => "Compound",
         }
-        "Compound"
     }
 
     /// The sub-shapes of one kind, in the kernel's order.
@@ -1629,8 +1615,8 @@ impl PartShape {
             .collect()
     }
 
-    /// The shape's topological kind (`Shape.ShapeType`); see the `shape_type`
-    /// inference above.
+    /// The shape's topological kind (`Shape.ShapeType`); see `shape_type`
+    /// above.
     #[getter]
     fn ShapeType(&self) -> &'static str {
         self.shape_type()

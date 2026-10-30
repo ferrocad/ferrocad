@@ -1338,6 +1338,86 @@ errored, 2 skipped, 0 load errors**, identical to the run above. The round added
 object type and a grid rewrite, neither of which SimpleCAD exercises, so an unchanged
 baseline is the expected result and is recorded as such rather than as a no-op.
 
+**2026-10-30 — the 64 failures, bucketed (SC0).** `tools/conformance.py --simplecad` with
+`LD_LIBRARY_PATH=.occt/prefix/lib PYTHONPATH=python`, `../simplecad` @ `9180c4b` (0.38.0),
+CPython **3.14.4**: **969 passed, 64 failed, 26 errored, 2 skipped, 0 load errors** — the
+same totals as the TODO-30 close, so there is no drift to explain. The 64 failure causes
+fall into 17 buckets by the harness’s own text:
+
+| Cause (as printed) | Count | Class | Tests (`file.Class.test`) |
+| --- | --- | --- | --- |
+| `False is not true` (assertTrue) | 13 | our defect | `test_circle_regions.CircleRegionGeometryTests.test_prior_divisions_and_loose_edges_survive`; `test_dense_drawing.NearlyCoplanarTests.test_a_line_across_leaning_triangles_divides_both`; `test_intersection.IntersectionTests.test_tangent_contact_rejected_and_loose_line_preserved`; `test_line_regions.LineRegionDocumentTests.test_loose_line_in_other_surface_object_keeps_its_surface`; `…test_loose_lines_inside_same_object_are_consumed` (base `Solid`, `Face`); `test_mesh_glue.MeshGlueTests.test_thin_wall_triangle_profile_and_existing_hole`; `test_polygons.PolygonGeometryTests.test_polygon_and_circle_keep_intersecting_neighbor_surfaces`; `test_rotation.RotationDocumentTests.test_multiple_changes_are_atomic_even_if_commit_fails`, `…test_preview_commit_undo_redo_and_native_topology`; `test_subdivision.SubdivisionGeometryTests.test_open_shell_reversed_face_and_loose_geometry`; `test_subdivision_surfaces.SurfaceSubdivisionTests.test_transformed_surface_with_loose_geometry_and_another_division`; `test_surface_line.SurfaceLineDocumentTests.test_moved_rotated_object_keeps_placement_and_survives_save_reopen` |
+| `False != True` (assertEqual bool) | 6 | our defect | `test_surface_line.FreeEndTests.test_only_lines_closing_a_path_skip_nothing_and_every_answer_matches_the_split` — subtests `[open chain]`, `[from the rim]`, `[across the seam]`, `[beside a closed loop]`, `[hole to rim]`, `[fitted open]` |
+| `TypeError: … not raised` | 5 | our defect | `test_degenerate_drawing.DegenerateDrawingTests.test_arc_loop_ignores_loose_degenerate_edges`, `…test_border_connection_then_partition_with_sphere`, `…test_free_line_undo_redo_with_unrelated_sphere`, `…test_triangle_completion_still_finds_real_segments`, `…test_two_separate_corner_bridges_partition_ring` |
+| `ValueError: … not raised` | 3 | our defect | `test_coincident.CoincidentDocumentTests.test_cleanup_does_not_discard_loose_edges_from_duplicate_mixed_compound`; `test_geometry.DocumentTests.test_transformed_container_rejected`; `test_rounding.RoundGeometryTests.test_open_mixed_and_multiple_solids_fail_before_rounding` (`type='Solid'`) |
+| `0 != N` (nothing produced) | 7 | our defect | `test_elongating.ElongateTests.test_heal_dangling_elongation_integrates_wire_into_solid` (0≠1); `test_geometry.DocumentTests.test_deleting_a_line_beside_a_step_sliver_merges_the_faces` (0≠1); `…test_erase_internal_edge_on_solid_face` (0≠1); `test_line_regions.LineRegionGeometryTests.test_dangling_branches_are_not_embedded_as_internal_face_edges` (0≠1); `test_material_mapping.MaterialMappingTests.test_loose_edge_filter_keeps_partial_and_nearby_lines` (0≠2); `test_mesh_surfaces.SmoothSurfaceTests.test_convert_with_surfaces_reports_fitted_faces_and_keeps_the_source` (0≠622); `test_slicing.SliceGeometryTests.test_mixed_surfaces_and_loose_lines_are_retained` (0≠40.0) |
+| integer count off by one (`3≠2`, `2≠1`, `6≠5`, `13≠12`) | 4 | our defect | `test_analytic.AnalyticHoleTests.test_boss_wall_is_rebuilt_in_place_too`; `test_edge_deletion.EraseGeometryTests.test_face_deletion_disconnected_faces_and_empty_result`; `test_elongating.ElongateTests.test_cleanup_integrates_dangling_elongations`; `test_geometry.DocumentTests.test_clean_solid_faces_removes_internal_edges` |
+| approximate number wrong (`0.9999999997≠1.0`, `6.2e-17≠1`, `999.93≠1000`, `4168.3≠4159.2`) | 4 | our defect | `test_healing.AlignmentTests.test_tilted_face_and_its_hole_become_exact`; `test_rotation.RotationGeometryTests.test_symmetric_main_axis_is_deterministic`; `test_idle_work.PullCleanupTests.test_compounds_still_drop_thin_loose_faces_and_keep_real_ones`; `test_mesh_surfaces.SmoothSurfaceTests.test_sphere_and_cylinder_close_into_solids` |
+| `'Shell' != 'Solid'` | 2 | our defect | `test_intersection.IntersectionTests.test_selected_faces_split_both_and_delete_to_closed_bowl` (`rotated=False` and `True`, `reverse=False`) |
+| `'Union' != 'First'` | 2 | our defect | `test_union.UnionDocumentTests.test_late_write_failure_aborts_all_changes`, `…test_one_undo_restores_both_objects_and_unrelated_shape_is_unchanged` |
+| `unexpectedly None` | 3 | our defect | `test_dense_drawing.ChangeRecordTests.test_seams_through_a_derived_index_match_a_full_pass`, `…test_the_result_index_matches_a_fresh_listing`; `test_precision.NoiseRemovalTests.test_through_push_from_a_slightly_tilted_face_leaves_no_skin` |
+| `Lists differ: …` | 4 | our defect | `test_healing.DocumentTests.test_heal_runs_isolated_and_undoes_in_one_step` (`[Part.Shape] != []`); `test_material_mapping.MaterialMappingTests.test_rigid_placement_and_uniform_materials_keep_styles` (styles lost); `test_surface_line.SurfaceLineDocumentTests.test_open_segments_skip_the_split_and_the_closing_one_still_divides` (`['local'] != []`); `test_union.UnionGeometryTests.test_rod_a_hair_off_its_bore_fills_it_cleanly` (`[2, 1, 1] != [1]`) |
+| multi-line shape dump differs (`'\nCA…' != '\nCA…'`) | 2 | our defect | `test_dense_deletion.DenseDeletionTests.test_mid_edge_divider_reconnects_neighboring_shell_faces`, `…test_open_shell_merge_and_redraw_keep_hole_and_other_divisions` |
+| `Listed every face` | 1 | our defect | `test_dense_drawing.ChangeRecordTests.test_snaps_after_a_line_are_patched_without_listing_the_part` |
+| `Split the whole solid` | 2 | our defect | `test_dense_drawing.LocalSplitTests.test_a_line_across_two_faces_splits_only_them`, `…test_a_line_ending_inside_an_edge_rebuilds_its_neighbour` |
+| comparison threshold missed (`0.0 > 0.002`, `0 ≥ 1` ×2, `80.0 < 0.0001`) | 4 | our defect | `test_dense_drawing.CompletionTests.test_a_line_between_holes_reaches_them_where_their_display_mesh_falls_short`; `test_rotate_edges.RotateEdgesTests.test_rotate_edge_with_copy`, `…test_rotate_ellipse_half_edge_on_solid`; `test_surface_wrap.WrappedDrawingTests.test_mouse_coordinates_reach_adjacent_and_opposite_faces` |
+| `'Block · 1' != 'Block'` | 1 | test expectation | `test_slicing.SliceDocumentTests.test_preview_is_read_only_apply_undo_redo_and_zero_gap` |
+| `True is not false` (assertFalse) | 1 | our defect | `test_edge_deletion.EraseGeometryTests.test_open_surface_divider_merges_without_closing_the_opening` |
+
+All 64 locations the harness prints are CPython raise sites — `unittest/case.py:209`
+(`assertRaises`), `:750/:756/:762` (`assertEqual`/`assertFalse`/`assertTrue`), `:918`
+(`assertEqual`), `:979` (`assertAlmostEqual`), and `unittest/mock.py:1241` (an
+`AssertionError` re-raised from a mock side effect) — not SimpleCAD lines, because SimpleCAD
+asserts through `self.assert*` and the last frame is therefore the stdlib. No failure cites a
+`simplecad/` line; making `_short` skip frames under `unittest/` would recover
+`simplecad/tests/unit/test_*.py:NNN` for every one of them at no cost.
+
+The split is **63 our defect / 1 test expectation / 0 deliberate absence**: the PartDesign
+and GUI absence is entirely inside the 26 errors, not the failures. The largest bucket is the
+generic `False is not true` (13), which is a property of SimpleCAD’s `assertTrue` style rather
+than one bug; by test name its core is loose-edge and internal-division survival
+(`line_regions`, `circle_regions`, `subdivision*`, `mesh_glue`, `polygons`, ~8 tests), with
+transaction/undo (`rotation`) and save/reopen (`surface_line`) as the remainder. Investigating
+that bucket means first recovering the real assertion line as above, then bisecting each case
+on `loose_edges`/`ShapeType`/face counts; INFERENCE: the loose-edge half is plausibly the same
+compound-vs-solid kind problem SC1 fixes, but the assertion text does not show that. The
+`'Shell' != 'Solid'` pair is a genuine open-shell boolean result rather than the `ShapeType`
+inference (INFERENCE: SC1 will not move it). The one numeric bucket mixes a 1e-10 miss
+(`healing`, possibly a tolerance expectation) with three real value errors (`rotation` axis,
+two volumes), so it is filed as our defect until the harness gives line numbers.
+
+**2026-10-30 — SC1 applied (`Shape.ShapeType` is exact).** Rebuilt the combined extension
+and re-ran the same harness: **985 passed, 49 failed, 23 errored, 2 skipped, 0 load errors**
+(was 969 / 64 / 26 / 2). The three `'NoneType' … 'ShapeType'` errors are gone. The pass count
+rises by only 16 against 18 fixed outcomes because the harness counts a **failing subtest**
+as its own record while a fully-passing parent test counts once: two subtest cases
+(`test_intersection`, `test_line_regions`) now pass as a whole, so the denominator shrinks by
+two. No test was lost — 88/88 modules still load.
+
+The loose-edge hypothesis held for those cases: the compound-vs-solid kind was the cause, as
+SC0 inferred. `'Shell' != 'Solid'` remains, as predicted. The remaining 49 failures and 23
+errors are the same buckets as above minus the fixed set; the biggest is still the generic
+`assertTrue` loose-edge/internal-division family.
+
+**2026-10-30 — re-bucketed after SC1, with real locations.** `_short`
+(`tools/conformance.py:190`) used to report the last traceback frame, which for every
+`assert*` failure is `unittest/case.py`; it now skips stdlib `unittest` frames and reports
+the test's own line (with a unit test, `tools/test_conformance.py`). The 49 + 23 now cite
+real locations, and they cluster into few roots:
+
+| Cluster | n | Cause as printed | Kind |
+| --- | --- | --- | --- |
+| `test_surface_line` FreeEndTests, six subtests of one test (`:148`) | 6 | `False != True` — an open/closed path distinction | our defect |
+| `test_degenerate_drawing` (`:22`) | 5 | `TypeError not raised` for degenerate input | our defect |
+| `test_surface_offset` DraftTests (`offset.py:248`) | 3 | `ModuleNotFoundError: PartDesign` | deliberate absence |
+| `dense_drawing.LocalSplitTests` (`geometry.py:821`) | 2 | “Split the whole solid” | our defect |
+| `forming` / `loop_faces` (`geometry.py:1623`) | 2 | “would create invalid geometry” | our defect |
+| the rest | 54 | named per line in the harness output | mixed |
+
+The two biggest real roots are therefore a **path-closure predicate** in surface-line
+splitting and a **missing degenerate-input rejection**, not the compound kind that SC1 fixed.
+Re-filing these into SC4–SC7/P2/P4 is SC0's last open item.
+
 ---
 
 ## 8. Draft vs SimpleCAD

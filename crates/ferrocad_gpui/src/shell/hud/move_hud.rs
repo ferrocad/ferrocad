@@ -977,10 +977,14 @@ impl Shell {
         if self.gate(Action::SwitchFrame, cx) {
             return;
         }
+        // Read the value in the **old** frame before changing the basis. In coordinate
+        // mode the field text is a position in the current frame, so reading it after
+        // the switch would reinterpret the same numbers in the new frame: the fields
+        // would not translate and the residual difference would read as a pending move.
+        let delta = self.pending_delta(cx).unwrap_or_default();
         self.pill.cycle_axis_frame();
         // The pending value does not move; only its decomposition into the fields and
         // the handles' basis change.
-        let delta = self.pending_delta(cx).unwrap_or_default();
         self.rearm_selection(cx);
         self.set_move_fields(delta, cx);
         cx.notify();

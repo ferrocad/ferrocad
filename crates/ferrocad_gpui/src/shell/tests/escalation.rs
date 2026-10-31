@@ -1,6 +1,7 @@
 //! Shell tests: fast escalation from an armed gizmo into the Move HUD.
 
 use super::*;
+use super::super::pill::AxisFrame;
 
 /// The focus handle of a Move field by position.
 fn axis_focus(shell: &Entity<Shell>, index: usize, cx: &VisualTestContext) -> FocusHandle {
@@ -628,6 +629,77 @@ fn the_coordinate_mode_shows_and_parses_absolute_values(cx: &mut TestAppContext)
         "15.00",
         "the pending +5 reads as X = 15"
     );
+}
+
+/// Switching the axis frame in coordinate mode re-expresses the **same point** in the
+/// new frame. It must not leave the old field text looking like a delta (which would
+/// show the finish pill), and the numbers must translate.
+#[gpui::test]
+fn a_frame_switch_translates_absolute_coordinates(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    // A body whose origin is (10, 20, 30), so world and local coordinates differ.
+    let mesh: StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Params",
+            "positions": [[10.0, 20.0, 30.0], [11.0, 20.0, 30.0], [10.0, 21.0, 30.0]],
+            "triangles": [0, 1, 2],
+            "triangle_parts": [0, 0, 0],
+            "edges": [],
+            "parts": []
+        }"#,
+    )
+    .expect("the test mesh");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let stage = shell.display.build(vec![mesh]);
+            shell.set_stage(stage, cx);
+            shell.select("Params", cx);
+        })
+    });
+    draw(&mut cx);
+
+    click_at(&mut cx, "move-mode");
+    assert!(shell.read_with(&cx, |shell, _| shell.pill.absolute()));
+    assert_eq!(fields(&shell, &cx), [10.0, 20.0, 30.0]);
+
+    // WLD → LOC: the same point, measured from the body's own origin.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.cycle_axis_frame(cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.axis_frame()),
+        AxisFrame::Local
+    );
+    assert_eq!(
+        fields(&shell, &cx),
+        [0.0, 0.0, 0.0],
+        "the body's own origin is (0, 0, 0) in LOC"
+    );
+    assert!(
+        !shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)),
+        "a frame switch is not a move"
+    );
+    assert!(cx.debug_bounds("dialog-accept").is_none(), "no finish pill");
+
+    // LOC → WP. Headless there is no viewport plane, so WP falls back to the world
+    // basis and origin; the point is still the same.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.cycle_axis_frame(cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.axis_frame()),
+        AxisFrame::Workplane
+    );
+    assert_eq!(fields(&shell, &cx), [10.0, 20.0, 30.0]);
+    assert!(!shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
 }
 
 /// The Esc cascade reaches its last rung: a **clean** form does not swallow the key, so

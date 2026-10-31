@@ -113,8 +113,9 @@ resets the fields; `✗`/`Esc` rolls back. Neither closes the coordinates. Start
 
 Click the `Δ` switch (or press `=`) to show **coordinates** instead of offsets: click the
 `X` field and type `0` to snap the pivot onto the YZ plane, and a typed coordinate is
-still one ordinary move. Type `=15` in a field to mean "X = 15" for that entry without
-switching the whole form.
+still one ordinary move. Switching `WLD`/`LOC`/`WP` keeps the same point and rewrites the
+fields in the new frame, so the number changes but no `✓`/`✗` appears. Type `=15` in a
+field to mean "X = 15" for that entry without switching the whole form.
 
 With the **rotate** rings, the same dock row becomes `ΔθX ΔθY ΔθZ` plus the `WLD/LOC/WP`
 switch and a `Reset 0°` button. Only the active ring's cell holds an input. `Tab` focuses

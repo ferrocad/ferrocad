@@ -278,6 +278,8 @@ Dirty X: [ WLD▾ ]  ΔθX -45.00 ΔθY  —      ΔθZ  —      deg   [ Reset 
   their fields read. The fields are frame coordinates: in `LOC` a typed `ΔX` is along
   the body's X, and an absolute `X/Y/Z` is measured from the frame's anchor (the world
   origin for `WLD`, the body's own origin for `LOC`, the workplane origin for `WP`).
+  Switching frames re-expresses the **same point** in the new basis: in coordinate mode
+  the field numbers translate with it, so a switch never reads as a pending move.
   It is inert while a step is pending — the reference basis cannot move under a value
   measured in the old frame. `WP` falls back to the world grid when there is no
   workplane to read.

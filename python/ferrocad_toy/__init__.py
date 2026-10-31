@@ -65,6 +65,15 @@ _FACES = (
     (3, 0, 4, 7),  # left (−X)
 )
 
+# The twelve box edges, numbered in first-seen order. Each face contributes its four
+# boundary segments; the shared corner pair identifies the one physical edge, so both
+# of its drawn copies carry the same sub-element id (the kernel does the same).
+_EDGES = {}
+for _face in _FACES:
+    for _index in range(len(_face)):
+        _pair = frozenset((_face[_index], _face[(_index + 1) % len(_face)]))
+        _EDGES.setdefault(_pair, len(_EDGES))
+
 
 def _slab_mesh(width: float, depth: float, height: float, placement) -> dict:
     """The world-space tessellation of a slab, placed by `placement`."""
@@ -84,36 +93,31 @@ def _slab_mesh(width: float, depth: float, height: float, placement) -> dict:
     positions = []
     triangles = []
     edges = []
+    segment_parts = []
     for face in _FACES:
         base = len(positions)
         for index in face:
             corner = corners[index]
             positions.append((corner.x, corner.y, corner.z))
         triangles.extend((base, base + 1, base + 2, base, base + 2, base + 3))
-        edges.extend(
-            (
-                base,
-                base + 1,
-                base + 1,
-                base + 2,
-                base + 2,
-                base + 3,
-                base + 3,
-                base,
-            )
-        )
+        for index in range(len(face)):
+            edges.extend((base + index, base + (index + 1) % len(face)))
+            pair = frozenset((face[index], face[(index + 1) % len(face)]))
+            segment_parts.append(len(_FACES) + _EDGES[pair])
     return {
         "positions": positions,
         "triangles": triangles,
-        # One part per box face, named like a kernel's sub-elements: a click selects the
-        # face (double-click promotes to the whole slab), and the viewport can bind a
-        # workplane to it the same way it binds a `Part` face.
+        # One part per box face and per box edge, named like a kernel's sub-elements: a
+        # click selects the face (double-click promotes to the whole slab), the viewport
+        # can bind a workplane to it the same way it binds a `Part` face, and an Edge
+        # filter can snap to and highlight one physical edge.
         "triangle_parts": [face for face in range(len(_FACES)) for _ in range(2)],
         "edges": edges,
-        "segment_parts": [face for face in range(len(_FACES)) for _ in range(4)],
+        "segment_parts": segment_parts,
         "vertices": [],
         "vertex_parts": [],
-        "parts": ["Face%d" % (face + 1) for face in range(len(_FACES))],
+        "parts": ["Face%d" % (face + 1) for face in range(len(_FACES))]
+        + ["Edge%d" % (edge + 1) for edge in range(len(_EDGES))],
         # The object's own origin: the triad hugs it and doubles as an origin
         # indicator, and a rotate pivot would turn about it.
         "origin": (placement.Base.x, placement.Base.y, placement.Base.z),

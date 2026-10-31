@@ -170,9 +170,12 @@ changing the slot.
   `a_face_click_in_the_move_slot_arms_only_the_triad`,
   `a_claimed_sub_element_suppresses_the_shared_body_triad` /
   `an_unclaimed_sub_element_leaves_the_face_slot_empty`; the Inspect highlight has
-  `ferrocad_viewport`'s `the_inspect_highlight_paints_the_filtered_scope`, the Edge snap
-  has `the_edge_scope_snaps_to_the_nearest_edge`, and the shell-to-viewport wiring has
-  `the_edge_filter_reaches_the_viewport_picker`.
+  `ferrocad_viewport`'s `the_inspect_highlight_paints_the_filtered_scope` and
+  `the_inspect_highlight_paints_an_edge_not_a_face`, the Edge snap has
+  `the_edge_scope_snaps_to_the_nearest_edge`, the shell-to-viewport wiring has
+  `the_edge_filter_reaches_the_viewport_picker` and
+  `the_inspect_switcher_reaches_the_viewport_picker`, and the toy mesh's edge tags have
+  `ferrocad_toy`'s `the_toy_slab_names_its_edges`.
 
 ---
 

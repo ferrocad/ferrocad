@@ -749,6 +749,32 @@ fn the_pills_re_arm_the_viewport_hand(cx: &mut TestAppContext) {
     );
 }
 
+/// The Inspect switcher itself reaches the picker (not just the command path): a click
+/// on its Edge segment asks the viewport for edge picks. Skips without a GPU adapter.
+#[gpui::test]
+fn the_inspect_switcher_reaches_the_viewport_picker(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::Inspect, cx));
+    });
+    draw(&mut cx);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("inspect-bar").is_some(), "the switcher is up");
+
+    click_at(&mut cx, "inspect-edge");
+    assert_eq!(
+        cx.update(|_window, cx| viewport.read(cx).pick_scope()),
+        ferrocad_viewport::PickScope::Edge,
+        "the switcher's Edge segment arms edge picking"
+    );
+}
+
 /// The topology filter reaches the viewport's picker: `Edge` asks it to snap picks to
 /// the nearest drawn edge, while every other scope keeps the raw primitive. Skips
 /// without a GPU adapter.

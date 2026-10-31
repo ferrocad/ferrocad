@@ -6951,6 +6951,33 @@ mod tests {
         assert_eq!(reference, SelectionRef::element(7, "Face2"));
     }
 
+    /// An Inspect highlight for an edge paints that edge's part only, never the face
+    /// whose boundary it is.
+    #[test]
+    fn the_inspect_highlight_paints_an_edge_not_a_face() {
+        use ferrocad_geom::SelectionRef;
+
+        let mut view = InventorViewport::new(
+            fake(ImageData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            }),
+            perspective_camera([100, 100]),
+            triangle_scene(),
+        );
+        let mut stage = Stage::new();
+        stage.add_item(edged_slab());
+        view.set_stage(stage);
+
+        assert!(view.set_inspect_highlight(&[SelectionRef::element(7, "Edge2")]));
+        assert_eq!(
+            view.stage().item(7).unwrap().highlight().to_vec(),
+            vec![2],
+            "the edge's own part id, not the face behind it"
+        );
+    }
+
     /// The Edge pick scope snaps a click and hover to the nearest projected edge of the
     /// hit body; a click too far from every edge still reports the face.
     #[test]

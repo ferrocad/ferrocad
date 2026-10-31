@@ -41,6 +41,39 @@ fn slab_names() -> Vec<String> {
         .collect()
 }
 
+/// The toy slab tags its **twelve physical edges** as sub-elements, the way the
+/// kernel does, so the Edge filter can resolve and highlight an edge instead of one of
+/// its two adjacent faces.
+#[test]
+fn the_toy_slab_names_its_edges() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    fresh_slab_document();
+    let meshes = python::stage_meshes().expect("stage meshes");
+    let slab = meshes
+        .iter()
+        .find(|mesh| mesh.object.starts_with("Slab"))
+        .expect("the slab");
+
+    assert_eq!(slab.parts.len(), 18, "six faces and twelve edges");
+    assert!(
+        slab.parts[..6].iter().all(|part| part.starts_with("Face")),
+        "the first six parts are the faces: {:?}",
+        &slab.parts[..6]
+    );
+    assert!(
+        slab.parts[6..].iter().all(|part| part.starts_with("Edge")),
+        "the rest are the edges: {:?}",
+        &slab.parts[6..]
+    );
+    assert_eq!(slab.segment_parts.len(), 24, "two drawn copies per edge");
+    let tagged: std::collections::BTreeSet<u32> = slab.segment_parts.iter().copied().collect();
+    assert_eq!(
+        tagged,
+        (6..18).collect(),
+        "every segment carries one of the edge part ids"
+    );
+}
+
 fn command(id: &str) -> ferrocad_gpui::CommandInfo {
     python::commands()
         .expect("the command list")

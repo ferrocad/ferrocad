@@ -349,16 +349,28 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
 - **Commit is single.** A drag never commits; `Enter`/Accept runs the command callback
   (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
   `Enter`.
-- **A pending move locks the context (built 2026-10-31).** While `✗`/`✓` are on screen the
-  move is an unfinished decision, so every gesture that would change its subject is
-  **refused** (`block_pending_move`), with a status line saying why: replacing or
-  clearing the selection, pressing a loadout key (including pausing Move), changing
-  `Select ▾`, switching the handle set (Rotate), and starting a tool. The loadout bar
-  dims and drops its click handlers while the lock is on, so the refusal is visible before
-  it is attempted. Nothing is committed and nothing is dropped — the user finishes with
-  `✓`/`Enter` or `✗`/`Esc`, and the gesture goes through afterwards. A **document** event is different: a pruned
-  selection or a competing edit cannot keep a stale delta, so it is rolled back. `Esc`
-  is the only user-initiated rollback and spends no undo entry.
+- **One context gate (built 2026-10-31).** The shell models what it is doing explicitly
+  (`shell/context.rs`): `InteractionContext` is `Modal → Tool → PendingMove → Armed →
+  Selection → Idle`, and every entry point asks `Shell::gate(action)` before it acts.
+  `Action` names the thing the user asked for — `Select`, `SwitchHand`, `SwitchScope`,
+  `SwitchHandleSet`, `StartTool`, `RunCommand { id, edit }`, `Arm` — so a new gesture
+  cannot forget to check the state of the one it competes with. Completion (`✓`/`✗`,
+  `Enter`/`Esc`) and field editing are not actions: they are how a context is left.
+- **What `PendingMove` refuses.** Selecting or clearing another object, pressing a
+  loadout key (pausing Move included), changing `Select ▾`, switching the handle set,
+  starting a tool, dragging another body, and **edit commands** (`CmdType: ForEdit`,
+  e.g. `Create Box`). Each refusal writes the reason to the status line
+  (`move pending — ✓ or ✗ before you run “Create box”`), the loadout bar dims and drops
+  its click handlers, and nothing is committed or dropped. **View commands**
+  (`CmdType: ForView`: grid, projection, …) stay live, so navigation and presentation
+  still work under the lock. A command the shell has not seen in its registry snapshot is
+  treated as an edit — without the declaration it cannot be proved harmless.
+- **Nothing is silently hijacked.** A transform preview whose target is not the session's
+  subject is refused and the viewport cancels the stroke
+  (`InventorViewport::cancel_gizmo_drag`), so dragging another box cannot move the
+  pending selection under a triad that sits elsewhere. A **document** event is still
+  different: a pruned selection or a competing edit cannot keep a stale delta, so it is
+  rolled back. `Esc` is the only user-initiated rollback and spends no undo entry.
 - **Fast escalation (built 2026-10-31, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
   while a `TransformGizmo` is armed (idle or mid-drag) is the primary entry into the
   numeric surface: the HUD seeds its fields from the current delta (or zero when idle)

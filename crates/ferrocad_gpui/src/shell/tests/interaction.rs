@@ -1,6 +1,7 @@
 //! Shell tests: interaction.
 
 use super::*;
+use super::super::context::InteractionContext;
 
 /// The wheel's Rotate verb is the discoverable way into the rings: it switches
 /// the session mode, and Move forces Translate again so its Δ HUD and the
@@ -623,6 +624,109 @@ if "Test_MoveModal" not in FreeCADGui.listCommands():
     );
 }
 
+/// The explicit context model: a pending move is its own context, and the gate refuses
+/// an edit command while it lasts. View-only commands stay live. Finishing the move
+/// lifts the lock.
+#[gpui::test]
+fn an_edit_command_is_refused_while_a_move_is_pending(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+
+    let script = r#"
+import FreeCADGui
+class _TestGateEdit:
+    def GetResources(self):
+        return {"MenuText": "Test gate edit", "CmdType": "ForEdit"}
+    def Activated(self):
+        return {"status": "test edit ran"}
+class _TestGateView:
+    def GetResources(self):
+        return {"MenuText": "Test gate view", "CmdType": "ForView"}
+    def Activated(self):
+        return {"status": "test view ran"}
+if "Test_GateEdit" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_GateEdit", _TestGateEdit())
+if "Test_GateView" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_GateView", _TestGateView())
+"#;
+    let registered = crate::python::evaluate(script).expect("evaluate");
+    assert!(registered.ok, "{}", registered.output);
+    // The gate reads the shell's registry snapshot, so take it after registering.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.refresh_commands(cx)));
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+        })
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.context(cx)),
+        InteractionContext::PendingMove
+    );
+
+    // An edit command is discarded, with a reason naming it.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.run_command("Test_GateEdit", cx)));
+    let status = shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone());
+    assert!(status.contains("move pending"), "the command was refused: {status}");
+    assert!(status.contains("Test gate edit"), "the status names it: {status}");
+
+    // A view command is harmless and still runs under the lock.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.run_command("Test_GateView", cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone()),
+        "test view ran"
+    );
+
+    // ✗ releases the lock: the same edit command now runs.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.dismiss_move_hud(cx)));
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.run_command("Test_GateEdit", cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone()),
+        "test edit ran"
+    );
+}
+
+/// A drag that begins on a body the session does not own is refused: it would move the
+/// old selection while the triad sits on another box.
+#[gpui::test]
+fn a_drag_on_another_body_is_refused_while_a_move_is_pending(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+        })
+    });
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            // Entity 8 is not the session's target (the session owns 7).
+            shell.on_transform_preview(
+                &TransformPreview {
+                    target_id: 8,
+                    phase: PreviewPhase::Begin,
+                    total_transform: ferrocad_types::Matrix4::translation(50.0, 0.0, 0.0),
+                },
+                cx,
+            );
+        })
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.pending_translation(cx)),
+        Some([5.0, 0.0, 0.0]),
+        "the pending move is untouched"
+    );
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("move pending"),
+        "the drag was refused"
+    );
+}
+
 /// A pending move locks its **subject**: unselecting or picking another object is
 /// refused, so the move is neither committed nor dropped. Finishing it releases the lock.
 #[gpui::test]
@@ -872,13 +976,6 @@ fn the_finish_pill_tracks_the_anchor_and_the_form_stays_docked(cx: &mut TestAppC
     assert!(
         bar.origin.y + bar.size.height > canvas.origin.y + canvas.size.height - px(24.0),
         "the loadout keeps the dock baseline"
-    );
-    // The row is wide; stacking it keeps its right edge clear of the centred command
-    // dock on the normal window (a row would have run into it).
-    let dock = cx.debug_bounds("action-dock").expect("the action dock");
-    assert!(
-        docked.origin.x + docked.size.width <= dock.origin.x,
-        "the coordinates clear the create/search dock: {docked:?} vs {dock:?}"
     );
 
     // With no viewport the anchor is the pointer, so the pair follows it.

@@ -68,16 +68,10 @@ impl Shell {
         };
         // A pending move is explicit state: the user has `✗`/`✓` on screen and has not
         // decided yet, so another object may neither spend the move nor drop it. The
-        // subject cannot change until the move is finished.
-        if changed {
-            let action = if items.is_empty() {
-                "clear the selection"
-            } else {
-                "select another object"
-            };
-            if self.block_pending_move(action, cx) {
-                return;
-            }
+        // subject cannot change until the move is finished — the context gate owns that
+        // rule, so every entry point agrees.
+        if changed && self.gate(Action::Select, cx) {
+            return;
         }
         if changed {
             self.move_disarmed = false;

@@ -319,6 +319,23 @@ impl Shell {
     /// There is **one mode**: the release never commits, with or without a HUD. The session
     /// stays live until `Enter` commits it, `Esc` drops it, or the context changes.
     pub(super) fn on_transform_preview(&mut self, preview: &TransformPreview, cx: &mut Context<Self>) {
+        // A drag on another body would hijack the pending move (the session targets one
+        // subject, and the tape measures it). The context gate refuses the stroke and the
+        // viewport drops it, so the triad cannot end up on a body the session does not own.
+        if !self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.targets().contains(&preview.target_id))
+            && self.gate(Action::Arm, cx)
+        {
+            if let Some(viewport) = self.viewport.clone() {
+                viewport.update(cx, |viewport, cx| {
+                    viewport.cancel_gizmo_drag();
+                    cx.notify();
+                });
+            }
+            return;
+        }
         let m = &preview.total_transform.m;
         // A translation is all this can be: a rotate drag never emits a preview (the
         // viewport previews and commits it from the full matrix itself).

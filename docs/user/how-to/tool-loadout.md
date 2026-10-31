@@ -45,10 +45,11 @@ sub-element reports the same filtered scope the window does.
   spends no undo entry. With nothing pending, `Esc` clears the selection instead — the
   form and the triad go with it.
 - **A pending move locks the workspace.** While the `✗`/`✓` buttons are showing,
-  switching tools, changing `Select ▾` or the handle set, selecting another object or
-  starting a command is **blocked** (the status line says "move pending"; the tool bar
-  dims), so nothing commits and nothing is lost by a stray click. Finish with `✓` or `✗`
-  and the gesture goes through.
+  switching tools, changing `Select ▾` or the handle set, selecting another object,
+  dragging a different body, or starting an editing command (`Create Box`) is **blocked**
+  (the status line says "move pending"; the tool bar dims), so nothing commits and nothing
+  is lost by a stray click. View commands such as `Grid` or `Axes` still work. Finish with
+  `✓` or `✗` and the gesture goes through.
 
 ## Keys at a glance
 

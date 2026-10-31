@@ -76,22 +76,6 @@ impl Shell {
             && !self.model.lock().unwrap().selection.is_empty()
     }
 
-    /// Refuse a context change while a move is pending.
-    ///
-    /// The `✗`/`✓` pair is on screen, so the pending value is explicit state the user
-    /// has not decided yet: clicking another object, switching the hand or the scope must
-    /// neither spend it nor silently drop it. Returns whether the change was refused (and
-    /// leaves the reason in the status line).
-    pub(super) fn block_pending_move(&mut self, action: &str, cx: &mut Context<Self>) -> bool {
-        if !self.move_is_pending(cx) {
-            return false;
-        }
-        let status = format!("move pending — ✓ or ✗ before you {action}");
-        self.model.lock().unwrap().status = status;
-        cx.notify();
-        true
-    }
-
     /// Show or hide the form for the current hand and selection.
     ///
     /// This is the one seam every context change calls (a selection, a slot, a tool,

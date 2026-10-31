@@ -236,8 +236,11 @@ impl Shell {
         // Saving the active workplane as a datum plane is a frame the shell owns plus a
         // document object the edition owns; the interpreter function does not exist in
         // every build, so this path reports its error rather than going through the
-        // registry's `run_command`.
+        // registry's `run_command`. It writes an object, so the context gate applies.
         if id == SAVE_DATUM_PLANE {
+            if self.gate(Action::RunCommand { id, edit: true }, cx) {
+                return;
+            }
             let status = self.save_datum_plane(cx);
             self.model.lock().unwrap().status = status.clone();
             self.console_line(status, cx);
@@ -275,6 +278,18 @@ impl Shell {
             self.model.lock().unwrap().status = status.clone();
             self.console_line(status, cx);
             cx.notify();
+            return;
+        }
+        // The registry path passes the context gate: a pending move refuses edit commands,
+        // while `CmdType: ForView` commands (grid, projection, …) stay live. The commit
+        // itself never comes through here — `commit_session` runs `App_Move` directly.
+        if self.gate(
+            Action::RunCommand {
+                id,
+                edit: !self.command_is_view(id),
+            },
+            cx,
+        ) {
             return;
         }
         let outcome = match commands::run(id) {
@@ -689,8 +704,9 @@ impl Shell {
     pub(super) fn start_tool(&mut self, id: &str, cx: &mut Context<Self>) -> String {
         // A tool owns the canvas and would commit the pending move; the user must
         // finish it first, exactly like a hand switch.
-        if self.block_pending_move("start a tool", cx) {
-            return "move pending — ✓ or ✗ before you start a tool".to_string();
+        if self.gate(Action::StartTool, cx) {
+            let status = self.model.lock().unwrap().status.clone();
+            return status;
         }
         let tool = match self.tool_for(id) {
             Ok(tool) => tool,

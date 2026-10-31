@@ -194,9 +194,9 @@ impl Shell {
     /// while a move is **pending**: the `✗`/`✓` pair is on screen, so the hand cannot
     /// change until the user decides.
     pub(crate) fn set_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
-        // Changing the hand would commit or drop the pending move; a same-slot call is
+        // Changing the hand would spend or drop the pending move; a same-slot call is
         // just a re-arm and is always allowed.
-        if self.loadout.slot() != slot && self.block_pending_move("switch tools", cx) {
+        if self.loadout.slot() != slot && self.gate(Action::SwitchHand, cx) {
             return;
         }
         // A command that equips a hand always arms it, including the hand already in
@@ -224,7 +224,7 @@ impl Shell {
     ///
     /// A pending move blocks both: pausing commits it, and switching commits it too.
     pub(crate) fn activate_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
-        if self.block_pending_move("switch tools", cx) {
+        if self.gate(Action::SwitchHand, cx) {
             return;
         }
         if slot.wants_gizmo() && self.loadout.slot() == slot {
@@ -273,7 +273,7 @@ impl Shell {
         if self.loadout.filter() == filter {
             return;
         }
-        if self.block_pending_move("change the selection scope", cx) {
+        if self.gate(Action::SwitchScope, cx) {
             return;
         }
         self.commit_pending_session(cx);

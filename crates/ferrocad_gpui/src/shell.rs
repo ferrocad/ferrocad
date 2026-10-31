@@ -68,6 +68,9 @@ mod pill;
 mod properties;
 mod loadout;
 mod move_hud;
+mod context;
+// The context gate: every action entry point asks `Shell::gate` (see `shell/context.rs`).
+pub(crate) use context::Action;
 
 pub(crate) use loadout::{Loadout, SelectFilter, Slot};
 

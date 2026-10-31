@@ -2,6 +2,7 @@
 
 use super::*;
 use super::super::context::InteractionContext;
+use super::super::pill::RingFrame;
 
 /// The wheel's Rotate verb is the discoverable way into the rings: it switches
 /// the session mode, and Move forces Translate again so its Δ HUD and the
@@ -1050,16 +1051,26 @@ fn typing_an_angular_value_previews_and_commits(cx: &mut TestAppContext) {
     assert!(cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.commit_session(cx))));
     assert_eq!(undo_count(), before + 1, "exactly one undo step");
 
-    // `WLD` is the default; `=` (or the badge) flips the rings to the body frame.
-    assert!(!shell.read_with(&cx, |shell, _| shell.pill.local_frame()));
+    // `WLD` is the default; the badge cycles the rings to the body, then the workplane.
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.ring_frame()),
+        RingFrame::World
+    );
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| shell.toggle_move_mode(window, cx));
     });
-    assert!(shell.read_with(&cx, |shell, _| shell.pill.local_frame()));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.ring_frame()),
+        RingFrame::Local
+    );
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| shell.toggle_move_mode(window, cx));
     });
-    assert!(!shell.read_with(&cx, |shell, _| shell.pill.local_frame()));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.ring_frame()),
+        RingFrame::Workplane,
+        "the third state is the active workplane"
+    );
 
     // `Reset 0°` commits the rotation that cancels the body's committed orientation.
     let orientation = shell.read_with(&cx, |shell, _| shell.object_rotation_now());
@@ -1291,6 +1302,108 @@ fn grabbing_a_locked_ring_is_refused_until_the_step_is_finished(cx: &mut TestApp
     assert!(
         matches!(pending(&cx), Some((Some(1), degrees)) if (degrees - 15.0).abs() < 1e-12),
         "one exact Y step: no fractional X/Z residue"
+    );
+}
+
+/// `LOC` and `WP` move the rings off the world grid: the body frame follows the
+/// committed rotation, the workplane frame follows a plane's `u`/`v`/`n`, and both
+/// reach the armed gizmos.
+#[gpui::test]
+fn the_ring_frames_reach_the_body_and_the_workplane(cx: &mut TestAppContext) {
+    use crate::contributions::Contributions;
+    use ferrocad_stage::{Stage, TransformGizmo, Workplane, WorkplaneKind};
+
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    register_transform_provider();
+    give_params_a_placement();
+    // The base shell contributes no triad; host a rotate gizmo so the arming seam has
+    // something to frame.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _cx| {
+            shell.set_contributions(Contributions::new().with_gizmo(
+                |_selection: &SelectionRef, stage: &Stage| {
+                    Some(TransformGizmo::rotate(7, stage.item(7)?.anchor()?))
+                },
+            ));
+        });
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+    // 45° about +Z, so the body's X ring points along (√½, √½, 0).
+    let rotated = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            r#"
+import FreeCAD
+obj = FreeCAD.ActiveDocument.getObject('Params')
+obj.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 45))
+"#,
+        )
+    });
+    assert!(rotated.expect("set the placement").ok);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.refresh_move_origin(cx));
+    });
+
+    let stage = shell.read_with(&cx, |shell, _| {
+        shell.last_stage.clone().expect("the test stage")
+    });
+    let reference = SelectionRef::whole(7);
+
+    // `WLD`: the coordinate axes.
+    let world = shell.read_with(&cx, |shell, _| shell.ring_basis(None));
+    assert!(world[0].is_equal(&Vector3::new(1.0, 0.0, 0.0), 1e-9));
+    assert!(world[2].is_equal(&Vector3::new(0.0, 0.0, 1.0), 1e-9));
+
+    // `LOC`: the X ring turns with the body, and the armed rings carry that basis.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            let _ = shell.pill.cycle_ring_frame();
+        });
+    });
+    let local = shell.read_with(&cx, |shell, _| shell.ring_basis(None));
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(
+        local[0].is_equal(&Vector3::new(half, half, 0.0), 1e-9),
+        "X follows the +45° Z rotation: {local:?}"
+    );
+    assert!(local[2].is_equal(&Vector3::new(0.0, 0.0, 1.0), 1e-9));
+    let set = shell.read_with(&cx, |shell, _| {
+        shell.arm_gizmos(&reference, &stage, Some(local))
+    });
+    assert!(
+        set.gizmos()
+            .iter()
+            .any(|gizmo| gizmo.frame().basis[0].is_equal(&local[0], 1e-9)),
+        "the armed rings take the body basis"
+    );
+
+    // `WP`: a plane's `u`/`v`/`n` become the ring axes; `n = u × v = +X`.
+    let plane = Workplane::new(
+        Vector3::zero(),
+        Vector3::new(0.0, 1.0, 0.0),
+        Vector3::new(0.0, 0.0, 1.0),
+        WorkplaneKind::Custom,
+    )
+    .expect("a valid plane");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            let _ = shell.pill.cycle_ring_frame();
+        });
+    });
+    let workplane = shell.read_with(&cx, |shell, _| shell.ring_basis(Some(&plane)));
+    assert!(workplane[0].is_equal(&Vector3::new(0.0, 1.0, 0.0), 1e-9));
+    assert!(workplane[1].is_equal(&Vector3::new(0.0, 0.0, 1.0), 1e-9));
+    assert!(workplane[2].is_equal(&Vector3::new(1.0, 0.0, 0.0), 1e-9));
+    let set = shell.read_with(&cx, |shell, _| {
+        shell.arm_gizmos(&reference, &stage, Some(workplane))
+    });
+    assert!(
+        set.gizmos()
+            .iter()
+            .any(|gizmo| gizmo.frame().basis[2].is_equal(&workplane[2], 1e-9)),
+        "the armed rings take the workplane basis"
     );
 }
 

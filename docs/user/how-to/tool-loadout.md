@@ -55,8 +55,9 @@ sub-element reports the same filtered scope the window does.
   Finish with `✓`/`Enter` or roll back with `✗`/`Esc`; the lock is what guarantees that
   cancel always means exactly the rotation on the protractor, and that no ring switch
   commits behind your back. Dragging the same ring again adds to that angle (three 30°
-  drags show 30°, 60°, then 90°). `WLD` keeps the rings aligned with the world grid; `LOC`
-  turns them with the body's committed orientation; both are inert while a step is
+  drags show 30°, 60°, then 90°). `WLD` keeps the rings aligned with the world grid, `LOC`
+  turns them with the body's committed orientation, and `WP` follows the active
+  workplane; the badge cycles the three and is inert while a step is pending.
   `Reset 0°` commits the rotation that returns the body to world alignment and is
   likewise disabled while a step is pending. The button names the stored orientation:
   `Reset (Z 45°)` for a pure axis, `Reset (21.4°)` for a compound tilt (the shortest total
@@ -78,7 +79,7 @@ sub-element reports the same filtered scope the window does.
 | `1` / `2` / `3` | equip Move / Push/Pull / Fillet; `1` again on Move pauses the hand |
 | `Tab` | focus the Move form's field for the axis you last dragged (then cycle); on the rotate form, focus `Δθ` |
 | a digit, `-` or `.` | focus the remembered field and start the number |
-| `=` | switch the translation form between offsets (`ΔX`) and coordinates (`X`); switch the rotate form between world rings (`WLD`) and body rings (`LOC`) when no rotation is pending |
+| `=` | switch the translation form between offsets (`ΔX`) and coordinates (`X`); cycle the rotate rings (`WLD` → `LOC` → `WP`) when no rotation is pending |
 | `Enter` | commit the pending move, or accept an open dialog |
 | `Esc` | roll back the pending move; at rest, clear the selection; or close the open surface |
 | `Space` | open the object-verb wheel |
@@ -102,8 +103,9 @@ Click the `Δ` switch (or press `=`) to show **coordinates** instead of offsets:
 ordinary move. Type `=15` in a field to mean "X = 15" for that entry without switching
 the whole form.
 
-With the **rotate** rings, the same dock row becomes `ΔθX ΔθY ΔθZ` plus `WLD/LOC` and a
-`Reset 0°` button. Only the active ring's cell holds an input. `Tab` focuses it; while
+With the **rotate** rings, the same dock row becomes `ΔθX ΔθY ΔθZ` plus the `WLD/LOC/WP`
+switch and a `Reset 0°` button. Only the active ring's cell holds an input. `Tab` focuses
+it; while
 nothing is pending, clicking another cell (or typing `X`, `Y` or `Z` while the caret is
 in the field) selects that ring. Once a step is pending the siblings show `—`, and the
 frame switch, `Reset 0°` and the sibling cells are disabled until you apply or cancel.

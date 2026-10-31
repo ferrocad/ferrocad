@@ -164,7 +164,7 @@ fn the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad(cx: &mut TestA
 
     let stage = body_stage([2.0, 3.0, 4.0]);
     let set = shell.read_with(cx, |shell, _| {
-        shell.arm_gizmos(&SelectionRef::whole(7), &stage)
+        shell.arm_gizmos(&SelectionRef::whole(7), &stage, None)
     });
     assert_eq!(
         set.len(),
@@ -197,7 +197,7 @@ fn the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad(cx: &mut TestA
         shell.on_gizmo_origin(Vector3::new(9.0, 9.0, 9.0), SnapKind::Vertex, cx);
     });
     let set: GizmoSet = shell.read_with(cx, |shell, _| {
-        shell.arm_gizmos(&SelectionRef::whole(7), &stage)
+        shell.arm_gizmos(&SelectionRef::whole(7), &stage, None)
     });
     assert_eq!(
         set.gizmos()[0].origin(),

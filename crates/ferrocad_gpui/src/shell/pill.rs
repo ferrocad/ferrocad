@@ -1,7 +1,7 @@
 //! The Move pill's keyboard state.
 //!
 //! The pill is one surface: a row of `ΔX`/`ΔY`/`ΔZ` fields for the arrows, or
-//! `[ WLD/LOC ] [ X/Y/Z ] [ Δθ ]` for the rings, shown whenever Slot 1 has a Move target.
+//! `[ WLD/LOC/WP ] [ X/Y/Z ] [ Δθ ]` for the rings, shown whenever Slot 1 has a Move target.
 //! This module holds only *which field, if any, the keyboard owns* and the two form
 //! switches — never the values themselves, which belong to the
 //! [`TransformSession`](ferrocad_stage::TransformSession) and are read through it. Keeping
@@ -27,6 +27,31 @@
 //! escalation keys through it (`shell.rs`); it is also where a typed edit opens or
 //! updates the session.
 
+/// The rotate form's ring basis.
+///
+/// `World` is the coordinate grid, `Local` follows the body's committed orientation,
+/// and `Workplane` follows the active workplane's `u`/`v`/`n`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RingFrame {
+    /// The global X/Y/Z rings (`WLD`).
+    World,
+    /// The body's own rings (`LOC`).
+    Local,
+    /// The active workplane's rings (`WP`).
+    Workplane,
+}
+
+impl RingFrame {
+    /// The badge text for this frame.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::World => "WLD ▾",
+            Self::Local => "LOC ▾",
+            Self::Workplane => "WP ▾",
+        }
+    }
+}
+
 /// Which Δ field the keyboard owns, if any, and the axis the last gesture moved.
 ///
 /// `focus == None` is the resting state: the fields render with their chrome hairline
@@ -44,7 +69,7 @@ pub(super) struct PillState {
     /// `true` when the rotate rings follow the body's own orientation (`LOC`) instead of
     /// the world grid (`WLD`). It is the rotate form's frame switch; the translation form
     /// keeps its own `absolute` coordinate mode.
-    local_frame: bool,
+    ring_frame: RingFrame,
 }
 
 /// How many Δ fields the pill can show: X, Y and Z.
@@ -60,7 +85,7 @@ impl PillState {
             focus: None,
             last: 0,
             absolute: false,
-            local_frame: false,
+            ring_frame: RingFrame::World,
         }
     }
 
@@ -71,7 +96,7 @@ impl PillState {
             focus: None,
             last: axis.min(AXES - 1),
             absolute: false,
-            local_frame: false,
+            ring_frame: RingFrame::World,
         }
     }
 
@@ -87,7 +112,7 @@ impl PillState {
             focus: Some(axis),
             last: axis,
             absolute: false,
-            local_frame: false,
+            ring_frame: RingFrame::World,
         }
     }
 
@@ -130,16 +155,22 @@ impl PillState {
         self.absolute
     }
 
-    /// Whether the rotate rings follow the body's own orientation (`LOC`).
-    pub(super) fn local_frame(&self) -> bool {
-        self.local_frame
+    /// The rotate form's ring basis.
+    pub(super) fn ring_frame(&self) -> RingFrame {
+        self.ring_frame
     }
 
-    /// Flip between world rings (`WLD`) and body-local rings (`LOC`); returns the new
-    /// state. Like `absolute`, the choice outlives a session.
-    pub(super) fn toggle_local_frame(&mut self) -> bool {
-        self.local_frame = !self.local_frame;
-        self.local_frame
+    /// Advance the ring basis `WLD → LOC → WP → WLD`; returns the new state.
+    ///
+    /// A third state does not fit a two-way toggle, so the badge cycles rather than
+    /// flipping. Like `absolute`, the choice outlives a session.
+    pub(super) fn cycle_ring_frame(&mut self) -> RingFrame {
+        self.ring_frame = match self.ring_frame {
+            RingFrame::World => RingFrame::Local,
+            RingFrame::Local => RingFrame::Workplane,
+            RingFrame::Workplane => RingFrame::World,
+        };
+        self.ring_frame
     }
 
     /// Focus `axis`, clamped to `0..=2`; returns whether the focus moved.
@@ -274,15 +305,29 @@ mod tests {
     fn the_coordinate_mode_starts_relative_and_toggles_back() {
         let mut pill = PillState::resting();
         assert!(!pill.absolute(), "a new HUD nudges by an offset");
-        assert!(!pill.local_frame(), "and starts with world rings");
+        assert_eq!(
+            pill.ring_frame(),
+            RingFrame::World,
+            "and starts with world rings"
+        );
         assert!(pill.toggle_absolute());
         assert!(pill.absolute());
-        assert!(pill.toggle_local_frame());
-        assert!(pill.local_frame());
-        assert!(!pill.toggle_local_frame());
-        assert!(!pill.local_frame());
+        assert_eq!(pill.cycle_ring_frame(), RingFrame::Local);
+        assert_eq!(pill.cycle_ring_frame(), RingFrame::Workplane);
+        assert_eq!(
+            pill.cycle_ring_frame(),
+            RingFrame::World,
+            "the third state wraps back to the world grid"
+        );
         assert!(!pill.toggle_absolute());
         assert!(!pill.absolute());
+    }
+
+    #[test]
+    fn the_ring_frame_labels_name_every_state() {
+        assert_eq!(RingFrame::World.label(), "WLD ▾");
+        assert_eq!(RingFrame::Local.label(), "LOC ▾");
+        assert_eq!(RingFrame::Workplane.label(), "WP ▾");
     }
 
     #[test]

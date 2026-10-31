@@ -21,6 +21,7 @@
 //! See `docs/project/tasks/transform-session.md` §3.2.
 
 use super::*;
+use super::pill::RingFrame;
 use ferrocad_types::Quantity;
 
 /// The text a resting field shows.
@@ -492,29 +493,54 @@ impl Shell {
 
     /// The ring a typed angle previews around, as `(index, world axis)`.
     ///
-    /// The index is the bar's selected segment. In `WLD` the world axis is the coordinate
-    /// axis; in `LOC` it is that axis turned by the body's committed orientation, which
-    /// is exactly the direction the local ring turns about.
-    fn rotate_axis_world(&self) -> (usize, Vector3) {
+    /// The index is the bar's selected segment. `WLD` is the coordinate axis, `LOC` is
+    /// that axis turned by the body's committed orientation, and `WP` is the active
+    /// workplane's axis — exactly the direction the matching ring turns about.
+    fn rotate_axis_world(&self, cx: &App) -> (usize, Vector3) {
         let index = self
             .move_hud
             .as_ref()
             .map_or(0, |hud| hud.axis.min(AXIS_COUNT - 1));
-        let unit = match index {
-            0 => Vector3::new(1.0, 0.0, 0.0),
-            1 => Vector3::new(0.0, 1.0, 0.0),
-            _ => Vector3::new(0.0, 0.0, 1.0),
-        };
-        if !self.pill.local_frame() {
-            return (index, unit);
+        let plane = self.active_ring_plane(cx);
+        (index, self.ring_basis(plane.as_ref())[index])
+    }
+
+    /// The three world ring axes for the current frame mode.
+    ///
+    /// `World` is the coordinate grid, `LOC` is the body's committed orientation and
+    /// `WP` is the active workplane's `u`/`v`/`n`. The plane is passed in because only
+    /// the caller can read it from the viewport.
+    pub(super) fn ring_basis(&self, plane: Option<&ferrocad_stage::Workplane>) -> [Vector3; 3] {
+        let world = [
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        match self.pill.ring_frame() {
+            RingFrame::World => world,
+            RingFrame::Local => {
+                ferrocad_stage::ManipulatorFrame::from_rotation(
+                    Vector3::zero(),
+                    self.object_rotation_now(),
+                )
+                .basis
+            }
+            RingFrame::Workplane => plane
+                .map(|plane| [plane.u, plane.v, plane.n])
+                .unwrap_or(world),
         }
-        let orientation = self
-            .session
-            .as_ref()
-            .map(TransformSession::orientation_0)
-            .or_else(|| self.move_hud.as_ref().map(|hud| hud.orientation))
-            .unwrap_or_else(Rotation::identity);
-        (index, orientation.to_matrix().transform(&unit))
+    }
+
+    /// The active workplane while the rotate form uses `WP` rings.
+    ///
+    /// `None` for the other frames, and when the shell has no viewport (headless),
+    /// where `ring_basis` falls back to the world grid.
+    pub(super) fn active_ring_plane(&self, cx: &App) -> Option<ferrocad_stage::Workplane> {
+        if self.pill.ring_frame() != RingFrame::Workplane {
+            return None;
+        }
+        let viewport = self.viewport.as_ref()?;
+        Some(viewport.read(cx).active_workplane().plane.clone())
     }
 
     /// A typed angle in the rotate form: it is the whole pending step, replacing any
@@ -546,7 +572,7 @@ impl Shell {
                 return;
             }
         }
-        let (index, axis) = self.rotate_axis_world();
+        let (index, axis) = self.rotate_axis_world(cx);
         if let Some(session) = self.session.as_mut() {
             session.set_mode(GizmoMode::Rotate);
             session.set_rotation_step(index, axis, degrees);
@@ -832,12 +858,14 @@ impl Shell {
                 pick.sub(&axis.scale(pick.dot(&axis))).normalize()
             }
         };
-        let reference = if self.pill.local_frame() {
-            session.orientation_0()
-        } else {
-            Rotation::identity()
-        };
-        let turned = reference.to_matrix().transform(&canonical);
+        let plane = self.active_ring_plane(cx);
+        let basis = self.ring_basis(plane.as_ref());
+        // The canonical zero direction is a world vector; the ring frame maps it onto
+        // the frame the rings actually occupy.
+        let turned = basis[0]
+            .scale(canonical.x)
+            .add(&basis[1].scale(canonical.y))
+            .add(&basis[2].scale(canonical.z));
         let in_plane = turned.sub(&axis.scale(turned.dot(&axis)));
         let start = if in_plane.length() > 1e-6 {
             in_plane.normalize()
@@ -895,8 +923,8 @@ impl Shell {
             .map(TransformSession::pending_degrees)
     }
 
-    /// Flip the rotate form between world rings (`WLD`) and body-local rings (`LOC`),
-    /// or the translation form between offsets and coordinates.
+    /// Cycle the rotate form's ring basis `WLD → LOC → WP`, or flip the translation form
+    /// between offsets and coordinates.
     ///
     /// A frame switch is a context exit for a pending rotation: the pending step was
     /// measured about the old ring, so it is committed before the rings are rebuilt.
@@ -909,7 +937,7 @@ impl Shell {
                 self.show_rotation_lock(self.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);
                 return;
             }
-            self.pill.toggle_local_frame();
+            self.pill.cycle_ring_frame();
             // The hosted rings take their frame from the arming seam, so rebuild them.
             self.rearm_selection(cx);
             self.pill_attention = false;

@@ -586,7 +586,14 @@ impl Shell {
                 // for translation the pivot does not change the result, and re-pivoting
                 // will be an explicit, snapped gesture (see transform-ux.md).
                 if slot.wants_gizmo() {
-                    gizmos = self.arm_gizmos(&reference, &stage);
+                    // The rotate rings take their basis from the form's frame: world,
+                    // the body, or the active workplane. A translate session is always
+                    // world-aligned, so it passes no basis and keeps the default frame.
+                    let basis = (self.gizmo_mode == GizmoMode::Rotate).then(|| {
+                        let plane = self.active_ring_plane(cx);
+                        self.ring_basis(plane.as_ref())
+                    });
+                    gizmos = self.arm_gizmos(&reference, &stage, basis);
                 }
             }
         }
@@ -648,23 +655,21 @@ impl Shell {
     /// workbench control anchored with it); a workbench gizmo that owns a different
     /// anchor (a grip on the top face) keeps it, because the pivot is a property of the
     /// triad, not of every handle in the set.
-    pub(super) fn arm_gizmos(&self, reference: &SelectionRef, stage: &Stage) -> GizmoSet {
+    pub(super) fn arm_gizmos(
+        &self,
+        reference: &SelectionRef,
+        stage: &Stage,
+        basis: Option<[Vector3; 3]>,
+    ) -> GizmoSet {
         let mut gizmos = self.armed_gizmos(reference, stage);
         let datum = stage.item(reference.object).and_then(ShapeItem::anchor);
-        // `LOC` rings follow the body's committed orientation; the shared triad only.
-        // A translate session is always world-aligned, so switching back rebuilds it.
-        let local = self.gizmo_mode == GizmoMode::Rotate && self.pill.local_frame();
-        let orientation = local.then(|| self.object_rotation_now());
         for gizmo in gizmos.gizmos_mut() {
             let object_origin = gizmo.origin();
             if datum == Some(object_origin) {
                 let origin = self.gizmo_origin_for(object_origin);
                 gizmo.set_origin(origin);
-                if let Some(orientation) = orientation {
-                    gizmo.set_frame(ferrocad_stage::ManipulatorFrame::from_rotation(
-                        origin,
-                        orientation,
-                    ));
+                if let Some(basis) = basis {
+                    gizmo.set_frame(ferrocad_stage::ManipulatorFrame { origin, basis });
                 }
             }
             gizmo.set_origin_enabled(self.gizmo_origin_enabled());

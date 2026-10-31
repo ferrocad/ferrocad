@@ -196,7 +196,7 @@ shows them as `—`. The only exits are `✓`/`Enter` and `✗`/`Esc`, so `dirty
 `transform`/`apply`; translation keeps the multi-body selection and the `App_Move` route.
 The rotate hand docks `ΔθX/ΔθY/ΔθZ` above the loadout: only the pending ring's cell holds
 an input, `WLD` rings follow the world grid, `LOC` rings follow the body's committed
-orientation, and `Reset 0°` commits the rotation that cancels it. The 3-D protractor
+orientation, `WP` rings follow the active workplane, and `Reset 0°` commits the rotation that cancels it. The 3-D protractor
 (swept glass sector, dashed press spoke, live spoke, detent ticks) is built from the same
 single step, so it is always one arc and one chip with the degree tag on the arc bisector.
 Moving the translation commit to the interaction provider is **planned**.

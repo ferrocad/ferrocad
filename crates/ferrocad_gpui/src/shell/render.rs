@@ -4,6 +4,7 @@
 //! `Render` impl stays in `shell.rs`; this file owns the pieces it composes.
 
 use super::*;
+use super::pill::RingFrame;
 
 /// The active-action surface: the active tool's label, point count, hint and a
 /// **Cancel** / **Finish** pair, as one dielectric pill over the bottom of the canvas.
@@ -752,7 +753,7 @@ pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElem
         return div().into_any_element();
     }
     let absolute = shell.pill.absolute();
-    let local = shell.pill.local_frame();
+    let frame = shell.pill.ring_frame();
     let angular = shell.angular();
     let focus = shell.dialog_focus.clone();
     let mut bar = div()
@@ -806,7 +807,7 @@ pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElem
         let locked = shell.rotation_pending();
         let (reset_label, reset_actionable) = shell.reset_rotation_label();
         bar = bar
-            .child(rotate_mode_badge(local, locked.is_some(), cx))
+            .child(rotate_mode_badge(frame, locked.is_some(), cx))
             .child(rotate_fields(shell, locked, cx))
             .child(div().text_xs().text_color(rgb(MUTED)).child("deg"))
             .child(reset_rotation_button(
@@ -848,17 +849,18 @@ fn mode_badge(absolute: bool, cx: &mut Context<Shell>) -> AnyElement {
         .into_any_element()
 }
 
-/// The rotate form's ring-frame switch: `WLD` (world rings) or `LOC` (body rings).
+/// The rotate form's ring-frame switch: `WLD` (world rings), `LOC` (body rings) or
+/// `WP` (the active workplane's `u`/`v`/`n`). It cycles through the three.
 ///
 /// While a step is pending the basis is frozen: the button is muted and explains the
 /// lock instead of moving the rings under the pending value.
-fn rotate_mode_badge(local: bool, locked: bool, cx: &mut Context<Shell>) -> AnyElement {
+fn rotate_mode_badge(frame: RingFrame, locked: bool, cx: &mut Context<Shell>) -> AnyElement {
     let ink = if locked {
         MUTED
-    } else if local {
-        ferrocad_theme::ui::ACTIVE_ACCENT
-    } else {
+    } else if frame == RingFrame::World {
         FG
+    } else {
+        ferrocad_theme::ui::ACTIVE_ACCENT
     };
     div()
         .id("move-mode")
@@ -877,7 +879,7 @@ fn rotate_mode_badge(local: bool, locked: bool, cx: &mut Context<Shell>) -> AnyE
                 style.bg(rgb(ACCENT))
             }
         })
-        .child(if local { "LOC ▾" } else { "WLD ▾" })
+        .child(frame.label())
         .on_click(cx.listener(move |this, _event, window, cx| {
             if this.rotation_pending().is_some() {
                 this.show_rotation_lock(this.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);

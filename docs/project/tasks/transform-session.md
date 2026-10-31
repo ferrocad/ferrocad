@@ -397,9 +397,10 @@ focused field (`Option<usize>`), the last dragged axis and the coordinate mode.
   another hand closes it. The row's `WLD/LOC/WP` switch orients both hands, and the
   fields are read in that frame: in `LOC` a typed `ΔX` is along the body's X and an
   absolute `X/Y/Z` is anchored at the body's origin. **Pressing `1` while Slot 1 is
-  already equipped toggles the hand** (`activate_loadout_slot`): Move ⇄ Rotate. The
-  pointer is its own slot (`0`): the selection stays and the stage's selection highlight
-  names its scope, while the triad, row and pill leave the canvas for inspection; `1`,
+  already equipped toggles the hand** (`activate_loadout_slot`): Move ⇄ Rotate.
+  Inspect is its own slot (`0`): the selection stays and the stage's selection highlight
+  names its scope, while the triad, row and pill leave the canvas for inspection; a
+  Body/Face/Edge switcher docks above the loadout bar. `1`,
   a new selection or any command that equips the hand brings Move back. Entering Slot 1
   from another slot starts at the arrows. A modal or the object wheel hides
   both pieces (they are not stacked under a backdrop); a right-press on the finish pill

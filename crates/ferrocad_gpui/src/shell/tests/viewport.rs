@@ -749,10 +749,10 @@ fn the_pills_re_arm_the_viewport_hand(cx: &mut TestAppContext) {
     );
 }
 
-/// U4: the pointer hand's stage highlight previews the filtered scope. Skips without a
+/// U4: the Inspect hand's stage highlight previews the filtered scope. Skips without a
 /// GPU adapter.
 #[gpui::test]
-fn the_pointer_hand_highlights_the_selected_scope(cx: &mut TestAppContext) {
+fn the_inspect_hand_highlights_the_selected_scope(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell();
     let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
@@ -770,7 +770,7 @@ fn the_pointer_hand_highlights_the_selected_scope(cx: &mut TestAppContext) {
     };
 
     cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::Idle, cx));
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::Inspect, cx));
     });
     click_select(
         &mut cx,
@@ -780,7 +780,7 @@ fn the_pointer_hand_highlights_the_selected_scope(cx: &mut TestAppContext) {
     assert_eq!(
         cx.update(|_window, cx| highlight(cx)),
         vec![0, 1],
-        "the pointer's Body default paints the whole slab"
+        "Inspect's Body default paints the whole slab"
     );
 
     // `Select ▾` narrows what a click reports, and the highlight follows it.
@@ -804,7 +804,7 @@ fn the_pointer_hand_highlights_the_selected_scope(cx: &mut TestAppContext) {
     });
     assert!(
         cx.update(|_window, cx| highlight(cx)).is_empty(),
-        "leaving the pointer hand clears the highlight"
+        "leaving Inspect clears the highlight"
     );
 }
 

@@ -878,10 +878,10 @@ impl Shell {
         // closes the form's session when the hand changes, so the pointer highlight
         // below sees the final state.
         self.ensure_move_hud(cx);
-        // The pointer hand's target follows the hand and the selection too: it has no
+        // The Inspect hand's target follows the hand and the selection too: it has no
         // manipulator, so the stage highlight is repainted here (hover still wins while
         // the pointer is over an object).
-        self.sync_pointer_highlight(cx);
+        self.sync_inspect_highlight(cx);
         // Only Slot 1 hosts the triad, and `gizmo_armed` is the shell's own "a
         // TransformGizmo is hosted" flag (the key path and Esc consult it). Clear it
         // here too, so a headless switch (no viewport to re-arm against) agrees.

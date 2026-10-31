@@ -8,13 +8,13 @@ the 3-D view names the hand you have equipped, and `1`, `2`, `3` and `0` switch 
 | **Move** | `1` | moves or rotates the selected body with the transform triad | Body |
 | **Push/Pull** | `2` | extrudes or pockets the face under the pointer | Face |
 | **Fillet** | `3` | fillets or chamfers the edge under the pointer | Edge |
-| **Idle** | `0` | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
+| **Inspect** | `0` | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
 
 The active slot is lit in the bar. Push/pull and fillet appear only when the
-edition provides those controls (the Part workbench does); Move and Idle are
+edition provides those controls (the Part workbench does); Move and Inspect are
 always there. Pressing `1` while Move is already equipped toggles it between
-Move and Rotate; from another pill, `1` equips Move with its arrows. `0` is its
-own pointer hand, not a paused Move.
+Move and Rotate; from another pill, `1` equips Move with its arrows. `0` is
+Inspect, its own selection hand, not a paused Move.
 
 ## Move a body without selecting it first
 
@@ -39,11 +39,13 @@ You can also override the filter yourself: choose `Auto`, `Body`, `Face` or
 while the filter differs from the hand's default. A script that selects a
 sub-element reports the same filtered scope the window does.
 
-With the **Idle** hand (`0`) there is no triad to tell you what a click would
-grab, so the viewport highlights it instead: hovering a body paints the whole
-body under `Body`, and a `Face`/`Edge` filter paints just that sub-element. The
-latched selection keeps its highlight when the pointer moves away. That is the
-same filtered scope a click will report.
+With **Inspect** (`0`) there is no triad to tell you what a click would grab, so
+the viewport highlights it instead: hovering a body paints the whole body under
+`Body`, and a `Face`/`Edge` filter paints just that sub-element. The latched
+selection keeps its highlight when the pointer moves away. That is the same
+filtered scope a click will report. Inspect also docks a Body/Face/Edge switcher
+just above the loadout bar; it reads and writes the same filter as `Select ▾`, so
+the header and the in-context pill can never disagree.
 
 ## Keep, commit or roll back a move
 
@@ -89,7 +91,7 @@ same filtered scope a click will report.
 
 | Key | Effect |
 | --- | --- |
-| `0` / `1` / `2` / `3` | equip Idle / Move / Push/Pull / Fillet; while Slot 1 is active, `1` toggles Move ⇄ Rotate |
+| `0` / `1` / `2` / `3` | equip Inspect / Move / Push/Pull / Fillet; while Slot 1 is active, `1` toggles Move ⇄ Rotate |
 | `Tab` | focus the Move form's field for the axis you last dragged (then cycle); on the rotate form, focus `Δθ` |
 | a digit other than `0`–`3`, `-` or `.` | focus the remembered field and start the number |
 | `=` | switch the translation form between offsets (`ΔX`) and coordinates (`X`); cycle the rotate rings (`WLD` → `LOC` → `WP`) when no rotation is pending |

@@ -15,16 +15,16 @@ fn slot_labels_name_the_hand_they_equip() {
     assert_eq!(Slot::Move.label_for(GizmoMode::Universal), "Move");
     assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate), "Push/Pull");
     assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate), "Fillet");
-    assert_eq!(Slot::Idle.label_for(GizmoMode::Rotate), "Idle");
+    assert_eq!(Slot::Inspect.label_for(GizmoMode::Rotate), "Inspect");
     assert_eq!(
-        Slot::Idle.status_label(GizmoMode::Rotate),
-        "idle",
-        "the status line keeps its lower-case idle"
+        Slot::Inspect.status_label(GizmoMode::Rotate),
+        "inspect",
+        "the status line uses the lower-case inspect"
     );
     assert_eq!(
         Slot::ALL,
-        [Slot::Move, Slot::PushPull, Slot::Fillet, Slot::Idle],
-        "the pointer is the last pill"
+        [Slot::Move, Slot::PushPull, Slot::Fillet, Slot::Inspect],
+        "Inspect is the last pill"
     );
 }
 
@@ -188,7 +188,7 @@ fn the_loadout_bar_renders_and_equips_a_slot(cx: &mut TestAppContext) {
         "a click equips the same slot as `2`"
     );
     // The pointer pill shares the same handler; its own key path is covered by
-    // `the_move_and_pointer_slots_are_separate_hands`. Do not click the last pill here:
+    // `the_move_and_inspect_slots_are_separate_hands`. Do not click the last pill here:
     // a test-run command registry can widen the centred action dock over it, while the
     // base app's dock stays clear of the bar.
     draw(&mut cx);
@@ -197,6 +197,53 @@ fn the_loadout_bar_renders_and_equips_a_slot(cx: &mut TestAppContext) {
     assert_eq!(
         shell.read_with(&cx, |shell, _| shell.loadout.slot()),
         Slot::Move
+    );
+}
+
+/// Inspect docks a Body/Face/Edge scope switcher above the loadout bar. It is a second
+/// view of the same `Select ▾` store, and it leaves with the hand.
+#[gpui::test]
+fn inspect_offers_a_scope_switcher(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("inspect-bar").is_none(),
+        "Move has no scope switcher"
+    );
+
+    press_root(&mut cx, &shell, "0");
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("inspect-bar").is_some(),
+        "Inspect docks its switcher above the bar"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.filter()),
+        SelectFilter::Body,
+        "Inspect starts on Body"
+    );
+
+    click_at(&mut cx, "inspect-face");
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.filter()),
+        SelectFilter::Face,
+        "the pill writes the same store as Select ▾"
+    );
+
+    draw(&mut cx);
+    cx.run_until_parked();
+    click_at(&mut cx, "inspect-edge");
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.filter()),
+        SelectFilter::Edge
+    );
+
+    press_root(&mut cx, &shell, "1");
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("inspect-bar").is_none(),
+        "the switcher belongs to Inspect"
     );
 }
 
@@ -275,10 +322,10 @@ fn switching_the_slot_waits_for_a_pending_move(cx: &mut TestAppContext) {
     );
 }
 
-/// `1` toggles Slot 1's two hands; `0` is the pointer, a separate slot that keeps the
+/// `1` toggles Slot 1's two hands; `0` is Inspect, a separate slot that keeps the
 /// selection but hosts no handles or form.
 #[gpui::test]
-fn the_move_and_pointer_slots_are_separate_hands(cx: &mut TestAppContext) {
+fn the_move_and_inspect_slots_are_separate_hands(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (mut cx, shell, _model) = armed_window(cx);
     draw(&mut cx);
@@ -329,11 +376,11 @@ fn the_move_and_pointer_slots_are_separate_hands(cx: &mut TestAppContext) {
             model.status.clone(),
         )
     });
-    assert_eq!(slot, Slot::Idle, "0 equips the pointer, not a paused Move");
-    assert!(!open, "the pointer hides the form");
-    assert!(!armed, "the pointer hosts no handles");
+    assert_eq!(slot, Slot::Inspect, "0 equips Inspect, not a paused Move");
+    assert!(!open, "Inspect hides the form");
+    assert!(!armed, "Inspect hosts no handles");
     assert_eq!(selection, 1, "the selection is kept for inspection");
-    assert_eq!(status, "tool: idle", "the pointer names its own state");
+    assert_eq!(status, "tool: inspect", "Inspect names its own state");
     assert!(cx.debug_bounds("move-hud").is_none());
 
     // 1 → Move: entering Slot 1 from the pointer starts at the arrows.

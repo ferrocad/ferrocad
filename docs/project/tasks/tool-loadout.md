@@ -1,7 +1,7 @@
 # The tool loadout: slots, the `Select ▾` filter, and hover-to-arm
 
 Status: **U4, U5 and U6 built (2026-10-31).** Slot 1 hosts the triad, Slots 2 and 3 host
-the selection's manipulator, Slot 0 is the pointer (selection highlight only), the
+the selection's manipulator, Slot 0 is Inspect (selection highlight only), the
 `Select ▾` filter rewrites the reported selection, `0`–`3` and the bottom-left bar equip
 a slot, a slot or filter change commits a dirty
 session first, and the Move hand materialises an idle triad over an unselected body so a
@@ -61,7 +61,7 @@ which single manipulator class is hosted (`GizmoSet::set_session`):
 | Slot 1 | `1` | Body (element: `None`) | `TransformGizmo` (Translate / Rotate) | the docked coordinate row + the in-context `✗`/`✓` pill, and the session's 3-D tape ([`transform-session.md`](transform-session.md) §3). Pressing `1` again toggles the hand Move ⇄ Rotate |
 | Slot 2 | `2` | Face (`FaceN`) | `PushPullStem` (extrude / pocket) | in-situ readout pill (`Tab` to type) |
 | Slot 3 | `3` | Edge (`EdgeN` chain) | `DressUpScrubber` (Fillet / Chamfer) | in-situ readout pill (`Tab` to type) |
-| Slot 0 (pointer) | `0` | Body (`None`) | none — selection only | none; the stage's selection highlight shows the hovered or latched scope |
+| Slot 0 (Inspect) | `0` | Body (`None`) | none — selection only | the in-context Body/Face/Edge switcher above the bar; the stage's selection highlight shows the hovered or latched scope |
 | Wheel | Right-click / Space | context-dependent | "Buy menu": equips specialised verbs (Rotate, Chamfer, Draft) into the active hand | the same session contract |
 
 Deliberate swapping over implicit collision:
@@ -69,8 +69,10 @@ Deliberate swapping over implicit collision:
 - With **Slot 1** equipped, `PushPullStem` and `DressUpScrubber` are **unoffered**, even if the
   pointer passes over `Face1`; the face is still *selectable*, it just does not get its stem.
 - With **Slot 2** equipped, the corner triad is hidden, and a click on a face arms the stem.
-- With the **pointer** equipped (`0`), no manipulator is hosted at all; the stage highlight
-  previews the scope a click would select, and the latched selection stays visible.
+- With the **Inspect** hand (`0`), no manipulator is hosted at all; the stage highlight
+  previews the scope a click would select, and the latched selection stays visible. A
+  Body/Face/Edge switcher docks above the bar and writes the same filter as
+  `Select ▾`.
 - The wheel's verbs equip *into* the active slot: `Rotate` keeps Slot 1 and switches the
   triad's mode; a future `Chamfer` would equip Slot 3 and preselect the operation.
 
@@ -93,7 +95,7 @@ creation dock (`Create Box | Search (Ctrl+K)`):
 - the active slot highlighted in `ui::CHROME_ACTIVE` (#67D7FF) over `ui::CHROME_ACTIVE_BG`
   (@ 0.33);
 - one pill per slot, labelled with the hotkey and the tool (`[1 Move] [2 Push/Pull]
-  [3 Fillet] [0 Idle]`), so the hotkey is discoverable without the wheel. The pointer
+  [3 Fillet] [0 Inspect]`), so the hotkey is discoverable without the wheel. Inspect
   comes last: it is the neutral hand, not a fourth tool.
 
 ### 1.4 How the narrowing is implemented
@@ -133,18 +135,18 @@ changing the slot.
   `Loadout::set_filter` is the header override. `Shell::loadout` sits beside
   `gizmo_mode` because both are tool state, not document state (D2).
 - The bottom-left bar (`chrome::loadout_bar`, `[1 Move] [2 Push/Pull] [3 Fillet]
-  [0 Idle]`) and the header selector (`chrome::select_button`, `Select: Body ▾`
+  [0 Inspect]`) and the header selector (`chrome::select_button`, `Select: Body ▾`
   between `Gizmo` and `Snap`) both call the same setters; `0`–`3` do too. The
   selector's row ids are synthetic (`select:<filter>`) and `run_command` intercepts
   them before the registry.
-- `Slot::Idle` is a real slot, not a paused Slot 1: it defaults to the `Body` filter,
-  hosts no manipulator, and owns the pointer hand's visual answer.
-  `Shell::sync_pointer_highlight` paints the **filtered** hover target (or the
-  latched selection when the pointer is away) through
-  `InventorViewport::set_pointer_highlight`, which uses the stage's existing per-part
-  selection tint/wire. That is what replaces the triad as the "what will a click
-  select?" cue; `Select ▾` is still the explicit statement of the scope (`Body` paints
-  the whole body, `Face`/`Edge` the sub-element).
+- `Slot::Inspect` is a real slot, not a paused Slot 1: it defaults to the `Body`
+  filter, hosts no manipulator, and owns the Inspect hand's visual answer. Its own
+  `chrome::inspect_bar` docks Body/Face/Edge above the loadout bar (the same store as
+  `Select ▾`; `Auto` stays header-only). `Shell::sync_inspect_highlight` paints the
+  **filtered** hover target (or the latched selection when the pointer is away)
+  through `InventorViewport::set_inspect_highlight`, which uses the stage's existing
+  per-part selection tint/wire. That is what replaces the triad as the "what will a
+  click select?" cue.
 - `Shell::arm` narrows the `SelectionRef` once and then calls **either**
   `arm_gizmos` (Slot 1) **or** `manipulator_for` + `manipulator_specs` (Slots 2/3).
   Slot 0 calls neither. `replace_selection` applies the same filter to every item, so
@@ -154,7 +156,7 @@ changing the slot.
   both gone. A tool session does not change the hand.
 - A slot or filter change commits a dirty session first (`commit_session`), then
   rearms. The slot keys are reserved above the resting form's typing path: `0` on an
-  armed triad equips the pointer, `2` equips the face hand, and a value that starts
+  armed triad equips Inspect, `2` equips the face hand, and a value that starts
   with a slot digit begins with `Tab` or a click into a field.
 - Slot 1's key toggles its two hands (Move ⇄ Rotate); it no longer cycles into idle.
   Entering Slot 1 from another slot always starts at the arrows (Rotate is a sub-mode
@@ -163,12 +165,12 @@ changing the slot.
   `the_slot_sets_the_filter_and_select_overrides_it`,
   `the_wheel_verbs_equip_the_move_slot`,
   `the_loadout_bar_renders_and_equips_a_slot`,
-  `the_move_and_pointer_slots_are_separate_hands`,
+  `the_move_and_inspect_slots_are_separate_hands`, `inspect_offers_a_scope_switcher`,
   `switching_the_slot_commits_a_pending_drag_first`, and the GPU-only
   `a_face_click_in_the_move_slot_arms_only_the_triad`,
   `a_claimed_sub_element_suppresses_the_shared_body_triad` /
-  `an_unclaimed_sub_element_leaves_the_face_slot_empty`; the pointer highlight has
-  `ferrocad_viewport`'s `the_pointer_highlight_paints_the_filtered_scope`.
+  `an_unclaimed_sub_element_leaves_the_face_slot_empty`; the Inspect highlight has
+  `ferrocad_viewport`'s `the_inspect_highlight_paints_the_filtered_scope`.
 
 ---
 
@@ -187,7 +189,7 @@ pub enum SelectFilter { Auto, Body, Face, Edge }
 - `Face` / `Edge` are the first-element variants the manipulator slots need.
 
 The filter lives in view state (D2), beside `Gizmo ▾`. The shell applies it where it
-reports a selection, where it arms a hand, and where the pointer hand paints its preview;
+reports a selection, where it arms a hand, and where the Inspect hand paints its preview;
 `InventorViewport` only sees the filtered `SelectionRef`.
 
 ### 2.2 Where the stripping happens
@@ -198,7 +200,7 @@ reference it reports to the tool, the tree and the manipulator arming.
 
 ### 2.3 What the filter does *not* decide
 
-- It does not change what is **hoverable** or what the raw pick reports. The pointer
+- It does not change what is **hoverable** or what the raw pick reports. The Inspect
   hand's highlight is the exception that proves the rule: it applies the filter, so its
   preview always matches what a click would select.
 - It does not change the wheel's target resolution (right-click still resolves the element,
@@ -252,17 +254,17 @@ Slot 1 (Move) equipped
   otherwise be empty. Promotion deliberately does **not** replace the hosted gizmo (the
   drag already owns it); it only removes the idle dimming. A latched selection, not a
   hover, is what keeps the triad after the pointer leaves.
-- The **pointer hand** (`0`) has no handles to preview. `Shell::sync_pointer_highlight`
+- The **Inspect hand** (`0`) has no handles to preview. `Shell::sync_inspect_highlight`
   runs from the same observer and paints the stage's selection tint/wire on the filtered
   hover target (`Body` = every part, a named element = that part), or on the latched
-  selection when the pointer is away. `InventorViewport::set_pointer_highlight` reports
+  selection when the pointer is away. `InventorViewport::set_inspect_highlight` reports
   whether anything changed, so a stationary pointer does not repaint. This is the
   pointer's substitute for the triad's implicit "what will a click select?" cue.
 - Covered by `ferrocad_gpui`'s `a_hover_preview_promotes_its_body_when_a_drag_begins`,
   `hover_to_arm_needs_the_move_slot_and_an_empty_selection`,
   `hover_arming_hosts_and_dissolves_the_preview` and (with a GPU)
   `the_idle_scale_dims_the_hosted_triad`; `ferrocad_stage`'s `a_scaled_opacity_clamps`,
-  and `ferrocad_viewport`'s `the_pointer_highlight_paints_the_filtered_scope`.
+  and `ferrocad_viewport`'s `the_inspect_highlight_paints_the_filtered_scope`.
 
 ---
 

@@ -28,7 +28,7 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 | Origin/pivot handle | **built (slice 3)**: `GizmoTarget::Origin`, a 10 px disc, priority origin > axis > plane > ring | `gizmo.rs` `GizmoTarget`; `inventor_view.rs` `gizmo_origin_snap` |
 | Face/edge tags, `Move` + the docked Δ row and in-context finish pill, and the tape's ruler tags | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
 | Face-normal push/pull | **built (slice 5)**: `PushPullStem` + the parametric `push_pull` hook | `ferrocad_part_gui/src/push_pull.rs`; `python/ferrocad_parametric/__init__.py` |
-| Hand / loadout | **built (U4, 2026-10-31)**: Slot 1 hosts the triad, Slots 2/3 the selection's manipulator, Slot 0 the pointer (selection highlight, no handles); `Select ▾`; `0`–`3`; bottom-left bar | `shell/loadout.rs`; `chrome.rs` |
+| Hand / loadout | **built (U4, 2026-10-31)**: Slot 1 hosts the triad, Slots 2/3 the selection's manipulator, Slot 0 Inspect (selection highlight + Body/Face/Edge switcher, no handles); `Select ▾`; `0`–`3`; bottom-left bar | `shell/loadout.rs`; `chrome.rs` |
 | Hover-to-arm | **built (U5, 2026-10-31)**: Move hand + empty selection materialises the triad at 30 %; a handle press promotes and drags | `shell/loadout.rs`; `inventor_view.rs` `set_gizmo_idle_scale` |
 
 The triad targets the **whole item** even when the selection names a face
@@ -181,9 +181,10 @@ The floating pill is anchored to the **gizmo**, not the screen or the pointer (f
   session, reset the fields and hand the keyboard back to the viewport; the row stays
   (`shell/tests/escalation.rs`). `Esc` then cascades: from a pending move it rolls back,
   from a clean form it clears the selection (taking the row and triad with it). Pressing
-  `1` while Slot 1 is already equipped toggles the hand — Move ⇄ Rotate. The pointer is
+  `1` while Slot 1 is already equipped toggles the hand — Move ⇄ Rotate. Inspect is
   its own slot (`0`): it leaves the selection without handles or row (the stage highlight
-  keeps the scope visible), and `1` from there brings Move back at the arrows.
+  keeps the scope visible) and docks a Body/Face/Edge switcher above the bar; `1` from
+  there brings Move back at the arrows.
 
 ## 4. Face-normal alignment and push/pull
 

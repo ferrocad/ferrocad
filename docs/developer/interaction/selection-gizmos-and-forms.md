@@ -85,8 +85,9 @@ command/dialog protocol).
   is applied where the shell **reports** the selection, not at the pick: `Body` rewrites
   `Face6` to its whole body, while `Auto`/`Face`/`Edge` keep the element. Hover and
   snapping still see the sub-element. The header's `Select ▾` overrides the slot's
-  preset; the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet] [0 Idle]` bar and
-  `0`–`3` equip the slot.
+  preset; the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet] [0 Inspect]` bar and
+  `0`–`3` equip the slot. In Inspect, a Body/Face/Edge switcher docks above the bar and
+  writes the same filter.
 
 ### 2.2 Context target (the wheel)
 
@@ -285,9 +286,9 @@ the row at rest.
 
 **Always visible while Move has a target.** The row appears with the selection (or a hover
 promotion) and disappears when the selection clears, another hand or tool takes over, or
-the pointer hand is equipped (`0`: the selection stays for inspection and the stage's
+Inspect is equipped (`0`: the selection stays for inspection and the stage's
 selection highlight names its scope, but the handles, form and ruler leave the canvas).
-`1` toggles Slot 1's two hands (**Move ⇄ Rotate**); `0` again keeps the pointer, and
+`1` toggles Slot 1's two hands (**Move ⇄ Rotate**); `0` again keeps Inspect, and
 `1`, a new selection or a `Move` verb brings the Move hand back. A modal or
 the object wheel hides both pieces for its lifetime; they return with the canvas. A
 right-press on the finish pill opens the object wheel, so it never swallows the verb
@@ -411,11 +412,12 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
   while a `TransformGizmo` is armed (idle or mid-drag) is the primary entry into the
   numeric surface: the HUD seeds its fields from the current delta (or zero when idle)
   and focuses the field the gesture names. **`0`–`3` are loadout slots** (U4) and are
-  reserved: they equip the pointer / Move / Push-Pull / Fillet even while the HUD is on
+  reserved: they equip Inspect / Move / Push-Pull / Fillet even while the HUD is on
   screen, so a value that starts with one of them begins with `Tab` or a click into a
   field. Pressing `1` while Move is already equipped toggles Move ⇄ Rotate; from
-  another pill, `1` equips Move on the arrows. The pointer
-  is its own pill (`0 Idle`), keeps the selection, and drops the handles and form. Once
+  another pill, `1` equips Move on the arrows. Inspect
+  is its own pill (`0 Inspect`), keeps the selection, drops the handles and form, and
+  docks a Body/Face/Edge switcher above the bar. Once
   a field is focused its digits belong to it. A drag on the resting HUD updates the
   fields and the tape but never takes the keyboard.
 
@@ -481,7 +483,7 @@ rendered form dialog (backdrop occludes everything)
 | context target | `open_radial` / `space_radial` | `commit_wheel`, `radial_slots` |
 | wheel phases | `WheelMenu` | shell (events) |
 | loadout slot/filter | `Shell::set_loadout_slot` / `set_select_filter` (the bar, `0`–`3`, `Select ▾`) | `Shell::arm`, `replace_selection`, the bar/header |
-| pointer highlight | `Shell::sync_pointer_highlight` (from the hover report and the selection) | the stage's per-part highlight |
+| pointer highlight | `Shell::sync_inspect_highlight` (from the hover report and the selection) | the stage's per-part highlight |
 | hover preview | `Shell::sync_hover_arm` (from the viewport's hover report) | `Shell::arm`, the viewport's idle scale |
 | pending transform | `Shell` (`TransformSession`; `commit_session` / `drop_session`) | `preview_transform`, the Δ fields, the commit |
 | preview transform | `InventorViewport::preview_transform`, fed by the session | stage items, overlays |

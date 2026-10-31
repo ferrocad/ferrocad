@@ -1108,7 +1108,7 @@ impl Shell {
             // At rest, Esc clears the selection: the form, the triad and the ruler go
             // with it. (A dirty move was rolled back above; a pivot was dropped first.)
             if !cancel_dialog
-                && matches!(self.loadout.slot(), Slot::Move | Slot::Idle)
+                && matches!(self.loadout.slot(), Slot::Move | Slot::Inspect)
                 && !self.session.as_ref().is_some_and(TransformSession::is_dirty)
                 && !self.model.lock().unwrap().selection.is_empty()
             {
@@ -1397,9 +1397,9 @@ else:
             // (U5); the viewport notifies on every hover change, and a hover report is
             // not an event of its own.
             this.sync_hover_arm(cx);
-            // The pointer hand has no handles, so its target is the stage's selection
+            // The Inspect hand has no handles, so its target is the stage's selection
             // highlight: the hovered scope, or the latched selection when away.
-            this.sync_pointer_highlight(cx);
+            this.sync_inspect_highlight(cx);
         });
         self.viewport = Some(viewport);
         self._viewport_events = Some(events);
@@ -1746,7 +1746,11 @@ impl Render for Shell {
             // move's coordinates sit directly above it instead of floating over the
             // handles. A column, not a row: stacked to the left, the pair never reaches
             // the centred action dock on a narrower window.
-            .child(
+            .child({
+                let inspect_visible = self.loadout.slot().is_inspect()
+                    && self.active_tool.is_none()
+                    && !self.modal_open()
+                    && !self.wheel.read(cx).is_open();
                 div()
                     .absolute()
                     .bottom(px(12.))
@@ -1756,13 +1760,16 @@ impl Render for Shell {
                     .items_start()
                     .gap_1()
                     .child(move_fields_bar(self, cx))
+                    .when(inspect_visible, |el| {
+                        el.child(crate::chrome::inspect_bar(self.loadout, cx))
+                    })
                     .child(crate::chrome::loadout_bar(
                         self.loadout,
                         self.gizmo_mode,
                         self.move_is_pending(cx),
                         cx,
-                    )),
-            )
+                    ))
+            })
             // Swap, do not stack: while a session runs the bottom-centre slot shows
             // the tool surface, so a second command cannot be started underneath it.
             .child(match active_tool {

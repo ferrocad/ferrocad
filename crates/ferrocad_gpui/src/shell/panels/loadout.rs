@@ -2,7 +2,7 @@
 //!
 //! One store, two views: the bottom-left bar and the header's `Select ▾` pill both
 //! write [`Loadout`]. The slot decides which control may arm — Slot 1 hosts the shared
-//! triad, Slots 2 and 3 host the selection's manipulator, and Slot 0 is the pointer:
+//! triad, Slots 2 and 3 host the selection's manipulator, and Slot 0 is Inspect:
 //! no handles, with the stage highlight previewing the filtered target — and the filter
 //! decides the [`SelectionRef`] the tree, the typed tool and the arm seam see, so a face
 //! click in Slot 1 selects the body.
@@ -81,15 +81,15 @@ pub(crate) enum Slot {
     PushPull,
     /// The selected edge's fillet / chamfer scrubber.
     Fillet,
-    /// The pointer: select and inspect, with no handles or numeric surface.
-    Idle,
+    /// Inspect: select and examine, with no handles or numeric surface.
+    Inspect,
 }
 
 impl Slot {
     /// The slot a `0`/`1`/`2`/`3` press equips.
     pub(crate) fn from_key(key: &str) -> Option<Self> {
         match key {
-            "0" => Some(Self::Idle),
+            "0" => Some(Self::Inspect),
             "1" => Some(Self::Move),
             "2" => Some(Self::PushPull),
             "3" => Some(Self::Fillet),
@@ -103,7 +103,7 @@ impl Slot {
             Self::Move => "1",
             Self::PushPull => "2",
             Self::Fillet => "3",
-            Self::Idle => "0",
+            Self::Inspect => "0",
         }
     }
 
@@ -113,7 +113,7 @@ impl Slot {
             Self::Move => "Move",
             Self::PushPull => "Push/Pull",
             Self::Fillet => "Fillet",
-            Self::Idle => "Idle",
+            Self::Inspect => "Inspect",
         }
     }
 
@@ -129,11 +129,10 @@ impl Slot {
         }
     }
 
-    /// The status-line spelling: the pointer hand is `idle` in lower case, matching
-    /// the verb the status line has always used there.
+    /// The status-line spelling: Inspect is `inspect` in lower case.
     pub(crate) fn status_label(self, mode: GizmoMode) -> &'static str {
         match self {
-            Self::Idle => "idle",
+            Self::Inspect => "inspect",
             _ => self.label_for(mode),
         }
     }
@@ -141,10 +140,15 @@ impl Slot {
     /// The topology filter a slot equips. `Select ▾` may override it afterwards.
     pub(crate) fn default_filter(self) -> SelectFilter {
         match self {
-            Self::Move | Self::Idle => SelectFilter::Body,
+            Self::Move | Self::Inspect => SelectFilter::Body,
             Self::PushPull => SelectFilter::Face,
             Self::Fillet => SelectFilter::Edge,
         }
+    }
+
+    /// Whether this slot is the Inspect hand.
+    pub(crate) fn is_inspect(self) -> bool {
+        matches!(self, Self::Inspect)
     }
 
     /// Whether this slot hosts the shared transform triad.
@@ -157,8 +161,8 @@ impl Slot {
         matches!(self, Self::PushPull | Self::Fillet)
     }
 
-    /// The slots in bar order. The pointer comes last, after the three hands.
-    pub(crate) const ALL: [Self; 4] = [Self::Move, Self::PushPull, Self::Fillet, Self::Idle];
+    /// The slots in bar order. Inspect comes last, after the three hands.
+    pub(crate) const ALL: [Self; 4] = [Self::Move, Self::PushPull, Self::Fillet, Self::Inspect];
 }
 
 /// The one loadout store: the active slot and the topology filter.
@@ -242,7 +246,7 @@ impl Shell {
     /// The user's activation of a loadout slot (`0`–`3` or the bottom-left bar).
     ///
     /// Slot 1 hosts **both** hands, so pressing its key while it is equipped toggles
-    /// **Move ⇄ Rotate**. The pointer hand is its own slot (`0`): it keeps the
+    /// **Move ⇄ Rotate**. Inspect is its own slot (`0`): it keeps the
     /// selection, but drops the handles and the numeric surface. A switch to another
     /// slot, and the first press from one, go through
     /// [`set_loadout_slot`](Self::set_loadout_slot).
@@ -253,9 +257,9 @@ impl Shell {
         if self.gate(Action::SwitchHand, cx) {
             return;
         }
-        if slot == Slot::Idle && self.loadout.slot() == slot {
-            // Equipping the pointer again is a no-op, but it re-affirms the status.
-            self.set_tool_status("idle");
+        if slot == Slot::Inspect && self.loadout.slot() == slot {
+            // Equipping Inspect again is a no-op, but it re-affirms the status.
+            self.set_tool_status("inspect");
             cx.notify();
             return;
         }
@@ -389,19 +393,19 @@ impl Shell {
         });
     }
 
-    /// Paint the pointer hand's target on the stage.
+    /// Paint the Inspect hand's target on the stage.
     ///
-    /// Slot 1's hands name their target with a manipulator; the pointer has none, so
+    /// Slot 1's hands name their target with a manipulator; Inspect has none, so
     /// the stage's selection highlight is what shows a body, a face or an edge. The
     /// hovered pick is narrowed by `Select ▾` (a `Body` filter outlines the whole body,
     /// `Face`/`Edge` keep the sub-element) and the latched selection takes over when the
     /// pointer is away. This is the "what would a click select?" answer that the triad
     /// used to give implicitly on hover.
-    pub(in crate::shell) fn sync_pointer_highlight(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_inspect_highlight(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
-        let targets = if self.loadout.slot() == Slot::Idle
+        let targets = if self.loadout.slot().is_inspect()
             && self.session.is_none()
             && self.active_tool.is_none()
         {
@@ -414,7 +418,7 @@ impl Shell {
             Vec::new()
         };
         viewport.update(cx, |viewport, cx| {
-            if viewport.set_pointer_highlight(&targets) {
+            if viewport.set_inspect_highlight(&targets) {
                 cx.notify();
             }
         });

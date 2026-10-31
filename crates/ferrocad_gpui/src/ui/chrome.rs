@@ -18,9 +18,9 @@
 //! they hang from does occlude, so a press on the glass does not start an orbit.)
 
 use gpui::{
-    Anchor, App, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, Pixels, Point,
-    Render, ScrollHandle, SharedString, Window, anchored, deferred, div, point, prelude::*, px,
-    rgb, rgba,
+    Anchor, AnyElement, App, ClickEvent, Context, IntoElement, MouseButton, MouseDownEvent, Pixels,
+    Point, Render, ScrollHandle, SharedString, Window, anchored, deferred, div, point, prelude::*,
+    px, rgb, rgba,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -799,6 +799,60 @@ pub(crate) fn loadout_bar(
     }
 
     panel
+}
+
+/// The Inspect hand's scope switcher: `Body | Face | Edge`, docked directly above the
+/// loadout bar.
+///
+/// It is a second view of the same [`Loadout`] filter the header's `Select ▾` writes,
+/// not a private mode: clicking a segment changes what the next pick reports and what
+/// the stage highlight previews. `Auto` stays a header-only choice, so no segment is
+/// lit while it is active.
+pub(crate) fn inspect_bar(loadout: Loadout, cx: &mut Context<Shell>) -> AnyElement {
+    let current = loadout.filter();
+    let mut panel = div()
+        .id("inspect-bar")
+        .debug_selector(|| "inspect-bar".to_string())
+        .occlude()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgba(DOCK_BG))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .text_xs();
+
+    // The three scopes that change what a pick reports. `Auto` is the pre-loadout
+    // "whatever the pick reports" mode and remains in the header menu.
+    for filter in [SelectFilter::Body, SelectFilter::Face, SelectFilter::Edge] {
+        let active = current == filter;
+        let label = filter.label();
+        panel = panel.child(
+            div()
+                .id(SharedString::from(format!(
+                    "inspect-{}",
+                    label.to_ascii_lowercase()
+                )))
+                .debug_selector(move || format!("inspect-{}", label.to_ascii_lowercase()))
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .text_color(rgb(if active { CHROME_ACTIVE } else { FG }))
+                .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgba(ROW_HOVER)))
+                .child(label)
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.set_select_filter(filter, cx);
+                })),
+        );
+    }
+
+    panel.into_any_element()
 }
 
 fn split_button(

@@ -82,8 +82,8 @@ impl Shell {
             return;
         }
         // The slot is a tool choice, not a selection property: the new subject stays in
-        // whichever hand is equipped. In the pointer hand no handles arm; the selection
-        // itself is what `sync_pointer_highlight` paints.
+        // whichever hand is equipped. In the Inspect hand no handles arm; the selection
+        // itself is what `sync_inspect_highlight` paints.
         // Opening menus never mutates the selection. A **new** selection, however,
         // invalidates both an open wheel (its context target no longer matches the
         // selection) and a pending translation form (its delta was measured against

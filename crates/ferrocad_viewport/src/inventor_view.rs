@@ -2521,14 +2521,14 @@ impl<V: InventorView> InventorViewport<V> {
         self.stage_dirty = true;
     }
 
-    /// Paint the pointer hand's hit target on the stage.
+    /// The Inspect hand's target: what a click would select under the active filter.
     ///
     /// `targets` are the references the current hand would select, with the host's
     /// topology filter already applied. The first target naming an item wins: an empty
     /// element list paints every part (the whole body), while named elements paint just
     /// those parts (`Face6`, `Edge3`). Returns whether any item's highlight changed, so
     /// a host can avoid a repaint when the pointer stays on the same scope.
-    pub fn set_pointer_highlight(&mut self, targets: &[SelectionRef]) -> bool {
+    pub fn set_inspect_highlight(&mut self, targets: &[SelectionRef]) -> bool {
         fn parts_for(item: &ShapeItem, targets: &[SelectionRef]) -> Vec<u32> {
             let Some(reference) = targets
                 .iter()
@@ -8061,10 +8061,10 @@ mod tests {
         viewport.refresh();
     }
 
-    /// The pointer hand paints its filtered target on the stage: the whole body for a
+    /// The Inspect hand paints its filtered target on the stage: the whole body for a
     /// whole reference, the named part for `Face2`, and nothing when the target leaves.
     #[test]
-    fn the_pointer_highlight_paints_the_filtered_scope() {
+    fn the_inspect_highlight_paints_the_filtered_scope() {
         use ferrocad_geom::SelectionRef;
 
         let mut view = InventorViewport::new(
@@ -8085,21 +8085,21 @@ mod tests {
             "nothing is painted at rest"
         );
 
-        assert!(view.set_pointer_highlight(&[SelectionRef::element(7, "Face2")]));
+        assert!(view.set_inspect_highlight(&[SelectionRef::element(7, "Face2")]));
         assert_eq!(view.stage().item(7).unwrap().highlight().to_vec(), vec![1]);
         assert!(
-            !view.set_pointer_highlight(&[SelectionRef::element(7, "Face2")]),
+            !view.set_inspect_highlight(&[SelectionRef::element(7, "Face2")]),
             "the same scope does not repaint"
         );
 
-        assert!(view.set_pointer_highlight(&[SelectionRef::whole(7)]));
+        assert!(view.set_inspect_highlight(&[SelectionRef::whole(7)]));
         assert_eq!(
             view.stage().item(7).unwrap().highlight().to_vec(),
             vec![0, 1],
             "a whole body is every part the slab carries"
         );
 
-        assert!(view.set_pointer_highlight(&[]));
+        assert!(view.set_inspect_highlight(&[]));
         assert!(view.stage().item(7).unwrap().highlight().is_empty());
     }
 

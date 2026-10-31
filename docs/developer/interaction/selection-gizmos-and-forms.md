@@ -286,16 +286,25 @@ back; both reset the fields and hand the keyboard back to the canvas, and the ro
 Only the **focused** field paints a selection highlight: a blurred `TextInput` clears its
 selection range, so a `Tab` from `ΔY` to `ΔZ` never leaves a purple range behind.
 
-**The finish pill floats above-right of the triad.** It is the one floating piece left:
-its anchor is recomputed each frame from the visible gizmo origin (or the **viewport
-centre** when no gizmo is armed; the live pointer is the last resort for a shell with no
-viewport). Its **bottom-left** sits **24 px right and 24 px up** from the origin
-(`render::place_finish`), so the only thing under it is empty canvas — never the Z
-arrowhead, the YZ glass plane or the origin disc — and the result is clamped into the
-canvas safe area. While the pointer owns a stroke the pill is **not rendered at all**,
-so a drag can never end on top of it; it comes back on the first paint after the release.
-It is dielectric: a `WHEEL_GLASS` body with a `CHROME_LINE` hairline, and the action is
-**ink** on hover (`SUBTRACT_COLOR` for `✗`, `AXIS_Y` for `✓`), never an opaque fill. It is clamped inside the viewport safe area (16 px margins; 64 px
+**The finish pill sits in the empty screen octant around the triad.** It is the one
+floating piece left. A fixed offset runs into whatever the camera puts there (the Z
+arrowhead and the YZ plane quad at a common angle), so `render::place_finish` sums the
+**screen directions the triad occupies** — its three projected stems
+(`InventorViewport::gizmo_stem_directions`) and the incoming tape leg from the ghost
+origin (`world_anchor` of the session datum, weighted 0.75) — negates the sum and puts
+the pill's **centre 36 px** out along it. With every stem up/right and the tape from
+up-left the pair lands down-left, in open canvas. `clamp_hud` keeps it reachable at an
+edge. While the pointer owns a stroke the pill is **not rendered at all**, so a drag can
+never end on top of it; it comes back on the first paint after the release, and its
+position is frozen while the pointer is inside it.
+
+The pill is the **same flat segmented strip** as `PERSP ┆ ORTHO` and `Create Box ┆
+Search` (`render::hud_buttons`): one `WHEEL_GLASS` body, a `DOCK_BORDER` hairline, a
+`CHROME_LINE` divider, `overflow_hidden`, and no nested button boxes. `✓` rests on
+`CHROME_ACTIVE_BG` with `CHROME_ACTIVE` ink — the accent the projection segment and the
+active loadout slot use — and hovers to `HIGHLIGHT_TINT` / `HOVER_RIM`; `✗` is `MUTED`
+until hover, when it takes `SUBTRACT_COLOR` ink on a 14 % subtract wash. State is ink,
+backgrounds are additive only (`visual-language.md` principles 2 and 5). It is clamped inside the viewport safe area (16 px margins; 64 px
 above the bottom dock) and its position is **frozen while the pointer is inside its
 rect**, so a click cannot slide the buttons out from under the cursor. The docked
 coordinate row does not move at all: it is laid out above the loadout, so typing a large

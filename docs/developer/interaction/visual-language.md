@@ -167,12 +167,16 @@ finish pill and a stage-side tape (all built 2026-10-31):
   `[ Δ|XYZ  ΔX  0.00  ΔY  0.00  ΔZ  0.00 mm ]`. No `✗`/`✓` pill and no tape: nothing is
   pending.
 - **Pending** (a drag or a typed value, `Δ ≠ 0`): the dashed ruler stretches from the ghost
-  disc, and a separate small pill materialises 24 px above-right of the triad with `✗`
-  (discard) and `✓` (commit). The buttons are **dielectric**: `ui::WHEEL_GLASS` bodies
-  with `ui::CHROME_LINE` hairlines, and the action is **ink on hover** —
-  `ui::SUBTRACT_COLOR` for `✗`, `ui::AXIS_Y` for `✓` — never an opaque fill (§0.2
-  principles 2 and 5). The pill is not drawn at all while a drag is in progress, and
-  the loadout bar dims to 45 % while this pending state locks the context.
+  disc, and a flat segmented glass strip in the `PERSP ┆ ORTHO` / `Create Box ┆ Search`
+  pattern materialises in the empty screen octant beside the triad (the negated sum of
+  the projected stems and the tape leg). One `ui::WHEEL_GLASS` body, a `ui::DOCK_BORDER`
+  hairline, a 1 px `ui::CHROME_LINE` divider, `overflow_hidden` — no nested boxes. `✗`
+  is `ui::MUTED` until hover, when it takes `ui::SUBTRACT_COLOR` ink on a 14 % subtract
+  wash; `✓` rests on `ui::CHROME_ACTIVE_BG` with `ui::CHROME_ACTIVE` ink (the
+  `PERSP`/`1 Move` accent) and hovers to `ui::HIGHLIGHT_TINT` / `ui::HOVER_RIM`. State
+  is ink, backgrounds are additive (§0.2 principles 2 and 5). The strip is not drawn at
+  all while a drag is in progress, and the loadout bar dims to 45 % while this pending
+  state locks the context.
   `Enter`/`✓` commits, `Tab`/`Shift+Tab` cycle the fields, `Esc`/`✗` rolls back; either
   dissolves the pill and the ruler, returning the row to rest.
 - **Tape** (stage, not gpui): a 10 px ghost-origin ring in `INACTIVE_COLOR` at the session

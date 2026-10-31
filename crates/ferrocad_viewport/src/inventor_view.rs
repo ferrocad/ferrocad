@@ -1807,6 +1807,48 @@ impl<V: InventorView> InventorViewport<V> {
         Some(self.window_point(device))
     }
 
+    /// An arbitrary **world point** in window-space logical pixels.
+    ///
+    /// The host uses this to place a surface relative to the session's tape without
+    /// duplicating the camera projection: projecting the session datum gives the ghost
+    /// origin the move started from. `None` when the point is behind the camera.
+    pub fn world_anchor(&self, world: Vector3) -> Option<Point<Pixels>> {
+        let device = project_device(&self.camera, world)?;
+        Some(self.window_point(device))
+    }
+
+    /// Screen-space unit directions of the triad's three stems, for a host that must
+    /// keep a floating control out of them.
+    ///
+    /// The vectors point from the origin towards the +X/+Y/+Z tips as drawn, so their
+    /// sum is the direction the triad "occupies" on screen. `None` when no gizmo is
+    /// offered or a tip is behind the camera; a stem that collapses to the origin on
+    /// screen reports `[0, 0]`.
+    pub fn gizmo_stem_directions(&self) -> Option<[[f32; 2]; 3]> {
+        let index = self.gizmos.primary()?;
+        let gizmo = &self.gizmos.gizmos()[index];
+        let origin = self.window_point(gizmo.origin_anchor(&self.camera)?);
+        let frame = gizmo.frame();
+        // The direction survives any positive stem length; the world radius keeps the
+        // projected tip on the drawn arrow rather than `scale * 0` at the origin.
+        let scale = if gizmo.scale() > 0.0 { gizmo.scale() } else { 1.0 };
+        let mut directions = [[0.0f32; 2]; 3];
+        for (direction, axis) in directions.iter_mut().zip(frame.basis) {
+            let tip = frame.origin.add(&axis.scale(scale));
+            let device = project_device(&self.camera, tip)?;
+            let tip = self.window_point(device);
+            let dx = tip.x.0 - origin.x.0;
+            let dy = tip.y.0 - origin.y.0;
+            let length = (dx * dx + dy * dy).sqrt();
+            *direction = if length > 1.0 {
+                [dx / length, dy / length]
+            } else {
+                [0.0, 0.0]
+            };
+        }
+        Some(directions)
+    }
+
     /// Device coordinates → the window-space point the element is painted at.
     fn window_point(&self, device: [f64; 2]) -> Point<Pixels> {
         let logical = self
@@ -9026,6 +9068,35 @@ mod tests {
         let expected = [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5];
         let tags = ruler_tags(&view.transform_tape().unwrap(), &view.camera, None);
         assert_eq!(tags[0].anchor, expected);
+    }
+
+    /// The host reads the triad's screen-space stem directions (for an in-context
+    /// control's repulsion) and any world point from the same camera it draws with.
+    #[test]
+    fn the_gizmo_stems_project_to_screen_directions() {
+        let (view, _viewport) = translate_gizmo_view();
+        let stems = view.gizmo_stem_directions().expect("the triad projects");
+        for stem in stems {
+            let length = (stem[0] * stem[0] + stem[1] * stem[1]).sqrt();
+            assert!((length - 1.0).abs() < 1e-3, "a unit direction: {stem:?}");
+        }
+        assert!(
+            (stems[1][0] - stems[2][0]).abs() > 1e-3 || (stems[1][1] - stems[2][1]).abs() > 1e-3,
+            "the projected stems are distinct: {stems:?}"
+        );
+
+        // A world point projects to the same window position the camera reports.
+        let world = Vector3::new(10.0, 20.0, 5.0);
+        let device = project_device(&view.camera, world).expect("the point projects");
+        let logical = view
+            .camera
+            .viewport
+            .to_logical([device[0].round() as i32, device[1].round() as i32]);
+        assert_eq!(
+            view.world_anchor(world),
+            Some(point(px(logical[0]), px(logical[1]))),
+            "the host reads the same window point the camera does"
+        );
     }
 
     #[test]

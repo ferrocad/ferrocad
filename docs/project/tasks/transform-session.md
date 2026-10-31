@@ -351,11 +351,12 @@ focused field (`Option<usize>`), the last dragged axis and the coordinate mode.
 - **Two pieces.** The coordinates are **docked** at the canvas' bottom-left, stacked
   above the loadout bar (`render::move_fields_bar`), so the canvas around the gizmo stays
   clear. The pending move's `✗`/`✓` pair is the only floating piece
-  (`render::move_finish_overlay`): a small dielectric pill placed **24 px right and
-  24 px above** the gizmo origin, clear of the Z arrowhead and the YZ plane, clamped into
-  the safe area and frozen under the pointer so a click cannot slide it away. While a drag
-  is running the pill is **not rendered at all**, so the stroke can never end on top of
-  it; it returns on the first paint after the release.
+  (`render::move_finish_overlay`): one flat segmented glass strip (`✗ │ ✓`, the
+  `PERSP ┆ ORTHO` pattern) placed in the **empty screen octant** — the negated sum of the
+  triad's projected stems and the incoming tape leg, 36 px out — so it covers neither a
+  stem nor the ruler, clamped into the safe area and frozen under the pointer. While a
+  drag is running the pill is **not rendered at all**, so the stroke can never end on top
+  of it; it returns on the first paint after the release.
 - **Always visible while Move has a target.** Slot 1 equipped + a selection + translate
   handles + no active tool ⇒ the row is on screen. `ensure_move_hud` runs on every
   selection, re-arm, slot change, tool end and viewport pick; it opens or closes the

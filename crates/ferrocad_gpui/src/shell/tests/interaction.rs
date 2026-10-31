@@ -865,30 +865,61 @@ fn switching_the_handle_set_waits_for_a_pending_move(cx: &mut TestAppContext) {
     );
 }
 
-/// The finish pill floats just above-right of the triad origin: its bottom-left sits
-/// 24 px right and 24 px up, clear of the Z arrowhead and the YZ glass plane. It is
-/// clamped into the canvas safe area at an edge.
+/// The finish pill is placed in the **empty screen octant**: the triad's projected stems
+/// and the incoming tape leg are summed and negated, so it never covers a stem or the
+/// ruler. Under the screenshot's camera (Z up, Y up-right, X down-right, tape from
+/// up-left) that lands down-left of the origin.
 #[test]
-fn the_finish_pill_floats_above_right_of_the_triad() {
+fn the_finish_pill_repels_from_the_stems_and_the_ruler() {
     let viewport = size(px(800.0), px(600.0));
-    let pill = size(px(70.0), px(36.0));
+    let pill = size(px(80.0), px(24.0));
     let origin = point(px(400.0), px(300.0));
+    let centre = |placed: Point<Pixels>| {
+        point(
+            px(placed.x.0 + pill.width.0 * 0.5),
+            px(placed.y.0 + pill.height.0 * 0.5),
+        )
+    };
 
-    let placed = place_finish(origin, viewport, pill);
-    assert_eq!(
-        placed,
-        point(px(424.0), px(240.0)),
-        "24 px right and 24 px above the origin, to the pill's bottom-left"
+    let stems = Some([[0.7, 0.7], [0.7, -0.7], [0.0, -1.0]]);
+    let placed = place_finish(origin, stems, Some([-0.7, -0.7]), viewport, pill);
+    let middle = centre(placed);
+    assert!(
+        middle.x.0 < origin.x.0,
+        "left of the triad: {placed:?}"
     );
     assert!(
-        placed.x.0 > origin.x.0 && placed.y.0 + pill.height.0 < origin.y.0,
-        "the pill is up and to the right, never on the origin handle"
+        middle.y.0 > origin.y.0,
+        "below the triad: {placed:?}"
+    );
+    let reach = ((middle.x.0 - origin.x.0).powi(2) + (middle.y.0 - origin.y.0).powi(2)).sqrt();
+    assert!((reach - 36.0).abs() < 0.5, "36 px out from the origin: {placed:?}");
+
+    // The tape alone pushes it to the opposite side.
+    let placed = place_finish(
+        origin,
+        Some([[0.0, 0.0]; 3]),
+        Some([1.0, 0.0]),
+        viewport,
+        pill,
+    );
+    assert!(
+        centre(placed).x.0 < origin.x.0,
+        "a tape from the right puts the pill on the left: {placed:?}"
     );
 
-    // A triad at the top-left clamps the pair's y into the safe area (the x offset still
-    // applies, and is already inside the margin).
-    let placed = place_finish(point(px(4.0), px(4.0)), viewport, pill);
-    assert_eq!(placed, point(px(28.0), px(HUD_MARGIN)));
+    // Nothing to repel from: the bottom-right fallback.
+    let placed = place_finish(origin, None, None, viewport, pill);
+    let middle = centre(placed);
+    assert!(
+        middle.x.0 > origin.x.0 && middle.y.0 > origin.y.0,
+        "the fallback is down-right: {placed:?}"
+    );
+
+    // At an edge the clamp keeps it reachable.
+    let placed = place_finish(point(px(4.0), px(596.0)), None, None, viewport, pill);
+    assert!(placed.x.0 >= HUD_MARGIN);
+    assert!(placed.y.0 + pill.height.0 <= 600.0 - HUD_DOCK_CLEARANCE);
 }
 
 /// While a gizmo drag runs the pair is **hidden**, so the stroke can never end on top of
@@ -995,14 +1026,14 @@ fn the_finish_pill_tracks_the_anchor_and_the_form_stays_docked(cx: &mut TestAppC
     let first = cx.debug_bounds("move-finish").expect("the pair");
     assert_eq!(
         first.origin,
-        place_finish(point(px(0.0), px(0.0)), viewport, first.size),
+        place_finish(point(px(0.0), px(0.0)), None, None, viewport, first.size),
         "the pair hangs off the anchor"
     );
     let elsewhere = point(px(300.0), px(200.0));
     cx.simulate_mouse_move(elsewhere, None::<MouseButton>, gpui::Modifiers::default());
     draw(&mut cx);
     let moved = cx.debug_bounds("move-finish").expect("the pair");
-    let expected = place_finish(elsewhere, viewport, moved.size);
+    let expected = place_finish(elsewhere, None, None, viewport, moved.size);
     assert!(
         (moved.origin.x.0 - expected.x.0).abs() <= 1.0
             && (moved.origin.y.0 - expected.y.0).abs() <= 1.0,

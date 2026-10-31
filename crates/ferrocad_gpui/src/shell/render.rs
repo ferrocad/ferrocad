@@ -134,24 +134,55 @@ pub(super) fn place_hud(anchor: Point<Pixels>, viewport: Size<Pixels>, hud: Size
     clamp_hud(offset, viewport, hud)
 }
 
-/// Where the pending move's finish pill appears: just **above-right of the triad origin**.
+/// Where the pending move's finish pill goes: the **empty screen octant** around the
+/// triad.
 ///
-/// Its bottom-left sits 24 px right and 24 px up from the anchor, so the only thing under
-/// it is empty canvas — never the Z arrowhead, the YZ glass plane or the origin disc. The
-/// anchor is the gizmo's screen-space origin (`Shell::dialog_anchor`), or the viewport
-/// centre / pointer when no triad is hosted. The result is clamped into the canvas safe
-/// area so a triad at an edge still gets a reachable pair.
+/// A fixed offset runs into whatever the camera happens to put there (the Z arrowhead and
+/// the YZ plane quad at a common angle). Instead, every screen direction the triad
+/// occupies — its three projected stems and the incoming tape leg from the ghost
+/// origin — is summed and negated, and the pill's **centre** is placed 36 px out along
+/// that vector, so it lands in the open canvas opposite the stems. `clamp_hud` keeps it
+/// reachable at a viewport edge.
 pub(super) fn place_finish(
-    anchor: Point<Pixels>,
+    origin: Point<Pixels>,
+    stems: Option<[[f32; 2]; 3]>,
+    ruler: Option<[f32; 2]>,
     viewport: Size<Pixels>,
     pill: Size<Pixels>,
 ) -> Point<Pixels> {
-    const CLEARANCE: f32 = 24.0;
-    let offset = point(
-        px(anchor.x.0 + CLEARANCE),
-        px(anchor.y.0 - CLEARANCE - pill.height.0),
+    // How far the pill's centre sits from the origin, in logical px.
+    const DISTANCE: f32 = 36.0;
+    // The incoming tape leg is one stroke, not three stems.
+    const RULER_WEIGHT: f32 = 0.75;
+    let mut occupied = [0.0f32; 2];
+    for stem in stems.unwrap_or_default() {
+        occupied[0] += stem[0];
+        occupied[1] += stem[1];
+    }
+    if let Some(ruler) = ruler {
+        occupied[0] += ruler[0] * RULER_WEIGHT;
+        occupied[1] += ruler[1] * RULER_WEIGHT;
+    }
+    let length = (occupied[0].powi(2) + occupied[1].powi(2)).sqrt();
+    let outward = if length > 0.01 {
+        // Point into the empty side: away from everything the triad and the tape ink.
+        [-occupied[0] / length, -occupied[1] / length]
+    } else {
+        // Nothing to repel from (no gizmo, or a degenerate projection): bottom-right.
+        [std::f32::consts::FRAC_1_SQRT_2; 2]
+    };
+    let centre = point(
+        px(origin.x.0 + outward[0] * DISTANCE),
+        px(origin.y.0 + outward[1] * DISTANCE),
     );
-    clamp_hud(offset, viewport, pill)
+    clamp_hud(
+        point(
+            px(centre.x.0 - pill.width.0 * 0.5),
+            px(centre.y.0 - pill.height.0 * 0.5),
+        ),
+        viewport,
+        pill,
+    )
 }
 
 /// A command dialog (A3): a floating dielectric HUD, or a glass modal over a dimmed
@@ -490,61 +521,81 @@ pub(super) fn dialog_buttons(
         )
 }
 
-/// The compact finish pair for the Move form: `✗` cancels, `✓` accepts.
+/// The compact finish pair for the Move form: one segmented glass strip, `✗ │ ✓`.
+///
+/// It is the same flat pattern as `PERSP ┆ ORTHO` and `Create Box ┆ Search`: a single
+/// `WHEEL_GLASS` body with a `DOCK_BORDER` hairline, **no nested button boxes**, one
+/// `CHROME_LINE` divider, and the segments distinguished by ink. `✓` rests on
+/// `CHROME_ACTIVE_BG` with `CHROME_ACTIVE` ink (the accent the projection segment and
+/// the active loadout slot use); `✗` is neutral until hover, when it takes the subtract
+/// tint. No opaque fills — `visual-language.md` principles 2 and 5.
 ///
 /// The glyphs match the keys the panel already routes ([`Shell::dismiss_move_hud`] on
 /// `Esc`, [`Shell::commit_session`] on `Enter`), and the ids are the ones the modal's
-/// buttons use, so a test drives either surface the same way. They are icons rather
-/// than words because the pill is an in-context control, not a dialog.
-///
-/// Dielectric by design: the buttons rest on the pill's own `WHEEL_GLASS` with a
-/// `CHROME_LINE` hairline, and the action is **ink** — `SUBTRACT_COLOR` for the discard,
-/// `AXIS_Y` for the commit, both on hover. No opaque fills: `visual-language.md`
-/// principle 5 (state is ink; background is only ever an additive hover).
+/// buttons use, so a test drives either surface the same way.
 pub(super) fn hud_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
+    // `SUBTRACT_COLOR` at 14 % (0x24), for the discard segment's hover wash.
+    const SUBTRACT_TINT: u32 = 0xef444424;
+
     let cancel = div()
         .id("dialog-cancel")
         .debug_selector(|| "dialog-cancel".to_string())
-        .px_2()
-        .py_1()
-        .rounded_sm()
-        .bg(rgba(WHEEL_GLASS))
-        .border_1()
-        .border_color(rgba(CHROME_LINE))
+        .flex()
+        .items_center()
+        .h_full()
+        .px(px(10.0))
         .text_xs()
-        .text_color(rgb(FG))
+        .text_color(rgb(MUTED))
         .cursor_pointer()
         .hover(|style| {
             style
-                .border_color(rgb(SUBTRACT_COLOR))
+                .bg(rgba(SUBTRACT_TINT))
                 .text_color(rgb(SUBTRACT_COLOR))
         })
         .child("✗")
         .on_click(cx.listener(|this, _event, _window, cx| this.dismiss_move_hud(cx)));
+
+    let divider = div().w(px(1.0)).h(px(14.0)).bg(rgba(CHROME_LINE));
+
     let accept = div()
         .id("dialog-accept")
         .debug_selector(|| "dialog-accept".to_string())
-        .px_2()
-        .py_1()
-        .rounded_sm()
-        .bg(rgba(WHEEL_GLASS))
-        .border_1()
-        .border_color(rgba(CHROME_LINE))
+        .flex()
+        .items_center()
+        .h_full()
+        .px(px(10.0))
         .text_xs()
-        .text_color(rgb(FG))
+        .bg(rgba(CHROME_ACTIVE_BG))
+        .text_color(rgb(CHROME_ACTIVE))
         .cursor_pointer()
-        .hover(|style| style.border_color(rgb(AXIS_Y)).text_color(rgb(AXIS_Y)))
+        .hover(|style| style.bg(rgba(HIGHLIGHT_TINT)).text_color(rgb(HOVER_RIM)))
         .child("✓")
         .on_click(cx.listener(|this, _event, _window, cx| {
             this.commit_session(cx);
         }));
+
     div()
+        .id("move-finish")
+        .debug_selector(|| "move-finish".to_string())
         .flex()
         .flex_row()
         .items_center()
-        .gap_1()
-        .flex_shrink_0()
+        .h(px(24.0))
+        .rounded(px(5.0))
+        .overflow_hidden()
+        .bg(rgba(WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .occlude()
+        // The pill floats over the canvas, so a right-press on it still names a verb.
+        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+            if this.active_tool.is_none() {
+                this.last_pointer = Some(event.position);
+                this.open_radial(event.position, cx);
+            }
+        }))
         .child(cancel)
+        .child(divider)
         .child(accept)
 }
 
@@ -575,7 +626,39 @@ pub(super) fn move_finish_overlay(
     let hovered = shell
         .hud_rect
         .is_some_and(|rect| rect.contains(&window.mouse_position()));
-    let follow = place_finish(shell.dialog_anchor(window, cx), viewport, pill);
+    // The screen directions the triad occupies, plus the incoming tape leg: the pill is
+    // placed in the empty octant opposite them.
+    let (stems, ruler) = {
+        let projected = shell.viewport.as_ref().and_then(|viewport| {
+            let viewport = viewport.read(cx);
+            let stems = viewport.gizmo_stem_directions()?;
+            let origin = viewport.gizmo_anchor()?;
+            let ruler = shell
+                .session
+                .as_ref()
+                .filter(|session| session.is_dirty())
+                .and_then(|session| viewport.world_anchor(session.datum()))
+                .map(|ghost| {
+                    let dx = ghost.x.0 - origin.x.0;
+                    let dy = ghost.y.0 - origin.y.0;
+                    let length = (dx * dx + dy * dy).sqrt();
+                    if length > 1.0 {
+                        [dx / length, dy / length]
+                    } else {
+                        [0.0, 0.0]
+                    }
+                });
+            Some((Some(stems), ruler))
+        });
+        projected.unwrap_or((None, None))
+    };
+    let follow = place_finish(
+        shell.dialog_anchor(window, cx),
+        stems,
+        ruler,
+        viewport,
+        pill,
+    );
     let origin = if hovered {
         shell.hud_lock.unwrap_or(follow)
     } else {
@@ -583,27 +666,6 @@ pub(super) fn move_finish_overlay(
     };
     let origin = clamp_hud(origin, viewport, pill);
     shell.hud_lock = Some(origin);
-    let panel = div()
-        .id("move-finish")
-        .debug_selector(|| "move-finish".to_string())
-        .flex()
-        .flex_row()
-        .items_center()
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .bg(rgba(WHEEL_GLASS))
-        .border_1()
-        .border_color(rgba(DOCK_BORDER))
-        .occlude()
-        // The pill floats over the canvas, so a right-press on it still names a verb.
-        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-            if this.active_tool.is_none() {
-                this.last_pointer = Some(event.position);
-                this.open_radial(event.position, cx);
-            }
-        }))
-        .child(hud_buttons(cx));
     let weak = cx.weak_entity();
     let measured = div()
         .on_children_prepainted(move |bounds, _window, cx| {
@@ -611,7 +673,7 @@ pub(super) fn move_finish_overlay(
                 let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
             }
         })
-        .child(panel);
+        .child(hud_buttons(cx));
     deferred(
         anchored()
             .anchor(Anchor::TopLeft)

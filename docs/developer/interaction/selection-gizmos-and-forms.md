@@ -195,8 +195,9 @@ shows them as `—`. The only exits are `✓`/`Enter` and `✗`/`Esc`, so `dirty
 (the interaction hook applies a transform to one object) and commits through
 `transform`/`apply`; translation keeps the multi-body selection and the `App_Move` route.
 The rotate hand docks `ΔθX/ΔθY/ΔθZ` above the loadout: only the pending ring's cell holds
-an input, `WLD` rings follow the world grid, `LOC` rings follow the body's committed
-orientation, `WP` rings follow the active workplane, and `Reset 0°` commits the rotation that cancels it. The 3-D protractor
+an input, and the frame switch (`WLD` world grid, `LOC` body, `WP` workplane) orients
+both the arrows and the rings. `Reset 0°` commits the rotation that cancels the stored
+orientation. The 3-D protractor
 (swept glass sector, dashed press spoke, live spoke, detent ticks) is built from the same
 single step, so it is always one arc and one chip with the degree tag on the arc bisector.
 Moving the translation commit to the interaction provider is **planned**.
@@ -265,7 +266,9 @@ bottom-left with the loadout (`[Δ|XYZ]  ΔX [ ]  ΔY [ ]  ΔZ [ ] mm`, `shell::
 and a small in-context `✗`/`✓` pill that floats beside the gizmo
 (`shell::move_finish_overlay`). Both appear whenever Slot 1 has a Move target. They are
 **shell-owned surfaces**, not a command dialog (`shell/move_hud.rs`): they survive a
-commit, never hold a command token, and can coexist with a command modal. The old
+commit, never hold a command token, and can coexist with a command modal. The finish pair
+is the shared `ferrocad_widgets::decision_pill`, so it is the same flat `✗ │ ✓` strip a
+modal dialog's footer renders — one widget, not two lookalikes. The old
 two-stage compact ↔ expanded pill, and the second (single-axis) readout beside it, are
 gone; the numbers a drag produces are drawn on the session's 3-D measuring tape as
 **ruler tags** (`gizmo-manipulators.md` §5), so the viewport no longer floats a duplicate
@@ -343,7 +346,7 @@ Any ──badge / `=`──► Δ fields ⇄ world coordinates (same pending Δ)
 Any ──selection replaced──► refused while pending; a clean form re-targets
 Pending ──selection / hand / scope / tool──► refused (status: "move/rotation pending") ──► Pending
 At rest ──Esc──► selection cleared ──► Closed
-At rest ──selection cleared / another hand / a tool / `1` (pause)──► Closed
+At rest ──selection cleared / another hand / a tool / `1` (idle)──► Closed
 Pending ──competing document edit (selection pruned)──► rollback ──► the new context
 ```
 

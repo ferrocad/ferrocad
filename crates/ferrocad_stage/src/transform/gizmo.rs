@@ -55,6 +55,9 @@ pub const SKIN_BACKEND: &str = "ferrocad-shader";
 pub const ACTIVE_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 1.0];
 /// Inactive manipulator stroke (`#94A3B8` in sRGB, linear here).
 pub const INACTIVE_COLOR: [f32; 4] = [0.296, 0.366, 0.479, 0.9];
+/// The alpha multiplier for a ring a pending step has disabled: faint enough to read as
+/// unavailable at a glance, while the ring stays in place as spatial context.
+pub const DISABLED_RING_ALPHA: f32 = 0.12;
 /// Translucent glass plane (`rgba(56, 189, 248, 0.10)`).
 pub const GLASS_COLOR: [f32; 4] = [0.040, 0.509, 0.939, 0.10];
 /// Glass plane while hovered.
@@ -1862,7 +1865,7 @@ impl TransformGizmo {
         for (index, target) in GizmoTarget::ALL.iter().enumerate() {
             let fade = self.fade[index];
             // A locked ring keeps the active ink; its siblings drop to the inactive
-            // token at a quarter alpha and never answer the hover cue.
+            // token at a faint alpha and never answer the hover cue.
             let locked_sibling = self.is_locked_sibling(*target);
             let owns_lock = self.locked_ring.is_some_and(|locked| {
                 matches!(
@@ -1877,19 +1880,26 @@ impl TransformGizmo {
             if locked_sibling {
                 surface = INACTIVE_COLOR;
                 edge = INACTIVE_COLOR;
-                surface[3] *= 0.25;
-                edge[3] *= 0.25;
+                surface[3] *= DISABLED_RING_ALPHA;
+                edge[3] *= DISABLED_RING_ALPHA;
             }
             surface[3] *= fade;
             edge[3] *= fade;
             self.handles[index].set_surface_color(surface);
             self.handles[index].set_edge_color(edge);
             self.handles[index].set_temporary_transform(offset);
+            // The halo is the widest ink: unless it is muted with the fill and stroke, a
+            // disabled sibling still reads as an active handle.
+            let halo_alpha = if locked_sibling {
+                outline_alpha * fade * DISABLED_RING_ALPHA
+            } else {
+                outline_alpha * fade
+            };
             let outline = [
                 self.style.outline[0],
                 self.style.outline[1],
                 self.style.outline[2],
-                outline_alpha * fade,
+                halo_alpha,
             ];
             self.halos[index].set_surface_color(outline);
             self.halos[index].set_temporary_transform(offset);
@@ -3620,6 +3630,14 @@ mod tests {
         assert!(
             gizmo.items()[z].surface_color()[3] > gizmo.items()[x].surface_color()[3],
             "the locked ring keeps the active ink; its sibling is muted"
+        );
+        assert!(
+            gizmo.items()[x].surface_color()[3] < 0.15,
+            "the disabled sibling is faint, not merely dimmer"
+        );
+        assert!(
+            gizmo.halos()[z].surface_color()[3] > gizmo.halos()[x].surface_color()[3],
+            "the disabled sibling's halo is muted too, or it would still read as active"
         );
         // A sibling cannot take the hover cue (which also widens the ribbon).
         assert!(!gizmo.set_hovered_target(Some(GizmoTarget::Handle(GizmoHandle::RotateX))));

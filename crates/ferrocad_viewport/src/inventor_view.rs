@@ -6352,22 +6352,13 @@ fn ruler_tags(tape: &TransformTape, camera: &Camera, active_axis: Option<usize>)
                 .to_logical([device[0].round() as i32, device[1].round() as i32]),
         )
     };
-    let delta = tape.delta();
     let mut current = tape.datum();
     for axis in 0..3 {
-        let amount = match axis {
-            0 => delta.x,
-            1 => delta.y,
-            _ => delta.z,
-        };
-        if amount == 0.0 {
+        let amount = tape.axis_delta(axis);
+        if amount.abs() <= 1e-9 {
             continue;
         }
-        let direction = match axis {
-            0 => Vector3::new(1.0, 0.0, 0.0),
-            1 => Vector3::new(0.0, 1.0, 0.0),
-            _ => Vector3::new(0.0, 0.0, 1.0),
-        };
+        let direction = tape.axis(axis);
         let next = current.add(&direction.scale(amount));
         if let (Some(start), Some(end)) = (project(current), project(next)) {
             let length =
@@ -9518,6 +9509,26 @@ mod tests {
         assert_eq!(tags[0].axis, 0);
         assert!(tags[0].active, "the dragged leg takes the live accent");
         assert_eq!(tags[0].text, format!("{:.1} mm", delta.x));
+    }
+
+    #[test]
+    fn a_frame_tape_tags_the_frame_axis_not_the_world_axes() {
+        let (view, _viewport) = translate_gizmo_view();
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let basis = [
+            Vector3::new(half, half, 0.0),
+            Vector3::new(-half, half, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        // Ten along the frame's X. The world decomposition would produce two 7.1 mm legs
+        // instead of one 10 mm leg.
+        let delta = Vector3::new(10.0 * half, 10.0 * half, 0.0);
+        let tape = TransformTape::in_frame(Vector3::zero(), delta, basis);
+        let tags = ruler_tags(&tape, &view.camera, Some(0));
+        assert_eq!(tags.len(), 1, "one leg in the frame: {tags:?}");
+        assert_eq!(tags[0].axis, 0, "the frame's X, not world X/Y");
+        assert_eq!(tags[0].text, "10.0 mm");
+        assert!(tags[0].active);
     }
 
     #[test]

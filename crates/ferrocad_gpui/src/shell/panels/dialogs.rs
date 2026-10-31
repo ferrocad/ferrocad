@@ -296,11 +296,14 @@ impl Shell {
     /// drawn. A clean session has no tape, and clearing the session (commit, `Esc`, a
     /// context change) hides it with the ghost.
     pub(in crate::shell) fn sync_transform_tape(&mut self, cx: &mut Context<Self>) {
+        // The ruler measures the active frame, the same one as the handles and the fields:
+        // a `LOC` drag shows its local displacement, not the world decomposition.
+        let basis = self.frame_basis_now(cx);
         let tape = self
             .session
             .as_ref()
             .filter(|session| session.is_dirty())
-            .map(TransformTape::from_session);
+            .map(|session| TransformTape::from_session_in_frame(session, basis));
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
@@ -330,7 +333,6 @@ impl Shell {
         preview: &TransformPreview,
         cx: &mut Context<Self>,
     ) {
-        self.pill_attention = false;
         // A drag on another body would hijack the pending move (the session targets one
         // subject, and the tape measures it). The context gate refuses the stroke and the
         // viewport drops it, so the triad cannot end up on a body the session does not own.
@@ -547,7 +549,6 @@ impl Shell {
     ///
     /// Returns whether anything was committed.
     pub(in crate::shell) fn commit_session(&mut self, cx: &mut Context<Self>) -> bool {
-        self.pill_attention = false;
         // A rotate session is one body and is not a translation: `App_Move` would apply the
         // delta (zero) to the selection, so it commits through the same transform
         // interaction a workbench gizmo uses. That hook owns the transaction and the
@@ -668,7 +669,6 @@ impl Shell {
         if self.session.is_none() {
             return false;
         }
-        self.pill_attention = false;
         self.session = None;
         self.drag_start = None;
         self.rotation_start = None;

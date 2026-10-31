@@ -58,6 +58,9 @@ sub-element reports the same filtered scope the window does.
   drags show 30°, 60°, then 90°). `WLD` keeps the rings aligned with the world grid, `LOC`
   turns them with the body's committed orientation, and `WP` follows the active
   workplane; the badge cycles the three and is inert while a step is pending.
+  The same switch orients the **Move arrows**, so `LOC` translates along the body's own
+  axes, and the `Δ` fields are read in that frame (in `LOC` an absolute coordinate is
+  measured from the body's origin).
   `Reset 0°` commits the rotation that returns the body to world alignment and is
   likewise disabled while a step is pending. The button names the stored orientation:
   `Reset (Z 45°)` for a pure axis, `Reset (21.4°)` for a compound tilt (the shortest total

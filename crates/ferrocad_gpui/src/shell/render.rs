@@ -4,7 +4,7 @@
 //! `Render` impl stays in `shell.rs`; this file owns the pieces it composes.
 
 use super::*;
-use super::pill::RingFrame;
+use super::pill::AxisFrame;
 
 /// The active-action surface: the active tool's label, point count, hint and a
 /// **Cancel** / **Finish** pair, as one dielectric pill over the bottom of the canvas.
@@ -395,7 +395,7 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
                         .child(spec.title.clone()),
                 )
                 .child(fields)
-                .child(dialog_buttons(accept, cancel, true, cx)),
+                .child(dialog_buttons(accept, cancel, cx)),
         );
         if let Some(error) = &error {
             panel = panel.child(
@@ -472,7 +472,7 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
                 .child(error.clone()),
         );
     }
-    panel = panel.child(dialog_buttons(accept, cancel, false, cx));
+    panel = panel.child(dialog_buttons(accept, cancel, cx));
 
     div()
         .id("dialog-backdrop")
@@ -501,128 +501,60 @@ pub(super) fn axis_token(field: &crate::dialog::DialogField) -> u32 {
     }
 }
 
-/// The accept/cancel pair. `compact` tightens the padding for the floating HUD.
+/// The accept/cancel pair, rendered with the same strip the Move form floats.
 pub(super) fn dialog_buttons(
     accept: String,
     cancel: String,
-    compact: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let pad = if compact { px(2.) } else { px(3.) };
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_end()
-        .gap_2()
-        .child(
-            div()
-                .id("dialog-cancel")
-                .debug_selector(|| "dialog-cancel".to_string())
-                .px(pad)
-                .py_1()
-                .rounded_sm()
-                .bg(rgb(PANEL_ALT))
-                .text_xs()
-                .text_color(rgb(FG))
-                .child(cancel)
-                .on_click(cx.listener(|this, _event, _window, cx| this.cancel_dialog(cx))),
-        )
-        .child(
-            div()
-                .id("dialog-accept")
-                .debug_selector(|| "dialog-accept".to_string())
-                .px(pad)
-                .py_1()
-                .rounded_sm()
-                .bg(rgb(ACCENT))
-                .text_xs()
-                .text_color(rgb(FG))
-                .child(accept)
-                .on_click(cx.listener(|this, _event, _window, cx| this.accept_dialog(cx))),
-        )
+    ferrocad_widgets::decision_pill(
+        ferrocad_widgets::DecisionButton::cancel(
+            "dialog-cancel",
+            cancel,
+            cx.listener(|this, _event, _window, cx| this.cancel_dialog(cx)),
+        ),
+        ferrocad_widgets::DecisionButton::accept(
+            "dialog-accept",
+            accept,
+            cx.listener(|this, _event, _window, cx| this.accept_dialog(cx)),
+        ),
+        ferrocad_widgets::DecisionOptions::default(),
+    )
 }
 
-/// The compact finish pair for the Move form: one segmented glass strip, `✗ │ ✓`.
-///
-/// It is the same flat pattern as `PERSP ┆ ORTHO` and `Create Box ┆ Search`: a single
-/// `WHEEL_GLASS` body with a `DOCK_BORDER` hairline, **no nested button boxes**, one
-/// `CHROME_LINE` divider, and the segments distinguished by ink. `✓` rests on
-/// `CHROME_ACTIVE_BG` with `CHROME_ACTIVE` ink (the accent the projection segment and
-/// the active loadout slot use); `✗` is neutral until hover, when it takes the subtract
-/// tint. No opaque fills — `visual-language.md` principles 2 and 5.
+/// The compact finish pair for the Move form: the shared `ferrocad_widgets` decision
+/// strip (`✗ │ ✓`), so a finish looks the same in a modal and beside the gizmo.
 ///
 /// The glyphs match the keys the panel already routes ([`Shell::dismiss_move_hud`] on
 /// `Esc`, [`Shell::commit_session`] on `Enter`), and the ids are the ones the modal's
 /// buttons use, so a test drives either surface the same way.
-pub(super) fn hud_buttons(attention: bool, cx: &mut Context<Shell>) -> impl IntoElement {
-    // `SUBTRACT_COLOR` at 14 % (0x24), for the discard segment's hover wash.
-    const SUBTRACT_TINT: u32 = 0xef444424;
-
-    let cancel = div()
-        .id("dialog-cancel")
-        .debug_selector(|| "dialog-cancel".to_string())
-        .flex()
-        .items_center()
-        .h_full()
-        .px(px(10.0))
-        .text_xs()
-        .text_color(rgb(MUTED))
-        .cursor_pointer()
-        .hover(|style| {
-            style
-                .bg(rgba(SUBTRACT_TINT))
-                .text_color(rgb(SUBTRACT_COLOR))
-        })
-        .child("✗")
-        .on_click(cx.listener(|this, _event, _window, cx| this.dismiss_move_hud(cx)));
-
-    let divider = div().w(px(1.0)).h(px(14.0)).bg(rgba(CHROME_LINE));
-
-    let accept = div()
-        .id("dialog-accept")
-        .debug_selector(|| "dialog-accept".to_string())
-        .flex()
-        .items_center()
-        .h_full()
-        .px(px(10.0))
-        .text_xs()
-        .bg(rgba(CHROME_ACTIVE_BG))
-        .text_color(rgb(CHROME_ACTIVE))
-        .cursor_pointer()
-        .hover(|style| style.bg(rgba(HIGHLIGHT_TINT)).text_color(rgb(HOVER_RIM)))
-        .child("✓")
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            this.commit_session(cx);
-        }));
-
-    div()
-        .id("move-finish")
-        .debug_selector(|| "move-finish".to_string())
-        .flex()
-        .flex_row()
-        .items_center()
-        .h(px(24.0))
-        .rounded(px(5.0))
-        .overflow_hidden()
-        .bg(rgba(WHEEL_GLASS))
-        .border_1()
-        .border_color(if attention {
-            rgb(HOVER_RIM)
-        } else {
-            rgba(DOCK_BORDER)
-        })
-        .occlude()
-        // The pill floats over the canvas, so a right-press on it still names a verb.
-        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-            if this.active_tool.is_none() {
-                this.last_pointer = Some(event.position);
-                this.open_radial(event.position, cx);
-            }
-        }))
-        .child(cancel)
-        .child(divider)
-        .child(accept)
+pub(super) fn hud_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
+    ferrocad_widgets::decision_pill(
+        ferrocad_widgets::DecisionButton::cancel(
+            "dialog-cancel",
+            "✗",
+            cx.listener(|this, _event, _window, cx| this.dismiss_move_hud(cx)),
+        ),
+        ferrocad_widgets::DecisionButton::accept(
+            "dialog-accept",
+            "✓",
+            cx.listener(|this, _event, _window, cx| {
+                this.commit_session(cx);
+            }),
+        ),
+        ferrocad_widgets::DecisionOptions {
+            outer_id: Some("move-finish".into()),
+            // The pill floats over the canvas, so a right-press on it still names a verb.
+            on_right_press: Some(Box::new(cx.listener(
+                |this, event: &MouseDownEvent, _window, cx| {
+                    if this.active_tool.is_none() {
+                        this.last_pointer = Some(event.position);
+                        this.open_radial(event.position, cx);
+                    }
+                },
+            ))),
+        },
+    )
 }
 
 /// The pending move's finish pair: `✗`/`✓` in their own glass pill beside the gizmo.
@@ -717,14 +649,13 @@ pub(super) fn move_finish_overlay(
     let origin = clamp_hud(origin, viewport, pill);
     shell.hud_lock = Some(origin);
     let weak = cx.weak_entity();
-    let attention = shell.pill_attention;
     let measured = div()
         .on_children_prepainted(move |bounds, _window, cx| {
             if let Some(rect) = bounds.first().copied() {
                 let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
             }
         })
-        .child(hud_buttons(attention, cx));
+        .child(hud_buttons(cx));
     deferred(
         anchored()
             .anchor(Anchor::TopLeft)
@@ -753,7 +684,7 @@ pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElem
         return div().into_any_element();
     }
     let absolute = shell.pill.absolute();
-    let frame = shell.pill.ring_frame();
+    let frame = shell.pill.axis_frame();
     let angular = shell.angular();
     let focus = shell.dialog_focus.clone();
     let mut bar = div()
@@ -807,7 +738,7 @@ pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElem
         let locked = shell.rotation_pending();
         let (reset_label, reset_actionable) = shell.reset_rotation_label();
         bar = bar
-            .child(rotate_mode_badge(frame, locked.is_some(), cx))
+            .child(frame_badge(frame, locked.is_some(), cx))
             .child(rotate_fields(shell, locked, cx))
             .child(div().text_xs().text_color(rgb(MUTED)).child("deg"))
             .child(reset_rotation_button(
@@ -818,6 +749,7 @@ pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElem
             ));
     } else {
         bar = bar
+            .child(frame_badge(frame, false, cx))
             .child(mode_badge(absolute, cx))
             .child(move_fields(&inputs, absolute));
     }
@@ -849,22 +781,23 @@ fn mode_badge(absolute: bool, cx: &mut Context<Shell>) -> AnyElement {
         .into_any_element()
 }
 
-/// The rotate form's ring-frame switch: `WLD` (world rings), `LOC` (body rings) or
-/// `WP` (the active workplane's `u`/`v`/`n`). It cycles through the three.
+/// The transform form's axis switch: `WLD` (world axes), `LOC` (body axes) or `WP`
+/// (the active workplane's `u`/`v`/`n`). It cycles through the three and orients both
+/// the translate arrows and the rotate rings.
 ///
 /// While a step is pending the basis is frozen: the button is muted and explains the
-/// lock instead of moving the rings under the pending value.
-fn rotate_mode_badge(frame: RingFrame, locked: bool, cx: &mut Context<Shell>) -> AnyElement {
+/// lock instead of moving the handles under the pending value.
+fn frame_badge(frame: AxisFrame, locked: bool, cx: &mut Context<Shell>) -> AnyElement {
     let ink = if locked {
         MUTED
-    } else if frame == RingFrame::World {
+    } else if frame == AxisFrame::World {
         FG
     } else {
         ferrocad_theme::ui::ACTIVE_ACCENT
     };
     div()
-        .id("move-mode")
-        .debug_selector(|| "move-mode".to_string())
+        .id("axis-frame")
+        .debug_selector(|| "axis-frame".to_string())
         .px_2()
         .py_1()
         .rounded_sm()
@@ -880,11 +813,11 @@ fn rotate_mode_badge(frame: RingFrame, locked: bool, cx: &mut Context<Shell>) ->
             }
         })
         .child(frame.label())
-        .on_click(cx.listener(move |this, _event, window, cx| {
+        .on_click(cx.listener(move |this, _event, _window, cx| {
             if this.rotation_pending().is_some() {
                 this.show_rotation_lock(this.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);
             } else {
-                this.toggle_move_mode(window, cx);
+                this.cycle_axis_frame(cx);
             }
         }))
         .into_any_element()

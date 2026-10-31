@@ -590,14 +590,13 @@ impl Shell {
                 // for translation the pivot does not change the result, and re-pivoting
                 // will be an explicit, snapped gesture (see transform-ux.md).
                 if slot.wants_gizmo() {
-                    // The rotate rings take their basis from the form's frame: world,
-                    // the body, or the active workplane. A translate session is always
-                    // world-aligned, so it passes no basis and keeps the default frame.
-                    let basis = (self.gizmo_mode == GizmoMode::Rotate).then(|| {
-                        let plane = self.active_ring_plane(cx);
-                        self.ring_basis(plane.as_ref())
-                    });
-                    gizmos = self.arm_gizmos(&reference, &stage, basis);
+                    // Both hands take their basis from the form's frame: the world grid,
+                    // the body, or the active workplane. The solver already works in the
+                    // gizmo's frame, so a local arrow translates along the body axis and
+                    // a local ring turns about it.
+                    let plane = self.active_frame_plane(cx);
+                    let basis = self.frame_basis(plane.as_ref());
+                    gizmos = self.arm_gizmos(&reference, &stage, Some(basis));
                 }
             }
         }

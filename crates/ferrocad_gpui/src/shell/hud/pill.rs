@@ -27,21 +27,22 @@
 //! escalation keys through it (`shell.rs`); it is also where a typed edit opens or
 //! updates the session.
 
-/// The rotate form's ring basis.
+/// The transform form's axis basis.
 ///
 /// `World` is the coordinate grid, `Local` follows the body's committed orientation,
-/// and `Workplane` follows the active workplane's `u`/`v`/`n`.
+/// and `Workplane` follows the active workplane's `u`/`v`/`n`. It orients both the
+/// translate arrows and the rotate rings, and the values their fields read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::shell) enum RingFrame {
-    /// The global X/Y/Z rings (`WLD`).
+pub(in crate::shell) enum AxisFrame {
+    /// The global X/Y/Z axes (`WLD`).
     World,
-    /// The body's own rings (`LOC`).
+    /// The body's own axes (`LOC`).
     Local,
-    /// The active workplane's rings (`WP`).
+    /// The active workplane's `u`/`v`/`n` (`WP`).
     Workplane,
 }
 
-impl RingFrame {
+impl AxisFrame {
     /// The badge text for this frame.
     pub(in crate::shell) fn label(self) -> &'static str {
         match self {
@@ -66,10 +67,10 @@ pub(in crate::shell) struct PillState {
     /// `true` when the fields show world coordinates (`X/Y/Z`) instead of offsets
     /// (`ΔX/ΔY/ΔZ`). The preview and the commit stay deltas either way.
     absolute: bool,
-    /// `true` when the rotate rings follow the body's own orientation (`LOC`) instead of
-    /// the world grid (`WLD`). It is the rotate form's frame switch; the translation form
-    /// keeps its own `absolute` coordinate mode.
-    ring_frame: RingFrame,
+    /// The basis the form's handles and numeric fields use. Both hands share it: it
+    /// orients the translate arrows and the rotate rings alike, while `absolute` is
+    /// the orthogonal coordinate mode of the fields.
+    axis_frame: AxisFrame,
 }
 
 /// How many Δ fields the pill can show: X, Y and Z.
@@ -85,7 +86,7 @@ impl PillState {
             focus: None,
             last: 0,
             absolute: false,
-            ring_frame: RingFrame::World,
+            axis_frame: AxisFrame::World,
         }
     }
 
@@ -96,7 +97,7 @@ impl PillState {
             focus: None,
             last: axis.min(AXES - 1),
             absolute: false,
-            ring_frame: RingFrame::World,
+            axis_frame: AxisFrame::World,
         }
     }
 
@@ -112,7 +113,7 @@ impl PillState {
             focus: Some(axis),
             last: axis,
             absolute: false,
-            ring_frame: RingFrame::World,
+            axis_frame: AxisFrame::World,
         }
     }
 
@@ -155,22 +156,22 @@ impl PillState {
         self.absolute
     }
 
-    /// The rotate form's ring basis.
-    pub(in crate::shell) fn ring_frame(&self) -> RingFrame {
-        self.ring_frame
+    /// The transform form's axis basis.
+    pub(in crate::shell) fn axis_frame(&self) -> AxisFrame {
+        self.axis_frame
     }
 
-    /// Advance the ring basis `WLD → LOC → WP → WLD`; returns the new state.
+    /// Advance the axis basis `WLD → LOC → WP → WLD`; returns the new state.
     ///
     /// A third state does not fit a two-way toggle, so the badge cycles rather than
     /// flipping. Like `absolute`, the choice outlives a session.
-    pub(in crate::shell) fn cycle_ring_frame(&mut self) -> RingFrame {
-        self.ring_frame = match self.ring_frame {
-            RingFrame::World => RingFrame::Local,
-            RingFrame::Local => RingFrame::Workplane,
-            RingFrame::Workplane => RingFrame::World,
+    pub(in crate::shell) fn cycle_axis_frame(&mut self) -> AxisFrame {
+        self.axis_frame = match self.axis_frame {
+            AxisFrame::World => AxisFrame::Local,
+            AxisFrame::Local => AxisFrame::Workplane,
+            AxisFrame::Workplane => AxisFrame::World,
         };
-        self.ring_frame
+        self.axis_frame
     }
 
     /// Focus `axis`, clamped to `0..=2`; returns whether the focus moved.
@@ -306,17 +307,17 @@ mod tests {
         let mut pill = PillState::resting();
         assert!(!pill.absolute(), "a new HUD nudges by an offset");
         assert_eq!(
-            pill.ring_frame(),
-            RingFrame::World,
+            pill.axis_frame(),
+            AxisFrame::World,
             "and starts with world rings"
         );
         assert!(pill.toggle_absolute());
         assert!(pill.absolute());
-        assert_eq!(pill.cycle_ring_frame(), RingFrame::Local);
-        assert_eq!(pill.cycle_ring_frame(), RingFrame::Workplane);
+        assert_eq!(pill.cycle_axis_frame(), AxisFrame::Local);
+        assert_eq!(pill.cycle_axis_frame(), AxisFrame::Workplane);
         assert_eq!(
-            pill.cycle_ring_frame(),
-            RingFrame::World,
+            pill.cycle_axis_frame(),
+            AxisFrame::World,
             "the third state wraps back to the world grid"
         );
         assert!(!pill.toggle_absolute());
@@ -324,10 +325,10 @@ mod tests {
     }
 
     #[test]
-    fn the_ring_frame_labels_name_every_state() {
-        assert_eq!(RingFrame::World.label(), "WLD ▾");
-        assert_eq!(RingFrame::Local.label(), "LOC ▾");
-        assert_eq!(RingFrame::Workplane.label(), "WP ▾");
+    fn the_axis_frame_labels_name_every_state() {
+        assert_eq!(AxisFrame::World.label(), "WLD ▾");
+        assert_eq!(AxisFrame::Local.label(), "LOC ▾");
+        assert_eq!(AxisFrame::Workplane.label(), "WP ▾");
     }
 
     #[test]

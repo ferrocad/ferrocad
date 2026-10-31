@@ -245,17 +245,18 @@ session (`Shell::rotation_pending()`), not a second state that can drift from it
 | --- | --- | --- |
 | **Idle** (`locked_ring: None`) | All three rings idle (`INACTIVE_COLOR`, `#94A3B8`), full width, normal hover growth | Any ring starts its drag |
 | **Active dirty ring** (`Some(axis)`, `abs(Δθ) > 1e-4`) | Active token (`ACTIVE_COLOR` / the axis ink), full `2 px` stroke, `hover_scale` on hover, the swept `12 %` fan, `15°` detent ticks and the on-arc degree tag | The drag adds to that ring's angle; a second drag on the same ring continues from the pending value |
-| **Locked sibling** (the other two) | `INACTIVE_COLOR` at `0.25` alpha, **no** hover widening and **no** bright rim | Kept visible for spatial context, but a press is **consumed** by the viewport: no drag, no camera orbit, no deselection |
+| **Locked sibling** (the other two) | `INACTIVE_COLOR` at `0.12` alpha (`DISABLED_RING_ALPHA`), **no** hover widening and **no** bright rim | Kept visible for spatial context, but a press is **consumed** by the viewport: no drag, no camera orbit, no deselection |
 
 `TransformGizmo::locked_ring` carries the axis; `set_locked_ring` mutes the siblings and
 `set_hovered_target` filters them out (a muted ring never takes the hover cue).
 `InventorViewport` repeats the filter at the press: a locked sibling or the re-pivot disc
 is refused before `begin_drag`, and queues `ViewportEvent::LockedRing`. The status line
-names the owner, and the finish pair takes the static attention rim (`ui::HOVER_RIM`).
+names the owner. The finish pair is the same shared strip in every state (no separate
+attention rim), so the Move and Rotate pills never present two different borders.
 
-> The visual language forbids animation (`visual-language.md`: no transitions, no
-timed flashes). The attention state is therefore a **static rim until the next action**,
-not the 120 ms pulse an animated prototype might use.
+> The visual language forbids animation (`visual-language.md`: no transitions, no timed
+> flashes). A state-dependent rim on the shared pill made the two hands look different, so
+> the muted sibling rings and the status line carry the lock instead.
 
 ### 6.2 Docked bar
 
@@ -271,10 +272,15 @@ Dirty X: [ WLD▾ ]  ΔθX -45.00 ΔθY  —      ΔθZ  —      deg   [ Reset 
   angle. `Tab` focuses the selected cell; `X`/`Y`/`Z` typed in the field choose the ring.
 - **Dirty:** the owner keeps the input (drag or type); the siblings render `—`, are
   non-focusable, and a click shows the same lock prompt as a ring press.
-- **Frame switch:** `WLD ▾` / `LOC ▾` / `WP ▾` cycles the ring basis: the world grid,
-  the body's committed orientation, or the active workplane's `u`/`v`/`n`. It is inert
-  while a step is pending — the reference basis cannot move under a value measured in
-  the old frame. `WP` falls back to the world grid when there is no workplane to read.
+- **Frame switch:** `WLD ▾` / `LOC ▾` / `WP ▾` cycles the transform basis: the world
+  grid, the body's committed orientation, or the active workplane's `u`/`v`/`n`. It
+  orients **both** hands — the translate arrows and the rotate rings — and the values
+  their fields read. The fields are frame coordinates: in `LOC` a typed `ΔX` is along
+  the body's X, and an absolute `X/Y/Z` is measured from the frame's anchor (the world
+  origin for `WLD`, the body's own origin for `LOC`, the workplane origin for `WP`).
+  It is inert while a step is pending — the reference basis cannot move under a value
+  measured in the old frame. `WP` falls back to the world grid when there is no
+  workplane to read.
 - **`Reset 0°`:** reads the stored orientation. An identity dims the button (`Reset 0°`);
   a pure X/Y/Z rotation names itself (`Reset (Z 45°)`); a compound 3-D tilt shows the
   **shortest total angle from identity** (`Reset (21.4°)`), never a fractional per-axis

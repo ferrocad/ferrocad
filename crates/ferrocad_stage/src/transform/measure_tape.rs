@@ -5,15 +5,18 @@
 //! The geometry is rebuilt from the session snapshot each paint, because the dash, tick and
 //! ring sizes are screen-invariant and therefore depend on the camera.
 //!
-//! The path is the orthogonal stair-step from the session datum to the previewed origin:
+//! The path is the orthogonal stair-step from the session datum to the previewed origin,
+//! in the **active transform frame** (the same basis the gizmo and the fields use):
 //!
 //! ```text
 //! O_start ──ΔX──► P_x ──ΔY──► P_xy ──ΔZ──► O_current
 //! ```
 //!
-//! Only a non-zero component draws a leg, each leg carries its axis token, and every
-//! corner gets a perpendicular tick. The ghost ring marks the datum. The tape is depth-off
-//! and never pickable; it is a measurement, not geometry.
+//! A `LOC` move therefore shows one leg along the body's own axis and its signed local
+//! displacement, instead of the world-axis decomposition of the same world delta. Only a
+//! non-zero frame component draws a leg, each leg carries its axis token, and every corner
+//! gets a perpendicular tick. The ghost ring marks the datum. The tape is depth-off and
+//! never pickable; it is a measurement, not geometry.
 
 use std::f64::consts::TAU;
 
@@ -85,11 +88,12 @@ pub fn build(tape: &TransformTape, camera: &Camera) -> TapeGeometry {
     };
     let mut current = tape.datum();
     for axis in 0..3 {
-        let amount = component(tape.delta(), axis);
-        if amount == 0.0 {
+        let amount = tape.axis_delta(axis);
+        // A pure frame-axis drag leaves tiny floating-point residue on the others.
+        if amount.abs() <= 1e-9 {
             continue;
         }
-        let direction = axis_vector(axis);
+        let direction = tape.axis(axis);
         let next = current.add(&direction.scale(amount));
         let color = axis_color(axis);
         let mid = current.add(&direction.scale(amount * 0.5));
@@ -100,23 +104,6 @@ pub fn build(tape: &TransformTape, camera: &Camera) -> TapeGeometry {
         current = next;
     }
     geometry
-}
-
-fn component(vector: Vector3, axis: usize) -> f64 {
-    match axis {
-        0 => vector.x,
-        1 => vector.y,
-        2 => vector.z,
-        _ => 0.0,
-    }
-}
-
-fn axis_vector(axis: usize) -> Vector3 {
-    match axis {
-        0 => Vector3::new(1.0, 0.0, 0.0),
-        1 => Vector3::new(0.0, 1.0, 0.0),
-        _ => Vector3::new(0.0, 0.0, 1.0),
-    }
 }
 
 /// A screen-facing ring of [`RING_PIXELS`] radius at `at`, as line segments.
@@ -212,6 +199,30 @@ mod tests {
         Camera {
             viewport: Viewport::new([200, 200], 1.0),
             ..Camera::identity()
+        }
+    }
+
+    #[test]
+    fn a_tape_draws_one_leg_along_the_frame_axis() {
+        let camera = camera();
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let basis = [
+            Vector3::new(half, half, 0.0),
+            Vector3::new(-half, half, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        // Ten along the rotated frame's X. A world decomposition would stair-step through
+        // world X and Y and never keep `x == y`.
+        let delta = Vector3::new(10.0 * half, 10.0 * half, 0.0);
+        let tape = TransformTape::in_frame(Vector3::zero(), delta, basis);
+        let geometry = build(&tape, &camera);
+        assert!(!geometry.legs.is_empty());
+        for vertex in &geometry.legs {
+            let [x, y, _] = vertex.position;
+            assert!(
+                (f64::from(x) - f64::from(y)).abs() < 1e-3,
+                "the single leg follows the frame X, not a world stair-step: {vertex:?}"
+            );
         }
     }
 

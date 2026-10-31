@@ -50,6 +50,8 @@ pub(crate) enum Action<'a> {
     SwitchScope,
     /// Change the transform handle set (translate / rotate).
     SwitchHandleSet,
+    /// Change the axis frame the handles and fields use (`WLD` / `LOC` / `WP`).
+    SwitchFrame,
     /// Start an interactive tool.
     StartTool,
     /// Run a registry command; `edit` is true unless it declares `CmdType: ForView`.
@@ -66,6 +68,7 @@ impl Action<'_> {
             Action::SwitchHand => "switch tools",
             Action::SwitchScope => "change the selection scope",
             Action::SwitchHandleSet => "switch the handle set",
+            Action::SwitchFrame => "change the axis frame",
             Action::StartTool => "start a tool",
             Action::RunCommand { .. } => "run a command",
             Action::Arm => "drag another object",

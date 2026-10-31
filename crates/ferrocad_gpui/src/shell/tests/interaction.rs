@@ -2,7 +2,7 @@
 
 use super::*;
 use super::super::context::InteractionContext;
-use super::super::pill::RingFrame;
+use super::super::pill::AxisFrame;
 
 /// The wheel's Rotate verb is the discoverable way into the rings: it switches
 /// the session mode, and Move forces Translate again so its Δ HUD and the
@@ -1053,22 +1053,22 @@ fn typing_an_angular_value_previews_and_commits(cx: &mut TestAppContext) {
 
     // `WLD` is the default; the badge cycles the rings to the body, then the workplane.
     assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.pill.ring_frame()),
-        RingFrame::World
+        shell.read_with(&cx, |shell, _| shell.pill.axis_frame()),
+        AxisFrame::World
     );
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| shell.toggle_move_mode(window, cx));
     });
     assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.pill.ring_frame()),
-        RingFrame::Local
+        shell.read_with(&cx, |shell, _| shell.pill.axis_frame()),
+        AxisFrame::Local
     );
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| shell.toggle_move_mode(window, cx));
     });
     assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.pill.ring_frame()),
-        RingFrame::Workplane,
+        shell.read_with(&cx, |shell, _| shell.pill.axis_frame()),
+        AxisFrame::Workplane,
         "the third state is the active workplane"
     );
 
@@ -1272,7 +1272,6 @@ fn grabbing_a_locked_ring_is_refused_until_the_step_is_finished(cx: &mut TestApp
             .contains("Pending rotate X"),
         "the status explains the lock"
     );
-    assert!(shell.read_with(&cx, |shell, _| shell.pill_attention));
 
     // The same ring still accumulates: a second X drag adds to the pending angle.
     cx.update(|_window, cx| {
@@ -1291,7 +1290,6 @@ fn grabbing_a_locked_ring_is_refused_until_the_step_is_finished(cx: &mut TestApp
     let before = undo_count();
     assert!(cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.commit_session(cx))));
     assert_eq!(undo_count(), before + 1);
-    assert!(!shell.read_with(&cx, |shell, _| shell.pill_attention));
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             shell.on_transform_preview(&preview(GizmoAxis::Y, PreviewPhase::Begin, 0.0), cx);
@@ -1309,7 +1307,7 @@ fn grabbing_a_locked_ring_is_refused_until_the_step_is_finished(cx: &mut TestApp
 /// committed rotation, the workplane frame follows a plane's `u`/`v`/`n`, and both
 /// reach the armed gizmos.
 #[gpui::test]
-fn the_ring_frames_reach_the_body_and_the_workplane(cx: &mut TestAppContext) {
+fn the_axis_frames_reach_the_body_and_the_workplane(cx: &mut TestAppContext) {
     use crate::contributions::Contributions;
     use ferrocad_stage::{Stage, TransformGizmo, Workplane, WorkplaneKind};
 
@@ -1352,17 +1350,17 @@ obj.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(Free
     let reference = SelectionRef::whole(7);
 
     // `WLD`: the coordinate axes.
-    let world = shell.read_with(&cx, |shell, _| shell.ring_basis(None));
+    let world = shell.read_with(&cx, |shell, _| shell.frame_basis(None));
     assert!(world[0].is_equal(&Vector3::new(1.0, 0.0, 0.0), 1e-9));
     assert!(world[2].is_equal(&Vector3::new(0.0, 0.0, 1.0), 1e-9));
 
     // `LOC`: the X ring turns with the body, and the armed rings carry that basis.
     cx.update(|_window, cx| {
         shell.update(cx, |shell, _| {
-            let _ = shell.pill.cycle_ring_frame();
+            let _ = shell.pill.cycle_axis_frame();
         });
     });
-    let local = shell.read_with(&cx, |shell, _| shell.ring_basis(None));
+    let local = shell.read_with(&cx, |shell, _| shell.frame_basis(None));
     let half = std::f64::consts::FRAC_1_SQRT_2;
     assert!(
         local[0].is_equal(&Vector3::new(half, half, 0.0), 1e-9),
@@ -1389,10 +1387,10 @@ obj.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(Free
     .expect("a valid plane");
     cx.update(|_window, cx| {
         shell.update(cx, |shell, _| {
-            let _ = shell.pill.cycle_ring_frame();
+            let _ = shell.pill.cycle_axis_frame();
         });
     });
-    let workplane = shell.read_with(&cx, |shell, _| shell.ring_basis(Some(&plane)));
+    let workplane = shell.read_with(&cx, |shell, _| shell.frame_basis(Some(&plane)));
     assert!(workplane[0].is_equal(&Vector3::new(0.0, 1.0, 0.0), 1e-9));
     assert!(workplane[1].is_equal(&Vector3::new(0.0, 0.0, 1.0), 1e-9));
     assert!(workplane[2].is_equal(&Vector3::new(1.0, 0.0, 0.0), 1e-9));
@@ -1404,6 +1402,65 @@ obj.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(Free
             .iter()
             .any(|gizmo| gizmo.frame().basis[2].is_equal(&workplane[2], 1e-9)),
         "the armed rings take the workplane basis"
+    );
+}
+
+/// `LOC` translates along the body's own axes: a typed ΔX moves along the rotated X,
+/// and the absolute fields read coordinates along that basis from the body's origin.
+#[gpui::test]
+fn a_local_translation_uses_the_body_axes(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    register_transform_provider();
+    give_params_a_placement();
+    // 90° about +Z: the body's X points along world +Y.
+    let rotated = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            r#"
+import FreeCAD
+obj = FreeCAD.ActiveDocument.getObject('Params')
+obj.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90))
+"#,
+        )
+    });
+    assert!(rotated.expect("set the placement").ok);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.refresh_move_origin(cx));
+    });
+
+    // WLD → LOC.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.cycle_axis_frame(cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.pill.axis_frame()),
+        AxisFrame::Local
+    );
+
+    // A typed ΔX of 10 is ten along the body's X: world +Y.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_move_text(0, "10".to_string(), cx);
+            shell.on_move_typed(cx);
+        })
+    });
+    let delta = shell
+        .read_with(&cx, |shell, _| shell.session.as_ref().map(|session| session.delta()))
+        .expect("a pending session");
+    assert!(
+        delta.x.abs() < 1e-9 && (delta.y - 10.0).abs() < 1e-9 && delta.z.abs() < 1e-9,
+        "local X is world +Y: {delta:?}"
+    );
+
+    // In LOC an absolute coordinate is measured from the body's own origin, so the
+    // local frame reads zero at rest (it is anchored to the object).
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.pill.toggle_absolute();
+            shell.set_move_fields([0.0; 3], cx);
+        })
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.move_field_text(0, cx)),
+        Some("0.00".to_string())
     );
 }
 

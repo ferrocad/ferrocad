@@ -21,7 +21,7 @@
 //! See `docs/project/tasks/transform-session.md` §3.2.
 
 use crate::shell::*;
-use crate::shell::pill::RingFrame;
+use crate::shell::pill::AxisFrame;
 use ferrocad_types::Quantity;
 
 /// The text a resting field shows.
@@ -354,16 +354,53 @@ impl Shell {
     }
 
     /// The field values that *display* the pending translation under the current mode.
-    fn display_values(&self, delta: [f64; 3]) -> [f64; 3] {
-        let origin = self.move_hud.as_ref().map_or(Vector3::zero(), |hud| hud.origin);
-        if self.pill.absolute() {
-            [
-                delta[0] + origin.x,
-                delta[1] + origin.y,
-                delta[2] + origin.z,
-            ]
-        } else {
-            delta
+    ///
+    /// The delta is world-space; the fields read it in the current axis frame. Absolute
+    /// values are coordinates along that frame from its anchor (the world origin, the
+    /// body's origin, or the workplane's origin).
+    fn display_values(&self, delta: [f64; 3], cx: &App) -> [f64; 3] {
+        let basis = self.frame_basis_now(cx);
+        let world = Vector3::new(delta[0], delta[1], delta[2]);
+        let coordinates = [
+            world.dot(&basis[0]),
+            world.dot(&basis[1]),
+            world.dot(&basis[2]),
+        ];
+        if !self.pill.absolute() {
+            return coordinates;
+        }
+        let origin = self
+            .move_hud
+            .as_ref()
+            .map_or(Vector3::zero(), |hud| hud.origin);
+        let base = origin.sub(&self.frame_anchor(cx));
+        [
+            coordinates[0] + base.dot(&basis[0]),
+            coordinates[1] + base.dot(&basis[1]),
+            coordinates[2] + base.dot(&basis[2]),
+        ]
+    }
+
+    /// The transform form's basis, reading the active plane when `WP` is selected.
+    pub(in crate::shell) fn frame_basis_now(&self, cx: &App) -> [Vector3; 3] {
+        let plane = self.active_frame_plane(cx);
+        self.frame_basis(plane.as_ref())
+    }
+
+    /// The world point the absolute fields measure from, in the current frame.
+    ///
+    /// `WLD` measures from the world origin, `LOC` from the body's own origin (so its
+    /// coordinates are zero at rest), and `WP` from the workplane's origin.
+    fn frame_anchor(&self, cx: &App) -> Vector3 {
+        match self.pill.axis_frame() {
+            AxisFrame::World => Vector3::zero(),
+            AxisFrame::Local => self
+                .move_hud
+                .as_ref()
+                .map_or(Vector3::zero(), |hud| hud.origin),
+            AxisFrame::Workplane => self
+                .active_frame_plane(cx)
+                .map_or(Vector3::zero(), |plane| plane.origin),
         }
     }
 
@@ -377,7 +414,7 @@ impl Shell {
             self.set_angle_text(self.display_angle(), cx);
             return;
         }
-        let display = self.display_values(delta);
+        let display = self.display_values(delta, cx);
         for (index, value) in display.iter().enumerate() {
             self.set_move_text(index, format!("{value:.2}"), cx);
         }
@@ -418,19 +455,23 @@ impl Shell {
         Quantity::parse(number).ok().map(|value| value.canonical_value())
     }
 
-    /// The translation delta the fields represent, honouring absolute mode and a
-    /// per-field `=`/`@`. The rotate form has no translation, so it returns `None`.
+    /// The translation delta the fields represent, honouring absolute mode, a per-field
+    /// `=`/`@`, and the current axis frame. The rotate form has no translation, so it
+    /// returns `None`.
     ///
-    /// Returns `None` while a field does not parse (a lone `-`), so a half-typed value
-    /// neither previews nor commits a silent zero.
+    /// The fields are read in the frame (a typed `10` in X is ten along the body's X, not
+    /// the world's) and converted to the world-space delta the session stores. Returns
+    /// `None` while a field does not parse (a lone `-`), so a half-typed value neither
+    /// previews nor commits a silent zero.
     pub(in crate::shell) fn move_fields_delta(&self, cx: &App) -> Option<[f64; 3]> {
         let hud = self.move_hud.as_ref()?;
         if self.angular() {
             return None;
         }
-        let origin = hud.origin;
+        let basis = self.frame_basis_now(cx);
         let absolute = self.pill.absolute();
-        let mut delta = [0.0; 3];
+        let base = hud.origin.sub(&self.frame_anchor(cx));
+        let mut coordinates = [0.0; 3];
         for (index, input) in hud.inputs.iter().enumerate() {
             let text = input.read(cx).text().trim().to_string();
             let (number, marked) = match text.strip_prefix('=') {
@@ -441,8 +482,8 @@ impl Shell {
                 },
             };
             let value = Quantity::parse(number).ok()?.canonical_value();
-            delta[index] = if absolute || marked {
-                let offset = value - component(origin, index);
+            coordinates[index] = if absolute || marked {
+                let offset = value - base.dot(&basis[index]);
                 if offset.abs() <= DISPLAY_EPSILON {
                     0.0
                 } else {
@@ -452,7 +493,11 @@ impl Shell {
                 value
             };
         }
-        Some(delta)
+        let delta = basis[0]
+            .scale(coordinates[0])
+            .add(&basis[1].scale(coordinates[1]))
+            .add(&basis[2].scale(coordinates[2]));
+        Some([delta.x, delta.y, delta.z])
     }
 
     /// A programmatic translation-field write (the seed and the mode toggle) is not a
@@ -491,7 +536,7 @@ impl Shell {
         }
     }
 
-    /// The ring a typed angle previews around, as `(index, world axis)`.
+    /// The axis a typed angle previews around, as `(index, world axis)`.
     ///
     /// The index is the bar's selected segment. `WLD` is the coordinate axis, `LOC` is
     /// that axis turned by the body's committed orientation, and `WP` is the active
@@ -501,42 +546,46 @@ impl Shell {
             .move_hud
             .as_ref()
             .map_or(0, |hud| hud.axis.min(AXIS_COUNT - 1));
-        let plane = self.active_ring_plane(cx);
-        (index, self.ring_basis(plane.as_ref())[index])
+        let plane = self.active_frame_plane(cx);
+        (index, self.frame_basis(plane.as_ref())[index])
     }
 
-    /// The three world ring axes for the current frame mode.
+    /// The three world axis directions for the current frame mode.
     ///
     /// `World` is the coordinate grid, `LOC` is the body's committed orientation and
     /// `WP` is the active workplane's `u`/`v`/`n`. The plane is passed in because only
-    /// the caller can read it from the viewport.
-    pub(in crate::shell) fn ring_basis(&self, plane: Option<&ferrocad_stage::Workplane>) -> [Vector3; 3] {
+    /// the caller can read it from the viewport. The same basis orients the translate
+    /// arrows and the rotate rings.
+    pub(in crate::shell) fn frame_basis(
+        &self,
+        plane: Option<&ferrocad_stage::Workplane>,
+    ) -> [Vector3; 3] {
         let world = [
             Vector3::new(1.0, 0.0, 0.0),
             Vector3::new(0.0, 1.0, 0.0),
             Vector3::new(0.0, 0.0, 1.0),
         ];
-        match self.pill.ring_frame() {
-            RingFrame::World => world,
-            RingFrame::Local => {
+        match self.pill.axis_frame() {
+            AxisFrame::World => world,
+            AxisFrame::Local => {
                 ferrocad_stage::ManipulatorFrame::from_rotation(
                     Vector3::zero(),
                     self.object_rotation_now(),
                 )
                 .basis
             }
-            RingFrame::Workplane => plane
+            AxisFrame::Workplane => plane
                 .map(|plane| [plane.u, plane.v, plane.n])
                 .unwrap_or(world),
         }
     }
 
-    /// The active workplane while the rotate form uses `WP` rings.
+    /// The active workplane while the form uses `WP` axes.
     ///
     /// `None` for the other frames, and when the shell has no viewport (headless),
-    /// where `ring_basis` falls back to the world grid.
-    pub(in crate::shell) fn active_ring_plane(&self, cx: &App) -> Option<ferrocad_stage::Workplane> {
-        if self.pill.ring_frame() != RingFrame::Workplane {
+    /// where `frame_basis` falls back to the world grid.
+    pub(in crate::shell) fn active_frame_plane(&self, cx: &App) -> Option<ferrocad_stage::Workplane> {
+        if self.pill.axis_frame() != AxisFrame::Workplane {
             return None;
         }
         let viewport = self.viewport.as_ref()?;
@@ -621,8 +670,6 @@ impl Shell {
         self.model.lock().unwrap().status = format!(
             "Pending rotate {axis} — apply (✓ / Enter) or cancel (✗ / Esc) before changing the axis"
         );
-        // A static attention rim on the finish pair; the host has no animation.
-        self.pill_attention = true;
         cx.notify();
     }
 
@@ -679,7 +726,6 @@ impl Shell {
             hud.axis = index;
         }
         self.pill.remember_axis(index);
-        self.pill_attention = false;
         self.set_move_fields([0.0; 3], cx);
         cx.notify();
         true
@@ -776,7 +822,6 @@ impl Shell {
         }
         self.preview_move(true, cx);
         self.commit_session(cx);
-        self.pill_attention = false;
     }
 
     /// Preview the pending value on the selection, optionally **settling** the gizmo
@@ -858,8 +903,8 @@ impl Shell {
                 pick.sub(&axis.scale(pick.dot(&axis))).normalize()
             }
         };
-        let plane = self.active_ring_plane(cx);
-        let basis = self.ring_basis(plane.as_ref());
+        let plane = self.active_frame_plane(cx);
+        let basis = self.frame_basis(plane.as_ref());
         // The canonical zero direction is a world vector; the ring frame maps it onto
         // the frame the rings actually occupy.
         let turned = basis[0]
@@ -923,6 +968,26 @@ impl Shell {
             .map(TransformSession::pending_degrees)
     }
 
+    /// Cycle the form's axis basis (`WLD → LOC → WP`); the handles and the fields follow.
+    ///
+    /// A pending transform freezes the basis: its value was measured in the old frame,
+    /// so the user finishes it with `✓`/`✗` first. Both hands share this switch.
+    pub(in crate::shell) fn cycle_axis_frame(&mut self, cx: &mut Context<Self>) {
+        if self.move_hud.is_none() {
+            return;
+        }
+        if self.gate(Action::SwitchFrame, cx) {
+            return;
+        }
+        self.pill.cycle_axis_frame();
+        // The pending value does not move; only its decomposition into the fields and
+        // the handles' basis change.
+        let delta = self.pending_delta(cx).unwrap_or_default();
+        self.rearm_selection(cx);
+        self.set_move_fields(delta, cx);
+        cx.notify();
+    }
+
     /// Cycle the rotate form's ring basis `WLD → LOC → WP`, or flip the translation form
     /// between offsets and coordinates.
     ///
@@ -937,10 +1002,9 @@ impl Shell {
                 self.show_rotation_lock(self.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);
                 return;
             }
-            self.pill.cycle_ring_frame();
+            self.pill.cycle_axis_frame();
             // The hosted rings take their frame from the arming seam, so rebuild them.
             self.rearm_selection(cx);
-            self.pill_attention = false;
             self.set_move_fields([0.0; 3], cx);
             self.focus_move_field(window, cx);
             cx.notify();
@@ -1071,15 +1135,6 @@ impl Shell {
         if let Some(input) = input {
             input.update(cx, |input, cx| input.select_all(cx));
         }
-    }
-}
-
-/// One component of a world vector.
-fn component(vector: Vector3, axis: usize) -> f64 {
-    match axis {
-        0 => vector.x,
-        1 => vector.y,
-        _ => vector.z,
     }
 }
 

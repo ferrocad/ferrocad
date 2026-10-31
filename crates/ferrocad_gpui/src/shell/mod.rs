@@ -81,9 +81,8 @@ pub(crate) use render::dev_tools_body;
 // keep their `crate::shell::FG` paths while the widget layer can use the same table
 // without depending on the shell.
 pub(crate) use ferrocad_theme::ui::{
-    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, DOCK_BG,
-    DOCK_BORDER, FG, HIGHLIGHT_TINT, HOVER_RIM, MUTED, PANEL, PANEL_ALT, SUBTRACT_COLOR,
-    WHEEL_GLASS,
+    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, CHROME_ACTIVE_BG, DOCK_BG, DOCK_BORDER, FG, MUTED, PANEL,
+    PANEL_ALT, WHEEL_GLASS,
 };
 
 /// The registry feature whose provider supplies the gizmo skin.
@@ -332,10 +331,6 @@ pub struct Shell {
     /// A field the next render must focus (a ruler tag's click, which arrives outside a
     /// window context). Cleared by the render that consumes it.
     pill_focus_request: Option<usize>,
-    /// Draw the finish pair with the bright rim until the next action. A refused press on
-    /// a locked ring sets it; the project's visual language has no animation, so it is a
-    /// static attention state, not a timed pulse.
-    pill_attention: bool,
     /// Give the keyboard back to the viewport on the next render, after a Move HUD
     /// finishes: `Enter`, ✓, `Esc` or ✗ all leave the fields behind.
     restore_viewport_focus: bool,
@@ -776,7 +771,6 @@ impl Shell {
             move_hud: None,
             move_disarmed: false,
             pill_focus_request: None,
-            pill_attention: false,
             restore_viewport_focus: false,
             form_dialog: None,
             form_events: None,

@@ -394,8 +394,10 @@ focused field (`Option<usize>`), the last dragged axis and the coordinate mode.
   handles + no active tool ⇒ the row is on screen. `ensure_move_hud` runs on every
   selection, re-arm, slot change, tool end and viewport pick; it opens or closes the
   surface and is idempotent while it is already up. Clearing the selection or equipping
-  another hand closes it. **Pressing `1` while Slot 1 is already equipped cycles the
-  hand** (`activate_loadout_slot`): Move → Rotate → idle. The idle press is the paused
+  another hand closes it. The row's `WLD/LOC/WP` switch orients both hands, and the
+  fields are read in that frame: in `LOC` a typed `ΔX` is along the body's X and an
+  absolute `X/Y/Z` is anchored at the body's origin. **Pressing `1` while Slot 1 is
+  already equipped cycles the hand** (`activate_loadout_slot`): Move → Rotate → idle. The idle press is the paused
   hand: the selection stays, and the triad, row and pill leave the canvas for inspection;
   `1` again (which re-arms Move), a new selection or any command that equips the hand
   brings it back; a changed selection clears the pause. A modal or the object wheel hides

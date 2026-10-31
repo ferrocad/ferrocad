@@ -21,12 +21,15 @@
 //!   prefix and an editable, possibly multi-line, tail (the console).
 //! * [`text_buffer::TextBuffer`] is the shared editing model underneath both.
 //! * [`menu`] is the domain-free popover row list.
+//! * [`decision`] is the accept/cancel strip (`✗ │ ✓`) shared by the Move form and a
+//!   modal dialog's footer.
 //! * [`wheel`] is the radial marking menu: a dielectric torus, wedge hit-testing and
 //!   the semantic tone arcs, plus the [`WheelMenu`] sidecar that owns the gesture
 //!   (armed/latched, tap-vs-flick, hover, overlay and dismissal).
 
 pub mod accordion;
 pub mod color;
+pub mod decision;
 pub mod events;
 pub mod form;
 pub mod icon;
@@ -42,6 +45,7 @@ pub mod window_chrome;
 
 pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
 pub use color::{normalize_hex, palette, parse_hex, swatch};
+pub use decision::{DecisionButton, DecisionOptions, DecisionRole, decision_pill};
 pub use events::{ChangeEvent, RejectedChar, SubmitEvent};
 pub use form::{choice_list, select_box, toggle};
 pub use icon::bug;

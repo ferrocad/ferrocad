@@ -382,20 +382,40 @@ fn wrap_signed_degrees(degrees: f64) -> f64 {
 pub struct TransformTape {
     datum: Vector3,
     delta: Vector3,
+    /// The axes the legs follow: the active transform frame (`WLD` / `LOC` / `WP`).
+    /// [`new`](Self::new) uses the coordinate axes, which is the historical world tape.
+    basis: [Vector3; 3],
 }
 
 impl TransformTape {
+    /// A world-axis tape.
     pub fn new(datum: Vector3, delta: Vector3) -> Self {
-        Self { datum, delta }
+        Self {
+            datum,
+            delta,
+            basis: world_axes(),
+        }
+    }
+
+    /// A tape whose legs follow `basis` (the active transform frame).
+    pub fn in_frame(datum: Vector3, delta: Vector3, basis: [Vector3; 3]) -> Self {
+        Self {
+            datum,
+            delta,
+            basis,
+        }
     }
 
     /// Snapshot a live session: its datum is the tape's anchor and its absolute delta is
     /// the offset.
     pub fn from_session(session: &TransformSession) -> Self {
-        Self {
-            datum: session.datum(),
-            delta: session.delta(),
-        }
+        Self::new(session.datum(), session.delta())
+    }
+
+    /// Snapshot a live session in the transform frame the form is using, so the ruler
+    /// measures the same axes the handles and the fields do.
+    pub fn from_session_in_frame(session: &TransformSession, basis: [Vector3; 3]) -> Self {
+        Self::in_frame(session.datum(), session.delta(), basis)
     }
 
     /// The world point the tape starts at (the session datum).
@@ -408,6 +428,21 @@ impl TransformTape {
         self.delta
     }
 
+    /// The signed displacement along frame axis `axis` (`0` = X, `1` = Y, `2` = Z).
+    pub fn axis_delta(&self, axis: usize) -> f64 {
+        self.delta.dot(&self.basis[axis.min(2)])
+    }
+
+    /// The world direction of frame axis `axis`.
+    pub fn axis(&self, axis: usize) -> Vector3 {
+        self.basis[axis.min(2)]
+    }
+
+    /// The frame the tape measures in.
+    pub fn basis(&self) -> [Vector3; 3] {
+        self.basis
+    }
+
     /// The previewed origin the tape ends at.
     pub fn current(&self) -> Vector3 {
         self.datum.add(&self.delta)
@@ -417,6 +452,15 @@ impl TransformTape {
     pub fn is_visible(&self) -> bool {
         self.delta.x != 0.0 || self.delta.y != 0.0 || self.delta.z != 0.0
     }
+}
+
+/// The coordinate axes as a frame.
+fn world_axes() -> [Vector3; 3] {
+    [
+        Vector3::new(1.0, 0.0, 0.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        Vector3::new(0.0, 0.0, 1.0),
+    ]
 }
 
 #[cfg(test)]
@@ -762,6 +806,22 @@ mod tests {
             session.rotation().is_same(&orientation.inverse(), 1e-9),
             "the step cancels the committed orientation"
         );
+    }
+
+    #[test]
+    fn a_tape_measures_in_the_frame_it_is_given() {
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let basis = [
+            Vector3::new(half, half, 0.0),
+            Vector3::new(-half, half, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        // Ten along the rotated frame's X, which is (half, half, 0) in world space.
+        let delta = Vector3::new(10.0 * half, 10.0 * half, 0.0);
+        let tape = TransformTape::in_frame(Vector3::zero(), delta, basis);
+        assert!((tape.axis_delta(0) - 10.0).abs() < 1e-9);
+        assert!(tape.axis_delta(1).abs() < 1e-9);
+        assert!(tape.axis(0).is_equal(&basis[0], 1e-9));
     }
 
     #[test]

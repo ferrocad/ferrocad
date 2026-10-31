@@ -205,7 +205,9 @@ appears only while the move is pending.
 reported by a third pill at the arrow tip. The session's 3-D measuring tape (U3) gets one
 **ruler tag per non-zero leg**, at that leg's projected 3-D midpoint:
 
-- The path is the same stair-step the tape draws (`O → P_x → P_xy → P_xyz`), so a tag
+- The path is the same stair-step the tape draws (`O → P_x → P_xy → P_xyz`), **in the
+  active `WLD`/`LOC`/`WP` frame**, so a `LOC` axis drag is a single leg carrying its local
+  displacement (18.87 mm) rather than a world-axis decomposition. A tag
   sits *on* its dashed leg. Each tag is the leg's **cumulative** value — the number the
   Δ field shows — tinted with its axis token, or `ACTIVE_ACCENT` while that leg is being
   dragged.

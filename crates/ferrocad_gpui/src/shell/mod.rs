@@ -1760,6 +1760,7 @@ impl Render for Shell {
                     .child(crate::chrome::loadout_bar(
                         self.loadout,
                         self.gizmo_mode,
+                        self.move_disarmed,
                         self.move_is_pending(cx),
                         cx,
                     )),

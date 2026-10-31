@@ -111,12 +111,16 @@ impl Slot {
         }
     }
 
-    /// The bar label for the shared triad's current handle set.
+    /// The bar label for Slot 1's current hand: `Move`, `Rotate` or `Idle`.
     ///
     /// Slot 1 hosts both the translate arrows and the rotate rings, so it names the
-    /// handle set the user will actually get (`1 Rotate` after the wheel's Rotate verb).
-    /// The other slots are one verb each and ignore `mode`.
-    pub(crate) fn label_for(self, mode: GizmoMode) -> &'static str {
+    /// handle set the user will actually get (`1 Rotate` after the wheel's Rotate verb)
+    /// or `1 Idle` while its hand is paused. The other slots are one verb each and ignore
+    /// `mode` and `idle`.
+    pub(crate) fn label_for(self, mode: GizmoMode, idle: bool) -> &'static str {
+        if self == Self::Move && idle {
+            return "Idle";
+        }
         match (self, mode) {
             (Self::Move, GizmoMode::Rotate) => "Rotate",
             _ => self.label(),
@@ -221,7 +225,7 @@ impl Shell {
         self.commit_pending_session(cx);
         self.loadout.set_slot(slot);
         self.rearm_selection(cx);
-        let status = format!("tool: {}", slot.label_for(self.gizmo_mode));
+        let status = format!("tool: {}", slot.label_for(self.gizmo_mode, false));
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
         cx.notify();

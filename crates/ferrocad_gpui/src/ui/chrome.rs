@@ -749,6 +749,7 @@ fn select_button(
 pub(crate) fn loadout_bar(
     loadout: Loadout,
     mode: GizmoMode,
+    idle: bool,
     blocked: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
@@ -785,7 +786,7 @@ pub(crate) fn loadout_bar(
             .text_color(rgb(if active { CHROME_ACTIVE } else { FG }))
             .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
             .child(div().text_color(rgb(MUTED)).child(key))
-            .child(slot.label_for(mode));
+            .child(slot.label_for(mode, idle));
         if !blocked {
             button = button
                 .cursor_pointer()

@@ -10,11 +10,14 @@ use super::*;
 /// Slot 1 hosts both handle sets, so its bar label names the one the user will get.
 #[test]
 fn slot_one_names_the_current_handle_set() {
-    assert_eq!(Slot::Move.label_for(GizmoMode::Translate), "Move");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate), "Rotate");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Universal), "Move");
-    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate), "Push/Pull");
-    assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate), "Fillet");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Translate, false), "Move");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate, false), "Rotate");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Universal, false), "Move");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Translate, true), "Idle");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate, true), "Idle");
+    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate, false), "Push/Pull");
+    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate, true), "Push/Pull");
+    assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate, true), "Fillet");
 }
 
 /// Select `reference` the way a click does, so the shell re-applies the loadout filter

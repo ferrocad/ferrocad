@@ -286,8 +286,8 @@ the row at rest.
 **Always visible while Move has a target.** The row appears with the selection (or a hover
 promotion) and disappears when the selection clears, another hand or tool takes over, or
 the Move hand is **idle** (pressing `1` twice while Slot 1 is active cycles Move →
-Rotate → idle — the selection stays for inspection — and `1` again, a new selection or
-a `Move` verb re-arms Move). A modal or
+Rotate → idle; the selection stays for inspection, the loadout pill reads `1 Idle`, and
+`1` again, a new selection or a `Move` verb re-arms Move). A modal or
 the object wheel hides both pieces for its lifetime; they return with the canvas. A
 right-press on the finish pill opens the object wheel, so it never swallows the verb
 gesture.
@@ -412,9 +412,11 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
   and focuses the field the gesture names. **`1`/`2`/`3` are loadout slots** (U4) and are
   reserved: they equip Move / Push-Pull / Fillet even while the HUD is on screen, so a
   value that starts with one of them begins with `Tab` or a click into a field. Pressing
-  `1` while Move is already active **pauses** it (selection kept, handles and form gone);
-  pressing it again arms the hand. Once a field is focused its digits belong to it. A
-  drag on the resting HUD updates the fields and the tape but never takes the keyboard.
+  `1` while Move is already active cycles Move → Rotate → idle (selection kept, handles and
+  form gone), and the loadout pill names the state it is in — `1 Move`, `1 Rotate` or
+  `1 Idle`; pressing `1` from idle arms Move again. Once a field is focused its digits
+  belong to it. A drag on the resting HUD updates the fields and the tape but never takes
+  the keyboard.
 
 ### 5.3 Selection scope
 

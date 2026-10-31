@@ -679,6 +679,76 @@ fn a_face_click_in_the_move_slot_arms_only_the_triad(cx: &mut TestAppContext) {
     });
 }
 
+/// The pill keys are a direct hand switch: `1` toggles Move/Rotate while Slot 1 is
+/// active, and entering Slot 1 from another pill always starts at Move. The viewport's
+/// hosted set follows every step. Skips without a GPU adapter.
+#[gpui::test]
+fn the_pills_re_arm_the_viewport_hand(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+
+    let state = |cx: &App| {
+        let viewport = shell.read(cx).viewport.clone().unwrap();
+        let viewport = viewport.read(cx);
+        (
+            shell.read(cx).loadout.slot(),
+            shell.read(cx).gizmo_mode,
+            viewport.gizmo().map(ferrocad_stage::TransformGizmo::kind),
+            viewport.manipulators().len(),
+        )
+    };
+
+    assert_eq!(
+        cx.update(|_window, cx| state(cx)),
+        (
+            Slot::Move,
+            GizmoMode::Translate,
+            Some(GizmoMode::Translate),
+            0
+        ),
+        "a fresh body selection arms the arrows"
+    );
+
+    // `1` on the active Move hand swaps to the rings.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::Move, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| state(cx)),
+        (Slot::Move, GizmoMode::Rotate, Some(GizmoMode::Rotate), 0),
+        "the toggle re-hosts the rings"
+    );
+
+    // Another pill drops the triad for its own hand.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.activate_loadout_slot(Slot::PushPull, cx)
+        });
+    });
+    let (slot, _, kind, _) = cx.update(|_window, cx| state(cx));
+    assert_eq!(slot, Slot::PushPull);
+    assert!(kind.is_none(), "Slot 2 hosts no triad");
+
+    // Coming back to Slot 1 is Move, not the rings it was left in.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::Move, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| state(cx)),
+        (
+            Slot::Move,
+            GizmoMode::Translate,
+            Some(GizmoMode::Translate),
+            0
+        ),
+        "entering Slot 1 from another pill starts at the arrows"
+    );
+}
+
 /// U4: the pointer hand's stage highlight previews the filtered scope. Skips without a
 /// GPU adapter.
 #[gpui::test]

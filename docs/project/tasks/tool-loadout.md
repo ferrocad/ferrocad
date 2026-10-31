@@ -157,7 +157,8 @@ changing the slot.
   armed triad equips the pointer, `2` equips the face hand, and a value that starts
   with a slot digit begins with `Tab` or a click into a field.
 - Slot 1's key toggles its two hands (Move ⇄ Rotate); it no longer cycles into idle.
-  Entering Slot 1 from the pointer always starts at the arrows.
+  Entering Slot 1 from another slot always starts at the arrows (Rotate is a sub-mode
+  of the active Move pill).
 - Covered by `ferrocad_gpui`'s `a_face_click_selects_the_body_in_the_move_slot`,
   `the_slot_sets_the_filter_and_select_overrides_it`,
   `the_wheel_verbs_equip_the_move_slot`,

@@ -270,9 +270,10 @@ impl Shell {
             cx.notify();
             return;
         }
-        // The pointer is a neutral place to land: entering Slot 1 from it always starts
-        // at the arrows instead of reopening stale rings.
-        if slot == Slot::Move && self.loadout.slot() == Slot::Idle {
+        // Entering Slot 1 from another hand always starts at the arrows: Rotate is a
+        // sub-mode of Move, not a property of the pill. The same-slot branch above is
+        // the only path that arms the rings.
+        if slot == Slot::Move {
             self.set_gizmo_mode("translate", cx);
         }
         self.set_loadout_slot(slot, cx);

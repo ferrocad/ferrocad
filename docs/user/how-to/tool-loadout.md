@@ -13,7 +13,8 @@ the 3-D view names the hand you have equipped, and `1`, `2`, `3` and `0` switch 
 The active slot is lit in the bar. Push/pull and fillet appear only when the
 edition provides those controls (the Part workbench does); Move and Idle are
 always there. Pressing `1` while Move is already equipped toggles it between
-Move and Rotate; `0` is its own pointer hand, not a paused Move.
+Move and Rotate; from another pill, `1` equips Move with its arrows. `0` is its
+own pointer hand, not a paused Move.
 
 ## Move a body without selecting it first
 

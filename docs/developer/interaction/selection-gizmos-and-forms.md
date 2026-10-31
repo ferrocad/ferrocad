@@ -413,7 +413,8 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
   and focuses the field the gesture names. **`0`–`3` are loadout slots** (U4) and are
   reserved: they equip the pointer / Move / Push-Pull / Fillet even while the HUD is on
   screen, so a value that starts with one of them begins with `Tab` or a click into a
-  field. Pressing `1` while Move is already equipped toggles Move ⇄ Rotate; the pointer
+  field. Pressing `1` while Move is already equipped toggles Move ⇄ Rotate; from
+  another pill, `1` equips Move on the arrows. The pointer
   is its own pill (`0 Idle`), keeps the selection, and drops the handles and form. Once
   a field is focused its digits belong to it. A drag on the resting HUD updates the
   fields and the tape but never takes the keyboard.

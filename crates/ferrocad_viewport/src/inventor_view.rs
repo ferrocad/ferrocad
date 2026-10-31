@@ -3667,15 +3667,18 @@ impl<V: InventorView> InventorViewport<V> {
     /// Offset the overlays from the pose captured when the preview began.
     ///
     /// Absolute per tick (`home + delta`), so a typed value and a drag cannot
-    /// accumulate. Every offered gizmo is skipped while one is the control being dragged;
-    /// the manipulators (a height grip on the top face) always follow the object.
+    /// accumulate. **Every** hosted kind moves, not only the offered ones: the set keeps
+    /// the other kinds hosted for a later verb, and a set re-narrow that promoted a stale
+    /// entry used to reveal a second triad at the old origin. The manipulators (a height
+    /// grip on the top face) always follow the object.
     fn apply_preview_overlays(&mut self, delta: Vector3, include_gizmo: bool) -> bool {
         if self.preview_home.is_none() {
             let gizmos = self
                 .gizmos
-                .offered()
-                .into_iter()
-                .map(|index| (index, self.gizmos.gizmos()[index].origin()))
+                .gizmos()
+                .iter()
+                .enumerate()
+                .map(|(index, gizmo)| (index, gizmo.origin()))
                 .collect();
             self.preview_home = Some(PreviewHome {
                 gizmos,
@@ -8494,6 +8497,41 @@ mod tests {
             }
         }
         panic!("the {handle:?} ring should be pickable");
+    }
+
+    /// A preview moves **every** hosted kind, not only the offered ones: the set keeps
+    /// the other kinds for a later verb, and a stale one used to surface as a second
+    /// triad at the old origin after a re-narrow.
+    #[test]
+    fn a_preview_moves_every_hosted_kind() {
+        use ferrocad_stage::{GizmoMode, GizmoSet, TransformGizmo};
+
+        let (mut view, _viewport) = translate_gizmo_view();
+        let origin = Vector3::zero();
+        view.set_gizmos(GizmoSet::new(vec![
+            TransformGizmo::new(42, origin, GizmoMode::Translate),
+            TransformGizmo::new(42, origin, GizmoMode::Rotate),
+            TransformGizmo::new(42, origin, GizmoMode::Universal),
+        ]));
+        assert_eq!(view.gizmos().len(), 3, "three hosted kinds");
+
+        let delta = Matrix4::translation(1.0, 0.0, 0.0);
+        assert!(view.preview_transform_settled(&[42], Some(delta)));
+        for (index, gizmo) in view.gizmos().gizmos().iter().enumerate() {
+            assert_eq!(
+                gizmo.origin(),
+                Vector3::new(1.0, 0.0, 0.0),
+                "hosted kind {index} follows the preview"
+            );
+        }
+        assert!(view.preview_transform(&[], None));
+        for gizmo in view.gizmos().gizmos() {
+            assert_eq!(
+                gizmo.origin(),
+                Vector3::zero(),
+                "restoring puts every kind back"
+            );
+        }
     }
 
     /// A settled release takes the real frame even while the viewport still reports the

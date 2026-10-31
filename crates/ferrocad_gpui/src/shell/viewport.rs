@@ -871,12 +871,32 @@ impl Shell {
         let (manipulators, gizmos) = self.arm(&reference, cx);
         self.model.lock().unwrap().gizmo_armed = !gizmos.is_empty();
         let mode = self.gizmo_mode;
+        // A re-arm rebuilds from the **document** stage, whose anchors are the committed
+        // pose. A dirty session's preview must be re-applied or the fresh triad lands at
+        // the old origin while the object stays previewed (the report's release
+        // snap-back).
+        let pending = self.session.as_ref().filter(|session| session.is_dirty()).map(|s| {
+            let delta = s.delta();
+            [delta.x, delta.y, delta.z]
+        });
+        let targets: Vec<u32> = {
+            let model = self.model.lock().unwrap();
+            model
+                .selection
+                .iter()
+                .filter_map(|item| self.display.entity_of(&item.object))
+                .collect()
+        };
         viewport.update(cx, |viewport, cx| {
             viewport.set_manipulators(manipulators);
             // An explicit arm replaces a hover preview, so its idle dimming goes too.
             viewport.set_gizmo_idle_scale(None);
             viewport.set_gizmos(gizmos);
             viewport.set_gizmo_mode(mode);
+            if let Some(delta) = pending {
+                let transform = Matrix4::translation(delta[0], delta[1], delta[2]);
+                viewport.preview_transform_settled(&targets, Some(transform));
+            }
             cx.notify();
         });
     }

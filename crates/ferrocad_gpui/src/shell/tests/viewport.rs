@@ -1268,6 +1268,25 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
         (f64::from(drawn_after[0]) - f64::from(drawn_before[0]) - dragged[0]).abs() < 1e-4,
         "the drawn triad stays at the released pose: {drawn_before:?} -> {drawn_after:?} (drag {dragged:?})"
     );
+    // A re-arm while the session is still pending rebuilds from the document stage;
+    // the pending preview must be re-applied or the triad lands back at the old pose.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.rearm_selection(cx));
+    });
+    draw(&mut cx);
+    let (rearmed_origin, rearmed_drawn) = cx.update(|_window, cx| {
+        let gizmo = viewport.read(cx).gizmo().expect("the triad is still armed");
+        (gizmo.origin(), gizmo.items()[0].positions()[0])
+    });
+    assert!(
+        (rearmed_origin.x - (start.x + dragged[0])).abs() < 1e-6
+            && (rearmed_origin.y - (start.y + dragged[1])).abs() < 1e-6,
+        "a re-arm keeps the pending pose: {start:?} + {dragged:?} != {rearmed_origin:?}"
+    );
+    assert!(
+        (f64::from(rearmed_drawn[0]) - f64::from(drawn_before[0]) - dragged[0]).abs() < 1e-4,
+        "the re-armed triad draws at the pending pose: {rearmed_drawn:?}"
+    );
 
     // 1. The triad sits where the drag ended, not back at the datum.
     cx.update(|_window, cx| {

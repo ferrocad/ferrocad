@@ -286,14 +286,14 @@ impl Shell {
             return;
         };
         viewport.update(cx, |viewport, cx| {
-            let changed = if settle {
+            let _changed = if settle {
                 viewport.preview_transform_settled(&entities, Some(transform))
             } else {
                 viewport.preview_transform(&entities, Some(transform))
             };
-            if changed {
-                cx.notify();
-            }
+            // Repaint on every edit: a typed preview that returned `false` (or was
+            // already at the value) used to wait for the next pointer move to show.
+            cx.notify();
         });
         // The gizmo (and therefore the HUD anchor) follows the previewed object, so
         // re-render the shell to keep the panel beside it.
@@ -695,14 +695,12 @@ impl Shell {
         };
         let transform = delta.map(|d| Matrix4::translation(d[0], d[1], d[2]));
         viewport.update(cx, |viewport, cx| {
-            let changed = if settle {
+            let _changed = if settle {
                 viewport.preview_transform_settled(&entities, transform)
             } else {
                 viewport.preview_transform(&entities, transform)
             };
-            if changed {
-                cx.notify();
-            }
+            cx.notify();
         });
         // The gizmo (and therefore the HUD anchor) follows the previewed object, so
         // re-render the shell to keep the panel beside it.

@@ -366,6 +366,11 @@ its padded outline/area is pickable.
   the workbench reads. A stem that points at the eye cannot be scrubbed by the axis
   solver, so the grip falls back to the pointer's vertical screen travel with the same
   commit.
+- **Previews move the whole set (2026-10-31).** `preview_transform` offsets **every**
+  hosted entry, not only the offered one, and a settled release gives every entry the
+  real frame. The unoffered kinds stay hosted for a later verb; moving only the offered
+  one left a stale control at the old origin that a re-narrow could surface as a second
+  triad.
 - **The loadout narrows the host (U4, built 2026-10-31).** The shell hosts **one
   hand**: Slot 1 (`1`, Move) arms `GizmoSet` and no manipulator; Slots 2/3 (`2`
   Push/Pull, `3` Fillet) arm the compiled `Manipulator` and any mod-declared handle,

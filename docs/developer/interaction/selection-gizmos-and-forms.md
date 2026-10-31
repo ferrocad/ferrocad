@@ -203,6 +203,9 @@ Therefore:
   rebuilds the handle geometry even if the viewport still reports the drag for a tick; a
   draw-offset-only release is what made the triad appear to snap back. The shell re-arms
   the selection after a commit, in `after_document_edit`.
+- A preview moves **every hosted kind**, not only the currently offered one. The set keeps
+  the other kinds hosted for a later verb, and a stale entry surfaced as a second triad at
+  the old origin after a re-narrow (2026-10-31).
 - Typed previews (no drag) move the real frame, so hit-testing agrees with the drawing
   **and the handle geometry is rebuilt in the same call** (`TransformGizmo::set_origin`
   only marks the frame dirty; `update` rebuilds it). A frame move without that rebuild

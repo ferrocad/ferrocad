@@ -775,6 +775,128 @@ fn the_inspect_switcher_reaches_the_viewport_picker(cx: &mut TestAppContext) {
     );
 }
 
+/// The Inspect hand's Edge scope reaches the stage highlight: hovering an edge (or the
+/// face it bounds) reports the edge and the viewport paints that edge's part, not the
+/// face. This is the whole hover → `sync_inspect_highlight` → `set_highlight` loop.
+/// Skips without a GPU adapter.
+#[gpui::test]
+fn the_inspect_edge_scope_highlights_the_edge_under_the_pointer(cx: &mut TestAppContext) {
+    use ferrocad_stage::screen::project_device;
+    use ferrocad_types::Vector3;
+
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    let attached = cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.enable_viewport(cx);
+            shell.viewport.is_some()
+        })
+    });
+    if !attached {
+        eprintln!("no GPU adapter available; skipping Inspect edge-highlight test");
+        return;
+    }
+
+    // A slab whose four boundaries are separately positioned, so each is its own part
+    // (`Edge1`…`Edge4`) — the shape a kernel tessellation produces.
+    let mesh: crate::display::StageMesh = serde_json::from_str(
+        r#"{
+            "entity": 7,
+            "object": "Slab",
+            "positions": [
+                [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
+                [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5],
+                [0.5, -0.5, 0.5], [0.5, 0.5, 0.5],
+                [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
+                [-0.5, 0.5, 0.5], [-0.5, -0.5, 0.5]
+            ],
+            "triangles": [0, 1, 2, 0, 2, 3],
+            "triangle_parts": [0, 0],
+            "edges": [4, 5, 6, 7, 8, 9, 10, 11],
+            "segment_parts": [1, 2, 3, 4],
+            "parts": ["Face1", "Edge1", "Edge2", "Edge3", "Edge4"]
+        }"#,
+    )
+    .expect("the test mesh");
+    let stage =
+        cx.update(|_window, cx| shell.update(cx, |shell, _cx| shell.display.build(vec![mesh])));
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_stage(stage, cx);
+            cx.notify();
+        });
+        viewport.update(cx, |viewport, _cx| {
+            // The shell built the sample scene before this stage existed; drop it so the
+            // pick resolves the slab and not the sample cube.
+            viewport.set_scene(ferrocad_inventor::Scene::default());
+            viewport.frame_stage();
+        });
+    });
+    // Compile the queue the picker reads.
+    draw(&mut cx);
+    cx.run_until_parked();
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_loadout_slot(Slot::Inspect, cx);
+            shell.set_select_filter(SelectFilter::Edge, cx);
+        })
+    });
+
+    // Hover the right boundary: the raw pick is the face, the Edge scope is Edge2.
+    let logical = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let camera = viewport.camera();
+        let device =
+            project_device(camera, Vector3::new(0.5, 0.0, 0.5)).expect("the edge projects");
+        camera
+            .viewport
+            .to_logical([device[0].round() as i32, device[1].round() as i32])
+    });
+    assert!(
+        cx.update(|_window, cx| {
+            viewport.update(cx, |viewport, cx| {
+                let changed = viewport.handle_pointer(logical);
+                if changed {
+                    cx.notify();
+                }
+                changed
+            })
+        }),
+        "a new hover target is a repaint"
+    );
+    cx.run_until_parked();
+
+    cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        assert_eq!(
+            viewport.hover_report().target,
+            Some(ferrocad_geom::SelectionRef::element(7, "Edge2")),
+            "the hover previews the edge"
+        );
+        assert_eq!(
+            viewport
+                .stage()
+                .item(7)
+                .expect("the slab")
+                .highlight()
+                .to_vec(),
+            vec![2],
+            "the Inspect highlight paints the edge's part, not the face"
+        );
+    });
+}
+
 /// The topology filter reaches the viewport's picker: `Edge` asks it to snap picks to
 /// the nearest drawn edge, while every other scope keeps the raw primitive. Skips
 /// without a GPU adapter.

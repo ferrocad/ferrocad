@@ -84,9 +84,12 @@ command/dialog protocol).
   [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md)). The filter
   is applied where the shell **reports** the selection, not at the pick: `Body` rewrites
   `Face6` to its whole body, while `Auto`/`Face`/`Edge` keep the element. `Edge` is
-  resolved by the viewport first: it snaps the pick to the nearest projected edge of the
-  hit body (within 8 px), so clicking a face near a boundary reports that boundary's
-  `EdgeN`. Hover and snapping still see the sub-element. The header's `Select ▾` overrides the slot's
+  resolved by the viewport first: it reports the nearest projected edge of the body under
+  the pointer, **at any distance** — an explicit edge mode never hands back the face. A
+  pointer that hits no primitive at all (`Wireframe` draws no surface, and its lines are
+  thin) still resolves to the nearest drawn edge within `EDGE_PICK_PIXELS` (8 px), so a
+  click beside a line selects it. Hover and snapping still see the raw sub-element. The
+  header's `Select ▾` overrides the slot's
   preset; the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet] [0 Inspect]` bar and
   `0`–`3` equip the slot. In Inspect, a Body/Face/Edge switcher docks above the bar and
   writes the same filter.
@@ -490,6 +493,15 @@ rendered form dialog (backdrop occludes everything)
 | pending transform | `Shell` (`TransformSession`; `commit_session` / `drop_session`) | `preview_transform`, the Δ fields, the commit |
 | preview transform | `InventorViewport::preview_transform`, fed by the session | stage items, overlays |
 | interaction frame | gizmo drag/commit | commit math, hit test |
+
+The hover report is a **scoped** target: a new report repaints even when the raw
+primitive under the pointer did not change (walking across one face from edge to edge),
+and changing the scope re-resolves a parked pointer. The edge wire of that highlight is
+pushed one bias further than the base wire (`HIGHLIGHT_WIRE_DEPTH_BIAS`); at the same
+bias it lost the depth test to the edge it marks and painted nothing.
+`cargo run -p ferrocad_parametric --example edge_probe` isolates the two halves against
+the real document: it writes the plain and highlighted frames to `target/edge-probe/`
+and prints the CPU and GPU pick at points around one edge.
 
 ## 7. Invariants
 

@@ -34,10 +34,11 @@ The header's `Select: Body ▾` control (between `Gizmo ▾` and `Snap ▾`) is 
 face, which is what lets you grab and move it immediately. Equipping Push/Pull or
 Fillet switches the filter to Face or Edge, so the sub-element is kept.
 
-`Edge` is a real snap, not just a label: a click — and the hover highlight that
-precedes it — resolves to the nearest drawn edge within about 8 px, even when the
-ray would hit the face behind it. A click deep in a face still reports the face,
-so the filter never jumps to a far boundary.
+`Edge` is a real scope, not just a label: a click — and the hover highlight that
+precedes it — resolves to the nearest drawn edge of the body under the pointer, at any
+distance. It never falls back to the face, so the highlighted scope always matches what
+a click will select. In a wireframe view there is no surface to hit, so the edge is
+found within about 8 px of the pointer; a click beside a line selects that line.
 
 You can also override the filter yourself: choose `Auto`, `Body`, `Face` or
 `Edge` in the `Select ▾` menu without changing the hand. The label turns cyan
@@ -46,7 +47,7 @@ sub-element reports the same filtered scope the window does.
 
 With **Inspect** (`0`) there is no triad to tell you what a click would grab, so
 the viewport highlights it instead: hovering a body paints the whole body under
-`Body`, a `Face` filter paints the face, and an `Edge` filter snaps to the nearest
+`Body`, a `Face` filter paints the face, and an `Edge` filter paints the nearest
 drawn edge. The latched selection keeps its highlight when the pointer moves away.
 That is the same filtered scope a click will report. Inspect also docks a
 Body/Face/Edge switcher just above the loadout bar; it reads and writes the same

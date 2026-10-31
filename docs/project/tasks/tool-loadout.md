@@ -171,11 +171,19 @@ changing the slot.
   `a_claimed_sub_element_suppresses_the_shared_body_triad` /
   `an_unclaimed_sub_element_leaves_the_face_slot_empty`; the Inspect highlight has
   `ferrocad_viewport`'s `the_inspect_highlight_paints_the_filtered_scope` and
-  `the_inspect_highlight_paints_an_edge_not_a_face`, the Edge snap has
-  `the_edge_scope_snaps_to_the_nearest_edge`, the shell-to-viewport wiring has
-  `the_edge_filter_reaches_the_viewport_picker` and
-  `the_inspect_switcher_reaches_the_viewport_picker`, and the toy mesh's edge tags have
-  `ferrocad_toy`'s `the_toy_slab_names_its_edges`.
+  `the_inspect_highlight_paints_the_filtered_scope`,
+  `the_inspect_highlight_paints_an_edge_not_a_face`,
+  `the_edge_scope_reports_a_new_edge_on_the_same_face` and
+  `a_scope_change_re_resolves_a_parked_pointer`, the Edge snap has
+  `the_edge_scope_snaps_to_the_nearest_edge` and `the_edge_scope_snaps_from_empty_space`,
+  the shell-to-viewport wiring has
+  `the_edge_filter_reaches_the_viewport_picker`,
+  `the_inspect_switcher_reaches_the_viewport_picker` and
+  `the_inspect_edge_scope_highlights_the_edge_under_the_pointer`, the highlight must
+  actually paint (`ferrocad_wgpu`'s `an_edge_highlight_paints_over_the_base_wire`), the
+  parametric edition end to end has
+  `ferrocad_parametric`'s `the_parametric_edge_scope_selects_an_edge`, and the toy mesh's
+  edge tags have `ferrocad_toy`'s `the_toy_slab_names_its_edges`.
 
 ---
 
@@ -192,10 +200,12 @@ pub enum SelectFilter { Auto, Body, Face, Edge }
   selects `whole(7)`. This is what makes Slot 1's "grab the body and move it" work on the first
   click, with no Shift-click or tree interaction.
 - `Face` / `Edge` are the first-element variants the manipulator slots need. `Edge`
-  also asks the viewport to resolve the pick to the nearest projected edge of the hit
-  body (`PickScope::Edge`, within `EDGE_PICK_PIXELS` = 8 px); a click too far from
-  every edge keeps the raw primitive. The viewport owns this because only it has the
-  camera and the projected segments.
+  also asks the viewport to resolve the pick to the nearest projected edge of the body
+  under the pointer (`PickScope::Edge`), **at any distance**: an explicit edge mode never
+  falls back to the face. When the pointer hits no primitive at all (`Wireframe` draws no
+  surface and its lines are thin), it still resolves to the nearest drawn edge within
+  `EDGE_PICK_PIXELS` = 8 px. The viewport owns this because only it has the camera and
+  the projected segments.
 
 The filter lives in view state (D2), beside `Gizmo ▾`. The shell applies it where it
 reports a selection, where it arms a hand, and where the Inspect hand paints its preview;
@@ -211,9 +221,11 @@ and the projected edge segments, not the shell's view of the stage.
 
 ### 2.3 What the filter does *not* decide
 
-- It does not change what is **hoverable** or what the raw pick reports. The Edge scope
-  changes which sub-element that raw pick **reports** (the nearest edge), and the Inspect
-  highlight applies the filter, so its preview always matches what a click would select.
+- It does not change what is **hoverable**: the raw pick still reports the face, and the
+  Edge scope only rewrites which sub-element that pick **reports** (the nearest edge). The
+  Inspect highlight applies the filter, so its preview always matches what a click would
+  select. A new scoped target repaints even when the raw primitive is unchanged (walking
+  across one face from edge to edge), and changing the scope re-resolves a parked pointer.
 - It does not change the wheel's target resolution (right-click still resolves the element,
   because a wheel's verbs are element verbs).
 - It does not apply to a translation session once it has begun: the session's target is fixed

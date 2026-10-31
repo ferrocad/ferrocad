@@ -54,6 +54,14 @@ pub const HIGHLIGHT_TINT: [f32; 4] = [0.040, 0.509, 0.939, 0.12];
 /// depth test against the coplanar surface it marks.
 pub const HIGHLIGHT_DEPTH_BIAS: f32 = 1e-5;
 
+/// How far towards the camera the highlight **wire** is pushed.
+///
+/// The base wire is emitted at [`WIRE_DEPTH_BIAS`] and writes depth, so a highlight wire
+/// at the same bias loses the `Less` test against it and paints nothing. One hair more
+/// puts the selected edge on top of the edge it marks (and of the tint, which keeps
+/// [`HIGHLIGHT_DEPTH_BIAS`]).
+pub const HIGHLIGHT_WIRE_DEPTH_BIAS: f32 = 2e-5;
+
 /// The highlight surface's depth state: test against the scene, but write no depth.
 ///
 /// The non-default state is deliberate. It selects the renderer's blended triangle
@@ -854,18 +862,18 @@ impl ShapeItem {
                 queue.packets.push(packet);
             }
         }
-        if self.draw_mode.has_edges() {
-            if let Some(geometry) = self.highlight_wire_geometry() {
-                queue.packets.push(self.packet(
-                    self.highlight_wire_mesh,
-                    Topology::Lines,
-                    geometry,
-                    world,
-                    HIGHLIGHT_COLOR,
-                    HIGHLIGHT_DEPTH_BIAS,
-                    self.highlight_generation,
-                ));
-            }
+        // The highlight wire is a selection affordance, not part of the display style: a
+        // selected edge stays visible even when the item draws no base wire (`Shaded`).
+        if let Some(geometry) = self.highlight_wire_geometry() {
+            queue.packets.push(self.packet(
+                self.highlight_wire_mesh,
+                Topology::Lines,
+                geometry,
+                world,
+                HIGHLIGHT_COLOR,
+                HIGHLIGHT_WIRE_DEPTH_BIAS,
+                self.highlight_generation,
+            ));
         }
     }
 
@@ -1516,7 +1524,7 @@ mod tests {
                 packet.topology == Topology::Lines && packet.state.color == HIGHLIGHT_COLOR
             })
             .expect("a highlight wire packet");
-        assert_eq!(wire.state.depth_bias, HIGHLIGHT_DEPTH_BIAS);
+        assert_eq!(wire.state.depth_bias, HIGHLIGHT_WIRE_DEPTH_BIAS);
         let geometry = wire.geometry.as_ref().expect("fresh geometry");
         assert_eq!(geometry.indices, vec![6, 7], "only the selected edge");
         assert!(

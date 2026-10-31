@@ -113,15 +113,18 @@ pub enum PickScope {
     /// The primitive the ray hits (the historical behaviour).
     #[default]
     Raw,
-    /// The nearest edge of the hit body within [`EDGE_PICK_PIXELS`] of the pointer.
+    /// The nearest edge of the hit body, at any distance.
     Edge,
 }
 
 /// How close (device pixels) the pointer must be to a projected edge for
-/// [`PickScope::Edge`] to claim it.
+/// [`PickScope::Edge`] to claim it when the pointer hits **no** primitive.
 ///
-/// Wider than the picker's 2 px line tolerance because this is an explicit "select
-/// edges" mode: the user is aiming at a boundary, not merely clicking through a line.
+/// A pointer over a body always resolves to that body's nearest edge (an explicit edge
+/// mode never hands back the face). This tolerance is for the miss case only: `Wireframe`
+/// draws no surface, and its lines are thin, so a pointer beside a line must still mean
+/// that edge. Wider than the picker's 2 px line tolerance for exactly that reason, but
+/// small enough that empty background does not snap to a distant body.
 pub const EDGE_PICK_PIXELS: f64 = 8.0;
 
 /// A live gizmo drag, reported to a host that previews the whole selection itself.
@@ -2603,6 +2606,17 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
+    /// Replace the inventor scene drawn beside the stage.
+    ///
+    /// The host decides whether the sample scene is a placeholder or real content. A
+    /// document stage makes the shell start from an empty scene, but a viewport created
+    /// before the document arrived still carries the sample: `set_scene(Scene::default())`
+    /// drops it, so the two are not drawn (or picked) together.
+    pub fn set_scene(&mut self, scene: Scene) {
+        self.scene = scene;
+        self.recompile();
+    }
+
     /// Replace the pull-registered overlay scenes (G5).
     ///
     /// Each overlay's root is merged under a synthetic separator beside the base
@@ -2770,14 +2784,30 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Prefer edges (or the raw primitive) for clicks and hovers.
     ///
-    /// The host sets this from its topology filter. The hover report refreshes on the
-    /// next pointer move; an already-parked pointer keeps its last report until then.
-    /// Returns whether the scope changed.
+    /// The host sets this from its topology filter. When a primitive is already under a
+    /// parked pointer its report is re-resolved immediately, so the host's highlight
+    /// follows the pill; over empty space the report refreshes on the next move (there is
+    /// nothing to re-resolve, and a consumed report must not be re-armed). Returns
+    /// whether the scope changed.
     pub fn set_pick_scope(&mut self, scope: PickScope) -> bool {
         if self.pick_scope == scope {
             return false;
         }
         self.pick_scope = scope;
+        // Only a live report is re-resolved: a consumed hover (a gizmo), the chrome, the
+        // navicube and empty space all have no target to rewrite, and the next move will
+        // report them under the new scope anyway.
+        if let Some(id) = self.hover.filter(|_| self.hover_report.target.is_some()) {
+            let part = self.hovered_part.unwrap_or(0);
+            let device = self.pointer.unwrap_or_default();
+            let target = match scope {
+                PickScope::Raw => self.selection_ref(id.0, part),
+                PickScope::Edge => self
+                    .edge_reference(id.0, device)
+                    .or_else(|| self.selection_ref(id.0, part)),
+            };
+            self.hover_report.target = target;
+        }
         true
     }
 
@@ -2788,13 +2818,21 @@ impl<V: InventorView> InventorViewport<V> {
     /// entity/part resolution, without consuming anything. A host that previews a
     /// selection on hover can read it in `render`.
     pub fn hovered_selection(&self) -> Option<SelectionRef> {
-        let id = self.hover?;
-        let part = self.hovered_part.unwrap_or(0);
-        match self.pick_scope {
-            PickScope::Raw => self.selection_ref(id.0, part),
-            PickScope::Edge => self
-                .edge_reference(id.0, self.pointer.unwrap_or_default())
-                .or_else(|| self.selection_ref(id.0, part)),
+        let device = self.pointer.unwrap_or_default();
+        match self.hover {
+            Some(id) => {
+                let part = self.hovered_part.unwrap_or(0);
+                match self.pick_scope {
+                    PickScope::Raw => self.selection_ref(id.0, part),
+                    PickScope::Edge => self
+                        .edge_reference(id.0, device)
+                        .or_else(|| self.selection_ref(id.0, part)),
+                }
+            }
+            // No primitive at all: `Wireframe` draws no surface, so the nearest drawn
+            // edge within tolerance is still what the pointer is aiming at.
+            None if self.pick_scope == PickScope::Edge => self.nearest_edge_reference(device),
+            None => None,
         }
     }
 
@@ -2865,14 +2903,32 @@ impl<V: InventorView> InventorViewport<V> {
     fn scoped_reference(&self, hit: &Hit, device: [i32; 2]) -> Option<SelectionRef> {
         match self.pick_scope {
             PickScope::Raw => self.selection_ref(hit.id.0, hit.part),
+            // An explicit edge mode never falls back to the face under the pointer: the
+            // nearest drawn edge (at any distance on the hit body) is the answer the
+            // readout and the highlight promise. A mesh with no drawn edges keeps the
+            // raw primitive.
             PickScope::Edge => self
                 .edge_reference(hit.id.0, device)
                 .or_else(|| self.selection_ref(hit.id.0, hit.part)),
         }
     }
 
-    /// The nearest edge of `entity` to the pointer, when one is within
-    /// [`EDGE_PICK_PIXELS`].
+    /// [`scoped_reference`](Self::scoped_reference) for a pointer that may have hit
+    /// nothing at all.
+    ///
+    /// Under [`PickScope::Edge`] a miss still resolves to the nearest drawn edge within
+    /// tolerance: `Wireframe` draws no surface to hit, and a click a pixel off a line
+    /// must select the edge it is beside instead of clearing the selection. The other
+    /// scopes keep the historic "nothing under the pointer means nothing selected".
+    fn scoped_reference_near(&self, hit: Option<&Hit>, device: [i32; 2]) -> Option<SelectionRef> {
+        match hit {
+            Some(hit) => self.scoped_reference(hit, device),
+            None if self.pick_scope == PickScope::Edge => self.nearest_edge_reference(device),
+            None => None,
+        }
+    }
+
+    /// The nearest edge of `entity` to the pointer, at any distance.
     ///
     /// Segments are projected through the camera; the winner is the nearest in **screen**
     /// space, so an occluded back edge cannot beat the boundary the user is aiming at.
@@ -2880,8 +2936,48 @@ impl<V: InventorView> InventorViewport<V> {
     /// [`selection_ref`](Self::selection_ref).
     fn edge_reference(&self, entity: u32, device: [i32; 2]) -> Option<SelectionRef> {
         let item = self.stage.item(entity)?;
-        let world = item.world_matrix();
         let pointer = [f64::from(device[0]), f64::from(device[1])];
+        let (_, part) = Self::nearest_edge_on(item, &self.camera, pointer, None)?;
+        self.selection_ref(entity, part)
+    }
+
+    /// The nearest drawn edge among **all** selectable items, when one is within
+    /// [`EDGE_PICK_PIXELS`].
+    ///
+    /// [`edge_reference`](Self::edge_reference) is scoped to the body under the pointer;
+    /// this is the [`PickScope::Edge`] fallback for a pointer that hit no primitive at
+    /// all (a wireframe line is thin, and nothing is drawn between the lines). The
+    /// tolerance keeps it from reaching across empty space.
+    fn nearest_edge_reference(&self, device: [i32; 2]) -> Option<SelectionRef> {
+        let pointer = [f64::from(device[0]), f64::from(device[1])];
+        let mut nearest: Option<(f64, u32, u32)> = None;
+        for item in self.stage.items() {
+            if !item.selectable() {
+                continue;
+            }
+            let Some((distance, part)) =
+                Self::nearest_edge_on(item, &self.camera, pointer, Some(EDGE_PICK_PIXELS))
+            else {
+                continue;
+            };
+            if nearest.is_none_or(|(best, _, _)| distance < best) {
+                nearest = Some((distance, item.entity_id(), part));
+            }
+        }
+        let (_, entity, part) = nearest?;
+        self.selection_ref(entity, part)
+    }
+
+    /// The nearest drawn edge of `item` to `pointer`, in screen space. Returns
+    /// `(distance, part)`. `limit` rejects edges farther than that many device pixels
+    /// (`None` accepts any distance).
+    fn nearest_edge_on(
+        item: &ferrocad_stage::ShapeItem,
+        camera: &Camera,
+        pointer: [f64; 2],
+        limit: Option<f64>,
+    ) -> Option<(f64, u32)> {
+        let world = item.world_matrix();
         let positions = item.positions();
         let parts = item.parts();
         let mut nearest: Option<(f64, u32)> = None;
@@ -2902,14 +2998,11 @@ impl<V: InventorView> InventorViewport<V> {
                 f64::from(b[1]),
                 f64::from(b[2]),
             ));
-            let (Some(a), Some(b)) = (
-                project_device(&self.camera, a),
-                project_device(&self.camera, b),
-            ) else {
+            let (Some(a), Some(b)) = (project_device(camera, a), project_device(camera, b)) else {
                 continue;
             };
             let (distance, _) = point_segment_distance(pointer, a, b);
-            if distance > EDGE_PICK_PIXELS {
+            if limit.is_some_and(|limit| distance > limit) {
                 continue;
             }
             if nearest.is_none_or(|(best, _)| distance < best) {
@@ -2917,8 +3010,7 @@ impl<V: InventorView> InventorViewport<V> {
                 nearest = Some((distance, part));
             }
         }
-        let (_, part) = nearest?;
-        self.selection_ref(entity, part)
+        nearest
     }
 
     /// Convert a **window-relative** logical point (what gpui reports to an element's
@@ -3183,12 +3275,12 @@ impl<V: InventorView> InventorViewport<V> {
 
         let hit = self.pick(device);
         let consumed = manipulator_hover || gizmo_hover;
+        let previous_target = self.hover_report.target.clone();
         self.hover_report = HoverReport {
             target: if consumed {
                 None
             } else {
-                hit.as_ref()
-                    .and_then(|hit| self.scoped_reference(hit, device))
+                self.scoped_reference_near(hit.as_ref(), device)
             },
             through: if consumed {
                 None
@@ -3198,6 +3290,10 @@ impl<V: InventorView> InventorViewport<V> {
                 None
             },
         };
+        // The scoped target can change while the raw primitive under the pointer does
+        // not (walking toward an edge keeps the same face). The host's highlight follows
+        // the report, so a new target is a repaint too.
+        changed |= self.hover_report.target != previous_target;
         self.hover_anchor = if consumed {
             None
         } else {
@@ -3541,7 +3637,7 @@ impl<V: InventorView> InventorViewport<V> {
         click_count: usize,
         device: [i32; 2],
     ) -> SelectionEvent {
-        let Some(reference) = hit.and_then(|hit| self.scoped_reference(hit, device)) else {
+        let Some(reference) = self.scoped_reference_near(hit, device) else {
             return SelectionEvent::Cleared;
         };
         SelectionEvent::Picked {
@@ -6979,7 +7075,7 @@ mod tests {
     }
 
     /// The Edge pick scope snaps a click and hover to the nearest projected edge of the
-    /// hit body; a click too far from every edge still reports the face.
+    /// hit body, at any distance: an explicit edge mode never reports the face.
     #[test]
     fn the_edge_scope_snaps_to_the_nearest_edge() {
         use ferrocad_stage::Stage;
@@ -7003,14 +7099,21 @@ mod tests {
         };
         assert_eq!(reference, SelectionRef::element(7, "Edge2"));
 
-        // The face centre is more than EDGE_PICK_PIXELS from every edge: the raw face
-        // remains the hit, so the filter never silently jumps to a far edge.
+        // The face centre is far from every edge, but Edge mode is explicit: it reports
+        // the nearest edge rather than the face under the pointer. The four edges tie at
+        // 25 px here, so the first drawn one wins deterministically.
+        assert!(view.handle_pointer([50.0, 50.0]));
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Edge1")),
+            "the nearest edge wins even from the face interior"
+        );
         view.handle_button([50.0, 50.0], 1, true);
         view.handle_button([50.0, 50.0], 1, false);
         let Some(SelectionEvent::Picked { reference, .. }) = view.take_selection() else {
             panic!("the interior still picks");
         };
-        assert_eq!(reference, SelectionRef::element(7, "Face1"));
+        assert_eq!(reference, SelectionRef::element(7, "Edge1"));
 
         // The raw scope does not snap: the same boundary click is the face again.
         view.set_pick_scope(PickScope::Raw);
@@ -7020,6 +7123,105 @@ mod tests {
             panic!("raw scope picks the face");
         };
         assert_eq!(reference, SelectionRef::element(7, "Face1"));
+    }
+
+    /// A wireframe item draws no surface, so a pointer just beside a line hits nothing.
+    /// The Edge scope still means the edge it is beside: the hover previews it and the
+    /// click selects it instead of clearing the selection.
+    #[test]
+    fn the_edge_scope_snaps_from_empty_space() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        let item = edged_slab().with_draw_mode(DrawMode::Wireframe);
+        view.set_stage(Stage::new().with_item(item));
+        view.refresh();
+        view.set_pick_scope(PickScope::Edge);
+
+        // Three pixels outside the right boundary (device x = 75): the CPU line pick
+        // misses, and the edge resolver is what keeps the pointer on the wire.
+        assert!(
+            view.handle_pointer([78.0, 50.0]),
+            "a new edge target is a repaint"
+        );
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Edge2")),
+            "the wire draws no surface, but the edge is still under the pointer"
+        );
+        view.handle_button([78.0, 50.0], 1, true);
+        view.handle_button([78.0, 50.0], 1, false);
+        let Some(SelectionEvent::Picked { reference, .. }) = view.take_selection() else {
+            panic!("a click beside the line selects the edge");
+        };
+        assert_eq!(reference, SelectionRef::element(7, "Edge2"));
+
+        // Far from any line the miss stays a clear.
+        view.handle_pointer([50.0, 50.0]);
+        assert_eq!(
+            view.hover_report().target,
+            None,
+            "the centre is empty space"
+        );
+    }
+
+    /// Moving within one face keeps the raw pick, but the **edge** under the pointer can
+    /// change; the viewport must report that as a change so the host's highlight follows.
+    #[test]
+    fn the_edge_scope_reports_a_new_edge_on_the_same_face() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(edged_slab()));
+        view.refresh();
+        view.set_pick_scope(PickScope::Edge);
+
+        assert!(view.handle_pointer([72.0, 50.0]));
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Edge2"))
+        );
+        assert_eq!(
+            view.hovered_part(),
+            Some(0),
+            "the raw pick is still the face"
+        );
+
+        // The other side of the same face: same `(entity, part)` as before, a different
+        // edge. The old raw-only comparison called this "no change" and the host's
+        // Inspect highlight stayed on the first edge.
+        assert!(
+            view.handle_pointer([28.0, 50.0]),
+            "crossing the face to another edge is a change"
+        );
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Edge4"))
+        );
+        assert_eq!(view.hovered_part(), Some(0));
+    }
+
+    /// Switching the scope while the pointer is parked re-resolves the live report, so
+    /// the host's highlight changes with the pill instead of waiting for a mouse move.
+    #[test]
+    fn a_scope_change_re_resolves_a_parked_pointer() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(edged_slab()));
+        view.refresh();
+
+        assert!(view.handle_pointer([72.0, 50.0]));
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Face1"))
+        );
+        assert!(view.set_pick_scope(PickScope::Edge));
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Edge2")),
+            "the parked pointer is re-resolved into the new scope"
+        );
     }
 
     /// The viewport reports gpui's click count alongside the raw sub-element pick. A

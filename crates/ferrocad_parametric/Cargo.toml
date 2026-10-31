@@ -39,3 +39,6 @@ ferrocad_geom.workspace = true
 ferrocad_graphics.workspace = true
 ferrocad_stage.workspace = true
 ferrocad_types.workspace = true
+ferrocad_viewport.workspace = true
+ferrocad_inventor.workspace = true
+ferrocad_wgpu.workspace = true

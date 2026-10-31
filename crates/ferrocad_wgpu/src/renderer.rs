@@ -2561,6 +2561,90 @@ pub(crate) mod tests {
         );
     }
 
+    /// An edge highlight must **paint** over the base wire it marks. The two are
+    /// coplanar and the base wire is drawn first, so the highlight needs a larger depth
+    /// bias; at the same bias every edge highlight lost the `Less` test and was invisible
+    /// (a face tint still showed, which is what made this look like a picking bug).
+    /// Skips without a GPU adapter.
+    #[test]
+    fn an_edge_highlight_paints_over_the_base_wire() {
+        use ferrocad_stage::{DrawMode, ShapeItem, Stage};
+
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([32, 32]) else {
+            eprintln!("no GPU adapter available; skipping highlight-paint test");
+            return;
+        };
+
+        // A square face at `z = 0.5` with four separately positioned edge segments, so
+        // each segment carries its own part id (the kernel tessellation's shape).
+        let mut item = ShapeItem::new(7)
+            .with_mesh(
+                vec![
+                    [-0.5, -0.5, 0.5],
+                    [0.5, -0.5, 0.5],
+                    [0.5, 0.5, 0.5],
+                    [-0.5, 0.5, 0.5],
+                    [-0.5, -0.5, 0.5],
+                    [0.5, -0.5, 0.5],
+                    [0.5, -0.5, 0.5],
+                    [0.5, 0.5, 0.5],
+                    [0.5, 0.5, 0.5],
+                    [-0.5, 0.5, 0.5],
+                    [-0.5, 0.5, 0.5],
+                    [-0.5, -0.5, 0.5],
+                ],
+                Vec::new(),
+                vec![0, 1, 2, 0, 2, 3],
+                vec![4, 5, 6, 7, 8, 9, 10, 11],
+                vec![0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4],
+            )
+            .with_draw_mode(DrawMode::ShadedWithEdges);
+        let camera = Camera::identity();
+
+        let draw = |renderer: &mut WgpuRenderer, item: &ShapeItem| {
+            let queue = Stage::new().with_item(item.clone()).to_queue();
+            renderer
+                .draw_frame(&[ViewSpec {
+                    queue: &queue,
+                    camera: &camera,
+                    rect: None,
+                    overlay: false,
+                    workplane: None,
+                }])
+                .expect("draw");
+            renderer.image().expect("readback")
+        };
+        let plain = draw(&mut renderer, &item);
+        item.set_highlight([2]);
+        let highlighted = draw(&mut renderer, &item);
+
+        // The highlight ink is the linear cyan; a line, so only a few dozen pixels.
+        let cyan = |rgba: &[u8]| rgba[2] > 120 && rgba[2] > rgba[0] + 60;
+        let painted = plain
+            .rgba
+            .chunks_exact(4)
+            .zip(highlighted.rgba.chunks_exact(4))
+            .filter(|(_, after)| cyan(after))
+            .count();
+        assert!(
+            painted > 8,
+            "the highlighted edge must be visible, {painted} px"
+        );
+
+        // An edge highlight is a line, not a face tint: the face interior stays plain.
+        let interior = ((16 * 32 + 12) * 4) as usize;
+        assert!(
+            !cyan(&highlighted.rgba[interior..interior + 4]),
+            "the face interior must not be tinted for an edge selection"
+        );
+        assert_eq!(
+            &plain.rgba[interior..interior + 4],
+            &highlighted.rgba[interior..interior + 4],
+            "the face interior is unchanged"
+        );
+    }
+
     // ------------------------------------------------------------------
     // The program path (G4)
     // ------------------------------------------------------------------

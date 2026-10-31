@@ -2408,9 +2408,12 @@ dependencies = [
  "ferrocad_geom",
  "ferrocad_gpui",
  "ferrocad_graphics",
+ "ferrocad_inventor",
  "ferrocad_part_gui",
  "ferrocad_stage",
  "ferrocad_types",
+ "ferrocad_viewport",
+ "ferrocad_wgpu",
  "pyo3",
 ]
 

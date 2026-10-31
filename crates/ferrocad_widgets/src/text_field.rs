@@ -445,7 +445,13 @@ impl Element for TextElement {
             .shape_line(display_text.into(), font_size, &runs, None);
 
         let cursor_pos = line.x_for_index(cursor);
-        let (selection, cursor) = if selected_range.is_empty() {
+        // A blurred field keeps its stored selection range so `Tab` back into it resumes
+        // the caret, but it must not **paint** it: two fields sharing one card then look
+        // focused at once (the purple `ΔZ` selection beside the cyan `ΔY` ring).
+        let focused = input.focus_handle.is_focused(window);
+        let (selection, cursor) = if !focused {
+            (None, None)
+        } else if selected_range.is_empty() {
             (
                 None,
                 Some(fill(

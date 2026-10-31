@@ -14,9 +14,10 @@ Move form surviving the loss of its selection.
 > commits), `Enter` commits one transaction, `Esc` drops the session and its ghost without
 > spending an undo entry, and a selection change commits a dirty session first. §4.2 and
 > §5.1–5.2 describe the built flow and §7 its invariant; the floating Move HUD remains only
-> as the session's numeric surface, and the two-stage pill that replaces it is **planned**.
-> The selection half — a topology filter that lets a loadout slot decide whether a click
-> selects a body or a sub-element — is **still planned** and changes §2.1. Authority:
+> as the session's numeric surface — since 2026-10-31 a single shape (three Δ fields plus
+> `✓`/`✗`), with the drag's numbers drawn on the 3-D tape's legs. The selection half — a
+> topology filter that lets a loadout slot decide whether a click selects a body or a
+> sub-element — is **built** too (U4). Authority:
 > [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
 > (§4.1, §5) and
 > [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (§2.1).
@@ -232,15 +233,50 @@ The selection is pruned first, so a delete leaves no handle for a dead object.
 | `presentation` | Layout | Pointer | Keyboard |
 | --- | --- | --- | --- |
 | `modal` (default) | centred 380 px glass panel over a dimmed backdrop that occludes the canvas | only the panel | panel owns keys; `Enter` accepts, `Esc` cancels |
-| `float` | one-row dielectric HUD beside the gizmo, **no backdrop**; only the panel occludes | the canvas stays live (orbit, select, drag) | first field focused and selected; `Tab`/`Shift+Tab` cycle fields; `Enter` accepts; `Esc` cancels |
+| `float` | one-row dielectric HUD beside the gizmo, **no backdrop**; only the panel occludes | the canvas stays live (orbit, select, drag) | **unfocused by default** (the viewport keeps the keys); `Tab`/`Shift+Tab` cycle fields, a digit or `-`/`.` opens one, a click in a field focuses it; `Enter` accepts; `Esc` cancels |
 
 **The translation HUD is a view, not an owner (built 2026-10-30).** The pending value for a
 move lives in the shell's `TransformSession`, not in the form: the Δ fields mirror
 `session.delta()` and an edit writes an absolute value back to the session. The session
-exists independently of the form, so a drag with no HUD open previews the same ghost. The
-two-stage pill (compact ↔ expanded, no `Cancel`/`Move` buttons) replaced this HUD on
-2026-10-31 (U2): a drag shows the compact readout, and `Tab`, a digit or a click unfolds
-the three Δ fields.
+exists independently of the form, so a drag with no HUD open previews the same ghost.
+
+The Move form has **one shape** since 2026-10-31: `[Δ|XYZ] ΔX [ ] ΔY [ ] ΔZ [ ] mm ✗ ✓`,
+shown whenever Slot 1 has a Move target. It is a **shell-owned surface**, not a command
+dialog (`shell/move_hud.rs`): it survives a commit, never holds a command token, and can
+coexist with a command modal. The old two-stage compact ↔ expanded pill, and the second
+(single-axis) readout beside it, are gone; the numbers a drag produces are drawn on the
+session's 3-D measuring tape as **ruler tags** (`gizmo-manipulators.md` §5), so the
+viewport no longer floats a duplicate pill at the arrow tip.
+
+**At rest it is an inspector; the finish pair is the pending move's control.** With
+`Δ = (0, 0, 0)` the fields show the live coordinate readout and there are no `✗`/`✓`
+buttons: there is nothing to spend, and a button that closes nothing reads as broken.
+As soon as a drag or a typed value makes the session dirty, the 3-D dashed ruler appears
+and the pair materialises **at the right end** of the pill. `✓`/`Enter` commits one undo
+step and `✗`/`Esc` returns to the ghost origin; either dissolves the ruler and the pair,
+leaving the form at rest.
+
+**Always visible while Move has a target.** The form appears with the selection (or a hover
+promotion) and disappears when the selection clears, another hand or tool takes over, or
+the Move hand is **paused** (pressing `1` while it is already active — the selection stays
+for inspection, and `1` again, a new selection or a `Move` verb re-arms it). A modal or
+the object wheel hides it for its lifetime; it returns with the canvas. A right-press on
+the form opens the object wheel, so the form never swallows the verb gesture.
+
+**Two coordinate modes.** The leading badge (or `=`) flips the fields between `ΔX/ΔY/ΔZ`
+(offsets) and `X/Y/Z` (world coordinates): the display is `origin_0 + delta`, where
+`origin_0` is the gizmo origin frozen while the session is dirty, and a typed coordinate
+is parsed back as `value - origin_0`. Both modes preview, tape and commit the same delta.
+A per-field `=`/`@` prefix (`=15`) asks for an absolute value without leaving offset mode.
+
+**Unfocused is the default.** Opening the form or releasing a drag leaves every field
+unfocused, so `1`/`2`/`3` still equip loadout slots and the viewport keeps its own keys.
+`Tab` opens the field of the last gesture (drag-axis memory) and selects its value, then
+cycles; a digit other than `1`–`3`, or `-`/`.`, focuses that field and starts the number;
+a click in a field or on a ruler tag does the same. `Enter`/`✓` commits and `Esc`/`✗` rolls
+back; both reset the fields and hand the keyboard back to the canvas, and the form stays.
+Only the **focused** field paints a selection highlight: a blurred `TextInput` clears its
+selection range, so a `Tab` from `ΔY` to `ΔZ` never leaves a purple range behind.
 
 A floating HUD may be repositioned when the gizmo moves; its anchor is recomputed from
 the visible gizmo origin (or the **viewport centre** when no gizmo is armed; the live
@@ -258,37 +294,41 @@ entering and leaving are judged against what the user actually saw.
 ### 5.2 States
 
 ```text
-Closed ──command returns a dialog spec──► Open (expanded)
-Open ──field edit──► session Δ updated + preview ──► Open
-Open ──gizmo drag──► compact pill; fields mirror the session Δ + preview ──► Open
-Open ──Tab / digit / click──► expanded fields ──► Open
-Open ──Enter / Accept──► validate → callback → one transaction ──► Closed
-Open ──Esc / Cancel──► rollback: token cancelled, session dropped, preview restored ──► Closed
-Open ──selection replaced/cleared, Δ ≠ 0──► auto-commit ──► Closed
-Open ──selection pruned, competing interaction──► rollback (stale delta) ──► Closed
+Closed ──Move hand + a target──► At rest (fields, no ✗/✓, no ruler)
+At rest ──drag / typed value (Δ ≠ 0)──► Pending (ruler + ✗/✓ at the right end)
+Pending ──Enter / ✓──► one transaction, fields reset ──► At rest (canvas focused)
+Pending ──Esc / ✗──► rollback: session dropped, preview restored ──► At rest
+At rest ──gizmo drag──► fields mirror the session Δ + preview; no focus taken
+At rest ──Tab / digit / tag click──► one field focused (drag-axis memory)
+Any ──badge / `=`──► Δ fields ⇄ world coordinates (same pending Δ)
+Any ──selection replaced──► auto-commit (if dirty), re-target, new clean session
+At rest ──Esc──► selection cleared ──► Closed
+Any ──selection cleared / another hand / a tool / `1` (pause)──► Closed
+Pending ──competing interaction (context exit)──► auto-commit ──► the new context
 ```
 
-- **One dialog at a time.** A second request is rejected while a dialog or a rendered
-  form is open; a wizard callback replaces the spec rather than stacking.
+- **One dialog at a time — for dialogs.** A second *command* dialog is rejected while a
+  dialog or a rendered form is open; the Move form is not a dialog, so a command can open
+  its own modal over it (the form hides for the modal's lifetime). A wizard callback
+  replaces the spec rather than stacking.
 - **Non-modal does not mean inert.** A float keeps the pointer live; clicking the
-  canvas does **not** dismiss it (only `Esc`, Accept/Cancel, a selection change, a
-  competing interaction or a document prune does). This is deliberate: the user may
-  orbit to see the preview.
+  canvas does **not** dismiss it. This is deliberate: the user may orbit to see the
+  preview.
 - **Precedence for `Esc`** (root handler, after the focused element had its chance):
-  palette → wheel → command dialog → popover → tool → settings card. A floating form
-  does not retain keyboard focus once the canvas is clicked, so the root fallback is
-  what keeps `Esc` working everywhere.
-- **Preview ownership is the session's (built 2026-10-30).** `preview: "translation"`
-  reads the shell's `TransformSession` rather than a value the form owns; a field edit
-  sets the session's absolute delta and the viewport renders `session.transform()`. The
-  form no longer toggles a deferred gizmo mode: the viewport's preview mode is enabled
-  once at startup. Closing the form restores the overlays and clears the ghost only
-  after the session has committed or been dropped.
-- **Two-way binding.** Typing → session Δ → preview (only the parsed fields; unparsable
-  text is zero, never an error while typing). A drag → session Δ → fields, using the
-  values at `Begin` as a baseline so successive drags accumulate. Drag ticks are
-  programmatic `set_text`, which does not re-emit a change event, so the two directions
-  cannot loop.
+  palette → wheel → command dialog → popover → tool → settings card → a **pending** Move
+  session (rollback, the form stays) → the session pivot → **at rest, clear the
+  selection** (the form, triad and ruler go with it). A command dialog consumes its own
+  `Esc`: the panel stops propagation, so cancelling a modal never also clears a selection
+  behind it.
+- **Preview ownership is the session's (built 2026-10-30).** A field edit sets the
+  session's absolute delta and the viewport renders `session.transform()`. The form no
+  longer toggles a deferred gizmo mode: the viewport's preview mode is enabled once at
+  startup. Rollback restores the overlays and clears the ghost; the form itself stays.
+- **Two-way binding.** Typing → session Δ → preview (only the fields that parse; an
+  unparsable field keeps the last preview and is an error only on commit). A drag →
+  session Δ → fields, using the values at `Begin` as a baseline so successive drags
+  accumulate. Drag ticks are programmatic `set_text`, which does not re-emit a change
+  event, so the two directions cannot loop.
 - **Commit is single.** A drag never commits; `Enter`/Accept runs the command callback
   (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
   `Enter`.
@@ -297,28 +337,29 @@ Open ──selection pruned, competing interaction──► rollback (stale delt
   changes; it is no longer "silently cancelled", because losing a drag is the defect the
   session exists to remove. A **loadout slot or `Select ▾` filter change** does the same
   (U4, built): `Shell::set_loadout_slot`/`set_select_filter` call `commit_session` first,
-  then re-arm. Starting a tool does not change the hand, so it does not commit. A pruned
-  selection or a competing document edit cannot commit a stale delta,
-  so it is rolled back. `Esc` is the only user-initiated rollback and spends no undo
-  entry.
+  then re-arm. Starting a tool is a context exit too: it commits a dirty move and hides
+  the form until the tool ends. A pruned selection or a competing document edit cannot
+  commit a stale delta, so it is rolled back. `Esc` is the only user-initiated rollback
+  and spends no undo entry.
 - **Fast escalation (built 2026-10-31, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
   while a `TransformGizmo` is armed (idle or mid-drag) is the primary entry into the
-  numeric surface: the two-stage pill seeds its fields from the current delta (or zero
-  when idle) and takes focus. **`1`/`2`/`3` are loadout slots** (U4): without an open pill
-  they equip Move / Push-Pull / Fillet, so typing a value that starts with one of them
-  begins with `Tab` or a click into a field; with a compact pill open, a digit types into
-  it. The wheel's `Move` still opens the same pill for a pointer user; `Tab` cycles its
-  fields once it is expanded.
+  numeric surface: the HUD seeds its fields from the current delta (or zero when idle)
+  and focuses the field the gesture names. **`1`/`2`/`3` are loadout slots** (U4) and are
+  reserved: they equip Move / Push-Pull / Fillet even while the HUD is on screen, so a
+  value that starts with one of them begins with `Tab` or a click into a field. Pressing
+  `1` while Move is already active **pauses** it (selection kept, handles and form gone);
+  pressing it again arms the hand. Once a field is focused its digits belong to it. A
+  drag on the resting HUD updates the fields and the tape but never takes the keyboard.
 
 ### 5.3 Selection scope
 
 A form is scoped to the selection it was opened for, and a pending session is scoped the
 same way. Replacing the selection (tree or viewport) or clearing it **commits a dirty
 session first** — while the old selection is still the selection, so the move lands on
-the objects the user dragged — and only then closes the form and changes the selection.
-A translation preview measured on the old selection is never applied to a new one. A
-form still open with no pending delta is cancelled and its token spent; pruning a
-deleted object cannot commit a stale delta, so it rolls the session back. (The wheel
+the objects the user dragged — and only then re-targets the form: a replacement keeps it
+open with a fresh session and origin, a clear closes it. A translation preview measured
+on the old selection is never applied to a new one. A form still open with no pending
+delta is simply re-targeted; pruning a deleted object rolls the session back. (The wheel
 closes for the same reason.)
 
 ## 6. Precedence and ownership
@@ -355,8 +396,11 @@ rendered form dialog (backdrop occludes everything)
 2. Palette `Esc`, then the palette shortcut.
 3. Wheel `Esc`.
 4. Command dialog `Esc` (needed when focus moved to the viewport).
-5. The Move pill's `Enter`/`Tab`/digit escalation (below the modal checks above).
-6. Loadout `1`/`2`/`3` — below the pill's typing path, above `Space` (U4).
+5. The Move HUD while **no field is focused**: `Enter` accepts, `Tab` opens a field on
+   the remembered drag axis, and a numeric key other than `1`–`3` focuses the field and
+   starts the number. A focused field consumes its own digits, `Enter` and `Tab` first.
+6. Loadout `1`/`2`/`3` — they are reserved even while the resting HUD is on screen, so
+   they equip a hand instead of typing (U4).
 7. `Space` — only with no dialog, palette, settings card or active tool.
 8. Popover `Esc`, then the `Esc` cascade (cancel dialog flag → tool → settings).
 9. Global shortcut registry.

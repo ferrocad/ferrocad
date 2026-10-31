@@ -52,10 +52,9 @@ fn the_rotate_verb_switches_the_gizmo_mode(cx: &mut TestAppContext) {
         "Move forces the arrows so its fields match the handles"
     );
     assert!(
-        shell.update(cx, |shell, _| shell.dialog.is_some()),
-        "the Move HUD opened"
+        shell.update(cx, |shell, _| shell.move_pill_open()),
+        "the Move form opened"
     );
-    shell.update(cx, |shell, cx| shell.cancel_dialog(cx));
 }
 
 /// Slice 3: the origin handle reports a session pivot, the triad uses it, a new
@@ -149,8 +148,8 @@ fn the_session_pivot_follows_the_origin_event_and_escape_restores_it(cx: &mut Te
     assert_eq!(shell.read_with(&cx, |shell, _| shell.user_origin), None);
 }
 
-/// The Move form is anchored to the visible origin, so the pivot handle is disabled
-/// while it is open and re-enabled when the form closes.
+/// The form is anchored to the visible origin, so the pivot handle is disabled while it
+/// is open; equipping another hand re-enables it.
 #[gpui::test]
 fn the_move_hud_disables_the_origin_handle(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -158,15 +157,12 @@ fn the_move_hud_disables_the_origin_handle(cx: &mut TestAppContext) {
     let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
     shell.update(cx, |shell, cx| shell.select("Params", cx));
-    assert!(shell.read_with(cx, |shell, _| shell.gizmo_origin_enabled()));
-
-    shell.update(cx, |shell, cx| shell.run_command("App_Move", cx));
     assert!(
         !shell.read_with(cx, |shell, _| shell.gizmo_origin_enabled()),
-        "the translation HUD owns the anchor"
+        "the always-on form owns the anchor"
     );
 
-    shell.update(cx, |shell, cx| shell.cancel_dialog(cx));
+    shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::PushPull, cx));
     assert!(
         shell.read_with(cx, |shell, _| shell.gizmo_origin_enabled()),
         "closing the form re-enables the handle"
@@ -187,8 +183,8 @@ fn the_gpu_notice_report_names_the_reason_and_the_fix() {
     assert!(details.contains("ZED_DEVICE_ID"));
 }
 
-/// Accepting the Move HUD ends the session it opened — the HUD's token is spent — but the
-/// body triad **stays** armed, so the object the user just placed is still draggable.
+/// ✓ spends a pending move, ends the session and keeps the form: the form belongs to
+/// the Move hand, so the object the user just placed is still draggable.
 #[gpui::test]
 fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -196,21 +192,45 @@ fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
     let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
 
     shell.update(cx, |shell, cx| shell.select("Params", cx));
-    shell.update(cx, |shell, cx| shell.run_command("App_Move", cx));
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.loadout.slot()),
         Slot::Move,
-        "Move equips the body hand"
+        "the Move hand owns the selection"
     );
     assert!(
-        shell.read_with(cx, |shell, _| shell.dialog.is_some()),
-        "Move opens its HUD"
+        shell.read_with(cx, |shell, _| shell.move_pill_open()),
+        "the Move form is always on with a target"
     );
 
-    shell.update(cx, |shell, cx| shell.accept_dialog(cx));
+    // A drag makes the session pending; ✓ spends it.
+    let preview = |phase, x: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+    };
+    cx.update(|cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::End, 5.0), cx);
+            shell.commit_session(cx);
+        })
+    });
     assert!(
-        shell.read_with(cx, |shell, _| shell.dialog.is_none()),
-        "the HUD closes on accept"
+        !shell.read_with(cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| session.is_dirty())),
+        "the pending session is spent"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.move_pill_open()),
+        "the form stays after a commit"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, cx| dialog_field(shell, cx, "dx")),
+        "0.00",
+        "the fields return to rest"
     );
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.loadout.slot()),
@@ -373,33 +393,42 @@ fn the_command_dialog_renders_and_escape_cancels(cx: &mut TestAppContext) {
     let mut cx = VisualTestContext::from_window(window.into(), cx);
     let shell: Entity<Shell> = window.root(&mut cx).unwrap();
 
-    // `App_Move` with a selection opens its dialog; the shell is built-ins only.
+    // A modal command (the Move form is not one): the shell renders it over a dimmed
+    // backdrop and `Esc` cancels it.
+    let script = r#"
+import FreeCADGui
+class _TestModalRender:
+    def GetResources(self):
+        return {"MenuText": "Modal render"}
+    def Activated(self):
+        return {
+            "title": "Modal render",
+            "fields": [{"name": "Note", "kind": "text", "value": "x"}],
+            "on_accept": lambda values: {"status": "ok"},
+        }
+if "Test_ModalRender" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_ModalRender", _TestModalRender())
+"#;
+    let registered = crate::python::evaluate(script).expect("evaluate");
+    assert!(registered.ok, "{}", registered.output);
     cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| {
-            shell.select("Params", cx);
-            shell.run_command("App_Move", cx);
-        })
+        shell.update(cx, |shell, cx| shell.run_command("Test_ModalRender", cx))
     });
-    let (open, fields) = cx.update(|_window, cx| {
-        let shell = shell.read(cx);
-        (
-            shell.dialog.is_some(),
-            shell
-                .dialog
-                .as_ref()
-                .map(|dialog| dialog.spec.fields.len())
-                .unwrap_or(0),
-        )
-    });
-    assert!(open, "the dialog opened");
-    assert_eq!(fields, 3, "ΔX, ΔY, ΔZ");
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.dialog.is_some()),
+        "the modal opened"
+    );
 
     // Force a full paint: the backdrop, fields and buttons are built.
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
+    assert!(
+        cx.debug_bounds("dialog-backdrop").is_some(),
+        "a modal paints its dimmed backdrop"
+    );
 
-    // The dialog held focus, so Escape cancels and drops its token.
+    // The first field held focus, so Escape cancels and drops its token.
     cx.simulate_keystrokes("escape");
     assert!(
         cx.update(|_window, cx| shell.read(cx).dialog.is_none()),
@@ -431,30 +460,148 @@ fn the_move_dialog_floats_without_a_backdrop(cx: &mut TestAppContext) {
     });
     draw(&mut cx);
 
-    assert!(cx.debug_bounds("dialog-panel").is_some(), "the HUD paints");
+    assert!(cx.debug_bounds("move-hud").is_some(), "the HUD paints");
     assert!(
         cx.debug_bounds("dialog-backdrop").is_none(),
         "a float has no dimming backdrop"
     );
-    // The Move HUD is the pill: expanded fields, and no Cancel/Move buttons.
-    assert!(cx.debug_bounds("move-pill-expanded").is_some());
-    assert!(cx.debug_bounds("move-pill-compact").is_none());
-    assert!(cx.debug_bounds("dialog-accept").is_none());
-    assert!(cx.debug_bounds("dialog-cancel").is_none());
+    // The Move HUD is the single 3-field pill. At rest it is an inspector, so the
+    // ✓/✗ finish pair has nothing to spend and is absent.
+    assert!(cx.debug_bounds("move-hud").is_some());
+    assert!(
+        cx.debug_bounds("dialog-accept").is_none(),
+        "no ✓ while the move is clean"
+    );
+    assert!(
+        cx.debug_bounds("dialog-cancel").is_none(),
+        "no ✗ while the move is clean"
+    );
 
-    // The first delta field took focus; Tab moves to the second.
+    // A typed value makes the move pending, and the pair materialises.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+        })
+    });
+    draw(&mut cx);
+    assert!(cx.debug_bounds("dialog-accept").is_some(), "✓ finishes the move");
+    assert!(cx.debug_bounds("dialog-cancel").is_some(), "✗ cancels it");
+
+    // The form opens with no field focused, so the loadout keys keep working; the first
+    // `Tab` takes the keyboard and the second reaches ΔY.
     let second = shell.read_with(&cx, |shell, cx| {
         shell
-            .dialog
+            .move_hud
             .as_ref()
-            .and_then(|dialog| dialog.inputs.iter().flatten().nth(1))
-            .map(|input| input.read(cx).focus_handle(cx))
+            .map(|hud| hud.inputs[1].read(cx).focus_handle(cx))
     });
     let second = second.expect("a second field");
+    cx.simulate_keystrokes("tab");
+    draw(&mut cx);
     cx.simulate_keystrokes("tab");
     assert!(
         cx.update(|window, _cx| second.is_focused(window)),
         "Tab moves focus to the next delta field"
+    );
+}
+
+/// While a move is pending the chrome runs mode switch → fields → ✗ ✓, left to right;
+/// at rest the finish pair is absent (the form is an inspector).
+#[gpui::test]
+fn the_move_form_orders_mode_fields_then_finish(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.select("Params", cx);
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+            shell.on_move_typed(cx);
+        })
+    });
+    draw(&mut cx);
+
+    let mode = cx.debug_bounds("move-mode").expect("the mode switch");
+    let first = cx.debug_bounds("move-axis-0").expect("ΔX");
+    let last = cx.debug_bounds("move-axis-2").expect("ΔZ");
+    let cancel = cx.debug_bounds("dialog-cancel").expect("✗");
+    let accept = cx.debug_bounds("dialog-accept").expect("✓");
+    assert!(mode.origin.x <= first.origin.x, "the mode switch leads");
+    assert!(first.origin.x < last.origin.x, "the fields run X → Z");
+    assert!(last.origin.x < cancel.origin.x, "✗ follows the fields");
+    assert!(cancel.origin.x < accept.origin.x, "✗ precedes ✓");
+}
+
+/// The always-on form and a command modal are different surfaces: the modal opens over
+/// the form (which hides its glass panel), and the form returns when it closes.
+#[gpui::test]
+fn the_move_form_coexists_with_a_command_dialog(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
+    draw(&mut cx);
+    assert!(cx.debug_bounds("move-hud").is_some(), "the form paints");
+
+    let script = r#"
+import FreeCADGui
+class _TestMoveModal:
+    def GetResources(self):
+        return {"MenuText": "Move modal"}
+    def Activated(self):
+        return {
+            "title": "Move modal",
+            "fields": [{"name": "Note", "kind": "text", "value": "x"}],
+            "on_accept": lambda values: {"status": "ok"},
+        }
+if "Test_MoveModal" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_MoveModal", _TestMoveModal())
+"#;
+    let registered = crate::python::evaluate(script).expect("evaluate");
+    assert!(registered.ok, "{}", registered.output);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.run_command("Test_MoveModal", cx))
+    });
+    draw(&mut cx);
+
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.dialog.is_some()
+            && shell.move_pill_open()),
+        "the modal opened over the form's state"
+    );
+    assert!(
+        cx.debug_bounds("dialog-backdrop").is_some(),
+        "the modal paints its backdrop"
+    );
+    assert!(
+        cx.debug_bounds("move-hud").is_none(),
+        "the form hides under the modal rather than stacking"
+    );
+
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(!shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
+    assert!(
+        cx.debug_bounds("move-hud").is_some(),
+        "the form returns with the canvas"
     );
 }
 
@@ -483,8 +630,8 @@ fn a_focused_floating_hud_freezes_in_place(cx: &mut TestAppContext) {
     draw(&mut cx);
 
     let viewport = cx.update(|window, _cx| window.viewport_size());
-    let before = cx.debug_bounds("dialog-panel").expect("the HUD paints");
-    let hud_size = before.size;
+    let first_paint = cx.debug_bounds("move-hud").expect("the HUD paints");
+    let hud_size = first_paint.size;
     let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
     // Bottom-left of the canvas: well away from the HUD's first position.
     let far = point(
@@ -492,10 +639,14 @@ fn a_focused_floating_hud_freezes_in_place(cx: &mut TestAppContext) {
         canvas.origin.y + canvas.size.height - px(8.0),
     );
 
-    // The first delta field holds focus, so the HUD does not chase the pointer.
+    // The fields start unfocused (the canvas owns the keys), so a `Tab` is what freezes
+    // the HUD for typing.
+    press_root(&mut cx, &shell, "tab");
+    draw(&mut cx);
+    let before = cx.debug_bounds("move-hud").expect("the HUD paints");
     cx.simulate_mouse_move(far, None::<MouseButton>, gpui::Modifiers::default());
     draw(&mut cx);
-    let frozen = cx.debug_bounds("dialog-panel").expect("the HUD paints");
+    let frozen = cx.debug_bounds("move-hud").expect("the HUD paints");
     assert_eq!(
         frozen.origin, before.origin,
         "a focused HUD stays put while the pointer moves"
@@ -507,7 +658,7 @@ fn a_focused_floating_hud_freezes_in_place(cx: &mut TestAppContext) {
     let elsewhere = point(canvas.origin.x + px(8.0), canvas.origin.y + px(8.0));
     cx.simulate_mouse_move(elsewhere, None::<MouseButton>, gpui::Modifiers::default());
     draw(&mut cx);
-    let resumed = cx.debug_bounds("dialog-panel").expect("the HUD paints");
+    let resumed = cx.debug_bounds("move-hud").expect("the HUD paints");
     assert_eq!(
         resumed.origin,
         place_hud(elsewhere, viewport, hud_size),
@@ -596,7 +747,7 @@ fn a_gizmo_drag_updates_the_move_fields(cx: &mut TestAppContext) {
     let field = |cx: &VisualTestContext, name: &str| {
         shell.read_with(cx, |shell, cx| dialog_field(shell, cx, name))
     };
-    assert_eq!(field(&cx, "dx"), "0.0");
+    assert_eq!(field(&cx, "dx"), "0.00");
 
     let preview = |phase, x: f64, y: f64, z: f64| TransformPreview {
         target_id: 7,
@@ -625,10 +776,10 @@ fn a_gizmo_drag_updates_the_move_fields(cx: &mut TestAppContext) {
     assert_eq!(field(&cx, "dy"), "1.00");
 }
 
-/// Any committed interaction supersedes the pending Move: a height change closes
-/// the HUD (and spends its token) instead of leaving a stale delta on screen.
+/// A committed interaction supersedes a **pending** move, but the form stays: it
+/// belongs to the hand, not to one target.
 #[gpui::test]
-fn a_competing_interaction_closes_the_move_hud(cx: &mut TestAppContext) {
+fn a_competing_interaction_drops_a_pending_move(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell();
     let window = cx.update(|cx| {
@@ -642,25 +793,60 @@ fn a_competing_interaction_closes_the_move_hud(cx: &mut TestAppContext) {
     let shell: Entity<Shell> = window.root(&mut cx).unwrap();
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
+            // A stage gives the session its datum.
+            let mesh: StageMesh = serde_json::from_str(
+                r#"{
+                    "entity": 7,
+                    "object": "Params",
+                    "positions": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    "triangles": [0, 1, 2],
+                    "triangle_parts": [0, 0, 0],
+                    "edges": [],
+                    "parts": []
+                }"#,
+            )
+            .expect("the test mesh");
+            let stage = shell.display.build(vec![mesh]);
+            shell.set_stage(stage, cx);
             shell.select("Params", cx);
-            shell.run_command("App_Move", cx);
+            let preview = |phase, x: f64| TransformPreview {
+                target_id: 7,
+                phase,
+                total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+            };
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0), cx);
         })
     });
     draw(&mut cx);
-    assert!(shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
+    assert!(shell.read_with(&cx, |shell, _| shell.move_pill_open()));
+    assert!(
+        shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| session.is_dirty())),
+        "the drag is pending"
+    );
 
     let height = InteractionCommit::new("toy_height", 0, "set").with_values([30.0]);
     cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.on_interaction(&height, cx)));
     assert!(
-        shell.read_with(&cx, |shell, _| shell.dialog.is_none()),
-        "a height commit closes the Move HUD"
+        !shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| session.is_dirty())),
+        "a height commit drops the stale pending move"
+    );
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.move_pill_open()),
+        "the form stays for the hand's target"
     );
 }
 
-/// The form is scoped to its selection: clearing or replacing the selection closes
-/// it instead of leaving a pending delta for objects that are no longer selected.
+/// The form follows the selection: clearing it closes the form; replacing it keeps
+/// the form, re-measured on the new target.
 #[gpui::test]
-fn a_selection_change_closes_the_move_hud(cx: &mut TestAppContext) {
+fn a_selection_change_retargets_the_move_hud(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell();
     let window = cx.update(|cx| {
@@ -672,33 +858,30 @@ fn a_selection_change_closes_the_move_hud(cx: &mut TestAppContext) {
     });
     let mut cx = VisualTestContext::from_window(window.into(), cx);
     let shell: Entity<Shell> = window.root(&mut cx).unwrap();
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| {
-            shell.select("Params", cx);
-            shell.run_command("App_Move", cx);
-        })
-    });
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
     draw(&mut cx);
-    assert!(shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
+    assert!(shell.read_with(&cx, |shell, _| shell.move_pill_open()));
 
-    // Clearing the selection closes it.
+    // Clearing the selection removes the hand's target, so the form goes.
     cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.clear_selection(cx)));
     assert!(
-        shell.read_with(&cx, |shell, _| shell.dialog.is_none()),
-        "unselecting closes the Move HUD"
+        !shell.read_with(&cx, |shell, _| shell.move_pill_open()),
+        "unselecting closes the Move form"
     );
 
-    // Replacing it (a tree click) does too.
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| {
-            shell.select("Params", cx);
-            shell.run_command("App_Move", cx);
-        })
-    });
-    assert!(shell.read_with(&cx, |shell, _| shell.dialog.is_some()));
+    // Replacing it keeps the form, now for the new target, with a clean session.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Params", cx)));
+    assert!(shell.read_with(&cx, |shell, _| shell.move_pill_open()));
     cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Derived", cx)));
     assert!(
-        shell.read_with(&cx, |shell, _| shell.dialog.is_none()),
-        "a new selection closes the Move HUD"
+        shell.read_with(&cx, |shell, _| shell.move_pill_open()),
+        "a new selection keeps the hand's form"
+    );
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| session.is_dirty())),
+        "the new selection starts clean"
     );
 }

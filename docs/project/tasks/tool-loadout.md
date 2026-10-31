@@ -57,7 +57,7 @@ which single manipulator class is hosted (`GizmoSet::set_session`):
 
 | Slot | Hotkey | Default `Select ▾` filter | Active manipulator (`set_session`) | Numeric surface |
 | --- | --- | --- | --- | --- |
-| Slot 1 | `1` | Body (element: `None`) | `TransformGizmo` (Translate / Rotate) | the session's 3-D tape + expandable ΔX/ΔY/ΔZ pill ([`transform-session.md`](transform-session.md) §3) |
+| Slot 1 | `1` | Body (element: `None`) | `TransformGizmo` (Translate / Rotate) | the always-on Move form + the session's 3-D tape ([`transform-session.md`](transform-session.md) §3). Pressing `1` again pauses the hand |
 | Slot 2 | `2` | Face (`FaceN`) | `PushPullStem` (extrude / pocket) | in-situ readout pill (`Tab` to type) |
 | Slot 3 | `3` | Edge (`EdgeN` chain) | `DressUpScrubber` (Fillet / Chamfer) | in-situ readout pill (`Tab` to type) |
 | Wheel | Right-click / Space | context-dependent | "Buy menu": equips specialised verbs (Rotate, Chamfer, Draft) into the active hand | the same session contract |
@@ -135,9 +135,9 @@ which keeps the session and changes its mode.
   Slot 1; the old "claimed element suppresses the triad" rule and its fallback are
   both gone. A tool session does not change the hand.
 - A slot or filter change commits a dirty session first (`commit_session`), then
-  rearms. The slot keys sit below the compact pill's typing path and above the digit
-  escalation: `2` on an armed triad equips the face hand, and typing `2` into a value
-  starts with `Tab`.
+  rearms. The slot keys are reserved above the resting form's typing path: `2` on an
+  armed triad equips the face hand, and a value that starts with a slot digit begins
+  with `Tab` or a click into a field.
 - Covered by `ferrocad_gpui`'s `a_face_click_selects_the_body_in_the_move_slot`,
   `the_slot_sets_the_filter_and_select_overrides_it`,
   `the_wheel_verbs_equip_the_move_slot`,

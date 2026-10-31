@@ -38,6 +38,12 @@ fn quantity_row(value: &str, min: Option<f64>, max: Option<f64>) -> PropRow {
 
 /// The text in a named dialog field (empty when the field is absent).
 fn dialog_field(shell: &Shell, cx: &App, name: &str) -> String {
+    // The Move form is its own surface, not a dialog: its fields have fixed names.
+    if let Some(index) = ["dx", "dy", "dz"].iter().position(|field| *field == name)
+        && let Some(text) = shell.move_field_text(index, cx)
+    {
+        return text;
+    }
     let Some(dialog) = shell.dialog.as_ref() else {
         return String::new();
     };

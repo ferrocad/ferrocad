@@ -240,7 +240,6 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
 
     let accept = spec.accept_label().to_string();
     let cancel = spec.cancel_label().to_string();
-    let move_pill = spec.previews_translation();
 
     if floating {
         let viewport = window.viewport_size();
@@ -286,45 +285,44 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
             .track_focus(&focus)
             .focusable()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                match event.keystroke.key.as_str() {
-                    "escape" => this.cancel_dialog(cx),
-                    "enter" => this.accept_dialog(cx),
-                    "tab" => this.cycle_dialog_focus(event.keystroke.modifiers.shift, window, cx),
-                    _ => {}
+                let handled = match event.keystroke.key.as_str() {
+                    "escape" => {
+                        this.cancel_dialog(cx);
+                        true
+                    }
+                    "enter" => {
+                        this.accept_dialog(cx);
+                        true
+                    }
+                    "tab" => {
+                        this.cycle_dialog_focus(event.keystroke.modifiers.shift, window, cx);
+                        true
+                    }
+                    _ => false,
+                };
+                // A modal owns Esc/Enter/Tab while it is up: the shell root must not
+                // also read the Esc that just closed it as "clear the selection".
+                if handled {
+                    cx.stop_propagation();
                 }
             }));
-        // The Move HUD is the two-stage pill: a compact readout during a drag, the
-        // ΔX/ΔY/ΔZ fields once `Tab`, a digit or a click expands it. It has no title
-        // and no Cancel/Move buttons; `Enter` commits and `Esc` rolls back.
-        if move_pill {
-            let delta = dialog::translation_preview(&spec, &states).unwrap_or_default();
-            let body = if shell.pill.is_expanded() {
-                move_pill_expanded(&spec, &inputs)
-            } else {
-                move_pill_compact(
-                    delta,
-                    shell.pill.focus(),
-                    cx,
+        // A floating command dialog (the workplane offset) is the ordinary field row.
+        // The Move form is not a dialog: it has its own overlay (`move_hud_overlay`).
+        panel = panel.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(spec.title.clone()),
                 )
-            };
-            panel = panel.child(body);
-        } else {
-            panel = panel.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child(spec.title.clone()),
-                    )
-                    .child(fields)
-                    .child(dialog_buttons(accept, cancel, true, cx)),
-            );
-        }
+                .child(fields)
+                .child(dialog_buttons(accept, cancel, true, cx)),
+        );
         if let Some(error) = &error {
             panel = panel.child(
                 div()
@@ -369,10 +367,20 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
         .track_focus(&focus)
         .focusable()
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-            match event.keystroke.key.as_str() {
-                "escape" => this.cancel_dialog(cx),
-                "enter" => this.accept_dialog(cx),
-                _ => {}
+            let handled = match event.keystroke.key.as_str() {
+                "escape" => {
+                    this.cancel_dialog(cx);
+                    true
+                }
+                "enter" => {
+                    this.accept_dialog(cx);
+                    true
+                }
+                _ => false,
+            };
+            // As above: the key that closes a modal is not also an Esc for the shell.
+            if handled {
+                cx.stop_propagation();
             }
         }))
         .child(
@@ -461,63 +469,209 @@ pub(super) fn dialog_buttons(
         )
 }
 
-/// The compact stage of the Move pill: the value a drag is already showing.
+/// The compact finish pair for the Move form: `✗` cancels, `✓` accepts.
 ///
-/// Only the moved components appear (`ΔX +24.50`, or `ΔX +24.50  ΔY +10.00` for a
-/// plane drag); an idle pill names the focused field. Clicking it expands the fields.
-fn move_pill_compact(delta: [f64; 3], focus: usize, cx: &mut Context<Shell>) -> AnyElement {
-    let axis = focus.min(2);
-    let mut shown: Vec<usize> = (0..3).filter(|slot| delta[*slot].abs() > 0.0005).collect();
-    if shown.is_empty() {
-        shown.push(axis);
-    }
-    let text = shown
-        .iter()
-        .map(|slot| format!("Δ{} {}", ["X", "Y", "Z"][*slot], compact_delta(delta[*slot])))
-        .collect::<Vec<_>>()
-        .join("  ");
+/// The glyphs match the keys the panel already routes ([`Shell::dismiss_move_hud`] on
+/// `Esc`, [`Shell::commit_session`] on `Enter`), and the ids are the ones the modal's
+/// buttons use, so a test drives either surface the same way. They are icons rather
+/// than words because the form is a readout beside the handles, not a dialog: two
+/// words would double its width.
+pub(super) fn hud_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
     div()
-        .id("move-pill-compact")
-        .debug_selector(|| "move-pill-compact".to_string())
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
-        .px_1()
-        .on_click(cx.listener(|this, _event, window, cx| {
-            this.expand_move_pill(window, cx);
-        }))
+        .flex_shrink_0()
         .child(
             div()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(FG))
-                .child(text),
+                .id("dialog-cancel")
+                .debug_selector(|| "dialog-cancel".to_string())
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(PANEL_ALT))
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .cursor_pointer()
+                .hover(|style| style.text_color(rgb(FG)))
+                .child("✗")
+                .on_click(cx.listener(|this, _event, _window, cx| this.dismiss_move_hud(cx))),
         )
-        .child(div().text_xs().text_color(rgb(MUTED)).child("mm"))
-        .into_any_element()
+        .child(
+            div()
+                .id("dialog-accept")
+                .debug_selector(|| "dialog-accept".to_string())
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(ACCENT))
+                .text_xs()
+                .text_color(rgb(FG))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(PANEL_ALT)))
+                .child("✓")
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.commit_session(cx);
+                })),
+        )
 }
 
-/// The expanded stage: one `ΔX` label and one glass field per axis, without brackets.
+/// The Move form: `[Δ|XYZ]  ✗ ✓  ΔX [ ]  ΔY [ ]  ΔZ [ ] mm`, anchored beside the
+/// gizmo exactly like a floating dialog.
 ///
-/// The field itself is the shared [`TextInput`], which already paints `WHEEL_GLASS`,
-/// the `CHROME_LINE` hairline and the `ACTIVE_ACCENT` focus ring. The old literal
-/// `( … )` wrappers were a second, non-token box around it and read as a malformed
-/// field in the pill.
-fn move_pill_expanded(spec: &DialogSpec, inputs: &[Option<Entity<TextInput>>]) -> AnyElement {
-    let mut row = div()
-        .id("move-pill-expanded")
-        .debug_selector(|| "move-pill-expanded".to_string())
+/// It is one shape — no compact/expanded morphing: the numbers a drag produces are the
+/// 3-D tape's ruler tags, and these fields are the editable total. The fields open
+/// unfocused; `Tab`, a digit, a click or a ruler tag focuses one.
+pub(super) fn move_hud_overlay(
+    shell: &mut Shell,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let Some(inputs) = shell.move_hud.as_ref().map(|hud| hud.inputs.clone()) else {
+        return div().into_any_element();
+    };
+    let absolute = shell.pill.absolute();
+    let focused = inputs
+        .iter()
+        .any(|input| input.read(cx).focus_handle(cx).is_focused(window));
+
+    // The same placement contract as a floating dialog: the gizmo origin (or the
+    // viewport centre), a fixed offset to the panel's bottom-left, a safe-area clamp,
+    // and a freeze while the pointer is over the panel or a field is focused.
+    let viewport = window.viewport_size();
+    let hud_size = shell
+        .hud_rect
+        .map(|rect| rect.size)
+        .unwrap_or_else(|| size(px(520.0), px(40.0)));
+    let hovered = shell
+        .hud_rect
+        .is_some_and(|rect| rect.contains(&window.mouse_position()));
+    let follow = place_hud(shell.dialog_anchor(window, cx), viewport, hud_size);
+    let origin = if hovered || focused {
+        shell.hud_lock.unwrap_or(follow)
+    } else {
+        follow
+    };
+    let origin = clamp_hud(origin, viewport, hud_size);
+    shell.hud_lock = Some(origin);
+
+    let panel = div()
+        .id("move-hud")
+        .debug_selector(|| "move-hud".to_string())
         .flex()
         .flex_row()
         .items_center()
-        .gap_2();
-    for (index, field) in spec.fields.iter().enumerate() {
-        let Some(input) = inputs.get(index).and_then(Option::as_ref) else {
-            continue;
+        .gap_2()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgba(WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .occlude()
+        // A right-press on the form opens the object wheel, exactly as it does on the
+        // canvas: the form sits over a slice of the viewport and must not swallow the
+        // gesture that names a verb.
+        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+            if this.active_tool.is_none() {
+                this.last_pointer = Some(event.position);
+                this.open_radial(event.position, cx);
+            }
+        }))
+        .track_focus(&shell.dialog_focus)
+        .focusable()
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            let handled = match event.keystroke.key.as_str() {
+                "escape" => {
+                    this.dismiss_move_hud(cx);
+                    true
+                }
+                "enter" => {
+                    this.commit_session(cx);
+                    true
+                }
+                "tab" => {
+                    this.cycle_move_focus(event.keystroke.modifiers.shift, window, cx);
+                    true
+                }
+                "=" => {
+                    this.toggle_move_mode(window, cx);
+                    true
+                }
+                _ => false,
+            };
+            // The root's key path handles the same keys when the canvas owns them; a
+            // key handled here must not run twice.
+            if handled {
+                cx.stop_propagation();
+            }
+        }))
+        .child(mode_badge(absolute, cx))
+        .child(move_fields(&inputs, absolute));
+    // The finish pair is the **pending** move's control: at rest the form is an
+    // inspector, and `✓`/`✗` would have nothing to spend.
+    let panel = if shell.move_is_pending(cx) {
+        panel.child(hud_buttons(cx))
+    } else {
+        panel
+    };
+
+    let weak = cx.weak_entity();
+    let measured = div()
+        .on_children_prepainted(move |bounds, _window, cx| {
+            if let Some(rect) = bounds.first().copied() {
+                let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
+            }
+        })
+        .child(panel);
+    deferred(
+        anchored()
+            .anchor(Anchor::TopLeft)
+            .position(origin)
+            .child(measured),
+    )
+    .with_priority(2)
+    .into_any_element()
+}
+
+/// The absolute/relative switch: `Δ` for offsets, `XYZ` for world coordinates.
+fn mode_badge(absolute: bool, cx: &mut Context<Shell>) -> AnyElement {
+    div()
+        .id("move-mode")
+        .debug_selector(|| "move-mode".to_string())
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .bg(rgb(PANEL_ALT))
+        .text_xs()
+        .text_color(rgb(if absolute {
+            ferrocad_theme::ui::ACTIVE_ACCENT
+        } else {
+            FG
+        }))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(ACCENT)))
+        .child(if absolute { "XYZ" } else { "Δ" })
+        .on_click(cx.listener(|this, _event, window, cx| {
+            this.toggle_move_mode(window, cx);
+        }))
+        .into_any_element()
+}
+
+/// The three labeled fields and the single `mm` suffix.
+fn move_fields(inputs: &[Entity<TextInput>; 3], absolute: bool) -> AnyElement {
+    let mut row = div().flex().flex_row().items_center().gap_2();
+    for (index, input) in inputs.iter().enumerate() {
+        let ink = match index {
+            0 => AXIS_X,
+            1 => AXIS_Y,
+            _ => AXIS_Z,
         };
         row = row.child(
             div()
+                .id(("move-axis", index))
+                .debug_selector(move || format!("move-axis-{index}"))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -525,23 +679,14 @@ fn move_pill_expanded(spec: &DialogSpec, inputs: &[Option<Entity<TextInput>>]) -
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(axis_token(field)))
-                        .child(field.label().to_string()),
+                        .text_color(rgb(ink))
+                        .child(super::move_hud::axis_label(index, absolute)),
                 )
-                .child(div().w(px(84.)).flex_shrink_0().child(input.clone())),
+                .child(div().w(px(88.)).flex_shrink_0().child(input.clone())),
         );
     }
     row.child(div().text_xs().text_color(rgb(MUTED)).child("mm"))
         .into_any_element()
-}
-
-/// A compact Δ value: an explicit sign for a movement, `0.00` for no movement.
-fn compact_delta(value: f64) -> String {
-    if value.abs() < 0.005 {
-        "0.00".to_string()
-    } else {
-        format!("{value:+.2}")
-    }
 }
 
 /// The command palette (Ctrl+K): a focused search field over the filtered registry.

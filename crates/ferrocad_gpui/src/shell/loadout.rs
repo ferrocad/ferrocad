@@ -192,7 +192,11 @@ impl Shell {
     /// A slot change is a **context exit**: a dirty transform session commits first,
     /// as one transaction, before the new hand narrows the handles.
     pub(crate) fn set_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
+        // A command that equips a hand always arms it, including the hand already in
+        // use: `Move` from the wheel brings a paused hand back.
+        self.move_disarmed = false;
         if self.loadout.slot() == slot {
+            self.rearm_selection(cx);
             return;
         }
         self.commit_pending_session(cx);
@@ -201,6 +205,50 @@ impl Shell {
         let status = format!("tool: {}", slot.label());
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
+        cx.notify();
+    }
+
+    /// The user's activation of a loadout slot (`1`/`2`/`3` or the bottom-left bar).
+    ///
+    /// Unlike a command, pressing the **active** Move hand pauses it: the selection
+    /// stays, but the triad and the form leave the canvas so the model can be inspected.
+    /// Pressing it again arms the hand. Other slots (and a switch back) go through
+    /// [`set_loadout_slot`](Self::set_loadout_slot).
+    pub(crate) fn activate_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
+        if slot.wants_gizmo() && self.loadout.slot() == slot {
+            if self.move_disarmed {
+                self.move_disarmed = false;
+                self.rearm_selection(cx);
+                self.model.lock().unwrap().status = "tool: Move".to_string();
+            } else {
+                self.disarm_move_hand(cx);
+            }
+            cx.notify();
+            return;
+        }
+        self.set_loadout_slot(slot, cx);
+    }
+
+    /// Pause the Move hand: keep the selection, drop the handles, form and ruler.
+    ///
+    /// A pending move is a context exit like a hand change, so it is committed first.
+    fn disarm_move_hand(&mut self, cx: &mut Context<Self>) {
+        if self.move_disarmed {
+            return;
+        }
+        self.commit_pending_session(cx);
+        self.move_disarmed = true;
+        self.close_move_hud(cx);
+        self.model.lock().unwrap().gizmo_armed = false;
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                viewport.set_manipulators(Vec::new());
+                viewport.set_gizmo_idle_scale(None);
+                viewport.set_gizmo(None);
+                cx.notify();
+            });
+        }
+        self.model.lock().unwrap().status = "tool: Move paused".to_string();
         cx.notify();
     }
 

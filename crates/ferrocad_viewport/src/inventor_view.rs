@@ -42,10 +42,10 @@ use ferrocad_stage::screen::{camera_position, project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
-    AnyElement, AppContext, Bounds, Context, DragMoveEvent, EventEmitter, FocusHandle, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
-    ObjectFit, Pixels, Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Window, div,
-    gpu_canvas, img, point, prelude::*, px, rgb, rgba,
+    AnyElement, AppContext, Bounds, ClickEvent, Context, DragMoveEvent, EventEmitter, FocusHandle,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
+    MouseUpEvent, ObjectFit, Pixels, Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent,
+    Window, div, gpu_canvas, img, point, prelude::*, px, rgb, rgba,
 };
 use image::{Frame, ImageBuffer, Rgba};
 
@@ -168,6 +168,10 @@ pub enum ViewportEvent {
     /// cancelled. `status.active` is false once the session ended, so the host hides
     /// its tool strip.
     ToolState(ToolStatus),
+    /// A ruler tag was clicked after the drag that drew it. `0..=2` names the ΔX/ΔY/ΔZ
+    /// field the tag measures, so the host can put the caret in it. The tags are
+    /// unpickable while a handle is dragged, so this only fires on a released click.
+    FocusDelta(usize),
 }
 
 /// The host's grid-step policy: the configured levels, and whether a plane's own extent
@@ -590,6 +594,10 @@ pub struct InventorViewport<V: InventorView> {
     tape_queue: RenderQueue,
     /// Stable meshes for the tape rebuild.
     tape_meshes: TapeMeshes,
+    /// Whether the ruler tags may take a click (the host owns a Move form to focus).
+    /// The tags stay non-occluding during a drag regardless: the handle must keep the
+    /// gesture even when the pointer crosses a label.
+    tape_labels_clickable: bool,
     frame: Option<Arc<RenderImage>>,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
@@ -1576,6 +1584,7 @@ impl<V: InventorView> InventorViewport<V> {
             tape: None,
             tape_queue: RenderQueue::default(),
             tape_meshes: TapeMeshes::new(),
+            tape_labels_clickable: false,
             frame: None,
             presenter: None,
             presenter_frames: 0,
@@ -3497,6 +3506,11 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// The gizmo's numeric pill: the active drag's readout text and its logical anchor.
     /// `None` while the gizmo is disabled, readouts are hidden, or no drag is active.
+    ///
+    /// A **translation** drag is deliberately absent: its numbers live on the tape's
+    /// ruler tags ([`ruler_tags`]), one at each leg's midpoint, so the tip-anchored pill
+    /// no longer duplicates the form and the 3-D measurement. The pivot and the ring
+    /// keep this pill — they have no tape to sit on.
     fn gizmo_readout(&self) -> Option<(String, [f32; 2])> {
         if !self.gizmo_style.enabled || !self.gizmo_style.show_readout {
             return None;
@@ -3513,6 +3527,9 @@ impl<V: InventorView> InventorViewport<V> {
             return Some((format!("pivot · {}", snap_name(drag.kind)), anchor));
         }
         let value = self.gizmo_value?;
+        if !matches!(value, GizmoValue::Angular { .. }) {
+            return None;
+        }
         let index = self.gizmos.dragging()?;
         let gizmo = self.gizmos.gizmos().get(index)?;
         if !gizmo.is_dragging() {
@@ -3641,6 +3658,33 @@ impl<V: InventorView> InventorViewport<V> {
     /// The tape the viewport is drawing, if it has a non-zero offset.
     pub fn transform_tape(&self) -> Option<TransformTape> {
         self.tape.filter(|tape| tape.is_visible())
+    }
+
+    /// Allow (or refuse) a click on a ruler tag.
+    ///
+    /// The host sets this while a Move form is open: the tag then focuses the matching
+    /// Δ field. It is host state, not tape state, because the viewport has no form to
+    /// focus; a click with no host interest stays a no-op and never steals a pick.
+    /// Returns whether the flag changed.
+    pub fn set_tape_labels_clickable(&mut self, clickable: bool) -> bool {
+        if self.tape_labels_clickable == clickable {
+            return false;
+        }
+        self.tape_labels_clickable = clickable;
+        true
+    }
+
+    /// Whether a ruler tag may take a click.
+    pub fn tape_labels_clickable(&self) -> bool {
+        self.tape_labels_clickable
+    }
+
+    /// The viewport's keyboard focus handle, once it has painted.
+    ///
+    /// The host hands the keyboard back here after a Move HUD finishes, so `Esc`, the
+    /// loadout digits and the gizmo keys reach the canvas again.
+    pub fn focus_handle(&self) -> Option<FocusHandle> {
+        self.focus.clone()
     }
 
     /// Write `transform` onto exactly the listed items, or clear every item's
@@ -5487,12 +5531,51 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             root.child(axis_labels(&axis))
         };
 
-        // The gizmo's numeric tag follows the active drag: anchored at the stem tip or
-        // plane, or at the pointer for a ring. It is a text layer with no hitboxes.
-        // `gizmo_readout` honours the style's `enabled`/`show_readout` policy.
+        // The gizmo's numeric tag follows the pivot drag or the active ring. It is a
+        // text layer with no hitboxes. `gizmo_readout` honours the style's
+        // `enabled`/`show_readout` policy, and deliberately has nothing to say about a
+        // translation drag: that is measured on the tape below.
         let root = match self.gizmo_readout() {
             Some((text, anchor)) => root.child(readout_pill(text, anchor)),
             None => root,
+        };
+
+        // The session's per-leg dimension tags: one chip at each dashed leg's 3-D
+        // midpoint, so the stair-step measurement carries its own numbers instead of
+        // piling a second pill on the triad. They are plain text while a handle owns the
+        // gesture, and become click-to-focus once released (the host decides whether a
+        // Move form exists to focus).
+        let root = if let Some(tape) = self
+            .transform_tape()
+            .filter(|_| self.gizmo_style.enabled && self.gizmo_style.show_readout)
+        {
+            let active = match self.gizmo_value {
+                Some(GizmoValue::Linear { axis, .. }) => Some(match axis {
+                    ferrocad_stage::GizmoAxis::X => 0,
+                    ferrocad_stage::GizmoAxis::Y => 1,
+                    ferrocad_stage::GizmoAxis::Z => 2,
+                }),
+                _ => None,
+            };
+            let clickable = self.tape_labels_clickable && self.gizmos.dragging().is_none();
+            let mut root = root;
+            for tag in ruler_tags(&tape, &self.camera, active) {
+                let axis = tag.axis;
+                let mut chip = ruler_tag(&tag).id(("ruler-tag", axis));
+                if clickable {
+                    // Only the released tag is a hitbox: during a drag the pointer must
+                    // keep reaching the handle even when it crosses a label.
+                    chip = chip.occlude().cursor_pointer().on_click(cx.listener(
+                        move |_this, _event: &ClickEvent, _window, cx| {
+                            cx.emit(ViewportEvent::FocusDelta(axis));
+                        },
+                    ));
+                }
+                root = root.child(chip);
+            }
+            root
+        } else {
+            root
         };
 
         // The snap's dimension pill: `ΔU`/`ΔV` in the active workplane's coordinates
@@ -5936,6 +6019,113 @@ fn readout_pill(text: String, anchor: [f32; 2]) -> impl IntoElement {
         .font_family("monospace")
         .text_color(rgb(CHROME_ACTIVE))
         .child(text)
+}
+
+/// The shortest projected leg that still gets a ruler tag, in logical pixels.
+///
+/// Below it the chip would cover the ghost disc or the corner vertex, and the 3-field
+/// HUD still names the exact number, so there is nothing to lose by hiding it.
+pub const RULER_MIN_PIXELS: f32 = 32.0;
+
+/// A measurement sitting on one leg of the session's stair-step tape.
+#[derive(Clone, Debug, PartialEq)]
+struct RulerTag {
+    /// `0..=2`: X, Y or Z. Also the Δ field a click would focus.
+    axis: usize,
+    /// The leg's cumulative length, formatted tabularly (`10.0 mm`).
+    text: String,
+    /// The leg's 3-D midpoint, projected to logical pixels.
+    anchor: [f32; 2],
+    /// The leg the current drag moves, tinted with the live accent.
+    active: bool,
+}
+
+/// One tag per non-zero leg, at the leg's **3-D midpoint** projected to the screen.
+///
+/// The path mirrors [`ferrocad_stage::measure_tape::build`]: start at the datum and
+/// walk the non-zero components in X/Y/Z order, so a tag sits exactly on the dashed
+/// leg it measures. Values are the session's cumulative deltas — the same numbers the
+/// 3-field HUD edits — never a single stroke's travel.
+fn ruler_tags(tape: &TransformTape, camera: &Camera, active_axis: Option<usize>) -> Vec<RulerTag> {
+    let mut tags = Vec::new();
+    if !tape.is_visible() {
+        return tags;
+    }
+    let project = |point: Vector3| -> Option<[f32; 2]> {
+        let device = project_device(camera, point)?;
+        Some(
+            camera
+                .viewport
+                .to_logical([device[0].round() as i32, device[1].round() as i32]),
+        )
+    };
+    let delta = tape.delta();
+    let mut current = tape.datum();
+    for axis in 0..3 {
+        let amount = match axis {
+            0 => delta.x,
+            1 => delta.y,
+            _ => delta.z,
+        };
+        if amount == 0.0 {
+            continue;
+        }
+        let direction = match axis {
+            0 => Vector3::new(1.0, 0.0, 0.0),
+            1 => Vector3::new(0.0, 1.0, 0.0),
+            _ => Vector3::new(0.0, 0.0, 1.0),
+        };
+        let next = current.add(&direction.scale(amount));
+        if let (Some(start), Some(end)) = (project(current), project(next)) {
+            let length =
+                ((end[0] - start[0]).powi(2) + (end[1] - start[1]).powi(2)).sqrt();
+            if length >= RULER_MIN_PIXELS {
+                tags.push(RulerTag {
+                    axis,
+                    text: format!("{amount:.1} mm"),
+                    anchor: [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5],
+                    active: active_axis == Some(axis),
+                });
+            }
+        }
+        current = next;
+    }
+    tags
+}
+
+/// The axis ink for a ruler tag: the same tokens the floating HUD uses for `ΔX/Y/Z`.
+fn ruler_ink(axis: usize) -> u32 {
+    match axis {
+        0 => ferrocad_theme::ui::AXIS_X,
+        1 => ferrocad_theme::ui::AXIS_Y,
+        _ => ferrocad_theme::ui::AXIS_Z,
+    }
+}
+
+/// A ruler tag, as a glass chip beside the leg's midpoint.
+///
+/// It carries no Δ prefix: the dashed leg is already tinted with the axis, so the
+/// number alone keeps the chip small enough to sit on the measurement.
+fn ruler_tag(tag: &RulerTag) -> gpui::Div {
+    let ink = if tag.active {
+        ferrocad_theme::ui::ACTIVE_ACCENT
+    } else {
+        ruler_ink(tag.axis)
+    };
+    div()
+        .absolute()
+        .left(px(tag.anchor[0] + 6.0))
+        .top(px(tag.anchor[1] - 8.0))
+        .px(px(5.))
+        .py(px(1.))
+        .rounded_sm()
+        .bg(rgba(ferrocad_theme::ui::WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(CHROME_LINE))
+        .text_size(px(11.))
+        .font_family("monospace")
+        .text_color(rgb(ink))
+        .child(tag.text.clone())
 }
 
 /// Wrap readback pixels as a gpui [`RenderImage`].
@@ -8757,6 +8947,94 @@ mod tests {
         assert_eq!(view.transform_tape(), None);
         assert!(view.set_transform_tape(None), "clears the stored snapshot");
         assert!(!view.set_transform_tape(None), "already empty");
+    }
+
+    #[test]
+    fn a_translation_drag_reads_on_the_ruler_not_a_tip_pill() {
+        let (mut view, viewport) = translate_gizmo_view();
+        let grab = axis_x_grab(&view);
+        // A long enough stroke that its projected leg clears the tag threshold.
+        let release = [grab[0] + 60, grab[1]];
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        assert!(view.handle_pointer(viewport.to_logical(release)));
+        assert!(view.gizmo_value().is_some(), "the drag has a value");
+        assert!(
+            view.gizmo_readout().is_none(),
+            "a translation is measured on the tape, not by a pill at the arrow tip"
+        );
+
+        // The tape the host mirrors gives the drag its tags, one per non-zero leg.
+        let drag = view.take_transform_preview().expect("an update");
+        let delta = Vector3::new(
+            drag.total_transform.m[3],
+            drag.total_transform.m[7],
+            drag.total_transform.m[11],
+        );
+        view.set_transform_tape(Some(TransformTape::new(Vector3::zero(), delta)));
+        let tape = view.transform_tape().expect("a visible tape");
+        let tags = ruler_tags(&tape, &view.camera, Some(0));
+        assert_eq!(tags.len(), 1, "one leg has a tag: {tags:?} (drag {delta:?})");
+        assert_eq!(tags[0].axis, 0);
+        assert!(tags[0].active, "the dragged leg takes the live accent");
+        assert_eq!(tags[0].text, format!("{:.1} mm", delta.x));
+    }
+
+    #[test]
+    fn a_ruler_tag_sits_on_each_leg_and_collapses_when_the_leg_is_short() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        let camera = view.camera.clone();
+
+        // Every non-zero leg gets a tag, in X/Y/Z order, with the cumulative value.
+        let tape = TransformTape::new(Vector3::zero(), Vector3::new(200.0, 100.0, -50.0));
+        let tags = ruler_tags(&tape, &camera, None);
+        assert_eq!(tags.len(), 3);
+        assert_eq!(
+            tags.iter().map(|tag| tag.axis).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(
+            tags.iter().map(|tag| tag.text.as_str()).collect::<Vec<_>>(),
+            ["200.0 mm", "100.0 mm", "-50.0 mm"]
+        );
+        assert!(tags.iter().all(|tag| !tag.active));
+
+        // A leg shorter than the collapse threshold still reaches the form, but gets no
+        // chip: it would cover the ghost disc and the corner tick.
+        let tiny = TransformTape::new(Vector3::zero(), Vector3::new(0.001, 0.0, 0.0));
+        assert!(ruler_tags(&tiny, &camera, None).is_empty());
+
+        // A clean tape has nothing to measure.
+        let clean = TransformTape::new(Vector3::zero(), Vector3::zero());
+        assert!(ruler_tags(&clean, &camera, None).is_empty());
+
+        // The tag's anchor is the midpoint of the projected leg, so it sits on the
+        // dashed line rather than beside it.
+        view.set_transform_tape(Some(tape));
+        let endpoint = |point: Vector3| {
+            let device = project_device(&view.camera, point).expect("the point projects");
+            view.camera
+                .viewport
+                .to_logical([device[0].round() as i32, device[1].round() as i32])
+        };
+        let start = endpoint(Vector3::zero());
+        let end = endpoint(Vector3::new(200.0, 0.0, 0.0));
+        let expected = [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5];
+        let tags = ruler_tags(&view.transform_tape().unwrap(), &view.camera, None);
+        assert_eq!(tags[0].anchor, expected);
+    }
+
+    #[test]
+    fn ruler_tags_only_take_a_click_when_the_host_allows_it() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        assert!(!view.tape_labels_clickable(), "off by default");
+        assert!(view.set_tape_labels_clickable(true));
+        assert!(view.tape_labels_clickable());
+        assert!(
+            !view.set_tape_labels_clickable(true),
+            "an unchanged flag is a no-op"
+        );
+        assert!(view.set_tape_labels_clickable(false));
+        assert!(!view.tape_labels_clickable());
     }
 
     #[test]

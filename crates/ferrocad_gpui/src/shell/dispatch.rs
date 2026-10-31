@@ -332,6 +332,24 @@ impl Shell {
         }
 
         if let (Some(spec), Some(token)) = (outcome.dialog.clone(), outcome.token.clone()) {
+            // A translation spec is the always-on Move form, not a modal: it belongs to
+            // the hand, so it never holds a token. The token is spent here and a fresh
+            // one is acquired when the form commits.
+            if spec.previews_translation() {
+                let _ = commands::cancel(&token);
+                if self.dialog.is_none() && self.form_dialog.is_none() {
+                    self.open_move_hud(cx);
+                }
+                let status = if outcome.status.is_empty() {
+                    "move: drag a handle or type a value".to_string()
+                } else {
+                    outcome.status.clone()
+                };
+                self.model.lock().unwrap().status = status.clone();
+                self.console_line(status, cx);
+                cx.notify();
+                return;
+            }
             let status = if self.dialog.is_some() || self.form_dialog.is_some() {
                 let _ = commands::cancel(&token);
                 "a dialog is already open".to_string()
@@ -673,6 +691,12 @@ impl Shell {
             Ok(tool) => tool,
             Err(error) => return error,
         };
+        // A tool owns the canvas: a pending move is committed (the same context-exit
+        // rule a hand switch follows) and the Move form leaves the screen.
+        if self.session.as_ref().is_some_and(TransformSession::is_dirty) {
+            self.commit_session(cx);
+        }
+        self.close_move_hud(cx);
         let status = tool.status();
         self.active_tool = Some(id.to_string());
         // A tool session owns the pointer, but it is not a loadout change: the hand the
@@ -743,6 +767,8 @@ impl Shell {
         }
         self.active_tool = None;
         self.model.lock().unwrap().tool = None;
+        // The hand is still equipped: its handles and form come back with its target.
+        self.rearm_selection(cx);
         cx.notify();
         had_tool
     }
@@ -783,6 +809,8 @@ impl Shell {
         // new object appears without a manual reload.
         self.refresh(cx);
         self.sync_stage(cx);
+        // The hand is still equipped: its handles and form come back with its target.
+        self.rearm_selection(cx);
         cx.notify();
         true
     }

@@ -777,7 +777,7 @@ pub(crate) fn loadout_bar(loadout: Loadout, cx: &mut Context<Shell>) -> impl Int
             .child(div().text_color(rgb(MUTED)).child(key))
             .child(slot.label());
         button = button.on_click(cx.listener(move |this, _event, _window, cx| {
-            this.set_loadout_slot(slot, cx);
+            this.activate_loadout_slot(slot, cx);
         }));
         panel = panel.child(button);
     }

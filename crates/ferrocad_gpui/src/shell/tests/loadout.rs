@@ -240,3 +240,47 @@ fn switching_the_slot_commits_a_pending_drag_first(cx: &mut TestAppContext) {
         "the slot change committed the drag as one transaction"
     );
 }
+
+/// Pressing the **active** Move hand pauses it: the selection stays, but the triad and
+/// the form leave the canvas so the model can be inspected. Pressing it again arms the
+/// same hand, and a new selection re-arms it on its own.
+#[gpui::test]
+fn pressing_the_active_move_hand_pauses_and_rearms_it(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.is_some()),
+        "the armed hand shows its form"
+    );
+
+    press_root(&mut cx, &shell, "1");
+    draw(&mut cx);
+    let (slot, open, armed, selection) = shell.read_with(&cx, |shell, _| {
+        let model = shell.model.lock().unwrap();
+        (
+            shell.loadout.slot(),
+            shell.move_hud.is_some(),
+            model.gizmo_armed,
+            model.selection.len(),
+        )
+    });
+    assert_eq!(slot, Slot::Move, "the hand stays equipped");
+    assert!(!open, "pausing hides the Move form");
+    assert!(!armed, "a paused hand hosts no handles");
+    assert_eq!(selection, 1, "the selection is kept for inspection");
+    assert!(cx.debug_bounds("move-hud").is_none());
+
+    // The same key arms it again.
+    press_root(&mut cx, &shell, "1");
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.is_some()),
+        "pressing the hand again brings its form back"
+    );
+    assert!(cx.debug_bounds("move-hud").is_some());
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell.move_disarmed),
+        "the hand is armed, not paused"
+    );
+}

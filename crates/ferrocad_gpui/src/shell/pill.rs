@@ -1,142 +1,164 @@
-//! The two-stage transform pill's presentation state.
+//! The Move pill's keyboard state.
 //!
-//! The pill has two stages (see `docs/project/tasks/transform-session.md` §3.2): a
-//! **compact** readout that follows a drag, and an **expanded** row of `ΔX`/`ΔY`/`ΔZ`
-//! fields once the user escalates it with `Tab`, a digit or a click. This module is the
-//! state machine between the two. It holds only *which stage is showing* and *which
-//! field the keyboard owns* — never the Δ values themselves, which belong to the
-//! [`TransformSession`](ferrocad_stage::TransformSession) and are read through it.
-//! Keeping the split means the pill cannot become a second source of truth for a
-//! pending transform, which is the drift the session exists to remove (§0.2).
+//! The pill is one shape now (see `docs/project/tasks/transform-session.md` §3.2): a
+//! single row of `ΔX`/`ΔY`/`ΔZ` fields, shown whenever Slot 1 has a Move target. This
+//! module holds only *which field, if any, the keyboard owns* — never the Δ values
+//! themselves, which belong to the [`TransformSession`](ferrocad_stage::TransformSession)
+//! and are read through it. Keeping the split means the pill cannot become a second
+//! source of truth for a pending transform, which is the drift the session exists to
+//! remove (§0.2).
 //!
-//! It is deliberately free of gpui types, [`Shell`](super::Shell) and the session. A
-//! window is not needed to decide that `Tab` expands a compact pill or that the third
-//! `Tab` wraps to X, so these transitions are unit-tested here and the renderer is a pure
-//! function of this state. §1.2's invariants describe what the *session* does; this state
-//! never commits, rolls back or moves a datum.
+//! **Resting is the default.** Opening the HUD, or releasing a drag, leaves every field
+//! unfocused, so `1`/`2`/`3` still equip loadout slots and the viewport keeps its own
+//! keys. Focus comes only from an explicit act: `Tab`, repurposing a digit, a click in a
+//! field, or a click on a ruler tag. [`PillState::release`] gives it back.
 //!
 //! The focus is an axis index `0..=2` (X/Y/Z) rather than a field enum because it is
 //! handed straight to
 //! [`TransformSession::translate_axis`](ferrocad_stage::TransformSession::translate_axis),
-//! which takes the same index. The constructors and [`PillState::set_focus`] clamp it, so
+//! which takes the same index. The constructors and [`PillState::focus_axis`] clamp it, so
 //! the range is an invariant every later caller can rely on instead of re-checking.
+//!
+//! The state also remembers the axis of the last gesture ([`remember_axis`]): `Tab` then
+//! opens on the field the user was just dragging instead of always starting at `ΔX`.
 //!
 //! [`Shell`](super::Shell) owns one, renders it (`shell/render.rs`) and routes the
 //! escalation keys through it (`shell.rs`); it is also where a typed edit opens or
 //! updates the session.
 
-/// Which stage of the pill is showing, and which Δ field has the keyboard.
+/// Which Δ field the keyboard owns, if any, and the axis the last gesture moved.
 ///
-/// `focus` is only *visible* while expanded, but it is kept across a collapse: the pill
-/// reopens on the field the user left, which is what makes [`tab`](Self::tab) a safe
-/// escalation key rather than a way to lose their place.
+/// `focus == None` is the resting state: the fields render with their chrome hairline
+/// and no caret, and the shell's loadout keys and the viewport keep the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PillState {
-    /// `true` once the pill has unfolded into the three Δ fields.
-    expanded: bool,
     /// The focused Δ field, `0..=2` (X/Y/Z). Every writer clamps it; see the module docs
     /// for why it is an index rather than an enum.
-    focus: usize,
+    focus: Option<usize>,
+    /// The axis the last drag (or armed handle) moved. `Tab` opens here.
+    last: usize,
+    /// `true` when the fields show world coordinates (`X/Y/Z`) instead of offsets
+    /// (`ΔX/ΔY/ΔZ`). The preview and the commit stay deltas either way.
+    absolute: bool,
 }
 
 /// How many Δ fields the pill can show: X, Y and Z.
 const AXES: usize = 3;
 
 impl PillState {
-    /// A compact pill, the stage a drag starts in.
+    /// The resting state: the fields are visible but no input owns the keyboard.
     ///
-    /// Focus starts on X because nothing is focused yet; the first [`expand`](Self::expand)
-    /// therefore lands on `ΔX`, the axis a first drag is most likely to have moved.
-    pub(super) fn compact() -> Self {
+    /// This is what a freshly opened HUD gets, and what it returns to after a commit,
+    /// a cancel or `Enter`.
+    pub(super) fn resting() -> Self {
         Self {
-            expanded: false,
-            focus: 0,
+            focus: None,
+            last: 0,
+            absolute: false,
         }
     }
 
-    /// An expanded pill focused on `axis`, clamped to `0..=2`.
-    ///
-    /// This is the entry point for the digit shortcut (§3.2): pressing a digit opens the
-    /// pill *and* puts the cursor in the field the user chose, in one transition, rather
-    /// than opening at X and then jumping.
-    pub(super) fn expanded_at(axis: usize) -> Self {
+    /// Resting, remembering `axis` as the field `Tab` should open.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn resting_at(axis: usize) -> Self {
         Self {
-            expanded: true,
-            focus: axis.min(AXES - 1),
+            focus: None,
+            last: axis.min(AXES - 1),
+            absolute: false,
         }
     }
 
-    /// Unfold the compact pill; returns whether it was compact.
+    /// Focused on `axis`, clamped to `0..=2`.
     ///
-    /// The focus is left alone, so re-expanding after a collapse resumes at the same
-    /// field. Expanding an already-expanded pill is a no-op, which keeps a click on an
-    /// open pill from resetting the cursor.
-    pub(super) fn expand(&mut self) -> bool {
-        if self.expanded {
-            return false;
+    /// This is the entry point for the digit shortcut and for a click on a ruler tag:
+    /// they open the field the user chose in one transition rather than focusing X and
+    /// then jumping.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn focused_at(axis: usize) -> Self {
+        let axis = axis.min(AXES - 1);
+        Self {
+            focus: Some(axis),
+            last: axis,
+            absolute: false,
         }
-        self.expanded = true;
-        true
     }
 
-    /// Fold the pill back to the compact readout; returns whether it was expanded.
-    ///
-    /// The focus is retained even though it is not drawn: collapse is a change of stage,
-    /// not a change of subject, so the next [`expand`](Self::expand) has to land where
-    /// the user was — §3.2's "`Tab` must not lose the user's place".
-    pub(super) fn collapse(&mut self) -> bool {
-        if !self.expanded {
-            return false;
-        }
-        self.expanded = false;
-        true
-    }
-
-    /// Move the keyboard to the next (`backward == false`) or previous Δ field.
-    ///
-    /// `Tab` is the **escalation key**, not a field-traversal key: on a compact pill it
-    /// unfolds and leaves the focus untouched, whatever the direction. `Shift+Tab` while
-    /// compact therefore also expands. The shell's escalation path already treats both
-    /// directions as one key ([`escalation_key`](super::escalation_key)), and a user's
-    /// `Shift+Tab` reflex must not silently do nothing while there is no field to step
-    /// back from. Once expanded, the fields wrap in both directions, because no other
-    /// widget sits behind them for focus to escape to.
-    pub(super) fn tab(&mut self, backward: bool) -> bool {
-        if !self.expanded {
-            return self.expand();
-        }
-        self.focus = if backward {
-            (self.focus + AXES - 1) % AXES
-        } else {
-            (self.focus + 1) % AXES
-        };
-        true
-    }
-
-    /// The focused Δ field, `0..=2` (X/Y/Z).
-    pub(super) fn focus(&self) -> usize {
+    /// The focused Δ field, if the keyboard owns one.
+    pub(super) fn focus(&self) -> Option<usize> {
         self.focus
     }
 
-    /// Whether the three Δ fields are showing.
-    pub(super) fn is_expanded(&self) -> bool {
-        self.expanded
+    /// Whether any field owns the keyboard.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn has_focus(&self) -> bool {
+        self.focus.is_some()
+    }
+
+    /// The axis `Tab` opens on while resting: the last gesture's axis.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn last_axis(&self) -> usize {
+        self.last
+    }
+
+    /// Remember `axis` as the last gesture's axis, clamped to `0..=2`.
+    ///
+    /// This does **not** move the focus: a drag must never steal the keyboard from a
+    /// field the user is typing in. It only decides where the next `Tab` lands.
+    pub(super) fn remember_axis(&mut self, axis: usize) {
+        self.last = axis.min(AXES - 1);
+    }
+
+    /// Whether the fields show absolute coordinates rather than offsets.
+    pub(super) fn absolute(&self) -> bool {
+        self.absolute
+    }
+
+    /// Flip between `ΔX/ΔY/ΔZ` and `X/Y/Z`; returns the new state.
+    ///
+    /// The mode outlives a session and a focus change: a user who works in world
+    /// coordinates keeps that form when the HUD reopens.
+    pub(super) fn toggle_absolute(&mut self) -> bool {
+        self.absolute = !self.absolute;
+        self.absolute
     }
 
     /// Focus `axis`, clamped to `0..=2`; returns whether the focus moved.
     ///
-    /// This does **not** expand: escalation belongs to [`expand`](Self::expand),
-    /// [`expanded_at`](Self::expanded_at) and [`tab`](Self::tab), so a click on a field
-    /// of an open pill moves the cursor without also deciding that the pill should open.
     /// A caller that means "show the pill and focus this axis" uses
-    /// [`expanded_at`](Self::expanded_at) instead, which is one transition rather than
-    /// two.
-    pub(super) fn set_focus(&mut self, axis: usize) -> bool {
+    /// [`focused_at`](Self::focused_at) instead, which is one transition rather than two.
+    pub(super) fn focus_axis(&mut self, axis: usize) -> bool {
         let axis = axis.min(AXES - 1);
-        if axis == self.focus {
+        if self.focus == Some(axis) {
             return false;
         }
-        self.focus = axis;
+        self.focus = Some(axis);
+        true
+    }
+
+    /// Give the keyboard back to the viewport; returns whether a field had it.
+    ///
+    /// The remembered axis survives, so the next `Tab` reopens where the user was.
+    pub(super) fn release(&mut self) -> bool {
+        self.focus.take().is_some()
+    }
+
+    /// `Tab` / `Shift+Tab`: open on the remembered axis, then cycle through the fields.
+    ///
+    /// While resting, both directions land on the last gesture's axis: the first `Tab` is
+    /// an act of *entering* the form, not of stepping through it, and a user whose last
+    /// drag was on Y expects `ΔY` rather than `ΔX`. Once a field is focused the fields
+    /// wrap in both directions, because no other widget sits behind them for focus to
+    /// escape to.
+    pub(super) fn tab(&mut self, backward: bool) -> bool {
+        let Some(focus) = self.focus else {
+            self.focus = Some(self.last);
+            return true;
+        };
+        self.focus = Some(if backward {
+            (focus + AXES - 1) % AXES
+        } else {
+            (focus + 1) % AXES
+        });
         true
     }
 }
@@ -146,92 +168,118 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_compact_pill_starts_on_x() {
-        let pill = PillState::compact();
-        assert!(!pill.is_expanded());
-        assert_eq!(pill.focus(), 0);
+    fn a_new_pill_rests_without_a_focused_field() {
+        let pill = PillState::resting();
+        assert!(!pill.has_focus());
+        assert_eq!(pill.focus(), None);
+        assert_eq!(pill.last_axis(), 0);
     }
 
     #[test]
-    fn tab_expands_a_compact_pill_without_moving_the_focus() {
-        let mut pill = PillState::compact();
+    fn tab_opens_on_the_remembered_axis() {
+        let mut pill = PillState::resting();
+        pill.remember_axis(1);
         assert!(pill.tab(false));
-        assert!(pill.is_expanded());
-        assert_eq!(pill.focus(), 0, "escalation must not choose a field");
+        assert_eq!(pill.focus(), Some(1), "the first Tab enters at the drag axis");
     }
 
     #[test]
-    fn shift_tab_also_expands_a_compact_pill() {
-        let mut pill = PillState::compact();
+    fn shift_tab_also_opens_on_the_remembered_axis() {
+        let mut pill = PillState::resting();
+        pill.remember_axis(2);
         assert!(pill.tab(true));
-        assert!(pill.is_expanded());
-        assert_eq!(pill.focus(), 0, "there is no field to step back from yet");
+        assert_eq!(pill.focus(), Some(2), "there is no field to step back from yet");
     }
 
     #[test]
     fn tab_cycles_the_fields_forward_with_wraparound() {
-        let mut pill = PillState::expanded_at(0);
+        let mut pill = PillState::focused_at(0);
         assert!(pill.tab(false));
-        assert_eq!(pill.focus(), 1);
+        assert_eq!(pill.focus(), Some(1));
         assert!(pill.tab(false));
-        assert_eq!(pill.focus(), 2);
+        assert_eq!(pill.focus(), Some(2));
         assert!(pill.tab(false));
-        assert_eq!(pill.focus(), 0, "after Z the next field is X");
+        assert_eq!(pill.focus(), Some(0), "after Z the next field is X");
     }
 
     #[test]
     fn shift_tab_cycles_the_fields_backward_with_wraparound() {
-        let mut pill = PillState::expanded_at(0);
+        let mut pill = PillState::focused_at(0);
         assert!(pill.tab(true));
-        assert_eq!(pill.focus(), 2, "before X the previous field is Z");
+        assert_eq!(pill.focus(), Some(2), "before X the previous field is Z");
         assert!(pill.tab(true));
-        assert_eq!(pill.focus(), 1);
+        assert_eq!(pill.focus(), Some(1));
         assert!(pill.tab(true));
-        assert_eq!(pill.focus(), 0);
+        assert_eq!(pill.focus(), Some(0));
     }
 
     #[test]
-    fn expand_keeps_the_focus() {
-        let mut pill = PillState::expanded_at(2);
-        assert!(pill.collapse());
-        assert!(pill.expand());
-        assert!(pill.is_expanded());
-        assert_eq!(pill.focus(), 2, "the pill reopens on the field the user left");
+    fn release_gives_the_keyboard_back_and_keeps_the_memory() {
+        let mut pill = PillState::focused_at(2);
+        assert!(pill.release());
+        assert!(!pill.has_focus());
+        assert!(!pill.release(), "already resting");
+        assert_eq!(pill.last_axis(), 2);
+        pill.tab(false);
+        assert_eq!(pill.focus(), Some(2), "the pill reopens where the user left");
     }
 
     #[test]
-    fn collapse_and_expand_round_trip() {
-        let mut pill = PillState::expanded_at(1);
-        let before = pill;
-        assert!(pill.collapse());
-        assert!(!pill.is_expanded());
-        assert!(pill.expand());
-        assert_eq!(pill, before);
+    fn remembering_a_drag_axis_never_steals_the_focus() {
+        let mut pill = PillState::focused_at(0);
+        pill.remember_axis(2);
+        assert_eq!(pill.focus(), Some(0), "a drag cannot move focus out of a field");
+        assert_eq!(pill.last_axis(), 2);
+        pill.tab(false);
+        assert_eq!(pill.focus(), Some(1), "an already-focused pill keeps cycling");
     }
 
     #[test]
-    fn out_of_range_focus_clamps_to_the_three_axes() {
-        assert_eq!(PillState::expanded_at(9).focus(), 2);
-        assert_eq!(PillState::expanded_at(usize::MAX).focus(), 2);
+    fn out_of_range_axes_clamp_to_the_three_fields() {
+        assert_eq!(PillState::focused_at(9).focus(), Some(2));
+        assert_eq!(PillState::focused_at(usize::MAX).focus(), Some(2));
+        assert_eq!(PillState::resting_at(7).last_axis(), 2);
 
-        let mut pill = PillState::expanded_at(0);
-        assert!(pill.set_focus(7));
-        assert_eq!(pill.focus(), 2);
-        assert!(!pill.set_focus(3), "already clamped to the same field");
-        assert!(!pill.set_focus(usize::MAX));
+        let mut pill = PillState::focused_at(0);
+        assert!(pill.focus_axis(7));
+        assert_eq!(pill.focus(), Some(2));
+        assert!(!pill.focus_axis(3), "already clamped to the same field");
+        assert!(!pill.focus_axis(usize::MAX));
+
+        pill.remember_axis(usize::MAX);
+        assert_eq!(pill.last_axis(), 2);
+    }
+
+    #[test]
+    fn the_coordinate_mode_starts_relative_and_toggles_back() {
+        let mut pill = PillState::resting();
+        assert!(!pill.absolute(), "a new HUD nudges by an offset");
+        assert!(pill.toggle_absolute());
+        assert!(pill.absolute());
+        assert!(!pill.toggle_absolute());
+        assert!(!pill.absolute());
+    }
+
+    #[test]
+    fn the_coordinate_mode_outlives_focus_and_release() {
+        let mut pill = PillState::focused_at(1);
+        pill.toggle_absolute();
+        pill.release();
+        assert!(pill.absolute(), "giving the keyboard back keeps the mode");
+        pill.tab(false);
+        assert!(pill.absolute(), "and so does focusing a field");
+        assert_eq!(pill.focus(), Some(1));
     }
 
     #[test]
     fn transitions_report_a_change_only_when_they_change_something() {
-        let mut pill = PillState::compact();
-        assert!(!pill.collapse(), "already compact");
-        assert!(!pill.set_focus(0), "already focused on X");
-        assert!(pill.expand());
-        assert!(!pill.expand(), "already expanded");
-        assert!(!pill.set_focus(0), "already focused on X");
-        assert!(pill.set_focus(1));
-        assert!(!pill.set_focus(1), "already focused on Y");
-        assert!(pill.collapse());
-        assert!(!pill.collapse(), "already compact");
+        let mut pill = PillState::resting();
+        assert!(!pill.release(), "already resting");
+        assert!(pill.focus_axis(0));
+        assert!(!pill.focus_axis(0), "already focused on X");
+        assert!(pill.focus_axis(1));
+        assert!(!pill.focus_axis(1), "already focused on Y");
+        assert!(pill.release());
+        assert!(!pill.release(), "already resting");
     }
 }

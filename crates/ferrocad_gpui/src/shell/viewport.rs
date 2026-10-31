@@ -225,6 +225,7 @@ impl Shell {
             ViewportEvent::TransformPreview(preview) => self.on_transform_preview(preview, cx),
             ViewportEvent::GizmoOrigin { point, kind } => self.on_gizmo_origin(*point, *kind, cx),
             ViewportEvent::ToolState(status) => self.on_tool_state(status, cx),
+            ViewportEvent::FocusDelta(axis) => self.focus_move_axis(*axis, cx),
         }
         // A tool or a mod event callback can select through the facade; applying the
         // queue here keeps that write in the same frame as the event that caused it.
@@ -235,6 +236,9 @@ impl Shell {
     /// user origin. This is not a transform commit and never touches the document.
     pub(super) fn on_gizmo_origin(&mut self, point: Vector3, kind: SnapKind, cx: &mut Context<Self>) {
         self.user_origin = Some(point);
+        // The absolute fields are measured from the pivot, so a re-pivot re-reads it
+        // (a pending move keeps its frozen `origin_0`).
+        self.refresh_move_origin(cx);
         self.model.lock().unwrap().status = format!("pivot: {}", snap_name(kind));
         cx.notify();
     }
@@ -251,8 +255,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// A click: select the object in the inspector, and arm the manipulators and gizmo
-    /// the edition's workbenches and mods contribute for that selection.
+    // A click: select the object in the inspector, and arm the manipulators and gizmo
+    // the edition's workbenches and mods contribute for that selection.
     pub(super) fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
         // A selection change is a competing interaction: it closes the offset HUD and
         // puts the plane back where the session started (`selection-gizmos-and-forms.md`
@@ -307,6 +311,9 @@ impl Shell {
                 cx.notify();
             });
         }
+        // A viewport pick arms directly rather than through `rearm_selection`, so the
+        // form's origin is re-read here.
+        self.refresh_move_origin(cx);
         cx.notify();
     }
 
@@ -667,14 +674,11 @@ impl Shell {
         self.user_origin.unwrap_or(object_origin)
     }
 
-    /// Whether the origin/centre handle is enabled. The floating Move HUD is anchored
-    /// to the visible origin, so the pivot handle is disabled while its translation
-    /// form is open; closing the form re-enables it.
+    /// Whether the origin/centre handle is enabled. The floating Move form is anchored
+    /// to the visible origin, so the pivot handle is disabled while it is open; closing
+    /// the form re-enables it.
     pub(super) fn gizmo_origin_enabled(&self) -> bool {
-        !self
-            .dialog
-            .as_ref()
-            .is_some_and(|dialog| dialog.spec.previews_translation())
+        self.move_hud.is_none()
     }
 
     /// Push the session's origin-handle policy into the viewport.
@@ -741,6 +745,9 @@ impl Shell {
                 }
             });
         }
+        // The form's Δ fields describe a translation: the rotate hand closes it, and
+        // returning to translate brings it back with its target.
+        self.ensure_move_hud(cx);
         cx.notify();
     }
 
@@ -754,17 +761,11 @@ impl Shell {
             self.on_workplane_offset(commit, cx);
             return;
         }
-        // Any document interaction supersedes a pending Move HUD: the height grip may
-        // have resized the body, and the pending delta is stale. Close the dialog (and
-        // its token) so it cannot apply on top of the committed change.
-        if self
-            .dialog
-            .as_ref()
-            .is_some_and(|dialog| dialog.spec.previews_translation())
-            && let Some(dialog) = self.dialog.take()
-        {
-            let _ = commands::cancel(&dialog.token);
-            self.discard_pending(cx);
+        // Any document interaction supersedes a pending move: the manipulator may have
+        // resized the body, and the pending delta is stale. The Move form belongs to
+        // the Move hand, which does not host manipulators, so this is only a safety net.
+        if self.session.as_ref().is_some_and(TransformSession::is_dirty) {
+            let _ = self.drop_session("move cancelled", cx);
         }
         let Some(object) = (if commit.creates {
             // A *creating* commit has no entity yet: the workbench makes the object,
@@ -833,6 +834,14 @@ impl Shell {
     pub(super) fn rearm_selection(&mut self, cx: &mut Context<Self>) {
         // An explicit re-arm replaces whatever the pointer was previewing.
         self.hover_arm = None;
+        // The Move form follows the hand and the target even without a viewport
+        // (headless): decide its visibility before the early returns below.
+        self.ensure_move_hud(cx);
+        // A paused hand keeps its selection but hosts no handles; `1` arms it again.
+        if self.move_disarmed && self.loadout.slot().wants_gizmo() {
+            self.model.lock().unwrap().gizmo_armed = false;
+            return;
+        }
         // The offset session owns the pointer while its HUD is open: keep its stem on
         // the live plane instead of handing the handles back to the selection.
         if self.workplane_hud_open() {
@@ -866,6 +875,7 @@ impl Shell {
                 viewport.set_gizmo(None);
                 cx.notify();
             });
+            self.ensure_move_hud(cx);
             return;
         };
         let (manipulators, gizmos) = self.arm(&reference, cx);
@@ -899,6 +909,8 @@ impl Shell {
             }
             cx.notify();
         });
+        // The form follows the armed target (a re-pivot included).
+        self.refresh_move_origin(cx);
     }
 
     /// Re-read the workbench commands and their enablement.

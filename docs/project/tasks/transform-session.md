@@ -311,11 +311,11 @@ What this deliberately does **not** add:
 
 ---
 
-## 3. The numeric surface: in-place pill and 3-D tape
+## 3. The numeric surface: the always-on form and the 3-D tape
 
 To honour `visual-language.md` §0.1 ("geometry is the interface; chrome recedes") the Move
-HUD's button bar (`Cancel` / `Move`) is replaced by a 3-D measuring tape in the stage and a
-two-stage pill in the gpui overlay.
+HUD's button bar (`Cancel` / `Move`) is replaced by a 3-D measuring tape in the stage and an
+always-on form in the gpui overlay.
 
 ### 3.1 Stage: the 3-D measuring tape
 
@@ -334,28 +334,68 @@ to the previewed origin `O_current`:
   `Enter`, a context switch or `Esc`. It is not a separate state: the session already
   survives the release (U1), and the tape/pill simply render it until it commits or drops.
 
-### 3.2 gpui: the expandable pill
+### 3.2 gpui: the always-on Move form and the tape's ruler tags
 
-**Built 2026-10-31** (U2b). One pill anchored to the active measurement replaces both the
-separate Move dialog spec and the separate `GizmoValue` readout.
+**Built 2026-10-31** (U2b). The Move surface is a shell-owned form, not a command dialog:
+`shell::move_hud::MoveHud` (three `TextInput`s, a frozen `origin`, subscriptions) lives
+`Option` in the `Shell`, and the command token is acquired only per commit. That is what
+lets the form stay on screen across a commit and coexist with a command modal — a dialog
+would have hit the "a dialog is already open" gate. `pill::PillState` holds the focused
+field (`Option<usize>`), the last dragged axis and the coordinate mode.
 
-- **Compact** (during a drag, and lingering in `SESSION_HOLD`) shows only the constrained value
-  in 12 px semibold tabular monospace on `ui::WHEEL_GLASS` with a `ui::CHROME_LINE` border:
-  `[ ΔX +24.50 mm ]`, or `[ ΔX +24.50  ΔY +10.00 mm ]` for a planar accumulation. Clicking the
-  pill or pressing `Tab` expands it.
-- **Expanded** (via `Tab` or a digit `0–9`, `-`, `.`) unfolds in place:
-  `[ ΔX ( 24.50 )  ΔY ( 10.00 )  ΔZ ( 0.00 ) ]`. There are no `Move`/`Cancel` buttons:
-  `Enter` commits (checkpoint), `Tab`/`Shift+Tab` cycle the fields, `Esc` rolls back.
+- **Always visible while Move has a target.** Slot 1 equipped + a selection + translate
+  handles + no active tool ⇒ the form is on screen. `ensure_move_hud` runs on every
+  selection, re-arm, slot change, tool end and viewport pick; it opens or closes the
+  surface and is idempotent while it is already up. Clearing the selection or equipping
+  another hand closes it. **Pressing `1` while Move is already equipped pauses the hand**
+  (`activate_loadout_slot`): the selection stays, the triad and the form leave the canvas
+  for inspection, and `1` again or any command that equips the hand re-arms it; a changed
+  selection clears the pause. A modal hides the form (the form is not stacked under a
+  backdrop); the object wheel hides it too, and a right-press on the form opens that wheel.
+- **Chrome order and the pending gate.** `[Δ|XYZ]  ΔX [ ] ΔY [ ] ΔZ [ ] mm  ✗ ✓` on
+  `ui::WHEEL_GLASS` with the `TextInput` field tokens. The mode switch leads, the three
+  fields follow, and the finish pair sits at the **right end**. The pair is rendered only
+  while the move is **pending** (`Shell::move_is_pending`: a dirty session, or non-zero
+  parsed fields before a session could open); at rest the same pill is a coordinate
+  inspector and has nothing to finish. The 3-D ruler follows the same gate — a clean
+  session draws no tape — so `✓`/`✗` and the dashed legs appear and vanish together.
+- **Two coordinate modes.** `Δ` (default) shows the pending offset; `XYZ` shows
+  `origin_0 + delta`, where `origin_0` is the gizmo origin frozen while the session is
+  dirty (a re-pivot therefore moves the measured point). Typing in `XYZ` subtracts the
+  origin, so the preview, the tape and the commit always speak deltas. The badge toggles
+  the mode, as does `=`; a per-field `=`/`@` prefix (`=15`) asks for an absolute value in
+  either mode. The origin is re-read after every commit/rollback and selection change.
+  The fields are world/triad axes; expressing them in a rotated workplane's basis is a
+  follow-up (the triad itself is world-aligned today).
+- **Unfocused by default.** Opening the form and every drag/release leave all fields at the
+  resting `ui::CHROME_LINE` border with no caret, so `1`/`2`/`3` keep equipping loadout
+  slots and the viewport keeps its own keys. `Tab` opens the remembered drag axis (and
+  selects its value), then cycles; a digit other than `1`–`3`, `-` or `.` focuses that field
+  and starts the number; a click in a field or on a ruler tag focuses it. A blurred field
+  paints **no** selection highlight, so only the focused field shows the `ACTIVE_ACCENT`
+  ring.
+- **Commit and rollback.** `Enter`/`✓` spends the pending value through `App_Move` and
+  resets the fields/origin; `Esc`/`✗` rolls it back the same way. **Neither closes the
+  form** — it belongs to the hand — and both hand the keyboard back to the viewport, where
+  the pair and the ruler vanish. A clean form commits nothing (no zero-length
+  transaction); a field that does not parse reports a validation status and stays open.
+- **The `Esc` cascade** ends at rest: a pending move rolls back (form stays), then the
+  session pivot is dropped, and a clean form passes the key on so the shell clears the
+  selection — taking the form and the triad with it. A command modal consumes its own
+  `Esc` (the panel stops propagation), so cancelling a dialog never clears the selection
+  behind it.
 - **Position freeze** reuses the existing `hud_lock` / freeze-on-focus invariant
   (`selection-gizmos-and-forms.md` §5.1), so typing `500` never slides the input out from under
   the pointer.
 
 ### 3.3 Keyboard-only workflow
 
-Select an object with the Move slot active (see [`tool-loadout.md`](tool-loadout.md)) → press
-`Tab` (or start typing `25`) → the pill expands to `[ ΔX ( 25 )  ΔY ( 0.0 )  ΔZ ( 0.0 ) ]` at
-the object's origin and the tape previews the +25 mm X offset live → `Tab` to ΔY, type `10`,
-`Enter` to commit both in one undo step.
+Select an object with the Move slot active (see [`tool-loadout.md`](tool-loadout.md)): the
+form appears at its rest pose. Press `Tab` → the caret (with the value selected) is in `ΔX`
+and the tape previews the typed offset live, with the ruler tag on the X leg → type `25`,
+`Tab` to `ΔY`, type `10`, `Enter` to commit both in one undo step. `Tab`, not a digit,
+opens a field because `1`/`2`/`3` are reserved for the loadout. `=` switches the form to
+`X/Y/Z`; typing `0` then `Enter` snaps the pivot there.
 
 ---
 
@@ -370,20 +410,20 @@ lands; the status column is updated then. The loadout-owned rows are in
 | Section | Change | Stage |
 | --- | --- | --- |
 | §4.2 States and transitions | unify the **normal** and **deferred** drag columns. Every `TransformGizmo` drag runs the cumulative session (`Begin → Update → End`), the preview survives the release, and no document transaction fires on mouse-up | U1 |
-| §5.1 / §5.2 Form state machine | replace the floating Move command dialog (`Cancel`/`Move`) with the two-stage pill; change context loss from *silently cancelled* to *auto-commit if dirty*, reserving `Esc` for rollback | U1 (semantics), U2 (pill) |
+| §5.1 / §5.2 Form state machine | replace the floating Move command dialog (`Cancel`/`Move`) with the one-shape Δ HUD; change context loss from *silently cancelled* to *auto-commit if dirty*, reserving `Esc` for rollback; at rest the form is an inspector (no `✗`/`✓`, no tape) | U1 (semantics), U2 (HUD) — done 2026-10-31 |
 | §7 Invariant 3 | "every pending transform session has an explicit rollback (`Esc`), an explicit checkpoint (`Enter`), and auto-commits non-zero deltas when the user deliberately switches selection, slot or tool" | U1 |
 
 ### 4.2 [`gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
-| §5 / §7 lifecycle, snapping, readout | promote `Tab`/digit entry from "deferred escalation" to the primary mechanism of the readout pill; merge `GizmoValue::readout` with the Δ pill so they are two states of one overlay | U2 |
+| §5 / §7 lifecycle, snapping, readout | promote `Tab`/digit entry from "deferred escalation" to the primary mechanism of the readout; a translation's numbers are the tape's ruler tags, not a second pill at the tip | U2 — done 2026-10-31 |
 
 ### 4.3 [`visual-language.md`](../../developer/interaction/visual-language.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
-| §1.5 Text and glass chrome | remove `Cancel`/`Move` button chrome from the translation HUD; specify compact↔expanded pill geometry and the 1 px dashed tape strokes (`AXIS_X`, `AXIS_Y`, `AXIS_Z`, `INACTIVE_COLOR` ghost ring) | U2, U3 |
+| §1.5 Text and glass chrome | remove `Cancel`/`Move` button chrome from the translation HUD; the HUD is one shape (Δ fields + `✗`/`✓`) and the tape draws 1 px dashed strokes (`AXIS_X`, `AXIS_Y`, `AXIS_Z`, `INACTIVE_COLOR` ghost ring) with per-leg ruler tags | U2, U3 — done 2026-10-31 |
 | §5 State model | add the post-drag `SESSION_HOLD` where the tape and pill stay live until `Enter`, a context switch or `Esc` (the hover-to-arm case belongs to the loadout note) | U3 |
 
 ### 4.4 [`transform-ux.md`](../../developer/interaction/transform-ux.md)
@@ -409,7 +449,7 @@ sweep.
 | **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — (**done 2026-10-31**: `set_gizmo_preview`/`gizmo_deferred`, `preview_translation` and `PendingMove` are gone; a translation drag is preview-only through `preview_transform`, while rotation keeps the viewport's direct preview/commit because it has no session yet. `preview_home` untouched. viewport 202, gpui 256) |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 — **done 2026-10-31**: `Manipulator::preview_items` is the manipulator half of the same unpickable display-only contract as `FreeCADGui.Preview`; the push/pull stem ghosts the face at the pending depth and the dress-up scrubber ghosts the edge swath at the pending radius. The viewport draws them only while dragging; no document write and no recompute. part_gui 30, viewport 204 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it, and the session is the selection's (742aee7). The no-arg form now opens the U2 pill, not the buttoned dialog |
-| **U2** | the two-stage pill (`GizmoValue` + Δ fields merged); `Tab`/digit escalation; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31**: `shell::pill::PillState` drives the Move HUD (compact readout during a drag; expanded Δ fields on `Tab`/`Shift+Tab`/a digit/a click; `Enter` commits, `Esc` rolls back), the `Cancel`/`Move` buttons are gone, and a typed-only edit opens the session from `last_stage`. gpui 256 |
+| **U2** | the numeric surface: the always-on form (mode switch + fields + a pending-only `✓`/`✗` pair at the right end), `Tab`/digit focus on the dragged axis, coordinates vs offsets, translation numbers on the tape's ruler tags; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31** (revised three times the same day): `shell::move_hud::MoveHud` is a shell surface (not a dialog), `shell::pill::PillState` holds the focus, the drag-axis memory and the coordinate mode. The form is always visible with a Move target, opens **unfocused** so `1`/`2`/`3` still equip slots, and survives a commit; its `✗`/`✓` pair sits at the right end and appears only while the move is pending (`Shell::move_is_pending`), so at rest it is a coordinate inspector and the tape is not drawn. `Tab`/a non-slot digit/a click/a ruler tag focuses a field; the badge or `=` flips `Δ` ↔ `XYZ` (`origin_0 + delta`, `=`/`@` per-field override). `Esc` cascades (rollback → pivot → clear selection) and `1` on the active hand pauses Move. gpui 282 |
 | **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 — **done 2026-10-31**: `ferrocad_stage::measure_tape` builds the ring, dashed legs and 6 px ticks from `TransformTape`; the viewport draws them depth-off and never picked, and the tape follows the session through the release. Stage 236, viewport 203 |
 | **U6** | this note's share of the sweep: spec text final, dead code gone, user-docs Move page | Converges with the loadout half | all of §4 — **done 2026-10-31**: the four interaction specs agree with the built session/loadout; the retired vocabulary is gone from the code; the user-docs loadout page is authored; gpui 268 |
 
@@ -446,11 +486,15 @@ sweep.
   the preview is a display-only item and `Esc` routes no commit, so history is untouched.
 - **U1** — drag, release, drag again, `Enter`: one undo entry; `Esc` after any drag: zero undo
   entries and the original pose; selecting another object mid-session keeps the move.
-- **U2** — `Tab` on an armed object expands the pill, typing moves the preview, `Enter`
-  commits; the old dialog buttons are absent; the headless harness can drive it without a
-  window (the pill is shell state, not gpui-only). **Built 2026-10-31** (gpui 256); the
-  compact stage is asserted after a drag and `a_typed_edit_opens_the_session` covers the
-  typed-only entry.
+- **U2** — `Tab` on an armed object opens the form on the dragged axis, typing moves the
+  preview, `Enter` commits; the form has its mode switch, its three fields and a `✗`/`✓`
+  pair that exists only while the move is pending; the headless harness can drive it
+  without a window (the form is shell state, not gpui-only). **Built 2026-10-31** (gpui 282): `a_drag_leaves_the_fields_visible_and_tab_focuses_the_drag_axis`,
+  `a_resting_move_hud_lets_a_digit_equip_a_slot`,
+  `the_coordinate_mode_shows_and_parses_absolute_values`,
+  `the_move_form_coexists_with_a_command_dialog`, `clicking_a_ruler_tag_focuses_its_field`,
+  `a_typed_edit_opens_the_session` and `accepting_an_empty_move_form_spends_nothing` cover
+  the keyboard, the mode and the surface's lifetime.
 - **U3** — the tape's legs are proportional to the non-zero delta components, the ghost disc
   sits at the datum, and nothing is pickable. **Built 2026-10-31**:
   `the_legs_follow_only_the_nonzero_axes_in_order`,

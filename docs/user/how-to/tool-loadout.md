@@ -38,10 +38,12 @@ sub-element reports the same filtered scope the window does.
 ## Keep, commit or roll back a move
 
 - **Release** does not commit. The object stays previewed and the 3-D measuring
-  tape shows the pending distance.
-- **`Enter`** commits the pending move as one undo step.
-- **`Esc`** rolls the preview back without writing anything, so it spends no
-  undo entry.
+  tape shows the pending distance: each dashed leg carries its own number.
+- **`Enter`** (or the form's `✓`) commits the pending move as one undo step and resets
+  the fields; a form with nothing pending commits nothing (and shows no `✓`/`✗` at all).
+- **`Esc`** (or the form's `✗`) rolls the preview back without writing anything, so it
+  spends no undo entry. With nothing pending, `Esc` clears the selection instead — the
+  form and the triad go with it.
 - **Switching the hand or the filter**, selecting another object, or starting a
   command **commits** a pending move first, then continues. You cannot lose a
   drag by changing what you are working on.
@@ -50,15 +52,29 @@ sub-element reports the same filtered scope the window does.
 
 | Key | Effect |
 | --- | --- |
-| `1` / `2` / `3` | equip Move / Push/Pull / Fillet |
-| `Tab` | open the Move pill's ΔX/ΔY/ΔZ fields (or cycle them) |
+| `1` / `2` / `3` | equip Move / Push/Pull / Fillet; `1` again on Move pauses the hand |
+| `Tab` | focus the Move form's field for the axis you last dragged (then cycle) |
+| a digit, `-` or `.` | focus the remembered field and start the number |
+| `=` | switch the form between offsets (`ΔX`) and coordinates (`X`) |
 | `Enter` | commit the pending move, or accept an open dialog |
-| `Esc` | roll back the pending move, or close the open surface |
+| `Esc` | roll back the pending move; at rest, clear the selection; or close the open surface |
 | `Space` | open the object-verb wheel |
 
-`1`, `2` and `3` are the tool keys. To type a numeric value that starts with one
-of them, press `Tab` first (or click the field): once the Move pill's fields are
-open, digits type into them.
+With **Move** equipped and something selected, the form is always on screen: a leading
+`Δ`/`XYZ` switch, then the `ΔX`, `ΔY` and `ΔZ` fields, then a `✗` (cancel) and `✓`
+(commit). The finish pair appears **only while a move is pending** (a drag or a typed
+number): at rest the form is a live coordinate readout and the 3-D ruler is not drawn.
+The fields start **unfocused**: their numbers follow the triad and the 3-D measuring
+tape live, but `1`, `2` and `3` still equip tools. `Tab` — or a digit other than
+`1`–`3`, `-`, `.`, a click in a field, or a click on a ruler tag — puts the keyboard in
+a field. Once a field is focused its digits belong to it. `✓`/`Enter` commits and
+resets the fields; `✗`/`Esc` rolls back. Neither closes the form. Starting a `Move`
+command (`Space` wheel or the bar) brings a paused hand back.
+
+Click the `Δ` switch (or press `=`) to show **coordinates** instead of offsets: typing
+`0` in `X` snaps the pivot onto the YZ plane, and a typed coordinate is still one
+ordinary move. Type `=15` in a field to mean "X = 15" for that entry without switching
+the whole form.
 
 ## Notes
 

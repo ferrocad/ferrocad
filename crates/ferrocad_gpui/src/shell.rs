@@ -23,8 +23,8 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, SnapKind, Stage, ToolStatus, TransformGizmo, TransformSession, TransformTape,
-    WorkplaneLive,
+    Manipulator, ShapeItem, SnapKind, Stage, ToolStatus, TransformGizmo, TransformSession,
+    TransformTape, WorkplaneLive,
 };
 use ferrocad_types::{Matrix4, Vector3};
 use ferrocad_ui::Form;
@@ -67,6 +67,7 @@ mod picking;
 mod pill;
 mod properties;
 mod loadout;
+mod move_hud;
 
 pub(crate) use loadout::{Loadout, SelectFilter, Slot};
 
@@ -316,10 +317,23 @@ pub struct Shell {
     dialog_focus: FocusHandle,
     /// Focus the modal on the next render (it is opened outside a window context).
     focus_dialog: bool,
-    /// The Move pill's stage and focused Δ field. The pill is the two-stage numeric
-    /// surface of the unified transform session: compact while a drag runs, expanded
-    /// once the user escalates it with `Tab`, a digit or a click (U2).
+    /// The Move pill's focused Δ field and drag-axis memory. The pill has one shape —
+    /// the three Δ fields — and no field owns the keyboard until the user asks for one
+    /// with `Tab`, a digit, a click or a ruler tag (U2).
     pill: pill::PillState,
+    /// The always-on Move form (three fields, absolute/relative toggle, conditional
+    /// ✓/✗). It is not an [`OpenDialog`](shell::OpenDialog): it belongs to the Move
+    /// hand, so it survives a commit and never blocks another command's dialog.
+    move_hud: Option<move_hud::MoveHud>,
+    /// The user paused the Move hand (`1` while it is already active): the selection
+    /// stays, but the triad, the form and the ruler go away until `1` arms it again.
+    move_disarmed: bool,
+    /// A field the next render must focus (a ruler tag's click, which arrives outside a
+    /// window context). Cleared by the render that consumes it.
+    pill_focus_request: Option<usize>,
+    /// Give the keyboard back to the viewport on the next render, after a Move HUD
+    /// finishes: `Enter`, ✓, `Esc` or ✗ all leave the fields behind.
+    restore_viewport_focus: bool,
     /// The rendered form dialog (`FreeCADGui.Control.showDialog`). It owns the
     /// keyboard while present; a command dialog and a form never share the shell.
     form_dialog: Option<Entity<FormDialog>>,
@@ -749,7 +763,11 @@ impl Shell {
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
-            pill: pill::PillState::compact(),
+            pill: pill::PillState::resting(),
+            move_hud: None,
+            move_disarmed: false,
+            pill_focus_request: None,
+            restore_viewport_focus: false,
             form_dialog: None,
             form_events: None,
             focus_form: false,
@@ -903,6 +921,8 @@ impl Shell {
         }
         self.active_tool = None;
         self.model.lock().unwrap().tool = None;
+        // The hand is still equipped: its handles and form come back with its target.
+        self.rearm_selection(cx);
         cx.notify();
         had_tool
     }
@@ -960,43 +980,73 @@ impl Shell {
         // window, so neither may have a digit stolen to open the Move HUD or an `Enter`
         // stolen to finish a tool. Before this, typing a spacing in `Grid settings`
         // opened the Move HUD and the rest of the number went into `dx`.
-        let editing = self.settings_card.is_some() || cancel_dialog;
-        // The Move pill owns the escalation keys even when no field has focus: a
-        // compact pill is a readout, but `Enter` still commits it and `Tab`/a digit
-        // opens the fields. When an input is focused its own handlers run first; the
-        // paths converge on the same accept/cycle/type helpers. `input_focused` keeps
-        // the root from running a transition the field already ran.
+        //
+        // A focused Δ field is the same case: once `Tab` puts the caret in it, every
+        // digit belongs to that field, not to the loadout. `handle_key` returning `true`
+        // stops propagation, so without this check a typed `1` was eaten by the slot
+        // hotkey and never reached the text input.
+        let field_focused = self.dialog.as_ref().is_some_and(|dialog| {
+            dialog
+                .inputs
+                .iter()
+                .flatten()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        }) || self.move_hud.as_ref().is_some_and(|hud| {
+            hud.inputs
+                .iter()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        });
+        // `=` flips the Move form between offsets and coordinates. It is not a number
+        // character, so it works whether a field owns the keyboard or the canvas does —
+        // but another surface with a text field (a modal, the settings card, the palette)
+        // keeps its own `=`.
+        if event.keystroke.key == "="
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && self.move_hud.is_some()
+            && !self.modal_open()
+            && self.settings_card.is_none()
+            && !self.wheel.read(cx).is_open()
+        {
+            self.toggle_move_mode(window, cx);
+            return true;
+        }
+        let editing = self.settings_card.is_some() || cancel_dialog || field_focused;
+        // The Move HUD owns two keys while a field is **not** focused: `Enter` accepts
+        // it and `Tab` opens a field on the remembered drag axis. Everything else — in
+        // particular `1`/`2`/`3` — belongs to the viewport and the loadout: the fields
+        // are visible but resting, so a digit equips a slot rather than starting a
+        // number. Once a field has focus its own handlers take the digits and `Enter`,
+        // and `Tab` bubbles to the HUD panel to cycle the next field.
         if !editing && self.move_pill_open() {
-            let input_focused = self.dialog.as_ref().is_some_and(|dialog| {
-                dialog
-                    .inputs
-                    .iter()
-                    .flatten()
-                    .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
-            });
             match event.keystroke.key.as_str() {
-                "enter" if !input_focused => {
-                    self.accept_dialog(cx);
+                "enter" => {
+                    self.commit_session(cx);
                     return true;
                 }
-                "tab" if !input_focused => {
-                    self.cycle_pill_focus(event.keystroke.modifiers.shift, window, cx);
+                "tab" => {
+                    self.cycle_move_focus(event.keystroke.modifiers.shift, window, cx);
                     return true;
                 }
-                _ => {}
-            }
-            if !self.pill.is_expanded()
-                && let Some(Some(typed)) = escalation_key(event)
-                && self.type_into_move_pill(typed, window, cx)
-            {
-                return true;
+                _ => {
+                    // `1`/`2`/`3` are the loadout hotkeys (handled just below), so
+                    // only the other numeric keys start a number here. `-` and `.`
+                    // are never slot keys and always open the remembered field.
+                    let slot_digit = Slot::from_key(&event.keystroke.key).is_some();
+                    if !slot_digit
+                        && let Some(Some(typed)) = escalation_key(event)
+                        && self.type_into_move_field(typed, window, cx)
+                    {
+                        return true;
+                    }
+                }
             }
         }
         // The loadout slots: `1`/`2`/`3` equip Move / Push-Pull / Fillet. They sit
-        // below the pill path (a digit typed into a compact readout belongs to the
-        // typing) and above the gizmo escalation below, so `2` on an armed triad
-        // equips the face hand instead of seeding the Move HUD with 2. Typing a value
-        // that starts with a slot digit therefore begins with `Tab`.
+        // above the gizmo escalation below, so `2` on an armed triad equips the face
+        // hand instead of seeding the Move HUD with 2. A focused Δ field consumes its
+        // own digits first; the Move HUD's resting fields do not count as a modal.
         if !editing
             && !self.modal_open()
             && self.active_tool.is_none()
@@ -1006,7 +1056,7 @@ impl Shell {
             && !event.keystroke.modifiers.platform
             && let Some(slot) = Slot::from_key(&event.keystroke.key)
         {
-            self.set_loadout_slot(slot, cx);
+            self.activate_loadout_slot(slot, cx);
             return true;
         }
         // Space in the **tree** window toggles the selected object's `Visibility`
@@ -1041,9 +1091,26 @@ impl Shell {
             if self.dialog.is_none() && self.close_settings_card(cx) {
                 return true;
             }
+            // A pending move is the user's work: Esc is its **rollback**, and the form
+            // stays (it belongs to the Move hand). A *clean* form does not swallow Esc:
+            // the pivot and tool paths below still run.
+            if self.move_hud.is_some() && self.move_is_pending(cx) {
+                self.dismiss_move_hud(cx);
+                return true;
+            }
             // A session pivot is a pending re-pivot: Esc drops it and rebuilds the
             // triad at the object origin.
             if self.clear_user_origin(cx) {
+                return true;
+            }
+            // At rest, Esc clears the selection: the form, the triad and the ruler go
+            // with it. (A dirty move was rolled back above; a pivot was dropped first.)
+            if !cancel_dialog
+                && self.loadout.slot().wants_gizmo()
+                && !self.session.as_ref().is_some_and(TransformSession::is_dirty)
+                && !self.model.lock().unwrap().selection.is_empty()
+            {
+                self.clear_selection(cx);
                 return true;
             }
             // A pending transform is the user's work: Esc is its **rollback** — the
@@ -1552,6 +1619,24 @@ impl Render for Shell {
                 None => window.focus(&self.dialog_focus, cx),
             }
         }
+        // A ruler tag was clicked: put the caret in the field it measures. Deferred
+        // because the click arrives from a viewport event, before a window is available.
+        if self.pill_focus_request.take().is_some() {
+            self.focus_move_field(window, cx);
+            if let Some(axis) = self.pill.focus() {
+                self.select_move_field(axis, cx);
+            }
+        }
+        // A finished Move HUD hands the keyboard back to the canvas, so the next digit
+        // equips a loadout slot instead of landing in a hidden field.
+        if std::mem::take(&mut self.restore_viewport_focus) {
+            let target = self
+                .viewport
+                .as_ref()
+                .and_then(|viewport| viewport.read(cx).focus_handle())
+                .unwrap_or_else(|| self.root_focus.clone());
+            window.focus(&target, cx);
+        }
         // A form opens outside a window context too. Its own element is not
         // focusable, so the shell root takes the keyboard and routes Esc/Enter.
         if std::mem::take(&mut self.focus_form) {
@@ -1758,6 +1843,17 @@ impl Render for Shell {
             body.child(palette_overlay(self, &model, cx))
         } else if self.settings_card.is_some() {
             body.child(settings_card_view(self, window, cx))
+        } else {
+            body
+        };
+        // The Move form is not a modal: it renders whenever the Move hand has a target.
+        // A modal or the object wheel hides it rather than stacking; it comes back when
+        // that transient layer closes.
+        let body = if self.move_hud.is_some()
+            && !self.modal_open()
+            && !self.wheel.read(cx).is_open()
+        {
+            body.child(move_hud_overlay(self, window, cx))
         } else {
             body
         };

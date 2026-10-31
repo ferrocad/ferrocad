@@ -26,7 +26,7 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 | Triad handles | Translate is the default; **Rotate is hosted** through the shell's session mode; Universal is defined but not surfaced | `gizmo.rs`; `contributions.rs`; `shell.rs` `gizmo_mode`/`set_gizmo_mode` |
 | Click anchor | the triad hugs the object origin (`ShapeItem::anchor`); a session `user_origin` from re-pivot overrides it while set | `contributions.rs` `translate_gizmo`; `shell.rs` `user_origin` |
 | Origin/pivot handle | **built (slice 3)**: `GizmoTarget::Origin`, a 10 px disc, priority origin > axis > plane > ring | `gizmo.rs` `GizmoTarget`; `inventor_view.rs` `gizmo_origin_snap` |
-| Face/edge tags, `Move` + the two-stage pill, feature snaps | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
+| Face/edge tags, `Move` + the one-shape Δ HUD and the tape's ruler tags | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
 | Face-normal push/pull | **built (slice 5)**: `PushPullStem` + the parametric `push_pull` hook | `ferrocad_part_gui/src/push_pull.rs`; `python/ferrocad_parametric/__init__.py` |
 | Hand / loadout | **built (U4, 2026-10-31)**: Slot 1 hosts the triad, Slots 2/3 the selection's manipulator; `Select ▾`; `1`/`2`/`3`; bottom-left bar | `shell/loadout.rs`; `chrome.rs` |
 | Hover-to-arm | **built (U5, 2026-10-31)**: Move hand + empty selection materialises the triad at 30 %; a handle press promotes and drags | `shell/loadout.rs`; `inventor_view.rs` `set_gizmo_idle_scale` |
@@ -149,10 +149,28 @@ The floating Δ HUD is anchored to the **gizmo**, not the screen or the pointer
 - The panel stays inside the canvas safe area (16 px margins, 64 px above the dock).
   While an input is focused or the pointer is inside the panel, its screen position is
   **frozen**, so typing a large Δ or dragging never slides the fields away.
-- The expanded pill uses the shared `TextInput` field tokens — `WHEEL_GLASS`, the
-  `CHROME_LINE` hairline and `ACTIVE_ACCENT` while focused. There are no literal
-  `( … )` wrappers around the value: a row is `ΔX` (axis ink), the field box, then one
-  `mm` suffix, repeated for Y and Z.
+- The form has **one shape** and is **always visible while the Move hand has a target**
+  (2026-10-31): `[Δ|XYZ] ΔX [ ] ΔY [ ] ΔZ [ ] mm ✗ ✓`. It is a shell-owned surface, not
+  a command dialog, so it survives a commit and a command modal can open over it. It
+  uses the shared `TextInput` field tokens — `WHEEL_GLASS`, the `CHROME_LINE` hairline
+  and `ACTIVE_ACCENT` while focused — and there are no literal `( … )` wrappers. A
+  blurred field paints no caret and no selection, so two fields never look focused at
+  once. The `✗`/`✓` pair sits at the **right end**, and only while a move is pending:
+  at rest the form is a coordinate inspector with nothing to finish.
+- The leading badge (or `=`) switches the fields between offsets (`ΔX`, the pending
+  delta) and world coordinates (`X`, `origin_0 + delta`), where `origin_0` is the gizmo
+  origin frozen while the session is dirty; a re-pivot moves it. Typing a coordinate
+  subtracts the origin, so preview, tape and commit stay deltas, and a `=`/`@` prefix on
+  one field (`=15`) does the same without leaving offset mode.
+- The fields open **unfocused**: the canvas keeps the keyboard, and `1`/`2`/`3` therefore
+  keep equipping loadout slots. `Tab` opens the drag axis (with its value selected), a
+  digit (other than `1`–`3`) or `-`/`.` opens the remembered field with that character,
+  and a click in a field or on a ruler tag focuses it. `Enter`/`✓` and `Esc`/`✗` finish the
+  session, reset the fields and hand the keyboard back to the viewport; the form stays
+  (`shell/tests/escalation.rs`). `Esc` then cascades: from a pending move it rolls back,
+  from a clean form it clears the selection (taking the form and triad with it). Pressing
+  `1` while Move is already equipped pauses the hand instead — selection kept, handles and
+  form gone — and `1` again, a new selection or a `Move` verb brings it back.
 
 ## 4. Face-normal alignment and push/pull
 

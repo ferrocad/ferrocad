@@ -12,14 +12,14 @@ Companions: [`stage.md`](../viewport/stage.md) (the stage gizmo), [`geometry-and
 kernel), and [`navicube-gpui-design.md`](navicube-gpui-design.md) (the overlay visual
 language this suite shares).
 
-> **Amended (2026-10-30).** The session half is **built**: there is one drag mode (the shell
+> **Amended (2026-10-31).** The session half is **built**: there is one drag mode (the shell
 > enables the viewport's preview mode once at startup, a release reports a preview and never
 > commits), the shell owns a `TransformSession`, `Enter` commits one transaction and `Esc`
-> rolls back without spending an undo entry. What is still **planned** is the readout pill
-> becoming the primary numeric surface (§5, §7) and a loadout slot deciding which manipulator
-> class may arm at all (§9.2, §14, §19). Plans:
-> [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) and
-> [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md); the maths,
+> rolls back without spending an undo entry. The numeric surface is also **built**: the
+> one-shape 3-field HUD (§5) and, for a translation, the tape's per-leg ruler tags. The
+> loadout slot deciding which manipulator class may arm at all is built too (§9.2, §14, §19).
+> Plans: [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
+> and [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md); the maths,
 > hit-testing, modifier and ribbon sections here stay authoritative.
 
 ## 0. Direction
@@ -181,7 +181,7 @@ enum GizmoValue {
 ```
 
 `GizmoDragEvent` and `GizmoCommitEvent` carry `constraint` and `value`. The gpui tag is
-projected at the handle tip (axis), the plane anchor, or the pointer (ring) and uses a
+projected at the handle tip, the plane anchor, or the pointer (ring) and uses a
 monospace/tabular face: `ΔX +24.5 mm`, `ΔθZ +15.0° (15.0°)` (`(free)` under `Ctrl`), or
 `ΔX … ΔY …` for a plane. It is a text layer over the image (like the navicube labels), so
 it never steals pointer events.
@@ -192,13 +192,33 @@ pass the step to `TransformGizmo::set_linear_snap`, and the transform uses the *
 likewise applied to the transform, and `GizmoValue::Angular` reports both raw and applied
 degrees.
 
-**Readout surface (session and pill built).** The numeric tag is a **view of the
+**Readout surface (session and form built).** The numeric tag is a **view of the
 shell's `TransformSession`**: it mirrors `session.delta()` and writes absolute values back,
-so the gesture and the numbers describe one pending value. Since 2026-10-31 the primary
-surface is the in-place two-stage pill (U2) — compact during a drag, expanded by `Tab`, a
-digit or a click, with no `Cancel`/`Move` buttons — which merges this readout with the
-translation Δ fields into two states of one overlay. A plain drag with no pill open still
-uses the read-only stage readout.
+so the gesture and the numbers describe one pending value. Since 2026-10-31 the editable
+surface is the **always-on** Move form (`selection-gizmos-and-forms.md` §5.1) — three
+coordinates with an absolute/relative switch (`X/Y/Z` vs `ΔX/ΔY/ΔZ`), plus a `✗`/`✓`
+finish pair that appears at the right end only while the move is pending.
+
+**Translation numbers sit on the tape (2026-10-31).** A translation drag is no longer
+reported by a third pill at the arrow tip. The session's 3-D measuring tape (U3) gets one
+**ruler tag per non-zero leg**, at that leg's projected 3-D midpoint:
+
+- The path is the same stair-step the tape draws (`O → P_x → P_xy → P_xyz`), so a tag
+  sits *on* its dashed leg. Each tag is the leg's **cumulative** value — the number the
+  Δ field shows — tinted with its axis token, or `ACTIVE_ACCENT` while that leg is being
+  dragged.
+- Tags carry the number and unit only (`10.0 mm`, `-16.5 mm`): the leg is already
+  colour-coded, so a `ΔX` prefix would only widen the chip.
+- A leg whose projected length is under **32 logical px** (`RULER_MIN_PIXELS`) gets no
+  tag; it would cover the ghost disc or the corner tick, and the HUD still carries the
+  exact value.
+- Tags are text while a handle is dragged (no hitbox, so the gesture never loses the
+  pointer) and become click-to-focus after release, when the shell reports a Move form to
+  focus (`set_tape_labels_clickable`). The click reports
+  `ViewportEvent::FocusDelta(axis)`.
+- The tip-anchored `gizmo_readout` remains for the **pivot** (`pivot · vertex`) and for a
+  **ring** drag (`ΔθZ +15.0°`), which have no tape; the workbench manipulators keep their
+  own `Manipulator::readout` pills (`PushPullStem`, `DressUpScrubber`).
 
 ## 6. Analytic hit-testing and occlusion
 
@@ -263,7 +283,8 @@ stateDiagram-v2
 ```
 
 - Release — reports a preview and **never commits**; `Enter` is the commit and `Esc` the
-  rollback (built 2026-10-30).
+  rollback (built 2026-10-30). The fields tick live during the drag and on release, but the
+  gesture never takes the keyboard: `Tab` is what opens a field.
 - `Shift` — plane override: `begin_drag_with_modifiers` turns an axis press into a drag
   in the plane spanned by that stem and the screen-horizontal.
 - `Ctrl` (or the platform's secondary modifier) — free rotation (15° detents are the
@@ -271,9 +292,10 @@ stateDiagram-v2
 - `Esc` — rollback the session: drop the preview and return the geometry to the session
   datum; no undo entry is spent. A re-pivot drag restores the pre-drag **origin** (and the
   shell drops its session user origin).
-- `Tab` / a digit — the primary entry into the numeric surface (U2, built 2026-10-31): a
-  compact pill expands, a digit opens it and replaces the focused field, and both write
-  absolute values back into the session. The tag remains read-only when no session is open.
+- `Tab` / a digit — the primary entry into the numeric surface (U2, built 2026-10-31):
+  the always-on form enters the remembered field (`Tab`) or starts a number there, and
+  both write absolute values back into the session. The tag remains read-only when no
+  session is open.
 - The viewport receives modifiers through `handle_pointer_with_modifiers`,
   `handle_button_with_modifiers` and `drag_move_with_modifiers`; the old methods delegate
   with no modifiers. The root element is focusable (`track_focus` + `focusable`) and the
@@ -493,7 +515,8 @@ Verification: `cargo test -p ferrocad_stage --lib` — 45 tests (10 new T2 cases
 - The viewport root is focusable (lazily created `FocusHandle`), focuses on mouse-down,
   and handles `Esc` by cancelling the drag and clearing the preview.
 - The drag readout is rendered as a small monospace pill over the image; `gizmo_value()`
-  exposes the typed value for tests/hosts.
+  exposes the typed value for tests/hosts. Since 2026-10-31 that pill is only for the
+  pivot and the rings: a **translation** is read on the session tape's ruler tags (§5).
 - `set_snap_grid`/`set_gizmo` pass the grid step to the gizmo.
 
 Verification: `cargo test -p ferrocad_stage --lib` — 52 tests (7 new T3 cases);

@@ -10,11 +10,14 @@ stroke rules, and the idle → hover → drag state machine. It also records wha
 already does, because the tokens currently live in four places with three different
 conventions.
 
-> **Amended (2026-10-31).** The translation HUD's `Cancel`/`Move` chrome is replaced by a
-> two-stage pill (compact ↔ expanded) and a 3-D measuring tape (§1.5), and the state machine
-> gains a post-drag `SESSION_HOLD` (§5); both are built. Hover-to-arm remains planned. Plans:
+> **Amended (2026-10-31).** The translation HUD's `Cancel`/`Move` chrome is replaced by an
+> always-on form — a mode switch, three coordinate fields and a `✗`/`✓` pair that appears
+> only while a move is pending — and a 3-D measuring tape (§1.5), and the state machine
+> gains a post-drag `SESSION_HOLD` (§5); both are built. The mode switch flips the fields
+> between offsets and world coordinates.
+> Hover-to-arm is built too. Plans:
 > [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
-> (pill, tape, `SESSION_HOLD`) and
+> (form, tape, `SESSION_HOLD`) and
 > [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (hover-to-arm);
 > every token and stroke rule here stays authoritative.
 
@@ -155,23 +158,24 @@ the shell bind the same constants.
 | Chrome active fill | `#1B2B38` @ 0.33 | `ui::CHROME_ACTIVE_BG` (the active projection segment) |
 | Error | `#EF4444` | dialog validation line |
 
-**Translation pill and measuring tape — built (U2/U3).** The translation HUD's
-`Cancel`/`Move` button bar is replaced by two states of one in-place pill and a stage-side
-tape (both built 2026-10-31):
+**Translation form and measuring tape — built (U2/U3).** The translation HUD's
+`Cancel`/`Move` button bar is replaced by one always-on form and a stage-side tape (both
+built 2026-10-31):
 
-- **Compact** (during a drag): only the constrained value, 12 px semibold tabular monospace
-  on `ui::WHEEL_GLASS` with a `ui::CHROME_LINE` border — `[ ΔX +24.50 mm ]`, or
-  `[ ΔX +24.50  ΔY +10.00 mm ]` for a planar accumulation.
-- **Expanded** (via `Tab` or a digit `0–9`, `-`, `.`): unfolds in place to
-  `[ ΔX ( 24.50 )  ΔY ( 10.00 )  ΔZ ( 0.00 ) ]`; there are no `Move`/`Cancel` buttons —
-  `Enter` commits, `Tab`/`Shift+Tab` cycle the fields, `Esc` rolls back.
+- **At rest** (a Move target, `Δ = 0`): the three fields are a live coordinate readout,
+  12 px tabular monospace on `ui::WHEEL_GLASS` with `ui::CHROME_LINE` hairlines —
+  `[ Δ|XYZ  ΔX  0.00  ΔY  0.00  ΔZ  0.00 mm ]`. No `✗`/`✓` and no tape: nothing is pending.
+- **Pending** (a drag or a typed value, `Δ ≠ 0`): the dashed ruler stretches from the ghost
+  disc, and the finish pair materialises **at the right end**:
+  `[ Δ|XYZ  ΔX  24.50  ΔY  10.00  ΔZ  0.00 mm  ✗ ✓ ]`. `Enter`/`✓` commits, `Tab`/
+  `Shift+Tab` cycle the fields, `Esc`/`✗` rolls back; either returns the form to rest.
 - **Tape** (stage, not gpui): a 10 px ghost-origin ring in `INACTIVE_COLOR` at the session
   datum, then dashed 1 px stair-step legs along the frame basis in the `AXIS_X`/`AXIS_Y`/
-  `AXIS_Z` tokens, with 6 px end-ticks; depth off, never picked, rebuilt from the session
-  each frame (the `workplane_stem` contract).
+  `AXIS_Z` tokens, with 6 px end-ticks and a midpoint ruler tag per non-zero leg; depth
+  off, never picked, rebuilt from the session each frame (the `workplane_stem` contract).
 
-The pill and the tape are built (`shell::pill::PillState`, `ferrocad_stage::measure_tape`).
-Authority for the specification:
+The form and the tape are built (`shell::move_hud::MoveHud`, `shell::pill::PillState`,
+`ferrocad_stage::measure_tape`). Authority for the specification:
 [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) §3.
 
 **Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
@@ -315,8 +319,8 @@ IDLE
 ```
 
 **`SESSION_HOLD` is built (U3).** After a release the ghost preview is kept (U1) and the 3-D
-tape and two-stage pill remain on screen until `Enter`, a context switch or `Esc`, because
-they render the session that already survives the release. **Hover-to-arm is built**
+tape and the always-on form remain on screen until `Enter`, a context switch or `Esc`,
+because they render the session that already survives the release. **Hover-to-arm is built**
 (U5, 2026-10-31; tool-loadout §3): with the Move hand equipped and nothing selected, a
 trusted body hover materialises the triad in the IDLE ink (30 % opacity); the pointer on
 a handle is the `HOVER` transition (the existing bloom), a press promotes the body and

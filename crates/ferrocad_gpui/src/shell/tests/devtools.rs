@@ -135,12 +135,28 @@ fn the_dev_tools_window_lists_commands_with_enablement(cx: &mut TestAppContext) 
 
     // A modal opens in the main window (the shell owns it); Esc from the Dev
     // Tools window must still reach it instead of being swallowed.
+    let script = r#"
+import FreeCADGui
+class _TestDevModal:
+    def GetResources(self):
+        return {"MenuText": "Dev modal"}
+    def Activated(self):
+        return {
+            "title": "Dev modal",
+            "fields": [{"name": "Note", "kind": "text", "value": "x"}],
+            "on_accept": lambda values: {"status": "ok"},
+        }
+if "Test_DevModal" not in FreeCADGui.listCommands():
+    FreeCADGui.addCommand("Test_DevModal", _TestDevModal())
+"#;
+    let registered = crate::python::evaluate(script).expect("evaluate");
+    assert!(registered.ok, "{}", registered.output);
     cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| shell.run_command("App_Move", cx))
+        shell.update(cx, |shell, cx| shell.run_command("Test_DevModal", cx))
     });
     assert!(
         cx.update(|_window, cx| shell.read(cx).dialog.is_some()),
-        "the move dialog opened"
+        "the modal opened"
     );
     dev_cx.simulate_keystrokes("escape");
     assert!(

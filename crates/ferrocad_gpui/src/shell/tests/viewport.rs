@@ -887,22 +887,16 @@ fn typing_a_move_moves_the_gizmo_with_the_object(cx: &mut TestAppContext) {
         (gizmo.items()[0].positions()[0], gizmo.origin())
     });
 
-    // The real HUD spec and token, so the fields and their change events are the same
-    // path the user types into.
-    let outcome = crate::commands::run("App_Move").expect("App_Move");
-    let spec = outcome.dialog.clone().expect("a dialog");
-    let token = outcome.token.clone().expect("a token");
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
-    });
+    // The selection already opened the always-on Move form (and a clean session).
     draw(&mut cx);
-    for axis in 0..3 {
-        if axis > 0 {
-            cx.simulate_keystrokes("tab");
-        }
+    // The HUD opens unfocused: `Tab` enters the fields on the remembered axis, then
+    // cycles X -> Y -> Z. Each typed `1` replaces that field's `0.00` seed.
+    for _ in 0..3 {
+        // `Tab` selects the field's seed, so `1` replaces it (0.00 -> 1, not 0.001).
+        press_root(&mut cx, &shell, "tab");
         cx.simulate_input("1");
+        draw(&mut cx);
     }
-    draw(&mut cx);
 
     let (origin, drawn_after, anchor, gizmo_anchor) = cx.update(|window, cx| {
         let viewport = viewport.read(cx);
@@ -1120,13 +1114,7 @@ fn a_deferred_hud_drag_moves_the_triad_with_the_object(cx: &mut TestAppContext) 
     };
     let start = origin(&cx);
 
-    // Open the Move HUD directly: `run_command` resyncs the synthetic stage.
-    let outcome = crate::commands::run("App_Move").expect("App_Move");
-    let spec = outcome.dialog.clone().expect("a dialog");
-    let token = outcome.token.clone().expect("a token");
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
-    });
+    // The selection already opened the always-on Move form (and a clean session).
     assert!(
         shell.read_with(&cx, |shell, _| shell
             .session
@@ -1171,13 +1159,7 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
     };
     click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
 
-    // The real HUD spec is what turns a drag into a preview.
-    let outcome = crate::commands::run("App_Move").expect("App_Move");
-    let spec = outcome.dialog.clone().expect("a dialog");
-    let token = outcome.token.clone().expect("a token");
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
-    });
+    // The selection already opened the always-on Move form (and a clean session).
     assert!(
         shell.read_with(&cx, |shell, _| shell
             .session
@@ -1355,12 +1337,80 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
         "the object is still previewed where the drag ended: {previewed:?} vs {dragged:?}"
     );
 
+    // 6. A **second** drag continues from the settled pose. The first release moved the
+    //    interaction frame; a stale preview home would then draw the triad back at the
+    //    document pose on the next press — the reported "it snaps back".
+    let (settled, second_grab, second_release) = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        let camera = viewport.camera().clone();
+        let gizmo = &viewport.gizmos().gizmos()[0];
+        let origin = gizmo.origin();
+        let device = ferrocad_stage::screen::project_device(&camera, origin)
+            .expect("the settled triad projects");
+        let mut hits = Vec::new();
+        for dx in -140..=140 {
+            for dy in -140..=140 {
+                let point = [device[0].round() as i32 + dx, device[1].round() as i32 + dy];
+                if gizmo.hit(&camera, point) == Some(GizmoTarget::Handle(GizmoHandle::AxisX)) {
+                    hits.push(point);
+                }
+            }
+        }
+        let grab = *hits
+            .get(hits.len() / 2)
+            .expect("the settled X arrow is pickable");
+        (
+            origin,
+            camera.viewport.to_logical(grab),
+            camera.viewport.to_logical([grab[0] + 24, grab[1]]),
+        )
+    });
+    step(&mut cx, second_grab, true);
+    let (press_origin, press_offset) = cx.update(|_window, cx| {
+        let gizmo = &viewport.read(cx).gizmos().gizmos()[0];
+        (gizmo.origin(), gizmo.display_offset())
+    });
+    assert!(
+        (press_origin.x - settled.x).abs() < 1e-9 && (press_origin.y - settled.y).abs() < 1e-9,
+        "the press keeps the settled frame: {settled:?} -> {press_origin:?}"
+    );
+    assert_eq!(
+        press_offset,
+        Some(ferrocad_types::Vector3::zero()),
+        "the draw-only offset is measured from where the triad is, not the document"
+    );
+    let update2 = cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, _cx| {
+            viewport.handle_pointer(second_release);
+            viewport.take_transform_preview().expect("an update")
+        })
+    });
+    let travelled = update2.total_transform.m[3];
+    assert!(travelled.abs() > 1e-9, "the second drag moved: {travelled}");
+    feed(&mut cx, Some(update2));
+    step(&mut cx, second_release, false);
+    draw(&mut cx);
+    let (after_origin, after_drawn) = cx.update(|_window, cx| {
+        let gizmo = &viewport.read(cx).gizmos().gizmos()[0];
+        (gizmo.origin(), gizmo.items()[0].positions()[0])
+    });
+    assert!(
+        (after_origin.x - (settled.x + travelled)).abs() < 1e-6,
+        "the second release settles at the cumulative pose: {settled:?} + {travelled} != {after_origin:?}"
+    );
+    assert!(
+        (f64::from(after_drawn[0]) - f64::from(drawn_before[0]) - dragged[0] - travelled).abs()
+            < 1e-4,
+        "the drawn triad carries both drags: {drawn_before:?} -> {after_drawn:?}"
+    );
+
     // 5. Cancelling drops the live value and its preview: `Esc` is a rollback of the
-    //    session, not an undo step (nothing was ever written to the document).
-    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.cancel_dialog(cx)));
+    //    session, not an undo step (nothing was ever written to the document). The form
+    //    itself stays, because it belongs to the Move hand.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.dismiss_move_hud(cx)));
     assert!(
         shell.read_with(&cx, |shell, _| shell.session.is_none()),
-        "the session is gone with the HUD"
+        "the session is gone with the rollback"
     );
     let previewed = cx.update(|_window, cx| {
         viewport
@@ -1468,13 +1518,7 @@ fn a_move_session_draws_the_tape_until_it_ends(cx: &mut TestAppContext) {
     };
     click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
 
-    // The real HUD spec opens the session (clean) and anchors it on the slab.
-    let outcome = crate::commands::run("App_Move").expect("App_Move");
-    let spec = outcome.dialog.clone().expect("a dialog");
-    let token = outcome.token.clone().expect("a token");
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
-    });
+    // The selection already opened the always-on Move form (and a clean session).
     let viewport = cx.update(|_window, cx| {
         shell
             .read(cx)

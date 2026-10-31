@@ -61,6 +61,14 @@ impl Shell {
             .into_iter()
             .map(|item| filter.apply_item(item))
             .collect();
+        // A paused Move hand is about *this* subject: a new selection arms it again.
+        let changed = {
+            let model = self.model.lock().unwrap();
+            model.selection != items
+        };
+        if changed {
+            self.move_disarmed = false;
+        }
         // A pending transform is **committed** before the context changes: losing a drag
         // because the user clicked something else is the defect the session exists to
         // remove. It has to happen first, while the old selection is still the selection —
@@ -128,6 +136,9 @@ impl Shell {
             self.console_line(format!("selection: {error}"), cx);
         }
         self.refresh_commands(cx);
+        // The Move hand's form follows the selection: it appears with a target and goes
+        // away when the selection clears. A tool owns the canvas instead.
+        self.ensure_move_hud(cx);
         cx.notify();
     }
 

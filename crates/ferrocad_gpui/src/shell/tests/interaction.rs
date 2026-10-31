@@ -623,52 +623,126 @@ if "Test_MoveModal" not in FreeCADGui.listCommands():
     );
 }
 
-/// The finish pill is placed **ahead** of the drag: the tape's ghost origin is behind
-/// it, so the pill (and its buttons) can never cover a dashed leg or a ruler tag.
+/// The finish pill sits **beside** the stroke, not in front of it: the tape lies along
+/// the drag and the pointer is on it, so the pill takes the perpendicular — and the
+/// other side when the pointer is already over one.
 #[test]
-fn the_finish_pill_is_placed_ahead_of_the_tape() {
+fn the_finish_pill_sits_beside_the_tape_and_clear_of_the_pointer() {
     let viewport = size(px(800.0), px(600.0));
     let pill = size(px(70.0), px(36.0));
     let origin = point(px(400.0), px(300.0));
+    let datum = Some(point(px(500.0), px(300.0)));
 
-    // The tape came from the right, so the pill goes left of the origin.
-    let placed = place_finish(
+    // A horizontal stroke: the pill goes above it, centred on the origin.
+    let above = place_finish(origin, datum, Some(origin), viewport, pill);
+    assert!(
+        above.y.0 + pill.height.0 < origin.y.0,
+        "the pill is above the stroke: {above:?}"
+    );
+    assert!(
+        (above.x.0 + pill.width.0 * 0.5 - origin.x.0).abs() < 1.0,
+        "and centred on the origin: {above:?}"
+    );
+
+    // A pointer already over that side pushes the pill to the other one.
+    let over = point(px(above.x.0 + 10.0), px(above.y.0 + 10.0));
+    let below = place_finish(origin, datum, Some(over), viewport, pill);
+    assert!(
+        below.y.0 > origin.y.0,
+        "the pointer takes the upper side: {below:?}"
+    );
+
+    // A vertical stroke puts the pill left or right of it, never on it.
+    let up = place_finish(
         origin,
-        Some(point(px(500.0), px(300.0))),
+        Some(point(px(400.0), px(420.0))),
+        Some(origin),
         viewport,
         pill,
     );
     assert!(
-        placed.x.0 + pill.width.0 < origin.x.0,
-        "the pill clears the incoming leg: {placed:?}"
-    );
-    assert!(
-        (placed.y.0 + pill.height.0 * 0.5 - origin.y.0).abs() < 1.0,
-        "the pill is centred on the drag line: {placed:?}"
-    );
-
-    // A drag from below-left puts it up and to the right.
-    let placed = place_finish(
-        origin,
-        Some(point(px(300.0), px(400.0))),
-        viewport,
-        pill,
-    );
-    assert!(
-        placed.x.0 > origin.x.0 && placed.y.0 < origin.y.0,
-        "the pill stays ahead of the move: {placed:?}"
+        up.x.0 > origin.x.0 || up.x.0 + pill.width.0 < origin.x.0,
+        "the pill is beside the vertical stroke: {up:?}"
     );
 
     // No projected datum, or a screen delta too small to name a direction: the plain
     // HUD anchor (up and to the right).
     assert_eq!(
-        place_finish(origin, None, viewport, pill),
+        place_finish(origin, None, Some(origin), viewport, pill),
         place_hud(origin, viewport, pill)
     );
     assert_eq!(
-        place_finish(origin, Some(point(px(405.0), px(302.0))), viewport, pill),
+        place_finish(
+            origin,
+            Some(point(px(405.0), px(302.0))),
+            Some(origin),
+            viewport,
+            pill
+        ),
         place_hud(origin, viewport, pill),
         "a negligible screen delta falls back"
+    );
+}
+
+/// While a gizmo drag runs the finish pair carries no hitbox: a release over the painted
+/// buttons must still reach the canvas, so the drag can end. The same click spends the
+/// move once the drag has ended.
+#[gpui::test]
+fn the_finish_pill_is_inert_while_a_drag_runs(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    draw(&mut cx);
+    // Park the pointer mid-canvas: with no viewport the pill anchors to it.
+    cx.simulate_mouse_move(
+        point(px(600.0), px(400.0)),
+        None::<MouseButton>,
+        gpui::Modifiers::default(),
+    );
+    draw(&mut cx);
+
+    let preview = |phase, y: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::translation(0.0, y, 0.0),
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0), cx);
+        })
+    });
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.drag_start.is_some()),
+        "the drag is running"
+    );
+
+    // A click where ✓ is painted must not finish the drag.
+    click_at(&mut cx, "dialog-accept");
+    draw(&mut cx);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.drag_start.is_some()),
+        "the pill did not take the pointer"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.pending_translation(cx)),
+        Some([0.0, 5.0, 0.0]),
+        "the pending drag is untouched"
+    );
+
+    // Released: the pill is a control again and the same click spends the move.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::End, 5.0), cx);
+        })
+    });
+    draw(&mut cx);
+    click_at(&mut cx, "dialog-accept");
+    draw(&mut cx);
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.pending_translation(cx)),
+        Some([0.0, 0.0, 0.0]),
+        "✓ spends it after the release"
     );
 }
 

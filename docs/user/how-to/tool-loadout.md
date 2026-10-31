@@ -34,6 +34,11 @@ The header's `Select: Body ▾` control (between `Gizmo ▾` and `Snap ▾`) is 
 face, which is what lets you grab and move it immediately. Equipping Push/Pull or
 Fillet switches the filter to Face or Edge, so the sub-element is kept.
 
+`Edge` is a real snap, not just a label: a click — and the hover highlight that
+precedes it — resolves to the nearest drawn edge within about 8 px, even when the
+ray would hit the face behind it. A click deep in a face still reports the face,
+so the filter never jumps to a far boundary.
+
 You can also override the filter yourself: choose `Auto`, `Body`, `Face` or
 `Edge` in the `Select ▾` menu without changing the hand. The label turns cyan
 while the filter differs from the hand's default. A script that selects a
@@ -41,11 +46,11 @@ sub-element reports the same filtered scope the window does.
 
 With **Inspect** (`0`) there is no triad to tell you what a click would grab, so
 the viewport highlights it instead: hovering a body paints the whole body under
-`Body`, and a `Face`/`Edge` filter paints just that sub-element. The latched
-selection keeps its highlight when the pointer moves away. That is the same
-filtered scope a click will report. Inspect also docks a Body/Face/Edge switcher
-just above the loadout bar; it reads and writes the same filter as `Select ▾`, so
-the header and the in-context pill can never disagree.
+`Body`, a `Face` filter paints the face, and an `Edge` filter snaps to the nearest
+drawn edge. The latched selection keeps its highlight when the pointer moves away.
+That is the same filtered scope a click will report. Inspect also docks a
+Body/Face/Edge switcher just above the loadout bar; it reads and writes the same
+filter as `Select ▾`, so the header and the in-context pill can never disagree.
 
 ## Keep, commit or roll back a move
 

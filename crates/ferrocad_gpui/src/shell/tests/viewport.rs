@@ -749,6 +749,62 @@ fn the_pills_re_arm_the_viewport_hand(cx: &mut TestAppContext) {
     );
 }
 
+/// The topology filter reaches the viewport's picker: `Edge` asks it to snap picks to
+/// the nearest drawn edge, while every other scope keeps the raw primitive. Skips
+/// without a GPU adapter.
+#[gpui::test]
+fn the_edge_filter_reaches_the_viewport_picker(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+    let scope = |cx: &App| viewport.read(cx).pick_scope();
+
+    assert_eq!(
+        cx.update(|_window, cx| scope(cx)),
+        ferrocad_viewport::PickScope::Raw,
+        "the move hand starts on the raw pick"
+    );
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_select_filter(SelectFilter::Edge, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| scope(cx)),
+        ferrocad_viewport::PickScope::Edge,
+        "the Edge filter reaches the picker"
+    );
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_select_filter(SelectFilter::Face, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| scope(cx)),
+        ferrocad_viewport::PickScope::Raw,
+        "Face goes back to the raw pick"
+    );
+
+    // Slot 3's Edge default follows the same path.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::Fillet, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| scope(cx)),
+        ferrocad_viewport::PickScope::Edge,
+        "equipping Fillet asks the picker for edges"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::PushPull, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| scope(cx)),
+        ferrocad_viewport::PickScope::Raw,
+        "the face hand goes back to the raw pick"
+    );
+}
+
 /// U4: the Inspect hand's stage highlight previews the filtered scope. Skips without a
 /// GPU adapter.
 #[gpui::test]

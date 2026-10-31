@@ -38,8 +38,8 @@ pub mod presenter;
 pub mod scene;
 
 pub use inventor_view::{
-    HoverReport, InventorViewport, PreviewPhase, SelectionAnchor, SelectionEvent, TransformPreview,
-    ViewportEvent,
+    HoverReport, InventorViewport, PickScope, PreviewPhase, SelectionAnchor, SelectionEvent,
+    TransformPreview, ViewportEvent,
 };
 pub use navicube::NaviCube;
 pub use presenter::{Presenter, PresenterStatus};

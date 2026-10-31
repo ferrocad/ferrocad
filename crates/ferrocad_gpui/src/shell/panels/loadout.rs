@@ -69,6 +69,17 @@ impl SelectFilter {
 
     /// Every filter the `Select ▾` popover offers, in menu order.
     pub(crate) const ALL: [Self; 4] = [Self::Auto, Self::Body, Self::Face, Self::Edge];
+
+    /// The viewport pick preference this scope asks for.
+    ///
+    /// `Edge` makes a click and hover snap to the nearest drawn edge of the hit body;
+    /// the other scopes keep the raw primitive (and `Body` is stripped by the shell).
+    pub(crate) fn pick_scope(self) -> PickScope {
+        match self {
+            Self::Edge => PickScope::Edge,
+            Self::Auto | Self::Body | Self::Face => PickScope::Raw,
+        }
+    }
 }
 
 /// The loadout slot: the instrument in the user's hand.
@@ -236,6 +247,7 @@ impl Shell {
         }
         self.commit_pending_session(cx);
         self.loadout.set_slot(slot);
+        self.sync_pick_scope(cx);
         self.rearm_selection(cx);
         let status = format!("tool: {}", slot.status_label(self.gizmo_mode));
         self.model.lock().unwrap().status = status.clone();
@@ -288,6 +300,23 @@ impl Shell {
         self.model.lock().unwrap().status = format!("tool: {label}");
     }
 
+    /// Push the active topology filter to the viewport's picker.
+    ///
+    /// `Edge` makes clicks and hovers snap to the nearest drawn edge; the other scopes
+    /// keep the raw primitive. Called wherever the filter changes (a slot's preset, the
+    /// header, the Inspect switcher) and once when the viewport attaches.
+    pub(in crate::shell) fn sync_pick_scope(&self, cx: &mut Context<Self>) {
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let scope = self.loadout.filter().pick_scope();
+        viewport.update(cx, |viewport, cx| {
+            if viewport.set_pick_scope(scope) {
+                cx.notify();
+            }
+        });
+    }
+
     /// Override the topology filter from the header's `Select ▾`.
     ///
     /// Like a slot change, this is a context exit: a pending edit commits before the
@@ -302,6 +331,7 @@ impl Shell {
         }
         self.commit_pending_session(cx);
         self.loadout.set_filter(filter);
+        self.sync_pick_scope(cx);
         self.rearm_selection(cx);
         let status = format!("select: {}", filter.label().to_lowercase());
         self.model.lock().unwrap().status = status.clone();

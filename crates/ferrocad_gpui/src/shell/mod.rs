@@ -30,8 +30,8 @@ use ferrocad_types::{Matrix4, Rotation, Vector3};
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{
-    HoverReport, InventorViewport, PreviewPhase, SelectionAnchor, SelectionEvent, TransformPreview,
-    ViewportEvent,
+    HoverReport, InventorViewport, PickScope, PreviewPhase, SelectionAnchor, SelectionEvent,
+    TransformPreview, ViewportEvent,
 };
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
@@ -1404,6 +1404,9 @@ else:
         self.viewport = Some(viewport);
         self._viewport_events = Some(events);
         self._viewport_camera = Some(camera);
+        // The picker starts from the filter the shell already holds (Body on boot), and
+        // follows it from here.
+        self.sync_pick_scope(cx);
         self.bootstrap_providers(cx);
     }
 

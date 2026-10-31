@@ -60,7 +60,7 @@ which single manipulator class is hosted (`GizmoSet::set_session`):
 | --- | --- | --- | --- | --- |
 | Slot 1 | `1` | Body (element: `None`) | `TransformGizmo` (Translate / Rotate) | the docked coordinate row + the in-context `✗`/`✓` pill, and the session's 3-D tape ([`transform-session.md`](transform-session.md) §3). Pressing `1` again toggles the hand Move ⇄ Rotate |
 | Slot 2 | `2` | Face (`FaceN`) | `PushPullStem` (extrude / pocket) | in-situ readout pill (`Tab` to type) |
-| Slot 3 | `3` | Edge (`EdgeN` chain) | `DressUpScrubber` (Fillet / Chamfer) | in-situ readout pill (`Tab` to type) |
+| Slot 3 | `3` | Edge (`EdgeN` chain) | `DressUpScrubber` (Fillet / Chamfer) | in-situ readout pill (`Tab` to type); its Edge default snaps picks to the nearest drawn edge |
 | Slot 0 (Inspect) | `0` | Body (`None`) | none — selection only | the in-context Body/Face/Edge switcher above the bar; the stage's selection highlight shows the hovered or latched scope |
 | Wheel | Right-click / Space | context-dependent | "Buy menu": equips specialised verbs (Rotate, Chamfer, Draft) into the active hand | the same session contract |
 
@@ -170,7 +170,9 @@ changing the slot.
   `a_face_click_in_the_move_slot_arms_only_the_triad`,
   `a_claimed_sub_element_suppresses_the_shared_body_triad` /
   `an_unclaimed_sub_element_leaves_the_face_slot_empty`; the Inspect highlight has
-  `ferrocad_viewport`'s `the_inspect_highlight_paints_the_filtered_scope`.
+  `ferrocad_viewport`'s `the_inspect_highlight_paints_the_filtered_scope`, the Edge snap
+  has `the_edge_scope_snaps_to_the_nearest_edge`, and the shell-to-viewport wiring has
+  `the_edge_filter_reaches_the_viewport_picker`.
 
 ---
 
@@ -186,7 +188,11 @@ pub enum SelectFilter { Auto, Body, Face, Edge }
 - `Body` **strips the sub-element** from the selection event: a click on `Face2` of body 7
   selects `whole(7)`. This is what makes Slot 1's "grab the body and move it" work on the first
   click, with no Shift-click or tree interaction.
-- `Face` / `Edge` are the first-element variants the manipulator slots need.
+- `Face` / `Edge` are the first-element variants the manipulator slots need. `Edge`
+  also asks the viewport to resolve the pick to the nearest projected edge of the hit
+  body (`PickScope::Edge`, within `EDGE_PICK_PIXELS` = 8 px); a click too far from
+  every edge keeps the raw primitive. The viewport owns this because only it has the
+  camera and the projected segments.
 
 The filter lives in view state (D2), beside `Gizmo ▾`. The shell applies it where it
 reports a selection, where it arms a hand, and where the Inspect hand paints its preview;
@@ -196,13 +202,15 @@ reports a selection, where it arms a hand, and where the Inspect hand paints its
 
 At the **selection event**, not at the pick: the pick still reports the sub-element (hover
 needs it for the bloom, snapping needs it for the element map), and the shell rewrites the
-reference it reports to the tool, the tree and the manipulator arming.
+reference it reports to the tool, the tree and the manipulator arming. `Edge` is the
+exception that is resolved **inside** the viewport, before the event: it needs the camera
+and the projected edge segments, not the shell's view of the stage.
 
 ### 2.3 What the filter does *not* decide
 
-- It does not change what is **hoverable** or what the raw pick reports. The Inspect
-  hand's highlight is the exception that proves the rule: it applies the filter, so its
-  preview always matches what a click would select.
+- It does not change what is **hoverable** or what the raw pick reports. The Edge scope
+  changes which sub-element that raw pick **reports** (the nearest edge), and the Inspect
+  highlight applies the filter, so its preview always matches what a click would select.
 - It does not change the wheel's target resolution (right-click still resolves the element,
   because a wheel's verbs are element verbs).
 - It does not apply to a translation session once it has begun: the session's target is fixed

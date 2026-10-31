@@ -37,7 +37,7 @@ use ferrocad_stage::{
     TransformGizmo, TransformTape, ViewProjection, Workplane, axis, feedback, grid,
     snap_to_geometry_with,
 };
-use ferrocad_stage::screen::{camera_position, project_device, scale_for};
+use ferrocad_stage::screen::{camera_position, point_segment_distance, project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 use gpui::{
@@ -101,6 +101,28 @@ pub struct HoverReport {
     /// The overlay under the pointer that will not consume the click.
     pub through: Option<&'static str>,
 }
+
+/// Which sub-element a click and hover should report.
+///
+/// The raw pick reports whatever primitive it hits (normally a face). A host whose
+/// selection filter asks for edges sets [`Edge`](Self::Edge), and the viewport snaps
+/// the pick to the nearest projected edge of the hit body, so a click near a drawn
+/// edge reports `EdgeN` instead of the face behind it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PickScope {
+    /// The primitive the ray hits (the historical behaviour).
+    #[default]
+    Raw,
+    /// The nearest edge of the hit body within [`EDGE_PICK_PIXELS`] of the pointer.
+    Edge,
+}
+
+/// How close (device pixels) the pointer must be to a projected edge for
+/// [`PickScope::Edge`] to claim it.
+///
+/// Wider than the picker's 2 px line tolerance because this is an explicit "select
+/// edges" mode: the user is aiming at a boundary, not merely clicking through a line.
+pub const EDGE_PICK_PIXELS: f64 = 8.0;
 
 /// A live gizmo drag, reported to a host that previews the whole selection itself.
 #[derive(Clone, Debug, PartialEq)]
@@ -516,6 +538,8 @@ pub struct InventorViewport<V: InventorView> {
     /// The sub-element id ([`Hit::part`]) under the pointer, mirroring
     /// [`hover`](Self::hover).
     hovered_part: Option<u32>,
+    /// Which sub-element a click and hover report ([`PickScope`]).
+    pick_scope: PickScope,
     /// The selection update produced by the last click, for the host to consume.
     selection: Option<SelectionEvent>,
     /// gpui's click count for the most recent left press. The release reports it with
@@ -1597,6 +1621,7 @@ impl<V: InventorView> InventorViewport<V> {
             snap: None,
             hover: None,
             hovered_part: None,
+            pick_scope: PickScope::Raw,
             selection: None,
             press_click_count: 1,
             hover_report: HoverReport::default(),
@@ -2738,6 +2763,24 @@ impl<V: InventorView> InventorViewport<V> {
         self.hovered_part
     }
 
+    /// Which sub-element a click and hover report ([`PickScope`]).
+    pub fn pick_scope(&self) -> PickScope {
+        self.pick_scope
+    }
+
+    /// Prefer edges (or the raw primitive) for clicks and hovers.
+    ///
+    /// The host sets this from its topology filter. The hover report refreshes on the
+    /// next pointer move; an already-parked pointer keeps its last report until then.
+    /// Returns whether the scope changed.
+    pub fn set_pick_scope(&mut self, scope: PickScope) -> bool {
+        if self.pick_scope == scope {
+            return false;
+        }
+        self.pick_scope = scope;
+        true
+    }
+
     /// The object under the pointer resolved to a [`SelectionRef`], if it is
     /// identifiable.
     ///
@@ -2746,7 +2789,13 @@ impl<V: InventorView> InventorViewport<V> {
     /// selection on hover can read it in `render`.
     pub fn hovered_selection(&self) -> Option<SelectionRef> {
         let id = self.hover?;
-        self.selection_ref(id.0, self.hovered_part.unwrap_or(0))
+        let part = self.hovered_part.unwrap_or(0);
+        match self.pick_scope {
+            PickScope::Raw => self.selection_ref(id.0, part),
+            PickScope::Edge => self
+                .edge_reference(id.0, self.pointer.unwrap_or_default())
+                .or_else(|| self.selection_ref(id.0, part)),
+        }
     }
 
     /// Take the selection update produced by the last click, if any.
@@ -2810,6 +2859,66 @@ impl<V: InventorView> InventorViewport<V> {
             .iter()
             .find(|item| item.entity_id() == entity)
             .and_then(|item| item.part_name(part))
+    }
+
+    /// Resolve a pick under the active [`PickScope`].
+    fn scoped_reference(&self, hit: &Hit, device: [i32; 2]) -> Option<SelectionRef> {
+        match self.pick_scope {
+            PickScope::Raw => self.selection_ref(hit.id.0, hit.part),
+            PickScope::Edge => self
+                .edge_reference(hit.id.0, device)
+                .or_else(|| self.selection_ref(hit.id.0, hit.part)),
+        }
+    }
+
+    /// The nearest edge of `entity` to the pointer, when one is within
+    /// [`EDGE_PICK_PIXELS`].
+    ///
+    /// Segments are projected through the camera; the winner is the nearest in **screen**
+    /// space, so an occluded back edge cannot beat the boundary the user is aiming at.
+    /// An untagged segment falls back to the whole object through
+    /// [`selection_ref`](Self::selection_ref).
+    fn edge_reference(&self, entity: u32, device: [i32; 2]) -> Option<SelectionRef> {
+        let item = self.stage.item(entity)?;
+        let world = item.world_matrix();
+        let pointer = [f64::from(device[0]), f64::from(device[1])];
+        let positions = item.positions();
+        let parts = item.parts();
+        let mut nearest: Option<(f64, u32)> = None;
+        for segment in item.edges().chunks_exact(2) {
+            let (Some(a), Some(b)) = (
+                positions.get(segment[0] as usize),
+                positions.get(segment[1] as usize),
+            ) else {
+                continue;
+            };
+            let a = world.transform(&Vector3::new(
+                f64::from(a[0]),
+                f64::from(a[1]),
+                f64::from(a[2]),
+            ));
+            let b = world.transform(&Vector3::new(
+                f64::from(b[0]),
+                f64::from(b[1]),
+                f64::from(b[2]),
+            ));
+            let (Some(a), Some(b)) = (
+                project_device(&self.camera, a),
+                project_device(&self.camera, b),
+            ) else {
+                continue;
+            };
+            let (distance, _) = point_segment_distance(pointer, a, b);
+            if distance > EDGE_PICK_PIXELS {
+                continue;
+            }
+            if nearest.is_none_or(|(best, _)| distance < best) {
+                let part = parts.get(segment[0] as usize).copied().unwrap_or(0);
+                nearest = Some((distance, part));
+            }
+        }
+        let (_, part) = nearest?;
+        self.selection_ref(entity, part)
     }
 
     /// Convert a **window-relative** logical point (what gpui reports to an element's
@@ -3079,7 +3188,7 @@ impl<V: InventorView> InventorViewport<V> {
                 None
             } else {
                 hit.as_ref()
-                    .and_then(|hit| self.selection_ref(hit.id.0, hit.part))
+                    .and_then(|hit| self.scoped_reference(hit, device))
             },
             through: if consumed {
                 None
@@ -3415,7 +3524,8 @@ impl<V: InventorView> InventorViewport<V> {
         // ring scrub, an orbit drag and an active tool all returned or are excluded
         // above, so their gestures never also select.
         if !down && button == 1 && self.tool.is_none() && orbit_clicked {
-            self.selection = Some(self.selection_event(hit.as_ref(), self.press_click_count));
+            self.selection =
+                Some(self.selection_event(hit.as_ref(), self.press_click_count, device));
             changed = true;
         }
         changed
@@ -3425,8 +3535,13 @@ impl<V: InventorView> InventorViewport<V> {
     ///
     /// The hit's world point and normal travel with the reference so the host can
     /// anchor a gizmo at the point of contact instead of the body's centre.
-    fn selection_event(&self, hit: Option<&Hit>, click_count: usize) -> SelectionEvent {
-        let Some(reference) = hit.and_then(|hit| self.selection_ref(hit.id.0, hit.part)) else {
+    fn selection_event(
+        &self,
+        hit: Option<&Hit>,
+        click_count: usize,
+        device: [i32; 2],
+    ) -> SelectionEvent {
+        let Some(reference) = hit.and_then(|hit| self.scoped_reference(hit, device)) else {
             return SelectionEvent::Cleared;
         };
         SelectionEvent::Picked {
@@ -6730,6 +6845,47 @@ mod tests {
         ShapeItem::from_tessellation(entity, &mesh)
     }
 
+    /// A single face at `z = 0.5` with four **separately positioned** edge segments, so
+    /// each edge carries its own part name (`Edge1`…`Edge4`). Kernel tessellations
+    /// duplicate vertices per primitive; a shared-vertex mesh would overwrite the face
+    /// parts with the edge parts.
+    fn edged_slab() -> ferrocad_stage::ShapeItem {
+        use ferrocad_geom::Tessellation;
+        use ferrocad_stage::ShapeItem;
+
+        let mesh = Tessellation {
+            positions: vec![
+                [-0.5, -0.5, 0.5],
+                [0.5, -0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [-0.5, 0.5, 0.5],
+                [-0.5, -0.5, 0.5],
+                [0.5, -0.5, 0.5],
+                [0.5, -0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [-0.5, 0.5, 0.5],
+                [-0.5, 0.5, 0.5],
+                [-0.5, -0.5, 0.5],
+            ],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2, 0, 2, 3],
+            triangle_parts: vec![0, 0],
+            edges: vec![4, 5, 6, 7, 8, 9, 10, 11],
+            segment_parts: vec![1, 2, 3, 4],
+            vertices: Vec::new(),
+            vertex_parts: Vec::new(),
+            parts: vec![
+                "Face1".to_owned(),
+                "Edge1".to_owned(),
+                "Edge2".to_owned(),
+                "Edge3".to_owned(),
+                "Edge4".to_owned(),
+            ],
+        };
+        ShapeItem::from_tessellation(7, &mesh)
+    }
+
     /// The identity camera at 1x, where device and world coordinates coincide in XY.
     fn identity_viewport(scene: Scene) -> InventorViewport<FakeView> {
         let camera = Camera {
@@ -6793,6 +6949,50 @@ mod tests {
             panic!("not a pick: {event:?}");
         };
         assert_eq!(reference, SelectionRef::element(7, "Face2"));
+    }
+
+    /// The Edge pick scope snaps a click and hover to the nearest projected edge of the
+    /// hit body; a click too far from every edge still reports the face.
+    #[test]
+    fn the_edge_scope_snaps_to_the_nearest_edge() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(edged_slab()));
+        view.refresh();
+        view.set_pick_scope(PickScope::Edge);
+
+        // Near the right boundary (device x = 75) but still over the face interior.
+        assert!(view.handle_pointer([72.0, 50.0]));
+        assert_eq!(
+            view.hover_report().target,
+            Some(SelectionRef::element(7, "Edge2")),
+            "the hover previews the edge the click would select"
+        );
+        view.handle_button([72.0, 50.0], 1, true);
+        view.handle_button([72.0, 50.0], 1, false);
+        let Some(SelectionEvent::Picked { reference, .. }) = view.take_selection() else {
+            panic!("a boundary click selects the edge");
+        };
+        assert_eq!(reference, SelectionRef::element(7, "Edge2"));
+
+        // The face centre is more than EDGE_PICK_PIXELS from every edge: the raw face
+        // remains the hit, so the filter never silently jumps to a far edge.
+        view.handle_button([50.0, 50.0], 1, true);
+        view.handle_button([50.0, 50.0], 1, false);
+        let Some(SelectionEvent::Picked { reference, .. }) = view.take_selection() else {
+            panic!("the interior still picks");
+        };
+        assert_eq!(reference, SelectionRef::element(7, "Face1"));
+
+        // The raw scope does not snap: the same boundary click is the face again.
+        view.set_pick_scope(PickScope::Raw);
+        view.handle_button([72.0, 50.0], 1, true);
+        view.handle_button([72.0, 50.0], 1, false);
+        let Some(SelectionEvent::Picked { reference, .. }) = view.take_selection() else {
+            panic!("raw scope picks the face");
+        };
+        assert_eq!(reference, SelectionRef::element(7, "Face1"));
     }
 
     /// The viewport reports gpui's click count alongside the raw sub-element pick. A

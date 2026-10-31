@@ -585,6 +585,19 @@ impl ShapeItem {
         self.placement
     }
 
+    /// The world transform the item draws with: the placement, with a temporary preview
+    /// composed after it.
+    ///
+    /// The picker and a host that resolves a sub-element both need the same matrix the
+    /// render queue receives, so this is the one place it is composed.
+    pub fn world_matrix(&self) -> Matrix4 {
+        let mut world = self.placement.to_matrix();
+        if let Some(temporary) = &self.temporary_transform {
+            world = world.mul(temporary);
+        }
+        world
+    }
+
     /// The temporary preview transform, if any.
     pub fn temporary_transform(&self) -> Option<Matrix4> {
         self.temporary_transform
@@ -730,10 +743,7 @@ impl ShapeItem {
     /// so they win the depth test against the coplanar base geometry they mark.
     pub fn emit(&self, queue: &mut RenderQueue) {
         // The world transform: the placement, with the temporary preview composed after it.
-        let mut world = self.placement.to_matrix();
-        if let Some(temporary) = &self.temporary_transform {
-            world = world.mul(temporary);
-        }
+        let world = self.world_matrix();
         if self.draw_mode.has_surface() {
             if let Some(geometry) = self.surface_geometry() {
                 queue.packets.push(self.packet_with_depth(

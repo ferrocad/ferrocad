@@ -83,8 +83,10 @@ command/dialog protocol).
   `SelectFilter` (`Auto`/`Body`/`Face`/`Edge`; see
   [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md)). The filter
   is applied where the shell **reports** the selection, not at the pick: `Body` rewrites
-  `Face6` to its whole body, while `Auto`/`Face`/`Edge` keep the element. Hover and
-  snapping still see the sub-element. The header's `Select ▾` overrides the slot's
+  `Face6` to its whole body, while `Auto`/`Face`/`Edge` keep the element. `Edge` is
+  resolved by the viewport first: it snaps the pick to the nearest projected edge of the
+  hit body (within 8 px), so clicking a face near a boundary reports that boundary's
+  `EdgeN`. Hover and snapping still see the sub-element. The header's `Select ▾` overrides the slot's
   preset; the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet] [0 Inspect]` bar and
   `0`–`3` equip the slot. In Inspect, a Body/Face/Edge switcher docks above the bar and
   writes the same filter.

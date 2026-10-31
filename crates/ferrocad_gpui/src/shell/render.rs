@@ -97,11 +97,12 @@ pub(super) const HUD_MARGIN: f32 = 16.0;
 /// The clearance below a floating HUD, so it never covers the bottom dock.
 pub(super) const HUD_DOCK_CLEARANCE: f32 = 64.0;
 /// Where the HUD first appears relative to its anchor: below-right of the gizmo.
-/// Where the HUD first appears relative to its anchor: right of the gizmo and
-/// **above** it. Below-right put a low body's HUD into the bottom dock and the clamp
-/// then pinned it to the bottom-right corner, away from the handles it describes.
+/// The HUD's clearance from its anchor: 24 px to the right and 36 px **above** it.
+/// The panel's bottom edge sits on that clearance, so it floats clear of the handle
+/// cluster; anchoring its top-left there made the (expanded) pill overlap the X arrow
+/// and swallow the press that was meant to start a drag.
 pub(super) const HUD_OFFSET_X: f32 = 24.0;
-pub(super) const HUD_OFFSET_Y: f32 = -36.0;
+pub(super) const HUD_OFFSET_Y: f32 = 36.0;
 
 /// The inclusive range of HUD origins that keep the whole rect inside the viewport
 /// safe area (16 px margins, 64 px above the bottom dock).
@@ -120,13 +121,16 @@ pub(super) fn clamp_hud(origin: Point<Pixels>, viewport: Size<Pixels>, hud: Size
     )
 }
 
-/// Where a floating HUD appears: above-right of `anchor`, clamped into the viewport
-/// safe area. `anchor` is the gizmo's screen-space origin (`GizmoSet` →
-/// `TransformGizmo::origin_anchor`) or, when no gizmo is armed, the viewport centre;
-/// the pointer is only the last resort (a shell with no viewport). The HUD must never
-/// leave the canvas, even when the gizmo is near a corner.
+/// Where a floating HUD appears: its **bottom-left** 24 px right and 36 px above
+/// `anchor`, clamped into the viewport safe area. `anchor` is the gizmo's screen-space
+/// origin (`GizmoSet` → `TransformGizmo::origin_anchor`) or, when no gizmo is armed,
+/// the viewport centre; the pointer is only the last resort (a shell with no viewport).
+/// The panel therefore floats clear of the handles, and must never leave the canvas.
 pub(super) fn place_hud(anchor: Point<Pixels>, viewport: Size<Pixels>, hud: Size<Pixels>) -> Point<Pixels> {
-    let offset = point(px(anchor.x.0 + HUD_OFFSET_X), px(anchor.y.0 + HUD_OFFSET_Y));
+    let offset = point(
+        px(anchor.x.0 + HUD_OFFSET_X),
+        px(anchor.y.0 - HUD_OFFSET_Y - hud.height.0),
+    );
     clamp_hud(offset, viewport, hud)
 }
 

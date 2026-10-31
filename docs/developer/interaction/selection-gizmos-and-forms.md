@@ -199,8 +199,10 @@ Therefore:
   visible triad.
 - On release the preview is **kept**: the viewport clears the draw-only offset and moves
   the real frame to the previewed pose, so hit-testing agrees with the drawing while the
-  session stays pending. The shell re-arms the selection after a commit, in
-  `after_document_edit`.
+  session stays pending. The frame move is **settled** (`preview_transform_settled`) and
+  rebuilds the handle geometry even if the viewport still reports the drag for a tick; a
+  draw-offset-only release is what made the triad appear to snap back. The shell re-arms
+  the selection after a commit, in `after_document_edit`.
 - Typed previews (no drag) move the real frame, so hit-testing agrees with the drawing
   **and the handle geometry is rebuilt in the same call** (`TransformGizmo::set_origin`
   only marks the frame dirty; `update` rebuilds it). A frame move without that rebuild
@@ -240,8 +242,9 @@ the three Δ fields.
 A floating HUD may be repositioned when the gizmo moves; its anchor is recomputed from
 the visible gizmo origin (or the **viewport centre** when no gizmo is armed; the live
 pointer is the last resort for a shell with no viewport) each frame it renders. The
-fixed offset is **+24 px right, −36 px up** (`render::place_hud`), so a low body keeps
-the panel beside its handles instead of in the bottom-right clamp. **Position stability:** the HUD is
+fixed offset is **+24 px right and 36 px up to the panel's bottom-left**
+(`render::place_hud`), so a low body keeps the panel beside its handles instead of in
+the bottom-right clamp and the pill does not cover the arrow it describes. **Position stability:** the HUD is
 clamped inside the viewport safe area (16 px window margins; 64 px above the bottom
 dock) and its screen position is **frozen while the pointer is inside the HUD rect or a
 field is focused**, so typing a large Δ (`500`) cannot move the inputs out from under the

@@ -133,15 +133,19 @@ The floating Δ HUD is anchored to the **gizmo**, not the screen or the pointer
 (fixed 2026-10-31; the screenshot bug was a bottom-right HUD):
 
 - `place_hud` offsets the gizmo's screen-space origin (`TransformGizmo::origin_anchor`
-  through `Shell::dialog_anchor`) by **+24 px right, −36 px up**. The old below-right
-  offset (`+24, +88`) put a low body's HUD under the bottom dock, where the clamp
-  pinned it to the bottom-right corner, far from the handles it describes.
+  through `Shell::dialog_anchor`) by **+24 px right and 36 px up**, measured to the
+  **bottom-left of the panel** so the pill floats clear of the handle cluster; the old
+  below-right offset (`+24, +88`) put a low body's HUD under the bottom dock, where the
+  clamp pinned it to the bottom-right corner, far from the handles it describes.
 - With a viewport but no gizmo armed, the anchor is the **viewport centre**
   (`InventorViewport::viewport_anchor`), not the last pointer position. The pointer is
   only the last resort for a shell with no viewport at all.
 - A **typed** Δ moves the gizmo's real frame with the object (and rebuilds its handle
   geometry), so the drawn triad and the HUD anchor follow the value while the session
-  is pending. `Enter` commits and the shell re-arms at the committed pose.
+  is pending. A **drag release** settles the same way (`preview_transform_settled`),
+  even if the viewport still reports its drag for a tick: the pending pose becomes the
+  resting frame and the draw-only offset is cleared, so the triad cannot snap back.
+  `Enter` commits and the shell re-arms at the committed pose.
 - The panel stays inside the canvas safe area (16 px margins, 64 px above the dock).
   While an input is focused or the pointer is inside the panel, its screen position is
   **frozen**, so typing a large Δ or dragging never slides the fields away.

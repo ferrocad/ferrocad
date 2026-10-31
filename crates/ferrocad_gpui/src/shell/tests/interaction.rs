@@ -525,8 +525,8 @@ fn a_floating_hud_is_clamped_into_the_safe_area() {
     let origin = place_hud(point(px(100.0), px(100.0)), viewport, hud);
     assert_eq!(
         origin,
-        point(px(124.0), px(64.0)),
-        "above-right of the anchor"
+        point(px(124.0), px(HUD_MARGIN)),
+        "above-right of the anchor, its bottom 36 px clear of it (clamped at the top)"
     );
 
     let origin = place_hud(point(px(790.0), px(590.0)), viewport, hud);

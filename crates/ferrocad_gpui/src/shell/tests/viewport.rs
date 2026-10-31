@@ -1187,10 +1187,11 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
     );
 
     let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
-    let (start, grab, release) = cx.update(|_window, cx| {
+    let (start, grab, release, drawn_before) = cx.update(|_window, cx| {
         let viewport = viewport.read(cx);
         let camera = viewport.camera().clone();
         let gizmo = &viewport.gizmos().gizmos()[0];
+        let drawn_before = gizmo.items()[0].positions()[0];
         let origin = gizmo.origin();
         let device = ferrocad_stage::screen::project_device(&camera, origin)
             .expect("the triad projects");
@@ -1211,6 +1212,7 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
             origin,
             camera.viewport.to_logical(grab),
             camera.viewport.to_logical(release),
+            drawn_before,
         )
     });
 
@@ -1244,6 +1246,9 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
     });
     feed(&mut cx, Some(update.clone()));
     step(&mut cx, release, false);
+    // Paint a frame after the release: a later render must not undo the SESSION_HOLD
+    // pose. The report was that the triad snapped back to the start of the drag.
+    draw(&mut cx);
 
     let dragged = [
         update.total_transform.m[3],
@@ -1253,6 +1258,15 @@ fn a_move_hud_drag_survives_its_release(cx: &mut TestAppContext) {
     assert!(
         dragged[0].abs() > 1e-9,
         "the drag moved along X: {dragged:?}"
+    );
+    // The drawn handles, not only `origin()`, are at the released pose. A frame move
+    // without a geometry rebuild was the "the triad snaps back" report.
+    let drawn_after = cx.update(|_window, cx| {
+        viewport.read(cx).gizmo().unwrap().items()[0].positions()[0]
+    });
+    assert!(
+        (f64::from(drawn_after[0]) - f64::from(drawn_before[0]) - dragged[0]).abs() < 1e-4,
+        "the drawn triad stays at the released pose: {drawn_before:?} -> {drawn_after:?} (drag {dragged:?})"
     );
 
     // 1. The triad sits where the drag ended, not back at the datum.

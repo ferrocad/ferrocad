@@ -3570,6 +3570,29 @@ impl<V: InventorView> InventorViewport<V> {
     /// clears the preview. Returns whether the stage changed (the caller still decides
     /// when to repaint).
     pub fn preview_transform(&mut self, entities: &[u32], transform: Option<Matrix4>) -> bool {
+        self.preview_transform_impl(entities, transform, false)
+    }
+
+    /// Like [`preview_transform`](Self::preview_transform), but **settles** the hosted
+    /// gizmos at the previewed pose even if the viewport still reports an active drag.
+    ///
+    /// A drag's `End` is the moment the uncommitted value becomes the resting pose: the
+    /// handles must stop being a draw-only offset and take the real frame, or a later
+    /// style/selection refresh clears the offset and the triad appears to snap back.
+    pub fn preview_transform_settled(
+        &mut self,
+        entities: &[u32],
+        transform: Option<Matrix4>,
+    ) -> bool {
+        self.preview_transform_impl(entities, transform, true)
+    }
+
+    fn preview_transform_impl(
+        &mut self,
+        entities: &[u32],
+        transform: Option<Matrix4>,
+        settle: bool,
+    ) -> bool {
         // An empty selection is a cancel, even when a matrix was supplied.
         let transform = transform.filter(|_| !entities.is_empty());
         let mut changed = match &transform {
@@ -3580,8 +3603,9 @@ impl<V: InventorView> InventorViewport<V> {
                 // feed a rotated interaction frame back into the drag math.
                 let delta = Vector3::new(transform.m[3], transform.m[7], transform.m[11]);
                 // The gizmos are the control while one is being dragged; otherwise
-                // they travel with the previewed object. Grips always follow.
-                let include_gizmo = self.gizmos.dragging().is_none();
+                // they travel with the previewed object. A settled release always
+                // takes the real frame. Grips always follow.
+                let include_gizmo = settle || self.gizmos.dragging().is_none();
                 self.apply_preview_overlays(delta, include_gizmo)
             }
             None => self.restore_preview_overlays(),
@@ -3679,7 +3703,7 @@ impl<V: InventorView> InventorViewport<V> {
                 // by `update`, which `set_display_offset` does not need but a real frame
                 // move does. Without this the typed preview moved the object and the HUD
                 // anchor while the drawn triad stayed at its old pose.
-                changed |= gizmo.update(&self.camera);
+                gizmo.update(&self.camera);
             } else {
                 // A gizmo is the control: freeze its interaction frame and move only the
                 // drawing, so the triad stays glued to the surface without feeding back
@@ -3711,8 +3735,10 @@ impl<V: InventorView> InventorViewport<V> {
                 gizmo.set_display_offset(None);
                 gizmo.set_origin(origin);
                 // The restored frame needs its handle geometry rebuilt, exactly as a
-                // typed preview does (see `apply_preview_overlays`).
-                changed |= gizmo.update(&self.camera);
+                // typed preview does (see `apply_preview_overlays`), and clearing the
+                // draw-only offset always changes the emitted packets.
+                let _ = gizmo.update(&self.camera);
+                changed = true;
             }
         }
         for (manipulator, anchor) in self.manipulators.iter_mut().zip(home.manipulators.iter()) {
@@ -8468,6 +8494,37 @@ mod tests {
             }
         }
         panic!("the {handle:?} ring should be pickable");
+    }
+
+    /// A settled release takes the real frame even while the viewport still reports the
+    /// drag as active (the release event and the viewport's drag state can differ by a
+    /// tick). That is what stops the triad snapping back when the draw offset clears.
+    #[test]
+    fn a_settled_preview_overrides_a_still_active_drag() {
+        let (mut view, viewport) = translate_gizmo_view();
+        let grab = axis_x_grab(&view);
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        assert_eq!(
+            view.take_transform_preview().expect("a begin").phase,
+            PreviewPhase::Begin
+        );
+
+        let delta = Matrix4::translation(1.0, 0.0, 0.0);
+        assert!(view.preview_transform_settled(&[42], Some(delta)));
+        let gizmo = view.gizmo().expect("a gizmo");
+        assert!(
+            gizmo.display_offset().is_none(),
+            "the settle clears the draw-only offset"
+        );
+        assert_eq!(
+            gizmo.origin(),
+            Vector3::new(1.0, 0.0, 0.0),
+            "the real frame takes the pending pose"
+        );
+
+        view.handle_button(viewport.to_logical(grab), 1, false);
+        view.take_transform_preview();
+        assert!(view.preview_transform(&[], None));
     }
 
     /// A drag reports its `Begin`/`Update`/`End` and never commits, so a host HUD can

@@ -239,6 +239,12 @@ impl Shell {
     /// commit. Text that does not parse yet previews as zero rather than flashing an
     /// error mid-keystroke.
     pub(super) fn preview_dialog(&mut self, cx: &mut Context<Self>) {
+        self.preview_dialog_with(false, cx);
+    }
+
+    /// [`preview_dialog`](Self::preview_dialog), optionally **settling** the gizmo frame
+    /// (a drag's `End`, where the pending pose becomes the resting pose).
+    fn preview_dialog_with(&mut self, settle: bool, cx: &mut Context<Self>) {
         let workplane_offset = self
             .dialog
             .as_ref()
@@ -280,7 +286,12 @@ impl Shell {
             return;
         };
         viewport.update(cx, |viewport, cx| {
-            if viewport.preview_transform(&entities, Some(transform)) {
+            let changed = if settle {
+                viewport.preview_transform_settled(&entities, Some(transform))
+            } else {
+                viewport.preview_transform(&entities, Some(transform))
+            };
+            if changed {
                 cx.notify();
             }
         });
@@ -592,16 +603,18 @@ impl Shell {
         if let Some(session) = self.session.as_mut() {
             session.set_translation(Vector3::new(delta[0], delta[1], delta[2]));
         }
+        let settle = preview.phase == PreviewPhase::End;
         if preview.phase == PreviewPhase::End {
             self.drag_start = None;
         }
         if previews {
             self.set_translation_fields(delta, cx);
-            self.preview_dialog(cx);
+            self.preview_dialog_with(settle, cx);
         } else if self.session.is_some() {
             // No HUD: the session still owns the preview, so a plain drag shows the same
-            // ghost the open form would.
-            self.preview_selection(Some(delta), cx);
+            // ghost the open form would. The release settles the frame at the pending
+            // pose even if the viewport still reports its drag for a tick.
+            self.preview_selection(Some(delta), settle, cx);
         }
         // The tape follows the session, including after the release (SESSION_HOLD): it is
         // cleared by the commit/Esc/context paths, not by the end of the pointer gesture.
@@ -668,7 +681,7 @@ impl Shell {
     ///
     /// This is the session's display half; it is the same write `preview_dialog` used to
     /// do inline, so a drag with no HUD open previews exactly like one with it.
-    fn preview_selection(&mut self, delta: Option<[f64; 3]>, cx: &mut Context<Self>) {
+    fn preview_selection(&mut self, delta: Option<[f64; 3]>, settle: bool, cx: &mut Context<Self>) {
         let entities: Vec<u32> = {
             let model = self.model.lock().unwrap();
             model
@@ -682,7 +695,12 @@ impl Shell {
         };
         let transform = delta.map(|d| Matrix4::translation(d[0], d[1], d[2]));
         viewport.update(cx, |viewport, cx| {
-            if viewport.preview_transform(&entities, transform) {
+            let changed = if settle {
+                viewport.preview_transform_settled(&entities, transform)
+            } else {
+                viewport.preview_transform(&entities, transform)
+            };
+            if changed {
                 cx.notify();
             }
         });

@@ -868,7 +868,7 @@ impl Shell {
     /// can never be stacked on the first.
     ///
     /// The Move form is **not** a dialog and never counts here: its fields are a
-    /// visible readout with no focus by default, which is what lets `1`/`2`/`3` keep
+    /// visible readout with no focus by default, which is what lets `0`–`3` keep
     /// equipping slots and a command keep opening its own dialog while it is up.
     pub(in crate::shell) fn modal_open(&self) -> bool {
         self.dialog.is_some() || self.palette.is_some() || self.form_dialog.is_some()

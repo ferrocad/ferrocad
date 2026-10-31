@@ -86,12 +86,10 @@ impl Shell {
     }
 
     /// Whether the Move hand currently owns the form: Slot 1 equipped, a selection,
-    /// and neither a tool nor the user's pause (`1` while the hand is already active)
-    /// taking it off the canvas. Both handle sets have a form: the arrows show
-    /// `ΔX/ΔY/ΔZ` in millimetres, the rings show one `Δθ` in degrees.
+    /// and no tool taking it off the canvas. Both handle sets have a form: the arrows
+    /// show `ΔX/ΔY/ΔZ` in millimetres, the rings show one `Δθ` in degrees.
     fn move_hud_wanted(&self) -> bool {
-        !self.move_disarmed
-            && self.loadout.slot().wants_gizmo()
+        self.loadout.slot().wants_gizmo()
             && self.active_tool.is_none()
             && !self.model.lock().unwrap().selection.is_empty()
     }
@@ -116,7 +114,7 @@ impl Shell {
 
     /// Create the form, if it is not already up.
     ///
-    /// The surface opens **unfocused**: the canvas keeps the keyboard, so `1`/`2`/`3`
+    /// The surface opens **unfocused**: the canvas keeps the keyboard, so `0`–`3`
     /// still equip loadout slots until the user asks for a field with `Tab`, a digit or
     /// a click. It also opens a clean session at the selection's current pose when one
     /// is not already live, so the first typed value has a datum.
@@ -1088,7 +1086,7 @@ impl Shell {
     /// A numeric key on the resting form: focus the remembered field and start the
     /// number there.
     ///
-    /// `1`/`2`/`3` never take this path — they are loadout hotkeys and the shell routes
+    /// `0`–`3` never take this path — they are loadout hotkeys and the shell routes
     /// them first. The seed text is replaced wholesale, so `5` over `0.00` is `5`.
     pub(in crate::shell) fn type_into_move_field(
         &mut self,

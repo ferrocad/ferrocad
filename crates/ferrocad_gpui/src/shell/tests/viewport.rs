@@ -679,6 +679,65 @@ fn a_face_click_in_the_move_slot_arms_only_the_triad(cx: &mut TestAppContext) {
     });
 }
 
+/// U4: the pointer hand's stage highlight previews the filtered scope. Skips without a
+/// GPU adapter.
+#[gpui::test]
+fn the_pointer_hand_highlights_the_selected_scope(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+    let highlight = |cx: &App| {
+        viewport
+            .read(cx)
+            .stage()
+            .item(7)
+            .expect("the slab")
+            .highlight()
+            .to_vec()
+    };
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::Idle, cx));
+    });
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Face2"),
+    );
+    assert_eq!(
+        cx.update(|_window, cx| highlight(cx)),
+        vec![0, 1],
+        "the pointer's Body default paints the whole slab"
+    );
+
+    // `Select ▾` narrows what a click reports, and the highlight follows it.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_select_filter(SelectFilter::Face, cx));
+    });
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Face2"),
+    );
+    assert_eq!(
+        cx.update(|_window, cx| highlight(cx)),
+        vec![1],
+        "a Face filter paints Face2 only"
+    );
+
+    // Back to Move: the triad owns the target again, so the stage highlight clears.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::Move, cx));
+    });
+    assert!(
+        cx.update(|_window, cx| highlight(cx)).is_empty(),
+        "leaving the pointer hand clears the highlight"
+    );
+}
+
 /// W1 §3.3 → U4: Slot 2 hosts only the selection's manipulator, so a claimed face
 /// arms the stem and the shared body triad is absent. Skips without a GPU adapter.
 #[gpui::test]

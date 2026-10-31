@@ -85,8 +85,8 @@ command/dialog protocol).
   is applied where the shell **reports** the selection, not at the pick: `Body` rewrites
   `Face6` to its whole body, while `Auto`/`Face`/`Edge` keep the element. Hover and
   snapping still see the sub-element. The header's `Select ▾` overrides the slot's
-  preset; the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet]` bar and `1`/`2`/`3`
-  equip the slot.
+  preset; the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet] [0 Idle]` bar and
+  `0`–`3` equip the slot.
 
 ### 2.2 Context target (the wheel)
 
@@ -285,9 +285,10 @@ the row at rest.
 
 **Always visible while Move has a target.** The row appears with the selection (or a hover
 promotion) and disappears when the selection clears, another hand or tool takes over, or
-the Move hand is **idle** (pressing `1` twice while Slot 1 is active cycles Move →
-Rotate → idle; the selection stays for inspection, the loadout pill reads `1 Idle`, and
-`1` again, a new selection or a `Move` verb re-arms Move). A modal or
+the pointer hand is equipped (`0`: the selection stays for inspection and the stage's
+selection highlight names its scope, but the handles, form and ruler leave the canvas).
+`1` toggles Slot 1's two hands (**Move ⇄ Rotate**); `0` again keeps the pointer, and
+`1`, a new selection or a `Move` verb brings the Move hand back. A modal or
 the object wheel hides both pieces for its lifetime; they return with the canvas. A
 right-press on the finish pill opens the object wheel, so it never swallows the verb
 gesture.
@@ -299,9 +300,9 @@ is parsed back as `value - origin_0`. Both modes preview, tape and commit the sa
 A per-field `=`/`@` prefix (`=15`) asks for an absolute value without leaving offset mode.
 
 **Unfocused is the default.** Opening the row or releasing a drag leaves every field
-unfocused, so `1`/`2`/`3` still equip loadout slots and the viewport keeps its own keys.
+unfocused, so `0`–`3` still equip loadout slots and the viewport keeps its own keys.
 `Tab` opens the field of the last gesture (drag-axis memory) and selects its value, then
-cycles; a digit other than `1`–`3`, or `-`/`.`, focuses that field and starts the number;
+cycles; a digit other than `0`–`3`, or `-`/`.`, focuses that field and starts the number;
 a click in a field or on a ruler tag does the same. `Enter`/`✓` commits and `Esc`/`✗` rolls
 back; both reset the fields and hand the keyboard back to the canvas, and the row stays.
 Only the **focused** field paints a selection highlight: a blurred `TextInput` clears its
@@ -346,7 +347,7 @@ Any ──badge / `=`──► Δ fields ⇄ world coordinates (same pending Δ)
 Any ──selection replaced──► refused while pending; a clean form re-targets
 Pending ──selection / hand / scope / tool──► refused (status: "move/rotation pending") ──► Pending
 At rest ──Esc──► selection cleared ──► Closed
-At rest ──selection cleared / another hand / a tool / `1` (idle)──► Closed
+At rest ──selection cleared / another hand / a tool / `0` (pointer)──► Closed
 Pending ──competing document edit (selection pruned)──► rollback ──► the new context
 ```
 
@@ -409,14 +410,13 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
 - **Fast escalation (built 2026-10-31, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
   while a `TransformGizmo` is armed (idle or mid-drag) is the primary entry into the
   numeric surface: the HUD seeds its fields from the current delta (or zero when idle)
-  and focuses the field the gesture names. **`1`/`2`/`3` are loadout slots** (U4) and are
-  reserved: they equip Move / Push-Pull / Fillet even while the HUD is on screen, so a
-  value that starts with one of them begins with `Tab` or a click into a field. Pressing
-  `1` while Move is already active cycles Move → Rotate → idle (selection kept, handles and
-  form gone), and the loadout pill names the state it is in — `1 Move`, `1 Rotate` or
-  `1 Idle`; pressing `1` from idle arms Move again. Once a field is focused its digits
-  belong to it. A drag on the resting HUD updates the fields and the tape but never takes
-  the keyboard.
+  and focuses the field the gesture names. **`0`–`3` are loadout slots** (U4) and are
+  reserved: they equip the pointer / Move / Push-Pull / Fillet even while the HUD is on
+  screen, so a value that starts with one of them begins with `Tab` or a click into a
+  field. Pressing `1` while Move is already equipped toggles Move ⇄ Rotate; the pointer
+  is its own pill (`0 Idle`), keeps the selection, and drops the handles and form. Once
+  a field is focused its digits belong to it. A drag on the resting HUD updates the
+  fields and the tape but never takes the keyboard.
 
 ### 5.3 Selection scope
 
@@ -464,9 +464,9 @@ rendered form dialog (backdrop occludes everything)
 3. Wheel `Esc`.
 4. Command dialog `Esc` (needed when focus moved to the viewport).
 5. The Move HUD while **no field is focused**: `Enter` accepts, `Tab` opens a field on
-   the remembered drag axis, and a numeric key other than `1`–`3` focuses the field and
+   the remembered drag axis, and a numeric key other than `0`–`3` focuses the field and
    starts the number. A focused field consumes its own digits, `Enter` and `Tab` first.
-6. Loadout `1`/`2`/`3` — they are reserved even while the resting HUD is on screen, so
+6. Loadout `0`–`3` — they are reserved even while the resting HUD is on screen, so
    they equip a hand instead of typing (U4).
 7. `Space` — only with no dialog, palette, settings card or active tool.
 8. Popover `Esc`, then the `Esc` cascade (cancel dialog flag → tool → settings).
@@ -479,7 +479,8 @@ rendered form dialog (backdrop occludes everything)
 | selection | `replace_selection` / `toggle_select` / `clear_selection` (the loadout filter is applied here) | commands, inspector, viewport arming, hover-to-arm |
 | context target | `open_radial` / `space_radial` | `commit_wheel`, `radial_slots` |
 | wheel phases | `WheelMenu` | shell (events) |
-| loadout slot/filter | `Shell::set_loadout_slot` / `set_select_filter` (the bar, `1`/`2`/`3`, `Select ▾`) | `Shell::arm`, `replace_selection`, the bar/header |
+| loadout slot/filter | `Shell::set_loadout_slot` / `set_select_filter` (the bar, `0`–`3`, `Select ▾`) | `Shell::arm`, `replace_selection`, the bar/header |
+| pointer highlight | `Shell::sync_pointer_highlight` (from the hover report and the selection) | the stage's per-part highlight |
 | hover preview | `Shell::sync_hover_arm` (from the viewport's hover report) | `Shell::arm`, the viewport's idle scale |
 | pending transform | `Shell` (`TransformSession`; `commit_session` / `drop_session`) | `preview_transform`, the Δ fields, the commit |
 | preview transform | `InventorViewport::preview_transform`, fed by the session | stage items, overlays |

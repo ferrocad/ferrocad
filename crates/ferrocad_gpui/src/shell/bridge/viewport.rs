@@ -874,12 +874,19 @@ impl Shell {
         // An explicit re-arm replaces whatever the pointer was previewing.
         self.hover_arm = None;
         // The Move form follows the hand and the target even without a viewport
-        // (headless): decide its visibility before the early returns below.
+        // (headless): decide its visibility before the early returns below. This also
+        // closes the form's session when the hand changes, so the pointer highlight
+        // below sees the final state.
         self.ensure_move_hud(cx);
-        // A paused hand keeps its selection but hosts no handles; `1` arms it again.
-        if self.move_disarmed && self.loadout.slot().wants_gizmo() {
+        // The pointer hand's target follows the hand and the selection too: it has no
+        // manipulator, so the stage highlight is repainted here (hover still wins while
+        // the pointer is over an object).
+        self.sync_pointer_highlight(cx);
+        // Only Slot 1 hosts the triad, and `gizmo_armed` is the shell's own "a
+        // TransformGizmo is hosted" flag (the key path and Esc consult it). Clear it
+        // here too, so a headless switch (no viewport to re-arm against) agrees.
+        if !self.loadout.slot().wants_gizmo() {
             self.model.lock().unwrap().gizmo_armed = false;
-            return;
         }
         // The offset session owns the pointer while its HUD is open: keep its stem on
         // the live plane instead of handing the handles back to the selection.

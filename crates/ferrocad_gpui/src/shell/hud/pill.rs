@@ -10,7 +10,7 @@
 //! so its focused index is always `0`; the selected ring lives on `MoveHud`.
 //!
 //! **Resting is the default.** Opening the HUD, or releasing a drag, leaves every field
-//! unfocused, so `1`/`2`/`3` still equip loadout slots and the viewport keeps its own
+//! unfocused, so `0`–`3` still equip loadout slots and the viewport keeps its own
 //! keys. Focus comes only from an explicit act: `Tab`, repurposing a digit, a click in a
 //! field, or a click on a ruler tag. [`PillState::release`] gives it back.
 //!

@@ -2,9 +2,10 @@
 //!
 //! One store, two views: the bottom-left bar and the header's `Select ▾` pill both
 //! write [`Loadout`]. The slot decides which control may arm — Slot 1 hosts the shared
-//! triad, Slots 2 and 3 host the selection's manipulator — and the filter decides the
-//! [`SelectionRef`] the tree, the typed tool and the arm seam see, so a face click in
-//! Slot 1 selects the body.
+//! triad, Slots 2 and 3 host the selection's manipulator, and Slot 0 is the pointer:
+//! no handles, with the stage highlight previewing the filtered target — and the filter
+//! decides the [`SelectionRef`] the tree, the typed tool and the arm seam see, so a face
+//! click in Slot 1 selects the body.
 //!
 //! See `docs/project/tasks/tool-loadout.md`.
 
@@ -73,19 +74,22 @@ impl SelectFilter {
 /// The loadout slot: the instrument in the user's hand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Slot {
-    /// The shared transform triad (translate / rotate).
+    /// The shared transform triad: translate arrows and rotate rings.
     #[default]
     Move,
-    /// The selected face's extrude / pocket stem.
+    /// The selected face's push/pull stem.
     PushPull,
     /// The selected edge's fillet / chamfer scrubber.
     Fillet,
+    /// The pointer: select and inspect, with no handles or numeric surface.
+    Idle,
 }
 
 impl Slot {
-    /// The slot a `1`/`2`/`3` press equips.
+    /// The slot a `0`/`1`/`2`/`3` press equips.
     pub(crate) fn from_key(key: &str) -> Option<Self> {
         match key {
+            "0" => Some(Self::Idle),
             "1" => Some(Self::Move),
             "2" => Some(Self::PushPull),
             "3" => Some(Self::Fillet),
@@ -99,6 +103,7 @@ impl Slot {
             Self::Move => "1",
             Self::PushPull => "2",
             Self::Fillet => "3",
+            Self::Idle => "0",
         }
     }
 
@@ -108,29 +113,35 @@ impl Slot {
             Self::Move => "Move",
             Self::PushPull => "Push/Pull",
             Self::Fillet => "Fillet",
+            Self::Idle => "Idle",
         }
     }
 
-    /// The bar label for Slot 1's current hand: `Move`, `Rotate` or `Idle`.
+    /// The bar label for Slot 1's current hand: `Move` or `Rotate`.
     ///
     /// Slot 1 hosts both the translate arrows and the rotate rings, so it names the
-    /// handle set the user will actually get (`1 Rotate` after the wheel's Rotate verb)
-    /// or `1 Idle` while its hand is paused. The other slots are one verb each and ignore
-    /// `mode` and `idle`.
-    pub(crate) fn label_for(self, mode: GizmoMode, idle: bool) -> &'static str {
-        if self == Self::Move && idle {
-            return "Idle";
-        }
+    /// handle set the user will actually get (`1 Rotate` after the wheel's Rotate verb).
+    /// The other slots are one verb each and ignore `mode`.
+    pub(crate) fn label_for(self, mode: GizmoMode) -> &'static str {
         match (self, mode) {
             (Self::Move, GizmoMode::Rotate) => "Rotate",
             _ => self.label(),
         }
     }
 
+    /// The status-line spelling: the pointer hand is `idle` in lower case, matching
+    /// the verb the status line has always used there.
+    pub(crate) fn status_label(self, mode: GizmoMode) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            _ => self.label_for(mode),
+        }
+    }
+
     /// The topology filter a slot equips. `Select ▾` may override it afterwards.
     pub(crate) fn default_filter(self) -> SelectFilter {
         match self {
-            Self::Move => SelectFilter::Body,
+            Self::Move | Self::Idle => SelectFilter::Body,
             Self::PushPull => SelectFilter::Face,
             Self::Fillet => SelectFilter::Edge,
         }
@@ -143,11 +154,11 @@ impl Slot {
 
     /// Whether this slot hosts the selection's compiled or declared manipulator.
     pub(crate) fn wants_manipulator(self) -> bool {
-        !self.wants_gizmo()
+        matches!(self, Self::PushPull | Self::Fillet)
     }
 
-    /// The slots in bar order.
-    pub(crate) const ALL: [Self; 3] = [Self::Move, Self::PushPull, Self::Fillet];
+    /// The slots in bar order. The pointer comes last, after the three hands.
+    pub(crate) const ALL: [Self; 4] = [Self::Move, Self::PushPull, Self::Fillet, Self::Idle];
 }
 
 /// The one loadout store: the active slot and the topology filter.
@@ -203,7 +214,7 @@ impl Loadout {
 }
 
 impl Shell {
-    /// Equip a loadout slot (`1`/`2`/`3` or the bottom-left bar).
+    /// Equip a loadout slot (`0`–`3` or the bottom-left bar).
     ///
     /// A slot change is a **context exit**: a dirty transform session commits first,
     /// as one transaction, before the new hand narrows the handles. That does not apply
@@ -215,9 +226,6 @@ impl Shell {
         if self.loadout.slot() != slot && self.gate(Action::SwitchHand, cx) {
             return;
         }
-        // A command that equips a hand always arms it, including the hand already in
-        // use: `Move` from the wheel brings a paused hand back.
-        self.move_disarmed = false;
         if self.loadout.slot() == slot {
             self.rearm_selection(cx);
             return;
@@ -225,18 +233,19 @@ impl Shell {
         self.commit_pending_session(cx);
         self.loadout.set_slot(slot);
         self.rearm_selection(cx);
-        let status = format!("tool: {}", slot.label_for(self.gizmo_mode, false));
+        let status = format!("tool: {}", slot.status_label(self.gizmo_mode));
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
         cx.notify();
     }
 
-    /// The user's activation of a loadout slot (`1`/`2`/`3` or the bottom-left bar).
+    /// The user's activation of a loadout slot (`0`–`3` or the bottom-left bar).
     ///
-    /// Slot 1 hosts **both** hands, so pressing it cycles its three states:
-    /// **Move → Rotate → idle → Move**. A switch to another slot, and the first press
-    /// from one, go through [`set_loadout_slot`](Self::set_loadout_slot). Idle is the
-    /// paused hand: the selection stays, but the handles and form leave the canvas.
+    /// Slot 1 hosts **both** hands, so pressing its key while it is equipped toggles
+    /// **Move ⇄ Rotate**. The pointer hand is its own slot (`0`): it keeps the
+    /// selection, but drops the handles and the numeric surface. A switch to another
+    /// slot, and the first press from one, go through
+    /// [`set_loadout_slot`](Self::set_loadout_slot).
     ///
     /// A pending move or rotation blocks all of it: the context gate refuses the
     /// change until the user finishes with `✓`/`✗`.
@@ -244,22 +253,27 @@ impl Shell {
         if self.gate(Action::SwitchHand, cx) {
             return;
         }
-        if slot.wants_gizmo() && self.loadout.slot() == slot {
-            if self.move_disarmed {
-                // Re-arming starts at Move, so the cycle closes instead of getting
-                // stuck on Rotate.
-                self.move_disarmed = false;
-                self.set_gizmo_mode("translate", cx);
-                self.rearm_selection(cx);
-                self.set_tool_status("Move");
-            } else if self.gizmo_mode == GizmoMode::Translate {
+        if slot == Slot::Idle && self.loadout.slot() == slot {
+            // Equipping the pointer again is a no-op, but it re-affirms the status.
+            self.set_tool_status("idle");
+            cx.notify();
+            return;
+        }
+        if slot == Slot::Move && self.loadout.slot() == slot {
+            if self.gizmo_mode == GizmoMode::Translate {
                 self.set_gizmo_mode("rotate", cx);
                 self.set_tool_status("Rotate");
             } else {
-                self.disarm_move_hand(cx);
+                self.set_gizmo_mode("translate", cx);
+                self.set_tool_status("Move");
             }
             cx.notify();
             return;
+        }
+        // The pointer is a neutral place to land: entering Slot 1 from it always starts
+        // at the arrows instead of reopening stale rings.
+        if slot == Slot::Move && self.loadout.slot() == Slot::Idle {
+            self.set_gizmo_mode("translate", cx);
         }
         self.set_loadout_slot(slot, cx);
     }
@@ -267,29 +281,6 @@ impl Shell {
     /// Name the equipped hand in the status line.
     fn set_tool_status(&mut self, label: &str) {
         self.model.lock().unwrap().status = format!("tool: {label}");
-    }
-
-    /// Pause the Move hand: keep the selection, drop the handles, form and ruler.
-    ///
-    /// A pending move is a context exit like a hand change, so it is committed first.
-    fn disarm_move_hand(&mut self, cx: &mut Context<Self>) {
-        if self.move_disarmed {
-            return;
-        }
-        self.commit_pending_session(cx);
-        self.move_disarmed = true;
-        self.close_move_hud(cx);
-        self.model.lock().unwrap().gizmo_armed = false;
-        if let Some(viewport) = self.viewport.clone() {
-            viewport.update(cx, |viewport, cx| {
-                viewport.set_manipulators(Vec::new());
-                viewport.set_gizmo_idle_scale(None);
-                viewport.set_gizmo(None);
-                cx.notify();
-            });
-        }
-        self.model.lock().unwrap().status = "tool: idle".to_string();
-        cx.notify();
     }
 
     /// Override the topology filter from the header's `Select ▾`.
@@ -395,6 +386,54 @@ impl Shell {
             viewport.set_gizmos(gizmos);
             cx.notify();
         });
+    }
+
+    /// Paint the pointer hand's target on the stage.
+    ///
+    /// Slot 1's hands name their target with a manipulator; the pointer has none, so
+    /// the stage's selection highlight is what shows a body, a face or an edge. The
+    /// hovered pick is narrowed by `Select ▾` (a `Body` filter outlines the whole body,
+    /// `Face`/`Edge` keep the sub-element) and the latched selection takes over when the
+    /// pointer is away. This is the "what would a click select?" answer that the triad
+    /// used to give implicitly on hover.
+    pub(in crate::shell) fn sync_pointer_highlight(&mut self, cx: &mut Context<Self>) {
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let targets = if self.loadout.slot() == Slot::Idle
+            && self.session.is_none()
+            && self.active_tool.is_none()
+        {
+            let hovered = viewport.read(cx).hover_report().target.clone();
+            match hovered {
+                Some(reference) => vec![self.loadout.narrow(&reference)],
+                None => self.latched_selection_refs(),
+            }
+        } else {
+            Vec::new()
+        };
+        viewport.update(cx, |viewport, cx| {
+            if viewport.set_pointer_highlight(&targets) {
+                cx.notify();
+            }
+        });
+    }
+
+    /// The selection as viewport references. The loadout filter was applied when the
+    /// selection was reported, so a `Body` slot also highlights the whole body here.
+    fn latched_selection_refs(&self) -> Vec<SelectionRef> {
+        let model = self.model.lock().unwrap();
+        model
+            .selection
+            .iter()
+            .filter_map(|item| {
+                let object = self.display.entity_of(&item.object)?;
+                Some(SelectionRef {
+                    object,
+                    elements: item.elements.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Whether hover-to-arm may materialise a triad right now.

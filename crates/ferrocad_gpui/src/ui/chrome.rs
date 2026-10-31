@@ -635,7 +635,7 @@ fn workplane_button(
 /// The `Select ▾` topology filter control (U4).
 ///
 /// A **selector**, like `WP`: it has no primary action, because equipping a slot is
-/// what the bottom-left bar and the `1`/`2`/`3` keys do. The label carries the current
+/// what the bottom-left bar and the `0`–`3` keys do. The label carries the current
 /// filter, accented when it overrides the slot's default, and the rows are the four
 /// filters. A row id is synthetic (`select:<filter>`), intercepted by
 /// [`Shell::run_command`] before the registry.
@@ -735,8 +735,9 @@ fn select_button(
     control
 }
 
-/// The loadout bar (U4): `[1 Move] [2 Push/Pull] [3 Fillet]` over the canvas'
-/// bottom-left corner.
+/// The loadout bar (U4): `[1 Move] [2 Push/Pull] [3 Fillet] [0 Idle]` over the
+/// canvas' bottom-left corner. The pointer comes last because it is the neutral
+/// hand, not a fourth tool.
 ///
 /// It shares the creation dock's baseline and glass. The active slot is accented over
 /// `CHROME_ACTIVE_BG`; a click equips it exactly as its key does, so the hotkey stays
@@ -749,7 +750,6 @@ fn select_button(
 pub(crate) fn loadout_bar(
     loadout: Loadout,
     mode: GizmoMode,
-    idle: bool,
     blocked: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
@@ -786,7 +786,7 @@ pub(crate) fn loadout_bar(
             .text_color(rgb(if active { CHROME_ACTIVE } else { FG }))
             .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
             .child(div().text_color(rgb(MUTED)).child(key))
-            .child(slot.label_for(mode, idle));
+            .child(slot.label_for(mode));
         if !blocked {
             button = button
                 .cursor_pointer()

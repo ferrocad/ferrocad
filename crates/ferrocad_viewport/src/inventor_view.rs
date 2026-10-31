@@ -33,8 +33,9 @@ use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, OVERLAY_DEPTH, WIRE_DEPT
 use ferrocad_stage::{
     AxisStyle, FaceFrame, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle, GizmoTarget, GizmoValue,
     GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent,
-    PointerKind, RingSweep, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus, TransformGizmo,
-    TransformTape, ViewProjection, Workplane, axis, feedback, grid, snap_to_geometry_with,
+    PointerKind, RingSweep, ShapeItem, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus,
+    TransformGizmo, TransformTape, ViewProjection, Workplane, axis, feedback, grid,
+    snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{camera_position, project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
@@ -2518,6 +2519,63 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn set_stage(&mut self, stage: Stage) {
         self.stage = stage;
         self.stage_dirty = true;
+    }
+
+    /// Paint the pointer hand's hit target on the stage.
+    ///
+    /// `targets` are the references the current hand would select, with the host's
+    /// topology filter already applied. The first target naming an item wins: an empty
+    /// element list paints every part (the whole body), while named elements paint just
+    /// those parts (`Face6`, `Edge3`). Returns whether any item's highlight changed, so
+    /// a host can avoid a repaint when the pointer stays on the same scope.
+    pub fn set_pointer_highlight(&mut self, targets: &[SelectionRef]) -> bool {
+        fn parts_for(item: &ShapeItem, targets: &[SelectionRef]) -> Vec<u32> {
+            let Some(reference) = targets
+                .iter()
+                .find(|target| target.object == item.entity_id())
+            else {
+                return Vec::new();
+            };
+            if reference.elements.is_empty() {
+                let mut parts = item.parts().to_vec();
+                parts.sort_unstable();
+                parts.dedup();
+                // An untagged mesh places every vertex at part 0.
+                if parts.is_empty() {
+                    parts.push(0);
+                }
+                return parts;
+            }
+            let mut parts: Vec<u32> = reference
+                .elements
+                .iter()
+                .filter_map(|name| {
+                    item.part_names()
+                        .iter()
+                        .position(|part| part == name)
+                        .map(|index| index as u32)
+                })
+                .collect();
+            // `set_highlight` stores a sorted, deduplicated list, so compare against the
+            // same shape or a multi-element target would look changed on every notify.
+            parts.sort_unstable();
+            parts.dedup();
+            parts
+        }
+        let changed = self
+            .stage
+            .items()
+            .iter()
+            .any(|item| item.highlight() != parts_for(item, targets).as_slice());
+        if !changed {
+            return false;
+        }
+        self.stage_dirty = true;
+        for item in self.stage.items_mut() {
+            let parts = parts_for(item, targets);
+            item.set_highlight(parts);
+        }
+        true
     }
 
     /// Replace the pull-registered overlay scenes (G5).
@@ -8001,6 +8059,48 @@ mod tests {
 
         // The draw path (scene + transient overlay) runs cleanly on the fake view.
         viewport.refresh();
+    }
+
+    /// The pointer hand paints its filtered target on the stage: the whole body for a
+    /// whole reference, the named part for `Face2`, and nothing when the target leaves.
+    #[test]
+    fn the_pointer_highlight_paints_the_filtered_scope() {
+        use ferrocad_geom::SelectionRef;
+
+        let mut view = InventorViewport::new(
+            fake(ImageData {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            }),
+            perspective_camera([100, 100]),
+            triangle_scene(),
+        );
+        let mut stage = Stage::new();
+        stage.add_item(named_slab());
+        view.set_stage(stage);
+
+        assert!(
+            view.stage().item(7).unwrap().highlight().is_empty(),
+            "nothing is painted at rest"
+        );
+
+        assert!(view.set_pointer_highlight(&[SelectionRef::element(7, "Face2")]));
+        assert_eq!(view.stage().item(7).unwrap().highlight().to_vec(), vec![1]);
+        assert!(
+            !view.set_pointer_highlight(&[SelectionRef::element(7, "Face2")]),
+            "the same scope does not repaint"
+        );
+
+        assert!(view.set_pointer_highlight(&[SelectionRef::whole(7)]));
+        assert_eq!(
+            view.stage().item(7).unwrap().highlight().to_vec(),
+            vec![0, 1],
+            "a whole body is every part the slab carries"
+        );
+
+        assert!(view.set_pointer_highlight(&[]));
+        assert!(view.stage().item(7).unwrap().highlight().is_empty());
     }
 
     /// A 45° perspective camera at `(0, 0, 5)` looking toward the origin.

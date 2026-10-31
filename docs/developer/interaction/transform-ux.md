@@ -13,7 +13,7 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 > discussion are replaced by one cumulative transform session with explicit commit,
 > checkpoint and rollback — no deferred mode, no undo-as-cancel, and a first-class
 > uncommitted edit in the model. Which control a selection arms stays context-driven, but the
-> *inference* is replaced by a visible loadout slot (U4, built 2026-10-31: `1`/`2`/`3`, the
+> *inference* is replaced by a visible loadout slot (U4, built 2026-10-31: `0`–`3`, the
 > bottom-left bar and the `Select ▾` filter). See
 > [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) and
 > [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md); the mode set,
@@ -28,7 +28,7 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 | Origin/pivot handle | **built (slice 3)**: `GizmoTarget::Origin`, a 10 px disc, priority origin > axis > plane > ring | `gizmo.rs` `GizmoTarget`; `inventor_view.rs` `gizmo_origin_snap` |
 | Face/edge tags, `Move` + the docked Δ row and in-context finish pill, and the tape's ruler tags | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
 | Face-normal push/pull | **built (slice 5)**: `PushPullStem` + the parametric `push_pull` hook | `ferrocad_part_gui/src/push_pull.rs`; `python/ferrocad_parametric/__init__.py` |
-| Hand / loadout | **built (U4, 2026-10-31)**: Slot 1 hosts the triad, Slots 2/3 the selection's manipulator; `Select ▾`; `1`/`2`/`3`; bottom-left bar | `shell/loadout.rs`; `chrome.rs` |
+| Hand / loadout | **built (U4, 2026-10-31)**: Slot 1 hosts the triad, Slots 2/3 the selection's manipulator, Slot 0 the pointer (selection highlight, no handles); `Select ▾`; `0`–`3`; bottom-left bar | `shell/loadout.rs`; `chrome.rs` |
 | Hover-to-arm | **built (U5, 2026-10-31)**: Move hand + empty selection materialises the triad at 30 %; a handle press promotes and drags | `shell/loadout.rs`; `inventor_view.rs` `set_gizmo_idle_scale` |
 
 The triad targets the **whole item** even when the selection names a face
@@ -174,16 +174,16 @@ The floating pill is anchored to the **gizmo**, not the screen or the pointer (f
   origin frozen while the session is dirty; a re-pivot moves it. Typing a coordinate
   subtracts the origin, so preview, tape and commit stay deltas, and a `=`/`@` prefix on
   one field (`=15`) does the same without leaving offset mode.
-- The fields open **unfocused**: the canvas keeps the keyboard, and `1`/`2`/`3` therefore
+- The fields open **unfocused**: the canvas keeps the keyboard, and `0`–`3` therefore
   keep equipping loadout slots. `Tab` opens the drag axis (with its value selected), a
-  digit (other than `1`–`3`) or `-`/`.` opens the remembered field with that character,
+  digit (other than `0`–`3`) or `-`/`.` opens the remembered field with that character,
   and a click in a field or on a ruler tag focuses it. `Enter`/`✓` and `Esc`/`✗` finish the
   session, reset the fields and hand the keyboard back to the viewport; the row stays
   (`shell/tests/escalation.rs`). `Esc` then cascades: from a pending move it rolls back,
   from a clean form it clears the selection (taking the row and triad with it). Pressing
-  `1` while Slot 1 is already equipped cycles the hand — Move → Rotate → idle — so the
-  third press leaves the selection without handles or row; `1` again, a new selection or
-  a `Move` verb brings Move back.
+  `1` while Slot 1 is already equipped toggles the hand — Move ⇄ Rotate. The pointer is
+  its own slot (`0`): it leaves the selection without handles or row (the stage highlight
+  keeps the scope visible), and `1` from there brings Move back at the arrows.
 
 ## 4. Face-normal alignment and push/pull
 

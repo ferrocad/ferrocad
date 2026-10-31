@@ -61,13 +61,13 @@ impl Shell {
             .into_iter()
             .map(|item| filter.apply_item(item))
             .collect();
-        // A paused Move hand is about *this* subject: a new selection arms it again.
+        // A new selection is about a new subject; a pick on the already-selected body
+        // is a no-op and must not run the session reset below (it used to drop a pending
+        // move silently).
         let changed = {
             let model = self.model.lock().unwrap();
             model.selection != items
         };
-        // Re-applying the same selection is a no-op, and it must not run the session reset
-        // below: a pick on the already-selected body used to drop a pending move silently.
         if !changed {
             return;
         }
@@ -81,7 +81,9 @@ impl Shell {
         if self.gate(Action::Select { target }, cx) {
             return;
         }
-        self.move_disarmed = false;
+        // The slot is a tool choice, not a selection property: the new subject stays in
+        // whichever hand is equipped. In the pointer hand no handles arm; the selection
+        // itself is what `sync_pointer_highlight` paints.
         // Opening menus never mutates the selection. A **new** selection, however,
         // invalidates both an open wheel (its context target no longer matches the
         // selection) and a pending translation form (its delta was measured against
@@ -91,7 +93,8 @@ impl Shell {
         self.wheel_target = None;
         // A new selection is a new pivot subject: the session user origin goes away.
         // The loadout slot is a tool choice, not a selection property, so it stays;
-        // a hover-to-arm preview is replaced by the latched selection's own handles.
+        // a hover-to-arm preview is replaced by the latched selection's own overlays
+        // (the triad, or the pointer hand's highlight).
         self.user_origin = None;
         self.hover_arm = None;
         if self

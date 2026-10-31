@@ -9,15 +9,23 @@ use super::*;
 
 /// Slot 1 hosts both handle sets, so its bar label names the one the user will get.
 #[test]
-fn slot_one_names_the_current_handle_set() {
-    assert_eq!(Slot::Move.label_for(GizmoMode::Translate, false), "Move");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate, false), "Rotate");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Universal, false), "Move");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Translate, true), "Idle");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate, true), "Idle");
-    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate, false), "Push/Pull");
-    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate, true), "Push/Pull");
-    assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate, true), "Fillet");
+fn slot_labels_name_the_hand_they_equip() {
+    assert_eq!(Slot::Move.label_for(GizmoMode::Translate), "Move");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate), "Rotate");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Universal), "Move");
+    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate), "Push/Pull");
+    assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate), "Fillet");
+    assert_eq!(Slot::Idle.label_for(GizmoMode::Rotate), "Idle");
+    assert_eq!(
+        Slot::Idle.status_label(GizmoMode::Rotate),
+        "idle",
+        "the status line keeps its lower-case idle"
+    );
+    assert_eq!(
+        Slot::ALL,
+        [Slot::Move, Slot::PushPull, Slot::Fillet, Slot::Idle],
+        "the pointer is the last pill"
+    );
 }
 
 /// Select `reference` the way a click does, so the shell re-applies the loadout filter
@@ -164,16 +172,13 @@ fn the_loadout_bar_renders_and_equips_a_slot(cx: &mut TestAppContext) {
         cx.debug_bounds("loadout-bar").is_some(),
         "the bar is drawn over the canvas"
     );
-    for key in ["1", "2", "3"] {
-        assert!(
-            cx.debug_bounds(match key {
-                "1" => "loadout-1",
-                "2" => "loadout-2",
-                _ => "loadout-3",
-            })
-            .is_some(),
-            "slot {key} has a pill"
-        );
+    for (key, selector) in [
+        ("0", "loadout-0"),
+        ("1", "loadout-1"),
+        ("2", "loadout-2"),
+        ("3", "loadout-3"),
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "slot {key} has a pill");
     }
 
     click_at(&mut cx, "loadout-2");
@@ -182,6 +187,12 @@ fn the_loadout_bar_renders_and_equips_a_slot(cx: &mut TestAppContext) {
         Slot::PushPull,
         "a click equips the same slot as `2`"
     );
+    // The pointer pill shares the same handler; its own key path is covered by
+    // `the_move_and_pointer_slots_are_separate_hands`. Do not click the last pill here:
+    // a test-run command registry can widen the centred action dock over it, while the
+    // base app's dock stays clear of the bar.
+    draw(&mut cx);
+    cx.run_until_parked();
     click_at(&mut cx, "loadout-1");
     assert_eq!(
         shell.read_with(&cx, |shell, _| shell.loadout.slot()),
@@ -222,7 +233,7 @@ fn switching_the_slot_waits_for_a_pending_move(cx: &mut TestAppContext) {
 
     let before = undo_count();
     // `2` is the slot key, not a digit typed into the Move HUD, even though a gizmo is
-    // armed: the loadout claims 1/2/3. With a move pending it is refused.
+    // armed: the loadout claims 0–3. With a move pending it is refused.
     press_root(&mut cx, &shell, "2");
 
     assert_eq!(
@@ -264,10 +275,10 @@ fn switching_the_slot_waits_for_a_pending_move(cx: &mut TestAppContext) {
     );
 }
 
-/// Pressing the active Move hand walks Slot 1 through **Move → Rotate → idle → Move**,
-/// and the status line names each state (idle included).
+/// `1` toggles Slot 1's two hands; `0` is the pointer, a separate slot that keeps the
+/// selection but hosts no handles or form.
 #[gpui::test]
-fn pressing_the_active_move_hand_cycles_move_rotate_and_idle(cx: &mut TestAppContext) {
+fn the_move_and_pointer_slots_are_separate_hands(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (mut cx, shell, _model) = armed_window(cx);
     draw(&mut cx);
@@ -281,57 +292,62 @@ fn pressing_the_active_move_hand_cycles_move_rotate_and_idle(cx: &mut TestAppCon
     // 1 → Rotate: the same slot, now hosting rings.
     press_root(&mut cx, &shell, "1");
     draw(&mut cx);
-    let (slot, open, armed, disarmed, status) = shell.read_with(&cx, |shell, _| {
+    let (slot, open, armed, status) = shell.read_with(&cx, |shell, _| {
         let model = shell.model.lock().unwrap();
         (
             shell.loadout.slot(),
             shell.move_hud.is_some(),
             model.gizmo_armed,
-            shell.move_disarmed,
             model.status.clone(),
         )
     });
     assert_eq!(slot, Slot::Move, "Slot 1 stays equipped");
-    assert_eq!(
-        mode(&cx),
-        GizmoMode::Rotate,
-        "the first press swaps to Rotate"
-    );
+    assert_eq!(mode(&cx), GizmoMode::Rotate, "the press swaps to Rotate");
     assert!(open, "the rotate form is the same docked row");
     assert!(armed, "the rings are hosted");
-    assert!(!disarmed, "and the hand is armed");
-    assert_eq!(
-        status, "tool: Rotate",
-        "the status names the hand, not Move"
-    );
+    assert_eq!(status, "tool: Rotate", "the status names the hand");
 
-    // 1 → idle: the selection stays, the handles and the row leave the canvas.
+    // 1 → Move: the same key toggles back instead of cycling into idle.
     press_root(&mut cx, &shell, "1");
     draw(&mut cx);
-    let (open, armed, selection, status) = shell.read_with(&cx, |shell, _| {
+    assert_eq!(mode(&cx), GizmoMode::Translate);
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone()),
+        "tool: Move"
+    );
+
+    // 0 → Idle: its own slot. The selection stays, the handles and form leave.
+    press_root(&mut cx, &shell, "0");
+    draw(&mut cx);
+    let (slot, open, armed, selection, status) = shell.read_with(&cx, |shell, _| {
         let model = shell.model.lock().unwrap();
         (
+            shell.loadout.slot(),
             shell.move_hud.is_some(),
             model.gizmo_armed,
             model.selection.len(),
             model.status.clone(),
         )
     });
-    assert!(!open, "idle hides the form");
-    assert!(!armed, "idle hosts no handles");
+    assert_eq!(slot, Slot::Idle, "0 equips the pointer, not a paused Move");
+    assert!(!open, "the pointer hides the form");
+    assert!(!armed, "the pointer hosts no handles");
     assert_eq!(selection, 1, "the selection is kept for inspection");
-    assert_eq!(status, "tool: idle", "the idle state has its own status");
+    assert_eq!(status, "tool: idle", "the pointer names its own state");
     assert!(cx.debug_bounds("move-hud").is_none());
 
-    // 1 → Move: the cycle closes on the translate hand.
+    // 1 → Move: entering Slot 1 from the pointer starts at the arrows.
     press_root(&mut cx, &shell, "1");
     draw(&mut cx);
     assert_eq!(mode(&cx), GizmoMode::Translate);
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.slot()),
+        Slot::Move
+    );
     assert!(
         shell.read_with(&cx, |shell, _| shell.move_hud.is_some()),
         "Move brings the row back"
     );
-    assert!(!shell.read_with(&cx, |shell, _| shell.move_disarmed));
     assert_eq!(
         shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone()),
         "tool: Move"

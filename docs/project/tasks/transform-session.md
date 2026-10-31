@@ -397,10 +397,11 @@ focused field (`Option<usize>`), the last dragged axis and the coordinate mode.
   another hand closes it. The row's `WLD/LOC/WP` switch orients both hands, and the
   fields are read in that frame: in `LOC` a typed `ΔX` is along the body's X and an
   absolute `X/Y/Z` is anchored at the body's origin. **Pressing `1` while Slot 1 is
-  already equipped cycles the hand** (`activate_loadout_slot`): Move → Rotate → idle. The idle press is the paused
-  hand: the selection stays, and the triad, row and pill leave the canvas for inspection;
-  `1` again (which re-arms Move), a new selection or any command that equips the hand
-  brings it back; a changed selection clears the pause. A modal or the object wheel hides
+  already equipped toggles the hand** (`activate_loadout_slot`): Move ⇄ Rotate. The
+  pointer is its own slot (`0`): the selection stays and the stage's selection highlight
+  names its scope, while the triad, row and pill leave the canvas for inspection; `1`,
+  a new selection or any command that equips the hand brings Move back. Entering Slot 1
+  from the pointer starts at the arrows. A modal or the object wheel hides
   both pieces (they are not stacked under a backdrop); a right-press on the finish pill
   opens that wheel.
 - **Chrome order and the pending gate.** The docked row is
@@ -427,9 +428,9 @@ focused field (`Option<usize>`), the last dragged axis and the coordinate mode.
   rotation (`Reset (Z 45°)` for a pure axis, `Reset (21.4°)` for a compound tilt) and dims
   at identity; it is never an Euler decomposition. `Tab` focuses the active cell.
 - **Unfocused by default.** Opening the form and every drag/release leave all fields at the
-  resting `ui::CHROME_LINE` border with no caret, so `1`/`2`/`3` keep equipping loadout
+  resting `ui::CHROME_LINE` border with no caret, so `0`–`3` keep equipping loadout
   slots and the viewport keeps its own keys. `Tab` opens the remembered drag axis (and
-  selects its value), then cycles; a digit other than `1`–`3`, `-` or `.` focuses that field
+  selects its value), then cycles; a digit other than `0`–`3`, `-` or `.` focuses that field
   and starts the number; a click in a field or on a ruler tag focuses it. A blurred field
   paints **no** selection highlight, so only the focused field shows the `ACTIVE_ACCENT`
   ring.
@@ -453,8 +454,8 @@ Select an object with the Move slot active (see [`tool-loadout.md`](tool-loadout
 form appears at its rest pose. Press `Tab` → the caret (with the value selected) is in `ΔX`
 and the tape previews the typed offset live, with the ruler tag on the X leg → type `25`,
 `Tab` to `ΔY`, type `10`, `Enter` to commit both in one undo step. `Tab`, not a digit,
-opens a field because `1`/`2`/`3` are reserved for the loadout. `=` switches the form to
-`X/Y/Z`; typing `0` then `Enter` snaps the pivot there.
+opens a field because `0`–`3` are reserved for the loadout. `=` switches the form to
+`X/Y/Z`; with a field focused, typing `0` then `Enter` snaps the pivot there.
 
 ---
 

@@ -325,9 +325,6 @@ pub struct Shell {
     /// ✓/✗). It is not an [`OpenDialog`](shell::OpenDialog): it belongs to the Move
     /// hand, so it survives a commit and never blocks another command's dialog.
     move_hud: Option<move_hud::MoveHud>,
-    /// The user reached **idle** (`1` twice while Slot 1 is active): the selection
-    /// stays, but the triad, the form and the ruler go away until `1` arms Move again.
-    move_disarmed: bool,
     /// A field the next render must focus (a ruler tag's click, which arrives outside a
     /// window context). Cleared by the render that consumes it.
     pill_focus_request: Option<usize>,
@@ -769,7 +766,6 @@ impl Shell {
             focus_dialog: false,
             pill: pill::PillState::resting(),
             move_hud: None,
-            move_disarmed: false,
             pill_focus_request: None,
             restore_viewport_focus: false,
             form_dialog: None,
@@ -1021,7 +1017,7 @@ impl Shell {
         let editing = self.settings_card.is_some() || cancel_dialog || field_focused;
         // The Move HUD owns two keys while a field is **not** focused: `Enter` accepts
         // it and `Tab` opens a field on the remembered drag axis. Everything else — in
-        // particular `1`/`2`/`3` — belongs to the viewport and the loadout: the fields
+        // particular `0`–`3` — belongs to the viewport and the loadout: the fields
         // are visible but resting, so a digit equips a slot rather than starting a
         // number. Once a field has focus its own handlers take the digits and `Enter`,
         // and `Tab` bubbles to the HUD panel to cycle the next field.
@@ -1036,7 +1032,7 @@ impl Shell {
                     return true;
                 }
                 _ => {
-                    // `1`/`2`/`3` are the loadout hotkeys (handled just below), so
+                    // `0`–`3` are the loadout hotkeys (handled just below), so
                     // only the other numeric keys start a number here. `-` and `.`
                     // are never slot keys and always open the remembered field.
                     let slot_digit = Slot::from_key(&event.keystroke.key).is_some();
@@ -1049,7 +1045,7 @@ impl Shell {
                 }
             }
         }
-        // The loadout slots: `1`/`2`/`3` equip Move / Push-Pull / Fillet. They sit
+        // The loadout slots: `0`–`3` equip Idle / Move / Push-Pull / Fillet. They sit
         // above the gizmo escalation below, so `2` on an armed triad equips the face
         // hand instead of seeding the Move HUD with 2. A focused Δ field consumes its
         // own digits first; the Move HUD's resting fields do not count as a modal.
@@ -1112,7 +1108,7 @@ impl Shell {
             // At rest, Esc clears the selection: the form, the triad and the ruler go
             // with it. (A dirty move was rolled back above; a pivot was dropped first.)
             if !cancel_dialog
-                && self.loadout.slot().wants_gizmo()
+                && matches!(self.loadout.slot(), Slot::Move | Slot::Idle)
                 && !self.session.as_ref().is_some_and(TransformSession::is_dirty)
                 && !self.model.lock().unwrap().selection.is_empty()
             {
@@ -1401,6 +1397,9 @@ else:
             // (U5); the viewport notifies on every hover change, and a hover report is
             // not an event of its own.
             this.sync_hover_arm(cx);
+            // The pointer hand has no handles, so its target is the stage's selection
+            // highlight: the hovered scope, or the latched selection when away.
+            this.sync_pointer_highlight(cx);
         });
         self.viewport = Some(viewport);
         self._viewport_events = Some(events);
@@ -1760,7 +1759,6 @@ impl Render for Shell {
                     .child(crate::chrome::loadout_bar(
                         self.loadout,
                         self.gizmo_mode,
-                        self.move_disarmed,
                         self.move_is_pending(cx),
                         cx,
                     )),

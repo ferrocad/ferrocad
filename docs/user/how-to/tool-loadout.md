@@ -1,16 +1,19 @@
 # Switch tools with the loadout
 
 FerroCAD's pointer carries **one tool at a time**. The bar at the bottom-left of
-the 3-D view names the hand you have equipped, and `1`, `2` and `3` switch it:
+the 3-D view names the hand you have equipped, and `1`, `2`, `3` and `0` switch it:
 
 | Slot | Key | A drag with this hand | `Select ▾` default |
 | --- | --- | --- | --- |
 | **Move** | `1` | moves or rotates the selected body with the transform triad | Body |
 | **Push/Pull** | `2` | extrudes or pockets the face under the pointer | Face |
 | **Fillet** | `3` | fillets or chamfers the edge under the pointer | Edge |
+| **Idle** | `0` | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
 
 The active slot is lit in the bar. Push/pull and fillet appear only when the
-edition provides those controls (the Part workbench does); Move is always there.
+edition provides those controls (the Part workbench does); Move and Idle are
+always there. Pressing `1` while Move is already equipped toggles it between
+Move and Rotate; `0` is its own pointer hand, not a paused Move.
 
 ## Move a body without selecting it first
 
@@ -34,6 +37,12 @@ You can also override the filter yourself: choose `Auto`, `Body`, `Face` or
 `Edge` in the `Select ▾` menu without changing the hand. The label turns cyan
 while the filter differs from the hand's default. A script that selects a
 sub-element reports the same filtered scope the window does.
+
+With the **Idle** hand (`0`) there is no triad to tell you what a click would
+grab, so the viewport highlights it instead: hovering a body paints the whole
+body under `Body`, and a `Face`/`Edge` filter paints just that sub-element. The
+latched selection keeps its highlight when the pointer moves away. That is the
+same filtered scope a click will report.
 
 ## Keep, commit or roll back a move
 
@@ -79,9 +88,9 @@ sub-element reports the same filtered scope the window does.
 
 | Key | Effect |
 | --- | --- |
-| `1` / `2` / `3` | equip Move / Push/Pull / Fillet; while Slot 1 is active, `1` cycles Move → Rotate → idle → Move, and the loadout pill reads `1 Move`, `1 Rotate` or `1 Idle` |
+| `0` / `1` / `2` / `3` | equip Idle / Move / Push/Pull / Fillet; while Slot 1 is active, `1` toggles Move ⇄ Rotate |
 | `Tab` | focus the Move form's field for the axis you last dragged (then cycle); on the rotate form, focus `Δθ` |
-| a digit, `-` or `.` | focus the remembered field and start the number |
+| a digit other than `0`–`3`, `-` or `.` | focus the remembered field and start the number |
 | `=` | switch the translation form between offsets (`ΔX`) and coordinates (`X`); cycle the rotate rings (`WLD` → `LOC` → `WP`) when no rotation is pending |
 | `Enter` | commit the pending move, or accept an open dialog |
 | `Esc` | roll back the pending move; at rest, clear the selection; or close the open surface |
@@ -95,16 +104,16 @@ the triad (it stays away from the arrows and the measuring tape); `✓` is accen
 number) and hides while you are dragging: at rest there is nothing to finish, and the
 3-D ruler is not drawn either.
 The fields start **unfocused**: their numbers follow the triad and the 3-D measuring
-tape live, but `1`, `2` and `3` still equip tools. `Tab` — or a digit other than
-`1`–`3`, `-`, `.`, a click in a field, or a click on a ruler tag — puts the keyboard in
+tape live, but `0`–`3` still equip tools. `Tab` — or a digit other than `0`–`3`,
+`-`, `.`, a click in a field, or a click on a ruler tag — puts the keyboard in
 a field. Once a field is focused its digits belong to it. `✓`/`Enter` commits and
 resets the fields; `✗`/`Esc` rolls back. Neither closes the coordinates. Starting a
-`Move` command (`Space` wheel or the bar) brings a paused hand back.
+`Move` command (`Space` wheel or the bar) leaves the pointer for the Move hand.
 
-Click the `Δ` switch (or press `=`) to show **coordinates** instead of offsets: typing
-`0` in `X` snaps the pivot onto the YZ plane, and a typed coordinate is still one
-ordinary move. Type `=15` in a field to mean "X = 15" for that entry without switching
-the whole form.
+Click the `Δ` switch (or press `=`) to show **coordinates** instead of offsets: click the
+`X` field and type `0` to snap the pivot onto the YZ plane, and a typed coordinate is
+still one ordinary move. Type `=15` in a field to mean "X = 15" for that entry without
+switching the whole form.
 
 With the **rotate** rings, the same dock row becomes `ΔθX ΔθY ΔθZ` plus the `WLD/LOC/WP`
 switch and a `Reset 0°` button. Only the active ring's cell holds an input. `Tab` focuses

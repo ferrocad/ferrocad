@@ -869,6 +869,67 @@ fn hover_to_arm_needs_the_move_slot_and_an_empty_selection(cx: &mut TestAppConte
     );
 }
 
+/// U6 fix: typing a delta in the Move pill moves the **gizmo**, not only the object.
+/// The screenshot bug had the box at 10/10/10 with the triad stranded at the origin.
+/// Skips without a GPU adapter.
+#[gpui::test]
+fn typing_a_move_moves_the_gizmo_with_the_object(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+
+    let (drawn_before, origin_before) = cx.update(|_window, cx| {
+        let gizmo = viewport.read(cx).gizmo().expect("the triad is armed");
+        (gizmo.items()[0].positions()[0], gizmo.origin())
+    });
+
+    // The real HUD spec and token, so the fields and their change events are the same
+    // path the user types into.
+    let outcome = crate::commands::run("App_Move").expect("App_Move");
+    let spec = outcome.dialog.clone().expect("a dialog");
+    let token = outcome.token.clone().expect("a token");
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.open_dialog_state(token, spec, cx));
+    });
+    draw(&mut cx);
+    for axis in 0..3 {
+        if axis > 0 {
+            cx.simulate_keystrokes("tab");
+        }
+        cx.simulate_input("1");
+    }
+    draw(&mut cx);
+
+    let (origin, drawn_after, anchor, gizmo_anchor) = cx.update(|window, cx| {
+        let viewport = viewport.read(cx);
+        let gizmo = viewport.gizmo().expect("a gizmo");
+        (
+            gizmo.origin(),
+            gizmo.items()[0].positions()[0],
+            shell.read_with(cx, |shell, cx| shell.dialog_anchor(window, cx)),
+            viewport.gizmo_anchor().expect("the triad projects"),
+        )
+    });
+    assert!(
+        (origin.x - origin_before.x - 1.0).abs() < 0.01
+            && (origin.y - origin_before.y - 1.0).abs() < 0.01
+            && (origin.z - origin_before.z - 1.0).abs() < 0.01,
+        "the typed delta moved the gizmo frame from its anchor: {origin_before:?} -> {origin:?}"
+    );
+    assert!(
+        (f64::from(drawn_after[0]) - f64::from(drawn_before[0]) - 1.0).abs() < 0.01,
+        "the drawn triad follows the typed delta: {drawn_before:?} -> {drawn_after:?}"
+    );
+    assert_eq!(
+        anchor, gizmo_anchor,
+        "the HUD anchor is the moved gizmo, not a screen corner"
+    );
+}
+
 /// U6 fix: the HUD anchors on the gizmo's projected origin, not on the pointer. The
 /// old below-right offset put a low body's HUD into the dock clamp (bottom-right).
 /// Skips without a GPU adapter.

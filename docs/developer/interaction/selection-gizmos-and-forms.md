@@ -201,7 +201,11 @@ Therefore:
   the real frame to the previewed pose, so hit-testing agrees with the drawing while the
   session stays pending. The shell re-arms the selection after a commit, in
   `after_document_edit`.
-- Typed previews (no drag) move the real frame, so hit-testing agrees with the drawing.
+- Typed previews (no drag) move the real frame, so hit-testing agrees with the drawing
+  **and the handle geometry is rebuilt in the same call** (`TransformGizmo::set_origin`
+  only marks the frame dirty; `update` rebuilds it). A frame move without that rebuild
+  left the typed object and the HUD anchor at the new pose while the drawn triad stayed
+  behind — the 2026-10-31 screenshot bug.
 
 ### 4.4 Re-arming
 

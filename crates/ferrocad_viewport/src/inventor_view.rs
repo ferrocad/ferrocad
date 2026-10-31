@@ -3675,6 +3675,11 @@ impl<V: InventorView> InventorViewport<V> {
                 // Not dragging: the real frame follows, so hit-testing agrees with the draw.
                 gizmo.set_display_offset(None);
                 gizmo.set_origin(origin.add(&delta));
+                // `set_origin` only marks the frame dirty: the handle geometry is rebuilt
+                // by `update`, which `set_display_offset` does not need but a real frame
+                // move does. Without this the typed preview moved the object and the HUD
+                // anchor while the drawn triad stayed at its old pose.
+                changed |= gizmo.update(&self.camera);
             } else {
                 // A gizmo is the control: freeze its interaction frame and move only the
                 // drawing, so the triad stays glued to the surface without feeding back
@@ -3705,7 +3710,9 @@ impl<V: InventorView> InventorViewport<V> {
             if let Some(gizmo) = self.gizmos.gizmo_mut(index) {
                 gizmo.set_display_offset(None);
                 gizmo.set_origin(origin);
-                changed = true;
+                // The restored frame needs its handle geometry rebuilt, exactly as a
+                // typed preview does (see `apply_preview_overlays`).
+                changed |= gizmo.update(&self.camera);
             }
         }
         for (manipulator, anchor) in self.manipulators.iter_mut().zip(home.manipulators.iter()) {
@@ -8534,6 +8541,7 @@ mod tests {
             end.total_transform.m[7],
             end.total_transform.m[11],
         ];
+        let drawn_before = view.gizmo().expect("a gizmo").items()[0].positions()[0];
         assert!(view.preview_transform(
             &[42],
             Some(Matrix4::translation(delta[0], delta[1], delta[2]))
@@ -8542,6 +8550,16 @@ mod tests {
         assert_eq!(
             view.gizmo().expect("a gizmo").origin(),
             Vector3::new(delta[0], delta[1], delta[2])
+        );
+        // A real frame move must rebuild the handle geometry, not only the frame: a
+        // typed HUD edit used to leave the drawn triad at its old pose while the object
+        // (and the HUD anchor) moved.
+        let drawn_after = view.gizmo().expect("a gizmo").items()[0].positions()[0];
+        assert!(
+            // The handle is screen-invariant, so a move along one axis also rescales the
+            // orthogonal extents; the previewed axis is what must translate with it.
+            (f64::from(drawn_after[0]) - f64::from(drawn_before[0]) - delta[0]).abs() < 1e-6,
+            "the drawn triad follows the typed preview: {drawn_before:?} -> {drawn_after:?} (delta {delta:?})"
         );
 
         // A second drag on the same pending move: the host sends the accumulated delta

@@ -139,6 +139,9 @@ The floating Δ HUD is anchored to the **gizmo**, not the screen or the pointer
 - With a viewport but no gizmo armed, the anchor is the **viewport centre**
   (`InventorViewport::viewport_anchor`), not the last pointer position. The pointer is
   only the last resort for a shell with no viewport at all.
+- A **typed** Δ moves the gizmo's real frame with the object (and rebuilds its handle
+  geometry), so the drawn triad and the HUD anchor follow the value while the session
+  is pending. `Enter` commits and the shell re-arms at the committed pose.
 - The panel stays inside the canvas safe area (16 px margins, 64 px above the dock).
   While an input is focused or the pointer is inside the panel, its screen position is
   **frozen**, so typing a large Δ or dragging never slides the fields away.

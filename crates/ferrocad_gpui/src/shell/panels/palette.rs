@@ -2,7 +2,7 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
+use crate::shell::*;
 
 impl Shell {
     /// Open the command palette (Ctrl+K, or the dock's Search slot).
@@ -48,7 +48,7 @@ impl Shell {
 
     /// Close the palette; returns whether it was open. The focus that opened it is
     /// restored on the next render.
-    pub(super) fn close_palette(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn close_palette(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(palette) = self.palette.take() else {
             return false;
         };
@@ -58,7 +58,7 @@ impl Shell {
     }
 
     /// `Ctrl+K`: open the palette, or close it when it is already open.
-    pub(super) fn toggle_palette(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn toggle_palette(&mut self, cx: &mut Context<Self>) {
         if self.palette.is_some() {
             self.close_palette(cx);
         } else {
@@ -68,7 +68,7 @@ impl Shell {
 
     /// Mirror the field's text into the query and rewind the cursor: a shorter list
     /// must never leave the cursor past its end.
-    pub(super) fn palette_query_changed(&mut self, text: String, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn palette_query_changed(&mut self, text: String, cx: &mut Context<Self>) {
         if let Some(palette) = self.palette.as_mut() {
             palette.query = text;
             palette.selected = 0;
@@ -77,7 +77,7 @@ impl Shell {
     }
 
     /// Move the palette cursor over the filtered rows, wrapping at both ends.
-    pub(super) fn move_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn move_palette_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
         let Some(palette) = self.palette.as_ref() else {
             return;
         };
@@ -98,7 +98,7 @@ impl Shell {
     /// Enter in the palette: run the selected command, but only when it is enabled.
     /// A disabled row stays visible (like the dock's greyed entries) and says why
     /// nothing happened instead of silently doing nothing.
-    pub(super) fn palette_accept(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn palette_accept(&mut self, cx: &mut Context<Self>) {
         let Some(palette) = self.palette.as_ref() else {
             return;
         };

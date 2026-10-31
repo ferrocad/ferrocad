@@ -43,6 +43,33 @@ obvious:
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
 | `ferrocad_ctypes` | `cdylib` | The legacy M0 C-ABI backend, **removed** (kept in §4 as the rationale). |
 
+### 1.1 Module layout
+
+The two presentation crates group their internals by responsibility. Every
+submodule stays public, each folder's `mod.rs` re-exports the high-level items, and
+the older flat module paths remain as aliases of the same modules — so both a
+coarse (`ferrocad_stage::Stage`) and a fine-grained
+(`ferrocad_stage::transform::gizmo::TransformGizmo`) import work.
+
+```text
+ferrocad_stage/src/
+  scene/       Stage, ShapeItem, DrawMode
+  render/      grid, axis, feedback, screen
+  interaction/ input, tool, snap, manipulator, plane_points, declarative
+  transform/   gizmo, session, protractor, measure_tape
+  workplane/   workplane, stem
+
+ferrocad_gpui/src/
+  model/       display, selection, view
+  runtime/     python, interop, headless
+  ui/          chrome, dialog, forms, shortcuts, dev_tools
+  workbench/   commands, contributions, manipulators
+  shell/       Shell + render.rs
+    bridge/    context, dispatch, picking, viewport
+    hud/       move_hud, pill
+    panels/    properties, palette, popovers, dialogs, forms, loadout, devtools
+```
+
 The open-document registry lives in `ferrocad_core::Application` (the analog of FreeCAD's
 `App::Application` / `App::GetApplication()`): the open documents (`Arc<Mutex<Document>>`),
 the active document, document-lifecycle observers, and FreeCAD-style unique naming. The
@@ -241,7 +268,7 @@ added deliberately, not by accident, and it must never bypass the same
 `ferrocad_core` that Python uses. A second rule follows from the editions: **the
 shell names no workbench** — a module reaches the window by registering the hooks
 in §9, and a workbench's Rust-side manipulator reaches it through the
-[`Contributions`](../../crates/ferrocad_gpui/src/contributions.rs) registry (§10).
+[`Contributions`](../../crates/ferrocad_gpui/src/workbench/contributions.rs) registry (§10).
 
 ## 7. Editions and repackaging
 

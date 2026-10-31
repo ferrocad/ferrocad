@@ -2,7 +2,7 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
+use crate::shell::*;
 use crate::python::SelectionRequest;
 
 /// The selection a click asks for.
@@ -12,7 +12,7 @@ use crate::python::SelectionRequest;
 /// to the whole body, so the triad names the body and Rotate pivots about its own
 /// origin. The count travels with the [`SelectionEvent`], so the shell never guesses
 /// a double click from time or distance.
-pub(super) fn click_target(reference: &SelectionRef, click_count: usize) -> SelectionRef {
+pub(in crate::shell) fn click_target(reference: &SelectionRef, click_count: usize) -> SelectionRef {
     if click_count >= 2 {
         SelectionRef::whole(reference.object)
     } else {
@@ -22,12 +22,12 @@ pub(super) fn click_target(reference: &SelectionRef, click_count: usize) -> Sele
 
 impl Shell {
     /// Replace the selection with one whole object (a plain click).
-    pub(super) fn select(&mut self, name: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn select(&mut self, name: &str, cx: &mut Context<Self>) {
         self.replace_selection(vec![SelectionItem::new(name)], cx);
     }
 
     /// Add or remove one object (Ctrl/Cmd- or Shift-click), keeping the rest.
-    pub(super) fn toggle_select(&mut self, name: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn toggle_select(&mut self, name: &str, cx: &mut Context<Self>) {
         let mut items = {
             let m = self.model.lock().unwrap();
             m.selection.clone()
@@ -41,7 +41,7 @@ impl Shell {
     }
 
     /// Clear the selection.
-    pub(super) fn clear_selection(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.replace_selection(Vec::new(), cx);
     }
 
@@ -50,7 +50,7 @@ impl Shell {
     ///
     /// The push happens **before** the commands are listed, so `IsActive` sees the
     /// selection the user just made.
-    pub(super) fn replace_selection(&mut self, items: Vec<SelectionItem>, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn replace_selection(&mut self, items: Vec<SelectionItem>, cx: &mut Context<Self>) {
         // The topology filter is applied where the shell **reports** the selection, so
         // the tree, the facade and the arm seam all see the same scope: `Select: Body`
         // rewrites a `Face6` pick to its whole body, `Auto`/`Face`/`Edge` keep the
@@ -150,7 +150,7 @@ impl Shell {
     }
 
     /// Push the shell's selection to `FreeCADGui.Selection` (the facade snapshot).
-    pub(super) fn push_selection(&self) -> Result<(), String> {
+    pub(in crate::shell) fn push_selection(&self) -> Result<(), String> {
         let items = {
             let m = self.model.lock().unwrap();
             m.selection.clone()
@@ -175,7 +175,7 @@ impl Shell {
     /// before it queues anything, so a record always names a live object; one deleted
     /// between the write and the drain is pruned by the next
     /// [`refresh`](Self::refresh).
-    pub(super) fn drain_selection_requests(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn drain_selection_requests(&mut self, cx: &mut Context<Self>) {
         let requests = match python::take_selection_requests() {
             Ok(requests) => requests,
             Err(error) => {
@@ -200,7 +200,7 @@ impl Shell {
 
     /// The status line's pass-through segment: the overlay the pointer would click
     /// through, plus the document object beneath it. Empty when there is none.
-    pub(super) fn hover_line(&self, cx: &App) -> String {
+    pub(in crate::shell) fn hover_line(&self, cx: &App) -> String {
         let Some(viewport) = self.viewport.as_ref() else {
             return String::new();
         };
@@ -221,7 +221,7 @@ impl Shell {
     /// Selection names the document no longer has (a delete, or an undo of a
     /// creation) are dropped here, and the pruned set is pushed to the facade so a
     /// command's `IsActive` cannot see a deleted object.
-    pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn refresh(&mut self, cx: &mut Context<Self>) {
         let tree = python::model_tree().unwrap_or_default();
         let live: HashSet<String> = tree
             .iter()
@@ -282,7 +282,7 @@ impl Shell {
 /// drops the object; `clear` empties everything. `preselect` is hover state and is
 /// ignored here, and an unknown op is ignored so a newer facade cannot break an older
 /// shell.
-pub(super) fn apply_selection_request(items: &mut Vec<SelectionItem>, request: SelectionRequest) {
+pub(in crate::shell) fn apply_selection_request(items: &mut Vec<SelectionItem>, request: SelectionRequest) {
     match request.op.as_str() {
         "add" => {
             if request.object.is_empty() {

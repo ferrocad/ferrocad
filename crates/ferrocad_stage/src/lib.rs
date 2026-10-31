@@ -44,6 +44,24 @@
 //! constructors ([`TransformGizmo::translate`] and friends) share the frame, hit and
 //! solver math; only the handle set differs.
 //!
+//! # Module map
+//!
+//! The crate is grouped by responsibility; every submodule stays public, so a host
+//! can use the high-level interface or reach for one piece directly.
+//!
+//! ```text
+//! scene/       Stage, ShapeItem, DrawMode          (what is drawn)
+//! render/      grid, axis, feedback, screen        (producers and pixel math)
+//! interaction/ input, tool, snap, manipulator,     (pointer, picking, overlays)
+//!              plane_points, declarative
+//! transform/   gizmo, session, protractor,         (the interactive transform)
+//!              measure_tape
+//! workplane/   workplane, stem                     (planar frames)
+//! ```
+//!
+//! The older flat module paths (`ferrocad_stage::gizmo`, `::screen`, …) are kept as
+//! re-exports of the same modules, so existing callers keep working.
+//!
 //! # Example
 //!
 //! ```
@@ -64,24 +82,20 @@
 //! assert_eq!(queue.len(), 2);
 //! ```
 
-pub mod axis;
-pub mod declarative;
-pub mod feedback;
-pub mod gizmo;
-pub mod grid;
-pub mod input;
 pub mod interaction;
-pub mod measure_tape;
-pub mod plane_points;
-pub mod protractor;
-pub mod screen;
-pub mod session;
-pub mod shape;
-pub mod snap;
-pub mod stage;
-pub mod tool;
+pub mod render;
+pub mod scene;
+pub mod transform;
 pub mod workplane;
-pub mod workplane_stem;
+
+// The flat module paths predate the folder hierarchy and remain part of the stable
+// library surface: `ferrocad_stage::gizmo::…` and
+// `ferrocad_stage::transform::gizmo::…` name the same module.
+pub use interaction::{declarative, input, plane_points, snap, tool};
+pub use render::{axis, feedback, grid, screen};
+pub use scene::{shape, stage};
+pub use transform::{gizmo, measure_tape, protractor, session};
+pub use workplane::stem as workplane_stem;
 
 pub use gizmo::{
     DEFAULT_GHOST_ALPHA, DEFAULT_HALO_WIDTH, DEFAULT_HIT_RADIUS_PX, DEFAULT_HOVER_SCALE,

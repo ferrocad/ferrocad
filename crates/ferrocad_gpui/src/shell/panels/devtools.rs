@@ -2,7 +2,7 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
+use crate::shell::*;
 
 impl Shell {
     /// Whether the Dev Tools window is currently open.
@@ -38,7 +38,7 @@ impl Shell {
     }
 
     /// Create the Dev Tools window around this shell entity.
-    pub(super) fn open_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
+    pub(in crate::shell) fn open_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
         // The providers and GPU panels read their state once per open, not per frame.
         self.provider_features = python::provider_features().ok();
         self.gpu_preference = Some(python::gpu_adapter().unwrap_or_else(|_| "auto".to_string()));

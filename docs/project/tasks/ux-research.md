@@ -122,7 +122,7 @@ claim is limited to what the cited render path draws.
 
 | Element | Status | Evidence |
 | --- | --- | --- |
-| Snap aurora (diamond, `#38BDF8`, 7 px) | implemented | `feedback::aurora`, `crates/ferrocad_stage/src/feedback.rs:23-26,52-65`; drawn at `crates/ferrocad_viewport/src/inventor_view.rs:4679-4686` |
+| Snap aurora (diamond, `#38BDF8`, 7 px) | implemented | `feedback::aurora`, `crates/ferrocad_stage/src/render/feedback.rs:23-26,52-65`; drawn at `crates/ferrocad_viewport/src/inventor_view.rs:4679-4686` |
 | 120 ms acquisition flash | implemented | `feedback.rs:29-30,47-50`; restarted only when point or kind changes, `inventor_view.rs:4636-4652` |
 | Projection rays to U and V | implemented, **grid only** | `feedback.rs:71-90`; gated on `kind == SnapKind::Grid`, `inventor_view.rs:4687-4701` |
 | ΔU/ΔV pill | implemented | `snap_pill`, `inventor_view.rs:5579-5598`; rendered at `:5177-5184` |
@@ -149,8 +149,8 @@ does not collide with SK4's HUD work.
 
 | Operation | Typed input today | Evidence |
 | --- | --- | --- |
-| Move the selection | **yes** — ΔX/ΔY/ΔZ quantity fields, two-way with the gizmo drag | `_MoveCommand`, `python/ferrocad_shell/__init__.py:1134-1138`; `dialog::translation_preview`, `crates/ferrocad_gpui/src/dialog.rs:283-313`; drag to field `shell/dialogs.rs:327-339` |
-| Offset the workplane | **yes** — one “Offset along normal (mm)” field, two-way with the `+N` stem | `_OffsetWorkplaneCommand`, `ferrocad_shell/__init__.py:2111-2131`; readout `crates/ferrocad_stage/src/workplane_stem.rs:255-258`; field and stem `shell/viewport.rs:956-1004` |
+| Move the selection | **yes** — ΔX/ΔY/ΔZ quantity fields, two-way with the gizmo drag | `_MoveCommand`, `python/ferrocad_shell/__init__.py:1134-1138`; `dialog::translation_preview`, `crates/ferrocad_gpui/src/ui/dialog.rs:283-313`; drag to field `shell/dialogs.rs:327-339` |
+| Offset the workplane | **yes** — one “Offset along normal (mm)” field, two-way with the `+N` stem | `_OffsetWorkplaneCommand`, `ferrocad_shell/__init__.py:2111-2131`; readout `crates/ferrocad_stage/src/workplane/stem.rs:255-258`; field and stem `shell/viewport.rs:956-1004` |
 | Extrude or pocket a face (push/pull) | **no** — drag only; readout `extrude 12.30 mm` | `crates/ferrocad_part_gui/src/push_pull.rs:86-89,214-235`; hosted as a manipulator, `crates/ferrocad_parametric/src/main.rs:93-95` |
 | Fillet or chamfer an edge | **no** at the gesture; the committed feature's radius is typed in the property pane | `crates/ferrocad_part_gui/src/dress_up.rs:103-114`; `shell/properties.rs:11-58` |
 | Draw a polyline vertex (X/Y) | **no** — designed, not built | spec §3.4, `polyline-vertex-editing-and-active-tool-hud.md:157-163`; “Still open … not built”, `:251-252`; the strip has no fields, `shell/render.rs:18-81` |

@@ -2,7 +2,7 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
+use crate::shell::*;
 
 impl Shell {
     /// Whether the popover keyed `key` is the open one.
@@ -76,7 +76,7 @@ impl Shell {
     /// panel is a tool over the model, not a selection, so the object being edited
     /// keeps its selection and its gizmo. The card is dismissed only by its own
     /// `✕` or `Esc`.
-    pub(super) fn open_settings_card(&mut self, node: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn open_settings_card(&mut self, node: &str, cx: &mut Context<Self>) {
         let rows = python::properties(node).unwrap_or_default();
         match self.settings_card.as_mut() {
             Some(card) => {
@@ -96,7 +96,7 @@ impl Shell {
     }
 
     /// Re-read the card's rows (after an edit, a reset or a provider switch).
-    pub(super) fn refresh_settings_card(&mut self) {
+    pub(in crate::shell) fn refresh_settings_card(&mut self) {
         let Some(card) = self.settings_card.as_mut() else {
             return;
         };
@@ -106,7 +106,7 @@ impl Shell {
     }
 
     /// Close the settings card; returns whether it was open.
-    pub(super) fn close_settings_card(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn close_settings_card(&mut self, cx: &mut Context<Self>) -> bool {
         self.row_popup = None;
         if self.settings_card.take().is_some() {
             cx.notify();
@@ -117,7 +117,7 @@ impl Shell {
     }
 
     /// Start dragging the card from its header.
-    pub(super) fn begin_settings_drag(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn begin_settings_drag(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
         if let Some(card) = &mut self.settings_card {
             card.drag = Some((pointer, card.position));
             cx.notify();
@@ -126,7 +126,7 @@ impl Shell {
 
     /// Follow a left-button drag; moves outside the header still count because the
     /// shell root forwards its pointer moves here.
-    pub(super) fn drag_settings_card(
+    pub(in crate::shell) fn drag_settings_card(
         &mut self,
         pointer: Point<Pixels>,
         pressed: Option<MouseButton>,
@@ -148,7 +148,7 @@ impl Shell {
         cx.notify();
     }
 
-    pub(super) fn end_settings_drag(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn end_settings_drag(&mut self, cx: &mut Context<Self>) {
         if let Some(card) = &mut self.settings_card {
             if card.drag.take().is_some() {
                 cx.notify();

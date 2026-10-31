@@ -56,24 +56,20 @@ use crate::shortcuts::Accelerator;
 use crate::dev_tools::DevTools;
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
-mod devtools;
-mod popovers;
-mod palette;
-mod viewport;
-mod dispatch;
-mod dialogs;
-mod forms;
-mod picking;
-mod pill;
-mod properties;
-mod loadout;
-mod move_hud;
-mod context;
-// The context gate: every action entry point asks `Shell::gate` (see `shell/context.rs`).
+pub mod bridge;
+pub mod hud;
+pub mod panels;
+
+// Keep the flat `shell::<name>` paths as aliases of the grouped modules, so both
+// `shell::move_hud` and `shell::hud::move_hud` work.
+pub use bridge::{context, dispatch, picking, viewport};
+pub use hud::{move_hud, pill};
+pub use panels::{devtools, dialogs, forms, loadout, palette, popovers, properties};
+
+// The context gate: every action entry point asks `Shell::gate` (see `shell/bridge/context.rs`).
 pub(crate) use context::Action;
 
 pub(crate) use loadout::{Loadout, SelectFilter, Slot};
-
 
 mod render;
 use render::*;

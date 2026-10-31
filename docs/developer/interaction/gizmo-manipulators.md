@@ -748,7 +748,7 @@ armed later adopts the current workspace look without a re-send.
 Four knobs exist because the default triad failed the accessibility success criteria,
 not as cosmetic extras. They are ordinary style fields, so a preset or the settings card
 can change them, and the **view enforces the floors and ceilings** rather than trusting
-the caller (`crates/ferrocad_gpui/src/view.rs`). The Python facade applies the same
+the caller (`crates/ferrocad_gpui/src/model/view.rs`). The Python facade applies the same
 rules (`python/FerroCAD/_gizmo.py`), so both views of the store agree.
 
 | Property | Default | Criterion | Why |
@@ -768,7 +768,7 @@ skinned handles).
 
 **The triad is drawn on top.** Both the halo and the handle passes use
 `OVERLAY_DEPTH` (`DepthCompare::Always`, no depth write) and emit no ghost pass
-(`crates/ferrocad_stage/src/shape.rs`, `gizmo.rs::new_handle`/`new_halo`). This is the
+(`crates/ferrocad_stage/src/scene/shape.rs`, `gizmo.rs::new_handle`/`new_halo`). This is the
 lesson of the 2026-10-26 screenshot: at an object-origin anchor the triad is inside the
 body, so a depth-tested foreground pass is rejected and only the 20 % ghost remains — a
 faint watermark. The analytic hit test still keeps the empty interior passing through;

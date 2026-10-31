@@ -14,7 +14,7 @@ smallest test that pins it.
 - **Tools are registered per edition, with last-wins precedence.**
   `Contributions { tools: Vec<(String, Arc<dyn ToolFactory>)> }`; `register_tool` documents
   “A later registration with the same id wins”, and `tool_for` scans `.rev()`
-  (`crates/ferrocad_gpui/src/contributions.rs:155-229`).
+  (`crates/ferrocad_gpui/src/workbench/contributions.rs:155-229`).
 - **The base registers exactly one tool: `workplane_points`**
   (`crates/ferrocad/src/lib.rs:80-86`). The parametric edition adds manipulators only
   (`crates/ferrocad_parametric/src/main.rs:91-95`).
@@ -23,7 +23,7 @@ smallest test that pins it.
   `{"tool": "polyline"}` plus an `_interaction` that creates one `App::FeaturePython`
   carrying a float list (`python/ferrocad_toy/__init__.py`, `crates/ferrocad_toy/tests/round_trip.rs`).
 - **Python tools cannot shadow a Rust id.** The shell checks the `python:` prefix first, and
-  a Python tool is addressed as `python:<name>` (`crates/ferrocad_gpui/src/shell/dispatch.rs:15,31,700`).
+  a Python tool is addressed as `python:<name>` (`crates/ferrocad_gpui/src/shell/bridge/dispatch.rs:15,31,700`).
   So today precedence is **edition-only**: a later Rust registration wins, but a mod can
   only add a differently-named tool.
 - **The creation policy is already split from the tool.** `InteractionCommit` says *what

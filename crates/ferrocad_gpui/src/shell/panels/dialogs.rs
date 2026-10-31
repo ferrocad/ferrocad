@@ -2,12 +2,12 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
-use super::move_hud::AXIS_COUNT;
+use crate::shell::*;
+use crate::shell::move_hud::AXIS_COUNT;
 
 impl Shell {
     /// Open a command's dialog, seeding one control per field.
-    pub(super) fn open_dialog_state(&mut self, token: String, spec: DialogSpec, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn open_dialog_state(&mut self, token: String, spec: DialogSpec, cx: &mut Context<Self>) {
         // A wizard or a rerun replaces the previous dialog: drop any preview it left.
         self.clear_dialog_preview(cx);
         // A new HUD starts free: the previous freeze belonged to the old anchor.
@@ -75,7 +75,7 @@ impl Shell {
     /// accumulates against the current document pose and the current objects — a stage
     /// rebuild cannot leave a stale datum behind. `fallback` is the preview's target, used
     /// when the selection does not map onto the stage yet.
-    pub(super) fn begin_drag_session(&mut self, fallback: Option<u32>) {
+    pub(in crate::shell) fn begin_drag_session(&mut self, fallback: Option<u32>) {
         let mut targets: Vec<u32> = {
             let model = self.model.lock().unwrap();
             model
@@ -101,7 +101,7 @@ impl Shell {
     }
 
     /// The collected state of every field; the text inputs are authoritative.
-    pub(super) fn dialog_states(&self, cx: &App) -> Vec<ValueState> {
+    pub(in crate::shell) fn dialog_states(&self, cx: &App) -> Vec<ValueState> {
         let Some(dialog) = self.dialog.as_ref() else {
             return Vec::new();
         };
@@ -127,7 +127,7 @@ impl Shell {
     ///
     /// Only `"workplane_offset"` asks for one now: the Move form is its own surface
     /// (`move_hud.rs`) and drives its preview directly.
-    pub(super) fn preview_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn preview_dialog(&mut self, cx: &mut Context<Self>) {
         let workplane_offset = self
             .dialog
             .as_ref()
@@ -144,7 +144,7 @@ impl Shell {
     /// Opening the HUD mid-drag calls this first; the seed comes from the viewport's live
     /// readout ([`gizmo_seed`](Self::gizmo_seed)), so the drag's value is not lost. The
     /// baseline is cleared because the next tick starts a fresh accumulation from the seed.
-    pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
         self.session = None;
         self.drag_start = None;
         self.rotation_start = None;
@@ -153,7 +153,7 @@ impl Shell {
     }
 
     /// Drop the pending value entirely (cancel, accept, or a competing interaction).
-    pub(super) fn discard_pending(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn discard_pending(&mut self, cx: &mut Context<Self>) {
         self.drag_start = None;
         self.rotation_start = None;
         self.pill.release();
@@ -161,7 +161,7 @@ impl Shell {
     }
 
     /// Clear every item's preview transform (and the overlay offsets that came with it).
-    pub(super) fn clear_preview_items(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn clear_preview_items(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
@@ -181,7 +181,7 @@ impl Shell {
     /// handles are already showing. Without one (headless, or before
     /// `enable_viewport`) the last mirrored preview is used; an idle gizmo seeds zero
     /// and only picks the focus from the handle under the pointer.
-    pub(super) fn gizmo_seed(&self, cx: &App) -> GizmoSeed {
+    pub(in crate::shell) fn gizmo_seed(&self, cx: &App) -> GizmoSeed {
         let Some(viewport) = self.viewport.as_ref() else {
             return self.seed_from_session();
         };
@@ -231,7 +231,7 @@ impl Shell {
     /// the fields take the current drag delta (zero when idle) and the field the armed
     /// handle names takes focus. `typed` is the numeric key that opened it: it replaces
     /// the freshly seeded value and previews immediately.
-    pub(super) fn escalate_to_move_hud(
+    pub(in crate::shell) fn escalate_to_move_hud(
         &mut self,
         seed: GizmoSeed,
         typed: Option<char>,
@@ -295,7 +295,7 @@ impl Shell {
     /// The tape is the **view** of the session; the session itself never knows it is
     /// drawn. A clean session has no tape, and clearing the session (commit, `Esc`, a
     /// context change) hides it with the ghost.
-    pub(super) fn sync_transform_tape(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_transform_tape(&mut self, cx: &mut Context<Self>) {
         let tape = self
             .session
             .as_ref()
@@ -325,7 +325,7 @@ impl Shell {
     /// stays live until `Enter` commits it, `Esc` drops it, or the context changes. A ring
     /// drag takes the same route; its value is an axis-angle rather than a translation, and
     /// it owns exactly one body (the commit hook applies a transform to one object).
-    pub(super) fn on_transform_preview(
+    pub(in crate::shell) fn on_transform_preview(
         &mut self,
         preview: &TransformPreview,
         cx: &mut Context<Self>,
@@ -546,7 +546,7 @@ impl Shell {
     /// nothing dragged) is a dismissal, not a zero-length transaction.
     ///
     /// Returns whether anything was committed.
-    pub(super) fn commit_session(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn commit_session(&mut self, cx: &mut Context<Self>) -> bool {
         self.pill_attention = false;
         // A rotate session is one body and is not a translation: `App_Move` would apply the
         // delta (zero) to the selection, so it commits through the same transform
@@ -664,7 +664,7 @@ impl Shell {
     }
 
     /// Drop the pending session without writing anything (`Esc`/`✗`).
-    pub(super) fn drop_session(&mut self, status: &str, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn drop_session(&mut self, status: &str, cx: &mut Context<Self>) -> bool {
         if self.session.is_none() {
             return false;
         }
@@ -687,7 +687,7 @@ impl Shell {
     /// This is the session's display half; it is the same write a form edit uses, so a
     /// drag with no form open previews exactly like one with it. The matrix carries a
     /// translation or a rotation, so both gestures on the session share this one path.
-    pub(super) fn preview_selection(
+    pub(in crate::shell) fn preview_selection(
         &mut self,
         transform: Option<Matrix4>,
         settle: bool,
@@ -729,7 +729,7 @@ impl Shell {
     /// HUD hangs off the handles the user is about to drag; a viewport with no gizmo
     /// still anchors to the canvas instead of a stale pointer. The pointer is the last
     /// resort for a shell with no viewport at all.
-    pub(super) fn dialog_anchor(&self, window: &Window, cx: &App) -> Point<Pixels> {
+    pub(in crate::shell) fn dialog_anchor(&self, window: &Window, cx: &App) -> Point<Pixels> {
         if let Some(viewport) = self.viewport.as_ref() {
             let viewport = viewport.read(cx);
             if let Some(anchor) = viewport
@@ -744,7 +744,7 @@ impl Shell {
 
     /// Move focus between a dialog's textual fields. `Tab` cycles forward; `Shift+Tab`
     /// back. Fields without an input (bool/enum) are not stops.
-    pub(super) fn cycle_dialog_focus(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn cycle_dialog_focus(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.dialog.as_ref() else {
             return;
         };
@@ -769,7 +769,7 @@ impl Shell {
 
     /// Validate and hand the dialog's values to the facade. Validation errors stay
     /// in the modal; a callback error is reported there too.
-    pub(super) fn accept_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn accept_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.dialog.as_ref() else {
             return;
         };
@@ -793,7 +793,7 @@ impl Shell {
 
     /// Finish an accept: close, replace with a new dialog (a wizard), or keep the
     /// modal open with the callback's error.
-    pub(super) fn finish_dialog(
+    pub(in crate::shell) fn finish_dialog(
         &mut self,
         result: Result<commands::CommandOutcome, String>,
         cx: &mut Context<Self>,
@@ -852,7 +852,7 @@ impl Shell {
     }
 
     /// Cancel the open dialog and drop its token (the callback is never run).
-    pub(super) fn cancel_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn cancel_dialog(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.dialog.take() else {
             return;
         };
@@ -870,7 +870,7 @@ impl Shell {
     /// The Move form is **not** a dialog and never counts here: its fields are a
     /// visible readout with no focus by default, which is what lets `1`/`2`/`3` keep
     /// equipping slots and a command keep opening its own dialog while it is up.
-    pub(super) fn modal_open(&self) -> bool {
+    pub(in crate::shell) fn modal_open(&self) -> bool {
         self.dialog.is_some() || self.palette.is_some() || self.form_dialog.is_some()
     }
 }

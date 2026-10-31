@@ -23,7 +23,7 @@
 //! The state also remembers the axis of the last gesture ([`remember_axis`]): `Tab` then
 //! opens on the field the user was just dragging instead of always starting at `ΔX`.
 //!
-//! [`Shell`](super::Shell) owns one, renders it (`shell/render.rs`) and routes the
+//! [`Shell`](crate::shell::Shell) owns one, renders it (`shell/render.rs`) and routes the
 //! escalation keys through it (`shell.rs`); it is also where a typed edit opens or
 //! updates the session.
 
@@ -32,7 +32,7 @@
 /// `World` is the coordinate grid, `Local` follows the body's committed orientation,
 /// and `Workplane` follows the active workplane's `u`/`v`/`n`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RingFrame {
+pub(in crate::shell) enum RingFrame {
     /// The global X/Y/Z rings (`WLD`).
     World,
     /// The body's own rings (`LOC`).
@@ -43,7 +43,7 @@ pub(super) enum RingFrame {
 
 impl RingFrame {
     /// The badge text for this frame.
-    pub(super) fn label(self) -> &'static str {
+    pub(in crate::shell) fn label(self) -> &'static str {
         match self {
             Self::World => "WLD ▾",
             Self::Local => "LOC ▾",
@@ -57,7 +57,7 @@ impl RingFrame {
 /// `focus == None` is the resting state: the fields render with their chrome hairline
 /// and no caret, and the shell's loadout keys and the viewport keep the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PillState {
+pub(in crate::shell) struct PillState {
     /// The focused Δ field, `0..=2` (X/Y/Z). Every writer clamps it; see the module docs
     /// for why it is an index rather than an enum.
     focus: Option<usize>,
@@ -80,7 +80,7 @@ impl PillState {
     ///
     /// This is what a freshly opened HUD gets, and what it returns to after a commit,
     /// a cancel or `Enter`.
-    pub(super) fn resting() -> Self {
+    pub(in crate::shell) fn resting() -> Self {
         Self {
             focus: None,
             last: 0,
@@ -91,7 +91,7 @@ impl PillState {
 
     /// Resting, remembering `axis` as the field `Tab` should open.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn resting_at(axis: usize) -> Self {
+    pub(in crate::shell) fn resting_at(axis: usize) -> Self {
         Self {
             focus: None,
             last: axis.min(AXES - 1),
@@ -106,7 +106,7 @@ impl PillState {
     /// they open the field the user chose in one transition rather than focusing X and
     /// then jumping.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn focused_at(axis: usize) -> Self {
+    pub(in crate::shell) fn focused_at(axis: usize) -> Self {
         let axis = axis.min(AXES - 1);
         Self {
             focus: Some(axis),
@@ -117,19 +117,19 @@ impl PillState {
     }
 
     /// The focused Δ field, if the keyboard owns one.
-    pub(super) fn focus(&self) -> Option<usize> {
+    pub(in crate::shell) fn focus(&self) -> Option<usize> {
         self.focus
     }
 
     /// Whether any field owns the keyboard.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn has_focus(&self) -> bool {
+    pub(in crate::shell) fn has_focus(&self) -> bool {
         self.focus.is_some()
     }
 
     /// The axis `Tab` opens on while resting: the last gesture's axis.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn last_axis(&self) -> usize {
+    pub(in crate::shell) fn last_axis(&self) -> usize {
         self.last
     }
 
@@ -137,12 +137,12 @@ impl PillState {
     ///
     /// This does **not** move the focus: a drag must never steal the keyboard from a
     /// field the user is typing in. It only decides where the next `Tab` lands.
-    pub(super) fn remember_axis(&mut self, axis: usize) {
+    pub(in crate::shell) fn remember_axis(&mut self, axis: usize) {
         self.last = axis.min(AXES - 1);
     }
 
     /// Whether the fields show absolute coordinates rather than offsets.
-    pub(super) fn absolute(&self) -> bool {
+    pub(in crate::shell) fn absolute(&self) -> bool {
         self.absolute
     }
 
@@ -150,13 +150,13 @@ impl PillState {
     ///
     /// The mode outlives a session and a focus change: a user who works in world
     /// coordinates keeps that form when the HUD reopens.
-    pub(super) fn toggle_absolute(&mut self) -> bool {
+    pub(in crate::shell) fn toggle_absolute(&mut self) -> bool {
         self.absolute = !self.absolute;
         self.absolute
     }
 
     /// The rotate form's ring basis.
-    pub(super) fn ring_frame(&self) -> RingFrame {
+    pub(in crate::shell) fn ring_frame(&self) -> RingFrame {
         self.ring_frame
     }
 
@@ -164,7 +164,7 @@ impl PillState {
     ///
     /// A third state does not fit a two-way toggle, so the badge cycles rather than
     /// flipping. Like `absolute`, the choice outlives a session.
-    pub(super) fn cycle_ring_frame(&mut self) -> RingFrame {
+    pub(in crate::shell) fn cycle_ring_frame(&mut self) -> RingFrame {
         self.ring_frame = match self.ring_frame {
             RingFrame::World => RingFrame::Local,
             RingFrame::Local => RingFrame::Workplane,
@@ -177,7 +177,7 @@ impl PillState {
     ///
     /// A caller that means "show the pill and focus this axis" uses
     /// [`focused_at`](Self::focused_at) instead, which is one transition rather than two.
-    pub(super) fn focus_axis(&mut self, axis: usize) -> bool {
+    pub(in crate::shell) fn focus_axis(&mut self, axis: usize) -> bool {
         let axis = axis.min(AXES - 1);
         if self.focus == Some(axis) {
             return false;
@@ -189,7 +189,7 @@ impl PillState {
     /// Give the keyboard back to the viewport; returns whether a field had it.
     ///
     /// The remembered axis survives, so the next `Tab` reopens where the user was.
-    pub(super) fn release(&mut self) -> bool {
+    pub(in crate::shell) fn release(&mut self) -> bool {
         self.focus.take().is_some()
     }
 
@@ -200,7 +200,7 @@ impl PillState {
     /// drag was on Y expects `ΔY` rather than `ΔX`. Once a field is focused the fields
     /// wrap in both directions, because no other widget sits behind them for focus to
     /// escape to.
-    pub(super) fn tab(&mut self, backward: bool) -> bool {
+    pub(in crate::shell) fn tab(&mut self, backward: bool) -> bool {
         let Some(focus) = self.focus else {
             self.focus = Some(self.last);
             return true;

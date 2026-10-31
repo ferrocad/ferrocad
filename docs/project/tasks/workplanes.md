@@ -25,13 +25,13 @@ points are not.
   with `Workplane::world()` (`origin = 0`, `u = +X`, `v = +Y`, `n = +Z`),
   `Workplane::new(origin, u, v, kind)` (normalized, `n = u × v`), and
   `Workplane::ray_local(origin, direction) -> Option<[u, v]>` — the ray/plane hit the
-  tools need (`crates/ferrocad_stage/src/workplane.rs`).
+  tools need (`crates/ferrocad_stage/src/workplane/workplane.rs`).
 - **`WorkplaneKind` already distinguishes the three sources:** `World`, `Datum(String)`,
   `Face { entity, element }` (`workplane.rs:19`). Only `World` and `Face` are ever
   produced; `Datum` appears in tests and the Python binding, because there is no datum
   plane object in the document yet.
 - **The grid is one generator, parameterised by a plane.** `GridSpec { workplane, minor,
-  major, radius }` (`crates/ferrocad_stage/src/grid.rs:85`); `GridSpec::world(radius)` is
+  major, radius }` (`crates/ferrocad_stage/src/render/grid.rs:85`); `GridSpec::world(radius)` is
   just the same struct with `Workplane::world()`. Every vertex is emitted through
   `spec.workplane.point(a, b)`, so a bound plane's grid is the *same* mesh generator and
   the *same* shader, rotated and offset — not a second “local patch” renderer.
@@ -58,13 +58,13 @@ points are not.
   `FerroCAD_Surface` is `"workplane"`: `App_ActivateWorkplane` (`activate`),
   `App_ClearWorkplane` (`clear`) and `App_ViewWorkplane` (`view`)
   (`python/ferrocad_shell/__init__.py`). A `ViewRequest` carries exactly those three
-  verbs and rejects anything else (`crates/ferrocad_gpui/src/view.rs`).
+  verbs and rejects anything else (`crates/ferrocad_gpui/src/model/view.rs`).
 - **The status string is a command result, not state.** `"no active workplane"` is the
   status-line message for `Clear`/`View` when nothing is active
-  (`crates/ferrocad_gpui/src/shell/dispatch.rs:498–510`) — it is not a persistent readout.
+  (`crates/ferrocad_gpui/src/shell/bridge/dispatch.rs:498–510`) — it is not a persistent readout.
   The persistent caption is the static `WP` label, which never says *which* plane.
 - **Frames and the gizmo are disconnected.** `ManipulatorFrame { origin, basis }` and
-  `TransformGizmo::set_frame` exist (`crates/ferrocad_stage/src/gizmo.rs`), and
+  `TransformGizmo::set_frame` exist (`crates/ferrocad_stage/src/transform/gizmo.rs`), and
   manipulators use them (`push_pull` sets a frame from a face centroid and normal), but
   nothing maps the active workplane onto the gizmo.
 - **Python can build a plane but not activate one.** `ferrocad_stage.Workplane` /

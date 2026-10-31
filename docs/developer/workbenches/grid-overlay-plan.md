@@ -104,7 +104,7 @@ Why not `FerroCADGui.Grid`:
   (`python/FreeCADGui/__init__.py:258-300`). A settings object with validated
   properties fits that shape better than a bag of functions.
 - `FerroCADGui.ViewState` is a **read-only mirror** pushed by the shell
-  (`crates/ferrocad_gpui/src/python.rs:376-383`,
+  (`crates/ferrocad_gpui/src/runtime/python.rs:376-383`,
   `python/ferrocad_shell/__init__.py:407-422`). Putting the writable policy beside a
   read-only mirror would create two truths in one namespace. The writable store lives
   in `FerroCAD`; the mirror stays where it is.
@@ -222,7 +222,7 @@ same way:
 | Validation | Raise `ValueError` for a bad colour, a negative step, `major < minor`, or opacity outside 0..1. The two steps are a **subdivision** apart: a `major` equal to the `minor` lowers the minor by a decade (an equal pair has no minor rows to draw, so `minor_style` would look broken), and a stored `major <= minor` is healed by `apply()` and written back. Silent clamping is the addon's local-dialog behaviour (`setting()`, `:146-160`); a public API should be loud, and the shell's `ViewState::apply` already validates-then-mutates (`view.rs:130-210`). |
 
 **One shell gap must be closed for the dialog path.** `finish_dialog`
-(`crates/ferrocad_gpui/src/shell.rs:655-696`) refreshes the model and the stage but does
+(`crates/ferrocad_gpui/src/shell/mod.rs:655-696`) refreshes the model and the stage but does
 **not** call `apply_view`, even though `CommandOutcome.view` exists
 (`commands.rs:72-76`). So a command whose `on_accept` returns `{"view": …}` is silently
 ignored today. G2 changes `finish_dialog` to apply `outcome.view` exactly as

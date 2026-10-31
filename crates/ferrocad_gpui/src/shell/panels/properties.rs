@@ -2,13 +2,13 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
+use crate::shell::*;
 
 impl Shell {
     /// Get the field for a property, creating it (and its submit subscription) on
     /// first use. The field is re-seeded from the model when the value changed
     /// underneath and the user is not editing it.
-    pub(super) fn ensure_prop_input(
+    pub(in crate::shell) fn ensure_prop_input(
         &mut self,
         key: &str,
         value: &str,
@@ -51,7 +51,7 @@ impl Shell {
     }
 
     /// Commit a property field: one filtered edit inside one transaction.
-    pub(super) fn commit_property(&mut self, key: &str, text: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn commit_property(&mut self, key: &str, text: &str, cx: &mut Context<Self>) {
         let Some((object, property)) = key.split_once('.') else {
             return;
         };
@@ -100,7 +100,7 @@ impl Shell {
     /// Start dragging a property row's scrub handle: the gesture begins at the
     /// press, and the window root forwards the moves while the button is held.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn start_scrub(
+    pub(in crate::shell) fn start_scrub(
         &mut self,
         key: &str,
         label: &str,
@@ -122,7 +122,7 @@ impl Shell {
     }
 
     /// Continue a scrub from a window-root mouse move.
-    pub(super) fn drag_scrub(
+    pub(in crate::shell) fn drag_scrub(
         &mut self,
         position: Point<Pixels>,
         pressed: Option<MouseButton>,
@@ -139,7 +139,7 @@ impl Shell {
     }
 
     /// Finish a scrub: one commit on release, or nothing if the pointer never moved.
-    pub(super) fn end_scrub(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn end_scrub(&mut self, cx: &mut Context<Self>) {
         let Some(drag) = self.scrub.take() else {
             return;
         };
@@ -155,7 +155,7 @@ impl Shell {
     /// Opening is deliberately not a toggle: an outside press dismisses the
     /// overlay before the swatch's click is dispatched, so a toggle here would
     /// immediately reopen it (the same rule as the header popovers).
-    pub(super) fn open_color_popup(
+    pub(in crate::shell) fn open_color_popup(
         &mut self,
         key: &str,
         label: &str,
@@ -185,7 +185,7 @@ impl Shell {
     /// Open the range slider for a numeric property with declared bounds.
     /// `unit` is carried into the readout and the commit.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn open_slider_popup(
+    pub(in crate::shell) fn open_slider_popup(
         &mut self,
         key: &str,
         label: &str,
@@ -217,7 +217,7 @@ impl Shell {
 
     /// Open the dropdown for an enumeration row or a dialog field.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn open_choice_popup(
+    pub(in crate::shell) fn open_choice_popup(
         &mut self,
         key: &str,
         value: &str,
@@ -246,7 +246,7 @@ impl Shell {
     }
 
     /// Pick a dialog enum's option from the dropdown.
-    pub(super) fn set_dialog_choice(&mut self, index: usize, choice: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn set_dialog_choice(&mut self, index: usize, choice: &str, cx: &mut Context<Self>) {
         if let Some(dialog) = self.dialog.as_mut() {
             let position = dialog
                 .spec
@@ -265,7 +265,7 @@ impl Shell {
     }
 
     /// Dismiss the row overlay, if one is open.
-    pub(super) fn close_row_popup(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn close_row_popup(&mut self, cx: &mut Context<Self>) {
         if self.row_popup.take().is_some() {
             cx.notify();
         }

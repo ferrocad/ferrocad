@@ -250,20 +250,20 @@ and they meet only when a `{"view": …}` request is applied:
    A stored value wins; the default is only a fallback and is never written by a
    read.
 2. **The shell (Rust).** `ViewState` starts at `ViewState::default()`
-   (`crates/ferrocad_gpui/src/view.rs:224-240`) and is changed only by
+   (`crates/ferrocad_gpui/src/model/view.rs:224-240`) and is changed only by
    `ViewState::apply`, which leaves every omitted field alone
-   (`crates/ferrocad_gpui/src/view.rs:248-632`). It never reads `ParamGet`.
+   (`crates/ferrocad_gpui/src/model/view.rs:248-632`). It never reads `ParamGet`.
 
 The two meet at the request boundaries: a command, dialog, provider switch or
 `refreshProviders` result returns `{"view": …}`, and `apply_view` copies it into
 `ViewState`, mirrors it to `FerroCADGui.ViewState`, and pushes it to the viewport
-(`crates/ferrocad_gpui/src/shell.rs:2429-2496`).
+(`crates/ferrocad_gpui/src/shell/mod.rs:2429-2496`).
 
 ### The layers
 
 | Layer | Where it lives | Kind | Applies | Persists? | Can be overridden by |
 | --- | --- | --- | --- | --- | --- |
-| Built-in Rust default | `GizmoStyle::default()`, `AxisStyle::default()`, `GridStyle::default()`, composed by `ViewState::default()` (`crates/ferrocad_stage/src/gizmo.rs:92-107`, `axis.rs:66-80`, `grid.rs:129-139`, `crates/ferrocad_gpui/src/view.rs:224-240`) | fallback | The shell's initial state, and any field a request omits | No — recomputed each boot | Any applied view request |
+| Built-in Rust default | `GizmoStyle::default()`, `AxisStyle::default()`, `GridStyle::default()`, composed by `ViewState::default()` (`crates/ferrocad_stage/src/transform/gizmo.rs:92-107`, `axis.rs:66-80`, `grid.rs:129-139`, `crates/ferrocad_gpui/src/model/view.rs:224-240`) | fallback | The shell's initial state, and any field a request omits | No — recomputed each boot | Any applied view request |
 | Mod/provider default | The `default` in a `settings=[…]` schema (`mods/GridOverlay/InitGui.py:258-267` advertises `_grid.SETTINGS_SCHEMA`) | fallback | Only when the store has no value for the key | No — never written at registration (`python/FerroCADGui/__init__.py:288-295`) | A stored value; a `get` hook |
 | User override | `User parameter:BaseApp/Preferences/Mods/<feature>/<backend>`, one key per setting | override | Any facade read; drawn only after a request applies it | Yes (JSON file in a GUI session) | Another setter, a migration; the drawn state by a later request |
 | Legacy value | `…/Preferences/View` `Grid*`, and `GridAxisCross` in the grid provider group | one-time override | The first read of a key with no provider value | Yes — copied into the provider group | A user write after the migration; `reset()` |
@@ -293,7 +293,7 @@ Python `bootstrap()`.
 
 ### At process start
 
-`Shell::boot` runs in this order (`crates/ferrocad_gpui/src/shell.rs:383-434`):
+`Shell::boot` runs in this order (`crates/ferrocad_gpui/src/shell/mod.rs:383-434`):
 
 1. `python::bootstrap()` imports the edition module. Its `bootstrap()` calls
    `installAppearancePresets()` and then the base bootstrap creates the sample
@@ -318,7 +318,7 @@ omits. A persisted user value is in the store, and the persisted provider choice
 is resolved by `_selected` (`python/FerroCADGui/__init__.py:469-485`). Stored
 appearance reaches the first window through `FerroCADGui.appearanceView()`
 (`python/FerroCADGui/__init__.py:1471-1492`), which `Shell::boot` calls and
-applies (`crates/ferrocad_gpui/src/shell.rs:427-433`), visibility included: the
+applies (`crates/ferrocad_gpui/src/shell/mod.rs:427-433`), visibility included: the
 provider lifecycle no longer writes `enabled`, so a stored switch survives the
 document opening (the temporary `ViewRequest::without_visibility` strip was
 removed once the mods stopped owning the switch).
@@ -346,7 +346,7 @@ survives switching away and back. Visibility changes only through
 | A fallback settings dialog's `on_accept` (e.g. `mods/GridOverlay/InitGui.py:150-175`) | the facade setters, then `apply()` | Yes, `finish_dialog` calls `apply_view` (`shell.rs:2213-2224`) |
 | `Mods_Settings` (`python/ferrocad_shell/__init__.py:1500-1538`) | `setActiveProvider` per changed feature | Yes, same dialog path |
 | A provider switch from the header popover | `setActiveProvider`; the provider callbacks select the backend and claim the overlay/backend, without writing `enabled` | Yes, `activate_provider` calls `apply_view` (`shell.rs:1680-1758`) |
-| `Settings/<Feature>` in the property pane | `FerroCADGui.setSetting` / `setActiveProvider`; `setSetting` also runs the backend's `refresh` | **No.** `ferrocad_shell.set_property` returns the `view`, but the Rust `SetResult` decodes only `ok`/`error` (`crates/ferrocad_gpui/src/python.rs:152-156`) and `commit_property` never calls `apply_view` (`shell.rs:2804-2832`) |
+| `Settings/<Feature>` in the property pane | `FerroCADGui.setSetting` / `setActiveProvider`; `setSetting` also runs the backend's `refresh` | **No.** `ferrocad_shell.set_property` returns the `view`, but the Rust `SetResult` decodes only `ok`/`error` (`crates/ferrocad_gpui/src/runtime/python.rs:152-156`) and `commit_property` never calls `apply_view` (`shell.rs:2804-2832`) |
 | A direct Python write (`FerroCAD.Grid.color = …`) | the store only | No; run `App_ReloadGridSettings`/`App_ReloadAxisSettings` or a toggle |
 
 The last two are where the store and the drawing can disagree without an
@@ -399,7 +399,7 @@ the canonical `_grid` defaults (`#94a3b8`, `1.0`).
 The file is versioned JSON and is replaced atomically on every mutation
 (`python/FreeCAD/__init__.py:370-418`). Headless runs are memory-only by
 default; the GUI sets `GuiUp` before the edition module imports
-(`crates/ferrocad_gpui/src/python.rs:349-356`), which enables the default path.
+(`crates/ferrocad_gpui/src/runtime/python.rs:349-356`), which enables the default path.
 
 ### Cache and refresh
 
@@ -423,12 +423,12 @@ These are gaps, not rules:
 
 - **Two default copies.** The Rust tokens and the Python `DEFAULT_*` constants
   agree today (e.g. `#38bdf8` is the sRGB spelling of
-  `[0.040, 0.509, 0.939]`, `crates/ferrocad_stage/src/gizmo.rs:41`), but they are
+  `[0.040, 0.509, 0.939]`, `crates/ferrocad_stage/src/transform/gizmo.rs:41`), but they are
   written twice and no test compares them across the boundary. A change to one
   side is invisible to the other's suite.
 - **The settings pane now repaints.** `Settings/<Feature>` edits store the value
   and `SetResult` carries the optional `view` the facade returns, which
-  `commit_property` applies (`crates/ferrocad_gpui/src/shell.rs`). Before
+  `commit_property` applies (`crates/ferrocad_gpui/src/shell/mod.rs`). Before
   2026-10-25 the reply had no `view` field at all and the edit was invisible
   until an unrelated repaint.
 
@@ -452,7 +452,7 @@ it replaced were:
 - **`setSetting` makes a provider "see" a value immediately**
   (`docs/mods/providers.md:101-102`). The `refresh` runs, but the
   `Settings/<Feature>` pane drops its `view` (`python/ferrocad_shell/__init__.py:518`,
-  `crates/ferrocad_gpui/src/python.rs:152-156`, `crates/ferrocad_gpui/src/shell.rs:2804-2832`).
+  `crates/ferrocad_gpui/src/runtime/python.rs:152-156`, `crates/ferrocad_gpui/src/shell/mod.rs:2804-2832`).
 - **"The feature owns the switch and `activate` only selects an implementation"
   was documented as contradicted by the code** (`docs/mods/providers.md`). The
   mods now follow the rule: the shipped `activate`/`deactivate` callbacks no

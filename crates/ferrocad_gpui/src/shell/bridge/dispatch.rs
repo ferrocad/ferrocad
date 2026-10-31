@@ -4,7 +4,7 @@
 
 use pyo3::prelude::{PyAnyMethods, Python};
 
-use super::*;
+use crate::shell::*;
 
 /// The id prefix for an interactive tool whose session lives in Python.
 ///
@@ -12,7 +12,7 @@ use super::*;
 /// `draft` bridge, which forwards viewport input to `FreeCADGui.draft`. Keeping
 /// the prefix here (rather than a magic string in every path) also means the
 /// edition's Rust tool registry and the Python bridge share one lookup.
-pub(super) const PYTHON_TOOL_PREFIX: &str = "python:";
+pub(in crate::shell) const PYTHON_TOOL_PREFIX: &str = "python:";
 
 /// The edition's `App_SaveDatumPlane` command id.
 ///
@@ -65,7 +65,7 @@ impl Shell {
     ///
     /// A modal owns the keyboard while it is open, and a disabled command does not
     /// fire (the same rule the bar shows).
-    pub(super) fn shortcut_for(&self, event: &KeyDownEvent) -> Option<String> {
+    pub(in crate::shell) fn shortcut_for(&self, event: &KeyDownEvent) -> Option<String> {
         // A modal owns the keyboard while any is open: a registry accelerator must
         // not fire over a dialog, a form, or while the user is typing a palette query.
         if self.modal_open() {
@@ -95,7 +95,7 @@ impl Shell {
     ///
     /// The window compositor keeps its own adapter; the choice only reaches the
     /// image path while zero-copy presentation is active.
-    pub(super) fn select_gpu_setting(&mut self, value: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn select_gpu_setting(&mut self, value: &str, cx: &mut Context<Self>) {
         let outcome = match crate::python::set_gpu_adapter(value) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -505,7 +505,7 @@ impl Shell {
     /// Apply a command's presentation request (A5, G5): perform a workplane action, or
     /// update the shell's view state, mirror it to `FerroCADGui.ViewState`, and apply it
     /// to the viewport when one exists. Returns a one-line summary for the status bar.
-    pub(super) fn apply_view(
+    pub(in crate::shell) fn apply_view(
         &mut self,
         request: &ViewRequest,
         cx: &mut Context<Self>,
@@ -587,7 +587,7 @@ impl Shell {
 
     /// Perform a workplane action on the viewport (G5). These are not presentation
     /// state: they act on the pointer hover, the sticky plane and the camera.
-    pub(super) fn apply_workplane(
+    pub(in crate::shell) fn apply_workplane(
         &mut self,
         action: WorkplaneAction,
         cx: &mut Context<Self>,
@@ -701,7 +701,7 @@ impl Shell {
     /// until it ends; no document transaction is opened. Its status is mirrored
     /// into the model immediately, so the tool strip appears even when no viewport
     /// is available (a headless window or a machine without a GPU).
-    pub(super) fn start_tool(&mut self, id: &str, cx: &mut Context<Self>) -> String {
+    pub(in crate::shell) fn start_tool(&mut self, id: &str, cx: &mut Context<Self>) -> String {
         // A tool owns the canvas and would commit the pending move; the user must
         // finish it first, exactly like a hand switch.
         if self.gate(Action::StartTool, cx) {
@@ -746,7 +746,7 @@ impl Shell {
     }
 
     /// Resolve a tool id: the edition's Rust registry, or a Python bridge.
-    pub(super) fn tool_for(
+    pub(in crate::shell) fn tool_for(
         &self,
         id: &str,
     ) -> Result<Box<dyn ferrocad_stage::Tool>, String> {

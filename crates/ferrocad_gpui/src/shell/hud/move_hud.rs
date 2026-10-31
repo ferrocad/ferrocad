@@ -5,7 +5,7 @@
 //! angle because a rotation is an axis and an angle, not three independent coordinates;
 //! while a step is pending its ring is locked, the siblings show `—`, and the only exits
 //! are `✓`/`Enter` and `✗`/`Esc`. A `✗`/`✓` pair appears while either value is pending. It
-//! is deliberately **not** an [`OpenDialog`](super::OpenDialog): the form belongs to the
+//! is deliberately **not** an [`OpenDialog`](crate::shell::OpenDialog): the form belongs to the
 //! hand, not to one command token, so it stays on screen across a commit and can coexist
 //! with a command dialog. The commit itself still goes through `App_Move`
 //! ([`Shell::commit_session`]) for a translation and `transform`/`apply` for a rotation,
@@ -20,8 +20,8 @@
 //!
 //! See `docs/project/tasks/transform-session.md` §3.2.
 
-use super::*;
-use super::pill::RingFrame;
+use crate::shell::*;
+use crate::shell::pill::RingFrame;
 use ferrocad_types::Quantity;
 
 /// The text a resting field shows.
@@ -36,7 +36,7 @@ const ZERO_TEXT: &str = "0.00";
 const DISPLAY_EPSILON: f64 = 0.005;
 
 /// One field per axis, in X/Y/Z order.
-pub(super) const AXIS_COUNT: usize = 3;
+pub(in crate::shell) const AXIS_COUNT: usize = 3;
 
 /// The always-visible Move form.
 ///
@@ -45,11 +45,11 @@ pub(super) const AXIS_COUNT: usize = 3;
 /// `orientation` is the body's committed orientation the local ring frame is built from.
 /// `axis` is the ring a typed angle previews around. All live exactly as long as the
 /// surface.
-pub(super) struct MoveHud {
-    pub(super) inputs: [Entity<TextInput>; AXIS_COUNT],
+pub(in crate::shell) struct MoveHud {
+    pub(in crate::shell) inputs: [Entity<TextInput>; AXIS_COUNT],
     /// The rotate form's only numeric field (`Δθ`). A rotation is one axis and one angle,
     /// so there is deliberately no `ΔθX/ΔθY/ΔθZ` triple.
-    pub(super) angle: Entity<TextInput>,
+    pub(in crate::shell) angle: Entity<TextInput>,
     /// Keeps the change/submit subscriptions alive for the surface's lifetime.
     _subs: Vec<Subscription>,
     /// The world point the absolute coordinates are measured from.
@@ -58,12 +58,12 @@ pub(super) struct MoveHud {
     /// frame and `Reset 0°` are measured from it.
     orientation: Rotation,
     /// The rotate ring a typed angle previews around (`0` = X, `1` = Y, `2` = Z).
-    pub(super) axis: usize,
+    pub(in crate::shell) axis: usize,
 }
 
 impl Shell {
     /// Whether the Move surface is on screen.
-    pub(super) fn move_pill_open(&self) -> bool {
+    pub(in crate::shell) fn move_pill_open(&self) -> bool {
         self.move_hud.is_some()
     }
 
@@ -72,7 +72,7 @@ impl Shell {
     /// The session is the owner of the pending value, but it can only open once a stage
     /// reports a datum; a typed field before that (headless, or a stage still building)
     /// is still a pending edit. This is what materialises `✗`/`✓`: at rest it is false.
-    pub(super) fn move_is_pending(&self, cx: &App) -> bool {
+    pub(in crate::shell) fn move_is_pending(&self, cx: &App) -> bool {
         if self.angular() {
             return self.session.as_ref().is_some_and(TransformSession::is_dirty)
                 || self.move_angle(cx).is_some_and(|angle| angle != 0.0);
@@ -97,7 +97,7 @@ impl Shell {
     }
 
     /// Whether the form edits a rotation rather than a translation.
-    pub(super) fn angular(&self) -> bool {
+    pub(in crate::shell) fn angular(&self) -> bool {
         self.gizmo_mode == GizmoMode::Rotate
     }
 
@@ -106,7 +106,7 @@ impl Shell {
     /// This is the one seam every context change calls (a selection, a slot, a tool,
     /// an edit). Opening is idempotent, so a re-arm while the form is open does not
     /// reset the values the user is working on.
-    pub(super) fn ensure_move_hud(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn ensure_move_hud(&mut self, cx: &mut Context<Self>) {
         if self.move_hud_wanted() {
             self.open_move_hud(cx);
         } else if self.move_hud.is_some() {
@@ -120,7 +120,7 @@ impl Shell {
     /// still equip loadout slots until the user asks for a field with `Tab`, a digit or
     /// a click. It also opens a clean session at the selection's current pose when one
     /// is not already live, so the first typed value has a datum.
-    pub(super) fn open_move_hud(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn open_move_hud(&mut self, cx: &mut Context<Self>) {
         if self.move_hud.is_some() {
             self.refresh_move_origin(cx);
             return;
@@ -216,7 +216,7 @@ impl Shell {
 
     /// Drop the surface without writing anything (the hand changed, the selection went
     /// away, or a tool took over). A dirty session is committed by the caller first.
-    pub(super) fn close_move_hud(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn close_move_hud(&mut self, cx: &mut Context<Self>) {
         if self.move_hud.take().is_none() {
             return;
         }
@@ -237,7 +237,7 @@ impl Shell {
     ///
     /// The form belongs to the Move hand, so it does not close; the fields return to the
     /// resting pose so the next nudge starts from zero.
-    pub(super) fn dismiss_move_hud(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn dismiss_move_hud(&mut self, cx: &mut Context<Self>) {
         if self.session.as_ref().is_some_and(TransformSession::is_dirty) {
             self.drop_session("move cancelled", cx);
         } else {
@@ -252,7 +252,7 @@ impl Shell {
     ///
     /// The session must already be gone (or clean): the origin is re-read from the
     /// gizmo, which by then sits at the committed pose.
-    pub(super) fn reset_move_fields(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn reset_move_fields(&mut self, cx: &mut Context<Self>) {
         self.refresh_move_origin(cx);
         self.set_move_fields([0.0; 3], cx);
         self.pill.release();
@@ -263,7 +263,7 @@ impl Shell {
     /// While a session is dirty the origin is `origin_0` and must not move under the
     /// absolute fields; a commit or a rollback clears the session first. In absolute
     /// mode a changed origin rewrites the resting fields (`new_origin + 0`).
-    pub(super) fn refresh_move_origin(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn refresh_move_origin(&mut self, cx: &mut Context<Self>) {
         if self.move_hud.is_none()
             || self.session.as_ref().is_some_and(TransformSession::is_dirty)
         {
@@ -294,7 +294,7 @@ impl Shell {
     ///
     /// The stage is world-space, so the orientation is not on the item. One console
     /// expression is the smallest bridge; a missing `Placement` reads as identity.
-    pub(super) fn object_rotation_now(&self) -> Rotation {
+    pub(in crate::shell) fn object_rotation_now(&self) -> Rotation {
         let name = self
             .model
             .lock()
@@ -335,19 +335,19 @@ impl Shell {
 
     /// The origin the absolute fields are measured from (tests and the ruler-tag focus).
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn move_origin(&self) -> Option<Vector3> {
+    pub(in crate::shell) fn move_origin(&self) -> Option<Vector3> {
         self.move_hud.as_ref().map(|hud| hud.origin)
     }
 
     /// The text in one field.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn move_field_text(&self, index: usize, cx: &App) -> Option<String> {
+    pub(in crate::shell) fn move_field_text(&self, index: usize, cx: &App) -> Option<String> {
         let input = self.move_hud.as_ref()?.inputs.get(index)?;
         Some(input.read(cx).text().to_string())
     }
 
     /// Write one field (programmatic, so no change event fires).
-    pub(super) fn set_move_text(&self, index: usize, text: String, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn set_move_text(&self, index: usize, text: String, cx: &mut Context<Self>) {
         if let Some(input) = self.move_hud.as_ref().and_then(|hud| hud.inputs.get(index)) {
             input.update(cx, |input, cx| input.set_text(text, cx));
         }
@@ -372,7 +372,7 @@ impl Shell {
     /// Programmatic `set_text` does not emit a change event, so a drag cannot loop
     /// back into another preview. The rotate form has one field: the pending step's
     /// signed angle, or `0.00` while clean.
-    pub(super) fn set_move_fields(&self, delta: [f64; 3], cx: &mut Context<Self>) {
+    pub(in crate::shell) fn set_move_fields(&self, delta: [f64; 3], cx: &mut Context<Self>) {
         if self.angular() {
             self.set_angle_text(self.display_angle(), cx);
             return;
@@ -394,20 +394,20 @@ impl Shell {
 
     /// The text the rotate field currently holds.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn angle_field_text(&self, cx: &App) -> Option<String> {
+    pub(in crate::shell) fn angle_field_text(&self, cx: &App) -> Option<String> {
         let input = &self.move_hud.as_ref()?.angle;
         Some(input.read(cx).text().to_string())
     }
 
     /// Write the single angle field (programmatic, so no change event fires).
-    pub(super) fn set_angle_text(&self, value: f64, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn set_angle_text(&self, value: f64, cx: &mut Context<Self>) {
         if let Some(input) = self.move_hud.as_ref().map(|hud| &hud.angle) {
             input.update(cx, |input, cx| input.set_text(format!("{value:.2}"), cx));
         }
     }
 
     /// The angle the rotate field parses, if it is a complete number.
-    pub(super) fn move_angle(&self, cx: &App) -> Option<f64> {
+    pub(in crate::shell) fn move_angle(&self, cx: &App) -> Option<f64> {
         let input = &self.move_hud.as_ref()?.angle;
         let text = input.read(cx).text().trim().to_string();
         let number = text
@@ -423,7 +423,7 @@ impl Shell {
     ///
     /// Returns `None` while a field does not parse (a lone `-`), so a half-typed value
     /// neither previews nor commits a silent zero.
-    pub(super) fn move_fields_delta(&self, cx: &App) -> Option<[f64; 3]> {
+    pub(in crate::shell) fn move_fields_delta(&self, cx: &App) -> Option<[f64; 3]> {
         let hud = self.move_hud.as_ref()?;
         if self.angular() {
             return None;
@@ -457,7 +457,7 @@ impl Shell {
 
     /// A programmatic translation-field write (the seed and the mode toggle) is not a
     /// change event, so the session and the preview are driven here.
-    pub(super) fn on_move_typed(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_move_typed(&mut self, cx: &mut Context<Self>) {
         if self.angular() {
             return;
         }
@@ -510,7 +510,7 @@ impl Shell {
     /// `World` is the coordinate grid, `LOC` is the body's committed orientation and
     /// `WP` is the active workplane's `u`/`v`/`n`. The plane is passed in because only
     /// the caller can read it from the viewport.
-    pub(super) fn ring_basis(&self, plane: Option<&ferrocad_stage::Workplane>) -> [Vector3; 3] {
+    pub(in crate::shell) fn ring_basis(&self, plane: Option<&ferrocad_stage::Workplane>) -> [Vector3; 3] {
         let world = [
             Vector3::new(1.0, 0.0, 0.0),
             Vector3::new(0.0, 1.0, 0.0),
@@ -535,7 +535,7 @@ impl Shell {
     ///
     /// `None` for the other frames, and when the shell has no viewport (headless),
     /// where `ring_basis` falls back to the world grid.
-    pub(super) fn active_ring_plane(&self, cx: &App) -> Option<ferrocad_stage::Workplane> {
+    pub(in crate::shell) fn active_ring_plane(&self, cx: &App) -> Option<ferrocad_stage::Workplane> {
         if self.pill.ring_frame() != RingFrame::Workplane {
             return None;
         }
@@ -545,7 +545,7 @@ impl Shell {
 
     /// A typed angle in the rotate form: it is the whole pending step, replacing any
     /// drag value on the same ring.
-    pub(super) fn on_angle_typed(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_angle_typed(&mut self, cx: &mut Context<Self>) {
         if !self.angular() {
             return;
         }
@@ -584,7 +584,7 @@ impl Shell {
 
     /// A refused character in the angle field. `X`/`Y`/`Z` choose the ring while the
     /// caret stays in `Δθ`; a sibling is refused once a step is pending.
-    pub(super) fn on_angle_rejected(&mut self, character: char, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_angle_rejected(&mut self, character: char, cx: &mut Context<Self>) {
         if !self.angular() {
             return;
         }
@@ -607,7 +607,7 @@ impl Shell {
     /// presses, and the bar's frame switch and sibling cells are inert. That keeps
     /// `dirty_ring_count <= 1`, so `✗`/`Esc` always cancels the exact step the protractor
     /// shows and no ring switch spends a hidden transaction.
-    pub(super) fn rotation_pending(&self) -> Option<usize> {
+    pub(in crate::shell) fn rotation_pending(&self) -> Option<usize> {
         self.session
             .as_ref()
             .filter(|session| session.is_dirty() && session.mode() == GizmoMode::Rotate)
@@ -615,7 +615,7 @@ impl Shell {
     }
 
     /// Explain why a ring, bar cell or the frame switch is refused right now.
-    pub(super) fn show_rotation_lock(&mut self, attempted: usize, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn show_rotation_lock(&mut self, attempted: usize, cx: &mut Context<Self>) {
         let axis = self.rotation_pending().unwrap_or(attempted).min(AXIS_COUNT - 1);
         let axis = ["X", "Y", "Z"][axis];
         self.model.lock().unwrap().status = format!(
@@ -628,7 +628,7 @@ impl Shell {
 
     /// A ring press/hover the viewport refused because a pending rotation owns another
     /// axis.
-    pub(super) fn on_locked_ring(
+    pub(in crate::shell) fn on_locked_ring(
         &mut self,
         axis: ferrocad_stage::GizmoAxis,
         cx: &mut Context<Self>,
@@ -645,7 +645,7 @@ impl Shell {
     ///
     /// Called whenever the pending step can change: a drag tick, a typed angle, a commit,
     /// a rollback or a re-arm. A clean session unlocks every ring.
-    pub(super) fn sync_locked_ring(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_locked_ring(&mut self, cx: &mut Context<Self>) {
         let locked = self.rotation_pending();
         let Some(viewport) = self.viewport.clone() else {
             return;
@@ -689,7 +689,7 @@ impl Shell {
     ///
     /// With no pending step this chooses the ring the typed angle previews around. With a
     /// pending step it is refused unless it is the locked ring's own cell.
-    pub(super) fn select_rotate_axis(
+    pub(in crate::shell) fn select_rotate_axis(
         &mut self,
         index: usize,
         window: &mut Window,
@@ -705,7 +705,7 @@ impl Shell {
     ///
     /// This is what `Reset 0°` will target (the stored `Placement.Rotation` in the flat
     /// editions) and what the button labels itself with.
-    pub(super) fn stored_orientation(&self) -> Rotation {
+    pub(in crate::shell) fn stored_orientation(&self) -> Rotation {
         self.move_hud
             .as_ref()
             .map_or_else(Rotation::identity, |hud| hud.orientation)
@@ -716,7 +716,7 @@ impl Shell {
     /// A stored identity disables the button. A pure X/Y/Z rotation names the axis and
     /// angle (`Reset (Z 45°)`); a compound 3-D tilt shows the true shortest angle from
     /// identity (`Reset (21.4°)`), never a fractional per-axis decomposition.
-    pub(super) fn reset_rotation_label(&self) -> (String, bool) {
+    pub(in crate::shell) fn reset_rotation_label(&self) -> (String, bool) {
         let orientation = self.stored_orientation();
         if orientation.is_same(&Rotation::identity(), 1e-9) {
             return ("Reset 0°".to_string(), false);
@@ -742,7 +742,7 @@ impl Shell {
     ///
     /// While a step is pending this is refused: the user must apply or cancel the step
     /// they can see before a second transaction replaces it.
-    pub(super) fn reset_rotation(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn reset_rotation(&mut self, cx: &mut Context<Self>) {
         if self.move_hud.is_none() || !self.angular() {
             return;
         }
@@ -781,7 +781,7 @@ impl Shell {
 
     /// Preview the pending value on the selection, optionally **settling** the gizmo
     /// frame (a drag's `End`, where the pending pose becomes the resting pose).
-    pub(super) fn preview_move(&mut self, settle: bool, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn preview_move(&mut self, settle: bool, cx: &mut Context<Self>) {
         if self.angular() {
             let transform = self
                 .session
@@ -805,7 +805,7 @@ impl Shell {
     }
 
     /// Publish the rotate session's protractor sweeps (or clear them).
-    pub(super) fn publish_protractor(
+    pub(in crate::shell) fn publish_protractor(
         &mut self,
         sweeps: Option<Vec<RingSweep>>,
         cx: &mut Context<Self>,
@@ -826,7 +826,7 @@ impl Shell {
     /// chip. The start spoke is the **ring's own zero**: the canonical direction turned by
     /// the committed orientation for a local ring frame, projected into the ring plane.
     /// The arc's value is the same signed scalar the docked field shows.
-    pub(super) fn session_protractor(&self, cx: &App) -> Option<Vec<RingSweep>> {
+    pub(in crate::shell) fn session_protractor(&self, cx: &App) -> Option<Vec<RingSweep>> {
         let session = self
             .session
             .as_ref()
@@ -904,7 +904,7 @@ impl Shell {
 
     /// The pending translation a Move will commit, when a form is open.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn pending_translation(&self, cx: &App) -> Option<[f64; 3]> {
+    pub(in crate::shell) fn pending_translation(&self, cx: &App) -> Option<[f64; 3]> {
         if self.move_hud.is_none() || self.angular() {
             return None;
         }
@@ -913,7 +913,7 @@ impl Shell {
 
     /// The pending angular step in degrees, when the rotate form is open.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn pending_angle(&self) -> Option<f64> {
+    pub(in crate::shell) fn pending_angle(&self) -> Option<f64> {
         if self.move_hud.is_none() || !self.angular() {
             return None;
         }
@@ -928,7 +928,7 @@ impl Shell {
     ///
     /// A frame switch is a context exit for a pending rotation: the pending step was
     /// measured about the old ring, so it is committed before the rings are rebuilt.
-    pub(super) fn toggle_move_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn toggle_move_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.move_hud.is_none() {
             return;
         }
@@ -959,7 +959,7 @@ impl Shell {
     /// An explicit focus request cancels a pending hand-back to the viewport: the user
     /// asked for the field (a segment click, `Tab`, a digit), so the next render must not
     /// steal it back.
-    pub(super) fn focus_move_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn focus_move_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(axis) = self.pill.focus() else {
             return;
         };
@@ -981,7 +981,7 @@ impl Shell {
     /// click is a no-op rather than an implicit open that would drop the session the
     /// tag is measuring. The `window.focus` is deferred to the next render
     /// (`pill_focus_request`), because a viewport event arrives outside a window.
-    pub(super) fn focus_move_axis(&mut self, axis: usize, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn focus_move_axis(&mut self, axis: usize, cx: &mut Context<Self>) {
         if self.move_hud.is_none() {
             return;
         }
@@ -995,7 +995,7 @@ impl Shell {
 
     /// `Tab`/`Shift+Tab`: open on the remembered drag axis, then cycle the fields. The
     /// rotate form has one field, so any `Tab` focuses it directly.
-    pub(super) fn cycle_move_focus(
+    pub(in crate::shell) fn cycle_move_focus(
         &mut self,
         backward: bool,
         window: &mut Window,
@@ -1026,7 +1026,7 @@ impl Shell {
     ///
     /// `1`/`2`/`3` never take this path — they are loadout hotkeys and the shell routes
     /// them first. The seed text is replaced wholesale, so `5` over `0.00` is `5`.
-    pub(super) fn type_into_move_field(
+    pub(in crate::shell) fn type_into_move_field(
         &mut self,
         typed: char,
         window: &mut Window,
@@ -1062,7 +1062,7 @@ impl Shell {
     }
 
     /// Select a field's text so the next keystroke replaces it.
-    pub(super) fn select_move_field(&self, axis: usize, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn select_move_field(&self, axis: usize, cx: &mut Context<Self>) {
         let input = if self.angular() {
             self.move_hud.as_ref().map(|hud| &hud.angle)
         } else {
@@ -1112,7 +1112,7 @@ fn is_angle_char(character: char) -> bool {
 }
 
 /// The axis label for a translation field: absolute mode drops the `Δ` prefix.
-pub(super) fn axis_label(axis: usize, absolute: bool) -> String {
+pub(in crate::shell) fn axis_label(axis: usize, absolute: bool) -> String {
     let letter = ["X", "Y", "Z"][axis.min(AXIS_COUNT - 1)];
     if absolute {
         letter.to_string()

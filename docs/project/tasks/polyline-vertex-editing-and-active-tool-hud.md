@@ -22,18 +22,18 @@ Two UX defects, one root cause each:
 Read from this checkout; the descriptions in the brief that follow are checked against it.
 
 - **`PolylineTool` appends on every press.** `on_event` pushes `snap.or(event.world())` on
-  each left `Down` (`crates/ferrocad_stage/src/tool.rs:206`). There is no press origin, no
+  each left `Down` (`crates/ferrocad_stage/src/interaction/tool.rs:206`). There is no press origin, no
   travel threshold, no hit test against the tool's own vertices, and no per-point edit or
   delete. `cancel()` clears all three `ShapeItem` slots; `status()` reports label, point
   count and a hint (`tool.rs:226`).
 - **`PointerEvent` has no drag state and no projection.** `kind` is
   `Move`/`Down`/`Up`, `position` is device pixels, `hit` is the scene pick
-  (`crates/ferrocad_stage/src/input.rs:34`). `button` is only set on `Down`/`Up`, so a tool
+  (`crates/ferrocad_stage/src/interaction/input.rs:34`). `button` is only set on `Down`/`Up`, so a tool
   that wants "press and drag" must remember the press itself. There is no view/projection
   available to a tool, so it cannot project its own points to screen space.
 - **The `Tool` trait has three jobs, not four.** `on_event`, `items`, `status`, `cancel`
   (`tool.rs:79`). There is no `finish`: `Enter` ends the session in the host
-  (`crates/ferrocad_gpui/src/shell/dispatch.rs:599`), and it produced no `InteractionCommit`,
+  (`crates/ferrocad_gpui/src/shell/bridge/dispatch.rs:599`), and it produced no `InteractionCommit`,
   so finishing drew nothing. *(Superseded 2026-10-29: `Tool::finish` exists and returns a
   creating commit; see §6.)*
 - **Tool visuals are never selectable**, which is the property to preserve:

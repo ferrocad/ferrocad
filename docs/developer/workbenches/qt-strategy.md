@@ -752,8 +752,8 @@ only: the measurements and decisions in §2–§7 are unchanged, still pinned to
 `33adf61`.
 
 **The Ctrl+K command palette is unrelated to Qt and to the Part GUI.** **Verified.**
-It lives entirely in `crates/ferrocad_gpui/src/shell.rs` and
-`crates/ferrocad_gpui/src/chrome.rs`, renders gpui elements and filters the command
+It lives entirely in `crates/ferrocad_gpui/src/shell/mod.rs` and
+`crates/ferrocad_gpui/src/ui/chrome.rs`, renders gpui elements and filters the command
 registry; commit `6179d62` touched only those two files. It imports no PySide/Qt and
 has nothing to do with `ferrocad_parametric` (the edition binary that links Part). It
 will be useful once the Draft/Part GUI arrives, but it is not part of D.

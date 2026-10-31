@@ -92,7 +92,7 @@ geometry-free), so `lib/` appears only once the geometry slices land; see
 [`occt-bundling.md`](occt-bundling.md).
 
 The shell already resolves the facade via `FERROCAD_PYTHON_PATH` (see
-`crates/ferrocad_gpui/src/python.rs`); the bundle sets it (and `PYTHONHOME`) at
+`crates/ferrocad_gpui/src/runtime/python.rs`); the bundle sets it (and `PYTHONHOME`) at
 `AppRun`, and the app adds its `mods/` directory through `HostConfig.mods_paths`,
 so no code change is needed to point at the bundled Python and scripts. There is
 no `lib/ferrocad.abi3.so` in the app: the binary registers the PyO3 module as a
@@ -316,7 +316,7 @@ moved into any crate's source tree. Packaging copies them:
   embedded in the binary and unpacked on first run.
 
 The three paths share one resolution order in the shell
-(`crates/ferrocad_gpui/src/python.rs::find_python_dir`), so the code never needs to
+(`crates/ferrocad_gpui/src/runtime/python.rs::find_python_dir`), so the code never needs to
 know which one it is in:
 
 | Order | Source | Who provides it |

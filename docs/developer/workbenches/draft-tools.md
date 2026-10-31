@@ -273,7 +273,7 @@ tests; the in-process Rust test is the one that proves the real kernel path.
 
 | File | Role |
 | --- | --- |
-| `crates/ferrocad_stage/src/snap.rs` | `SnapContext::snap_point` (camera-free) |
+| `crates/ferrocad_stage/src/interaction/snap.rs` | `SnapContext::snap_point` (camera-free) |
 | `crates/ferrocad_stage_py/src/{snap,workplane}.rs` | the `ferrocad.stage` spatial reference |
 | `python/FreeCADGui/draft.py` | `Snapper`, `draftToolBar`, hints, sessions, snap commands |
 | `python/FreeCADGui/__init__.py` | the headless window and `doCommand`/`addModule` |

@@ -8,7 +8,7 @@
 //!
 //! See `docs/project/tasks/tool-loadout.md`.
 
-use super::*;
+use crate::shell::*;
 
 /// The alpha multiplier of the triad a hover preview materialises (U5): present at
 /// the body's origin, but clearly not selected yet.
@@ -314,7 +314,7 @@ impl Shell {
     /// materialises the Move hand's triad at the body's origin so a press on a handle
     /// can promote the body and start the drag in one gesture. A latched selection
     /// owns the handles instead, so this is a no-op whenever one exists.
-    pub(super) fn sync_hover_arm(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_hover_arm(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             self.hover_arm = None;
             return;
@@ -333,7 +333,7 @@ impl Shell {
     ///
     /// `sync_hover_arm` passes the viewport's report; a test can pass a target
     /// directly, which keeps the state machine testable without a scene pick.
-    pub(super) fn apply_hover_arm(
+    pub(in crate::shell) fn apply_hover_arm(
         &mut self,
         target: Option<&SelectionRef>,
         over_gizmo: bool,
@@ -385,7 +385,7 @@ impl Shell {
     ///
     /// Only the Move hand offers it, and only with nothing latched: a selection, a
     /// session, a tool, a modal, or an open wheel all own the pointer's meaning.
-    pub(super) fn hover_arm_allowed(&self) -> bool {
+    pub(in crate::shell) fn hover_arm_allowed(&self) -> bool {
         self.loadout.slot().wants_gizmo()
             && self.session.is_none()
             && self.active_tool.is_none()
@@ -402,7 +402,7 @@ impl Shell {
     /// session opens: the commit reads the facade selection. The drag already owns the
     /// hosted gizmo, so this deliberately does **not** re-arm it; it only clears the
     /// idle dimming so the handles read as selected.
-    pub(super) fn promote_hover_target(&mut self, target: u32, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn promote_hover_target(&mut self, target: u32, cx: &mut Context<Self>) {
         let Some(reference) = self.hover_arm.clone() else {
             return;
         };

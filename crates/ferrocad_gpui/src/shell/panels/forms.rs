@@ -2,7 +2,7 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
+use crate::shell::*;
 
 impl Shell {
     /// Whether a rendered form dialog is open (`FreeCADGui.Control.showDialog`).
@@ -87,14 +87,14 @@ impl Shell {
     }
 
     /// Reject the open form; the modal is released through [`FormEvent`].
-    pub(super) fn reject_form(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn reject_form(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.form_dialog.clone() {
             dialog.update(cx, |dialog, cx| dialog.reject(cx));
         }
     }
 
     /// Accept the open form; the modal is released through [`FormEvent`].
-    pub(super) fn accept_form(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn accept_form(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.form_dialog.clone() {
             dialog.update(cx, |dialog, cx| dialog.accept(cx));
         }
@@ -102,7 +102,7 @@ impl Shell {
 
     /// Release the shell's modal when the form closes, whether that was `Esc`,
     /// `Enter`, a footer button or `close_form`.
-    pub(super) fn finish_form(
+    pub(in crate::shell) fn finish_form(
         &mut self,
         dialog: &Entity<FormDialog>,
         event: &FormEvent,
@@ -129,7 +129,7 @@ impl Shell {
     }
 
     /// Flip a bool field.
-    pub(super) fn toggle_flag(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn toggle_flag(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(dialog) = self.dialog.as_mut() {
             if let Some(ValueState::Flag(flag)) = dialog.states.get_mut(index) {
                 *flag = !*flag;

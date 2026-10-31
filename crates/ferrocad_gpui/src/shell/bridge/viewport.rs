@@ -2,7 +2,7 @@
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
-use super::*;
+use crate::shell::*;
 use super::picking::click_target;
 use ferrocad_stage::{
     GizmoSet, ShapeItem, Stage, WorkplaneLive, WorkplaneStem, WORKPLANE_OFFSET_ID,
@@ -17,7 +17,7 @@ impl Shell {
     /// Call after any edit that can change geometry: a property commit, a console
     /// snippet, or an interaction commit (which syncs itself). An empty document or a
     /// build without a display workbench simply yields an empty stage.
-    pub(super) fn sync_stage(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_stage(&mut self, cx: &mut Context<Self>) {
         if self.viewport.is_none() {
             return;
         }
@@ -38,7 +38,7 @@ impl Shell {
     /// The document stage is kept so a preview change can redraw without re-reading the
     /// tessellations (`stage_meshes` crosses into the kernel). A stage with no preview
     /// published is handed over as built — the common case pays nothing.
-    pub(super) fn set_stage(&mut self, stage: Stage, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn set_stage(&mut self, stage: Stage, cx: &mut Context<Self>) {
         let generation = ferrocad_stage_py::preview_generation();
         self.preview_generation = generation;
         let merged = self.stage_with_previews(&stage);
@@ -52,7 +52,7 @@ impl Shell {
     }
 
     /// The draw stage: the document's items plus the published preview items.
-    pub(super) fn stage_with_previews(&self, stage: &Stage) -> Stage {
+    pub(in crate::shell) fn stage_with_previews(&self, stage: &Stage) -> Stage {
         if ferrocad_stage_py::preview_generation() == 0 {
             return stage.clone();
         }
@@ -68,7 +68,7 @@ impl Shell {
     /// A preview changes without a document edit, so [`sync_stage`] would not run and
     /// the drawn stage would keep the old visual. The generation check is a mutex read;
     /// only a real change clones the document stage.
-    pub(super) fn sync_previews(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_previews(&mut self, cx: &mut Context<Self>) {
         // A `Offset Workplane…` HUD that closed without accepting has cancelled its
         // session: put the plane back. This runs before the cheap generation check
         // because a repaint is the first moment after Esc that the shell sees.
@@ -101,7 +101,7 @@ impl Shell {
     /// the live camera is mirrored into `ferrocad_stage` (S4.1). Called from every
     /// shell render and from each viewport event, so a script that runs in response to
     /// a click sees the camera that click was made with.
-    pub(super) fn publish_camera(&self, cx: &App) {
+    pub(in crate::shell) fn publish_camera(&self, cx: &App) {
         let Some(viewport) = self.viewport.as_ref() else {
             return;
         };
@@ -114,7 +114,7 @@ impl Shell {
     /// stage the viewport is drawing may never have gone through [`sync_stage`]. This
     /// render-path publish closes that gap once; afterwards `sync_stage` owns it, so a
     /// frame never clones a stage.
-    pub(super) fn publish_view(&self, cx: &App) {
+    pub(in crate::shell) fn publish_view(&self, cx: &App) {
         let Some(viewport) = self.viewport.as_ref() else {
             return;
         };
@@ -131,7 +131,7 @@ impl Shell {
     /// so `getObjectsInfo` walks the same packets the viewport picks against. The
     /// sub-element name tables come from the items themselves (the kernel
     /// tessellation's `parts`).
-    pub(super) fn publish_stage(&self, stage: &Stage) {
+    pub(in crate::shell) fn publish_stage(&self, stage: &Stage) {
         let objects = stage
             .items()
             .iter()
@@ -152,7 +152,7 @@ impl Shell {
     /// `grid_overlay`, which only hides the native ground. With no
     /// viewport (headless, or before [`enable_viewport`](Self::enable_viewport)) the
     /// dirty flag is left set, so the next viewport applies it.
-    pub(super) fn sync_overlays(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_overlays(&mut self, cx: &mut Context<Self>) {
         if !ferrocad_inventor_py::overlays_dirty() {
             return;
         }
@@ -175,7 +175,7 @@ impl Shell {
     /// The registry is the only channel: the shader ships with a mod, and asking the
     /// active backend means a provider switch cannot leave a stale skin behind. A
     /// bridge failure is logged and treated as "no skin" (the native material).
-    pub(super) fn active_gizmo_skin(&mut self, cx: &mut Context<Self>) -> Option<Arc<str>> {
+    pub(in crate::shell) fn active_gizmo_skin(&mut self, cx: &mut Context<Self>) -> Option<Arc<str>> {
         match python::provider_skin(GIZMO_FEATURE) {
             Ok(source) => source.map(Arc::from),
             Err(error) => {
@@ -190,7 +190,7 @@ impl Shell {
     /// Returns whether a source was supplied. A missing viewport still reports that
     /// state: it is simply not applied until [`enable_viewport`](Self::enable_viewport)
     /// runs. The viewport is notified only when the stored program changed.
-    pub(super) fn sync_gizmo_skin(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn sync_gizmo_skin(&mut self, cx: &mut Context<Self>) -> bool {
         let skin = self.active_gizmo_skin(cx);
         let supplied = skin.is_some();
         if let Some(viewport) = self.viewport.clone() {
@@ -207,14 +207,14 @@ impl Shell {
     ///
     /// The shell names no workbench: the script routes `stage_meshes` through
     /// `FerroCAD.display_mesh`, so whatever module owns the objects supplies the mesh.
-    pub(super) fn build_stage(&mut self) -> Result<ferrocad_stage::Stage, String> {
+    pub(in crate::shell) fn build_stage(&mut self) -> Result<ferrocad_stage::Stage, String> {
         let meshes: Vec<StageMesh> = python::stage_meshes()?;
         Ok(self.display.build(meshes))
     }
 
     /// React to a viewport event: a click selection, a manipulator commit, or a
     /// gizmo drag.
-    pub(super) fn on_viewport_event(&mut self, event: &ViewportEvent, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_viewport_event(&mut self, event: &ViewportEvent, cx: &mut Context<Self>) {
         // The facade's camera snapshot is refreshed before anything can reach Python:
         // a command or tool that reacts to this event reports the camera it happened in.
         self.publish_camera(cx);
@@ -234,7 +234,7 @@ impl Shell {
 
     /// The origin/centre handle was released: remember the snapped pivot as the session
     /// user origin. This is not a transform commit and never touches the document.
-    pub(super) fn on_gizmo_origin(&mut self, point: Vector3, kind: SnapKind, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_gizmo_origin(&mut self, point: Vector3, kind: SnapKind, cx: &mut Context<Self>) {
         self.user_origin = Some(point);
         // The absolute fields are measured from the pivot, so a re-pivot re-reads it
         // (a pending move keeps its frozen `origin_0`).
@@ -246,7 +246,7 @@ impl Shell {
     /// A tool started, gained a point, finished or was cancelled: mirror its status
     /// into the model so the tool strip shows the label, point count and hint, and
     /// hides as soon as the session is over. The document is never touched here.
-    pub(super) fn on_tool_state(&mut self, status: &ToolStatus, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_tool_state(&mut self, status: &ToolStatus, cx: &mut Context<Self>) {
         let active = status.is_active();
         if !active {
             self.active_tool = None;
@@ -257,7 +257,7 @@ impl Shell {
 
     // A click: select the object in the inspector, and arm the manipulators and gizmo
     // the edition's workbenches and mods contribute for that selection.
-    pub(super) fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
         // A pick is a context action like any other. Under a pending move it is refused
         // *before* anything is re-targeted: the click must not move the triad (or the
         // session's origin) onto another body while the value is undecided.
@@ -342,7 +342,7 @@ impl Shell {
     /// not a mutation), so the registry's selection-dependent `IsActive` cannot be the
     /// gate. Its verbs are offered and the target is promoted when one is chosen; the
     /// command then validates against a selection that contains it.
-    pub(super) fn radial_slots(&self, target: Option<&SelectionRef>) -> Vec<WheelSlot> {
+    pub(in crate::shell) fn radial_slots(&self, target: Option<&SelectionRef>) -> Vec<WheelSlot> {
         let model = self.model.lock().unwrap();
         let groups = model.surfaces();
         let target_selected = target.map_or(true, |target| {
@@ -405,7 +405,7 @@ impl Shell {
     /// move (a trackpad tap can even deliver `Down` and `Up` before the next move), and
     /// the press never reaches the viewport's own pick because the canvas consumes it,
     /// so this re-picks through the same G-buffer path a click uses.
-    pub(super) fn wheel_target_at(
+    pub(in crate::shell) fn wheel_target_at(
         &mut self,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
@@ -442,7 +442,7 @@ impl Shell {
     }
 
     /// Open the radial menu **latched**, for a keyboard trigger.
-    pub(super) fn open_radial_latched(&mut self, anchor: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn open_radial_latched(&mut self, anchor: Point<Pixels>, cx: &mut Context<Self>) {
         let slots = self.radial_slots(self.wheel_target.as_ref().map(|target| &target.reference));
         let wheel = self.wheel.clone();
         let opened = wheel.update(cx, |wheel, cx| wheel.open_latched(anchor, slots, cx));
@@ -456,7 +456,7 @@ impl Shell {
     /// The promotion is what makes a context menu act on the pointed object without
     /// the mere act of opening it changing the selection. The target is one-shot; a
     /// cancel discards it in the `Closed` handler.
-    pub(super) fn commit_wheel(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn commit_wheel(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(target) = self.wheel_target.take() {
             let already_selected =
                 self.display
@@ -494,13 +494,13 @@ impl Shell {
     }
 
     /// Forward a pointer move to the sidecar (it owns the hover).
-    pub(super) fn hover_radial(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn hover_radial(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.pointer_move(position, cx));
     }
 
     /// Forward the arming release (the sidecar commits, latches or cancels).
-    pub(super) fn release_radial(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn release_radial(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let wheel = self.wheel.clone();
         let _ = wheel.update(cx, |wheel, cx| wheel.pointer_up(position, cx));
     }
@@ -508,7 +508,7 @@ impl Shell {
     /// The `Space` path: commit a hovered latched wedge, close an open wheel, or open
     /// **contextually** — the entity under the pointer is the context target, so the key
     /// is spatial rather than a blind global shortcut.
-    pub(super) fn space_radial(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn space_radial(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         let wheel = self.wheel.clone();
         if wheel.read(cx).is_open() {
             let committed = wheel.update(cx, |wheel, cx| wheel.commit_hovered(cx));
@@ -562,7 +562,7 @@ impl Shell {
     /// the topology filter decides the [`SelectionRef`] both calls see. A face click in
     /// Slot 1 therefore selects and arms the body; the old claim heuristic that retired
     /// the triad behind a sub-element is gone.
-    pub(super) fn arm(
+    pub(in crate::shell) fn arm(
         &mut self,
         reference: &SelectionRef,
         cx: &mut Context<Self>,
@@ -640,7 +640,7 @@ impl Shell {
     /// and the first entry is the one that answers the pointer. The viewport narrows it
     /// to the session kind (the wheel's `Move`/`Rotate` verbs) and re-narrows it in place
     /// when the verb changes, so the kinds an edition registered are never lost.
-    pub(super) fn armed_gizmos(&self, reference: &SelectionRef, stage: &Stage) -> GizmoSet {
+    pub(in crate::shell) fn armed_gizmos(&self, reference: &SelectionRef, stage: &Stage) -> GizmoSet {
         GizmoSet::new(self.contributions.gizmos_for(reference, stage))
     }
 
@@ -655,7 +655,7 @@ impl Shell {
     /// workbench control anchored with it); a workbench gizmo that owns a different
     /// anchor (a grip on the top face) keeps it, because the pivot is a property of the
     /// triad, not of every handle in the set.
-    pub(super) fn arm_gizmos(
+    pub(in crate::shell) fn arm_gizmos(
         &self,
         reference: &SelectionRef,
         stage: &Stage,
@@ -683,7 +683,7 @@ impl Shell {
     /// Kept alongside [`arm_gizmos`](Self::arm_gizmos) for a host that shows one gizmo
     /// (and for the pivot tests): the set form is what the viewport hosts.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn armed_gizmo(
+    pub(in crate::shell) fn armed_gizmo(
         &self,
         reference: &SelectionRef,
         stage: &Stage,
@@ -700,7 +700,7 @@ impl Shell {
 
     /// The pivot the triad should use for an object whose factory reported
     /// `object_origin`: the session user origin while set, else that datum.
-    pub(super) fn gizmo_origin_for(&self, object_origin: Vector3) -> Vector3 {
+    pub(in crate::shell) fn gizmo_origin_for(&self, object_origin: Vector3) -> Vector3 {
         self.user_origin.unwrap_or(object_origin)
     }
 
@@ -708,7 +708,7 @@ impl Shell {
     /// to the visible origin, so the pivot handle is disabled while it is open; the
     /// angular form is docked at the bottom-left, so a rotate session keeps the disc
     /// live and can re-pivot before turning. Closing the form re-enables it.
-    pub(super) fn gizmo_origin_enabled(&self) -> bool {
+    pub(in crate::shell) fn gizmo_origin_enabled(&self) -> bool {
         self.move_hud.is_none() || self.gizmo_mode == GizmoMode::Rotate
     }
 
@@ -717,7 +717,7 @@ impl Shell {
     /// The shell owns the policy (the pivot handle is disabled while the translation pill
     /// is open); the viewport only hosts the handle, so it must be told when a dialog opens
     /// or closes outside a re-arm.
-    pub(super) fn sync_gizmo_origin(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_gizmo_origin(&mut self, cx: &mut Context<Self>) {
         let enabled = self.gizmo_origin_enabled();
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, _cx| {
@@ -728,7 +728,7 @@ impl Shell {
 
     /// Drop the session pivot and rebuild the selection's triad at the object origin.
     /// Returns whether a user origin was set.
-    pub(super) fn clear_user_origin(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn clear_user_origin(&mut self, cx: &mut Context<Self>) -> bool {
         if self.user_origin.take().is_none() {
             return false;
         }
@@ -750,7 +750,7 @@ impl Shell {
     /// `arm` applies it), and `Move` resets it to translate because that command's
     /// fields describe a translation. Switching away from translate cancels an open
     /// translation HUD: its Δ fields would no longer describe the visible handles.
-    pub(super) fn set_gizmo_mode(&mut self, name: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn set_gizmo_mode(&mut self, name: &str, cx: &mut Context<Self>) {
         let Some(mode) = gizmo_mode_named(name) else {
             self.console_line(format!("gizmo: unknown mode {name:?}"), cx);
             return;
@@ -789,7 +789,7 @@ impl Shell {
 
     /// A manipulator drag ended: apply the commit through the app script's
     /// `interaction` hook, recompute, and re-read the shapes.
-    pub(super) fn on_interaction(&mut self, commit: &InteractionCommit, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn on_interaction(&mut self, commit: &InteractionCommit, cx: &mut Context<Self>) {
         // The active plane's offset stem is transient viewport state: the shell applies
         // it itself, before any entity lookup and without the `interaction` hook. No
         // document object is involved and nothing is written.
@@ -838,7 +838,7 @@ impl Shell {
     }
 
     /// Refresh the model panes and the stage after the document changed.
-    pub(super) fn after_document_edit(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn after_document_edit(&mut self, cx: &mut Context<Self>) {
         if self.viewport.is_some() {
             match self.build_stage() {
                 Ok(stage) => {
@@ -867,7 +867,7 @@ impl Shell {
     /// stay attached after its own commit — so this rebuilds from the (already pruned)
     /// selection against the new stage. The factory re-reads the object's origin, so the
     /// triad tracks the geometry without any shell-side bookkeeping.
-    pub(super) fn rearm_selection(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn rearm_selection(&mut self, cx: &mut Context<Self>) {
         // An explicit re-arm replaces whatever the pointer was previewing.
         self.hover_arm = None;
         // The Move form follows the hand and the target even without a viewport
@@ -956,7 +956,7 @@ impl Shell {
     /// Called after anything that can change `IsActive()`: a selection, a document
     /// edit, undo/redo, an open/close. It is deliberately not per frame — each call
     /// crosses into the interpreter.
-    pub(super) fn refresh_commands(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn refresh_commands(&mut self, cx: &mut Context<Self>) {
         match commands::list() {
             Ok(commands) => {
                 self.shortcuts = global_shortcuts(&commands);
@@ -974,7 +974,7 @@ impl Shell {
     /// half; both live in the viewport's transient state. A re-arm after a commit —
     /// the plane moved, so the stem must sit on it again — keeps the session's base;
     /// a fresh command starts a new one.
-    pub(super) fn arm_workplane_stem(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn arm_workplane_stem(&mut self, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
@@ -1005,7 +1005,7 @@ impl Shell {
     }
 
     /// The offset the live `Offset Workplane…` session started from, if one is open.
-    pub(super) fn workplane_session_base(&self) -> Option<f64> {
+    pub(in crate::shell) fn workplane_session_base(&self) -> Option<f64> {
         self.workplane_session.as_ref().map(|session| session.base)
     }
 
@@ -1054,7 +1054,7 @@ impl Shell {
     /// viewport but emits no event) and from the render path. The field is written
     /// only when the displayed total actually changes, and `set_text` is programmatic,
     /// so this cannot loop back through the input's change event.
-    pub(super) fn sync_workplane_drag(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn sync_workplane_drag(&mut self, cx: &mut Context<Self>) {
         let Some(total) = self.workplane_session.as_ref().and_then(|s| s.live.total()) else {
             return;
         };
@@ -1078,7 +1078,7 @@ impl Shell {
     /// restores the session's base. Text that does not parse yet (a lone `-`, an
     /// empty field) leaves the plane where it is rather than snapping it back to the
     /// session base on every keystroke.
-    pub(super) fn preview_workplane_offset(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn preview_workplane_offset(&mut self, cx: &mut Context<Self>) {
         let Some(base) = self.workplane_session_base() else {
             return;
         };
@@ -1188,7 +1188,7 @@ impl Shell {
     /// `keep` is the accept path: the offset is already applied, so only the stem
     /// goes. Otherwise (a cancelled HUD, `Esc`) the plane returns to the offset the
     /// session began with. Returns whether a session was active.
-    pub(super) fn end_workplane_session(&mut self, keep: bool, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn end_workplane_session(&mut self, keep: bool, cx: &mut Context<Self>) -> bool {
         let base = self.workplane_session.take().map(|session| session.base);
         let Some(base) = base else {
             return false;
@@ -1227,7 +1227,7 @@ impl Shell {
     /// cancel path, which the shell cannot intercept itself; the next repaint is the
     /// first moment it can, and a transient viewport value restored then is never
     /// drawn out of place.
-    pub(super) fn reconcile_workplane_session(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn reconcile_workplane_session(&mut self, cx: &mut Context<Self>) {
         if self.workplane_session_base().is_none() {
             return;
         }

@@ -8,7 +8,7 @@
 //!
 //! See `docs/developer/interaction/selection-gizmos-and-forms.md` §5.2.
 
-use super::*;
+use crate::shell::*;
 
 /// What the shell is doing, in precedence order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +100,7 @@ impl InteractionContext {
 
 impl Shell {
     /// The current interaction context.
-    pub(super) fn context(&self, cx: &App) -> InteractionContext {
+    pub(in crate::shell) fn context(&self, cx: &App) -> InteractionContext {
         if self.modal_open() {
             return InteractionContext::Modal;
         }
@@ -138,7 +138,7 @@ impl Shell {
     ///
     /// Returns whether the action was **refused**; a refusal writes the reason to the
     /// status line so a click that does nothing says why.
-    pub(super) fn gate(&mut self, action: Action<'_>, cx: &mut Context<Self>) -> bool {
+    pub(in crate::shell) fn gate(&mut self, action: Action<'_>, cx: &mut Context<Self>) -> bool {
         let context = self.context(cx);
         if context.allows(action) {
             return false;
@@ -169,7 +169,7 @@ impl Shell {
     ///
     /// A command the shell has not seen in its registry snapshot is treated as an edit:
     /// without the declaration it cannot be proved harmless under a pending move.
-    pub(super) fn command_is_view(&self, id: &str) -> bool {
+    pub(in crate::shell) fn command_is_view(&self, id: &str) -> bool {
         let model = self.model.lock().unwrap();
         commands::find(&model.commands, id)
             .is_some_and(|command| command.cmd_type.eq_ignore_ascii_case("ForView"))

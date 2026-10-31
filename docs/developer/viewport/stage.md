@@ -413,3 +413,18 @@ vocabulary:
 | `entity_id` | `PickId` (a `u32`) |
 | interleaved `[pos, norm, part_idx]` | `Geometry { Vec<Vertex>, Vec<u32> }`, `Vertex { pos, norm, uv, part_idx }` |
 | `glam::Mat4`/`Vec4` | `ferrocad_types::Matrix4` / `[f32; 4]` |
+
+## 7. Crate layout
+
+The crate is grouped by responsibility and each folder's `mod.rs` is its high-level
+interface. The submodules stay public, and the flat module paths
+(`ferrocad_stage::gizmo`, `::screen`, …) remain as re-exports of the same modules.
+
+```text
+scene/       stage, shape
+render/      grid, axis, feedback, screen
+interaction/ input, tool, snap, manipulator (the old interaction.rs),
+             plane_points, declarative
+transform/   gizmo, session, protractor, measure_tape
+workplane/   workplane, stem (the old workplane_stem.rs)
+```

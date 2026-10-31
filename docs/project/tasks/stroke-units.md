@@ -34,10 +34,10 @@ has no notion of UI scale. Everything the viewport sizes in "pixels" is device p
 | Setting | Type | Where |
 | --- | --- | --- |
 | `FerroCAD.Grid.major_width` / `minor_width` | 1–8 px | `GridPolicy`, `GridStyle` |
-| `AxisStyle.width` | device px | `crates/ferrocad_stage/src/axis.rs` |
+| `AxisStyle.width` | device px | `crates/ferrocad_stage/src/render/axis.rs` |
 | `AxisStyle.length` (`TRIAD_PIXELS`) | device px | same |
-| `GizmoStyle.width`, `halo_width`, `hit_radius_px`, `size` | device px | `crates/ferrocad_stage/src/gizmo.rs` |
-| `MIN_STROKE_PIXELS` / `MAX_STROKE_PIXELS`, `MINOR_PIXELS`, `MIN_PX` | device px | `crates/ferrocad_stage/src/grid.rs` |
+| `GizmoStyle.width`, `halo_width`, `hit_radius_px`, `size` | device px | `crates/ferrocad_stage/src/transform/gizmo.rs` |
+| `MIN_STROKE_PIXELS` / `MAX_STROKE_PIXELS`, `MINOR_PIXELS`, `MIN_PX` | device px | `crates/ferrocad_stage/src/render/grid.rs` |
 
 The conversion to world units is one function, `ferrocad_stage::screen::scale_for`, and
 the Coin shader converts back with the screen-space derivative of the same plane

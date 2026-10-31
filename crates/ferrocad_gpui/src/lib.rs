@@ -9,30 +9,40 @@
 //! public `FreeCAD` Python API, exactly like a workbench (see
 //! `docs/developer/architecture.md` and `docs/developer/architecture/repackaging.md`).
 
-pub mod chrome;
-pub mod commands;
-pub mod contributions;
-pub mod dev_tools;
-pub mod dialog;
-pub mod display;
-/// Q3a: render `ferrocad_ui` forms as gpui elements and host a form dialog.
-pub mod forms;
-/// Headless edition rendering (`--render out.png`): model → stage → PNG.
-pub mod headless;
-pub mod manipulators;
-pub mod python;
-pub mod selection;
-pub mod shell;
-pub mod shortcuts;
-pub mod view;
+//! # Module map
+//!
+//! ```text
+//! model/      display, selection, view       (shell-facing data)
+//! runtime/    python, interop, headless      (embedding and presentation back ends)
+//! ui/         chrome, dialog, forms,          (gpui surfaces)
+//!             shortcuts, dev_tools
+//! workbench/  commands, contributions,        (what a workbench registers)
+//!             manipulators
+//! shell/      Shell + bridge/, hud/, panels/  (the application shell)
+//! ```
+//!
+//! Every submodule is public. The older flat paths (`ferrocad_gpui::chrome`,
+//! `::commands`, …) are kept as re-exports of the same modules.
 
-/// Zero-copy viewport presentation through gpui's wgpu window renderer.
+pub mod model;
+pub mod runtime;
+pub mod shell;
+pub mod ui;
+pub mod workbench;
+
+// The flat module paths predate the folder hierarchy and remain part of the stable
+// library surface: `ferrocad_gpui::chrome` and `ferrocad_gpui::ui::chrome` name the
+// same module.
+pub use model::{display, selection, view};
 #[cfg(all(
     feature = "gpu-interop",
     not(target_os = "macos"),
     not(target_family = "wasm")
 ))]
-pub mod interop;
+pub use runtime::interop;
+pub use runtime::{headless, python};
+pub use ui::{chrome, dev_tools, dialog, forms, shortcuts};
+pub use workbench::{commands, contributions, manipulators};
 
 #[cfg(test)]
 mod spike;

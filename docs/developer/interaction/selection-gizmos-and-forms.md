@@ -282,8 +282,9 @@ the row at rest.
 
 **Always visible while Move has a target.** The row appears with the selection (or a hover
 promotion) and disappears when the selection clears, another hand or tool takes over, or
-the Move hand is **paused** (pressing `1` while it is already active — the selection stays
-for inspection, and `1` again, a new selection or a `Move` verb re-arms it). A modal or
+the Move hand is **idle** (pressing `1` twice while Slot 1 is active cycles Move →
+Rotate → idle — the selection stays for inspection — and `1` again, a new selection or
+a `Move` verb re-arms Move). A modal or
 the object wheel hides both pieces for its lifetime; they return with the canvas. A
 right-press on the finish pill opens the object wheel, so it never swallows the verb
 gesture.

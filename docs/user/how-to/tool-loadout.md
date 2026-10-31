@@ -76,7 +76,7 @@ sub-element reports the same filtered scope the window does.
 
 | Key | Effect |
 | --- | --- |
-| `1` / `2` / `3` | equip Move / Push/Pull / Fillet; `1` again on Move pauses the hand |
+| `1` / `2` / `3` | equip Move / Push/Pull / Fillet; while Slot 1 is active, `1` cycles Move → Rotate → idle → Move |
 | `Tab` | focus the Move form's field for the axis you last dragged (then cycle); on the rotate form, focus `Δθ` |
 | a digit, `-` or `.` | focus the remembered field and start the number |
 | `=` | switch the translation form between offsets (`ΔX`) and coordinates (`X`); cycle the rotate rings (`WLD` → `LOC` → `WP`) when no rotation is pending |

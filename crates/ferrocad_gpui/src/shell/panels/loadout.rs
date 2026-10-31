@@ -221,7 +221,7 @@ impl Shell {
         self.commit_pending_session(cx);
         self.loadout.set_slot(slot);
         self.rearm_selection(cx);
-        let status = format!("tool: {}", slot.label());
+        let status = format!("tool: {}", slot.label_for(self.gizmo_mode));
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
         cx.notify();
@@ -229,21 +229,28 @@ impl Shell {
 
     /// The user's activation of a loadout slot (`1`/`2`/`3` or the bottom-left bar).
     ///
-    /// Unlike a command, pressing the **active** Move hand pauses it: the selection
-    /// stays, but the triad and the form leave the canvas so the model can be inspected.
-    /// Pressing it again arms the hand. Other slots (and a switch back) go through
-    /// [`set_loadout_slot`](Self::set_loadout_slot).
+    /// Slot 1 hosts **both** hands, so pressing it cycles its three states:
+    /// **Move → Rotate → idle → Move**. A switch to another slot, and the first press
+    /// from one, go through [`set_loadout_slot`](Self::set_loadout_slot). Idle is the
+    /// paused hand: the selection stays, but the handles and form leave the canvas.
     ///
-    /// A pending move blocks both: pausing commits it, and switching commits it too.
+    /// A pending move or rotation blocks all of it: the context gate refuses the
+    /// change until the user finishes with `✓`/`✗`.
     pub(crate) fn activate_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
         if self.gate(Action::SwitchHand, cx) {
             return;
         }
         if slot.wants_gizmo() && self.loadout.slot() == slot {
             if self.move_disarmed {
+                // Re-arming starts at Move, so the cycle closes instead of getting
+                // stuck on Rotate.
                 self.move_disarmed = false;
+                self.set_gizmo_mode("translate", cx);
                 self.rearm_selection(cx);
-                self.model.lock().unwrap().status = "tool: Move".to_string();
+                self.set_tool_status("Move");
+            } else if self.gizmo_mode == GizmoMode::Translate {
+                self.set_gizmo_mode("rotate", cx);
+                self.set_tool_status("Rotate");
             } else {
                 self.disarm_move_hand(cx);
             }
@@ -251,6 +258,11 @@ impl Shell {
             return;
         }
         self.set_loadout_slot(slot, cx);
+    }
+
+    /// Name the equipped hand in the status line.
+    fn set_tool_status(&mut self, label: &str) {
+        self.model.lock().unwrap().status = format!("tool: {label}");
     }
 
     /// Pause the Move hand: keep the selection, drop the handles, form and ruler.
@@ -272,7 +284,7 @@ impl Shell {
                 cx.notify();
             });
         }
-        self.model.lock().unwrap().status = "tool: Move paused".to_string();
+        self.model.lock().unwrap().status = "tool: idle".to_string();
         cx.notify();
     }
 

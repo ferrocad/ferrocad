@@ -326,8 +326,8 @@ pub struct Shell {
     /// ✓/✗). It is not an [`OpenDialog`](shell::OpenDialog): it belongs to the Move
     /// hand, so it survives a commit and never blocks another command's dialog.
     move_hud: Option<move_hud::MoveHud>,
-    /// The user paused the Move hand (`1` while it is already active): the selection
-    /// stays, but the triad, the form and the ruler go away until `1` arms it again.
+    /// The user reached **idle** (`1` twice while Slot 1 is active): the selection
+    /// stays, but the triad, the form and the ruler go away until `1` arms Move again.
     move_disarmed: bool,
     /// A field the next render must focus (a ruler tag's click, which arrives outside a
     /// window context). Cleared by the render that consumes it.

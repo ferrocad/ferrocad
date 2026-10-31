@@ -261,46 +261,76 @@ fn switching_the_slot_waits_for_a_pending_move(cx: &mut TestAppContext) {
     );
 }
 
-/// Pressing the **active** Move hand pauses it: the selection stays, but the triad and
-/// the form leave the canvas so the model can be inspected. Pressing it again arms the
-/// same hand, and a new selection re-arms it on its own.
+/// Pressing the active Move hand walks Slot 1 through **Move → Rotate → idle → Move**,
+/// and the status line names each state (idle included).
 #[gpui::test]
-fn pressing_the_active_move_hand_pauses_and_rearms_it(cx: &mut TestAppContext) {
+fn pressing_the_active_move_hand_cycles_move_rotate_and_idle(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (mut cx, shell, _model) = armed_window(cx);
     draw(&mut cx);
+    let mode = |cx: &VisualTestContext| shell.read_with(cx, |shell, _| shell.gizmo_mode);
+    assert_eq!(mode(&cx), GizmoMode::Translate);
     assert!(
         shell.read_with(&cx, |shell, _| shell.move_hud.is_some()),
         "the armed hand shows its form"
     );
 
+    // 1 → Rotate: the same slot, now hosting rings.
     press_root(&mut cx, &shell, "1");
     draw(&mut cx);
-    let (slot, open, armed, selection) = shell.read_with(&cx, |shell, _| {
+    let (slot, open, armed, disarmed, status) = shell.read_with(&cx, |shell, _| {
         let model = shell.model.lock().unwrap();
         (
             shell.loadout.slot(),
             shell.move_hud.is_some(),
             model.gizmo_armed,
-            model.selection.len(),
+            shell.move_disarmed,
+            model.status.clone(),
         )
     });
-    assert_eq!(slot, Slot::Move, "the hand stays equipped");
-    assert!(!open, "pausing hides the Move form");
-    assert!(!armed, "a paused hand hosts no handles");
-    assert_eq!(selection, 1, "the selection is kept for inspection");
-    assert!(cx.debug_bounds("move-hud").is_none());
+    assert_eq!(slot, Slot::Move, "Slot 1 stays equipped");
+    assert_eq!(
+        mode(&cx),
+        GizmoMode::Rotate,
+        "the first press swaps to Rotate"
+    );
+    assert!(open, "the rotate form is the same docked row");
+    assert!(armed, "the rings are hosted");
+    assert!(!disarmed, "and the hand is armed");
+    assert_eq!(
+        status, "tool: Rotate",
+        "the status names the hand, not Move"
+    );
 
-    // The same key arms it again.
+    // 1 → idle: the selection stays, the handles and the row leave the canvas.
     press_root(&mut cx, &shell, "1");
     draw(&mut cx);
+    let (open, armed, selection, status) = shell.read_with(&cx, |shell, _| {
+        let model = shell.model.lock().unwrap();
+        (
+            shell.move_hud.is_some(),
+            model.gizmo_armed,
+            model.selection.len(),
+            model.status.clone(),
+        )
+    });
+    assert!(!open, "idle hides the form");
+    assert!(!armed, "idle hosts no handles");
+    assert_eq!(selection, 1, "the selection is kept for inspection");
+    assert_eq!(status, "tool: idle", "the idle state has its own status");
+    assert!(cx.debug_bounds("move-hud").is_none());
+
+    // 1 → Move: the cycle closes on the translate hand.
+    press_root(&mut cx, &shell, "1");
+    draw(&mut cx);
+    assert_eq!(mode(&cx), GizmoMode::Translate);
     assert!(
         shell.read_with(&cx, |shell, _| shell.move_hud.is_some()),
-        "pressing the hand again brings its form back"
+        "Move brings the row back"
     );
-    assert!(cx.debug_bounds("move-hud").is_some());
-    assert!(
-        !shell.read_with(&cx, |shell, _| shell.move_disarmed),
-        "the hand is armed, not paused"
+    assert!(!shell.read_with(&cx, |shell, _| shell.move_disarmed));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone()),
+        "tool: Move"
     );
 }

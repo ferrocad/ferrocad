@@ -57,7 +57,7 @@ which single manipulator class is hosted (`GizmoSet::set_session`):
 
 | Slot | Hotkey | Default `Select ▾` filter | Active manipulator (`set_session`) | Numeric surface |
 | --- | --- | --- | --- | --- |
-| Slot 1 | `1` | Body (element: `None`) | `TransformGizmo` (Translate / Rotate) | the docked coordinate row + the in-context `✗`/`✓` pill, and the session's 3-D tape ([`transform-session.md`](transform-session.md) §3). Pressing `1` again pauses the hand |
+| Slot 1 | `1` | Body (element: `None`) | `TransformGizmo` (Translate / Rotate) | the docked coordinate row + the in-context `✗`/`✓` pill, and the session's 3-D tape ([`transform-session.md`](transform-session.md) §3). Pressing `1` again cycles the hand: Move → Rotate → idle → Move |
 | Slot 2 | `2` | Face (`FaceN`) | `PushPullStem` (extrude / pocket) | in-situ readout pill (`Tab` to type) |
 | Slot 3 | `3` | Edge (`EdgeN` chain) | `DressUpScrubber` (Fillet / Chamfer) | in-situ readout pill (`Tab` to type) |
 | Wheel | Right-click / Space | context-dependent | "Buy menu": equips specialised verbs (Rotate, Chamfer, Draft) into the active hand | the same session contract |

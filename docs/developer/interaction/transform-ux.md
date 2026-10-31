@@ -181,8 +181,9 @@ The floating pill is anchored to the **gizmo**, not the screen or the pointer (f
   session, reset the fields and hand the keyboard back to the viewport; the row stays
   (`shell/tests/escalation.rs`). `Esc` then cascades: from a pending move it rolls back,
   from a clean form it clears the selection (taking the row and triad with it). Pressing
-  `1` while Move is already equipped pauses the hand instead — selection kept, handles and
-  row gone — and `1` again, a new selection or a `Move` verb brings it back.
+  `1` while Slot 1 is already equipped cycles the hand — Move → Rotate → idle — so the
+  third press leaves the selection without handles or row; `1` again, a new selection or
+  a `Move` verb brings Move back.
 
 ## 4. Face-normal alignment and push/pull
 

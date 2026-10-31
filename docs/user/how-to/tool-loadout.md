@@ -65,10 +65,11 @@ sub-element reports the same filtered scope the window does.
 
 With **Move** equipped and something selected, the coordinates are always on screen: a
 `Δ`/`XYZ` switch and the `ΔX`, `ΔY` and `ΔZ` fields, docked at the bottom-left, just
-above the loadout bar. A separate little pill floats beside the gizmo — a **red `✗`**
-(discard) and a **green `✓`** (commit) — and appears **only while a move is pending**
-(a drag or a typed number): at rest there is nothing to finish, and the 3-D ruler is not
-drawn either.
+above the loadout bar. A separate little pill floats just above-right of the triad with
+`✗` (discard) and `✓` (commit); its hover ink is red for discard and green for commit.
+It appears **only while a move is pending** (a drag or a typed number) and hides while
+you are dragging: at rest there is nothing to finish, and the 3-D ruler is not drawn
+either.
 The fields start **unfocused**: their numbers follow the triad and the 3-D measuring
 tape live, but `1`, `2` and `3` still equip tools. `Tab` — or a digit other than
 `1`–`3`, `-`, `.`, a click in a field, or a click on a ruler tag — puts the keyboard in

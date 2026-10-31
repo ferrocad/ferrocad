@@ -258,6 +258,20 @@ impl Shell {
     // A click: select the object in the inspector, and arm the manipulators and gizmo
     // the edition's workbenches and mods contribute for that selection.
     pub(super) fn on_selection(&mut self, selection: &SelectionEvent, cx: &mut Context<Self>) {
+        // A pick is a context action like any other. Under a pending move it is refused
+        // *before* anything is re-targeted: the click must not move the triad (or the
+        // session's origin) onto another body while the value is undecided.
+        let target = match selection {
+            SelectionEvent::Picked {
+                reference,
+                click_count,
+                ..
+            } => Some(click_target(reference, *click_count).object),
+            SelectionEvent::Cleared => None,
+        };
+        if self.gate(Action::Select { target }, cx) {
+            return;
+        }
         // A selection change is a competing interaction: it closes the offset HUD and
         // puts the plane back where the session started (`selection-gizmos-and-forms.md`
         // §5.3). A `float` is not dismissed by clicking the canvas, so this is the

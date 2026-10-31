@@ -662,7 +662,8 @@ if "Test_GateView" not in FreeCADGui.listCommands():
     });
     assert_eq!(
         shell.read_with(&cx, |shell, cx| shell.context(cx)),
-        InteractionContext::PendingMove
+        InteractionContext::PendingMove { target: Some(7) },
+        "the context carries the dirty object"
     );
 
     // An edit command is discarded, with a reason naming it.
@@ -776,6 +777,57 @@ fn a_pending_move_locks_the_selection(cx: &mut TestAppContext) {
     );
 }
 
+/// A **pick** is refused before anything is re-targeted: clicking another body must not
+/// move the triad (or re-arm it) while the pending move owns the current subject.
+#[gpui::test]
+fn a_pick_on_another_body_is_refused_while_a_move_is_pending(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+        })
+    });
+    let pick = |entity: u32| SelectionEvent::Picked {
+        reference: SelectionRef::whole(entity),
+        anchor: None,
+        click_count: 1,
+    };
+
+    // Another body: refused, selection and pending value untouched.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.on_selection(&pick(8), cx))
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().selection.clone()),
+        vec![SelectionItem::new("Params")],
+        "the pick did not become the selection"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.pending_translation(cx)),
+        Some([5.0, 0.0, 0.0]),
+        "and the pending move is untouched"
+    );
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("move pending"),
+        "the status says why the pick did nothing"
+    );
+
+    // The already-selected body is a no-op too: re-picking must not reset the session.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.on_selection(&pick(7), cx))
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.pending_translation(cx)),
+        Some([5.0, 0.0, 0.0]),
+        "a pick on the dirty body keeps the pending value"
+    );
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+}
+
 /// The handle set is a tool too: `Rotate` is refused while a move is pending, so the
 /// form's delta is not dropped by the mode change.
 #[gpui::test]
@@ -813,72 +865,36 @@ fn switching_the_handle_set_waits_for_a_pending_move(cx: &mut TestAppContext) {
     );
 }
 
-/// The finish pill sits **beside** the stroke, not in front of it: the tape lies along
-/// the drag and the pointer is on it, so the pill takes the perpendicular — and the
-/// other side when the pointer is already over one.
+/// The finish pill floats just above-right of the triad origin: its bottom-left sits
+/// 24 px right and 24 px up, clear of the Z arrowhead and the YZ glass plane. It is
+/// clamped into the canvas safe area at an edge.
 #[test]
-fn the_finish_pill_sits_beside_the_tape_and_clear_of_the_pointer() {
+fn the_finish_pill_floats_above_right_of_the_triad() {
     let viewport = size(px(800.0), px(600.0));
     let pill = size(px(70.0), px(36.0));
     let origin = point(px(400.0), px(300.0));
-    let datum = Some(point(px(500.0), px(300.0)));
 
-    // A horizontal stroke: the pill goes above it, centred on the origin.
-    let above = place_finish(origin, datum, Some(origin), viewport, pill);
-    assert!(
-        above.y.0 + pill.height.0 < origin.y.0,
-        "the pill is above the stroke: {above:?}"
-    );
-    assert!(
-        (above.x.0 + pill.width.0 * 0.5 - origin.x.0).abs() < 1.0,
-        "and centred on the origin: {above:?}"
-    );
-
-    // A pointer already over that side pushes the pill to the other one.
-    let over = point(px(above.x.0 + 10.0), px(above.y.0 + 10.0));
-    let below = place_finish(origin, datum, Some(over), viewport, pill);
-    assert!(
-        below.y.0 > origin.y.0,
-        "the pointer takes the upper side: {below:?}"
-    );
-
-    // A vertical stroke puts the pill left or right of it, never on it.
-    let up = place_finish(
-        origin,
-        Some(point(px(400.0), px(420.0))),
-        Some(origin),
-        viewport,
-        pill,
-    );
-    assert!(
-        up.x.0 > origin.x.0 || up.x.0 + pill.width.0 < origin.x.0,
-        "the pill is beside the vertical stroke: {up:?}"
-    );
-
-    // No projected datum, or a screen delta too small to name a direction: the plain
-    // HUD anchor (up and to the right).
+    let placed = place_finish(origin, viewport, pill);
     assert_eq!(
-        place_finish(origin, None, Some(origin), viewport, pill),
-        place_hud(origin, viewport, pill)
+        placed,
+        point(px(424.0), px(240.0)),
+        "24 px right and 24 px above the origin, to the pill's bottom-left"
     );
-    assert_eq!(
-        place_finish(
-            origin,
-            Some(point(px(405.0), px(302.0))),
-            Some(origin),
-            viewport,
-            pill
-        ),
-        place_hud(origin, viewport, pill),
-        "a negligible screen delta falls back"
+    assert!(
+        placed.x.0 > origin.x.0 && placed.y.0 + pill.height.0 < origin.y.0,
+        "the pill is up and to the right, never on the origin handle"
     );
+
+    // A triad at the top-left clamps the pair's y into the safe area (the x offset still
+    // applies, and is already inside the margin).
+    let placed = place_finish(point(px(4.0), px(4.0)), viewport, pill);
+    assert_eq!(placed, point(px(28.0), px(HUD_MARGIN)));
 }
 
-/// While a gizmo drag runs the finish pair carries no hitbox: a release over the painted
-/// buttons must still reach the canvas, so the drag can end. The same click spends the
-/// move once the drag has ended.
+/// While a gizmo drag runs the pair is **hidden**, so the stroke can never end on top of
+/// it. It reappears on the next paint after the release.
 #[gpui::test]
-fn the_finish_pill_is_inert_while_a_drag_runs(cx: &mut TestAppContext) {
+fn the_finish_pill_is_hidden_while_a_drag_runs(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (mut cx, shell, _model) = armed_window(cx);
     draw(&mut cx);
@@ -906,13 +922,9 @@ fn the_finish_pill_is_inert_while_a_drag_runs(cx: &mut TestAppContext) {
         shell.read_with(&cx, |shell, _| shell.drag_start.is_some()),
         "the drag is running"
     );
-
-    // A click where ✓ is painted must not finish the drag.
-    click_at(&mut cx, "dialog-accept");
-    draw(&mut cx);
     assert!(
-        shell.read_with(&cx, |shell, _| shell.drag_start.is_some()),
-        "the pill did not take the pointer"
+        cx.debug_bounds("move-finish").is_none(),
+        "the pair is out of the way while the pointer owns the stroke"
     );
     assert_eq!(
         shell.read_with(&cx, |shell, cx| shell.pending_translation(cx)),
@@ -920,13 +932,14 @@ fn the_finish_pill_is_inert_while_a_drag_runs(cx: &mut TestAppContext) {
         "the pending drag is untouched"
     );
 
-    // Released: the pill is a control again and the same click spends the move.
+    // Released: the pair comes back and a click on it spends the move.
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             shell.on_transform_preview(&preview(PreviewPhase::End, 5.0), cx);
         })
     });
     draw(&mut cx);
+    assert!(cx.debug_bounds("move-finish").is_some(), "the pair returns");
     click_at(&mut cx, "dialog-accept");
     draw(&mut cx);
     assert_eq!(
@@ -982,14 +995,14 @@ fn the_finish_pill_tracks_the_anchor_and_the_form_stays_docked(cx: &mut TestAppC
     let first = cx.debug_bounds("move-finish").expect("the pair");
     assert_eq!(
         first.origin,
-        place_hud(point(px(0.0), px(0.0)), viewport, first.size),
+        place_finish(point(px(0.0), px(0.0)), viewport, first.size),
         "the pair hangs off the anchor"
     );
     let elsewhere = point(px(300.0), px(200.0));
     cx.simulate_mouse_move(elsewhere, None::<MouseButton>, gpui::Modifiers::default());
     draw(&mut cx);
     let moved = cx.debug_bounds("move-finish").expect("the pair");
-    let expected = place_hud(elsewhere, viewport, moved.size);
+    let expected = place_finish(elsewhere, viewport, moved.size);
     assert!(
         (moved.origin.x.0 - expected.x.0).abs() <= 1.0
             && (moved.origin.y.0 - expected.y.0).abs() <= 1.0,

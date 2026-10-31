@@ -134,73 +134,24 @@ pub(super) fn place_hud(anchor: Point<Pixels>, viewport: Size<Pixels>, hud: Size
     clamp_hud(offset, viewport, hud)
 }
 
-/// Where the pending move's finish pill appears: **beside** the drag, never under the
-/// pointer.
+/// Where the pending move's finish pill appears: just **above-right of the triad origin**.
 ///
-/// The tape runs from the session's datum (the ghost origin) to the gizmo's current
-/// origin, so every dashed leg and its ruler tag lies along that stroke. The pill is
-/// centred on the **perpendicular** through the origin, which is the side the ruler can
-/// never occupy — and the side the dragging pointer (which sits on the stroke) is not.
-/// When both perpendicular sides are free the higher one wins; when the pointer is over
-/// one of them the other is taken. With no projected datum (no viewport, or a screen
-/// delta too small to name a direction) it falls back to [`place_hud`]. Either way the
-/// result is clamped into the canvas safe area.
+/// Its bottom-left sits 24 px right and 24 px up from the anchor, so the only thing under
+/// it is empty canvas — never the Z arrowhead, the YZ glass plane or the origin disc. The
+/// anchor is the gizmo's screen-space origin (`Shell::dialog_anchor`), or the viewport
+/// centre / pointer when no triad is hosted. The result is clamped into the canvas safe
+/// area so a triad at an edge still gets a reachable pair.
 pub(super) fn place_finish(
-    origin: Point<Pixels>,
-    datum: Option<Point<Pixels>>,
-    pointer: Option<Point<Pixels>>,
+    anchor: Point<Pixels>,
     viewport: Size<Pixels>,
     pill: Size<Pixels>,
 ) -> Point<Pixels> {
-    // Clear of the stroke (and of the handles along it), then half the pill so it is
-    // centred on the perpendicular.
-    const CLEARANCE: f32 = 56.0;
-    // Below this many pixels the direction is projection noise, not a drag.
-    const MIN_DIRECTION: f32 = 24.0;
-    let fallback = || clamp_hud(place_hud(origin, viewport, pill), viewport, pill);
-    let Some(datum) = datum else {
-        return fallback();
-    };
-    let dx = origin.x.0 - datum.x.0;
-    let dy = origin.y.0 - datum.y.0;
-    let length = (dx * dx + dy * dy).sqrt();
-    if length < MIN_DIRECTION {
-        return fallback();
-    }
-    let reach = CLEARANCE + pill.width.0.max(pill.height.0) * 0.5;
-    // Unit perpendicular `(-dy, dx)`, both signs.
-    let perp = point(px(-dy / length), px(dx / length));
-    let place = |sign: f32| {
-        let centre = point(
-            px(origin.x.0 + perp.x.0 * sign * reach),
-            px(origin.y.0 + perp.y.0 * sign * reach),
-        );
-        clamp_hud(
-            point(
-                px(centre.x.0 - pill.width.0 * 0.5),
-                px(centre.y.0 - pill.height.0 * 0.5),
-            ),
-            viewport,
-            pill,
-        )
-    };
-    let over = |candidate: Point<Pixels>| {
-        pointer.is_some_and(|pointer| {
-            pointer.x.0 >= candidate.x.0
-                && pointer.x.0 <= candidate.x.0 + pill.width.0
-                && pointer.y.0 >= candidate.y.0
-                && pointer.y.0 <= candidate.y.0 + pill.height.0
-        })
-    };
-    let (a, b) = (place(1.0), place(-1.0));
-    match (over(a), over(b)) {
-        (true, false) => b,
-        (false, true) => a,
-        // Both free (or both blocked): prefer the higher side, which is out of the
-        // way of a horizontal stroke and its arrow.
-        _ if a.y.0 <= b.y.0 => a,
-        _ => b,
-    }
+    const CLEARANCE: f32 = 24.0;
+    let offset = point(
+        px(anchor.x.0 + CLEARANCE),
+        px(anchor.y.0 - CLEARANCE - pill.height.0),
+    );
+    clamp_hud(offset, viewport, pill)
 }
 
 /// A command dialog (A3): a floating dielectric HUD, or a glass modal over a dimmed
@@ -544,59 +495,49 @@ pub(super) fn dialog_buttons(
 /// The glyphs match the keys the panel already routes ([`Shell::dismiss_move_hud`] on
 /// `Esc`, [`Shell::commit_session`] on `Enter`), and the ids are the ones the modal's
 /// buttons use, so a test drives either surface the same way. They are icons rather
-/// than words because the form is a readout beside the handles, not a dialog: two
-/// words would double its width.
-/// The `✗`/`✓` pair.
+/// than words because the pill is an in-context control, not a dialog.
 ///
-/// The tones are semantic, not decorative: `✗` is the destructive red (discard the
-/// pending move) and `✓` the confirm green (spend it), so the pair reads as a decision
-/// even before the glyphs are parsed.
-///
-/// `interactive` is false while a gizmo drag is running: the pair is then a readout,
-/// not a control. A button that carries a hitbox would swallow the pointer-up that ends
-/// the drag, so the release would never reach the canvas.
-pub(super) fn hud_buttons(cx: &mut Context<Shell>, interactive: bool) -> impl IntoElement {
-    // Slightly darker shades so the hover still reads as the same action.
-    const CONFIRM_HOVER: u32 = 0x16a34a;
-    const DISCARD_HOVER: u32 = 0xb91c1c;
+/// Dielectric by design: the buttons rest on the pill's own `WHEEL_GLASS` with a
+/// `CHROME_LINE` hairline, and the action is **ink** — `SUBTRACT_COLOR` for the discard,
+/// `AXIS_Y` for the commit, both on hover. No opaque fills: `visual-language.md`
+/// principle 5 (state is ink; background is only ever an additive hover).
+pub(super) fn hud_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
     let cancel = div()
         .id("dialog-cancel")
         .debug_selector(|| "dialog-cancel".to_string())
         .px_2()
         .py_1()
         .rounded_sm()
-        .bg(rgb(SUBTRACT_COLOR))
+        .bg(rgba(WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(CHROME_LINE))
         .text_xs()
         .text_color(rgb(FG))
-        .child("✗");
-    let cancel = if interactive {
-        cancel
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(DISCARD_HOVER)))
-            .on_click(cx.listener(|this, _event, _window, cx| this.dismiss_move_hud(cx)))
-    } else {
-        cancel
-    };
+        .cursor_pointer()
+        .hover(|style| {
+            style
+                .border_color(rgb(SUBTRACT_COLOR))
+                .text_color(rgb(SUBTRACT_COLOR))
+        })
+        .child("✗")
+        .on_click(cx.listener(|this, _event, _window, cx| this.dismiss_move_hud(cx)));
     let accept = div()
         .id("dialog-accept")
         .debug_selector(|| "dialog-accept".to_string())
         .px_2()
         .py_1()
         .rounded_sm()
-        .bg(rgb(CONFIRM_COLOR))
+        .bg(rgba(WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(CHROME_LINE))
         .text_xs()
         .text_color(rgb(FG))
-        .child("✓");
-    let accept = if interactive {
-        accept
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(CONFIRM_HOVER)))
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.commit_session(cx);
-            }))
-    } else {
-        accept
-    };
+        .cursor_pointer()
+        .hover(|style| style.border_color(rgb(AXIS_Y)).text_color(rgb(AXIS_Y)))
+        .child("✓")
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            this.commit_session(cx);
+        }));
     div()
         .flex()
         .flex_row()
@@ -620,7 +561,10 @@ pub(super) fn move_finish_overlay(
     window: &Window,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
-    if !shell.move_is_pending(cx) {
+    // Hidden while the pointer owns a stroke: the pair is an in-context control, not a
+    // target for the drag. It comes back on the first paint after the release, so a drag
+    // can never end on top of it.
+    if shell.drag_start.is_some() || !shell.move_is_pending(cx) {
         return div().into_any_element();
     }
     let viewport = window.viewport_size();
@@ -631,31 +575,7 @@ pub(super) fn move_finish_overlay(
     let hovered = shell
         .hud_rect
         .is_some_and(|rect| rect.contains(&window.mouse_position()));
-    // The tape's ghost origin, when the viewport can project it: the pill then sits on
-    // the far side of the move, where the ruler's legs and tags cannot reach.
-    let (anchor, datum) = {
-        let projected = shell.viewport.as_ref().and_then(|viewport| {
-            let viewport = viewport.read(cx);
-            let origin = viewport.gizmo_anchor()?;
-            let datum = shell
-                .session
-                .as_ref()
-                .filter(|session| session.is_dirty())
-                .and_then(|session| viewport.world_anchor(session.datum()));
-            Some((origin, datum))
-        });
-        match projected {
-            Some(pair) => pair,
-            None => (shell.dialog_anchor(window, cx), None),
-        }
-    };
-    let follow = place_finish(
-        anchor,
-        datum,
-        Some(window.mouse_position()),
-        viewport,
-        pill,
-    );
+    let follow = place_finish(shell.dialog_anchor(window, cx), viewport, pill);
     let origin = if hovered {
         shell.hud_lock.unwrap_or(follow)
     } else {
@@ -663,10 +583,7 @@ pub(super) fn move_finish_overlay(
     };
     let origin = clamp_hud(origin, viewport, pill);
     shell.hud_lock = Some(origin);
-    // While the pointer owns a drag the pair is a readout: it carries no hitbox, so the
-    // release that ends the drag always reaches the canvas.
-    let interactive = shell.drag_start.is_none();
-    let mut panel = div()
+    let panel = div()
         .id("move-finish")
         .debug_selector(|| "move-finish".to_string())
         .flex()
@@ -677,20 +594,16 @@ pub(super) fn move_finish_overlay(
         .rounded_md()
         .bg(rgba(WHEEL_GLASS))
         .border_1()
-        .border_color(rgba(DOCK_BORDER));
-    if interactive {
+        .border_color(rgba(DOCK_BORDER))
+        .occlude()
         // The pill floats over the canvas, so a right-press on it still names a verb.
-        panel = panel.occlude().on_mouse_down(
-            MouseButton::Right,
-            cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                if this.active_tool.is_none() {
-                    this.last_pointer = Some(event.position);
-                    this.open_radial(event.position, cx);
-                }
-            }),
-        );
-    }
-    let panel = panel.child(hud_buttons(cx, interactive));
+        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+            if this.active_tool.is_none() {
+                this.last_pointer = Some(event.position);
+                this.open_radial(event.position, cx);
+            }
+        }))
+        .child(hud_buttons(cx));
     let weak = cx.weak_entity();
     let measured = div()
         .on_children_prepainted(move |bounds, _window, cx| {

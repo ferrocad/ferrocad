@@ -52,8 +52,6 @@ pub const HOVER_RIM: u32 = 0x48e5ff;
 pub const PUSH_PULL_COLOR: u32 = 0xf59e0b;
 /// Destructive operations (`#EF4444`): delete, pocket, subtract.
 pub const SUBTRACT_COLOR: u32 = 0xef4444;
-/// The commit/approve action (`#22C55E`): the Move pair's `✓`.
-pub const CONFIRM_COLOR: u32 = 0x22c55e;
 /// A hovered wheel wedge's tint: [`ACTIVE_ACCENT`] at 12%.
 pub const HIGHLIGHT_TINT: u32 = 0x38bdf81f;
 /// The X axis token in a floating HUD (`#F87171`, a coral that reads as X without

@@ -286,20 +286,16 @@ back; both reset the fields and hand the keyboard back to the canvas, and the ro
 Only the **focused** field paints a selection highlight: a blurred `TextInput` clears its
 selection range, so a `Tab` from `ΔY` to `ΔZ` never leaves a purple range behind.
 
-**The finish pill tracks the gizmo, ahead of the drag.** It is the one floating piece
-left: its anchor is recomputed each frame from the visible gizmo origin (or the
-**viewport centre** when no gizmo is armed; the live pointer is the last resort for a
-shell with no viewport). While the tape is live the shell projects the session datum
-(the ghost origin) through the viewport (`InventorViewport::world_anchor`) and places
-the pill on the **perpendicular** through the origin (`render::place_finish`): the tape
-runs from the datum to the origin, so a leg or ruler tag can never be there, and the
-dragging pointer sits on that stroke rather than beside it. The side that is already
-under the pointer is skipped, so the pair moves out of the cursor as the drag goes.
-With no projected datum (no viewport, or a screen delta too small to name a direction)
-it falls back to **+24 px right and 36 px up** (`render::place_hud`), clear of the handle
-cluster. During a drag the pill carries **no hitbox** (no `occlude`, no `on_click`), so a
-release over its painted buttons still reaches the canvas; it becomes a control again on
-the next paint after the release. It is clamped inside the viewport safe area (16 px margins; 64 px
+**The finish pill floats above-right of the triad.** It is the one floating piece left:
+its anchor is recomputed each frame from the visible gizmo origin (or the **viewport
+centre** when no gizmo is armed; the live pointer is the last resort for a shell with no
+viewport). Its **bottom-left** sits **24 px right and 24 px up** from the origin
+(`render::place_finish`), so the only thing under it is empty canvas — never the Z
+arrowhead, the YZ glass plane or the origin disc — and the result is clamped into the
+canvas safe area. While the pointer owns a stroke the pill is **not rendered at all**,
+so a drag can never end on top of it; it comes back on the first paint after the release.
+It is dielectric: a `WHEEL_GLASS` body with a `CHROME_LINE` hairline, and the action is
+**ink** on hover (`SUBTRACT_COLOR` for `✗`, `AXIS_Y` for `✓`), never an opaque fill. It is clamped inside the viewport safe area (16 px margins; 64 px
 above the bottom dock) and its position is **frozen while the pointer is inside its
 rect**, so a click cannot slide the buttons out from under the cursor. The docked
 coordinate row does not move at all: it is laid out above the loadout, so typing a large
@@ -350,12 +346,20 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
   (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
   `Enter`.
 - **One context gate (built 2026-10-31).** The shell models what it is doing explicitly
-  (`shell/context.rs`): `InteractionContext` is `Modal → Tool → PendingMove → Armed →
-  Selection → Idle`, and every entry point asks `Shell::gate(action)` before it acts.
-  `Action` names the thing the user asked for — `Select`, `SwitchHand`, `SwitchScope`,
-  `SwitchHandleSet`, `StartTool`, `RunCommand { id, edit }`, `Arm` — so a new gesture
-  cannot forget to check the state of the one it competes with. Completion (`✓`/`✗`,
-  `Enter`/`Esc`) and field editing are not actions: they are how a context is left.
+  (`shell/context.rs`): `InteractionContext` is `Modal → Tool → PendingMove { target } →
+  Armed → Selection → Idle`, and every entry point asks `Shell::gate(action)` before it
+  acts. `PendingMove` carries the **dirty object** (the session's primary stage entity),
+  and `Action::Select { target }` carries the body a pick would select, so the rule can be
+  stated against the subject rather than "some selection". `Action` also names
+  `SwitchHand`, `SwitchScope`, `SwitchHandleSet`, `StartTool`,
+  `RunCommand { id, edit }` and `Arm`, so a new gesture cannot forget to check the state
+  of the one it competes with. Completion (`✓`/`✗`, `Enter`/`Esc`) and field editing are
+  not actions: they are how a context is left.
+- **A pick is refused before it re-targets.** `Shell::on_selection` gates first, so the
+  viewport's pick cannot re-arm the triad on the clicked body (the defect behind "the
+  gizmo jumped to the other box while the move was pending"). Re-applying the **same**
+  selection is a no-op early return in `replace_selection`, so a re-pick cannot reach the
+  session reset and silently drop the pending value either.
 - **What `PendingMove` refuses.** Selecting or clearing another object, pressing a
   loadout key (pausing Move included), changing `Select ▾`, switching the handle set,
   starting a tool, dragging another body, and **edit commands** (`CmdType: ForEdit`,

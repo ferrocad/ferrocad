@@ -152,8 +152,7 @@ the shell bind the same constants.
 | Axis Z token | `#38BDF8` | `ui::AXIS_Z` (floating HUD label) |
 | Hover rim | `#48E5FF` | `ui::HOVER_RIM` (structural wedge) |
 | Additive tone | `#F59E0B` | `ui::PUSH_PULL_COLOR` (push/pull, extrude) |
-| Destructive tone | `#EF4444` | `ui::SUBTRACT_COLOR` (delete, pocket; the `✗` discard) |
-| Confirm tone | `#22C55E` | `ui::CONFIRM_COLOR` (the `✓` commit) |
+| Destructive tone | `#EF4444` | `ui::SUBTRACT_COLOR` (delete, pocket; the `✗` hover ink) |
 | Hover tint | `#38BDF8` @ 0.12 | `ui::HIGHLIGHT_TINT` (hovered wedge) |
 | Chrome accent | `#67D7FF` | `ui::CHROME_ACTIVE` (navicube bar, Dev Tools badge) |
 | Chrome active fill | `#1B2B38` @ 0.33 | `ui::CHROME_ACTIVE_BG` (the active projection segment) |
@@ -168,9 +167,12 @@ finish pill and a stage-side tape (all built 2026-10-31):
   `[ Δ|XYZ  ΔX  0.00  ΔY  0.00  ΔZ  0.00 mm ]`. No `✗`/`✓` pill and no tape: nothing is
   pending.
 - **Pending** (a drag or a typed value, `Δ ≠ 0`): the dashed ruler stretches from the ghost
-  disc, and a separate small glass pill materialises beside the gizmo with a red `✗`
-  (`ui::SUBTRACT_COLOR`, discard) and a green `✓` (`ui::CONFIRM_COLOR`, commit). The
-  loadout bar dims to 45 % while this pending state locks the context.
+  disc, and a separate small pill materialises 24 px above-right of the triad with `✗`
+  (discard) and `✓` (commit). The buttons are **dielectric**: `ui::WHEEL_GLASS` bodies
+  with `ui::CHROME_LINE` hairlines, and the action is **ink on hover** —
+  `ui::SUBTRACT_COLOR` for `✗`, `ui::AXIS_Y` for `✓` — never an opaque fill (§0.2
+  principles 2 and 5). The pill is not drawn at all while a drag is in progress, and
+  the loadout bar dims to 45 % while this pending state locks the context.
   `Enter`/`✓` commits, `Tab`/`Shift+Tab` cycle the fields, `Esc`/`✗` rolls back; either
   dissolves the pill and the ruler, returning the row to rest.
 - **Tape** (stage, not gpui): a 10 px ghost-origin ring in `INACTIVE_COLOR` at the session

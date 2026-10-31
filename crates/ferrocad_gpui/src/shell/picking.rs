@@ -66,16 +66,22 @@ impl Shell {
             let model = self.model.lock().unwrap();
             model.selection != items
         };
+        // Re-applying the same selection is a no-op, and it must not run the session reset
+        // below: a pick on the already-selected body used to drop a pending move silently.
+        if !changed {
+            return;
+        }
         // A pending move is explicit state: the user has `✗`/`✓` on screen and has not
         // decided yet, so another object may neither spend the move nor drop it. The
         // subject cannot change until the move is finished — the context gate owns that
         // rule, so every entry point agrees.
-        if changed && self.gate(Action::Select, cx) {
+        let target = items
+            .last()
+            .and_then(|item| self.display.entity_of(&item.object));
+        if self.gate(Action::Select { target }, cx) {
             return;
         }
-        if changed {
-            self.move_disarmed = false;
-        }
+        self.move_disarmed = false;
         // Opening menus never mutates the selection. A **new** selection, however,
         // invalidates both an open wheel (its context target no longer matches the
         // selection) and a pending translation form (its delta was measured against

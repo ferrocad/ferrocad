@@ -85,7 +85,7 @@ pub(crate) use render::dev_tools_body;
 // keep their `crate::shell::FG` paths while the widget layer can use the same table
 // without depending on the shell.
 pub(crate) use ferrocad_theme::ui::{
-    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, CONFIRM_COLOR, DOCK_BG, DOCK_BORDER, FG, MUTED, PANEL,
+    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, CHROME_LINE, DOCK_BG, DOCK_BORDER, FG, MUTED, PANEL,
     PANEL_ALT, SUBTRACT_COLOR, WHEEL_GLASS,
 };
 

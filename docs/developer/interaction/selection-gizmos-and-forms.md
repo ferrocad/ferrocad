@@ -280,18 +280,23 @@ Open ──selection pruned, competing interaction──► rollback (stale delt
 - **Commit is single.** A drag never commits; `Enter`/Accept runs the command callback
   (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
   `Enter`.
-- **Context loss auto-commits when dirty (built 2026-10-30).** Replacing or clearing the
+- **Context loss auto-commits when dirty (built 2026-10-30; slot/filter 2026-10-31).** Replacing or clearing the
   selection commits a non-zero pending delta as one transaction *before* the selection
   changes; it is no longer "silently cancelled", because losing a drag is the defect the
-  session exists to remove. A slot or tool change will do the same once the loadout lands
-  (planned). A pruned selection or a competing document edit cannot commit a stale delta,
+  session exists to remove. A **loadout slot or `Select ▾` filter change** does the same
+  (U4, built): `Shell::set_loadout_slot`/`set_select_filter` call `commit_session` first,
+  then re-arm. Starting a tool does not change the hand, so it does not commit. A pruned
+  selection or a competing document edit cannot commit a stale delta,
   so it is rolled back. `Esc` is the only user-initiated rollback and spends no undo
   entry.
 - **Fast escalation (built 2026-10-31, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
   while a `TransformGizmo` is armed (idle or mid-drag) is the primary entry into the
   numeric surface: the two-stage pill seeds its fields from the current delta (or zero
-  when idle) and takes focus. The wheel's `Move` still opens the same pill for a pointer
-  user; `Tab` cycles its fields once it is expanded.
+  when idle) and takes focus. **`1`/`2`/`3` are loadout slots** (U4): without an open pill
+  they equip Move / Push-Pull / Fillet, so typing a value that starts with one of them
+  begins with `Tab` or a click into a field; with a compact pill open, a digit types into
+  it. The wheel's `Move` still opens the same pill for a pointer user; `Tab` cycles its
+  fields once it is expanded.
 
 ### 5.3 Selection scope
 
@@ -321,9 +326,12 @@ rendered form dialog (backdrop occludes everything)
 ```
 
 - Workbench manipulators are **more specific** than the generic triad and claim their
-grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
+  grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
   origin/pivot handle (`transform-ux.md` §3); while that handle is disabled (the
   translation HUD) the centre is pass-through again.
+- The **hover-to-arm preview** (U5) is the same gizmo layer, hosted only while the Move
+  hand is equipped and nothing is selected; it is dimmed (`gizmo_idle_scale` 0.30) and
+  becomes the selection's own triad on a handle press. It never adds a layer.
 - The canvas's right-press is gated on **no active tool and no command dialog**.
 - A floating HUD's panel is the only part that occludes; the rest of the canvas behaves
   normally.
@@ -335,17 +343,21 @@ grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
 2. Palette `Esc`, then the palette shortcut.
 3. Wheel `Esc`.
 4. Command dialog `Esc` (needed when focus moved to the viewport).
-5. `Space` — only with no dialog, palette, settings card or active tool.
-6. Popover `Esc`, then the `Esc` cascade (cancel dialog flag → tool → settings).
-7. Global shortcut registry.
+5. The Move pill's `Enter`/`Tab`/digit escalation (below the modal checks above).
+6. Loadout `1`/`2`/`3` — below the pill's typing path, above `Space` (U4).
+7. `Space` — only with no dialog, palette, settings card or active tool.
+8. Popover `Esc`, then the `Esc` cascade (cancel dialog flag → tool → settings).
+9. Global shortcut registry.
 
 ### 6.3 Single-writer rules
 
 | State | Written by | Read by |
 | --- | --- | --- |
-| selection | `replace_selection` / `toggle_select` / `clear_selection` | commands, inspector, viewport arming |
+| selection | `replace_selection` / `toggle_select` / `clear_selection` (the loadout filter is applied here) | commands, inspector, viewport arming, hover-to-arm |
 | context target | `open_radial` / `space_radial` | `commit_wheel`, `radial_slots` |
 | wheel phases | `WheelMenu` | shell (events) |
+| loadout slot/filter | `Shell::set_loadout_slot` / `set_select_filter` (the bar, `1`/`2`/`3`, `Select ▾`) | `Shell::arm`, `replace_selection`, the bar/header |
+| hover preview | `Shell::sync_hover_arm` (from the viewport's hover report) | `Shell::arm`, the viewport's idle scale |
 | pending transform | `Shell` (`TransformSession`; `commit_session` / `drop_session`) | `preview_transform`, the Δ fields, the commit |
 | preview transform | `InventorViewport::preview_transform`, fed by the session | stage items, overlays |
 | interaction frame | gizmo drag/commit | commit math, hit test |
@@ -358,6 +370,8 @@ grab targets first (`gizmo-manipulators.md` §14). The triad's centre is the
 3. Every pending transform session has an explicit rollback (`Esc`), an explicit
    checkpoint (`Enter`), and auto-commits a non-zero delta when the user deliberately
    switches selection, slot or tool.
+4. Hover-to-arm writes no selection and no session: only a handle press or a body click
+   promotes the hovered body, and the preview is dimmed until then.
 4. A preview is never committed by a repaint, a camera move or a re-arm.
 5. A command runs only against a selection that contains its target.
 6. At most one pending preview exists; the last explicit interaction (typing or drag,

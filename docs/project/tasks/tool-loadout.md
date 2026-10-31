@@ -1,11 +1,12 @@
 # The tool loadout: slots, the `Select ▾` filter, and hover-to-arm
 
-Status: **U4 and U5 built (2026-10-31); U6 planned (design 2026-10-30).** In the tree:
-Slot 1 hosts the triad, Slots 2 and 3 host the selection's manipulator, the `Select ▾`
-filter rewrites the reported selection, `1`/`2`/`3` and the bottom-left bar equip a slot,
-a slot or filter change commits a dirty session first, and the Move hand materialises an
-idle triad over an unselected body so a handle press selects and drags it in one gesture.
-**U6 (the sweep and the user page) is not built.**
+Status: **U4, U5 and U6 built (2026-10-31).** Slot 1 hosts the triad, Slots 2 and 3 host
+the selection's manipulator, the `Select ▾` filter rewrites the reported selection,
+`1`/`2`/`3` and the bottom-left bar equip a slot, a slot or filter change commits a dirty
+session first, and the Move hand materialises an idle triad over an unselected body so a
+handle press selects and drags it in one gesture. The sweep and the user page (U6) are
+in: the four interaction specs agree with the tree, the retired vocabulary is deleted,
+and `docs/user/how-to/tool-loadout.md` documents the bar, the filter and hover-to-arm.
 Read against the tree in
 [`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
 which found the loadout **smaller** than this note first assumed: only one compiled manipulator
@@ -226,7 +227,8 @@ Slot 1 (Move) equipped
   drag already owns it); it only removes the idle dimming. A latched selection, not a
   hover, is what keeps the triad after the pointer leaves.
 - Covered by `ferrocad_gpui`'s `a_hover_preview_promotes_its_body_when_a_drag_begins`,
-  `hover_to_arm_needs_the_move_slot_and_an_empty_selection` and (with a GPU)
+  `hover_to_arm_needs_the_move_slot_and_an_empty_selection`,
+  `hover_arming_hosts_and_dissolves_the_preview` and (with a GPU)
   `the_idle_scale_dims_the_hosted_triad`; `ferrocad_stage`'s `a_scaled_opacity_clamps`.
 
 ---
@@ -276,7 +278,7 @@ before U2/U3, i.e. the loadout can arrive before the pill and the tape.
 | --- | --- | --- | --- |
 | **U4** | loadout slots, `Select ▾` filter, `1`/`2`/`3` keys, the bottom-left bar, and the two arm calls gated by the slot (no trait change) | Needs one session to narrow to; no `ManipulatorKind` is required | §4.1, §4.2 — **built 2026-10-31**; `transform_verb` retired |
 | **U5** | hover-to-arm and zero-click drag on `HoverReport::target` | Needs U4's filter: "movable body" is the slot's contract | §4.3 — **built 2026-10-31** |
-| **U6** | this note's share of the sweep: spec text final, the user-docs page for the loadout, and any claim the tree no longer makes | Converges with the session half | all of §4 — planned. `transform_verb` is already deleted by U4, so the sweep no longer owns it |
+| **U6** | this note's share of the sweep: spec text final, the user-docs page for the loadout, and any claim the tree no longer makes | Converges with the session half | all of §4 — **done 2026-10-31**: the four interaction specs state the built loadout/hover behavior, the retired vocabulary is gone from the code (`transform_verb` was retired by U4), and `docs/user/how-to/tool-loadout.md` is authored and indexed. `transform_verb` was already deleted by U4, so the sweep no longer owns it |
 
 ### Stage acceptance
 

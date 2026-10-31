@@ -869,6 +869,79 @@ fn hover_to_arm_needs_the_move_slot_and_an_empty_selection(cx: &mut TestAppConte
     );
 }
 
+/// U5/U6: the hover preview is hosted and dissolved by the state machine itself — the
+/// pointer's report is the only untested leg, and it is `HoverReport`, already covered.
+/// Skips without a GPU adapter.
+#[gpui::test]
+fn hover_arming_hosts_and_dissolves_the_preview(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+    let body = ferrocad_geom::SelectionRef::whole(7);
+
+    // The observer after this update sees no real pointer (the target was injected), so
+    // the transitions are asserted inside the update that applies them.
+    let (hovered, kept, left) = cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.apply_hover_arm(Some(&body), false, cx);
+            let hosted = !viewport.read(cx).gizmos().is_empty();
+            let idle = viewport
+                .read(cx)
+                .gizmo()
+                .is_some_and(|gizmo| (gizmo.style().opacity - 0.30).abs() < 1e-6);
+            let hovered = (
+                shell.hover_arm.is_some(),
+                hosted && idle,
+                shell.model.lock().unwrap().selection.is_empty(),
+            );
+
+            // The gizmo consumes the pointer on its own handles: keep the preview.
+            shell.apply_hover_arm(None, true, cx);
+            let kept = shell.hover_arm.is_some();
+
+            // Leaving dissolves it.
+            shell.apply_hover_arm(None, false, cx);
+            let left = (
+                shell.hover_arm.is_none(),
+                viewport.read(cx).gizmos().is_empty(),
+            );
+            (hovered, kept, left)
+        })
+    });
+    assert_eq!(
+        hovered,
+        (true, true, true),
+        "the hover is a live, idle-ink preview that selects nothing"
+    );
+    assert!(kept, "the pointer moving onto the handles keeps the preview");
+    assert_eq!(left, (true, true), "leaving dissolves the idle triad");
+
+    // A latched selection owns the handles: a body hover cannot replace or dim them.
+    click_select(&mut cx, &shell, body.clone());
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.apply_hover_arm(Some(&body), false, cx));
+    });
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.hover_arm.is_none()),
+        "a selection is not a hover preview"
+    );
+    let (hosted, opacity) = cx.update(|_window, cx| {
+        let viewport = viewport.read(cx);
+        (
+            viewport.gizmos().len(),
+            viewport.gizmo().map(|gizmo| gizmo.style().opacity),
+        )
+    });
+    assert!(hosted > 0, "the latched selection keeps its triad");
+    assert!(
+        opacity.is_some_and(|opacity| (opacity - 1.0).abs() < 1e-6),
+        "the selected triad keeps its full ink"
+    );
+}
+
 /// U5: the hover preview is dimmed to the idle ink, and promotion restores the
 /// selected triad's full opacity. Skips without a GPU adapter.
 #[gpui::test]

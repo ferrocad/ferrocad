@@ -26,12 +26,16 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 | Triad handles | Translate is the default; **Rotate is hosted** through the shell's session mode; Universal is defined but not surfaced | `gizmo.rs`; `contributions.rs`; `shell.rs` `gizmo_mode`/`set_gizmo_mode` |
 | Click anchor | the triad hugs the object origin (`ShapeItem::anchor`); a session `user_origin` from re-pivot overrides it while set | `contributions.rs` `translate_gizmo`; `shell.rs` `user_origin` |
 | Origin/pivot handle | **built (slice 3)**: `GizmoTarget::Origin`, a 10 px disc, priority origin > axis > plane > ring | `gizmo.rs` `GizmoTarget`; `inventor_view.rs` `gizmo_origin_snap` |
-| Face/edge tags, `Move` + Δ form, feature snaps | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
+| Face/edge tags, `Move` + the two-stage pill, feature snaps | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
 | Face-normal push/pull | **built (slice 5)**: `PushPullStem` + the parametric `push_pull` hook | `ferrocad_part_gui/src/push_pull.rs`; `python/ferrocad_parametric/__init__.py` |
+| Hand / loadout | **built (U4, 2026-10-31)**: Slot 1 hosts the triad, Slots 2/3 the selection's manipulator; `Select ▾`; `1`/`2`/`3`; bottom-left bar | `shell/loadout.rs`; `chrome.rs` |
+| Hover-to-arm | **built (U5, 2026-10-31)**: Move hand + empty selection materialises the triad at 30 %; a handle press promotes and drags | `shell/loadout.rs`; `inventor_view.rs` `set_gizmo_idle_scale` |
 
 The triad targets the **whole item** even when the selection names a face
-(`contributions.rs:22-28`; `gizmo-manipulators.md:779-782`). A Part click always resolves
-to an element, so a face click is the normal case; an untagged toy mesh selects the body.
+(`contributions.rs:22-28`; `gizmo-manipulators.md:779-782`). With the loadout
+(U4), Slot 1's `Body` filter makes a face click report the whole body before the
+triad is built; Slot 2 keeps the face and arms the workbench manipulator instead.
+A face-scoped *transform* is still not built.
 
 ## 1. Mode set and switching
 
@@ -42,7 +46,7 @@ after the factory, because every factory returns a fresh `Translate` gizmo
 
 | Surface | Sets | Why |
 | --- | --- | --- |
-| Wheel `Move` | `Translate` (+ opens the Δ form) | the existing verb means "move"; it must force Translate so the deferred drag and fields agree (`selection-gizmos-and-forms.md:230-235`) |
+| Wheel `Move` | `Translate` (+ opens the pill, and equips Slot 1) | the existing verb means "move"; it must force Translate so the drag and fields agree (`selection-gizmos-and-forms.md:230-235`) |
 | New wheel `Rotate` | `Rotate` | the object-verb vocabulary is where users look for "what to do" |
 | Header `Gizmo` control (in flight) | the same state; may expose **Both** | the mode is which handles are drawn, so it is presentation, the header's existing meaning (`gizmo-manipulators.md:767-771`, `796-797`) |
 | Keyboard | `Ctrl+Shift+R` (registered on `App_Rotate`) | `shortcuts.rs:64-76` binds chorded keys; a bare `R` stays unbound |
@@ -119,7 +123,7 @@ drag has no solver, so there is no `display_offset`. On release
 the shell stores it as a session `user_origin` and applies it instead of the object
 origin while it is set. It is not a transform commit and never touches the document.
 `Esc` restores the pre-drag frame and clears it.
-- **With `Move`'s deferred form.** The origin handle is disabled while a
+- **With the Move pill open.** The origin handle is disabled while a
 `preview: "translation"` form is open: the HUD is anchored to the visible origin and
 must not slide under the user's typing. Closing the form re-enables it.
 

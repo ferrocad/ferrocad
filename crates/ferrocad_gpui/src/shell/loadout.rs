@@ -250,9 +250,26 @@ impl Shell {
                 viewport.gizmo_hovered(),
             )
         };
+        self.apply_hover_arm(target.as_ref(), over_gizmo, cx);
+    }
+
+    /// Apply a hover target to the preview state (U5).
+    ///
+    /// `sync_hover_arm` passes the viewport's report; a test can pass a target
+    /// directly, which keeps the state machine testable without a scene pick.
+    pub(super) fn apply_hover_arm(
+        &mut self,
+        target: Option<&SelectionRef>,
+        over_gizmo: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(viewport) = self.viewport.clone() else {
+            self.hover_arm = None;
+            return;
+        };
         let next = if self.hover_arm_allowed() {
             match target {
-                Some(reference) => Some(self.loadout.narrow(&reference)),
+                Some(reference) => Some(self.loadout.narrow(reference)),
                 // The gizmo consumes the hover and the report is empty there: keep the
                 // preview while the pointer travels from the body onto its handles, so
                 // it does not dissolve just before the press.

@@ -143,9 +143,15 @@ impl Shell {
             self.console_line(format!("selection: {error}"), cx);
         }
         self.refresh_commands(cx);
-        // The Move hand's form follows the selection: it appears with a target and goes
-        // away when the selection clears. A tool owns the canvas instead.
-        self.ensure_move_hud(cx);
+        // The canvas follows the selection: re-arm its handles, or clear them when the
+        // selection is empty. Without this the previous target's triad stayed hosted and
+        // kept consuming the hover, so the idle preview appeared only after a pointer
+        // move (or never). With nothing selected, re-offer the preview for a body the
+        // pointer is still over: it often has not moved since the clear.
+        self.rearm_selection(cx);
+        if self.model.lock().unwrap().selection.is_empty() {
+            self.sync_hover_arm(cx);
+        }
         cx.notify();
     }
 

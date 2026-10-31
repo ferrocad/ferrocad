@@ -1044,6 +1044,37 @@ fn hover_arming_hosts_and_dissolves_the_preview(cx: &mut TestAppContext) {
     );
 }
 
+/// Clearing the selection re-arms the canvas: the previous target's triad must not stay
+/// hosted. A stale triad keeps consuming the pointer's hover, so hover-to-arm could not
+/// materialise the idle preview until the pointer left and came back (or never). Skips
+/// without a GPU adapter.
+#[gpui::test]
+fn clearing_the_selection_drops_the_stale_triad(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+    draw(&mut cx);
+    let hosted = cx.update(|_window, cx| viewport.read(cx).gizmos().len());
+    assert!(hosted > 0, "the selection hosts its triad");
+
+    // Clear without a pointer move in between: the old handles must go now, not on the
+    // next hover event.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.clear_selection(cx)));
+    draw(&mut cx);
+    let (hosted, armed) = cx.update(|_window, cx| {
+        let hosted = viewport.read(cx).gizmos().len();
+        let armed = shell.read_with(cx, |shell, _| shell.model.lock().unwrap().gizmo_armed);
+        (hosted, armed)
+    });
+    assert_eq!(hosted, 0, "the old target's triad is gone");
+    assert!(!armed, "and the model agrees");
+}
+
 /// U5: the hover preview is dimmed to the idle ink, and promotion restores the
 /// selected triad's full opacity. Skips without a GPU adapter.
 #[gpui::test]

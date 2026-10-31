@@ -328,6 +328,10 @@ impl Shell {
         // A viewport pick arms directly rather than through `rearm_selection`, so the
         // form's origin is re-read here.
         self.refresh_move_origin(cx);
+        // A cleared selection hands the canvas back to hover-to-arm. The pointer usually
+        // has not moved since the click, so apply its current report now rather than
+        // waiting for the next hover event.
+        self.sync_hover_arm(cx);
         cx.notify();
     }
 

@@ -432,6 +432,10 @@ pub struct InventorViewport<V: InventorView> {
     /// crate stays GPU- and source-agnostic: the viewport only knows that a skin
     /// program was injected.
     gizmo_skin: Option<Arc<ShaderProgram>>,
+    /// The alpha multiplier for the hosted gizmos while they are a **hover-to-arm**
+    /// preview (U5). `None` for a real selection arm. Presentation only: it never
+    /// changes hit-testing or the commit.
+    gizmo_idle_scale: Option<f32>,
     /// The last gizmo commit, for the host to apply to the document. Only a rotation
     /// drag uses it: translation is preview-only and the host commits its session.
     gizmo_commit: Option<GizmoCommitEvent>,
@@ -1512,6 +1516,7 @@ impl<V: InventorView> InventorViewport<V> {
             gizmos: GizmoSet::default(),
             gizmo_queue: RenderQueue::default(),
             gizmo_skin: None,
+            gizmo_idle_scale: None,
             gizmo_commit: None,
             manipulators: Vec::new(),
             manipulator_queue: RenderQueue::default(),
@@ -1767,9 +1772,10 @@ impl<V: InventorView> InventorViewport<V> {
     /// Adopt `gizmos` as the hosted set, narrowed to `session`, with the host policy
     /// applied to every entry.
     fn host_gizmos(&mut self, mut gizmos: GizmoSet, session: GizmoMode) {
+        let style = self.hosted_gizmo_style();
         for gizmo in gizmos.gizmos_mut() {
             gizmo.set_linear_snap(self.snap_grid);
-            gizmo.set_style(&self.gizmo_style);
+            gizmo.set_style(&style);
         }
         gizmos.set_session(session);
         self.gizmos = gizmos;
@@ -1957,17 +1963,63 @@ impl<V: InventorView> InventorViewport<V> {
             self.gizmo_style = style;
         }
         let mut changed = stored_changed;
+        let gizmo_style = self.hosted_gizmo_style();
         for manipulator in &mut self.manipulators {
             changed |= manipulator.set_style(&self.gizmo_style);
         }
         for gizmo in self.gizmos.gizmos_mut() {
-            changed |= gizmo.set_style(&self.gizmo_style);
+            changed |= gizmo.set_style(&gizmo_style);
         }
         if changed {
             self.rebuild_manipulator_queue();
             self.rebuild_gizmo_queue();
         }
         changed
+    }
+
+    /// Dim the hosted gizmos by `scale` for a **hover-to-arm** preview (U5).
+    ///
+    /// The scale multiplies the workspace style's `opacity`; it never changes
+    /// hit-testing. The host sets it for the idle triad it shows over an unselected
+    /// body and clears it when the body is promoted or the pointer leaves.
+    /// Returns whether a hosted gizmo's visuals changed.
+    pub fn set_gizmo_idle_scale(&mut self, scale: Option<f32>) -> bool {
+        if self.gizmo_idle_scale == scale {
+            return false;
+        }
+        self.gizmo_idle_scale = scale;
+        let style = self.hosted_gizmo_style();
+        let mut changed = false;
+        for gizmo in self.gizmos.gizmos_mut() {
+            changed |= gizmo.set_style(&style);
+        }
+        if changed {
+            self.rebuild_gizmo_queue();
+        }
+        changed
+    }
+
+    /// The style the hosted gizmos draw with: the workspace style, dimmed while a
+    /// hover-to-arm preview is active.
+    fn hosted_gizmo_style(&self) -> GizmoStyle {
+        match self.gizmo_idle_scale {
+            Some(scale) => self.gizmo_style.clone().scaled_opacity(scale),
+            None => self.gizmo_style.clone(),
+        }
+    }
+
+    /// Whether the pointer is on a hosted gizmo grab target.
+    ///
+    /// The hover report is empty there (the gizmo consumes the move), so a host
+    /// uses this to keep a hover-armed preview alive while the pointer travels from
+    /// the body onto its own handles.
+    pub fn gizmo_hovered(&self) -> bool {
+        self.pointer.is_some()
+            && self
+                .gizmos
+                .gizmos()
+                .iter()
+                .any(|gizmo| gizmo.hovered_target().is_some())
     }
 
     /// The latest gizmo drag readout, if a drag is in progress.

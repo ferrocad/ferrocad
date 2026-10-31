@@ -563,6 +563,10 @@ impl Shell {
             .is_some_and(|dialog| dialog.spec.previews_translation());
 
         if preview.phase == PreviewPhase::Begin {
+            // A press on the hover-to-arm triad is the user's first action on that
+            // body: promote it before the session opens (U5). A drag on a latched
+            // selection is already selected, so this is a no-op.
+            self.promote_hover_target(preview.target_id, cx);
             // A drag is compact: the readout follows the pointer while the fields wait
             // behind `Tab` (the pill expands again, on the same axis, on request).
             if previews {

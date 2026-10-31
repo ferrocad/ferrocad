@@ -10,6 +10,10 @@
 
 use super::*;
 
+/// The alpha multiplier of the triad a hover preview materialises (U5): present at
+/// the body's origin, but clearly not selected yet.
+pub(crate) const HOVER_ARM_OPACITY: f32 = 0.30;
+
 /// Which topology a click selects (the `Select ▾` filter).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SelectFilter {
@@ -225,6 +229,105 @@ impl Shell {
             .is_some_and(|session| session.is_dirty())
         {
             self.commit_session(cx);
+        }
+    }
+
+    /// Show (or hide) the idle triad for the body under the pointer (U5).
+    ///
+    /// Hover-to-arm is a **preview**: it writes no selection and no session; it only
+    /// materialises the Move hand's triad at the body's origin so a press on a handle
+    /// can promote the body and start the drag in one gesture. A latched selection
+    /// owns the handles instead, so this is a no-op whenever one exists.
+    pub(super) fn sync_hover_arm(&mut self, cx: &mut Context<Self>) {
+        let Some(viewport) = self.viewport.clone() else {
+            self.hover_arm = None;
+            return;
+        };
+        let (target, over_gizmo) = {
+            let viewport = viewport.read(cx);
+            (
+                viewport.hover_report().target.clone(),
+                viewport.gizmo_hovered(),
+            )
+        };
+        let next = if self.hover_arm_allowed() {
+            match target {
+                Some(reference) => Some(self.loadout.narrow(&reference)),
+                // The gizmo consumes the hover and the report is empty there: keep the
+                // preview while the pointer travels from the body onto its handles, so
+                // it does not dissolve just before the press.
+                None if over_gizmo => self.hover_arm.clone(),
+                None => None,
+            }
+        } else {
+            None
+        }
+        .filter(|reference| self.display.object_of(reference.object).is_some());
+        let previous = self.hover_arm.clone();
+        if next == previous {
+            return;
+        }
+
+        let hosted = next
+            .as_ref()
+            .map(|reference| self.arm(reference, cx).1)
+            .filter(|gizmos| !gizmos.is_empty());
+        let idle = hosted.is_some();
+        // Nothing to show and nothing was showing: do not notify, or a hover over a
+        // body no control claims would loop the observer.
+        if !idle && previous.is_none() {
+            return;
+        }
+        self.hover_arm = next.filter(|_| idle);
+        let gizmos = hosted.unwrap_or_default();
+        viewport.update(cx, |viewport, cx| {
+            viewport.set_gizmo_idle_scale(idle.then_some(HOVER_ARM_OPACITY));
+            viewport.set_manipulators(Vec::new());
+            viewport.set_gizmos(gizmos);
+            cx.notify();
+        });
+    }
+
+    /// Whether hover-to-arm may materialise a triad right now.
+    ///
+    /// Only the Move hand offers it, and only with nothing latched: a selection, a
+    /// session, a tool, a modal, or an open wheel all own the pointer's meaning.
+    pub(super) fn hover_arm_allowed(&self) -> bool {
+        self.loadout.slot().wants_gizmo()
+            && self.session.is_none()
+            && self.active_tool.is_none()
+            && !self.modal_open()
+            && self.wheel_target.is_none()
+            && self.model.lock().unwrap().selection.is_empty()
+    }
+
+    /// Promote the hover preview's body to the selection when its handle is pressed
+    /// (U5).
+    ///
+    /// The viewport queues `PreviewPhase::Begin` from a handle press. The hover
+    /// preview is not a selection yet, so the press must make it one before the
+    /// session opens: the commit reads the facade selection. The drag already owns the
+    /// hosted gizmo, so this deliberately does **not** re-arm it; it only clears the
+    /// idle dimming so the handles read as selected.
+    pub(super) fn promote_hover_target(&mut self, target: u32, cx: &mut Context<Self>) {
+        let Some(reference) = self.hover_arm.clone() else {
+            return;
+        };
+        if reference.object != target {
+            return;
+        }
+        let Some(name) = self.display.object_of(target).map(str::to_string) else {
+            return;
+        };
+        let item = SelectionItem::with_elements(name, reference.elements);
+        self.replace_selection(vec![item], cx);
+        self.model.lock().unwrap().gizmo_armed = true;
+        if let Some(viewport) = self.viewport.clone() {
+            viewport.update(cx, |viewport, cx| {
+                if viewport.set_gizmo_idle_scale(None) {
+                    cx.notify();
+                }
+            });
         }
     }
 }

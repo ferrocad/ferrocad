@@ -76,8 +76,10 @@ impl Shell {
         let _ = wheel.update(cx, |wheel, cx| wheel.close(cx));
         self.wheel_target = None;
         // A new selection is a new pivot subject: the session user origin goes away.
-        // The loadout slot is a tool choice, not a selection property, so it stays.
+        // The loadout slot is a tool choice, not a selection property, so it stays;
+        // a hover-to-arm preview is replaced by the latched selection's own handles.
         self.user_origin = None;
+        self.hover_arm = None;
         if self
             .dialog
             .as_ref()

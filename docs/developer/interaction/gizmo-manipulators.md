@@ -981,6 +981,10 @@ The **hand** is visible and chosen explicitly (U4, built 2026-10-31):
   The filter is the slot's preset (`Body` / `Face` / `Edge`) unless overridden; the
   label turns `CHROME_ACTIVE` while it differs from the slot's default. Both the bar
   and this control write the same `Shell::loadout` store.
+- With the Move hand and **no selection**, a body hover materialises the triad in the
+  idle ink (U5, 2026-10-31; `hover_arm` + `set_gizmo_idle_scale(0.30)`). A handle press
+  promotes the body and starts the drag; leaving dissolves it. A latched selection
+  keeps its triad at full opacity.
 
 The **handles** are a transient tool handle, not a persistent scene helper, so they are
 not a dock row: object verbs moved to the wheel

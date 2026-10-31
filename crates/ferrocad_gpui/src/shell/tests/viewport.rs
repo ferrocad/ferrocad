@@ -787,6 +787,136 @@ fn a_move_verb_arms_the_body_triad_on_a_face_selection(cx: &mut TestAppContext) 
     });
 }
 
+// ---------------------------------------------------------------------------
+// U5: hover-to-arm and the zero-click drag
+// ---------------------------------------------------------------------------
+
+/// U5: a handle press on the hover preview promotes its body **before** the session
+/// opens, in one gesture. The preview is not a selection, so without this the commit
+/// would find an empty facade selection.
+#[gpui::test]
+fn a_hover_preview_promotes_its_body_when_a_drag_begins(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    // The preview only exists while nothing is selected.
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.clear_selection(cx)));
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| shell.hover_arm = Some(SelectionRef::whole(7)));
+    });
+
+    let preview = |phase, x: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+        });
+    });
+
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().selection.clone()),
+        vec![SelectionItem::new("Params")],
+        "the press promoted the hovered body"
+    );
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.hover_arm.is_none()),
+        "the promoted body owns the handles"
+    );
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.is_some()),
+        "the same gesture opened the session"
+    );
+    assert!(shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().gizmo_armed));
+
+    // The release keeps the one-mode pending session.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 4.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::End, 4.0), cx);
+        });
+    });
+    assert!(
+        shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| session.is_dirty())),
+        "the release leaves the move pending"
+    );
+}
+
+/// U5: hover-to-arm belongs to the Move hand and to an empty selection. A latched
+/// selection, a non-Move slot, a tool or a modal all own the pointer's meaning.
+#[gpui::test]
+fn hover_to_arm_needs_the_move_slot_and_an_empty_selection(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let shell = cx.update(|cx| cx.new(|cx| Shell::from_model(model.clone(), cx)));
+
+    assert!(shell.read_with(cx, |shell, _| shell.hover_arm_allowed()));
+    shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::PushPull, cx));
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.hover_arm_allowed()),
+        "the face hand has no hover preview"
+    );
+    shell.update(cx, |shell, cx| shell.set_loadout_slot(Slot::Move, cx));
+    assert!(shell.read_with(cx, |shell, _| shell.hover_arm_allowed()));
+    shell.update(cx, |shell, cx| shell.select("Params", cx));
+    assert!(
+        !shell.read_with(cx, |shell, _| shell.hover_arm_allowed()),
+        "a latched selection keeps its own handles"
+    );
+}
+
+/// U5: the hover preview is dimmed to the idle ink, and promotion restores the
+/// selected triad's full opacity. Skips without a GPU adapter.
+#[gpui::test]
+fn the_idle_scale_dims_the_hosted_triad(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+
+    let opacity = |cx: &mut VisualTestContext| {
+        cx.update(|_window, cx| {
+            viewport
+                .read(cx)
+                .gizmo()
+                .map(|gizmo| gizmo.style().opacity)
+        })
+    };
+    assert!(
+        opacity(&mut cx).is_some_and(|opacity| (opacity - 1.0).abs() < 1e-6),
+        "a selection is drawn at full opacity"
+    );
+
+    cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, cx| {
+            assert!(viewport.set_gizmo_idle_scale(Some(0.30)));
+            cx.notify();
+        });
+    });
+    assert!(
+        opacity(&mut cx).is_some_and(|opacity| (opacity - 0.30).abs() < 1e-6),
+        "the hover preview draws in the idle ink"
+    );
+
+    cx.update(|_window, cx| {
+        viewport.update(cx, |viewport, cx| {
+            assert!(viewport.set_gizmo_idle_scale(None));
+            cx.notify();
+        });
+    });
+    assert!(
+        opacity(&mut cx).is_some_and(|opacity| (opacity - 1.0).abs() < 1e-6),
+        "clearing the preview restores the selected ink"
+    );
+}
+
 /// A deferred HUD drag must carry the triad with the previewed object, not leave it
 /// at the datum it started from. Skips without a GPU adapter.
 #[gpui::test]

@@ -380,6 +380,11 @@ pub struct Shell {
     /// filter both the bottom-left bar and the header's `Select ▾` write. View state,
     /// not a document property.
     loadout: Loadout,
+    /// The body an idle triad is shown for while the pointer hovers it (U5). This is a
+    /// **preview**, not a selection: pressing one of its handles or clicking the
+    /// interior promotes the body. `None` when the Move hand is not equipped, a
+    /// selection is latched, or the pointer is away.
+    hover_arm: Option<SelectionRef>,
     /// The session pivot the user dragged the origin handle to. It is applied instead of
     /// the object origin while set; it is not undoable and not a document property. A
     /// selection change or a wheel promotion clears it, and `Esc` restores the object
@@ -765,6 +770,7 @@ impl Shell {
             settings_card: None,
             gizmo_mode: GizmoMode::Translate,
             loadout: Loadout::default(),
+            hover_arm: None,
             user_origin: None,
             row_popup: None,
             scrub: None,
@@ -1318,6 +1324,10 @@ else:
             // viewport each tick, but a manipulator has no preview event stream; the
             // session's live read is how that tick reaches the HUD's field.
             this.sync_workplane_drag(cx);
+            // The pointer's hover target is what hover-to-arm materialises a triad for
+            // (U5); the viewport notifies on every hover change, and a hover report is
+            // not an event of its own.
+            this.sync_hover_arm(cx);
         });
         self.viewport = Some(viewport);
         self._viewport_events = Some(events);

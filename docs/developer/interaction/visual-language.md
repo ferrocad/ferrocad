@@ -304,7 +304,7 @@ the glass-top/glass-shade pair.
 
 ```
 IDLE      ambient: wireframe 30 %, structural tokens, no labels
-  │  pointer within HOVER_RADIUS        (hover-to-arm: planned, tool-loadout §3)
+  │  pointer within HOVER_RADIUS        (hover-to-arm: built 2026-10-31, tool-loadout §3)
 HOVER     full luminosity, rim #48E5FF, crisp labels, no commit
   │  press on a grab target
 DRAG      solid handle, amber/cyan hull, tabular pill follows
@@ -316,9 +316,12 @@ IDLE
 
 **`SESSION_HOLD` is built (U3).** After a release the ghost preview is kept (U1) and the 3-D
 tape and two-stage pill remain on screen until `Enter`, a context switch or `Esc`, because
-they render the session that already survives the release. **Hover-to-arm is planned**
-(tool-loadout §3): the `HOVER` transition above is pointer proximity to an already-armed
-handle; a loadout slot deciding whether proximity arms a body or a sub-element is not built.
+they render the session that already survives the release. **Hover-to-arm is built**
+(U5, 2026-10-31; tool-loadout §3): with the Move hand equipped and nothing selected, a
+trusted body hover materialises the triad in the IDLE ink (30 % opacity); the pointer on
+a handle is the `HOVER` transition (the existing bloom), a press promotes the body and
+opens the session in the same gesture, and leaving dissolves it. A latched selection
+keeps its triad. The preview writes no selection and no session until the press.
 
 | Constant | Value | Notes |
 | --- | --- | --- |

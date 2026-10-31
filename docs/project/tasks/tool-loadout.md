@@ -1,10 +1,11 @@
 # The tool loadout: slots, the `Select ▾` filter, and hover-to-arm
 
-Status: **U4 built (2026-10-31); U5 and U6 planned (design 2026-10-30).** U4 is in the
-tree: Slot 1 hosts the triad, Slots 2 and 3 host the selection's manipulator, the
-`Select ▾` filter rewrites the reported selection, `1`/`2`/`3` and the bottom-left bar
-equip a slot, and a slot or filter change commits a dirty session first. **U5
-(hover-to-arm) and U6 (the sweep and the user page) are not built.**
+Status: **U4 and U5 built (2026-10-31); U6 planned (design 2026-10-30).** In the tree:
+Slot 1 hosts the triad, Slots 2 and 3 host the selection's manipulator, the `Select ▾`
+filter rewrites the reported selection, `1`/`2`/`3` and the bottom-left bar equip a slot,
+a slot or filter change commits a dirty session first, and the Move hand materialises an
+idle triad over an unselected body so a handle press selects and drags it in one gesture.
+**U6 (the sweep and the user page) is not built.**
 Read against the tree in
 [`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
 which found the loadout **smaller** than this note first assumed: only one compiled manipulator
@@ -206,6 +207,28 @@ Slot 1 (Move) equipped
 - **The armed triad is the session's `ArmedIdle`** (`transform-session.md` §1.1): hover-to-arm
   only changes *whether* it is shown and at what origin, never the commit semantics.
 
+### 3.1 As built (2026-10-31)
+
+- `Shell::hover_arm` holds the previewed body, and `Shell::sync_hover_arm` runs from the
+  viewport's notification observer: the viewport already notifies on every hover change
+  (the report is not an event of its own). It is allowed only in the Move hand with an
+  empty selection, no session, no tool and no modal/wheel.
+- The preview hosts the same `arm` seam as a selection, with the template's `Body` filter,
+  at **`HOVER_ARM_OPACITY` 0.30**: `InventorViewport::set_gizmo_idle_scale` multiplies the
+  workspace style's opacity for the hosted set. The scale is presentation only; hit-testing
+  and the commit are unchanged. It is cleared by every explicit re-arm.
+- While the pointer travels from the body onto the hovered triad's handles, the hover
+  report is empty (the gizmo consumes the move). `InventorViewport::gizmo_hovered` keeps
+  the preview alive there, so it does not dissolve just before the press.
+- `PreviewPhase::Begin` promotes the previewed body before the session opens
+  (`Shell::promote_hover_target`): the commit reads the facade selection, which would
+  otherwise be empty. Promotion deliberately does **not** replace the hosted gizmo (the
+  drag already owns it); it only removes the idle dimming. A latched selection, not a
+  hover, is what keeps the triad after the pointer leaves.
+- Covered by `ferrocad_gpui`'s `a_hover_preview_promotes_its_body_when_a_drag_begins`,
+  `hover_to_arm_needs_the_move_slot_and_an_empty_selection` and (with a GPU)
+  `the_idle_scale_dims_the_hosted_triad`; `ferrocad_stage`'s `a_scaled_opacity_clamps`.
+
 ---
 
 ## 4. Spec changes this note owns
@@ -252,7 +275,7 @@ before U2/U3, i.e. the loadout can arrive before the pill and the tape.
 | Stage | Deliverable | Why this order | Spec updated |
 | --- | --- | --- | --- |
 | **U4** | loadout slots, `Select ▾` filter, `1`/`2`/`3` keys, the bottom-left bar, and the two arm calls gated by the slot (no trait change) | Needs one session to narrow to; no `ManipulatorKind` is required | §4.1, §4.2 — **built 2026-10-31**; `transform_verb` retired |
-| **U5** | hover-to-arm and zero-click drag on `HoverReport::target` | Needs U4's filter: "movable body" is the slot's contract | §4.3 — planned |
+| **U5** | hover-to-arm and zero-click drag on `HoverReport::target` | Needs U4's filter: "movable body" is the slot's contract | §4.3 — **built 2026-10-31** |
 | **U6** | this note's share of the sweep: spec text final, the user-docs page for the loadout, and any claim the tree no longer makes | Converges with the session half | all of §4 — planned. `transform_verb` is already deleted by U4, so the sweep no longer owns it |
 
 ### Stage acceptance

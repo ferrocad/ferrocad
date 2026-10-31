@@ -161,6 +161,16 @@ impl Default for GizmoStyle {
     }
 }
 
+impl GizmoStyle {
+    /// The same style with [`opacity`](Self::opacity) scaled by `factor` (clamped to
+    /// `0..=1`). The host uses this for a **hover-to-arm** preview: the handles are
+    /// present but clearly not selected yet, and the scale never changes hit-testing.
+    pub fn scaled_opacity(mut self, factor: f32) -> Self {
+        self.opacity = (self.opacity * factor).clamp(0.0, 1.0);
+        self
+    }
+}
+
 /// The kind of transform gizmo: which degrees of freedom it offers.
 ///
 /// Each kind is one construction over the shared frame, hit and solver math
@@ -3670,6 +3680,20 @@ mod tests {
         let camera = camera(5.0);
         let legacy = scale_for(&camera, Vector3::zero(), DEFAULT_PIXELS);
         assert!((gizmo.screen_scale(&camera) - legacy).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_scaled_opacity_clamps() {
+        let style = GizmoStyle::default().scaled_opacity(0.30);
+        assert!((style.opacity - 0.30).abs() < 1e-6);
+        assert_eq!(
+            GizmoStyle::default().scaled_opacity(100.0).opacity,
+            1.0,
+            "a factor above one cannot brighten past the style"
+        );
+        assert_eq!(GizmoStyle::default().scaled_opacity(-1.0).opacity, 0.0);
+        let dim = GizmoStyle::default().scaled_opacity(0.5).scaled_opacity(0.5);
+        assert!((dim.opacity - 0.25).abs() < 1e-6, "scales compose");
     }
 
     #[test]

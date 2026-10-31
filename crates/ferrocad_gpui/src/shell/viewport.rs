@@ -298,6 +298,7 @@ impl Shell {
         if let Some(viewport) = self.viewport.clone() {
             viewport.update(cx, |viewport, cx| {
                 viewport.set_manipulators(manipulators);
+                viewport.set_gizmo_idle_scale(None);
                 viewport.set_gizmos(gizmos);
                 // The shell's session kind is authoritative: a viewport created after
                 // the verb was chosen (a headless run that gained a GPU) starts at the
@@ -830,6 +831,8 @@ impl Shell {
     /// selection against the new stage. The factory re-reads the object's origin, so the
     /// triad tracks the geometry without any shell-side bookkeeping.
     pub(super) fn rearm_selection(&mut self, cx: &mut Context<Self>) {
+        // An explicit re-arm replaces whatever the pointer was previewing.
+        self.hover_arm = None;
         // The offset session owns the pointer while its HUD is open: keep its stem on
         // the live plane instead of handing the handles back to the selection.
         if self.workplane_hud_open() {
@@ -859,6 +862,7 @@ impl Shell {
             self.model.lock().unwrap().gizmo_armed = false;
             viewport.update(cx, |viewport, cx| {
                 viewport.set_manipulators(Vec::new());
+                viewport.set_gizmo_idle_scale(None);
                 viewport.set_gizmo(None);
                 cx.notify();
             });
@@ -869,6 +873,8 @@ impl Shell {
         let mode = self.gizmo_mode;
         viewport.update(cx, |viewport, cx| {
             viewport.set_manipulators(manipulators);
+            // An explicit arm replaces a hover preview, so its idle dimming goes too.
+            viewport.set_gizmo_idle_scale(None);
             viewport.set_gizmos(gizmos);
             viewport.set_gizmo_mode(mode);
             cx.notify();

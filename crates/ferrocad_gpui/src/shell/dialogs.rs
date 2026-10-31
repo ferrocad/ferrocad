@@ -691,14 +691,22 @@ impl Shell {
         cx.notify();
     }
 
-    /// Where a floating dialog should sit: beside the gizmo, else under the live
-    /// pointer. The gizmo wins when it is visible, so the HUD hangs off the handles
-    /// the user is about to drag; otherwise it opens where they are looking.
+    /// Where a floating dialog should sit: beside the gizmo, else at the viewport
+    /// centre, else under the live pointer. The gizmo wins when it is visible, so the
+    /// HUD hangs off the handles the user is about to drag; a viewport with no gizmo
+    /// still anchors to the canvas instead of a stale pointer. The pointer is the last
+    /// resort for a shell with no viewport at all.
     pub(super) fn dialog_anchor(&self, window: &Window, cx: &App) -> Point<Pixels> {
-        self.viewport
-            .as_ref()
-            .and_then(|viewport| viewport.read(cx).gizmo_anchor())
-            .unwrap_or_else(|| window.mouse_position())
+        if let Some(viewport) = self.viewport.as_ref() {
+            let viewport = viewport.read(cx);
+            if let Some(anchor) = viewport
+                .gizmo_anchor()
+                .or_else(|| viewport.viewport_anchor())
+            {
+                return anchor;
+            }
+        }
+        window.mouse_position()
     }
 
     /// Move focus between a dialog's textual fields. `Tab` cycles forward; `Shift+Tab`

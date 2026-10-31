@@ -869,6 +869,51 @@ fn hover_to_arm_needs_the_move_slot_and_an_empty_selection(cx: &mut TestAppConte
     );
 }
 
+/// U6 fix: the HUD anchors on the gizmo's projected origin, not on the pointer. The
+/// old below-right offset put a low body's HUD into the dock clamp (bottom-right).
+/// Skips without a GPU adapter.
+#[gpui::test]
+fn the_move_hud_anchors_to_the_gizmo_not_the_pointer(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell();
+    let Some((mut cx, shell)) = face_claim_shell(cx, model) else {
+        return;
+    };
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
+    click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+
+    let gizmo = cx
+        .update(|_window, cx| viewport.read(cx).gizmo_anchor())
+        .expect("the triad projects");
+    let anchor = cx.update(|window, cx| {
+        shell.read_with(cx, |shell, cx| shell.dialog_anchor(window, cx))
+    });
+    assert_eq!(anchor, gizmo, "the HUD hangs off the gizmo origin");
+
+    // A pointer parked in the bottom-right corner must not drag the HUD with it.
+    let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    let far = point(
+        canvas.origin.x + canvas.size.width - px(4.0),
+        canvas.origin.y + canvas.size.height - px(4.0),
+    );
+    cx.simulate_mouse_move(far, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    let after = cx.update(|window, cx| {
+        shell.read_with(cx, |shell, cx| shell.dialog_anchor(window, cx))
+    });
+    assert_eq!(after, gizmo, "the pointer does not move the anchor");
+
+    // The placement offset is up and to the right, so a low body keeps its HUD
+    // beside the handles instead of in the bottom-right clamp.
+    let viewport_size = cx.update(|window, _cx| window.viewport_size());
+    let hud = size(px(420.0), px(60.0));
+    let placed = place_hud(anchor, viewport_size, hud);
+    assert!(
+        placed.y < anchor.y,
+        "the HUD sits above its anchor: {placed:?} vs {anchor:?}"
+    );
+}
+
 /// U5/U6: the hover preview is hosted and dissolved by the state machine itself — the
 /// pointer's report is the only untested leg, and it is `HoverReport`, already covered.
 /// Skips without a GPU adapter.

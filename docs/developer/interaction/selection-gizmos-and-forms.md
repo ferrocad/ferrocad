@@ -234,8 +234,10 @@ two-stage pill (compact ↔ expanded, no `Cancel`/`Move` buttons) replaced this 
 the three Δ fields.
 
 A floating HUD may be repositioned when the gizmo moves; its anchor is recomputed from
-the visible gizmo origin (or the live pointer when no gizmo is armed) each frame it
-renders. **Position stability:** the HUD is
+the visible gizmo origin (or the **viewport centre** when no gizmo is armed; the live
+pointer is the last resort for a shell with no viewport) each frame it renders. The
+fixed offset is **+24 px right, −36 px up** (`render::place_hud`), so a low body keeps
+the panel beside its handles instead of in the bottom-right clamp. **Position stability:** the HUD is
 clamped inside the viewport safe area (16 px window margins; 64 px above the bottom
 dock) and its screen position is **frozen while the pointer is inside the HUD rect or a
 field is focused**, so typing a large Δ (`500`) cannot move the inputs out from under the

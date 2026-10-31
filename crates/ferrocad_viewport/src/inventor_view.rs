@@ -1810,6 +1810,19 @@ impl<V: InventorView> InventorViewport<V> {
         ))
     }
 
+    /// The centre of the viewport element in window-space logical pixels.
+    ///
+    /// A floating HUD uses this when no gizmo is armed: the panel stays over the
+    /// canvas the user is looking at instead of wherever the pointer happened to be
+    /// last (which can be over the chrome or off-canvas).
+    pub fn viewport_anchor(&self) -> Option<Point<Pixels>> {
+        let bounds = self.last_bounds?;
+        Some(point(
+            bounds.origin.x + px(bounds.size.width.0 / 2.0),
+            bounds.origin.y + px(bounds.size.height.0 / 2.0),
+        ))
+    }
+
     /// The highest-priority hosted gizmo on offer for the session, if any.
     pub fn gizmo(&self) -> Option<&TransformGizmo> {
         self.gizmos.primary().map(|index| &self.gizmos.gizmos()[index])

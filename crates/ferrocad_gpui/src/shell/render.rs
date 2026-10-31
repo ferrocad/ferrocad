@@ -97,8 +97,11 @@ pub(super) const HUD_MARGIN: f32 = 16.0;
 /// The clearance below a floating HUD, so it never covers the bottom dock.
 pub(super) const HUD_DOCK_CLEARANCE: f32 = 64.0;
 /// Where the HUD first appears relative to its anchor: below-right of the gizmo.
+/// Where the HUD first appears relative to its anchor: right of the gizmo and
+/// **above** it. Below-right put a low body's HUD into the bottom dock and the clamp
+/// then pinned it to the bottom-right corner, away from the handles it describes.
 pub(super) const HUD_OFFSET_X: f32 = 24.0;
-pub(super) const HUD_OFFSET_Y: f32 = 88.0;
+pub(super) const HUD_OFFSET_Y: f32 = -36.0;
 
 /// The inclusive range of HUD origins that keep the whole rect inside the viewport
 /// safe area (16 px margins, 64 px above the bottom dock).
@@ -117,9 +120,11 @@ pub(super) fn clamp_hud(origin: Point<Pixels>, viewport: Size<Pixels>, hud: Size
     )
 }
 
-/// Where a floating HUD appears: below-right of `anchor`, clamped into the viewport
-/// safe area. `anchor` is the gizmo's visible origin (or the live pointer); the HUD
-/// must never leave the canvas, even when the gizmo is dragged into a corner.
+/// Where a floating HUD appears: above-right of `anchor`, clamped into the viewport
+/// safe area. `anchor` is the gizmo's screen-space origin (`GizmoSet` →
+/// `TransformGizmo::origin_anchor`) or, when no gizmo is armed, the viewport centre;
+/// the pointer is only the last resort (a shell with no viewport). The HUD must never
+/// leave the canvas, even when the gizmo is near a corner.
 pub(super) fn place_hud(anchor: Point<Pixels>, viewport: Size<Pixels>, hud: Size<Pixels>) -> Point<Pixels> {
     let offset = point(px(anchor.x.0 + HUD_OFFSET_X), px(anchor.y.0 + HUD_OFFSET_Y));
     clamp_hud(offset, viewport, hud)
@@ -489,7 +494,12 @@ fn move_pill_compact(delta: [f64; 3], focus: usize, cx: &mut Context<Shell>) -> 
         .into_any_element()
 }
 
-/// The expanded stage: one `ΔX ( value )` group per field, without the old button bar.
+/// The expanded stage: one `ΔX` label and one glass field per axis, without brackets.
+///
+/// The field itself is the shared [`TextInput`], which already paints `WHEEL_GLASS`,
+/// the `CHROME_LINE` hairline and the `ACTIVE_ACCENT` focus ring. The old literal
+/// `( … )` wrappers were a second, non-token box around it and read as a malformed
+/// field in the pill.
 fn move_pill_expanded(spec: &DialogSpec, inputs: &[Option<Entity<TextInput>>]) -> AnyElement {
     let mut row = div()
         .id("move-pill-expanded")
@@ -497,21 +507,25 @@ fn move_pill_expanded(spec: &DialogSpec, inputs: &[Option<Entity<TextInput>>]) -
         .flex()
         .flex_row()
         .items_center()
-        .gap_1();
+        .gap_2();
     for (index, field) in spec.fields.iter().enumerate() {
         let Some(input) = inputs.get(index).and_then(Option::as_ref) else {
             continue;
         };
-        row = row
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(axis_token(field)))
-                    .child(field.label().to_string()),
-            )
-            .child(div().text_xs().text_color(rgb(MUTED)).child("("))
-            .child(div().w(px(84.)).flex_shrink_0().child(input.clone()))
-            .child(div().text_xs().text_color(rgb(MUTED)).child(")"));
+        row = row.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(axis_token(field)))
+                        .child(field.label().to_string()),
+                )
+                .child(div().w(px(84.)).flex_shrink_0().child(input.clone())),
+        );
     }
     row.child(div().text_xs().text_color(rgb(MUTED)).child("mm"))
         .into_any_element()

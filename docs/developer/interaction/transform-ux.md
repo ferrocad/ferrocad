@@ -127,6 +127,26 @@ origin while it is set. It is not a transform commit and never touches the docum
 `preview: "translation"` form is open: the HUD is anchored to the visible origin and
 must not slide under the user's typing. Closing the form re-enables it.
 
+### 3.1 Floating HUD placement and fields
+
+The floating Δ HUD is anchored to the **gizmo**, not the screen or the pointer
+(fixed 2026-10-31; the screenshot bug was a bottom-right HUD):
+
+- `place_hud` offsets the gizmo's screen-space origin (`TransformGizmo::origin_anchor`
+  through `Shell::dialog_anchor`) by **+24 px right, −36 px up**. The old below-right
+  offset (`+24, +88`) put a low body's HUD under the bottom dock, where the clamp
+  pinned it to the bottom-right corner, far from the handles it describes.
+- With a viewport but no gizmo armed, the anchor is the **viewport centre**
+  (`InventorViewport::viewport_anchor`), not the last pointer position. The pointer is
+  only the last resort for a shell with no viewport at all.
+- The panel stays inside the canvas safe area (16 px margins, 64 px above the dock).
+  While an input is focused or the pointer is inside the panel, its screen position is
+  **frozen**, so typing a large Δ or dragging never slides the fields away.
+- The expanded pill uses the shared `TextInput` field tokens — `WHEEL_GLASS`, the
+  `CHROME_LINE` hairline and `ACTIVE_ACCENT` while focused. There are no literal
+  `( … )` wrappers around the value: a row is `ΔX` (axis ink), the field box, then one
+  `mm` suffix, repeated for Y and Z.
+
 ## 4. Face-normal alignment and push/pull
 
 **Built 2026-10-26: push/pull is a Part manipulator, not a mode of the triad.** The

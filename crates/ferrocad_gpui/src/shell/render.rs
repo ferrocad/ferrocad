@@ -307,7 +307,8 @@ pub(super) fn dialog_overlay(shell: &mut Shell, window: &Window, cx: &mut Contex
                 }
             }));
         // A floating command dialog (the workplane offset) is the ordinary field row.
-        // The Move form is not a dialog: it has its own overlay (`move_hud_overlay`).
+        // The Move form is not a dialog: it has its own row and finish pill
+        // (`move_fields_bar`, `move_finish_overlay`).
         panel = panel.child(
             div()
                 .flex()
@@ -517,46 +518,96 @@ pub(super) fn hud_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
         )
 }
 
-/// The Move form: `[Δ|XYZ]  ✗ ✓  ΔX [ ]  ΔY [ ]  ΔZ [ ] mm`, anchored beside the
-/// gizmo exactly like a floating dialog.
+/// The pending move's finish pair: `✗`/`✓` in their own glass pill beside the gizmo.
 ///
-/// It is one shape — no compact/expanded morphing: the numbers a drag produces are the
-/// 3-D tape's ruler tags, and these fields are the editable total. The fields open
-/// unfocused; `Tab`, a digit, a click or a ruler tag focuses one.
-pub(super) fn move_hud_overlay(
+/// The editable fields are docked at the bottom with the loadout ([`move_fields_bar`]),
+/// so the only thing that has to live in context is the control that ends the gesture.
+/// It appears only while a move is pending — at rest there is nothing to finish — and
+/// tracks the gizmo's screen-space origin (or the viewport centre when no triad is
+/// armed), clamped into the canvas safe area and frozen while the pointer is over it, so
+/// a click cannot slide the pair out from under the cursor.
+pub(super) fn move_finish_overlay(
     shell: &mut Shell,
     window: &Window,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
-    let Some(inputs) = shell.move_hud.as_ref().map(|hud| hud.inputs.clone()) else {
+    if !shell.move_is_pending(cx) {
         return div().into_any_element();
-    };
-    let absolute = shell.pill.absolute();
-    let focused = inputs
-        .iter()
-        .any(|input| input.read(cx).focus_handle(cx).is_focused(window));
-
-    // The same placement contract as a floating dialog: the gizmo origin (or the
-    // viewport centre), a fixed offset to the panel's bottom-left, a safe-area clamp,
-    // and a freeze while the pointer is over the panel or a field is focused.
+    }
     let viewport = window.viewport_size();
-    let hud_size = shell
+    let pill = shell
         .hud_rect
         .map(|rect| rect.size)
-        .unwrap_or_else(|| size(px(520.0), px(40.0)));
+        .unwrap_or_else(|| size(px(88.0), px(36.0)));
     let hovered = shell
         .hud_rect
         .is_some_and(|rect| rect.contains(&window.mouse_position()));
-    let follow = place_hud(shell.dialog_anchor(window, cx), viewport, hud_size);
-    let origin = if hovered || focused {
+    let follow = place_hud(shell.dialog_anchor(window, cx), viewport, pill);
+    let origin = if hovered {
         shell.hud_lock.unwrap_or(follow)
     } else {
         follow
     };
-    let origin = clamp_hud(origin, viewport, hud_size);
+    let origin = clamp_hud(origin, viewport, pill);
     shell.hud_lock = Some(origin);
-
     let panel = div()
+        .id("move-finish")
+        .debug_selector(|| "move-finish".to_string())
+        .flex()
+        .flex_row()
+        .items_center()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgba(WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .occlude()
+        // The pill floats over the canvas, so a right-press on it still names a verb.
+        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+            if this.active_tool.is_none() {
+                this.last_pointer = Some(event.position);
+                this.open_radial(event.position, cx);
+            }
+        }))
+        .child(hud_buttons(cx));
+    let weak = cx.weak_entity();
+    let measured = div()
+        .on_children_prepainted(move |bounds, _window, cx| {
+            if let Some(rect) = bounds.first().copied() {
+                let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
+            }
+        })
+        .child(panel);
+    deferred(
+        anchored()
+            .anchor(Anchor::TopLeft)
+            .position(origin)
+            .child(measured),
+    )
+    .with_priority(2)
+    .into_any_element()
+}
+
+/// The Move coordinate form, docked with the loadout at the bottom-left of the canvas.
+///
+/// `[Δ|XYZ]  ΔX [ ]  ΔY [ ]  ΔZ [ ] mm` — one shape, no compact/expanded morphing: the
+/// numbers a drag produces are the 3-D tape's ruler tags, and these fields are the
+/// editable total. Keeping them in the dock leaves the canvas around the gizmo clear for
+/// the finish pair. The row opens unfocused; `Tab`, a digit, `-`/`.`, a field click or a
+/// ruler tag focuses one.
+pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElement {
+    let Some(inputs) = shell.move_hud.as_ref().map(|hud| hud.inputs.clone()) else {
+        return div().into_any_element();
+    };
+    // A modal or the object wheel hides the row rather than stacking with it; it comes
+    // back when that transient layer closes.
+    if shell.modal_open() || shell.wheel.read(cx).is_open() {
+        return div().into_any_element();
+    }
+    let absolute = shell.pill.absolute();
+    let focus = shell.dialog_focus.clone();
+    div()
         .id("move-hud")
         .debug_selector(|| "move-hud".to_string())
         .flex()
@@ -566,20 +617,11 @@ pub(super) fn move_hud_overlay(
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgba(WHEEL_GLASS))
+        .bg(rgba(DOCK_BG))
         .border_1()
         .border_color(rgba(DOCK_BORDER))
         .occlude()
-        // A right-press on the form opens the object wheel, exactly as it does on the
-        // canvas: the form sits over a slice of the viewport and must not swallow the
-        // gesture that names a verb.
-        .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-            if this.active_tool.is_none() {
-                this.last_pointer = Some(event.position);
-                this.open_radial(event.position, cx);
-            }
-        }))
-        .track_focus(&shell.dialog_focus)
+        .track_focus(&focus)
         .focusable()
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
             let handled = match event.keystroke.key.as_str() {
@@ -608,31 +650,8 @@ pub(super) fn move_hud_overlay(
             }
         }))
         .child(mode_badge(absolute, cx))
-        .child(move_fields(&inputs, absolute));
-    // The finish pair is the **pending** move's control: at rest the form is an
-    // inspector, and `✓`/`✗` would have nothing to spend.
-    let panel = if shell.move_is_pending(cx) {
-        panel.child(hud_buttons(cx))
-    } else {
-        panel
-    };
-
-    let weak = cx.weak_entity();
-    let measured = div()
-        .on_children_prepainted(move |bounds, _window, cx| {
-            if let Some(rect) = bounds.first().copied() {
-                let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
-            }
-        })
-        .child(panel);
-    deferred(
-        anchored()
-            .anchor(Anchor::TopLeft)
-            .position(origin)
-            .child(measured),
-    )
-    .with_priority(2)
-    .into_any_element()
+        .child(move_fields(&inputs, absolute))
+        .into_any_element()
 }
 
 /// The absolute/relative switch: `Δ` for offsets, `XYZ` for world coordinates.

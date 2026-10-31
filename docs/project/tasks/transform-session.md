@@ -334,31 +334,36 @@ to the previewed origin `O_current`:
   `Enter`, a context switch or `Esc`. It is not a separate state: the session already
   survives the release (U1), and the tape/pill simply render it until it commits or drops.
 
-### 3.2 gpui: the always-on Move form and the tape's ruler tags
+### 3.2 gpui: the always-on Move chrome and the tape's ruler tags
 
-**Built 2026-10-31** (U2b). The Move surface is a shell-owned form, not a command dialog:
+**Built 2026-10-31** (U2b). The Move surface is a shell-owned pair, not a command dialog:
 `shell::move_hud::MoveHud` (three `TextInput`s, a frozen `origin`, subscriptions) lives
 `Option` in the `Shell`, and the command token is acquired only per commit. That is what
-lets the form stay on screen across a commit and coexist with a command modal — a dialog
-would have hit the "a dialog is already open" gate. `pill::PillState` holds the focused
-field (`Option<usize>`), the last dragged axis and the coordinate mode.
+lets the surface stay on screen across a commit and coexist with a command modal — a
+dialog would have hit the "a dialog is already open" gate. `pill::PillState` holds the
+focused field (`Option<usize>`), the last dragged axis and the coordinate mode.
 
+- **Two pieces.** The coordinates are **docked** at the canvas' bottom-left, stacked
+  above the loadout bar (`render::move_fields_bar`), so the canvas around the gizmo stays
+  clear. The pending move's `✗`/`✓` pair is the only floating piece
+  (`render::move_finish_overlay`): a small glass pill on the `place_hud` anchor, clamped
+  into the safe area and frozen under the pointer so a click cannot slide it away.
 - **Always visible while Move has a target.** Slot 1 equipped + a selection + translate
-  handles + no active tool ⇒ the form is on screen. `ensure_move_hud` runs on every
+  handles + no active tool ⇒ the row is on screen. `ensure_move_hud` runs on every
   selection, re-arm, slot change, tool end and viewport pick; it opens or closes the
   surface and is idempotent while it is already up. Clearing the selection or equipping
   another hand closes it. **Pressing `1` while Move is already equipped pauses the hand**
-  (`activate_loadout_slot`): the selection stays, the triad and the form leave the canvas
+  (`activate_loadout_slot`): the selection stays, the triad, row and pill leave the canvas
   for inspection, and `1` again or any command that equips the hand re-arms it; a changed
-  selection clears the pause. A modal hides the form (the form is not stacked under a
-  backdrop); the object wheel hides it too, and a right-press on the form opens that wheel.
-- **Chrome order and the pending gate.** `[Δ|XYZ]  ΔX [ ] ΔY [ ] ΔZ [ ] mm  ✗ ✓` on
-  `ui::WHEEL_GLASS` with the `TextInput` field tokens. The mode switch leads, the three
-  fields follow, and the finish pair sits at the **right end**. The pair is rendered only
-  while the move is **pending** (`Shell::move_is_pending`: a dirty session, or non-zero
-  parsed fields before a session could open); at rest the same pill is a coordinate
-  inspector and has nothing to finish. The 3-D ruler follows the same gate — a clean
-  session draws no tape — so `✓`/`✗` and the dashed legs appear and vanish together.
+  selection clears the pause. A modal or the object wheel hides both pieces (they are not
+  stacked under a backdrop); a right-press on the finish pill opens that wheel.
+- **Chrome order and the pending gate.** The docked row is
+  `[Δ|XYZ]  ΔX [ ] ΔY [ ] ΔZ [ ] mm` on `ui::DOCK_BG` with the `TextInput` field tokens;
+  the separate in-context pill holds `✗` then `✓`. The pair is rendered only while the
+  move is **pending** (`Shell::move_is_pending`: a dirty session, or non-zero parsed
+  fields before a session could open); at rest the row is a coordinate inspector and has
+  nothing to finish. The 3-D ruler follows the same gate — a clean session draws no tape
+  — so `✓`/`✗` and the dashed legs appear and vanish together.
 - **Two coordinate modes.** `Δ` (default) shows the pending offset; `XYZ` shows
   `origin_0 + delta`, where `origin_0` is the gizmo origin frozen while the session is
   dirty (a re-pivot therefore moves the measured point). Typing in `XYZ` subtracts the
@@ -384,9 +389,9 @@ field (`Option<usize>`), the last dragged axis and the coordinate mode.
   selection — taking the form and the triad with it. A command modal consumes its own
   `Esc` (the panel stops propagation), so cancelling a dialog never clears the selection
   behind it.
-- **Position freeze** reuses the existing `hud_lock` / freeze-on-focus invariant
-  (`selection-gizmos-and-forms.md` §5.1), so typing `500` never slides the input out from under
-  the pointer.
+- **Position freeze** reuses the `hud_lock` freeze-under-pointer invariant
+  (`selection-gizmos-and-forms.md` §5.1) for the finish pill only. The docked row is laid
+  out above the loadout, so typing `500` can never slide the inputs under the pointer.
 
 ### 3.3 Keyboard-only workflow
 
@@ -410,7 +415,7 @@ lands; the status column is updated then. The loadout-owned rows are in
 | Section | Change | Stage |
 | --- | --- | --- |
 | §4.2 States and transitions | unify the **normal** and **deferred** drag columns. Every `TransformGizmo` drag runs the cumulative session (`Begin → Update → End`), the preview survives the release, and no document transaction fires on mouse-up | U1 |
-| §5.1 / §5.2 Form state machine | replace the floating Move command dialog (`Cancel`/`Move`) with the one-shape Δ HUD; change context loss from *silently cancelled* to *auto-commit if dirty*, reserving `Esc` for rollback; at rest the form is an inspector (no `✗`/`✓`, no tape) | U1 (semantics), U2 (HUD) — done 2026-10-31 |
+| §5.1 / §5.2 Form state machine | replace the floating Move command dialog (`Cancel`/`Move`) with the always-on coordinate row (docked with the loadout) plus an in-context pending-only `✗`/`✓` pill; change context loss from *silently cancelled* to *auto-commit if dirty*, reserving `Esc` for rollback; at rest the row is an inspector (no pill, no tape) | U1 (semantics), U2 (HUD) — done 2026-10-31 |
 | §7 Invariant 3 | "every pending transform session has an explicit rollback (`Esc`), an explicit checkpoint (`Enter`), and auto-commits non-zero deltas when the user deliberately switches selection, slot or tool" | U1 |
 
 ### 4.2 [`gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
@@ -423,7 +428,7 @@ lands; the status column is updated then. The loadout-owned rows are in
 
 | Section | Change | Stage |
 | --- | --- | --- |
-| §1.5 Text and glass chrome | remove `Cancel`/`Move` button chrome from the translation HUD; the HUD is one shape (Δ fields + `✗`/`✓`) and the tape draws 1 px dashed strokes (`AXIS_X`, `AXIS_Y`, `AXIS_Z`, `INACTIVE_COLOR` ghost ring) with per-leg ruler tags | U2, U3 — done 2026-10-31 |
+| §1.5 Text and glass chrome | remove `Cancel`/`Move` button chrome from the translation HUD; the chrome is a docked 3-field row plus an in-context `✗`/`✓` pill, and the tape draws 1 px dashed strokes (`AXIS_X`, `AXIS_Y`, `AXIS_Z`, `INACTIVE_COLOR` ghost ring) with per-leg ruler tags | U2, U3 — done 2026-10-31 |
 | §5 State model | add the post-drag `SESSION_HOLD` where the tape and pill stay live until `Enter`, a context switch or `Esc` (the hover-to-arm case belongs to the loadout note) | U3 |
 
 ### 4.4 [`transform-ux.md`](../../developer/interaction/transform-ux.md)
@@ -449,7 +454,7 @@ sweep.
 | **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — (**done 2026-10-31**: `set_gizmo_preview`/`gizmo_deferred`, `preview_translation` and `PendingMove` are gone; a translation drag is preview-only through `preview_transform`, while rotation keeps the viewport's direct preview/commit because it has no session yet. `preview_home` untouched. viewport 202, gpui 256) |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 — **done 2026-10-31**: `Manipulator::preview_items` is the manipulator half of the same unpickable display-only contract as `FreeCADGui.Preview`; the push/pull stem ghosts the face at the pending depth and the dress-up scrubber ghosts the edge swath at the pending radius. The viewport draws them only while dragging; no document write and no recompute. part_gui 30, viewport 204 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it, and the session is the selection's (742aee7). The no-arg form now opens the U2 pill, not the buttoned dialog |
-| **U2** | the numeric surface: the always-on form (mode switch + fields + a pending-only `✓`/`✗` pair at the right end), `Tab`/digit focus on the dragged axis, coordinates vs offsets, translation numbers on the tape's ruler tags; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31** (revised three times the same day): `shell::move_hud::MoveHud` is a shell surface (not a dialog), `shell::pill::PillState` holds the focus, the drag-axis memory and the coordinate mode. The form is always visible with a Move target, opens **unfocused** so `1`/`2`/`3` still equip slots, and survives a commit; its `✗`/`✓` pair sits at the right end and appears only while the move is pending (`Shell::move_is_pending`), so at rest it is a coordinate inspector and the tape is not drawn. `Tab`/a non-slot digit/a click/a ruler tag focuses a field; the badge or `=` flips `Δ` ↔ `XYZ` (`origin_0 + delta`, `=`/`@` per-field override). `Esc` cascades (rollback → pivot → clear selection) and `1` on the active hand pauses Move. gpui 282 |
+| **U2** | the numeric surface: the always-on coordinate row docked with the loadout, an in-context pending-only `✓`/`✗` pill, `Tab`/digit focus on the dragged axis, coordinates vs offsets, translation numbers on the tape's ruler tags; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31** (revised four times the same day): `shell::move_hud::MoveHud` is a shell surface (not a dialog), `shell::pill::PillState` holds the focus, the drag-axis memory and the coordinate mode. The row is always visible with a Move target (bottom-left, above the loadout) and opens **unfocused** so `1`/`2`/`3` still equip slots; it survives a commit. The `✗`/`✓` pair is a separate pill anchored beside the gizmo and appears only while the move is pending (`Shell::move_is_pending`), so at rest the row is a coordinate inspector and the tape is not drawn. `Tab`/a non-slot digit/a click/a ruler tag focuses a field; the badge or `=` flips `Δ` ↔ `XYZ` (`origin_0 + delta`, `=`/`@` per-field override). `Esc` cascades (rollback → pivot → clear selection) and `1` on the active hand pauses Move. gpui 282 |
 | **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 — **done 2026-10-31**: `ferrocad_stage::measure_tape` builds the ring, dashed legs and 6 px ticks from `TransformTape`; the viewport draws them depth-off and never picked, and the tape follows the session through the release. Stage 236, viewport 203 |
 | **U6** | this note's share of the sweep: spec text final, dead code gone, user-docs Move page | Converges with the loadout half | all of §4 — **done 2026-10-31**: the four interaction specs agree with the built session/loadout; the retired vocabulary is gone from the code; the user-docs loadout page is authored; gpui 268 |
 

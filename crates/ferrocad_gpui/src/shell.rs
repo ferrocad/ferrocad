@@ -82,7 +82,8 @@ pub(crate) use render::dev_tools_body;
 // keep their `crate::shell::FG` paths while the widget layer can use the same table
 // without depending on the shell.
 pub(crate) use ferrocad_theme::ui::{
-    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, DOCK_BORDER, FG, MUTED, PANEL, PANEL_ALT, WHEEL_GLASS,
+    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, DOCK_BG, DOCK_BORDER, FG, MUTED, PANEL, PANEL_ALT,
+    WHEEL_GLASS,
 };
 
 /// The registry feature whose provider supplies the gizmo skin.
@@ -1736,9 +1737,23 @@ impl Render for Shell {
                         cx,
                     )),
             )
-            // The hand is visible over the canvas, bottom-left, on the dock's baseline:
-            // the loadout is switchable by key, click and the wheel alike.
-            .child(crate::chrome::loadout_bar(self.loadout, cx))
+            // The hand and the Move form share the dock's baseline, bottom-left: the
+            // loadout is switchable by key, click and the wheel alike, and the pending
+            // move's coordinates sit directly above it instead of floating over the
+            // handles. A column, not a row: stacked to the left, the pair never reaches
+            // the centred action dock on a narrower window.
+            .child(
+                div()
+                    .absolute()
+                    .bottom(px(12.))
+                    .left(px(16.))
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap_1()
+                    .child(move_fields_bar(self, cx))
+                    .child(crate::chrome::loadout_bar(self.loadout, cx)),
+            )
             // Swap, do not stack: while a session runs the bottom-centre slot shows
             // the tool surface, so a second command cannot be started underneath it.
             .child(match active_tool {
@@ -1846,14 +1861,15 @@ impl Render for Shell {
         } else {
             body
         };
-        // The Move form is not a modal: it renders whenever the Move hand has a target.
-        // A modal or the object wheel hides it rather than stacking; it comes back when
-        // that transient layer closes.
+        // The Move form is not a modal: its coordinate row docks with the loadout, and
+        // the in-context finish pair floats beside the gizmo while a move is pending.
+        // A modal or the object wheel hides both rather than stacking; they come back
+        // when that transient layer closes.
         let body = if self.move_hud.is_some()
             && !self.modal_open()
             && !self.wheel.read(cx).is_open()
         {
-            body.child(move_hud_overlay(self, window, cx))
+            body.child(move_finish_overlay(self, window, cx))
         } else {
             body
         };

@@ -240,28 +240,33 @@ move lives in the shell's `TransformSession`, not in the form: the Δ fields mir
 `session.delta()` and an edit writes an absolute value back to the session. The session
 exists independently of the form, so a drag with no HUD open previews the same ghost.
 
-The Move form has **one shape** since 2026-10-31: `[Δ|XYZ] ΔX [ ] ΔY [ ] ΔZ [ ] mm ✗ ✓`,
-shown whenever Slot 1 has a Move target. It is a **shell-owned surface**, not a command
-dialog (`shell/move_hud.rs`): it survives a commit, never holds a command token, and can
-coexist with a command modal. The old two-stage compact ↔ expanded pill, and the second
-(single-axis) readout beside it, are gone; the numbers a drag produces are drawn on the
-session's 3-D measuring tape as **ruler tags** (`gizmo-manipulators.md` §5), so the
-viewport no longer floats a duplicate pill at the arrow tip.
+The Move surface has **two pieces** since 2026-10-31: a coordinate row docked at the
+bottom-left with the loadout (`[Δ|XYZ]  ΔX [ ]  ΔY [ ]  ΔZ [ ] mm`, `shell::move_fields_bar`)
+and a small in-context `✗`/`✓` pill that floats beside the gizmo
+(`shell::move_finish_overlay`). Both appear whenever Slot 1 has a Move target. They are
+**shell-owned surfaces**, not a command dialog (`shell/move_hud.rs`): they survive a
+commit, never hold a command token, and can coexist with a command modal. The old
+two-stage compact ↔ expanded pill, and the second (single-axis) readout beside it, are
+gone; the numbers a drag produces are drawn on the session's 3-D measuring tape as
+**ruler tags** (`gizmo-manipulators.md` §5), so the viewport no longer floats a duplicate
+pill at the arrow tip. Docking the fields keeps the canvas around the gizmo clear for
+the finish pair.
 
-**At rest it is an inspector; the finish pair is the pending move's control.** With
-`Δ = (0, 0, 0)` the fields show the live coordinate readout and there are no `✗`/`✓`
-buttons: there is nothing to spend, and a button that closes nothing reads as broken.
-As soon as a drag or a typed value makes the session dirty, the 3-D dashed ruler appears
-and the pair materialises **at the right end** of the pill. `✓`/`Enter` commits one undo
-step and `✗`/`Esc` returns to the ghost origin; either dissolves the ruler and the pair,
-leaving the form at rest.
+**At rest the row is an inspector; the finish pair is the pending move's control.** With
+`Δ = (0, 0, 0)` the fields show the live coordinate readout and the `✗`/`✓` pill is not
+rendered at all: there is nothing to spend, and a button that closes nothing reads as
+broken. As soon as a drag or a typed value makes the session dirty, the 3-D dashed ruler
+appears and the pair materialises beside the gizmo. `✓`/`Enter` commits one undo step and
+`✗`/`Esc` returns to the ghost origin; either dissolves the ruler and the pill, leaving
+the row at rest.
 
-**Always visible while Move has a target.** The form appears with the selection (or a hover
+**Always visible while Move has a target.** The row appears with the selection (or a hover
 promotion) and disappears when the selection clears, another hand or tool takes over, or
 the Move hand is **paused** (pressing `1` while it is already active — the selection stays
 for inspection, and `1` again, a new selection or a `Move` verb re-arms it). A modal or
-the object wheel hides it for its lifetime; it returns with the canvas. A right-press on
-the form opens the object wheel, so the form never swallows the verb gesture.
+the object wheel hides both pieces for its lifetime; they return with the canvas. A
+right-press on the finish pill opens the object wheel, so it never swallows the verb
+gesture.
 
 **Two coordinate modes.** The leading badge (or `=`) flips the fields between `ΔX/ΔY/ΔZ`
 (offsets) and `X/Y/Z` (world coordinates): the display is `origin_0 + delta`, where
@@ -269,33 +274,33 @@ the form opens the object wheel, so the form never swallows the verb gesture.
 is parsed back as `value - origin_0`. Both modes preview, tape and commit the same delta.
 A per-field `=`/`@` prefix (`=15`) asks for an absolute value without leaving offset mode.
 
-**Unfocused is the default.** Opening the form or releasing a drag leaves every field
+**Unfocused is the default.** Opening the row or releasing a drag leaves every field
 unfocused, so `1`/`2`/`3` still equip loadout slots and the viewport keeps its own keys.
 `Tab` opens the field of the last gesture (drag-axis memory) and selects its value, then
 cycles; a digit other than `1`–`3`, or `-`/`.`, focuses that field and starts the number;
 a click in a field or on a ruler tag does the same. `Enter`/`✓` commits and `Esc`/`✗` rolls
-back; both reset the fields and hand the keyboard back to the canvas, and the form stays.
+back; both reset the fields and hand the keyboard back to the canvas, and the row stays.
 Only the **focused** field paints a selection highlight: a blurred `TextInput` clears its
 selection range, so a `Tab` from `ΔY` to `ΔZ` never leaves a purple range behind.
 
-A floating HUD may be repositioned when the gizmo moves; its anchor is recomputed from
-the visible gizmo origin (or the **viewport centre** when no gizmo is armed; the live
-pointer is the last resort for a shell with no viewport) each frame it renders. The
-fixed offset is **+24 px right and 36 px up to the panel's bottom-left**
-(`render::place_hud`), so a low body keeps the panel beside its handles instead of in
-the bottom-right clamp and the pill does not cover the arrow it describes. **Position stability:** the HUD is
-clamped inside the viewport safe area (16 px window margins; 64 px above the bottom
-dock) and its screen position is **frozen while the pointer is inside the HUD rect or a
-field is focused**, so typing a large Δ (`500`) cannot move the inputs out from under the
-cursor. It resumes tracking once the pointer leaves and focus is released. The pointer
-is read from the window's live position, and the HUD rect from the previous paint, so
-entering and leaving are judged against what the user actually saw.
+**The finish pill tracks the gizmo.** It is the one floating piece left: its anchor is
+recomputed from the visible gizmo origin (or the **viewport centre** when no gizmo is
+armed; the live pointer is the last resort for a shell with no viewport) each frame it
+renders. The fixed offset is **+24 px right and 36 px up to the pill's bottom-left**
+(`render::place_hud`), so it floats clear of the handle cluster instead of covering the
+arrow it describes. It is clamped inside the viewport safe area (16 px margins; 64 px
+above the bottom dock) and its position is **frozen while the pointer is inside its
+rect**, so a click cannot slide the buttons out from under the cursor. The docked
+coordinate row does not move at all: it is laid out above the loadout, so typing a large
+Δ (`500`) can never move the inputs. The pointer is read from the window's live position
+and the pill rect from the previous paint, so entering and leaving are judged against
+what the user actually saw.
 
 ### 5.2 States
 
 ```text
 Closed ──Move hand + a target──► At rest (fields, no ✗/✓, no ruler)
-At rest ──drag / typed value (Δ ≠ 0)──► Pending (ruler + ✗/✓ at the right end)
+At rest ──drag / typed value (Δ ≠ 0)──► Pending (ruler + the in-context ✗/✓ pill)
 Pending ──Enter / ✓──► one transaction, fields reset ──► At rest (canvas focused)
 Pending ──Esc / ✗──► rollback: session dropped, preview restored ──► At rest
 At rest ──gizmo drag──► fields mirror the session Δ + preview; no focus taken
@@ -456,7 +461,7 @@ rendered form dialog (backdrop occludes everything)
 | display offset | `TransformGizmo::set_display_offset` | `a_display_offset_moves_the_drawing_not_the_drag_frame` |
 | preview + pending session | `InventorViewport::preview_transform`, `Shell::on_transform_preview` (opens the shell's session) | `a_typed_translation_previews_only_the_named_entities`, `a_move_hud_drag_survives_its_release`, `a_plain_drag_is_pending_until_enter_or_escape`, `a_gizmo_drag_updates_the_move_fields` |
 | floating form | `Shell::{open_dialog_state, dialog_overlay}` | `the_move_dialog_floats_without_a_backdrop`, `the_command_dialog_renders_and_escape_cancels` |
-| HUD clamp + freeze | `place_hud`, `clamp_hud`, `dialog_overlay` (`on_children_prepainted`) | `a_floating_hud_is_clamped_into_the_safe_area`, `a_focused_floating_hud_freezes_in_place` |
+| HUD clamp + freeze | `place_hud`, `clamp_hud`, `dialog_overlay`, `move_finish_overlay` | `a_floating_hud_is_clamped_into_the_safe_area`, `the_finish_pill_tracks_the_anchor_and_the_form_stays_docked` |
 | selection-scoped form | `Shell::replace_selection`, `Shell::refresh` | `a_selection_change_closes_the_move_hud`, `a_competing_interaction_closes_the_move_hud` |
 | grip follows preview | `Manipulator::{anchor, set_anchor}` | `a_typed_preview_moves_the_gizmo_and_the_grips`, `a_grip_anchor_follows_the_object` |
 | topology filter (U4, 2026-10-31) | `shell/loadout.rs`, `Shell::replace_selection` | `a_face_click_selects_the_body_in_the_move_slot`, `the_slot_sets_the_filter_and_select_overrides_it`, `a_scripted_selection_reaches_the_shell` (with `Select: Auto`) |

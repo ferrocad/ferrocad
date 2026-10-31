@@ -60,16 +60,17 @@ sub-element reports the same filtered scope the window does.
 | `Esc` | roll back the pending move; at rest, clear the selection; or close the open surface |
 | `Space` | open the object-verb wheel |
 
-With **Move** equipped and something selected, the form is always on screen: a leading
-`Δ`/`XYZ` switch, then the `ΔX`, `ΔY` and `ΔZ` fields, then a `✗` (cancel) and `✓`
-(commit). The finish pair appears **only while a move is pending** (a drag or a typed
-number): at rest the form is a live coordinate readout and the 3-D ruler is not drawn.
+With **Move** equipped and something selected, the coordinates are always on screen: a
+`Δ`/`XYZ` switch and the `ΔX`, `ΔY` and `ΔZ` fields, docked at the bottom-left, just
+above the loadout bar. The `✗` (cancel) and `✓` (commit) buttons are a separate little pill
+that appears **only while a move is pending** (a drag or a typed number), floating next
+to the gizmo: at rest there is nothing to finish, and the 3-D ruler is not drawn either.
 The fields start **unfocused**: their numbers follow the triad and the 3-D measuring
 tape live, but `1`, `2` and `3` still equip tools. `Tab` — or a digit other than
 `1`–`3`, `-`, `.`, a click in a field, or a click on a ruler tag — puts the keyboard in
 a field. Once a field is focused its digits belong to it. `✓`/`Enter` commits and
-resets the fields; `✗`/`Esc` rolls back. Neither closes the form. Starting a `Move`
-command (`Space` wheel or the bar) brings a paused hand back.
+resets the fields; `✗`/`Esc` rolls back. Neither closes the coordinates. Starting a
+`Move` command (`Space` wheel or the bar) brings a paused hand back.
 
 Click the `Δ` switch (or press `=`) to show **coordinates** instead of offsets: typing
 `0` in `X` snaps the pivot onto the YZ plane, and a typed coordinate is still one

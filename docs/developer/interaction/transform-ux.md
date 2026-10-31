@@ -26,7 +26,7 @@ drag), [`topology-selection.md`](topology-selection.md) (sub-element names),
 | Triad handles | Translate is the default; **Rotate is hosted** through the shell's session mode; Universal is defined but not surfaced | `gizmo.rs`; `contributions.rs`; `shell.rs` `gizmo_mode`/`set_gizmo_mode` |
 | Click anchor | the triad hugs the object origin (`ShapeItem::anchor`); a session `user_origin` from re-pivot overrides it while set | `contributions.rs` `translate_gizmo`; `shell.rs` `user_origin` |
 | Origin/pivot handle | **built (slice 3)**: `GizmoTarget::Origin`, a 10 px disc, priority origin > axis > plane > ring | `gizmo.rs` `GizmoTarget`; `inventor_view.rs` `gizmo_origin_snap` |
-| Face/edge tags, `Move` + the one-shape Δ HUD and the tape's ruler tags | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
+| Face/edge tags, `Move` + the docked Δ row and in-context finish pill, and the tape's ruler tags | today | `inventor_view.rs`; `ferrocad_shell/__init__.py`; `snap.rs` |
 | Face-normal push/pull | **built (slice 5)**: `PushPullStem` + the parametric `push_pull` hook | `ferrocad_part_gui/src/push_pull.rs`; `python/ferrocad_parametric/__init__.py` |
 | Hand / loadout | **built (U4, 2026-10-31)**: Slot 1 hosts the triad, Slots 2/3 the selection's manipulator; `Select ▾`; `1`/`2`/`3`; bottom-left bar | `shell/loadout.rs`; `chrome.rs` |
 | Hover-to-arm | **built (U5, 2026-10-31)**: Move hand + empty selection materialises the triad at 30 %; a handle press promotes and drags | `shell/loadout.rs`; `inventor_view.rs` `set_gizmo_idle_scale` |
@@ -127,36 +127,41 @@ origin while it is set. It is not a transform commit and never touches the docum
 `preview: "translation"` form is open: the HUD is anchored to the visible origin and
 must not slide under the user's typing. Closing the form re-enables it.
 
-### 3.1 Floating HUD placement and fields
+### 3.1 Floating finish pill and docked fields
 
-The floating Δ HUD is anchored to the **gizmo**, not the screen or the pointer
-(fixed 2026-10-31; the screenshot bug was a bottom-right HUD):
+The Move surface is **two pieces** since 2026-10-31: the coordinates are docked at the
+bottom-left, stacked above the loadout, and only the pending move's `✗`/`✓` pill floats
+in context.
+The floating pill is anchored to the **gizmo**, not the screen or the pointer (fixed
+2026-10-31; the screenshot bug was a bottom-right HUD):
 
 - `place_hud` offsets the gizmo's screen-space origin (`TransformGizmo::origin_anchor`
   through `Shell::dialog_anchor`) by **+24 px right and 36 px up**, measured to the
-  **bottom-left of the panel** so the pill floats clear of the handle cluster; the old
+  **bottom-left of the pill** so it floats clear of the handle cluster; the old
   below-right offset (`+24, +88`) put a low body's HUD under the bottom dock, where the
   clamp pinned it to the bottom-right corner, far from the handles it describes.
 - With a viewport but no gizmo armed, the anchor is the **viewport centre**
   (`InventorViewport::viewport_anchor`), not the last pointer position. The pointer is
   only the last resort for a shell with no viewport at all.
 - A **typed** Δ moves the gizmo's real frame with the object (and rebuilds its handle
-  geometry), so the drawn triad and the HUD anchor follow the value while the session
+  geometry), so the drawn triad and the pill anchor follow the value while the session
   is pending. A **drag release** settles the same way (`preview_transform_settled`),
   even if the viewport still reports its drag for a tick: the pending pose becomes the
   resting frame and the draw-only offset is cleared, so the triad cannot snap back.
   `Enter` commits and the shell re-arms at the committed pose.
-- The panel stays inside the canvas safe area (16 px margins, 64 px above the dock).
-  While an input is focused or the pointer is inside the panel, its screen position is
-  **frozen**, so typing a large Δ or dragging never slides the fields away.
-- The form has **one shape** and is **always visible while the Move hand has a target**
-  (2026-10-31): `[Δ|XYZ] ΔX [ ] ΔY [ ] ΔZ [ ] mm ✗ ✓`. It is a shell-owned surface, not
-  a command dialog, so it survives a commit and a command modal can open over it. It
-  uses the shared `TextInput` field tokens — `WHEEL_GLASS`, the `CHROME_LINE` hairline
-  and `ACTIVE_ACCENT` while focused — and there are no literal `( … )` wrappers. A
-  blurred field paints no caret and no selection, so two fields never look focused at
-  once. The `✗`/`✓` pair sits at the **right end**, and only while a move is pending:
-  at rest the form is a coordinate inspector with nothing to finish.
+- The pill stays inside the canvas safe area (16 px margins, 64 px above the dock).
+  While the pointer is inside it, its screen position is **frozen**, so a click cannot
+  slide the buttons away. The docked row never moves, so typing a large Δ can never
+  move the fields.
+- The fields (`[Δ|XYZ] ΔX [ ] ΔY [ ] ΔZ [ ] mm`, `move_fields_bar`) are **always visible
+  while the Move hand has a target** and dock beside `[1 Move] [2 Push/Pull] [3 Fillet]`
+  on the bottom bar. They are a shell-owned surface, not a command dialog, so they
+  survive a commit and a command modal can open over them. They use the shared
+  `TextInput` field tokens — `DOCK_BG`, the `CHROME_LINE` hairline and `ACTIVE_ACCENT`
+  while focused — and there are no literal `( … )` wrappers. A blurred field paints no
+  caret and no selection, so two fields never look focused at once. The `✗`/`✓` pair is
+  the separate in-context pill, and only while a move is pending: at rest the row is a
+  coordinate inspector with nothing to finish.
 - The leading badge (or `=`) switches the fields between offsets (`ΔX`, the pending
   delta) and world coordinates (`X`, `origin_0 + delta`), where `origin_0` is the gizmo
   origin frozen while the session is dirty; a re-pivot moves it. Typing a coordinate
@@ -166,11 +171,11 @@ The floating Δ HUD is anchored to the **gizmo**, not the screen or the pointer
   keep equipping loadout slots. `Tab` opens the drag axis (with its value selected), a
   digit (other than `1`–`3`) or `-`/`.` opens the remembered field with that character,
   and a click in a field or on a ruler tag focuses it. `Enter`/`✓` and `Esc`/`✗` finish the
-  session, reset the fields and hand the keyboard back to the viewport; the form stays
+  session, reset the fields and hand the keyboard back to the viewport; the row stays
   (`shell/tests/escalation.rs`). `Esc` then cascades: from a pending move it rolls back,
-  from a clean form it clears the selection (taking the form and triad with it). Pressing
+  from a clean form it clears the selection (taking the row and triad with it). Pressing
   `1` while Move is already equipped pauses the hand instead — selection kept, handles and
-  form gone — and `1` again, a new selection or a `Move` verb brings it back.
+  row gone — and `1` again, a new selection or a `Move` verb brings it back.
 
 ## 4. Face-normal alignment and push/pull
 

@@ -16,7 +16,8 @@ language this suite shares).
 > enables the viewport's preview mode once at startup, a release reports a preview and never
 > commits), the shell owns a `TransformSession`, `Enter` commits one transaction and `Esc`
 > rolls back without spending an undo entry. The numeric surface is also **built**: the
-> one-shape 3-field HUD (§5) and, for a translation, the tape's per-leg ruler tags. The
+> 3-field coordinate row docked with the loadout, the pending move's in-context `✗`/`✓`
+> pill (§5) and, for a translation, the tape's per-leg ruler tags. The
 > loadout slot deciding which manipulator class may arm at all is built too (§9.2, §14, §19).
 > Plans: [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
 > and [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md); the maths,
@@ -195,9 +196,10 @@ degrees.
 **Readout surface (session and form built).** The numeric tag is a **view of the
 shell's `TransformSession`**: it mirrors `session.delta()` and writes absolute values back,
 so the gesture and the numbers describe one pending value. Since 2026-10-31 the editable
-surface is the **always-on** Move form (`selection-gizmos-and-forms.md` §5.1) — three
-coordinates with an absolute/relative switch (`X/Y/Z` vs `ΔX/ΔY/ΔZ`), plus a `✗`/`✓`
-finish pair that appears at the right end only while the move is pending.
+surface is the **always-on** coordinate row docked with the loadout
+(`selection-gizmos-and-forms.md` §5.1) — three coordinates with an absolute/relative
+switch (`X/Y/Z` vs `ΔX/ΔY/ΔZ`) — plus an in-context `✗`/`✓` pill beside the gizmo that
+appears only while the move is pending.
 
 **Translation numbers sit on the tape (2026-10-31).** A translation drag is no longer
 reported by a third pill at the arrow tip. The session's 3-D measuring tape (U3) gets one

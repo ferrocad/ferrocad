@@ -739,7 +739,9 @@ fn select_button(
 ///
 /// It shares the creation dock's baseline and glass. The active slot is accented over
 /// `CHROME_ACTIVE_BG`; a click equips it exactly as its key does, so the hotkey stays
-/// discoverable without opening the wheel.
+/// discoverable without opening the wheel. The caller positions the pill in the
+/// bottom-left column (the Move form docks directly above it), so this returns the pill
+/// itself.
 pub(crate) fn loadout_bar(loadout: Loadout, cx: &mut Context<Shell>) -> impl IntoElement {
     let mut panel = div()
         .id("loadout-bar")
@@ -782,11 +784,7 @@ pub(crate) fn loadout_bar(loadout: Loadout, cx: &mut Context<Shell>) -> impl Int
         panel = panel.child(button);
     }
 
-    div()
-        .absolute()
-        .bottom(px(12.))
-        .left(px(16.))
-        .child(panel)
+    panel
 }
 
 fn split_button(

@@ -506,10 +506,10 @@ fn the_move_dialog_floats_without_a_backdrop(cx: &mut TestAppContext) {
     );
 }
 
-/// While a move is pending the chrome runs mode switch → fields → ✗ ✓, left to right;
-/// at rest the finish pair is absent (the form is an inspector).
+/// The pending move's chrome is two pieces: the fields dock bottom-left with the
+/// loadout, and `✗`/`✓` float in their own pill beside the gizmo.
 #[gpui::test]
-fn the_move_form_orders_mode_fields_then_finish(cx: &mut TestAppContext) {
+fn the_move_form_docks_the_fields_and_floats_the_finish_pair(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell();
     let window = cx.update(|cx| {
@@ -531,14 +531,32 @@ fn the_move_form_orders_mode_fields_then_finish(cx: &mut TestAppContext) {
     });
     draw(&mut cx);
 
+    let form = cx.debug_bounds("move-hud").expect("the docked form");
     let mode = cx.debug_bounds("move-mode").expect("the mode switch");
     let first = cx.debug_bounds("move-axis-0").expect("ΔX");
     let last = cx.debug_bounds("move-axis-2").expect("ΔZ");
+    let finish = cx.debug_bounds("move-finish").expect("the finish pill");
     let cancel = cx.debug_bounds("dialog-cancel").expect("✗");
     let accept = cx.debug_bounds("dialog-accept").expect("✓");
+
+    // The docked row: the mode switch leads, then the fields run X → Z.
+    assert!(form.contains(&mode.center()));
+    assert!(form.contains(&first.center()));
+    assert!(form.contains(&last.center()));
     assert!(mode.origin.x <= first.origin.x, "the mode switch leads");
     assert!(first.origin.x < last.origin.x, "the fields run X → Z");
-    assert!(last.origin.x < cancel.origin.x, "✗ follows the fields");
+
+    // The finish pair is a separate in-context pill, not part of the dock.
+    assert!(
+        !form.contains(&accept.center()),
+        "✓ is not in the docked row"
+    );
+    assert!(
+        !form.contains(&cancel.center()),
+        "✗ is not in the docked row"
+    );
+    assert!(finish.contains(&cancel.center()));
+    assert!(finish.contains(&accept.center()));
     assert!(cancel.origin.x < accept.origin.x, "✗ precedes ✓");
 }
 
@@ -605,11 +623,10 @@ if "Test_MoveModal" not in FreeCADGui.listCommands():
     );
 }
 
-/// Seam B: while a field is focused the floating HUD is frozen, so typing a large
-/// delta cannot slide the inputs out from under the pointer. Releasing focus and
-/// moving away lets it track the anchor again.
+/// The finish pair floats beside the gizmo and freezes under the pointer, so a click
+/// cannot slide the buttons away; the coordinate row is docked and never moves.
 #[gpui::test]
-fn a_focused_floating_hud_freezes_in_place(cx: &mut TestAppContext) {
+fn the_finish_pill_tracks_the_anchor_and_the_form_stays_docked(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell();
     let window = cx.update(|cx| {
@@ -624,47 +641,62 @@ fn a_focused_floating_hud_freezes_in_place(cx: &mut TestAppContext) {
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             shell.select("Params", cx);
-            shell.run_command("App_Move", cx);
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+            shell.on_move_typed(cx);
         })
     });
     draw(&mut cx);
 
     let viewport = cx.update(|window, _cx| window.viewport_size());
-    let first_paint = cx.debug_bounds("move-hud").expect("the HUD paints");
-    let hud_size = first_paint.size;
     let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
-    // Bottom-left of the canvas: well away from the HUD's first position.
-    let far = point(
-        canvas.origin.x + px(8.0),
-        canvas.origin.y + canvas.size.height - px(8.0),
-    );
-
-    // The fields start unfocused (the canvas owns the keys), so a `Tab` is what freezes
-    // the HUD for typing.
-    press_root(&mut cx, &shell, "tab");
-    draw(&mut cx);
-    let before = cx.debug_bounds("move-hud").expect("the HUD paints");
-    cx.simulate_mouse_move(far, None::<MouseButton>, gpui::Modifiers::default());
-    draw(&mut cx);
-    let frozen = cx.debug_bounds("move-hud").expect("the HUD paints");
+    let docked = cx.debug_bounds("move-hud").expect("the form");
+    let bar = cx.debug_bounds("loadout-bar").expect("the loadout bar");
     assert_eq!(
-        frozen.origin, before.origin,
-        "a focused HUD stays put while the pointer moves"
+        docked.origin.x, bar.origin.x,
+        "the coordinate row is left-aligned with the loadout"
+    );
+    assert!(
+        docked.origin.y + docked.size.height <= bar.origin.y,
+        "the row stacks above the loadout: {docked:?} vs {bar:?}"
+    );
+    assert!(
+        bar.origin.y + bar.size.height > canvas.origin.y + canvas.size.height - px(24.0),
+        "the loadout keeps the dock baseline"
     );
 
-    // Release focus and move again: the HUD follows the new anchor, clamped.
-    let root_focus = cx.update(|_window, cx| shell.read(cx).root_focus.clone());
-    cx.update(|window, cx| window.focus(&root_focus, cx));
-    let elsewhere = point(canvas.origin.x + px(8.0), canvas.origin.y + px(8.0));
+    // With no viewport the anchor is the pointer, so the pair follows it.
+    let first = cx.debug_bounds("move-finish").expect("the pair");
+    assert_eq!(
+        first.origin,
+        place_hud(point(px(0.0), px(0.0)), viewport, first.size),
+        "the pair hangs off the anchor"
+    );
+    let elsewhere = point(px(300.0), px(200.0));
     cx.simulate_mouse_move(elsewhere, None::<MouseButton>, gpui::Modifiers::default());
     draw(&mut cx);
-    let resumed = cx.debug_bounds("move-hud").expect("the HUD paints");
-    assert_eq!(
-        resumed.origin,
-        place_hud(elsewhere, viewport, hud_size),
-        "with focus released the HUD follows the pointer, clamped"
+    let moved = cx.debug_bounds("move-finish").expect("the pair");
+    let expected = place_hud(elsewhere, viewport, moved.size);
+    assert!(
+        (moved.origin.x.0 - expected.x.0).abs() <= 1.0
+            && (moved.origin.y.0 - expected.y.0).abs() <= 1.0,
+        "moving the anchor moves the pair: {moved:?} vs {expected:?}"
     );
-    assert_ne!(resumed.origin, frozen.origin, "the HUD moved again");
+    assert_ne!(moved.origin, first.origin, "the pair moved");
+
+    // A pointer inside the pill freezes it: a click must not slide the buttons away.
+    let inside = point(moved.origin.x + px(30.0), moved.origin.y + px(18.0));
+    cx.simulate_mouse_move(inside, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    let frozen = cx.debug_bounds("move-finish").expect("the pair");
+    assert_eq!(frozen.origin, moved.origin, "the pair freezes under the pointer");
+
+    // The docked fields never move with the pointer or the pair.
+    let form_after = cx.debug_bounds("move-hud").expect("the form");
+    assert_eq!(
+        form_after.origin, docked.origin,
+        "the docked coordinates stay put"
+    );
 }
 
 /// Seam B: a floating HUD is clamped into the viewport safe area.

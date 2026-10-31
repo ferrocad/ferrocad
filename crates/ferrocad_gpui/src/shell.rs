@@ -23,10 +23,10 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, ShapeItem, SnapKind, Stage, ToolStatus, TransformGizmo, TransformSession,
-    TransformTape, WorkplaneLive,
+    Manipulator, RingSweep, ShapeItem, SnapKind, Stage, ToolStatus, TRANSFORM_ID,
+    TransformGizmo, TransformSession, TransformTape, WorkplaneLive,
 };
-use ferrocad_types::{Matrix4, Vector3};
+use ferrocad_types::{Matrix4, Rotation, Vector3};
 use ferrocad_ui::Form;
 use ferrocad_viewport::scene;
 use ferrocad_viewport::{
@@ -42,7 +42,7 @@ use ferrocad_widgets::scrub;
 use ferrocad_widgets::slider;
 use ferrocad_widgets::wheel::{WheelEvent, WheelMenu, WheelSlot, WheelTone};
 use ferrocad_widgets::window_chrome::window_frame_with_leading;
-use ferrocad_widgets::{ChangeEvent, SubmitEvent, TextAreaState, TextInput};
+use ferrocad_widgets::{ChangeEvent, RejectedChar, SubmitEvent, TextAreaState, TextInput};
 
 use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
@@ -336,6 +336,10 @@ pub struct Shell {
     /// A field the next render must focus (a ruler tag's click, which arrives outside a
     /// window context). Cleared by the render that consumes it.
     pill_focus_request: Option<usize>,
+    /// Draw the finish pair with the bright rim until the next action. A refused press on
+    /// a locked ring sets it; the project's visual language has no animation, so it is a
+    /// static attention state, not a timed pulse.
+    pill_attention: bool,
     /// Give the keyboard back to the viewport on the next render, after a Move HUD
     /// finishes: `Enter`, ✓, `Esc` or ✗ all leave the fields behind.
     restore_viewport_focus: bool,
@@ -430,6 +434,10 @@ pub struct Shell {
     /// drags. The value itself lives in [`session`](Self::session); this only accumulates
     /// the viewport's per-drag transform onto the session's absolute delta.
     drag_start: Option<[f64; 3]>,
+    /// The running **rotate** drag's baseline: the pending step's angle at its press. A
+    /// ring reports an absolute sweep from its own press, so each tick re-applies it on
+    /// top of this baseline instead of compounding into the session. `None` between drags.
+    rotation_start: Option<f64>,
     /// The live transform session, when a Move drag has opened one.
     ///
     /// This is the uncommitted value: the datum the gesture started from, the accumulated
@@ -772,6 +780,7 @@ impl Shell {
             move_hud: None,
             move_disarmed: false,
             pill_focus_request: None,
+            pill_attention: false,
             restore_viewport_focus: false,
             form_dialog: None,
             form_events: None,
@@ -802,6 +811,7 @@ impl Shell {
             wheel_target: None,
             last_pointer: None,
             drag_start: None,
+            rotation_start: None,
             session: None,
             workplane_session: None,
             hud_rect: None,
@@ -999,6 +1009,7 @@ impl Shell {
         }) || self.move_hud.as_ref().is_some_and(|hud| {
             hud.inputs
                 .iter()
+                .chain(std::iter::once(&hud.angle))
                 .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
         });
         // `=` flips the Move form between offsets and coordinates. It is not a number
@@ -1758,6 +1769,7 @@ impl Render for Shell {
                     .child(move_fields_bar(self, cx))
                     .child(crate::chrome::loadout_bar(
                         self.loadout,
+                        self.gizmo_mode,
                         self.move_is_pending(cx),
                         cx,
                     )),

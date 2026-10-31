@@ -699,6 +699,25 @@ impl Rotation {
         )
     }
 
+    /// Intrinsic **XYZ** Euler angles (`x`/`y`/`z`) in degrees.
+    ///
+    /// The composition order is `Rz * Ry * Rx`, the same convention as
+    /// [`from_euler_deg`](Self::from_euler_deg) (FreeCAD's yaw/pitch/roll). The three
+    /// transform fields name X, Y and Z, so this pair is the UI's round trip.
+    pub fn from_euler_xyz_deg(x: f64, y: f64, z: f64) -> Rotation {
+        Rotation::from_euler_deg(z, y, x)
+    }
+
+    /// The inverse of [`from_euler_xyz_deg`](Self::from_euler_xyz_deg): the intrinsic
+    /// XYZ angles in degrees, in `[x, y, z]` order.
+    ///
+    /// A gimbal-locked rotation has no unique answer; this returns the conventional
+    /// one with its first angle zero (see [`yaw_pitch_roll`](Self::yaw_pitch_roll)).
+    pub fn to_euler_xyz_deg(&self) -> [f64; 3] {
+        let (yaw, pitch, roll) = self.yaw_pitch_roll();
+        [roll.to_degrees(), pitch.to_degrees(), yaw.to_degrees()]
+    }
+
     pub fn from_yaw_pitch_roll(yaw: f64, pitch: f64, roll: f64) -> Rotation {
         // Direct half-angle formula, mirroring FreeCAD `Rotation::setYawPitchRoll`
         // (XY'Z''). Building it from `from_axis_angle` would normalize the angles
@@ -984,6 +1003,24 @@ mod tests {
         let r = Rotation::from_vectors(Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0));
         let v = r.to_matrix().transform(&Vector3::new(1.0, 0.0, 0.0));
         assert!(v.is_equal(&Vector3::new(0.0, 1.0, 0.0), 1e-9));
+    }
+
+    #[test]
+    fn rotation_xyz_euler_round_trips() {
+        // A non-gimbal triple round-trips through the matrix convention.
+        let (x, y, z) = (20.0, -35.0, 50.0);
+        let rotation = Rotation::from_euler_xyz_deg(x, y, z);
+        let [rx, ry, rz] = rotation.to_euler_xyz_deg();
+        assert!((rx - x).abs() < 1e-9, "roll {rx} vs {x}");
+        assert!((ry - y).abs() < 1e-9, "pitch {ry} vs {y}");
+        assert!((rz - z).abs() < 1e-9, "yaw {rz} vs {z}");
+
+        // The identity is the zero triple, and a quaternion product is the composed
+        // orientation rather than a sum of angles.
+        assert!(Rotation::identity().to_euler_xyz_deg().iter().all(|v| v.abs() < 1e-9));
+        let step = Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), 0.5);
+        let composed = step.multiply(&rotation);
+        assert!(!composed.is_same(&rotation, 1e-6), "the step changed the pose");
     }
 
     #[test]

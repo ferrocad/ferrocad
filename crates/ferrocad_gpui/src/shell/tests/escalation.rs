@@ -122,6 +122,8 @@ fn a_mid_drag_escalation_seeds_the_drag_and_defers(cx: &mut TestAppContext) {
                     target_id: 7,
                     phase: PreviewPhase::Update,
                     total_transform: ferrocad_types::Matrix4::translation(0.0, 7.0, 0.0),
+                    value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+                    ring: None,
                 },
                 cx,
             );
@@ -206,6 +208,8 @@ fn escape_rolls_back_and_keeps_the_move_form(cx: &mut TestAppContext) {
                     target_id: 7,
                     phase: PreviewPhase::Update,
                     total_transform: ferrocad_types::Matrix4::translation(0.0, 7.0, 0.0),
+                    value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+                    ring: None,
                 },
                 cx,
             );
@@ -253,6 +257,8 @@ fn a_drag_leaves_the_fields_visible_and_tab_focuses_the_drag_axis(cx: &mut TestA
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {

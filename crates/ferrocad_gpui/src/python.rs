@@ -768,6 +768,26 @@ pub fn evaluate(code: &str) -> Result<EvalResult, String> {
     call_json("evaluate", Some(code))
 }
 
+/// The object's placement rotation as a quaternion `[w, x, y, z]`.
+///
+/// The stage items are world-space tessellations with an identity placement, so the
+/// document's own orientation is not on the stage. The rotation fields' ABS mode needs
+/// it, and this is the smallest bridge: one console expression, parsed back as the list
+/// the helper prints. FreeCAD's `Rotation.Q` is `(x, y, z, w)`, so it is reordered into
+/// this crate's `[w, x, y, z]`. `None` when the object (or its `Placement`) is absent.
+pub fn rotation_quaternion(object: &str) -> Option<[f64; 4]> {
+    let name = serde_json::to_string(object).ok()?;
+    let code = format!(
+        "list(__import__('FreeCAD').ActiveDocument.getObject({name}).Placement.Rotation.Q)"
+    );
+    let result = evaluate(&code).ok()?;
+    if !result.ok {
+        return None;
+    }
+    let q: [f64; 4] = serde_json::from_str(result.output.trim()).ok()?;
+    Some([q[3], q[0], q[1], q[2]])
+}
+
 /// Set one property from its editor string. The Python side wraps the change in
 /// a named transaction and recomputes.
 pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResult, String> {

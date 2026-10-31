@@ -208,6 +208,8 @@ fn accepting_the_move_hud_ends_the_transform_session(cx: &mut TestAppContext) {
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|cx| {
         shell.update(cx, |shell, cx| {
@@ -710,6 +712,8 @@ fn a_drag_on_another_body_is_refused_while_a_move_is_pending(cx: &mut TestAppCon
                     target_id: 8,
                     phase: PreviewPhase::Begin,
                     total_transform: ferrocad_types::Matrix4::translation(50.0, 0.0, 0.0),
+                    value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+                    ring: None,
                 },
                 cx,
             );
@@ -774,6 +778,577 @@ fn a_pending_move_locks_the_selection(cx: &mut TestAppContext) {
         shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().selection.clone()),
         vec![SelectionItem::new("Derived")],
         "with the move finished the subject can change"
+    );
+}
+
+/// The rotate bar shows all three axes, but only the active one holds an input: the
+/// siblings are `0.00` choices when clean and `—` locked cells once a step is pending.
+#[gpui::test]
+fn the_rotate_bar_locks_the_sibling_axes(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+    draw(&mut cx);
+    assert!(cx.debug_bounds("move-hud").is_some(), "the rotate bar is docked");
+    for axis in ["rotate-field-0", "rotate-field-1", "rotate-field-2"] {
+        assert!(
+            cx.debug_bounds(axis).is_some(),
+            "the ΔθX/ΔθY/ΔθZ cells are visible"
+        );
+    }
+    assert!(
+        cx.debug_bounds("rotate-angle").is_some(),
+        "the active cell holds the angle input"
+    );
+    assert!(
+        cx.debug_bounds("rotate-choice-1").is_some(),
+        "a clean sibling is a selectable 0.00 cell"
+    );
+    assert!(
+        cx.debug_bounds("rotate-locked-1").is_none(),
+        "nothing is locked yet"
+    );
+    assert!(
+        cx.debug_bounds("rotate-reset").is_some(),
+        "Reset 0° is offered"
+    );
+    assert!(
+        cx.debug_bounds("move-axis-0").is_none(),
+        "the three translation fields are not in the rotate bar"
+    );
+
+    // A pending X step locks the siblings to `—` and keeps one input.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_angle_text(15.0, cx);
+            shell.on_angle_typed(cx);
+        });
+    });
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("rotate-locked-1").is_some(),
+        "Y is locked while X is pending"
+    );
+    assert!(
+        cx.debug_bounds("rotate-choice-1").is_none(),
+        "the sibling is no longer a choice"
+    );
+    assert!(
+        cx.debug_bounds("rotate-angle").is_some(),
+        "the locked ring keeps its input"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.angle_field_text(cx)),
+        Some("15.00".to_string())
+    );
+}
+
+/// A ring drag is the same session as a move: it opens a pending value, locks the
+/// subject, and commits **once** through the transform interaction. The rotate hand
+/// has no coordinate row (those fields are a translation), but the `✗`/`✓` strip is
+/// the same control.
+#[gpui::test]
+fn a_rotation_drag_opens_and_commits_a_pending_session(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    register_transform_provider();
+    give_params_a_placement();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.move_pill_open()),
+        "the rotate hand docks its angular row"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.angle_field_text(cx)),
+        Some("0.00".to_string()),
+        "the angular field rests at zero"
+    );
+
+    let preview = |phase, degrees: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::identity(),
+        value: GizmoValue::Angular {
+            axis: GizmoAxis::Z,
+            raw_deg: degrees,
+            applied_deg: degrees,
+            detent_deg: 15.0,
+        },
+        ring: None,
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 30.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::End, 30.0), cx);
+        });
+    });
+    assert!(
+        shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)),
+        "the release leaves the sweep pending"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.context(cx)),
+        InteractionContext::PendingRotation { target: Some(7) },
+        "rotation has its own pending context"
+    );
+    let pending = shell.read_with(&cx, |shell, _| {
+        shell.session.as_ref().map(|session| {
+            (
+                session.mode(),
+                session.pending_axis_index(),
+                session.pending_degrees(),
+            )
+        })
+    });
+    assert!(
+        matches!(
+            pending,
+            Some((GizmoMode::Rotate, Some(2), degrees)) if (degrees - 30.0).abs() < 1e-9
+        ),
+        "the session holds one Z step: {pending:?}"
+    );
+    let docked = shell.read_with(&cx, |shell, _| shell.pending_angle());
+    assert!(
+        matches!(docked, Some(degrees) if (degrees - 30.0).abs() < 1e-9),
+        "the docked angular field mirrors the sweep: {docked:?}"
+    );
+
+    // ✓ spends it once, through the workbench's transform hook.
+    let before = undo_count();
+    let committed = cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.commit_session(cx)));
+    assert!(committed, "the sweep committed");
+    assert_eq!(undo_count(), before + 1, "exactly one undo step");
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "the session is spent"
+    );
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("rotated"),
+        "the status reports the verb, not a second readout"
+    );
+
+    // ✗ drops a second sweep without writing.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::Update, 15.0), cx);
+            shell.on_transform_preview(&preview(PreviewPhase::End, 15.0), cx);
+        });
+    });
+    let before = undo_count();
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let _ = shell.drop_session("rotation discarded", cx);
+        })
+    });
+    assert_eq!(undo_count(), before, "discarding writes nothing");
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.session.is_none()),
+        "the session is dropped"
+    );
+}
+
+/// The rotate bar shows three axis cells and **one** input. Typing previews a single
+/// `(axis, angle)` step, the siblings lock while it is pending, and `Reset 0°` restores
+/// world alignment.
+#[gpui::test]
+fn typing_an_angular_value_previews_and_commits(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    register_transform_provider();
+    give_params_a_placement();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+
+    // X is the default ring; a typed 45 is exactly 45 about X.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_angle_text(45.0, cx);
+            shell.on_angle_typed(cx);
+        });
+    });
+    let pending = shell.read_with(&cx, |shell, _| {
+        shell.session.as_ref().map(|session| {
+            (
+                session.mode(),
+                session.pending_axis_index(),
+                session.pending_degrees(),
+            )
+        })
+    });
+    assert!(
+        matches!(
+            pending,
+            Some((GizmoMode::Rotate, Some(0), degrees)) if (degrees - 45.0).abs() < 1e-9
+        ),
+        "one X step: {pending:?}"
+    );
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.angle_field_text(cx)),
+        Some("45.00".to_string())
+    );
+
+    // Selecting Y while X is pending is refused: the visible X step must be applied or
+    // cancelled first, so no transaction happens behind the user's back.
+    let before = undo_count();
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.select_rotate_axis(1, window, cx));
+    });
+    assert_eq!(undo_count(), before, "a locked ring spends nothing");
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.as_ref().map(|hud| hud.axis)),
+        Some(0),
+        "X still owns the step"
+    );
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+
+    // Finish X, then Y is selectable and starts clean.
+    assert!(cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.commit_session(cx))));
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.select_rotate_axis(1, window, cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.as_ref().map(|hud| hud.axis)),
+        Some(1),
+        "Y is the selected cell"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, cx| shell.angle_field_text(cx)),
+        Some("0.00".to_string())
+    );
+
+    // A typed 30 on Y is one Y step and spends one transaction.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_angle_text(30.0, cx);
+            shell.on_angle_typed(cx);
+        });
+    });
+    let pending = shell.read_with(&cx, |shell, _| {
+        shell.session.as_ref().map(|session| {
+            (
+                session.pending_axis_index(),
+                session.pending_degrees(),
+            )
+        })
+    });
+    assert!(
+        matches!(pending, Some((Some(1), degrees)) if (degrees - 30.0).abs() < 1e-9),
+        "one Y step: {pending:?}"
+    );
+    let before = undo_count();
+    assert!(cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.commit_session(cx))));
+    assert_eq!(undo_count(), before + 1, "exactly one undo step");
+
+    // `WLD` is the default; `=` (or the badge) flips the rings to the body frame.
+    assert!(!shell.read_with(&cx, |shell, _| shell.pill.local_frame()));
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.toggle_move_mode(window, cx));
+    });
+    assert!(shell.read_with(&cx, |shell, _| shell.pill.local_frame()));
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.toggle_move_mode(window, cx));
+    });
+    assert!(!shell.read_with(&cx, |shell, _| shell.pill.local_frame()));
+
+    // `Reset 0°` commits the rotation that cancels the body's committed orientation.
+    let orientation = shell.read_with(&cx, |shell, _| shell.object_rotation_now());
+    assert!(
+        !orientation.is_same(&Rotation::identity(), 1e-6),
+        "the test body really is rotated before the reset"
+    );
+    let before = undo_count();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.reset_rotation(cx));
+    });
+    assert_eq!(undo_count(), before + 1, "the reset is one transaction");
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.object_rotation_now())
+            .is_same(&Rotation::identity(), 1e-6),
+        "the body is world-aligned again"
+    );
+}
+
+/// Successive drags on the **same** ring are one pending step: 30° + 30° + 30° reads
+/// 90°, exactly as successive translation drags accumulate.
+#[gpui::test]
+fn successive_rotation_drags_accumulate_on_the_same_ring(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    register_transform_provider();
+    give_params_a_placement();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+
+    let preview = |phase, degrees: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::identity(),
+        value: GizmoValue::Angular {
+            axis: GizmoAxis::Z,
+            raw_deg: degrees,
+            applied_deg: degrees,
+            detent_deg: 15.0,
+        },
+        ring: None,
+    };
+    for expected in [30.0, 60.0, 90.0] {
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::Update, 30.0), cx);
+                shell.on_transform_preview(&preview(PreviewPhase::End, 30.0), cx);
+            });
+        });
+        let pending = shell.read_with(&cx, |shell, _| {
+            shell.session.as_ref().map(|session| {
+                (
+                    session.pending_axis_index(),
+                    session.pending_degrees(),
+                )
+            })
+        });
+        assert!(
+            matches!(pending, Some((Some(2), degrees)) if (degrees - expected).abs() < 1e-9),
+            "the Z steps accumulate to {expected}: {pending:?}"
+        );
+    }
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+}
+
+/// `X`/`Y`/`Z` typed in the focused angle field choose the ring while the form is clean;
+/// once a step is pending the siblings are refused rather than committing behind the
+/// user's back.
+#[gpui::test]
+fn the_angle_field_switches_rings_on_xyz(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    register_transform_provider();
+    give_params_a_placement();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.set_angle_text(15.0, cx);
+            shell.on_angle_typed(cx);
+        });
+    });
+    assert!(shell.read_with(&cx, |shell, _| shell.rotation_pending().is_some()));
+
+    // The pending X step owns the ring: `y` is refused and spends nothing.
+    let before = undo_count();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.on_angle_rejected('y', cx));
+    });
+    assert_eq!(undo_count(), before, "a locked ring is not a hidden commit");
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.as_ref().map(|hud| hud.axis)),
+        Some(0),
+        "X still owns the step"
+    );
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("Pending rotate X"),
+        "the status explains the lock"
+    );
+
+    // After the step is finished, the same keys switch rings again.
+    assert!(cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.commit_session(cx))));
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.on_angle_rejected('y', cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.as_ref().map(|hud| hud.axis)),
+        Some(1),
+        "Y is selected once nothing is pending"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.on_angle_rejected('z', cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.as_ref().map(|hud| hud.axis)),
+        Some(2),
+        "Z is selected"
+    );
+    // A letter with no ring meaning is ignored (and is still not inserted by the field).
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.on_angle_rejected('q', cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.as_ref().map(|hud| hud.axis)),
+        Some(2)
+    );
+}
+
+/// A pending rotation owns its ring: grabbing a sibling ring is refused (and consumes
+/// the press) rather than spending a hidden transaction. Dragging the same ring still
+/// accumulates; the step is exact, with no fractional residue on the other axes.
+#[gpui::test]
+fn grabbing_a_locked_ring_is_refused_until_the_step_is_finished(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    register_transform_provider();
+    give_params_a_placement();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+
+    let preview = |axis: GizmoAxis, phase, degrees: f64| TransformPreview {
+        target_id: 7,
+        phase,
+        total_transform: ferrocad_types::Matrix4::identity(),
+        value: GizmoValue::Angular {
+            axis,
+            raw_deg: degrees,
+            applied_deg: degrees,
+            detent_deg: 15.0,
+        },
+        ring: None,
+    };
+    let pending = |cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            shell.session.as_ref().map(|session| {
+                (
+                    session.pending_axis_index(),
+                    session.pending_degrees(),
+                )
+            })
+        })
+    };
+
+    // Drag X +15 and leave it pending.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(GizmoAxis::X, PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(GizmoAxis::X, PreviewPhase::Update, 15.0), cx);
+            shell.on_transform_preview(&preview(GizmoAxis::X, PreviewPhase::End, 15.0), cx);
+        });
+    });
+    assert!(
+        matches!(pending(&cx), Some((Some(0), degrees)) if (degrees - 15.0).abs() < 1e-9),
+        "X is pending"
+    );
+
+    // Grab Y: refused. No undo entry, and the X step is untouched.
+    let before = undo_count();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(GizmoAxis::Y, PreviewPhase::Begin, 0.0), cx);
+        });
+    });
+    assert_eq!(undo_count(), before, "a locked ring is not a hidden commit");
+    assert!(
+        matches!(pending(&cx), Some((Some(0), degrees)) if (degrees - 15.0).abs() < 1e-9),
+        "X still owns the step"
+    );
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("Pending rotate X"),
+        "the status explains the lock"
+    );
+    assert!(shell.read_with(&cx, |shell, _| shell.pill_attention));
+
+    // The same ring still accumulates: a second X drag adds to the pending angle.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(GizmoAxis::X, PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(GizmoAxis::X, PreviewPhase::Update, 15.0), cx);
+            shell.on_transform_preview(&preview(GizmoAxis::X, PreviewPhase::End, 15.0), cx);
+        });
+    });
+    assert!(
+        matches!(pending(&cx), Some((Some(0), degrees)) if (degrees - 30.0).abs() < 1e-12),
+        "the X step is exactly 30 degrees"
+    );
+
+    // Finish X (one transaction), then Y is free again.
+    let before = undo_count();
+    assert!(cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.commit_session(cx))));
+    assert_eq!(undo_count(), before + 1);
+    assert!(!shell.read_with(&cx, |shell, _| shell.pill_attention));
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.on_transform_preview(&preview(GizmoAxis::Y, PreviewPhase::Begin, 0.0), cx);
+            shell.on_transform_preview(&preview(GizmoAxis::Y, PreviewPhase::Update, 15.0), cx);
+            shell.on_transform_preview(&preview(GizmoAxis::Y, PreviewPhase::End, 15.0), cx);
+        });
+    });
+    assert!(
+        matches!(pending(&cx), Some((Some(1), degrees)) if (degrees - 15.0).abs() < 1e-12),
+        "one exact Y step: no fractional X/Z residue"
+    );
+}
+
+/// `Reset 0°` names the stored orientation without ever printing a fractional Euler
+/// decomposition: a pure axis names itself, a compound tilt shows the shortest total angle,
+/// and an identity dims the button.
+#[gpui::test]
+fn the_reset_button_names_the_stored_orientation(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    give_params_a_placement();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx));
+    });
+    let label = |cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.reset_rotation_label())
+    };
+
+    assert_eq!(label(&cx), ("Reset 0°".to_string(), false), "identity is inert");
+
+    let rotated = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            r#"
+import FreeCAD
+obj = FreeCAD.ActiveDocument.getObject('Params')
+obj.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 45))
+"#,
+        )
+    });
+    assert!(rotated.expect("set the placement").ok);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.refresh_move_origin(cx));
+    });
+    assert_eq!(
+        label(&cx),
+        ("Reset (Z 45°)".to_string(), true),
+        "a pure axis is named exactly"
+    );
+
+    let compound = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            r#"
+import FreeCAD
+obj = FreeCAD.ActiveDocument.getObject('Params')
+obj.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 0, 0), FreeCAD.Rotation(10.0, 20.0, 30.0))
+"#,
+        )
+    });
+    assert!(compound.expect("set a compound placement").ok);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.refresh_move_origin(cx));
+    });
+    let (text, actionable) = label(&cx);
+    assert!(actionable);
+    assert!(text.starts_with("Reset (") && text.ends_with("°)"), "{text}");
+    assert!(
+        !text.contains("(X ") && !text.contains("(Y ") && !text.contains("(Z "),
+        "a compound tilt has no single ring to name: {text}"
     );
 }
 
@@ -941,6 +1516,8 @@ fn the_finish_pill_is_hidden_while_a_drag_runs(cx: &mut TestAppContext) {
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(0.0, y, 0.0),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
@@ -1142,6 +1719,8 @@ fn a_gizmo_drag_updates_the_move_fields(cx: &mut TestAppContext) {
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, y, z),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
@@ -1202,6 +1781,8 @@ fn a_competing_interaction_drops_a_pending_move(cx: &mut TestAppContext) {
                 target_id: 7,
                 phase,
                 total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+                value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+                ring: None,
             };
             shell.on_transform_preview(&preview(PreviewPhase::Begin, 0.0), cx);
             shell.on_transform_preview(&preview(PreviewPhase::Update, 5.0), cx);

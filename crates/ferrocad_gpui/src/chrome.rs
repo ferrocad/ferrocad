@@ -25,6 +25,7 @@ use gpui::{
 
 use std::collections::{HashMap, HashSet};
 
+use ferrocad_stage::GizmoMode;
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
 use ferrocad_widgets::icon;
 use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
@@ -747,6 +748,7 @@ fn select_button(
 /// change until the user finishes it with `✗`/`✓`.
 pub(crate) fn loadout_bar(
     loadout: Loadout,
+    mode: GizmoMode,
     blocked: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
@@ -783,7 +785,7 @@ pub(crate) fn loadout_bar(
             .text_color(rgb(if active { CHROME_ACTIVE } else { FG }))
             .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
             .child(div().text_color(rgb(MUTED)).child(key))
-            .child(slot.label());
+            .child(slot.label_for(mode));
         if !blocked {
             button = button
                 .cursor_pointer()

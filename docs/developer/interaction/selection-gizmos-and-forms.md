@@ -174,20 +174,32 @@ Absent ──selection with a target──► Idle ◄──document edit: re-ar
 
 | Event | Session flow |
 | --- | --- |
-| press on a handle | `Begin`: the frame is frozen at the press and the shell opens a `TransformSession` from the un-previewed stage, pinning the object's world origin (`ShapeItem::anchor`) as its datum |
-| move (tick) | `Update`: the shell accumulates the absolute delta and previews the whole selection; the target is drawn with `session.transform()`, **grips follow**, and the triad's *drawing* is offset so it stays on the surface |
+| press on a handle | `Begin`: the frame is frozen at the press and the shell opens a `TransformSession` from the un-previewed stage, pinning the object's world origin (`ShapeItem::anchor`) as its datum (a ring also pins `orientation_0` from the document) |
+| move (tick) | `Update`: the shell accumulates the absolute delta (or replaces the ring's one pending `(axis, angle)` step) and previews the whole selection; the target is drawn with `session.transform()`, **grips follow**, and a translation's triad *drawing* is offset so it stays on the surface |
 | release | `End`: the preview is **kept**; nothing is committed and no undo entry exists |
-| `Enter` | commit the accumulated delta as one transaction through `_move_selection` (the `App_Move` callback); the session and ghost are released and the triad re-arms at the new origin, so the next step starts there |
-| selection change while dirty | refused: finish the move with `✓`/`✗` first (`block_pending_move`) |
+| `Enter` | commit as one transaction: a translation through `_move_selection` (the `App_Move` callback), a rotation through the `transform`/`apply` interaction hook; the session and ghost are released and the triad re-arms |
+| selection change while dirty | refused: finish with `✓`/`✗` first (`block_pending_move`) |
 | `Esc` / cancel | rollback: drop the session and its ghost; no undo entry is spent |
 
-**Changed 2026-10-30 (U1), unified 2026-10-31 (A2).** There is one mode: a **translation**
-drag always reports `Begin`/`Update`/`End` and never commits on release. The viewport has no
-deferral flag — `set_gizmo_preview`/`gizmo_deferred` are gone — and the drag kind decides:
-translation is preview-only (the shell's session owns the value), while rotation, which has no
-session yet, keeps the viewport's direct preview and commit. The session already carries the
-whole selection; the commit route is still the `App_Move` callback (`_move_selection` is the
-writer), and moving it to the interaction provider is **planned**.
+**Changed 2026-10-30 (U1), unified 2026-10-31 (A2), single-dirty-ring lock 2026-10-31.**
+There is one mode: both a **translation** and a **rotation** drag report
+`Begin`/`Update`/`End` and never commit on release. The viewport has no deferral flag —
+`set_gizmo_preview`/`gizmo_deferred` are gone. A ring session stores **one
+`(axis, angle)` step**, not a composed quaternion or three Euler fields: `SO(3)` is not a
+vector space, so three independent angles would have to multiply in an order and would
+decompose into fractional cross-talk. While a step is pending its ring is the only one
+that answers: the siblings and the re-pivot disc are muted, their presses are consumed
+(the viewport queues `LockedRing` instead of starting a drag or orbiting), and the bar
+shows them as `—`. The only exits are `✓`/`Enter` and `✗`/`Esc`, so `dirty_ring_count <=
+1` and no ring switch spends a hidden transaction. The ring session owns exactly one body
+(the interaction hook applies a transform to one object) and commits through
+`transform`/`apply`; translation keeps the multi-body selection and the `App_Move` route.
+The rotate hand docks `ΔθX/ΔθY/ΔθZ` above the loadout: only the pending ring's cell holds
+an input, `WLD` rings follow the world grid, `LOC` rings follow the body's committed
+orientation, and `Reset 0°` commits the rotation that cancels it. The 3-D protractor
+(swept glass sector, dashed press spoke, live spoke, detent ticks) is built from the same
+single step, so it is always one arc and one chip with the degree tag on the arc bisector.
+Moving the translation commit to the interaction provider is **planned**.
 
 ### 4.3 The display offset invariant
 
@@ -228,6 +240,11 @@ The shell re-arms the current selection against the rebuilt stage after:
   while a tree `select` directive is merely being applied.
 
 The selection is pruned first, so a delete leaves no handle for a dead object.
+
+The rotate form's **ring lock** is enforced at the viewport's press gate, not by a re-arm:
+a pending step keeps its ring's input and mutes the siblings, so a press on one is consumed
+and reported (`ViewportEvent::LockedRing`) without a drag, orbit or deselection. The
+ordinary `✓`/`Enter` and `✗`/`Esc` paths still clear and re-arm.
 
 ## 5. The form state machine
 
@@ -323,7 +340,7 @@ At rest ──gizmo drag──► fields mirror the session Δ + preview; no foc
 At rest ──Tab / digit / tag click──► one field focused (drag-axis memory)
 Any ──badge / `=`──► Δ fields ⇄ world coordinates (same pending Δ)
 Any ──selection replaced──► refused while pending; a clean form re-targets
-Pending ──selection / hand / scope / tool──► refused (status: "move pending") ──► Pending
+Pending ──selection / hand / scope / tool──► refused (status: "move/rotation pending") ──► Pending
 At rest ──Esc──► selection cleared ──► Closed
 At rest ──selection cleared / another hand / a tool / `1` (pause)──► Closed
 Pending ──competing document edit (selection pruned)──► rollback ──► the new context
@@ -355,12 +372,13 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
   (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
   `Enter`.
 - **One context gate (built 2026-10-31).** The shell models what it is doing explicitly
-  (`shell/context.rs`): `InteractionContext` is `Modal → Tool → PendingMove { target } →
-  Armed → Selection → Idle`, and every entry point asks `Shell::gate(action)` before it
-  acts. `PendingMove` carries the **dirty object** (the session's primary stage entity),
-  and `Action::Select { target }` carries the body a pick would select, so the rule can be
-  stated against the subject rather than "some selection". `Action` also names
-  `SwitchHand`, `SwitchScope`, `SwitchHandleSet`, `StartTool`,
+  (`shell/context.rs`): `InteractionContext` is `Modal → Tool → (PendingMove |
+  PendingRotation) { target } → Armed → Selection → Idle`, and every entry point asks
+  `Shell::gate(action)` before it acts. The pending variants carry the **dirty object**
+  (the session's primary stage entity) and split on the session's mode, so the refusal
+  names the right verb; `Action::Select { target }` carries the body a pick would select,
+  so the rule can be stated against the subject rather than "some selection". `Action` also
+  names `SwitchHand`, `SwitchScope`, `SwitchHandleSet`, `StartTool`,
   `RunCommand { id, edit }` and `Arm`, so a new gesture cannot forget to check the state
   of the one it competes with. Completion (`✓`/`✗`, `Enter`/`Esc`) and field editing are
   not actions: they are how a context is left.
@@ -369,11 +387,11 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
   gizmo jumped to the other box while the move was pending"). Re-applying the **same**
   selection is a no-op early return in `replace_selection`, so a re-pick cannot reach the
   session reset and silently drop the pending value either.
-- **What `PendingMove` refuses.** Selecting or clearing another object, pressing a
+- **What a pending transform refuses.** Selecting or clearing another object, pressing a
   loadout key (pausing Move included), changing `Select ▾`, switching the handle set,
   starting a tool, dragging another body, and **edit commands** (`CmdType: ForEdit`,
   e.g. `Create Box`). Each refusal writes the reason to the status line
-  (`move pending — ✓ or ✗ before you run “Create box”`), the loadout bar dims and drops
+  (`move pending — …` or `rotation pending — …`), the loadout bar dims and drops
   its click handlers, and nothing is committed or dropped. **View commands**
   (`CmdType: ForView`: grid, projection, …) stay live, so navigation and presentation
   still work under the lock. A command the shell has not seen in its registry snapshot is

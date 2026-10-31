@@ -231,6 +231,72 @@ uses gpui's `MouseDownEvent::click_count` (no timing heuristic of its own), carr
 the body. A later single click on a face returns to that face; a third click stays whole
 (no toggling). The triad still arms at the object's own origin for either scope.
 
+## 6. Rotation gizmo and protractor UX
+
+**Invariant: `dirty_ring_count <= 1`.** A rotation is one `(axis, angle)` step. At most
+one ring can hold a non-zero uncommitted angle, so the protractor, the docked value and
+the step `✗`/`Esc` cancels are always the same scalar. The lock is **derived** from the
+session (`Shell::rotation_pending()`), not a second state that can drift from it.
+
+### 6.1 Ring states
+
+| State | Visual | Pointer |
+| --- | --- | --- |
+| **Idle** (`locked_ring: None`) | All three rings idle (`INACTIVE_COLOR`, `#94A3B8`), full width, normal hover growth | Any ring starts its drag |
+| **Active dirty ring** (`Some(axis)`, `abs(Δθ) > 1e-4`) | Active token (`ACTIVE_COLOR` / the axis ink), full `2 px` stroke, `hover_scale` on hover, the swept `12 %` fan, `15°` detent ticks and the on-arc degree tag | The drag adds to that ring's angle; a second drag on the same ring continues from the pending value |
+| **Locked sibling** (the other two) | `INACTIVE_COLOR` at `0.25` alpha, **no** hover widening and **no** bright rim | Kept visible for spatial context, but a press is **consumed** by the viewport: no drag, no camera orbit, no deselection |
+
+`TransformGizmo::locked_ring` carries the axis; `set_locked_ring` mutes the siblings and
+`set_hovered_target` filters them out (a muted ring never takes the hover cue).
+`InventorViewport` repeats the filter at the press: a locked sibling or the re-pivot disc
+is refused before `begin_drag`, and queues `ViewportEvent::LockedRing`. The status line
+names the owner, and the finish pair takes the static attention rim (`ui::HOVER_RIM`).
+
+> The visual language forbids animation (`visual-language.md`: no transitions, no
+timed flashes). The attention state is therefore a **static rim until the next action**,
+not the 120 ms pulse an animated prototype might use.
+
+### 6.2 Docked bar
+
+The rotate form shows the three axes, because the locked siblings are part of the
+information, but only the selected ring holds an input:
+
+```text
+Clean:   [ WLD▾ ]  ΔθX 0.00   ΔθY 0.00   ΔθZ 0.00   deg   [ Reset 0° ]
+Dirty X: [ WLD▾ ]  ΔθX -45.00 ΔθY  —      ΔθZ  —      deg   [ Reset 0° ]
+```
+
+- **Clean:** the siblings are `0.00` cells; clicking one selects that ring for the typed
+  angle. `Tab` focuses the selected cell; `X`/`Y`/`Z` typed in the field choose the ring.
+- **Dirty:** the owner keeps the input (drag or type); the siblings render `—`, are
+  non-focusable, and a click shows the same lock prompt as a ring press.
+- **Frame switch:** `WLD ▾`/`LOC ▾` is inert while a step is pending. The reference basis
+  cannot move under a value measured in the old frame.
+- **`Reset 0°`:** reads the stored orientation. An identity dims the button (`Reset 0°`);
+  a pure X/Y/Z rotation names itself (`Reset (Z 45°)`); a compound 3-D tilt shows the
+  **shortest total angle from identity** (`Reset (21.4°)`), never a fractional per-axis
+  decomposition. While a step is pending the button is inert and explains the lock.
+  In today's flat documents it targets `Placement.Rotation`; an attached body would need
+  `AttachmentOffset.Rotation` (see
+  [`transform-session.md` §5, *Explicitly deferred*](../../project/tasks/transform-session.md#explicitly-deferred)).
+
+All three cells are a **presentation** of the one session step. None of them is an
+independent Euler angle, and only one can be non-zero.
+
+### 6.3 Transition table
+
+| Current | Action | Result |
+| --- | --- | --- |
+| Idle | Drag ring X to `-45°`, or type `-45` in `ΔθX` | `locked_ring = Some(X)`; Y/Z mute to `—`; protractor and the `✗`/`✓` pair appear |
+| Dirty X (`-45°`) | Drag X again to `-60°`, or edit `ΔθX` | The same step updates to `-60°`; siblings stay locked |
+| Dirty X (`-60°`) | Drag X back to `0.0°`, or type `0` | `locked_ring = None`; the protractor and finish pair hide; Y/Z re-enable immediately |
+| Dirty X | Hover/click ring Y or Z, a sibling bar cell, the frame switch or `Reset 0°` | The press/click is consumed; the status says `Pending rotate X — apply (✓ / Enter) or cancel (✗ / Esc) before changing the axis`; the finish pair's rim brightens |
+| Dirty X | `✓` / `Enter` | One undo step for `Rotate X -45°`; Idle; Y/Z re-enable |
+| Dirty X | `✗` / `Esc` | The preview returns to the pre-drag pose; Idle; Y/Z re-enable; no undo entry |
+
+The only exits from a dirty state are `✓`/`Enter` and `✗`/`Esc`. No ring switch, frame
+switch, reset or selection change spends a transaction the user did not see.
+
 ## Contradictions to reconcile
 
 | # | Conflict | Recommendation |
@@ -244,12 +310,12 @@ the body. A later single click on a face returns to that face; a third click sta
 | 7 | "The triad's centre remains pass-through" (`selection-gizmos-and-forms.md:260-261`; `gizmo-manipulators.md:192-198`) vs the origin drag | resolved: the centre is the 10 px origin handle; while that handle is disabled (the translation HUD) the centre passes through again; §3 |
 | 8 | §19 rejected a `Gizmo` header toggle (`gizmo-manipulators.md:767-771`) | the control that landed is **configuration** (show, providers, settings, reset), not a mode switch — consistent with “the header means how the viewport is drawn”; the wheel owns the verbs; §1 |
 
-## 6. Minimum implementation order
+## 7. Minimum implementation order
 
 | # | Slice | Acceptance | Touches |
 | --- | --- | --- | --- |
 | 0 | **Origin anchor — landed 2026-10-25** — `StageMesh.origin` → `ShapeItem::anchor`; the triad hugs it; the click no longer re-anchors | The toy slab's triad sits at its placement point, not the bbox corner; a move keeps it on the origin; a mesh without an origin falls back to the corner | `ferrocad_stage/src/shape.rs`, `ferrocad_gpui/{display,contributions,shell}.rs`, both app scripts |
-| 1 | **Rotate mode** — `Shell::gizmo_mode` applied after the factory; `App_Rotate` radial verb via a `{"view": …}` mode request; header mirror | A body shows rings only; a 90° ring drag commits one `transform/apply`; the mode survives re-arm; Translate shows no rings | `ferrocad_gpui/src/shell.rs`, `view.rs`; `python/ferrocad_shell/__init__.py`; `chrome.rs` |
+| 1 | **Rotate mode — landed 2026-10-25, single-dirty-ring lock 2026-10-31** — `Shell::gizmo_mode` applied after the factory; `App_Rotate` radial verb via a `{"view": …}` mode request; header mirror; Slot 1 labelled `Rotate`; docked `ΔθX/ΔθY/ΔθZ` row (only the active cell editable) with `WLD/LOC` and `Reset 0°` | A body shows rings only; a 90° ring drag leaves a pending **one-axis** step that `✓`/`Enter` commits as one `transform/apply`; the sibling rings and bar cells are muted and refuse input while it is pending (`dirty_ring_count <= 1`); `✗`/`Esc` always cancels exactly the step the protractor shows; the protractor shows one wedge and one tag; `WLD`/`LOC` switch the free ring frame; the mode survives re-arm; Translate shows no rings | `ferrocad_gpui/src/shell.rs`, `view.rs`, `chrome.rs`; `ferrocad_stage/src/{gizmo,protractor}.rs`; `ferrocad_viewport/src/inventor_view.rs`; `python/ferrocad_shell/__init__.py` |
 | 2 | **Multi-selection guard** — no triad while more than one object is selected (the commit names one target) | Selecting two bodies shows no triad and the wheel's `Move` still moves both | `ferrocad_gpui/src/shell.rs` |
 | 3 | **Re-pivot — landed 2026-10-26** — `GizmoTarget::Origin`, the snap pipeline, `GizmoOrigin`, session user origin, disabled during the Move HUD | The centre snaps to a vertex/edge mid/face centre/grid; a ring drag rotates about it; a new selection clears it; the Move HUD disables it | `ferrocad_stage/src/gizmo.rs`, `ferrocad_viewport/src/inventor_view.rs`, `shell.rs` |
 | 4 | **Select mode — landed 2026-10-26** — double-click a face/edge upgrades to the whole body; `MouseDownEvent::click_count` rides on `SelectionEvent::Picked` | Click selects `Face6`; double-click selects the body; a click on another face returns to that face; the triad arms at the object origin either way | `ferrocad_viewport/src/inventor_view.rs`; `shell/{viewport,picking}.rs` |
@@ -258,7 +324,7 @@ the body. A later single click on a face returns to that face; a third click sta
 Slices 1–2 are the transform slice proper; 3 depends on 1; 4 is gated on 1; 5 does not
 depend on 4 (a face is already the default) but follows 2 so the centroid helper is shared.
 
-## 7. Structure for several gizmos
+## 8. Structure for several gizmos
 
 The current container is one `TransformGizmo` with a `GizmoMode` (`Translate` /
 `Rotate` / `Universal`), hosted through `Contributions::gizmo_for` →

@@ -73,6 +73,7 @@ pub mod input;
 pub mod interaction;
 pub mod measure_tape;
 pub mod plane_points;
+pub mod protractor;
 pub mod screen;
 pub mod session;
 pub mod shape;
@@ -87,7 +88,7 @@ pub use gizmo::{
     GIZMO_BASE_ID, GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle,
     GizmoKind, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle, GizmoTarget, GizmoValue,
     HandleKind, MAX_GHOST_ALPHA, MIN_HIT_RADIUS_PX, ManipulatorFrame, NATIVE_BACKEND,
-    OUTLINE_COLOR, SKIN_BACKEND, TRANSFORM_ID, TransformGizmo,
+    OUTLINE_COLOR, RingSweep, SKIN_BACKEND, TRANSFORM_ID, TransformGizmo,
 };
 pub use axis::AxisStyle;
 pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};

@@ -303,6 +303,14 @@ impl GizmoHandle {
         Some(axis)
     }
 
+    /// The coordinate label of an axis or ring handle, `None` for a plane.
+    ///
+    /// This is the `X`/`Y`/`Z` the ring lock names; [`axis`](Self::axis) is the geometric
+    /// direction instead.
+    pub fn axis_label(self) -> Option<GizmoAxis> {
+        axis_of(self)
+    }
+
     /// The plane normal in the **world** frame, for a `Plane` handle (`XY` → Z, `XZ` → Y,
     /// `YZ` → X). Use [`ManipulatorFrame::plane_normal`] for a local frame.
     pub fn plane_normal(self) -> Option<Vector3> {
@@ -627,6 +635,47 @@ impl GizmoValue {
     }
 }
 
+/// The active ring drag's in-plane sweep, for the host's 3-D protractor.
+///
+/// `start` and `current` are unit vectors in the ring plane; `current` is `start`
+/// turned by the **applied** (detented) angle, so the drawn wedge matches the transform.
+/// `radius` is the gizmo's world radius at the current camera distance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RingSweep {
+    /// The ring's centre in world space.
+    pub origin: Vector3,
+    /// The ring's normal (the rotation axis), unit length.
+    pub axis: Vector3,
+    /// The press direction, unit length and in the ring plane.
+    pub start: Vector3,
+    /// The live direction after the applied sweep, unit length and in the ring plane.
+    pub current: Vector3,
+    /// The ring's world radius.
+    pub radius: f64,
+    /// The signed applied sweep in degrees, wrapped into `(-180, 180]`.
+    ///
+    /// A drag may turn past a full revolution (the solver unwraps the pointer angle), but
+    /// the same orientation is shown once: the datum for the protractor and the tag.
+    pub degrees: f64,
+    /// The active detent in degrees (`0` for free rotation).
+    pub detent_deg: f64,
+}
+
+impl RingSweep {
+    /// The arc's bisector: where the on-arc degree tag sits.
+    ///
+    /// At a half turn `start + current` is degenerate, so the fallback is the direction
+    /// half way round the applied sweep.
+    pub fn midpoint(&self) -> Vector3 {
+        let sum = self.start.add(&self.current);
+        if sum.length() > 0.2 {
+            sum.normalize()
+        } else {
+            rotate_about(&self.start, &self.axis, self.degrees.to_radians() * 0.5)
+        }
+    }
+}
+
 /// The axis label for an axis or ring handle.
 fn axis_of(handle: GizmoHandle) -> Option<GizmoAxis> {
     match handle {
@@ -735,11 +784,13 @@ enum DragStart {
         normal: Vector3,
     },
     /// Arc: the last measured pointer angle (to unwrap each frame's step), the
-    /// accumulated sweep since the press, and the last applied (snapped) sweep.
+    /// accumulated sweep since the press, and the last applied (snapped) sweep. `start`
+    /// is the press direction in the ring plane, so the host can draw the swept wedge.
     Ring {
         previous: f64,
         swept: f64,
         last: f64,
+        start: Vector3,
     },
 }
 
@@ -767,6 +818,10 @@ pub struct TransformGizmo {
     /// floating Move form is open: that HUD is anchored to the visible origin and must
     /// not slide under the user's typing.
     origin_enabled: bool,
+    /// The one ring a pending rotation owns. When set, the other two rings are drawn
+    /// muted and their presses are refused by the host: `dirty_ring_count <= 1`, and a
+    /// cancel always means the exact step the protractor shows.
+    locked_ring: Option<GizmoAxis>,
     dirty: bool,
     /// The per-handle alpha multiplier from the grazing-angle test (`1.0` square to the
     /// view, `0.0` collapsed to a line or dot). Rebuilt with the geometry.
@@ -799,6 +854,7 @@ impl TransformGizmo {
             active: None,
             display_offset: None,
             origin_enabled: true,
+            locked_ring: None,
             dirty: true,
             fade: [1.0; GizmoTarget::ALL.len()],
             handles: (0..GizmoTarget::ALL.len()).map(new_handle).collect(),
@@ -964,6 +1020,51 @@ impl TransformGizmo {
     /// the geometry at the camera's current distance.
     fn screen_scale(&self, camera: &Camera) -> f64 {
         scale_for(camera, self.frame.origin, self.style.size)
+    }
+
+    /// The active drag's current value, if a drag is running.
+    ///
+    /// A host reads this at the press (`Begin`) to know *what kind* of gesture started
+    /// before the first tick has reported one: a ring produces
+    /// [`GizmoValue::Angular`], an axis or plane a linear/planar value.
+    pub fn active_value(&self) -> Option<GizmoValue> {
+        self.active.as_ref().map(|active| active.value)
+    }
+
+    /// The active ring drag's in-plane sweep, or `None` for any other gesture.
+    ///
+    /// `current` is the press direction turned by the applied (detented) sweep, so the
+    /// host's protractor fan and its arc-midpoint tag agree with the transform.
+    pub fn active_ring_sweep(&self) -> Option<RingSweep> {
+        let active = self.active.as_ref()?;
+        if active.handle.kind() != HandleKind::Ring {
+            return None;
+        }
+        let DragStart::Ring { start, .. } = &active.start else {
+            return None;
+        };
+        let axis = self.frame.axis(active.handle)?.normalize();
+        let (raw_degrees, detent_deg) = match active.value {
+            GizmoValue::Angular {
+                applied_deg,
+                detent_deg,
+                ..
+            } => (applied_deg, detent_deg),
+            _ => (0.0, 0.0),
+        };
+        // Bound the display: a +570° drag is the same pose as −150°, and a fan that
+        // wraps a full turn reads as a filled ring rather than a swept sector.
+        let degrees = wrap_degrees(raw_degrees);
+        let current = rotate_about(start, &axis, degrees.to_radians());
+        Some(RingSweep {
+            origin: self.frame.origin,
+            axis,
+            start: *start,
+            current,
+            radius: self.scale,
+            degrees,
+            detent_deg,
+        })
     }
 
     /// The transform handle under the pointer (set by the host from a pick).
@@ -1214,6 +1315,9 @@ impl TransformGizmo {
     /// Highlight a gizmo target (a transform handle or the origin control), or clear.
     /// Returns whether the visuals changed.
     pub fn set_hovered_target(&mut self, target: Option<GizmoTarget>) -> bool {
+        // A locked sibling ring is not a hover target: it must not widen or take the
+        // active ink while another ring owns the pending rotation.
+        let target = target.filter(|target| !self.is_locked_sibling(*target));
         if self.hovered == target {
             return false;
         }
@@ -1223,6 +1327,39 @@ impl TransformGizmo {
         self.dirty = true;
         self.apply_colors();
         true
+    }
+
+    /// The ring a pending rotation owns, if any.
+    pub fn locked_ring(&self) -> Option<GizmoAxis> {
+        self.locked_ring
+    }
+
+    /// Lock the other two rings while `axis` owns a non-zero pending step, or clear the
+    /// lock. Returns whether the visuals changed.
+    pub fn set_locked_ring(&mut self, axis: Option<GizmoAxis>) -> bool {
+        if self.locked_ring == axis {
+            return false;
+        }
+        self.locked_ring = axis;
+        if self.hovered.is_some_and(|target| self.is_locked_sibling(target)) {
+            self.hovered = None;
+        }
+        self.dirty = true;
+        self.apply_colors();
+        true
+    }
+
+    /// Whether `target` is a ring the lock mutes (any ring other than the locked one).
+    fn is_locked_sibling(&self, target: GizmoTarget) -> bool {
+        let Some(locked) = self.locked_ring else {
+            return false;
+        };
+        matches!(
+            target.handle(),
+            Some(handle)
+                if handle.kind() == HandleKind::Ring
+                    && handle.axis_label().is_some_and(|axis| axis != locked)
+        )
     }
 
     /// Recompute the screen-invariant scale for `camera` and rebuild the handles if it
@@ -1351,6 +1488,7 @@ impl TransformGizmo {
                         previous: angle,
                         swept: 0.0,
                         last: 0.0,
+                        start: ring_direction(axis, angle),
                     },
                     GizmoConstraint::Ring(axis_label),
                     GizmoValue::Angular {
@@ -1457,6 +1595,7 @@ impl TransformGizmo {
                 previous,
                 swept,
                 last,
+                start: _,
             } => {
                 let axis = frame.axis(handle).expect("ring handle");
                 let axis_label = axis_of(handle).expect("ring label");
@@ -1504,8 +1643,8 @@ impl TransformGizmo {
     }
 
     /// The device-space anchor for the drag's numeric readout. Axis drags anchor at the
-    /// stem tip, plane drags at the anchor, and ring drags return `None` so the host can
-    /// follow the pointer instead.
+    /// stem tip, plane drags at the anchor, and a ring anchors on the **arc bisector**:
+    /// the swept wedge's midpoint, not the pointer, so the degree tag sits on the arc.
     pub fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
         let active = self.active.as_ref()?;
         let point = match &active.start {
@@ -1518,9 +1657,29 @@ impl TransformGizmo {
                 )
             }
             DragStart::Plane { .. } => self.display_point(self.frame.origin),
-            DragStart::Ring { .. } => return None,
+            DragStart::Ring { .. } => {
+                let sweep = self.active_ring_sweep()?;
+                self.display_point(sweep.origin.add(&sweep.midpoint().scale(sweep.radius)))
+            }
         };
         project_device(camera, point)
+    }
+
+    /// The swept arc's chord length on screen, in device pixels.
+    ///
+    /// The host hides the on-arc degree tag below a readable sweep (the same threshold
+    /// a ruler tag uses), so a tiny detent does not flash a tag at the ring centre.
+    pub fn ring_arc_screen_px(&self, camera: &Camera) -> Option<f64> {
+        let sweep = self.active_ring_sweep()?;
+        let start = project_device(
+            camera,
+            self.display_point(sweep.origin.add(&sweep.start.scale(sweep.radius))),
+        )?;
+        let current = project_device(
+            camera,
+            self.display_point(sweep.origin.add(&sweep.current.scale(sweep.radius))),
+        )?;
+        Some((start[0] - current[0]).hypot(start[1] - current[1]))
     }
 
     /// End the active drag, returning the commit (the accumulated transform).
@@ -1702,8 +1861,25 @@ impl TransformGizmo {
         let outline_alpha = self.style.outline[3] * self.style.opacity;
         for (index, target) in GizmoTarget::ALL.iter().enumerate() {
             let fade = self.fade[index];
-            let (mut surface, mut edge) =
-                paint_for(*target, self.hovered == Some(*target), &self.style);
+            // A locked ring keeps the active ink; its siblings drop to the inactive
+            // token at a quarter alpha and never answer the hover cue.
+            let locked_sibling = self.is_locked_sibling(*target);
+            let owns_lock = self.locked_ring.is_some_and(|locked| {
+                matches!(
+                    target.handle(),
+                    Some(handle)
+                        if handle.kind() == HandleKind::Ring
+                            && handle.axis_label() == Some(locked)
+                )
+            });
+            let hovered = (self.hovered == Some(*target) || owns_lock) && !locked_sibling;
+            let (mut surface, mut edge) = paint_for(*target, hovered, &self.style);
+            if locked_sibling {
+                surface = INACTIVE_COLOR;
+                edge = INACTIVE_COLOR;
+                surface[3] *= 0.25;
+                edge[3] *= 0.25;
+            }
             surface[3] *= fade;
             edge[3] *= fade;
             self.handles[index].set_surface_color(surface);
@@ -1873,6 +2049,16 @@ impl GizmoSet {
             self.gizmos[index].set_hovered_target(None);
             self.gizmos[index].set_kind(kind);
             changed = true;
+        }
+        changed
+    }
+
+    /// Lock every hosted entry's other two rings to `axis`, or clear the lock. Returns
+    /// whether any entry's visuals changed.
+    pub fn set_locked_ring(&mut self, axis: Option<GizmoAxis>) -> bool {
+        let mut changed = false;
+        for gizmo in &mut self.gizmos {
+            changed |= gizmo.set_locked_ring(axis);
         }
         changed
     }
@@ -2451,6 +2637,39 @@ fn angle_at(hit: Vector3, centre: Vector3, axis: Vector3) -> Option<f64> {
     let reference = any_perpendicular(axis);
     let up = axis.cross(&reference).normalize();
     Some(v.dot(&up).atan2(v.dot(&reference)))
+}
+
+/// The in-plane direction at `angle` for a ring about `axis`.
+///
+/// The same `reference`/`up` basis [`angle_at`] measures against, so a stored press
+/// direction and the live angle describe the same point on the ring.
+fn ring_direction(axis: Vector3, angle: f64) -> Vector3 {
+    let reference = any_perpendicular(axis);
+    let up = axis.cross(&reference).normalize();
+    reference
+        .scale(angle.cos())
+        .add(&up.scale(angle.sin()))
+        .normalize()
+}
+
+/// Rotate `v` about the unit `axis` by `angle` radians (Rodrigues).
+fn rotate_about(v: &Vector3, axis: &Vector3, angle: f64) -> Vector3 {
+    let (sin, cos) = angle.sin_cos();
+    v.scale(cos)
+        .add(&axis.cross(v).scale(sin))
+        .add(&axis.scale(axis.dot(v) * (1.0 - cos)))
+}
+
+/// Wrap a signed degree value into `(-180, 180]`.
+fn wrap_degrees(degrees: f64) -> f64 {
+    let wrapped = degrees % 360.0;
+    if wrapped <= -180.0 {
+        wrapped + 360.0
+    } else if wrapped > 180.0 {
+        wrapped - 360.0
+    } else {
+        wrapped
+    }
 }
 
 /// Snap a ring's accumulated sweep to relative `detent` radians, or leave it free.
@@ -3366,7 +3585,64 @@ mod tests {
 
         let mut ring = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
         assert!(ring.begin_drag(GizmoHandle::RotateZ, &camera(5.0), UP));
-        assert!(ring.readout_anchor(&camera(5.0)).is_none());
+        let sweep = ring.active_ring_sweep().expect("a ring sweep");
+        assert_eq!(sweep.degrees, 0.0);
+        assert!(
+            ring.readout_anchor(&camera(5.0)).is_some(),
+            "the tag anchors on the arc bisector"
+        );
+        assert!(
+            ring.ring_arc_screen_px(&camera(5.0))
+                .is_some_and(|pixels| pixels < 1.0),
+            "at the press the swept arc has no length"
+        );
+    }
+
+    #[test]
+    fn a_ring_sweep_is_bounded_to_half_a_turn() {
+        assert_eq!(wrap_degrees(570.0), -150.0);
+        assert_eq!(wrap_degrees(-570.0), 150.0);
+        assert_eq!(wrap_degrees(180.0), 180.0);
+        assert_eq!(wrap_degrees(-180.0), 180.0);
+        assert_eq!(wrap_degrees(45.0), 45.0);
+    }
+
+    #[test]
+    fn a_locked_ring_mutes_its_siblings_and_refuses_their_hover() {
+        let camera = tilted_camera(5.0);
+        let mut gizmo = TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate);
+        gizmo.update(&camera);
+        let z = GizmoTarget::Handle(GizmoHandle::RotateZ).index();
+        let x = GizmoTarget::Handle(GizmoHandle::RotateX).index();
+
+        assert!(gizmo.set_locked_ring(Some(GizmoAxis::Z)));
+        assert_eq!(gizmo.locked_ring(), Some(GizmoAxis::Z));
+        assert!(
+            gizmo.items()[z].surface_color()[3] > gizmo.items()[x].surface_color()[3],
+            "the locked ring keeps the active ink; its sibling is muted"
+        );
+        // A sibling cannot take the hover cue (which also widens the ribbon).
+        assert!(!gizmo.set_hovered_target(Some(GizmoTarget::Handle(GizmoHandle::RotateX))));
+        assert_eq!(gizmo.hovered(), None);
+        assert!(gizmo.set_hovered_target(Some(GizmoTarget::Handle(GizmoHandle::RotateZ))));
+
+        assert!(gizmo.set_locked_ring(None));
+        assert_eq!(gizmo.locked_ring(), None);
+        assert!(!gizmo.set_locked_ring(None), "already unlocked");
+    }
+
+    #[test]
+    fn a_set_forwards_the_ring_lock_to_every_entry() {
+        let mut gizmos = GizmoSet::new(vec![
+            TransformGizmo::new(1, Vector3::zero(), GizmoMode::Rotate),
+            TransformGizmo::new(2, Vector3::new(5.0, 0.0, 0.0), GizmoMode::Rotate),
+        ]);
+        assert!(gizmos.set_locked_ring(Some(GizmoAxis::X)));
+        for gizmo in gizmos.gizmos() {
+            assert_eq!(gizmo.locked_ring(), Some(GizmoAxis::X));
+        }
+        assert!(!gizmos.set_locked_ring(Some(GizmoAxis::X)));
+        assert!(gizmos.set_locked_ring(None));
     }
 
     #[test]

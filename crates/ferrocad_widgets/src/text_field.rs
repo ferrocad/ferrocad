@@ -15,7 +15,7 @@ use gpui::{
     UnderlineStyle, Window, div, fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
 
-use crate::events::{ChangeEvent, SubmitEvent};
+use crate::events::{ChangeEvent, RejectedChar, SubmitEvent};
 use crate::text_buffer::TextBuffer;
 use ferrocad_theme::ui::{ACTIVE_ACCENT, CHROME_LINE, WHEEL_GLASS};
 
@@ -32,10 +32,14 @@ pub struct TextInput {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    /// Characters this field accepts. `None` accepts everything; a numeric field uses it
+    /// to refuse letters and emit [`RejectedChar`] so the host can give them a meaning.
+    char_filter: Option<fn(char) -> bool>,
 }
 
 impl EventEmitter<ChangeEvent> for TextInput {}
 impl EventEmitter<SubmitEvent> for TextInput {}
+impl EventEmitter<RejectedChar> for TextInput {}
 
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -52,6 +56,7 @@ impl TextInput {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
+            char_filter: None,
         }
     }
 
@@ -75,6 +80,24 @@ impl TextInput {
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         self.buffer.select_all();
         cx.notify();
+    }
+
+    /// Refuse characters `filter` rejects and emit [`RejectedChar`] instead of inserting
+    /// them. `None` restores the ordinary free-text behaviour.
+    pub fn set_char_filter(&mut self, filter: Option<fn(char) -> bool>) {
+        self.char_filter = filter;
+    }
+
+    /// Whether `text` may be inserted as a whole; the first refused character is reported.
+    fn accept_text(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        let Some(filter) = self.char_filter else {
+            return true;
+        };
+        if let Some(character) = text.chars().find(|character| !filter(*character)) {
+            cx.emit(RejectedChar { character });
+            return false;
+        }
+        true
     }
 
     fn changed(&self, cx: &mut Context<Self>) {
@@ -278,6 +301,9 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accept_text(new_text, cx) {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.buffer.range_from_utf16(range_utf16))
@@ -295,6 +321,9 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accept_text(new_text, cx) {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.buffer.range_from_utf16(range_utf16))
@@ -602,5 +631,41 @@ mod tests {
 
         cx.simulate_keystrokes("enter");
         assert_eq!(submits.borrow().as_slice(), ["hi"]);
+    }
+
+    #[gpui::test]
+    fn a_char_filter_refuses_and_reports_the_rejected_character(cx: &mut TestAppContext) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let input = cx.new(|cx| {
+                    let mut input = TextInput::new(cx, "");
+                    input.set_char_filter(Some(|character: char| character.is_ascii_digit()));
+                    input
+                });
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+                input
+            })
+            .unwrap()
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let input: Entity<TextInput> = window.root(&mut cx).unwrap();
+
+        let rejected: Rc<RefCell<Vec<char>>> = Rc::default();
+        let sink = rejected.clone();
+        let _subscription = cx.update(|_window, cx| {
+            cx.subscribe(&input, move |_e, event: &RejectedChar, _cx| {
+                sink.borrow_mut().push(event.character);
+            })
+        });
+
+        cx.simulate_input("4");
+        cx.simulate_input("x");
+        cx.simulate_input("5");
+        assert_eq!(input.read_with(&cx, |input, _| input.text().to_string()), "45");
+        assert_eq!(*rejected.borrow(), vec!['x']);
+        assert_eq!(input.read_with(&cx, |input, _| input.text().to_string()), "45");
     }
 }

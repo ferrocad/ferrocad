@@ -143,6 +143,7 @@ pub(super) fn place_hud(anchor: Point<Pixels>, viewport: Size<Pixels>, hud: Size
 /// origin — is summed and negated, and the pill's **centre** is placed 36 px out along
 /// that vector, so it lands in the open canvas opposite the stems. `clamp_hud` keeps it
 /// reachable at a viewport edge.
+#[cfg(test)]
 pub(super) fn place_finish(
     origin: Point<Pixels>,
     stems: Option<[[f32; 2]; 3]>,
@@ -150,8 +151,24 @@ pub(super) fn place_finish(
     viewport: Size<Pixels>,
     pill: Size<Pixels>,
 ) -> Point<Pixels> {
-    // How far the pill's centre sits from the origin, in logical px.
-    const DISTANCE: f32 = 36.0;
+    place_finish_with(origin, stems, ruler, None, 36.0, viewport, pill)
+}
+
+/// [`place_finish`] with the rotate-specific additions: the swept sector's direction
+/// and the distance from the origin in logical pixels.
+///
+/// A ring has no linear tape leg, so the protractor wedge takes the ruler's place in the
+/// repulsion sum; its distance is the ring radius plus a gap, keeping the pill outside
+/// the whole ring sphere rather than 36 px from the centre.
+pub(super) fn place_finish_with(
+    origin: Point<Pixels>,
+    stems: Option<[[f32; 2]; 3]>,
+    ruler: Option<[f32; 2]>,
+    sweep: Option<[f32; 2]>,
+    distance: f32,
+    viewport: Size<Pixels>,
+    pill: Size<Pixels>,
+) -> Point<Pixels> {
     // The incoming tape leg is one stroke, not three stems.
     const RULER_WEIGHT: f32 = 0.75;
     let mut occupied = [0.0f32; 2];
@@ -163,6 +180,10 @@ pub(super) fn place_finish(
         occupied[0] += ruler[0] * RULER_WEIGHT;
         occupied[1] += ruler[1] * RULER_WEIGHT;
     }
+    if let Some(sweep) = sweep {
+        occupied[0] += sweep[0];
+        occupied[1] += sweep[1];
+    }
     let length = (occupied[0].powi(2) + occupied[1].powi(2)).sqrt();
     let outward = if length > 0.01 {
         // Point into the empty side: away from everything the triad and the tape ink.
@@ -172,8 +193,8 @@ pub(super) fn place_finish(
         [std::f32::consts::FRAC_1_SQRT_2; 2]
     };
     let centre = point(
-        px(origin.x.0 + outward[0] * DISTANCE),
-        px(origin.y.0 + outward[1] * DISTANCE),
+        px(origin.x.0 + outward[0] * distance),
+        px(origin.y.0 + outward[1] * distance),
     );
     clamp_hud(
         point(
@@ -533,7 +554,7 @@ pub(super) fn dialog_buttons(
 /// The glyphs match the keys the panel already routes ([`Shell::dismiss_move_hud`] on
 /// `Esc`, [`Shell::commit_session`] on `Enter`), and the ids are the ones the modal's
 /// buttons use, so a test drives either surface the same way.
-pub(super) fn hud_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
+pub(super) fn hud_buttons(attention: bool, cx: &mut Context<Shell>) -> impl IntoElement {
     // `SUBTRACT_COLOR` at 14 % (0x24), for the discard segment's hover wash.
     const SUBTRACT_TINT: u32 = 0xef444424;
 
@@ -585,7 +606,11 @@ pub(super) fn hud_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
         .overflow_hidden()
         .bg(rgba(WHEEL_GLASS))
         .border_1()
-        .border_color(rgba(DOCK_BORDER))
+        .border_color(if attention {
+            rgb(HOVER_RIM)
+        } else {
+            rgba(DOCK_BORDER)
+        })
         .occlude()
         // The pill floats over the canvas, so a right-press on it still names a verb.
         .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -614,8 +639,16 @@ pub(super) fn move_finish_overlay(
 ) -> AnyElement {
     // Hidden while the pointer owns a stroke: the pair is an in-context control, not a
     // target for the drag. It comes back on the first paint after the release, so a drag
-    // can never end on top of it.
-    if shell.drag_start.is_some() || !shell.move_is_pending(cx) {
+    // can never end on top of it. A ring drag has no translation baseline, so the
+    // viewport's active drag is the authority for "the pointer owns a stroke".
+    let dragging = shell.drag_start.is_some()
+        || shell.viewport.as_ref().is_some_and(|viewport| {
+            viewport
+                .read(cx)
+                .gizmo()
+                .is_some_and(ferrocad_stage::TransformGizmo::is_dragging)
+        });
+    if dragging || !shell.move_is_pending(cx) {
         return div().into_any_element();
     }
     let viewport = window.viewport_size();
@@ -626,36 +659,52 @@ pub(super) fn move_finish_overlay(
     let hovered = shell
         .hud_rect
         .is_some_and(|rect| rect.contains(&window.mouse_position()));
-    // The screen directions the triad occupies, plus the incoming tape leg: the pill is
-    // placed in the empty octant opposite them.
-    let (stems, ruler) = {
+    // The screen directions the triad occupies, plus the incoming tape leg (Move) or
+    // the swept protractor wedge (Rotate): the pill is placed in the empty octant
+    // opposite them. A ring has no tape leg, and its pill sits outside the ring sphere.
+    let (stems, ruler, sweep, distance) = {
+        let angular = shell.angular();
         let projected = shell.viewport.as_ref().and_then(|viewport| {
             let viewport = viewport.read(cx);
             let stems = viewport.gizmo_stem_directions()?;
             let origin = viewport.gizmo_anchor()?;
-            let ruler = shell
-                .session
-                .as_ref()
-                .filter(|session| session.is_dirty())
-                .and_then(|session| viewport.world_anchor(session.datum()))
-                .map(|ghost| {
-                    let dx = ghost.x.0 - origin.x.0;
-                    let dy = ghost.y.0 - origin.y.0;
-                    let length = (dx * dx + dy * dy).sqrt();
-                    if length > 1.0 {
-                        [dx / length, dy / length]
-                    } else {
-                        [0.0, 0.0]
-                    }
-                });
-            Some((Some(stems), ruler))
+            let ruler = (!angular)
+                .then(|| {
+                    shell
+                        .session
+                        .as_ref()
+                        .filter(|session| session.is_dirty())
+                        .and_then(|session| viewport.world_anchor(session.datum()))
+                        .map(|ghost| {
+                            let dx = ghost.x.0 - origin.x.0;
+                            let dy = ghost.y.0 - origin.y.0;
+                            let length = (dx * dx + dy * dy).sqrt();
+                            if length > 1.0 {
+                                [dx / length, dy / length]
+                            } else {
+                                [0.0, 0.0]
+                            }
+                        })
+                })
+                .flatten();
+            let sweep = angular
+                .then(|| viewport.gizmo_sweep_direction())
+                .flatten();
+            let distance = if angular {
+                viewport.gizmo_radius_logical().unwrap_or(55.0) + 28.0
+            } else {
+                36.0
+            };
+            Some((Some(stems), ruler, sweep, distance))
         });
-        projected.unwrap_or((None, None))
+        projected.unwrap_or((None, None, None, 36.0))
     };
-    let follow = place_finish(
+    let follow = place_finish_with(
         shell.dialog_anchor(window, cx),
         stems,
         ruler,
+        sweep,
+        distance,
         viewport,
         pill,
     );
@@ -667,13 +716,14 @@ pub(super) fn move_finish_overlay(
     let origin = clamp_hud(origin, viewport, pill);
     shell.hud_lock = Some(origin);
     let weak = cx.weak_entity();
+    let attention = shell.pill_attention;
     let measured = div()
         .on_children_prepainted(move |bounds, _window, cx| {
             if let Some(rect) = bounds.first().copied() {
                 let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
             }
         })
-        .child(hud_buttons(cx));
+        .child(hud_buttons(attention, cx));
     deferred(
         anchored()
             .anchor(Anchor::TopLeft)
@@ -692,17 +742,20 @@ pub(super) fn move_finish_overlay(
 /// the finish pair. The row opens unfocused; `Tab`, a digit, `-`/`.`, a field click or a
 /// ruler tag focuses one.
 pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElement {
-    let Some(inputs) = shell.move_hud.as_ref().map(|hud| hud.inputs.clone()) else {
+    let Some(hud) = shell.move_hud.as_ref() else {
         return div().into_any_element();
     };
+    let inputs = hud.inputs.clone();
     // A modal or the object wheel hides the row rather than stacking with it; it comes
     // back when that transient layer closes.
     if shell.modal_open() || shell.wheel.read(cx).is_open() {
         return div().into_any_element();
     }
     let absolute = shell.pill.absolute();
+    let local = shell.pill.local_frame();
+    let angular = shell.angular();
     let focus = shell.dialog_focus.clone();
-    div()
+    let mut bar = div()
         .id("move-hud")
         .debug_selector(|| "move-hud".to_string())
         .flex()
@@ -743,14 +796,36 @@ pub(super) fn move_fields_bar(shell: &Shell, cx: &mut Context<Shell>) -> AnyElem
             if handled {
                 cx.stop_propagation();
             }
-        }))
-        .child(mode_badge(absolute, cx))
-        .child(move_fields(&inputs, absolute))
-        .into_any_element()
+        }));
+    if angular {
+        // An interactive ring rotation is an **axis + angle**, not a 3-vector. The row
+        // shows the three axes so the locked siblings are visible as such, but only the
+        // dirty axis's cell holds an input; the others are `—` until it is applied or
+        // cancelled. This keeps `dirty_ring_count <= 1` and makes the form and the rings
+        // describe exactly the same step.
+        let locked = shell.rotation_pending();
+        let (reset_label, reset_actionable) = shell.reset_rotation_label();
+        bar = bar
+            .child(rotate_mode_badge(local, locked.is_some(), cx))
+            .child(rotate_fields(shell, locked, cx))
+            .child(div().text_xs().text_color(rgb(MUTED)).child("deg"))
+            .child(reset_rotation_button(
+                reset_label,
+                locked.is_some(),
+                reset_actionable,
+                cx,
+            ));
+    } else {
+        bar = bar
+            .child(mode_badge(absolute, cx))
+            .child(move_fields(&inputs, absolute));
+    }
+    bar.into_any_element()
 }
 
 /// The absolute/relative switch: `Δ` for offsets, `XYZ` for world coordinates.
 fn mode_badge(absolute: bool, cx: &mut Context<Shell>) -> AnyElement {
+    let label = if absolute { "XYZ" } else { "Δ" };
     div()
         .id("move-mode")
         .debug_selector(|| "move-mode".to_string())
@@ -766,14 +841,172 @@ fn mode_badge(absolute: bool, cx: &mut Context<Shell>) -> AnyElement {
         }))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(ACCENT)))
-        .child(if absolute { "XYZ" } else { "Δ" })
+        .child(label)
         .on_click(cx.listener(|this, _event, window, cx| {
             this.toggle_move_mode(window, cx);
         }))
         .into_any_element()
 }
 
-/// The three labeled fields and the single `mm` suffix.
+/// The rotate form's ring-frame switch: `WLD` (world rings) or `LOC` (body rings).
+///
+/// While a step is pending the basis is frozen: the button is muted and explains the
+/// lock instead of moving the rings under the pending value.
+fn rotate_mode_badge(local: bool, locked: bool, cx: &mut Context<Shell>) -> AnyElement {
+    let ink = if locked {
+        MUTED
+    } else if local {
+        ferrocad_theme::ui::ACTIVE_ACCENT
+    } else {
+        FG
+    };
+    div()
+        .id("move-mode")
+        .debug_selector(|| "move-mode".to_string())
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .bg(rgb(PANEL_ALT))
+        .text_xs()
+        .text_color(rgb(ink))
+        .cursor_pointer()
+        .hover(|style| {
+            if locked {
+                style
+            } else {
+                style.bg(rgb(ACCENT))
+            }
+        })
+        .child(if local { "LOC ▾" } else { "WLD ▾" })
+        .on_click(cx.listener(move |this, _event, window, cx| {
+            if this.rotation_pending().is_some() {
+                this.show_rotation_lock(this.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);
+            } else {
+                this.toggle_move_mode(window, cx);
+            }
+        }))
+        .into_any_element()
+}
+
+/// The rotate row's three axis cells. Only the selected ring holds the numeric input.
+///
+/// While a step is pending its ring owns the input; the siblings show `—` and either
+/// explain the lock (dirty) or switch the selected ring (clean).
+fn rotate_fields(
+    shell: &Shell,
+    locked: Option<usize>,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let Some(hud) = shell.move_hud.as_ref() else {
+        return div().into_any_element();
+    };
+    let active = hud.axis;
+    let angle = hud.angle.clone();
+    let dirty = locked.is_some();
+    let mut row = div().flex().flex_row().items_center().gap_2();
+    for (index, ink) in [AXIS_X, AXIS_Y, AXIS_Z].into_iter().enumerate() {
+        let is_active = index == active;
+        let label = ["ΔθX", "ΔθY", "ΔθZ"][index];
+        let mut cell = div()
+            .id(("rotate-field", index))
+            .debug_selector(move || format!("rotate-field-{index}"))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .rounded_sm()
+            .when(is_active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(if is_active { ink } else { MUTED }))
+                    .child(label),
+            );
+        if is_active {
+            cell = cell.child(
+                div()
+                    .id("rotate-angle")
+                    .debug_selector(|| "rotate-angle".to_string())
+                    .w(px(88.))
+                    .flex_shrink_0()
+                    .child(angle.clone()),
+            );
+        } else if dirty {
+            cell = cell.child(
+                div()
+                    .id(("rotate-locked", index))
+                    .debug_selector(move || format!("rotate-locked-{index}"))
+                    .w(px(88.))
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .cursor_pointer()
+                    .child("—")
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.show_rotation_lock(index, cx);
+                    })),
+            );
+        } else {
+            cell = cell.child(
+                div()
+                    .id(("rotate-choice", index))
+                    .debug_selector(move || format!("rotate-choice-{index}"))
+                    .w(px(88.))
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(PANEL_ALT)))
+                    .child("0.00")
+                    .on_click(cx.listener(move |this, _event, window, cx| {
+                        this.select_rotate_axis(index, window, cx);
+                    })),
+            );
+        }
+        row = row.child(cell);
+    }
+    row.into_any_element()
+}
+
+/// `Reset 0°`: snap the body's committed orientation back to world.
+///
+/// The label names the stored rotation (`Reset (Z 45°)`, or the true shortest angle for
+/// a compound tilt). A stored identity dims the button; a pending step keeps it inert
+/// with the lock prompt (one visible step at a time).
+fn reset_rotation_button(
+    label: String,
+    locked: bool,
+    actionable: bool,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let muted = locked || !actionable;
+    let mut button = div()
+        .id("rotate-reset")
+        .debug_selector(|| "rotate-reset".to_string())
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .bg(rgb(PANEL_ALT))
+        .text_xs()
+        .text_color(rgb(if muted { MUTED } else { FG }))
+        .child(label);
+    if locked {
+        button = button.cursor_pointer().on_click(cx.listener(|this, _event, _window, cx| {
+            this.show_rotation_lock(this.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);
+        }));
+    } else if actionable {
+        button = button
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(ACCENT)).text_color(rgb(FG)))
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.reset_rotation(cx);
+            }));
+    }
+    button.into_any_element()
+}
+
+/// The three labeled translation fields and the single unit suffix (`mm`).
 fn move_fields(inputs: &[Entity<TextInput>; 3], absolute: bool) -> AnyElement {
     let mut row = div().flex().flex_row().items_center().gap_2();
     for (index, input) in inputs.iter().enumerate() {
@@ -799,8 +1032,13 @@ fn move_fields(inputs: &[Entity<TextInput>; 3], absolute: bool) -> AnyElement {
                 .child(div().w(px(88.)).flex_shrink_0().child(input.clone())),
         );
     }
-    row.child(div().text_xs().text_color(rgb(MUTED)).child("mm"))
-        .into_any_element()
+    row.child(
+        div()
+            .text_xs()
+            .text_color(rgb(MUTED))
+            .child("mm"),
+    )
+    .into_any_element()
 }
 
 /// The command palette (Ctrl+K): a focused search field over the filtered registry.

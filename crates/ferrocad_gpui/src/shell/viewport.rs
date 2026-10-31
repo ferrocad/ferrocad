@@ -221,11 +221,11 @@ impl Shell {
         match event {
             ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
             ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),
-            ViewportEvent::Transform(event) => self.on_interaction(&event.to_interaction(), cx),
             ViewportEvent::TransformPreview(preview) => self.on_transform_preview(preview, cx),
             ViewportEvent::GizmoOrigin { point, kind } => self.on_gizmo_origin(*point, *kind, cx),
             ViewportEvent::ToolState(status) => self.on_tool_state(status, cx),
             ViewportEvent::FocusDelta(axis) => self.focus_move_axis(*axis, cx),
+            ViewportEvent::LockedRing { axis } => self.on_locked_ring(*axis, cx),
         }
         // A tool or a mod event callback can select through the facade; applying the
         // queue here keeps that write in the same frame as the event that caused it.
@@ -651,10 +651,21 @@ impl Shell {
     pub(super) fn arm_gizmos(&self, reference: &SelectionRef, stage: &Stage) -> GizmoSet {
         let mut gizmos = self.armed_gizmos(reference, stage);
         let datum = stage.item(reference.object).and_then(ShapeItem::anchor);
+        // `LOC` rings follow the body's committed orientation; the shared triad only.
+        // A translate session is always world-aligned, so switching back rebuilds it.
+        let local = self.gizmo_mode == GizmoMode::Rotate && self.pill.local_frame();
+        let orientation = local.then(|| self.object_rotation_now());
         for gizmo in gizmos.gizmos_mut() {
             let object_origin = gizmo.origin();
             if datum == Some(object_origin) {
-                gizmo.set_origin(self.gizmo_origin_for(object_origin));
+                let origin = self.gizmo_origin_for(object_origin);
+                gizmo.set_origin(origin);
+                if let Some(orientation) = orientation {
+                    gizmo.set_frame(ferrocad_stage::ManipulatorFrame::from_rotation(
+                        origin,
+                        orientation,
+                    ));
+                }
             }
             gizmo.set_origin_enabled(self.gizmo_origin_enabled());
         }
@@ -689,10 +700,11 @@ impl Shell {
     }
 
     /// Whether the origin/centre handle is enabled. The floating Move form is anchored
-    /// to the visible origin, so the pivot handle is disabled while it is open; closing
-    /// the form re-enables it.
+    /// to the visible origin, so the pivot handle is disabled while it is open; the
+    /// angular form is docked at the bottom-left, so a rotate session keeps the disc
+    /// live and can re-pivot before turning. Closing the form re-enables it.
     pub(super) fn gizmo_origin_enabled(&self) -> bool {
-        self.move_hud.is_none()
+        self.move_hud.is_none() || self.gizmo_mode == GizmoMode::Rotate
     }
 
     /// Push the session's origin-handle policy into the viewport.
@@ -903,11 +915,12 @@ impl Shell {
         // A re-arm rebuilds from the **document** stage, whose anchors are the committed
         // pose. A dirty session's preview must be re-applied or the fresh triad lands at
         // the old origin while the object stays previewed (the report's release
-        // snap-back).
-        let pending = self.session.as_ref().filter(|session| session.is_dirty()).map(|s| {
-            let delta = s.delta();
-            [delta.x, delta.y, delta.z]
-        });
+        // snap-back). The session owns whether that preview is a translation or a rotation.
+        let pending = self
+            .session
+            .as_ref()
+            .filter(|session| session.is_dirty())
+            .map(TransformSession::transform);
         let targets: Vec<u32> = {
             let model = self.model.lock().unwrap();
             model
@@ -922,14 +935,15 @@ impl Shell {
             viewport.set_gizmo_idle_scale(None);
             viewport.set_gizmos(gizmos);
             viewport.set_gizmo_mode(mode);
-            if let Some(delta) = pending {
-                let transform = Matrix4::translation(delta[0], delta[1], delta[2]);
+            if let Some(transform) = pending {
                 viewport.preview_transform_settled(&targets, Some(transform));
             }
             cx.notify();
         });
         // The form follows the armed target (a re-pivot included).
         self.refresh_move_origin(cx);
+        // A re-arm replaces the hosted gizmos; restore the pending step's ring lock.
+        self.sync_locked_ring(cx);
     }
 
     /// Re-read the workbench commands and their enablement.

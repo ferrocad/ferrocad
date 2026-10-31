@@ -44,21 +44,41 @@ sub-element reports the same filtered scope the window does.
 - **`Esc`** (or the form's `✗`) rolls the preview back without writing anything, so it
   spends no undo entry. With nothing pending, `Esc` clears the selection instead — the
   form and the triad go with it.
-- **A pending move locks the workspace.** While the `✗`/`✓` buttons are showing,
-  switching tools, changing `Select ▾` or the handle set, selecting another object,
-  dragging a different body, or starting an editing command (`Create Box`) is **blocked**
-  (the status line says "move pending"; the tool bar dims), so nothing commits and nothing
-  is lost by a stray click. View commands such as `Grid` or `Axes` still work. Finish with
-  `✓` or `✗` and the gesture goes through.
+- **Rotation follows the same rule, one axis at a time.** The wheel's `Rotate` verb switches
+  the Move hand to the rings, and its bar reads `1 Rotate`. A ring drag leaves a pending
+  rotation and the same flat `✗ │ ✓` strip appears beside the rings; a 3-D protractor draws
+  the swept glass sector, a dashed start spoke, the live spoke and the 15° detents. The
+  docked rotate bar shows `ΔθX`, `ΔθY` and `ΔθZ`, but only the pending ring's cell holds an
+  angle: a rotation is an axis and an angle, not three independent coordinate fields.
+  While a step is pending, **the other two rings are locked** — they stay visible but are
+  muted, refuse clicks (no accidental orbit or deselection) and their bar cells show `—`.
+  Finish with `✓`/`Enter` or roll back with `✗`/`Esc`; the lock is what guarantees that
+  cancel always means exactly the rotation on the protractor, and that no ring switch
+  commits behind your back. Dragging the same ring again adds to that angle (three 30°
+  drags show 30°, 60°, then 90°). `WLD` keeps the rings aligned with the world grid; `LOC`
+  turns them with the body's committed orientation; both are inert while a step is
+  `Reset 0°` commits the rotation that returns the body to world alignment and is
+  likewise disabled while a step is pending. The button names the stored orientation:
+  `Reset (Z 45°)` for a pure axis, `Reset (21.4°)` for a compound tilt (the shortest total
+  angle, never Euler fractions), and it dims when the body is already at `0°`. `Tab` focuses the active `Δθ` cell; when
+  nothing is pending, clicking another cell (or typing `X`, `Y` or `Z` in the field)
+  chooses the ring the typed angle will use. A ring rotates the body the triad sits on;
+  drag the centre disc first to re-pivot onto a vertex or edge midpoint.
+- **A pending move or rotation locks the workspace.** While the `✗`/`✓` buttons are
+  showing, switching tools, changing `Select ▾` or the handle set, selecting another
+  object, dragging a different body, or starting an editing command (`Create Box`) is
+  **blocked** (the status line says "move pending" or "rotation pending"; the tool bar
+  dims), so nothing commits and nothing is lost by a stray click. View commands such as
+  `Grid` or `Axes` still work. Finish with `✓` or `✗` and the gesture goes through.
 
 ## Keys at a glance
 
 | Key | Effect |
 | --- | --- |
 | `1` / `2` / `3` | equip Move / Push/Pull / Fillet; `1` again on Move pauses the hand |
-| `Tab` | focus the Move form's field for the axis you last dragged (then cycle) |
+| `Tab` | focus the Move form's field for the axis you last dragged (then cycle); on the rotate form, focus `Δθ` |
 | a digit, `-` or `.` | focus the remembered field and start the number |
-| `=` | switch the form between offsets (`ΔX`) and coordinates (`X`) |
+| `=` | switch the translation form between offsets (`ΔX`) and coordinates (`X`); switch the rotate form between world rings (`WLD`) and body rings (`LOC`) when no rotation is pending |
 | `Enter` | commit the pending move, or accept an open dialog |
 | `Esc` | roll back the pending move; at rest, clear the selection; or close the open surface |
 | `Space` | open the object-verb wheel |
@@ -81,6 +101,12 @@ Click the `Δ` switch (or press `=`) to show **coordinates** instead of offsets:
 `0` in `X` snaps the pivot onto the YZ plane, and a typed coordinate is still one
 ordinary move. Type `=15` in a field to mean "X = 15" for that entry without switching
 the whole form.
+
+With the **rotate** rings, the same dock row becomes `ΔθX ΔθY ΔθZ` plus `WLD/LOC` and a
+`Reset 0°` button. Only the active ring's cell holds an input. `Tab` focuses it; while
+nothing is pending, clicking another cell (or typing `X`, `Y` or `Z` while the caret is
+in the field) selects that ring. Once a step is pending the siblings show `—`, and the
+frame switch, `Reset 0°` and the sibling cells are disabled until you apply or cancel.
 
 ## Notes
 

@@ -1,12 +1,13 @@
 //! The Move pill's keyboard state.
 //!
-//! The pill is one shape now (see `docs/project/tasks/transform-session.md` §3.2): a
-//! single row of `ΔX`/`ΔY`/`ΔZ` fields, shown whenever Slot 1 has a Move target. This
-//! module holds only *which field, if any, the keyboard owns* — never the Δ values
-//! themselves, which belong to the [`TransformSession`](ferrocad_stage::TransformSession)
-//! and are read through it. Keeping the split means the pill cannot become a second
-//! source of truth for a pending transform, which is the drift the session exists to
-//! remove (§0.2).
+//! The pill is one surface: a row of `ΔX`/`ΔY`/`ΔZ` fields for the arrows, or
+//! `[ WLD/LOC ] [ X/Y/Z ] [ Δθ ]` for the rings, shown whenever Slot 1 has a Move target.
+//! This module holds only *which field, if any, the keyboard owns* and the two form
+//! switches — never the values themselves, which belong to the
+//! [`TransformSession`](ferrocad_stage::TransformSession) and are read through it. Keeping
+//! the split means the pill cannot become a second source of truth for a pending transform,
+//! which is the drift the session exists to remove (§0.2). The rotate form has one field,
+//! so its focused index is always `0`; the selected ring lives on `MoveHud`.
 //!
 //! **Resting is the default.** Opening the HUD, or releasing a drag, leaves every field
 //! unfocused, so `1`/`2`/`3` still equip loadout slots and the viewport keeps its own
@@ -40,6 +41,10 @@ pub(super) struct PillState {
     /// `true` when the fields show world coordinates (`X/Y/Z`) instead of offsets
     /// (`ΔX/ΔY/ΔZ`). The preview and the commit stay deltas either way.
     absolute: bool,
+    /// `true` when the rotate rings follow the body's own orientation (`LOC`) instead of
+    /// the world grid (`WLD`). It is the rotate form's frame switch; the translation form
+    /// keeps its own `absolute` coordinate mode.
+    local_frame: bool,
 }
 
 /// How many Δ fields the pill can show: X, Y and Z.
@@ -55,6 +60,7 @@ impl PillState {
             focus: None,
             last: 0,
             absolute: false,
+            local_frame: false,
         }
     }
 
@@ -65,6 +71,7 @@ impl PillState {
             focus: None,
             last: axis.min(AXES - 1),
             absolute: false,
+            local_frame: false,
         }
     }
 
@@ -80,6 +87,7 @@ impl PillState {
             focus: Some(axis),
             last: axis,
             absolute: false,
+            local_frame: false,
         }
     }
 
@@ -120,6 +128,18 @@ impl PillState {
     pub(super) fn toggle_absolute(&mut self) -> bool {
         self.absolute = !self.absolute;
         self.absolute
+    }
+
+    /// Whether the rotate rings follow the body's own orientation (`LOC`).
+    pub(super) fn local_frame(&self) -> bool {
+        self.local_frame
+    }
+
+    /// Flip between world rings (`WLD`) and body-local rings (`LOC`); returns the new
+    /// state. Like `absolute`, the choice outlives a session.
+    pub(super) fn toggle_local_frame(&mut self) -> bool {
+        self.local_frame = !self.local_frame;
+        self.local_frame
     }
 
     /// Focus `axis`, clamped to `0..=2`; returns whether the focus moved.
@@ -254,8 +274,13 @@ mod tests {
     fn the_coordinate_mode_starts_relative_and_toggles_back() {
         let mut pill = PillState::resting();
         assert!(!pill.absolute(), "a new HUD nudges by an offset");
+        assert!(!pill.local_frame(), "and starts with world rings");
         assert!(pill.toggle_absolute());
         assert!(pill.absolute());
+        assert!(pill.toggle_local_frame());
+        assert!(pill.local_frame());
+        assert!(!pill.toggle_local_frame());
+        assert!(!pill.local_frame());
         assert!(!pill.toggle_absolute());
         assert!(!pill.absolute());
     }

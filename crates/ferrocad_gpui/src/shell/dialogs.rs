@@ -147,6 +147,7 @@ impl Shell {
     pub(super) fn clear_dialog_preview(&mut self, cx: &mut Context<Self>) {
         self.session = None;
         self.drag_start = None;
+        self.rotation_start = None;
         self.clear_preview_items(cx);
         self.sync_transform_tape(cx);
     }
@@ -154,6 +155,7 @@ impl Shell {
     /// Drop the pending value entirely (cancel, accept, or a competing interaction).
     pub(super) fn discard_pending(&mut self, cx: &mut Context<Self>) {
         self.drag_start = None;
+        self.rotation_start = None;
         self.pill.release();
         self.clear_dialog_preview(cx);
     }
@@ -164,7 +166,9 @@ impl Shell {
             return;
         };
         viewport.update(cx, |viewport, cx| {
-            if viewport.preview_transform(&[], None) {
+            let mut changed = viewport.preview_transform(&[], None);
+            changed |= viewport.set_protractor(None);
+            if changed {
                 cx.notify();
             }
         });
@@ -300,8 +304,9 @@ impl Shell {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
-        // A ruler tag may only take a click while there is a Move form to focus; the
-        // viewport keeps the tags non-occluding during a drag regardless.
+        // A numeric tag (a ruler chip or a ring degree chip) may only take a click while
+        // there is a form to focus; the viewport keeps the tags non-occluding during a
+        // drag regardless.
         let clickable = self.move_pill_open();
         viewport.update(cx, |viewport, cx| {
             let mut changed = viewport.set_transform_tape(tape);
@@ -317,8 +322,15 @@ impl Shell {
     /// typed values describe the same pending move.
     ///
     /// There is **one mode**: the release never commits, with or without a HUD. The session
-    /// stays live until `Enter` commits it, `Esc` drops it, or the context changes.
-    pub(super) fn on_transform_preview(&mut self, preview: &TransformPreview, cx: &mut Context<Self>) {
+    /// stays live until `Enter` commits it, `Esc` drops it, or the context changes. A ring
+    /// drag takes the same route; its value is an axis-angle rather than a translation, and
+    /// it owns exactly one body (the commit hook applies a transform to one object).
+    pub(super) fn on_transform_preview(
+        &mut self,
+        preview: &TransformPreview,
+        cx: &mut Context<Self>,
+    ) {
+        self.pill_attention = false;
         // A drag on another body would hijack the pending move (the session targets one
         // subject, and the tape measures it). The context gate refuses the stroke and the
         // viewport drops it, so the triad cannot end up on a body the session does not own.
@@ -336,46 +348,169 @@ impl Shell {
             }
             return;
         }
+        let angular = match preview.value {
+            GizmoValue::Angular {
+                axis, applied_deg, ..
+            } => {
+                // The ring's world axis comes from its sweep (a local ring frame turns it
+                // with the body); the label names the bar's segment.
+                let world = preview
+                    .ring
+                    .as_ref()
+                    .map(|ring| ring.axis)
+                    .unwrap_or_else(|| gizmo_axis_vector(axis));
+                Some((axis_index(axis), world, applied_deg))
+            }
+            _ => None,
+        };
         let m = &preview.total_transform.m;
-        // A translation is all this can be: a rotate drag never emits a preview (the
-        // viewport previews and commits it from the full matrix itself).
         let drag = [m[3], m[7], m[11]];
-        let mut previews = self.move_hud.is_some();
+        let begin = preview.phase == PreviewPhase::Begin;
+        let settle = preview.phase == PreviewPhase::End;
 
-        if preview.phase == PreviewPhase::Begin {
+        if begin {
             // A press on the hover-to-arm triad is the user's first action on that
             // body: promote it before the session opens (U5). A drag on a latched
             // selection is already selected, so this is a no-op.
             self.promote_hover_target(preview.target_id, cx);
-            // A drag reports its transform from its own press, so it adds to whatever the
-            // session already holds — a second drag on a pending move continues it. The
-            // session is re-opened from the un-previewed stage so its datum and targets are
-            // the current document pose; the pending value is carried in `drag_start`.
-            self.drag_start = Some(self.session_delta().unwrap_or_default());
-            self.begin_drag_session(Some(preview.target_id));
-            // A promoted hover body makes the Move hand's target real: the form appears
-            // with the drag, if it was not already up.
-            self.ensure_move_hud(cx);
+            if let Some((index, world_axis, _)) = angular {
+                // A pending rotation owns one ring. A sibling press that reached the host
+                // (a harness, or a host that missed the viewport gate) is refused rather
+                // than committing behind the user's back.
+                if let Some(locked) = self.rotation_pending() {
+                    if locked != index {
+                        self.show_rotation_lock(index, cx);
+                        if let Some(viewport) = self.viewport.clone() {
+                            viewport.update(cx, |viewport, cx| {
+                                viewport.cancel_gizmo_drag();
+                                cx.notify();
+                            });
+                        }
+                        return;
+                    }
+                }
+                // Dragging the same ring again adds to that ring's angle; a clean
+                // session starts the step at zero.
+                let baseline = self
+                    .session
+                    .as_ref()
+                    .filter(|session| {
+                        session.is_dirty()
+                            && session.mode() == GizmoMode::Rotate
+                            && session.pending_axis_index() == Some(index)
+                    })
+                    .map(TransformSession::pending_degrees)
+                    .unwrap_or(0.0);
+                self.rotation_start = Some(baseline);
+                // Rotation is one subject: the interaction hook applies the matrix to one
+                // object, so the session follows the triad's target rather than the whole
+                // selection.
+                self.session = self
+                    .last_stage
+                    .as_ref()
+                    .and_then(|stage| TransformSession::begin(stage, &[preview.target_id]));
+                // A promoted body makes the angular row real: it appears with the drag if
+                // it was not already up.
+                self.ensure_move_hud(cx);
+                let orientation = self.object_rotation_now();
+                if let Some(session) = self.session.as_mut() {
+                    session.set_mode(GizmoMode::Rotate);
+                    session.set_orientation_0(orientation);
+                    session.set_rotation_step(index, world_axis, baseline);
+                }
+                if let Some(hud) = self.move_hud.as_mut() {
+                    hud.axis = index;
+                }
+                self.pill.remember_axis(index);
+            } else {
+                // A drag reports its transform from its own press, so it adds to whatever
+                // the session already holds — a second drag on a pending move continues it.
+                // The session is re-opened from the un-previewed stage so its datum and
+                // targets are the current document pose; the pending value is carried in
+                // `drag_start`.
+                self.drag_start = Some(self.session_delta().unwrap_or_default());
+                self.begin_drag_session(Some(preview.target_id));
+                // A promoted hover body makes the Move hand's target real: the form appears
+                // with the drag, if it was not already up.
+                self.ensure_move_hud(cx);
+            }
             // The pointer owns this gesture: the form must not take the keyboard back
             // from the canvas mid-drag.
             self.restore_viewport_focus = false;
-            previews |= self.move_hud.is_some();
         }
         if self.session.is_none() {
             // A tick without a `Begin` (a harness, or a host that missed it) still opens it.
-            self.begin_drag_session(Some(preview.target_id));
+            if let Some((index, world_axis, _)) = angular {
+                self.session = self
+                    .last_stage
+                    .as_ref()
+                    .and_then(|stage| TransformSession::begin(stage, &[preview.target_id]));
+                let orientation = self.object_rotation_now();
+                if let Some(session) = self.session.as_mut() {
+                    session.set_mode(GizmoMode::Rotate);
+                    session.set_orientation_0(orientation);
+                    session.set_rotation_step(index, world_axis, 0.0);
+                }
+                self.ensure_move_hud(cx);
+            } else {
+                self.begin_drag_session(Some(preview.target_id));
+            }
         }
+
+        if let Some((index, world_axis, applied_deg)) = angular {
+            // A ring reports its sweep from its own press. The session is one step, so it
+            // holds `baseline + applied` about the **same** axis. A sibling axis cannot
+            // reach here while a step is pending: both the viewport and the Begin guard
+            // refuse it.
+            if let Some(locked) = self.rotation_pending() {
+                if locked != index {
+                    self.show_rotation_lock(index, cx);
+                    return;
+                }
+            }
+            let baseline = self.rotation_start.unwrap_or(0.0);
+            if let Some(session) = self.session.as_mut() {
+                session.set_mode(GizmoMode::Rotate);
+                session.set_rotation_step(index, world_axis, baseline + applied_deg);
+            }
+            if let Some(hud) = self.move_hud.as_mut() {
+                hud.axis = index;
+            }
+            self.pill.remember_axis(index);
+            // The docked field is the numeric channel; the 3-D arc tag is the in-context
+            // one. A drag never takes the keyboard, so this is a mirror only.
+            if self.move_hud.is_some() {
+                self.set_move_fields([0.0; 3], cx);
+            }
+            // One pending step means one protractor arc and one chip.
+            let sweeps = self.session_protractor(cx);
+            self.publish_protractor(sweeps, cx);
+            self.sync_locked_ring(cx);
+            if settle {
+                self.drag_start = None;
+                self.rotation_start = None;
+            }
+            // The session owns the preview matrix; a rotation has no measuring tape (its
+            // delta is zero), while the docked field shows its single signed angle.
+            if let Some(transform) = self.session.as_ref().map(TransformSession::transform) {
+                self.preview_selection(Some(transform), settle, cx);
+            }
+            self.sync_transform_tape(cx);
+            return;
+        }
+
         let baseline = self.drag_start.unwrap_or_default();
         let delta = [
             baseline[0] + drag[0],
             baseline[1] + drag[1],
             baseline[2] + drag[2],
         ];
+        let previews = self.move_hud.is_some();
         if let Some(session) = self.session.as_mut() {
+            session.set_mode(GizmoMode::Translate);
             session.set_translation(Vector3::new(delta[0], delta[1], delta[2]));
         }
-        let settle = preview.phase == PreviewPhase::End;
-        if preview.phase == PreviewPhase::End {
+        if settle {
             self.drag_start = None;
         }
         // Remember where the user just worked, so the first `Tab` opens the field the
@@ -391,7 +526,11 @@ impl Shell {
             // No HUD: the session still owns the preview, so a plain drag shows the same
             // ghost the open form would. The release settles the frame at the pending
             // pose even if the viewport still reports its drag for a tick.
-            self.preview_selection(Some(delta), settle, cx);
+            self.preview_selection(
+                Some(Matrix4::translation(delta[0], delta[1], delta[2])),
+                settle,
+                cx,
+            );
         }
         // The tape follows the session, including after the release (SESSION_HOLD): it is
         // cleared by the commit/Esc/context paths, not by the end of the pointer gesture.
@@ -408,6 +547,34 @@ impl Shell {
     ///
     /// Returns whether anything was committed.
     pub(super) fn commit_session(&mut self, cx: &mut Context<Self>) -> bool {
+        self.pill_attention = false;
+        // A rotate session is one body and is not a translation: `App_Move` would apply the
+        // delta (zero) to the selection, so it commits through the same transform
+        // interaction a workbench gizmo uses. That hook owns the transaction and the
+        // recompute, exactly as it does for a direct ring commit.
+        let rotate = self
+            .session
+            .as_ref()
+            .filter(|session| session.is_dirty() && session.mode() == GizmoMode::Rotate)
+            .map(|session| (session.primary(), session.transform()));
+        if let Some((target, matrix)) = rotate {
+            // The numeric readout lives on the 3-D arc tag; the status line stays a
+            // short verb so the bottom-left text is not a second readout.
+            let commit = InteractionCommit::new(TRANSFORM_ID, target, "apply")
+                .with_values(matrix.m)
+                .with_readout("rotated");
+            self.session = None;
+            self.drag_start = None;
+            self.rotation_start = None;
+            self.clear_preview_items(cx);
+            self.sync_transform_tape(cx);
+            self.on_interaction(&commit, cx);
+            self.sync_locked_ring(cx);
+            self.reset_move_fields(cx);
+            self.restore_viewport_focus = true;
+            cx.notify();
+            return true;
+        }
         let session_delta = self
             .session
             .as_ref()
@@ -459,6 +626,7 @@ impl Shell {
         // way, and the ghost goes with it before the stage rebuild.
         self.session = None;
         self.drag_start = None;
+        self.rotation_start = None;
         self.clear_preview_items(cx);
         self.sync_transform_tape(cx);
         match result {
@@ -500,10 +668,13 @@ impl Shell {
         if self.session.is_none() {
             return false;
         }
+        self.pill_attention = false;
         self.session = None;
         self.drag_start = None;
+        self.rotation_start = None;
         self.clear_preview_items(cx);
         self.sync_transform_tape(cx);
+        self.sync_locked_ring(cx);
         self.reset_move_fields(cx);
         self.model.lock().unwrap().status = status.to_string();
         self.restore_viewport_focus = true;
@@ -511,28 +682,35 @@ impl Shell {
         true
     }
 
-    /// Preview the current selection at `delta` without touching the document.
+    /// Preview the current selection at `transform` without touching the document.
     ///
     /// This is the session's display half; it is the same write a form edit uses, so a
-    /// drag with no form open previews exactly like one with it.
+    /// drag with no form open previews exactly like one with it. The matrix carries a
+    /// translation or a rotation, so both gestures on the session share this one path.
     pub(super) fn preview_selection(
         &mut self,
-        delta: Option<[f64; 3]>,
+        transform: Option<Matrix4>,
         settle: bool,
         cx: &mut Context<Self>,
     ) {
-        let entities: Vec<u32> = {
-            let model = self.model.lock().unwrap();
-            model
-                .selection
-                .iter()
-                .filter_map(|item| self.display.entity_of(&item.object))
-                .collect()
-        };
+        // The session is the authority when it is live: a rotation owns exactly one body,
+        // while a translation owns the whole selection. Falling back to the selection
+        // keeps a typed preview working before a stage (and so a session) exists.
+        let entities: Vec<u32> = self
+            .session
+            .as_ref()
+            .map(|session| session.targets().to_vec())
+            .unwrap_or_else(|| {
+                let model = self.model.lock().unwrap();
+                model
+                    .selection
+                    .iter()
+                    .filter_map(|item| self.display.entity_of(&item.object))
+                    .collect()
+            });
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
-        let transform = delta.map(|d| Matrix4::translation(d[0], d[1], d[2]));
         viewport.update(cx, |viewport, cx| {
             let _changed = if settle {
                 viewport.preview_transform_settled(&entities, transform)
@@ -703,6 +881,19 @@ fn axis_index(axis: GizmoAxis) -> usize {
         GizmoAxis::X => 0,
         GizmoAxis::Y => 1,
         GizmoAxis::Z => 2,
+    }
+}
+
+/// The world direction a ring with this axis label turns about.
+///
+/// The hosted triad is built in the world frame, so the label is the axis. A gizmo in a
+/// rotated local frame would need [`TransformGizmo::frame`], which this stack does not
+/// use yet.
+fn gizmo_axis_vector(axis: GizmoAxis) -> Vector3 {
+    match axis {
+        GizmoAxis::X => Vector3::new(1.0, 0.0, 0.0),
+        GizmoAxis::Y => Vector3::new(0.0, 1.0, 0.0),
+        GizmoAxis::Z => Vector3::new(0.0, 0.0, 1.0),
     }
 }
 

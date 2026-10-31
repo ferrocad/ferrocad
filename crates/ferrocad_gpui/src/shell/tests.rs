@@ -19,6 +19,52 @@ fn boot_shell() -> Arc<Mutex<ShellModel>> {
     Shell::boot().expect("boot shell")
 }
 
+/// Register a minimal `transform`/`apply` interaction provider for headless tests.
+///
+/// The boot app links no workbench, so without one the commit route has nothing to
+/// call. This is deliberately not `ferrocad_toy`: importing an edition declares its
+/// appearance preset, which would leak into the other shell tests' boot state.
+fn register_transform_provider() {
+    let result = crate::python::evaluate(
+        r#"
+import FerroCAD
+import FreeCAD as _fc
+def _test_transform(obj, manipulator, action, element, values):
+    if manipulator != 'transform' or action != 'apply' or len(values) != 16:
+        return None
+    doc = obj.Document
+    doc.openTransaction('Rotate')
+    try:
+        obj.Placement = _fc.Placement(_fc.Matrix(*values)) * obj.Placement
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return {'ok': False, 'error': str(exc)}
+    return {'ok': True}
+FerroCAD.register_interaction_provider(_test_transform)
+"#,
+    )
+    .expect("register a transform interaction provider");
+    assert!(result.ok, "{}", result.output);
+}
+
+/// The boot object is an `App::FeaturePython`, which has no `Placement`. Give it one
+/// so a transform or `_move_selection` can write a real transaction and the undo
+/// count is meaningful.
+fn give_params_a_placement() {
+    let result = crate::python::evaluate(
+        r#"
+import FreeCAD
+obj = FreeCAD.ActiveDocument.getObject('Params')
+if obj is not None and 'Placement' not in obj.PropertiesList:
+    obj.addProperty('App::PropertyPlacement', 'Placement', 'Base', 'Placement')
+"#,
+    )
+    .expect("add Placement to the boot object");
+    assert!(result.ok, "{}", result.output);
+}
+
 fn quantity_row(value: &str, min: Option<f64>, max: Option<f64>) -> PropRow {
     PropRow {
         name: "Length".into(),

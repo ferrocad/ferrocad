@@ -262,13 +262,14 @@ and `the_gizmo_interior_falls_through_to_the_scene` (viewport).
 
 ### 7. Lifecycle and modifiers
 
-**One mode (built 2026-10-30; the flag removed 2026-10-31).** There is no separate *normal*
-and *deferred* drag and no viewport mode flag. A **translation** drag reports previews and
-never commits: the shell owns a `TransformSession`; `Enter` commits it as one transaction,
-`Esc` rolls it back, and a selection change commits a dirty session first. **Rotation** has no
-session yet, so a ring drag keeps the viewport's direct preview and commit. The commit route for
-translation is still the `App_Move` callback (`_move_selection` is the writer); moving it to
-the interaction provider is planned.
+**One mode (built 2026-10-30; the flag removed 2026-10-31; rotation unified 2026-10-31).**
+There is no separate *normal* and *deferred* drag and no viewport mode flag. Both a
+**translation** and a **rotation** drag report previews and never commit: the shell owns a
+`TransformSession` (`delta` or one `AxisAngle`), `Enter` commits it as one transaction, `Esc`
+rolls it back, and a selection change is refused while it is dirty. A ring session owns one
+body and commits through `transform`/`apply`; a translation keeps the multi-body selection
+and still commits through the `App_Move` callback (`_move_selection` is the writer). Moving
+that last route to the interaction provider is planned.
 
 ```mermaid
 stateDiagram-v2
@@ -281,12 +282,24 @@ stateDiagram-v2
     Drag --> SessionLive: release (preview kept, nothing committed)
     Drag --> Idle: Esc / focus loss (rollback)
     SessionLive --> Idle: Enter (one commit) or Esc (rollback)
+    SessionLive --> SessionLive: grab another ring (commit, start new step)
     SessionLive --> Idle: selection change (commit if dirty, then switch)
 ```
 
 - Release — reports a preview and **never commits**; `Enter` is the commit and `Esc` the
   rollback (built 2026-10-30). The fields tick live during the drag and on release, but the
-  gesture never takes the keyboard: `Tab` is what opens a field.
+  gesture never takes the keyboard: `Tab` is what opens a field. The Move hand docks the
+  same row for both handle sets: `ΔX/ΔY/ΔZ` (mm) for the arrows, and
+  `ΔθX/ΔθY/ΔθZ` (deg) for the rings. A rotation is one `(axis, angle)` step, and while it
+  is pending its ring is **locked**: the siblings are muted, their presses are consumed
+  (no camera orbit, no deselection) and the bar shows them as `—`. The only exits are
+  `✓`/`Enter` and `✗`/`Esc`, so no ring switch spends a hidden transaction. `WLD` rings
+  follow the world grid; `LOC` rings follow the body's committed orientation, and the
+  frame switch is inert while a step is pending; `Reset 0°` commits the rotation that
+  cancels it. A ring also publishes its in-plane press/live vectors and detent, and the
+  host builds the 3-D protractor from that **same single step** — one arc and one chip,
+  never an Euler decomposition. The degree chip persists while the rotation is pending and
+  is click-to-focus in the docked row, like a tape ruler tag; it hides below a 28 px chord.
 - `Shift` — plane override: `begin_drag_with_modifiers` turns an axis press into a drag
   in the plane spanned by that stem and the screen-horizontal.
 - `Ctrl` (or the platform's secondary modifier) — free rotation (15° detents are the
@@ -649,8 +662,10 @@ a **contribution** like a manipulator, and it shares the same document route:
   own origin (the placement base point, else the bounding-box base corner). The triad
   therefore stays on the object's origin as the geometry moves; there is no shell-side
   re-anchoring.
-- `ViewportEvent::Transform(GizmoCommitEvent)` — the viewport emits the drag commit on
-  release (`take_gizmo_commit` is the poll form).
+- `ViewportEvent::TransformPreview(TransformPreview)` — the viewport queues every drag tick
+  (`Begin`/`Update`/`End`) and the host commits its session. The event carries the snapped
+  `GizmoValue` and, for a ring, the `RingSweep` (press/live vectors, radius, detent), so the
+  host's protractor and arc tag need no separate readout poll.
 - `GizmoCommitEvent::to_interaction` — the commit becomes `"transform"` / `"apply"`
   with the 16 row-major matrix elements, so the app script's **existing** `interaction`
   hook receives it. There is no second document hook.

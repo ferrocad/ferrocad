@@ -189,8 +189,11 @@ pub struct TransformSession {
     targets: Vec<u32>,        // stage entities: the selection, not one object
     datum: Vector3,           // world-space origin at begin (the ghost ring)
     delta: Vector3,           // accumulated translation
-    mode: GizmoMode,          // translate | rotate (rotation wired after U3)
-    dirty: bool,
+    mode: GizmoMode,          // translate | rotate
+    axis: Option<Vector3>,    // the one pending rotation axis, in world space
+    degrees: f64,             // signed angle about that axis, (-180, 180]
+    axis_index: Option<usize>,// 0/1/2 for the bar's selector; None for `Reset 0°`
+    orientation_0: Rotation,  // the body's committed orientation at the session's start
 }
 impl TransformSession {
     pub fn begin(stage: &Stage, targets: &[u32]) -> Option<Self>;
@@ -198,6 +201,13 @@ impl TransformSession {
     pub fn translate_axis(&mut self, axis: Axis, value: f64);   // absolute along the axis
     pub fn delta(&self) -> Vector3;
     pub fn datum(&self) -> Vector3;                             // the ghost's base
+    pub fn set_rotation_step(&mut self, axis_index: usize, axis: Vector3, degrees: f64);
+    pub fn set_rotation_axis_angle(&mut self, axis: Vector3, degrees: f64);
+    pub fn set_pending_degrees(&mut self, degrees: f64);
+    pub fn pending_axis(&self) -> Option<Vector3>;
+    pub fn pending_axis_index(&self) -> Option<usize>;
+    pub fn pending_degrees(&self) -> f64;
+    pub fn rotation(&self) -> Rotation;                         // the step as a quaternion
     pub fn transform(&self) -> Matrix4;                         // what the item is drawn with
     pub fn checkpoint(&mut self, datum: Vector3);               // Enter: new datum, Δ = 0
     pub fn is_dirty(&self) -> bool;
@@ -211,22 +221,45 @@ multi-object move as one value, and what unblocks moving the commit route off `_
 
 The datum is a **world point from `ShapeItem::origin`** (falling back to `anchor()`), not a
 `Placement`: document items arrive as world-space tessellations with an identity placement, and
-the triad already hugs `origin`. The delta is a matrix so rotation is expressible before any
-`Placement` is involved — only the commit needs the object, which the facade owns.
+the triad already hugs `origin`. The pending value becomes a matrix, so rotation is expressible
+before any `Placement` is involved — only the commit needs the object, which the facade owns.
 
-**Rotation has no shell-side state and keeps the viewport's direct path.** A translation
-drag is preview-only: the viewport queues `Begin`/`Update`/`End` and the shell owns the value.
-A rotation drag has no HUD or session, so the viewport previews it directly
-(`apply_gizmo_preview`) and commits the matrix through `to_interaction_with`;
-`queue_transform_preview` is not called for a rotation handle. The `mode` field below, and
-the matrix delta, are where that state moves if a rotate session (with a pill or a form) ever
-exists — which is why the session is a `Transform` session rather than a `Move` one.
+**Rotation shares the session, one axis at a time.** A translation drag is preview-only:
+the viewport queues `Begin`/`Update`/`End` and the shell owns the value. A ring drag takes
+the same route; the session's `mode` is `Rotate` and the pending value is **one**
+`(axis, angle)` step, not three independent Euler components. `SO(3)` is not a vector
+space: three simultaneous `ΔθX/ΔθY/ΔθZ` fields would have to multiply in some order, and
+the same three numbers in another order are a different pose. The session therefore
+refuses to pretend otherwise. While a step is pending the other two rings are **locked**:
+the viewport consumes their presses (and the re-pivot disc's), the docked bar shows them
+as `—`, the frame switch and `Reset 0°` are inert, and the status line explains why. The
+only exits are `✓`/`Enter` and `✗`/`Esc`, so `dirty_ring_count <= 1` and no ring switch
+spends a transaction the user did not see. At every instant the preview, the field and the
+protractor describe the same scalar `θ` about the same unit axis `û`, so a 15° detent can
+never appear as a fractional angle on another axis.
+
+`orientation_0` is the body's committed orientation when the session opens. It is not an
+`ABS` reference any more: it is what makes the `LOC` ring frame and `Reset 0°` possible.
+`LOC` takes the world axis by turning the selected coordinate axis with `orientation_0`;
+`WLD` uses the world axis directly. `Reset 0°` decomposes `orientation_0.inverse()` into
+one axis-angle step and commits it. `transform()` returns `T(datum)·R(axis, θ)·T(−datum)`,
+and the session's delta stays zero, so the measuring tape draws nothing.
+
+The 3-D protractor (`ferrocad_stage::protractor`) draws the swept glass sector, a dashed
+start spoke, the live spoke, the swept rim and the detent ticks. It is built from the
+**same single step** the field shows: exactly one arc and one chip, whose zero spoke is
+the ring's canonical direction (turned by `orientation_0` in `LOC`). The degree tag sits on
+the arc bisector, persists while the step is pending, and is **click-to-focus**; it hides
+below a 28 px chord. The fan radius follows the current gizmo scale, so a zoom never
+leaves it larger than the ring. The ring session owns exactly **one** body — the
+`transform`/`apply` interaction hook composes the matrix onto one object; translation
+keeps the multi-body selection route. There is no viewport-side `apply_gizmo_preview` path
+any more.
 
 One owner: the shell holds it; the viewport **renders** it. A2 deleted the three-way split:
-translation previews go through `preview_transform`, and the separate `PendingMove`, the
-dialog's mirrored field delta and `set_gizmo_preview`/`gizmo_deferred` are gone. Rotation
-still uses the viewport's `apply_gizmo_preview` because it has no session yet. `preview_home`
-is unaffected: it anchors gizmos and manipulators, not items.
+all drags go through `preview_transform`, and the separate `PendingMove`, the dialog's
+mirrored field delta and `set_gizmo_preview`/`gizmo_deferred` are gone. `preview_home` is
+unaffected: it anchors gizmos and manipulators, not items.
 
 How that owner arrived: **A1a** built this type and its arithmetic, **A1b** made
 `preview_transform` the one translation write path, **A1c** wired the shell (one session,
@@ -381,6 +414,14 @@ focused field (`Option<usize>`), the last dragged axis and the coordinate mode.
   either mode. The origin is re-read after every commit/rollback and selection change.
   The fields are world/triad axes; expressing them in a rotated workplane's basis is a
   follow-up (the triad itself is world-aligned today).
+- **The rotate bar is one axis and one angle.** The row shows `ΔθX/ΔθY/ΔθZ`, but only the
+  active ring's cell holds an input; while a step is pending the siblings render `—` and
+  refuse focus, because a rotation is not a vector. The only exits are `✓`/`Enter` and
+  `✗`/`Esc`; a ring press, sibling cell, frame switch or `Reset 0°` is consumed and the
+  status names the pending axis. `WLD`/`LOC` switch the free ring frame, and `Reset 0°`
+  commits the inverse orientation when nothing is pending. Its label reads the stored
+  rotation (`Reset (Z 45°)` for a pure axis, `Reset (21.4°)` for a compound tilt) and dims
+  at identity; it is never an Euler decomposition. `Tab` focuses the active cell.
 - **Unfocused by default.** Opening the form and every drag/release leave all fields at the
   resting `ui::CHROME_LINE` border with no caret, so `1`/`2`/`3` keep equipping loadout
   slots and the viewport keeps its own keys. `Tab` opens the remembered drag axis (and
@@ -460,7 +501,7 @@ sweep.
 | **A1a** | `TransformSession` in `ferrocad_stage` (`session`): the world datum from `ShapeItem::anchor()` (which already applies the `origin` → bounding-box-minimum fallback), the accumulated translation, `transform()`, `checkpoint`, dirty. No consumer yet | The arithmetic lands before anything calls it, so it is tested headless in the crate the toy and Parametric editions already share, and no behaviour can move with it | — (**done 2026-10-30**: 9 unit tests + a doctest, `ferrocad_stage` 225) |
 | **A1b** | `InventorViewport::preview_transform(entities, Option<Matrix4>)`, the **one** owner of item-preview writes: `preview_translation` becomes a wrapper over it and `apply_gizmo_preview` routes through the same helper | One write path for the item preview, so A1c has a single seam to push a session into and A2 has one thing — not three — to delete | — (**done 2026-10-30**: `ferrocad_viewport` 201, including a rotation-carrying matrix and the no-stranded-ghost rule) |
 | **A1c** | shell wiring: the shell owns one session, opens it at `TransformPreview::Begin` from the un-previewed stage (`Shell::last_stage`), feeds it every tick, prefers it over the Δ fields for preview and commit, and drops it with the HUD | Puts the owner on the commit path without changing the commit's route: see §2.8 on why the HUD's accept still goes through `App_Move` until the session carries a selection | — (**done 2026-10-30**: the drag test asserts the session's delta and datum and that cancelling drops it; the commit still reads the command's callback) |
-| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — (**done 2026-10-31**: `set_gizmo_preview`/`gizmo_deferred`, `preview_translation` and `PendingMove` are gone; a translation drag is preview-only through `preview_transform`, while rotation keeps the viewport's direct preview/commit because it has no session yet. `preview_home` untouched. viewport 202, gpui 256) |
+| **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — (**done 2026-10-31**: `set_gizmo_preview`/`gizmo_deferred`, `preview_translation` and `PendingMove` are gone; a translation drag is preview-only through `preview_transform`. `preview_home` untouched. viewport 202, gpui 256. *Superseded the same day:* a ring is now a session too, so `apply_gizmo_preview` is deleted and `preview_transform` is the only item writer.) |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 — **done 2026-10-31**: `Manipulator::preview_items` is the manipulator half of the same unpickable display-only contract as `FreeCADGui.Preview`; the push/pull stem ghosts the face at the pending depth and the dress-up scrubber ghosts the edge swath at the pending radius. The viewport draws them only while dragging; no document write and no recompute. part_gui 30, viewport 204 |
 | **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; a pending move locks the context; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, and the session is the selection's (742aee7). A dirty session originally auto-committed on a context exit; **revised the same day** to refuse the exit instead (U2's `block_pending_move`). The no-arg form now opens the U2 pill, not the buttoned dialog |
 | **U2** | the numeric surface: the always-on coordinate row docked with the loadout, an in-context pending-only `✓`/`✗` pill (green commit / red discard), `Tab`/digit focus on the dragged axis, coordinates vs offsets, translation numbers on the tape's ruler tags; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31** (revised five times the same day): `shell::move_hud::MoveHud` is a shell surface (not a dialog), `shell::pill::PillState` holds the focus, the drag-axis memory and the coordinate mode. The row is always visible with a Move target (bottom-left, above the loadout) and opens **unfocused** so `1`/`2`/`3` still equip slots; it survives a commit. The `✗`/`✓` pair is a separate pill anchored beside the gizmo and appears only while the move is pending (`Shell::move_is_pending`), so at rest the row is a coordinate inspector and the tape is not drawn. `Tab`/a non-slot digit/a click/a ruler tag focuses a field; the badge or `=` flips `Δ` ↔ `XYZ` (`origin_0 + delta`, `=`/`@` per-field override). `Esc` cascades (rollback → pivot → clear selection) and `1` on the active hand pauses Move. A pending move **locks the context** (`block_pending_move`), so a selection change, hand/scope switch or tool start is refused until it is finished. gpui 289 |
@@ -486,12 +527,11 @@ sweep.
   cancelling drops it together with the ghost. Asserted in
   `a_move_hud_drag_survives_its_release`; the commit's *route* is unchanged (§2.8).
 - **A2** — grep-level: `gizmo_deferred`, `set_gizmo_preview`, `preview_translation` and
-  `PendingMove` are gone; `preview_transform` is the only **translation** item writer
-  (`apply_gizmo_preview` remains for rotation, which has no session) and `preview_home` keeps
-  its gizmo/manipulator anchors. The 2026-10-30 regression tests
-  (`a_move_hud_drag_survives_its_release`,
+  `PendingMove` are gone; `preview_transform` is the only item writer (a ring session uses
+  it too, since 2026-10-31) and `preview_home` keeps its gizmo/manipulator anchors. The
+  2026-10-30 regression tests (`a_move_hud_drag_survives_its_release`,
   `a_drag_reports_previews_and_never_commits`) and the rotation path
-  (`a_rotation_drag_previews_and_commits_directly`) pass.
+  (`a_rotation_drag_is_preview_only`) pass.
 - **A3** — dragging a fillet radius or a stem previews a ghost shape, and `Esc` leaves
   `undo_names()` unchanged. **Built 2026-10-31**:
   `a_push_pull_drag_ghosts_the_face_at_the_pending_distance`,
@@ -524,18 +564,37 @@ sweep.
 | The commit-per-session crossing is slower than a Rust write | It is one crossing per commit against 60–120 ticks/s of breathing room, and the recompute it does was always required. Measure it in U1 with `FERROCAD_TRACE=1` and record the number |
 | A mod that owns `transform` can make a commit slow or blocking | It already can (the non-deferred release goes through the same route), and the fix belongs to that mod; the shell reports the status text it returns |
 | Recomputed ghosts (a fillet's *shape*) need a recompute preview the DAG cannot do without mutating | Out of scope for A3: it previews the properties already shown, and the rebuild waits for commit. **Decided in U6 (2026-10-31): no second DAG pass.** The property ghost is the honest, side-effect-free preview; a recomputed shape is a later feature with its own DAG contract, not a patch on this one |
-| A pending move that refuses a context change surprises a user who expected their click to land | It cannot lose work either way; the refusal is announced in the status line, and `✗` (red) / `✓` (green) are the one obvious way out. This replaced auto-commit on 2026-10-31 after it silently spent a drag the user had not confirmed |
+| A pending move that refuses a context change surprises a user who expected their click to land | It cannot lose work either way; the refusal is announced in the status line, and `✗` (discard) / `✓` (commit) are the one obvious way out. This replaced auto-commit on 2026-10-31 after it silently spent a drag the user had not confirmed |
 | Dropping the dialog breaks scripts or tests that accept it | `App_Move` keeps the argument form; only the no-arg dialog goes, and its callers are in-tree |
 
 ### Explicitly deferred
 
-- Rotation sessions (`GizmoMode::Rotate`) — the session carries the mode from A1a but only
-  translation is wired until after U3.
+- Rotation about an arbitrary pivot other than the session datum — the interaction hook
+  applies one matrix to one object, and the datum is the pivot the triad hugs. The
+  `Reset 0°` step is the one special case with no coordinate-ring label.
 - Sub-element (face/edge) transforms — they need the loadout's filter and their own reference
   model.
-- Multi-selection sessions — A1a takes one target; a set is a later widening (the `PendingEdit`
-  already handles many properties).
 - A real ghost *recompute* for parametric shapes (see the risk row).
+- **Parent-aware and attachment-aware commit targets.** Both editions are **flat** today: every
+  transformed object is a top-level, unattached `Part::Feature`, so the interaction hook's
+  `Placement = delta · Placement` is exact, and `Reset 0°`'s target is always
+  `Placement.Rotation`. Three pieces are missing and none has a caller until containers or
+  attachment become user-reachable:
+  - **Display composition.** `_apply_object_placement` bakes only `obj.Placement`; a parent's
+    placement is not folded in, and there is no `getGlobalPlacement()` surface. A child of an
+    `App::Part` would display at the wrong place even before a commit.
+  - **Commit basis.** With `q_delta` the ring rotation and `q` the stored rotation:
+    - unattached top-level — `q_new = q_delta · q`;
+    - geo-group child — `q_new = (q_parent⁻¹ · q_delta · q_parent) · q`, with `q_parent` from
+      `getParentGeoFeatureGroup().Placement`;
+    - `LOC` rings (any target) — `q_new = q · q_delta`, because the delta is already in the
+      body's own frame.
+  - **Attachment target.** An attached object (`hasExtension("Part::AttachExtension")` and
+    `MapMode != "Deactivated"`) must write `AttachmentOffset`, not `Placement`, which
+    `positionBySupport` overwrites on the next recompute. With `q_support` the effective support
+    frame (`q_global · q_offset⁻¹`): `WLD` is `q_offset_new = (q_support⁻¹ · q_delta · q_support) ·
+    q_offset`, `LOC` is `q_offset · q_delta`. `Reset 0°` then targets
+    `AttachmentOffset.Rotation` for an attached object and `Placement.Rotation` otherwise.
 
 ---
 
@@ -547,7 +606,8 @@ sweep.
 | **D1** | Through the command **dialog** callback or the interaction provider? | **closed by D0** | The interaction provider: it is the same seam a workbench gizmo already uses (`to_interaction_with`), so a `Part::Fillet` and a `Move` share one commit route. The Move *command* keeps its dialog only for scripts that call it with arguments |
 | D3 | One session per shell or per viewport? | **decided 2026-10-30** | **One session per shell.** It is driven by pointer events the shell already receives as `TransformPreview` ticks, the pending value already lives in `Shell::pending_move`, and a second window must not start a second session on the same object. The viewport stays a view: it renders a session snapshot and never owns one |
 | D4 | Save with a live session: commit or abort? | **decided 2026-10-30** | **Commit it first, and say so** — the status line reads `saved, pending move committed`. Losing a drag to `Ctrl+S` is the same defect class as losing it to a selection change, and `Esc` remains the only way to discard. The implementation point is the **save command in `python/ferrocad_shell`**, not the session: the command commits the pending value before it writes, and reports that in its status line; the session itself never knows a save happened |
-| D6 | Does the tape appear for a typed-only session (no drag)? | **decided 2026-10-31** | Yes, once a delta is non-zero — typing is a gesture too. The tape is the session's view, and a typed edit updates the session.
+| D6 | Does the tape appear for a typed-only session (no drag)? | **decided 2026-10-31** | Yes, once a delta is non-zero — typing is a gesture too. The tape is the session's view, and a typed edit updates the session. |
+| D7 | Are the rotate fields three independent Euler angles? | **decided 2026-10-31** | **No.** The pending value is one `(axis, angle)` step. Three `ΔθX/ΔθY/ΔθZ` fields cannot be independent on `SO(3)`: multiplying them in any order makes the same three numbers a different pose, and anchored detents then decompose into fractional cross-talk (Y 15° then X 15° is ≈ `15.5 / 14.5 / 4.0`). The row shows all three axes but only the pending one is editable; the siblings are locked until `✓`/`✗`. `ABS` is replaced by `WLD`/`LOC` plus `Reset 0°` |
 
 The loadout note owns D2 and D5. The mod-facing event contract is [`mod-events.md`](mod-events.md)
 (stage E1), which also records what was **not** built: a mod-to-mod event bus.

@@ -808,6 +808,8 @@ fn a_hover_preview_promotes_its_body_when_a_drag_begins(cx: &mut TestAppContext)
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
@@ -1127,6 +1129,8 @@ fn a_deferred_hud_drag_moves_the_triad_with_the_object(cx: &mut TestAppContext) 
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, y, z),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
@@ -1444,6 +1448,8 @@ fn a_plain_drag_is_pending_until_enter_or_escape(cx: &mut TestAppContext) {
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     let drag = |cx: &mut VisualTestContext, x: f64| {
         cx.update(|_window, cx| {
@@ -1536,6 +1542,8 @@ fn a_move_session_draws_the_tape_until_it_ends(cx: &mut TestAppContext) {
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {

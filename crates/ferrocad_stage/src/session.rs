@@ -38,7 +38,7 @@
 //! assert_eq!(session.delta().x, 5.0);
 //! ```
 
-use ferrocad_types::{Matrix4, Vector3};
+use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::gizmo::GizmoMode;
 use crate::stage::Stage;
@@ -53,8 +53,11 @@ use crate::stage::Stage;
 /// [`translate_axis`](Self::translate_axis) can overwrite one component without
 /// decomposing anything.
 ///
-/// Rotation will join [`transform`](Self::transform) once a rotate gesture exists; it is
-/// deliberately absent now, because nothing emits one yet. See [`transform`](Self::transform).
+/// Rotation shares the session as **one** `(axis, angle)` step, because `SO(3)` is not a
+/// vector space: composing independent per-axis angles would make the same three numbers a
+/// different pose depending on their order. [`transform`](Self::transform) turns the step
+/// into the matrix the stage draws. A rotation has no translation, so its delta stays zero
+/// and the measuring tape draws nothing.
 #[derive(Clone, Debug)]
 pub struct TransformSession {
     /// The stage entities the gesture moves, in selection order with the unknown ones
@@ -71,10 +74,27 @@ pub struct TransformSession {
     /// The accumulated translation from the datum, in world units (millimetres in this
     /// stack). Absolute, never per-tick: see [`set_translation`](Self::set_translation).
     delta: Vector3,
-    /// The gesture kind that opened the session. Carried from the first slice so a rotate
-    /// session becomes a widening of this type rather than a second type; only
-    /// `Translate` affects [`transform`](Self::transform) today.
+    /// The gesture kind that opened the session. `Translate` reads
+    /// [`delta`](Self::delta); `Rotate` reads the pending step.
     mode: GizmoMode,
+    /// The unit world axis of the one pending rotation step, `None` before a ring or a
+    /// typed angle names one.
+    ///
+    /// A session is **single-axis** by construction: `SO(3)` is not a vector space, so
+    /// three independent per-axis angles would be a lie that decomposes into fractional
+    /// Euler values. Grabbing another ring commits this step first (the shell does that);
+    /// the value the user sees is always `(axis, angle)`.
+    axis: Option<Vector3>,
+    /// The signed angle about [`axis`](Self::axis), in degrees, bounded to `(-180, 180]`.
+    degrees: f64,
+    /// The ring the pending step was made on (`0` = X, `1` = Y, `2` = Z), for the
+    /// docked bar's axis selector. `None` for a step that cancels an arbitrary orientation
+    /// (`Reset 0°`), whose axis need not be a coordinate axis.
+    axis_index: Option<usize>,
+    /// The body's absolute orientation when the session opened, so a local ring frame can
+    /// be derived from it. Identity when the host has no document orientation (the stage
+    /// is world-space, so this is the only way to know it).
+    orientation_0: Rotation,
 }
 
 impl TransformSession {
@@ -122,6 +142,10 @@ impl TransformSession {
             datum,
             delta: Vector3::zero(),
             mode: GizmoMode::default(),
+            axis: None,
+            degrees: 0.0,
+            axis_index: None,
+            orientation_0: Rotation::identity(),
         })
     }
 
@@ -189,6 +213,86 @@ impl TransformSession {
         self.delta
     }
 
+    /// The pending rotation as a quaternion, identity while clean.
+    ///
+    /// The session stores a **single** axis and angle; this is the quaternion the two
+    /// values name, never a composition of independent axes.
+    pub fn rotation(&self) -> Rotation {
+        match self.axis {
+            Some(axis) if self.degrees != 0.0 => {
+                Rotation::from_axis_angle(&axis, self.degrees.to_radians())
+            }
+            _ => Rotation::identity(),
+        }
+    }
+
+    /// Set the single pending step around a named world axis.
+    ///
+    /// `axis_index` names the ring (`0` = X, `1` = Y, `2` = Z) for the docked axis
+    /// selector; `axis` is the **world** direction the ring turns about, which is the
+    /// body's local axis when a local ring frame is in use. A degenerate axis is ignored.
+    /// The angle is stored signed, bounded to `(-180, 180]`.
+    pub fn set_rotation_step(&mut self, axis_index: usize, axis: Vector3, degrees: f64) {
+        if axis.sqr() <= f64::EPSILON {
+            return;
+        }
+        self.axis = Some(axis.normalize());
+        self.degrees = wrap_signed_degrees(degrees);
+        self.axis_index = Some(axis_index.min(2));
+    }
+
+    /// Set the pending step around an arbitrary world axis (no ring label).
+    ///
+    /// This is what `Reset 0°` uses: cancelling a body's committed orientation is a
+    /// rotation about whichever axis that orientation names, not necessarily X, Y or Z.
+    pub fn set_rotation_axis_angle(&mut self, axis: Vector3, degrees: f64) {
+        if axis.sqr() <= f64::EPSILON {
+            return;
+        }
+        self.axis = Some(axis.normalize());
+        self.degrees = wrap_signed_degrees(degrees);
+        self.axis_index = None;
+    }
+
+    /// Change the step's signed angle without touching its axis.
+    pub fn set_pending_degrees(&mut self, degrees: f64) {
+        self.degrees = wrap_signed_degrees(degrees);
+    }
+
+    /// The unit world axis of the pending step, if one is named.
+    pub fn pending_axis(&self) -> Option<Vector3> {
+        self.axis
+    }
+
+    /// The ring the pending step was made on (`0..=2`), if it was a coordinate ring.
+    pub fn pending_axis_index(&self) -> Option<usize> {
+        self.axis_index
+    }
+
+    /// The signed pending angle in degrees, `0.0` while clean.
+    pub fn pending_degrees(&self) -> f64 {
+        self.degrees
+    }
+
+    /// Pin the body's absolute orientation at the session's start.
+    ///
+    /// The stage items are world-space meshes, so the document's `Placement.Rotation` is
+    /// not available here; the host supplies it. A local ring frame (`LOC`) turns the
+    /// selected coordinate axis by this value, and `Reset 0°` commits its inverse.
+    pub fn set_orientation_0(&mut self, orientation: Rotation) {
+        self.orientation_0 = orientation;
+    }
+
+    /// The absolute orientation at the session's start (identity when unknown).
+    pub fn orientation_0(&self) -> Rotation {
+        self.orientation_0
+    }
+
+    /// The body's absolute orientation with the pending step applied.
+    pub fn absolute_rotation(&self) -> Rotation {
+        self.rotation().multiply(&self.orientation_0)
+    }
+
     /// The gesture kind the session is running as. The host reads it to pick the readout
     /// and tape form (`ΔX … mm` or `ΔθZ … °`).
     pub fn mode(&self) -> GizmoMode {
@@ -197,20 +301,32 @@ impl TransformSession {
 
     /// The matrix every target item is drawn with during the session.
     ///
-    /// It is a translation only, relative to each item's committed pose: the caller
-    /// composes it *after* the item's placement (the `temporary` slot of
+    /// A translation is the accumulated delta; a rotation is
+    /// `T(datum)·R(axis, θ)·T(−datum)`, so the body turns about the pivot the triad hugs
+    /// instead of orbiting the world origin. The caller composes the matrix *after* the
+    /// item's placement (the `temporary` slot of
     /// [`set_temporary_transform`](crate::shape::ShapeItem::set_temporary_transform)) and
     /// leaves the geometry itself untouched until the commit. It is the same matrix for the
     /// whole selection because a gesture moves the selection rigidly; the datum is not part
-    /// of it — the geometry already sits where it is in world space, so adding the datum
-    /// would move the items twice.
-    ///
-    /// Rotation will be composed here once a gesture can produce one (`mode == Rotate`
-    /// with a ring drag behind it). It is absent now on purpose: the session holds no
-    /// rotation, and a matrix that silently dropped a requested rotation would be worse than
-    /// one that cannot express it.
+    /// of a translation — the geometry already sits where it is in world space, so adding
+    /// the datum would move the items twice.
     pub fn transform(&self) -> Matrix4 {
-        Matrix4::translation(self.delta.x, self.delta.y, self.delta.z)
+        match self.mode {
+            // The rotation is about the session **datum**, not the world origin: the
+            // matrix is composed after the item's placement, so a body away from the
+            // world origin must spin about the pivot the triad hugs instead of orbiting.
+            GizmoMode::Rotate if self.axis.is_some() && self.degrees != 0.0 => {
+                let rotation = Placement::new(Vector3::zero(), self.rotation()).to_matrix();
+                Matrix4::translation(self.datum.x, self.datum.y, self.datum.z)
+                    .mul(&rotation)
+                    .mul(&Matrix4::translation(
+                        -self.datum.x,
+                        -self.datum.y,
+                        -self.datum.z,
+                    ))
+            }
+            _ => Matrix4::translation(self.delta.x, self.delta.y, self.delta.z),
+        }
     }
 
     /// Enter: commit one step and re-arm at `datum`.
@@ -222,6 +338,11 @@ impl TransformSession {
     pub fn checkpoint(&mut self, datum: Vector3) {
         self.datum = datum;
         self.delta = Vector3::zero();
+        // The committed pose becomes the next step's starting orientation.
+        self.orientation_0 = self.absolute_rotation();
+        self.axis = None;
+        self.degrees = 0.0;
+        self.axis_index = None;
     }
 
     /// Whether the session holds a translation worth committing.
@@ -231,8 +352,23 @@ impl TransformSession {
     /// drag that returns to its datum is therefore clean again — no transaction, no undo
     /// entry — rather than leaving a near-zero that merely looks clean.
     pub fn is_dirty(&self) -> bool {
-        self.delta.x != 0.0 || self.delta.y != 0.0 || self.delta.z != 0.0
+        self.delta.x != 0.0
+            || self.delta.y != 0.0
+            || self.delta.z != 0.0
+            || (self.axis.is_some() && self.degrees != 0.0)
     }
+}
+
+/// Normalize a signed angle to `(-180, 180]` so a drag that crosses half a turn keeps a
+/// readable value (a `+190°` turn is the same pose as `-170°`). Zero never becomes `-0.0`.
+fn wrap_signed_degrees(degrees: f64) -> f64 {
+    let mut wrapped = degrees % 360.0;
+    if wrapped <= -180.0 {
+        wrapped += 360.0;
+    } else if wrapped > 180.0 {
+        wrapped -= 360.0;
+    }
+    if wrapped == 0.0 { 0.0 } else { wrapped }
 }
 
 /// The measuring tape's model: where a session started and how far it has moved.
@@ -500,6 +636,131 @@ mod tests {
             tape.current(),
             Vector3::new(7.0, 3.0, 0.0),
             "the tape ends at the previewed origin"
+        );
+    }
+
+    /// A rotation session is **one** pending `(axis, angle)` step, not three independent
+    /// Euler fields: setting another step replaces the first instead of composing axes.
+    #[test]
+    fn a_rotation_session_holds_one_axis_and_one_angle() {
+        let stage = Stage::new().with_item(block(7, [5.0, 0.0, 0.0]));
+        let mut session =
+            TransformSession::begin(&stage, &[7]).expect("the entity is on the stage");
+        session.set_mode(GizmoMode::Rotate);
+        assert!(
+            !session.is_dirty(),
+            "a rotate session with no sweep is clean"
+        );
+
+        // The axis is normalised, so a scaled frame axis is still one value.
+        session.set_rotation_step(2, Vector3::new(0.0, 0.0, 2.0), 90.0);
+        assert!(session.is_dirty());
+        assert_eq!(session.pending_axis_index(), Some(2));
+        assert!((session.pending_degrees() - 90.0).abs() < 1e-9);
+        // The datum (5, 0, 0) is the pivot: it stays fixed while +X from it turns to +Y.
+        let pivot = session.transform().transform(&Vector3::new(5.0, 0.0, 0.0));
+        assert!(
+            pivot.sub(&Vector3::new(5.0, 0.0, 0.0)).length() < 1e-9,
+            "the pivot does not move: {pivot:?}"
+        );
+        let turned = session.transform().transform(&Vector3::new(6.0, 0.0, 0.0));
+        assert!(
+            turned.sub(&Vector3::new(5.0, 1.0, 0.0)).length() < 1e-9,
+            "+90 deg about the datum maps +X of it to +Y: {turned:?}"
+        );
+
+        // A second step on another axis **replaces** the first: the pending value is one
+        // axis, so it can never decompose into fractional cross-talk.
+        session.set_rotation_step(0, Vector3::new(1.0, 0.0, 0.0), 30.0);
+        assert_eq!(session.pending_axis_index(), Some(0));
+        assert!((session.pending_degrees() - 30.0).abs() < 1e-9);
+        let pivot = session.transform().transform(&Vector3::new(5.0, 0.0, 0.0));
+        let turned = session
+            .transform()
+            .transform(&Vector3::new(5.0, 0.0, 1.0))
+            .sub(&pivot);
+        // +30 about X maps the pivot's +Z onto (0, -sin 30, cos 30).
+        assert!(
+            turned
+                .sub(&Vector3::new(
+                    0.0,
+                    -30.0f64.to_radians().sin(),
+                    30.0f64.to_radians().cos(),
+                ))
+                .length()
+                < 1e-9,
+            "the pending pose is exactly +30 about X: {turned:?}"
+        );
+
+        // The displayed angle is bounded to (-180, 180]; the rotation is unchanged.
+        session.set_rotation_step(2, Vector3::new(0.0, 0.0, 1.0), 190.0);
+        assert!((session.pending_degrees() + 170.0).abs() < 1e-9);
+        session.set_rotation_step(2, Vector3::new(0.0, 0.0, 1.0), -180.0);
+        assert!((session.pending_degrees() - 180.0).abs() < 1e-9);
+
+        // A checkpoint clears the step with the translation.
+        let datum = session.datum();
+        session.checkpoint(datum);
+        assert!(!session.is_dirty());
+        assert_eq!(session.pending_axis(), None);
+        assert_eq!(session.pending_degrees(), 0.0);
+        assert!(session.rotation().is_same(&Rotation::identity(), 1e-12));
+        assert!(session.transform().is_unity(1e-9));
+
+        // A degenerate axis has nothing to turn about.
+        session.set_rotation_axis_angle(Vector3::zero(), 45.0);
+        assert_eq!(session.pending_axis(), None);
+        assert!(!session.is_dirty());
+    }
+
+    /// A 15° detent is **exactly** 15° on the one axis: the value the bar shows and the
+    /// rotation the matrix applies are the same scalar, with no Euler decomposition.
+    #[test]
+    fn a_snapped_ring_step_is_exactly_the_detent() {
+        let stage = Stage::new().with_item(block(7, [0.0; 3]));
+        let mut session =
+            TransformSession::begin(&stage, &[7]).expect("the entity is on the stage");
+        session.set_mode(GizmoMode::Rotate);
+        for (index, axis) in [
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            session.set_rotation_step(index, axis, 15.0);
+            assert!((session.pending_degrees() - 15.0).abs() < 1e-12);
+            let angle = session.rotation().angle().to_degrees();
+            assert!(
+                (angle - 15.0).abs() < 1e-9,
+                "the quaternion is the same 15 deg step: {angle}"
+            );
+        }
+    }
+
+    /// A step that cancels an arbitrary orientation has no coordinate-ring label; the
+    /// `Reset 0°` action uses it.
+    #[test]
+    fn a_reset_step_can_have_no_ring_label() {
+        let stage = Stage::new().with_item(block(7, [0.0; 3]));
+        let mut session =
+            TransformSession::begin(&stage, &[7]).expect("the entity is on the stage");
+        session.set_mode(GizmoMode::Rotate);
+        let orientation = Rotation::from_euler_xyz_deg(10.0, 20.0, 30.0);
+        session.set_orientation_0(orientation);
+        let inverse = session.orientation_0().inverse();
+        let mut degrees = inverse.angle().to_degrees();
+        let mut axis = inverse.axis();
+        if degrees > 180.0 {
+            degrees -= 360.0;
+            axis = axis.scale(-1.0);
+        }
+        session.set_rotation_axis_angle(axis, degrees);
+        assert_eq!(session.pending_axis_index(), None);
+        assert!(
+            session.rotation().is_same(&orientation.inverse(), 1e-9),
+            "the step cancels the committed orientation"
         );
     }
 

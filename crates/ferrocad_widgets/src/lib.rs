@@ -16,7 +16,7 @@
 //! * [`window_chrome::window_frame`] draws client-side decorations (title bar and
 //!   resize grips) where the compositor does not.
 //! * [`text_field::TextInput`] is a single-line editable field that emits
-//!   [`ChangeEvent`] and [`SubmitEvent`].
+//!   [`ChangeEvent`], [`SubmitEvent`] and (when filtered) [`RejectedChar`].
 //! * [`text_area::TextAreaState`] is a scrollable text area with a read-only
 //!   prefix and an editable, possibly multi-line, tail (the console).
 //! * [`text_buffer::TextBuffer`] is the shared editing model underneath both.
@@ -42,7 +42,7 @@ pub mod window_chrome;
 
 pub use accordion::{AccordionLayout, AccordionSection, AccordionState, accordion, resolve_layout};
 pub use color::{normalize_hex, palette, parse_hex, swatch};
-pub use events::{ChangeEvent, SubmitEvent};
+pub use events::{ChangeEvent, RejectedChar, SubmitEvent};
 pub use form::{choice_list, select_box, toggle};
 pub use icon::bug;
 pub use menu::{MenuInfoRow, MenuRow, menu};

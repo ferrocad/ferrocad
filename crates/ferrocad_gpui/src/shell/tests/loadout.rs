@@ -7,6 +7,16 @@
 
 use super::*;
 
+/// Slot 1 hosts both handle sets, so its bar label names the one the user will get.
+#[test]
+fn slot_one_names_the_current_handle_set() {
+    assert_eq!(Slot::Move.label_for(GizmoMode::Translate), "Move");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate), "Rotate");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Universal), "Move");
+    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate), "Push/Pull");
+    assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate), "Fillet");
+}
+
 /// Select `reference` the way a click does, so the shell re-applies the loadout filter
 /// and re-arms.
 fn click(cx: &mut VisualTestContext, shell: &Entity<Shell>, reference: SelectionRef) {
@@ -176,21 +186,6 @@ fn the_loadout_bar_renders_and_equips_a_slot(cx: &mut TestAppContext) {
     );
 }
 
-/// The boot object is an `App::FeaturePython`, which has no `Placement`. Give it one
-/// so `_move_selection` can write a real transaction and the undo count is meaningful.
-fn give_params_a_placement() {
-    let result = crate::python::evaluate(
-        r#"
-import FreeCAD
-obj = FreeCAD.ActiveDocument.getObject('Params')
-if obj is not None and 'Placement' not in obj.PropertiesList:
-    obj.addProperty('App::PropertyPlacement', 'Placement', 'Base', 'Placement')
-"#,
-    )
-    .expect("add Placement to the boot object");
-    assert!(result.ok, "{}", result.output);
-}
-
 /// A pending move is explicit state, so a slot change is **refused** while it is
 /// unfinished: the drag is neither committed nor dropped and no undo entry appears.
 /// Finishing it with `Enter` releases the lock and `2` then equips the face hand.
@@ -204,6 +199,8 @@ fn switching_the_slot_waits_for_a_pending_move(cx: &mut TestAppContext) {
         target_id: 7,
         phase,
         total_transform: ferrocad_types::Matrix4::translation(x, 0.0, 0.0),
+        value: GizmoValue::Linear { axis: GizmoAxis::X, raw: 0.0, applied: 0.0 },
+        ring: None,
     };
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {

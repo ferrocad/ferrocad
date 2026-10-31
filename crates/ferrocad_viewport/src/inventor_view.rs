@@ -31,12 +31,10 @@ use ferrocad_inventor::{
 use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, OVERLAY_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
-    AxisStyle, FaceFrame, GizmoCommitEvent, GizmoHandle, GizmoMode, GizmoModifiers, GizmoSet,
-    GizmoStyle,
-    GizmoTarget, GizmoValue, GridSpec, GridStyle, InteractionCommit, Manipulator,
-    MouseButton as StageButton, PointerEvent, PointerKind, SnapCandidate, SnapContext, SnapKind,
-    Tool, ToolStatus, TransformGizmo, TransformTape, ViewProjection, Workplane, axis, feedback, grid,
-    snap_to_geometry_with,
+    AxisStyle, FaceFrame, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle, GizmoTarget, GizmoValue,
+    GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent,
+    PointerKind, RingSweep, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus, TransformGizmo,
+    TransformTape, ViewProjection, Workplane, axis, feedback, grid, snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{camera_position, project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
@@ -112,6 +110,15 @@ pub struct TransformPreview {
     pub phase: PreviewPhase,
     /// The transform accumulated since the drag began.
     pub total_transform: Matrix4,
+    /// The constrained, snapped value this tick produced.
+    ///
+    /// Carried here so the host reads the gesture kind (linear, planar, angular) from
+    /// the event, including on the release, rather than from viewport state that clears
+    /// with the readout.
+    pub value: GizmoValue,
+    /// The ring's in-plane sweep, for the host's 3-D protractor. `None` for a
+    /// translation drag.
+    pub ring: Option<RingSweep>,
 }
 
 /// The lifecycle of a [`TransformPreview`].
@@ -148,12 +155,10 @@ pub enum ViewportEvent {
     Selection(SelectionEvent),
     /// A workbench manipulator committed a value for the host to apply.
     Interaction(InteractionCommit),
-    /// A **rotation** gizmo drag ended. Translation drags are preview-only
-    /// ([`TransformPreview`](Self::TransformPreview)) and the host commits their session;
-    /// rotation has no session yet, so it commits here.
-    Transform(GizmoCommitEvent),
-    /// A translation gizmo drag tick. The host mirrors the delta into its editable values
-    /// and previews the whole selection itself; it commits when its own editor accepts.
+    /// A gizmo drag tick. The host mirrors it into its editable values and previews the
+    /// whole selection itself; it commits when its own editor accepts. Translation and
+    /// rotation share this path: the matrix carries either, and the session names the
+    /// gesture kind.
     TransformPreview(TransformPreview),
     /// The origin/centre handle was dragged and released. `point` is the snapped world
     /// pivot and `kind` names the snap that won. This is **not** a transform commit: the
@@ -168,10 +173,18 @@ pub enum ViewportEvent {
     /// cancelled. `status.active` is false once the session ended, so the host hides
     /// its tool strip.
     ToolState(ToolStatus),
-    /// A ruler tag was clicked after the drag that drew it. `0..=2` names the ΔX/ΔY/ΔZ
-    /// field the tag measures, so the host can put the caret in it. The tags are
-    /// unpickable while a handle is dragged, so this only fires on a released click.
+    /// A numeric tag was clicked after the drag that drew it. `0..=2` names the axis the
+    /// tag measures (a tape ruler chip or a ring degree chip), so the host can put the
+    /// caret in the matching distance or angle field. The tags are unpickable while a
+    /// handle is dragged, so this only fires on a released click.
     FocusDelta(usize),
+    /// A press landed on a ring (or the re-pivot disc) that a pending rotation has
+    /// locked. The viewport consumed the press, so no drag, orbit or deselection
+    /// happened; the host explains the lock and points at the finish pair.
+    LockedRing {
+        /// The axis the pending step owns (`X`, `Y` or `Z`).
+        axis: ferrocad_stage::GizmoAxis,
+    },
 }
 
 /// The host's grid-step policy: the configured levels, and whether a plane's own extent
@@ -440,9 +453,6 @@ pub struct InventorViewport<V: InventorView> {
     /// preview (U5). `None` for a real selection arm. Presentation only: it never
     /// changes hit-testing or the commit.
     gizmo_idle_scale: Option<f32>,
-    /// The last gizmo commit, for the host to apply to the document. Only a rotation
-    /// drag uses it: translation is preview-only and the host commits its session.
-    gizmo_commit: Option<GizmoCommitEvent>,
     /// The workbench manipulators (the edge fillet arc, a thickness grip, …), in
     /// registration order. They are the most specific overlays: dispatched in reverse
     /// order, before the gizmo, the tool and the scene.
@@ -468,6 +478,11 @@ pub struct InventorViewport<V: InventorView> {
     gizmo_origin: Option<(Vector3, SnapKind)>,
     /// A drag tick waiting for the next gpui handler to emit it.
     transform_preview: Option<TransformPreview>,
+    /// A refused press on a locked ring, waiting for the next gpui handler to emit it.
+    locked_ring_event: Option<ferrocad_stage::GizmoAxis>,
+    /// The locked ring under the pointer, so the hover notice is emitted once per entry
+    /// rather than on every pointer move.
+    locked_hover: Option<ferrocad_stage::GizmoAxis>,
     /// The overlay anchors a live preview offsets from (see [`Self::preview_transform`]).
     preview_home: Option<PreviewHome>,
     queue: RenderQueue,
@@ -598,6 +613,13 @@ pub struct InventorViewport<V: InventorView> {
     /// The tags stay non-occluding during a drag regardless: the handle must keep the
     /// gesture even when the pointer crosses a label.
     tape_labels_clickable: bool,
+    /// The rotate session's protractor sweeps. The shell owns the session and the typed
+    /// Euler breakdown; the viewport only draws the wedges.
+    protractor: Vec<RingSweep>,
+    /// The protractor's fan/spoke/tick packets, rebuilt each paint.
+    protractor_queue: RenderQueue,
+    /// Stable meshes for the protractor rebuild.
+    protractor_meshes: ProtractorMeshes,
     frame: Option<Arc<RenderImage>>,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
@@ -1412,6 +1434,28 @@ impl TapeMeshes {
     }
 }
 
+/// Stable mesh identities for the rotate session's protractor.
+struct ProtractorMeshes {
+    fan: MeshId,
+    spokes: MeshId,
+    ticks: MeshId,
+    generation: Generation,
+}
+
+impl ProtractorMeshes {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1 << 40);
+        let next = || MeshId(NEXT.fetch_add(1, Ordering::Relaxed));
+        Self {
+            fan: next(),
+            spokes: next(),
+            ticks: next(),
+            generation: Generation(0),
+        }
+    }
+}
+
 /// A cap on the tessellated edge segments considered for an edge-midpoint snap; beyond
 /// it the mesh is too dense for a midpoint to mean anything.
 const MAX_EDGE_CANDIDATES: usize = 1024;
@@ -1525,7 +1569,6 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo_queue: RenderQueue::default(),
             gizmo_skin: None,
             gizmo_idle_scale: None,
-            gizmo_commit: None,
             manipulators: Vec::new(),
             manipulator_queue: RenderQueue::default(),
             manipulator_preview_queue: RenderQueue::default(),
@@ -1536,6 +1579,8 @@ impl<V: InventorView> InventorViewport<V> {
             gizmo_origin_drag: None,
             gizmo_origin: None,
             transform_preview: None,
+            locked_ring_event: None,
+            locked_hover: None,
             preview_home: None,
             queue,
             directives,
@@ -1585,6 +1630,9 @@ impl<V: InventorView> InventorViewport<V> {
             tape_queue: RenderQueue::default(),
             tape_meshes: TapeMeshes::new(),
             tape_labels_clickable: false,
+            protractor: Vec::new(),
+            protractor_queue: RenderQueue::default(),
+            protractor_meshes: ProtractorMeshes::new(),
             frame: None,
             presenter: None,
             presenter_frames: 0,
@@ -1760,6 +1808,24 @@ impl<V: InventorView> InventorViewport<V> {
         self.host_gizmos(gizmos, session);
     }
 
+    /// Lock the two rings a pending rotation does not own, or clear the lock.
+    ///
+    /// The host derives this from its session (`(axis, angle)` where `angle != 0`); the
+    /// viewport keeps the visuals and refuses a press on a sibling ring, so the pending
+    /// step is the only one that can change. Returns whether the hosted gizmos changed.
+    pub fn set_locked_ring(&mut self, axis: Option<usize>) -> bool {
+        let axis = axis.map(|index| match index {
+            0 => ferrocad_stage::GizmoAxis::X,
+            1 => ferrocad_stage::GizmoAxis::Y,
+            _ => ferrocad_stage::GizmoAxis::Z,
+        });
+        let changed = self.gizmos.set_locked_ring(axis);
+        if changed {
+            self.rebuild_gizmo_queue();
+        }
+        changed
+    }
+
     /// Replace (or clear) a **single** transform gizmo, the historical one-gizmo form.
     ///
     /// A lone control has no alternative kind to offer, so it is registered as
@@ -1847,6 +1913,35 @@ impl<V: InventorView> InventorViewport<V> {
             };
         }
         Some(directions)
+    }
+
+    /// The hosted triad's ring radius in **logical** pixels.
+    ///
+    /// The style's `size` is device pixels and the handles are screen-invariant; the
+    /// finish pill is placed in logical pixels, so a host needs the converted radius to
+    /// keep the pill outside the ring sphere on a HiDPI window.
+    pub fn gizmo_radius_logical(&self) -> Option<f32> {
+        let gizmo = self.gizmo()?;
+        let ratio = f64::from(self.camera.viewport.device_pixel_ratio()).max(f64::EPSILON);
+        Some((gizmo.style().size / ratio) as f32)
+    }
+
+    /// The screen-space unit direction from the triad origin to the swept arc's midpoint.
+    ///
+    /// The finish pill is steered away from the protractor as well as the stems, so a
+    /// rotate release never lands on the wedge that just grew under the pointer. `None`
+    /// when no protractor is published or the midpoint collapses to the origin on screen.
+    pub fn gizmo_sweep_direction(&self) -> Option<[f32; 2]> {
+        let sweep = self.protractor.first()?;
+        let origin = self.window_point(project_device(&self.camera, sweep.origin)?);
+        let midpoint = sweep
+            .origin
+            .add(&sweep.midpoint().scale(sweep.radius));
+        let midpoint = self.window_point(project_device(&self.camera, midpoint)?);
+        let dx = midpoint.x.0 - origin.x.0;
+        let dy = midpoint.y.0 - origin.y.0;
+        let length = (dx * dx + dy * dy).sqrt();
+        (length > 1.0).then_some([dx / length, dy / length])
     }
 
     /// Device coordinates → the window-space point the element is painted at.
@@ -1991,11 +2086,22 @@ impl<V: InventorView> InventorViewport<V> {
         self.transform_preview.take()
     }
 
+    /// Take the refused-press notice a locked ring queued (tests and a host that wants to
+    /// read it without an event loop).
+    pub fn take_locked_ring(&mut self) -> Option<ferrocad_stage::GizmoAxis> {
+        self.locked_ring_event.take()
+    }
+
     /// Emit a queued drag tick. The gpui pointer handlers call this after every update.
     fn flush_transform_preview(&mut self, cx: &mut Context<Self>)
     where
         V: 'static,
     {
+        // A refused press is a one-shot notice; emit it before any drag tick so the host's
+        // status line names the lock rather than the next preview.
+        if let Some(axis) = self.locked_ring_event.take() {
+            cx.emit(ViewportEvent::LockedRing { axis });
+        }
         if let Some(preview) = self.take_transform_preview() {
             cx.emit(ViewportEvent::TransformPreview(preview));
         }
@@ -2003,10 +2109,16 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Queue a drag tick for the host.
     ///
-    /// Every **translation** drag is previewed: the host owns the uncommitted value and
-    /// decides when (or whether) to apply it, so a release never commits here. Rotation is
-    /// not queued; it keeps the direct path in [`apply_gizmo_preview`](Self::apply_gizmo_preview).
-    fn queue_transform_preview(&mut self, phase: PreviewPhase, total_transform: Matrix4) {
+    /// Every drag is previewed: the host owns the uncommitted value and decides when
+    /// (or whether) to apply it, so a release never commits here. The matrix carries a
+    /// translation or a rotation; `value` names which, and with which constraint.
+    fn queue_transform_preview(
+        &mut self,
+        phase: PreviewPhase,
+        total_transform: Matrix4,
+        value: GizmoValue,
+        ring: Option<RingSweep>,
+    ) {
         let Some(target_id) = self
             .gizmos
             .dragging()
@@ -2019,6 +2131,8 @@ impl<V: InventorView> InventorViewport<V> {
             target_id,
             phase,
             total_transform,
+            value,
+            ring,
         });
     }
 
@@ -2109,9 +2223,8 @@ impl<V: InventorView> InventorViewport<V> {
         }
         if cancelled || origin {
             // The host owns translation previews; clearing the whole stage also restores
-            // the overlay anchors the drag captured. A rotation preview is cleared here too.
+            // the overlay anchors the drag captured.
             self.preview_transform(&[], None);
-            self.gizmo_commit = None;
             self.gizmo_value = None;
             self.gizmo_pointer = None;
             self.transform_preview = None;
@@ -2274,16 +2387,6 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn gizmo_mut(&mut self) -> Option<&mut TransformGizmo> {
         let index = self.gizmos.primary()?;
         self.gizmos.gizmo_mut(index)
-    }
-
-    /// The last rotation commit (a drag's final transform), if one has ended.
-    pub fn last_gizmo_commit(&self) -> Option<&GizmoCommitEvent> {
-        self.gizmo_commit.as_ref()
-    }
-
-    /// Take the last rotation commit, for the host to route to the document.
-    pub fn take_gizmo_commit(&mut self) -> Option<GizmoCommitEvent> {
-        self.gizmo_commit.take()
     }
 
     /// Add a workbench manipulator (the edge fillet arc, a thickness grip, …).
@@ -2861,12 +2964,13 @@ impl<V: InventorView> InventorViewport<V> {
                 .gizmo_mut(index)
                 .and_then(|gizmo| gizmo.drag_to_with_modifiers(&self.camera, device, modifiers));
             if let Some(event) = event {
-                if matches!(&event.value, GizmoValue::Angular { .. }) {
-                    // Rotation is not a session yet: the viewport previews it directly.
-                    self.apply_gizmo_preview(Some(event.total_transform));
-                } else {
-                    self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
-                }
+                let ring = self.gizmos.gizmos()[index].active_ring_sweep();
+                self.queue_transform_preview(
+                    PreviewPhase::Update,
+                    event.total_transform,
+                    event.value,
+                    ring,
+                );
                 self.gizmo_value = Some(event.value);
                 self.gizmo_pointer = Some(logical);
                 self.hover_report = HoverReport::default();
@@ -2875,6 +2979,18 @@ impl<V: InventorView> InventorViewport<V> {
         } else if self.gizmo_style.enabled && self.gizmos.primary().is_some() {
             let target = self.gizmo_handle_at(device);
             gizmo_hover = target.is_some();
+            // Hovering a locked sibling explains the lock (once per entry); the gizmo
+            // itself suppresses its hover cue, so only the status line changes.
+            let locked_now = target.and_then(|(index, target)| {
+                let locked = self.gizmos.gizmos()[index].locked_ring()?;
+                ring_press_is_locked(locked, target).then_some(locked)
+            });
+            if locked_now != self.locked_hover {
+                self.locked_hover = locked_now;
+                if let Some(locked) = locked_now {
+                    self.locked_ring_event = Some(locked);
+                }
+            }
             // Only the entry that claimed the pointer shows the hover cue; an entry the
             // pointer is merely near keeps its idle ink.
             let mut recoloured = false;
@@ -3117,6 +3233,16 @@ impl<V: InventorView> InventorViewport<V> {
         if self.gizmo_style.enabled && self.gizmos.primary().is_some() {
             if down {
                 if let Some((index, target)) = self.gizmo_handle_at(device) {
+                    // A pending rotation owns one ring. A press on a sibling ring (or on
+                    // the re-pivot disc) is refused **here**, so it cannot start a drag,
+                    // orbit the camera or clear the selection; the host then explains the
+                    // lock and points at the finish pair.
+                    if let Some(locked) = self.gizmos.gizmos()[index].locked_ring()
+                        && ring_press_is_locked(locked, target)
+                    {
+                        self.locked_ring_event = Some(locked);
+                        return true;
+                    }
                     if target == GizmoTarget::Origin {
                         // The origin/centre handle moves that entry's frame, not the target.
                         if self.begin_gizmo_origin_drag(index, device) {
@@ -3135,15 +3261,24 @@ impl<V: InventorView> InventorViewport<V> {
                                 )
                             });
                         if started {
-                            // Translation is preview-only. Rotation has no session yet, so
-                            // it keeps the viewport's direct preview/commit path.
-                            if !matches!(
-                                handle,
-                                GizmoHandle::RotateX | GizmoHandle::RotateY | GizmoHandle::RotateZ
-                            ) {
+                            // Every drag is preview-only: the host owns the uncommitted
+                            // value and commits its session. The press publishes the
+                            // gesture kind so a ring is known before its first tick.
+                            if let Some(value) = self
+                                .gizmos
+                                .gizmo_mut(index)
+                                .and_then(|gizmo| gizmo.active_value())
+                            {
+                                let ring = self
+                                    .gizmos
+                                    .gizmo_mut(index)
+                                    .and_then(|gizmo| gizmo.active_ring_sweep());
+                                self.gizmo_value = Some(value);
                                 self.queue_transform_preview(
                                     PreviewPhase::Begin,
                                     Matrix4::identity(),
+                                    value,
+                                    ring,
                                 );
                             }
                             self.rebuild_gizmo_queue();
@@ -3152,20 +3287,24 @@ impl<V: InventorView> InventorViewport<V> {
                     }
                 }
             } else if let Some(index) = self.gizmos.dragging() {
+                // Capture the ring sweep before `end_drag` clears the active drag: the
+                // host needs the final wedge on the release.
+                let ring = self.gizmos.gizmos()[index].active_ring_sweep();
                 let commit = self
                     .gizmos
                     .gizmo_mut(index)
                     .and_then(|gizmo| gizmo.end_drag());
                 if let Some(commit) = commit {
-                    if matches!(&commit.value, GizmoValue::Angular { .. }) {
-                        // Rotation commits directly: there is no shell session to apply it.
-                        self.gizmo_commit = Some(commit);
-                        self.apply_gizmo_preview(None);
-                    } else {
-                        // Translation: the host owns the commit; leave its preview in place
-                        // and let it decide when (or whether) to apply the delta.
-                        self.queue_transform_preview(PreviewPhase::End, commit.total_transform);
-                    }
+                    // The host owns the commit: leave its preview in place and let it
+                    // decide when (or whether) to apply the value. The release carries
+                    // the final gesture value, so the host does not read it back from
+                    // the readout state that the button change just cleared.
+                    self.queue_transform_preview(
+                        PreviewPhase::End,
+                        commit.total_transform,
+                        commit.value,
+                        ring,
+                    );
                     self.rebuild_gizmo_queue();
                     return true;
                 }
@@ -3562,28 +3701,8 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.gizmo_style.enabled || !self.gizmo_style.show_readout {
             return None;
         }
-        if let Some(drag) = self.gizmo_origin_drag.as_ref() {
-            let anchor = project_device(&self.camera, drag.point)
-                .map(|device| {
-                    self.camera
-                        .viewport
-                        .to_logical([device[0].round() as i32, device[1].round() as i32])
-                })
-                .or(self.gizmo_pointer)
-                .unwrap_or([0.0, 0.0]);
-            return Some((format!("pivot · {}", snap_name(drag.kind)), anchor));
-        }
-        let value = self.gizmo_value?;
-        if !matches!(value, GizmoValue::Angular { .. }) {
-            return None;
-        }
-        let index = self.gizmos.dragging()?;
-        let gizmo = self.gizmos.gizmos().get(index)?;
-        if !gizmo.is_dragging() {
-            return None;
-        }
-        let anchor = gizmo
-            .readout_anchor(&self.camera)
+        let drag = self.gizmo_origin_drag.as_ref()?;
+        let anchor = project_device(&self.camera, drag.point)
             .map(|device| {
                 self.camera
                     .viewport
@@ -3591,7 +3710,56 @@ impl<V: InventorView> InventorViewport<V> {
             })
             .or(self.gizmo_pointer)
             .unwrap_or([0.0, 0.0]);
-        Some((value.readout(), anchor))
+        Some((format!("pivot · {}", snap_name(drag.kind)), anchor))
+    }
+
+    /// The ring degree chips, one per published protractor sweep.
+    ///
+    /// Unlike the pivot pill these **persist after the release**, while the session is
+    /// pending, and become click-to-focus exactly like the tape's ruler tags: the host's
+    /// `focus_move_axis` puts the caret in the matching `ΔθX/ΔθY/ΔθZ` field. A sub-28 px
+    /// chord has no chip (the wedge is not readable yet).
+    fn rotation_tags(&self) -> Vec<RulerTag> {
+        let mut tags = Vec::new();
+        if !self.gizmo_style.enabled || !self.gizmo_style.show_readout {
+            return tags;
+        }
+        let Some(gizmo) = self.gizmo() else {
+            return tags;
+        };
+        let radius = gizmo.scale();
+        if radius <= 0.0 {
+            return tags;
+        }
+        let active_axis = gizmo.active_ring_sweep().map(|sweep| world_axis_index(sweep.axis));
+        for sweep in &self.protractor {
+            let axis = world_axis_index(sweep.axis);
+            let start = sweep.origin.add(&sweep.start.scale(radius));
+            let current = sweep.origin.add(&sweep.current.scale(radius));
+            let (Some(start), Some(current)) = (
+                project_device(&self.camera, start),
+                project_device(&self.camera, current),
+            ) else {
+                continue;
+            };
+            if (start[0] - current[0]).hypot(start[1] - current[1]) < 28.0 {
+                continue;
+            }
+            let midpoint = sweep.origin.add(&sweep.midpoint().scale(radius));
+            let Some(midpoint) = project_device(&self.camera, midpoint) else {
+                continue;
+            };
+            tags.push(RulerTag {
+                axis,
+                text: format!("{:+.1}°", sweep.degrees),
+                anchor: self.camera.viewport.to_logical([
+                    midpoint[0].round() as i32,
+                    midpoint[1].round() as i32,
+                ]),
+                active: active_axis == Some(axis),
+            });
+        }
+        tags
     }
 
     /// The topmost manipulator's numeric pill: its readout text and logical anchor.
@@ -3661,16 +3829,15 @@ impl<V: InventorView> InventorViewport<V> {
         let transform = transform.filter(|_| !entities.is_empty());
         let mut changed = match &transform {
             Some(transform) => {
-                // Overlay anchoring is translation-only for now: the handles sit where
-                // the translation component puts them. Rotating the gizmo with the
-                // object is the transform session's later job — doing it here would
-                // feed a rotated interaction frame back into the drag math.
-                let delta = Vector3::new(transform.m[3], transform.m[7], transform.m[11]);
+                // The overlays follow the preview **through the same matrix** as the item:
+                // a translation moves them by its delta, and a rotation about the datum
+                // leaves the pivot handle where it is (a rotated frame would feed back
+                // into the drag math, so only the anchor point is transformed).
                 // The gizmos are the control while one is being dragged; otherwise
                 // they travel with the previewed object. A settled release always
                 // takes the real frame. Grips always follow.
                 let include_gizmo = settle || self.gizmos.dragging().is_none();
-                self.apply_preview_overlays(delta, include_gizmo)
+                self.apply_preview_overlays(transform, include_gizmo)
             }
             None => self.restore_preview_overlays(),
         };
@@ -3707,12 +3874,32 @@ impl<V: InventorView> InventorViewport<V> {
         self.tape.filter(|tape| tape.is_visible())
     }
 
-    /// Allow (or refuse) a click on a ruler tag.
+    /// Hand the viewport the rotate session's protractor sweeps, or clear them.
     ///
-    /// The host sets this while a Move form is open: the tag then focuses the matching
-    /// Δ field. It is host state, not tape state, because the viewport has no form to
-    /// focus; a click with no host interest stays a no-op and never steals a pick.
-    /// Returns whether the flag changed.
+    /// The shell owns the session; the viewport only draws. A sweep carries the press
+    /// vector, the applied sweep and the ring radius, so the fan and its ticks are
+    /// screen-invariant and follow the camera. Returns whether the stored set changed.
+    pub fn set_protractor(&mut self, sweeps: Option<Vec<RingSweep>>) -> bool {
+        let sweeps = sweeps.unwrap_or_default();
+        if self.protractor == sweeps {
+            return false;
+        }
+        self.protractor = sweeps;
+        self.rebuild_protractor_queue();
+        true
+    }
+
+    /// The protractor sweeps the viewport is drawing.
+    pub fn protractor(&self) -> &[RingSweep] {
+        &self.protractor
+    }
+
+    /// Allow (or refuse) a click on a numeric tag: a tape ruler chip or a ring degree chip.
+    ///
+    /// The host sets this while a form is open to focus (the Move or the angular row); a
+    /// click then focuses the matching `ΔX/ΔY/ΔZ` or `ΔθX/ΔθY/ΔθZ` field. It is host
+    /// state, not tape state, because the viewport has no form to focus. Returns whether
+    /// the flag changed.
     pub fn set_tape_labels_clickable(&mut self, clickable: bool) -> bool {
         if self.tape_labels_clickable == clickable {
             return false;
@@ -3757,12 +3944,14 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Offset the overlays from the pose captured when the preview began.
     ///
-    /// Absolute per tick (`home + delta`), so a typed value and a drag cannot
-    /// accumulate. **Every** hosted kind moves, not only the offered ones: the set keeps
-    /// the other kinds hosted for a later verb, and a set re-narrow that promoted a stale
-    /// entry used to reveal a second triad at the old origin. The manipulators (a height
-    /// grip on the top face) always follow the object.
-    fn apply_preview_overlays(&mut self, delta: Vector3, include_gizmo: bool) -> bool {
+    /// Absolute per tick, so a typed value and a drag cannot accumulate. **Every** hosted
+    /// kind moves, not only the offered ones: the set keeps the other kinds hosted for a
+    /// later verb, and a set re-narrow that promoted a stale entry used to reveal a second
+    /// triad at the old origin. The manipulators (a height grip on the top face) always
+    /// follow. Each anchor is put through the item's matrix, so a rotation about the
+    /// pivot leaves that pivot where it is instead of orbiting the world origin.
+    fn apply_preview_overlays(&mut self, transform: &Matrix4, include_gizmo: bool) -> bool {
+        let offset = |point: Vector3| transform.transform(&point).sub(&point);
         if self.preview_home.is_none() {
             let gizmos = self
                 .gizmos
@@ -3786,6 +3975,7 @@ impl<V: InventorView> InventorViewport<V> {
         let home_gizmos = home.gizmos.clone();
         let mut changed = false;
         for (index, origin) in home_gizmos {
+            let delta = offset(origin);
             let Some(gizmo) = self.gizmos.gizmo_mut(index) else {
                 continue;
             };
@@ -3812,7 +4002,7 @@ impl<V: InventorView> InventorViewport<V> {
         }
         for (manipulator, anchor) in self.manipulators.iter_mut().zip(home.manipulators.iter()) {
             if let Some(anchor) = anchor {
-                changed |= manipulator.set_anchor(anchor.add(&delta));
+                changed |= manipulator.set_anchor(anchor.add(&offset(*anchor)));
             }
         }
         changed
@@ -3841,41 +4031,6 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
         changed
-    }
-
-    /// Preview `transform` on the gizmo's target stage item (or clear the preview).
-    ///
-    /// This is the **rotation** path only: a rotation drag has no shell session yet, so the
-    /// viewport previews and commits it directly. A translation drag is preview-only and the
-    /// host writes that item through [`preview_transform`](Self::preview_transform).
-    fn apply_gizmo_preview(&mut self, transform: Option<Matrix4>) {
-        let Some(target) = self
-            .gizmos
-            .dragging()
-            .or_else(|| self.gizmos.primary())
-            .map(|index| self.gizmos.gizmos()[index].target_id())
-        else {
-            return;
-        };
-        let mut changed = match &transform {
-            Some(transform) => {
-                let delta = Vector3::new(transform.m[3], transform.m[7], transform.m[11]);
-                // The gizmo is the control here: only the grips follow the object.
-                self.apply_preview_overlays(delta, false)
-            }
-            None => self.restore_preview_overlays(),
-        };
-        // One-element slice: the gizmo's target is the only item it previews, but the
-        // write itself belongs to the same owner as a typed preview.
-        let touched = self.set_items_transform(&[target], transform);
-        if touched {
-            self.stage_dirty = true;
-            changed = true;
-        }
-        if changed {
-            self.rebuild_gizmo_queue();
-            self.rebuild_manipulator_queue();
-        }
     }
 
     /// Handle a gpui drag-move: orbit the navigation cube or the main camera,
@@ -3925,12 +4080,13 @@ impl<V: InventorView> InventorViewport<V> {
                 .gizmo_mut(index)
                 .and_then(|gizmo| gizmo.drag_to_with_modifiers(&self.camera, device, modifiers));
             if let Some(event) = event {
-                if matches!(&event.value, GizmoValue::Angular { .. }) {
-                    // Rotation is not a session yet: the viewport previews it directly.
-                    self.apply_gizmo_preview(Some(event.total_transform));
-                } else {
-                    self.queue_transform_preview(PreviewPhase::Update, event.total_transform);
-                }
+                let ring = self.gizmos.gizmos()[index].active_ring_sweep();
+                self.queue_transform_preview(
+                    PreviewPhase::Update,
+                    event.total_transform,
+                    event.value,
+                    ring,
+                );
                 self.gizmo_value = Some(event.value);
                 self.gizmo_pointer = Some(logical);
                 return true;
@@ -5096,6 +5252,64 @@ impl<V: InventorView> InventorViewport<V> {
         self.tape_queue = queue;
     }
 
+    /// Rebuild the rotate session's protractor.
+    ///
+    /// Like the tape, the dash/tick sizes depend on the camera, so this runs each paint.
+    /// The fan is a triangle packet; the spokes and detents are line packets.
+    fn rebuild_protractor_queue(&mut self) {
+        if self.protractor.is_empty() {
+            self.protractor_queue = RenderQueue::default();
+            return;
+        }
+        // The stored sweeps carry the radius from when they were published. The ring is
+        // screen-invariant and its world radius follows the camera, so use the current
+        // scale or a zoom would leave the fan bigger/smaller than the ring.
+        let sweeps: Vec<RingSweep> = {
+            let radius = self.gizmo().map(TransformGizmo::scale).filter(|r| *r > 0.0);
+            self.protractor
+                .iter()
+                .map(|sweep| match radius {
+                    Some(radius) => RingSweep { radius, ..*sweep },
+                    None => *sweep,
+                })
+                .collect()
+        };
+        let geometry = ferrocad_stage::protractor::build(&sweeps, &self.camera);
+        if geometry.is_empty() {
+            self.protractor_queue = RenderQueue::default();
+            return;
+        }
+        self.protractor_meshes.generation =
+            Generation(self.protractor_meshes.generation.0 + 1);
+        let generation = self.protractor_meshes.generation;
+        let mut queue = RenderQueue::default();
+        let mut push = |mesh, topology, vertices: Vec<Vertex>| {
+            if vertices.is_empty() {
+                return;
+            }
+            let indices = (0..vertices.len() as u32).collect();
+            queue.packets.push(tape_packet(
+                mesh, generation, topology, vertices, indices,
+            ));
+        };
+        push(
+            self.protractor_meshes.fan,
+            Topology::Triangles,
+            geometry.fan,
+        );
+        push(
+            self.protractor_meshes.spokes,
+            Topology::Lines,
+            geometry.spokes,
+        );
+        push(
+            self.protractor_meshes.ticks,
+            Topology::Lines,
+            geometry.ticks,
+        );
+        self.protractor_queue = queue;
+    }
+
     /// Whether the aurora is still in its acquisition flash (the renderer keeps asking
     /// for frames until it settles).
     fn feedback_flash_pending(&self) -> bool {
@@ -5178,6 +5392,7 @@ impl<V: InventorView> InventorViewport<V> {
         // feedback is rebuilt per paint (a handful of vertices).
         self.rebuild_feedback();
         self.rebuild_tape_queue();
+        self.rebuild_protractor_queue();
         if let Some(cube) = self.navicube.as_mut() {
             cube.sync(&self.camera);
         }
@@ -5273,6 +5488,17 @@ impl<V: InventorView> InventorViewport<V> {
             // The session tape is a measurement: depth-off, and behind the controls.
             views.push(ViewSpec {
                 queue: &self.tape_queue,
+                camera: &self.camera,
+                rect: None,
+                overlay: true,
+                workplane: None,
+            });
+        }
+        if !self.protractor_queue.is_empty() {
+            // The rotate session's protractor is a measurement too: depth-off glass under
+            // the handles.
+            views.push(ViewSpec {
+                queue: &self.protractor_queue,
                 camera: &self.camera,
                 rect: None,
                 overlay: true,
@@ -5517,7 +5743,6 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 // update returns, so the host may update this viewport in response.
                 let selection = this.take_selection();
                 let commit = this.take_interaction_commit();
-                let transform = this.take_gizmo_commit();
                 let origin = this.take_gizmo_origin();
                 let tool_state = this.take_tool_state();
                 this.flush_transform_preview(cx);
@@ -5532,9 +5757,6 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 }
                 if let Some(commit) = commit {
                     cx.emit(ViewportEvent::Interaction(commit));
-                }
-                if let Some(transform) = transform {
-                    cx.emit(ViewportEvent::Transform(transform));
                 }
                 if let Some((point, kind)) = origin {
                     cx.emit(ViewportEvent::GizmoOrigin { point, kind });
@@ -5585,6 +5807,30 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         let root = match self.gizmo_readout() {
             Some((text, anchor)) => root.child(readout_pill(text, anchor)),
             None => root,
+        };
+
+        // The rotation degree chips: one per published protractor sweep, at the arc
+        // midpoint. They persist while the rotation is pending (so the number stays on
+        // screen after the release) and become click-to-focus like the tape's tags.
+        let ring_tags = self.rotation_tags();
+        let root = if ring_tags.is_empty() {
+            root
+        } else {
+            let clickable = self.tape_labels_clickable && self.gizmos.dragging().is_none();
+            let mut root = root;
+            for tag in &ring_tags {
+                let axis = tag.axis;
+                let mut chip = ruler_tag(tag).id(("ring-tag", axis));
+                if clickable {
+                    chip = chip.occlude().cursor_pointer().on_click(cx.listener(
+                        move |_this, _event: &ClickEvent, _window, cx| {
+                            cx.emit(ViewportEvent::FocusDelta(axis));
+                        },
+                    ));
+                }
+                root = root.child(chip);
+            }
+            root
         };
 
         // The session's per-leg dimension tags: one chip at each dashed leg's 3-D
@@ -6149,6 +6395,17 @@ fn ruler_ink(axis: usize) -> u32 {
     }
 }
 
+/// The world-axis index (`0..=2`) a ring normal names: its dominant component.
+fn world_axis_index(axis: Vector3) -> usize {
+    let absolute = [axis.x.abs(), axis.y.abs(), axis.z.abs()];
+    absolute
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(index, _)| index)
+        .unwrap_or(2)
+}
+
 /// A ruler tag, as a glass chip beside the leg's midpoint.
 ///
 /// It carries no Δ prefix: the dashed leg is already tinted with the axis, so the
@@ -6191,12 +6448,26 @@ pub fn render_image(image: ImageData) -> RenderImage {
     RenderImage::new([Frame::new(buffer)])
 }
 
+/// Whether a press on `target` is refused because a pending rotation owns `locked`.
+///
+/// The re-pivot disc is refused too: moving the pivot while a step is pending would
+/// change what `✗`/`✓` mean, so the finish pair comes first.
+fn ring_press_is_locked(locked: ferrocad_stage::GizmoAxis, target: GizmoTarget) -> bool {
+    match target {
+        GizmoTarget::Origin => true,
+        GizmoTarget::Handle(handle) => {
+            handle.kind() == ferrocad_stage::HandleKind::Ring
+                && handle.axis_label().is_some_and(|axis| axis != locked)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ferrocad_graphics::{Projection, ShadowFootprint, Topology};
     use ferrocad_inventor::{Node, NodeKind, compile_with_base};
-    use ferrocad_stage::{DrawMode, ShapeItem};
+    use ferrocad_stage::{DrawMode, GizmoHandle, ShapeItem};
     use ferrocad_types::{Placement, Rotation, Vector3};
     use gpui::{Bounds, point, px, size};
 
@@ -8926,7 +9197,110 @@ mod tests {
     }
 
     #[test]
-    fn a_rotation_drag_previews_and_commits_directly() {
+    fn a_rotation_drag_is_preview_only() {
+        use ferrocad_stage::{GizmoHandle, GizmoMode, TransformGizmo};
+
+        let (mut view, viewport) =
+            gizmo_view(TransformGizmo::new(42, Vector3::zero(), GizmoMode::Rotate));
+        let grab = ring_grab(&view, GizmoHandle::RotateZ);
+        // A sweep large enough to survive the 15° detent: a tiny drag can round to 0°.
+        let release = [grab[0] - 40, grab[1] - 40];
+
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        let begin = view.take_transform_preview().expect("a rotate drag begins");
+        assert_eq!(begin.phase, PreviewPhase::Begin);
+        assert!(
+            matches!(view.gizmo_value(), Some(GizmoValue::Angular { .. })),
+            "the press publishes the ring kind before the first tick"
+        );
+        assert!(view.handle_pointer(viewport.to_logical(release)));
+        let update = view.take_transform_preview().expect("a rotate drag ticks");
+        assert_eq!(update.phase, PreviewPhase::Update);
+        assert!(
+            matches!(update.value, GizmoValue::Angular { applied_deg, .. } if applied_deg != 0.0),
+            "the tick names a non-zero ring sweep: {:?}",
+            update.value
+        );
+        let sweep = update.ring.expect("a ring sweep for the protractor");
+        assert!(sweep.degrees.abs() > 0.0);
+        assert!(
+            sweep.start.sub(&sweep.current).length() > 1e-6,
+            "the press and live spokes differ"
+        );
+        assert!(
+            (update.total_transform.m[3].abs()
+                + update.total_transform.m[7].abs()
+                + update.total_transform.m[11].abs())
+                < 1e-9,
+            "a ring has no translation: {:?}",
+            update.total_transform
+        );
+        // The host applies the queued matrix; the viewport never writes a drag itself.
+        assert!(view.preview_transform(&[42], Some(update.total_transform)));
+        assert!(
+            view.stage()
+                .item(42)
+                .and_then(|item| item.temporary_transform())
+                .is_some(),
+            "the host's preview is applied to the stage"
+        );
+        assert!(matches!(
+            view.gizmo_value(),
+            Some(GizmoValue::Angular { .. })
+        ));
+
+        assert!(view.handle_button(viewport.to_logical(release), 1, false));
+        let end = view.take_transform_preview().expect("a rotate drag ends");
+        assert_eq!(end.phase, PreviewPhase::End);
+        assert!(
+            matches!(end.value, GizmoValue::Angular { .. }),
+            "the release carries the ring value: {:?}",
+            end.value
+        );
+        assert!(
+            end.ring.is_some(),
+            "the release carries the wedge for the finish pill"
+        );
+        let turned = end.total_transform.transform(&Vector3::new(1.0, 0.0, 0.0));
+        assert!(
+            turned.sub(&Vector3::new(1.0, 0.0, 0.0)).length() > 1e-6,
+            "the release carries the rotation: {turned:?}"
+        );
+        assert!(
+            view.stage()
+                .item(42)
+                .and_then(|item| item.temporary_transform())
+                .is_some(),
+            "the host owns the commit; the preview stays until it spends it"
+        );
+    }
+
+    /// A rotation preview turns the item but leaves the pivot handle where it is: the
+    /// overlays are put through the same matrix as the item, not offset by its
+    /// translation components (which a rotation about a datum has, and which would make
+    /// the triad orbit the world origin).
+    #[test]
+    fn a_rotation_preview_keeps_the_pivot_in_place() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        let (mut view, _viewport) = translate_gizmo_view();
+        let pivot = Vector3::new(5.0, 0.0, 0.0);
+        view.set_gizmo(Some(TransformGizmo::new(42, pivot, GizmoMode::Rotate)));
+        let rotation = Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), 90f64.to_radians())
+            .to_matrix();
+        let about_pivot = Matrix4::translation(5.0, 0.0, 0.0)
+            .mul(&rotation)
+            .mul(&Matrix4::translation(-5.0, 0.0, 0.0));
+        assert!(view.preview_transform_settled(&[42], Some(about_pivot)));
+        assert_eq!(
+            view.gizmo().expect("a gizmo").origin(),
+            pivot,
+            "the pivot does not orbit the world origin"
+        );
+    }
+
+    #[test]
+    fn a_second_ring_drag_emits_its_own_begin() {
         use ferrocad_stage::{GizmoHandle, GizmoMode, TransformGizmo};
 
         let (mut view, viewport) = gizmo_view(TransformGizmo::new(
@@ -8935,37 +9309,113 @@ mod tests {
             GizmoMode::Rotate,
         ));
         let grab = ring_grab(&view, GizmoHandle::RotateZ);
-        let release = [grab[0] + 8, grab[1]];
-
+        let moved = [grab[0] - 40, grab[1] - 40];
         assert!(view.handle_button(viewport.to_logical(grab), 1, true));
-        assert!(
-            view.take_transform_preview().is_none(),
-            "rotation is not preview-deferred"
+        assert_eq!(
+            view.take_transform_preview().expect("a begin").phase,
+            PreviewPhase::Begin
         );
-        assert!(view.handle_pointer(viewport.to_logical(release)));
-        assert!(
-            view.take_transform_preview().is_none(),
-            "rotation queues no host tick"
+        assert!(view.handle_pointer(viewport.to_logical(moved)));
+        assert_eq!(
+            view.take_transform_preview().expect("an update").phase,
+            PreviewPhase::Update
         );
-        assert!(
-            view.stage()
-                .item(42)
-                .and_then(|item| item.temporary_transform())
-                .is_some(),
-            "the viewport previews the rotation itself"
+        assert!(view.handle_button(viewport.to_logical(moved), 1, false));
+        assert_eq!(
+            view.take_transform_preview().expect("an end").phase,
+            PreviewPhase::End
         );
-        assert!(matches!(view.gizmo_value(), Some(GizmoValue::Angular { .. })));
 
-        assert!(view.handle_button(viewport.to_logical(release), 1, false));
-        let commit = view.take_gizmo_commit().expect("a direct rotation commit");
-        assert!(matches!(commit.value, GizmoValue::Angular { .. }));
-        assert!(
-            view.stage()
-                .item(42)
-                .and_then(|item| item.temporary_transform())
-                .is_none(),
-            "the preview is cleared on commit"
-        );
+        // The release left the session pending in the shell; the next press on the ring
+        // must start a **new** drag so the host can compose it onto the pending value.
+        assert!(view.handle_button(viewport.to_logical(grab), 1, true));
+        let begin = view.take_transform_preview().expect("a second begin");
+        assert_eq!(begin.phase, PreviewPhase::Begin);
+        assert!(begin.ring.is_some(), "the press carries a fresh ring sweep");
+    }
+
+    #[test]
+    fn a_locked_ring_consumes_the_press_and_reports_the_lock() {
+        use ferrocad_stage::{GizmoAxis, GizmoHandle, GizmoMode, TransformGizmo};
+
+        let (mut view, viewport) = gizmo_view(TransformGizmo::new(
+            42,
+            Vector3::zero(),
+            GizmoMode::Rotate,
+        ));
+        let sibling = ring_grab(&view, GizmoHandle::RotateX);
+        assert!(view.set_locked_ring(Some(2)), "Z owns the pending step");
+
+        // The press is consumed: no drag, no preview, and a notice for the host. It must
+        // not fall through to the scene and deselect or orbit.
+        assert!(view.handle_button(viewport.to_logical(sibling), 1, true));
+        assert!(view.gizmos().dragging().is_none());
+        assert!(view.take_transform_preview().is_none());
+        assert_eq!(view.take_locked_ring(), Some(GizmoAxis::Z));
+
+        // The locked ring itself is still the control.
+        let own = ring_grab(&view, GizmoHandle::RotateZ);
+        assert!(view.handle_button(viewport.to_logical(own), 1, true));
+        assert!(view.gizmos().dragging().is_some());
+        assert!(view.take_transform_preview().is_some());
+    }
+
+    #[test]
+    fn hovering_a_locked_sibling_reports_the_lock_once_per_entry() {
+        use ferrocad_stage::{GizmoAxis, GizmoHandle, GizmoMode, TransformGizmo};
+
+        let (mut view, viewport) =
+            gizmo_view(TransformGizmo::new(42, Vector3::zero(), GizmoMode::Rotate));
+        let sibling = ring_grab(&view, GizmoHandle::RotateX);
+        let own = ring_grab(&view, GizmoHandle::RotateZ);
+        assert!(view.set_locked_ring(Some(2)), "Z owns the pending step");
+
+        // Entering the locked sibling explains the lock exactly once. The pointer handler
+        // reports tool/hover changes rather than lock notices, so the notice is read from
+        // `take_locked_ring`.
+        view.handle_pointer(viewport.to_logical(sibling));
+        assert_eq!(view.take_locked_ring(), Some(GizmoAxis::Z));
+
+        // Staying on it is not a new entry, so the status line is not re-emitted on
+        // every pointer move.
+        view.handle_pointer(viewport.to_logical(sibling));
+        assert!(view.take_locked_ring().is_none());
+
+        // Leaving for the owning ring clears the entry, so coming back explains again.
+        view.handle_pointer(viewport.to_logical(own));
+        assert!(view.take_locked_ring().is_none());
+        view.handle_pointer(viewport.to_logical(sibling));
+        assert_eq!(view.take_locked_ring(), Some(GizmoAxis::Z));
+    }
+
+    #[test]
+    fn rotation_tags_persist_while_pending_and_name_the_axis() {
+        use ferrocad_stage::{GizmoMode, TransformGizmo};
+
+        let (mut view, _viewport) =
+            gizmo_view(TransformGizmo::new(42, Vector3::zero(), GizmoMode::Rotate));
+        let radius = view.gizmo().expect("a gizmo").scale();
+        let axis = Vector3::new(0.0, 0.0, 1.0);
+        let start = Vector3::new(1.0, 0.0, 0.0);
+        let current = Rotation::from_axis_angle(&axis, 45f64.to_radians())
+            .to_matrix()
+            .transform(&start);
+        let sweep = RingSweep {
+            origin: Vector3::zero(),
+            axis,
+            start,
+            current,
+            radius,
+            degrees: 45.0,
+            detent_deg: 15.0,
+        };
+        assert!(view.set_protractor(Some(vec![sweep])));
+        // Not dragging: the tag is the pending readout, as the ruler tags are for Move.
+        let tags = view.rotation_tags();
+        assert_eq!(tags.len(), 1, "one chip per pending arc");
+        assert_eq!(tags[0].axis, 2, "the Z field is the click target");
+        assert_eq!(tags[0].text, "+45.0°");
+        assert!(!tags[0].active, "nothing is dragged after the release");
     }
 
     #[test]
@@ -8994,6 +9444,50 @@ mod tests {
         assert_eq!(view.transform_tape(), None);
         assert!(view.set_transform_tape(None), "clears the stored snapshot");
         assert!(!view.set_transform_tape(None), "already empty");
+    }
+
+    #[test]
+    fn a_protractor_draws_a_fan_spokes_and_ticks_that_are_never_picked() {
+        let (mut view, _viewport) = translate_gizmo_view();
+        let axis = Vector3::new(0.0, 0.0, 1.0);
+        let start = Vector3::new(1.0, 0.0, 0.0);
+        let current = Rotation::from_axis_angle(&axis, 45f64.to_radians())
+            .to_matrix()
+            .transform(&start);
+        let sweep = RingSweep {
+            origin: Vector3::zero(),
+            axis,
+            start,
+            current,
+            radius: 5.0,
+            degrees: 45.0,
+            detent_deg: 15.0,
+        };
+
+        assert!(view.set_protractor(Some(vec![sweep])));
+        assert_eq!(
+            view.protractor_queue.packets.len(),
+            3,
+            "fan, spokes and detent ticks"
+        );
+        assert_eq!(
+            view.protractor_queue.packets[0].topology,
+            Topology::Triangles,
+            "the glass sector is a triangle packet"
+        );
+        for packet in &view.protractor_queue.packets {
+            assert!(!packet.state.pickable, "the protractor is never picked");
+            assert_eq!(packet.state.id, PickId(0));
+            assert_eq!(packet.state.depth, OVERLAY_DEPTH);
+        }
+        assert!(
+            !view.set_protractor(Some(vec![sweep])),
+            "the same sweeps are a no-op"
+        );
+        assert_eq!(view.protractor(), &[sweep]);
+
+        assert!(view.set_protractor(None), "clears the stored sweeps");
+        assert!(view.protractor_queue.is_empty());
     }
 
     #[test]

@@ -111,6 +111,18 @@ impl Slot {
         }
     }
 
+    /// The bar label for the shared triad's current handle set.
+    ///
+    /// Slot 1 hosts both the translate arrows and the rotate rings, so it names the
+    /// handle set the user will actually get (`1 Rotate` after the wheel's Rotate verb).
+    /// The other slots are one verb each and ignore `mode`.
+    pub(crate) fn label_for(self, mode: GizmoMode) -> &'static str {
+        match (self, mode) {
+            (Self::Move, GizmoMode::Rotate) => "Rotate",
+            _ => self.label(),
+        }
+    }
+
     /// The topology filter a slot equips. `Select ▾` may override it afterwards.
     pub(crate) fn default_filter(self) -> SelectFilter {
         match self {

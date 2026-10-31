@@ -1,18 +1,22 @@
 //! The always-on Move surface.
 //!
-//! Three coordinate fields, an absolute/relative toggle and a `✗`/`✓` pair, shown
-//! whenever the Move hand has a target. It is deliberately **not** an
-//! [`OpenDialog`](super::OpenDialog): the form belongs to the hand, not to one command
-//! token, so it stays on screen across a commit and can coexist with a command dialog.
-//! The commit itself still goes through `App_Move` ([`Shell::commit_session`]), which
-//! acquires a fresh token at that moment, and the session created by
-//! [`Shell::begin_drag_session`] remains the single owner of the pending value.
+//! One row, two shapes: the arrows show three translation fields (`ΔX/ΔY/ΔZ`), the rings
+//! show `ΔθX/ΔθY/ΔθZ` with only the active cell editable. The rotate form has **one**
+//! angle because a rotation is an axis and an angle, not three independent coordinates;
+//! while a step is pending its ring is locked, the siblings show `—`, and the only exits
+//! are `✓`/`Enter` and `✗`/`Esc`. A `✗`/`✓` pair appears while either value is pending. It
+//! is deliberately **not** an [`OpenDialog`](super::OpenDialog): the form belongs to the
+//! hand, not to one command token, so it stays on screen across a commit and can coexist
+//! with a command dialog. The commit itself still goes through `App_Move`
+//! ([`Shell::commit_session`]) for a translation and `transform`/`apply` for a rotation,
+//! and the session created by [`Shell::begin_drag_session`] remains the single owner of the
+//! pending value.
 //!
-//! The fields are a **view**: relative mode shows the session delta, absolute mode
-//! shows `origin + delta`, where `origin` is the gizmo origin frozen when the current
-//! (clean) session started. Typing in absolute mode subtracts the origin, so the
-//! preview, the tape and the commit always speak deltas. A per-field `=`/`@` prefix
-//! asks for an absolute coordinate even in relative mode.
+//! The translation fields are a **view**: relative mode shows the session delta, absolute
+//! mode shows `origin + delta`, where `origin` is the gizmo origin frozen when the current
+//! (clean) session started. Typing in absolute mode subtracts the origin, so the preview,
+//! the tape and the commit always speak deltas. A per-field `=`/`@` prefix asks for an
+//! absolute coordinate even in relative mode.
 //!
 //! See `docs/project/tasks/transform-session.md` §3.2.
 
@@ -35,14 +39,25 @@ pub(super) const AXIS_COUNT: usize = 3;
 
 /// The always-visible Move form.
 ///
-/// `inputs` are the three fields; `origin` is the frozen world point absolute
-/// coordinates are measured from. Both live exactly as long as the surface.
+/// `inputs` are the three translation fields; `angle` is the rotate form's single angle.
+/// `origin` is the frozen world point absolute coordinates are measured from;
+/// `orientation` is the body's committed orientation the local ring frame is built from.
+/// `axis` is the ring a typed angle previews around. All live exactly as long as the
+/// surface.
 pub(super) struct MoveHud {
     pub(super) inputs: [Entity<TextInput>; AXIS_COUNT],
+    /// The rotate form's only numeric field (`Δθ`). A rotation is one axis and one angle,
+    /// so there is deliberately no `ΔθX/ΔθY/ΔθZ` triple.
+    pub(super) angle: Entity<TextInput>,
     /// Keeps the change/submit subscriptions alive for the surface's lifetime.
     _subs: Vec<Subscription>,
     /// The world point the absolute coordinates are measured from.
     origin: Vector3,
+    /// The body's absolute orientation while no rotate session is live. The local ring
+    /// frame and `Reset 0°` are measured from it.
+    orientation: Rotation,
+    /// The rotate ring a typed angle previews around (`0` = X, `1` = Y, `2` = Z).
+    pub(super) axis: usize,
 }
 
 impl Shell {
@@ -57,6 +72,10 @@ impl Shell {
     /// reports a datum; a typed field before that (headless, or a stage still building)
     /// is still a pending edit. This is what materialises `✗`/`✓`: at rest it is false.
     pub(super) fn move_is_pending(&self, cx: &App) -> bool {
+        if self.angular() {
+            return self.session.as_ref().is_some_and(TransformSession::is_dirty)
+                || self.move_angle(cx).is_some_and(|angle| angle != 0.0);
+        }
         self.session
             .as_ref()
             .is_some_and(TransformSession::is_dirty)
@@ -66,14 +85,19 @@ impl Shell {
     }
 
     /// Whether the Move hand currently owns the form: Slot 1 equipped, a selection,
-    /// the translate handles showing, and neither a tool nor the user's pause
-    /// (`1` while the hand is already active) taking it off the canvas.
+    /// and neither a tool nor the user's pause (`1` while the hand is already active)
+    /// taking it off the canvas. Both handle sets have a form: the arrows show
+    /// `ΔX/ΔY/ΔZ` in millimetres, the rings show one `Δθ` in degrees.
     fn move_hud_wanted(&self) -> bool {
         !self.move_disarmed
             && self.loadout.slot().wants_gizmo()
-            && self.gizmo_mode == GizmoMode::Translate
             && self.active_tool.is_none()
             && !self.model.lock().unwrap().selection.is_empty()
+    }
+
+    /// Whether the form edits a rotation rather than a translation.
+    pub(super) fn angular(&self) -> bool {
+        self.gizmo_mode == GizmoMode::Rotate
     }
 
     /// Show or hide the form for the current hand and selection.
@@ -125,18 +149,65 @@ impl Shell {
             ));
             input
         });
+        // The rotate form's single angle field. It has its own change handler because a
+        // typed angle is a step around the selected ring, not a translation component.
+        let angle = cx.new(|cx| {
+            let mut input = TextInput::new(cx, "");
+            input.set_text(ZERO_TEXT, cx);
+            // A numeric field: letters are refused and reported, so `X`/`Y`/`Z` can
+            // switch the ring while the caret stays in `Δθ`.
+            input.set_char_filter(Some(is_angle_char));
+            input
+        });
+        subs.push(cx.subscribe(
+            &angle,
+            |this: &mut Shell, _emitter, _event: &ChangeEvent, cx| {
+                this.on_angle_typed(cx);
+            },
+        ));
+        subs.push(cx.subscribe(
+            &angle,
+            |this: &mut Shell, _emitter, _event: &SubmitEvent, cx| {
+                this.commit_session(cx);
+            },
+        ));
+        subs.push(cx.subscribe(
+            &angle,
+            |this: &mut Shell, _emitter, event: &RejectedChar, cx| {
+                this.on_angle_rejected(event.character, cx);
+            },
+        ));
         self.move_hud = Some(MoveHud {
             inputs,
+            angle,
             _subs: subs,
             origin: Vector3::zero(),
+            orientation: Rotation::identity(),
+            axis: 0,
         });
         if self.session.is_none() {
             self.begin_drag_session(None);
         }
         self.refresh_move_origin(cx);
+        // A fresh rotation session starts from the body's document orientation, so the
+        // local ring frame and a reset have a base and the relative field starts clean.
+        if self.angular() {
+            let orientation = self
+                .move_hud
+                .as_ref()
+                .map_or_else(Rotation::identity, |hud| hud.orientation);
+            if let Some(session) = self.session.as_mut() {
+                session.set_mode(GizmoMode::Rotate);
+                if !session.is_dirty() {
+                    session.set_orientation_0(orientation);
+                }
+            }
+            self.set_move_fields([0.0; 3], cx);
+        }
         self.pill.release();
         self.sync_gizmo_origin(cx);
         self.sync_transform_tape(cx);
+        self.sync_locked_ring(cx);
         // A readout first: the canvas keeps the keyboard.
         self.restore_viewport_focus = true;
         cx.notify();
@@ -150,9 +221,11 @@ impl Shell {
         }
         self.session = None;
         self.drag_start = None;
+        self.rotation_start = None;
         self.pill.release();
         self.clear_preview_items(cx);
         self.sync_transform_tape(cx);
+        self.sync_locked_ring(cx);
         self.sync_gizmo_origin(cx);
         // A focused field is going away with the surface.
         self.restore_viewport_focus = true;
@@ -195,6 +268,16 @@ impl Shell {
         {
             return;
         }
+        if self.angular() {
+            // The local ring frame and a reset are measured from the body's own document
+            // orientation, not a point.
+            let orientation = self.object_rotation_now();
+            let Some(hud) = self.move_hud.as_mut() else {
+                return;
+            };
+            hud.orientation = orientation;
+            return;
+        }
         let origin = self.move_origin_now(cx);
         let Some(hud) = self.move_hud.as_mut() else {
             return;
@@ -204,6 +287,24 @@ impl Shell {
         if changed && self.pill.absolute() {
             self.set_move_fields([0.0; 3], cx);
         }
+    }
+
+    /// The selected body's absolute rotation, when the document reports one.
+    ///
+    /// The stage is world-space, so the orientation is not on the item. One console
+    /// expression is the smallest bridge; a missing `Placement` reads as identity.
+    pub(super) fn object_rotation_now(&self) -> Rotation {
+        let name = self
+            .model
+            .lock()
+            .unwrap()
+            .selection
+            .last()
+            .map(|item| item.object.clone());
+        name.as_deref()
+            .and_then(crate::python::rotation_quaternion)
+            .map(|q| Rotation { q, raw_axis: None })
+            .unwrap_or_else(Rotation::identity)
     }
 
     /// The world point the absolute fields are measured from: the selection's gizmo
@@ -251,7 +352,7 @@ impl Shell {
         }
     }
 
-    /// The field values that *display* `delta` under the current mode.
+    /// The field values that *display* the pending translation under the current mode.
     fn display_values(&self, delta: [f64; 3]) -> [f64; 3] {
         let origin = self.move_hud.as_ref().map_or(Vector3::zero(), |hud| hud.origin);
         if self.pill.absolute() {
@@ -265,23 +366,67 @@ impl Shell {
         }
     }
 
-    /// Mirror `delta` into the fields, in the current mode.
+    /// Mirror the pending value into the fields, in the current mode.
     ///
     /// Programmatic `set_text` does not emit a change event, so a drag cannot loop
-    /// back into another preview.
+    /// back into another preview. The rotate form has one field: the pending step's
+    /// signed angle, or `0.00` while clean.
     pub(super) fn set_move_fields(&self, delta: [f64; 3], cx: &mut Context<Self>) {
+        if self.angular() {
+            self.set_angle_text(self.display_angle(), cx);
+            return;
+        }
         let display = self.display_values(delta);
         for (index, value) in display.iter().enumerate() {
             self.set_move_text(index, format!("{value:.2}"), cx);
         }
     }
 
-    /// The delta the fields represent, honouring the mode and a per-field `=`/`@`.
+    /// The angle the rotate field should show: the pending step, or zero while clean.
+    fn display_angle(&self) -> f64 {
+        self.session
+            .as_ref()
+            .filter(|session| session.is_dirty())
+            .map(TransformSession::pending_degrees)
+            .unwrap_or(0.0)
+    }
+
+    /// The text the rotate field currently holds.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn angle_field_text(&self, cx: &App) -> Option<String> {
+        let input = &self.move_hud.as_ref()?.angle;
+        Some(input.read(cx).text().to_string())
+    }
+
+    /// Write the single angle field (programmatic, so no change event fires).
+    pub(super) fn set_angle_text(&self, value: f64, cx: &mut Context<Self>) {
+        if let Some(input) = self.move_hud.as_ref().map(|hud| &hud.angle) {
+            input.update(cx, |input, cx| input.set_text(format!("{value:.2}"), cx));
+        }
+    }
+
+    /// The angle the rotate field parses, if it is a complete number.
+    pub(super) fn move_angle(&self, cx: &App) -> Option<f64> {
+        let input = &self.move_hud.as_ref()?.angle;
+        let text = input.read(cx).text().trim().to_string();
+        let number = text
+            .strip_prefix('=')
+            .or_else(|| text.strip_prefix('@'))
+            .unwrap_or(&text)
+            .trim();
+        Quantity::parse(number).ok().map(|value| value.canonical_value())
+    }
+
+    /// The translation delta the fields represent, honouring absolute mode and a
+    /// per-field `=`/`@`. The rotate form has no translation, so it returns `None`.
     ///
     /// Returns `None` while a field does not parse (a lone `-`), so a half-typed value
     /// neither previews nor commits a silent zero.
     pub(super) fn move_fields_delta(&self, cx: &App) -> Option<[f64; 3]> {
         let hud = self.move_hud.as_ref()?;
+        if self.angular() {
+            return None;
+        }
         let origin = hud.origin;
         let absolute = self.pill.absolute();
         let mut delta = [0.0; 3];
@@ -309,15 +454,19 @@ impl Shell {
         Some(delta)
     }
 
-    /// A programmatic field write (the seed and the mode toggle) is not a change event,
-    /// so the session and the preview are driven here.
+    /// A programmatic translation-field write (the seed and the mode toggle) is not a
+    /// change event, so the session and the preview are driven here.
     pub(super) fn on_move_typed(&mut self, cx: &mut Context<Self>) {
-        if let Some(delta) = self.move_fields_delta(cx) {
+        if self.angular() {
+            return;
+        }
+        if let Some(value) = self.move_fields_delta(cx) {
             if self.session.is_none() {
                 self.begin_drag_session(None);
             }
             if let Some(session) = self.session.as_mut() {
-                session.set_translation(Vector3::new(delta[0], delta[1], delta[2]));
+                session.set_mode(GizmoMode::Translate);
+                session.set_translation(Vector3::new(value[0], value[1], value[2]));
             }
         }
         self.preview_move(false, cx);
@@ -326,18 +475,395 @@ impl Shell {
         cx.notify();
     }
 
-    /// Preview the pending delta on the selection, optionally **settling** the gizmo
+    /// Open (or re-base) the rotate session a typed angle edits.
+    fn ensure_rotate_session(&mut self) {
+        let orientation = self.object_rotation_now();
+        if self.session.is_none() {
+            self.begin_drag_session(None);
+        }
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        session.set_mode(GizmoMode::Rotate);
+        if !session.is_dirty() {
+            session.set_orientation_0(orientation);
+        }
+    }
+
+    /// The ring a typed angle previews around, as `(index, world axis)`.
+    ///
+    /// The index is the bar's selected segment. In `WLD` the world axis is the coordinate
+    /// axis; in `LOC` it is that axis turned by the body's committed orientation, which
+    /// is exactly the direction the local ring turns about.
+    fn rotate_axis_world(&self) -> (usize, Vector3) {
+        let index = self
+            .move_hud
+            .as_ref()
+            .map_or(0, |hud| hud.axis.min(AXIS_COUNT - 1));
+        let unit = match index {
+            0 => Vector3::new(1.0, 0.0, 0.0),
+            1 => Vector3::new(0.0, 1.0, 0.0),
+            _ => Vector3::new(0.0, 0.0, 1.0),
+        };
+        if !self.pill.local_frame() {
+            return (index, unit);
+        }
+        let orientation = self
+            .session
+            .as_ref()
+            .map(TransformSession::orientation_0)
+            .or_else(|| self.move_hud.as_ref().map(|hud| hud.orientation))
+            .unwrap_or_else(Rotation::identity);
+        (index, orientation.to_matrix().transform(&unit))
+    }
+
+    /// A typed angle in the rotate form: it is the whole pending step, replacing any
+    /// drag value on the same ring.
+    pub(super) fn on_angle_typed(&mut self, cx: &mut Context<Self>) {
+        if !self.angular() {
+            return;
+        }
+        let Some(degrees) = self.move_angle(cx) else {
+            // A half-typed value (`-`) is not a pending angle: the single field is the
+            // numeric truth, so the session drops to clean instead of keeping a value the
+            // bar no longer shows. Typing a complete number rebuilds the step.
+            if let Some(session) = self.session.as_mut() {
+                session.set_pending_degrees(0.0);
+            }
+            self.preview_move(false, cx);
+            self.sync_transform_tape(cx);
+            cx.notify();
+            return;
+        };
+        self.ensure_rotate_session();
+        // A pending step owns its ring; the bar cannot edit another one until it is
+        // applied or cancelled. The guard is here as well as in the bar so a harness or a
+        // future surface cannot create a second dirty axis.
+        if let Some(locked) = self.rotation_pending() {
+            let index = self.move_hud.as_ref().map_or(locked, |hud| hud.axis);
+            if index != locked {
+                self.show_rotation_lock(index, cx);
+                return;
+            }
+        }
+        let (index, axis) = self.rotate_axis_world();
+        if let Some(session) = self.session.as_mut() {
+            session.set_mode(GizmoMode::Rotate);
+            session.set_rotation_step(index, axis, degrees);
+        }
+        self.preview_move(false, cx);
+        self.sync_transform_tape(cx);
+        cx.notify();
+    }
+
+    /// A refused character in the angle field. `X`/`Y`/`Z` choose the ring while the
+    /// caret stays in `Δθ`; a sibling is refused once a step is pending.
+    pub(super) fn on_angle_rejected(&mut self, character: char, cx: &mut Context<Self>) {
+        if !self.angular() {
+            return;
+        }
+        let index = match character.to_ascii_lowercase() {
+            'x' => 0,
+            'y' => 1,
+            'z' => 2,
+            _ => return,
+        };
+        if self.switch_rotate_axis(index, cx) {
+            // The user is typing: the field keeps the keyboard.
+            self.restore_viewport_focus = false;
+            cx.notify();
+        }
+    }
+
+    /// The axis of a dirty rotate step, if one is pending.
+    ///
+    /// While this is `Some`, the other two rings are locked: the viewport refuses their
+    /// presses, and the bar's frame switch and sibling cells are inert. That keeps
+    /// `dirty_ring_count <= 1`, so `✗`/`Esc` always cancels the exact step the protractor
+    /// shows and no ring switch spends a hidden transaction.
+    pub(super) fn rotation_pending(&self) -> Option<usize> {
+        self.session
+            .as_ref()
+            .filter(|session| session.is_dirty() && session.mode() == GizmoMode::Rotate)
+            .and_then(TransformSession::pending_axis_index)
+    }
+
+    /// Explain why a ring, bar cell or the frame switch is refused right now.
+    pub(super) fn show_rotation_lock(&mut self, attempted: usize, cx: &mut Context<Self>) {
+        let axis = self.rotation_pending().unwrap_or(attempted).min(AXIS_COUNT - 1);
+        let axis = ["X", "Y", "Z"][axis];
+        self.model.lock().unwrap().status = format!(
+            "Pending rotate {axis} — apply (✓ / Enter) or cancel (✗ / Esc) before changing the axis"
+        );
+        // A static attention rim on the finish pair; the host has no animation.
+        self.pill_attention = true;
+        cx.notify();
+    }
+
+    /// A ring press/hover the viewport refused because a pending rotation owns another
+    /// axis.
+    pub(super) fn on_locked_ring(
+        &mut self,
+        axis: ferrocad_stage::GizmoAxis,
+        cx: &mut Context<Self>,
+    ) {
+        let attempted = match axis {
+            ferrocad_stage::GizmoAxis::X => 0,
+            ferrocad_stage::GizmoAxis::Y => 1,
+            ferrocad_stage::GizmoAxis::Z => 2,
+        };
+        self.show_rotation_lock(attempted, cx);
+    }
+
+    /// Push the session's locked ring into the viewport (the visuals and the press gate).
+    ///
+    /// Called whenever the pending step can change: a drag tick, a typed angle, a commit,
+    /// a rollback or a re-arm. A clean session unlocks every ring.
+    pub(super) fn sync_locked_ring(&mut self, cx: &mut Context<Self>) {
+        let locked = self.rotation_pending();
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        viewport.update(cx, |viewport, cx| {
+            if viewport.set_locked_ring(locked) {
+                cx.notify();
+            }
+        });
+    }
+
+    /// Switch the bar's selected ring while the session is clean. A dirty step owns its
+    /// ring, so the other cells are inert until it is applied or cancelled.
+    /// Returns whether the axis changed.
+    fn switch_rotate_axis(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        if self.move_hud.is_none() || !self.angular() {
+            return false;
+        }
+        let index = index.min(AXIS_COUNT - 1);
+        if let Some(locked) = self.rotation_pending() {
+            if locked != index {
+                self.show_rotation_lock(index, cx);
+            }
+            return false;
+        }
+        let current = self.move_hud.as_ref().map_or(0, |hud| hud.axis);
+        if current == index {
+            return false;
+        }
+        if let Some(hud) = self.move_hud.as_mut() {
+            hud.axis = index;
+        }
+        self.pill.remember_axis(index);
+        self.pill_attention = false;
+        self.set_move_fields([0.0; 3], cx);
+        cx.notify();
+        true
+    }
+
+    /// Click a cell in the rotate bar's `ΔθX/ΔθY/ΔθZ` row.
+    ///
+    /// With no pending step this chooses the ring the typed angle previews around. With a
+    /// pending step it is refused unless it is the locked ring's own cell.
+    pub(super) fn select_rotate_axis(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let owned = self.rotation_pending().is_some_and(|locked| locked == index);
+        if self.switch_rotate_axis(index, cx) || owned {
+            self.focus_move_field(window, cx);
+        }
+    }
+
+    /// The body's committed orientation while no rotate session is live.
+    ///
+    /// This is what `Reset 0°` will target (the stored `Placement.Rotation` in the flat
+    /// editions) and what the button labels itself with.
+    pub(super) fn stored_orientation(&self) -> Rotation {
+        self.move_hud
+            .as_ref()
+            .map_or_else(Rotation::identity, |hud| hud.orientation)
+    }
+
+    /// The `Reset 0°` label and whether it is actionable.
+    ///
+    /// A stored identity disables the button. A pure X/Y/Z rotation names the axis and
+    /// angle (`Reset (Z 45°)`); a compound 3-D tilt shows the true shortest angle from
+    /// identity (`Reset (21.4°)`), never a fractional per-axis decomposition.
+    pub(super) fn reset_rotation_label(&self) -> (String, bool) {
+        let orientation = self.stored_orientation();
+        if orientation.is_same(&Rotation::identity(), 1e-9) {
+            return ("Reset 0°".to_string(), false);
+        }
+        let (axis, degrees) = shortest_axis_angle(orientation);
+        let name = if axis.x.abs() > 0.999 {
+            Some("X")
+        } else if axis.y.abs() > 0.999 {
+            Some("Y")
+        } else if axis.z.abs() > 0.999 {
+            Some("Z")
+        } else {
+            None
+        };
+        let text = match name {
+            Some(name) => format!("Reset ({name} {})", degrees_text(degrees)),
+            None => format!("Reset ({})", degrees_text(degrees)),
+        };
+        (text, true)
+    }
+
+    /// `Reset 0°`: commit the rotation that cancels the body's committed orientation.
+    ///
+    /// While a step is pending this is refused: the user must apply or cancel the step
+    /// they can see before a second transaction replaces it.
+    pub(super) fn reset_rotation(&mut self, cx: &mut Context<Self>) {
+        if self.move_hud.is_none() || !self.angular() {
+            return;
+        }
+        if self.rotation_pending().is_some() {
+            self.show_rotation_lock(self.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);
+            return;
+        }
+        let orientation = self.object_rotation_now();
+        if orientation.is_same(&Rotation::identity(), 1e-9) {
+            self.model.lock().unwrap().status = "rotation is already 0°".to_string();
+            cx.notify();
+            return;
+        }
+        if self.session.as_ref().is_some_and(TransformSession::is_dirty) {
+            self.session = None;
+            self.drag_start = None;
+            self.rotation_start = None;
+            self.clear_preview_items(cx);
+            self.sync_transform_tape(cx);
+        }
+        self.ensure_rotate_session();
+        let inverse = orientation.inverse();
+        let mut degrees = inverse.angle().to_degrees();
+        let mut axis = inverse.axis();
+        if degrees > 180.0 {
+            degrees -= 360.0;
+            axis = axis.scale(-1.0);
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.set_rotation_axis_angle(axis, degrees);
+        }
+        self.preview_move(true, cx);
+        self.commit_session(cx);
+        self.pill_attention = false;
+    }
+
+    /// Preview the pending value on the selection, optionally **settling** the gizmo
     /// frame (a drag's `End`, where the pending pose becomes the resting pose).
     pub(super) fn preview_move(&mut self, settle: bool, cx: &mut Context<Self>) {
+        if self.angular() {
+            let transform = self
+                .session
+                .as_ref()
+                .filter(|session| session.is_dirty())
+                .map(TransformSession::transform);
+            self.preview_selection(transform, settle, cx);
+            let sweeps = self.session_protractor(cx);
+            self.publish_protractor(sweeps, cx);
+            self.sync_locked_ring(cx);
+            return;
+        }
         let Some(delta) = self.pending_delta(cx) else {
             return;
         };
-        self.preview_selection(Some(delta), settle, cx);
+        self.preview_selection(
+            Some(Matrix4::translation(delta[0], delta[1], delta[2])),
+            settle,
+            cx,
+        );
+    }
+
+    /// Publish the rotate session's protractor sweeps (or clear them).
+    pub(super) fn publish_protractor(
+        &mut self,
+        sweeps: Option<Vec<RingSweep>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        viewport.update(cx, |viewport, cx| {
+            if viewport.set_protractor(sweeps) {
+                cx.notify();
+            }
+        });
+    }
+
+    /// The one canonical wedge for the pending rotation step.
+    ///
+    /// A session holds exactly one `(axis, angle)`, so the protractor is one arc and one
+    /// chip. The start spoke is the **ring's own zero**: the canonical direction turned by
+    /// the committed orientation for a local ring frame, projected into the ring plane.
+    /// The arc's value is the same signed scalar the docked field shows.
+    pub(super) fn session_protractor(&self, cx: &App) -> Option<Vec<RingSweep>> {
+        let session = self
+            .session
+            .as_ref()
+            .filter(|session| session.is_dirty() && session.mode() == GizmoMode::Rotate)?;
+        let axis = session.pending_axis()?;
+        let degrees = session.pending_degrees();
+        if degrees.abs() < 0.05 {
+            return None;
+        }
+        let viewport = self.viewport.as_ref()?.read(cx);
+        let gizmo = viewport.gizmo()?;
+        let radius = gizmo.scale();
+        let detent_deg = gizmo.style().ring_snap_deg;
+        let origin = session.datum();
+        // The canonical zero direction for the ring: X turns from +Y, Y from +Z and Z
+        // from +X. A local frame turns that direction with the body's committed pose.
+        let canonical = match session.pending_axis_index() {
+            Some(0) => Vector3::new(0.0, 1.0, 0.0),
+            Some(1) => Vector3::new(0.0, 0.0, 1.0),
+            Some(2) => Vector3::new(1.0, 0.0, 0.0),
+            // A reset step has no coordinate ring; pick a stable direction perpendicular
+            // to its axis so the wedge still has a visible zero spoke.
+            _ => {
+                let pick = if axis.x.abs() < 0.9 {
+                    Vector3::new(1.0, 0.0, 0.0)
+                } else {
+                    Vector3::new(0.0, 1.0, 0.0)
+                };
+                pick.sub(&axis.scale(pick.dot(&axis))).normalize()
+            }
+        };
+        let reference = if self.pill.local_frame() {
+            session.orientation_0()
+        } else {
+            Rotation::identity()
+        };
+        let turned = reference.to_matrix().transform(&canonical);
+        let in_plane = turned.sub(&axis.scale(turned.dot(&axis)));
+        let start = if in_plane.length() > 1e-6 {
+            in_plane.normalize()
+        } else {
+            canonical
+        };
+        let current = Rotation::from_axis_angle(&axis, degrees.to_radians())
+            .to_matrix()
+            .transform(&start);
+        Some(vec![RingSweep {
+            origin,
+            axis,
+            start,
+            current,
+            radius,
+            degrees,
+            detent_deg,
+        }])
     }
 
     /// The pending translation the form would show: the session when it is dirty, else
     /// the parsed fields.
     fn pending_delta(&self, cx: &App) -> Option<[f64; 3]> {
+        if self.angular() {
+            return None;
+        }
         self.session
             .as_ref()
             .filter(|session| session.is_dirty())
@@ -351,15 +877,45 @@ impl Shell {
     /// The pending translation a Move will commit, when a form is open.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn pending_translation(&self, cx: &App) -> Option<[f64; 3]> {
-        if self.move_hud.is_none() {
+        if self.move_hud.is_none() || self.angular() {
             return None;
         }
         self.pending_delta(cx)
     }
 
-    /// Flip between `ΔX/ΔY/ΔZ` and `X/Y/Z`, rewriting the fields in the new mode.
+    /// The pending angular step in degrees, when the rotate form is open.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn pending_angle(&self) -> Option<f64> {
+        if self.move_hud.is_none() || !self.angular() {
+            return None;
+        }
+        self.session
+            .as_ref()
+            .filter(|session| session.is_dirty())
+            .map(TransformSession::pending_degrees)
+    }
+
+    /// Flip the rotate form between world rings (`WLD`) and body-local rings (`LOC`),
+    /// or the translation form between offsets and coordinates.
+    ///
+    /// A frame switch is a context exit for a pending rotation: the pending step was
+    /// measured about the old ring, so it is committed before the rings are rebuilt.
     pub(super) fn toggle_move_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.move_hud.is_none() {
+            return;
+        }
+        if self.angular() {
+            if self.rotation_pending().is_some() {
+                self.show_rotation_lock(self.move_hud.as_ref().map_or(0, |hud| hud.axis), cx);
+                return;
+            }
+            self.pill.toggle_local_frame();
+            // The hosted rings take their frame from the arming seam, so rebuild them.
+            self.rearm_selection(cx);
+            self.pill_attention = false;
+            self.set_move_fields([0.0; 3], cx);
+            self.focus_move_field(window, cx);
+            cx.notify();
             return;
         }
         // Read the value in the *old* mode before flipping.
@@ -371,13 +927,23 @@ impl Shell {
     }
 
     /// Put the caret in the field the [`PillState`](PillState) names.
-    pub(super) fn focus_move_field(&self, window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// An explicit focus request cancels a pending hand-back to the viewport: the user
+    /// asked for the field (a segment click, `Tab`, a digit), so the next render must not
+    /// steal it back.
+    pub(super) fn focus_move_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(axis) = self.pill.focus() else {
             return;
         };
-        if let Some(input) = self.move_hud.as_ref().and_then(|hud| hud.inputs.get(axis)) {
+        let input = if self.angular() {
+            self.move_hud.as_ref().map(|hud| &hud.angle)
+        } else {
+            self.move_hud.as_ref().and_then(|hud| hud.inputs.get(axis))
+        };
+        if let Some(input) = input {
             let handle = input.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
+            self.restore_viewport_focus = false;
         }
     }
 
@@ -391,12 +957,16 @@ impl Shell {
         if self.move_hud.is_none() {
             return;
         }
+        // The rotate form has one field, so an arc tag focuses it without changing the
+        // selected ring (a local ring's world axis need not spell its local label).
+        let axis = if self.angular() { 0 } else { axis };
         self.pill.focus_axis(axis);
         self.pill_focus_request = Some(axis.min(AXIS_COUNT - 1));
         cx.notify();
     }
 
-    /// `Tab`/`Shift+Tab`: open on the remembered drag axis, then cycle the fields.
+    /// `Tab`/`Shift+Tab`: open on the remembered drag axis, then cycle the fields. The
+    /// rotate form has one field, so any `Tab` focuses it directly.
     pub(super) fn cycle_move_focus(
         &mut self,
         backward: bool,
@@ -404,6 +974,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if self.move_hud.is_none() {
+            return;
+        }
+        if self.angular() {
+            self.pill.focus_axis(0);
+            self.focus_move_field(window, cx);
+            self.select_move_field(0, cx);
+            cx.notify();
             return;
         }
         self.pill.tab(backward);
@@ -430,6 +1007,18 @@ impl Shell {
         if self.move_hud.is_none() {
             return false;
         }
+        if self.angular() {
+            self.pill.focus_axis(0);
+            self.set_angle_text(0.0, cx);
+            if let Some(input) = self.move_hud.as_ref().map(|hud| &hud.angle) {
+                input.update(cx, |input, cx| input.set_text(typed.to_string(), cx));
+            }
+            // `set_text` is programmatic (no change event), so drive the preview here.
+            self.on_angle_typed(cx);
+            self.focus_move_field(window, cx);
+            cx.notify();
+            return true;
+        }
         let axis = self
             .pill
             .focus()
@@ -446,7 +1035,12 @@ impl Shell {
 
     /// Select a field's text so the next keystroke replaces it.
     pub(super) fn select_move_field(&self, axis: usize, cx: &mut Context<Self>) {
-        if let Some(input) = self.move_hud.as_ref().and_then(|hud| hud.inputs.get(axis)) {
+        let input = if self.angular() {
+            self.move_hud.as_ref().map(|hud| &hud.angle)
+        } else {
+            self.move_hud.as_ref().and_then(|hud| hud.inputs.get(axis))
+        };
+        if let Some(input) = input {
             input.update(cx, |input, cx| input.select_all(cx));
         }
     }
@@ -461,7 +1055,35 @@ fn component(vector: Vector3, axis: usize) -> f64 {
     }
 }
 
-/// The axis ink and label for a field: relative mode keeps the `Δ` prefix.
+/// The shortest axis-angle form of `rotation` (angle in `0..=180`).
+fn shortest_axis_angle(rotation: Rotation) -> (Vector3, f64) {
+    let mut degrees = rotation.angle().to_degrees();
+    let mut axis = rotation.axis();
+    if degrees > 180.0 {
+        degrees = 360.0 - degrees;
+        axis = axis.scale(-1.0);
+    }
+    (axis, degrees)
+}
+
+/// A compact degree label: `45°` for a whole value, `21.4°` otherwise.
+fn degrees_text(degrees: f64) -> String {
+    let rounded = (degrees * 10.0).round() / 10.0;
+    if (rounded - rounded.round()).abs() < 1e-9 {
+        format!("{rounded:.0}°")
+    } else {
+        format!("{rounded:.1}°")
+    }
+}
+
+/// The characters the rotate field accepts. Digits and a leading sign/decimal are the
+/// numeric surface; `X`/`Y`/`Z` deliberately fall through to [`RejectedChar`] so they can
+/// switch the ring while the field keeps the caret.
+fn is_angle_char(character: char) -> bool {
+    character.is_ascii_digit() || matches!(character, '-' | '+' | '.' | ',' | '=' | '@')
+}
+
+/// The axis label for a translation field: absolute mode drops the `Δ` prefix.
 pub(super) fn axis_label(axis: usize, absolute: bool) -> String {
     let letter = ["X", "Y", "Z"][axis.min(AXIS_COUNT - 1)];
     if absolute {

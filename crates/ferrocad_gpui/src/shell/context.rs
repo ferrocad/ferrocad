@@ -22,6 +22,10 @@ pub(crate) enum InteractionContext {
     /// `target` is the stage entity the session owns (the dirty object), so a pick can
     /// be judged against *which* subject it would replace rather than "any selection".
     PendingMove { target: Option<u32> },
+    /// A rotation is pending: the same finish pair, but the value is a sweep rather than
+    /// a translation. It is a distinct context so the refusal names the right verb and
+    /// the angular row keeps its own readout.
+    PendingRotation { target: Option<u32> },
     /// The Move hand has a selected target and its handles are armed.
     Armed,
     /// A selection exists without handles.
@@ -78,10 +82,11 @@ impl InteractionContext {
     /// are gated where they are routed.
     fn allows(self, action: Action<'_>) -> bool {
         match self {
-            // A pending move accepts only the completion keys, field editing and
+            // A pending transform accepts only the completion keys, field editing and
             // view-only commands (grid, projection, …). It refuses everything that would
             // spend or drop it, or that would make another body the subject.
-            InteractionContext::PendingMove { .. } => {
+            InteractionContext::PendingMove { .. }
+            | InteractionContext::PendingRotation { .. } => {
                 matches!(action, Action::RunCommand { edit: false, .. })
             }
             InteractionContext::Modal
@@ -106,7 +111,15 @@ impl Shell {
             // The subject is the session's primary target (the body the triad hugs).
             // Typed-only pending state before a stage exists has no entity to name.
             let target = self.session.as_ref().map(|session| session.primary());
-            return InteractionContext::PendingMove { target };
+            let rotate = self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.mode() == GizmoMode::Rotate);
+            return if rotate {
+                InteractionContext::PendingRotation { target }
+            } else {
+                InteractionContext::PendingMove { target }
+            };
         }
         let (armed, selected) = {
             let model = self.model.lock().unwrap();
@@ -137,6 +150,9 @@ impl Shell {
         let status = match context {
             InteractionContext::PendingMove { .. } => {
                 format!("move pending — ✓ or ✗ before you {verb}")
+            }
+            InteractionContext::PendingRotation { .. } => {
+                format!("rotation pending — ✓ or ✗ before you {verb}")
             }
             InteractionContext::Tool => format!("a tool is active — finish it before you {verb}"),
             InteractionContext::Modal => format!("close the dialog before you {verb}"),

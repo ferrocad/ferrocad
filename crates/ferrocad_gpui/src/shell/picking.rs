@@ -108,6 +108,7 @@ impl Shell {
         // tape rather than reused by the next drag.
         self.session = None;
         self.drag_start = None;
+        self.rotation_start = None;
         self.sync_transform_tape(cx);
         let primary = items.last().map(|item| item.object.clone());
         let properties = primary

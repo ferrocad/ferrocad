@@ -623,6 +623,55 @@ if "Test_MoveModal" not in FreeCADGui.listCommands():
     );
 }
 
+/// The finish pill is placed **ahead** of the drag: the tape's ghost origin is behind
+/// it, so the pill (and its buttons) can never cover a dashed leg or a ruler tag.
+#[test]
+fn the_finish_pill_is_placed_ahead_of_the_tape() {
+    let viewport = size(px(800.0), px(600.0));
+    let pill = size(px(70.0), px(36.0));
+    let origin = point(px(400.0), px(300.0));
+
+    // The tape came from the right, so the pill goes left of the origin.
+    let placed = place_finish(
+        origin,
+        Some(point(px(500.0), px(300.0))),
+        viewport,
+        pill,
+    );
+    assert!(
+        placed.x.0 + pill.width.0 < origin.x.0,
+        "the pill clears the incoming leg: {placed:?}"
+    );
+    assert!(
+        (placed.y.0 + pill.height.0 * 0.5 - origin.y.0).abs() < 1.0,
+        "the pill is centred on the drag line: {placed:?}"
+    );
+
+    // A drag from below-left puts it up and to the right.
+    let placed = place_finish(
+        origin,
+        Some(point(px(300.0), px(400.0))),
+        viewport,
+        pill,
+    );
+    assert!(
+        placed.x.0 > origin.x.0 && placed.y.0 < origin.y.0,
+        "the pill stays ahead of the move: {placed:?}"
+    );
+
+    // No projected datum, or a screen delta too small to name a direction: the plain
+    // HUD anchor (up and to the right).
+    assert_eq!(
+        place_finish(origin, None, viewport, pill),
+        place_hud(origin, viewport, pill)
+    );
+    assert_eq!(
+        place_finish(origin, Some(point(px(405.0), px(302.0))), viewport, pill),
+        place_hud(origin, viewport, pill),
+        "a negligible screen delta falls back"
+    );
+}
+
 /// The finish pair floats beside the gizmo and freezes under the pointer, so a click
 /// cannot slide the buttons away; the coordinate row is docked and never moves.
 #[gpui::test]
@@ -663,6 +712,13 @@ fn the_finish_pill_tracks_the_anchor_and_the_form_stays_docked(cx: &mut TestAppC
     assert!(
         bar.origin.y + bar.size.height > canvas.origin.y + canvas.size.height - px(24.0),
         "the loadout keeps the dock baseline"
+    );
+    // The row is wide; stacking it keeps its right edge clear of the centred command
+    // dock on the normal window (a row would have run into it).
+    let dock = cx.debug_bounds("action-dock").expect("the action dock");
+    assert!(
+        docked.origin.x + docked.size.width <= dock.origin.x,
+        "the coordinates clear the create/search dock: {docked:?} vs {dock:?}"
     );
 
     // With no viewport the anchor is the pointer, so the pair follows it.

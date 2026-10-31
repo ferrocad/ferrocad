@@ -1804,6 +1804,22 @@ impl<V: InventorView> InventorViewport<V> {
     pub fn gizmo_anchor(&self) -> Option<Point<Pixels>> {
         let index = self.gizmos.primary()?;
         let device = self.gizmos.gizmos()[index].origin_anchor(&self.camera)?;
+        Some(self.window_point(device))
+    }
+
+    /// An arbitrary **world point** in window-space logical pixels.
+    ///
+    /// The host uses this to place a surface relative to the session's tape without
+    /// duplicating the camera projection: projecting the tape's datum gives the ghost
+    /// origin the move started from, so a finish pill can sit on the side the ruler is
+    /// not. `None` when the point is behind the camera.
+    pub fn world_anchor(&self, world: Vector3) -> Option<Point<Pixels>> {
+        let device = project_device(&self.camera, world)?;
+        Some(self.window_point(device))
+    }
+
+    /// Device coordinates → the window-space point the element is painted at.
+    fn window_point(&self, device: [f64; 2]) -> Point<Pixels> {
         let logical = self
             .camera
             .viewport
@@ -1813,10 +1829,10 @@ impl<V: InventorView> InventorViewport<V> {
             .as_ref()
             .map(|bounds| point(bounds.origin.x, bounds.origin.y))
             .unwrap_or_else(|| point(px(0.0), px(0.0)));
-        Some(point(
+        point(
             px(origin.x.0 + logical[0]),
             px(origin.y.0 + logical[1]),
-        ))
+        )
     }
 
     /// The centre of the viewport element in window-space logical pixels.
@@ -9021,6 +9037,24 @@ mod tests {
         let expected = [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5];
         let tags = ruler_tags(&view.transform_tape().unwrap(), &view.camera, None);
         assert_eq!(tags[0].anchor, expected);
+    }
+
+    /// The host can project a world point to the window: the finish pill is placed on
+    /// the side the ruler is not, so it needs the tape's ghost origin in screen space.
+    #[test]
+    fn a_world_point_projects_to_a_window_anchor() {
+        let (view, _viewport) = translate_gizmo_view();
+        let world = Vector3::new(10.0, 20.0, 5.0);
+        let device = project_device(&view.camera, world).expect("the point projects");
+        let logical = view
+            .camera
+            .viewport
+            .to_logical([device[0].round() as i32, device[1].round() as i32]);
+        assert_eq!(
+            view.world_anchor(world),
+            Some(point(px(logical[0]), px(logical[1]))),
+            "the host reads the same window point the camera does"
+        );
     }
 
     #[test]

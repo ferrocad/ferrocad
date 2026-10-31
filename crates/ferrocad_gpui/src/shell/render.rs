@@ -134,6 +134,48 @@ pub(super) fn place_hud(anchor: Point<Pixels>, viewport: Size<Pixels>, hud: Size
     clamp_hud(offset, viewport, hud)
 }
 
+/// Where the pending move's finish pill appears: **ahead** of the drag.
+///
+/// The tape runs from the session's datum (the ghost origin) to the gizmo's current
+/// origin, so every dashed leg and its ruler tag lies behind the move. The pill is
+/// centred just past the origin along that same screen direction — the one side no leg
+/// can occupy. With no projected datum (no viewport, or a drag whose screen delta is too
+/// small to give a direction) it falls back to [`place_hud`]. Either way the result is
+/// clamped into the canvas safe area.
+pub(super) fn place_finish(
+    origin: Point<Pixels>,
+    datum: Option<Point<Pixels>>,
+    viewport: Size<Pixels>,
+    pill: Size<Pixels>,
+) -> Point<Pixels> {
+    // Clear of the origin handle, then half the pill so it is centred on that point.
+    const CLEARANCE: f32 = 28.0;
+    // Below this many pixels the direction is projection noise, not a drag.
+    const MIN_DIRECTION: f32 = 24.0;
+    let Some(datum) = datum else {
+        return clamp_hud(place_hud(origin, viewport, pill), viewport, pill);
+    };
+    let dx = origin.x.0 - datum.x.0;
+    let dy = origin.y.0 - datum.y.0;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < MIN_DIRECTION {
+        return clamp_hud(place_hud(origin, viewport, pill), viewport, pill);
+    }
+    let reach = CLEARANCE + pill.width.0.max(pill.height.0) * 0.5;
+    let centre = point(
+        px(origin.x.0 + dx / length * reach),
+        px(origin.y.0 + dy / length * reach),
+    );
+    clamp_hud(
+        point(
+            px(centre.x.0 - pill.width.0 * 0.5),
+            px(centre.y.0 - pill.height.0 * 0.5),
+        ),
+        viewport,
+        pill,
+    )
+}
+
 /// A command dialog (A3): a floating dielectric HUD, or a glass modal over a dimmed
 /// shell when the spec keeps the default (`"presentation": "modal"`).
 ///
@@ -542,7 +584,25 @@ pub(super) fn move_finish_overlay(
     let hovered = shell
         .hud_rect
         .is_some_and(|rect| rect.contains(&window.mouse_position()));
-    let follow = place_hud(shell.dialog_anchor(window, cx), viewport, pill);
+    // The tape's ghost origin, when the viewport can project it: the pill then sits on
+    // the far side of the move, where the ruler's legs and tags cannot reach.
+    let (anchor, datum) = {
+        let projected = shell.viewport.as_ref().and_then(|viewport| {
+            let viewport = viewport.read(cx);
+            let origin = viewport.gizmo_anchor()?;
+            let datum = shell
+                .session
+                .as_ref()
+                .filter(|session| session.is_dirty())
+                .and_then(|session| viewport.world_anchor(session.datum()));
+            Some((origin, datum))
+        });
+        match projected {
+            Some(pair) => pair,
+            None => (shell.dialog_anchor(window, cx), None),
+        }
+    };
+    let follow = place_finish(anchor, datum, viewport, pill);
     let origin = if hovered {
         shell.hud_lock.unwrap_or(follow)
     } else {

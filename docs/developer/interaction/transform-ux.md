@@ -149,10 +149,13 @@ The floating pill is anchored to the **gizmo**, not the screen or the pointer (f
   even if the viewport still reports its drag for a tick: the pending pose becomes the
   resting frame and the draw-only offset is cleared, so the triad cannot snap back.
   `Enter` commits and the shell re-arms at the committed pose.
-- The pill stays inside the canvas safe area (16 px margins, 64 px above the dock).
-  While the pointer is inside it, its screen position is **frozen**, so a click cannot
-  slide the buttons away. The docked row never moves, so typing a large Δ can never
-  move the fields.
+- The pill is placed **ahead of the drag**: `place_finish` projects the session datum
+  (the ghost origin) through the viewport and centres the pill past the gizmo origin
+  along the drag direction, so the ruler and its tags (which lie behind the move)
+  cannot be under it. It stays inside the canvas safe area (16 px margins, 64 px above
+  the dock) and its screen position is **frozen while the pointer is inside it**, so a
+  click cannot slide the buttons away. The docked row never moves, so typing a large Δ
+  can never move the fields.
 - The fields (`[Δ|XYZ] ΔX [ ] ΔY [ ] ΔZ [ ] mm`, `move_fields_bar`) are **always visible
   while the Move hand has a target** and dock beside `[1 Move] [2 Push/Pull] [3 Fillet]`
   on the bottom bar. They are a shell-owned surface, not a command dialog, so they

@@ -283,12 +283,16 @@ back; both reset the fields and hand the keyboard back to the canvas, and the ro
 Only the **focused** field paints a selection highlight: a blurred `TextInput` clears its
 selection range, so a `Tab` from `ΔY` to `ΔZ` never leaves a purple range behind.
 
-**The finish pill tracks the gizmo.** It is the one floating piece left: its anchor is
-recomputed from the visible gizmo origin (or the **viewport centre** when no gizmo is
-armed; the live pointer is the last resort for a shell with no viewport) each frame it
-renders. The fixed offset is **+24 px right and 36 px up to the pill's bottom-left**
-(`render::place_hud`), so it floats clear of the handle cluster instead of covering the
-arrow it describes. It is clamped inside the viewport safe area (16 px margins; 64 px
+**The finish pill tracks the gizmo, ahead of the drag.** It is the one floating piece
+left: its anchor is recomputed each frame from the visible gizmo origin (or the
+**viewport centre** when no gizmo is armed; the live pointer is the last resort for a
+shell with no viewport). While the tape is live the shell projects the session datum
+(the ghost origin) through the viewport (`InventorViewport::world_anchor`) and centres
+the pill **past the origin along the drag direction** (`render::place_finish`): the tape
+runs from the datum to the origin, so that is the one side no dashed leg or ruler tag can
+occupy. With no projected datum (no viewport, or a screen delta too small to name a
+direction) it falls back to **+24 px right and 36 px up** (`render::place_hud`), clear of
+the handle cluster. It is clamped inside the viewport safe area (16 px margins; 64 px
 above the bottom dock) and its position is **frozen while the pointer is inside its
 rect**, so a click cannot slide the buttons out from under the cursor. The docked
 coordinate row does not move at all: it is laid out above the loadout, so typing a large

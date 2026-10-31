@@ -44,9 +44,11 @@ sub-element reports the same filtered scope the window does.
 - **`Esc`** (or the form's `✗`) rolls the preview back without writing anything, so it
   spends no undo entry. With nothing pending, `Esc` clears the selection instead — the
   form and the triad go with it.
-- **Switching the hand or the filter**, selecting another object, or starting a
-  command **commits** a pending move first, then continues. You cannot lose a
-  drag by changing what you are working on.
+- **A pending move locks the workspace.** While the `✗`/`✓` buttons are showing,
+  switching tools, changing `Select ▾` or the handle set, selecting another object or
+  starting a command is **blocked** (the status line says "move pending"; the tool bar
+  dims), so nothing commits and nothing is lost by a stray click. Finish with `✓` or `✗`
+  and the gesture goes through.
 
 ## Keys at a glance
 
@@ -62,9 +64,10 @@ sub-element reports the same filtered scope the window does.
 
 With **Move** equipped and something selected, the coordinates are always on screen: a
 `Δ`/`XYZ` switch and the `ΔX`, `ΔY` and `ΔZ` fields, docked at the bottom-left, just
-above the loadout bar. The `✗` (cancel) and `✓` (commit) buttons are a separate little pill
-that appears **only while a move is pending** (a drag or a typed number), floating next
-to the gizmo: at rest there is nothing to finish, and the 3-D ruler is not drawn either.
+above the loadout bar. A separate little pill floats beside the gizmo — a **red `✗`**
+(discard) and a **green `✓`** (commit) — and appears **only while a move is pending**
+(a drag or a typed number): at rest there is nothing to finish, and the 3-D ruler is not
+drawn either.
 The fields start **unfocused**: their numbers follow the triad and the 3-D measuring
 tape live, but `1`, `2` and `3` still equip tools. `Tab` — or a digit other than
 `1`–`3`, `-`, `.`, a click in a field, or a click on a ruler tag — puts the keyboard in

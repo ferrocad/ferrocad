@@ -190,8 +190,15 @@ impl Shell {
     /// Equip a loadout slot (`1`/`2`/`3` or the bottom-left bar).
     ///
     /// A slot change is a **context exit**: a dirty transform session commits first,
-    /// as one transaction, before the new hand narrows the handles.
+    /// as one transaction, before the new hand narrows the handles. That does not apply
+    /// while a move is **pending**: the `✗`/`✓` pair is on screen, so the hand cannot
+    /// change until the user decides.
     pub(crate) fn set_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
+        // Changing the hand would commit or drop the pending move; a same-slot call is
+        // just a re-arm and is always allowed.
+        if self.loadout.slot() != slot && self.block_pending_move("switch tools", cx) {
+            return;
+        }
         // A command that equips a hand always arms it, including the hand already in
         // use: `Move` from the wheel brings a paused hand back.
         self.move_disarmed = false;
@@ -214,7 +221,12 @@ impl Shell {
     /// stays, but the triad and the form leave the canvas so the model can be inspected.
     /// Pressing it again arms the hand. Other slots (and a switch back) go through
     /// [`set_loadout_slot`](Self::set_loadout_slot).
+    ///
+    /// A pending move blocks both: pausing commits it, and switching commits it too.
     pub(crate) fn activate_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
+        if self.block_pending_move("switch tools", cx) {
+            return;
+        }
         if slot.wants_gizmo() && self.loadout.slot() == slot {
             if self.move_disarmed {
                 self.move_disarmed = false;
@@ -255,9 +267,13 @@ impl Shell {
     /// Override the topology filter from the header's `Select ▾`.
     ///
     /// Like a slot change, this is a context exit: a pending edit commits before the
-    /// new scope changes what the handles target.
+    /// new scope changes what the handles target — and, like a slot change, it is
+    /// **refused** while a move is pending, which the user must finish first.
     pub(crate) fn set_select_filter(&mut self, filter: SelectFilter, cx: &mut Context<Self>) {
         if self.loadout.filter() == filter {
+            return;
+        }
+        if self.block_pending_move("change the selection scope", cx) {
             return;
         }
         self.commit_pending_session(cx);

@@ -43,9 +43,12 @@ command/dialog protocol).
    transaction.
 4. **Every pending state has an explicit rollback.** A form, a preview, a wheel and a
    drag can all be abandoned without a partial edit, and `Esc` is that rollback; it never
-   spends an undo entry. Context loss is a different rule: a dirty transform session is
-   **auto-committed** before the context changes, because losing a drag is data loss, not
-   a cancel. Only a delta that cannot be committed (its object was pruned) is discarded.
+   spends an undo entry. A pending **move** is a decision the user has not made yet: while
+   its `✗`/`✓` pair is on screen, the context is **locked** — selecting another object,
+   switching the hand or the handle set, changing `Select ▾`, or starting a tool is
+   refused, so the value is neither committed nor dropped by a stray click. Finish it
+   with `✗`/`✓` (or `Esc`/`Enter`). Only a delta that cannot survive (its object was
+   pruned by a document edit) is discarded.
 5. **State is ink; background is only ever an additive hover.** (See the visual
    language.) The interaction model does not depend on a filled "active" surface.
 
@@ -165,7 +168,7 @@ Absent ──selection with a target──► Idle ◄──document edit: re-ar
                                      │  release → End (preview kept; nothing committed)
                                      ▼
                               Session live ──Enter───────────────► commit one step, re-arm
-                                     ├── selection change, Δ ≠ 0 ─► commit, then switch
+                                     ├── object / hand / scope / tool ─► refused while Δ ≠ 0
                                      └── Esc ──────────────────────► drop session + ghost, Idle
 ```
 
@@ -175,7 +178,7 @@ Absent ──selection with a target──► Idle ◄──document edit: re-ar
 | move (tick) | `Update`: the shell accumulates the absolute delta and previews the whole selection; the target is drawn with `session.transform()`, **grips follow**, and the triad's *drawing* is offset so it stays on the surface |
 | release | `End`: the preview is **kept**; nothing is committed and no undo entry exists |
 | `Enter` | commit the accumulated delta as one transaction through `_move_selection` (the `App_Move` callback); the session and ghost are released and the triad re-arms at the new origin, so the next step starts there |
-| selection change while dirty | auto-commit first, then change context |
+| selection change while dirty | refused: finish the move with `✓`/`✗` first (`block_pending_move`) |
 | `Esc` / cancel | rollback: drop the session and its ghost; no undo entry is spent |
 
 **Changed 2026-10-30 (U1), unified 2026-10-31 (A2).** There is one mode: a **translation**
@@ -314,10 +317,11 @@ Pending ──Esc / ✗──► rollback: session dropped, preview restored ─
 At rest ──gizmo drag──► fields mirror the session Δ + preview; no focus taken
 At rest ──Tab / digit / tag click──► one field focused (drag-axis memory)
 Any ──badge / `=`──► Δ fields ⇄ world coordinates (same pending Δ)
-Any ──selection replaced──► auto-commit (if dirty), re-target, new clean session
+Any ──selection replaced──► refused while pending; a clean form re-targets
+Pending ──selection / hand / scope / tool──► refused (status: "move pending") ──► Pending
 At rest ──Esc──► selection cleared ──► Closed
-Any ──selection cleared / another hand / a tool / `1` (pause)──► Closed
-Pending ──competing interaction (context exit)──► auto-commit ──► the new context
+At rest ──selection cleared / another hand / a tool / `1` (pause)──► Closed
+Pending ──competing document edit (selection pruned)──► rollback ──► the new context
 ```
 
 - **One dialog at a time — for dialogs.** A second *command* dialog is rejected while a
@@ -345,15 +349,16 @@ Pending ──competing interaction (context exit)──► auto-commit ──�
 - **Commit is single.** A drag never commits; `Enter`/Accept runs the command callback
   (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
   `Enter`.
-- **Context loss auto-commits when dirty (built 2026-10-30; slot/filter 2026-10-31).** Replacing or clearing the
-  selection commits a non-zero pending delta as one transaction *before* the selection
-  changes; it is no longer "silently cancelled", because losing a drag is the defect the
-  session exists to remove. A **loadout slot or `Select ▾` filter change** does the same
-  (U4, built): `Shell::set_loadout_slot`/`set_select_filter` call `commit_session` first,
-  then re-arm. Starting a tool is a context exit too: it commits a dirty move and hides
-  the form until the tool ends. A pruned selection or a competing document edit cannot
-  commit a stale delta, so it is rolled back. `Esc` is the only user-initiated rollback
-  and spends no undo entry.
+- **A pending move locks the context (built 2026-10-31).** While `✗`/`✓` are on screen the
+  move is an unfinished decision, so every gesture that would change its subject is
+  **refused** (`block_pending_move`), with a status line saying why: replacing or
+  clearing the selection, pressing a loadout key (including pausing Move), changing
+  `Select ▾`, switching the handle set (Rotate), and starting a tool. The loadout bar
+  dims and drops its click handlers while the lock is on, so the refusal is visible before
+  it is attempted. Nothing is committed and nothing is dropped — the user finishes with
+  `✓`/`Enter` or `✗`/`Esc`, and the gesture goes through afterwards. A **document** event is different: a pruned
+  selection or a competing edit cannot keep a stale delta, so it is rolled back. `Esc`
+  is the only user-initiated rollback and spends no undo entry.
 - **Fast escalation (built 2026-10-31, §10).** Pressing `Tab` or a numeric key (`0–9`, `-`, `.`)
   while a `TransformGizmo` is armed (idle or mid-drag) is the primary entry into the
   numeric surface: the HUD seeds its fields from the current delta (or zero when idle)
@@ -437,8 +442,8 @@ rendered form dialog (backdrop occludes everything)
    selection.
 2. A context target outside the selection is promoted **at commit**, never at open.
 3. Every pending transform session has an explicit rollback (`Esc`), an explicit
-   checkpoint (`Enter`), and auto-commits a non-zero delta when the user deliberately
-   switches selection, slot or tool.
+   checkpoint (`Enter`), and **locks** the context: selecting another object, switching
+   selection, slot, handle set or tool is refused while the delta is non-zero.
 4. Hover-to-arm writes no selection and no session: only a handle press or a body click
    promotes the hovered body, and the preview is dimmed until then.
 4. A preview is never committed by a repaint, a camera move or a re-arm.

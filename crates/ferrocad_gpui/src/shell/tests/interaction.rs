@@ -623,6 +623,92 @@ if "Test_MoveModal" not in FreeCADGui.listCommands():
     );
 }
 
+/// A pending move locks its **subject**: unselecting or picking another object is
+/// refused, so the move is neither committed nor dropped. Finishing it releases the lock.
+#[gpui::test]
+fn a_pending_move_locks_the_selection(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+        })
+    });
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Derived", cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().selection.clone()),
+        vec![SelectionItem::new("Params")],
+        "another object cannot be selected under a pending move"
+    );
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.clear_selection(cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().selection.clone()),
+        vec![SelectionItem::new("Params")],
+        "and the selection cannot be cleared either"
+    );
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("move pending"),
+        "the status says why the click did nothing"
+    );
+    assert!(
+        shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)),
+        "the move is still pending"
+    );
+
+    // ✗ releases the lock; the same selection change then goes through.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.dismiss_move_hud(cx))
+    });
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.select("Derived", cx)));
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().selection.clone()),
+        vec![SelectionItem::new("Derived")],
+        "with the move finished the subject can change"
+    );
+}
+
+/// The handle set is a tool too: `Rotate` is refused while a move is pending, so the
+/// form's delta is not dropped by the mode change.
+#[gpui::test]
+fn switching_the_handle_set_waits_for_a_pending_move(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            let input = shell.move_hud.as_ref().unwrap().inputs[0].clone();
+            input.update(cx, |input, cx| input.set_text("5", cx));
+        })
+    });
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx))
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.gizmo_mode),
+        GizmoMode::Translate,
+        "the rotate hand waits for the move to finish"
+    );
+    assert!(shell.read_with(&cx, |shell, cx| shell.move_is_pending(cx)));
+
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.dismiss_move_hud(cx))
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.set_gizmo_mode("rotate", cx))
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.gizmo_mode),
+        GizmoMode::Rotate,
+        "with no pending move the mode changes"
+    );
+}
+
 /// The finish pill sits **beside** the stroke, not in front of it: the tape lies along
 /// the drag and the pointer is on it, so the pill takes the perpendicular — and the
 /// other side when the pointer is already over one.

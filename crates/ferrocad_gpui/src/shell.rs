@@ -82,8 +82,8 @@ pub(crate) use render::dev_tools_body;
 // keep their `crate::shell::FG` paths while the widget layer can use the same table
 // without depending on the shell.
 pub(crate) use ferrocad_theme::ui::{
-    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, DOCK_BG, DOCK_BORDER, FG, MUTED, PANEL, PANEL_ALT,
-    WHEEL_GLASS,
+    ACCENT, AXIS_X, AXIS_Y, AXIS_Z, BG, CONFIRM_COLOR, DOCK_BG, DOCK_BORDER, FG, MUTED, PANEL,
+    PANEL_ALT, SUBTRACT_COLOR, WHEEL_GLASS,
 };
 
 /// The registry feature whose provider supplies the gizmo skin.
@@ -1752,7 +1752,11 @@ impl Render for Shell {
                     .items_start()
                     .gap_1()
                     .child(move_fields_bar(self, cx))
-                    .child(crate::chrome::loadout_bar(self.loadout, cx)),
+                    .child(crate::chrome::loadout_bar(
+                        self.loadout,
+                        self.move_is_pending(cx),
+                        cx,
+                    )),
             )
             // Swap, do not stack: while a session runs the bottom-centre slot shows
             // the tool surface, so a second command cannot be started underneath it.

@@ -92,6 +92,7 @@ mod tests {
         assert_eq!(ui::DOCK_BG, 0x16181de6);
         assert_eq!(ui::DOCK_BORDER, 0xffffff1f);
         assert_eq!(ui::CHROME_ACTIVE_BG, 0x1b2b3855, "the active chrome fill");
+        assert_eq!(ui::CONFIRM_COLOR, 0x22c55e, "the commit action");
     }
 
     /// Where the two tables name the same colour, they agree.

@@ -548,24 +548,31 @@ pub(super) fn dialog_buttons(
 /// words would double its width.
 /// The `✗`/`✓` pair.
 ///
+/// The tones are semantic, not decorative: `✗` is the destructive red (discard the
+/// pending move) and `✓` the confirm green (spend it), so the pair reads as a decision
+/// even before the glyphs are parsed.
+///
 /// `interactive` is false while a gizmo drag is running: the pair is then a readout,
 /// not a control. A button that carries a hitbox would swallow the pointer-up that ends
 /// the drag, so the release would never reach the canvas.
 pub(super) fn hud_buttons(cx: &mut Context<Shell>, interactive: bool) -> impl IntoElement {
+    // Slightly darker shades so the hover still reads as the same action.
+    const CONFIRM_HOVER: u32 = 0x16a34a;
+    const DISCARD_HOVER: u32 = 0xb91c1c;
     let cancel = div()
         .id("dialog-cancel")
         .debug_selector(|| "dialog-cancel".to_string())
         .px_2()
         .py_1()
         .rounded_sm()
-        .bg(rgb(PANEL_ALT))
+        .bg(rgb(SUBTRACT_COLOR))
         .text_xs()
-        .text_color(rgb(MUTED))
+        .text_color(rgb(FG))
         .child("✗");
     let cancel = if interactive {
         cancel
             .cursor_pointer()
-            .hover(|style| style.text_color(rgb(FG)))
+            .hover(|style| style.bg(rgb(DISCARD_HOVER)))
             .on_click(cx.listener(|this, _event, _window, cx| this.dismiss_move_hud(cx)))
     } else {
         cancel
@@ -576,14 +583,14 @@ pub(super) fn hud_buttons(cx: &mut Context<Shell>, interactive: bool) -> impl In
         .px_2()
         .py_1()
         .rounded_sm()
-        .bg(rgb(ACCENT))
+        .bg(rgb(CONFIRM_COLOR))
         .text_xs()
         .text_color(rgb(FG))
         .child("✓");
     let accept = if interactive {
         accept
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(PANEL_ALT)))
+            .hover(|style| style.bg(rgb(CONFIRM_HOVER)))
             .on_click(cx.listener(|this, _event, _window, cx| {
                 this.commit_session(cx);
             }))

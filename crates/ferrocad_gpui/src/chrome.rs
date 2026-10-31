@@ -742,7 +742,14 @@ fn select_button(
 /// discoverable without opening the wheel. The caller positions the pill in the
 /// bottom-left column (the Move form docks directly above it), so this returns the pill
 /// itself.
-pub(crate) fn loadout_bar(loadout: Loadout, cx: &mut Context<Shell>) -> impl IntoElement {
+///
+/// `blocked` dims the bar and drops every click while a move is pending: the hand cannot
+/// change until the user finishes it with `✗`/`✓`.
+pub(crate) fn loadout_bar(
+    loadout: Loadout,
+    blocked: bool,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let mut panel = div()
         .id("loadout-bar")
         .debug_selector(|| "loadout-bar".to_string())
@@ -757,7 +764,8 @@ pub(crate) fn loadout_bar(loadout: Loadout, cx: &mut Context<Shell>) -> impl Int
         .bg(rgba(DOCK_BG))
         .border_1()
         .border_color(rgba(DOCK_BORDER))
-        .text_xs();
+        .text_xs()
+        .when(blocked, |el| el.opacity(0.45));
 
     for slot in Slot::ALL {
         let active = loadout.slot() == slot;
@@ -774,13 +782,16 @@ pub(crate) fn loadout_bar(loadout: Loadout, cx: &mut Context<Shell>) -> impl Int
             .rounded_sm()
             .text_color(rgb(if active { CHROME_ACTIVE } else { FG }))
             .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgba(ROW_HOVER)))
             .child(div().text_color(rgb(MUTED)).child(key))
             .child(slot.label());
-        button = button.on_click(cx.listener(move |this, _event, _window, cx| {
-            this.activate_loadout_slot(slot, cx);
-        }));
+        if !blocked {
+            button = button
+                .cursor_pointer()
+                .hover(|style| style.bg(rgba(ROW_HOVER)))
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.activate_loadout_slot(slot, cx);
+                }));
+        }
         panel = panel.child(button);
     }
 

@@ -727,6 +727,11 @@ impl Shell {
         if self.gizmo_mode == mode {
             return;
         }
+        // With translate, the form's Δ fields are the pending move. Another handle set
+        // would close the form and drop that value, so it waits for ✗/✓.
+        if self.block_pending_move("switch tools", cx) {
+            return;
+        }
         if mode != GizmoMode::Translate
             && self
                 .dialog

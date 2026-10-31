@@ -88,7 +88,7 @@ stateDiagram-v2
     }
 
     SessionActive --> ArmedIdle: Enter (checkpoint: commit one step, re-arm at the new origin, Δ = 0)
-    SessionActive --> NextContext: another object / slot change / wheel verb (auto-commit if Δ ≠ 0, then switch)
+    SessionActive --> SessionActive: another object / slot / scope / tool is refused while Δ ≠ 0
     SessionActive --> ArmedIdle: Esc (rollback: restore the session-start pose, clear the preview, Δ = 0)
 ```
 
@@ -98,10 +98,12 @@ stateDiagram-v2
    **world origin** as the *session datum*. Drag X +15 mm, release, drag Y +20 mm, release, then
    type `16.5` into ΔX: all four adjust the same live preview relative to that datum and
    collapse into one transaction.
-2. **Implicit auto-commit on context exit.** If the accumulated delta is non-zero, switching
-   slot, choosing a wheel verb, selecting another object or clicking empty space commits the
-   preview as one transaction *before* changing context. The user cannot lose a drag by
-   forgetting to press Move.
+2. **A pending move locks the context.** If the accumulated delta is non-zero, switching
+   slot, changing the handle set or `Select ▾`, selecting another object, clearing the
+   selection or starting a tool is **refused** (with a status line) until the user finishes
+   with `✓`/`Enter` or `✗`/`Esc`. Nothing is committed and nothing is dropped by a stray
+   click: the pending value is explicit state, so the user decides it. (Revised 2026-10-31
+   from the earlier auto-commit rule.)
 3. **Checkpoint on Enter.** Enter commits the current delta, moves the session datum to the new
    placement, resets Δ to 0 and keeps the object selected — ready for the next step.
 4. **Explicit rollback on Esc.** Esc is the only abort: mid-drag it cancels the stroke; with a
@@ -241,7 +243,7 @@ method to add.
 | drag / type | `set_translation` | nothing leaves the process | **no entry** |
 | `Esc` | dropped | — | **no entry** |
 | `Enter` | `checkpoint` (new datum, Δ = 0) | one `InteractionCommit` → the mod's transaction | **exactly one** named entry |
-| selection / slot / tool change while dirty | committed first | one `InteractionCommit` | one entry, then the change |
+| selection / slot / scope / tool change while dirty | refused (the move locks the context) | — | no entry until `Enter`/`✓` |
 | `Ctrl+Z` after any of the above | — | — | reverts the *committed* step; a live preview is untouched because it was never in history |
 
 ### 2.6 What the renderer needs
@@ -283,7 +285,7 @@ and it is worth stating as a rule because both directions look tempting:
 | | Where | Why |
 | --- | --- | --- |
 | Drag tick, typed Δ, `Esc` | `ferrocad_stage::TransformSession` + the viewport's display transform | 60–120/s. Crossing into Python per tick would put the GIL on the interaction path, and `apply_interaction` also recomputes — a kernel operation — which is why it must happen once, not per tick |
-| Commit (Enter, auto-commit, checkpoint) | The mod layer, as an `InteractionCommit` | One crossing per commit. The module owns the transaction name, the status text, the recompute, and any veto or derived feature; a built-in `_move_selection` and a mod's own move are then the same code path |
+| Commit (Enter, checkpoint) | The mod layer, as an `InteractionCommit` | One crossing per commit. The module owns the transaction name, the status text, the recompute, and any veto or derived feature; a built-in `_move_selection` and a mod's own move are then the same code path |
 
 The vision check the decision was made against: workbenches own edits, so an edit must pass
 through one. The performance cost is real but it is paid **once per session**, not once per
@@ -420,8 +422,8 @@ lands; the status column is updated then. The loadout-owned rows are in
 | Section | Change | Stage |
 | --- | --- | --- |
 | §4.2 States and transitions | unify the **normal** and **deferred** drag columns. Every `TransformGizmo` drag runs the cumulative session (`Begin → Update → End`), the preview survives the release, and no document transaction fires on mouse-up | U1 |
-| §5.1 / §5.2 Form state machine | replace the floating Move command dialog (`Cancel`/`Move`) with the always-on coordinate row (docked with the loadout) plus an in-context pending-only `✗`/`✓` pill; change context loss from *silently cancelled* to *auto-commit if dirty*, reserving `Esc` for rollback; at rest the row is an inspector (no pill, no tape) | U1 (semantics), U2 (HUD) — done 2026-10-31 |
-| §7 Invariant 3 | "every pending transform session has an explicit rollback (`Esc`), an explicit checkpoint (`Enter`), and auto-commits non-zero deltas when the user deliberately switches selection, slot or tool" | U1 |
+| §5.1 / §5.2 Form state machine | replace the floating Move command dialog (`Cancel`/`Move`) with the always-on coordinate row (docked with the loadout) plus an in-context pending-only `✗`/`✓` pill; change context loss from *silently cancelled* to a **locked context** the user must finish with `✗`/`✓` (revised 2026-10-31 from auto-commit), reserving `Esc` for rollback; at rest the row is an inspector (no pill, no tape) | U1 (semantics), U2 (HUD) — done 2026-10-31 |
+| §7 Invariant 3 | "every pending transform session has an explicit rollback (`Esc`), an explicit checkpoint (`Enter`), and locks the context while its delta is non-zero" | U1 |
 
 ### 4.2 [`gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
 
@@ -458,8 +460,8 @@ sweep.
 | **A1c** | shell wiring: the shell owns one session, opens it at `TransformPreview::Begin` from the un-previewed stage (`Shell::last_stage`), feeds it every tick, prefers it over the Δ fields for preview and commit, and drops it with the HUD | Puts the owner on the commit path without changing the commit's route: see §2.8 on why the HUD's accept still goes through `App_Move` until the session carries a selection | — (**done 2026-10-30**: the drag test asserts the session's delta and datum and that cancelling drops it; the commit still reads the command's callback) |
 | **A2** | delete the alternative preview paths: `set_gizmo_preview`/`gizmo_deferred`, the two wrapper paths A1b left (`preview_translation`, and `apply_gizmo_preview`'s route through `preview_transform`), and the shell's separately stored field delta. `preview_home` (overlay anchors) is untouched | Removes the three-way split that caused the 2026-10-30 defect | — (**done 2026-10-31**: `set_gizmo_preview`/`gizmo_deferred`, `preview_translation` and `PendingMove` are gone; a translation drag is preview-only through `preview_transform`, while rotation keeps the viewport's direct preview/commit because it has no session yet. `preview_home` untouched. viewport 202, gpui 256) |
 | **A3** | the push/pull stem and the dress-up scrubber preview through the session's snapshot (they preview nothing today) — via the mod-published `Preview` channel, not a document change | Proves the display-only preview generalises beyond the triad, without pulling A0 forward | §4.2 — **done 2026-10-31**: `Manipulator::preview_items` is the manipulator half of the same unpickable display-only contract as `FreeCADGui.Preview`; the push/pull stem ghosts the face at the pending depth and the dress-up scrubber ghosts the edge swath at the pending radius. The viewport draws them only while dragging; no document write and no recompute. part_gui 30, viewport 204 |
-| **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; auto-commit on context exit; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, a selection change commits it, and the session is the selection's (742aee7). The no-arg form now opens the U2 pill, not the buttoned dialog |
-| **U2** | the numeric surface: the always-on coordinate row docked with the loadout, an in-context pending-only `✓`/`✗` pill, `Tab`/digit focus on the dragged axis, coordinates vs offsets, translation numbers on the tape's ruler tags; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31** (revised four times the same day): `shell::move_hud::MoveHud` is a shell surface (not a dialog), `shell::pill::PillState` holds the focus, the drag-axis memory and the coordinate mode. The row is always visible with a Move target (bottom-left, above the loadout) and opens **unfocused** so `1`/`2`/`3` still equip slots; it survives a commit. The `✗`/`✓` pair is a separate pill anchored beside the gizmo and appears only while the move is pending (`Shell::move_is_pending`), so at rest the row is a coordinate inspector and the tape is not drawn. `Tab`/a non-slot digit/a click/a ruler tag focuses a field; the badge or `=` flips `Δ` ↔ `XYZ` (`origin_0 + delta`, `=`/`@` per-field override). `Esc` cascades (rollback → pivot → clear selection) and `1` on the active hand pauses Move. gpui 284 |
+| **U1** | one drag mode: release keeps the preview; `Enter` checkpoint; `Esc` rollback; a pending move locks the context; `App_Move`'s no-arg form stops opening a dialog | The behaviour change all three reports asked for | §4.1 — **done 2026-10-31**: the mode is unified, `Enter` commits through the `App_Move` token, `Esc` drops the session, and the session is the selection's (742aee7). A dirty session originally auto-committed on a context exit; **revised the same day** to refuse the exit instead (U2's `block_pending_move`). The no-arg form now opens the U2 pill, not the buttoned dialog |
+| **U2** | the numeric surface: the always-on coordinate row docked with the loadout, an in-context pending-only `✓`/`✗` pill (green commit / red discard), `Tab`/digit focus on the dragged axis, coordinates vs offsets, translation numbers on the tape's ruler tags; button bar gone | Needs U1's session to read from | §4.1, §4.2, §4.3 — **done 2026-10-31** (revised five times the same day): `shell::move_hud::MoveHud` is a shell surface (not a dialog), `shell::pill::PillState` holds the focus, the drag-axis memory and the coordinate mode. The row is always visible with a Move target (bottom-left, above the loadout) and opens **unfocused** so `1`/`2`/`3` still equip slots; it survives a commit. The `✗`/`✓` pair is a separate pill anchored beside the gizmo and appears only while the move is pending (`Shell::move_is_pending`), so at rest the row is a coordinate inspector and the tape is not drawn. `Tab`/a non-slot digit/a click/a ruler tag focuses a field; the badge or `=` flips `Δ` ↔ `XYZ` (`origin_0 + delta`, `=`/`@` per-field override). `Esc` cascades (rollback → pivot → clear selection) and `1` on the active hand pauses Move. A pending move **locks the context** (`block_pending_move`), so a selection change, hand/scope switch or tool start is refused until it is finished. gpui 286 |
 | **U3** | the 3-D measuring tape: ghost disc + stair-step legs + end-ticks; `SESSION_HOLD` | Needs the session's base/effective pair | §4.3 — **done 2026-10-31**: `ferrocad_stage::measure_tape` builds the ring, dashed legs and 6 px ticks from `TransformTape`; the viewport draws them depth-off and never picked, and the tape follows the session through the release. Stage 236, viewport 203 |
 | **U6** | this note's share of the sweep: spec text final, dead code gone, user-docs Move page | Converges with the loadout half | all of §4 — **done 2026-10-31**: the four interaction specs agree with the built session/loadout; the retired vocabulary is gone from the code; the user-docs loadout page is authored; gpui 268 |
 
@@ -520,7 +522,7 @@ sweep.
 | The commit-per-session crossing is slower than a Rust write | It is one crossing per commit against 60–120 ticks/s of breathing room, and the recompute it does was always required. Measure it in U1 with `FERROCAD_TRACE=1` and record the number |
 | A mod that owns `transform` can make a commit slow or blocking | It already can (the non-deferred release goes through the same route), and the fix belongs to that mod; the shell reports the status text it returns |
 | Recomputed ghosts (a fillet's *shape*) need a recompute preview the DAG cannot do without mutating | Out of scope for A3: it previews the properties already shown, and the rebuild waits for commit. **Decided in U6 (2026-10-31): no second DAG pass.** The property ghost is the honest, side-effect-free preview; a recomputed shape is a later feature with its own DAG contract, not a patch on this one |
-| Auto-commit on context exit surprises a user who expected to lose the drag | The inverse of today's data loss; the tape and pill make the pending state explicit, and one undo removes it |
+| A pending move that refuses a context change surprises a user who expected their click to land | It cannot lose work either way; the refusal is announced in the status line, and `✗` (red) / `✓` (green) are the one obvious way out. This replaced auto-commit on 2026-10-31 after it silently spent a drag the user had not confirmed |
 | Dropping the dialog breaks scripts or tests that accept it | `App_Move` keeps the argument form; only the no-arg dialog goes, and its callers are in-tree |
 
 ### Explicitly deferred

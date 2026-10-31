@@ -191,11 +191,11 @@ if obj is not None and 'Placement' not in obj.PropertiesList:
     assert!(result.ok, "{}", result.output);
 }
 
-/// A slot change is a context exit: a pending drag commits first, as **one**
-/// transaction, then the new hand arms. This is the acceptance test the loadout note
-/// asks for (a drag, then `2`, then one undo entry).
+/// A pending move is explicit state, so a slot change is **refused** while it is
+/// unfinished: the drag is neither committed nor dropped and no undo entry appears.
+/// Finishing it with `Enter` releases the lock and `2` then equips the face hand.
 #[gpui::test]
-fn switching_the_slot_commits_a_pending_drag_first(cx: &mut TestAppContext) {
+fn switching_the_slot_waits_for_a_pending_move(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (mut cx, shell, _model) = armed_window(cx);
     give_params_a_placement();
@@ -222,22 +222,45 @@ fn switching_the_slot_commits_a_pending_drag_first(cx: &mut TestAppContext) {
 
     let before = undo_count();
     // `2` is the slot key, not a digit typed into the Move HUD, even though a gizmo is
-    // armed: the loadout claims 1/2/3.
+    // armed: the loadout claims 1/2/3. With a move pending it is refused.
     press_root(&mut cx, &shell, "2");
 
     assert_eq!(
         shell.read_with(&cx, |shell, _| shell.loadout.slot()),
-        Slot::PushPull,
-        "the key equipped the face hand"
+        Slot::Move,
+        "the hand does not change under a pending move"
     );
     assert!(
-        shell.read_with(&cx, |shell, _| shell.session.is_none()),
-        "the pending move was spent, not dropped"
+        shell.read_with(&cx, |shell, _| shell
+            .session
+            .as_ref()
+            .is_some_and(|session| session.is_dirty())),
+        "the pending move is neither committed nor dropped"
     );
+    assert_eq!(undo_count(), before, "nothing was written");
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("move pending"),
+        "the status says why the key did nothing"
+    );
+
+    // The dimmed bar is inert too: a click cannot change the hand either.
+    click_at(&mut cx, "loadout-2");
     assert_eq!(
-        undo_count(),
-        before + 1,
-        "the slot change committed the drag as one transaction"
+        shell.read_with(&cx, |shell, _| shell.loadout.slot()),
+        Slot::Move,
+        "the bar does not equip a hand under a pending move"
+    );
+
+    // `Enter` spends the move; the lock lifts and `2` goes through.
+    press_root(&mut cx, &shell, "enter");
+    assert_eq!(undo_count(), before + 1, "the move committed once");
+    press_root(&mut cx, &shell, "2");
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.slot()),
+        Slot::PushPull,
+        "with the move finished the key equips the face hand"
     );
 }
 

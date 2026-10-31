@@ -112,10 +112,13 @@ nothing, and the fixed bar says why (`[1 Move]` is one key away).
 
 ### 1.5 What a slot change does to a live session
 
-A slot change is a **context exit**: if the transform session is dirty it commits first
-(`transform-session.md` §1.2, invariant 2), then the new slot narrows the hosted set and the
-topology filter. The one exception is the "equip a verb into the current slot" case (Rotate),
-which keeps the session and changes its mode.
+A slot change is a **context change**: while the transform session is dirty the pending move
+is unfinished, so the change is **refused** (`block_pending_move`) — the value is neither
+committed nor dropped, and the status line says why (`transform-session.md` §1.2,
+invariant 2). Finish the move with `✓`/`Enter` or `✗`/`Esc` and equip the hand again. The same
+holds for `Select ▾`, the handle set (Rotate) and starting a tool. The one exception is the
+"equip a verb into the current slot" case (Move on the active hand), which re-arms rather than
+changing the slot.
 
 ### 1.6 As built (2026-10-31)
 

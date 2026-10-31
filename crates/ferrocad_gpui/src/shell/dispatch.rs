@@ -687,6 +687,11 @@ impl Shell {
     /// into the model immediately, so the tool strip appears even when no viewport
     /// is available (a headless window or a machine without a GPU).
     pub(super) fn start_tool(&mut self, id: &str, cx: &mut Context<Self>) -> String {
+        // A tool owns the canvas and would commit the pending move; the user must
+        // finish it first, exactly like a hand switch.
+        if self.block_pending_move("start a tool", cx) {
+            return "move pending — ✓ or ✗ before you start a tool".to_string();
+        }
         let tool = match self.tool_for(id) {
             Ok(tool) => tool,
             Err(error) => return error,

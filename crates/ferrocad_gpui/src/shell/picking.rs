@@ -66,15 +66,21 @@ impl Shell {
             let model = self.model.lock().unwrap();
             model.selection != items
         };
+        // A pending move is explicit state: the user has `✗`/`✓` on screen and has not
+        // decided yet, so another object may neither spend the move nor drop it. The
+        // subject cannot change until the move is finished.
+        if changed {
+            let action = if items.is_empty() {
+                "clear the selection"
+            } else {
+                "select another object"
+            };
+            if self.block_pending_move(action, cx) {
+                return;
+            }
+        }
         if changed {
             self.move_disarmed = false;
-        }
-        // A pending transform is **committed** before the context changes: losing a drag
-        // because the user clicked something else is the defect the session exists to
-        // remove. It has to happen first, while the old selection is still the selection —
-        // the commit is `_move_selection`, which reads it.
-        if self.session.as_ref().is_some_and(|session| session.is_dirty()) {
-            self.commit_session(cx);
         }
         // Opening menus never mutates the selection. A **new** selection, however,
         // invalidates both an open wheel (its context target no longer matches the

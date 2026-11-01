@@ -25,5 +25,5 @@ ferrocad_geom.workspace = true
 ferrocad_curves.workspace = true
 ferrocad_types.workspace = true
 opencascade-sys = { version = "0.3", package = "ferrocad_occt_cxx" }
-ferrocad_part_cxx = { version = "0.1.0", git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.18" }
+ferrocad_part_cxx = { version = "0.1.0", git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.19" }
 cxx = "1"

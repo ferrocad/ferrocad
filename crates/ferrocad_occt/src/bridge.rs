@@ -1,11 +1,11 @@
 //! Facade over the fork's OCCT bindings.
 //!
 //! Every remaining C++ OCCT call `ferrocad_occt` makes lives in
-//! `ferrocad_part_cxx` ([`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)):
-//! the generic bindings there are `shapefix` and `ops`
+//! `ferrocad_part_cxx`: the generic bindings there are `ops`
 //! (curves, 2-D geometry, shape queries, the Part operations).
 //! This module re-exports them so call sites keep their single `bridge::fc_...`
-//! path.
+//! path. (`shapefix` has moved to `opencascade_sys::shape_fix`, used from
+//! [`crate::shapefix`].)
 //!
 //! History composition (the `Modified`/`Generated` loops, direct children and the
 //! reusable cut operation) is plain Rust over `opencascade-sys`, in

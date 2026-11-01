@@ -118,7 +118,8 @@ impl Edge {
     pub fn remove_pcurve_face(&self, edge: &Shape, face: &Shape) -> bool {
         with_occt!(edge, |edge| with_occt!(face, |face| self
             .inner
-            .fix_remove_pcurve_face(edge, face)))
+            .fix_remove_pcurve_face(edge, face)
+            .unwrap_or(false)))
     }
 
     /// The surface overload: `Face.Surface` carries a normal but no location,
@@ -126,17 +127,17 @@ impl Edge {
     pub fn remove_pcurve_surface(&self, edge: &Shape, normal: [f64; 3]) -> bool {
         with_occt!(edge, |edge| self.inner.fix_remove_pcurve_surface(
             edge, normal[0], normal[1], normal[2]
-        ))
+        ).unwrap_or(false))
     }
 
     pub fn remove_curve3d(&self, edge: &Shape) -> bool {
-        with_occt!(edge, |edge| self.inner.fix_remove_curve3d(edge))
+        with_occt!(edge, |edge| self.inner.fix_remove_curve3d(edge).unwrap_or(false))
     }
 
     pub fn add_pcurve_face(&self, edge: &Shape, face: &Shape, seam: bool, prec: f64) -> bool {
         with_occt!(edge, |edge| with_occt!(face, |face| self
             .inner
-            .fix_add_pcurve_face(edge, face, seam, prec)))
+            .fix_add_pcurve_face(edge, face, seam, prec).unwrap_or(false)))
     }
 
     pub fn add_pcurve_surface(
@@ -148,45 +149,45 @@ impl Edge {
     ) -> bool {
         with_occt!(edge, |edge| self.inner.fix_add_pcurve_surface(
             edge, normal[0], normal[1], normal[2], seam, prec
-        ))
+        ).unwrap_or(false))
     }
 
     pub fn add_curve3d(&self, edge: &Shape) -> bool {
-        with_occt!(edge, |edge| self.inner.fix_add_curve3d(edge))
+        with_occt!(edge, |edge| self.inner.fix_add_curve3d(edge).unwrap_or(false))
     }
 
     pub fn vertex_tolerance_face(&self, edge: &Shape, face: &Shape) -> bool {
         with_occt!(edge, |edge| with_occt!(face, |face| self
             .inner
-            .fix_vertex_tolerance_face(edge, face)))
+            .fix_vertex_tolerance_face(edge, face).unwrap_or(false)))
     }
 
     pub fn vertex_tolerance(&self, edge: &Shape) -> bool {
-        with_occt!(edge, |edge| self.inner.fix_vertex_tolerance(edge))
+        with_occt!(edge, |edge| self.inner.fix_vertex_tolerance(edge).unwrap_or(false))
     }
 
     pub fn reversed2d_face(&self, edge: &Shape, face: &Shape) -> bool {
         with_occt!(edge, |edge| with_occt!(face, |face| self
             .inner
-            .fix_reversed2d_face(edge, face)))
+            .fix_reversed2d_face(edge, face).unwrap_or(false)))
     }
 
     pub fn reversed2d_surface(&self, edge: &Shape, normal: [f64; 3]) -> bool {
         with_occt!(edge, |edge| self.inner.fix_reversed2d_surface(
             edge, normal[0], normal[1], normal[2]
-        ))
+        ).unwrap_or(false))
     }
 
     pub fn same_parameter(&self, edge: &Shape, tolerance: f64) -> bool {
         with_occt!(edge, |edge| self
             .inner
-            .fix_same_parameter(edge, tolerance))
+            .fix_same_parameter(edge, tolerance).unwrap_or(false))
     }
 
     pub fn same_parameter_face(&self, edge: &Shape, face: &Shape, tolerance: f64) -> bool {
         with_occt!(edge, |edge| with_occt!(face, |face| self
             .inner
-            .fix_same_parameter_face(edge, face, tolerance)))
+            .fix_same_parameter_face(edge, face, tolerance).unwrap_or(false)))
     }
 }
 
@@ -215,7 +216,7 @@ impl Wire {
         let (Some(wire), Some(face)) = (wire_guard.as_ref(), face_guard.as_ref()) else {
             return None;
         };
-        Self::from_inner(ffi::fc_shapefix_wire_from_wire(wire, face, prec))
+        Self::from_inner(ffi::fc_shapefix_wire_from_wire(wire, face, prec).ok()?)
     }
 
     fn from_inner(inner: UniquePtr<ffi::FcShapeFixWire>) -> Option<Self> {
@@ -228,13 +229,13 @@ impl Wire {
 
     pub fn init(&self, wire: &Shape, face: &Shape, prec: f64) -> bool {
         with_occt!(wire, |wire| with_occt!(face, |face| {
-            self.inner.init(wire, face, prec);
+            let _ = self.inner.init(wire, face, prec);
             true
         }))
     }
 
     pub fn load(&self, wire: &Shape) -> bool {
-        with_occt!(wire, |wire| self.inner.load(wire))
+        with_occt!(wire, |wire| self.inner.load(wire).unwrap_or(false))
     }
 
     /// `ShapeFix_Root::SetPrecision` - the tolerance `fixWire(tolerance)` uses
@@ -244,17 +245,17 @@ impl Wire {
     }
 
     pub fn set_face(&self, face: &Shape) -> bool {
-        with_occt!(face, |face| self.inner.set_face(face))
+        with_occt!(face, |face| self.inner.set_face(face).unwrap_or(false))
     }
 
     pub fn set_surface(&self, origin: [f64; 3], normal: [f64; 3], placed: bool) -> bool {
         if placed {
             self.inner.set_surface_placed(
                 origin[0], origin[1], origin[2], normal[0], normal[1], normal[2],
-            )
+            ).unwrap_or(false)
         } else {
             self.inner
-                .set_surface(origin[0], origin[1], origin[2], normal[0], normal[1], normal[2])
+                .set_surface(origin[0], origin[1], origin[2], normal[0], normal[1], normal[2]).unwrap_or(false)
         }
     }
 
@@ -274,16 +275,16 @@ impl Wire {
         self.inner.nb_edges()
     }
     pub fn wire(&self) -> Option<Shape> {
-        output(self.inner.wire())
+        self.inner.wire().ok().and_then(output)
     }
     pub fn wire_api_make(&self) -> Option<Shape> {
-        output(self.inner.wire_api_make())
+        self.inner.wire_api_make().ok().and_then(output)
     }
     pub fn face(&self) -> Option<Shape> {
-        output(self.inner.face())
+        self.inner.face().ok().and_then(output)
     }
     pub fn perform(&self) -> bool {
-        self.inner.perform()
+        self.inner.perform().unwrap_or(false)
     }
     pub fn clear_modes(&self) {
         self.inner.clear_modes()
@@ -296,64 +297,64 @@ impl Wire {
     }
 
     pub fn fix_reorder(&self) -> bool {
-        self.inner.fix_reorder()
+        self.inner.fix_reorder().unwrap_or(false)
     }
     pub fn fix_small_global(&self, lock: bool, prec: f64) -> i32 {
-        self.inner.fix_small_global(lock, prec)
+        self.inner.fix_small_global(lock, prec).unwrap_or(0)
     }
     pub fn fix_small_one(&self, num: i32, lock: bool, prec: f64) -> bool {
-        self.inner.fix_small_one(num, lock, prec)
+        self.inner.fix_small_one(num, lock, prec).unwrap_or(false)
     }
     pub fn fix_connected(&self, prec: f64) -> bool {
-        self.inner.fix_connected(prec)
+        self.inner.fix_connected(prec).unwrap_or(false)
     }
     pub fn fix_connected_one(&self, num: i32, prec: f64) -> bool {
-        self.inner.fix_connected_one(num, prec)
+        self.inner.fix_connected_one(num, prec).unwrap_or(false)
     }
     pub fn fix_edge_curves(&self) -> bool {
-        self.inner.fix_edge_curves()
+        self.inner.fix_edge_curves().unwrap_or(false)
     }
     pub fn fix_degenerated(&self) -> bool {
-        self.inner.fix_degenerated()
+        self.inner.fix_degenerated().unwrap_or(false)
     }
     pub fn fix_degenerated_one(&self, num: i32) -> bool {
-        self.inner.fix_degenerated_one(num)
+        self.inner.fix_degenerated_one(num).unwrap_or(false)
     }
     pub fn fix_self_intersection(&self) -> bool {
-        self.inner.fix_self_intersection()
+        self.inner.fix_self_intersection().unwrap_or(false)
     }
     pub fn fix_lacking(&self, force: bool) -> bool {
-        self.inner.fix_lacking(force)
+        self.inner.fix_lacking(force).unwrap_or(false)
     }
     pub fn fix_lacking_one(&self, num: i32, force: bool) -> bool {
-        self.inner.fix_lacking_one(num, force)
+        self.inner.fix_lacking_one(num, force).unwrap_or(false)
     }
     pub fn fix_closed(&self, prec: f64) -> bool {
-        self.inner.fix_closed(prec)
+        self.inner.fix_closed(prec).unwrap_or(false)
     }
     pub fn fix_gaps3d(&self) -> bool {
-        self.inner.fix_gaps3d()
+        self.inner.fix_gaps3d().unwrap_or(false)
     }
     pub fn fix_gaps2d(&self) -> bool {
-        self.inner.fix_gaps2d()
+        self.inner.fix_gaps2d().unwrap_or(false)
     }
     pub fn fix_seam(&self, num: i32) -> bool {
-        self.inner.fix_seam(num)
+        self.inner.fix_seam(num).unwrap_or(false)
     }
     pub fn fix_shifted(&self) -> bool {
-        self.inner.fix_shifted()
+        self.inner.fix_shifted().unwrap_or(false)
     }
     pub fn fix_notched_edges(&self) -> bool {
-        self.inner.fix_notched_edges()
+        self.inner.fix_notched_edges().unwrap_or(false)
     }
     pub fn fix_gap3d(&self, num: i32, convert: bool) -> bool {
-        self.inner.fix_gap3d(num, convert)
+        self.inner.fix_gap3d(num, convert).unwrap_or(false)
     }
     pub fn fix_gap2d(&self, num: i32, convert: bool) -> bool {
-        self.inner.fix_gap2d(num, convert)
+        self.inner.fix_gap2d(num, convert).unwrap_or(false)
     }
     pub fn fix_tails(&self) -> bool {
-        self.inner.fix_tails()
+        self.inner.fix_tails().unwrap_or(false)
     }
 
     // Modes reported as booleans where OCCT stores a `Standard_Boolean`, and as
@@ -551,7 +552,7 @@ impl Face {
     }
 
     pub fn from_face(face: &Shape) -> Option<Self> {
-        Self::from_inner(with_shape(face, ffi::fc_shapefix_face_from_face)?)
+        Self::from_inner(with_shape(face, ffi::fc_shapefix_face_from_face)?.ok()?)
     }
 
     pub fn from_plane(
@@ -562,7 +563,8 @@ impl Face {
     ) -> Option<Self> {
         let inner = ffi::fc_shapefix_face_from_plane(
             origin[0], origin[1], origin[2], normal[0], normal[1], normal[2], prec, forward,
-        );
+        )
+        .ok()?;
         Self::from_inner(inner)
     }
 
@@ -575,7 +577,7 @@ impl Face {
     }
 
     pub fn init_face(&self, face: &Shape) -> bool {
-        with_occt!(face, |face| self.inner.init_face(face))
+        with_occt!(face, |face| self.inner.init_face(face).unwrap_or(false))
     }
 
     pub fn init_plane(
@@ -587,32 +589,34 @@ impl Face {
     ) -> bool {
         self.inner.init_plane(
             origin[0], origin[1], origin[2], normal[0], normal[1], normal[2], prec, forward,
-        )
+        ).unwrap_or(false)
     }
 
     pub fn add(&self, wire: &Shape) -> bool {
-        with_occt!(wire, |wire| self.inner.add(wire))
+        with_occt!(wire, |wire| self.inner.add(wire).unwrap_or(false))
     }
 
     pub fn perform(&self) -> bool {
-        self.inner.perform()
+        self.inner.perform().unwrap_or(false)
     }
     pub fn fix_orientation(&self) -> bool {
-        self.inner.fix_orientation()
+        self.inner.fix_orientation().unwrap_or(false)
     }
     pub fn fix_add_natural_bound(&self) -> bool {
-        self.inner.fix_add_natural_bound()
+        self.inner.fix_add_natural_bound().unwrap_or(false)
     }
     pub fn fix_missing_seam(&self) -> bool {
-        self.inner.fix_missing_seam()
+        self.inner.fix_missing_seam().unwrap_or(false)
     }
     pub fn fix_small_area_wire(&self, remove_small: bool) -> bool {
-        self.inner.fix_small_area_wire(remove_small)
+        self.inner.fix_small_area_wire(remove_small).unwrap_or(false)
     }
 
     /// `(fixed, replaced_wires)` — upstream's `(bool, list)` tuple.
     pub fn fix_loop_wire(&self) -> (bool, Vec<Shape>) {
-        let list = self.inner.fix_loop_wire();
+        let Ok(list) = self.inner.fix_loop_wire() else {
+            return (false, Vec::new());
+        };
         if list.is_null() {
             return (false, Vec::new());
         }
@@ -624,19 +628,19 @@ impl Face {
     }
 
     pub fn fix_intersecting_wires(&self) -> bool {
-        self.inner.fix_intersecting_wires()
+        self.inner.fix_intersecting_wires().unwrap_or(false)
     }
     pub fn fix_wires_two_coincident_edges(&self) -> bool {
-        self.inner.fix_wires_two_coincident_edges()
+        self.inner.fix_wires_two_coincident_edges().unwrap_or(false)
     }
     pub fn fix_periodic_degenerated(&self) -> bool {
-        self.inner.fix_periodic_degenerated()
+        self.inner.fix_periodic_degenerated().unwrap_or(false)
     }
     pub fn face(&self) -> Option<Shape> {
-        output(self.inner.face())
+        self.inner.face().ok().and_then(output)
     }
     pub fn result(&self) -> Option<Shape> {
-        output(self.inner.result())
+        self.inner.result().ok().and_then(output)
     }
     pub fn fix_wire_tool(&self) -> Option<Wire> {
         Wire::from_inner(self.inner.fix_wire_tool())
@@ -730,7 +734,7 @@ impl Shell {
     }
 
     pub fn from_shell(shell: &Shape) -> Option<Self> {
-        Self::from_inner(with_shape(shell, ffi::fc_shapefix_shell_from_shell)?)
+        Self::from_inner(with_shape(shell, ffi::fc_shapefix_shell_from_shell)?.ok()?)
     }
 
     fn from_inner(inner: UniquePtr<ffi::FcShapeFixShell>) -> Option<Self> {
@@ -742,20 +746,20 @@ impl Shell {
     }
 
     pub fn init(&self, shell: &Shape) -> bool {
-        with_occt!(shell, |shell| self.inner.init(shell))
+        with_occt!(shell, |shell| self.inner.init(shell).unwrap_or(false))
     }
 
     pub fn perform(&self) -> bool {
-        self.inner.perform()
+        self.inner.perform().unwrap_or(false)
     }
     pub fn shell(&self) -> Option<Shape> {
-        output(self.inner.shell())
+        self.inner.shell().ok().and_then(output)
     }
     pub fn shape(&self) -> Option<Shape> {
-        output(self.inner.shape())
+        self.inner.shape().ok().and_then(output)
     }
     pub fn error_faces(&self) -> Option<Shape> {
-        output(self.inner.error_faces())
+        self.inner.error_faces().ok().and_then(output)
     }
     pub fn number_of_shells(&self) -> i32 {
         self.inner.nb_shells()
@@ -771,7 +775,8 @@ impl Shell {
     ) -> bool {
         with_occt!(shell, |shell| self
             .inner
-            .fix_face_orientation(shell, multi_connex, non_manifold))
+            .fix_face_orientation(shell, multi_connex, non_manifold)
+            .unwrap_or(false))
     }
     pub fn set_non_manifold_flag(&self, value: bool) {
         self.inner.set_non_manifold_flag(value)
@@ -807,7 +812,7 @@ impl Solid {
     }
 
     pub fn from_solid(solid: &Shape) -> Option<Self> {
-        Self::from_inner(with_shape(solid, ffi::fc_shapefix_solid_from_solid)?)
+        Self::from_inner(with_shape(solid, ffi::fc_shapefix_solid_from_solid)?.ok()?)
     }
 
     fn from_inner(inner: UniquePtr<ffi::FcShapeFixSolid>) -> Option<Self> {
@@ -819,20 +824,20 @@ impl Solid {
     }
 
     pub fn init(&self, solid: &Shape) -> bool {
-        with_occt!(solid, |solid| self.inner.init(solid))
+        with_occt!(solid, |solid| self.inner.init(solid).unwrap_or(false))
     }
 
     pub fn perform(&self) -> bool {
-        self.inner.perform()
+        self.inner.perform().unwrap_or(false)
     }
     pub fn solid_from_shell(&self, shell: &Shape) -> Option<Shape> {
-        with_occt!(shell, |shell| output(self.inner.solid_from_shell(shell)))
+        with_occt!(shell, |shell| self.inner.solid_from_shell(shell).ok().and_then(output))
     }
     pub fn solid(&self) -> Option<Shape> {
-        output(self.inner.solid())
+        self.inner.solid().ok().and_then(output)
     }
     pub fn shape(&self) -> Option<Shape> {
-        output(self.inner.shape())
+        self.inner.shape().ok().and_then(output)
     }
     pub fn fix_shell_tool(&self) -> Option<Shell> {
         Shell::from_inner(self.inner.fix_shell_tool())
@@ -874,7 +879,7 @@ impl ShapeFix {
     }
 
     pub fn from_shape(shape: &Shape) -> Option<Self> {
-        Self::from_inner(with_shape(shape, ffi::fc_shapefix_shape_from_shape)?)
+        Self::from_inner(with_shape(shape, ffi::fc_shapefix_shape_from_shape)?.ok()?)
     }
 
     fn from_inner(inner: UniquePtr<ffi::FcShapeFixShape>) -> Option<Self> {
@@ -886,14 +891,14 @@ impl ShapeFix {
     }
 
     pub fn init(&self, shape: &Shape) -> bool {
-        with_occt!(shape, |shape| self.inner.init(shape))
+        with_occt!(shape, |shape| self.inner.init(shape).unwrap_or(false))
     }
 
     pub fn perform(&self) -> bool {
-        self.inner.perform()
+        self.inner.perform().unwrap_or(false)
     }
     pub fn shape(&self) -> Option<Shape> {
-        output(self.inner.shape())
+        self.inner.shape().ok().and_then(output)
     }
     pub fn fix_solid_tool(&self) -> Option<Solid> {
         Solid::from_inner(self.inner.fix_solid_tool())

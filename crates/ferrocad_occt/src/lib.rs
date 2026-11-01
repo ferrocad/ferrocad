@@ -55,6 +55,7 @@ mod policy;
 pub mod shapefix;
 mod stl;
 pub mod surface_ops;
+mod surface_frame;
 mod topology;
 
 pub use backend::OcctBackend;

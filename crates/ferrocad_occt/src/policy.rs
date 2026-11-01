@@ -10,6 +10,7 @@ use std::pin::Pin;
 
 use cxx::UniquePtr;
 use ferrocad_curves::Vector3;
+use ferrocad_geom::SurfaceSpec;
 use opencascade_sys as ffi;
 
 use ffi::b_rep_algo_api::BRepAlgoAPI_Cut;
@@ -1045,6 +1046,971 @@ pub(crate) fn offset2d(
     compound_of(&faces).ok_or(OcctError::NotDone {
         operation: "offset2d",
     })
+}
+
+// ---------------------------------------------------------------------------
+// `part_ops.hxx` FreeCAD behaviour
+// ---------------------------------------------------------------------------
+
+fn occt_exception(operation: &'static str, e: cxx::Exception) -> OcctError {
+    OcctError::Exception {
+        operation,
+        message: e.what().to_string(),
+    }
+}
+
+/// `BRep_Builder`'s in-place add: mutates `shape` so it gains `sub` as a child.
+fn add_sub_shape(builder: &ffi::topo_ds::TopoDS_Builder, shape: &mut UniquePtr<TopoDS_Shape>, sub: &TopoDS_Shape) {
+    builder.Add(shape.pin_mut(), sub);
+}
+
+/// Whether `shape` has any sub-shape of the given kind (`TopExp_Explorer`).
+fn has_type(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> bool {
+    let xp = ffi::top_exp::TopExp_Explorer_new(shape, kind);
+    xp.More()
+}
+
+/// Project `tool` onto `target` along `direction` (parallel) or from the
+/// viewpoint `direction` (perspective).
+pub(crate) fn project(
+    tool: &TopoDS_Shape,
+    target: &TopoDS_Shape,
+    direction: Vector3,
+    parallel: bool,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if tool.IsNull() || target.IsNull() {
+        return Err(OcctError::InvalidInput {
+            what: "project needs a tool and a target",
+        });
+    }
+    let made = if parallel {
+        if direction.x * direction.x + direction.y * direction.y + direction.z * direction.z
+            <= ffi::precision::Precision::Confusion()
+        {
+            return Err(OcctError::NotDone {
+                operation: "project",
+            });
+        }
+        let dir = ffi::gp::gp_Dir_new(direction.x, direction.y, direction.z);
+        ffi::b_rep_proj::BRepProj_Projection_dir_new(tool, target, &dir)
+            .map_err(|e| occt_exception("project", e))?
+    } else {
+        let pnt = ffi::gp::new_point(direction.x, direction.y, direction.z);
+        ffi::b_rep_proj::BRepProj_Projection_pnt_new(tool, target, &pnt)
+            .map_err(|e| occt_exception("project", e))?
+    };
+    if !made.IsDone() {
+        return Err(OcctError::NotDone {
+            operation: "project",
+        });
+    }
+    let compound = ffi::b_rep_proj::BRepProj_Projection_Shape(&made);
+    Ok(ffi::topo_ds::TopoDS_Compound_as_shape(compound))
+}
+
+/// `Shape.defeaturing(faces)`: remove the faces and heal the gap.
+pub(crate) fn defeature(
+    shape: &TopoDS_Shape,
+    faces: &TopTools_ListOfShape,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if shape.IsNull() || faces.IsEmpty() {
+        return Err(OcctError::NotDone {
+            operation: "defeaturing",
+        });
+    }
+    let mut defeaturing = ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_new();
+    ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_SetRunParallel(defeaturing.pin_mut(), true);
+    ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_SetToFillHistory(defeaturing.pin_mut(), true);
+    ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_SetShape(defeaturing.pin_mut(), shape);
+    let mut it = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(faces);
+    while it.More() {
+        let face = it.Value();
+        if face.ShapeType() != TopAbs_ShapeEnum::TopAbs_FACE {
+            return Err(OcctError::InvalidInput {
+                what: "defeaturing removes faces",
+            });
+        }
+        ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_AddFaceToRemove(defeaturing.pin_mut(), face);
+        it.pin_mut().Next();
+    }
+    ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_Build(defeaturing.pin_mut())
+        .map_err(|e| occt_exception("defeaturing", e))?;
+    if !ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_IsDone(&defeaturing) {
+        return Err(OcctError::NotDone {
+            operation: "defeaturing",
+        });
+    }
+    let result = ffi::b_rep_algo_api::BRepAlgoAPI_Defeaturing_Shape(defeaturing.pin_mut());
+    if result.IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "defeaturing",
+        });
+    }
+    Ok(result)
+}
+
+/// `Face.validate()`: repair each wire, then fall back to `ShapeFix_Shape`.
+pub(crate) fn validate_face(
+    shape: &TopoDS_Shape,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if shape.IsNull() || shape.ShapeType() != TopAbs_ShapeEnum::TopAbs_FACE {
+        return Err(OcctError::InvalidInput {
+            what: "validate_face expects a face",
+        });
+    }
+    let face = TopoDS::Face(shape);
+    let checker = ffi::b_rep_check::BRepCheck_Analyzer_new(shape, true);
+    if checker.IsValid() {
+        return Ok(ffi::topo_ds::TopoDS_Shape_to_owned(shape));
+    }
+
+    let outer = ffi::b_rep_tools::outer_wire(face);
+    let mut seen = ffi::top_tools::new_indexed_map_of_shape();
+    let _ = seen.pin_mut().Add(ffi::topo_ds::cast_wire_to_shape(&outer));
+
+    let fix = ffi::shape_fix::ShapeFix_Wire_new();
+    ffi::shape_fix::ShapeFix_Wire_SetFace(&fix, face).map_err(|e| occt_exception("validate_face", e))?;
+    ffi::shape_fix::ShapeFix_Wire_Load(&fix, &outer).map_err(|e| occt_exception("validate_face", e))?;
+    ffi::shape_fix::ShapeFix_Wire_Perform(&fix).map_err(|e| occt_exception("validate_face", e))?;
+    let first = ffi::shape_fix::ShapeFix_Wire_WireAPIMake(&fix)
+        .map_err(|e| occt_exception("validate_face", e))?;
+    let mut mk_face = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(&first, false);
+
+    let mut xp = ffi::top_exp::TopExp_Explorer_new(shape, TopAbs_ShapeEnum::TopAbs_WIRE);
+    while xp.More() {
+        if seen.FindIndex(xp.Current()) == 0 {
+            ffi::shape_fix::ShapeFix_Wire_Load(&fix, TopoDS::Wire(xp.Current()))
+                .map_err(|e| occt_exception("validate_face", e))?;
+            ffi::shape_fix::ShapeFix_Wire_Perform(&fix)
+                .map_err(|e| occt_exception("validate_face", e))?;
+            let fixed = ffi::shape_fix::ShapeFix_Wire_WireAPIMake(&fix)
+                .map_err(|e| occt_exception("validate_face", e))?;
+            mk_face.pin_mut().add_wire(&fixed);
+        }
+        xp.pin_mut().Next();
+    }
+
+    let face_shape = ffi::topo_ds::cast_face_to_shape(mk_face.Face());
+    let checker = ffi::b_rep_check::BRepCheck_Analyzer_new(face_shape, true);
+    if checker.IsValid() {
+        return Ok(ffi::topo_ds::TopoDS_Shape_to_owned(face_shape));
+    }
+
+    let fixer = ffi::shape_fix::ShapeFix_Shape_from_shape(face_shape)
+        .map_err(|e| occt_exception("validate_face", e))?;
+    let confusion = ffi::precision::Precision::Confusion();
+    ffi::shape_fix::ShapeFix_Root_set_precision(
+        ffi::shape_fix::ShapeFix_Shape_as_root(&fixer),
+        confusion,
+    );
+    ffi::shape_fix::ShapeFix_Root_set_max_tolerance(
+        ffi::shape_fix::ShapeFix_Shape_as_root(&fixer),
+        confusion,
+    );
+    ffi::shape_fix::ShapeFix_Shape_Perform(&fixer).map_err(|e| occt_exception("validate_face", e))?;
+    let wire_tool = ffi::shape_fix::ShapeFix_Shape_FixWireTool(&fixer);
+    if !wire_tool.IsNull() {
+        ffi::shape_fix::ShapeFix_Wire_Perform(&wire_tool).map_err(|e| occt_exception("validate_face", e))?;
+    }
+    let face_tool = ffi::shape_fix::ShapeFix_Shape_FixFaceTool(&fixer);
+    if !face_tool.IsNull() {
+        ffi::shape_fix::ShapeFix_Face_Perform(&face_tool).map_err(|e| occt_exception("validate_face", e))?;
+    }
+    ffi::shape_fix::ShapeFix_Shape_Shape(&fixer).map_err(|e| occt_exception("validate_face", e))
+}
+
+/// `Shape.fix(precision, mintol, maxtol)`: `ShapeFix_Shape` with upstream's
+/// per-kind tool walk.
+pub(crate) fn fix_shape(
+    shape: &TopoDS_Shape,
+    precision: f64,
+    min_tolerance: f64,
+    max_tolerance: f64,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if shape.IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "fix_shape",
+        });
+    }
+    let kind = shape.ShapeType();
+    let fix = ffi::shape_fix::ShapeFix_Shape_from_shape(shape)
+        .map_err(|e| occt_exception("fix_shape", e))?;
+    ffi::shape_fix::ShapeFix_Root_set_precision(
+        ffi::shape_fix::ShapeFix_Shape_as_root(&fix),
+        precision,
+    );
+    ffi::shape_fix::ShapeFix_Root_set_min_tolerance(
+        ffi::shape_fix::ShapeFix_Shape_as_root(&fix),
+        min_tolerance,
+    );
+    ffi::shape_fix::ShapeFix_Root_set_max_tolerance(
+        ffi::shape_fix::ShapeFix_Shape_as_root(&fix),
+        max_tolerance,
+    );
+    ffi::shape_fix::ShapeFix_Shape_Perform(&fix).map_err(|e| occt_exception("fix_shape", e))?;
+
+    if kind == TopAbs_ShapeEnum::TopAbs_SOLID {
+        let wire_tool = ffi::shape_fix::ShapeFix_Shape_FixWireTool(&fix);
+        if !wire_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Wire_Perform(&wire_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+        let face_tool = ffi::shape_fix::ShapeFix_Shape_FixFaceTool(&fix);
+        if !face_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Face_Perform(&face_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+        let shell_tool = ffi::shape_fix::ShapeFix_Shape_FixShellTool(&fix);
+        if !shell_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Shell_Perform(&shell_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+        let solid_tool = ffi::shape_fix::ShapeFix_Shape_FixSolidTool(&fix);
+        if !solid_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Solid_Perform(&solid_tool).map_err(|e| occt_exception("fix_shape", e))?;
+            let tool_shape = ffi::shape_fix::ShapeFix_Solid_Shape(&solid_tool)
+                .map_err(|e| occt_exception("fix_shape", e))?;
+            if !tool_shape.IsNull() {
+                return Ok(tool_shape);
+            }
+        }
+    } else if kind == TopAbs_ShapeEnum::TopAbs_SHELL {
+        let wire_tool = ffi::shape_fix::ShapeFix_Shape_FixWireTool(&fix);
+        if !wire_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Wire_Perform(&wire_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+        let face_tool = ffi::shape_fix::ShapeFix_Shape_FixFaceTool(&fix);
+        if !face_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Face_Perform(&face_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+        let shell_tool = ffi::shape_fix::ShapeFix_Shape_FixShellTool(&fix);
+        if !shell_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Shell_Perform(&shell_tool).map_err(|e| occt_exception("fix_shape", e))?;
+            let tool_shape = ffi::shape_fix::ShapeFix_Shell_Shape(&shell_tool)
+                .map_err(|e| occt_exception("fix_shape", e))?;
+            if !tool_shape.IsNull() {
+                return Ok(tool_shape);
+            }
+        }
+    } else if kind == TopAbs_ShapeEnum::TopAbs_FACE {
+        let wire_tool = ffi::shape_fix::ShapeFix_Shape_FixWireTool(&fix);
+        if !wire_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Wire_Perform(&wire_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+        let face_tool = ffi::shape_fix::ShapeFix_Shape_FixFaceTool(&fix);
+        if !face_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Face_Perform(&face_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+    } else if kind == TopAbs_ShapeEnum::TopAbs_WIRE {
+        let wire_tool = ffi::shape_fix::ShapeFix_Shape_FixWireTool(&fix);
+        if !wire_tool.IsNull() {
+            ffi::shape_fix::ShapeFix_Wire_Perform(&wire_tool).map_err(|e| occt_exception("fix_shape", e))?;
+        }
+    }
+    ffi::shape_fix::ShapeFix_Shape_Shape(&fix).map_err(|e| occt_exception("fix_shape", e))
+}
+
+/// The pcurves of `wire`'s edges on `surface` (see the `fc_wire_on_surface`
+/// contract): updated in place, or a located copy flattened to the global frame.
+fn wire_on_surface(
+    wire: &TopoDS_Wire,
+    surface: &ffi::geom::Handle_Geom_Surface,
+) -> Result<UniquePtr<TopoDS_Wire>, OcctError> {
+    let located = !ffi::topo_ds::cast_wire_to_shape(wire).Location().IsIdentity();
+    let mut target = ffi::topo_ds::TopoDS_Wire_to_owned(wire);
+    if located {
+        let mut copier = ffi::b_rep_builder_api::BRepBuilderAPI_Copy_new(
+            ffi::topo_ds::cast_wire_to_shape(wire),
+            true,
+            false,
+        );
+        if !copier.IsDone()
+            || copier.pin_mut().Shape().ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE
+        {
+            return Err(OcctError::NotDone {
+                operation: "wire_on_surface",
+            });
+        }
+        target = ffi::topo_ds::TopoDS_Wire_to_owned(TopoDS::Wire(copier.pin_mut().Shape()));
+        let identity = ffi::top_loc::Location_new();
+        target.pin_mut().set_location(&identity, false);
+    }
+
+    let builder = ffi::b_rep::BRep_Builder_new();
+    let mut xp = ffi::top_exp::TopExp_Explorer_new(
+        ffi::topo_ds::cast_wire_to_shape(&target),
+        TopAbs_ShapeEnum::TopAbs_EDGE,
+    );
+    let confusion = ffi::precision::Precision::Confusion();
+    while xp.More() {
+        let edge = TopoDS::Edge(xp.Current());
+        let mut first = 0.0;
+        let mut last = 0.0;
+        let curve = ffi::b_rep::BRep_Tool_Curve(edge, &mut first, &mut last);
+        if curve.IsNull() {
+            xp.pin_mut().Next();
+            continue;
+        }
+        let piece = ffi::geom::Geom_TrimmedCurve_new(&curve, first, last)
+            .map_err(|e| occt_exception("wire_on_surface", e))?;
+        let piece_curve = ffi::geom::new_HandleGeomCurve_from_HandleGeom_TrimmedCurve(&piece);
+        let pcurve = ffi::geom_proj_lib::GeomProjLib_Curve2d(&piece_curve, first, last, surface)
+            .map_err(|e| occt_exception("wire_on_surface", e))?;
+        if pcurve.IsNull() {
+            return Err(OcctError::NotDone {
+                operation: "wire_on_surface",
+            });
+        }
+        let identity = ffi::top_loc::Location_new();
+        ffi::b_rep::BRep_Builder_UpdateEdge(&builder, edge, &pcurve, surface, &identity, confusion);
+        ffi::b_rep_lib::BRepLib_SameRange(edge, confusion)
+            .map_err(|e| occt_exception("wire_on_surface", e))?;
+        xp.pin_mut().Next();
+    }
+    Ok(target)
+}
+
+/// `Part.Face(wire)` for one boundary wire.
+pub(crate) fn face_from_wire(
+    wire: &TopoDS_Shape,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if wire.IsNull() || wire.ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE {
+        return Err(OcctError::InvalidInput {
+            what: "face_from_wire expects a wire",
+        });
+    }
+    let w = TopoDS::Wire(wire);
+    let make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(w, false);
+    if make.IsDone() && !ffi::topo_ds::cast_face_to_shape(make.Face()).IsNull() {
+        return Ok(ffi::topo_ds::TopoDS_Shape_to_owned(
+            ffi::topo_ds::cast_face_to_shape(make.Face()),
+        ));
+    }
+
+    let first_edge = ffi::top_exp::TopExp_Explorer_new(wire, TopAbs_ShapeEnum::TopAbs_EDGE);
+    if !first_edge.More() {
+        return Err(OcctError::NotDone {
+            operation: "face_from_wire",
+        });
+    }
+    let mut pcurve = ffi::geom2d::Handle_Geom2d_Curve_new();
+    let mut support = ffi::geom::Handle_Geom_Surface_new();
+    let mut location = ffi::top_loc::Location_new();
+    let mut first = 0.0;
+    let mut last = 0.0;
+    ffi::b_rep::BRep_Tool_CurveOnSurface(
+        TopoDS::Edge(first_edge.Current()),
+        pcurve.pin_mut(),
+        support.pin_mut(),
+        location.pin_mut(),
+        &mut first,
+        &mut last,
+    );
+    if pcurve.IsNull() || support.IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "face_from_wire",
+        });
+    }
+
+    let mut copier = ffi::b_rep_builder_api::BRepBuilderAPI_Copy_new(wire, true, false);
+    if !copier.IsDone() || copier.pin_mut().Shape().ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE {
+        return Err(OcctError::NotDone {
+            operation: "face_from_wire",
+        });
+    }
+    let projected = wire_on_surface(TopoDS::Wire(copier.pin_mut().Shape()), &support)?;
+
+    let on_wire = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(&projected, false);
+    if on_wire.IsDone() && !ffi::topo_ds::cast_face_to_shape(on_wire.Face()).IsNull() {
+        return Ok(ffi::topo_ds::TopoDS_Shape_to_owned(
+            ffi::topo_ds::cast_face_to_shape(on_wire.Face()),
+        ));
+    }
+    let mut on_surface = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_surface(
+        &support,
+        ffi::precision::Precision::Confusion(),
+    );
+    if !on_surface.IsDone() {
+        return Err(OcctError::NotDone {
+            operation: "face_from_wire",
+        });
+    }
+    on_surface.pin_mut().add_wire(&projected);
+    if !on_surface.IsDone() || ffi::topo_ds::cast_face_to_shape(on_surface.Face()).IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "face_from_wire",
+        });
+    }
+    let check = ffi::b_rep_check::BRepCheck_Analyzer_new(
+        ffi::topo_ds::cast_face_to_shape(on_surface.Face()),
+        true,
+    );
+    if !check.IsValid() {
+        return Err(OcctError::NotDone {
+            operation: "face_from_wire",
+        });
+    }
+    Ok(ffi::topo_ds::TopoDS_Shape_to_owned(
+        ffi::topo_ds::cast_face_to_shape(on_surface.Face()),
+    ))
+}
+
+/// Attach a further boundary wire to an existing face (`BRepBuilderAPI_MakeFace::Add`).
+pub(crate) fn face_add_wire(
+    face: &TopoDS_Shape,
+    wire: &TopoDS_Shape,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if face.IsNull()
+        || face.ShapeType() != TopAbs_ShapeEnum::TopAbs_FACE
+        || wire.IsNull()
+        || wire.ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE
+    {
+        return Err(OcctError::InvalidInput {
+            what: "face_add_wire expects a face and a wire",
+        });
+    }
+    let mut face_shape = ffi::topo_ds::TopoDS_Shape_to_owned(face);
+    let builder = ffi::b_rep::BRep_Builder_new();
+    let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+    builder.Add(face_shape.pin_mut(), wire);
+    Ok(face_shape)
+}
+
+/// `Part.Face(surface, wires)` for an elementary surface described by `spec`.
+pub(crate) fn make_face_on_surface(
+    spec: &SurfaceSpec,
+    wires: &TopTools_ListOfShape,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if wires.IsEmpty() {
+        return Err(OcctError::InvalidInput {
+            what: "a face needs a wire",
+        });
+    }
+    let (origin, axis, x_dir, direct) = match spec {
+        SurfaceSpec::Plane {
+            origin,
+            normal,
+            x_dir,
+            direct,
+        } => (*origin, *normal, *x_dir, *direct),
+        SurfaceSpec::Cylinder {
+            origin,
+            axis,
+            x_dir,
+            direct,
+            ..
+        } => (*origin, *axis, *x_dir, *direct),
+        SurfaceSpec::Cone {
+            origin,
+            axis,
+            x_dir,
+            direct,
+            ..
+        } => (*origin, *axis, *x_dir, *direct),
+        SurfaceSpec::Sphere {
+            center,
+            axis,
+            x_dir,
+            direct,
+            ..
+        } => (*center, *axis, *x_dir, *direct),
+        SurfaceSpec::Torus {
+            center,
+            axis,
+            x_dir,
+            direct,
+            ..
+        } => (*center, *axis, *x_dir, *direct),
+    };
+
+    let mut frame = ffi::gp::gp_Ax3_new3(
+        &ffi::gp::new_point(origin.x, origin.y, origin.z),
+        &ffi::gp::gp_Dir_new(axis.x, axis.y, axis.z),
+        &ffi::gp::gp_Dir_new(x_dir.x, x_dir.y, x_dir.z),
+    )
+    .map_err(|e| occt_exception("make_face_on_surface", e))?;
+    if !direct {
+        frame.pin_mut().YReverse();
+    }
+
+    let surface: UniquePtr<ffi::geom::Handle_Geom_Surface> = match spec {
+        SurfaceSpec::Plane { .. } => {
+            let plane = ffi::gp::gp_Pln_new_frame(&frame)
+                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+            let handle = ffi::geom::Geom_Plane_new(&plane);
+            ffi::geom::plane_to_surface(&handle)
+        }
+        SurfaceSpec::Cylinder { radius, .. } => {
+            let handle = ffi::geom::Geom_CylindricalSurface_new(&frame, *radius);
+            ffi::geom::cylinder_to_surface(&handle)
+        }
+        SurfaceSpec::Cone {
+            radius, semi_angle, ..
+        } => {
+            let handle = ffi::geom::Geom_ConicalSurface_new(&frame, *semi_angle, *radius)
+                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+            ffi::geom::conical_to_surface(&handle)
+        }
+        SurfaceSpec::Sphere { radius, .. } => {
+            let handle = ffi::geom::Geom_SphericalSurface_new(&frame, *radius)
+                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+            ffi::geom::spherical_to_surface(&handle)
+        }
+        SurfaceSpec::Torus {
+            major_radius,
+            minor_radius,
+            ..
+        } => {
+            let handle = ffi::geom::Geom_ToroidalSurface_new(&frame, *major_radius, *minor_radius)
+                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+            ffi::geom::toroidal_to_surface(&handle)
+        }
+    };
+
+    let mut it = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(wires);
+    if !it.More() || it.Value().ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE {
+        return Err(OcctError::InvalidInput {
+            what: "make_face_on_surface expects wires",
+        });
+    }
+    let outer = wire_on_surface(TopoDS::Wire(it.Value()), &surface)?;
+    let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_surface_wire(&surface, &outer, true)
+        .map_err(|e| occt_exception("make_face_on_surface", e))?;
+    if !make.IsDone() {
+        return Err(OcctError::NotDone {
+            operation: "make_face_on_surface",
+        });
+    }
+    it.pin_mut().Next();
+    while it.More() {
+        if it.Value().ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE {
+            return Err(OcctError::InvalidInput {
+                what: "make_face_on_surface expects wires",
+            });
+        }
+        let inner = wire_on_surface(TopoDS::Wire(it.Value()), &surface)?;
+        make.pin_mut().add_wire(&inner);
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_face_on_surface",
+            });
+        }
+        it.pin_mut().Next();
+    }
+    if ffi::topo_ds::cast_face_to_shape(make.Face()).IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "make_face_on_surface",
+        });
+    }
+    Ok(ffi::topo_ds::TopoDS_Shape_to_owned(
+        ffi::topo_ds::cast_face_to_shape(make.Face()),
+    ))
+}
+
+/// `TopoDS_Iterator`-based `fc_bullseye_wire_direction`.
+fn bullseye_wire_direction(plane: &ffi::gp::gp_Pln, wire: &TopoDS_Wire) -> Result<i32, OcctError> {
+    let make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_Plane_wire(plane, wire, true)
+        .map_err(|e| occt_exception("bullseye", e))?;
+    if !make.IsDone() {
+        return Ok(0);
+    }
+    let face = make.Face();
+    let it = ffi::topo_ds::TopoDS_Iterator_new_cum_orientation(
+        ffi::topo_ds::cast_face_to_shape(face),
+        false,
+    );
+    if ffi::topo_ds::cast_face_to_shape(face).IsNull() || !it.More() {
+        return Ok(0);
+    }
+    Ok(if it.Value().Orientation() == ffi::topo_ds::cast_wire_to_shape(wire).Orientation() {
+        1
+    } else {
+        -1
+    })
+}
+
+/// The `(u, v)` of a wire's first vertex on `plane`, with its tolerance.
+fn bullseye_sample(
+    wire: &TopoDS_Shape,
+    plane: &ffi::gp::gp_Pln,
+) -> Option<(UniquePtr<ffi::gp::gp_Pnt2d>, f64)> {
+    let xp = ffi::top_exp::TopExp_Explorer_new(wire, TopAbs_ShapeEnum::TopAbs_VERTEX);
+    if !xp.More() {
+        return None;
+    }
+    let vertex = TopoDS::Vertex(xp.Current());
+    let tolerance = ffi::b_rep::BRep_Tool_Tolerance_vertex(vertex);
+    let surface = {
+        let handle = ffi::geom::Geom_Plane_new(plane);
+        ffi::geom::plane_to_surface(&handle)
+    };
+    let projection = ffi::geom_api::GeomAPI_ProjectPointOnSurf_new(
+        &ffi::b_rep::BRep_Tool_Pnt(vertex),
+        &surface,
+    );
+    if projection.NbPoints() < 1 {
+        return None;
+    }
+    let mut u = 0.0;
+    let mut v = 0.0;
+    projection.LowerDistanceParameters(&mut u, &mut v);
+    Some((ffi::gp::new_point_2d(u, v), tolerance))
+}
+
+/// `Part.makeFace(wires, "Part::FaceMakerBullseye")`.
+pub(crate) fn bullseye_face(
+    wires: &TopTools_ListOfShape,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if wires.IsEmpty() {
+        return Err(OcctError::InvalidInput {
+            what: "bullseye_face needs wires",
+        });
+    }
+    let mut it = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(wires);
+    while it.More() {
+        if it.Value().ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE
+            || !ffi::b_rep::BRep_Tool_IsClosed_shape(it.Value())
+        {
+            return Err(OcctError::InvalidInput {
+                what: "bullseye_face needs closed wires",
+            });
+        }
+        it.pin_mut().Next();
+    }
+
+    let builder = ffi::b_rep::BRep_Builder_new();
+    let builder_upcast = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+    let mut compound = ffi::topo_ds::TopoDS_Compound_new();
+    builder_upcast.MakeCompound(compound.pin_mut());
+    let mut compound_shape = ffi::topo_ds::TopoDS_Compound_as_shape(compound);
+    let mut it = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(wires);
+    while it.More() {
+        let mut copy = ffi::b_rep_builder_api::BRepBuilderAPI_Copy_new(it.Value(), true, false);
+        builder_upcast.Add(compound_shape.pin_mut(), copy.pin_mut().Shape());
+        it.pin_mut().Next();
+    }
+
+    let finder = ffi::b_rep_lib::BRepLib_FindSurface_new(&compound_shape, -1.0, true);
+    if !finder.Found() {
+        return Err(OcctError::NotDone {
+            operation: "bullseye_face",
+        });
+    }
+    let found_surface = ffi::b_rep_lib::BRepLib_FindSurface_Surface(&finder);
+    let plane_handle = ffi::geom::new_HandleGeomPlane_from_HandleGeomSurface(&found_surface);
+    if plane_handle.IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "bullseye_face",
+        });
+    }
+    let plane = ffi::geom::Handle_Geom_Plane_Pln(&plane_handle);
+    let surface = ffi::geom::plane_to_surface(&plane_handle);
+
+    struct Item {
+        wire: UniquePtr<TopoDS_Wire>,
+        extent: f64,
+    }
+    let mut items: Vec<Item> = Vec::new();
+    let mut it = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(wires);
+    while it.More() {
+        let mut box_ = ffi::bnd::Bnd_Box_new();
+        ffi::b_rep_bnd_lib::BRepBndLib::AddOptimal(it.Value(), box_.pin_mut(), false, false);
+        if !box_.IsVoid() {
+            items.push(Item {
+                wire: ffi::topo_ds::TopoDS_Wire_to_owned(TopoDS::Wire(it.Value())),
+                extent: box_.SquareExtent(),
+            });
+        }
+        it.pin_mut().Next();
+    }
+    items.sort_by(|a, b| b.extent.partial_cmp(&a.extent).unwrap_or(std::cmp::Ordering::Equal));
+
+    struct Driller {
+        face: UniquePtr<TopoDS_Face>,
+        bound: UniquePtr<TopoDS_Face>,
+    }
+    let confusion = ffi::precision::Precision::Confusion();
+    let mut faces: Vec<Driller> = Vec::new();
+    for item in &items {
+        let Some((uv, tolerance)) = bullseye_sample(ffi::topo_ds::cast_wire_to_shape(&item.wire), &plane) else {
+            return Err(OcctError::NotDone {
+                operation: "bullseye_face",
+            });
+        };
+        let mut found = None;
+        for index in (0..faces.len()).rev() {
+            let state = ffi::b_rep_class::BRepClass_FaceClassifier_State(
+                &faces[index].face,
+                uv.X(),
+                uv.Y(),
+                tolerance,
+            )
+            .map_err(|e| occt_exception("bullseye_face", e))?;
+            if state == TopAbs_State::TopAbs_IN {
+                found = Some(index);
+                break;
+            }
+            if state == TopAbs_State::TopAbs_OUT {
+                let bound_state = ffi::b_rep_class::BRepClass_FaceClassifier_State(
+                    &faces[index].bound,
+                    uv.X(),
+                    uv.Y(),
+                    tolerance,
+                )
+                .map_err(|e| occt_exception("bullseye_face", e))?;
+                if bound_state != TopAbs_State::TopAbs_IN {
+                    continue;
+                }
+            }
+        }
+        if let Some(found) = found {
+            let mut hole = ffi::topo_ds::TopoDS_Wire_to_owned(&item.wire);
+            let direction = bullseye_wire_direction(&plane, &hole)?;
+            if direction == 0 {
+                return Err(OcctError::NotDone {
+                    operation: "bullseye_face",
+                });
+            }
+            if direction > 0 {
+                hole = ffi::topo_ds::TopoDS_Wire_to_owned(TopoDS::Wire(&ffi::topo_ds::Reversed(
+                    ffi::topo_ds::cast_wire_to_shape(&hole),
+                )));
+            }
+            let mut face_shape = ffi::topo_ds::TopoDS_Shape_to_owned(
+                ffi::topo_ds::cast_face_to_shape(&faces[found].face),
+            );
+            add_sub_shape(&builder_upcast, &mut face_shape, ffi::topo_ds::cast_wire_to_shape(&hole));
+            faces[found].face = ffi::topo_ds::TopoDS_Face_to_owned(TopoDS::Face(&face_shape));
+        } else {
+            let mut outer = ffi::topo_ds::TopoDS_Wire_to_owned(&item.wire);
+            let direction = bullseye_wire_direction(&plane, &outer)?;
+            if direction == 0 {
+                return Err(OcctError::NotDone {
+                    operation: "bullseye_face",
+                });
+            }
+            if direction < 0 {
+                outer = ffi::topo_ds::TopoDS_Wire_to_owned(TopoDS::Wire(&ffi::topo_ds::Reversed(
+                    ffi::topo_ds::cast_wire_to_shape(&outer),
+                )));
+            }
+            let mut face = ffi::topo_ds::TopoDS_Face_new();
+            ffi::b_rep::BRep_Builder_MakeFace(&builder, face.pin_mut(), &surface, confusion);
+            let mut face_shape = ffi::topo_ds::TopoDS_Shape_to_owned(ffi::topo_ds::cast_face_to_shape(&face));
+            add_sub_shape(&builder_upcast, &mut face_shape, ffi::topo_ds::cast_wire_to_shape(&outer));
+            face = ffi::topo_ds::TopoDS_Face_to_owned(TopoDS::Face(&face_shape));
+            let bound = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_surface_wire(
+                &surface,
+                &outer,
+                true,
+            )
+            .map_err(|e| occt_exception("bullseye_face", e))?;
+            if !bound.IsDone() {
+                return Err(OcctError::NotDone {
+                    operation: "bullseye_face",
+                });
+            }
+            faces.push(Driller {
+                face,
+                bound: ffi::topo_ds::TopoDS_Face_to_owned(bound.Face()),
+            });
+        }
+    }
+
+    if faces.is_empty() {
+        return Err(OcctError::NotDone {
+            operation: "bullseye_face",
+        });
+    }
+    if faces.len() == 1 {
+        return Ok(ffi::topo_ds::TopoDS_Shape_to_owned(
+            ffi::topo_ds::cast_face_to_shape(&faces[0].face),
+        ));
+    }
+    let mut result = ffi::topo_ds::TopoDS_Compound_new();
+    builder_upcast.MakeCompound(result.pin_mut());
+    let mut result_shape = ffi::topo_ds::TopoDS_Compound_as_shape(result);
+    for driller in &faces {
+        builder_upcast.Add(result_shape.pin_mut(), ffi::topo_ds::cast_face_to_shape(&driller.face));
+    }
+    Ok(result_shape)
+}
+
+/// The sub-shapes of `shape` whose type is `kind`, as a compound.
+pub(crate) fn shape_sub_shapes_of_type(
+    shape: &TopoDS_Shape,
+    kind: TopAbs_ShapeEnum,
+) -> UniquePtr<TopoDS_Shape> {
+    if shape.IsNull() {
+        return UniquePtr::null();
+    }
+    let mut map = ffi::top_tools::new_indexed_map_of_shape();
+    ffi::top_exp::TopExp::MapShapes(shape, kind, map.pin_mut());
+    let mut compound = ffi::topo_ds::TopoDS_Compound_new();
+    let builder = ffi::b_rep::BRep_Builder_new();
+    let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+    builder.MakeCompound(compound.pin_mut());
+    let mut compound_shape = ffi::topo_ds::TopoDS_Compound_as_shape(compound);
+    for index in 1..=map.Extent() {
+        builder.Add(compound_shape.pin_mut(), map.FindKey(index));
+    }
+    compound_shape
+}
+
+/// `Shape.makeOffsetShape`: a 3D offset with the fill-wall contract.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn offset_shape(
+    shape: &TopoDS_Shape,
+    offset: f64,
+    tolerance: f64,
+    inter: bool,
+    self_inter: bool,
+    offset_mode: i32,
+    join: i32,
+    fill: bool,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if shape.IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "offset_shape",
+        });
+    }
+    let mode = match offset_mode {
+        1 => ffi::b_rep_offset_api::BRepOffset_Mode::BRepOffset_Pipe,
+        2 => ffi::b_rep_offset_api::BRepOffset_Mode::BRepOffset_RectoVerso,
+        _ => ffi::b_rep_offset_api::BRepOffset_Mode::BRepOffset_Skin,
+    };
+    let mut mk = ffi::b_rep_offset_api::BRepOffsetAPI_MakeOffsetShape_new();
+    ffi::b_rep_offset_api::BRepOffsetAPI_MakeOffsetShape_PerformByJoin(
+        mk.pin_mut(),
+        shape,
+        offset,
+        tolerance,
+        mode,
+        inter,
+        self_inter,
+        join_type(join),
+    )
+    .map_err(|e| occt_exception("offset_shape", e))?;
+    if !mk.IsDone() {
+        return Err(OcctError::NotDone {
+            operation: "offset_shape",
+        });
+    }
+    let mut result = ffi::topo_ds::TopoDS_Shape_to_owned(mk.pin_mut().Shape());
+    if result.IsNull() {
+        return Err(OcctError::NotDone {
+            operation: "offset_shape",
+        });
+    }
+
+    if has_type(shape, TopAbs_ShapeEnum::TopAbs_SOLID) && !has_type(&result, TopAbs_ShapeEnum::TopAbs_SOLID) {
+        let mut sewn = ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_new_default();
+        ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_Add(sewn.pin_mut(), &result);
+        ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_Perform(sewn.pin_mut())
+            .map_err(|e| occt_exception("offset_shape", e))?;
+        let shell = ffi::topo_ds::TopoDS_Shape_to_owned(sewn.SewedShape());
+        if shell.ShapeType() == TopAbs_ShapeEnum::TopAbs_SHELL {
+            let mut solid = ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(TopoDS::Shell(&shell));
+            if solid.IsDone() {
+                result = ffi::topo_ds::TopoDS_Shape_to_owned(
+                    ffi::topo_ds::cast_solid_to_shape(solid.pin_mut().Solid()),
+                );
+            }
+        }
+    }
+
+    if !fill {
+        return Ok(result);
+    }
+
+    let mut free_check = ffi::shape_analysis::ShapeAnalysis_FreeBoundsProperties_new(shape)
+        .map_err(|e| occt_exception("offset_shape", e))?;
+    ffi::shape_analysis::ShapeAnalysis_FreeBoundsProperties_Perform(free_check.pin_mut())
+        .map_err(|e| occt_exception("offset_shape", e))?;
+    if ffi::shape_analysis::ShapeAnalysis_FreeBoundsProperties_NbClosedFreeBounds(&free_check) < 1 {
+        return Err(OcctError::NotDone {
+            operation: "offset_shape",
+        });
+    }
+
+    let image = ffi::b_rep_offset_api::BRepOffsetAPI_MakeOffsetShape_OffsetEdgesFromShapes(&mk);
+    let builder = ffi::b_rep::BRep_Builder_new();
+    let builder_upcast = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+    let mut perimeter = ffi::topo_ds::TopoDS_Compound_new();
+    builder_upcast.MakeCompound(perimeter.pin_mut());
+    let mut perimeter_shape = ffi::topo_ds::TopoDS_Compound_as_shape(perimeter);
+
+    for index in 1..=ffi::shape_analysis::ShapeAnalysis_FreeBoundsProperties_NbClosedFreeBounds(&free_check) {
+        let original = ffi::shape_analysis::ShapeAnalysis_FreeBoundsProperties_ClosedFreeBound(
+            &free_check,
+            index,
+        )
+        .map_err(|e| occt_exception("offset_shape", e))?;
+        let mut offset_wire = ffi::topo_ds::TopoDS_Wire_new();
+        ffi::b_rep::BRep_Builder_MakeWire(&builder, offset_wire.pin_mut());
+        let mut explorer = ffi::top_exp::TopExp_Explorer_new(
+            ffi::topo_ds::cast_wire_to_shape(&original),
+            TopAbs_ShapeEnum::TopAbs_EDGE,
+        );
+        while explorer.More() {
+            if !image.HasImage(explorer.Current()) {
+                return Err(OcctError::NotDone {
+                    operation: "offset_shape",
+                });
+            }
+            let mapped = image.Image(explorer.Current());
+            let mut edge = None;
+            let mut count = 0;
+            let mut list = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(mapped);
+            while list.More() {
+                if list.Value().ShapeType() == TopAbs_ShapeEnum::TopAbs_EDGE {
+                    count += 1;
+                    edge = Some(ffi::topo_ds::TopoDS_Edge_to_owned(TopoDS::Edge(list.Value())));
+                }
+                list.pin_mut().Next();
+            }
+            if count != 1 {
+                return Err(OcctError::NotDone {
+                    operation: "offset_shape",
+                });
+            }
+            let edge = edge.unwrap();
+            let mut wire_shape = ffi::topo_ds::TopoDS_Shape_to_owned(
+                ffi::topo_ds::cast_wire_to_shape(&offset_wire),
+            );
+            add_sub_shape(&builder_upcast, &mut wire_shape, ffi::topo_ds::cast_edge_to_shape(&edge));
+            offset_wire = ffi::topo_ds::TopoDS_Wire_to_owned(TopoDS::Wire(&wire_shape));
+            explorer.pin_mut().Next();
+        }
+
+        let mut generator = ffi::b_rep_offset_api::BRepOffsetAPI_ThruSections_new(false);
+        generator.pin_mut().AddWire(&original);
+        generator.pin_mut().AddWire(&offset_wire);
+        generator.pin_mut().Build(&ffi::message::Message_ProgressRange_new());
+        if !generator.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "offset_shape",
+            });
+        }
+        builder_upcast.Add(perimeter_shape.pin_mut(), generator.pin_mut().Shape());
+    }
+
+    let mut sew = ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_new_default();
+    ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_Add(sew.pin_mut(), shape);
+    ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_Add(sew.pin_mut(), &perimeter_shape);
+    ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_Add(sew.pin_mut(), &result);
+    ffi::b_rep_builder_api::BRepBuilderAPI_Sewing_Perform(sew.pin_mut())
+        .map_err(|e| occt_exception("offset_shape", e))?;
+    let mut output = ffi::topo_ds::TopoDS_Shape_to_owned(sew.SewedShape());
+    if output.ShapeType() == TopAbs_ShapeEnum::TopAbs_SHELL && output.Closed() {
+        let mut solid = ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(TopoDS::Shell(&output));
+        if solid.IsDone() {
+            let mut candidate = ffi::topo_ds::TopoDS_Solid_to_owned(solid.pin_mut().Solid());
+            if ffi::b_rep_lib::BRepLib::OrientClosedSolid(candidate.pin_mut()) {
+                output = ffi::topo_ds::TopoDS_Shape_to_owned(
+                    ffi::topo_ds::cast_solid_to_shape(&candidate),
+                );
+            }
+        }
+    }
+    Ok(output)
 }
 
 #[cfg(test)]

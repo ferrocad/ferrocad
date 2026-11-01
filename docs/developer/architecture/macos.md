@@ -85,7 +85,7 @@ and **returns an error** on macOS. A `stage_macho` needs:
 
 1. seed from `otool -L` / `otool -D`, recurse into every copied toolkit;
 2. copy prefix-owned dylibs under the loader's exact basename (mind the
-   `libTKernel.7.8.dylib` → `libTKernel.7.8.1.dylib` symlink convention);
+   `libTKernel.8.0.dylib` → `libTKernel.8.0.1.dylib` symlink convention);
 3. `install_name_tool -id @rpath/<name>` on each copied dylib and
    `install_name_tool -change <old> @rpath/<name>` on each dependent file *and* the
    binary;
@@ -145,7 +145,7 @@ release job installs only `unzip` — add `p7zip-full` when a `.dmg` returns.
 - Whether the 64 `#[gpui::test]` tests in `ferrocad_gpui` run headless on a
   GitHub macOS VM (Metal device / WindowServer availability).
 - Whether the Metal backend renders a real window (titlebar, client decorations).
-- Whether conda-forge publishes `occt=7.8.1` for `osx-arm64`, and what its dylib
+- Whether conda-forge publishes `occt=8.0.1` for `osx-arm64`, and what its dylib
   install names look like.
 - Whether the pinned `python-build-standalone` `aarch64-apple-darwin` asset
   exists and links through PyO3's config.

@@ -141,7 +141,7 @@ jobs:
           if-no-files-found: error
 
   # The Parametric edition: the base app plus the Part workbench, linked against
-  # OCCT. The OCCT 7.8.1 prefix compiles the crates and is then walked by
+  # OCCT. The OCCT 8.0.1 prefix compiles the crates and is then walked by
   # `xtask bundle --occt`, so one source of truth feeds both (see
   # docs/developer/architecture/occt-bundling.md). `--check-init` boots the staged payload
   # headlessly before the artifact is wrapped; the AppImage/zip is run again
@@ -183,16 +183,16 @@ jobs:
         with:
           extra: librsvg2-bin python3-dev
 
-      - name: Fetch OCCT 7.8.1 (conda-forge, rootless) — Linux
+      - name: Fetch OCCT 8.0.1 novtk (conda-forge, rootless) — Linux
         if: runner.os == 'Linux'
         env:
           MAMBA_ROOT_PREFIX: ${{ github.workspace }}/.occt/root
         run: |
           mkdir -p .occt
           curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
-          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=8.0.1=novtk_*
 
-      - name: Fetch OCCT 7.8.1 (conda-forge, rootless) — Windows
+      - name: Fetch OCCT 8.0.1 novtk (conda-forge, rootless) — Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -202,7 +202,7 @@ jobs:
           $mamba = (Get-ChildItem -Path .occt -Recurse -Filter micromamba.exe | Select-Object -First 1).FullName
           if (-not $mamba) { throw "micromamba.exe not found" }
           $env:MAMBA_ROOT_PREFIX = "$PWD/.occt/root"
-          & $mamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          & $mamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=8.0.1=novtk_*
           if ($LASTEXITCODE -ne 0) { throw "micromamba create failed" }
           # conda-forge's Windows layout nests under Library/; the workspace
           # .cargo/config.toml paths assume the Unix layout, so override them.

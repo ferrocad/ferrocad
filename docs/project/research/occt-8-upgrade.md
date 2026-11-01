@@ -87,8 +87,9 @@ uses those names (or one in `bindings_common.hxx`, which they already include).
 ## 2.1 The first 8.0.1 build (2026-11-01)
 
 The existing micromamba recipe fetched a conda-forge `occt=8.0.1` prefix
-(`micromamba create -p .occt8/prefix -c conda-forge occt=8.0.1`; ~3.5 GB because the
-package pulls VTK and Python), and the fork was compiled against it. Three more fixes
+(`micromamba create -p .occt8/prefix -c conda-forge 'occt=8.0.1=novtk_*'`; 205 MB — the
+`all` variant depends on VTK and pulls Python/X11 for 3.5 GB, so pin the build string),
+and the fork was compiled against it. Three more fixes
 were needed beyond the handle aliases — all API changes the header audit missed, which
 is exactly why the build was worth doing:
 
@@ -182,15 +183,19 @@ notes warn about when it leaks into a 7.8.1 link.
 
 | Step | Work | Exit criterion | Status |
 | --- | --- | --- | --- |
-| **O1** | C++17 + version range in `ferrocad_occt_cxx`; keep 7.8.1 as the CI default | 7.8.1 build still green | ✅ 2026-11-01 |
+| **O1** | C++17 + version range in `ferrocad_occt_cxx`; keep 7.8.1 working | 7.8.1 build still green | ✅ 2026-11-01 |
 | **O2** | `occt8_handle_compat.hxx`: 34 handle aliases plus 13 container names, gated `>= 8`, included from `bindings_common.hxx` | no bridge-signature changes; 7.8.1 green | ✅ 2026-11-01 |
-| **O3** | Compile and test against `occt=8.0.1` (Linux), then add the **CI leg** | the leg compiles and `ferrocad_occt`'s 78 tests pass on 8.0.1 | ✅ local (78/78); ⏳ CI leg |
+| **O3** | Compile and test against `occt=8.0.1`, then make it the CI fetch | 78 tests pass on 8.0.1 | ✅ 2026-11-01: fork tag `v0.3.0-ferrocad.23`, workspace re-pinned, CI/packaging fetch `occt=8.0.1=novtk_*` |
 | **O4** | Windows leg for 8.0.1; confirm the #234 patch is no longer needed there | `ferrocad_parametric` builds on MSVC/8.0.1 | open |
-| **O5** | Flip CI/release/packaging pins to 8.0.1; keep one 7.8 job until the release after | green release with 8.0.1 binaries | open |
+| **O5** | Flip CI/release/packaging pins to 8.0.1 | green release with 8.0.1 binaries | ✅ pins flipped; a release is still to cut |
 
-O1–O3 are additive and reversible: as long as the code builds on *both* versions, the
-upgrade is a CI matrix entry, not a branch. That is the cheapest possible way to find the
-removals we cannot see from headers alone.
+O1–O3 were additive and reversible: the code builds on *both* versions, so the upgrade
+was a pin change, not a branch. That is also how the removals we could not see from
+headers alone were found.
+
+The `builtin` feature still builds the vendored **7.8.1** submodule. That is fine for the
+shared default path and keeps 7.8 supported, but a self-contained 8.0.1 build needs the
+`crates/occt-sys` submodule bumped as well.
 
 ---
 
@@ -216,10 +221,13 @@ removals we cannot see from headers alone.
 
 ## 8. Recommendation
 
-O1–O3 are done locally. The next step is to **tag the fork** (`v0.3.0-ferrocad.23`),
-re-pin the workspace, and add the `occt=8.0.1` leg to `ci.yml`. Then O4 (Windows) and
-O5 (release pins). Keep 7.8.1 as the default until the Windows leg is green: the Linux
-pass proves the shim, not the MSVC theory.
+O1–O3 and the pin flip are done: fork `v0.3.0-ferrocad.23`, workspace re-pinned, CI and
+packaging fetch `occt=8.0.1=novtk_*`, and the suite is green on 8.0.1 (78/78) and on
+7.8.1. What remains is **O4 (Windows)**: the Linux pass proves the shim, not the MSVC
+theory, so do not treat the Windows build as verified until that leg is green.
+
+`builtin` still vendors 7.8.1; bump the `occt-sys` submodule separately if a
+self-contained 8.0.1 build is needed.
 
 The error-modelling work
 ([`../tasks/operation-failure-modelling.md`](../tasks/operation-failure-modelling.md))

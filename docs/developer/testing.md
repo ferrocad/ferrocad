@@ -172,7 +172,7 @@ preflight -> headless -> geometry
 - **headless** builds the primary App extension and runs
   `python3 tools/run_tests.py --extension base`. This is where a test that needs
   the kernel shows up.
-- **geometry** fetches OCCT 7.8.1, builds and tests the OCCT-backed crates, builds
+- **geometry** fetches OCCT 8.0.1, builds and tests the OCCT-backed crates, builds
   `ferrocad_combined_py`, and runs the `workbenches` suite with the modules that
   build provides (`--extension Part --extension Mesh --extension MeshPart`).
 

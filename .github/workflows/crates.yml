@@ -29,7 +29,7 @@ jobs:
         # needs fontconfig, xcb and xkbcommon dev packages to build and link.
         uses: ./.github/actions/linux-desktop-deps
 
-      - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
+      - name: Fetch OCCT 8.0.1 novtk (conda-forge, rootless)
         # `cargo publish` verify-builds `ferrocad_occt` and `ferrocad_part_py`,
         # which compile against OCCT. The artifact builds in release.yml use the
         # same kind of prefix; see docs/developer/architecture/occt-bundling.md.
@@ -37,7 +37,7 @@ jobs:
           mkdir -p .occt
           curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
           export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
-          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=8.0.1=novtk_*
 
       - name: Verify the tag matches the workspace version
         run: |

@@ -56,7 +56,7 @@ Same three options as before, now with a bundling lens:
 | Source | Fit | Cost |
 | --- | --- | --- |
 | **our own minimal shared build** (CI, cached) | best: we choose the modules and options, skip FreeImage/OpenGL/FreeType/OpenEXR | a one-time build per platform (slow), then cached like python-build-standalone |
-| conda-forge prebuilt (`occt=7.8.1`) | fast to obtain; a superset (visualization + codecs) | minutes to fetch; heavier bundle unless pruned |
+| conda-forge prebuilt (`occt=8.0.1=novtk_*`) | fast to obtain; a superset (extra codecs, OpenGL) | ~205 MB installed. **Pin the `novtk` build**: the `all` variant depends on VTK and pulls Python/X11 into the prefix (~3.5 GB) |
 | system packages (apt/brew/vcpkg) | dev convenience | not redistributable-complete; version drift |
 
 **Recommendation:** produce **our own minimal shared OCCT** in a dedicated CI job and
@@ -70,14 +70,18 @@ accepting the imaging stack only when it is asked for.
 
 ### 3.1 Local development: no exports needed
 
-Fetch the same 7.8.1 prefix CI uses into the workspace once:
+Fetch the same 8.0.1 prefix CI uses into the workspace once (~205 MB installed):
 
 ```sh
 mkdir -p .occt
 curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
 export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
-.occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+.occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge 'occt=8.0.1=novtk_*'
 ```
+
+Pin the build string: conda-forge publishes an `all` variant too, and that one depends on
+VTK, which drags Python and X11 into the prefix (3.5 GB instead of 205 MB). The `novtk`
+build still ships all 51 `TK*` libraries, including data exchange and OCAF.
 
 `.cargo/config.toml` then points `OpenCASCADE_DIR`, `OCCT_INCLUDE_DIR` and
 `LD_LIBRARY_PATH` at `.occt/prefix` with `relative = true`, so
@@ -162,7 +166,7 @@ opts into the vendored static build (it compiles the whole kernel from source).
   implemented and exercised; see [`edition-publishing.md`](edition-publishing.md) §6 and
   [`macos.md`](macos.md).
 
-## 8. Why 7.8.1, and what OCCT 8.x would need (2026-10-25)
+## 8. Why OCCT 8.0.1 (2026-11-01)
 
 OCCT 8.0 exists — `V8_0_0` (2026-05-07) and `V8_0_1` (2026-07-30) — and conda-forge
 publishes both for `linux-64`, `linux-aarch64`, `linux-ppc64le`, `osx-64`,
@@ -178,33 +182,28 @@ invoke the macro at all; the API spells handles `occ::handle<T>` (a new alias fo
 user code, marked deprecated. So a future major upgrade does dissolve the problem our
 fork's MSVC patch works around.
 
-**It is not adopted today.** The fork (`v0.3.0-ferrocad.22`) is written against 7.8:
+**What it took** (fork tag `v0.3.0-ferrocad.23`):
 
-- `build.rs` pins `const OCCT_VERSION: (u8, u8) = (7, 8)` and rejects any other major,
-  so a conda 8.0 prefix fails before anything compiles;
-- `build.rs` also passes `-std=c++11`, which 8.0's headers cannot parse — 8.0 requires
-  C++17 (`CMakeLists.txt`, `BUILD_CPP_STANDARD`);
-- 34 of the 35 `Handle_*` types the cxx bridges declare lose their C++ definition in
-  8.0.1 (`Handle_Standard_Type` is the survivor). A gated compatibility header aliasing
-  them to `opencascade::handle<T>` restores them without touching a bridge signature, so
-  this is smaller than the "binding port" it first looked like.
+- `build.rs`: C++17 (8.0's minimum) and a 7.8+/8.x version range. The OCCT probe now
+  requires CMake 3.15.
+- `crates/opencascade-sys/include/occt8_handle_compat.hxx`: 34 `Handle_*` aliases and 13
+  container typedefs that 8.0 no longer declares, gated on `OCC_VERSION_MAJOR >= 8`.
+- `class TopoDS` became `namespace TopoDS`, and `NCollection_List::Size()` returns
+  `size_t`: both are bound through free wrappers, and a Rust `TopoDS` module keeps the
+  call spelling.
+- Verified on Linux: the fork compiles on 7.8.1 and 8.0.1, and `ferrocad_occt`'s 78 tests
+  pass on both. Windows (O4) and the full geometry conformance suite are still to run.
 
-The measured cost, the staging and what remains unverified are in
-[`../../project/research/occt-8-upgrade.md`](../../project/research/occt-8-upgrade.md).
-**As of 2026-11-01 the fork compiles against 8.0.1 and `ferrocad_occt`'s 78 tests pass
-on it** (locally, from a conda prefix): the fixes were the C++17 flag, the version
-range, 34 handle aliases, 13 container aliases, a `Size()` wrapper and the
-`class TopoDS` → `namespace TopoDS` change. Remaining: tag the fork, add the CI leg,
-then Windows (O4) and the release pins (O5).
+**Pin the `novtk` build.** conda-forge publishes two 8.0.1 variants: `all` (depends on
+VTK, pulling Python and X11 — 3.5 GB installed) and `novtk` (205 MB, still all 51 `TK*`
+libraries). CI, packaging and the local recipe use `occt=8.0.1=novtk_*`.
 
-**Decision:** release on 7.8.1 with our fork
+The measured cost, the audit and what remains unverified are in
+[`../../project/research/occt-8-upgrade.md`](../../project/research/occt-8-upgrade.md)
+and [`../../project/research/occt-8-api-audit.md`](../../project/research/occt-8-api-audit.md).
+
+**Decision:** ship on **8.0.1** with
 [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)
-(0.3.0 + upstream PR #234; tag `v0.3.0-ferrocad.2`; see
-[`edition-publishing.md`](edition-publishing.md) §6). Revisit OCCT 8 when a published
-binding supports it — at that point the fork's MSVC patch should be droppable in one
-step. Tracked upstream
-as [bschwind/opencascade-rs#237](https://github.com/bschwind/opencascade-rs/issues/237),
-which asks for 8.x support and points out that spelling the bridge's handles
-`opencascade::handle<T>` (what 8.0 uses, and what `occ::handle<T>` aliases) fixes MSVC
-*and* 8.0 in one change; we offered to run an `occt=8.0.1` CI leg against a branch to
-measure what else 8.0 removed.
+(`v0.3.0-ferrocad.23`), pinned from the workspace via `[patch.crates-io]`. The upstream
+tracking issue is
+[bschwind/opencascade-rs#237](https://github.com/bschwind/opencascade-rs/issues/237).

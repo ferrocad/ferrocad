@@ -33,7 +33,7 @@ jobs:
         shell: pwsh
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
 
-      - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
+      - name: Fetch OCCT 8.0.1 novtk (conda-forge, rootless)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path .occt | Out-Null
@@ -42,7 +42,7 @@ jobs:
           $mamba = (Get-ChildItem -Path .occt -Recurse -Filter micromamba.exe | Select-Object -First 1).FullName
           if (-not $mamba) { throw "micromamba.exe not found" }
           $env:MAMBA_ROOT_PREFIX = "$PWD/.occt/root"
-          & $mamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          & $mamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=8.0.1=novtk_*
           if ($LASTEXITCODE -ne 0) { throw "micromamba create failed" }
           # conda-forge's Windows layout nests under Library/; the workspace
           # .cargo/config.toml paths assume the Unix layout, so override them.

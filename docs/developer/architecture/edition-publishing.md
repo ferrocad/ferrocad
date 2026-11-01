@@ -41,7 +41,7 @@ Everything below already exists for the base app; the edition extends each.
    (`--edition parametric`) builds `-p ferrocad_parametric` and stages that binary
    as `bin/ferrocad` so the launchers stay shared.
 2. **The OCCT closure.** `xtask occt` ([`occt-bundling.md`](occt-bundling.md) §5)
-   resolves the per-platform OCCT 7.8.1 prefix (or fetches it with micromamba) and
+   resolves the per-platform OCCT 8.0.1 prefix (or fetches it with micromamba) and
    records it under `target/occt-runtime/<triple>/`. `bundle --occt` walks the
    built binary's `DT_NEEDED` (`readelf -d` on Linux, the PE import table on
    Windows; macOS is blocked, see §6), copies each library that lives in the
@@ -55,7 +55,7 @@ Everything below already exists for the base app; the edition extends each.
      `ferrocad.bat` puts `bin/`/`lib/` on `PATH`.
 4. **The build-time prefix.** The same prefix compiles the crates
    (`OpenCASCADE_DIR`, `OCCT_INCLUDE_DIR`) and is bundled, so there is one source
-   of truth. Locally that is the OCCT 7.8.1 conda prefix the geometry CI already
+   of truth. Locally that is the OCCT 8.0.1 conda prefix the geometry CI already
    uses.
 5. **Licenses.** Stage OCCT's license text and its exception under `LICENSES/`,
    as CPython's PSF text already is.
@@ -118,14 +118,14 @@ cargo xtask bundle --edition parametric --occt-prefix DIR [--check-init]
 
 - `--edition parametric` builds `ferrocad_parametric` and stages it as the
 generic `bin/ferrocad` in `target/dist/ferrocad-parametric/`. `--occt` resolves
-the pinned 7.8.1 prefix (or fetches it with micromamba; `--offline` never does)
+the pinned 8.0.1 prefix (or fetches it with micromamba; `--offline` never does)
 and walks the binary's closure: `readelf -d` for `DT_NEEDED`, `ldd` for
 resolution. Prefix-owned libraries are copied under their exact soname into
 `lib/`, a `MANIFEST` records them, and OCCT's license and linking exception are
 copied under `LICENSES/`. `packaging/linux/AppRun` puts `lib/` on
 `LD_LIBRARY_PATH`.
 - The walk refuses to bundle a binary linked against a different OCCT than the
-prefix (for example a system 7.9 beside the 7.8.1 prefix), instead of silently
+prefix (for example a system 7.9 beside the 8.0.1 prefix), instead of silently
 producing an artifact with missing libraries.
 - `--check-init` runs the staged `bin/ferrocad --check-init` with only the staged
 `lib/` and `runtime/lib` on the loader path. It never opens a window. The edition
@@ -138,7 +138,7 @@ unchanged.
 
 **E2 — implemented; the next tag (`v0.1.5`) will be the first four-artifact release.**
 `.github/workflows/release.yml` has an `edition` job (Linux + Windows) that
-fetches OCCT 7.8.1, builds `ferrocad_parametric`, walks its library closure and
+fetches OCCT 8.0.1, builds `ferrocad_parametric`, walks its library closure and
 uploads the Parametric artifact beside the base ones. `v0.1.4` shipped three
 (its Windows leg predated the MSVC fix); a tag from here on yields **four**:
 two base, two Parametric. macOS is still absent, so six would be the full set.

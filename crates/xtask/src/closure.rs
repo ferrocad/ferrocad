@@ -159,7 +159,7 @@ fn stage_elf(
         return Err(format!(
             "the binary references OCCT libraries the prefix does not provide:\n{list}\n\
              The prefix at {} is OCCT {version}. A binary linked against a different \
-             OCCT (for example a system 7.9 beside a 7.8.1 prefix) cannot be bundled. \
+             OCCT (for example a system 8.0.2 beside an 8.0.1 prefix) cannot be bundled. \
              Rebuild with OpenCASCADE_DIR/OCCT_INCLUDE_DIR pointing at this prefix \
              and check `readelf -d {} | grep TK`.",
             prefix.display(),

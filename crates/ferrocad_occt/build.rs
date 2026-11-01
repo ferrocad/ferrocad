@@ -25,7 +25,7 @@ fn main() {
         panic!(
             "could not find the OCCT headers. Set OCCT_INCLUDE_DIR to the OCCT \
              'include/opencascade' directory (e.g. <prefix>/include/opencascade), or \
-             put an OCCT 7.8 prefix at .occt/prefix (the CI recipe is in \
+             put an OCCT 8.0 prefix at .occt/prefix (the CI recipe is in \
              docs/developer/architecture/occt-bundling.md)."
         )
     });

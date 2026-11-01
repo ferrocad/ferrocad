@@ -159,12 +159,12 @@ jobs:
         uses: ./.github/actions/linux-desktop-deps
         with:
           extra: xvfb mesa-vulkan-drivers python3-dev
-      - name: Fetch OCCT 7.8.1 (conda-forge, rootless) for the Part workbench
+      - name: Fetch OCCT 8.0.1 novtk (conda-forge, rootless) for the Part workbench
         run: |
           mkdir -p .occt
           curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
           export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
-          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=8.0.1=novtk_*
       - name: Build and validate the docs screenshot tool
         run: |
           cargo build -p ferrocad_snapshot
@@ -176,7 +176,8 @@ jobs:
       - name: Open a real window with the Part workbench (must not crash within 30s)
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
-          # CMake 4.x dropped the `cmake_minimum_required` versions OCCT 7.8.1 uses.
+          # Only needed when `builtin` is enabled: the vendored 7.8.1 submodule
+          # predates CMake's 3.10 floor. The shared 8.0.1 probe requires 3.15.
           export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
@@ -191,7 +192,7 @@ jobs:
           if [ "$code" != "124" ]; then exit "$code"; fi
 
   # Geometry: the OCCT backend (`ferrocad_occt`) and the Part bindings that sit on
-  # it (`ferrocad_part`, `ferrocad_part_py`). They need a kernel, so OCCT 7.8.1 is
+  # it (`ferrocad_part`, `ferrocad_part_py`). They need a kernel, so OCCT 8.0.1 is
   # fetched from conda-forge into a local prefix (rootless) and built against it.
   # This is the only job that needs OCCT; the fast jobs above do not, because these
   # crates are not in `default-members`.
@@ -204,15 +205,16 @@ jobs:
         uses: ./.github/actions/linux-desktop-deps
         with:
           extra: python3-dev
-      - name: Fetch OCCT 7.8.1 (conda-forge, rootless)
+      - name: Fetch OCCT 8.0.1 novtk (conda-forge, rootless)
         run: |
           mkdir -p .occt
           curl -sSL https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C .occt
           export MAMBA_ROOT_PREFIX="$PWD/.occt/root"
-          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=7.8.1
+          .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=8.0.1=novtk_*
       - name: Build and test the OCCT-backed crates
         run: |
-          # CMake 4.x dropped the `cmake_minimum_required` versions OCCT 7.8.1 uses.
+          # Only needed when `builtin` is enabled: the vendored 7.8.1 submodule
+          # predates CMake's 3.10 floor. The shared 8.0.1 probe requires 3.15.
           export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"

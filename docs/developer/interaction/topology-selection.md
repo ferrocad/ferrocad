@@ -36,7 +36,7 @@ Transactor, because the manipulators consume neutral `ElementRef`/`Hit` data.
 | Crate | Has | Does not have |
 | --- | --- | --- |
 | `ferrocad_geom` | `Shape`, `ElementRef`, `History`, `ElementMap` (+`apply`/`from_history`), `SelectionRef`, `ElementKind`, `Continuity`, `Tessellation`/`TessellationOptions`, `Capabilities`, `tangent_chain`; `GeometryBackend` gains `capabilities`, `tessellate`, `elements`, `ancestors`, `continuity`, `chamfer` (defaulted, so `NullBackend` need not implement them) | — |
-| `ferrocad_occt` | box/fuse/cut/fillet/place/chamfer, BREP save/load, the six seam methods, fillet/chamfer lineage, `fc_topology.hxx` (list access, `IsSame` lookups, edge tangents) | — |
+| `ferrocad_occt` | box/fuse/cut/fillet/place/chamfer, BREP save/load, the six seam methods, fillet/chamfer lineage, `ferrocad_part_cxx::topology` (list access, `IsSame` lookups, edge tangents) | — |
 | `ferrocad_part` | `Part::Feature` (Shape + Placement), `Part::Fillet` / `Part::Chamfer` (Base LinkSub + Edges + Radius/Distance + Propagate, rebuilt in `execute`), `Part::PropertyPartShape`, `register(backend)`, `make_box` | per-edge radii, a selection service |
 | `ferrocad_part_py` | `Part.makeBox`, `Part.Shape` (`isNull`, `isSame`, `exportBrep`, `exportBrepToString`), the extension converter hook | `Faces`/`Edges`/`Vertexes`, `ShapeType`, `tessellate`, `Part.show`, booleans, fillet |
 | renderer | `Vertex.part_idx`; the GPU pick pass writes `[entity_id, part_idx]`; the CPU path reports `Hit { part, element }`; screen-space line tolerance (2 px) | — |
@@ -147,7 +147,8 @@ fold, the null backend's empty topology, the mesh accessors and the selection
 constructors; `cargo test -p ferrocad_geom` is 11 tests + the doctest.
 
 **F0.2 as built (2026-10-20).** `ferrocad_occt` gained `src/topology.rs` and
-`include/fc_topology.hxx`. `OcctBackend` now advertises
+`include/fc_topology.hxx` (the bindings since moved to
+`ferrocad_part_cxx::topology`). `OcctBackend` now advertises
 `BOOLEANS | FILLET | CHAMFER | TESSELLATION | TOPOLOGY`, tessellates with
 `BRepMesh_IncrementalMesh` (deflection from `TessellationOptions`, or 1e-3 of the
 bounding diagonal), enumerates elements with `TopExp::MapShapes`, answers adjacency in
@@ -221,7 +222,7 @@ Checked against the published crate sources and then **verified by running**
 
 Three C++-side additions cover the gaps, in the proven sibling-bridge pattern
 (`spikes/occt-tessellation/bridge/include/fc_topology.hxx`; the real one is at
-`crates/ferrocad_occt/include/fc_topology.hxx`):
+`crates/ferrocad_part_cxx/include/topology.hxx` in the `ferrocad_occt_cxx` fork):
 
 - `fc_list_size` / `fc_list_value` for `TopTools_ListOfShape`, plus `IsSame`-based
   index lookups for both the indexed map and the ancestor data map;

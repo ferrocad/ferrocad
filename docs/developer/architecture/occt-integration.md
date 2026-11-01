@@ -76,9 +76,12 @@ It owns everything OCCT-specific, so no other crate has to:
   sys crate does not expose;
 - keeps the policy in Rust: `ferrocad_part_cxx` owns the C++ boundary and
   translates `Standard_Failure`, while history/element-map policy, validation
-  and error mapping stay here. `general_transform`, the `ChFi2d` algorithms and
-  the `ShapeFix` fixers are migrated; the remaining `fc_*.hxx` files are the
-  next slices. The bindings crate is
+  and error mapping stay here. `general_transform`, the `ChFi2d` algorithms,
+  the `ShapeFix` fixers and the history/topology bindings are migrated (the last
+  as `ferrocad_part_cxx::{history,topology}`); the remaining `fc_*.hxx` files are
+  the next slices. What still lives in C++ here, in `include/fc_policy.hxx`, is
+  FreeCAD `TopoShape` policy only, and only until its OCCT entry points are
+  bridged. The bindings crate is
   LGPL-2.1 and contains no FerroCAD/FreeCAD semantics, so it can be donated to
   `opencascade-sys` without carrying product behaviour;
 - implements `ferrocad_geom::GeometryBackend`, and ports FreeCAD's `FCBRepAlgoAPI_*`
@@ -235,7 +238,8 @@ The extraction is a refactor with its own tests, so it lands in stages:
    `ferrocad_types`; `ferrocad_core` does not depend on it yet. (The doc's temporary
    `geom -> core` edge was avoided: `ferrocad_types` landed first.)
 3. **[x] `ferrocad_occt`** (done 2026-10-06): implements `GeometryBackend` via
-   `opencascade-sys` + the sibling bridge (`include/fc_history.hxx`). First operations:
+   `opencascade-sys` + the sibling bridge (`include/fc_history.hxx`, since moved
+   to `ferrocad_part_cxx::history`). First operations:
    `make_box`, `fuse`, `cut`, `fillet`, `place`, and a positional `resolve`; fuse/cut
    build a face-level `History`. Verified against OCCT 7.8.1 (5 tests + doctest) and
    tested in CI by a `geometry` job that fetches OCCT from conda-forge.
@@ -269,8 +273,8 @@ The extraction is a refactor with its own tests, so it lands in stages:
 9. **[x] Topology and tessellation** (2026-10-20) — `ferrocad_occt` implements
    `capabilities`, `tessellate`, `elements`, `ancestors`, `continuity` and `chamfer`, and
    fillet/chamfer now report lineage. The sibling bridge gained `fc_topology.hxx`
-   (list access, `IsSame` lookups, the two-distance chamfer, fillet/chamfer history and
-   edge tangents). See [`topology-selection.md`](../interaction/topology-selection.md) (F0.2).
+   (since moved to `ferrocad_part_cxx::topology`: list access, `IsSame` lookups, the
+   two-distance chamfer, fillet/chamfer history and edge tangents). See [`topology-selection.md`](../interaction/topology-selection.md) (F0.2).
 10. **[x] The selection bridge** (2026-10-20) — a click in `InventorViewport` reports a
     kernel-neutral `SelectionRef` (`SelectionEvent::Picked`), resolving the hit's part id
     through the stage item's name table (`Face6`, `Edge3`); empty space reports

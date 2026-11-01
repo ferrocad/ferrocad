@@ -76,8 +76,9 @@ It owns everything OCCT-specific, so no other crate has to:
   sys crate does not expose;
 - keeps the policy in Rust: `ferrocad_part_cxx` owns the C++ boundary and
   translates `Standard_Failure`, while history/element-map policy, validation
-  and error mapping stay here. `general_transform` and the `ChFi2d` algorithms
-  are migrated; the remaining `fc_*.hxx` files are the next slices. The bindings crate is
+  and error mapping stay here. `general_transform`, the `ChFi2d` algorithms and
+  the `ShapeFix` fixers are migrated; the remaining `fc_*.hxx` files are the
+  next slices. The bindings crate is
   LGPL-2.1 and contains no FerroCAD/FreeCAD semantics, so it can be donated to
   `opencascade-sys` without carrying product behaviour;
 - implements `ferrocad_geom::GeometryBackend`, and ports FreeCAD's `FCBRepAlgoAPI_*`

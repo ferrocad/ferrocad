@@ -26,12 +26,10 @@ fn main() {
         "include/fc_topology.hxx",
         "include/fc_curve.hxx",
         "include/fc_geom2d.hxx",
-        "include/fc_shapefix.hxx",
         "include/fc_surface_ops.hxx",
         "include/fc_shape_ops.hxx",
         "src/fc_part_ops.hxx",
         "src/bridge.rs",
-        "src/shapefix.rs",
         "src/surface_ops.rs",
     ] {
         println!("cargo:rerun-if-changed={file}");
@@ -57,7 +55,7 @@ fn main() {
     });
     println!("cargo:rustc-env=FERROCAD_OCC_VERSION={version}");
 
-    cxx_build::bridges(["src/bridge.rs", "src/shapefix.rs", "src/surface_ops.rs"])
+    cxx_build::bridges(["src/bridge.rs", "src/surface_ops.rs"])
         .include(&occt_include)
         .std("c++14")
         .compile("ferrocad-occt-bridge");

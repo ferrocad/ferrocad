@@ -110,6 +110,34 @@ changes reach downstream Rust: `TopTools_ListOfShape::Size()` is now the free
 
 ---
 
+## 2.2 The kernel in wasm (2026-11-01)
+
+cadrum publishes a prebuilt OCCT **8.0.1** for `wasm32-unknown-unknown`
+(`occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz`, 34 MB; 157 MB extracted): 6,748
+headers, 19 headless `TK*` static libraries, `libc++.a`/`libc++abi.a` and the
+`libcadrum_*` wasm-EH runtime. It is built with wasi-sdk 33 as `wasm32-wasip1` with
+`-fwasm-exceptions` (legacy EH encoding, rebuilt sysroot), not Emscripten.
+
+The fork consumes it behind a target check (tag `v0.3.0-ferrocad.24`):
+
+- `OCCT_WASM_ROOT` points at the extracted tarball; there is no CMake probe.
+- link only the 19 toolkits it ships, then `libcadrum_*` and `libc++.a`.
+- compile the bridge with `-mllvm -wasm-use-legacy-eh=true` so its EH metadata
+  matches the tarball.
+- build inside `ghcr.io/lzpel/cross-wasm32-unknown-unknown`, which supplies the
+  matching wasi-sdk toolchain.
+
+Verified in that image: `cargo check -p ferrocad_occt_cxx` and
+`cargo check -p ferrocad_occt` both succeed for `wasm32-unknown-unknown` (61 bridge
+translation units; 2m40s and 2m48s).
+
+Limits: the wasm kernel is a subset — no TKDESTL, TKDEIGES, TKFeat, TKCAF, TKLCAF or
+TKXCAF — so a final link that uses those bindings fails. Compilation proves the bridge
+and the Part layer; linking a `cdylib` is the next step. Rendering is separate: wgpu's
+WebGL2/WebGPU backends are the browser path.
+
+---
+
 ## 3. Build-level blockers
 
 These are the things that fail before any API question arises:
@@ -188,6 +216,7 @@ notes warn about when it leaks into a 7.8.1 link.
 | **O3** | Compile and test against `occt=8.0.1`, then make it the CI fetch | 78 tests pass on 8.0.1 | ✅ 2026-11-01: fork tag `v0.3.0-ferrocad.23`, workspace re-pinned, CI/packaging fetch `occt=8.0.1=novtk_*` |
 | **O4** | Windows leg for 8.0.1; confirm the #234 patch is no longer needed there | `ferrocad_parametric` builds on MSVC/8.0.1 | open |
 | **O5** | Flip CI/release/packaging pins to 8.0.1 | green release with 8.0.1 binaries | ✅ pins flipped; a release is still to cut |
+| **O6** | Kernel in wasm: consume the prebuilt wasm OCCT | the sys crate and `ferrocad_occt` compile for `wasm32-unknown-unknown` | ✅ check-only (tag `v0.3.0-ferrocad.24`, CI job `wasm`); link a `cdylib` next |
 
 O1–O3 were additive and reversible: the code builds on *both* versions, so the upgrade
 was a pin change, not a branch. That is also how the removals we could not see from

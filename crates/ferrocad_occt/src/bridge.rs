@@ -1,9 +1,9 @@
 //! Facade over the fork's OCCT bindings.
 //!
-//! Every OCCT call `ferrocad_occt` makes lives in `ferrocad_part_cxx`
-//! ([`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)):
-//! the generic bindings there are `shapefix`, `ops`
-//! (curves, 2-D geometry, shape queries, the Part operations) and `surface_ops`.
+//! Every remaining C++ OCCT call `ferrocad_occt` makes lives in
+//! `ferrocad_part_cxx` ([`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)):
+//! the generic bindings there are `shapefix` and `ops`
+//! (curves, 2-D geometry, shape queries, the Part operations).
 //! This module re-exports them so call sites keep their single `bridge::fc_...`
 //! path.
 //!

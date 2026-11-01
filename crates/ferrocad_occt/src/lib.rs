@@ -53,6 +53,7 @@ mod shape;
 pub mod part_ops;
 mod policy;
 pub mod shapefix;
+mod stl;
 pub mod surface_ops;
 mod topology;
 

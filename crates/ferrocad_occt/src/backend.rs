@@ -2632,21 +2632,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        match bridge::fc_is_inside(
-            inner,
-            point.x,
-            point.y,
-            point.z,
-            tolerance,
-            check_face,
-        ) {
-            1 => Ok(true),
-            0 => Ok(false),
-            _ => Err(OcctError::NotDone {
-                operation: "is_inside",
-            }
-            .into()),
-        }
+        policy::is_inside(inner, point, tolerance, check_face).map_err(GeomError::from)
     }
 
     fn is_partner(&self, first: &Shape, second: &Shape) -> Result<bool, GeomError> {
@@ -2655,7 +2641,7 @@ impl GeometryBackend for OcctBackend {
         let first_guard = first_occt.borrow();
         let second_guard = second_occt.borrow();
         match (first_guard.as_ref(), second_guard.as_ref()) {
-            (Some(a), Some(b)) => Ok(bridge::fc_is_partner(a, b)),
+            (Some(a), Some(b)) => Ok(a.IsPartner(b)),
             _ => Ok(false),
         }
     }
@@ -2666,14 +2652,8 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let complemented = bridge::fc_complement(inner);
-        let Some(complemented) = complemented.as_ref() else {
-            return Err(OcctError::NotDone {
-                operation: "complement",
-            }
-            .into());
-        };
-        Ok(erase(complemented))
+        let complemented = policy::complement(inner)?;
+        Ok(erase(&complemented))
     }
 
     fn transform_geometry(
@@ -2698,14 +2678,8 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        let result = bridge::fc_transform_geometry(inner, m, copy);
-        let Some(result) = result.as_ref() else {
-            return Err(OcctError::NotDone {
-                operation: "transform_geometry",
-            }
-            .into());
-        };
-        Ok(erase(result))
+        let result = policy::transform_geometry(inner, m, copy)?;
+        Ok(erase(&result))
     }
 
     fn global_tolerance(&self, shape: &Shape, mode: i32) -> Result<f64, GeomError> {
@@ -2714,14 +2688,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let value = bridge::fc_global_tolerance(inner, mode);
-        if !value.is_finite() {
-            return Err(OcctError::NotDone {
-                operation: "global_tolerance",
-            }
-            .into());
-        }
-        Ok(value)
+        policy::global_tolerance(inner, mode).map_err(GeomError::from)
     }
 
     fn fix_tolerance(
@@ -2735,13 +2702,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        if !bridge::fc_fix_tolerance(inner, value, tolerance_shape_type(kind)) {
-            return Err(OcctError::InvalidInput {
-                what: "a tolerance is a finite, non-negative number",
-            }
-            .into());
-        }
-        Ok(())
+        policy::fix_tolerance(inner, value, tolerance_shape_type(kind)).map_err(GeomError::from)
     }
 
     fn limit_tolerance(
@@ -2756,18 +2717,8 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        if !minimum.is_finite() || !maximum.is_finite() {
-            return Err(OcctError::InvalidInput {
-                what: "tolerances are finite numbers",
-            }
-            .into());
-        }
-        Ok(bridge::fc_limit_tolerance(
-            inner,
-            minimum,
-            maximum,
-            tolerance_shape_type(kind),
-        ))
+        policy::limit_tolerance(inner, minimum, maximum, tolerance_shape_type(kind))
+            .map_err(GeomError::from)
     }
 
     fn tolerance_in(
@@ -2782,14 +2733,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let mut list = ffi::top_tools::new_list_of_shape();
-        bridge::fc_tolerance_in(
-            inner,
-            minimum,
-            maximum,
-            tolerance_shape_type(kind),
-            list.pin_mut(),
-        );
+        let list = policy::tolerance_in(inner, minimum, maximum, tolerance_shape_type(kind))?;
         Ok(list_shapes(&list))
     }
 
@@ -2804,8 +2748,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let mut list = ffi::top_tools::new_list_of_shape();
-        bridge::fc_tolerance_over(inner, value, tolerance_shape_type(kind), list.pin_mut());
+        let list = policy::tolerance_over(inner, value, tolerance_shape_type(kind))?;
         Ok(list_shapes(&list))
     }
 
@@ -2820,14 +2763,8 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let wires = bridge::fc_make_wires(inner, tolerance);
-        let Some(wires) = wires.as_ref() else {
-            return Err(OcctError::NotDone {
-                operation: "make_wires",
-            }
-            .into());
-        };
-        Ok(erase(wires))
+        let wires = policy::make_wires(inner, tolerance)?;
+        Ok(erase(&wires))
     }
 
     fn remove_internal_wires(
@@ -2840,16 +2777,8 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let mut fix = bridge::fc_remove_internal_wires_new();
-        let performed = fix.pin_mut().perform(inner, minimum_area);
-        let result = fix.result();
-        let Some(result) = result.as_ref() else {
-            return Err(OcctError::NotDone {
-                operation: "remove_internal_wires",
-            }
-            .into());
-        };
-        Ok((erase(result), performed))
+        let (result, performed) = policy::remove_internal_wires(inner, minimum_area)?;
+        Ok((erase(&result), performed))
     }
 
     fn stl_bytes(&self, shape: &Shape, deflection: f64) -> Result<Vec<u8>, GeomError> {
@@ -2864,14 +2793,14 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        let bytes = bridge::fc_stl_bytes(inner, deflection);
+        let bytes = crate::stl::mesh(inner, deflection)?.encode_binary();
         if bytes.is_empty() {
             return Err(OcctError::NotDone {
                 operation: "stl_bytes",
             }
             .into());
         }
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
 
     fn edge_value_at(&self, edge: &Shape, t: f64) -> Result<Vector3, GeomError> {
@@ -3424,8 +3353,8 @@ enum CutOperation {
 ///
 /// cxx exposes a shared enum as a transparent struct, so its `repr` field is the
 /// OCCT discriminant (`TopAbs_SHAPE` is 8, `TopAbs_VERTEX` 7, …).
-fn tolerance_shape_type(kind: ToleranceKind) -> i32 {
-    let value = match kind {
+fn tolerance_shape_type(kind: ToleranceKind) -> TopAbs_ShapeEnum {
+    match kind {
         ToleranceKind::All => TopAbs_ShapeEnum::TopAbs_SHAPE,
         ToleranceKind::Solid => TopAbs_ShapeEnum::TopAbs_SOLID,
         ToleranceKind::Shell => TopAbs_ShapeEnum::TopAbs_SHELL,
@@ -3433,8 +3362,7 @@ fn tolerance_shape_type(kind: ToleranceKind) -> i32 {
         ToleranceKind::Wire => TopAbs_ShapeEnum::TopAbs_WIRE,
         ToleranceKind::Edge => TopAbs_ShapeEnum::TopAbs_EDGE,
         ToleranceKind::Vertex => TopAbs_ShapeEnum::TopAbs_VERTEX,
-    };
-    value.repr as i32
+    }
 }
 
 /// A copy of every shape in a bridged `TopTools_ListOfShape`.

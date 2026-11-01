@@ -20,7 +20,6 @@ use ffi::top_abs::{TopAbs_Orientation, TopAbs_ShapeEnum};
 use ffi::top_tools::TopTools_ListOfShape;
 use ffi::topo_ds::{TopoDS, TopoDS_Shape};
 
-use crate::bridge;
 use crate::error::OcctError;
 use crate::shape::downcast;
 
@@ -241,16 +240,16 @@ pub fn wire_ordered_edges(wire: &Shape) -> Result<Vec<Shape>, GeomError> {
 pub fn edge_first_vertex(edge: &Shape) -> Option<Shape> {
     let occt = downcast(edge).ok()?;
     let guard = occt.borrow();
-    let vertex = bridge::fc_edge_first_vertex(guard.as_ref()?);
-    vertex.as_ref().map(|vertex| crate::shape::erase(vertex))
+    let vertex = crate::curve::edge_first_vertex(guard.as_ref()?);
+    vertex.map(|vertex| crate::shape::erase(&vertex))
 }
 
 /// The vertex an edge ends at in its own orientation, or `None`.
 pub fn edge_last_vertex(edge: &Shape) -> Option<Shape> {
     let occt = downcast(edge).ok()?;
     let guard = occt.borrow();
-    let vertex = bridge::fc_edge_last_vertex(guard.as_ref()?);
-    vertex.as_ref().map(|vertex| crate::shape::erase(vertex))
+    let vertex = crate::curve::edge_last_vertex(guard.as_ref()?);
+    vertex.map(|vertex| crate::shape::erase(&vertex))
 }
 
 /// A wire's stored first and last vertex, or `None`.
@@ -258,11 +257,11 @@ pub fn wire_end_vertices(wire: &Shape) -> Option<(Shape, Shape)> {
     let occt = downcast(wire).ok()?;
     let guard = occt.borrow();
     let inner = guard.as_ref()?;
-    let first = bridge::fc_wire_first_vertex(inner);
-    let last = bridge::fc_wire_last_vertex(inner);
+    let first = crate::curve::wire_first_vertex(inner)?;
+    let last = crate::curve::wire_last_vertex(inner)?;
     Some((
-        crate::shape::erase(first.as_ref()?),
-        crate::shape::erase(last.as_ref()?),
+        crate::shape::erase(&first),
+        crate::shape::erase(&last),
     ))
 }
 

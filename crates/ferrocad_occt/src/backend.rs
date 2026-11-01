@@ -43,11 +43,11 @@ use ffi::top_tools::TopTools_IndexedMapOfShape;
 use ffi::top_tools::TopTools_ListOfShape;
 use ffi::topo_ds::{TopoDS, TopoDS_Shape};
 
-use crate::bridge;
 use crate::error::OcctError;
 use crate::history;
 use crate::policy;
 use crate::shape::{downcast, erase, find_index_same, new_map, sub_shape_map};
+use crate::shape_ops;
 use crate::topology;
 
 type Map = TopTools_IndexedMapOfShape;
@@ -132,7 +132,7 @@ impl OcctBackend {
         let Some(inner) = guard.as_ref() else {
             return shape.clone();
         };
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return shape.clone();
         }
         let wires = sub_shape_map(inner, TopAbs_ShapeEnum::TopAbs_WIRE);
@@ -172,7 +172,7 @@ impl OcctBackend {
                 let Some(wire_inner) = wire_guard.as_ref() else {
                     return shape.clone();
                 };
-                match bridge::fc_split_wire_into_faces(wire_inner).as_ref() {
+                match crate::shape_ops::split_wire_into_faces(wire_inner).as_ref() {
                     Some(enclosed) => {
                         let faces = sub_shape_map(enclosed, TopAbs_ShapeEnum::TopAbs_FACE);
                         (1..=faces.Extent())
@@ -228,7 +228,7 @@ impl OcctBackend {
         for pole in poles {
             coords.extend_from_slice(&[pole.x, pole.y, pole.z]);
         }
-        let edge = bridge::fc_bspline_edge(
+        let Some(curve) = crate::curve::build(
             &coords,
             weights,
             knots,
@@ -236,14 +236,22 @@ impl OcctBackend {
             degree,
             periodic,
             check_rational,
-        );
-        let Some(edge) = edge.as_ref() else {
+        ) else {
             return Err(OcctError::NotDone {
                 operation: "make_bspline_poles_mults_knots",
             }
             .into());
         };
-        Ok(erase(edge))
+        let curve = ffi::geom::new_HandleGeomCurve_from_HandleGeom_BSplineCurve(&curve);
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_HandleGeomCurve(&curve);
+        let edge = erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge()));
+        if !make.IsDone() {
+            return Err(OcctError::NotDone {
+                operation: "make_bspline_poles_mults_knots",
+            }
+            .into());
+        }
+        Ok(edge)
     }
 
     /// The flattened state of the B-spline with the given poles, weights, knots
@@ -260,9 +268,9 @@ impl OcctBackend {
         degree: i32,
         periodic: bool,
         check_rational: bool,
-    ) -> Option<Vec<f64>> {
+    ) -> Option<crate::curve::BsplineState> {
         let coords = flatten(poles);
-        let state = bridge::fc_bspline_probe(
+        crate::curve::probe(
             &coords,
             weights,
             knots,
@@ -270,8 +278,7 @@ impl OcctBackend {
             degree,
             periodic,
             check_rational,
-        );
-        (!state.is_empty()).then_some(state)
+        )
     }
 
     /// The flattened state of the B-spline interpolating `points`
@@ -281,9 +288,8 @@ impl OcctBackend {
         &self,
         points: &[Vector3],
         periodic: bool,
-    ) -> Option<Vec<f64>> {
-        let state = bridge::fc_bspline_probe_interpolated(&flatten(points), periodic);
-        (!state.is_empty()).then_some(state)
+    ) -> Option<crate::curve::BsplineState> {
+        crate::curve::interpolated(&flatten(points), periodic)
     }
 
     /// The state of the same curve after `SetPeriodic`/`SetNotPeriodic`. `None`
@@ -299,8 +305,8 @@ impl OcctBackend {
         periodic: bool,
         check_rational: bool,
         target_periodic: bool,
-    ) -> Option<Vec<f64>> {
-        let state = bridge::fc_bspline_set_periodic(
+    ) -> Option<crate::curve::BsplineState> {
+        crate::curve::set_periodic(
             &flatten(poles),
             weights,
             knots,
@@ -309,8 +315,7 @@ impl OcctBackend {
             periodic,
             check_rational,
             target_periodic,
-        );
-        (!state.is_empty()).then_some(state)
+        )
     }
 
     /// `Geom_BSplineCurve::Resolution`: the parameter tolerance equivalent to
@@ -327,7 +332,7 @@ impl OcctBackend {
         check_rational: bool,
         tolerance: f64,
     ) -> Option<f64> {
-        let resolution = bridge::fc_bspline_resolution(
+        let resolution = crate::curve::resolution(
             &flatten(poles),
             weights,
             knots,
@@ -337,7 +342,7 @@ impl OcctBackend {
             check_rational,
             tolerance,
         );
-        resolution.is_finite().then_some(resolution)
+        resolution
     }
 
     /// `BSplineCurve.segment(u1, u2)`: the state of the curve restricted to
@@ -354,8 +359,8 @@ impl OcctBackend {
         check_rational: bool,
         u1: f64,
         u2: f64,
-    ) -> Option<Vec<f64>> {
-        let state = bridge::fc_bspline_segment(
+    ) -> Option<crate::curve::BsplineState> {
+        crate::curve::segment(
             &flatten(poles),
             weights,
             knots,
@@ -365,8 +370,7 @@ impl OcctBackend {
             check_rational,
             u1,
             u2,
-        );
-        (!state.is_empty()).then_some(state)
+        )
     }
 
     /// The point at parameter `u` on the B-spline with the given state
@@ -384,7 +388,7 @@ impl OcctBackend {
         check_rational: bool,
         u: f64,
     ) -> Option<Vector3> {
-        let point = bridge::fc_bspline_point(
+        crate::curve::bspline_point(
             &flatten(poles),
             weights,
             knots,
@@ -393,8 +397,7 @@ impl OcctBackend {
             periodic,
             check_rational,
             u,
-        );
-        (point.len() == 3).then(|| Vector3::new(point[0], point[1], point[2]))
+        )
     }
 
     /// A conic converted to a B-spline over `[first, last]`, flattened like
@@ -414,12 +417,8 @@ impl OcctBackend {
         first: f64,
         last: f64,
         nurbs: bool,
-    ) -> Option<Vec<f64>> {
-        let state = bridge::fc_conic_to_spline(
-            kind, center.x, center.y, center.z, normal.x, normal.y, normal.z, x_axis.x, x_axis.y,
-            x_axis.z, major, minor, first, last, nurbs,
-        );
-        (!state.is_empty()).then_some(state)
+    ) -> Option<crate::curve::BsplineState> {
+        crate::curve::conic_to_spline(kind, center, normal, x_axis, major, minor, first, last, nurbs)
     }
 
     /// The curve parameter of the closest point to `point`
@@ -437,7 +436,7 @@ impl OcctBackend {
         check_rational: bool,
         point: Vector3,
     ) -> Option<f64> {
-        let parameter = bridge::fc_bspline_parameter(
+        let parameter = crate::curve::parameter(
             &flatten(poles),
             weights,
             knots,
@@ -449,7 +448,7 @@ impl OcctBackend {
             point.y,
             point.z,
         );
-        parameter.is_finite().then_some(parameter)
+        parameter
     }
 
     /// The state of the B-spline with knot `index` reduced to multiplicity `mult`
@@ -467,8 +466,8 @@ impl OcctBackend {
         index: i32,
         mult: i32,
         tolerance: f64,
-    ) -> Option<Vec<f64>> {
-        let state = bridge::fc_bspline_remove_knot(
+    ) -> Option<crate::curve::BsplineState> {
+        crate::curve::remove_knot(
             &flatten(poles),
             weights,
             knots,
@@ -479,8 +478,7 @@ impl OcctBackend {
             index,
             mult,
             tolerance,
-        );
-        (!state.is_empty()).then_some(state)
+        )
     }
 
     /// The state of the B-spline approximating `points`
@@ -492,14 +490,8 @@ impl OcctBackend {
         degree_min: i32,
         degree_max: i32,
         tolerance: f64,
-    ) -> Option<Vec<f64>> {
-        let state = bridge::fc_bspline_approximated(
-            &flatten(points),
-            degree_min,
-            degree_max,
-            tolerance,
-        );
-        (!state.is_empty()).then_some(state)
+    ) -> Option<crate::curve::BsplineState> {
+        crate::curve::approximated(&flatten(points), degree_min, degree_max, tolerance)
     }
 
     /// The state of the B-spline with `u` inserted up to multiplicity `mult`
@@ -517,8 +509,8 @@ impl OcctBackend {
         u: f64,
         mult: i32,
         tolerance: f64,
-    ) -> Option<Vec<f64>> {
-        let state = bridge::fc_bspline_insert_knot(
+    ) -> Option<crate::curve::BsplineState> {
+        crate::curve::insert_knot(
             &flatten(poles),
             weights,
             knots,
@@ -529,8 +521,7 @@ impl OcctBackend {
             u,
             mult,
             tolerance,
-        );
-        (!state.is_empty()).then_some(state)
+        )
     }
 
     /// The surface normal of `face` at `(u, v)` (`BRepLProp_SLProps` through
@@ -540,10 +531,10 @@ impl OcctBackend {
         let occt = downcast(face).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
-        three(&bridge::fc_face_normal(inner, u, v))
+        crate::curve::face_normal(ffi::topo_ds::TopoDS::Face(inner), u, v)
     }
 
     /// The two unit surface tangents at `(u, v)` (`TangentU`, `TangentV`).
@@ -556,14 +547,11 @@ impl OcctBackend {
         let occt = downcast(face).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
-        let raw = bridge::fc_face_tangents(inner, u, v);
-        if raw.len() < 6 {
-            return None;
-        }
-        Some((three(&raw[..3])?, three(&raw[3..6])?))
+        let raw = crate::curve::face_tangents(ffi::topo_ds::TopoDS::Face(inner), u, v);
+        raw
     }
 
     /// The two partial derivatives of order `order` (1 or 2) at `(u, v)`.
@@ -577,14 +565,10 @@ impl OcctBackend {
         let occt = downcast(face).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
-        let raw = bridge::fc_face_derivatives(inner, u, v, order);
-        if raw.len() < 6 {
-            return None;
-        }
-        Some((three(&raw[..3])?, three(&raw[3..6])?))
+        crate::curve::face_derivatives(ffi::topo_ds::TopoDS::Face(inner), u, v, order)
     }
 
     /// The `(min, max)` principal curvatures of a face at `(u, v)`.
@@ -592,11 +576,10 @@ impl OcctBackend {
         let occt = downcast(face).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
-        let raw = bridge::fc_face_curvature(inner, u, v);
-        (raw.len() == 2).then(|| (raw[0], raw[1]))
+        crate::curve::face_curvature(ffi::topo_ds::TopoDS::Face(inner), u, v)
     }
 
     /// Sample a wire into points (`Wire.discretize`, upstream's
@@ -618,7 +601,7 @@ impl OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null wire" })?;
-        if !bridge::fc_is_wire(inner) {
+        if !is_wire(inner) {
             return Err(OcctError::InvalidInput {
                 what: "not a wire",
             }
@@ -640,11 +623,10 @@ impl OcctBackend {
         let occt = downcast(face).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
-        let raw = bridge::fc_face_surface_bounds(inner);
-        (raw.len() == 4).then(|| (raw[0], raw[1], raw[2], raw[3]))
+        crate::curve::face_surface_bounds(ffi::topo_ds::TopoDS::Face(inner))
     }
 
     /// The principal normal of an edge's curve at `parameter`.
@@ -652,10 +634,10 @@ impl OcctBackend {
         let occt = downcast(edge).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return None;
         }
-        three(&bridge::fc_edge_normal(inner, parameter))
+        crate::curve::edge_normal(ffi::topo_ds::TopoDS::Edge(inner), parameter)
     }
 
     /// The derivative of order `order` (1, 2 or 3) of an edge's curve.
@@ -668,10 +650,10 @@ impl OcctBackend {
         let occt = downcast(edge).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return None;
         }
-        three(&bridge::fc_edge_derivatives(inner, parameter, order))
+        crate::curve::edge_derivatives(ffi::topo_ds::TopoDS::Edge(inner), parameter, order)
     }
 
     /// The curvature of an edge's curve at `parameter`.
@@ -679,22 +661,21 @@ impl OcctBackend {
         let occt = downcast(edge).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return None;
         }
-        let curvature = bridge::fc_edge_curvature(inner, parameter);
-        curvature.is_finite().then_some(curvature)
+        crate::curve::edge_curvature(ffi::topo_ds::TopoDS::Edge(inner), parameter)
     }
 
     /// The pcurve an edge has on a face, as a B-spline state (see
     /// [`SplineState`](ferrocad_part_py)) whose range is the edge's own.
-    pub fn edge_pcurve_state(&self, edge: &Shape, face: &Shape) -> Option<Vec<f64>> {
+    pub fn edge_pcurve_state(&self, edge: &Shape, face: &Shape) -> Option<crate::curve::BsplineState> {
         let edge = downcast(edge).ok()?;
         let face = downcast(face).ok()?;
         let edge = edge.borrow();
         let face = face.borrow();
-        let state = bridge::fc_edge_pcurve(edge.as_ref()?, face.as_ref()?);
-        (!state.is_empty()).then_some(state)
+        let state = crate::curve::edge_pcurve(edge.as_ref()?, face.as_ref()?);
+        state
     }
 
     /// A 2-D B-spline lifted onto a surface as an edge: `poles` are `(u, v)`
@@ -717,24 +698,21 @@ impl OcctBackend {
         for (u, v) in poles {
             coordinates.extend_from_slice(&[*u, *v]);
         }
-        let spec = surface.map(surface_spec).unwrap_or_default();
         let owned_face = surface_face(face)?;
-        // A default-constructed (null) face stands in when no surface was given;
-        // the C++ side only looks at it when `spec` is empty.
         let null_face = ffi::topo_ds::TopoDS_Face_new();
         let face_shape: &TopoDS_Shape = match &owned_face {
             Some(shape) => shape,
             None => ffi::topo_ds::cast_face_to_shape(&null_face),
         };
         let (first, last) = range.unwrap_or((0.0, 0.0));
-        let edge = bridge::fc_bspline2d_edge(
+        let edge = crate::curve::bspline2d_edge(
             &coordinates,
             weights,
             knots,
             multiplicities,
             degree,
             periodic,
-            &spec,
+            surface,
             face_shape,
             first,
             last,
@@ -763,7 +741,6 @@ impl OcctBackend {
         surface: Option<&SurfaceSpec>,
         face: Option<&Shape>,
     ) -> Result<Shape, GeomError> {
-        let spec = surface.map(surface_spec).unwrap_or_default();
         let owned_face = surface_face(face)?;
         let null_face = ffi::topo_ds::TopoDS_Face_new();
         let face_shape: &TopoDS_Shape = match &owned_face {
@@ -775,7 +752,7 @@ impl OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        let lifted = bridge::fc_curve2d_on_surface(inner, &spec, face_shape);
+        let lifted = crate::curve::curve2d_on_surface(inner, surface, face_shape);
         match lifted.as_ref() {
             Some(shape) => Ok(erase(shape)),
             None => Err(OcctError::NotDone {
@@ -819,7 +796,7 @@ impl OcctBackend {
             let inner = guard
                 .as_ref()
                 .ok_or(OcctError::InvalidInput { what: "null face" })?;
-            if !bridge::fc_is_face(inner) {
+            if !is_face(inner) {
                 return Err(OcctError::InvalidInput {
                     what: "a shell is made of faces",
                 }
@@ -851,6 +828,26 @@ fn surface_face(face: Option<&Shape>) -> Result<Option<UniquePtr<TopoDS_Shape>>,
 /// reported nothing.
 fn three(values: &[f64]) -> Option<Vector3> {
     (values.len() >= 3).then(|| Vector3::new(values[0], values[1], values[2]))
+}
+
+fn is_edge(shape: &TopoDS_Shape) -> bool {
+    !shape.IsNull() && shape.ShapeType() == TopAbs_ShapeEnum::TopAbs_EDGE
+}
+
+fn is_wire(shape: &TopoDS_Shape) -> bool {
+    !shape.IsNull() && shape.ShapeType() == TopAbs_ShapeEnum::TopAbs_WIRE
+}
+
+fn is_vertex(shape: &TopoDS_Shape) -> bool {
+    !shape.IsNull() && shape.ShapeType() == TopAbs_ShapeEnum::TopAbs_VERTEX
+}
+
+fn is_face(shape: &TopoDS_Shape) -> bool {
+    !shape.IsNull() && shape.ShapeType() == TopAbs_ShapeEnum::TopAbs_FACE
+}
+
+fn is_shell(shape: &TopoDS_Shape) -> bool {
+    !shape.IsNull() && shape.ShapeType() == TopAbs_ShapeEnum::TopAbs_SHELL
 }
 
 impl GeometryBackend for OcctBackend {
@@ -1021,22 +1018,43 @@ impl GeometryBackend for OcctBackend {
                     .as_ref()
                     .ok_or(OcctError::InvalidInput { what: "null basis edge" })?;
                 let direction = curve.direction();
-                let edge = bridge::fc_offset_curve_edge(
-                    basis_inner,
-                    curve.offset(),
-                    direction.x,
-                    direction.y,
-                    direction.z,
-                    curve.first(),
-                    curve.last(),
-                );
-                let Some(edge) = edge.as_ref() else {
+                let edge = (|| {
+                    if !is_edge(basis_inner) {
+                        return None;
+                    }
+                    let mut bf = 0.0;
+                    let mut bl = 0.0;
+                    let base = ffi::b_rep::BRep_Tool_Curve(
+                        ffi::topo_ds::TopoDS::Edge(basis_inner),
+                        &mut bf,
+                        &mut bl,
+                    );
+                    if base.IsNull() {
+                        return None;
+                    }
+                    let dir = ffi::gp::gp_Dir_new(direction.x, direction.y, direction.z);
+                    let offset = ffi::geom::Geom_OffsetCurve_new(&base, curve.offset(), &dir).ok()?;
+                    let offset = ffi::geom::new_HandleGeomCurve_from_HandleGeom_OffsetCurve(&offset);
+                    let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_CurveRange(
+                        &offset,
+                        curve.first(),
+                        curve.last(),
+                    )
+                    .ok()?;
+                    if !make.IsDone() {
+                        return None;
+                    }
+                    Some(ffi::topo_ds::TopoDS_Shape_to_owned(
+                        ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge()),
+                    ))
+                })();
+                let Some(edge) = edge else {
                     return Err(OcctError::NotDone {
                         operation: "make_edge (offset curve)",
                     }
                     .into());
                 };
-                Ok(erase(edge))
+                Ok(erase(&edge))
             }
         }
     }
@@ -1049,13 +1067,13 @@ impl GeometryBackend for OcctBackend {
             let inner = guard
                 .as_ref()
                 .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-            if !bridge::fc_is_edge(inner) {
+            if !is_edge(inner) {
                 return Err(OcctError::InvalidInput {
                     what: "make_wire expects edges",
                 }
                 .into());
             }
-            make.pin_mut().add_edge(bridge::fc_shape_as_edge(inner));
+            make.pin_mut().add_edge(ffi::topo_ds::TopoDS::Edge(inner));
         }
         if !make.IsDone() {
             return Err(OcctError::NotDone {
@@ -1080,10 +1098,10 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_vertex(inner) {
+        if !is_vertex(inner) {
             return None;
         }
-        let pnt = ffi::b_rep::BRep_Tool_Pnt(bridge::fc_shape_as_vertex(inner));
+        let pnt = ffi::b_rep::BRep_Tool_Pnt(ffi::topo_ds::TopoDS::Vertex(inner));
         Some(Vector3::new(pnt.X(), pnt.Y(), pnt.Z()))
     }
 
@@ -1131,14 +1149,15 @@ impl GeometryBackend for OcctBackend {
         for pole in poles {
             coords.extend_from_slice(&[pole.x, pole.y, pole.z]);
         }
-        let curve = bridge::fc_bspline_from_poles(&coords, degree, periodic);
-        let Some(curve) = curve.as_ref() else {
+        let curve = crate::curve::bspline_from_poles(&coords, degree, periodic);
+        let Some(curve) = curve else {
             return Err(OcctError::NotDone {
                 operation: "make_bspline_poles",
             }
             .into());
         };
-        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_HandleGeomCurve(curve);
+        let curve = ffi::geom::new_HandleGeomCurve_from_HandleGeom_BSplineCurve(&curve);
+        let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_HandleGeomCurve(&curve);
         let shape = erase(ffi::topo_ds::cast_edge_to_shape(make.pin_mut().Edge()));
         if !make.IsDone() {
             return Err(OcctError::NotDone {
@@ -1158,7 +1177,7 @@ impl GeometryBackend for OcctBackend {
         let first_inner = first_guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null wire" })?;
-        if !bridge::fc_is_wire(first_inner) {
+        if !is_wire(first_inner) {
             return Err(OcctError::InvalidInput {
                 what: "make_face expects wires",
             }
@@ -1181,7 +1200,7 @@ impl GeometryBackend for OcctBackend {
             let inner = guard
                 .as_ref()
                 .ok_or(OcctError::InvalidInput { what: "null wire" })?;
-            if !bridge::fc_is_wire(inner) {
+            if !is_wire(inner) {
                 return Err(OcctError::InvalidInput {
                     what: "make_face expects wires",
                 }
@@ -1189,7 +1208,7 @@ impl GeometryBackend for OcctBackend {
             }
             // A hole must run opposite to the outer boundary; reverse it so the
             // boundary subtracts its area instead of adding another one.
-            let reversed = bridge::fc_reversed(inner);
+            let reversed = ffi::topo_ds::Reversed(inner);
             let Some(reversed) = reversed.as_ref() else {
                 return Err(OcctError::InvalidInput { what: "null wire" }.into());
             };
@@ -1218,7 +1237,7 @@ impl GeometryBackend for OcctBackend {
             let inner = guard
                 .as_ref()
                 .ok_or(OcctError::InvalidInput { what: "null wire" })?;
-            if !bridge::fc_is_wire(inner) {
+            if !is_wire(inner) {
                 return Err(OcctError::InvalidInput {
                     what: "make_faces expects wires",
                 }
@@ -1227,7 +1246,7 @@ impl GeometryBackend for OcctBackend {
 
             // A self-intersecting boundary splits into several loops (one face
             // per loop); a simple boundary stays on the ordinary path below.
-            let split = bridge::fc_split_wire_into_faces(inner);
+            let split = crate::shape_ops::split_wire_into_faces(inner);
             if let Some(split) = split.as_ref() {
                 let map = sub_shape_map(split, TopAbs_ShapeEnum::TopAbs_FACE);
                 if map.Extent() > 1 {
@@ -1239,7 +1258,7 @@ impl GeometryBackend for OcctBackend {
             }
 
             let make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(
-                bridge::fc_shape_as_wire(inner),
+                ffi::topo_ds::TopoDS::Wire(inner),
                 true,
             );
             if make.IsDone() {
@@ -1250,7 +1269,7 @@ impl GeometryBackend for OcctBackend {
             // lateral wire) can still build a face when the builder is allowed
             // to find that surface.
             let make_any = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_wire(
-                bridge::fc_shape_as_wire(inner),
+                ffi::topo_ds::TopoDS::Wire(inner),
                 false,
             );
             if make_any.IsDone() {
@@ -1260,7 +1279,7 @@ impl GeometryBackend for OcctBackend {
 
             let mut list = ffi::top_tools::new_list_of_shape();
             let _ = list.pin_mut().Append(inner);
-            let filled = bridge::fc_fill_wires(&list);
+            let filled = crate::shape_ops::fill_wires(&list);
             let Some(filled) = filled.as_ref() else {
                 // An open boundary cannot bound a face; it still subdivides the
                 // faces around it (dangling ends are pruned by the boolean).
@@ -1297,7 +1316,7 @@ impl GeometryBackend for OcctBackend {
                     let _ = list.pin_mut().Append(inner);
                 }
             }
-            let fused = bridge::fc_general_fuse(&list);
+            let fused = crate::shape_ops::general_fuse(&list);
             if let Some(fused) = fused.as_ref() {
                 let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
                 let mut regions = Vec::with_capacity(map.Extent() as usize);
@@ -1410,7 +1429,7 @@ impl GeometryBackend for OcctBackend {
                             let _ = list.pin_mut().Append(inner);
                         }
                     }
-                    let fused = bridge::fc_general_fuse(&list);
+                    let fused = crate::shape_ops::general_fuse(&list);
                     if let Some(fused) = fused.as_ref() {
                         let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
                         let mut kept = Vec::new();
@@ -1466,7 +1485,7 @@ impl GeometryBackend for OcctBackend {
                     let _ = list.pin_mut().Append(inner);
                 }
             }
-            let fused = bridge::fc_general_fuse(&list);
+            let fused = crate::shape_ops::general_fuse(&list);
             if let Some(fused) = fused.as_ref() {
                 let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
                 let mut regions = Vec::with_capacity(map.Extent() as usize);
@@ -1506,7 +1525,7 @@ impl GeometryBackend for OcctBackend {
             let inner = guard
                 .as_ref()
                 .ok_or(OcctError::InvalidInput { what: "null wire" })?;
-            if !bridge::fc_is_wire(inner) {
+            if !is_wire(inner) {
                 return Err(OcctError::InvalidInput {
                     what: "make_face_on_surface expects wires",
                 }
@@ -1528,10 +1547,10 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
-        let surface = ffi::b_rep::BRep_Tool_Surface(bridge::fc_shape_as_face(inner));
+        let surface = ffi::b_rep::BRep_Tool_Surface(ffi::topo_ds::TopoDS::Face(inner));
         let name = ffi::standard::type_name(ffi::geom::DynamicType(surface.as_ref()?));
         Some(
             match name.as_str() {
@@ -1551,7 +1570,7 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
         match crate::surface_frame::of(ffi::topo_ds::TopoDS::Face(inner)) {
@@ -1630,10 +1649,10 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return None;
         }
-        let wire = ffi::b_rep_tools::outer_wire(bridge::fc_shape_as_face(inner));
+        let wire = ffi::b_rep_tools::outer_wire(ffi::topo_ds::TopoDS::Face(inner));
         Some(erase(ffi::topo_ds::cast_wire_to_shape(wire.as_ref()?)))
     }
 
@@ -1643,11 +1662,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let data = bridge::fc_edge_curve(inner);
-        if data.len() < 14 {
-            return Err(unsupported("curve_of: the bridge returned no curve data"));
-        }
-        parse_edge_curve(&data)
+        crate::curve::edge_curve(inner)
     }
 
     fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
@@ -1803,7 +1818,7 @@ impl GeometryBackend for OcctBackend {
                 .ok_or(OcctError::InvalidInput { what: "null solid" })?;
             let _ = list.pin_mut().Append(inner);
         }
-        let composed = bridge::fc_comp_solid(&list);
+        let composed = crate::shape_ops::comp_solid(&list);
         let Some(composed) = composed.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "make_comp_solid",
@@ -1819,14 +1834,14 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shell" })?;
-        if !bridge::fc_is_shell(inner) {
+        if !is_shell(inner) {
             return Err(OcctError::InvalidInput {
                 what: "make_solid expects a shell",
             }
             .into());
         }
         let mut make =
-            ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(bridge::fc_shape_as_shell(inner));
+            ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(ffi::topo_ds::TopoDS::Shell(inner));
         let shape = erase(make.pin_mut().Shape());
         if !make.IsDone() {
             return Err(OcctError::NotDone {
@@ -1891,13 +1906,13 @@ impl GeometryBackend for OcctBackend {
             let inner = guard
                 .as_ref()
                 .ok_or(OcctError::InvalidInput { what: "null wire" })?;
-            if !bridge::fc_is_wire(inner) {
+            if !is_wire(inner) {
                 return Err(OcctError::InvalidInput {
                     what: "make_loft expects wires",
                 }
                 .into());
             }
-            make.pin_mut().AddWire(bridge::fc_shape_as_wire(inner));
+            make.pin_mut().AddWire(ffi::topo_ds::TopoDS::Wire(inner));
         }
         // Upstream keeps the wires in the order given rather than letting OCCT
         // reorder them to match a common origin.
@@ -1924,7 +1939,7 @@ impl GeometryBackend for OcctBackend {
         let b = second_guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        let face = bridge::fc_ruled_surface(a, b);
+        let face = crate::shape_ops::ruled_surface(a, b);
         let Some(face) = face.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "make_ruled_surface",
@@ -1950,7 +1965,7 @@ impl GeometryBackend for OcctBackend {
         let profile_inner = profile_guard.as_ref().ok_or(OcctError::InvalidInput {
             what: "null profile",
         })?;
-        let piped = bridge::fc_pipe(spine_inner, profile_inner, tolerance);
+        let piped = crate::shape_ops::pipe(spine_inner, profile_inner, tolerance);
         let Some(piped) = piped.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "make_pipe",
@@ -1982,7 +1997,7 @@ impl GeometryBackend for OcctBackend {
                 .ok_or(OcctError::InvalidInput { what: "null wire" })?;
             list.pin_mut().Append(inner);
         }
-        let face = bridge::fc_fill_wires(&list);
+        let face = crate::shape_ops::fill_wires(&list);
         let Some(face) = face.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "make_filled_face",
@@ -2112,11 +2127,7 @@ impl GeometryBackend for OcctBackend {
         // Upstream's `getShapeProperties` rule: the property regime follows what
         // the shape contains, so a compound of faces measures its surface instead
         // of a zero-mass volume (whose centre is the origin).
-        let (mut x, mut y, mut z) = (0.0, 0.0, 0.0);
-        if !bridge::fc_center_of_mass(inner, &mut x, &mut y, &mut z) {
-            return None;
-        }
-        Some(Vector3::new(x, y, z))
+        crate::shape_ops::center_of_mass(inner)
     }
 
     fn is_valid(&self, shape: &Shape) -> bool {
@@ -2125,7 +2136,7 @@ impl GeometryBackend for OcctBackend {
         };
         let guard = occt.borrow();
         match guard.as_ref() {
-            Some(inner) => bridge::fc_is_valid(inner),
+            Some(inner) => crate::shape_ops::is_valid(inner),
             None => false,
         }
     }
@@ -2134,11 +2145,7 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        let mut values = Vec::with_capacity(9);
-        bridge::fc_inertia_matrix(inner, &mut values);
-        if values.len() < 9 {
-            return None;
-        }
+        let values = crate::shape_ops::inertia_matrix(inner)?;
         let mut matrix = Matrix4::identity();
         for row in 0..3 {
             for column in 0..3 {
@@ -2152,19 +2159,17 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        let mut values = Vec::with_capacity(17);
-        bridge::fc_principal_properties(inner, &mut values);
-        if values.len() < 17 {
-            return None;
-        }
-        let axis =
-            |offset: usize| Vector3::new(values[offset], values[offset + 1], values[offset + 2]);
+        let values = crate::shape_ops::principal_properties(inner)?;
         Some(PrincipalProperties {
-            symmetry_axis: values[0] != 0.0,
-            symmetry_point: values[1] != 0.0,
-            moments: (values[2], values[3], values[4]),
-            axes: (axis(5), axis(8), axis(11)),
-            radius_of_gyration: (values[14], values[15], values[16]),
+            symmetry_axis: values.symmetry_axis,
+            symmetry_point: values.symmetry_point,
+            moments: (values.moments[0], values.moments[1], values.moments[2]),
+            axes: (values.axes[0], values.axes[1], values.axes[2]),
+            radius_of_gyration: (
+                values.radius_of_gyration[0],
+                values.radius_of_gyration[1],
+                values.radius_of_gyration[2],
+            ),
         })
     }
 
@@ -2218,7 +2223,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let offset = bridge::fc_offset(inner, distance, join);
+        let offset = crate::shape_ops::offset(inner, distance, join);
         let Some(offset) = offset.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "make_offset",
@@ -2255,7 +2260,7 @@ impl GeometryBackend for OcctBackend {
                 .ok_or(OcctError::InvalidInput { what: "null face" })?;
             let _ = list.pin_mut().Append(face_inner);
         }
-        let thickened = bridge::fc_thick_solid(inner, &list, thickness, tolerance);
+        let thickened = crate::shape_ops::thick_solid(inner, &list, thickness, tolerance);
         let Some(thickened) = thickened.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "make_thickness",
@@ -2276,7 +2281,7 @@ impl GeometryBackend for OcctBackend {
         let sb = b_guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let section = bridge::fc_section(sa, sb);
+        let section = crate::shape_ops::section(sa, sb);
         let Some(section) = section.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "section",
@@ -2297,7 +2302,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let sliced = bridge::fc_slice(inner, direction.x, direction.y, direction.z, distance);
+        let sliced = crate::shape_ops::slice(inner, direction.x, direction.y, direction.z, distance);
         let Some(sliced) = sliced.as_ref() else {
             return Err(OcctError::NotDone { operation: "slice" }.into());
         };
@@ -2323,7 +2328,7 @@ impl GeometryBackend for OcctBackend {
                 .ok_or(OcctError::InvalidInput { what: "null shape" })?;
             let _ = list.pin_mut().Append(inner);
         }
-        let fused = bridge::fc_general_fuse(&list);
+        let fused = crate::shape_ops::general_fuse(&list);
         let Some(fused) = fused.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "general_fuse",
@@ -2332,7 +2337,7 @@ impl GeometryBackend for OcctBackend {
         };
         let mut split = Vec::with_capacity(shapes.len());
         for index in 1..=shapes.len() as i32 {
-            let modified = bridge::fc_general_fuse_modified(&list, index, 0.0);
+            let modified = crate::shape_ops::general_fuse_modified(&list, index, 0.0);
             split.push(
                 modified
                     .as_ref()
@@ -2374,7 +2379,7 @@ impl GeometryBackend for OcctBackend {
 
         let mut direct = ffi::top_tools::new_list_of_shape();
         let mut left = ffi::top_tools::new_list_of_shape();
-        if !bridge::fc_split_shape(
+        if !crate::shape_ops::split_shape(
             inner,
             &cutters,
             &faces,
@@ -2399,17 +2404,7 @@ impl GeometryBackend for OcctBackend {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();
         let inner = guard.as_ref()?;
-        let mut values = Vec::with_capacity(6);
-        if !bridge::fc_optimal_box(inner, use_triangulation, use_tolerance, &mut values) {
-            return None;
-        }
-        if values.len() < 6 {
-            return None;
-        }
-        Some((
-            Vector3::new(values[0], values[1], values[2]),
-            Vector3::new(values[3], values[4], values[5]),
-        ))
+        crate::shape_ops::optimal_box(inner, use_triangulation, use_tolerance)
     }
 
     fn same_shape(&self, a: &Shape, b: &Shape) -> bool {
@@ -2419,7 +2414,7 @@ impl GeometryBackend for OcctBackend {
         let a_guard = a_occt.borrow();
         let b_guard = b_occt.borrow();
         match (a_guard.as_ref(), b_guard.as_ref()) {
-            (Some(a_inner), Some(b_inner)) => bridge::fc_is_same(a_inner, b_inner),
+            (Some(a_inner), Some(b_inner)) => a_inner.IsSame(b_inner),
             _ => a.is_same(b),
         }
     }
@@ -2456,7 +2451,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return Err(OcctError::InvalidInput {
                 what: "not an edge",
             }
@@ -2476,13 +2471,13 @@ impl GeometryBackend for OcctBackend {
         let face_inner = face_guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null face" })?;
-        if !bridge::fc_is_edge(edge_inner) {
+        if !is_edge(edge_inner) {
             return Err(OcctError::InvalidInput {
                 what: "not an edge",
             }
             .into());
         }
-        if !bridge::fc_is_face(face_inner) {
+        if !is_face(face_inner) {
             return Err(OcctError::InvalidInput { what: "not a face" }.into());
         }
         Ok(ffi::b_rep::BRep_Tool_IsClosed_edge_face(
@@ -2497,7 +2492,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return Err(OcctError::InvalidInput {
                 what: "not an edge",
             }
@@ -2514,7 +2509,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null face" })?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return Err(OcctError::InvalidInput { what: "not a face" }.into());
         }
         let (mut u0, mut u1, mut v0, mut v1) = (0.0, 0.0, 0.0, 0.0);
@@ -2762,7 +2757,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return Err(OcctError::InvalidInput {
                 what: "not an edge",
             }
@@ -2779,7 +2774,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null face" })?;
-        if !bridge::fc_is_face(inner) {
+        if !is_face(inner) {
             return Err(OcctError::InvalidInput { what: "not a face" }.into());
         }
         let surface = ffi::b_rep_adaptor::BRepAdaptor_Surface_new(TopoDS::Face(inner));
@@ -2802,7 +2797,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return Err(OcctError::InvalidInput {
                 what: "not an edge",
             }
@@ -2829,7 +2824,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return Err(OcctError::InvalidInput {
                 what: "not an edge",
             }
@@ -2953,7 +2948,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let reversed = bridge::fc_reversed(inner);
+        let reversed = ffi::topo_ds::Reversed(inner);
         let Some(reversed) = reversed.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "reversed",
@@ -3006,7 +3001,7 @@ impl GeometryBackend for OcctBackend {
                 .ok_or(OcctError::InvalidInput { what: "null shape" })?;
             let _ = list.pin_mut().Append(removal_inner);
         }
-        let result = bridge::fc_reshape_remove(inner, &list);
+        let result = crate::shape_ops::reshape_remove(inner, &list);
         let Some(result) = result.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "remove_shapes",
@@ -3022,13 +3017,13 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        if !bridge::fc_is_edge(inner) {
+        if !is_edge(inner) {
             return Err(OcctError::InvalidInput {
                 what: "split_edge needs an edge",
             }
             .into());
         }
-        let split = bridge::fc_split_edge(inner, parameters);
+        let split = crate::shape_ops::split_edge(inner, parameters);
         let Some(split) = split.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "split_edge",
@@ -3064,7 +3059,7 @@ impl GeometryBackend for OcctBackend {
             let _ = from.pin_mut().Append(old_inner);
             let _ = to.pin_mut().Append(new_inner);
         }
-        let result = bridge::fc_reshape_replace(inner, &from, &to);
+        let result = crate::shape_ops::reshape_replace(inner, &from, &to);
         let Some(result) = result.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "replace_shapes",
@@ -3107,12 +3102,22 @@ impl GeometryBackend for OcctBackend {
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
         let mut trsf = ffi::gp::new_transform();
-        if !bridge::fc_trsf_from_matrix(&matrix.m, trsf.pin_mut()) {
+        let m = &matrix.m;
+        if m.len() < 16 {
             return Err(OcctError::InvalidInput {
                 what: "matrix is not an affine transform",
             }
             .into());
         }
+        ffi::gp::gp_Trsf_SetValues(
+            trsf.pin_mut(),
+            m[0], m[1], m[2], m[3],
+            m[4], m[5], m[6], m[7],
+            m[8], m[9], m[10], m[11],
+        )
+        .map_err(|_| GeomError::from(OcctError::InvalidInput {
+            what: "matrix is not an affine transform",
+        }))?;
         let mut op = ffi::b_rep_builder_api::BRepBuilderAPI_Transform_new(inner, &trsf, true);
         let out = erase(op.pin_mut().Shape());
         if !op.IsDone() {
@@ -3301,94 +3306,6 @@ fn flatten_compound_into(shape: &TopoDS_Shape, out: &mut Vec<UniquePtr<TopoDS_Sh
     } else {
         out.push(owned(shape));
     }
-}
-
-/// Flatten an elementary surface into the layout the geom2d bridge
-/// (`fc_bspline2d_edge`, `fc_curve2d_on_surface`) takes: kind, origin, axis
-/// (the normal for a plane), the `u` direction, then radius, semi-angle, major
-/// and minor radius.
-pub fn surface_spec(surface: &SurfaceSpec) -> Vec<f64> {
-    fn put(spec: &mut [f64], at: usize, point: Vector3) {
-        spec[at] = point.x;
-        spec[at + 1] = point.y;
-        spec[at + 2] = point.z;
-    }
-    let mut spec = vec![0.0; 15];
-    match surface {
-        SurfaceSpec::Plane {
-            origin,
-            normal,
-            x_dir,
-            direct,
-        } => {
-            spec[0] = 0.0;
-            put(&mut spec, 1, *origin);
-            put(&mut spec, 4, *normal);
-            put(&mut spec, 7, *x_dir);
-            spec[14] = f64::from(u8::from(*direct));
-        }
-        SurfaceSpec::Cylinder {
-            origin,
-            axis,
-            x_dir,
-            radius,
-            direct,
-        } => {
-            spec[0] = 1.0;
-            put(&mut spec, 1, *origin);
-            put(&mut spec, 4, *axis);
-            put(&mut spec, 7, *x_dir);
-            spec[10] = *radius;
-            spec[14] = f64::from(u8::from(*direct));
-        }
-        SurfaceSpec::Cone {
-            origin,
-            axis,
-            x_dir,
-            radius,
-            semi_angle,
-            direct,
-        } => {
-            spec[0] = 2.0;
-            put(&mut spec, 1, *origin);
-            put(&mut spec, 4, *axis);
-            put(&mut spec, 7, *x_dir);
-            spec[10] = *radius;
-            spec[11] = *semi_angle;
-            spec[14] = f64::from(u8::from(*direct));
-        }
-        SurfaceSpec::Sphere {
-            center,
-            axis,
-            x_dir,
-            radius,
-            direct,
-        } => {
-            spec[0] = 3.0;
-            put(&mut spec, 1, *center);
-            put(&mut spec, 4, *axis);
-            put(&mut spec, 7, *x_dir);
-            spec[10] = *radius;
-            spec[14] = f64::from(u8::from(*direct));
-        }
-        SurfaceSpec::Torus {
-            center,
-            axis,
-            x_dir,
-            major_radius,
-            minor_radius,
-            direct,
-        } => {
-            spec[0] = 4.0;
-            put(&mut spec, 1, *center);
-            put(&mut spec, 4, *axis);
-            put(&mut spec, 7, *x_dir);
-            spec[12] = *major_radius;
-            spec[13] = *minor_radius;
-            spec[14] = f64::from(u8::from(*direct));
-        }
-    }
-    spec
 }
 
 /// An OCCT shape list holding the given handles, in order.
@@ -3752,7 +3669,7 @@ fn add_derived_names(history: &mut History, out_maps: &[(ElementKind, UniquePtr<
             continue;
         }
         let face = face_map.FindKey(index);
-        let wire = ffi::b_rep_tools::outer_wire(bridge::fc_shape_as_face(face));
+        let wire = ffi::b_rep_tools::outer_wire(ffi::topo_ds::TopoDS::Face(face));
         let Some(wire) = wire.as_ref() else {
             continue;
         };
@@ -4098,26 +4015,20 @@ fn edge_from_conic<T: ConicFrame>(
     what: &'static str,
 ) -> Result<Shape, GeomError> {
     let (center, normal, x_axis, major, minor) = curve.conic_frame();
-    let edge = bridge::fc_conic_edge(
+    let edge = crate::curve::conic_edge(
         kind,
-        center.x,
-        center.y,
-        center.z,
-        normal.x,
-        normal.y,
-        normal.z,
-        x_axis.x,
-        x_axis.y,
-        x_axis.z,
+        center,
+        normal,
+        x_axis,
         major,
         minor,
         first,
         last,
     );
-    let Some(edge) = edge.as_ref() else {
+    let Some(edge) = edge else {
         return Err(OcctError::NotDone { operation: what }.into());
     };
-    Ok(erase(edge))
+    Ok(erase(&edge))
 }
 
 /// A Bezier edge (`Geom_BezierCurve`).
@@ -4127,20 +4038,20 @@ fn edge_from_conic<T: ConicFrame>(
 /// `[0, 1]`). The Python `toShape` path keeps arbitrary ranges by converting to a
 /// B-spline instead.
 fn edge_from_bezier(curve: &BezierCurve) -> Result<Shape, GeomError> {
-    let edge = bridge::fc_bezier_edge(&flatten(curve.poles()), curve.weights());
-    let Some(edge) = edge.as_ref() else {
+    let edge = crate::curve::bezier_edge(&flatten(curve.poles()), curve.weights());
+    let Some(edge) = edge else {
         return Err(OcctError::NotDone {
             operation: "make_edge (Bezier)",
         }
         .into());
     };
-    Ok(erase(edge))
+    Ok(erase(&edge))
 }
 
 /// A B-spline edge, re-segmenting when the stored range is narrower than the knot
 /// domain.
 fn edge_from_nurbs(curve: &NurbsCurve) -> Result<Shape, GeomError> {
-    let edge = bridge::fc_bspline_edge_range(
+    let edge = crate::curve::bspline_edge_range(
         &flatten(curve.poles()),
         curve.weights(),
         curve.knots(),
@@ -4150,13 +4061,13 @@ fn edge_from_nurbs(curve: &NurbsCurve) -> Result<Shape, GeomError> {
         curve.first(),
         curve.last(),
     );
-    let Some(edge) = edge.as_ref() else {
+    let Some(edge) = edge else {
         return Err(OcctError::NotDone {
             operation: "make_edge (B-spline)",
         }
         .into());
     };
-    Ok(erase(edge))
+    Ok(erase(&edge))
 }
 
 /// A circular edge from the analytic circle.
@@ -4188,26 +4099,20 @@ fn edge_from_circle(circle: &Circle) -> Result<Shape, GeomError> {
 /// the two radii) because `gp_Elips`' axis placement carries all of them; the
 /// edge parameterisation starts on the major axis.
 fn edge_from_ellipse(ellipse: &Ellipse) -> Result<Shape, GeomError> {
-    let edge = bridge::fc_ellipse_edge(
-        ellipse.center().x,
-        ellipse.center().y,
-        ellipse.center().z,
-        ellipse.normal().x,
-        ellipse.normal().y,
-        ellipse.normal().z,
-        ellipse.x_axis().x,
-        ellipse.x_axis().y,
-        ellipse.x_axis().z,
+    let edge = crate::curve::ellipse_edge(
+        ellipse.center(),
+        ellipse.normal(),
+        ellipse.x_axis(),
         ellipse.major_radius(),
         ellipse.minor_radius(),
     );
-    let Some(edge) = edge.as_ref() else {
+    let Some(edge) = edge else {
         return Err(OcctError::NotDone {
             operation: "make_edge (ellipse)",
         }
         .into());
     };
-    Ok(erase(edge))
+    Ok(erase(&edge))
 }
 
 #[cfg(test)]
@@ -4643,16 +4548,13 @@ mod curve_bridge_tests {
             )
             .expect("the upstream NURBS builds");
 
-        assert_eq!(state[DEGREE], 2.0);
-        assert_eq!(state[NB_POLES], 4.0);
-        assert_eq!(state[NB_KNOTS], 3.0);
-        assert_eq!(state[PERIODIC], 0.0);
-        assert_eq!(state[FIRST_PARAMETER], 0.0);
-        assert_eq!(state[LAST_PARAMETER], 1.0);
-        assert_eq!(
-            state[CONTINUITY], 2.0,
-            "C1 at the inner knot (mult 1, degree 2)"
-        );
+        assert_eq!(state.degree, 2);
+        assert_eq!(state.poles.len(), 4);
+        assert_eq!(state.knots.len(), 3);
+        assert!(!state.periodic);
+        assert_eq!(state.first_parameter, 0.0);
+        assert_eq!(state.last_parameter, 1.0);
+        assert_eq!(state.continuity, 2, "C1 at the inner knot (mult 1, degree 2)");
 
         // The same arrays also build the edge, exactly.
         let edge = backend
@@ -4684,8 +4586,8 @@ mod curve_bridge_tests {
         let state = backend
             .bspline_state(&poles, &[1.0; 3], &[0.0, 1.0], &[3, 3], 2, false, true)
             .expect("the clamped quadratic builds");
-        assert_eq!(state[PERIODIC], 0.0);
-        assert_eq!(state[NB_POLES], 3.0);
+        assert!(!state.periodic);
+        assert_eq!(state.poles.len(), 3);
 
         // `SetPeriodic` is a structural change (the curve is not closed, so OCCT
         // drops the redundant pole); the state must come from OCCT, not from a
@@ -4702,8 +4604,8 @@ mod curve_bridge_tests {
                 true,
             )
             .expect("SetPeriodic succeeds");
-        assert_eq!(periodic[PERIODIC], 1.0);
-        assert_eq!(periodic[NB_POLES], 2.0);
+        assert!(periodic.periodic);
+        assert_eq!(periodic.poles.len(), 2);
     }
 
     #[test]

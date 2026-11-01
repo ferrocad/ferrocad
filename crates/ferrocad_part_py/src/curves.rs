@@ -45,6 +45,7 @@ use ferrocad_curves::{
 };
 use ferrocad_geom::{ElementKind, Shape, SurfaceData, SurfaceSpec};
 use ferrocad_occt::surface_ops;
+use ferrocad_occt::BsplineState;
 use ferrocad_part::backend;
 use ferrocad_types::Matrix4;
 use pyo3::create_exception;
@@ -3665,96 +3666,7 @@ struct SplineState {
     weights: Vec<f64>,
 }
 
-/// A cursor over the flat `f64` state `fc_curve.hxx` returns.
-struct StateReader<'a> {
-    data: &'a [f64],
-    at: usize,
-}
-
-impl<'a> StateReader<'a> {
-    fn new(data: &'a [f64]) -> Self {
-        Self { data, at: 0 }
-    }
-
-    fn number(&mut self) -> Option<f64> {
-        let value = *self.data.get(self.at)?;
-        self.at += 1;
-        Some(value)
-    }
-
-    fn integer(&mut self) -> Option<i32> {
-        Some(self.number()? as i32)
-    }
-
-    fn count(&mut self) -> Option<usize> {
-        Some(self.integer()?.max(0) as usize)
-    }
-
-    fn point(&mut self) -> Option<Vector3> {
-        Some(Vector3::new(self.number()?, self.number()?, self.number()?))
-    }
-
-    fn numbers(&mut self, count: usize) -> Option<Vec<f64>> {
-        let end = self.at.checked_add(count)?;
-        let values = self.data.get(self.at..end)?;
-        self.at = end;
-        Some(values.to_vec())
-    }
-}
-
 impl SplineState {
-    fn from_blob(blob: &[f64]) -> Option<Self> {
-        let mut reader = StateReader::new(blob);
-        let degree = reader.integer()?;
-        let max_degree = reader.integer()?;
-        let _nb_poles = reader.integer()?;
-        let _nb_knots = reader.integer()?;
-        let periodic = reader.number()? != 0.0;
-        let rational = reader.number()? != 0.0;
-        let start = reader.point()?;
-        let end = reader.point()?;
-        let first_parameter = reader.number()?;
-        let last_parameter = reader.number()?;
-        let first_u_knot = reader.integer()?;
-        let last_u_knot = reader.integer()?;
-        let continuity = reader.integer()?;
-        let sequence_length = reader.count()?;
-        let knot_sequence = reader.numbers(sequence_length)?;
-        let knot_count = reader.count()?;
-        let knots = reader.numbers(knot_count)?;
-        let mult_count = reader.count()?;
-        let mults = reader
-            .numbers(mult_count)?
-            .into_iter()
-            .map(|value| value as i32)
-            .collect();
-        let pole_count = reader.count()?;
-        let mut poles = Vec::with_capacity(pole_count);
-        for _ in 0..pole_count {
-            poles.push(reader.point()?);
-        }
-        let weight_count = reader.count()?;
-        let weights = reader.numbers(weight_count)?;
-        Some(Self {
-            degree,
-            max_degree,
-            periodic,
-            rational,
-            start,
-            end,
-            first_parameter,
-            last_parameter,
-            first_u_knot,
-            last_u_knot,
-            continuity,
-            knot_sequence,
-            knots,
-            mults,
-            poles,
-            weights,
-        })
-    }
-
     /// Rebuild `checkRational` for the stored curve: a rational curve must keep
     /// its weights, a non-rational one is reconstructed from unit weights.
     fn check_rational(&self) -> bool {
@@ -3772,6 +3684,35 @@ impl SplineState {
             5 => "C3",
             _ => "CN",
         }
+    }
+}
+
+impl From<BsplineState> for SplineState {
+    fn from(state: BsplineState) -> Self {
+        SplineState {
+            degree: state.degree,
+            max_degree: state.max_degree,
+            periodic: state.periodic,
+            rational: state.rational,
+            start: state.start,
+            end: state.end,
+            first_parameter: state.first_parameter,
+            last_parameter: state.last_parameter,
+            first_u_knot: state.first_u_knot,
+            last_u_knot: state.last_u_knot,
+            continuity: state.continuity,
+            knot_sequence: state.knot_sequence,
+            knots: state.knots,
+            mults: state.mults,
+            poles: state.poles,
+            weights: state.weights,
+        }
+    }
+}
+
+impl SplineState {
+    fn from_blob(state: BsplineState) -> Option<Self> {
+        Some(Self::from(state))
     }
 }
 
@@ -3858,7 +3799,7 @@ fn full_conic_nurbs(conic: &Conic) -> PyResult<SplineState> {
     let blob = occt()
         .bspline_state(&poles, &weights, &knots, &mults, 3, false, true)
         .ok_or_else(|| OCCError::new_err("conversion to a NURBS failed"))?;
-    SplineState::from_blob(&blob)
+    SplineState::from_blob(blob)
         .ok_or_else(|| OCCError::new_err("conversion to a NURBS failed"))
 }
 
@@ -3881,7 +3822,7 @@ fn conic_spline(
     let blob = occt()
         .conic_spline_state(kind, center, normal, x_axis, major, minor, first, last, nurbs)
         .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
-    let state = SplineState::from_blob(&blob)
+    let state = SplineState::from_blob(blob)
         .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
     Py::new(py, PyBSplineCurve::from_state(state))
 }
@@ -3900,7 +3841,7 @@ fn nurbs_state(curve: &NurbsCurve) -> PyResult<SplineState> {
             !curve.is_rational(),
         )
         .ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))?;
-    SplineState::from_blob(&blob).ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))
+    SplineState::from_blob(blob).ok_or_else(|| OCCError::new_err("conversion to a B-spline failed"))
 }
 
 /// A `Part.BSplineCurve` carrying the exact conversion of a conic or a Bezier.
@@ -4095,7 +4036,7 @@ fn build_spline_from_poles(
     let blob = occt()
         .bspline_state(&poles, &weights, &knots, &mults, degree, periodic, check_rational)
         .ok_or_else(|| OCCError::new_err("failed to create spline"))?;
-    SplineState::from_blob(&blob).ok_or_else(|| OCCError::new_err("failed to create spline"))
+    SplineState::from_blob(blob).ok_or_else(|| OCCError::new_err("failed to create spline"))
 }
 
 #[pymethods]
@@ -4256,7 +4197,7 @@ impl PyBSplineCurve {
             )
             .ok_or_else(|| OCCError::new_err("failed to create spline"))?;
         let state =
-            SplineState::from_blob(&blob).ok_or_else(|| OCCError::new_err("failed to create spline"))?;
+            SplineState::from_blob(blob).ok_or_else(|| OCCError::new_err("failed to create spline"))?;
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(())
     }
@@ -4279,7 +4220,7 @@ impl PyBSplineCurve {
         let blob = occt()
             .bspline_interpolated_state(&parsed, PeriodicFlag)
             .ok_or_else(|| OCCError::new_err("failed to interpolate the B-spline"))?;
-        let state = SplineState::from_blob(&blob)
+        let state = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("failed to interpolate the B-spline"))?;
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(())
@@ -4313,7 +4254,7 @@ impl PyBSplineCurve {
                     .ok_or_else(|| {
                         OCCError::new_err("the B-spline cannot be trimmed to that parameter range")
                     })?;
-                SplineState::from_blob(&blob)
+                SplineState::from_blob(blob)
                     .ok_or_else(|| OCCError::new_err("failed to trim the B-spline"))?
             }
             _ => {
@@ -4359,7 +4300,7 @@ impl PyBSplineCurve {
                 u2,
             )
             .ok_or_else(|| OCCError::new_err("Failed to segment BSpline curve"))?;
-        let trimmed = SplineState::from_blob(&blob)
+        let trimmed = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("Failed to segment BSpline curve"))?;
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(trimmed);
         Ok(())
@@ -4421,7 +4362,7 @@ impl PyBSplineCurve {
                 tol,
             )
             .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
-        let state = SplineState::from_blob(&blob)
+        let state = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(())
@@ -4447,7 +4388,7 @@ impl PyBSplineCurve {
         ) else {
             return Ok(false);
         };
-        let Some(removed) = SplineState::from_blob(&blob) else {
+        let Some(removed) = SplineState::from_blob(blob) else {
             return Ok(false);
         };
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(removed);
@@ -4725,7 +4666,7 @@ impl PyBSplineCurve {
                 target,
             )
             .ok_or_else(|| OCCError::new_err("failed to change the spline's periodicity"))?;
-        let state = SplineState::from_blob(&blob)
+        let state = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("failed to change the spline's periodicity"))?;
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
         Ok(())
@@ -5571,7 +5512,7 @@ impl Geom2dData {
                         last,
                     )
                     .ok_or_else(|| OCCError::new_err("failed to trim the B-spline"))?;
-                let state = SplineState::from_blob(&blob)
+                let state = SplineState::from_blob(blob)
                     .ok_or_else(|| OCCError::new_err("failed to trim the B-spline"))?;
                 Self::BSpline(Some(nurbs_of_state(&state).ok_or_else(|| {
                     OCCError::new_err("failed to trim the B-spline")
@@ -6728,7 +6669,7 @@ fn conic_arc_state(ellipse: &Ellipse, first: f64, last: f64) -> PyResult<SplineS
             true,
         )
         .ok_or_else(|| OCCError::new_err("conversion of the elliptical arc to a NURBS failed"))?;
-    SplineState::from_blob(&blob)
+    SplineState::from_blob(blob)
         .ok_or_else(|| OCCError::new_err("conversion of the elliptical arc to a NURBS failed"))
 }
 
@@ -8170,7 +8111,7 @@ impl PyBSplineCurve2d {
         let blob = occt()
             .bspline_interpolated_state(&points, PeriodicFlag)
             .ok_or_else(|| OCCError::new_err("failed to interpolate the 2D B-spline"))?;
-        let state = SplineState::from_blob(&blob)
+        let state = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("failed to interpolate the 2D B-spline"))?;
         let curve = nurbs_of_state(&state)
             .ok_or_else(|| OCCError::new_err("failed to interpolate the 2D B-spline"))?;
@@ -8204,7 +8145,7 @@ impl PyBSplineCurve2d {
         let blob = occt()
             .bspline_approximated_state(&points, DegMin.max(1), DegMax.max(DegMin.max(1)), Tolerance)
             .ok_or_else(|| OCCError::new_err("failed to approximate the 2D B-spline"))?;
-        let state = SplineState::from_blob(&blob)
+        let state = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("failed to approximate the 2D B-spline"))?;
         let curve = nurbs_of_state(&state)
             .ok_or_else(|| OCCError::new_err("failed to approximate the 2D B-spline"))?;
@@ -8282,7 +8223,7 @@ impl PyBSplineCurve2d {
                 tol,
             )
             .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
-        let state = SplineState::from_blob(&blob)
+        let state = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
         let curve = nurbs_of_state(&state)
             .ok_or_else(|| OCCError::new_err("knot insertion failed"))?;
@@ -8314,7 +8255,7 @@ impl PyBSplineCurve2d {
         ) else {
             return Ok(false);
         };
-        let Some(removed) = SplineState::from_blob(&blob) else {
+        let Some(removed) = SplineState::from_blob(blob) else {
             return Ok(false);
         };
         let Some(removed) = nurbs_of_state(&removed) else {
@@ -8508,7 +8449,7 @@ impl PyBSplineCurve2d {
                 periodic,
             )
             .ok_or_else(|| OCCError::new_err("the curve cannot change periodicity"))?;
-        let state = SplineState::from_blob(&blob)
+        let state = SplineState::from_blob(blob)
             .ok_or_else(|| OCCError::new_err("the curve cannot change periodicity"))?;
         let curve = nurbs_of_state(&state)
             .ok_or_else(|| OCCError::new_err("the curve cannot change periodicity"))?;
@@ -10381,7 +10322,7 @@ impl PyFace {
         let Some(blob) = occt().edge_pcurve_state(&edge, &face) else {
             return Ok(None);
         };
-        let Some(state) = SplineState::from_blob(&blob) else {
+        let Some(state) = SplineState::from_blob(blob) else {
             return Ok(None);
         };
         let curve = Py::new(

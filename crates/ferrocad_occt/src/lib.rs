@@ -3,15 +3,14 @@
 //! The real geometry kernel behind the [`ferrocad_geom`] seam. It implements
 //! [`GeometryBackend`](ferrocad_geom::GeometryBackend) with OCCT, through the
 //! [`ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx) fork of
-//! `opencascade-sys` and its sibling bindings crate `ferrocad_part_cxx`.
+//! `opencascade-sys`.
 //!
 //! What stays here is the FreeCAD/`Part` semantics: what a shape operation means,
 //! how elements are named and tracked, and how kernel failures become
 //! `Part.OCCError`. FreeCAD's `TopoShape` policy is Rust, in `src/policy.rs`.
 //!
-//! **This crate contains no C++.** Every OCCT call - including the ones
-//! `opencascade-sys` does not bridge - lives in `ferrocad_part_cxx`, whose
-//! modules `src/bridge.rs` re-exports.
+//! **This crate contains no C++.** Every OCCT call is a generic binding in
+//! `opencascade-sys`, composed into Part/FreeCAD behaviour here.
 //!
 //! The seam means nothing below the application depends on this crate: the document
 //! core talks to a `dyn GeometryBackend`, and the application installs
@@ -45,21 +44,22 @@
 //! ```
 
 mod backend;
-mod bridge;
 pub mod chfi2d;
+mod curve;
 mod error;
 mod history;
 mod shape;
 pub mod part_ops;
 mod policy;
 pub mod shapefix;
+mod shape_ops;
 mod stl;
 pub mod surface_ops;
 mod surface_frame;
 mod topology;
 
 pub use backend::OcctBackend;
-pub use backend::surface_spec;
+pub use curve::BsplineState;
 pub use error::OcctError;
 pub use shape::{read_brep, write_brep, OcctShape};
 

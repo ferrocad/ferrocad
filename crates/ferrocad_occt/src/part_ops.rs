@@ -3,8 +3,8 @@
 //! face validation, projection, defeaturing, 3D offsetting, ordered wire
 //! traversal and the B-spline surface data model.
 //!
-//! Everything here is a thin, safe wrapper over the sibling bridge
-//! ([`crate::bridge`], `src/fc_part_ops.hxx`), in the same style as
+//! Everything here is a thin, safe wrapper over the bindings crate
+//! ([`crate::bridge`], `ferrocad_part_cxx::ops`), in the same style as
 //! [`crate::shapefix`] and [`crate::surface_ops`]. The seam stays
 //! kernel-agnostic; these calls are OCCT-only operations a `dyn GeometryBackend`
 //! cannot usefully abstract.
@@ -251,7 +251,8 @@ fn child_shapes(compound: &Shape) -> Vec<Shape> {
 
 /// A B-spline surface, described by everything Part's surface API reads.
 ///
-/// This is the neutral shape of the layout in `fc_part_ops.hxx`; the Python
+/// This is the neutral shape of the layout in `ferrocad_part_cxx`'s Part
+/// operations bindings; the Python
 /// `Part.BSplineSurface` holds one and the bridge rebuilds an OCCT
 /// `Geom_BSplineSurface` from it on demand.
 #[derive(Clone, Debug, PartialEq)]
@@ -271,7 +272,7 @@ pub struct BsplineSurface {
 }
 
 impl BsplineSurface {
-    /// The flat layout the bridge reads (see `fc_part_ops.hxx`).
+    /// The flat layout the bridge reads (`ferrocad_part_cxx::ops`).
     fn to_flat(&self) -> Vec<f64> {
         let mut out = vec![
             f64::from(self.u_degree),

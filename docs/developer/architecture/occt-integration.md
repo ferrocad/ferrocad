@@ -76,13 +76,13 @@ It owns everything OCCT-specific, so no other crate has to:
   sys crate does not expose;
 - keeps the policy in Rust: `ferrocad_part_cxx` owns the C++ boundary and
   translates `Standard_Failure`, while history/element-map policy, validation
-  and error mapping stay here. `general_transform`, the `ChFi2d` algorithms,
-  the `ShapeFix` fixers, the history/topology bindings and FreeCAD's `TopoShape`
-  policy (`src/policy.rs`: the boolean operation's non-destructive/auto-fuzzy
-  settings, `isClosed`, the shape tolerance) are migrated; the remaining
-  `fc_*.hxx` files are the next slices. The bindings crate is
-  LGPL-2.1 and contains no FerroCAD/FreeCAD semantics, so it can be donated to
-  `opencascade-sys` without carrying product behaviour;
+  and error mapping stay here. **This crate contains no C++** as of tag
+  `v0.3.0-ferrocad.10`: every OCCT call moved to `ferrocad_part_cxx`
+  (`history`, `topology`, `bnd`, `ops`, `surface_ops`) and is re-exported through
+  `src/bridge.rs`; FreeCAD's `TopoShape` policy is `src/policy.rs`.
+  The bindings crate is LGPL-2.1 and written to be donation-ready: a few
+  `ops`/`surface_ops` entries still mirror a FreeCAD `TopoShape` method or carry
+  a flat `Vec<f64>` payload, and extracting those is the remaining work;
 - implements `ferrocad_geom::GeometryBackend`, and ports FreeCAD's `FCBRepAlgoAPI_*`
   behaviour (auto-fuzzy scaled to model bounds, non-destructive, recursive compounds)
   that `occt-history-spike.md` found is required for a usable element map;

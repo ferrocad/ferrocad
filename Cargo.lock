@@ -2392,7 +2392,6 @@ name = "ferrocad_occt"
 version = "0.1.5"
 dependencies = [
  "cxx",
- "cxx-build",
  "ferrocad_curves",
  "ferrocad_geom",
  "ferrocad_occt_cxx",
@@ -2403,7 +2402,7 @@ dependencies = [
 [[package]]
 name = "ferrocad_occt_cxx"
 version = "0.3.0"
-source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.9#c11e342f9338f59b59a9cb63aa3958ac0aa9cd64"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.10#f06cd123a5a0a4a0ef9343a23d85a1b898df4227"
 dependencies = [
  "cmake",
  "cxx",
@@ -2443,7 +2442,7 @@ dependencies = [
 [[package]]
 name = "ferrocad_part_cxx"
 version = "0.1.0"
-source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.9#c11e342f9338f59b59a9cb63aa3958ac0aa9cd64"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.10#f06cd123a5a0a4a0ef9343a23d85a1b898df4227"
 dependencies = [
  "cxx",
  "cxx-build",

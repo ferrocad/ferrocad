@@ -21,18 +21,6 @@ fn main() {
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
-    for file in [
-        "include/fc_curve.hxx",
-        "include/fc_geom2d.hxx",
-        "include/fc_surface_ops.hxx",
-        "include/fc_shape_ops.hxx",
-        "src/fc_part_ops.hxx",
-        "src/bridge.rs",
-        "src/surface_ops.rs",
-    ] {
-        println!("cargo:rerun-if-changed={file}");
-    }
-
     let occt_include = find_include().unwrap_or_else(|| {
         panic!(
             "could not find the OCCT headers. Set OCCT_INCLUDE_DIR to the OCCT \
@@ -52,11 +40,6 @@ fn main() {
         )
     });
     println!("cargo:rustc-env=FERROCAD_OCC_VERSION={version}");
-
-    cxx_build::bridges(["src/bridge.rs", "src/surface_ops.rs"])
-        .include(&occt_include)
-        .std("c++14")
-        .compile("ferrocad-occt-bridge");
 }
 
 /// Find the directory that contains `Standard_Version.hxx`.

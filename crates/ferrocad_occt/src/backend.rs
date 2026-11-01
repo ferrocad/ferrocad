@@ -4044,7 +4044,7 @@ fn point(vector: Vector3) -> UniquePtr<ffi::gp::gp_Pnt> {
     ffi::gp::new_point(vector.x, vector.y, vector.z)
 }
 
-/// A flat xyz list, the form the `fc_curve.hxx` B-spline helpers take.
+/// A flat xyz list, the form the `ferrocad_part_cxx` B-spline helpers take.
 fn flatten(points: &[Vector3]) -> Vec<f64> {
     let mut coords = Vec::with_capacity(points.len() * 3);
     for point in points {
@@ -4094,7 +4094,7 @@ impl ConicFrame for Parabola {
     }
 }
 
-/// Read the flat payload `fc_curve.hxx`'s `fc_edge_curve` writes.
+/// Read the flat payload `fc_edge_curve` writes.
 ///
 /// See that function for the layout: a 14-value header plus a kind-specific tail.
 fn parse_edge_curve(data: &[f64]) -> Result<EdgeCurve, GeomError> {

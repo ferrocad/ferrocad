@@ -10,7 +10,7 @@ use std::pin::Pin;
 
 use cxx::UniquePtr;
 
-use ferrocad_part_cxx::{bnd, history, topology};
+use ferrocad_part_cxx::{history, topology};
 use opencascade_sys as ffi;
 
 use ffi::b_rep_algo_api::BRepAlgoAPI_Cut;
@@ -39,8 +39,8 @@ pub(crate) fn cut_set_auto_fuzzy(mut op: Pin<&mut BRepAlgoAPI_Cut>) {
     add_bounds(history::fc_cut_arguments(op.as_ref().get_ref()), bounds.pin_mut());
     add_bounds(history::fc_cut_tools(op.as_ref().get_ref()), bounds.pin_mut());
 
-    let diagonal = bnd::fc_bnd_box_square_extent(bounds.as_ref().unwrap()).sqrt();
-    history::fc_cut_set_fuzzy_value(op.as_mut(), diagonal * bnd::fc_precision_confusion());
+    let diagonal = bounds.as_ref().unwrap().SquareExtent().sqrt();
+    history::fc_cut_set_fuzzy_value(op.as_mut(), diagonal * ffi::precision::Precision::Confusion());
 }
 
 /// Extend `bounds` with every shape in `shapes`, using the triangulation when the

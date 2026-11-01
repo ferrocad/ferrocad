@@ -3306,18 +3306,31 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        let result = ferrocad_part_cxx::gtransform(inner, m).map_err(|error| {
-            OcctError::Exception {
-                operation: "general_transform",
-                message: error.what().to_owned(),
+        let mut transform = ffi::gp::new_gp_GTrsf();
+        for row in 1..=3 {
+            for column in 1..=4 {
+                let value = m[((row - 1) * 4 + (column - 1)) as usize];
+                transform.pin_mut().SetValue(row, column, value);
             }
-        })?;
-        let Some(result) = result.as_ref() else {
+        }
+        let mut op = ffi::b_rep_builder_api::BRepBuilderAPI_GTransform_new(
+            inner,
+            transform.as_ref().unwrap(),
+            true,
+        );
+        if !op.IsDone() {
             return Err(OcctError::NotDone {
                 operation: "general_transform",
             }
             .into());
-        };
+        }
+        let result = op.pin_mut().Shape();
+        if result.IsNull() {
+            return Err(OcctError::NotDone {
+                operation: "general_transform",
+            }
+            .into());
+        }
         Ok(erase(result))
     }
 

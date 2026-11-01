@@ -2403,7 +2403,7 @@ dependencies = [
 [[package]]
 name = "ferrocad_occt_cxx"
 version = "0.3.0"
-source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.7#121a1187d76110b9f0208729b474bbd2bbcc7e37"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.8#4fd7fdea74cfc2e56d74182e57e80a5dcfd947ef"
 dependencies = [
  "cmake",
  "cxx",
@@ -2443,7 +2443,7 @@ dependencies = [
 [[package]]
 name = "ferrocad_part_cxx"
 version = "0.1.0"
-source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.7#121a1187d76110b9f0208729b474bbd2bbcc7e37"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.8#4fd7fdea74cfc2e56d74182e57e80a5dcfd947ef"
 dependencies = [
  "cxx",
  "cxx-build",

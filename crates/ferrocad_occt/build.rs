@@ -22,8 +22,7 @@ fn main() {
         println!("cargo:rerun-if-env-changed={var}");
     }
     for file in [
-        "include/fc_history.hxx",
-        "include/fc_topology.hxx",
+        "include/fc_policy.hxx",
         "include/fc_curve.hxx",
         "include/fc_geom2d.hxx",
         "include/fc_surface_ops.hxx",

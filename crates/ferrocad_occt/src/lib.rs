@@ -1,11 +1,16 @@
 //! # FerroCAD OCCT backend (`ferrocad_occt`)
 //!
 //! The real geometry kernel behind the [`ferrocad_geom`] seam. It implements
-//! [`GeometryBackend`](ferrocad_geom::GeometryBackend) with OCCT
-//! via [`opencascade_sys`](https://crates.io/crates/opencascade-sys), plus a
-//! **sibling cxx bridge** (`include/fc_history.hxx` and `include/fc_topology.hxx`)
-//! that adds the shape-history, tessellation-adjacency and chamfer calls the crate
-//! does not bridge — no fork, no patch.
+//! [`GeometryBackend`](ferrocad_geom::GeometryBackend) with OCCT, through the
+//! [`ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx) fork of
+//! `opencascade-sys` and its sibling bindings crate `ferrocad_part_cxx`.
+//!
+//! What stays here is the FreeCAD/`Part` semantics: what a shape operation means,
+//! how elements are named and tracked, and how kernel failures become
+//! `Part.OCCError`. The generic OCCT calls live in `ferrocad_part_cxx`, and this
+//! crate's own cxx bridge (`include/fc_policy.hxx`, `fc_curve.hxx`,
+//! `fc_geom2d.hxx`, `fc_shape_ops.hxx`, `src/fc_part_ops.hxx`) holds only what has
+//! not moved yet.
 //!
 //! The seam means nothing below the application depends on this crate: the document
 //! core talks to a `dyn GeometryBackend`, and the application installs

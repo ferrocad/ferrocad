@@ -417,6 +417,7 @@ F0.6 is covered by `ferrocad_part`'s `a_fillet_feature_fillets_the_linked_edge`,
 `a_chamfer_feature_bevels_the_linked_edge`,
 `a_second_distance_makes_the_chamfer_asymmetric`,
 `a_missing_edge_marks_the_feature_invalid_and_leaves_a_null_shape`,
+`a_failed_rebuild_keeps_the_last_good_shape_and_reports_why`,
 `the_edges_property_overrides_the_base_selection`, `a_feature_without_a_base_is_invalid`,
 `a_feature_cannot_use_itself_as_its_base`, `a_negative_radius_is_rejected` and
 `undoing_a_radius_change_rebuilds_the_previous_shape`; `ferrocad_geom`'s two tangent-chain

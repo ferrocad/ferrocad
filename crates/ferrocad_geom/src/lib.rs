@@ -650,6 +650,82 @@ pub fn unsupported(operation: &'static str) -> GeomError {
     Box::new(UnsupportedOperation(operation))
 }
 
+/// Why a backend rejected an input as invalid.
+///
+/// This is deliberately kernel-neutral plain data. [`GeometryBackend`] is
+/// object-safe and a workbench composes with it without naming a specific kernel,
+/// so a reason cannot be recovered by downcasting above the seam. Every variant
+/// means the *user* asked for something invalid and can recover by changing the
+/// input; a kernel that cannot say that must report [`FailureKind::Kernel`]
+/// instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvalidReason {
+    /// A numeric input was zero, negative, non-finite, or outside its valid range
+    /// (a fillet radius, an offset distance, a tolerance, a deflection, …).
+    NonPositiveValue,
+    /// The operation was given nothing to act on (no edges, no sections, no
+    /// tools, …).
+    EmptySelection,
+    /// A shape handle was empty or otherwise unusable.
+    NullShape,
+    /// An element reference is not part of the shape it was applied to.
+    EdgeNotOnShape,
+    /// An element reference did not resolve to the kind of sub-shape the
+    /// operation needs.
+    UnresolvableElement,
+    /// An input this backend rejected that has no more specific variant yet. The
+    /// original diagnostic text is kept so it is not lost.
+    Other(String),
+}
+
+impl fmt::Display for InvalidReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InvalidReason::NonPositiveValue => write!(f, "a size is out of range"),
+            InvalidReason::EmptySelection => write!(f, "nothing was selected"),
+            InvalidReason::NullShape => write!(f, "a shape is empty"),
+            InvalidReason::EdgeNotOnShape => write!(f, "the edge is not part of the shape"),
+            InvalidReason::UnresolvableElement => write!(f, "an element could not be resolved"),
+            InvalidReason::Other(what) => write!(f, "{what}"),
+        }
+    }
+}
+
+/// The failure classes a caller must be able to tell apart.
+///
+/// The split is a product rule, not a rendering detail: a domain error presented
+/// as a bug teaches users to distrust the tool, and a kernel bug presented as
+/// user error hides real regressions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The user asked for something invalid. Recoverable by steering the input;
+    /// the UI must not offer to report it as a bug.
+    Invalid {
+        reason: InvalidReason,
+        message: String,
+    },
+    /// A kernel anomaly — a bug in FerroCAD or in the geometry kernel. Reportable;
+    /// the UI must never present it as the user's fault.
+    Kernel {
+        operation: &'static str,
+        message: String,
+    },
+}
+
+impl fmt::Display for FailureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FailureKind::Invalid { reason, message } => {
+                write!(f, "{message} (reason: {reason})")
+            }
+            FailureKind::Kernel { operation, message } if operation.is_empty() => {
+                write!(f, "{message}")
+            }
+            FailureKind::Kernel { operation, message } => write!(f, "{operation}: {message}"),
+        }
+    }
+}
+
 /// A geometry kernel.
 ///
 /// One method per operation the workbenches actually call; the set grows with them.
@@ -1613,6 +1689,25 @@ pub trait GeometryBackend: Send + Sync {
     ) -> Result<OpResult, GeomError> {
         Err(unsupported("chamfer"))
     }
+
+    /// Classify `error` as a domain error or a kernel anomaly.
+    ///
+    /// The default is [`FailureKind::Kernel`], and that default is the point: a
+    /// backend that cannot classify its own error must never blame the user. A
+    /// kernel refusal presented as user error hides a real regression and teaches
+    /// users to distrust the tool, whereas a user error presented as a kernel bug
+    /// is merely over-cautious. So a backend opts *in* to
+    /// [`FailureKind::Invalid`] by downcasting the error it knows it produced and
+    /// mapping only the cases where it rejected the input itself.
+    ///
+    /// This is additive on purpose: no operation signature changes, and a caller
+    /// that only reads the `Display` message keeps working.
+    fn classify(&self, error: &GeomError) -> FailureKind {
+        FailureKind::Kernel {
+            operation: "",
+            message: error.to_string(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2085,5 +2180,51 @@ mod tests {
 
         // A backend that reports no topology still returns the seed.
         assert_eq!(names(tangent_chain(&NullBackend, &shape, &seed)), ["Edge3"]);
+    }
+
+    #[test]
+    fn the_default_classification_never_blames_the_user() {
+        // Neither dummy backend overrides `classify`, so this is the trait's
+        // default: an error the backend cannot classify is reportable, not the
+        // user's fault.
+        let unsupported: GeomError = Box::new(UnsupportedOperation("fillet"));
+        let foreign: GeomError = Box::new(std::io::Error::other("not from a kernel"));
+
+        for backend in [&NullBackend as &dyn GeometryBackend, &GraphBackend] {
+            for error in [&unsupported, &foreign] {
+                assert_eq!(
+                    backend.classify(error),
+                    FailureKind::Kernel {
+                        operation: "",
+                        message: error.to_string(),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_failure_kinds_describe_themselves() {
+        let invalid = FailureKind::Invalid {
+            reason: InvalidReason::NonPositiveValue,
+            message: "invalid input: fillet radius must be positive and finite".to_string(),
+        };
+        assert!(invalid.to_string().contains("a size is out of range"));
+        assert!(invalid.to_string().contains("fillet radius"));
+
+        let kernel = FailureKind::Kernel {
+            operation: "fillet",
+            message: "OCCT raised".to_string(),
+        };
+        assert_eq!(kernel.to_string(), "fillet: OCCT raised");
+
+        let anonymous = FailureKind::Kernel {
+            operation: "",
+            message: "OCCT raised".to_string(),
+        };
+        assert_eq!(anonymous.to_string(), "OCCT raised");
+
+        // `Other` keeps the backend's own text as its description.
+        assert_eq!(InvalidReason::Other("boundary wire".to_string()).to_string(), "boundary wire");
     }
 }

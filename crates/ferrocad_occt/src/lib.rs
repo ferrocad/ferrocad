@@ -75,8 +75,8 @@ pub const OCC_VERSION: &str = env!("FERROCAD_OCC_VERSION");
 mod tests {
     use super::*;
     use ferrocad_geom::{
-        Capabilities, Continuity, ElementKind, GeometryBackend, MassProperties, Shape,
-        TessellationOptions,
+        Capabilities, Continuity, ElementKind, FailureKind, GeometryBackend, InvalidReason,
+        MassProperties, Shape, TessellationOptions,
     };
 
     #[test]
@@ -418,6 +418,62 @@ mod tests {
                 error.downcast_ref::<crate::error::OcctError>(),
                 Some(crate::error::OcctError::InvalidInput { .. })
             ));
+        }
+    }
+
+    #[test]
+    fn a_non_positive_fillet_radius_classifies_as_invalid() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let edge = backend.elements(&cube, ElementKind::Edge)[0].clone();
+
+        let error = backend
+            .fillet(&cube, std::slice::from_ref(&edge), 0.0)
+            .expect_err("a zero radius is invalid input");
+        assert_eq!(
+            backend.classify(&error),
+            FailureKind::Invalid {
+                reason: InvalidReason::NonPositiveValue,
+                message: error.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_foreign_fillet_edge_classifies_as_invalid() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let other = backend.make_box(5.0, 5.0, 5.0).unwrap();
+        let foreign = backend.elements(&other, ElementKind::Edge)[0].clone();
+
+        let error = backend
+            .fillet(&cube, std::slice::from_ref(&foreign), 1.0)
+            .expect_err("a foreign fillet edge is invalid input");
+        assert_eq!(
+            backend.classify(&error),
+            FailureKind::Invalid {
+                reason: InvalidReason::EdgeNotOnShape,
+                message: error.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_fillet_refused_by_the_kernel_classifies_as_a_kernel_failure() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let edge = backend.elements(&cube, ElementKind::Edge)[0].clone();
+
+        // A radius far larger than the box gets past this backend's own validation
+        // and fails inside the kernel (`Build()` raises, or `IsDone()` is false).
+        // That is the kernel failing to execute, not a bad input, so it must be
+        // reportable rather than presented as the user's mistake.
+        let error = backend
+            .fillet(&cube, std::slice::from_ref(&edge), 1.0e6)
+            .expect_err("an impossible fillet is an error, not a crash");
+        match backend.classify(&error) {
+            FailureKind::Kernel { operation, .. } => assert_eq!(operation, "fillet"),
+            other => panic!("a kernel refusal must not blame the user, got {other}"),
         }
     }
 

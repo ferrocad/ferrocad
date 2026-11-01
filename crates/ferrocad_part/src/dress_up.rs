@@ -283,16 +283,22 @@ fn source_shape(doc: &Document, name: &str) -> Result<(Shape, Lineage), String> 
     Ok((shape, property.lineage().clone()))
 }
 
-/// Store a rebuild's outcome: the shape, or an empty output plus the invalid flag.
+/// Store a rebuild's outcome: the shape, or the invalid flag plus its reason.
+///
+/// A failed rebuild keeps the last good shape. Blanking it made the dressed body
+/// vanish from the viewport, which is the failure mode this workbench exists to
+/// avoid: the user sees a hole in the model and has to guess what went wrong.
+/// The object is `invalid`, and `getStatusString` reports the reason, so the
+/// stale output is never mistaken for a fresh one. A feature that never built
+/// has no earlier shape to keep; its output stays empty.
 fn store(doc: &mut Document, id: ObjectId, result: Result<Shape, String>) {
     match result {
         Ok(shape) => {
             doc.set_property_raw(id, SHAPE, make_shape_property(ShapeProperty::new(shape)));
         }
-        Err(_) => {
-            doc.mark_invalid(id);
-            doc.set_property_raw(id, SHAPE, make_shape_property(ShapeProperty::empty()));
-        }
+        // Keep `Shape` as it was: the last successful rebuild, or empty if there
+        // never was one. The reason survives for `getStatusString`.
+        Err(reason) => doc.mark_invalid_with(id, reason),
     }
 }
 
@@ -551,7 +557,7 @@ mod tests {
         assert!(object.invalid, "a missing edge fails the rebuild");
         assert!(
             stored_shape(&doc, fillet).is_none(),
-            "the output is cleared, not left stale"
+            "the feature never built, so it has no shape to keep"
         );
 
         // Fixing the selection recovers on the next recompute.
@@ -730,7 +736,7 @@ mod tests {
         );
         assert!(
             stored_shape(&doc, fillet).is_none(),
-            "the output is cleared, not filleted elsewhere"
+            "the feature never built, so it is not filleted elsewhere either"
         );
     }
 
@@ -745,5 +751,41 @@ mod tests {
         doc.recompute().unwrap();
         assert!(doc.object(fillet).unwrap().invalid);
         assert!(stored_shape(&doc, fillet).is_none());
+    }
+
+    #[test]
+    fn a_failed_rebuild_keeps_the_last_good_shape_and_reports_why() {
+        setup();
+        let mut doc = Document::new();
+        let box_id = box_feature(&mut doc, 10.0);
+        let fillet = add_fillet(&mut doc, box_id, &["Edge1"]);
+        doc.recompute().unwrap();
+        let good = stored_shape(&doc, fillet).expect("the first rebuild produces a shape");
+        let good_faces = face_count(&good);
+        assert_eq!(good_faces, 7, "the premise: a filleted box");
+
+        // A radius the workbench rejects. The rebuild fails, but the previously
+        // filleted body stays in the document instead of vanishing.
+        doc.set_property(fillet, "Radius", Property::Float(0.0))
+            .unwrap();
+        doc.recompute().unwrap();
+
+        let object = doc.object(fillet).unwrap();
+        assert!(object.invalid, "the rebuild failed");
+        assert_eq!(
+            object.error.as_deref(),
+            Some("the fillet radius must be positive"),
+            "the reason is kept for getStatusString"
+        );
+        let kept = stored_shape(&doc, fillet).expect("the last good shape is kept");
+        assert_eq!(face_count(&kept), good_faces, "the body did not disappear");
+
+        // Fixing the input clears both the flag and the message.
+        doc.set_property(fillet, "Radius", Property::Float(2.0))
+            .unwrap();
+        doc.recompute().unwrap();
+        let object = doc.object(fillet).unwrap();
+        assert!(!object.invalid);
+        assert!(object.error.is_none(), "a good rebuild clears the reason");
     }
 }

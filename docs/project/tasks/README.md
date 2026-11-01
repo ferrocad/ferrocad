@@ -1,6 +1,12 @@
 # Active task specs
 
-Status: index (2026-10-30). Nine active specs and one recorded decision:
+Status: index (2026-11-01). Ten active specs and one recorded decision:
+
+- [operation-failure-modelling.md](operation-failure-modelling.md) — **typed, recoverable
+  failures**: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the
+  `FilletRef`/`Recovery` affordances, the `SESSION_HOLD(failure)` payload and the
+  never-report rule for domain errors. Stages **F1–F5**; **F1 landed 2026-11-01**
+  (`FailureKind::classify`), F2–F5 open.
 
 - [mod-events.md](mod-events.md) — **the mod boundary, planned not built**: a fixed
   low-frequency event set the host advertises, explicit `FerroCAD.subscribe`, and why a

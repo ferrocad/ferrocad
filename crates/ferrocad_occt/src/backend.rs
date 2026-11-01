@@ -25,8 +25,8 @@ use ferrocad_curves::{
     Hyperbola, Line, NurbsCurve, OffsetCurve, Parabola, Vector3,
 };
 use ferrocad_geom::{
-    BsplineSurfaceData, Capabilities, Continuity, ElementId, ElementKind, ElementRef, GeomError,
-    GeometryBackend, History, Lineage, MapVersion, MassProperties, OpResult, OperandId,
+    BsplineSurfaceData, Capabilities, Continuity, ElementId, ElementKind, ElementRef, FailureKind,
+    GeomError, GeometryBackend, History, Lineage, MapVersion, MassProperties, OpResult, OperandId,
     PrincipalProperties, Shape, ShapeDistance, SurfaceData, SurfaceSpec, Tessellation,
     TessellationOptions, ToleranceKind, unsupported,
 };
@@ -3236,6 +3236,12 @@ impl GeometryBackend for OcctBackend {
         d2: Option<f64>,
     ) -> Result<OpResult, GeomError> {
         topology::chamfer(shape, edges, d1, d2)
+    }
+
+    fn classify(&self, error: &GeomError) -> FailureKind {
+        // The whole OCCT mapping lives in `error.rs` so it can be audited and
+        // unit-tested in one place; this backend's job is simply to opt in.
+        crate::error::classify(error)
     }
 }
 

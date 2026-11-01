@@ -62,6 +62,31 @@ pub(crate) fn new_map() -> UniquePtr<TopTools_IndexedMapOfShape> {
     ffi::top_tools::new_indexed_map_of_shape()
 }
 
+/// `FindIndex` that ignores orientation (`IsSame`), matching the old
+/// `fc_*_find_index_same` helpers. Returns 0 when `shape` is not present.
+pub(crate) fn find_index_same(map: &TopTools_IndexedMapOfShape, shape: &TopoDS_Shape) -> i32 {
+    (1..=map.Extent())
+        .find(|index| map.FindKey(*index).IsSame(shape))
+        .unwrap_or(0)
+}
+
+/// `TopExp_Explorer(shape, find, avoid)` de-duplicated into a map — replaces
+/// the old `fc_explore`. Pass `TopAbs_SHAPE` as `avoid` to explore the whole
+/// subtree.
+pub(crate) fn explore(
+    shape: &TopoDS_Shape,
+    find: TopAbs_ShapeEnum,
+    avoid: TopAbs_ShapeEnum,
+) -> UniquePtr<TopTools_IndexedMapOfShape> {
+    let mut out = new_map();
+    let mut xp = ffi::top_exp::TopExp_Explorer_new_avoid(shape, find, avoid);
+    while xp.More() {
+        out.pin_mut().Add(xp.Current());
+        xp.pin_mut().Next();
+    }
+    out
+}
+
 /// Map the sub-shapes of `shape` of `kind` (1-based, OCCT order).
 pub(crate) fn sub_shape_map(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> UniquePtr<TopTools_IndexedMapOfShape> {
     let mut map = new_map();

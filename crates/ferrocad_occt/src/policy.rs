@@ -8,18 +8,14 @@
 
 use std::pin::Pin;
 
-use cxx::UniquePtr;
-
-use ferrocad_part_cxx::topology;
 use opencascade_sys as ffi;
 
 use ffi::b_rep_algo_api::BRepAlgoAPI_Cut;
 use ffi::top_abs::TopAbs_ShapeEnum;
-use ffi::top_tools::{TopTools_IndexedMapOfShape, TopTools_ListOfShape};
+use ffi::top_tools::TopTools_ListOfShape;
 use ffi::topo_ds::{TopoDS, TopoDS_Shape};
 
-use crate::bridge;
-use crate::shape::new_map;
+use crate::shape::explore;
 
 /// Upstream `FCBRepAlgoAPI_BooleanOperation`'s constructor settings: run in
 /// parallel and non-destructively, so the operands are not rewritten in place.
@@ -49,8 +45,8 @@ pub(crate) fn cut_set_auto_fuzzy(mut op: Pin<&mut BRepAlgoAPI_Cut>) {
 /// Extend `bounds` with every shape in `shapes`, using the triangulation when the
 /// shape has one (`BRepBndLib::Add`'s default, which upstream also relies on).
 fn add_bounds(shapes: &TopTools_ListOfShape, mut bounds: Pin<&mut ffi::bnd::Bnd_Box>) {
-    for index in 1..=bridge::fc_list_size(shapes) {
-        let shape = bridge::fc_list_value(shapes, index);
+    let vec = ffi::topo_ds::shape_list_to_vector(shapes);
+    for shape in vec.iter() {
         ffi::b_rep_bnd_lib::BRepBndLib::Add(shape, bounds.as_mut(), true);
     }
 }
@@ -69,7 +65,7 @@ pub(crate) fn is_closed(shape: &TopoDS_Shape) -> bool {
         | TopAbs_ShapeEnum::TopAbs_EDGE
         | TopAbs_ShapeEnum::TopAbs_FACE
         | TopAbs_ShapeEnum::TopAbs_VERTEX
-        | TopAbs_ShapeEnum::TopAbs_SHAPE => topology::fc_shape_is_closed(shape),
+        | TopAbs_ShapeEnum::TopAbs_SHAPE => ffi::b_rep::BRep_Tool_IsClosed_shape(shape),
         TopAbs_ShapeEnum::TopAbs_COMPSOLID | TopAbs_ShapeEnum::TopAbs_SOLID => {
             every_sub_shape_closed(
                 shape,
@@ -120,9 +116,8 @@ fn every_sub_shape_closed(
     to_find: TopAbs_ShapeEnum,
     to_avoid: TopAbs_ShapeEnum,
 ) -> bool {
-    let mut found: UniquePtr<TopTools_IndexedMapOfShape> = new_map();
-    topology::fc_explore(shape, to_find, to_avoid, found.pin_mut());
-    (1..=found.Extent()).all(|index| topology::fc_shape_is_closed(found.FindKey(index)))
+    let found = explore(shape, to_find, to_avoid);
+    (1..=found.Extent()).all(|index| ffi::b_rep::BRep_Tool_IsClosed_shape(found.FindKey(index)))
 }
 
 /// The shape's geometric tolerance. A vertex, edge or face reports its own; any
@@ -145,8 +140,7 @@ pub(crate) fn shape_tolerance(shape: &TopoDS_Shape) -> f64 {
 /// The largest tolerance among `shape`'s sub-shapes of `kind`, or 0.0 when it has
 /// none.
 fn max_tolerance(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> f64 {
-    let mut found: UniquePtr<TopTools_IndexedMapOfShape> = new_map();
-    topology::fc_explore(shape, kind, TopAbs_ShapeEnum::TopAbs_SHAPE, found.pin_mut());
+    let found = explore(shape, kind, TopAbs_ShapeEnum::TopAbs_SHAPE);
     (1..=found.Extent())
         .map(|index| leaf_tolerance(found.FindKey(index)))
         .fold(0.0_f64, f64::max)
@@ -157,9 +151,9 @@ fn max_tolerance(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> f64 {
 /// accumulates before walking the sub-shapes.
 fn leaf_tolerance(shape: &TopoDS_Shape) -> f64 {
     match shape.ShapeType() {
-        TopAbs_ShapeEnum::TopAbs_VERTEX => topology::fc_vertex_tolerance(TopoDS::Vertex(shape)),
-        TopAbs_ShapeEnum::TopAbs_EDGE => topology::fc_edge_tolerance(TopoDS::Edge(shape)),
-        TopAbs_ShapeEnum::TopAbs_FACE => topology::fc_face_tolerance(TopoDS::Face(shape)),
+        TopAbs_ShapeEnum::TopAbs_VERTEX => ffi::b_rep::BRep_Tool_Tolerance_vertex(TopoDS::Vertex(shape)),
+        TopAbs_ShapeEnum::TopAbs_EDGE => ffi::b_rep::BRep_Tool_Tolerance_edge(TopoDS::Edge(shape)),
+        TopAbs_ShapeEnum::TopAbs_FACE => ffi::b_rep::BRep_Tool_Tolerance_face(TopoDS::Face(shape)),
         _ => 0.0,
     }
 }
@@ -168,14 +162,16 @@ fn leaf_tolerance(shape: &TopoDS_Shape) -> f64 {
 mod tests {
     use super::{is_closed, shape_tolerance};
     use cxx::UniquePtr;
-    use ferrocad_part_cxx::topology::fc_copy_shape;
     use opencascade_sys as ffi;
     use ffi::topo_ds::TopoDS_Shape;
 
     fn make_box(size: f64) -> UniquePtr<TopoDS_Shape> {
         let origin = ffi::gp::new_point(0.0, 0.0, 0.0);
         let mut make = ffi::b_rep_prim_api::BRepPrimAPI_MakeBox_new(&origin, size, size, size);
-        let shape = fc_copy_shape(make.pin_mut().Shape());
+        let mut copier =
+            ffi::b_rep_builder_api::BRepBuilderAPI_Copy_new(make.pin_mut().Shape(), true, false);
+        assert!(copier.IsDone(), "a box copy");
+        let shape = ffi::topo_ds::TopoDS_Shape_to_owned(copier.pin_mut().Shape());
         assert!(!shape.is_null(), "a box copy");
         shape
     }
@@ -193,12 +189,10 @@ mod tests {
     #[test]
     fn an_open_face_is_not_closed() {
         let cube = make_box(10.0);
-        let mut faces = ffi::top_tools::new_indexed_map_of_shape();
-        ferrocad_part_cxx::topology::fc_explore(
+        let faces = crate::shape::explore(
             cube.as_ref().unwrap(),
             ffi::top_abs::TopAbs_ShapeEnum::TopAbs_FACE,
             ffi::top_abs::TopAbs_ShapeEnum::TopAbs_SHAPE,
-            faces.pin_mut(),
         );
         let face = faces.FindKey(1);
         assert!(!is_closed(face), "a box face is an open surface");

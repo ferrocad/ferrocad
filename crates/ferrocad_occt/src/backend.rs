@@ -34,18 +34,20 @@ use ferrocad_types::{Matrix4, Placement};
 use opencascade_sys as ffi;
 
 use std::collections::BTreeSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use ffi::top_abs::TopAbs_Orientation;
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
 use ffi::top_tools::TopTools_ListOfShape;
-use ffi::topo_ds::TopoDS_Shape;
+use ffi::topo_ds::{TopoDS, TopoDS_Shape};
 
 use crate::bridge;
 use crate::error::OcctError;
 use crate::history;
 use crate::policy;
-use crate::shape::{downcast, erase, new_map, sub_shape_map};
+use crate::shape::{downcast, erase, find_index_same, new_map, sub_shape_map};
 use crate::topology;
 
 type Map = TopTools_IndexedMapOfShape;
@@ -147,7 +149,7 @@ impl OcctBackend {
         let Some(outer_inner) = outer_guard.as_ref() else {
             return shape.clone();
         };
-        let outer_index = bridge::fc_indexed_map_find_index_same(&wires, outer_inner);
+        let outer_index = find_index_same(&wires, outer_inner);
 
         // A wire bounds an area only when it encloses a region on its own; probe
         // each one and count the ones that do not.
@@ -2481,7 +2483,13 @@ impl GeometryBackend for OcctBackend {
         // Upstream's `countSubShapes("SubShape")` counts the direct children, not
         // every descendant; every other spelling counts that sub-shape kind.
         if kind == "SubShape" {
-            return Ok(bridge::fc_direct_child_count(inner).max(0) as usize);
+            let mut count = 0;
+            let mut iterator = ffi::topo_ds::TopoDS_Iterator_new(inner);
+            while iterator.More() {
+                count += 1;
+                iterator.pin_mut().Next();
+            }
+            return Ok(count.max(0) as usize);
         }
         let Some(occt_kind) = count_kind(kind) else {
             return Ok(0);
@@ -2501,7 +2509,7 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        Ok(bridge::fc_edge_degenerated(inner))
+        Ok(ffi::b_rep::BRep_Tool::Degenerated(TopoDS::Edge(inner)))
     }
 
     fn is_seam(&self, edge: &Shape, face: &Shape) -> Result<bool, GeomError> {
@@ -2524,7 +2532,10 @@ impl GeometryBackend for OcctBackend {
         if !bridge::fc_is_face(face_inner) {
             return Err(OcctError::InvalidInput { what: "not a face" }.into());
         }
-        Ok(bridge::fc_edge_is_seam(edge_inner, face_inner))
+        Ok(ffi::b_rep::BRep_Tool_IsClosed_edge_face(
+            TopoDS::Edge(edge_inner),
+            TopoDS::Face(face_inner),
+        ))
     }
 
     fn edge_parameter_range(&self, edge: &Shape) -> Result<(f64, f64), GeomError> {
@@ -2540,7 +2551,7 @@ impl GeometryBackend for OcctBackend {
             .into());
         }
         let (mut first, mut last) = (0.0, 0.0);
-        bridge::fc_edge_range(inner, &mut first, &mut last);
+        ffi::b_rep::BRep_Tool::Range(TopoDS::Edge(inner), &mut first, &mut last);
         Ok((first, last))
     }
 
@@ -2554,7 +2565,13 @@ impl GeometryBackend for OcctBackend {
             return Err(OcctError::InvalidInput { what: "not a face" }.into());
         }
         let (mut u0, mut u1, mut v0, mut v1) = (0.0, 0.0, 0.0, 0.0);
-        bridge::fc_face_uv_bounds(inner, &mut u0, &mut u1, &mut v0, &mut v1);
+        ffi::b_rep_tools::BRepTools::UVBounds(
+            TopoDS::Face(inner),
+            &mut u0,
+            &mut u1,
+            &mut v0,
+            &mut v1,
+        );
         Ok((u0, u1, v0, v1))
     }
 
@@ -2569,28 +2586,19 @@ impl GeometryBackend for OcctBackend {
         let second_inner = second_guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let (mut distance, mut first_x, mut first_y, mut first_z) = (0.0, 0.0, 0.0, 0.0);
-        let (mut second_x, mut second_y, mut second_z) = (0.0, 0.0, 0.0);
-        if !bridge::fc_dist_to_shape(
-            first_inner,
-            second_inner,
-            &mut distance,
-            &mut first_x,
-            &mut first_y,
-            &mut first_z,
-            &mut second_x,
-            &mut second_y,
-            &mut second_z,
-        ) {
+        let dist = ffi::b_rep_extrema::BRepExtrema_DistShapeShape_new(first_inner, second_inner);
+        if !dist.IsDone() || dist.NbSolution() < 1 {
             return Err(OcctError::NotDone {
                 operation: "dist_to_shape",
             }
             .into());
         }
+        let p1 = ffi::b_rep_extrema::BRepExtrema_DistShapeShape_point_on_shape1(&dist, 1);
+        let p2 = ffi::b_rep_extrema::BRepExtrema_DistShapeShape_point_on_shape2(&dist, 1);
         Ok(ShapeDistance {
-            distance,
-            first: Vector3::new(first_x, first_y, first_z),
-            second: Vector3::new(second_x, second_y, second_z),
+            distance: dist.Value(),
+            first: Vector3::new(p1.X(), p1.Y(), p1.Z()),
+            second: Vector3::new(p2.X(), p2.Y(), p2.Z()),
         })
     }
 
@@ -2878,14 +2886,9 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        let (mut x, mut y, mut z) = (0.0, 0.0, 0.0);
-        if !bridge::fc_edge_value(inner, t, &mut x, &mut y, &mut z) {
-            return Err(OcctError::NotDone {
-                operation: "edge_value_at",
-            }
-            .into());
-        }
-        Ok(Vector3::new(x, y, z))
+        let curve = ffi::b_rep_adaptor::BRepAdaptor_Curve_new(TopoDS::Edge(inner));
+        let point = ffi::b_rep_adaptor::BRepAdaptor_Curve_value(&curve, t);
+        Ok(Vector3::new(point.X(), point.Y(), point.Z()))
     }
 
     fn face_value_at(&self, face: &Shape, u: f64, v: f64) -> Result<Vector3, GeomError> {
@@ -2897,14 +2900,9 @@ impl GeometryBackend for OcctBackend {
         if !bridge::fc_is_face(inner) {
             return Err(OcctError::InvalidInput { what: "not a face" }.into());
         }
-        let (mut x, mut y, mut z) = (0.0, 0.0, 0.0);
-        if !bridge::fc_face_value(inner, u, v, &mut x, &mut y, &mut z) {
-            return Err(OcctError::NotDone {
-                operation: "face_value_at",
-            }
-            .into());
-        }
-        Ok(Vector3::new(x, y, z))
+        let surface = ffi::b_rep_adaptor::BRepAdaptor_Surface_new(TopoDS::Face(inner));
+        let point = ffi::b_rep_adaptor::BRepAdaptor_Surface_value(&surface, u, v);
+        Ok(Vector3::new(point.X(), point.Y(), point.Z()))
     }
 
     fn edge_discretize(
@@ -3079,14 +3077,14 @@ impl GeometryBackend for OcctBackend {
         if inner.IsNull() {
             return Err(OcctError::InvalidInput { what: "null shape" }.into());
         }
-        let copy = bridge::fc_copy_shape(inner);
-        let Some(copy) = copy.as_ref() else {
+        let mut copier = ffi::b_rep_builder_api::BRepBuilderAPI_Copy_new(inner, true, false);
+        if !copier.IsDone() {
             return Err(OcctError::NotDone {
                 operation: "copy_shape",
             }
             .into());
-        };
-        Ok(erase(copy))
+        }
+        Ok(erase(copier.pin_mut().Shape()))
     }
 
     fn shape_hash(&self, shape: &Shape) -> Result<u64, GeomError> {
@@ -3095,7 +3093,23 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        Ok(bridge::fc_shape_hash(inner, u64::MAX))
+        if inner.IsNull() {
+            return Ok(0);
+        }
+        // Same TShape pointer and location as the old `fc_shape_hash`, but the
+        // pointer is re-hashed with a deterministic hasher before the boost
+        // combine. Only `IsSame => same hash` matters, so the exact value is not
+        // asserted anywhere.
+        let ptr = ffi::topo_ds::TopoDS_Shape_t_shape_ptr(inner);
+        let mut hasher = DefaultHasher::new();
+        ptr.hash(&mut hasher);
+        let mut hash = hasher.finish();
+        let location = inner.Location().HashCode() as u64;
+        hash ^= location
+            .wrapping_add(0x9e3779b97f4a7c15u64)
+            .wrapping_add(hash.wrapping_shl(6))
+            .wrapping_add(hash.wrapping_shr(2));
+        Ok(hash)
     }
 
     fn orientation(&self, shape: &Shape) -> Option<&'static str> {
@@ -3425,9 +3439,9 @@ fn tolerance_shape_type(kind: ToleranceKind) -> i32 {
 
 /// A copy of every shape in a bridged `TopTools_ListOfShape`.
 fn list_shapes(list: &TopTools_ListOfShape) -> Vec<Shape> {
-    let count = bridge::fc_list_size(list);
-    (1..=count)
-        .map(|index| erase(bridge::fc_list_value(list, index)))
+    ffi::topo_ds::shape_list_to_vector(list)
+        .iter()
+        .map(erase)
         .collect()
 }
 
@@ -3995,9 +4009,9 @@ fn collect_list(list: &UniquePtr<TopTools_ListOfShape>) -> Vec<Shape> {
     let Some(list) = list.as_ref() else {
         return Vec::new();
     };
-    let count = bridge::fc_list_size(list);
-    (1..=count)
-        .map(|index| erase(bridge::fc_list_value(list, index)))
+    ffi::topo_ds::shape_list_to_vector(list)
+        .iter()
+        .map(erase)
         .collect()
 }
 

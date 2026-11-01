@@ -16,12 +16,12 @@ use ferrocad_geom::{
 use opencascade_sys as ffi;
 
 use ffi::top_abs::{TopAbs_Orientation, TopAbs_ShapeEnum};
-use ffi::top_tools::{TopTools_IndexedMapOfShape, TopTools_ListOfShape};
+use ffi::top_tools::TopTools_IndexedMapOfShape;
 use ffi::topo_ds::{TopoDS, TopoDS_Shape};
 
-use crate::bridge;
 use crate::error::OcctError;
-use crate::shape::{downcast, erase, new_map, sub_shape_map};
+use crate::history;
+use crate::shape::{downcast, erase, find_index_same, new_map, sub_shape_map};
 
 type Map = TopTools_IndexedMapOfShape;
 
@@ -72,7 +72,7 @@ fn element_ref(map: &Map, index: i32, kind: ElementKind) -> ElementRef {
 
 /// The index of `shape` in `map`, ignoring orientation, or `None`.
 fn index_in(map: &Map, shape: &TopoDS_Shape) -> Option<i32> {
-    let index = bridge::fc_indexed_map_find_index_same(map, shape);
+    let index = find_index_same(map, shape);
     (index > 0).then_some(index)
 }
 
@@ -375,15 +375,16 @@ pub(crate) fn ancestors(shape: &Shape, element: &ElementRef, kind: ElementKind) 
             shape_enum(kind),
             data.pin_mut(),
         );
-        let index = bridge::fc_data_map_find_index_same(&data, source_shape);
+        let index = (1..=data.Extent())
+            .find(|index| data.FindKey(*index).IsSame(source_shape))
+            .unwrap_or(0);
         if index == 0 {
             return Vec::new();
         }
-        let list: &TopTools_ListOfShape = data.FindFromIndex(index);
-        let count = bridge::fc_list_size(list);
-        (1..=count)
-            .filter_map(|entry| {
-                let ancestor = bridge::fc_list_value(list, entry);
+        let list = data.FindFromIndex(index);
+        let vec = ffi::topo_ds::shape_list_to_vector(list);
+        vec.iter()
+            .filter_map(|ancestor| {
                 index_in(&target_map, ancestor).map(|index| element_ref(&target_map, index, kind))
             })
             .collect()
@@ -406,10 +407,31 @@ pub(crate) fn continuity(_shape: &Shape, a: &ElementRef, b: &ElementRef) -> Opti
         return None;
     }
 
-    let mut tangents = Vec::new();
-    bridge::fc_edge_tangents(TopoDS::Edge(edge_a), TopoDS::Edge(edge_b), &mut tangents);
-    if tangents.len() != 6 {
+    let mut vertex = ffi::topo_ds::TopoDS_Vertex_new();
+    if !ffi::top_exp::TopExp::CommonVertex(
+        TopoDS::Edge(edge_a),
+        TopoDS::Edge(edge_b),
+        vertex.pin_mut(),
+    ) {
         return None;
+    }
+
+    let mut tangents = Vec::with_capacity(6);
+    for edge in [edge_a, edge_b] {
+        let curve = ffi::b_rep_adaptor::BRepAdaptor_Curve_new(TopoDS::Edge(edge));
+        let u = ffi::b_rep::BRep_Tool_Parameter_edge(vertex.as_ref().unwrap(), TopoDS::Edge(edge));
+        let mut point = ffi::gp::new_point(0.0, 0.0, 0.0);
+        let mut derivative = ffi::gp::new_vec(0.0, 0.0, 0.0);
+        ffi::b_rep_adaptor::BRepAdaptor_Curve_d1(&curve, u, point.pin_mut(), derivative.pin_mut());
+        let magnitude = derivative.Magnitude();
+        if magnitude < 1e-12 {
+            return None;
+        }
+        tangents.extend_from_slice(&[
+            derivative.X() / magnitude,
+            derivative.Y() / magnitude,
+            derivative.Z() / magnitude,
+        ]);
     }
     let dot = tangents[0] * tangents[3] + tangents[1] * tangents[4] + tangents[2] * tangents[5];
     // `abs`: the two edges may be oriented towards or away from the shared vertex.
@@ -506,13 +528,12 @@ pub(crate) fn fillet(
     }
     // `Build()` runs the algorithm without `Shape()`'s `Check()`. It can also
     // raise `Standard_Failure` (OCCT 7.x does not derive it from
-    // `std::exception`), which must be caught in C++ before it crosses cxx's
-    // `noexcept` shim. `IsDone()` is only meaningful afterwards.
-    let mut message = String::new();
-    if !bridge::fc_fillet_build(op.pin_mut(), &mut message) {
+    // `std::exception`), which is translated in C++ and delivered here as a
+    // `Result`. `IsDone()` is only meaningful afterwards.
+    if let Err(e) = ffi::b_rep_fillet_api::BRepFilletAPI_MakeFillet_build(op.pin_mut()) {
         return Err(OcctError::Exception {
             operation: "fillet",
-            message,
+            message: e.what().to_string(),
         }
         .into());
     }
@@ -539,9 +560,9 @@ pub(crate) fn fillet(
             edge_shape,
             &out_faces,
             |shape, modified, generated| {
-                bridge::fc_fillet_modified(op.pin_mut(), shape, modified.pin_mut());
-                bridge::fc_fillet_generated(op.pin_mut(), shape, generated.pin_mut());
-                bridge::fc_fillet_is_deleted(op.pin_mut(), shape)
+                history::collect(op.pin_mut().Modified(shape), modified);
+                history::collect(op.pin_mut().Generated(shape), generated);
+                op.pin_mut().IsDeleted(shape)
             },
         );
         merge_into(&mut history, lineage);
@@ -593,8 +614,7 @@ pub(crate) fn chamfer(
                 let face_shape = face_guard
                     .as_ref()
                     .ok_or(OcctError::InvalidInput { what: "null face" })?;
-                bridge::fc_chamfer_add_asym(
-                    op.pin_mut(),
+                op.pin_mut().add_asym(
                     d1,
                     d2,
                     TopoDS::Edge(edge_shape),
@@ -605,11 +625,10 @@ pub(crate) fn chamfer(
         }
     }
     // Same checked build as the fillet above.
-    let mut message = String::new();
-    if !bridge::fc_chamfer_build(op.pin_mut(), &mut message) {
+    if let Err(e) = ffi::b_rep_fillet_api::BRepFilletAPI_MakeChamfer_build(op.pin_mut()) {
         return Err(OcctError::Exception {
             operation: "chamfer",
-            message,
+            message: e.what().to_string(),
         }
         .into());
     }
@@ -636,9 +655,9 @@ pub(crate) fn chamfer(
             edge_shape,
             &out_faces,
             |shape, modified, generated| {
-                bridge::fc_chamfer_modified(op.pin_mut(), shape, modified.pin_mut());
-                bridge::fc_chamfer_generated(op.pin_mut(), shape, generated.pin_mut());
-                bridge::fc_chamfer_is_deleted(op.pin_mut(), shape)
+                history::collect(op.pin_mut().Modified(shape), modified);
+                history::collect(op.pin_mut().Generated(shape), generated);
+                op.pin_mut().IsDeleted(shape)
             },
         );
         merge_into(&mut history, lineage);

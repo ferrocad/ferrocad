@@ -2401,7 +2401,7 @@ dependencies = [
 [[package]]
 name = "ferrocad_occt_cxx"
 version = "0.3.0"
-source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.21#bd0a6dba6f0680d27601669003adc7399c4aadb3"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.22#0aea31b194dbffe654af0a3eb553634a2f6da464"
 dependencies = [
  "cmake",
  "cxx",
@@ -6826,7 +6826,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

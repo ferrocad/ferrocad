@@ -75,7 +75,8 @@ pub const OCC_VERSION: &str = env!("FERROCAD_OCC_VERSION");
 mod tests {
     use super::*;
     use ferrocad_geom::{
-        Capabilities, Continuity, ElementKind, GeometryBackend, TessellationOptions,
+        Capabilities, Continuity, ElementKind, GeometryBackend, MassProperties, Shape,
+        TessellationOptions,
     };
 
     #[test]
@@ -328,51 +329,115 @@ mod tests {
         );
     }
 
+    /// A cheap, deterministic fingerprint for non-destructiveness checks.
+    fn fingerprint(
+        backend: &OcctBackend,
+        shape: &Shape,
+    ) -> (MassProperties, (usize, usize, usize)) {
+        let mass = backend
+            .mass_properties(shape)
+            .expect("a box has mass properties");
+        let faces = backend.elements(shape, ElementKind::Face).len();
+        let edges = backend.elements(shape, ElementKind::Edge).len();
+        let vertices = backend.elements(shape, ElementKind::Vertex).len();
+        (mass, (faces, edges, vertices))
+    }
+
     #[test]
-    fn a_throwing_build_is_reported_instead_of_aborting() {
+    fn a_foreign_edge_is_rejected_before_the_kernel() {
         let backend = OcctBackend::new();
         let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
         let other = backend.make_box(5.0, 5.0, 5.0).unwrap();
-        // An edge that is not part of `cube`. `Build()` raises
-        // `Standard_Failure("There are no suitable edges for chamfer or
-        // fillet")` instead of returning `IsDone() == false`.
+        // An edge that is not part of `cube`. Ownership validation now rejects it
+        // up front; without it `Build()` raises `Standard_Failure` ("There are no
+        // suitable edges for chamfer or fillet"), and on some OCCT versions a
+        // foreign edge can even produce a wrong shape instead of throwing.
         let foreign = backend.elements(&other, ElementKind::Edge)[0].clone();
 
         let errors = [
             (
-                "fillet",
+                "fillet edge is not part of the shape",
                 backend
                     .fillet(&cube, std::slice::from_ref(&foreign), 1.0)
                     .expect_err("a foreign fillet edge is an error, not a crash"),
             ),
             (
-                "chamfer",
+                "chamfer edge is not part of the shape",
                 backend
                     .chamfer(&cube, std::slice::from_ref(&foreign), 1.0, None)
                     .expect_err("a foreign chamfer edge is an error, not a crash"),
             ),
         ];
 
-        for (operation, error) in errors {
+        for (what, error) in errors {
             let occt = error
                 .downcast_ref::<crate::error::OcctError>()
                 .expect("the error is an OcctError");
             assert!(
                 matches!(
                     occt,
-                    crate::error::OcctError::Exception {
-                        operation: "fillet" | "chamfer",
-                        ..
-                    }
+                    crate::error::OcctError::InvalidInput { what: got } if *got == what
                 ),
-                "expected OCCT's failure to cross as an exception, got {occt:?}"
-            );
-            let text = error.to_string();
-            assert!(
-                text.contains(operation) && text.contains("no suitable edges"),
-                "the error names the operation and keeps OCCT's message: {text}"
+                "expected early invalid-input rejection, got {occt:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_non_positive_radius_or_distance_is_invalid_input() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let edge = backend.elements(&cube, ElementKind::Edge)[0].clone();
+
+        for radius in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let error = backend
+                .fillet(&cube, std::slice::from_ref(&edge), radius)
+                .expect_err("a non-positive/non-finite radius is invalid input");
+            assert!(matches!(
+                error.downcast_ref::<crate::error::OcctError>(),
+                Some(crate::error::OcctError::InvalidInput { .. })
+            ));
+        }
+
+        for d1 in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let error = backend
+                .chamfer(&cube, std::slice::from_ref(&edge), d1, None)
+                .expect_err("a non-positive/non-finite distance is invalid input");
+            assert!(matches!(
+                error.downcast_ref::<crate::error::OcctError>(),
+                Some(crate::error::OcctError::InvalidInput { .. })
+            ));
+        }
+
+        // The two-distance form validates the second distance as well.
+        for d2 in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let error = backend
+                .chamfer(&cube, std::slice::from_ref(&edge), 1.0, Some(d2))
+                .expect_err("a non-positive/non-finite d2 is invalid input");
+            assert!(matches!(
+                error.downcast_ref::<crate::error::OcctError>(),
+                Some(crate::error::OcctError::InvalidInput { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn a_failed_fillet_leaves_the_input_shape_unchanged() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let edge = backend.elements(&cube, ElementKind::Edge)[0].clone();
+
+        let before = fingerprint(&backend, &cube);
+
+        // A radius far larger than the box cannot be built. The operation must
+        // fail without mutating the input handle.
+        let error = backend
+            .fillet(&cube, std::slice::from_ref(&edge), 1.0e6)
+            .expect_err("an impossible fillet is an error, not a crash");
+        assert!(!error.to_string().is_empty());
+
+        let after = fingerprint(&backend, &cube);
+        assert_eq!(before, after, "the failed fillet must not mutate its input");
     }
 
     #[test]

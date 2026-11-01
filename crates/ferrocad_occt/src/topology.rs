@@ -511,11 +511,36 @@ pub(crate) fn fillet(
         }
         .into());
     }
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "fillet radius must be positive and finite",
+        }
+        .into());
+    }
     let occt = downcast(shape)?;
     let guard = occt.borrow();
     let s = guard
         .as_ref()
         .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+
+    // Reject a foreign edge before the kernel: on some OCCT versions a foreign
+    // edge can produce a wrong shape instead of raising, so `Build()` alone must
+    // not be the guard. Build the edge map once and require every requested edge
+    // to be one of the shape's own.
+    let edge_map = sub_shape_map(s, TopAbs_ShapeEnum::TopAbs_EDGE);
+    for edge in edges {
+        let edge_occt = downcast(&edge.shape)?;
+        let edge_guard = edge_occt.borrow();
+        let edge_shape = edge_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if find_index_same(&edge_map, edge_shape) == 0 {
+            return Err(OcctError::InvalidInput {
+                what: "fillet edge is not part of the shape",
+            }
+            .into());
+        }
+    }
 
     let mut op = ffi::b_rep_fillet_api::BRepFilletAPI_MakeFillet_new(s);
     for edge in edges {
@@ -524,7 +549,17 @@ pub(crate) fn fillet(
         let edge_shape = edge_guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
-        op.pin_mut().add_edge(radius, TopoDS::Edge(edge_shape));
+        if let Err(e) = ffi::b_rep_fillet_api::BRepFilletAPI_MakeFillet_add_edge_checked(
+            op.pin_mut(),
+            radius,
+            TopoDS::Edge(edge_shape),
+        ) {
+            return Err(OcctError::Exception {
+                operation: "fillet",
+                message: e.what().to_string(),
+            }
+            .into());
+        }
     }
     // `Build()` runs the algorithm without `Shape()`'s `Check()`. It can also
     // raise `Standard_Failure` (OCCT 7.x does not derive it from
@@ -588,11 +623,41 @@ pub(crate) fn chamfer(
         }
         .into());
     }
+    if !d1.is_finite() || d1 <= 0.0 {
+        return Err(OcctError::InvalidInput {
+            what: "chamfer distance must be positive and finite",
+        }
+        .into());
+    }
+    if let Some(d2) = d2 {
+        if !d2.is_finite() || d2 <= 0.0 {
+            return Err(OcctError::InvalidInput {
+                what: "chamfer distance must be positive and finite",
+            }
+            .into());
+        }
+    }
     let occt = downcast(shape)?;
     let guard = occt.borrow();
     let s = guard
         .as_ref()
         .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+
+    // Same early ownership rejection as the fillet above.
+    let edge_map = sub_shape_map(s, TopAbs_ShapeEnum::TopAbs_EDGE);
+    for edge in edges {
+        let edge_occt = downcast(&edge.shape)?;
+        let edge_guard = edge_occt.borrow();
+        let edge_shape = edge_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null edge" })?;
+        if find_index_same(&edge_map, edge_shape) == 0 {
+            return Err(OcctError::InvalidInput {
+                what: "chamfer edge is not part of the shape",
+            }
+            .into());
+        }
+    }
 
     let mut op = ffi::b_rep_fillet_api::BRepFilletAPI_MakeChamfer_new(s);
     for edge in edges {
@@ -614,14 +679,33 @@ pub(crate) fn chamfer(
                 let face_shape = face_guard
                     .as_ref()
                     .ok_or(OcctError::InvalidInput { what: "null face" })?;
-                op.pin_mut().add_asym(
+                if let Err(e) = ffi::b_rep_fillet_api::BRepFilletAPI_MakeChamfer_add_asym_checked(
+                    op.pin_mut(),
                     d1,
                     d2,
                     TopoDS::Edge(edge_shape),
                     TopoDS::Face(face_shape),
-                );
+                ) {
+                    return Err(OcctError::Exception {
+                        operation: "chamfer",
+                        message: e.what().to_string(),
+                    }
+                    .into());
+                }
             }
-            None => op.pin_mut().add_edge(d1, TopoDS::Edge(edge_shape)),
+            None => {
+                if let Err(e) = ffi::b_rep_fillet_api::BRepFilletAPI_MakeChamfer_add_edge_checked(
+                    op.pin_mut(),
+                    d1,
+                    TopoDS::Edge(edge_shape),
+                ) {
+                    return Err(OcctError::Exception {
+                        operation: "chamfer",
+                        message: e.what().to_string(),
+                    }
+                    .into());
+                }
+            }
         }
     }
     // Same checked build as the fillet above.

@@ -297,10 +297,11 @@ jobs:
           fi
 
   # WASM. The model side is kernel-free (`wasm-example`); the OCCT-backed Part
-  # layer compiles against a prebuilt wasm kernel. The tarball is cadrum's OCCT
-  # 8.0.1 build, and the image supplies the wasi-sdk toolchain whose rebuilt
-  # sysroot matches its wasm-EH encoding. Compile-only: a final link needs the
-  # modules the tarball ships (it has no IGES, STL, BRepFeat or OCAF toolkits).
+  # layer compiles and links against a prebuilt wasm kernel. The tarball is
+  # cadrum's OCCT 8.0.1 build, and the image supplies the wasi-sdk toolchain
+  # whose rebuilt sysroot matches its wasm-EH encoding. The tarball is headless
+  # (no IGES, STL, BRepFeat or OCAF toolkits): unused bindings are dropped by
+  # --gc-sections, so a normal geometry path links, but calling those does not.
   wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -325,3 +326,7 @@ jobs:
         run: |
           cargo check -p ferrocad_occt_cxx --target wasm32-unknown-unknown --locked
           cargo check -p ferrocad_occt --target wasm32-unknown-unknown --locked
+      - name: Link the wasm cdylib (box, fillet, tessellate)
+        env:
+          OCCT_WASM_ROOT: ${{ github.workspace }}/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown
+        run: cargo build -p ferrocad_occt_wasm --target wasm32-unknown-unknown --locked

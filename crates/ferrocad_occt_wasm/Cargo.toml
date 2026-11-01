@@ -1,0 +1,20 @@
+# wasm32 link smoke test for the OCCT Part backend.
+#
+# Built for `wasm32-unknown-unknown` against a prebuilt wasm OCCT (see the fork's
+# build script and `docs/project/research/occt-8-upgrade.md` §2.2). It is a
+# workspace member but NOT in `default-members`, because it links the kernel.
+[package]
+name = "ferrocad_occt_wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "wasm32 link smoke test for the ferrocad_occt Part backend"
+
+[lib]
+name = "ferrocad_occt_wasm"
+crate-type = ["cdylib"]
+
+[dependencies]
+ferrocad_geom.workspace = true
+ferrocad_occt.workspace = true

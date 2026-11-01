@@ -2409,6 +2409,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_occt_wasm"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_geom",
+ "ferrocad_occt",
+]
+
+[[package]]
 name = "ferrocad_parametric"
 version = "0.1.5"
 dependencies = [

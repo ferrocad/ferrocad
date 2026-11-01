@@ -129,12 +129,19 @@ The fork consumes it behind a target check (tag `v0.3.0-ferrocad.24`):
 
 Verified in that image: `cargo check -p ferrocad_occt_cxx` and
 `cargo check -p ferrocad_occt` both succeed for `wasm32-unknown-unknown` (61 bridge
-translation units; 2m40s and 2m48s).
+translation units; 2m40s and 2m48s), and `crates/ferrocad_occt_wasm` — a `cdylib` that
+builds a box, fillets an edge and tessellates it — **links**: 38 MB in the debug
+profile with 4,079 OCCT symbols.
+
+It also **runs**. Under Node 22's WASI (`node --experimental-wasi-unstable-preview1`)
+the module imports only `wasi_snapshot_preview1` (13 functions), `occt_init()` runs the
+C++ constructors, and `filleted_box_triangles()` returns **40** for a 10 mm box
+filleted on one edge. A browser host therefore needs a WASI shim plus the rendering
+layer; the kernel itself is ready.
 
 Limits: the wasm kernel is a subset — no TKDESTL, TKDEIGES, TKFeat, TKCAF, TKLCAF or
-TKXCAF — so a final link that uses those bindings fails. Compilation proves the bridge
-and the Part layer; linking a `cdylib` is the next step. Rendering is separate: wgpu's
-WebGL2/WebGPU backends are the browser path.
+TKXCAF. `--gc-sections` drops unused bindings, so a normal geometry path links; code
+that actually calls those modules fails at link time.
 
 ---
 
@@ -216,7 +223,7 @@ notes warn about when it leaks into a 7.8.1 link.
 | **O3** | Compile and test against `occt=8.0.1`, then make it the CI fetch | 78 tests pass on 8.0.1 | ✅ 2026-11-01: fork tag `v0.3.0-ferrocad.23`, workspace re-pinned, CI/packaging fetch `occt=8.0.1=novtk_*` |
 | **O4** | Windows leg for 8.0.1; confirm the #234 patch is no longer needed there | `ferrocad_parametric` builds on MSVC/8.0.1 | open |
 | **O5** | Flip CI/release/packaging pins to 8.0.1 | green release with 8.0.1 binaries | ✅ pins flipped; a release is still to cut |
-| **O6** | Kernel in wasm: consume the prebuilt wasm OCCT | the sys crate and `ferrocad_occt` compile for `wasm32-unknown-unknown` | ✅ check-only (tag `v0.3.0-ferrocad.24`, CI job `wasm`); link a `cdylib` next |
+| **O6** | Kernel in wasm: consume the prebuilt wasm OCCT | the sys crate and `ferrocad_occt` compile for `wasm32-unknown-unknown`, and a `cdylib` links and runs | ✅ tag `v0.3.0-ferrocad.24`, CI job `wasm`, `ferrocad_occt_wasm` links; 40 triangles under Node/WASI |
 
 O1–O3 were additive and reversible: the code builds on *both* versions, so the upgrade
 was a pin change, not a branch. That is also how the removals we could not see from

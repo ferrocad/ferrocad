@@ -19,6 +19,7 @@ members = [
     "crates/ferrocad_mesh_py",
     "crates/ferrocad_combined_py",
     "crates/ferrocad_occt",
+    "crates/ferrocad_occt_wasm",
     "crates/ferrocad_part",
     "crates/ferrocad_part_gui",
     "crates/ferrocad_part_py",

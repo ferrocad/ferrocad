@@ -43,6 +43,7 @@ use ffi::topo_ds::TopoDS_Shape;
 
 use crate::bridge;
 use crate::error::OcctError;
+use crate::history;
 use crate::policy;
 use crate::shape::{downcast, erase, new_map, sub_shape_map};
 use crate::topology;
@@ -1664,9 +1665,9 @@ impl GeometryBackend for OcctBackend {
         let Some(compound_inner) = compound_guard.as_ref() else {
             return Vec::new();
         };
-        let count = bridge::fc_shape_child_count(compound_inner);
-        (1..=count)
-            .filter_map(|index| bridge::fc_shape_child(compound_inner, index).as_ref().map(erase))
+        history::children(compound_inner)
+            .iter()
+            .filter_map(|child| child.as_ref().map(erase))
             .collect()
     }
 
@@ -1714,9 +1715,9 @@ impl GeometryBackend for OcctBackend {
             [(OperandId::A, sa), (OperandId::B, sb)],
             &out_maps,
             |sub, mods, gens| {
-                bridge::fc_brep_fuse_modified(op.pin_mut(), sub, mods.pin_mut());
-                bridge::fc_brep_fuse_generated(op.pin_mut(), sub, gens.pin_mut());
-                bridge::fc_brep_fuse_is_deleted(op.pin_mut(), sub)
+                history::collect(op.pin_mut().Modified(sub), mods);
+                history::collect(op.pin_mut().Generated(sub), gens);
+                op.pin_mut().IsDeleted(sub)
             },
         );
         Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
@@ -1738,12 +1739,12 @@ impl GeometryBackend for OcctBackend {
         // cut before OCCT sees it. One operation object is reused for every
         // internal build, so its history describes the last of them — which is
         // exactly what the element map is built from.
-        let mut op = bridge::fc_cut_new_op();
+        let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Cut_new_default();
         // The constructor-time settings, taken from the *original* operands: the
         // fuzzy value is not recomputed for the internal fuse/cut builds.
         let initial_arguments = shape_list(&[sa]);
         let initial_tools = shape_list(&[sb]);
-        bridge::fc_cut_configure(op.pin_mut(), &initial_arguments, &initial_tools);
+        history::configure_cut(op.pin_mut(), &initial_arguments, &initial_tools);
         policy::cut_prepare(op.pin_mut());
         policy::cut_set_auto_fuzzy(op.pin_mut());
 
@@ -1757,9 +1758,9 @@ impl GeometryBackend for OcctBackend {
             [(OperandId::A, sa), (OperandId::B, sb)],
             &out_maps,
             |sub, mods, gens| {
-                bridge::fc_brep_cut_modified(op.pin_mut(), sub, mods.pin_mut());
-                bridge::fc_brep_cut_generated(op.pin_mut(), sub, gens.pin_mut());
-                bridge::fc_brep_cut_is_deleted(op.pin_mut(), sub)
+                history::collect(op.pin_mut().Modified(sub), mods);
+                history::collect(op.pin_mut().Generated(sub), gens);
+                op.pin_mut().IsDeleted(sub)
             },
         );
         Ok(OpResult::new(erase(result), history))
@@ -1797,9 +1798,9 @@ impl GeometryBackend for OcctBackend {
             [(OperandId::A, sa), (OperandId::B, sb)],
             &out_maps,
             |sub, mods, gens| {
-                bridge::fc_brep_common_modified(op.pin_mut(), sub, mods.pin_mut());
-                bridge::fc_brep_common_generated(op.pin_mut(), sub, gens.pin_mut());
-                bridge::fc_brep_common_is_deleted(op.pin_mut(), sub)
+                history::collect(op.pin_mut().Modified(sub), mods);
+                history::collect(op.pin_mut().Generated(sub), gens);
+                op.pin_mut().IsDeleted(sub)
             },
         );
         Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
@@ -3445,11 +3446,7 @@ fn refs(shapes: &[UniquePtr<TopoDS_Shape>]) -> Vec<&TopoDS_Shape> {
 /// Unlike `TopExp::MapShapes`, this does not recurse: it is the iteration
 /// upstream's `RecursiveAddTools`/`RecursiveCutCompound` perform.
 fn direct_children(shape: &TopoDS_Shape) -> Vec<UniquePtr<TopoDS_Shape>> {
-    let count = bridge::fc_shape_child_count(shape);
-    (1..=count)
-        .map(|index| bridge::fc_shape_child(shape, index))
-        .filter(|child| !child.is_null())
-        .collect()
+    history::children(shape)
 }
 
 /// Flatten a shape's compound children recursively, as `RecursiveAddTools` does.
@@ -3613,10 +3610,10 @@ fn build_cut_policy(
             let fuse_arguments = [first.as_ref().expect("a tool piece")];
             let argument_list = shape_list(&fuse_arguments);
             let tool_list = shape_list(&rest);
-            bridge::fc_cut_set_operation(op.pin_mut(), true);
-            bridge::fc_cut_configure(op.pin_mut(), &argument_list, &tool_list);
-            bridge::fc_cut_build(op.pin_mut());
-            bridge::fc_cut_set_operation(op.pin_mut(), false);
+            history::set_operation(op.pin_mut(), true);
+            history::configure_cut(op.pin_mut(), &argument_list, &tool_list);
+            history::build_cut(op.pin_mut());
+            history::set_operation(op.pin_mut(), false);
             if !op.IsDone() {
                 return None;
             }
@@ -3629,9 +3626,9 @@ fn build_cut_policy(
         let tool_refs = refs(&pieces);
         let argument_list = shape_list(arguments);
         let tool_list = shape_list(&tool_refs);
-        bridge::fc_cut_set_operation(op.pin_mut(), false);
-        bridge::fc_cut_configure(op.pin_mut(), &argument_list, &tool_list);
-        bridge::fc_cut_build(op.pin_mut());
+        history::set_operation(op.pin_mut(), false);
+        history::configure_cut(op.pin_mut(), &argument_list, &tool_list);
+        history::build_cut(op.pin_mut());
         return op.IsDone().then(|| owned(op.pin_mut().Shape()));
     }
 
@@ -3652,9 +3649,9 @@ fn build_cut_policy(
 
     let argument_list = shape_list(arguments);
     let tool_list = shape_list(tools);
-    bridge::fc_cut_set_operation(op.pin_mut(), operation == CutOperation::Fuse);
-    bridge::fc_cut_configure(op.pin_mut(), &argument_list, &tool_list);
-    bridge::fc_cut_build(op.pin_mut());
+    history::set_operation(op.pin_mut(), operation == CutOperation::Fuse);
+    history::configure_cut(op.pin_mut(), &argument_list, &tool_list);
+    history::build_cut(op.pin_mut());
     op.IsDone().then(|| owned(op.pin_mut().Shape()))
 }
 
@@ -3737,7 +3734,7 @@ where
                 let mut mapped = false;
                 for entry in 1..=mods.Extent() {
                     let out = mods.FindKey(entry);
-                    let index = bridge::fc_indexed_map_find_index(out_map, out);
+                    let index = out_map.FindIndex(out);
                     if index > 0 {
                         history.push_modified(
                             element_ref(kind, ordinal, element),
@@ -3749,7 +3746,7 @@ where
                 }
                 for entry in 1..=gens.Extent() {
                     let out = gens.FindKey(entry);
-                    let index = bridge::fc_indexed_map_find_index(out_map, out);
+                    let index = out_map.FindIndex(out);
                     if index > 0 {
                         history.push_generated(
                             element_ref(kind, ordinal, element),
@@ -3811,7 +3808,7 @@ fn add_identity_relations(
             let out_map = &out_maps[kind_index].1;
             for ordinal in 1..=in_map.Extent() {
                 let element = in_map.FindKey(ordinal);
-                let index = bridge::fc_indexed_map_find_index(out_map, element);
+                let index = out_map.FindIndex(element);
                 if index > 0 {
                     history.push_identity(
                         element_ref(kind, ordinal, element),
@@ -3880,7 +3877,7 @@ fn add_derived_names(history: &mut History, out_maps: &[(ElementKind, UniquePtr<
             let sub = sub_shape_map(upper, lower_occt);
             for sub_index in 1..=sub.Extent() {
                 let lower_shape = sub.FindKey(sub_index);
-                let lower_index = bridge::fc_indexed_map_find_index(lower_map, lower_shape);
+                let lower_index = lower_map.FindIndex(lower_shape);
                 if lower_index <= 0 || named.contains(&(lower_kind, lower_index)) {
                     continue;
                 }
@@ -3954,7 +3951,7 @@ fn complete_lower(
     let sub = sub_shape_map(shape, kind);
     let mut ordinals: Vec<i32> = Vec::new();
     for index in 1..=sub.Extent() {
-        let index = bridge::fc_indexed_map_find_index(map, sub.FindKey(index));
+        let index = map.FindIndex(sub.FindKey(index));
         if index <= 0 || !named.contains(&(element_kind, index)) {
             return None;
         }

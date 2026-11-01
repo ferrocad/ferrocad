@@ -10,7 +10,7 @@ use std::pin::Pin;
 
 use cxx::UniquePtr;
 
-use ferrocad_part_cxx::{history, topology};
+use ferrocad_part_cxx::topology;
 use opencascade_sys as ffi;
 
 use ffi::b_rep_algo_api::BRepAlgoAPI_Cut;
@@ -24,8 +24,8 @@ use crate::shape::new_map;
 /// Upstream `FCBRepAlgoAPI_BooleanOperation`'s constructor settings: run in
 /// parallel and non-destructively, so the operands are not rewritten in place.
 pub(crate) fn cut_prepare(mut op: Pin<&mut BRepAlgoAPI_Cut>) {
-    history::fc_cut_set_run_parallel(op.as_mut(), true);
-    history::fc_cut_set_non_destructive(op.as_mut(), true);
+    ffi::b_rep_algo_api::BRepAlgoAPI_Cut_SetRunParallel(op.as_mut(), true);
+    op.as_mut().SetNonDestructive(true);
 }
 
 /// Upstream's automatic fuzzy value: the diagonal of the combined operand bounds
@@ -33,14 +33,17 @@ pub(crate) fn cut_prepare(mut op: Pin<&mut BRepAlgoAPI_Cut>) {
 /// factor to 1.0).
 ///
 /// Reads the operands already installed on `op`, so it must run after
-/// `fc_cut_configure`.
+/// `configure_cut`.
 pub(crate) fn cut_set_auto_fuzzy(mut op: Pin<&mut BRepAlgoAPI_Cut>) {
     let mut bounds = ffi::bnd::Bnd_Box_new();
-    add_bounds(history::fc_cut_arguments(op.as_ref().get_ref()), bounds.pin_mut());
-    add_bounds(history::fc_cut_tools(op.as_ref().get_ref()), bounds.pin_mut());
+    add_bounds(op.as_ref().get_ref().Arguments(), bounds.pin_mut());
+    add_bounds(op.as_ref().get_ref().Tools(), bounds.pin_mut());
 
     let diagonal = bounds.as_ref().unwrap().SquareExtent().sqrt();
-    history::fc_cut_set_fuzzy_value(op.as_mut(), diagonal * ffi::precision::Precision::Confusion());
+    ffi::b_rep_algo_api::BRepAlgoAPI_Cut_SetFuzzyValue(
+        op.as_mut(),
+        diagonal * ffi::precision::Precision::Confusion(),
+    );
 }
 
 /// Extend `bounds` with every shape in `shapes`, using the triangulation when the

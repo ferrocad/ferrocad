@@ -445,7 +445,7 @@ where
     let mut history = History::default();
     for entry in 1..=modified.Extent() {
         let out = modified.FindKey(entry);
-        let index = bridge::fc_indexed_map_find_index(out_faces, out);
+        let index = out_faces.FindIndex(out);
         if index > 0 {
             history
                 .modified
@@ -454,7 +454,7 @@ where
     }
     for entry in 1..=generated.Extent() {
         let out = generated.FindKey(entry);
-        let index = bridge::fc_indexed_map_find_index(out_faces, out);
+        let index = out_faces.FindIndex(out);
         if index > 0 {
             history
                 .generated

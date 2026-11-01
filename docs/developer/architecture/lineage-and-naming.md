@@ -121,7 +121,7 @@ a kernel question, not an inference from a name table.
 
 | Stage | Code | State |
 | --- | --- | --- |
-| Provenance | `ferrocad_occt/src/backend.rs` `build_history`; `ferrocad_part_cxx::history` | **Both operands** and faces/edges/vertices, each with `OperandId`, kind and ordinal. The *names* remain positional (`FaceN` from the operand's own enumeration); the backend still invents them. |
+| Provenance | `ferrocad_occt/src/backend.rs` `build_history`; `ferrocad_occt/src/history.rs` over the sys `Modified`/`Generated` bindings | **Both operands** and faces/edges/vertices, each with `OperandId`, kind and ordinal. The *names* remain positional (`FaceN` from the operand's own enumeration); the backend still invents them. |
 | Vocabulary and fold | `crates/ferrocad_lineage`; re-exported by `ferrocad_geom` | Payload-generic, no workspace dependencies, unit-tested with `T = String` and with `Shape`. `Lineage`, `ReverseMap`, `MapVersion` and `NamePolicy` are the production types. |
 | Document and property | `ferrocad_part/src/{containers,dress_up,shape_property}.rs` | `ShapeProperty` stores the shape **plus** its `Lineage` in a versioned native envelope; boolean containers fold `OpResult.history`; `resolve_element_in` reads the map before falling back. |
 | Python | `ferrocad_part_py` | `ElementReverseMap` returns `{output: [inputs]}` from the stored reverse map. `ElementMap`/`ElementMapVersion` stay empty until the remaining exact sizes (52/58/26/10/9/24) are reproduced. |
@@ -259,7 +259,7 @@ them into names**, and a string must never cross the FFI boundary.
 
 | Item | Owner | Today | Required |
 | --- | --- | --- | --- |
-| `Modified` / `Generated` | OCCT → backend | Bridged (`ferrocad_part_cxx::history`), both operands, faces/edges/vertices | All operations, not only booleans |
+| `Modified` / `Generated` | OCCT → backend | Bridged (`opencascade-sys` `BRepAlgoAPI_*`), both operands, faces/edges/vertices | All operations, not only booleans |
 | `IsDeleted` | OCCT → backend | Suppressed when the element also maps | Report raw; lineage decides |
 | Unchanged | OCCT (by absence) | Not represented | Derived by lineage from "in output, in neither list" |
 | Input identity | backend | `ElementId`: operand + kind + 1-based ordinal | Keep identity distinct from the name |

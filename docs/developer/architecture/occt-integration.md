@@ -238,7 +238,7 @@ The extraction is a refactor with its own tests, so it lands in stages:
    `geom -> core` edge was avoided: `ferrocad_types` landed first.)
 3. **[x] `ferrocad_occt`** (done 2026-10-06): implements `GeometryBackend` via
    `opencascade-sys` + the sibling bridge (`include/fc_history.hxx`, since moved
-   to `ferrocad_part_cxx::history`). First operations:
+   to the sys crate's generic boolean-history bindings). First operations:
    `make_box`, `fuse`, `cut`, `fillet`, `place`, and a positional `resolve`; fuse/cut
    build a face-level `History`. Verified against OCCT 7.8.1 (5 tests + doctest) and
    tested in CI by a `geometry` job that fetches OCCT from conda-forge.

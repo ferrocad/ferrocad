@@ -75,13 +75,13 @@ pub fn write_brep(shape: &Shape) -> Option<Vec<u8>> {
     let guard = occt.borrow();
     let inner = guard.as_ref()?;
     let mut bytes = Vec::new();
-    crate::bridge::fc_brep_write(inner, &mut bytes);
+    ffi::b_rep_tools::write_brep_bytes(inner, &mut bytes);
     Some(bytes)
 }
 
 /// Read a shape from BREP bytes, or `None` if they are not valid BREP.
 pub fn read_brep(bytes: &[u8]) -> Option<Shape> {
-    let shape = crate::bridge::fc_brep_read(bytes);
+    let shape = ffi::b_rep_tools::read_brep_bytes(bytes);
     if shape.is_null() {
         return None;
     }

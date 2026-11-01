@@ -236,15 +236,11 @@ pub fn wire_end_vertices(wire: &Shape) -> Option<(Shape, Shape)> {
 /// The direct children of a shape (the compound `wire_ordered_edges` returns).
 fn child_shapes(compound: &Shape) -> Vec<Shape> {
     borrow(compound, |inner| {
-        let count = bridge::fc_shape_child_count(inner);
-        let mut children = Vec::with_capacity(count.max(0) as usize);
-        for index in 1..=count {
-            let child = bridge::fc_shape_child(inner, index);
-            if !child.is_null() {
-                children.push(Shape::new(crate::shape::OcctShape(child)));
-            }
-        }
-        Ok(children)
+        Ok(crate::history::children(inner)
+            .into_iter()
+            .filter(|child| !child.is_null())
+            .map(|child| Shape::new(crate::shape::OcctShape(child)))
+            .collect())
     })
     .unwrap_or_default()
 }

@@ -43,6 +43,7 @@ use ffi::topo_ds::TopoDS_Shape;
 
 use crate::bridge;
 use crate::error::OcctError;
+use crate::policy;
 use crate::shape::{downcast, erase, new_map, sub_shape_map};
 use crate::topology;
 
@@ -1743,8 +1744,8 @@ impl GeometryBackend for OcctBackend {
         let initial_arguments = shape_list(&[sa]);
         let initial_tools = shape_list(&[sb]);
         bridge::fc_cut_configure(op.pin_mut(), &initial_arguments, &initial_tools);
-        bridge::fc_cut_prepare(op.pin_mut());
-        bridge::fc_cut_set_auto_fuzzy(op.pin_mut());
+        policy::cut_prepare(op.pin_mut());
+        policy::cut_set_auto_fuzzy(op.pin_mut());
 
         let Some(result) = build_cut_policy(&mut op, &[sa], &[sb], CutOperation::Cut) else {
             return Err(OcctError::NotDone { operation: "cut" }.into());
@@ -2598,7 +2599,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        Ok(bridge::fc_is_closed(inner))
+        Ok(policy::is_closed(inner))
     }
 
     fn shape_tolerance(&self, shape: &Shape) -> Result<f64, GeomError> {
@@ -2607,7 +2608,7 @@ impl GeometryBackend for OcctBackend {
         let inner = guard
             .as_ref()
             .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        Ok(bridge::fc_shape_tolerance(inner))
+        Ok(policy::shape_tolerance(inner))
     }
 
     fn is_inside(

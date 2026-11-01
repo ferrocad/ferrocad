@@ -8,9 +8,9 @@
 //! What stays here is the FreeCAD/`Part` semantics: what a shape operation means,
 //! how elements are named and tracked, and how kernel failures become
 //! `Part.OCCError`. The generic OCCT calls live in `ferrocad_part_cxx`, and this
-//! crate's own cxx bridge (`include/fc_policy.hxx`, `fc_curve.hxx`,
-//! `fc_geom2d.hxx`, `fc_shape_ops.hxx`, `src/fc_part_ops.hxx`) holds only what has
-//! not moved yet.
+//! crate's own cxx bridge (`include/fc_curve.hxx`, `include/fc_geom2d.hxx`,
+//! `include/fc_shape_ops.hxx`, `src/fc_part_ops.hxx`) holds only what has not
+//! moved yet. FreeCAD's `TopoShape` policy is Rust, in `src/policy.rs`.
 //!
 //! The seam means nothing below the application depends on this crate: the document
 //! core talks to a `dyn GeometryBackend`, and the application installs
@@ -49,6 +49,7 @@ pub mod chfi2d;
 mod error;
 mod shape;
 pub mod part_ops;
+mod policy;
 pub mod shapefix;
 pub mod surface_ops;
 mod topology;

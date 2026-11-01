@@ -6,9 +6,10 @@
 //! (`ferrocad_part_cxx`) and are re-exported at the bottom of this file, so a call
 //! site still reads `bridge::fc_...`.
 //!
-//! What remains declared here is the FerroCAD-specific surface: the FreeCAD
-//! `TopoShape` policies (`fc_policy.hxx`) and the curve/2-D/shape/surface op
-//! bindings that have not moved yet. The design is written up in
+//! What remains declared here is what has not moved yet: the curve, 2-D, shape
+//! and surface-op bindings (`fc_curve.hxx`, `fc_geom2d.hxx`, `fc_shape_ops.hxx`,
+//! `src/fc_part_ops.hxx`). FreeCAD's `TopoShape` policy is Rust now, in
+//! `src/policy.rs`. The design is written up in
 //! `docs/developer/architecture/occt-integration.md`.
 
 // `common` is bridged for completeness and used when the trait grows an
@@ -17,7 +18,6 @@
 #[cxx::bridge]
 mod ffi {
     unsafe extern "C++" {
-        include!("ferrocad_occt/include/fc_policy.hxx");
         include!("ferrocad_occt/include/fc_curve.hxx");
         include!("ferrocad_occt/include/fc_geom2d.hxx");
         include!("ferrocad_occt/include/fc_shape_ops.hxx");
@@ -26,7 +26,6 @@ mod ffi {
         // Reuse the crate's opaque types. cxx shares these across bridges by path.
         // (`ferrocad_part_cxx` declares its own aliases to the same types; cxx
         // unifies them, which is why a shape can cross between the two bridges.)
-        type BRepAlgoAPI_Cut = opencascade_sys::b_rep_algo_api::BRepAlgoAPI_Cut;
         type TopoDS_Shape = opencascade_sys::topo_ds::TopoDS_Shape;
         type TopoDS_Edge = opencascade_sys::topo_ds::TopoDS_Edge;
         type TopoDS_Vertex = opencascade_sys::topo_ds::TopoDS_Vertex;
@@ -420,12 +419,6 @@ mod ffi {
             nurbs: bool,
         ) -> Vec<f64>;
 
-        /// Upstream `TopoShape::isClosed` (see `fc_policy.hxx`).
-        fn fc_is_closed(shape: &TopoDS_Shape) -> bool;
-
-        /// The shape's geometric tolerance (`BRep_Tool::Tolerance`).
-        fn fc_shape_tolerance(shape: &TopoDS_Shape) -> f64;
-
         /// `fc_face_surface_data` with the cone (4) and torus (5) cases added.
         fn fc_face_surface_frame(shape: &TopoDS_Shape, out: &mut Vec<f64>);
 
@@ -646,12 +639,6 @@ mod ffi {
         /// The sub-shapes of a numeric `TopAbs_ShapeEnum` as a compound
         /// (`TopExp::MapShapes`), or null.
         fn fc_shape_sub_shapes_of_type(shape: &TopoDS_Shape, kind: i32) -> UniquePtr<TopoDS_Shape>;
-
-        /// Upstream's constructor settings: run parallel, non-destructive.
-        fn fc_cut_prepare(op: Pin<&mut BRepAlgoAPI_Cut>);
-
-        /// Upstream's automatic fuzzy value from the current argument/tool bounds.
-        fn fc_cut_set_auto_fuzzy(op: Pin<&mut BRepAlgoAPI_Cut>);
 
         /// `Face.isPartOfDomain(u, v)` (`BRepTopAdaptor_FClass2d`).
         fn fc_face_is_part_of_domain(face: &TopoDS_Shape, u: f64, v: f64) -> bool;

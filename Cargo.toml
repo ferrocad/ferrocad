@@ -154,4 +154,4 @@ lto = true
 # https://github.com/ferrocad/ferrocad_occt_cxx
 [patch.crates-io]
 bite-gp-apple = { path = "third_party/bite-gp-apple" }
-ferrocad_occt_cxx = { git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.8" }
+ferrocad_occt_cxx = { git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.9" }

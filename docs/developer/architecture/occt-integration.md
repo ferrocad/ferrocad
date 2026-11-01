@@ -77,11 +77,10 @@ It owns everything OCCT-specific, so no other crate has to:
 - keeps the policy in Rust: `ferrocad_part_cxx` owns the C++ boundary and
   translates `Standard_Failure`, while history/element-map policy, validation
   and error mapping stay here. `general_transform`, the `ChFi2d` algorithms,
-  the `ShapeFix` fixers and the history/topology bindings are migrated (the last
-  as `ferrocad_part_cxx::{history,topology}`); the remaining `fc_*.hxx` files are
-  the next slices. What still lives in C++ here, in `include/fc_policy.hxx`, is
-  FreeCAD `TopoShape` policy only, and only until its OCCT entry points are
-  bridged. The bindings crate is
+  the `ShapeFix` fixers, the history/topology bindings and FreeCAD's `TopoShape`
+  policy (`src/policy.rs`: the boolean operation's non-destructive/auto-fuzzy
+  settings, `isClosed`, the shape tolerance) are migrated; the remaining
+  `fc_*.hxx` files are the next slices. The bindings crate is
   LGPL-2.1 and contains no FerroCAD/FreeCAD semantics, so it can be donated to
   `opencascade-sys` without carrying product behaviour;
 - implements `ferrocad_geom::GeometryBackend`, and ports FreeCAD's `FCBRepAlgoAPI_*`

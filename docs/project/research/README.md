@@ -23,6 +23,13 @@ result becomes a stable design, the decision is written in
   a shader/extraction fixture.
 - [simplecad-bringup.md](simplecad-bringup.md) — SimpleCAD as the canvas-first proving
   ground: the measured tree and S0–S5.
+- [occt-8-upgrade.md](occt-8-upgrade.md) — what OCCT 8.0.1 actually costs: the measured
+  34-of-35 handle aliases plus 13 container aliases, the C++17 and version-gate
+  blockers, the `TopoDS`/`Size()` breaks the build found, and the result — the fork
+  compiles and the 78 backend tests pass on 8.0.1.
+- [occt-8-api-audit.md](occt-8-api-audit.md) — the symbol-level companion: 225 unique
+  includes, 156 member and 30 static bindings and 14 mirrored enums checked against
+  `V8_0_1`, with the incompatibilities ordered by severity.
 
 The complete folder list is in [`../../README.md`](../../README.md); the file-by-file
 map is [`../../INDEX.md`](../../INDEX.md).

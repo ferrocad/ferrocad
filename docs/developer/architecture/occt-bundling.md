@@ -172,22 +172,24 @@ invoke the macro at all; the API spells handles `occ::handle<T>` (a new alias fo
 user code, marked deprecated. So a future major upgrade does dissolve the problem our
 fork's MSVC patch works around.
 
-**It cannot be adopted today.** `opencascade-sys 0.3.0` is written against 7.8:
+**It is not adopted today.** The fork (`v0.3.0-ferrocad.22`) is written against 7.8:
 
-- `build.rs` pins `const OCCT_VERSION: (u8, u8) = (7, 8)` and panics when the found
-  header's major version is not 7, so a conda 8.0 prefix is rejected outright;
-- its bridge headers name `Handle_Geom_Surface`, `Handle_Poly_Triangulation`, …, which
-  8.0 no longer defines anywhere, so the bridge would not compile even without the
-  version gate;
-- upstream has no OCCT 8 support and no tracking issue (latest release 0.3.0).
+- `build.rs` pins `const OCCT_VERSION: (u8, u8) = (7, 8)` and rejects any other major,
+  so a conda 8.0 prefix fails before anything compiles;
+- `build.rs` also passes `-std=c++11`, which 8.0's headers cannot parse — 8.0 requires
+  C++17 (`CMakeLists.txt`, `BUILD_CPP_STANDARD`);
+- 34 of the 35 `Handle_*` types the cxx bridges declare lose their C++ definition in
+  8.0.1 (`Handle_Standard_Type` is the survivor). A gated compatibility header aliasing
+  them to `opencascade::handle<T>` restores them without touching a bridge signature, so
+  this is smaller than the "binding port" it first looked like.
 
-An 8.x migration is therefore a **binding port**, not a version bump: every
-handle-typed bridge signature in `opencascade-sys` moves to `occ::handle<T>`/`Handle(T)`
-(which is the same rewrite as PR #234's alternative, but mandatory and wider), plus
-whatever else 8.0 removed that we cannot see until the crate compiles. Our own layer is
-small — `crates/ferrocad_occt/include` uses six `Handle_Geom_Curve` and 27 deprecated
-`Standard_Boolean`/`Standard_True`/`Standard_False` spellings, which are warnings only —
-but the geometry conformance suite would have to be re-measured against 8.0 anyway.
+The measured cost, the staging and what remains unverified are in
+[`../../project/research/occt-8-upgrade.md`](../../project/research/occt-8-upgrade.md).
+**As of 2026-11-01 the fork compiles against 8.0.1 and `ferrocad_occt`'s 78 tests pass
+on it** (locally, from a conda prefix): the fixes were the C++17 flag, the version
+range, 34 handle aliases, 13 container aliases, a `Size()` wrapper and the
+`class TopoDS` → `namespace TopoDS` change. Remaining: tag the fork, add the CI leg,
+then Windows (O4) and the release pins (O5).
 
 **Decision:** release on 7.8.1 with our fork
 [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)

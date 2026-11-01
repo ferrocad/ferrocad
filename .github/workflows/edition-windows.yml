@@ -2,10 +2,9 @@ name: Edition build check (Windows)
 
 # Manual-only, one platform: the on-demand reproduction of `release.yml`'s
 # `edition (windows-latest)` leg, useful when you want the answer without cutting
-# a tag. It exists because OCCT never compiled with MSVC until the vendored
-# `opencascade-sys` patch (`third_party/opencascade-sys`, upstream
-# bschwind/opencascade-rs#234 — OCCT's `Handle_T` is a derived class on MSVC, a
-# typedef elsewhere; see that directory's `PATCHES.md`). The regular `windows` CI
+# a tag. It exists because OCCT never compiled with MSVC until the forked
+# `ferrocad_occt_cxx` (upstream bschwind/opencascade-rs#234 — OCCT's `Handle_T`
+# is a derived class on MSVC, a typedef elsewhere). The regular `windows` CI
 # job does not build the kernel, and a 10-minute OCCT fetch on every push is not
 # worth it, so this is dispatch-only.
 #

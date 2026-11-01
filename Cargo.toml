@@ -70,7 +70,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 license = "LGPL-2.1-or-later"
 readme = "README.md"
@@ -112,7 +112,7 @@ ferrocad_geom = { path = "crates/ferrocad_geom", version = "0.1.4" }
 ferrocad_mesh = { path = "crates/ferrocad_mesh", version = "0.1.4" }
 ferrocad_mesh_py = { path = "crates/ferrocad_mesh_py", version = "0.1.4" }
 ferrocad_combined_py = { path = "crates/ferrocad_combined_py", version = "0.1.4" }
-ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.4" }
+ferrocad_occt = { path = "crates/ferrocad_occt", version = "0.1.5" }
 ferrocad_part = { path = "crates/ferrocad_part", version = "0.1.4" }
 ferrocad_part_py = { path = "crates/ferrocad_part_py", version = "0.1.4" }
 ferrocad_py = { path = "crates/ferrocad_py", version = "0.1.4" }
@@ -146,10 +146,12 @@ lto = true
 # Temporary patch: bite-gp-apple 1.24.402/1.25.202 import `cocoa` without
 # declaring it. See third_party/bite-gp-apple/PATCHES.md.
 #
-# opencascade-sys 0.3.0 allocates `opencascade::handle<T>` where its
-# `unique_ptr<Handle_T>` requires `Handle_T`; that is fine on GCC/Clang (typedef)
-# but not on MSVC (OCCT defines `Handle_T` as a derived class). See
-# third_party/opencascade-sys/PATCHES.md.
+# `opencascade-sys` 0.3.0 does not compile with MSVC: OCCT's `Handle_T` is a
+# derived class there, not the `Handle(T)` alias. This resolves it to FerroCAD's
+# fork, which carries upstream PR #234. The fork keeps the library name
+# `opencascade_sys` and the cxx include prefix `opencascade-sys`, so it is a
+# drop-in for the rest of the tree.
+# https://github.com/ferrocad/ferrocad_occt_cxx
 [patch.crates-io]
 bite-gp-apple = { path = "third_party/bite-gp-apple" }
-opencascade-sys = { path = "third_party/opencascade-sys" }
+ferrocad_occt_cxx = { git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.4" }

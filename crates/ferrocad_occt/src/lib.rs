@@ -319,6 +319,78 @@ mod tests {
     }
 
     #[test]
+    fn a_throwing_build_is_reported_instead_of_aborting() {
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let other = backend.make_box(5.0, 5.0, 5.0).unwrap();
+        // An edge that is not part of `cube`. `Build()` raises
+        // `Standard_Failure("There are no suitable edges for chamfer or
+        // fillet")` instead of returning `IsDone() == false`.
+        let foreign = backend.elements(&other, ElementKind::Edge)[0].clone();
+
+        let errors = [
+            (
+                "fillet",
+                backend
+                    .fillet(&cube, std::slice::from_ref(&foreign), 1.0)
+                    .expect_err("a foreign fillet edge is an error, not a crash"),
+            ),
+            (
+                "chamfer",
+                backend
+                    .chamfer(&cube, std::slice::from_ref(&foreign), 1.0, None)
+                    .expect_err("a foreign chamfer edge is an error, not a crash"),
+            ),
+        ];
+
+        for (operation, error) in errors {
+            let occt = error
+                .downcast_ref::<crate::error::OcctError>()
+                .expect("the error is an OcctError");
+            assert!(
+                matches!(
+                    occt,
+                    crate::error::OcctError::Exception {
+                        operation: "fillet" | "chamfer",
+                        ..
+                    }
+                ),
+                "expected OCCT's failure to cross as an exception, got {occt:?}"
+            );
+            let text = error.to_string();
+            assert!(
+                text.contains(operation) && text.contains("no suitable edges"),
+                "the error names the operation and keeps OCCT's message: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_general_transform_applies_a_non_uniform_scale() {
+        use ferrocad_types::Matrix4;
+
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(1.0, 1.0, 1.0).unwrap();
+        let matrix = Matrix4 {
+            m: [
+                2.0, 0.0, 0.0, 0.0, //
+                0.0, 3.0, 0.0, 0.0, //
+                0.0, 0.0, 4.0, 0.0, //
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+
+        let out = backend.general_transform(&cube, &matrix).unwrap();
+        assert_eq!(backend.elements(&out, ElementKind::Face).len(), 6);
+        let props = backend.mass_properties(&out).expect("mass properties");
+        assert!(
+            (props.volume - 24.0).abs() < 1e-6,
+            "a 1x1x1 box scaled by 2,3,4 has volume 24, got {}",
+            props.volume
+        );
+    }
+
+    #[test]
     fn a_placed_box_tessellates_at_its_location() {
         use ferrocad_types::{Placement, Rotation, Vector3};
         let backend = OcctBackend::new();

@@ -2258,7 +2258,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ferrocad_geom",
  "ferrocad_gpui",
@@ -2299,7 +2299,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_gen"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "pyo3",
 ]
@@ -2315,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_gpui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bite-gp-wgpu",
  "bite-gpui",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_graphics"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ferrocad_theme",
  "ferrocad_types",
@@ -2389,19 +2389,30 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_occt"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cxx",
  "cxx-build",
  "ferrocad_curves",
  "ferrocad_geom",
+ "ferrocad_occt_cxx",
+ "ferrocad_part_cxx",
  "ferrocad_types",
- "opencascade-sys",
+]
+
+[[package]]
+name = "ferrocad_occt_cxx"
+version = "0.3.0"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.4#8b7e48730dfd03adb370b5226c1f46c48eb475d5"
+dependencies = [
+ "cmake",
+ "cxx",
+ "cxx-build",
 ]
 
 [[package]]
 name = "ferrocad_parametric"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ferrocad",
  "ferrocad_combined_py",
@@ -2430,8 +2441,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_part_cxx"
+version = "0.1.0"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.4#8b7e48730dfd03adb370b5226c1f46c48eb475d5"
+dependencies = [
+ "cxx",
+ "cxx-build",
+ "ferrocad_occt_cxx",
+]
+
+[[package]]
 name = "ferrocad_part_gui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ferrocad_geom",
  "ferrocad_graphics",
@@ -2467,7 +2488,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_snapshot"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ferrocad_wgpu",
  "serde_json",
@@ -2475,7 +2496,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_stage"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ferrocad_geom",
  "ferrocad_graphics",
@@ -2495,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_text"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "read-fonts 0.37.0",
  "skrifa 0.40.0",
@@ -2503,11 +2524,11 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_theme"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "ferrocad_toy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ferrocad",
  "ferrocad_geom",
@@ -2544,7 +2565,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocad_viewport"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bite-gpui",
  "ferrocad_geom",
@@ -3188,7 +3209,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -4379,15 +4400,6 @@ checksum = "aa576c76302b7b808eecc68061e67336c47833ef9d22caa74dda10fa9675eebc"
 dependencies = [
  "is-wsl",
  "libc",
-]
-
-[[package]]
-name = "opencascade-sys"
-version = "0.3.0"
-dependencies = [
- "cmake",
- "cxx",
- "cxx-build",
 ]
 
 [[package]]
@@ -6826,7 +6838,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7415,7 +7427,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "y4m"

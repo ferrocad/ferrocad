@@ -10,6 +10,12 @@ pub enum OcctError {
     WrongBackend,
     /// OCCT reported the operation as not done (`IsDone() == false`).
     NotDone { operation: &'static str },
+    /// OCCT raised while running the operation, with the kernel's own message
+    /// (`Standard_Failure::GetMessageString`).
+    Exception {
+        operation: &'static str,
+        message: String,
+    },
     /// An input could not be interpreted (e.g. a fillet edge ref that is not a shape
     /// of this backend, or is not an edge).
     InvalidInput { what: &'static str },
@@ -23,6 +29,9 @@ impl fmt::Display for OcctError {
             }
             OcctError::NotDone { operation } => {
                 write!(f, "OCCT operation `{operation}` did not complete")
+            }
+            OcctError::Exception { operation, message } => {
+                write!(f, "OCCT operation `{operation}` failed: {message}")
             }
             OcctError::InvalidInput { what } => write!(f, "invalid input: {what}"),
         }

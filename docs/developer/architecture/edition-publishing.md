@@ -143,22 +143,27 @@ uploads the Parametric artifact beside the base ones. `v0.1.4` shipped three
 (its Windows leg predated the MSVC fix); a tag from here on yields **four**:
 two base, two Parametric. macOS is still absent, so six would be the full set.
 
-**The Windows bridge needed a vendored patch.** `opencascade-sys` 0.3.0 does not
-build with MSVC. OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived
-class** on MSVC (for C++/CLI export) while `Handle(C)` stays
-`opencascade::handle<C>`, so the two are distinct types there and identical on
-GCC/Clang; the crate's bridge assumed the alias. Three symptoms: the
-`unique_ptr<Handle_T>` allocations, cxx's member/function-pointer bindings, and
-a link closure that needs `advapi32`. Upstream PR
+**The Windows bridge needs a fork.** `opencascade-sys` 0.3.0 does not build with
+MSVC. OCCT's `DEFINE_STANDARD_HANDLE` makes `Handle_T` a **derived class** on MSVC
+(for C++/CLI export) while `Handle(C)` stays `opencascade::handle<C>`, so the two
+are distinct types there and identical on GCC/Clang; the crate's bridge assumed
+the alias. Three symptoms: the `unique_ptr<Handle_T>` allocations, cxx's
+member/function-pointer bindings, and a link closure that needs `advapi32`.
+Upstream PR
 [bschwind/opencascade-rs#234](https://github.com/bschwind/opencascade-rs/pull/234)
-fixes all three and `third_party/opencascade-sys` is 0.3.0 with it applied
-(details and the removal condition in that directory's `PATCHES.md`). Verified
-end to end on `windows-latest` on 2026-10-25: `cargo build -p ferrocad_occt`,
+fixes all three. We carry it in
+[`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)
+(tag `v0.3.0-ferrocad.2`): the package is renamed `ferrocad_occt_cxx`, while the
+library and the cxx include prefix stay `opencascade_sys` / `opencascade-sys`.
+`ferrocad_occt` depends on it with `package = "ferrocad_occt_cxx"`, so
+publishing that crate requires publishing the fork first. Verified end to end on
+`windows-latest` on 2026-10-25: `cargo build -p ferrocad_occt`,
 `bundle --edition parametric --occt --check-init`, the portable zip and
 `ferrocad.bat --check-init` on the unpacked artifact. `.github/workflows/edition-windows.yml`
-stays as the dispatch-only reproduction; drop the vendored crate and the
-`[patch.crates-io]` entry once a fixed `opencascade-sys` release exists.
-Tracking: [ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1).
+stays as the dispatch-only reproduction; drop the fork and the
+`[patch.crates-io]` entry once upstream `opencascade-sys` carries #234 (or an
+equivalent fix). Tracking:
+[ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1).
 
 The `v0.1.4` first run failed here; the mechanism, the 17-site patch we started
 with and the two follow-on classes are described above and in

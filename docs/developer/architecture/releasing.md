@@ -97,7 +97,10 @@ Dependencies are published before their dependents:
     above; `stage_py` is also a dev-dependency of `part_py`, so it must come
     first).
 11. `ferrocad_occt` (depends on `ferrocad_geom`, `ferrocad_curves`,
-    `ferrocad_types`; **needs OCCT**).
+    `ferrocad_types`, and `ferrocad_part_cxx` from
+    [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx);
+    **needs OCCT**). Publish `ferrocad_part_cxx` (and the sys crate it wraps)
+    from the fork repository first.
 12. `ferrocad_part` (depends on `ferrocad_core`, `ferrocad_geom`,
     `ferrocad_curves`, `ferrocad_types`; OCCT is a *dev-dependency*, so publish
     `ferrocad_occt` first).
@@ -116,7 +119,9 @@ Dependencies are published before their dependents:
 `ferrocad_occt` and `ferrocad_part_py` are the two crates whose `cargo publish`
 verify-build compiles against a kernel, so the publish job fetches OCCT 7.8.1 from
 conda-forge and exports `CMAKE_POLICY_VERSION_MINIMUM`, `OpenCASCADE_DIR`,
-`OCCT_INCLUDE_DIR` and `LD_LIBRARY_PATH` before publishing. `ferrocad_part` is
+`OCCT_INCLUDE_DIR` and `LD_LIBRARY_PATH` before publishing. `ferrocad_occt` also
+depends on `ferrocad_part_cxx`, so that crate (and the patched sys crate it
+builds on) must be published from the fork repository before this job runs. `ferrocad_part` is
 *not* one of them: it holds only the seam, and `ferrocad_occt` sits in its
 `[dev-dependencies]`, which the verify-build does not compile.
 
@@ -284,12 +289,16 @@ The Parametric edition additionally bundles the OCCT 7.8.1 toolkit closure under
 staging are described in [`edition-publishing.md`](edition-publishing.md) and
 [`occt-bundling.md`](occt-bundling.md).
 
-**The Windows edition needed a vendored OCCT binding.** `opencascade-sys 0.3.0`
+**The Windows edition needs a forked OCCT binding.** `opencascade-sys 0.3.0`
 does not compile with MSVC — OCCT's `Handle_T` is a derived class there, not the
-`Handle(T)` alias — so `third_party/opencascade-sys` carries upstream
+`Handle(T)` alias. The workspace resolves it to
+[`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)
+(tag `v0.3.0-ferrocad.2`), our fork carrying upstream
 [PR #234](https://github.com/bschwind/opencascade-rs/pull/234) (the three fix
-classes plus `advapi32`). Verified end to end on `windows-latest` on 2026-10-25;
-see [`edition-publishing.md`](edition-publishing.md) §6 and
+classes plus `advapi32`). Publishing `ferrocad_occt` therefore requires
+`ferrocad_occt_cxx` to be on crates.io first. Verified end to end on
+`windows-latest` on 2026-10-25; see
+[`edition-publishing.md`](edition-publishing.md) §6 and
 [ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1).
 
 **macOS is not shipped.** `bite-gp-apple 1.24.402` uses `cocoa` without declaring

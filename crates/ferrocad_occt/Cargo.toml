@@ -5,7 +5,7 @@
 # See docs/developer/architecture/occt-integration.md and docs/developer/architecture/occt-bundling.md.
 [package]
 name = "ferrocad_occt"
-version = "0.1.4"
+version = "0.1.5"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true
@@ -24,7 +24,8 @@ name = "ferrocad_occt"
 ferrocad_geom.workspace = true
 ferrocad_curves.workspace = true
 ferrocad_types.workspace = true
-opencascade-sys = "0.3"
+opencascade-sys = { version = "0.3", package = "ferrocad_occt_cxx" }
+ferrocad_part_cxx = { version = "0.1.0", git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.4" }
 cxx = "1"
 
 [build-dependencies]

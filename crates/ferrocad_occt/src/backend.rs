@@ -3305,7 +3305,12 @@ impl GeometryBackend for OcctBackend {
             }
             .into());
         }
-        let result = bridge::fc_gtransform(inner, m);
+        let result = ferrocad_part_cxx::gtransform(inner, m).map_err(|error| {
+            OcctError::Exception {
+                operation: "general_transform",
+                message: error.what().to_owned(),
+            }
+        })?;
         let Some(result) = result.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "general_transform",

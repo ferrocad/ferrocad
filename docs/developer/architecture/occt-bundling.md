@@ -169,8 +169,8 @@ alias it is on GCC/Clang — the type split that made the Windows build fail. In
 `V8_0_1`, `Geom_Surface.hxx`, `Geom_Curve.hxx` and `Poly_Triangulation.hxx` no longer
 invoke the macro at all; the API spells handles `occ::handle<T>` (a new alias for
 `opencascade::handle<T>` in `Standard_Handle.hxx`). The macro itself survives only for
-user code, marked deprecated. So a future major upgrade does dissolve the problem the
-vendored `opencascade-sys` patch works around.
+user code, marked deprecated. So a future major upgrade does dissolve the problem our
+fork's MSVC patch works around.
 
 **It cannot be adopted today.** `opencascade-sys 0.3.0` is written against 7.8:
 
@@ -189,10 +189,12 @@ small — `crates/ferrocad_occt/include` uses six `Handle_Geom_Curve` and 27 dep
 `Standard_Boolean`/`Standard_True`/`Standard_False` spellings, which are warnings only —
 but the geometry conformance suite would have to be re-measured against 8.0 anyway.
 
-**Decision:** release on 7.8.1 with the vendored `opencascade-sys` (0.3.0 + upstream
-PR #234; see [`edition-publishing.md`](edition-publishing.md) §6). Revisit OCCT 8 when a
-published `opencascade-sys` supports it — at that point both `third_party/` patches
-(handle aliases and the MSVC bridge) should be droppable in one step. Tracked upstream
+**Decision:** release on 7.8.1 with our fork
+[`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)
+(0.3.0 + upstream PR #234; tag `v0.3.0-ferrocad.2`; see
+[`edition-publishing.md`](edition-publishing.md) §6). Revisit OCCT 8 when a published
+binding supports it — at that point the fork's MSVC patch should be droppable in one
+step. Tracked upstream
 as [bschwind/opencascade-rs#237](https://github.com/bschwind/opencascade-rs/issues/237),
 which asks for 8.x support and points out that spelling the bridge's handles
 `opencascade::handle<T>` (what 8.0 uses, and what `occ::handle<T>` aliases) fixes MSVC

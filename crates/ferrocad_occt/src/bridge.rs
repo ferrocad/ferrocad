@@ -17,7 +17,6 @@ mod ffi {
         include!("ferrocad_occt/include/fc_topology.hxx");
         include!("ferrocad_occt/include/fc_curve.hxx");
         include!("ferrocad_occt/include/fc_geom2d.hxx");
-        include!("ferrocad_occt/include/fc_transform.hxx");
         include!("ferrocad_occt/include/fc_shape_ops.hxx");
         include!("ferrocad_occt/src/fc_part_ops.hxx");
 
@@ -256,9 +255,6 @@ mod ffi {
         /// Install a row-major 4x4 matrix into an OCCT transform.
         fn fc_trsf_from_matrix(m: &[f64], out: Pin<&mut gp_Trsf>) -> bool;
 
-        /// Apply a general affine transform (`BRepBuilderAPI_GTransform`), or
-        /// null on failure.
-        fn fc_gtransform(shape: &TopoDS_Shape, matrix: &[f64]) -> UniquePtr<TopoDS_Shape>;
 
         /// A B-spline from control points (flat xyz), or null on failure.
         fn fc_bspline_from_poles(
@@ -463,6 +459,18 @@ mod ffi {
             edge: &TopoDS_Edge,
             face: &TopoDS_Face,
         );
+
+        /// `Build()` wrapped so an OCCT exception is reported instead of
+        /// crossing cxx's `noexcept` shim. True on success; on failure
+        /// `message` holds OCCT's own text.
+        fn fc_fillet_build(
+            op: Pin<&mut BRepFilletAPI_MakeFillet>,
+            message: &mut String,
+        ) -> bool;
+        fn fc_chamfer_build(
+            op: Pin<&mut BRepFilletAPI_MakeChamfer>,
+            message: &mut String,
+        ) -> bool;
 
         fn fc_fillet_modified(
             op: Pin<&mut BRepFilletAPI_MakeFillet>,

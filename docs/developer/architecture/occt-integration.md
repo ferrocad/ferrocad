@@ -70,9 +70,16 @@ Two implementations are in scope, exactly as §6 proposed:
 
 It owns everything OCCT-specific, so no other crate has to:
 
-- depends on `opencascade-sys` for geometry, and on the **sibling bridge** (the
-  `#[cxx::bridge]` from the history spike) for history/element maps — **no fork, no
-  patch** of `opencascade-sys`;
+- depends on `ferrocad_occt_cxx` (our patched `opencascade-sys`, imported under
+  the `opencascade-sys` dependency key) for geometry, and on
+  `ferrocad_part_cxx` (the fork's typed Part-layer bindings) for OCCT calls the
+  sys crate does not expose;
+- keeps the policy in Rust: `ferrocad_part_cxx` owns the C++ boundary and
+  translates `Standard_Failure`, while history/element-map policy, validation
+  and error mapping stay here. `general_transform` is the first call migrated;
+  the remaining `fc_*.hxx` files are the next slices. The bindings crate is
+  LGPL-2.1 and contains no FerroCAD/FreeCAD semantics, so it can be donated to
+  `opencascade-sys` without carrying product behaviour;
 - implements `ferrocad_geom::GeometryBackend`, and ports FreeCAD's `FCBRepAlgoAPI_*`
   behaviour (auto-fuzzy scaled to model bounds, non-destructive, recursive compounds)
   that `occt-history-spike.md` found is required for a usable element map;

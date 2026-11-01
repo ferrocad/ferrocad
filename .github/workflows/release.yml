@@ -151,10 +151,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The Windows leg needs the vendored `opencascade-sys`
-        # (`third_party/opencascade-sys`, upstream bschwind/opencascade-rs#234):
-        # OCCT's `Handle_T` is a distinct class under MSVC, so the published
-        # 0.3.0 does not compile there. Verified green on 2026-10-25 via
+        # The Windows leg needs the forked `ferrocad_occt_cxx`
+        # (upstream bschwind/opencascade-rs#234): OCCT's `Handle_T` is a distinct
+        # class under MSVC, so the published 0.3.0 does not compile there.
+        # Verified green on 2026-10-25 via
         # `edition-windows.yml`, which stays as the on-demand reproduction of
         # this leg. See docs/developer/architecture/edition-publishing.md §6.
         include:

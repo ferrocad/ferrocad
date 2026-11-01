@@ -504,10 +504,18 @@ pub(crate) fn fillet(
             .ok_or(OcctError::InvalidInput { what: "null edge" })?;
         op.pin_mut().add_edge(radius, TopoDS::Edge(edge_shape));
     }
-    // `Build()` runs the algorithm without `Shape()`'s `Check()`, which raises
-    // `StdFail_NotDone` on a failure. `IsDone()` is only meaningful afterwards.
-    let progress = ffi::message::Message_ProgressRange_new();
-    op.pin_mut().Build(&progress);
+    // `Build()` runs the algorithm without `Shape()`'s `Check()`. It can also
+    // raise `Standard_Failure` (OCCT 7.x does not derive it from
+    // `std::exception`), which must be caught in C++ before it crosses cxx's
+    // `noexcept` shim. `IsDone()` is only meaningful afterwards.
+    let mut message = String::new();
+    if !bridge::fc_fillet_build(op.pin_mut(), &mut message) {
+        return Err(OcctError::Exception {
+            operation: "fillet",
+            message,
+        }
+        .into());
+    }
     if !op.IsDone() {
         return Err(OcctError::NotDone {
             operation: "fillet",
@@ -596,10 +604,15 @@ pub(crate) fn chamfer(
             None => op.pin_mut().add_edge(d1, TopoDS::Edge(edge_shape)),
         }
     }
-    // Same build-then-check as the fillet above: `Shape()` would raise
-    // `StdFail_NotDone` instead of reporting it.
-    let progress = ffi::message::Message_ProgressRange_new();
-    op.pin_mut().Build(&progress);
+    // Same checked build as the fillet above.
+    let mut message = String::new();
+    if !bridge::fc_chamfer_build(op.pin_mut(), &mut message) {
+        return Err(OcctError::Exception {
+            operation: "chamfer",
+            message,
+        }
+        .into());
+    }
     if !op.IsDone() {
         return Err(OcctError::NotDone {
             operation: "chamfer",

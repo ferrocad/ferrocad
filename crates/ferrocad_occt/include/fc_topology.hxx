@@ -16,6 +16,8 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepTools.hxx>
+#include <Message_ProgressRange.hxx>
+#include <Standard_Failure.hxx>
 #include <BRep_Tool.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <GeomAbs_SurfaceType.hxx>
@@ -38,6 +40,8 @@
 #include <algorithm>
 #include <stdexcept>
 #include <functional>
+
+#include "rust/cxx.h"
 #include <memory>
 
 #include "rust/cxx.h"
@@ -379,6 +383,46 @@ inline void fc_chamfer_add_asym(BRepFilletAPI_MakeChamfer& op,
                                 const TopoDS_Face& face)
 {
     op.Add(distance1, distance2, edge, face);
+}
+
+// --- fallible building ------------------------------------------------------
+// `opencascade-sys` bridges `Build` as a plain call, so cxx emits a `noexcept`
+// shim. An OCCT `Standard_Failure` escaping it calls `std::terminate`, and on
+// OCCT 7.x that type does not derive from `std::exception`, so a Rust-side
+// `Result` cannot help. Catch it here and hand the kernel's own message back.
+namespace fc_topology_internal
+{
+template <typename Op>
+inline bool build_or_report(Op& op, rust::String& message)
+{
+    try
+    {
+        op.Build(Message_ProgressRange());
+        return true;
+    }
+    catch (const Standard_Failure& failure)
+    {
+        message = failure.GetMessageString();
+        if (message.empty())
+            message = "OCCT reported a failure";
+        return false;
+    }
+    catch (...)
+    {
+        message = "unknown OCCT exception";
+        return false;
+    }
+}
+} // namespace fc_topology_internal
+
+inline bool fc_fillet_build(BRepFilletAPI_MakeFillet& op, rust::String& message)
+{
+    return fc_topology_internal::build_or_report(op, message);
+}
+
+inline bool fc_chamfer_build(BRepFilletAPI_MakeChamfer& op, rust::String& message)
+{
+    return fc_topology_internal::build_or_report(op, message);
 }
 
 // --- fillet / chamfer lineage -------------------------------------------------

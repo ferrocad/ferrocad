@@ -146,12 +146,18 @@ LGPL-3.0-or-later (see [`rewrite-strategy.md`](../../project/direction/rewrite-s
 license text (and the exception) under `LICENSES/`, exactly as we ship the PSF text for
 CPython. Confirm the exact exception wording at adoption time.
 
+The exception removes the legal obstacle to static linking, not the practical ones: the
+shared build is what we ship, what the prefix provides, and what keeps `cargo build` to
+minutes. Our fork therefore links the prefix's `.so` by default; `--features builtin`
+opts into the vendored static build (it compiles the whole kernel from source).
+
 ## 7. What this leaves open
 
 - Whether the release OCCT is our minimal shared build (§3 recommendation) or a pruned
   conda prefix; and whether to ship data exchange (and thus the imaging stack) in v1.
 - Static (`builtin`) OCCT as an alternative release path: no `lib/` to bundle, one
-  artifact per platform, but a slower CI and a bigger binary.
+  artifact per platform, but a slower CI and a bigger binary. It is opt-in
+  (`--features builtin`); the fork's default is the prefix's shared libraries.
 - The macOS closure (`install_name_tool` fix-ups, `otool`/signing). The Windows half is
   implemented and exercised; see [`edition-publishing.md`](edition-publishing.md) §6 and
   [`macos.md`](macos.md).

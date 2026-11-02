@@ -198,6 +198,19 @@ fork's MSVC patch works around.
 VTK, pulling Python and X11 — 3.5 GB installed) and `novtk` (205 MB, still all 51 `TK*`
 libraries). CI, packaging and the local recipe use `occt=8.0.1=novtk_*`.
 
+**Link by versioned file name.** The bindings emit
+`cargo:rustc-link-lib=dylib:+verbatim=libTKernel.so.8.0` (the name is discovered in the
+probed prefix) instead of `-lTKernel`. With the plain name, search-path order decides:
+a distribution's OCCT dev package (Ubuntu's `libocct-*-dev` 7.9 puts
+`/usr/lib/x86_64-linux-gnu` on the link line through an unrelated crate's
+pkg-config) satisfies `-lTKernel` *before* `.occt/prefix/lib`, so 8.0 headers meet 7.9
+libraries and the link fails on `Standard_Failure::what()`, the new `NCollection_*`
+signatures and several vtables. `-l:libTKernel.so.8.0` matches exactly one file, so the
+prefix wins regardless of order; the linker still records the library's own SONAME, so
+the `$ORIGIN`-relative rpath keeps working at run time. Fork `v0.3.0-ferrocad.27`.
+Check with `readelf -d target/debug/ferrocad_parametric | grep TK`: every entry must
+name `.so.8.0`, never `.so.7.9`.
+
 The measured cost, the audit and what remains unverified are in
 [`../../project/research/occt-8-upgrade.md`](../../project/research/occt-8-upgrade.md)
 and [`../../project/research/occt-8-api-audit.md`](../../project/research/occt-8-api-audit.md).

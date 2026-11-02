@@ -72,9 +72,29 @@ struct App {
     queue: RenderQueue,
 }
 
+/// The empty display handle `raw-window-handle` defines for the web.
+///
+/// Only its existence matters: wgpu-core rejects `create_surface()` when there
+/// is no display handle at all (see `App::new`).
+#[derive(Debug)]
+struct WebDisplay;
+
+impl wgpu::rwh::HasDisplayHandle for WebDisplay {
+    fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        Ok(wgpu::rwh::DisplayHandle::web())
+    }
+}
+
 impl App {
     async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<Self, JsValue> {
-        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        // wgpu-core refuses `create_surface()` when neither the instance nor the
+        // target carries a display handle, and on the web there is no display
+        // connection to name — the canvas arrives in the window handle. wgpu-core
+        // is the only context that can do WebGL2, which is the path Firefox (and
+        // any browser without `navigator.gpu`) takes, so the unit
+        // `WebDisplayHandle` raw-window-handle defines for this case is required.
+        // The pure-JS WebGPU context ignores the field.
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(WebDisplay));
         desc.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
         let instance = wgpu::util::new_instance_with_webgpu_detection(desc).await;
 
@@ -92,6 +112,10 @@ impl App {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("ferrocad web"),
+                // The adapter's own limits, not `Limits::default()`: a WebGL2
+                // adapter reports 0 for the compute limits it has no concept
+                // of, and asking for 65535 fails validation.
+                required_limits: adapter.limits(),
                 ..Default::default()
             })
             .await
@@ -131,8 +155,12 @@ impl App {
             view_format,
         );
         let camera = Camera {
+            // `view` is world→view, and `Placement::new(pos, rot)` composes as
+            // `T(pos) · R`: `pos` is a view-space translation applied to the
+            // already-rotated point. A lateral term therefore slides the box (at
+            // the origin) off the view axis; only -Z keeps it centred.
             view: Placement::new(
-                Vector3::new(5.0, 5.0, -28.0),
+                Vector3::new(0.0, 0.0, -28.0),
                 Rotation::from_axis_angle(&Vector3::new(1.0, 1.0, 0.0), 0.5),
             )
             .to_matrix(),
@@ -197,7 +225,13 @@ fn filleted_box() -> Result<Tessellation, GeomError> {
     let edges = backend.elements(&shape, ElementKind::Edge);
     let edge = edges.first().ok_or("the box has no edges")?;
     let filleted = backend.fillet(&shape, std::slice::from_ref(edge), 1.0)?;
-    backend.tessellate(&filleted.shape, &TessellationOptions::absolute(0.2))
+    // `make_box` builds from the corner at the origin; centre it so the orbit
+    // camera, which looks at the origin, frames the whole box.
+    let centred = backend.place(
+        &filleted.shape,
+        &Placement::new(Vector3::new(-5.0, -5.0, -5.0), Rotation::identity()),
+    )?;
+    backend.tessellate(&centred, &TessellationOptions::absolute(0.2))
 }
 
 /// Pick the surface and view formats.

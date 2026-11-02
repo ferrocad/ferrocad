@@ -5,8 +5,10 @@
 //! A real `Document` with `Part::Box` and `Part::Fillet` is recomputed through the
 //! OCCT kernel compiled to wasm, tessellated, turned into `ferrocad_stage` draw
 //! packets, drawn by `ferrocad_wgpu` into a `gpui_interop::WgpuSurface` on the
-//! window's own device, and composited by GPUI with `paint_texture`. The camera
-//! orbits a little every frame, so a screenshot is evidence of a live surface.
+//! window's own device, and composited by GPUI with `paint_texture`. Drag orbits
+//! and the wheel zooms: the pointer half is `gpui_interop`'s `surface_input`
+//! gateway, so the gesture survives leaving the canvas without any state of ours,
+//! and the wheel is the view's own handler because the gateway has no scroll.
 //!
 //! What this still is not: no CPython, no shell. `ferrocad_gpui` embeds CPython
 //! and cannot be the wasm crate until that dependency is split; this probe stops
@@ -20,7 +22,7 @@
 #![cfg(target_family = "wasm")]
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::Arc,
 };
@@ -34,10 +36,10 @@ use ferrocad_stage::{DrawMode, ShapeItem, Stage};
 use ferrocad_types::{Placement, Rotation, Vector3};
 use ferrocad_wgpu::{GpuContext, WgpuRenderer};
 use gpui::{
-    App, Bounds, Context, GpuCanvasContext, IntoElement, Render, Window, WindowBounds, WindowOptions,
-    div, gpu_canvas, prelude::*, px, rgb, size,
+    App, Bounds, Context, GpuCanvasContext, IntoElement, Render, ScrollDelta, Window, WindowBounds,
+    WindowOptions, div, gpu_canvas, prelude::*, px, rgb, size,
 };
-use gpui_interop::WgpuSurface;
+use gpui_interop::{SurfaceEvent, SurfaceInput, SurfacePoint, WgpuSurface, surface_input};
 use gpui_wgpu::{ImportedTextureExt as _, WebBackendPreference, WgpuRenderer as GpuiWgpuRenderer};
 use wasm_bindgen::prelude::*;
 
@@ -50,6 +52,12 @@ const RADIUS: f64 = 3.0;
 
 /// The tessellation tolerance, in millimetres (the demo's).
 const TOLERANCE: f64 = 0.2;
+
+/// One wheel line zooms by this factor — the rate `ferrocad_web_viewport` uses.
+const ZOOM_PER_LINE: f64 = 1.15;
+
+/// A wheel event delivers lines or pixels; a mouse notch is about this many pixels.
+const PIXELS_PER_LINE: f32 = 40.0;
 
 unsafe extern "C" {
     /// Emitted by wasm-ld: runs the module's static constructors. OCCT's C++
@@ -94,6 +102,11 @@ struct Probe {
     camera: Rc<RefCell<Camera>>,
     /// Frames painted, for the console.
     frames: Rc<RefCell<u32>>,
+    /// Whether this surface founded the current gesture, and where the pointer was
+    /// at the previous move. The gateway holds no state across frames; the producer
+    /// pairs a down with its up itself.
+    grab: Rc<Cell<bool>>,
+    last: Rc<Cell<Option<SurfacePoint>>>,
 }
 
 impl Probe {
@@ -115,14 +128,16 @@ impl Probe {
             packets: Rc::new(packets),
             camera: Rc::new(RefCell::new(demo_camera())),
             frames: Rc::new(RefCell::new(0)),
+            grab: Rc::new(Cell::new(false)),
+            last: Rc::new(Cell::new(None)),
         }
     }
 }
 
 impl Render for Probe {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        // The camera moves every frame, so keep asking for frames. The real
-        // viewport does this while it animates.
+        // The surface repaints on its own schedule for now; the real viewport
+        // draws on demand, and the gateway marks the window for redraw itself.
         window.request_animation_frame();
 
         let surface = Rc::clone(&self.surface);
@@ -130,6 +145,58 @@ impl Render for Probe {
         let packets = Rc::clone(&self.packets);
         let camera = Rc::clone(&self.camera);
         let frames = Rc::clone(&self.frames);
+
+        let painted_camera = Rc::clone(&self.camera);
+        let canvas = gpu_canvas(move |gpu: &mut GpuCanvasContext| {
+            paint(gpu, &surface, &renderer, &packets, &painted_camera, &frames);
+        })
+        // The element sizes itself from its childless content otherwise: it
+        // measured 320x1 inside a 320x320 div.
+        .size_full();
+
+        // The wheel is the view's own handler: the gateway's vocabulary carries no
+        // scroll, and zoom is a camera verb rather than a producer event.
+        let zooming = Rc::clone(&self.camera);
+        let canvas = canvas.on_scroll_wheel(move |event, window, _cx| {
+            let notches = match event.delta {
+                ScrollDelta::Lines(lines) => lines.y,
+                ScrollDelta::Pixels(pixels) => pixels.y.as_f32() / PIXELS_PER_LINE,
+            };
+            zooming
+                .borrow_mut()
+                .dolly(ZOOM_PER_LINE.powf(-f64::from(notches)));
+            window.refresh();
+        });
+
+        // Orbit is the gateway's: it founds GPUI's drag on the down, so the gesture
+        // keeps arriving past the canvas edge, and reports positions in physical
+        // pixels from the canvas’s top-left corner.
+        let grab = Rc::clone(&self.grab);
+        let last = Rc::clone(&self.last);
+        let element = surface_input(canvas, move |input: SurfaceInput| {
+            // `Camera::orbit` takes logical pixels, like the canvas demo's pointer
+            // listeners; the gateway works in physical ones.
+            let scale = input.scale.max(1.0);
+            match input.event {
+                SurfaceEvent::PointerDown { position, .. } => {
+                    grab.set(true);
+                    last.set(Some(position));
+                }
+                SurfaceEvent::PointerMove { position, .. } if grab.get() => {
+                    if let Some(previous) = last.replace(Some(position)) {
+                        camera.borrow_mut().orbit([
+                            (position.x - previous.x) / scale,
+                            (position.y - previous.y) / scale,
+                        ]);
+                    }
+                }
+                SurfaceEvent::PointerMove { .. } => {}
+                SurfaceEvent::PointerUp { .. } => {
+                    grab.set(false);
+                    last.set(None);
+                }
+            }
+        });
 
         div()
             .size_full()
@@ -139,19 +206,7 @@ impl Render for Probe {
             .items_center()
             .justify_center()
             .p_6()
-            .child(
-                div()
-                    .w(px(320.))
-                    .h(px(320.))
-                    .child(
-                        gpu_canvas(move |gpu: &mut GpuCanvasContext| {
-                            paint(gpu, &surface, &renderer, &packets, &camera, &frames);
-                        })
-                        // The element sizes itself from its childless content
-                        // otherwise: it measured 320x1 inside a 320x320 div.
-                        .size_full(),
-                    ),
-            )
+            .child(div().w(px(320.)).h(px(320.)).child(element))
     }
 }
 
@@ -213,11 +268,10 @@ fn paint(
         *frames
     };
 
-    // Turn the model a little each frame: a live surface, not a cached one.
+    // The pixel size drives the projection; the pose belongs to the input handlers.
     let camera = {
         let mut camera = camera.borrow_mut();
         camera.viewport = Viewport::new([width, height], scale);
-        camera.orbit([0.8, 0.3]);
         camera
     };
 

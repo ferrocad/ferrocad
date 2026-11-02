@@ -16,6 +16,35 @@
     // `#[wasm_bindgen(start)]` entry point (log setup, then GPUI's application).
     import init from "./pkg/ferrocad_web_gpui.js";
     await init();
+
+    // `?drag=1` synthesises one pointer drag across the canvas, so a headless
+    // screenshot can show that `surface_input` drives the camera. Real pointer
+    // input needs none of this.
+    if (new URLSearchParams(location.search).has("drag")) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const canvas = document.querySelector("canvas");
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const x = rect.left + rect.width * 0.3;
+        const y = rect.top + rect.height * 0.3;
+        const fire = (type, dx, dy, buttons) =>
+          canvas.dispatchEvent(
+            new PointerEvent(type, {
+              pointerId: 1,
+              pointerType: "mouse",
+              isPrimary: true,
+              clientX: x + dx,
+              clientY: y + dy,
+              buttons,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        fire("pointerdown", 0, 0, 1);
+        for (let i = 1; i <= 12; i += 1) fire("pointermove", i * 8, i * 3, 1);
+        fire("pointerup", 96, 36, 0);
+      }
+    }
   </script>
 </body>
 </html>

@@ -28,9 +28,15 @@ geometry:
 5. The window's device comes from
    `GpuCanvasContext::try_device::<gpui_wgpu::WgpuRenderer>()`, which needs a
    wasm `GpuRenderer` impl that upstream gates out (change 3 in the same file).
+6. **Pointer input is `gpui_interop`'s own gateway**: `surface_input(canvas, ..)`
+   reports `SurfaceEvent`s in physical pixels from the canvas's top-left corner
+   and founds GPUI's drag on the down, so a drag keeps orbiting after the pointer
+   leaves the canvas. The wheel is the view's own handler because the gateway's
+   vocabulary has no scroll; it calls `Camera::dolly`, the same verb the canvas
+   demo binds to its DOM listener.
 
-The camera orbits a little every frame, so a screenshot shows a live surface
-rather than a cached texture.
+The camera starts at the demo pose and moves only when the pointer does, so the
+probe draws a live surface rather than a cached texture.
 
 The 13 WASI link stubs the wasm kernel needs live in `crates/ferrocad_wasm`
 (shared with `ferrocad_web`); `ferrocad_wasm::install()` keeps them linked.
@@ -74,8 +80,6 @@ the first load takes a moment.
 - **No `ferrocad_gpui`.** The shell embeds CPython (`pyo3 auto-initialize`), which
   does not build for `wasm32-unknown-unknown`; a wasm shell needs a separate crate
   or a `no-python` feature first.
-- **No interaction.** The camera orbits on its own; pointer-driven orbit/zoom
-  lives in `ferrocad_web_viewport` today and would be the next thing to port.
 - **No image fallback and no picking.** The native presenter degrades to a
   readback image when the device is unavailable; that path needs an async
   `map_async` on WebGL2 and is not covered here.
@@ -93,6 +97,14 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader (`--use-angle=swiftshader
 ```
 
 The screenshot shows the 10 mm box with a 3 mm fillet on `Edge1` — the rounded
-lower-left edge — shaded with its twelve edges. `ferrocad_web`'s smoke test
-still passes after the WASI-stub extraction (40 triangles, refused fillet
-reported, `split: 1 direct, 1 left`).
+lower-left edge — shaded with its twelve edges.
+
+Pointer input was checked the same way: `index.html` honours `?drag=1`, which
+synthesises one `pointerdown`/`pointermove`×12/`pointerup` sequence on the canvas
+(the only reason that page has any scripting beyond `init()`). A capture of
+`/?drag=1` differs from the same page without the drag in 22 027 pixels, all
+inside the canvas, with the box turned from a front view to a corner view — the
+gateway delivered the whole gesture.
+
+`ferrocad_web`'s smoke test still passes after the WASI-stub extraction (40
+triangles, refused fillet reported, `split: 1 direct, 1 left`).

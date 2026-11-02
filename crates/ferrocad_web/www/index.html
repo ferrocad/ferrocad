@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FerroCAD wasm kernel</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0f1218 }
+  canvas { display: block; width: 100%; height: 100% }
+</style>
+<canvas id="cad" width="960" height="600"></canvas>
+<script type="module">
+  import init from "./pkg/ferrocad_web.js";
+  init().catch((error) => {
+    document.body.textContent = String(error);
+    console.error(error);
+  });
+</script>

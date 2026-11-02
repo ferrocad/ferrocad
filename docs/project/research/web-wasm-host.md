@@ -1,9 +1,8 @@
 # A minimal wgpu/WebGL host for the wasm kernel
 
-Status: **research note (2026-11-02)**. This is a decision note, not an
-implementation: no crate, manifest, lockfile or git state was changed. One new file
-was added (this one). Scratch crates used for the measurements live under the
-gitignored `target/` and were deleted afterwards.
+Status: **research note (2026-11-02)**, followed by the first implementation
+(`crates/ferrocad_web`, §11). The research itself changed no crate, manifest or
+lockfile; the implementation is a separate commit.
 
 What this note **ran** (host: Rust 1.95.0; container: Rust 1.97.0, clang 22 /
 wasi-sdk 33, image digest `sha256:4dc88df…`):
@@ -952,3 +951,36 @@ rights_inheriting: i64, fdflags, opened_fd)`, `proc_exit(code)`.
 Return `0` from a successful call, `8` (`EBADF`) / `44` (`ENOENT`) from the file
 calls. The measured build's `proc_exit` returned; a shipped shim should trap there
 (§5).
+
+---
+
+## 11. What landed (2026-11-02)
+
+Implemented after this note:
+
+- `ferrocad_wgpu` gained `with_sample_count_and_format` (Option B, §4): `Targets`
+  and both colour attachments take the format, while `new`/`with_sample_count`
+  keep `TARGET_FORMAT`, so native rendering is unchanged. The 64 renderer tests
+  pass.
+- `crates/ferrocad_web` is a `cdylib` with `#[wasm_bindgen(start)]`, a canvas
+  surface (`BROWSER_WEBGPU | GL`, so WebGL2 is the required path), one sample
+  (MSAA deferred until the WebGL path is browser-tested), `pick_formats` (an sRGB
+  view on WebGPU, an sRGB surface on WebGL), and a filleted box from
+  `ferrocad_occt`.
+- `src/wasi.rs` defines the 13 stubs from Appendix B; the shipped module has no
+  `wasi_snapshot_preview1` imports.
+- One extra gotcha: wasm-bindgen 0.2.129's glue reads the `__instance_terminated`
+  export. The static is `#[no_mangle]` in `wasm_bindgen::__rt`, but
+  `--gc-sections` drops it unless something references it; `main` does a volatile
+  read so the export survives.
+- `www/smoke.mjs` runs under Node: `initSync({ module })` + `triangles()` returns
+  40 and asserts there are no WASI imports. `node www/smoke.mjs`.
+
+Sizes: release `ferrocad_web.wasm` is 20.3 MB, and 17 MB after
+`wasm-bindgen --target web` (`_bg.wasm`); the debug build is 181 MB. The CI job
+`wasm-web` does the Docker build, installs the lock-derived wasm-bindgen CLI,
+generates the glue and runs the smoke test.
+
+Still unverified: an actual browser canvas (there is no browser or GPU here), the
+WebGL2 MSAA path, and picking. The canvas draw is the one thing the Node test
+cannot cover.

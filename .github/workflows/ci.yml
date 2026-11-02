@@ -330,3 +330,51 @@ jobs:
         env:
           OCCT_WASM_ROOT: ${{ github.workspace }}/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown
         run: cargo build -p ferrocad_occt_wasm --target wasm32-unknown-unknown --locked
+
+  # The browser host: build `ferrocad_web` (OCCT + wgpu, WebGL2 fallback) in the
+  # cross image, then run wasm-bindgen and the Node smoke test on the runner.
+  # `wasm-bindgen` is not in the image, and its CLI version must equal the crate's
+  # schema version, so derive it from the lock instead of hard-coding it.
+  wasm-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the wasm-bindgen version from the lock
+        id: bindgen
+        run: |
+          version=$(cargo tree -p wasm-bindgen --depth 0 | awk 'NR==1 {print $2}' | tr -d v)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "wasm-bindgen $version"
+      - name: Fetch the prebuilt wasm OCCT 8.0.1
+        run: |
+          curl -sSL -o /tmp/occt-wasm.tar.gz https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz
+          mkdir -p .occt-wasm
+          tar xzf /tmp/occt-wasm.tar.gz -C .occt-wasm
+      - name: Build ferrocad_web in the cross image
+        run: |
+          mkdir -p target
+          docker run --name web \
+            -v "$GITHUB_WORKSPACE":/work -w /work \
+            -e OCCT_WASM_ROOT=/work/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown \
+            -e CARGO_TARGET_DIR=/tmp/target \
+            -e HTTP_PROXY -e HTTPS_PROXY -e ALL_PROXY \
+            ghcr.io/lzpel/cross-wasm32-unknown-unknown@sha256:4dc88df287da141e67588ba80ebf1d14d5cb24f5b05302c57b11b2a1e9bed1df \
+            cargo build --release -j 2 -p ferrocad_web --target wasm32-unknown-unknown --locked
+          docker cp web:/tmp/target/wasm32-unknown-unknown/release/ferrocad_web.wasm target/wasm-web.wasm
+          docker rm web
+      - name: Install the matching wasm-bindgen CLI
+        env:
+          VERSION: ${{ steps.bindgen.outputs.version }}
+        run: |
+          base="wasm-bindgen-${VERSION}-x86_64-unknown-linux-musl"
+          curl -sSLO "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${VERSION}/${base}.tar.gz"
+          curl -sSLO "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${VERSION}/${base}.tar.gz.sha256sum"
+          sed 's#gh-release/##' "${base}.tar.gz.sha256sum" | sha256sum -c -
+          tar xzf "${base}.tar.gz"
+          install -m 755 "${base}/wasm-bindgen" /usr/local/bin/wasm-bindgen
+          test "$(wasm-bindgen --version | awk '{print $2}')" = "$VERSION"
+      - name: Generate the JS glue and run the Node smoke test
+        run: |
+          wasm-bindgen --target web --out-dir crates/ferrocad_web/www/pkg target/wasm-web.wasm
+          node crates/ferrocad_web/www/smoke.mjs

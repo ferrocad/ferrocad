@@ -104,14 +104,21 @@ struct Targets {
     _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     sample_count: u32,
+    /// The colour attachment format the pipelines were built for.
+    color_format: wgpu::TextureFormat,
 }
 
 impl Targets {
-    fn new(device: &wgpu::Device, size: [u32; 2], sample_count: u32) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        size: [u32; 2],
+        sample_count: u32,
+        color_format: wgpu::TextureFormat,
+    ) -> Self {
         let sample_count = sample_count.max(1);
-        let (color, color_view) = create_color(device, size);
+        let (color, color_view) = create_color(device, size, color_format);
         let (msaa, msaa_view) = if sample_count > 1 {
-            let (texture, view) = create_msaa_color(device, size, sample_count);
+            let (texture, view) = create_msaa_color(device, size, sample_count, color_format);
             (Some(texture), Some(view))
         } else {
             (None, None)
@@ -125,6 +132,7 @@ impl Targets {
             _depth: depth,
             depth_view,
             sample_count,
+            color_format,
         }
     }
 }
@@ -172,10 +180,26 @@ impl WgpuRenderer {
     /// the usual choice). The count must be supported by the device for both the
     /// colour and depth formats.
     pub fn with_sample_count(context: GpuContext, size: [u32; 2], sample_count: u32) -> Self {
+        Self::with_sample_count_and_format(context, size, sample_count, TARGET_FORMAT)
+    }
+
+    /// Create a renderer whose colour attachments use `color_format`.
+    ///
+    /// [`TARGET_FORMAT`] (sRGB RGBA) is what gpui's `RenderImage` expects, and is
+    /// what [`new`](Self::new)/[`with_sample_count`](Self::with_sample_count) use.
+    /// A browser host passes the canvas surface's format instead: WebGPU canvases
+    /// forbid sRGB formats, so they configure `Rgba8Unorm` and hand the renderer
+    /// that format, using an sRGB view only when resolving to the canvas.
+    pub fn with_sample_count_and_format(
+        context: GpuContext,
+        size: [u32; 2],
+        sample_count: u32,
+        color_format: wgpu::TextureFormat,
+    ) -> Self {
         let size = clamp_size(size);
-        let targets = Targets::new(&context.device, size, sample_count);
+        let targets = Targets::new(&context.device, size, sample_count, color_format);
         // Diagnostics first: the trace names the device every later line belongs to.
-        trace::startup(&context.device, TARGET_FORMAT, targets.sample_count);
+        trace::startup(&context.device, color_format, targets.sample_count);
         trace::install(&context.device);
         let uniform_layout = uniforms::layout(&context.device);
         let textures_layout = textures::layout(&context.device);
@@ -191,13 +215,13 @@ impl WgpuRenderer {
             &context.device,
             &uniform_layout,
             &textures_layout,
-            TARGET_FORMAT,
+            color_format,
             targets.sample_count,
         );
         programs.upload_placeholder(&context.queue);
         let pipelines = ScenePipelines::new(
             &context.device,
-            TARGET_FORMAT,
+            color_format,
             &uniform_layout,
             &textures_layout,
             programs.bind_group_layout(),
@@ -281,7 +305,12 @@ impl WgpuRenderer {
             return;
         }
         trace::resized(self.size, size, self.targets.sample_count);
-        self.targets = Targets::new(&self.context.device, size, self.targets.sample_count);
+        self.targets = Targets::new(
+            &self.context.device,
+            size,
+            self.targets.sample_count,
+            self.targets.color_format,
+        );
         self.pick_targets = None; // re-allocated at the new size on the next pick
         self.readback = None; // re-allocated at the new size on the next readback
         self.readback_bytes = 0;
@@ -1283,7 +1312,11 @@ fn clamp_size([width, height]: [u32; 2]) -> [u32; 2] {
 }
 
 /// Create the single-sampled colour target (the resolve/readback target).
-fn create_color(device: &wgpu::Device, size: [u32; 2]) -> (wgpu::Texture, wgpu::TextureView) {
+fn create_color(
+    device: &wgpu::Device,
+    size: [u32; 2],
+    color_format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let [width, height] = clamp_size(size);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("ferrocad target"),
@@ -1295,7 +1328,7 @@ fn create_color(device: &wgpu::Device, size: [u32; 2]) -> (wgpu::Texture, wgpu::
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
+        format: color_format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC,
@@ -1310,6 +1343,7 @@ fn create_msaa_color(
     device: &wgpu::Device,
     size: [u32; 2],
     sample_count: u32,
+    color_format: wgpu::TextureFormat,
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let [width, height] = clamp_size(size);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1322,7 +1356,7 @@ fn create_msaa_color(
         mip_level_count: 1,
         sample_count,
         dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
+        format: color_format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });

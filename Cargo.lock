@@ -2574,6 +2574,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_web"
+version = "0.1.5"
+dependencies = [
+ "console_error_panic_hook",
+ "ferrocad_geom",
+ "ferrocad_graphics",
+ "ferrocad_occt",
+ "ferrocad_stage",
+ "ferrocad_types",
+ "ferrocad_wgpu",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "ferrocad_wgpu"
 version = "0.1.4"
 dependencies = [

@@ -1011,3 +1011,28 @@ share one implementation instead of drifting.
 
 Verified by screenshot on both paths: the box renders, a synthesized pointer drag
 orbits it, and a wheel event dollies the eye.
+
+### The Part layer in the browser (same day)
+
+The demo now drives a real document rather than calling the kernel directly:
+`Part::Box` + `Part::Fillet` under `Document::recompute`, with a radius slider on
+the page. `ferrocad_part` and `ferrocad_core` are plain Rust and check clean for
+`wasm32-unknown-unknown` (8 s), so the whole workbench layer fits in the browser.
+Two things surfaced:
+
+- **`ferrocad_part::register(Arc<OcctBackend>)` needs the whole vtable.** Coercing
+  to `Arc<dyn GeometryBackend>` retains *every* trait method, including
+  `split_shape`, which is `BRepFeat_SplitShape` — and the prebuilt kernel ships no
+  `TKFeat`. Static dispatch did not need it, so the earlier demo linked without it.
+  `OcctBackend::split_shape` is now a reported error on `wasm32`
+  (`docs/developer/architecture/occt-bundling.md` §8.1 lists the kernel's modules);
+  a host that needs `Part.makeSplitShape` in the browser needs a kernel built with
+  `TKFeat`.
+- **A refused fillet is data, not an abort.** `fillet(12.0)` on the 10 mm box now
+  returns `OCCT operation \`fillet\` did not complete` with the last good shape
+  still in the output property, which the page renders next to the message. This is
+  the F1 behaviour of `operation-failure-modelling.md` seen end to end, and it is
+  what the original crash report was about.
+
+`www/smoke.mjs` asserts both: 40 triangles, then a refused radius (reported, last
+good shape kept) and then a valid one (rebuilds).

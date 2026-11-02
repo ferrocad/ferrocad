@@ -18,7 +18,11 @@ name = "ferrocad_web"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Geometry and the kernel.
+# The document and the Part workbench: the demo drives a real `Document::recompute`
+# (box + fillet), not the kernel directly.
+ferrocad_core.workspace = true
+ferrocad_part.workspace = true
+# Geometry and the kernel behind the Part objects.
 ferrocad_geom.workspace = true
 ferrocad_occt.workspace = true
 # Draw contract and the declarative producer.

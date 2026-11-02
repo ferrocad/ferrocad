@@ -2578,9 +2578,11 @@ name = "ferrocad_web"
 version = "0.1.5"
 dependencies = [
  "console_error_panic_hook",
+ "ferrocad_core",
  "ferrocad_geom",
  "ferrocad_graphics",
  "ferrocad_occt",
+ "ferrocad_part",
  "ferrocad_stage",
  "ferrocad_types",
  "ferrocad_web_viewport",

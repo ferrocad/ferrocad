@@ -1,33 +1,40 @@
-//! The demo host: OCCT in wasm, drawn by [`WebViewport`].
+//! The demo host: a `Part` document in the browser, drawn by [`WebViewport`].
 //!
-//! `#[wasm_bindgen(start)]` runs on `init()`, finds `#cad`, builds a filleted box
-//! with the real kernel, and draws it every animation frame. The surface, device and
-//! orbit/zoom input live in `ferrocad_web_viewport`; this crate is the scene and the
-//! demo pose, plus the smoke-test export.
+//! `#[wasm_bindgen(start)]` runs on `init()`: it builds the document (a 10 mm box
+//! with a fillet on one edge) through the same `Document::recompute` path the
+//! desktop app uses, finds `#cad`, and draws the recomputed shape every animation
+//! frame. [`set_fillet_radius`] rebuilds it, so the page can drive a real feature
+//! and show what the kernel says when it refuses.
 //!
-//! Everything is gated on `wasm32`: on other targets the crate is empty, so a
-//! workspace `cargo check` does not need the browser APIs.
+//! The surface, device and orbit/zoom input live in `ferrocad_web_viewport`; the
+//! document lives in [`scene`]. Everything is gated on `wasm32`, so a workspace
+//! `cargo check` does not need the browser APIs.
 
 #![cfg(target_arch = "wasm32")]
 
+mod scene;
 mod wasi;
 
 use std::{cell::RefCell, rc::Rc};
 
-use ferrocad_geom::{ElementKind, GeomError, GeometryBackend, Tessellation, TessellationOptions};
-use ferrocad_graphics::{Camera, Projection, RenderQueue};
-use ferrocad_occt::OcctBackend;
-use ferrocad_stage::{DrawMode, ShapeItem, Stage};
+use ferrocad_graphics::{Camera, Projection};
 use ferrocad_types::{Placement, Rotation, Vector3};
 use ferrocad_web_viewport::WebViewport;
+use scene::{Scene, DEFAULT_RADIUS};
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
 
 unsafe extern "C" {
     /// Emitted by wasm-ld: runs the module's static constructors. OCCT's C++
     /// initialisers must run before any kernel call.
     fn __wasm_call_ctors();
+}
+
+thread_local! {
+    /// The document the page's radius control drives. `main` installs it before
+    /// the viewport exists, so an exported call always finds it.
+    static SCENE: RefCell<Option<Rc<RefCell<Scene>>>> = const { RefCell::new(None) };
 }
 
 #[wasm_bindgen(start)]
@@ -41,12 +48,22 @@ pub fn main() -> Result<(), JsValue> {
     // is no canvas and `triangles()` is the only thing a test calls.
     unsafe { __wasm_call_ctors() };
 
+    // The document is built before the surface: it is fast, and a page that calls
+    // `set_fillet_radius` early must find it.
+    let scene = match Scene::new(DEFAULT_RADIUS) {
+        Ok(scene) => Rc::new(RefCell::new(scene)),
+        Err(error) => {
+            web_sys::console::error_1(&JsValue::from_str(&error));
+            return Ok(());
+        }
+    };
+    SCENE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&scene)));
+
     let Some(canvas) = canvas() else {
         return Ok(());
     };
-
     wasm_bindgen_futures::spawn_local(async move {
-        match App::new(canvas).await {
+        match App::new(canvas, scene).await {
             Ok(app) => request_frame(Rc::new(RefCell::new(app))),
             Err(error) => web_sys::console::error_1(&error),
         }
@@ -64,11 +81,14 @@ fn canvas() -> Option<web_sys::HtmlCanvasElement> {
 
 struct App {
     viewport: WebViewport,
-    queue: RenderQueue,
+    scene: Rc<RefCell<Scene>>,
 }
 
 impl App {
-    async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<Self, JsValue> {
+    async fn new(
+        canvas: web_sys::HtmlCanvasElement,
+        scene: Rc<RefCell<Scene>>,
+    ) -> Result<Self, JsValue> {
         let camera = Camera {
             // `view` is world→view, and `Placement::new(pos, rot)` composes as
             // `T(pos) · R`: `pos` is a view-space translation applied to the
@@ -88,46 +108,108 @@ impl App {
             ..Camera::identity()
         };
         let viewport = WebViewport::new(canvas, camera).await?;
-
-        let mesh = filleted_box().map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let queue = Stage::new()
-            .with_item(
-                ShapeItem::from_tessellation(1, &mesh)
-                    .with_draw_mode(DrawMode::ShadedWithEdges)
-                    .with_surface_color([0.62, 0.66, 0.72, 1.0]),
-            )
-            .to_queue();
-
-        Ok(Self { viewport, queue })
+        Ok(Self { viewport, scene })
     }
 
     fn frame(&mut self) {
-        self.viewport.draw(&self.queue.packets);
+        let scene = self.scene.borrow();
+        self.viewport.draw(scene.packets());
     }
 }
 
-/// The triangle count of a box filleted on one edge, for the smoke test and for
-/// hosts that want to check the kernel before creating a canvas.
+/// The document's state after the last recompute, for the page.
 #[wasm_bindgen]
-pub fn triangles() -> u32 {
-    filleted_box()
-        .map(|mesh| (mesh.triangles.len() / 3) as u32)
-        .unwrap_or(0)
+pub struct Status {
+    ok: bool,
+    error: Option<String>,
+    radius: f64,
+    faces: u32,
+    triangles: u32,
 }
 
-fn filleted_box() -> Result<Tessellation, GeomError> {
-    let backend = OcctBackend::new();
-    let shape = backend.make_box(10.0, 10.0, 10.0)?;
-    let edges = backend.elements(&shape, ElementKind::Edge);
-    let edge = edges.first().ok_or("the box has no edges")?;
-    let filleted = backend.fillet(&shape, std::slice::from_ref(edge), 1.0)?;
-    // `make_box` builds from the corner at the origin; centre it so the orbit
-    // camera, which looks at the origin, frames the whole box.
-    let centred = backend.place(
-        &filleted.shape,
-        &Placement::new(Vector3::new(-5.0, -5.0, -5.0), Rotation::identity()),
-    )?;
-    backend.tessellate(&centred, &TessellationOptions::absolute(0.2))
+impl Status {
+    fn of(scene: &Scene) -> Self {
+        Self {
+            ok: scene.error().is_none(),
+            error: scene.error().map(str::to_string),
+            radius: scene.radius(),
+            faces: scene.faces(),
+            triangles: scene.triangles(),
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl Status {
+    /// Whether the last recompute produced a valid shape.
+    #[wasm_bindgen(getter)]
+    pub fn ok(&self) -> bool {
+        self.ok
+    }
+
+    /// The kernel's reason when `ok` is false.
+    #[wasm_bindgen(getter)]
+    pub fn error(&self) -> Option<String> {
+        self.error.clone()
+    }
+
+    /// The radius the document holds, valid or not.
+    #[wasm_bindgen(getter)]
+    pub fn radius(&self) -> f64 {
+        self.radius
+    }
+
+    /// Faces in the last built shape.
+    #[wasm_bindgen(getter)]
+    pub fn faces(&self) -> u32 {
+        self.faces
+    }
+
+    /// Triangles in the last built shape.
+    #[wasm_bindgen(getter)]
+    pub fn triangles(&self) -> u32 {
+        self.triangles
+    }
+}
+
+/// Recompute the document's fillet at `radius` and report the result.
+///
+/// The geometry on screen is the last **valid** result: `Part::Fillet` keeps its
+/// last good shape when the kernel refuses, so a radius that cannot exist leaves
+/// the box visible and reports why — the state the failure model is about.
+#[wasm_bindgen]
+pub fn set_fillet_radius(radius: f64) -> Result<Status, JsValue> {
+    with_scene(|scene| {
+        let mut scene = scene.borrow_mut();
+        scene
+            .set_radius(radius)
+            .map_err(|error| JsValue::from_str(&error))?;
+        Ok(Status::of(&scene))
+    })
+}
+
+/// The document's state, without rebuilding it.
+#[wasm_bindgen]
+pub fn fillet_status() -> Result<Status, JsValue> {
+    with_scene(|scene| Ok(Status::of(&scene.borrow())))
+}
+
+fn with_scene<T>(f: impl FnOnce(Rc<RefCell<Scene>>) -> Result<T, JsValue>) -> Result<T, JsValue> {
+    let scene = SCENE.with(|slot| slot.borrow().clone()).ok_or_else(|| {
+        JsValue::from_str("the FerroCAD document has not been built (init() failed)")
+    })?;
+    f(scene)
+}
+
+/// The demo document's triangle count, for the Node smoke test.
+///
+/// Builds the same `Part` document as the page — box, fillet, `recompute` — so the
+/// smoke test covers the workbench and document layers, not just the kernel.
+#[wasm_bindgen]
+pub fn triangles() -> u32 {
+    Scene::new(DEFAULT_RADIUS)
+        .map(|scene| scene.triangles())
+        .unwrap_or(0)
 }
 
 fn request_frame(app: Rc<RefCell<App>>) {

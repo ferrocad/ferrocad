@@ -2,21 +2,64 @@
 <meta charset="utf-8">
 <title>FerroCAD wasm kernel</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #0f1218 }
+  html, body {
+    margin: 0; height: 100%; background: #0f1218;
+    font: 0.8125rem/1.4 system-ui, sans-serif;
+  }
   /* `touch-action: none`: the canvas owns the drag, not the page's scroll gesture. */
   canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab }
-  #hint {
-    position: fixed; left: 1rem; bottom: 0.75rem; margin: 0;
-    font: 0.8125rem/1.4 system-ui, sans-serif; color: #6b7480;
-    pointer-events: none; user-select: none;
+  #panel {
+    position: fixed; left: 1rem; bottom: 0.75rem; padding: 0.6rem 0.75rem;
+    max-width: 24rem; background: #161b22e0; border: 1px solid #232a35;
+    border-radius: 0.5rem; color: #c3cad4;
   }
+  #panel label { display: block; color: #6b7480; margin-bottom: 0.3rem }
+  #panel input { width: 12rem; vertical-align: middle }
+  #status { margin: 0.45rem 0 0; color: #8a94a1 }
+  #status.bad { color: #e0605e }
+  #hint { margin: 0.3rem 0 0; color: #4e5661 }
 </style>
 <canvas id="cad" width="960" height="600"></canvas>
-<p id="hint">drag to orbit · scroll to zoom</p>
+<div id="panel">
+  <label for="radius">fillet radius — <output id="radius-value">1.0 mm</output></label>
+  <input id="radius" type="range" min="0.1" max="12" step="0.1" value="1">
+  <p id="status">building the document…</p>
+  <p id="hint">drag to orbit · scroll to zoom</p>
+</div>
 <script type="module">
-  import init from "./pkg/ferrocad_web.js";
-  init().catch((error) => {
-    document.body.textContent = String(error);
-    console.error(error);
+  import init, { fillet_status, set_fillet_radius } from "./pkg/ferrocad_web.js";
+
+  const radius = document.getElementById("radius");
+  const value = document.getElementById("radius-value");
+  const status = document.getElementById("status");
+
+  function show(next) {
+    value.textContent = `${next.radius.toFixed(1)} mm`;
+    status.classList.toggle("bad", !next.ok);
+    status.textContent = next.ok
+      ? `${next.faces} faces · ${next.triangles} triangles`
+      : `invalid: ${next.error ?? "the fillet failed"} — the box shown is the last valid shape`;
+  }
+
+  // `input` only previews the number; `change` recomputes, so dragging the slider
+  // does not run the kernel on every pixel.
+  radius.addEventListener("input", () => {
+    value.textContent = `${Number(radius.value).toFixed(1)} mm`;
   });
+  radius.addEventListener("change", () => {
+    try {
+      show(set_fillet_radius(Number(radius.value)));
+    } catch (error) {
+      status.classList.add("bad");
+      status.textContent = String(error);
+    }
+  });
+
+  init()
+    .then(() => show(fillet_status()))
+    .catch((error) => {
+      status.classList.add("bad");
+      status.textContent = String(error);
+      console.error(error);
+    });
 </script>

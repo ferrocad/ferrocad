@@ -1,10 +1,19 @@
 # ferrocad_web
 
-The real OCCT kernel, compiled to WebAssembly, rendered through `ferrocad_wgpu`
-on a `<canvas>`. A 10 mm box is built, one edge is filleted, and the result is
-tessellated and drawn every animation frame. **Drag** with the primary button to
-orbit the box; the **wheel** zooms. WebGL2 is the required path; WebGPU is used
-when the browser offers it.
+The real OCCT kernel, compiled to WebAssembly, drawing a **`Part` document** on a
+`<canvas>`: `Document::recompute` runs a `Part::Box` and a `Part::Fillet` through
+the same `GeometryBackend` seam the desktop app uses, and the recomputed shape is
+tessellated and drawn every animation frame.
+
+The page drives the feature: a radius slider rebuilds the document, and a radius
+the kernel refuses is **reported, not fatal** — the box that is still valid stays
+on screen and the reason is shown (`OCCT operation \`fillet\` did not complete`).
+That is the point of the failure model in
+[`operation-failure-modelling.md`](../../docs/project/tasks/operation-failure-modelling.md):
+what used to abort the process is now a value.
+
+**Drag** with the primary button to orbit; the **wheel** zooms. WebGL2 is the
+required path; WebGPU is used when the browser offers it.
 
 ## Run the demo
 
@@ -48,21 +57,28 @@ crates/ferrocad_web/run.sh --build-only
 
 | Path | What |
 | --- | --- |
-| `src/lib.rs` | `#[wasm_bindgen(start)]`, the filleted-box demo and its camera pose, `triangles()` |
+| `src/lib.rs` | `#[wasm_bindgen(start)]`, the camera pose, the page API (`set_fillet_radius`, `fillet_status`, `triangles`) |
+| `src/scene.rs` | the `Part` document: `Part::Box` + `Part::Fillet`, `Document::recompute`, tessellation, failure state |
 | `src/wasi.rs` | 13 link-time WASI stubs, so the module imports no `wasi_snapshot_preview1` |
-| `www/index.html` | the page: a `<canvas id="cad">`, one module script, the orbit/zoom hint |
-| `www/smoke.mjs` | Node check: zero WASI imports, 40 triangles |
+| `www/index.html` | the page: a `<canvas id="cad">`, the radius slider, the status line |
+| `www/smoke.mjs` | Node check: zero WASI imports, 40 triangles, a refused fillet is reported and keeps the last good shape |
 | `run.sh` | the one command above |
 
-The kernel is `ferrocad_occt` (which links the prebuilt static OCCT libraries);
-the renderer is `ferrocad_wgpu`, which gained
-`with_sample_count_and_format` so it can draw straight into a canvas texture. The
-canvas surface, device and input bindings live in `ferrocad_web_viewport` — the
-wasm analogue of the GPUI `ferrocad_viewport` — so this crate is only the scene.
-Orbit and zoom are `ferrocad_graphics::Camera::{orbit, dolly}`, the same maths the
-GPUI viewport uses, so the two behave alike. See
+The layers, bottom-up: `ferrocad_occt` (links the prebuilt static OCCT libraries)
+implements `ferrocad_geom::GeometryBackend`; `ferrocad_part` registers its object
+types against it and `ferrocad_core`'s `Document` recomputes them; `ferrocad_stage`
+turns the result into draw packets; `ferrocad_wgpu` renders them (it gained
+`with_sample_count_and_format` so it can draw straight into a canvas texture);
+`ferrocad_web_viewport` — the wasm analogue of the GPUI `ferrocad_viewport` — owns
+the canvas surface, device and input. Orbit and zoom are
+`ferrocad_graphics::Camera::{orbit, dolly}`, the same maths the GPUI viewport uses,
+so the two behave alike. See
 [`docs/project/research/web-wasm-host.md`](../../docs/project/research/web-wasm-host.md)
 for the measurements and for what is still unverified.
+
+The prebuilt wasm kernel omits `TKFeat`, so `GeometryBackend::split_shape` (which
+`BRepFeat_SplitShape` implements) is a reported error on wasm rather than a link
+failure for every consumer of the backend. Nothing here calls it.
 
 ## Limits
 

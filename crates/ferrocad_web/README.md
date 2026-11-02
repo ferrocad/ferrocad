@@ -27,20 +27,24 @@ That is the whole workflow. On the first run the script:
 
 1. downloads cadrum's prebuilt **OCCT 8.0.1** for `wasm32-unknown-unknown` into
    `.occt-wasm/`;
-2. builds `ferrocad_web` in the digest-pinned
+2. builds the one toolkit that tarball prunes — **`TKFeat`** — into the kernel: it is
+   35 translation units sparse-cloned from the OCCT 8.0.1 tag into `target/occt-src`
+   and compiled in the same cross image (~1 min, skipped once
+   `.occt-wasm/<kernel>/lib/libTKFeat.a` exists);
+3. builds `ferrocad_web` in the digest-pinned
    `ghcr.io/lzpel/cross-wasm32-unknown-unknown` image, which carries the wasi-sdk
    toolchain whose wasm-EH encoding matches that kernel (the image is ~2.5 GB and
    is pulled on first use);
-3. installs the **wasm-bindgen CLI version pinned by `Cargo.lock`** into
+4. installs the **wasm-bindgen CLI version pinned by `Cargo.lock`** into
    `target/wasm-bindgen/`;
-4. generates `www/pkg/` and runs the Node smoke test when Node is available;
-5. serves `www/` with `python3 -m http.server`.
+5. generates `www/pkg/` and runs the Node smoke test when Node is available;
+6. serves `www/` with `python3 -m http.server`.
 
-Later runs reuse `.occt-wasm/`, `target/wasm-bindgen/` and `target/wasm-cargo/`,
-so only the changed crates rebuild.
+Later runs reuse `.occt-wasm/`, `target/occt-src/`, `target/wasm-bindgen/` and
+`target/wasm-cargo/`, so only the changed crates rebuild.
 
-Requirements: Docker (usable without `sudo`), `curl`, `tar` and `python3`. Node is
-optional — it runs the smoke test. A host Rust toolchain is not needed: the
+Requirements: Docker (usable without `sudo`), `curl`, `tar`, `git` and `python3`.
+Node is optional — it runs the smoke test. A host Rust toolchain is not needed: the
 wasm-bindgen CLI version is read from `Cargo.lock` and the build happens inside
 the image.
 
@@ -76,9 +80,13 @@ so the two behave alike. See
 [`docs/project/research/web-wasm-host.md`](../../docs/project/research/web-wasm-host.md)
 for the measurements and for what is still unverified.
 
-The prebuilt wasm kernel omits `TKFeat`, so `GeometryBackend::split_shape` (which
-`BRepFeat_SplitShape` implements) is a reported error on wasm rather than a link
-failure for every consumer of the backend. Nothing here calls it.
+The prebuilt kernel omits `TKFeat`, which `GeometryBackend::split_shape` needs: once
+the backend is coerced to `Arc<dyn GeometryBackend>` (as `ferrocad_part` does) the
+whole vtable is reachable, so a bare cadrum tarball fails to link on
+`BRepFeat_SplitShape`. `run.sh` therefore builds that one toolkit into the kernel
+from the OCCT 8.0.1 sources, and the fork's build script links `-lTKFeat` when the
+archive is present (warning, with the recipe, when it is not). Nothing in the demo
+calls `split_shape` yet, but `Part.makeSplitShape` now works in the browser.
 
 ## Limits
 

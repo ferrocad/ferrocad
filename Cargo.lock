@@ -2401,7 +2401,7 @@ dependencies = [
 [[package]]
 name = "ferrocad_occt_cxx"
 version = "0.3.0"
-source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.27#1016cabc58b0e0904f9b2cd79203384b5b5d531a"
+source = "git+https://github.com/ferrocad/ferrocad_occt_cxx?tag=v0.3.0-ferrocad.29#ca70d19915e6f7f2944a4559a8a3505f08f20537"
 dependencies = [
  "cmake",
  "cxx",

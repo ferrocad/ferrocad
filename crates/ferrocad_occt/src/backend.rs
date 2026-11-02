@@ -2347,27 +2347,6 @@ impl GeometryBackend for OcctBackend {
         Ok((erase(fused), split))
     }
 
-    /// OCCT's `BRepFeat_SplitShape`, which the prebuilt wasm kernel does not ship.
-    ///
-    /// The kernel omits `TKFeat`, so referring to the FFI symbols here fails at
-    /// link time for every wasm consumer of this backend — and `ferrocad_part`
-    /// instantiates the whole `GeometryBackend` vtable. Nothing in the browser
-    /// demo calls this; a wasm host that needs `Part.makeSplitShape` needs a
-    /// kernel built with `TKFeat`.
-    #[cfg(target_arch = "wasm32")]
-    fn split_shape(
-        &self,
-        _shape: &Shape,
-        _tools: &[(Shape, Shape)],
-        _check_interior: bool,
-    ) -> Result<(Vec<Shape>, Vec<Shape>), GeomError> {
-        Err(OcctError::InvalidInput {
-            what: "split_shape needs TKFeat, which the prebuilt wasm kernel omits",
-        }
-        .into())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn split_shape(
         &self,
         shape: &Shape,

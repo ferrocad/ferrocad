@@ -227,15 +227,23 @@ wasm-EH encoding. It ships **19 headless `TK*` libraries** — `TKernel`, `TKMat
 `TKDECascade`, `TKDESTEP`, `TKXSBase` — plus the `cadrum_*` C++ runtime.
 
 It omits the data-exchange and application-framework libraries the desktop prefix has
-(`TKDESTL`, `TKDEIGES`, `TKCAF`, `TKLCAF`, `TKXCAF`) **and `TKFeat`**. `ferrocad_occt`
-binds `BRepFeat_SplitShape` for `GeometryBackend::split_shape`; because
-`ferrocad_part::register(Arc<OcctBackend>)` materialises the whole trait vtable, that
-binding is reachable even when nothing calls it, so `split_shape` is a reported error
-on `wasm32` instead of a link failure. A host that needs `Part.makeSplitShape` in the
-browser needs a kernel built with `TKFeat`.
+(`TKDESTL`, `TKDEIGES`, `TKCAF`, `TKLCAF`, `TKXCAF`) as well as **`TKFeat`**, which
+`ferrocad_occt` needs: it binds `BRepFeat_SplitShape` for
+`GeometryBackend::split_shape`, and `ferrocad_part::register(Arc<OcctBackend>)`
+materialises the whole trait vtable, so that binding is reachable even when nothing
+calls it. Rebuilding OCCT for that is unnecessary — `TKFeat` is 35 translation units
+(`src/ModelingAlgorithms/TKFeat/{BRepFeat,LocOpe}/*.cxx`) that compile against the
+kernel's own headers. `crates/ferrocad_web/run.sh` sparse-clones those sources into
+`target/occt-src` (tag `V8_0_1`, ~1 MB) and compiles them in the same cross image
+with the kernel's flags, writing `.occt-wasm/<kernel>/lib/libTKFeat.a`; the step is
+skipped once the archive exists. The fork links `-lTKFeat` only when the archive is
+present, and otherwise emits a `cargo:warning` naming this recipe instead of failing
+the link with barrel-shifted `BRepFeat` symbols. A host that points `OCCT_WASM_ROOT`
+at a bare cadrum tarball and builds without `run.sh` has to run that recipe itself
+for `Part.makeSplitShape` to work in the browser.
 
 **Decision:** ship on **8.0.1** with
 [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)
-(`v0.3.0-ferrocad.23`), pinned from the workspace via `[patch.crates-io]`. The upstream
+(`v0.3.0-ferrocad.29`), pinned from the workspace via `[patch.crates-io]`. The upstream
 tracking issue is
 [bschwind/opencascade-rs#237](https://github.com/bschwind/opencascade-rs/issues/237).

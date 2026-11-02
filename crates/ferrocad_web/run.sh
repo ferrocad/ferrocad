@@ -6,8 +6,8 @@
 #   JOBS=4 crates/ferrocad_web/run.sh
 #   crates/ferrocad_web/run.sh --build-only
 #
-# Requirements: Docker (usable without sudo), curl, tar and python3. Node is
-# optional (it runs the smoke test); a host Rust toolchain is not needed.
+# Requirements: Docker (usable without sudo), curl, tar, git and python3. Node
+# is optional (it runs the smoke test); a host Rust toolchain is not needed.
 set -eu
 
 cd "$(dirname "$0")/../.."
@@ -15,6 +15,8 @@ cd "$(dirname "$0")/../.."
 IMAGE='ghcr.io/lzpel/cross-wasm32-unknown-unknown@sha256:4dc88df287da141e67588ba80ebf1d14d5cb24f5b05302c57b11b2a1e9bed1df'
 OCCT_TARBALL='https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz'
 OCCT_NAME='occt-8_0_1_rev3-wasm32_unknown_unknown'
+# The OCCT release the tarball was built from, for the TKFeat sources below.
+OCCT_GIT_TAG='V8_0_1'
 CARGO_TARGET='target/wasm-cargo'
 CARGO_HOME_HOST='target/wasm-cargo-home'
 PORT="${PORT:-8080}"
@@ -74,7 +76,50 @@ if [ ! -x "$bindgen" ] || ! "$bindgen" --version 2>/dev/null | grep -q "$version
     rm -f "target/wasm-bindgen/${base}.tar.gz" "target/wasm-bindgen/${base}.tar.gz.sha256sum"
 fi
 
-# 3. Build the cdylib in the digest-pinned cross image. Both caches — the build
+# 3. TKFeat, which the tarball prunes (cadrum's API never needs BRepFeat/LocOpe)
+#    but `ferrocad_part` does, because coercing the backend to
+#    `Arc<dyn GeometryBackend>` keeps `split_shape` in the vtable. OCCT is not
+#    rebuilt: the toolkit is 35 translation units compiled against the kernel's
+#    own headers with the kernel's wasi-sdk, which is a one-off step of about a
+#    minute, cached in the kernel directory. The container runs as the invoking
+#    user so the archive does not land root-owned.
+KERNEL=".occt-wasm/$OCCT_NAME"
+if [ ! -f "$KERNEL/lib/libTKFeat.a" ]; then
+    echo "building TKFeat into the wasm kernel (one-off) ..."
+    if [ ! -d target/occt-src/src/ModelingAlgorithms/TKFeat ]; then
+        rm -rf target/occt-src
+        git -c advice.detachedHead=false clone --depth 1 --branch "$OCCT_GIT_TAG" \
+            --filter=blob:none --sparse \
+            https://github.com/Open-Cascade-SAS/OCCT.git target/occt-src
+        git -C target/occt-src sparse-checkout set src/ModelingAlgorithms/TKFeat
+    fi
+    # The flags mirror the kernel's wasi-sdk build, in particular the legacy
+    # wasm-EH encoding, or the archives cannot be linked together.
+    docker run --rm --user "$(id -u):$(id -g)" \
+        -v "$PWD":/work -w /work \
+        -e SRC=/work/target/occt-src \
+        -e OUT=/work/.occt-wasm/$OCCT_NAME \
+        -e SYSROOT=/opt/wasi-sdk/share/wasi-sysroot \
+        "$IMAGE" sh -ec '
+            mkdir -p /tmp/tkfeat
+            cd /tmp/tkfeat
+            for f in "$SRC"/src/ModelingAlgorithms/TKFeat/BRepFeat/*.cxx \
+                     "$SRC"/src/ModelingAlgorithms/TKFeat/LocOpe/*.cxx; do
+                clang++ --target=wasm32-wasip1 --sysroot="$SYSROOT" \
+                    -fwasm-exceptions -fexceptions -mllvm -wasm-use-legacy-eh=true \
+                    -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_SIGNAL \
+                    -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID \
+                    -D_USE_MATH_DEFINES -DFEATURE_COLOR -std=c++17 -O2 \
+                    -I "$OUT/include/opencascade" \
+                    -I "$SRC/src/ModelingAlgorithms/TKFeat" \
+                    -c "$f" -o "$(basename "$f" .cxx).o"
+            done
+            ar rcs "$OUT/lib/libTKFeat.a" ./*.o
+        '
+    echo "built $KERNEL/lib/libTKFeat.a"
+fi
+
+# 4. Build the cdylib in the digest-pinned cross image. Both caches — the build
 #    output and Cargo's own home (registry + git checkouts of the OCCT bindings)
 #    — live on the host, so repeat runs are incremental and need no network. The
 #    container runs as root, so hand the caches back to the invoking user.
@@ -90,7 +135,7 @@ docker run --rm \
 docker run --rm -v "$PWD":/work "$IMAGE" \
     chown -R "$(id -u):$(id -g)" "/work/$CARGO_TARGET" "/work/$CARGO_HOME_HOST"
 
-# 4. Generate the JS glue and exercise the module without a browser.
+# 5. Generate the JS glue and exercise the module without a browser.
 "$bindgen" --target web \
     --out-dir crates/ferrocad_web/www/pkg \
     "$CARGO_TARGET/wasm32-unknown-unknown/release/ferrocad_web.wasm"
@@ -105,7 +150,7 @@ if [ "$BUILD_ONLY" = 1 ]; then
     exit 0
 fi
 
-# 5. Serve it. wasm-bindgen's `--target web` output must be fetched over HTTP.
+# 6. Serve it. wasm-bindgen's `--target web` output must be fetched over HTTP.
 if [ "$NO_OPEN" = 0 ]; then
     (xdg-open "http://localhost:$PORT" >/dev/null 2>&1 \
         || open "http://localhost:$PORT" >/dev/null 2>&1 \

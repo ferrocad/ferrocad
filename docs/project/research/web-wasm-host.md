@@ -1024,10 +1024,14 @@ Two things surfaced:
   to `Arc<dyn GeometryBackend>` retains *every* trait method, including
   `split_shape`, which is `BRepFeat_SplitShape` — and the prebuilt kernel ships no
   `TKFeat`. Static dispatch did not need it, so the earlier demo linked without it.
-  `OcctBackend::split_shape` is now a reported error on `wasm32`
-  (`docs/developer/architecture/occt-bundling.md` §8.1 lists the kernel's modules);
-  a host that needs `Part.makeSplitShape` in the browser needs a kernel built with
-  `TKFeat`.
+  The first fix made `OcctBackend::split_shape` a reported error on `wasm32`;
+  **resolved** by building that one toolkit into the kernel (`run.sh` sparse-clones
+  the 35 translation units and compiles them with the kernel's own wasi-sdk, ~1 min,
+  cached), so wasm now links the real implementation and
+  `Part.makeSplitShape` works in the browser. The fork
+  (`v0.3.0-ferrocad.29`) links `-lTKFeat` only when the archive is present and warns
+  with the recipe otherwise; `docs/developer/architecture/occt-bundling.md` §8.1
+  lists the kernel's modules and the recipe.
 - **A refused fillet is data, not an abort.** `fillet(12.0)` on the 10 mm box now
   returns `OCCT operation \`fillet\` did not complete` with the last good shape
   still in the output property, which the page renders next to the message. This is

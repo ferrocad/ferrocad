@@ -501,17 +501,9 @@ pub fn snap_view(piece: Piece, main: &Camera) -> Matrix4 {
 /// clamped away from zero so repeated zoom-in cannot collapse the camera onto the
 /// pivot (which would make the view matrix singular).
 pub fn zoom_view(main: &Camera, factor: f64) -> Matrix4 {
-    let base = Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]);
-    let distance = base.length();
-    if distance <= 1e-9 {
-        return main.view;
-    }
-    let target = (distance * factor).clamp(1e-4, 1e9);
-    Placement::new(
-        base.scale(target / distance),
-        Rotation::from_matrix(&main.view),
-    )
-    .to_matrix()
+    let mut camera = main.clone();
+    camera.dolly(factor);
+    camera.view
 }
 
 /// The camera **view matrix** yawed so the eye moves `angle` radians about the vertical
@@ -536,19 +528,9 @@ pub fn yaw_view(main: &Camera, angle: f64) -> Matrix4 {
 /// canonical: the navicube rebuilds a roll-free rotation, so any roll would make the two
 /// drift apart.
 pub fn drag_view(main: &Camera, delta: [f32; 2]) -> Matrix4 {
-    const RADIANS_PER_PIXEL: f64 = 0.012;
-    // The screen-right axis in world space: the view matrix's first row.
-    let right = Vector3::new(main.view.m[0], main.view.m[1], main.view.m[2]);
-    let pitch = Rotation::from_axis_angle(&right, f64::from(delta[1]) * RADIANS_PER_PIXEL);
-    let yaw = Rotation::from_axis_angle(
-        &Vector3::new(0.0, 0.0, 1.0),
-        f64::from(delta[0]) * RADIANS_PER_PIXEL,
-    );
-    let base = Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]);
-    let rotation = Rotation::from_matrix(&main.view)
-        .multiply(&pitch)
-        .multiply(&yaw);
-    Placement::new(base, rotation).to_matrix()
+    let mut camera = main.clone();
+    camera.orbit(delta);
+    camera.view
 }
 
 /// Spherical linear interpolation between two rotations (`t` in `[0, 1]`).

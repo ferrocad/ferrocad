@@ -8,7 +8,7 @@
 //!
 //! Clip depth is in `[0, 1]` (the wgpu/WebGPU convention), matching the renderer.
 
-use ferrocad_types::{Matrix4, Vector3};
+use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
 
 use crate::pixels::Viewport;
 
@@ -204,6 +204,63 @@ impl Camera {
             }
             Projection::Matrix(_) => false,
         }
+    }
+
+    /// Orbit the eye around the pivot by a pointer drag of `delta` logical pixels.
+    ///
+    /// Both rotations are **world** rotations composed on the right, so the camera
+    /// orbits its pivot without ever rolling: the pitch is about the current
+    /// screen-right axis (the view matrix's first row) and the yaw about the world
+    /// vertical (`+Z`). Pitching about the *post-yaw* screen-right keeps the camera
+    /// roll-free, which is what a navigation cube rebuilding the orientation from
+    /// the view matrix assumes. The pivot is the world origin, so the eye distance
+    /// is unchanged.
+    ///
+    /// Returns whether the view changed.
+    pub fn orbit(&mut self, delta: [f32; 2]) -> bool {
+        const RADIANS_PER_PIXEL: f64 = 0.012;
+        let (dx, dy) = (f64::from(delta[0]), f64::from(delta[1]));
+        if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
+            return false;
+        }
+        let right = Vector3::new(self.view.m[0], self.view.m[1], self.view.m[2]);
+        let pitch = Rotation::from_axis_angle(&right, dy * RADIANS_PER_PIXEL);
+        let yaw = Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), dx * RADIANS_PER_PIXEL);
+        let base = Vector3::new(self.view.m[3], self.view.m[7], self.view.m[11]);
+        let rotation = Rotation::from_matrix(&self.view)
+            .multiply(&pitch)
+            .multiply(&yaw);
+        self.view = Placement::new(base, rotation).to_matrix();
+        true
+    }
+
+    /// Scale the eye distance by `factor` — one wheel notch, or the equivalent.
+    ///
+    /// The rotation is kept, so only the eye moves along the view ray; the distance is
+    /// clamped away from zero so repeated zoom-in cannot collapse the view matrix. An
+    /// orthographic camera has no eye distance to scale, so its `extent` carries the
+    /// zoom (see [`zoom_projection`](Self::zoom_projection)), and the clip window
+    /// follows either way (see [`fit_clip`](Self::fit_clip)).
+    ///
+    /// Returns whether the view changed.
+    pub fn dolly(&mut self, factor: f64) -> bool {
+        if !factor.is_finite() || factor <= 0.0 {
+            return false;
+        }
+        let base = Vector3::new(self.view.m[3], self.view.m[7], self.view.m[11]);
+        let distance = base.length();
+        if distance <= 1e-9 {
+            return false;
+        }
+        let target = (distance * factor).clamp(1e-4, 1e9);
+        self.view = Placement::new(
+            base.scale(target / distance),
+            Rotation::from_matrix(&self.view),
+        )
+        .to_matrix();
+        self.zoom_projection(factor);
+        self.fit_clip();
+        true
     }
 }
 

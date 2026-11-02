@@ -33,6 +33,14 @@ ferrocad_stage.workspace = true
 ferrocad_wgpu.workspace = true
 ferrocad_geom.workspace = true
 ferrocad_types.workspace = true
+# The document layer and the kernel behind it: the scene is a `Part::Box` with a
+# `Part::Fillet`, recomputed, not hand-built geometry. On wasm this links the
+# prebuilt OCCT kernel (see README.md for the cross-image build).
+ferrocad_core.workspace = true
+ferrocad_part.workspace = true
+ferrocad_occt.workspace = true
+# Link-time WASI stubs for the wasm OCCT kernel, shared with `ferrocad_web`.
+ferrocad_wasm.workspace = true
 # `fragile-send-sync-non-atomic-wasm` is what makes wgpu's wasm handles
 # `Send + Sync`, which the imported-texture handle requires. Without it the
 # interop path does not typecheck for wasm.

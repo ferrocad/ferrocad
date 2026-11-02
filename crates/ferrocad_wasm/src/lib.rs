@@ -14,9 +14,37 @@
 //!
 //! Behaviour: file APIs report `EBADF`/`ENOENT` (nothing is opened), the
 //! environment is empty, and `proc_exit` traps so a kernel abort is visible.
+//!
+//! # Using it
+//!
+//! The stubs are referenced by name from OCCT's objects, never from Rust, so a
+//! host must call [`install`]: without it the linker can drop this crate's
+//! objects and the imports come back.
 
 const EBADF: i32 = 8;
 const ENOENT: i32 = 44;
+
+/// Keeps the stubs in the final link.
+///
+/// Taking each stub's address is what retains its section; the call is otherwise
+/// a no-op, and it is cheap enough to keep in a release host.
+pub fn install() {
+    core::hint::black_box((
+        environ_get as *const () as usize,
+        environ_sizes_get as *const () as usize,
+        clock_time_get as *const () as usize,
+        fd_close as *const () as usize,
+        fd_fdstat_get as *const () as usize,
+        fd_fdstat_set_flags as *const () as usize,
+        fd_prestat_get as *const () as usize,
+        fd_prestat_dir_name as *const () as usize,
+        fd_read as *const () as usize,
+        fd_seek as *const () as usize,
+        fd_write as *const () as usize,
+        path_open as *const () as usize,
+        proc_exit as *const () as usize,
+    ));
+}
 
 #[unsafe(export_name = "__imported_wasi_snapshot_preview1_environ_get")]
 pub unsafe extern "C" fn environ_get(_environ: *mut *mut u8, _buf: *mut u8) -> i32 {

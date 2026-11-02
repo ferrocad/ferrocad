@@ -63,7 +63,7 @@ crates/ferrocad_web/run.sh --build-only
 | --- | --- |
 | `src/lib.rs` | `#[wasm_bindgen(start)]`, the camera pose, the page API (`set_fillet_radius`, `fillet_status`, `triangles`) and `split_check`, which the smoke test uses to exercise `BRepFeat_SplitShape` |
 | `src/scene.rs` | the `Part` document: `Part::Box` + `Part::Fillet`, `Document::recompute`, tessellation, failure state |
-| `src/wasi.rs` | 13 link-time WASI stubs, so the module imports no `wasi_snapshot_preview1` |
+| `crates/ferrocad_wasm` (workspace crate) | 13 link-time WASI stubs, so the module imports no `wasi_snapshot_preview1`; shared with the GPUI browser probe |
 | `www/index.html` | the page: a `<canvas id="cad">`, the radius slider, the status line |
 | `www/smoke.mjs` | Node check: zero WASI imports, 40 triangles, a refused fillet is reported and keeps the last good shape, and the face split returns one direct + one left piece (the only behavioural proof that `TKFeat` is linked) |
 | `run.sh` | the one command above |

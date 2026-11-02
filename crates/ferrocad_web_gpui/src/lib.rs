@@ -1,17 +1,16 @@
-//! A GPUI window in the browser, compositing a FerroCAD wgpu scene through
+//! A GPUI window in the browser, compositing a FerroCAD `Part` document through
 //! `gpui_interop`.
 //!
-//! Step 2's probe, second increment: the square from the first increment is
-//! replaced by the real render path. `ferrocad_stage` emits the draw packets,
-//! `ferrocad_wgpu` — the renderer the canvas demo uses — draws them into a
-//! `gpui_interop::WgpuSurface` on the window's own device, and GPUI composites
-//! the result with `paint_texture`. The camera orbits a little every frame, so a
-//! screenshot is evidence of a live surface rather than a cached frame.
+//! Step 2's probe, third increment: the scene is no longer hand-built geometry.
+//! A real `Document` with `Part::Box` and `Part::Fillet` is recomputed through the
+//! OCCT kernel compiled to wasm, tessellated, turned into `ferrocad_stage` draw
+//! packets, drawn by `ferrocad_wgpu` into a `gpui_interop::WgpuSurface` on the
+//! window's own device, and composited by GPUI with `paint_texture`. The camera
+//! orbits a little every frame, so a screenshot is evidence of a live surface.
 //!
-//! What this still is not: no document, no CPython, no OCCT. The scene is a
-//! hand-built cube in the stage's own vocabulary, because the point here is the
-//! GPU seam, not the document layer — `ferrocad_gpui` cannot be the wasm crate
-//! until its PyO3 dependency is split.
+//! What this still is not: no CPython, no shell. `ferrocad_gpui` embeds CPython
+//! and cannot be the wasm crate until that dependency is split; this probe stops
+//! at the document layer, which is the last one that does not need Python.
 //!
 //! There is **no text** on purpose: GPUI panics when asked to resolve a font and
 //! none has been added (`DefaultTextSystem::resolve_font`), and font loading is
@@ -20,10 +19,17 @@
 
 #![cfg(target_family = "wasm")]
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::Arc,
+};
 
-use ferrocad_geom::Tessellation;
-use ferrocad_graphics::{Camera, Projection, Viewport, DrawPacket};
+use ferrocad_core::{Document, Property};
+use ferrocad_geom::TessellationOptions;
+use ferrocad_graphics::{Camera, DrawPacket, Projection, Viewport};
+use ferrocad_occt::OcctBackend;
+use ferrocad_part::{BOX_TYPE, FILLET_TYPE, shape_of};
 use ferrocad_stage::{DrawMode, ShapeItem, Stage};
 use ferrocad_types::{Placement, Rotation, Vector3};
 use ferrocad_wgpu::{GpuContext, WgpuRenderer};
@@ -35,12 +41,28 @@ use gpui_interop::WgpuSurface;
 use gpui_wgpu::{ImportedTextureExt as _, WebBackendPreference, WgpuRenderer as GpuiWgpuRenderer};
 use wasm_bindgen::prelude::*;
 
-/// The cube's half extent, in model units. The camera pose below is the demo's,
-/// which was chosen for a 10 mm box.
-const HALF_EXTENT: f32 = 5.0;
+/// The edge the fillet is applied to, as the canvas demo does.
+const EDGE: &str = "Edge1";
+
+/// The fillet radius, in millimetres. Large enough to see, well under the radius
+/// at which the kernel refuses it (the demo's 10 mm box fails at 10 or more).
+const RADIUS: f64 = 3.0;
+
+/// The tessellation tolerance, in millimetres (the demo's).
+const TOLERANCE: f64 = 0.2;
+
+unsafe extern "C" {
+    /// Emitted by wasm-ld: runs the module's static constructors. OCCT's C++
+    /// initialisers must run before any kernel call.
+    fn __wasm_call_ctors();
+}
 
 #[wasm_bindgen(start)]
 pub fn main() {
+    // Retain the WASI stubs before the kernel's objects are linked in.
+    ferrocad_wasm::install();
+    // The C++ runtime behind the kernel, before anything can call it.
+    unsafe { __wasm_call_ctors() };
     // Logging and the panic hook; must run before the application.
     gpui::web_init();
 
@@ -66,8 +88,8 @@ struct Probe {
     surface: Rc<RefCell<Option<WgpuSurface>>>,
     /// The FerroCAD renderer, on the window's device. Created with the surface.
     renderer: Rc<RefCell<Option<WgpuRenderer>>>,
-    /// The stage's packets, built once. The real viewport rebuilds them per frame;
-    /// a static cube does not need that.
+    /// The document's packets, built once. The real viewport rebuilds them when
+    /// the document changes; a static feature does not need that.
     packets: Rc<Vec<DrawPacket>>,
     camera: Rc<RefCell<Camera>>,
     /// Frames painted, for the console.
@@ -76,10 +98,21 @@ struct Probe {
 
 impl Probe {
     fn new() -> Self {
+        let packets = match document_packets(RADIUS) {
+            Ok(packets) => packets,
+            Err(error) => {
+                // Never fail the window: an empty stage draws the background, and
+                // the reason is in the console.
+                log::error!("ferrocad probe: the document did not build: {error}");
+                Vec::new()
+            }
+        };
+        log::info!("ferrocad probe: {} packets from the document", packets.len());
+
         Self {
             surface: Rc::new(RefCell::new(None)),
             renderer: Rc::new(RefCell::new(None)),
-            packets: Rc::new(cube_packets()),
+            packets: Rc::new(packets),
             camera: Rc::new(RefCell::new(demo_camera())),
             frames: Rc::new(RefCell::new(0)),
         }
@@ -122,7 +155,7 @@ impl Render for Probe {
     }
 }
 
-/// One frame: render the stage into the surface, then composite it.
+/// One frame: render the document's packets into the surface, then composite it.
 fn paint(
     gpu: &mut GpuCanvasContext,
     surface: &Rc<RefCell<Option<WgpuSurface>>>,
@@ -210,16 +243,71 @@ fn paint(
     }
 }
 
-/// The stage's packets for one shaded cube with its edges drawn.
-fn cube_packets() -> Vec<DrawPacket> {
-    Stage::new()
+/// The `Part` document's draw packets: a 10 mm box with a fillet on one edge,
+/// recomputed by the kernel and tessellated for the stage.
+fn document_packets(radius: f64) -> Result<Vec<DrawPacket>, String> {
+    // Idempotent: the Part module keeps one backend per process.
+    ferrocad_part::register(Arc::new(OcctBackend::new()));
+
+    let mut document = Document::new();
+    let base = document.add_object("Box", BOX_TYPE);
+    // `make_box` builds from the corner at the origin; centre it so the orbit
+    // camera, which pivots on the origin, frames the whole box.
+    document.set_property(
+        base,
+        "Placement",
+        Property::Placement(Placement::new(
+            Vector3::new(-5.0, -5.0, -5.0),
+            Rotation::identity(),
+        )),
+    )?;
+
+    let fillet = document.add_object("Fillet", FILLET_TYPE);
+    document.set_property(
+        fillet,
+        "Base",
+        Property::LinkSub("Box".to_string(), vec![EDGE.to_string()]),
+    )?;
+    document.set_property(fillet, "Radius", Property::Float(radius))?;
+    document.recompute()?;
+
+    // A refused fillet is a document state, not an error: the feature keeps its
+    // last good shape, so the box is drawn and the reason is only reported. (The
+    // radius above is chosen to succeed.)
+    let object = document
+        .object(fillet)
+        .ok_or_else(|| "the fillet disappeared after recompute".to_string())?;
+    if object.invalid {
+        log::warn!(
+            "ferrocad probe: the kernel refused the fillet: {}",
+            object.error.as_deref().unwrap_or("no reason recorded")
+        );
+    }
+
+    let shape = object
+        .properties
+        .get("Shape")
+        .and_then(shape_of)
+        .and_then(|property| property.shape())
+        .ok_or_else(|| "the fillet produced no shape".to_string())?;
+
+    let backend = ferrocad_part::backend();
+    let mesh = backend
+        .tessellate(&shape, &TessellationOptions::absolute(TOLERANCE))
+        .map_err(|error| error.to_string())?;
+    log::info!(
+        "ferrocad probe: document tessellated to {} triangles",
+        mesh.triangles.len() / 3
+    );
+
+    Ok(Stage::new()
         .with_item(
-            ShapeItem::from_tessellation(1, &cube(HALF_EXTENT))
+            ShapeItem::from_tessellation(1, &mesh)
                 .with_draw_mode(DrawMode::ShadedWithEdges)
                 .with_surface_color([0.62, 0.66, 0.72, 1.0]),
         )
         .to_queue()
-        .packets
+        .packets)
 }
 
 /// The camera pose the canvas demo uses for its 10 mm box.
@@ -239,49 +327,5 @@ fn demo_camera() -> Camera {
             far: 100.0,
         },
         ..Camera::identity()
-    }
-}
-
-/// A cube of half extent `h`: eight shared corners, twelve triangles and the
-/// twelve edges, in the stage's tessellation vocabulary.
-///
-/// Positions are shared rather than duplicated per face (the kernel duplicates
-/// them so each triangle can carry its own part id); with no normals the
-/// renderer shades flat, which is what a box wants.
-fn cube(h: f32) -> Tessellation {
-    let positions = vec![
-        [-h, -h, -h],
-        [h, -h, -h],
-        [h, h, -h],
-        [-h, h, -h],
-        [-h, -h, h],
-        [h, -h, h],
-        [h, h, h],
-        [-h, h, h],
-    ];
-    // Two triangles per face; winding is irrelevant while culling is off.
-    let triangles = vec![
-        4, 5, 6, 4, 6, 7, // +z
-        1, 0, 3, 1, 3, 2, // -z
-        0, 4, 7, 0, 7, 3, // -x
-        5, 1, 2, 5, 2, 6, // +x
-        7, 6, 2, 7, 2, 3, // +y
-        0, 1, 5, 0, 5, 4, // -y
-    ];
-    let edges = vec![
-        0, 1, 1, 2, 2, 3, 3, 0, // -z
-        4, 5, 5, 6, 6, 7, 7, 4, // +z
-        0, 4, 1, 5, 2, 6, 3, 7, // connecting
-    ];
-    Tessellation {
-        triangle_parts: vec![0; triangles.len() / 3],
-        segment_parts: vec![0; edges.len() / 2],
-        vertices: vec![0, 1, 2, 3, 4, 5, 6, 7],
-        vertex_parts: vec![0; 8],
-        parts: vec!["Cube".to_string()],
-        positions,
-        triangles,
-        edges,
-        ..Tessellation::default()
     }
 }

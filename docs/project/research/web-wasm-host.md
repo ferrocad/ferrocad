@@ -483,7 +483,8 @@ crates/ferrocad_web/
   Cargo.toml
   src/
     lib.rs        # start(), App, frame loop
-    wasi.rs       # the 13 link-time stubs (cfg wasm32)
+    # the 13 link-time stubs live in `crates/ferrocad_wasm`, shared with the GPUI
+    # probe and retained by `ferrocad_wasm::install()`
   www/
     index.html    # the whole page
     pkg/          # wasm-bindgen output (generated, not committed)
@@ -705,8 +706,8 @@ Notes on the sketch:
   (`Rgba8Unorm` + `view_formats: [Rgba8UnormSrgb]` on WebGPU, `Rgba8UnormSrgb` on
   WebGL), create the view as `Rgba8UnormSrgb`, and pass `Rgba8UnormSrgb` as the
   renderer's target format.
-- The `wasi.rs` module is the 13-symbol shim from §5, compiled only for
-  `target_arch = "wasm32"`.
+- The 13-symbol shim from §5 is `crates/ferrocad_wasm` (shared with the GPUI
+  probe); `ferrocad_wasm::install()` is what keeps it in the link.
 
 ### What the example proves, and what it does not
 
@@ -967,7 +968,7 @@ Implemented after this note:
   (MSAA deferred until the WebGL path is browser-tested), `pick_formats` (an sRGB
   view on WebGPU, an sRGB surface on WebGL), and a filleted box from
   `ferrocad_occt`.
-- `src/wasi.rs` defines the 13 stubs from Appendix B; the shipped module has no
+- `ferrocad_wasm` defines the 13 stubs from Appendix B; the shipped module has no
   `wasi_snapshot_preview1` imports.
 - One extra gotcha: wasm-bindgen 0.2.129's glue reads the `__instance_terminated`
   export. The static is `#[no_mangle]` in `wasm_bindgen::__rt`, but
@@ -1042,3 +1043,30 @@ Two things surfaced:
 good shape kept), a valid one (rebuilds), and finally `split_check()` — a 1×2×2 box
 face cut by a shifted edge, one direct and one left piece — so the `TKFeat` archive
 is exercised by behaviour, not only by linking.
+
+### GPUI in the browser (same day)
+
+`bite-gpui` 1.24.402 already ships a browser platform (`bite-gp-web`: one
+document-owned canvas, WebGPU preferred with an automatic WebGL2 fallback), so
+"GPUI in wasm" is a repair job, not a port. Five defects stood in the way, all
+filed upstream (`bite-gpui/bite-gpui` #15–#19): a default feature that pulls a
+nightly-only `wasm_thread`, two wrong `cfg`s in `bite-gp-wgpu`, two imports from
+the wrong crate, and — the one that matters here — no `GpuRenderer` impl for the
+browser, which is the door `gpui_interop`'s same-device producer knocks on.
+`third_party/bite-gp-web` and `third_party/bite-gp-wgpu` carry the patches, each
+with a `PATCHES.md` recording the upstream issue and the removal condition.
+
+`crates/ferrocad_web_gpui` is the probe: a GPUI window in Chrome on WebGL2 doing
+`try_device::<WgpuRenderer>()` → `gpui_interop::WgpuSurface` →
+`ferrocad_wgpu::render(&surface.view(), …)` → `to_imported_handle()` →
+`paint_texture`. It draws a real `Part::Box` + `Part::Fillet` document (40
+triangles, 2 packets) recomputed by the wasm kernel, with the camera orbiting so a
+screenshot proves a live surface. Two things it does not have: text (GPUI panics
+when asked to resolve a font and none was added) and CPython (`pyo3` has no
+`wasm32-unknown-unknown` story), so the shell proper waits on a `no-python` split.
+The OCCT link stubs moved to `crates/ferrocad_wasm`, shared with `ferrocad_web`.
+
+One workspace bug fell out: `.cargo/config.toml` applied the OCCT `-Wl,-rpath`
+link args to every target, and `rust-lld` rejects them, so any host
+`--target wasm32-unknown-unknown` build failed while linking. They are now scoped
+to `cfg(target_os = "linux")`.

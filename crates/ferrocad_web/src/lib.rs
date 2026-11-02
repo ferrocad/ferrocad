@@ -13,7 +13,6 @@
 #![cfg(target_arch = "wasm32")]
 
 mod scene;
-mod wasi;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -46,6 +45,7 @@ pub fn main() -> Result<(), JsValue> {
     unsafe { core::ptr::read_volatile(&raw const wasm_bindgen::__rt::__instance_terminated) };
     // Before anything that touches the kernel; also runs under Node, where there
     // is no canvas and `triangles()` is the only thing a test calls.
+    ferrocad_wasm::install();
     unsafe { __wasm_call_ctors() };
 
     // The document is built before the surface: it is fast, and a page that calls

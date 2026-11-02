@@ -1,58 +1,69 @@
 # ferrocad_web_gpui
 
-A GPUI window in the browser, compositing a FerroCAD wgpu scene through
+A GPUI window in the browser, compositing a FerroCAD **`Part` document** through
 [`gpui_interop`](https://crates.io/crates/gpui_interop).
 
-This is step 2's probe: the smallest thing that exercises the seam
-`ferrocad_gpui`'s interop presenter needs on `wasm32-unknown-unknown`. It has no
-document, no CPython and no OCCT — see "What it does not have".
+This is step 2's probe: the smallest thing that puts the real product path —
+document, OCCT kernel, stage, renderer — inside a GPUI window on WebGL2, and
+composites the result without a CPU copy. It has no CPython and no shell; see
+"What it does not have".
 
 ## What it proves
 
-The cube on the page is drawn by **`ferrocad_wgpu`** — the renderer the canvas
-demo uses — from **`ferrocad_stage`** draw packets, into a texture on the GPUI
-window's own device, and composited by GPUI:
+The filleted box on the page comes from `Document::recompute`, not from literal
+geometry:
 
-1. `GpuCanvasContext::try_device::<gpui_wgpu::WgpuRenderer>()` answers in the
-   browser, i.e. the window's renderer lends its `wgpu::Device` and `Queue`. That
-   needs `impl GpuRenderer for WgpuRenderer` on wasm, which upstream gates out —
-   see `third_party/bite-gp-wgpu/PATCHES.md` (change 3).
-2. A `gpui_interop::WgpuSurface` allocated on that device takes
-   `WgpuRenderer::render(&surface.view(), &camera, &packets)` unchanged: the
-   renderer renders into any texture view, so the offscreen target needs no
-   special path.
-3. `surface.view().to_imported_handle()` typechecks on wasm and `paint_texture`
-   composites the result into the scene. That needs the `wasm-interop` feature on
-   our vendored `bite-gp-wgpu` plus wgpu's `fragile-send-sync-non-atomic-wasm`
-   (change 2 in the same file).
+1. `Document` with `Part::Box` and `Part::Fillet` is recomputed by the OCCT kernel
+   compiled to wasm (`ferrocad_occt`), exactly as `ferrocad_web`'s demo does.
+2. The resulting shape is tessellated and turned into `ferrocad_stage` draw
+   packets (shaded faces + edges: 2 packets, 40 triangles for the 10 mm box).
+3. `ferrocad_wgpu` — the renderer the canvas demo uses — draws them into a
+   `gpui_interop::WgpuSurface` created on the GPUI window's own device.
+   `WgpuRenderer::render` takes any texture view, so the offscreen target needed
+   no renderer changes.
+4. `surface.view().to_imported_handle()` + `paint_texture` composite it into the
+   GPUI scene. That needs the `wasm-interop` feature on our vendored
+   `bite-gp-wgpu` and wgpu's `fragile-send-sync-non-atomic-wasm`; see
+   `third_party/bite-gp-wgpu/PATCHES.md`.
+5. The window's device comes from
+   `GpuCanvasContext::try_device::<gpui_wgpu::WgpuRenderer>()`, which needs a
+   wasm `GpuRenderer` impl that upstream gates out (change 3 in the same file).
 
 The camera orbits a little every frame, so a screenshot shows a live surface
 rather than a cached texture.
 
-The scene is a hand-built cube in the stage's own vocabulary (`ShapeItem` with a
-`Tessellation`), because the point here is the GPU seam, not the document layer.
-Swapping in a real document means swapping `cube_packets()` for
-`ferrocad_stage`'s output from a recomputed document — the renderer call does not
-change.
+The 13 WASI link stubs the wasm kernel needs live in `crates/ferrocad_wasm`
+(shared with `ferrocad_web`); `ferrocad_wasm::install()` keeps them linked.
 
 ## Run it
 
-```sh
-rustup target add wasm32-unknown-unknown
-cargo build -p ferrocad_web_gpui --release --target wasm32-unknown-unknown
+Linking OCCT needs the wasi-sdk toolchain whose wasm-EH encoding matches the
+prebuilt kernel, so — like `ferrocad_web` — this builds inside
+`ghcr.io/lzpel/cross-wasm32-unknown-unknown`. If you have never run the demo,
+`crates/ferrocad_web/run.sh --build-only` once first: it fetches the kernel into
+`.occt-wasm/` and the pinned wasm-bindgen CLI.
 
-# wasm-bindgen CLI must match Cargo.lock; fetch the pinned release into
-# target/wasm-bindgen/ (crates/ferrocad_web/run.sh does the same for the demo).
+```sh
+docker run --rm -v "$PWD":/work -w /work \
+    -e OCCT_WASM_ROOT=/work/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown \
+    -e CARGO_HOME=/work/target/wasm-cargo-home \
+    -e CARGO_TARGET_DIR=/work/target/wasm-cargo \
+    ghcr.io/lzpel/cross-wasm32-unknown-unknown \
+    cargo build --release -p ferrocad_web_gpui --target wasm32-unknown-unknown
+
+# The container runs as root; hand the caches back.
+docker run --rm -v "$PWD":/work ghcr.io/lzpel/cross-wasm32-unknown-unknown \
+    chown -R "$(id -u):$(id -g)" /work/target/wasm-cargo /work/target/wasm-cargo-home
+
 target/wasm-bindgen/wasm-bindgen --target web \
     --out-dir crates/ferrocad_web_gpui/www/pkg \
-    target/wasm32-unknown-unknown/release/ferrocad_web_gpui.wasm
+    target/wasm-cargo/wasm32-unknown-unknown/release/ferrocad_web_gpui.wasm
 
 cd crates/ferrocad_web_gpui/www && python3 -m http.server 8081
 ```
 
-Then open <http://localhost:8081>. No Docker and no OCCT prefix: GPUI and the
-renderer are pure Rust, so this builds with the host toolchain. First build after
-touching `ferrocad_wgpu` takes a few minutes; later ones are incremental.
+Then open <http://localhost:8081>. The module is ~32 MB (GPUI + wgpu + OCCT);
+the first load takes a moment.
 
 ## What it does not have
 
@@ -63,8 +74,8 @@ touching `ferrocad_wgpu` takes a few minutes; later ones are incremental.
 - **No `ferrocad_gpui`.** The shell embeds CPython (`pyo3 auto-initialize`), which
   does not build for `wasm32-unknown-unknown`; a wasm shell needs a separate crate
   or a `no-python` feature first.
-- **No document or OCCT.** The cube is literal geometry; `ferrocad_part` and the
-  kernel are the next layer up.
+- **No interaction.** The camera orbits on its own; pointer-driven orbit/zoom
+  lives in `ferrocad_web_viewport` today and would be the next thing to port.
 - **No image fallback and no picking.** The native presenter degrades to a
   readback image when the device is unavailable; that path needs an async
   `map_async` on WebGL2 and is not covered here.
@@ -75,10 +86,13 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader (`--use-angle=swiftshader
 --enable-unsafe-swiftshader`):
 
 ```
+[INFO] ferrocad probe: document tessellated to 40 triangles
+[INFO] ferrocad probe: 2 packets from the document
 [INFO] gpui_wgpu::wgpu_context: Browser graphics initialized: requested=WebGl, selected=Gl, adapter="ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device ...))"
 [INFO] ferrocad probe: 2 packets, 320x320, frame 1
 ```
 
-The screenshot shows the shaded cube with its twelve edges. Two captures at
-different virtual times differ in 1245 pixels, all inside the 320×320 canvas
-bounding box, which is the camera orbit — a live surface, not a cached frame.
+The screenshot shows the 10 mm box with a 3 mm fillet on `Edge1` — the rounded
+lower-left edge — shaded with its twelve edges. `ferrocad_web`'s smoke test
+still passes after the WASI-stub extraction (40 triangles, refused fillet
+reported, `split: 1 direct, 1 left`).

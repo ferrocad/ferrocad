@@ -23,6 +23,7 @@ members = [
     "crates/ferrocad_web",
     "crates/ferrocad_web_viewport",
     "crates/ferrocad_web_gpui",
+    "crates/ferrocad_wasm",
     "crates/ferrocad_part",
     "crates/ferrocad_part_gui",
     "crates/ferrocad_part_py",
@@ -125,6 +126,9 @@ ferrocad_inventor = { path = "crates/ferrocad_inventor", version = "0.1.4" }
 ferrocad_stage = { path = "crates/ferrocad_stage", version = "0.1.4" }
 ferrocad_part_gui = { path = "crates/ferrocad_part_gui", version = "0.1.4" }
 ferrocad_wgpu = { path = "crates/ferrocad_wgpu", version = "0.1.4" }
+# Not published: link-time stubs for the prebuilt wasm OCCT, shared by the
+# browser hosts (`ferrocad_web`, `ferrocad_web_gpui`).
+ferrocad_wasm = { path = "crates/ferrocad_wasm" }
 ferrocad_viewport = { path = "crates/ferrocad_viewport", version = "0.1.4" }
 ferrocad_inventor_py = { path = "crates/ferrocad_inventor_py", version = "0.1.4" }
 ferrocad_stage_py = { path = "crates/ferrocad_stage_py", version = "0.1.4" }

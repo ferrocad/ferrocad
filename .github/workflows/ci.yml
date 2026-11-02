@@ -176,9 +176,6 @@ jobs:
       - name: Open a real window with the Part workbench (must not crash within 30s)
         run: |
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
-          # Only needed when `builtin` is enabled: the vendored 7.8.1 submodule
-          # predates CMake's 3.10 floor. The shared 8.0.1 probe requires 3.15.
-          export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
@@ -213,9 +210,6 @@ jobs:
           .occt/bin/micromamba create -y -p "$PWD/.occt/prefix" -c conda-forge occt=8.0.1=novtk_*
       - name: Build and test the OCCT-backed crates
         run: |
-          # Only needed when `builtin` is enabled: the vendored 7.8.1 submodule
-          # predates CMake's 3.10 floor. The shared 8.0.1 probe requires 3.15.
-          export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
@@ -228,7 +222,6 @@ jobs:
         # in-process harness cannot express; see
         # docs/developer/workbenches/part-api-audit.md and crates/ferrocad_combined_py.
         run: |
-          export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
@@ -248,7 +241,6 @@ jobs:
         # silently covered. The full `LD_LIBRARY_PATH` is required because
         # importing Part loads OCCT.
         run: |
-          export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
@@ -263,7 +255,6 @@ jobs:
         # `import ferrocad_combined` must refuse to replace them. `--check-init`
         # asserts the kernel identity and exercises a Part::Feature document (K0).
         run: |
-          export CMAKE_POLICY_VERSION_MINIMUM=3.5
           export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"

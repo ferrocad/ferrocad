@@ -240,7 +240,10 @@ skipped once the archive exists. The fork links `-lTKFeat` only when the archive
 present, and otherwise emits a `cargo:warning` naming this recipe instead of failing
 the link with barrel-shifted `BRepFeat` symbols. A host that points `OCCT_WASM_ROOT`
 at a bare cadrum tarball and builds without `run.sh` has to run that recipe itself
-for `Part.makeSplitShape` to work in the browser.
+for `Part.makeSplitShape` to work in the browser. The Node smoke test calls the
+demo's exported `split_check()` (a 1×2×2 box face cut by a shifted edge → one
+direct and one left piece), so the archive is proven by behaviour and not only by
+linking.
 
 **Decision:** ship on **8.0.1** with
 [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)

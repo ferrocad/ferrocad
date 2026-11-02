@@ -1038,5 +1038,7 @@ Two things surfaced:
   the F1 behaviour of `operation-failure-modelling.md` seen end to end, and it is
   what the original crash report was about.
 
-`www/smoke.mjs` asserts both: 40 triangles, then a refused radius (reported, last
-good shape kept) and then a valid one (rebuilds).
+`www/smoke.mjs` asserts all of it: 40 triangles, a refused radius (reported, last
+good shape kept), a valid one (rebuilds), and finally `split_check()` — a 1×2×2 box
+face cut by a shifted edge, one direct and one left piece — so the `TKFeat` archive
+is exercised by behaviour, not only by linking.

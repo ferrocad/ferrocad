@@ -61,11 +61,11 @@ crates/ferrocad_web/run.sh --build-only
 
 | Path | What |
 | --- | --- |
-| `src/lib.rs` | `#[wasm_bindgen(start)]`, the camera pose, the page API (`set_fillet_radius`, `fillet_status`, `triangles`) |
+| `src/lib.rs` | `#[wasm_bindgen(start)]`, the camera pose, the page API (`set_fillet_radius`, `fillet_status`, `triangles`) and `split_check`, which the smoke test uses to exercise `BRepFeat_SplitShape` |
 | `src/scene.rs` | the `Part` document: `Part::Box` + `Part::Fillet`, `Document::recompute`, tessellation, failure state |
 | `src/wasi.rs` | 13 link-time WASI stubs, so the module imports no `wasi_snapshot_preview1` |
 | `www/index.html` | the page: a `<canvas id="cad">`, the radius slider, the status line |
-| `www/smoke.mjs` | Node check: zero WASI imports, 40 triangles, a refused fillet is reported and keeps the last good shape |
+| `www/smoke.mjs` | Node check: zero WASI imports, 40 triangles, a refused fillet is reported and keeps the last good shape, and the face split returns one direct + one left piece (the only behavioural proof that `TKFeat` is linked) |
 | `run.sh` | the one command above |
 
 The layers, bottom-up: `ferrocad_occt` (links the prebuilt static OCCT libraries)
@@ -85,8 +85,10 @@ the backend is coerced to `Arc<dyn GeometryBackend>` (as `ferrocad_part` does) t
 whole vtable is reachable, so a bare cadrum tarball fails to link on
 `BRepFeat_SplitShape`. `run.sh` therefore builds that one toolkit into the kernel
 from the OCCT 8.0.1 sources, and the fork's build script links `-lTKFeat` when the
-archive is present (warning, with the recipe, when it is not). Nothing in the demo
-calls `split_shape` yet, but `Part.makeSplitShape` now works in the browser.
+archive is present (warning, with the recipe, when it is not). The page never
+splits anything, so `www/smoke.mjs` calls the exported `split_check()` — a 1×2×2
+box face cut by a shifted edge, one direct and one left piece — to keep the toolkit
+honest by behaviour and not just by linking.
 
 ## Limits
 

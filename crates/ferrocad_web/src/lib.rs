@@ -212,6 +212,46 @@ pub fn triangles() -> u32 {
         .unwrap_or(0)
 }
 
+/// Exercise `BRepFeat_SplitShape` and report upstream's two groups.
+///
+/// The page never splits a shape, so nothing else here would notice if `TKFeat`
+/// fell out of the wasm kernel again: `split_shape` stays reachable through the
+/// `GeometryBackend` vtable, and a missing toolkit only shows up as a link error
+/// when something builds *this* module. The Node smoke test calls this so the
+/// toolkit is exercised by behaviour too, not only by linking.
+///
+/// It is the native `make_split_shape_returns_two_groups` case from
+/// `ferrocad_part_py`: a 1×2×2 box, its first face, and one of that face's edges
+/// shifted 0.5 mm along the face as the cutter. Upstream splits the face into one
+/// `DirectLeft` and one `Left` piece.
+///
+/// Returns `[direct, left]` piece counts, or the kernel's error.
+#[wasm_bindgen]
+pub fn split_check() -> Result<Vec<u32>, JsValue> {
+    use ferrocad_geom::GeometryBackend as _;
+
+    let backend = ferrocad_occt::OcctBackend::new();
+    let to_js = |error: ferrocad_geom::GeomError| JsValue::from_str(&error.to_string());
+
+    let boxed = backend.make_box(1.0, 2.0, 2.0).map_err(to_js)?;
+    let face = backend
+        .resolve(&boxed, "Face1")
+        .ok_or_else(|| JsValue::from_str("the box has no Face1"))?;
+    let edge = backend
+        .resolve(&face, "Edge1")
+        .ok_or_else(|| JsValue::from_str("the face has no Edge1"))?;
+    let cutter = backend
+        .place(
+            &edge,
+            &Placement::new(Vector3::new(0.0, 0.5, 0.0), Rotation::identity()),
+        )
+        .map_err(to_js)?;
+    let (direct, left) = backend
+        .split_shape(&face, &[(cutter, face.clone())], false)
+        .map_err(to_js)?;
+    Ok(vec![direct.len() as u32, left.len() as u32])
+}
+
 fn request_frame(app: Rc<RefCell<App>>) {
     let next = app.clone();
     let callback = Closure::once_into_js(move || {

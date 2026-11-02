@@ -31,9 +31,9 @@ geometry:
 6. **Pointer input is `gpui_interop`'s own gateway**: `surface_input(canvas, ..)`
    reports `SurfaceEvent`s in physical pixels from the canvas's top-left corner
    and founds GPUI's drag on the down, so a drag keeps orbiting after the pointer
-   leaves the canvas. The wheel is the view's own handler because the gateway's
-   vocabulary has no scroll; it calls `Camera::dolly`, the same verb the canvas
-   demo binds to its DOM listener.
+   leaves the canvas. Scroll, `click_count` and enter/leave come from our vendored
+   copy of the gateway (see `third_party/gpui_interop/PATCHES.md`): the wheel zooms
+   through `SurfaceEvent::Scroll`, and a double-click recentres the camera.
 
 The camera starts at the demo pose and moves only when the pointer does, so the
 probe draws a live surface rather than a cached texture.
@@ -99,14 +99,20 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader (`--use-angle=swiftshader
 The screenshot shows the 10 mm box with a 3 mm fillet on `Edge1` — the rounded
 lower-left edge — shaded with its twelve edges.
 
-Pointer input was checked the same way: `index.html` honours `?drag=1`, which
-synthesises one `pointerdown`/`pointermove`×12/`pointerup` sequence on the canvas,
-and `?wheel=1`, which synthesises one scroll. A capture of `/?drag=1` differs from
-the undragged page in 22 027 pixels, all inside the canvas, with the box turned
-from a front view to a corner view — the gateway delivered the whole gesture. One
-notch (`?wheel=1`) differs in 26 127 pixels with the box visibly smaller, i.e.
-scrolling down zooms out, which is what the canvas demo does; GPUI's web backend
-negates the DOM wheel delta, so the exponent here is the demo's own.
+Pointer input was checked the same way: `index.html` honours `?drag=1` (one
+`pointerdown`/`pointermove`×12/`pointerup`), `?wheel=1` (one scroll) and
+`?dblclick=1` (a drag, then two quick clicks), so a headless capture can show each
+handler working. Against the untouched page:
+
+| Capture | Differing pixels | What it shows |
+| --- | ---: | --- |
+| `?drag=1` | 22 027 | orbit; the box turns front-on → corner-on |
+| `?wheel=1` | 26 127 | zoom out, through the gateway's `Scroll` |
+| `?dblclick=1` | **0** | the double-click recentred to the demo pose exactly |
+
+One notch zooms out on scroll-down because GPUI's web backend negates the DOM
+wheel delta (`bite-gp-web/src/events.rs`), so its positive notch is "up"; the
+exponent is the canvas demo's.
 
 `ferrocad_web`'s smoke test still passes after the WASI-stub extraction (40
 triangles, refused fillet reported, `split: 1 direct, 1 left`).

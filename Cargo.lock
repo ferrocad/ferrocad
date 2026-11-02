@@ -3084,8 +3084,6 @@ dependencies = [
 [[package]]
 name = "gpui_interop"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba29cb61144c2793f9fc77fa5882d4eaebbad6ac8837d07d7e2e5d36ada2a358"
 dependencies = [
  "anyhow",
  "ash",

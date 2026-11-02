@@ -170,4 +170,9 @@ lto = true
 bite-gp-apple = { path = "third_party/bite-gp-apple" }
 bite-gp-web = { path = "third_party/bite-gp-web" }
 bite-gp-wgpu = { path = "third_party/bite-gp-wgpu" }
+# Temporary patch: the surface-input gateway has no scroll vocabulary, drops
+# `PointerDown.click_count`, has no enter/leave, and loses the up of a press that
+# never founded the engine's drag (right/middle, released off the surface). See
+# third_party/gpui_interop/PATCHES.md and file upstream.
+gpui_interop = { path = "third_party/gpui_interop" }
 ferrocad_occt_cxx = { git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.29" }

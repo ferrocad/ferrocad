@@ -36,10 +36,12 @@ use ferrocad_stage::{DrawMode, ShapeItem, Stage};
 use ferrocad_types::{Placement, Rotation, Vector3};
 use ferrocad_wgpu::{GpuContext, WgpuRenderer};
 use gpui::{
-    App, Bounds, Context, GpuCanvasContext, IntoElement, Render, ScrollDelta, Window, WindowBounds,
-    WindowOptions, div, gpu_canvas, prelude::*, px, rgb, size,
+    App, Bounds, Context, GpuCanvasContext, IntoElement, Render, Window, WindowBounds, WindowOptions,
+    div, gpu_canvas, prelude::*, px, rgb, size,
 };
-use gpui_interop::{SurfaceEvent, SurfaceInput, SurfacePoint, WgpuSurface, surface_input};
+use gpui_interop::{
+    SurfaceEvent, SurfaceInput, SurfacePoint, SurfaceScroll, WgpuSurface, surface_input,
+};
 use gpui_wgpu::{ImportedTextureExt as _, WebBackendPreference, WgpuRenderer as GpuiWgpuRenderer};
 use wasm_bindgen::prelude::*;
 
@@ -154,26 +156,10 @@ impl Render for Probe {
         // measured 320x1 inside a 320x320 div.
         .size_full();
 
-        // The wheel is the view's own handler: the gateway's vocabulary carries no
-        // scroll, and zoom is a camera verb rather than a producer event. GPUI's web
-        // backend negates the DOM wheel delta (`bite-gp-web/src/events.rs`), so a
-        // positive notch is "up" here; the exponent is the canvas demo's, which makes
-        // scrolling down zoom out.
-        let zooming = Rc::clone(&self.camera);
-        let canvas = canvas.on_scroll_wheel(move |event, window, _cx| {
-            let notches = match event.delta {
-                ScrollDelta::Lines(lines) => lines.y,
-                ScrollDelta::Pixels(pixels) => pixels.y.as_f32() / PIXELS_PER_LINE,
-            };
-            zooming
-                .borrow_mut()
-                .dolly(ZOOM_PER_LINE.powf(-f64::from(notches)));
-            window.refresh();
-        });
-
-        // Orbit is the gateway's: it founds GPUI's drag on the down, so the gesture
-        // keeps arriving past the canvas edge, and reports positions in physical
-        // pixels from the canvas’s top-left corner.
+        // Input is the gateway's: drag orbits, the wheel zooms (through
+        // `SurfaceEvent::Scroll`, which our vendored copy adds), and a double-click
+        // recentres the view. The gateway founds GPUI's drag on the down, so the
+        // gesture keeps arriving past the canvas edge.
         let grab = Rc::clone(&self.grab);
         let last = Rc::clone(&self.last);
         let element = surface_input(canvas, move |input: SurfaceInput| {
@@ -181,11 +167,47 @@ impl Render for Probe {
             // listeners; the gateway works in physical ones.
             let scale = input.scale.max(1.0);
             match input.event {
-                SurfaceEvent::PointerDown { position, .. } => {
+                SurfaceEvent::PointerDown {
+                    position,
+                    click_count,
+                    ..
+                } => {
+                    // Double-click recentres, as a CAD viewport does. This is also the
+                    // check that the gateway forwards the engine's click count.
+                    if click_count >= 2 {
+                        *camera.borrow_mut() = demo_camera();
+                    }
                     grab.set(true);
                     last.set(Some(position));
                 }
-                SurfaceEvent::PointerMove { position, .. } if grab.get() => {
+                SurfaceEvent::Scroll { delta, .. } => {
+                    // The sign is the engine's (positive is "up"); scrolling down
+                    // zooms out, as the canvas demo does.
+                    let notches = match delta {
+                        SurfaceScroll::Lines { y, .. } => y,
+                        SurfaceScroll::Pixels { y, .. } => y / PIXELS_PER_LINE,
+                    };
+                    camera
+                        .borrow_mut()
+                        .dolly(ZOOM_PER_LINE.powf(-f64::from(notches)));
+                }
+                SurfaceEvent::PointerEnter { .. } | SurfaceEvent::PointerLeave { .. } => {}
+                SurfaceEvent::PointerMove {
+                    position, pressed, ..
+                } => {
+                    if !grab.get() {
+                        return;
+                    }
+                    // The gateway only delivers an up for a gesture the engine's drag is
+                    // carrying — left button, past its threshold. A right or middle press
+                    // released off the canvas therefore writes no `PointerUp`, and the
+                    // first sign the gesture ended is a move with no button pressed. Treat
+                    // it as the release rather than orbiting on every later hover.
+                    if pressed.is_none() {
+                        grab.set(false);
+                        last.set(None);
+                        return;
+                    }
                     if let Some(previous) = last.replace(Some(position)) {
                         camera.borrow_mut().orbit([
                             (position.x - previous.x) / scale,
@@ -193,7 +215,6 @@ impl Render for Probe {
                         ]);
                     }
                 }
-                SurfaceEvent::PointerMove { .. } => {}
                 SurfaceEvent::PointerUp { .. } => {
                     grab.set(false);
                     last.set(None);

@@ -63,6 +63,40 @@
         );
       }
     }
+
+    // `?dblclick=1` drags and then double-clicks: the second down must carry a
+    // click count of 2, which recentres the camera on the demo pose.
+    if (new URLSearchParams(location.search).has("dblclick")) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const canvas = document.querySelector("canvas");
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const fire = (type, cx, cy, buttons) =>
+          canvas.dispatchEvent(
+            new PointerEvent(type, {
+              pointerId: 1,
+              pointerType: "mouse",
+              isPrimary: true,
+              clientX: cx,
+              clientY: cy,
+              buttons,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        // A drag first, so the recentre is visible.
+        fire("pointerdown", x, y, 1);
+        for (let i = 1; i <= 12; i += 1) fire("pointermove", x + i * 8, y + i * 3, 1);
+        fire("pointerup", x + 96, y + 36, 0);
+        // Then two clicks in quick succession at one spot.
+        for (let i = 0; i < 2; i += 1) {
+          fire("pointerdown", x, y, 1);
+          fire("pointerup", x, y, 0);
+        }
+      }
+    }
   </script>
 </body>
 </html>

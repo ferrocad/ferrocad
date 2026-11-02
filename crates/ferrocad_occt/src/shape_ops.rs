@@ -11,7 +11,7 @@ use opencascade_sys as ffi;
 
 use ffi::geom_abs::GeomAbs_JoinType;
 use ffi::top_abs::{TopAbs_Orientation, TopAbs_ShapeEnum};
-use ffi::top_tools::{TopTools_ListIteratorOfListOfShape, TopTools_ListOfShape};
+use ffi::top_tools::TopTools_ListOfShape;
 use ffi::topo_ds::{TopoDS, TopoDS_Shape};
 
 /// Upstream's `JoinType` enum (0 = arc, 1 = tangent, 2 = intersection).

@@ -202,6 +202,25 @@ The measured cost, the audit and what remains unverified are in
 [`../../project/research/occt-8-upgrade.md`](../../project/research/occt-8-upgrade.md)
 and [`../../project/research/occt-8-api-audit.md`](../../project/research/occt-8-api-audit.md).
 
+### 8.1 The prebuilt wasm kernel
+
+The browser build does not use the conda prefix: `wasm32-unknown-unknown` links
+cadrum's prebuilt OCCT 8.0.1 (`occt-8_0_1_rev3-wasm32_unknown_unknown`, fetched into
+`.occt-wasm/` by `crates/ferrocad_web/run.sh`) and must be compiled inside
+`ghcr.io/lzpel/cross-wasm32-unknown-unknown` so the C++ and the kernel agree on the
+wasm-EH encoding. It ships **19 headless `TK*` libraries** — `TKernel`, `TKMath`,
+`TKG2d`, `TKG3d`, `TKGeomBase`, `TKGeomAlgo`, `TKBRep`, `TKTopAlgo`, `TKPrim`,
+`TKBO`, `TKBool`, `TKFillet`, `TKOffset`, `TKMesh`, `TKShHealing`, `TKDE`,
+`TKDECascade`, `TKDESTEP`, `TKXSBase` — plus the `cadrum_*` C++ runtime.
+
+It omits the data-exchange and application-framework libraries the desktop prefix has
+(`TKDESTL`, `TKDEIGES`, `TKCAF`, `TKLCAF`, `TKXCAF`) **and `TKFeat`**. `ferrocad_occt`
+binds `BRepFeat_SplitShape` for `GeometryBackend::split_shape`; because
+`ferrocad_part::register(Arc<OcctBackend>)` materialises the whole trait vtable, that
+binding is reachable even when nothing calls it, so `split_shape` is a reported error
+on `wasm32` instead of a link failure. A host that needs `Part.makeSplitShape` in the
+browser needs a kernel built with `TKFeat`.
+
 **Decision:** ship on **8.0.1** with
 [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)
 (`v0.3.0-ferrocad.23`), pinned from the workspace via `[patch.crates-io]`. The upstream

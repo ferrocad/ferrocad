@@ -1,10 +1,9 @@
-//! The minimal browser host: OCCT in wasm, rendered by wgpu on a canvas.
+//! The demo host: OCCT in wasm, drawn by [`WebViewport`].
 //!
 //! `#[wasm_bindgen(start)]` runs on `init()`, finds `#cad`, builds a filleted box
-//! with the real kernel, and draws it every animation frame. WebGL2 is the path
-//! that must work (WebGPU support on Linux is still uneven); the instance asks for
-//! `BROWSER_WEBGPU | GL` and wgpu's helper drops WebGPU when the browser cannot
-//! provide an adapter.
+//! with the real kernel, and draws it every animation frame. The surface, device and
+//! orbit/zoom input live in `ferrocad_web_viewport`; this crate is the scene and the
+//! demo pose, plus the smoke-test export.
 //!
 //! Everything is gated on `wasm32`: on other targets the crate is empty, so a
 //! workspace `cargo check` does not need the browser APIs.
@@ -16,11 +15,11 @@ mod wasi;
 use std::{cell::RefCell, rc::Rc};
 
 use ferrocad_geom::{ElementKind, GeomError, GeometryBackend, Tessellation, TessellationOptions};
-use ferrocad_graphics::{Camera, Projection, RenderQueue, Viewport};
+use ferrocad_graphics::{Camera, Projection, RenderQueue};
 use ferrocad_occt::OcctBackend;
 use ferrocad_stage::{DrawMode, ShapeItem, Stage};
 use ferrocad_types::{Placement, Rotation, Vector3};
-use ferrocad_wgpu::{GpuContext, WgpuRenderer};
+use ferrocad_web_viewport::WebViewport;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -64,96 +63,12 @@ fn canvas() -> Option<web_sys::HtmlCanvasElement> {
 }
 
 struct App {
-    surface: wgpu::Surface<'static>,
-    /// The format a surface texture view is created with (sRGB, always).
-    view_format: wgpu::TextureFormat,
-    renderer: WgpuRenderer,
-    camera: Camera,
+    viewport: WebViewport,
     queue: RenderQueue,
-}
-
-/// The empty display handle `raw-window-handle` defines for the web.
-///
-/// Only its existence matters: wgpu-core rejects `create_surface()` when there
-/// is no display handle at all (see `App::new`).
-#[derive(Debug)]
-struct WebDisplay;
-
-impl wgpu::rwh::HasDisplayHandle for WebDisplay {
-    fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
-        Ok(wgpu::rwh::DisplayHandle::web())
-    }
 }
 
 impl App {
     async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<Self, JsValue> {
-        // wgpu-core refuses `create_surface()` when neither the instance nor the
-        // target carries a display handle, and on the web there is no display
-        // connection to name — the canvas arrives in the window handle. wgpu-core
-        // is the only context that can do WebGL2, which is the path Firefox (and
-        // any browser without `navigator.gpu`) takes, so the unit
-        // `WebDisplayHandle` raw-window-handle defines for this case is required.
-        // The pure-JS WebGPU context ignores the field.
-        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(WebDisplay));
-        desc.backends = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
-        let instance = wgpu::util::new_instance_with_webgpu_detection(desc).await;
-
-        let surface = instance
-            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("ferrocad web"),
-                // The adapter's own limits, not `Limits::default()`: a WebGL2
-                // adapter reports 0 for the compute limits it has no concept
-                // of, and asking for 65535 fails validation.
-                required_limits: adapter.limits(),
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
-
-        let caps = surface.get_capabilities(&adapter);
-        let (surface_format, view_format) = pick_formats(&caps.formats);
-        let view_formats = if surface_format == view_format {
-            Vec::new()
-        } else {
-            // WebGPU forbids sRGB canvas formats; it lets a view reinterpret the
-            // non-sRGB texture as sRGB, which is what keeps the colours right.
-            vec![view_format]
-        };
-
-        let size = [canvas.width().max(1), canvas.height().max(1)];
-        surface.configure(
-            &device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: surface_format,
-                width: size[0],
-                height: size[1],
-                present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode: caps.alpha_modes[0],
-                view_formats,
-                desired_maximum_frame_latency: 2,
-            },
-        );
-
-        let renderer = WgpuRenderer::with_sample_count_and_format(
-            GpuContext::new(device, queue),
-            size,
-            // MSAA on WebGL is the one path the research note could not test;
-            // one sample draws straight into the canvas view and always works.
-            1,
-            view_format,
-        );
         let camera = Camera {
             // `view` is world→view, and `Placement::new(pos, rot)` composes as
             // `T(pos) · R`: `pos` is a view-space translation applied to the
@@ -169,8 +84,11 @@ impl App {
                 near: 0.1,
                 far: 100.0,
             },
-            viewport: Viewport::new(size, 1.0),
+            // The canvas owns the size; the viewport replaces this.
+            ..Camera::identity()
         };
+        let viewport = WebViewport::new(canvas, camera).await?;
+
         let mesh = filleted_box().map_err(|error| JsValue::from_str(&error.to_string()))?;
         let queue = Stage::new()
             .with_item(
@@ -180,33 +98,11 @@ impl App {
             )
             .to_queue();
 
-        Ok(Self {
-            surface,
-            view_format,
-            renderer,
-            camera,
-            queue,
-        })
+        Ok(Self { viewport, queue })
     }
 
     fn frame(&mut self) {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            // Timeout/Occluded/Outdated/Lost/Validation: skip this frame.
-            _ => return,
-        };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.view_format),
-            ..Default::default()
-        });
-        if self
-            .renderer
-            .render(&view, &self.camera, &self.queue.packets)
-            .is_ok()
-        {
-            frame.present();
-        }
+        self.viewport.draw(&self.queue.packets);
     }
 }
 
@@ -232,29 +128,6 @@ fn filleted_box() -> Result<Tessellation, GeomError> {
         &Placement::new(Vector3::new(-5.0, -5.0, -5.0), Rotation::identity()),
     )?;
     backend.tessellate(&centred, &TessellationOptions::absolute(0.2))
-}
-
-/// Pick the surface and view formats.
-///
-/// A WebGL surface lists the sRGB format, so configure it directly. A WebGPU
-/// surface only allows `bgra8unorm`/`rgba8unorm`/`rgba16float`; configure the
-/// non-sRGB counterpart and create an sRGB view, which the renderer's pipelines
-/// are built for.
-fn pick_formats(formats: &[wgpu::TextureFormat]) -> (wgpu::TextureFormat, wgpu::TextureFormat) {
-    use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm, Rgba8UnormSrgb};
-    if formats.contains(&Rgba8UnormSrgb) {
-        return (Rgba8UnormSrgb, Rgba8UnormSrgb);
-    }
-    let base = formats
-        .iter()
-        .copied()
-        .find(|format| matches!(format, Rgba8Unorm | Bgra8Unorm))
-        .unwrap_or(Rgba8Unorm);
-    let srgb = match base {
-        Bgra8Unorm => Bgra8UnormSrgb,
-        _ => Rgba8UnormSrgb,
-    };
-    (base, srgb)
 }
 
 fn request_frame(app: Rc<RefCell<App>>) {

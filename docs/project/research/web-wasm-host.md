@@ -984,3 +984,30 @@ generates the glue and runs the smoke test.
 Still unverified: an actual browser canvas (there is no browser or GPU here), the
 WebGL2 MSAA path, and picking. The canvas draw is the one thing the Node test
 cannot cover.
+
+### Follow-up: the first browser run (later on 2026-11-02)
+
+Headless Chrome found three faults the Node test cannot see. WebGL2 was forced by
+hiding `navigator.gpu` (so wgpu-core, not the pure-JS WebGPU context, is used):
+
+1. `create_surface()` returned `MissingDisplayHandle`. wgpu-core requires a display
+   handle, `InstanceDescriptor::new_without_display_handle()` is the default, and on
+   the web the canvas arrives in the *window* handle. The empty `WebDisplayHandle`
+   `raw-window-handle` defines for this case satisfies the check; the pure-JS
+   context ignores the field.
+2. `request_device` then failed with `max_compute_workgroups_per_dimension: 65535
+   is better than allowed 0` — a WebGL2 adapter has no compute limits, so a device
+   must request `adapter.limits()`, not `Limits::default()`.
+3. The framing was wrong: `make_box` builds from the origin corner while the orbit
+   camera pivots on the origin, and the eye offset carried a lateral term. The shape
+   is now centred with `place()` and the eye offset is `-Z` only.
+
+The surface, device, loop and pointer/wheel navigation moved to
+`crates/ferrocad_web_viewport` (the wasm analogue of the GPUI `ferrocad_viewport`),
+so `ferrocad_web` is only the demo — scene, camera pose and the smoke-test export.
+Orbit and zoom are `Camera::orbit`/`Camera::dolly` in `ferrocad_graphics`, which
+`ferrocad_viewport::navicube` now delegates to, so the GPUI and browser viewports
+share one implementation instead of drifting.
+
+Verified by screenshot on both paths: the box renders, a synthesized pointer drag
+orbits it, and a wheel event dollies the eye.

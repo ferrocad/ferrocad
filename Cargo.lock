@@ -2583,10 +2583,19 @@ dependencies = [
  "ferrocad_occt",
  "ferrocad_stage",
  "ferrocad_types",
- "ferrocad_wgpu",
- "js-sys",
+ "ferrocad_web_viewport",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "ferrocad_web_viewport"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_graphics",
+ "ferrocad_wgpu",
+ "wasm-bindgen",
  "web-sys",
  "wgpu",
 ]

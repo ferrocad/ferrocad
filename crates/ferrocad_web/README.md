@@ -2,8 +2,9 @@
 
 The real OCCT kernel, compiled to WebAssembly, rendered through `ferrocad_wgpu`
 on a `<canvas>`. A 10 mm box is built, one edge is filleted, and the result is
-tessellated and drawn every animation frame. WebGL2 is the required path; WebGPU
-is used when the browser offers it.
+tessellated and drawn every animation frame. **Drag** with the primary button to
+orbit the box; the **wheel** zooms. WebGL2 is the required path; WebGPU is used
+when the browser offers it.
 
 ## Run the demo
 
@@ -47,22 +48,28 @@ crates/ferrocad_web/run.sh --build-only
 
 | Path | What |
 | --- | --- |
-| `src/lib.rs` | `#[wasm_bindgen(start)]`, canvas surface, render loop |
+| `src/lib.rs` | `#[wasm_bindgen(start)]`, the filleted-box demo and its camera pose, `triangles()` |
 | `src/wasi.rs` | 13 link-time WASI stubs, so the module imports no `wasi_snapshot_preview1` |
-| `www/index.html` | the page: a `<canvas id="cad">` and one module script |
+| `www/index.html` | the page: a `<canvas id="cad">`, one module script, the orbit/zoom hint |
 | `www/smoke.mjs` | Node check: zero WASI imports, 40 triangles |
 | `run.sh` | the one command above |
 
 The kernel is `ferrocad_occt` (which links the prebuilt static OCCT libraries);
 the renderer is `ferrocad_wgpu`, which gained
-`with_sample_count_and_format` so it can draw straight into a canvas texture. See
+`with_sample_count_and_format` so it can draw straight into a canvas texture. The
+canvas surface, device and input bindings live in `ferrocad_web_viewport` — the
+wasm analogue of the GPUI `ferrocad_viewport` — so this crate is only the scene.
+Orbit and zoom are `ferrocad_graphics::Camera::{orbit, dolly}`, the same maths the
+GPUI viewport uses, so the two behave alike. See
 [`docs/project/research/web-wasm-host.md`](../../docs/project/research/web-wasm-host.md)
 for the measurements and for what is still unverified.
 
 ## Limits
 
 This is a canvas, not an application: no resize observer, picking, text or GPUI
-shell. MSAA is off (one sample). The canvas is 960×600 and CSS-scaled.
+shell, and the scale factor is fixed at 1 (a HiDPI canvas would upscale the
+backing store in the host). MSAA is off (one sample). The canvas is 960×600 and
+CSS-scaled.
 
 Both paths have been checked in headless Chrome — WebGPU, and WebGL2 through
 SwiftShader by hiding `navigator.gpu` — and both draw the filleted box. Two wgpu

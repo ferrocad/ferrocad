@@ -1,16 +1,17 @@
-# The browser host for the wasm kernel.
+# The demo host for the wasm kernel: a filleted box, drawn on a canvas.
 #
 # Built for `wasm32-unknown-unknown` against a prebuilt wasm OCCT (see the fork's
 # build script and `docs/project/research/occt-8-upgrade.md` §2.2). It is a
 # workspace member but NOT in `default-members`: it links the kernel and, on wasm,
-# needs the cross image.
+# needs the cross image. The surface, device and orbit/zoom input live in
+# `ferrocad_web_viewport`; this crate is only the scene and the demo pose.
 [package]
 name = "ferrocad_web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Browser (wasm32) host for the FerroCAD OCCT kernel and wgpu renderer"
+description = "Browser (wasm32) demo host for the FerroCAD OCCT kernel"
 
 [lib]
 name = "ferrocad_web"
@@ -24,14 +25,10 @@ ferrocad_occt.workspace = true
 ferrocad_graphics.workspace = true
 ferrocad_types.workspace = true
 ferrocad_stage.workspace = true
-# The renderer (surface-free; it draws into a caller-provided view).
-ferrocad_wgpu.workspace = true
-# WebGPU in the browser; `webgl` enables the GL/WebGL2 fallback. On Linux,
-# WebGPU support is still uneven, so the WebGL2 path is the one that must work.
-wgpu = { version = "29", features = ["webgl"] }
+# The canvas surface, wgpu device and pointer/wheel navigation.
+ferrocad_web_viewport = { path = "../ferrocad_web_viewport" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Document",
     "Element",

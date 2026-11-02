@@ -33,6 +33,8 @@ obvious:
 | `ferrocad_part_gui` | `rlib` | The Part workbench's **presentation**: the edge dress-up manipulator (`DressUpScrubber`) and the planar-face push/pull stem (`PushPullStem`), with their factories. Implements `ferrocad_stage::Manipulator`. **No kernel, no document, no `pyo3`, no OCCT.** Linked only by an edition that has Part. |
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes `ferrocad_graphics` draw batches (pipelines, uniforms, MSAA, offscreen target, readback) and owns the deterministic snapshot path (`snapshot`). |
 | `ferrocad_snapshot` | `bin` | The docs-screenshot bridge over `ferrocad_wgpu::snapshot`: `ferrocad_snapshot <spec.json> <out.png>`, `--validate`, stdin/stdout, atomic writes and the no-adapter exit code. Not published; see [`workbenches/screenshot-tool.md`](workbenches/screenshot-tool.md). |
+| `ferrocad_web_viewport` | `rlib` (wasm32) | The **browser** viewport: a canvas surface (`BROWSER_WEBGPU | GL`, so WebGL2 is the required path), the wgpu device, the per-frame draw into that surface, and primary-button drag orbit + wheel dolly. Owns no scene. The wasm analogue of `ferrocad_viewport`; orbit/zoom are `Camera::orbit`/`Camera::dolly` from `ferrocad_graphics`, so the two viewports move alike. Not published. |
+| `ferrocad_web` | `cdylib` (wasm32) | The browser demo host: builds a filleted box with `ferrocad_occt`, dresses it through `ferrocad_stage`, hands the packets to `ferrocad_web_viewport`, and exports `triangles()` for the Node smoke test. Links the prebuilt wasm OCCT. Not published. |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` and the shared `ferrocad_theme` tokens. |
@@ -228,6 +230,12 @@ ferrocad_viewport  -> ferrocad_graphics, ferrocad_geom,
                       ferrocad_inventor, ferrocad_stage,
                       ferrocad_types, bite-gpui            [the gpui viewport; no wgpu, no pyo3]
                                                      [geom is a leaf: SelectionRef]
+ferrocad_web_viewport -> ferrocad_graphics, ferrocad_wgpu, wgpu
+                                                     [browser viewport: surface + input; wasm32 only]
+ferrocad_web       -> ferrocad_web_viewport, ferrocad_geom,
+                      ferrocad_occt, ferrocad_stage,
+                      ferrocad_graphics, ferrocad_types
+                                                     [browser demo host; links the kernel]
 ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
                       ferrocad_inventor, ferrocad_wgpu,
                       ferrocad_geom, ferrocad_stage,

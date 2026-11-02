@@ -100,11 +100,13 @@ The screenshot shows the 10 mm box with a 3 mm fillet on `Edge1` — the rounded
 lower-left edge — shaded with its twelve edges.
 
 Pointer input was checked the same way: `index.html` honours `?drag=1`, which
-synthesises one `pointerdown`/`pointermove`×12/`pointerup` sequence on the canvas
-(the only reason that page has any scripting beyond `init()`). A capture of
-`/?drag=1` differs from the same page without the drag in 22 027 pixels, all
-inside the canvas, with the box turned from a front view to a corner view — the
-gateway delivered the whole gesture.
+synthesises one `pointerdown`/`pointermove`×12/`pointerup` sequence on the canvas,
+and `?wheel=1`, which synthesises one scroll. A capture of `/?drag=1` differs from
+the undragged page in 22 027 pixels, all inside the canvas, with the box turned
+from a front view to a corner view — the gateway delivered the whole gesture. One
+notch (`?wheel=1`) differs in 26 127 pixels with the box visibly smaller, i.e.
+scrolling down zooms out, which is what the canvas demo does; GPUI's web backend
+negates the DOM wheel delta, so the exponent here is the demo's own.
 
 `ferrocad_web`'s smoke test still passes after the WASI-stub extraction (40
 triangles, refused fillet reported, `split: 1 direct, 1 left`).

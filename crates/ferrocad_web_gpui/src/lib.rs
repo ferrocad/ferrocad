@@ -155,7 +155,10 @@ impl Render for Probe {
         .size_full();
 
         // The wheel is the view's own handler: the gateway's vocabulary carries no
-        // scroll, and zoom is a camera verb rather than a producer event.
+        // scroll, and zoom is a camera verb rather than a producer event. GPUI's web
+        // backend negates the DOM wheel delta (`bite-gp-web/src/events.rs`), so a
+        // positive notch is "up" here; the exponent is the canvas demo's, which makes
+        // scrolling down zoom out.
         let zooming = Rc::clone(&self.camera);
         let canvas = canvas.on_scroll_wheel(move |event, window, _cx| {
             let notches = match event.delta {

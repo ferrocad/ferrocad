@@ -45,6 +45,24 @@
         fire("pointerup", 96, 36, 0);
       }
     }
+
+    // `?wheel=1` synthesises one scroll notch, for the zoom handler.
+    if (new URLSearchParams(location.search).has("wheel")) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const canvas = document.querySelector("canvas");
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        canvas.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: 240,
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+    }
   </script>
 </body>
 </html>

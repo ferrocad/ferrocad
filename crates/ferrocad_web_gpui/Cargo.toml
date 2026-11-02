@@ -26,6 +26,13 @@ gpui = { package = "bite-gpui", version = "=1.24.402" }
 gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.24.402", features = ["wasm-interop"] }
 # `WgpuSurface`: the same-device offscreen target, no dma-buf and no fence.
 gpui_interop = { version = "0.1.3", default-features = false, features = ["wgpu"] }
+# The real scene path: the stage's draw packets, the camera, and the renderer
+# that the canvas demo uses. This is the same trio `ferrocad_web_viewport` drives.
+ferrocad_graphics.workspace = true
+ferrocad_stage.workspace = true
+ferrocad_wgpu.workspace = true
+ferrocad_geom.workspace = true
+ferrocad_types.workspace = true
 # `fragile-send-sync-non-atomic-wasm` is what makes wgpu's wasm handles
 # `Send + Sync`, which the imported-texture handle requires. Without it the
 # interop path does not typecheck for wasm.

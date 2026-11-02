@@ -2591,6 +2591,11 @@ version = "0.1.5"
 dependencies = [
  "bite-gp-wgpu",
  "bite-gpui",
+ "ferrocad_geom",
+ "ferrocad_graphics",
+ "ferrocad_stage",
+ "ferrocad_types",
+ "ferrocad_wgpu",
  "gpui_interop",
  "log",
  "wasm-bindgen",

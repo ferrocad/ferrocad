@@ -32,10 +32,12 @@ pub trait ImportedTextureExt {
     fn to_imported_handle(&self) -> anyhow::Result<ImportedTextureHandle>;
 }
 
-/// wasm has no `Send + Sync` texture view yet: `ImportedTextureHandle::new`
-/// requires it, and wgpu's wasm handles wrap `Rc`. `gpui_web` never imports a
-/// texture, so the impl is native-only until the handle bound is wasm-aware.
-#[cfg(not(target_family = "wasm"))]
+/// On wasm the handle's `Send + Sync` bound holds only with wgpu's
+/// `fragile-send-sync-non-atomic-wasm` feature enabled (wgpu builds its handle
+/// types `Send + Sync` under `any(native, all(that feature, not(atomics)))`), so
+/// the impl is opt-in there: enable this crate's `wasm-interop` feature **and**
+/// that wgpu feature together. Without both, the bound fails with 46 `E0277`s.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-interop"))]
 impl ImportedTextureExt for wgpu::TextureView {
     fn to_imported_handle(&self) -> anyhow::Result<ImportedTextureHandle> {
         let texture = self.texture();

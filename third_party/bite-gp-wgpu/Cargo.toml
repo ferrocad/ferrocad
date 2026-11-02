@@ -40,6 +40,10 @@ default = []
 font-kit = ["dep:font-kit"]
 headless = ["dep:image"]
 test-support = ["dep:image"]
+# Opts the imported-texture impl in on wasm. The handle it builds needs
+# `Send + Sync`, which wgpu's wasm handles only have with
+# `fragile-send-sync-non-atomic-wasm` enabled (see PATCHES.md).
+wasm-interop = []
 
 [lib]
 name = "gpui_wgpu"

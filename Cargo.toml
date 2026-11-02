@@ -22,6 +22,7 @@ members = [
     "crates/ferrocad_occt_wasm",
     "crates/ferrocad_web",
     "crates/ferrocad_web_viewport",
+    "crates/ferrocad_web_gpui",
     "crates/ferrocad_part",
     "crates/ferrocad_part_gui",
     "crates/ferrocad_part_py",

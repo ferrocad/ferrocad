@@ -2586,6 +2586,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_web_gpui"
+version = "0.1.5"
+dependencies = [
+ "bite-gp-wgpu",
+ "bite-gpui",
+ "gpui_interop",
+ "log",
+ "wasm-bindgen",
+ "wgpu",
+]
+
+[[package]]
 name = "ferrocad_web_viewport"
 version = "0.1.5"
 dependencies = [

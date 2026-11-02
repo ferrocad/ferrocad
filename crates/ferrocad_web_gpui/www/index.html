@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FerroCAD · GPUI browser probe</title>
+  <style>
+    /* GPUI's web platform appends its own full-size canvas to `body`. */
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #101014; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <script type="module">
+    // `--target web` glue. `init` instantiates the module, which runs the
+    // `#[wasm_bindgen(start)]` entry point (log setup, then GPUI's application).
+    import init from "./pkg/ferrocad_web_gpui.js";
+    await init();
+  </script>
+</body>
+</html>

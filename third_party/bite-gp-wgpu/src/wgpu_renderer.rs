@@ -285,9 +285,9 @@ enum InstanceData {
 }
 
 /// GPU resources that must be dropped together during device recovery.
-struct WgpuResources {
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
+pub(crate) struct WgpuResources {
+    pub(crate) device: Arc<wgpu::Device>,
+    pub(crate) queue: Arc<wgpu::Queue>,
     pipelines: WgpuPipelines,
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
@@ -324,8 +324,9 @@ impl WgpuResources {
     }
 }
 
-struct WgpuRendererCore {
-    resources: WgpuResources,
+pub(crate) struct WgpuRendererCore {
+    /// Visible to `web_renderer`, which lends the device through `GpuRenderer`.
+    pub(crate) resources: WgpuResources,
     atlas: Arc<WgpuAtlas>,
     path_globals_offset: u64,
     gamma_offset: u64,
@@ -381,7 +382,7 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    fn core(&self) -> Option<&WgpuRendererCore> {
+    pub(crate) fn core(&self) -> Option<&WgpuRendererCore> {
         match &self.state {
             RendererState::Ready { core, .. } | RendererState::Unconfigured { core } => Some(core),
             RendererState::Released => None,

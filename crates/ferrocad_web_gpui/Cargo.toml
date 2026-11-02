@@ -1,0 +1,36 @@
+# The step-2 browser probe: a GPUI window compositing a wgpu surface.
+#
+# It exercises the seam `ferrocad_gpui`'s interop presenter needs on wasm — the
+# window renderer's device (`GpuRenderer::device`), a `WgpuSurface` allocated on
+# that device, and `paint_texture` — without CPython, the document layer or the
+# OCCT kernel. Built for `wasm32-unknown-unknown` only; see README.md.
+[package]
+name = "ferrocad_web_gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Browser (wasm32) probe: a GPUI window compositing a wgpu surface through gpui_interop"
+
+[lib]
+name = "ferrocad_web_gpui"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# The GUI framework, with its browser backend: `bite-gp-web` gives one
+# document-owned canvas, WebGPU preferred and WebGL2 as the fallback we force.
+gpui = { package = "bite-gpui", version = "=1.24.402" }
+# The renderer, and the `ImportedTextureExt` that turns a texture made on its
+# device into a handle GPUI can composite. `wasm-interop` re-enables that impl in
+# our vendored copy; see third_party/bite-gp-wgpu/PATCHES.md.
+gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.24.402", features = ["wasm-interop"] }
+# `WgpuSurface`: the same-device offscreen target, no dma-buf and no fence.
+gpui_interop = { version = "0.1.3", default-features = false, features = ["wgpu"] }
+# `fragile-send-sync-non-atomic-wasm` is what makes wgpu's wasm handles
+# `Send + Sync`, which the imported-texture handle requires. Without it the
+# interop path does not typecheck for wasm.
+wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm"] }
+wasm-bindgen = "0.2"
+# The logger `gpui::web_init` installs forwards to the browser console; the probe
+# reports through it instead of drawing text (see README.md).
+log = "0.4"

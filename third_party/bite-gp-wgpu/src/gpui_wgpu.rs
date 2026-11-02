@@ -7,6 +7,8 @@ mod platform_renderer;
 mod wgpu_atlas;
 mod wgpu_context;
 mod wgpu_renderer;
+#[cfg(target_family = "wasm")]
+mod web_renderer;
 
 pub use cosmic_text_system::*;
 #[cfg(target_os = "linux")]

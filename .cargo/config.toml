@@ -2,11 +2,17 @@
 # `cargo xtask <task>` -> the `xtask` crate (crates/xtask).
 xtask = "run --package xtask --"
 
-[build]
+[target.'cfg(target_os = "linux")']
 # Development-only runtime lookup for the OCCT shared libraries. `target/debug`
 # and `target/debug/deps` sit at different depths, so both relative forms are
 # present; `$ORIGIN` is expanded by the dynamic loader, not the shell. Packaged
 # editions set their own library path.
+#
+# Scoped to Linux rather than `[build]`: these are ELF link arguments, and
+# `rust-lld` rejects `-Wl,-rpath` for wasm, which would break every
+# `--target wasm32-unknown-unknown` build that does not set RUSTFLAGS (the cross
+# image sets its own, which is why `ferrocad_web`'s container build never saw
+# this).
 rustflags = [
     "-C", "link-arg=-Wl,-rpath,$ORIGIN/../../.occt/prefix/lib",
     "-C", "link-arg=-Wl,-rpath,$ORIGIN/../../../.occt/prefix/lib",

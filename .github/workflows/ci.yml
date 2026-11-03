@@ -94,6 +94,17 @@ jobs:
         working-directory: crates/ferrocad_gpui
         run: cargo test
 
+      - name: Vendored gpui_interop examples
+        # `third_party/gpui_interop` is a `[patch.crates-io]` source inside this
+        # tree (`exclude`d from the workspace), so nothing in the build compiles
+        # its examples. They are what a consumer copies, and our patch adds
+        # `SurfaceEvent` variants, so a match that stops being exhaustive is a
+        # real break their CI does not catch either. This runs the crate in its
+        # own workspace; `--locked` keeps it on the vendored lockfile.
+        run: >-
+          cargo check --manifest-path third_party/gpui_interop/Cargo.toml
+          --features example --examples --locked
+
       - name: ferrocad_toy end-to-end test (the generic interaction registry, no kernel)
         working-directory: crates/ferrocad_toy
         run: cargo test

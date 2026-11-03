@@ -17,9 +17,9 @@
 //! factor alongside, and its `SurfaceEvent` is the crate's vocabulary rather than GPUI's. A drag starts
 //! on the viewport, which founds the gateway's own drag, so the cube keeps turning while the pointer is
 //! off past the edge — and because the gateway refreshes the window after each event, the producer only
-//! has to change its own state. Not every event takes that road: the wheel, which zooms the cube, is the
-//! demo's own `on_scroll_wheel`, because the gateway's vocabulary carries no scroll yet and the zoom is
-//! the view's rather than the producer's.
+//! has to change its own state. The wheel takes the same road: the handler receives it as
+//! `SurfaceEvent::Scroll`, in the same physical-pixel-or-lines vocabulary as the pointer events, and
+//! zooms the cube by a fixed proportion per notch.
 //!
 //! # Three layers, and why the frame is transparent
 //!
@@ -73,10 +73,10 @@ mod demo {
     use std::rc::Rc;
 
     use gpui::{
-        AnyElement, App, Bounds, Context, IntoElement, Render, ScrollDelta, Window, WindowBounds,
-        WindowOptions, div, gpu_canvas, prelude::*, px, rgb, rgba, size,
+        AnyElement, App, Bounds, Context, IntoElement, Render, Window, WindowBounds, WindowOptions,
+        div, gpu_canvas, prelude::*, px, rgb, rgba, size,
     };
-    use gpui_interop::{SurfaceEvent, SurfaceInput, SurfacePoint, surface_input};
+    use gpui_interop::{SurfaceEvent, SurfaceInput, SurfacePoint, SurfaceScroll, surface_input};
 
     use crate::cube::{Cube, TRANSPARENT};
 
@@ -215,7 +215,6 @@ mod demo {
         spinning: Rc<Cell<bool>>,
     ) -> AnyElement {
         let drawing = cube.clone();
-        let zooming = cube.clone();
         let covering = cube.clone();
         let surface = gpu_canvas(move |gpu| {
             let mut cube = drawing.borrow_mut();
@@ -246,23 +245,6 @@ mod demo {
                 .borrow()
                 .as_ref()
                 .is_some_and(|cube| cube.covers(uv))
-        })
-        // The wheel zooms the *cube*, so it is the demo's own gpui handler and not the gateway's: the
-        // gateway's vocabulary carries no scroll yet, and the zoom is the view's rather than the
-        // producer's. One notch moves the eye by a fixed proportion, so zooming out to see the layer
-        // behind the cube and zooming back in feel the same at either end.
-        .on_scroll_wheel(move |event, window, _cx| {
-            let notches = match event.delta {
-                ScrollDelta::Lines(lines) => lines.y,
-                ScrollDelta::Pixels(pixels) => pixels.y.as_f32() / PIXELS_PER_LINE,
-            };
-            let mut cube = zooming.borrow_mut();
-            let Some(cube) = cube.as_mut() else {
-                // Nothing to zoom before the first paint has built the cube.
-                return;
-            };
-            cube.zoom(ZOOM_PER_NOTCH.powf(notches));
-            window.refresh();
         })
         // No background of its own: the surface is composited over the layer beneath it, and where
         // the producer left the frame transparent that layer shows through.
@@ -296,6 +278,18 @@ mod demo {
                     grab.set(false);
                     last.set(None);
                 }
+                // The wheel zooms the *cube*, so the zoom is the view's rather than the producer's.
+                // One notch moves the eye by a fixed proportion, so zooming out to see the layer
+                // behind the cube and zooming back in feel the same at either end.
+                SurfaceEvent::Scroll { delta, .. } => {
+                    let notches = match delta {
+                        SurfaceScroll::Lines { y, .. } => y,
+                        SurfaceScroll::Pixels { y, .. } => y / PIXELS_PER_LINE,
+                    };
+                    cube.zoom(ZOOM_PER_NOTCH.powf(notches));
+                }
+                // The cube has no hover state of its own.
+                SurfaceEvent::PointerEnter { .. } | SurfaceEvent::PointerLeave { .. } => {}
             }
         };
 

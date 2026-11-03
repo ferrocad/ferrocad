@@ -45,6 +45,17 @@ members = [
     "crates/ferrocad_toy",
     "crates/xtask",
 ]
+# `third_party/` holds the `[patch.crates-io]` sources. They are dependencies, not
+# members, but they live inside this directory tree, so Cargo would otherwise
+# consider them part of this workspace and refuse to check them standalone. That
+# standalone check is how the vendored crates' own examples are validated: our
+# packages never build them (`gpui_interop`'s require its `example` feature).
+exclude = [
+    "third_party/bite-gp-apple",
+    "third_party/bite-gp-web",
+    "third_party/bite-gp-wgpu",
+    "third_party/gpui_interop",
+]
 # The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`,
 # `ferrocad`), the renderer (`ferrocad_wgpu`, which pulls in the whole GPU stack) and
 # the pivy facade (`ferrocad_inventor_py`, which needs CPython headers), plus the

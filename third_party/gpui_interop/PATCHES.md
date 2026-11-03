@@ -7,9 +7,10 @@ This directory is a copy of the crates.io source for `gpui_interop` 0.2.0
 | --- | --- |
 | `src/input.rs` | `SurfaceEvent::Scroll` + `SurfaceScroll`; `PointerDown.click_count`; `PointerEnter`/`PointerLeave`; an `App`-held pressed origin so an off-surface up is always delivered |
 | `src/gpui_interop.rs` | re-export `SurfaceScroll` |
+| `examples/interop_cube_drag.rs` | handle `SurfaceEvent::Scroll` and the hover edges in its `match`, instead of binding its own `on_scroll_wheel` |
 
-Everything else (`Cargo.toml.orig`, license files, `README.md`, examples, the
-crate's own tests) is unchanged.
+Everything else (`Cargo.toml.orig`, license files, `README.md`, the other
+examples, the crate's own tests) is unchanged.
 
 The two patched files are byte-identical between 0.1.3 and 0.2.0, so this patch
 ports without changes; 0.2.0's only reason to move was the `bite-gpui 1.25.202`
@@ -96,6 +97,11 @@ until the version wall moves.)
     differ — the double-click recentred to the demo pose, which is also the
     proof that `click_count` arrives;
   - `?drag=1` vs `?dblclick=1`: 22 027.
+- The vendored crate's examples compile on their own, which the workspace build
+  never checks (they need the `example` feature):
+  `cargo check --manifest-path third_party/gpui_interop/Cargo.toml --features example --examples --locked`.
+  This matters because the patch adds enum variants: an exhaustive `match` in an
+  example stops compiling. The `headless` CI job runs the same command.
 - **Not verified:** the crate's own `input-test` suite was not run in this
   fork. Adding enter/leave puts two more events in the recorded stream, so some
   of its exact-sequence assertions will need updating; the integration test here

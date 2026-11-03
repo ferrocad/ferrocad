@@ -25,7 +25,7 @@ ferrocad_types.workspace = true
 # The declarative producer the documentation snapshot spec builds its scene with
 # (`Stage`/`ShapeItem`/`DrawMode`). Pure data: no kernel, no Python, no GPU.
 ferrocad_stage.workspace = true
-wgpu = "29"
+wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
 # A documentation snapshot is a JSON spec; the renderer itself never parses one.
 serde.workspace = true

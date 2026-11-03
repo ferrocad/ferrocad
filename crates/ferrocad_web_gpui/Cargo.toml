@@ -19,13 +19,17 @@ crate-type = ["cdylib"]
 [target.'cfg(target_family = "wasm")'.dependencies]
 # The GUI framework, with its browser backend: `bite-gp-web` gives one
 # document-owned canvas, WebGPU preferred and WebGL2 as the fallback we force.
-gpui = { package = "bite-gpui", version = "=1.24.402" }
+# 1.25 added `multithreaded` to `bite-gpui`'s defaults, which turns on
+# `bite-gp-web/multithreaded` and with it `wasm_thread` — a nightly-only
+# `#![feature(stdarch_wasm_atomic_wait)]`. Nothing here uses worker threads, so
+# take the same default set 1.24 had (`platform`) and leave `multithreaded` off.
+gpui = { package = "bite-gpui", version = "=1.25.202", default-features = false, features = ["platform"] }
 # The renderer, and the `ImportedTextureExt` that turns a texture made on its
 # device into a handle GPUI can composite. `wasm-interop` re-enables that impl in
 # our vendored copy; see third_party/bite-gp-wgpu/PATCHES.md.
-gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.24.402", features = ["wasm-interop"] }
+gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.202", features = ["wasm-interop"] }
 # `WgpuSurface`: the same-device offscreen target, no dma-buf and no fence.
-gpui_interop = { version = "0.1.3", default-features = false, features = ["gpui", "wgpu"] }
+gpui_interop = { version = "0.2.0", default-features = false, features = ["gpui", "wgpu"] }
 # The real scene path: the stage's draw packets, the camera, and the renderer
 # that the canvas demo uses. This is the same trio `ferrocad_web_viewport` drives.
 ferrocad_graphics.workspace = true
@@ -44,7 +48,7 @@ ferrocad_wasm.workspace = true
 # `fragile-send-sync-non-atomic-wasm` is what makes wgpu's wasm handles
 # `Send + Sync`, which the imported-texture handle requires. Without it the
 # interop path does not typecheck for wasm.
-wgpu = { version = "29", features = ["fragile-send-sync-non-atomic-wasm"] }
+wgpu = { version = "30", features = ["fragile-send-sync-non-atomic-wasm"] }
 wasm-bindgen = "0.2"
 # The logger `gpui::web_init` installs forwards to the browser console; the probe
 # reports through it instead of drawing text (see README.md).

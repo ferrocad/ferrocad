@@ -3,8 +3,8 @@
 Part of **[bite-gpui](https://bite-gpui.github.io)** — Zed's [GPUI](https://github.com/zed-industries/zed) re-cut into a
 modular, acyclic stack of crates: install a tier on its own, or the whole stack behind one facade.
 
-This package is the published build of `gpui_web`, staged from the `bite_v1.24.x` line of this
-project's repository at `1.24.402`.
+This package is the published build of `gpui_web`, staged from the `bite_v1.25.x` line of this
+project's repository at `1.25.202`.
 
 - **Website and guides** — <https://bite-gpui.github.io>
 - **The stack, tier by tier** — <https://bite-gpui.github.io/#layers>
@@ -106,6 +106,6 @@ Derived from Zed's gpui: restructured, renamed and published as `bite-gp-web` un
 the licence text.
 
     source:   https://github.com/bite-gpui/bite-gpui
-    branch:   bite_v1.24.x  (upstream 1.24.4)
-    version:  1.24.402
-    commit:   8b288f1a2a06ed463d56228823a2f28a911e8855
+    branch:   bite_v1.25.x  (upstream 1.25.2)
+    version:  1.25.202
+    commit:   19271206c7e12504f1a0b3879a85c90df5d9b4c4

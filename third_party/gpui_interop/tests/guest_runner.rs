@@ -242,7 +242,7 @@ fn read_pixel(
     })?;
     receiver.recv_timeout(Duration::from_secs(30))??;
 
-    let data = readback.slice(..).get_mapped_range();
+    let data = readback.slice(..).get_mapped_range()?;
     let offset = (y * padded_bytes_per_row + x * 4) as usize;
     let mut pixel = [
         data[offset],

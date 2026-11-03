@@ -296,7 +296,6 @@ pub(crate) struct WgpuResources {
     globals_buffer: wgpu::Buffer,
     /// One uniform buffer for every surface's params in a frame, addressed by dynamic offset, held
     /// across frames so the surface bind groups that reference it stay valid.
-    #[cfg(target_os = "linux")]
     surface_params: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     path_globals_bind_group: wgpu::BindGroup,
@@ -521,7 +520,15 @@ impl WgpuRenderer {
             .iter()
             .find(|f| surface_caps.formats.contains(f))
             .copied()
-            .or_else(|| surface_caps.formats.iter().find(|f| !f.is_srgb()).copied())
+            .or_else(|| {
+                surface_caps
+                    .formats
+                    .iter()
+                    // `has_srgb_suffix` is newer than the published wgpu-types; `is_srgb` is
+                    // the same predicate (`*self != self.remove_srgb_suffix()`).
+                    .find(|format| !format.is_srgb())
+                    .copied()
+            })
             .or_else(|| surface_caps.formats.first().copied())
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -580,6 +587,7 @@ impl WgpuRenderer {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: clamped_width.max(1),
             height: clamped_height.max(1),
             present_mode: config
@@ -971,19 +979,6 @@ impl WgpuRendererCore {
             &shader_module,
         );
 
-        let paths_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
-
         let paths = create_pipeline(
             "paths",
             "vs_path",
@@ -994,7 +989,7 @@ impl WgpuRendererCore {
             wgpu::PrimitiveTopology::TriangleStrip,
             &[Some(wgpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(paths_blend),
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             1,
@@ -1405,7 +1400,7 @@ impl WgpuRenderer {
             return core.release_unpresented(scene);
         }
 
-        frame.present();
+        core.resources.queue.present(frame);
         true
     }
 }
@@ -1546,7 +1541,6 @@ impl WgpuRendererCore {
             ],
         });
         let max_texture_size = device.limits().max_texture_dimension_2d;
-        #[cfg(target_os = "linux")]
         let surface_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("surface_params"),
             size: 1 << 20,
@@ -1564,7 +1558,6 @@ impl WgpuRendererCore {
                 imported_texture_sampler,
                 atlas_texture_bind_groups: FxHashMap::default(),
                 globals_buffer,
-                #[cfg(target_os = "linux")]
                 surface_params,
                 globals_bind_group,
                 path_globals_bind_group,
@@ -2089,16 +2082,25 @@ impl WgpuRendererCore {
 
     /// The release descriptors of a scene's dma-buf surfaces: the signals a producer waits on to
     /// know the renderer is done with each buffer. Collected from the whole scene rather than only
-    /// the surfaces that are drawn, so a frame that culls a surface still releases it.
+    /// the surfaces that are drawn, so a frame that culls a surface still releases it. Empty where
+    /// the platform has no dma-buf source.
     #[cfg(target_os = "linux")]
     fn surface_releases(scene: &Scene) -> Vec<Arc<OwnedFd>> {
-        scene
-            .surfaces
-            .iter()
-            .filter_map(|surface| match &surface.source {
-                gpui_engine::SurfaceSource::DmaBuf(handle) => handle.release.clone(),
-            })
-            .collect()
+        #[cfg(target_os = "linux")]
+        {
+            scene
+                .surfaces
+                .iter()
+                .filter_map(|surface| match &surface.source {
+                    gpui_engine::SurfaceSource::DmaBuf(handle) => handle.release.clone(),
+                })
+                .collect()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = scene;
+            Vec::new()
+        }
     }
 
     /// Register the releases of a scene the frame will not present, so a producer's surface is not
@@ -3061,7 +3063,7 @@ impl WgpuHeadlessRenderer {
             .map_err(|error| anyhow::anyhow!("Failed to map headless readback buffer: {error}"))?;
         self.check_gpu_errors()?;
 
-        let mapped_data = readback_buffer.slice(..).get_mapped_range();
+        let mapped_data = readback_buffer.slice(..).get_mapped_range()?;
         let pixel_capacity = usize::try_from(u64::from(bytes_per_row) * u64::from(height))
             .map_err(|_| anyhow::anyhow!("Headless image size exceeds addressable memory"))?;
         let mut pixels = Vec::with_capacity(pixel_capacity);
@@ -3520,7 +3522,7 @@ mod tests {
         })?;
         receiver.recv_timeout(Duration::from_secs(30))??;
 
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback.slice(..).get_mapped_range().unwrap();
         let offset = 16 * padded_bytes_per_row as usize + 8 * 4;
         let mut pixel = [
             data[offset],

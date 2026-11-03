@@ -4,7 +4,7 @@ homepage = "https://bite-gpui.github.io/"
 repository = "https://github.com/bite-gpui/bite-gpui"
 description = "gpui_web \u2014 part of the bite-gpui rearchitecture of zed's gpui"
 name = "bite-gp-web"
-version = "1.24.402"
+version = "1.25.202"
 edition.workspace = true
 license = "Apache-2.0"
 autoexamples = false
@@ -34,6 +34,7 @@ parking_lot = { workspace = true, features = ["nightly"] }
 gpui_wgpu.workspace = true
 http_client.workspace = true
 anyhow.workspace = true
+async-channel.workspace = true
 futures.workspace = true
 log.workspace = true
 uuid.workspace = true
@@ -110,8 +111,8 @@ ignored = ["scheduler"]
 
 [package.metadata.bite]
 source = "https://github.com/bite-gpui/bite-gpui.git"
-branch = "bite_v1.24.x"
-commit = "8b288f1a2a06ed463d56228823a2f28a911e8855"
-upstream = "1.24.4"
+branch = "bite_v1.25.x"
+commit = "19271206c7e12504f1a0b3879a85c90df5d9b4c4"
+upstream = "1.25.2"
 amendment = 2
 original = "gpui_web"

@@ -204,6 +204,10 @@ impl WgpuSharedBuffer {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
                 },
+                // The imported image's layout is not tracked across the API boundary; the
+                // producer's acquire fence (or the consumer's first use) orders the contents, and
+                // wgpu transitions the image from its untracked state itself.
+                wgpu::TextureUses::UNINITIALIZED,
             )
         };
         let view = texture.create_view(&wgpu::TextureViewDescriptor {

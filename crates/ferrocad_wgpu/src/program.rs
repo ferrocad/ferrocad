@@ -664,13 +664,13 @@ fn create_pipeline(
     // buffer carries nothing else. A geometry program instead reads the packet's mesh,
     // whose vertices are laid out like the scene's.
     let placeholder_attributes = wgpu::vertex_attr_array![0 => Float32x3];
-    let placeholder_buffers = [wgpu::VertexBufferLayout {
+    let placeholder_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<[f32; 3]>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &placeholder_attributes,
-    }];
+    })];
     let scene_buffers = crate::pipeline::scene_vertex_layout();
-    let vertex_buffers: &[wgpu::VertexBufferLayout<'_>] = if key.geometry {
+    let vertex_buffers: &[Option<wgpu::VertexBufferLayout<'_>>] = if key.geometry {
         &scene_buffers
     } else {
         &placeholder_buffers

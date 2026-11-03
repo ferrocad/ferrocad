@@ -1,6 +1,6 @@
-# Vendored `gpui_interop` 0.1.3 — surface-input gaps
+# Vendored `gpui_interop` 0.2.0 — surface-input gaps
 
-This directory is a copy of the crates.io source for `gpui_interop` 0.1.3
+This directory is a copy of the crates.io source for `gpui_interop` 0.2.0
 (<https://github.com/bite-gpui/gpui_interop>). Changed from that copy:
 
 | File | Change |
@@ -10,6 +10,10 @@ This directory is a copy of the crates.io source for `gpui_interop` 0.1.3
 
 Everything else (`Cargo.toml.orig`, license files, `README.md`, examples, the
 crate's own tests) is unchanged.
+
+The two patched files are byte-identical between 0.1.3 and 0.2.0, so this patch
+ports without changes; 0.2.0's only reason to move was the `bite-gpui 1.25.202`
+/ wgpu 30 bump, and it does **not** include any of the four fixes below.
 
 It is wired in through the workspace root `Cargo.toml`:
 
@@ -77,10 +81,9 @@ not attempt to fix it.
 ## Removing this
 
 Drop the `[patch.crates-io]` entry once the four issues above are fixed
-upstream — but note the version wall: 0.2.0 targets `bite-gpui` **1.25.202** and
-**wgpu 30**, while this workspace is pinned to the 1.24.402 family and wgpu 29
-(`crates/ferrocad_gpui/Cargo.toml` explains why). The vendored copy stays until
-that family bump happens, even if the fixes land upstream.
+upstream. (This workspace has since moved to the 1.25.202 family and wgpu 30,
+which is what 0.2.0 targets; the vendored copy stays until the fixes land, not
+until the version wall moves.)
 
 ## Verified
 

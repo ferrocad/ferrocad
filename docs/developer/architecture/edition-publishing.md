@@ -176,7 +176,7 @@ puts `bin/` (and `lib/`, for an alternate layout) on `PATH`. That path is now
 exercised for real: the 2026-10-25 `edition-windows` run built the edition,
 bundled the DLLs, packaged the zip and passed `ferrocad.bat --check-init` on the
 unpacked artifact. OCCT license staging is shared by every platform. macOS
-remains deliberately blocked on upstream `bite-gp-apple 1.24.402` (it imports
+remains deliberately blocked on upstream `bite-gp-apple 1.25.202` (it imports
 `cocoa` without declaring it, and the import is dead); `xtask` reports that and
 does not attempt an `otool`/`install_name_tool` walk. The diagnosis, the temporary
 vendored patch (`third_party/bite-gp-apple`) and the full re-enable checklist are

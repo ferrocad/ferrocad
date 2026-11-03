@@ -490,6 +490,7 @@ fn import_luma_chroma(
                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm],
             },
+            wgpu::TextureUses::UNINITIALIZED,
         )
     };
 
@@ -721,6 +722,7 @@ fn import_plane(
                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             },
+            wgpu::TextureUses::UNINITIALIZED,
         )
     };
     let view = texture.create_view(&wgpu::TextureViewDescriptor {

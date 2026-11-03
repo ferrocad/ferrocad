@@ -165,7 +165,7 @@ Windows `.zip` for the base app, plus the Parametric Linux AppImage
 (`ferrocad-parametric-*`, with the OCCT closure under `lib/`); the Parametric
 Windows zip joins them from the next tag (the MSVC bridge fix is in
 [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)). The macOS `.dmg` is still blocked because
-`bite-gp-apple 1.24.402`
+`bite-gp-apple 1.25.202`
 (the GPUI Metal backend) uses `cocoa` without declaring it. See
 [`releasing.md`](releasing.md) §5. Each artifact bundles the pinned
 `python-build-standalone` runtime (the build job runs `cargo xtask python` before

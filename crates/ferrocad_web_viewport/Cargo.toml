@@ -31,7 +31,7 @@ ferrocad_graphics.workspace = true
 ferrocad_wgpu.workspace = true
 # WebGPU in the browser; `webgl` enables the GL/WebGL2 fallback, which is the
 # path that must work on Linux.
-wgpu = { version = "29", features = ["webgl"] }
+wgpu = { version = "30", features = ["webgl"] }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
     "AddEventListenerOptions",

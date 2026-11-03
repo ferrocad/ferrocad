@@ -131,11 +131,12 @@ impl PickPipelines {
         let attributes = wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Uint32, 4 => Float32x4
         ];
-        let vertex_buffers = [wgpu::VertexBufferLayout {
+        // wgpu 30 makes each vertex buffer slot optional; the pick slot is always present.
+        let vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<GpuVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &attributes,
-        }];
+        })];
         let make = |label: &str, topology: wgpu::PrimitiveTopology| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -309,7 +310,9 @@ pub fn read_texel(
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(|_| "device poll failed")?;
 
-    let view = slice.get_mapped_range();
+    let view = slice
+        .get_mapped_range()
+        .map_err(|_| "mapped range unavailable")?;
     let bytes = view[..bytes_per_texel as usize].to_vec();
     drop(view);
     buffer.unmap();

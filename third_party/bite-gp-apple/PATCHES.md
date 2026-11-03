@@ -1,10 +1,10 @@
-# Vendored `bite-gp-apple` 1.24.402 — temporary macOS/iOS build fix
+# Vendored `bite-gp-apple` 1.25.202 — temporary macOS/iOS build fix
 
 This directory is a verbatim copy of the crates.io source for
-`bite-gp-apple 1.24.402` (upstream `bite-gpui` branch `bite_v1.24.x`, commit
-`8b288f1a2a06ed463d56228823a2f28a911e8855`, per the crate's
-`[package.metadata.bite]`). `Cargo.toml.orig`, the license files and `README.md`
-are unchanged.
+`bite-gp-apple 1.25.202` (upstream `bite-gpui` branch `bite_v1.25.x`, commit
+`19271206c7e12504f1a0b3879a85c90df5d9b4c4`, per the crate's
+`[package.metadata.bite]`), except for the deletions below. `Cargo.toml.orig`,
+the license files and `README.md` are unchanged.
 
 It is wired in through the workspace root `Cargo.toml`:
 
@@ -15,22 +15,29 @@ bite-gp-apple = { path = "third_party/bite-gp-apple" }
 
 ## Why
 
-`bite-gp-apple 1.24.402` (and the cached `1.25.202`) use `cocoa` in
-`src/metal_renderer.rs` but never declare it, so the crate cannot compile for
-`cfg(any(target_os = "macos", target_os = "ios"))`:
+`bite-gp-apple` uses `cocoa` but never declares it, so the crate cannot compile
+for `cfg(any(target_os = "macos", target_os = "ios"))`:
 
-```rust
-use cocoa::{
-    base::{NO, YES},
-    foundation::{NSSize, NSUInteger},
-    quartzcore::AutoresizingMask,
-};
-```
+1. `src/metal_renderer.rs` — a five-line import block whose names are unused:
+
+   ```rust
+   use cocoa::{
+       base::{NO, YES},
+       foundation::{NSSize, NSUInteger},
+       quartzcore::AutoresizingMask,
+   };
+   ```
+
+2. `src/text_system.rs` — `use cocoa::appkit::CGFloat;`, which collides with the
+   `CGFloat` this file already imports from `core_graphics::base` in the next
+   `use` group (`E0252: the name CGFloat is defined multiple times`).
+
+Both appeared in 1.25.202; the first was already present in 1.24.402.
 
 ## Change
 
-Deleted that five-line `use cocoa::{...};` block in
-`src/metal_renderer.rs`. No dependency was added. Nothing else was changed.
+Deleted those two `use cocoa…` lines. No dependency was added. Nothing else was
+changed.
 
 ## Why not just declare `cocoa`
 
@@ -51,16 +58,15 @@ compile:
   (`src/metal_renderer.rs`, the `setAutoresizingMask` call).
 * `NSUInteger` is **already imported from `metal`** at the top of the same file.
   `metal::NSUInteger` is `u64`/`u32`; `cocoa::foundation::NSUInteger` is a
-  different alias, so bringing both into scope is `E0252`:
-  `the name NSUInteger is defined multiple times`. That error was reproduced
-  locally with `rustc --edition 2024 --emit=metadata`. The two remaining uses of
-  `NSUInteger` (the `NSRange { length: ... }` arguments) are satisfied by the
-  `metal` import.
+  different alias, so bringing both into scope is `E0252`.
 * `cocoa`'s `quartzcore` module is `#[cfg(target_os = "macos")]`, while this
   crate is gated on `any(target_os = "macos", target_os = "ios")`. Even after
   declaring `cocoa`, the `quartzcore` import would fail to build for iOS.
+* Likewise `CGFloat` in `text_system.rs` is already in scope from
+  `core_graphics::base`, so the `cocoa` import is redundant as well as
+  undeclared.
 
-Deleting the dead import is therefore smaller and fixes both Apple targets.
+Deleting the dead imports is therefore smaller and fixes both Apple targets.
 
 ## Verification
 
@@ -82,11 +88,11 @@ macOS SDK, `metal`, `CoreFoundation`, `CoreGraphics`, `CoreVideo` and
 `QuartzCore` frameworks, and a working linker.
 
 An audit of all `use <crate>::` roots under `src/` found no other undeclared
-Apple-target dependency in 1.24.402. (`dispatcher` is the crate's own
+Apple-target dependency in 1.25.202. (`dispatcher` is the crate's own
 `mod dispatcher`.)
 
 ## Removal
 
 Delete this directory and the `[patch.crates-io]` block once the upstream fork
-ships a release that removes the dead `cocoa` import (or otherwise compiles
+ships a release that removes the dead `cocoa` imports (or otherwise compiles
 cleanly on macOS and iOS). This patch is temporary and carries no version bump.

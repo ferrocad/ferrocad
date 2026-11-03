@@ -1,6 +1,6 @@
 {
   "git": {
-    "sha1": "8b288f1a2a06ed463d56228823a2f28a911e8855",
+    "sha1": "19271206c7e12504f1a0b3879a85c90df5d9b4c4",
     "dirty": true
   },
   "path_in_vcs": "crates/gpui_web"

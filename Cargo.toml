@@ -81,7 +81,7 @@ license = "LGPL-2.1-or-later"
 readme = "README.md"
 repository = "https://github.com/ferrocad/ferrocad"
 homepage = "https://github.com/ferrocad/ferrocad"
-rust-version = "1.85"
+rust-version = "1.87"
 
 [workspace.dependencies]
 include_dir = "0.7"
@@ -151,13 +151,14 @@ windows = "0.62.2"
 opt-level = 3
 lto = true
 
-# Temporary patch: bite-gp-apple 1.24.402/1.25.202 import `cocoa` without
-# declaring it. See third_party/bite-gp-apple/PATCHES.md.
+# Temporary patch: bite-gp-apple 1.25.202 imports `cocoa` without declaring it.
+# See third_party/bite-gp-apple/PATCHES.md.
 #
 # Temporary patches: bite-gp-web and bite-gp-wgpu do not compile for
-# `wasm32-unknown-unknown` (a nightly-only default feature, two wrong `cfg`s and
-# a `Send + Sync` bound the wasm wgpu handles cannot meet). Five lines, no
-# behaviour change on a native target. See third_party/bite-gp-web/PATCHES.md and
+# `wasm32-unknown-unknown` (a nightly-only default feature, Linux-only dma-buf
+# code compiled unconditionally, two wrong `cfg`s, a `Send + Sync` bound the wasm
+# wgpu handles cannot meet, and no browser `GpuRenderer`). No behaviour change on
+# a native target. See third_party/bite-gp-web/PATCHES.md and
 # third_party/bite-gp-wgpu/PATCHES.md; drop both when the fixes reach the family.
 #
 # `opencascade-sys` 0.3.0 does not compile with MSVC: OCCT's `Handle_T` is a

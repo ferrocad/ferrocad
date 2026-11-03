@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "gpui_interop"
-version = "0.1.3"
+version = "0.2.0"
 build = "build.rs"
 publish = ["crates-io"]
 autolib = false
@@ -141,13 +141,13 @@ version = "0.3"
 optional = true
 
 [dependencies.gpui]
-version = "1.24"
+version = "1.25"
 optional = true
 default-features = false
 package = "bite-gpui"
 
 [dependencies.wgpu]
-version = "29.0.4"
+version = "30.0.1"
 optional = true
 
 [build-dependencies.embed-resource]
@@ -157,7 +157,7 @@ version = "3.0"
 version = "0.38"
 
 [target.'cfg(target_os = "linux")'.dependencies.gpui_engine]
-version = "1.24"
+version = "1.25"
 package = "bite-gp-engine"
 
 [target.'cfg(target_os = "linux")'.dependencies.libc]
@@ -167,12 +167,12 @@ version = "0.2"
 version = "0.4.16"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies.gpui_wgpu]
-version = "1.24"
+version = "1.25"
 features = ["headless"]
 package = "bite-gp-wgpu"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies.naga]
-version = "29.0.4"
+version = "30.0.1"
 features = [
     "wgsl-in",
     "spv-out",
@@ -243,7 +243,7 @@ features = [
 ]
 
 [target.'cfg(target_os = "windows")'.dev-dependencies.gpui_windows]
-version = "1.24"
+version = "1.25"
 package = "bite-gp-windows"
 
 [lints.clippy]

@@ -18,7 +18,7 @@ system RAM and re-uploading it.
 OS-level handle (a `dma-buf` on Linux or a shared texture on Windows), and passes it to GPUI's
 `surface()` element. GPUI's renderer imports that handle and samples the texture directly on the GPU.
 
-This crate is **experimental**. It is built against the **`bite-gpui` 1.24 line** — the published
+This crate is **experimental**. It is built against the **`bite-gpui` 1.25 line** — the published
 `bite-gpui`, `bite-gp-engine`, `bite-gp-wgpu` and `bite-gp-windows` packages.
 
 ## Install
@@ -28,9 +28,9 @@ dependency. The published packages are aliased back to their standard crate name
 
 ```toml
 [dependencies]
-gpui_interop = { version = "0.1", features = ["gpui", "wgpu"] }
-gpui         = { package = "bite-gpui",       version = "1.24", default-features = false, features = ["platform"] }
-gpui_wgpu    = { package = "bite-gp-wgpu",    version = "1.24" }
+gpui_interop = { version = "0.2", features = ["gpui", "wgpu"] }
+gpui         = { package = "bite-gpui",       version = "1.25", default-features = false, features = ["platform"] }
+gpui_wgpu    = { package = "bite-gp-wgpu",    version = "1.25" }
 ```
 
 Drop `platform` for a producer that does not open a window. A producer that renders on `wgpu`

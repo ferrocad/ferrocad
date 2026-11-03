@@ -57,7 +57,7 @@ pub fn stage(
         stage_pe(binary, dest, prefix, runtime_dirs)
     } else if cfg!(target_os = "macos") {
         Err(
-            "the macOS closure is blocked on the pinned bite-gp-apple 1.24.402 \
+            "the macOS closure is blocked on the pinned bite-gp-apple 1.25.202 \
              (it uses `cocoa` without declaring it); see \
              docs/developer/architecture/edition-publishing.md. Build the Linux/Windows \
              editions meanwhile."

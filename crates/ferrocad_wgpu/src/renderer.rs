@@ -1163,7 +1163,9 @@ impl WgpuRenderer {
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|_| RenderError::Readback("device poll failed"))?;
 
-        let view = slice.get_mapped_range();
+        let view = slice
+            .get_mapped_range()
+            .map_err(|_| RenderError::Readback("mapped range unavailable"))?;
         // An aligned row is already the image: one memcpy instead of one per row.
         let rgba = if padded == unpadded {
             view.to_vec()

@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "bite-gp-wgpu"
-version = "1.24.402"
+version = "1.25.202"
 build = false
 autolib = false
 autobins = false
@@ -28,9 +28,9 @@ resolver = "2"
 
 [package.metadata.bite]
 source = "https://github.com/bite-gpui/bite-gpui.git"
-branch = "bite_v1.24.x"
-commit = "8b288f1a2a06ed463d56228823a2f28a911e8855"
-upstream = "1.24.4"
+branch = "bite_v1.25.x"
+commit = "19271206c7e12504f1a0b3879a85c90df5d9b4c4"
+upstream = "1.25.2"
 amendment = 2
 original = "gpui_wgpu"
 
@@ -66,7 +66,7 @@ version = "1.0.86"
 version = "1"
 
 [dependencies.collections]
-version = "1.24.402"
+version = "1.25.202"
 package = "bite-gp-collections"
 
 [dependencies.cosmic-text]
@@ -82,15 +82,15 @@ default-features = false
 package = "zed-font-kit"
 
 [dependencies.gpui_engine]
-version = "1.24.402"
+version = "1.25.202"
 package = "bite-gp-engine"
 
 [dependencies.gpui_platform]
-version = "1.24.402"
+version = "1.25.202"
 package = "bite-gp-platform"
 
 [dependencies.gpui_util]
-version = "1.24.402"
+version = "1.25.202"
 package = "bite-gp-gpui-util"
 
 [dependencies.image]
@@ -178,15 +178,10 @@ features = [
 ]
 default-features = false
 
-[dev-dependencies.naga]
-version = "29.0.4"
-features = ["wgsl-in"]
-
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wgpu]
-version = "29.0"
+version = "30.0.1"
 features = [
     "std",
-    "parking_lot",
     "metal",
     "gles",
     "vulkan",
@@ -196,7 +191,7 @@ features = [
 default-features = false
 
 [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies.wgpu]
-version = "29.0"
+version = "30.0.1"
 default-features = true
 
 [target.'cfg(target_family = "wasm")'.dependencies.web-sys]
@@ -204,7 +199,7 @@ version = "0.3"
 features = ["HtmlCanvasElement"]
 
 [target.'cfg(target_family = "wasm")'.dependencies.wgpu]
-version = "29.0"
+version = "30.0.1"
 features = ["webgl"]
 default-features = false
 

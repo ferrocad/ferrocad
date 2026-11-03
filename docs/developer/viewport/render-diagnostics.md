@@ -78,8 +78,8 @@ fallback; `docs/project/research/gpu-interop-assessment.md` §10 explains the ru
 
 This application has no swapchain in `ferrocad_wgpu`: frames go to an offscreen
 texture (image path) or the presenter's exportable texture (zero-copy path).
-wgpu 29 therefore never surfaces an acquisition error here; the window surface is
-gpui's. `trace::surface_status` maps wgpu 29's `CurrentSurfaceTexture` outcomes
+wgpu 30 therefore never surfaces an acquisition error here; the window surface is
+gpui's. `trace::surface_status` maps wgpu 30's `CurrentSurfaceTexture` outcomes
 (`Success`, `Suboptimal`, `Timeout`, `Occluded`, `Outdated`, `Lost`,
 `Validation`) for a host that does own a surface, and `OutOfMemory` is reported
 through the device error callback.

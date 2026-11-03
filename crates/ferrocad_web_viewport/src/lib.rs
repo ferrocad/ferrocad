@@ -36,6 +36,9 @@ pub struct WebViewport {
     /// The format a surface texture view is created with (sRGB, always).
     view_format: wgpu::TextureFormat,
     size: [u32; 2],
+    /// The queue that presents a drawn frame (wgpu 30 moved `present` off
+    /// `SurfaceTexture`, which no longer knows its surface).
+    queue: wgpu::Queue,
     renderer: WgpuRenderer,
     /// Shared with the listeners below, which orbit/dolly it as the pointer moves.
     camera: Rc<RefCell<Camera>>,
@@ -107,11 +110,13 @@ impl WebViewport {
                 alpha_mode: caps.alpha_modes[0],
                 view_formats,
                 desired_maximum_frame_latency: 2,
+                // SDR sRGB in the canvas, exactly what the old default selected.
+                color_space: wgpu::SurfaceColorSpace::Auto,
             },
         );
 
         let renderer = WgpuRenderer::with_sample_count_and_format(
-            GpuContext::new(device, queue),
+            GpuContext::new(device, queue.clone()),
             size,
             // MSAA on WebGL is the one path that stays untested; one sample draws
             // straight into the canvas view and always works.
@@ -127,6 +132,7 @@ impl WebViewport {
             surface,
             view_format,
             size,
+            queue,
             renderer,
             camera,
             _listeners: listeners,
@@ -161,7 +167,7 @@ impl WebViewport {
         });
         let camera = self.camera.borrow();
         if self.renderer.render(&view, &camera, packets).is_ok() {
-            frame.present();
+            self.queue.present(frame);
             true
         } else {
             false

@@ -27,7 +27,7 @@
 //! This module previously hand-rolled a ring and a "reuse after `RING_DEPTH`
 //! submissions" distance rule. A distance heuristic is not a synchronisation
 //! primitive: a frame can stay in the consumer's queue for more submissions than
-//! the ring is deep, and the race returns. `gpui_interop 0.1.3`'s
+//! the ring is deep, and the race returns. `gpui_interop 0.2.0`'s
 //! `WgpuSharedBufferRing` is the upstream fix (bite-gpui/gpui_interop#1), and this
 //! module now uses it directly. It guarantees:
 //!

@@ -11,7 +11,7 @@ this tree, and the checklist for turning the platform back on.
 not a missing feature or a missing manifest entry:
 
 ```rust
-// bite-gp-apple 1.24.402, src/metal_renderer.rs
+// bite-gp-apple 1.25.202, src/metal_renderer.rs
 use cocoa::{
     base::{NO, YES},
     foundation::{NSSize, NSUInteger},
@@ -39,8 +39,8 @@ with the evidence and the one-line-per-file fix.
 
 ### The temporary patch in this repository
 
-`third_party/bite-gp-apple/` is a verbatim copy of the 1.24.402 crate with that
-five-line import deleted, wired in from the workspace root:
+`third_party/bite-gp-apple/` is a verbatim copy of the 1.25.202 crate with
+those imports deleted, wired in from the workspace root:
 
 ```toml
 [patch.crates-io]
@@ -50,9 +50,12 @@ bite-gp-apple = { path = "third_party/bite-gp-apple" }
 `third_party/bite-gp-apple/PATCHES.md` has the full rationale, the verification
 performed here, and the removal condition. The patch adds no dependency and no
 lock package, and nothing changes on Linux or Windows (the crate is not selected
-there). The family stays on 1.24.402: 1.24.401 does not compile for
-`*-pc-windows-msvc`, and the caret ranges would otherwise float the transitive
-`bite-gp-*` crates to 1.25.x and split the wgpu device.
+there). The family stays on 1.25.202: its members declare caret requirements,
+so a plain `cargo update` floats some of them while `bite-gpui` stays put and
+splits the wgpu device between the window renderer and `ferrocad_wgpu`. The
+1.25 line also turned `multithreaded` on by default, which needs a nightly
+wasm-thread shim on the browser target — see
+[`third_party/bite-gp-web/PATCHES.md`](../../../third_party/bite-gp-web/PATCHES.md).
 
 Delete the directory and the `[patch]` block once upstream ships a release that
 compiles on macOS.

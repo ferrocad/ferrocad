@@ -36,7 +36,8 @@ pub trait ImportedTextureExt {
 /// `fragile-send-sync-non-atomic-wasm` feature enabled (wgpu builds its handle
 /// types `Send + Sync` under `any(native, all(that feature, not(atomics)))`), so
 /// the impl is opt-in there: enable this crate's `wasm-interop` feature **and**
-/// that wgpu feature together. Without both, the bound fails with 46 `E0277`s.
+/// that wgpu feature together. Without both, the bound fails with a wall of
+/// `E0277`s.
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-interop"))]
 impl ImportedTextureExt for wgpu::TextureView {
     fn to_imported_handle(&self) -> anyhow::Result<ImportedTextureHandle> {

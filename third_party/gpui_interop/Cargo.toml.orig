@@ -1,6 +1,6 @@
 [package]
 name = "gpui_interop"
-version = "0.1.3"
+version = "0.2.0"
 edition.workspace = true
 publish.workspace = true
 license = "Apache-2.0"
@@ -195,4 +195,4 @@ gpui_wgpu = { workspace = true, features = ["headless"] }
 # The cube example compiles its WGSL to SPIR-V at run time with `naga` -- the frontend and backend
 # `wgpu` itself uses -- so the demo needs no offline shader compiler (`glslc`, `glslangValidator`).
 # Dev-dependencies: only the example names a shader, and the shared `naga` picks the features up.
-naga = { version = "29.0.4", features = ["wgsl-in", "spv-out"] }
+naga = { version = "30.0.1", features = ["wgsl-in", "spv-out"] }

@@ -38,12 +38,13 @@ pub(crate) const SCENE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_att
 ];
 
 /// The scene vertex buffer layout (one interleaved [`GpuVertex`] buffer).
-pub(crate) fn scene_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 1] {
-    [wgpu::VertexBufferLayout {
+pub(crate) fn scene_vertex_layout() -> [Option<wgpu::VertexBufferLayout<'static>>; 1] {
+    // wgpu 30 makes each vertex buffer slot optional; a scene slot is always present.
+    [Some(wgpu::VertexBufferLayout {
         array_stride: size_of::<GpuVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &SCENE_ATTRIBUTES,
-    }]
+    })]
 }
 
 /// The render pipelines the scene renderer draws with: a scene and an overlay variant

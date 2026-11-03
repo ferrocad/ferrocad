@@ -35,8 +35,8 @@
       "ferrocad_part",
       "ferrocad_part_py",
       "ferrocad_py",
-      "ferrocad_types",
-      "opencascade-sys"
+      "ferrocad_text",
+      "ferrocad_types"
     ],
     "ferrocad_gpui": [
       "ferrocad_curves",
@@ -82,13 +82,13 @@
       "ferrocad_py",
       "ferrocad_stage",
       "ferrocad_stage_py",
+      "ferrocad_text",
       "ferrocad_theme",
       "ferrocad_types",
       "ferrocad_ui",
       "ferrocad_viewport",
       "ferrocad_wgpu",
-      "ferrocad_widgets",
-      "opencascade-sys"
+      "ferrocad_widgets"
     ],
     "ferrocad_py": [
       "ferrocad_core",

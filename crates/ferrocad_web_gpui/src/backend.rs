@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use ferrocad_shell_core::app::AppBackend;
 use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
+use ferrocad_shell_core::display::StageMesh;
 use ferrocad_shell_core::types::{
     Bootstrap, DocumentNode, EvalResult, ObjectNode, PropRow, SetResult,
 };
@@ -28,11 +29,13 @@ const FIT: &str = "App_Fit";
 /// The sample document's name.
 const DOCUMENT: &str = "Sample";
 
-/// One sample object: its label and its three dimensions.
+/// One sample object: its label, its three dimensions and where it sits.
 #[derive(Debug, Clone, Copy)]
 struct SampleObject {
     label: &'static str,
     size: [f64; 3],
+    /// The world-space position of the box's centre.
+    centre: [f64; 3],
 }
 
 /// The mutable half of the backend: the view state the commands toggle, the snap
@@ -83,6 +86,7 @@ impl SampleBackend {
                 SampleObject {
                     label: "Box",
                     size: [10.0, 10.0, 10.0],
+                    centre: [0.0, 0.0, 0.0],
                 },
             ),
             (
@@ -90,6 +94,8 @@ impl SampleBackend {
                 SampleObject {
                     label: "Box001",
                     size: [20.0, 12.0, 6.0],
+                    // Beside `Box`, so both are in frame and a pick can tell them apart.
+                    centre: [20.0, 0.0, 0.0],
                 },
             ),
         ]
@@ -135,6 +141,14 @@ impl AppBackend for SampleBackend {
                 })
                 .collect(),
         }])
+    }
+
+    fn stage_meshes(&self) -> Result<Vec<StageMesh>, String> {
+        Ok(Self::objects()
+            .iter()
+            .enumerate()
+            .map(|(index, (name, object))| box_mesh(index as u32 + 1, name, *object))
+            .collect())
     }
 
     fn properties(&self, object: &str) -> Result<Vec<PropRow>, String> {
@@ -213,7 +227,7 @@ impl AppBackend for SampleBackend {
             command.group = "View".to_string();
         }
         if let Some(fit) = commands.iter_mut().find(|command| command.id == FIT) {
-            fit.tooltip = "Frame the document (no viewport yet)".to_string();
+            fit.tooltip = "Frame the document".to_string();
         }
         Ok(commands)
     }
@@ -255,10 +269,10 @@ impl AppBackend for SampleBackend {
                 view: None,
             });
         }
-        self.state
-            .borrow_mut()
-            .values
-            .insert((object.to_string(), property.to_string()), value.to_string());
+        self.state.borrow_mut().values.insert(
+            (object.to_string(), property.to_string()),
+            value.to_string(),
+        );
         Ok(SetResult {
             ok: true,
             error: String::new(),
@@ -310,8 +324,11 @@ impl AppBackend for SampleBackend {
                     None,
                 )
             }
-            WORKPLANE => ("workplane: no viewport yet".to_string(), None),
-            FIT => ("fit: no viewport yet".to_string(), None),
+            WORKPLANE => (
+                "workplane: not wired in the browser build".to_string(),
+                None,
+            ),
+            FIT => ("fit: the sample is framed on load".to_string(), None),
             other => {
                 return Ok(CommandOutcome {
                     ok: false,
@@ -330,6 +347,95 @@ impl AppBackend for SampleBackend {
 
     fn refresh_providers(&mut self, _feature: &str) -> Result<CommandOutcome, String> {
         Ok(CommandOutcome::default())
+    }
+}
+
+/// One box as the display seam's mesh: eight shared corners, twelve triangles and the
+/// twelve edges the shaded-with-edges mode draws.
+///
+/// There is no kernel in this build, so the sample's boxes are tessellated here. The
+/// shape is the same one a `Part::Box` would produce: axis-aligned, world-space, with
+/// one `parts` entry per face and per edge so a pick can name the sub-element.
+fn box_mesh(entity: u32, name: &str, object: SampleObject) -> StageMesh {
+    let [hx, hy, hz] = [
+        (object.size[0] / 2.0) as f32,
+        (object.size[1] / 2.0) as f32,
+        (object.size[2] / 2.0) as f32,
+    ];
+    let [cx, cy, cz] = [
+        object.centre[0] as f32,
+        object.centre[1] as f32,
+        object.centre[2] as f32,
+    ];
+    // Corner index bits: bit 0 = +x, bit 1 = +y, bit 2 = +z.
+    let positions: Vec<[f32; 3]> = (0..8)
+        .map(|corner: u8| {
+            let x = if corner & 1 != 0 { hx } else { -hx };
+            let y = if corner & 2 != 0 { hy } else { -hy };
+            let z = if corner & 4 != 0 { hz } else { -hz };
+            [cx + x, cy + y, cz + z]
+        })
+        .collect();
+
+    // Two triangles per face, one `parts` entry per face. Winding is irrelevant: the
+    // renderer draws with culling off and shades flat (no normals).
+    let faces: [[u32; 4]; 6] = [
+        [4, 5, 6, 7], // +z
+        [1, 0, 3, 2], // -z
+        [0, 4, 7, 3], // -x
+        [5, 1, 2, 6], // +x
+        [7, 6, 2, 3], // +y
+        [0, 1, 5, 4], // -y
+    ];
+    let mut triangles = Vec::with_capacity(36);
+    let mut triangle_parts = Vec::with_capacity(12);
+    for (part, [a, b, c, d]) in faces.iter().enumerate() {
+        triangles.extend_from_slice(&[*a, *b, *c, *a, *c, *d]);
+        triangle_parts.extend_from_slice(&[part as u32, part as u32]);
+    }
+
+    // The twelve edges, as corner pairs, each its own part after the six faces.
+    let edges: Vec<u32> = [
+        (0, 1),
+        (1, 3),
+        (3, 2),
+        (2, 0),
+        (4, 5),
+        (5, 7),
+        (7, 6),
+        (6, 4),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+    ]
+    .iter()
+    .flat_map(|(a, b)| [*a, *b])
+    .collect();
+    let segment_parts: Vec<u32> = (0..12).map(|edge| edge + 6).collect();
+
+    let mut parts = Vec::with_capacity(18);
+    parts.extend((1..=6).map(|face| format!("Face{face}")));
+    parts.extend((1..=12).map(|edge| format!("Edge{edge}")));
+
+    StageMesh {
+        entity,
+        object: name.to_string(),
+        label: object.label.to_string(),
+        positions,
+        normals: Vec::new(),
+        triangles,
+        triangle_parts,
+        edges,
+        segment_parts,
+        vertices: Vec::new(),
+        vertex_parts: Vec::new(),
+        parts,
+        // The placement's base point: the minimum corner, as a box built from a corner
+        // reports it (the triad hugs it).
+        origin: Some([cx - hx, cy - hy, cz - hz]),
+        color: None,
+        display: None,
     }
 }
 

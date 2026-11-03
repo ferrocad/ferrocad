@@ -57,36 +57,58 @@
 //! the dma-buf ring does. This module keeps one surface for the same-device path and
 //! repaints its last imported handle when no new frame was drawn.
 //!
-//! This module is compiled only where gpui's wgpu renderer is available (not macOS
-//! or wasm). Everywhere else [`zero_copy_presenter`](crate::zero_copy_presenter)
-//! returns `None` and the viewport keeps its readback image path.
-
+//! This module is compiled only where gpui's wgpu renderer is available (not macOS).
+//! Natively the viewport has its own renderer as well, and a presenter that reports
+//! `Unsupported` leaves the image path in place. In a browser window the presenter is
+//! the *only* renderer: the element's own is a size-only placeholder, and the
+//! readback path cannot complete, so an unsupported presenter means an empty canvas
+//! (reported through `status_note`).
+//!
+//! The wasm shape is the same-device path with two differences: the colour format
+//! comes from the surface (`WgpuSurface::format`) and the target is single-sampled,
+//! because MSAA on a WebGL2 render target is not the tested path.
 use std::sync::Arc;
 
 use ferrocad_inventor::{Camera, Hit, RenderQueue, ViewSpec};
 use ferrocad_viewport::{Presenter, PresenterStatus};
 use ferrocad_wgpu::{GpuContext, WgpuRenderer as FerrocadRenderer, trace};
-use gpui::GpuCanvasContext;
 #[cfg(target_os = "linux")]
 use gpui::DmaBufHandle;
+use gpui::GpuCanvasContext;
+#[cfg(not(target_os = "linux"))]
+use gpui::{Corners, ImportedTextureHandle};
 #[cfg(target_os = "linux")]
 use gpui_interop::WgpuSharedBufferRing;
 #[cfg(not(target_os = "linux"))]
-use gpui::{Corners, ImportedTextureHandle};
-use gpui_interop::attach;
-#[cfg(not(target_os = "linux"))]
 use gpui_interop::WgpuSurface;
-use gpui_wgpu::wgpu;
+use gpui_interop::attach;
 #[cfg(not(target_os = "linux"))]
 use gpui_wgpu::ImportedTextureExt as _;
 use gpui_wgpu::WgpuRenderer as WindowRenderer;
+use gpui_wgpu::wgpu;
 
 /// The viewport target's sRGB format, matching `ferrocad_wgpu`'s `TARGET_FORMAT`
 /// and the imported-texture contract.
+///
+/// The same-device path (Windows, FreeBSD and the web) takes the format from the
+/// surface it allocates instead, so the two cannot disagree.
+#[cfg(target_os = "linux")]
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// MSAA count for the scene target. Matches the image path's 4× default.
+///
+/// WebGL2 render targets are single-sampled here: MSAA is the untested path in the
+/// browser, and one sample always works.
+#[cfg(not(target_family = "wasm"))]
 const SAMPLES: u32 = 4;
+#[cfg(target_family = "wasm")]
+const SAMPLES: u32 = 1;
+
+/// What happens when the presenter cannot present, for the log line.
+#[cfg(target_family = "wasm")]
+const FALLBACK: &str = "the viewport stays blank";
+#[cfg(not(target_family = "wasm"))]
+const FALLBACK: &str = "using the image path";
 
 /// Build the host presenter. Installing it is always safe: if the window has no
 /// compatible device, it reports [`PresenterStatus::Unsupported`] and the viewport
@@ -179,12 +201,7 @@ impl GpuiInteropPresenter {
                 return;
             };
             match ring.resize(&device, self.size[0], self.size[1]) {
-                Ok(()) => trace::presenter_ring(
-                    "dma-buf + sync_file",
-                    ring.len(),
-                    self.size,
-                    true,
-                ),
+                Ok(()) => trace::presenter_ring("dma-buf + sync_file", ring.len(), self.size, true),
                 Err(error) => {
                     eprintln!("ferrocad: dma-buf ring resize failed: {error:#}");
                     self.note = Some(format!("dma-buf ring resize: {error:#}"));
@@ -284,11 +301,11 @@ impl Presenter for GpuiInteropPresenter {
         };
 
         let size = self.size;
-        let renderer = FerrocadRenderer::with_sample_count(
-            GpuContext::new(device.as_ref().clone(), queue.as_ref().clone()),
-            size,
-            SAMPLES,
-        );
+
+        // Allocate the presentation target first: the same-device path takes the
+        // renderer's colour format from it, so the two cannot disagree (WebGPU
+        // canvases forbid sRGB surface formats, and a renderer built for the wrong
+        // one fails validation instead of drawing).
 
         #[cfg(target_os = "linux")]
         {
@@ -298,19 +315,11 @@ impl Presenter for GpuiInteropPresenter {
                         "ferrocad: viewport presenting through dma-buf ring ({} slots)",
                         ring.len()
                     );
-                    trace::presenter_ring(
-                        "dma-buf + sync_file",
-                        ring.len(),
-                        size,
-                        true,
-                    );
+                    trace::presenter_ring("dma-buf + sync_file", ring.len(), size, true);
                     self.ring = Some(ring);
                 }
                 Err(error) => {
-                    eprintln!(
-                        "ferrocad: dma-buf viewport unavailable ({error:#}); \
-                         using the image path"
-                    );
+                    eprintln!("ferrocad: dma-buf viewport unavailable ({error:#}); {FALLBACK}");
                     self.note = Some(format!("dma-buf ring: {error:#}"));
                     self.status = PresenterStatus::Unsupported;
                     trace::presenter_disabled("dma-buf ring unavailable");
@@ -330,7 +339,7 @@ impl Presenter for GpuiInteropPresenter {
                 Err(error) => {
                     eprintln!(
                         "ferrocad: same-device viewport unavailable ({error:#}); \
-                         using the image path"
+                         {FALLBACK}"
                     );
                     self.note = Some(format!("same-device surface: {error:#}"));
                     self.status = PresenterStatus::Unsupported;
@@ -339,6 +348,23 @@ impl Presenter for GpuiInteropPresenter {
                 }
             }
         }
+
+        // The renderer draws into the target above, so it is built for the same
+        // colour format and the same device.
+        #[cfg(target_os = "linux")]
+        let color_format = FORMAT;
+        #[cfg(not(target_os = "linux"))]
+        let color_format = self
+            .surface
+            .as_ref()
+            .map(WgpuSurface::format)
+            .unwrap_or(WgpuSurface::DEFAULT_FORMAT);
+        let renderer = FerrocadRenderer::with_sample_count_and_format(
+            GpuContext::new(device.as_ref().clone(), queue.as_ref().clone()),
+            size,
+            SAMPLES,
+            color_format,
+        );
 
         self.device = Some(device);
         self.queue = Some(queue);
@@ -492,16 +518,38 @@ impl Presenter for GpuiInteropPresenter {
     }
 
     fn pick_at(&mut self, queue: &RenderQueue, camera: &Camera, device: [i32; 2]) -> Option<Hit> {
-        if self.status != PresenterStatus::Ready {
-            return None;
+        // The G-buffer pick reads a texel back with a blocking `poll`, which a browser
+        // cannot complete. `supports_pick` reports that, and the viewport falls back to
+        // its CPU ray cast; this guard keeps a caller that ignores it from hanging.
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = (queue, camera, device);
+            None
         }
-        // The renderer already lives on the window's device, so this is the same
-        // G-buffer pass the image path uses, just without a second device.
-        self.renderer.as_mut()?.pick_at(queue, camera, device)
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if self.status != PresenterStatus::Ready {
+                return None;
+            }
+            // The renderer already lives on the window's device, so this is the same
+            // G-buffer pass the image path uses, just without a second device.
+            self.renderer.as_mut()?.pick_at(queue, camera, device)
+        }
     }
 
     fn supports_pick(&self) -> bool {
-        self.status == PresenterStatus::Ready && self.renderer.is_some()
+        // A browser pick has no synchronous readback: the pick targets live on the GPU
+        // and `map_async` only completes on a later event-loop turn. Reporting `false`
+        // here is what makes the viewport use its CPU ray cast instead, which is pure
+        // math over the same queue and camera.
+        #[cfg(target_family = "wasm")]
+        {
+            false
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.status == PresenterStatus::Ready && self.renderer.is_some()
+        }
     }
 }
 

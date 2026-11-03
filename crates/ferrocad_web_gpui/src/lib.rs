@@ -4,9 +4,14 @@
 //! [`ferrocad_shell_core`](https://crates.io/crates/ferrocad_shell_core) window —
 //! leading bar, viewport header, status line, model inspector, property editor and
 //! console — and supplies a Rust [`AppBackend`](ferrocad_shell_core::AppBackend)
-//! instead of CPython. There is no interpreter, no OCCT kernel and no 3D scene yet:
-//! the canvas shows the shell's placeholder, and the document is a small in-memory
-//! sample. The live 3D viewport is the next milestone (M3).
+//! instead of CPython. There is no interpreter and no OCCT kernel: the document is a
+//! small in-memory sample, and the 3D viewport draws a hand-built stage for it.
+//!
+//! The viewport is the shell's real `InventorViewport` element; its renderer is the
+//! zero-copy presenter, which negotiates with the window's own wgpu device on the
+//! first paint and composites the frame with `paint_texture`. There is no readback
+//! image path on the web (it needs a blocking `poll`), so a presenter that cannot
+//! negotiate leaves the canvas blank and reports why.
 //!
 //! GPUI's web platform starts with an empty font database and panics when it cannot
 //! resolve one, so the shell's bundled DejaVu Sans is registered before the window
@@ -49,6 +54,9 @@ pub fn main() {
 
         let window = cx.open_window(window_options(), move |window, cx| {
             let shell = cx.new(|cx| ferrocad_shell_core::Shell::from_model(model, cx));
+            // The viewport: the element itself is the shell's, and on the web its
+            // renderer is the presenter's (see `Shell::enable_viewport`).
+            shell.update(cx, |shell, cx| shell.enable_viewport(cx));
             // The console lives in the side panel, so the main window focuses its
             // root: `Esc` and the command shortcuts bubble from there.
             let root = shell.read(cx).root_focus_handle();

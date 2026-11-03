@@ -23,8 +23,8 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, RingSweep, ShapeItem, SnapKind, Stage, ToolStatus, TRANSFORM_ID,
-    TransformGizmo, TransformSession, TransformTape, WorkplaneLive,
+    Manipulator, RingSweep, ShapeItem, SnapKind, Stage, TRANSFORM_ID, ToolStatus, TransformGizmo,
+    TransformSession, TransformTape, WorkplaneLive,
 };
 use ferrocad_types::{Matrix4, Rotation, Vector3};
 use ferrocad_ui::Form;
@@ -33,7 +33,9 @@ use ferrocad_viewport::{
     HoverReport, InventorViewport, PickScope, PreviewPhase, SelectionAnchor, SelectionEvent,
     TransformPreview, ViewportEvent,
 };
-use ferrocad_wgpu::{AdapterChoice, AdapterSummary, WgpuRenderer};
+use ferrocad_wgpu::AdapterSummary;
+#[cfg(not(target_family = "wasm"))]
+use ferrocad_wgpu::{AdapterChoice, WgpuRenderer};
 use ferrocad_widgets::accordion::{AccordionSection, AccordionState, accordion};
 use ferrocad_widgets::color;
 use ferrocad_widgets::form;
@@ -47,14 +49,15 @@ use ferrocad_widgets::{ChangeEvent, RejectedChar, SubmitEvent, TextAreaState, Te
 use crate::app;
 use crate::commands::{self, CommandInfo};
 use crate::contributions::Contributions;
+use crate::dev_tools::DevTools;
 use crate::dialog::{self, DialogSpec, Kind, ValueState};
 use crate::display::{DisplaySync, StageMesh};
 use crate::forms::{FormDialog, FormEvent, FormResult};
 use crate::manipulators;
-use crate::types::{AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
+use crate::runtime::render_view::ShellView;
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
-use crate::dev_tools::DevTools;
+use crate::types::{AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
 pub mod bridge;
@@ -299,9 +302,11 @@ pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
     /// The console transcript plus the live input line (S5's text area).
     console: Entity<TextAreaState>,
-    /// The 3D viewport, once [`Shell::enable_viewport`] has created a GPU renderer.
-    /// `None` headlessly (no GPU), where the pane shows a placeholder.
-    viewport: Option<Entity<InventorViewport<WgpuRenderer>>>,
+    /// The 3D viewport, once [`Shell::enable_viewport`] has created it.
+    /// `None` headlessly (no GPU), where the pane shows a placeholder. The element is
+    /// generic over its renderer: the readback renderer natively, a size-only view on
+    /// the web (the presenter owns the device).
+    viewport: Option<Entity<InventorViewport<ShellView>>>,
     /// One uncontrolled field per editable property, keyed by `object.property`.
     prop_inputs: HashMap<String, PropInput>,
     /// The entity → document-object map, rebuilt from the app script's display meshes.
@@ -677,7 +682,9 @@ impl Shell {
     /// `--check-init` path and the headless tests use this form: it proves the
     /// engine loads without creating a GPUI application (so it needs no display
     /// server and no GPU).
-    pub fn boot_with(backend: &mut dyn crate::app::AppBackend) -> Result<Arc<Mutex<ShellModel>>, String> {
+    pub fn boot_with(
+        backend: &mut dyn crate::app::AppBackend,
+    ) -> Result<Arc<Mutex<ShellModel>>, String> {
         let mut boot: Bootstrap = backend.bootstrap()?;
         backend.open_startup_document(&mut boot)?;
         let tree = backend.model_tree().unwrap_or_default();
@@ -907,9 +914,19 @@ impl Shell {
     /// Zero-copy presentation builds a separate renderer on the window's adapter;
     /// this reports the image-path renderer's adapter (see the panel's note).
     pub(crate) fn in_use_adapter(&self, cx: &App) -> Option<AdapterSummary> {
-        self.viewport
-            .as_ref()
-            .map(|viewport| viewport.read(cx).view().adapter_info())
+        #[cfg(target_family = "wasm")]
+        {
+            // The browser has no adapter list and no image-path renderer to ask: the
+            // presenter owns the window's device, and the view is a placeholder.
+            let _ = cx;
+            None
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.viewport
+                .as_ref()
+                .map(|viewport| viewport.read(cx).view().adapter_info())
+        }
     }
 
     /// Finish the active tool session from the active-action surface's **Finish**
@@ -1138,7 +1155,10 @@ impl Shell {
             // with it. (A dirty move was rolled back above; a pivot was dropped first.)
             if !cancel_dialog
                 && matches!(self.loadout.slot(), Slot::Move | Slot::Inspect)
-                && !self.session.as_ref().is_some_and(TransformSession::is_dirty)
+                && !self
+                    .session
+                    .as_ref()
+                    .is_some_and(TransformSession::is_dirty)
                 && !self.model.lock().unwrap().selection.is_empty()
             {
                 self.clear_selection(cx);
@@ -1159,7 +1179,10 @@ impl Shell {
         if event.keystroke.key == "enter"
             && !editing
             && !self.modal_open()
-            && self.session.as_ref().is_some_and(|session| session.is_dirty())
+            && self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.is_dirty())
         {
             self.commit_session(cx);
             return true;
@@ -1273,8 +1296,12 @@ else:
     /// The persisted adapter choice, falling back to [`AdapterChoice::Auto`] with a
     /// console line when the stored value is malformed.
     ///
+    /// A browser window has no adapter list to choose from (the presenter takes the
+    /// window's own device), so this is native-only.
+    ///
     /// The setting is read across the Python bridge (file-backed preferences); a
     /// parse failure is a result the user can see and fix, not a fatal error.
+    #[cfg(not(target_family = "wasm"))]
     fn stored_gpu_choice(&mut self, cx: &mut Context<Self>) -> AdapterChoice {
         let value = match app::gpu_adapter(cx) {
             Ok(value) => value,
@@ -1300,6 +1327,11 @@ else:
     /// tests stay GPU-free and render the placeholder. If no adapter is available the
     /// pane keeps the placeholder too.
     ///
+    /// In a browser window there is no adapter to ask before a paint, so the element is
+    /// built with a size-only view and the presenter creates the renderer on the
+    /// window's own device during the first paint; the element still exists even if
+    /// that negotiation later fails, so the pane shows the canvas with its header.
+    ///
     /// The adapter comes from the persisted setting (`Adapters` panel); a malformed
     /// value falls back to **Auto** with a console line. The window compositor keeps
     /// its own adapter, so a forced choice only reaches the image path.
@@ -1311,16 +1343,25 @@ else:
         // A bootstrap size only: `InventorViewport` resizes the render target and the
         // camera to its element's physical size on the first frame (see `sync_size`).
         const SIZE: [u32; 2] = [640, 480];
-        let choice = self.stored_gpu_choice(cx);
-        let renderer = match WgpuRenderer::new_with_choice(SIZE, &choice) {
-            Ok(renderer) => renderer,
-            Err(error) => {
-                // Auto keeps the old silent "no GPU" path; an explicit choice that
-                // cannot be satisfied is worth reporting.
-                if choice != AdapterChoice::Auto {
-                    self.console_line(format!("viewport GPU: {error}"), cx);
+        // The browser has no adapter to create before a paint (`block_on` does not
+        // return on wasm), so the element starts with a size-only view and the real
+        // renderer is created by the zero-copy presenter on the first paint, from the
+        // window's own device. Natively the element owns its renderer, as always.
+        #[cfg(target_family = "wasm")]
+        let renderer = crate::runtime::render_view::DeferredView::new(SIZE);
+        #[cfg(not(target_family = "wasm"))]
+        let renderer = {
+            let choice = self.stored_gpu_choice(cx);
+            match WgpuRenderer::new_with_choice(SIZE, &choice) {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    // Auto keeps the old silent "no GPU" path; an explicit choice that
+                    // cannot be satisfied is worth reporting.
+                    if choice != AdapterChoice::Auto {
+                        self.console_line(format!("viewport GPU: {error}"), cx);
+                    }
+                    return;
                 }
-                return;
             }
         };
         let camera = scene::sample_camera(Viewport::new(SIZE, 1.0));
@@ -1517,7 +1558,6 @@ else:
     }
 }
 
-
 /// The copyable technical report behind the software-rendering notice.
 ///
 /// Plain text on purpose: the user pastes it into a bug report or a chat. It names
@@ -1597,12 +1637,10 @@ fn gpu_notice_banner(note: String, cx: &mut Context<Shell>) -> AnyElement {
                         .child("Dismiss"),
                 ),
         )
-        .child(
-            div().text_color(rgb(MUTED)).child(
-                "Hardware acceleration is unavailable; frames are read back and \
+        .child(div().text_color(rgb(MUTED)).child(
+            "Hardware acceleration is unavailable; frames are read back and \
                  composited on the CPU.",
-            ),
-        )
+        ))
         .child(
             div()
                 .id("gpu-notice-copy")
@@ -1736,15 +1774,21 @@ impl Render for Shell {
                 this.last_pointer = Some(event.position);
                 this.hover_radial(event.position, cx);
             }))
-            .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                if this.active_tool.is_none() && this.dialog.is_none() {
-                    this.last_pointer = Some(event.position);
-                    this.open_radial(event.position, cx);
-                }
-            }))
-            .on_mouse_up(MouseButton::Right, cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                this.release_radial(event.position, cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    if this.active_tool.is_none() && this.dialog.is_none() {
+                        this.last_pointer = Some(event.position);
+                        this.open_radial(event.position, cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.release_radial(event.position, cx);
+                }),
+            )
             .child(match &self.viewport {
                 Some(viewport) => viewport.clone().into_any_element(),
                 None => div()
@@ -1926,14 +1970,12 @@ impl Render for Shell {
         // the in-context finish pair floats beside the gizmo while a move is pending.
         // A modal or the object wheel hides both rather than stacking; they come back
         // when that transient layer closes.
-        let body = if self.move_hud.is_some()
-            && !self.modal_open()
-            && !self.wheel.read(cx).is_open()
-        {
-            body.child(move_finish_overlay(self, window, cx))
-        } else {
-            body
-        };
+        let body =
+            if self.move_hud.is_some() && !self.modal_open() && !self.wheel.read(cx).is_open() {
+                body.child(move_finish_overlay(self, window, cx))
+            } else {
+                body
+            };
         // A row overlay (the colour palette, the slider or an enum dropdown) is
         // anchored at its click and can belong to the canvas, the settings card or a
         // dialog, so it is a root child rather than part of a pane. Its priority
@@ -1951,13 +1993,8 @@ impl Render for Shell {
         // The app menu lives in the window title bar, not the viewport header: it is
         // app-level chrome, and the title bar is the one place a native-looking app
         // menu belongs. The Dev Tools window passes no leading element.
-        let leading = crate::chrome::app_menu(
-            self.popover_open("app"),
-            &model,
-            dev_tools_open,
-            cx,
-        )
-        .into_any_element();
+        let leading = crate::chrome::app_menu(self.popover_open("app"), &model, dev_tools_open, cx)
+            .into_any_element();
         window_frame_with_leading(window, model.title.clone(), Some(leading), body)
     }
 }

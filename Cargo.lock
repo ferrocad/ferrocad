@@ -2615,6 +2615,7 @@ dependencies = [
 name = "ferrocad_web_gpui"
 version = "0.1.5"
 dependencies = [
+ "bite-gp-wgpu",
  "bite-gpui",
  "ferrocad_shell_core",
  "log",

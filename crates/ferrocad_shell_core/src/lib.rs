@@ -46,11 +46,7 @@ pub mod workbench;
 // library surface: `ferrocad_shell_core::chrome` and `ferrocad_shell_core::ui::chrome`
 // name the same module.
 pub use model::{display, selection, view};
-#[cfg(all(
-    feature = "gpu-interop",
-    not(target_os = "macos"),
-    not(target_family = "wasm")
-))]
+#[cfg(all(feature = "gpu-interop", not(target_os = "macos")))]
 pub use runtime::interop;
 pub use ui::{chrome, dev_tools, dialog, forms, shortcuts};
 pub use workbench::{commands, contributions, manipulators};
@@ -65,7 +61,7 @@ pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
 pub use shortcuts::Accelerator;
 pub use types::{
-    AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
     GridProvider, GridSummary, ObjectNode, OpenedDocument, PropRow, ProviderFeature, ProviderSkin,
     SelectionRequest, SetResult, WorkbenchError, WorkbenchReport,
 };
@@ -74,24 +70,17 @@ pub use view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 /// A zero-copy viewport presenter for this build and platform, if one is available.
 ///
 /// Returns `None` when the `gpu-interop` feature is off, or on a platform whose
-/// window renderer cannot share its device (macOS, wasm). The viewport then keeps
-/// the readback `RenderImage` path. Even when a presenter is returned it may report
-/// itself unsupported at paint time (a headless window or a non-wgpu renderer), in
-/// which case the viewport falls back as well.
+/// window renderer cannot share its device (macOS). The viewport then keeps the
+/// readback `RenderImage` path — except on the web, where the readback path cannot
+/// complete and the presenter is the only way to show a scene. Even when a
+/// presenter is returned it may report itself unsupported at paint time (a headless
+/// window or a non-wgpu renderer), in which case the viewport falls back as well.
 pub fn zero_copy_presenter() -> Option<Box<dyn ferrocad_viewport::Presenter>> {
-    #[cfg(all(
-        feature = "gpu-interop",
-        not(target_os = "macos"),
-        not(target_family = "wasm")
-    ))]
+    #[cfg(all(feature = "gpu-interop", not(target_os = "macos")))]
     {
         Some(interop::presenter())
     }
-    #[cfg(not(all(
-        feature = "gpu-interop",
-        not(target_os = "macos"),
-        not(target_family = "wasm")
-    )))]
+    #[cfg(not(all(feature = "gpu-interop", not(target_os = "macos"))))]
     {
         None
     }

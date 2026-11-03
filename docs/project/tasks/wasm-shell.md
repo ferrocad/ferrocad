@@ -1,6 +1,6 @@
 # The wasm shell: one GPUI UI crate, two backends
 
-Status: **task (2026-11-03). M0–M2 done (2026-11-03); M3–M5 planned.**
+Status: **task (2026-11-03). M0–M3 done (2026-11-03); M4–M5 planned.**
 Companions: [`../research/web-wasm-host.md`](../research/web-wasm-host.md) (the
 probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md)
@@ -249,14 +249,21 @@ to make the shell real without any kernel:
   an override and the pane re-reads it.
 - `commands`: the five header ids plus `Dev_ToggleTools` and a dock `App_Fit`.
   `Grid`/`Axes`/`Gizmo`/`Snap` report `checked` from the stored state and return a
-  `ViewRequest`; `Fit`/`WP` report that there is no viewport yet.
+  `ViewRequest`; `Fit` reports that the sample is framed on load and `WP` that no
+  workplane command is wired yet.
 - `set_view_state`: stores the shell's state so the next command list agrees with
   the toggles.
 - `evaluate`: reports that the browser build has no interpreter (the console is
   still a real transcript, and `hello` names the Rust backend).
+- `stage_meshes` (**M3**): the two boxes as hand-tessellated `StageMesh`es — eight
+  shared corners, twelve triangles and twelve edges each, with one `parts` entry per
+  face and edge. That is a real document stage: `frame_stage` frames it on boot, a
+  viewport click picks it, the entity → object map names it in the tree, and the
+  gizmo arms from the selection. The boxes are tessellated in Rust because there is
+  no kernel in this build; `Part::Box` would produce the same shape.
 
-M4 replaces the sample with `ferrocad_core::Document` + `ferrocad_part` +
-`OcctBackend`, tessellated through the stage path.
+M4 replaces the hand-built meshes with `ferrocad_core::Document` + `ferrocad_part` +
+`OcctBackend`, tessellated through the same stage path.
 
 ## 6. Blockers to clear (from the research note)
 
@@ -265,16 +272,17 @@ M4 replaces the sample with `ferrocad_core::Document` + `ferrocad_part` +
 | 1 | pyo3 | The crate boundary; `ferrocad_web_gpui` cannot name a Python crate. | **M0 done** |
 | 2 | `Instant::now()` panics on wasm | `web-time::Instant` in `ferrocad_viewport` (`inventor_view.rs`, `navicube.rs`), `ferrocad_widgets/wheel.rs`, `ferrocad_wgpu/trace.rs`. | **M1 done** (a runtime panic, not a compile one) |
 | 3 | `std::env::args()` panics | `configure_trace` is native-only; the wasm entry does not call it. | **M1 done** (no wasm entry calls it) |
-| 4 | `block_on` adapter/device creation hangs | Never create a renderer/adapter on wasm; the presenter supplies the device. | M2 avoids it (no `enable_viewport`); M3 |
-| 5 | Shell creates its own `WgpuRenderer` before paint | `DeferredView` on wasm; the real renderer is created in `Presenter::prepare`. | M3 |
-| 6 | Presenter cfg excludes wasm | Allow `cfg(all(feature = "gpu-interop", not(target_os = "macos")))`; its same-device branch is the probe's path. | M3 |
-| 7 | Presenter format/MSAA | Use `surface.format()` and `SAMPLES = 1` on wasm. | M3 |
+| 4 | `block_on` adapter/device creation hangs | Never create a renderer/adapter on wasm; the presenter supplies the device. | **M3 done** (`enable_viewport` skips `new_with_choice`) |
+| 5 | Shell creates its own `WgpuRenderer` before paint | `DeferredView` on wasm; the real renderer is created in `Presenter::prepare`. | **M3 done** (`runtime/render_view.rs`, `ShellView`) |
+| 6 | Presenter cfg excludes wasm | Allow `cfg(all(feature = "gpu-interop", not(target_os = "macos")))`; its same-device branch is the probe's path. | **M3 done** |
+| 7 | Presenter format/MSAA | Use `surface.format()` and `SAMPLES = 1` on wasm. | **M3 done** |
 | 8 | One window only | Render tree/properties/console **in the main window** behind a `panels_open` flag; do not use `Floating`/`Dialog`. | **M2 done** (`panels_sidebar`) |
 | 9 | Adapter enumeration | Empty on wasm (the Dev Tools GPU panel is read-only). | **M2 done** (`open_dev_tools` is native-only) |
 | 10 | Fonts absent → `resolve_font` panic | Embed a UI font and call `add_fonts` before opening the window. | **M2 done** (DejaVu Sans; its family is in GPUI's fallback stack, so no per-element family is needed) |
 | 11 | WebGPU-first entry | `application_with_web_backend(WebBackendPreference::WebGl)` + `gpui::web_init()`. | **M2 done** |
 | 12 | `process::exit(1)` on boot error | Log and return; the page stays usable. | **M2 done** |
-| 13 | Readback image path cannot work | The presenter is mandatory; an `Unsupported` presenter shows a diagnostic, not the image path. | M3 |
+| 13 | Readback image path cannot work | The presenter is mandatory; an `Unsupported` presenter shows a diagnostic, not the image path. | **M3 done** (the presenter is the only renderer; `DeferredView` draws nothing) |
+| 14 | G-buffer picking needs a synchronous readback | `pick::read_texel` uses `map_async` + `poll(wait_indefinitely)`, which cannot complete in a browser. The presenter reports `supports_pick() == false` on wasm, so the viewport uses its CPU ray cast — pure math over the same queue and camera. | **M3 done** (clicking a box selects it) |
 
 The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research/web-wasm-host.md).
 
@@ -285,12 +293,12 @@ The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research
 | **M0** | **Crate split, no behaviour change** — **done 2026-11-03** | Create `ferrocad_shell_api` and `ferrocad_shell_core`; move the UI; rename `ferrocad_gpui` to `ferrocad_shell_gpui`; move the Python backend behind `AppBackend`; move the per-frame statics into the pure crates; update `ferrocad`/`ferrocad_parametric`/`ferrocad_toy`/`xtask`/docs. | 250 core + 52 api + 6 shell_gpui tests pass (the old 308); the native app boots and `--check-init` prints `ferrocad: init OK`; `cargo tree -p ferrocad_shell_core -e normal` has no pyo3. |
 | **M1** | **Compile for wasm (no window)** — **done 2026-11-03** | `web-time` in the three crates that read a clock; `interop` stays cfg'd off wasm and `headless` stays native; the browser host depends on the core (plus gpui); CI check. | `cargo check -p ferrocad_web_gpui --target wasm32-unknown-unknown --locked` passes (CI `wasm` job); the result links no OCCT and no CPython. |
 | **M2** | **A shell window in Chrome** — **done 2026-11-03** | Bundled DejaVu Sans + `fonts::install`; WebGL entry (`web_init`, no `process::exit`); `panels_open` in-window sidebar (Model/Properties/Console stacked); `SampleBackend` (two boxes, editable rows, header commands); placeholder viewport. | Headless Chrome shows the leading bar, viewport header, status line, tree, properties and console, with no panic. The console prints `FerroCAD browser shell · Rust backend (no CPython)`; clicking `Box` fills the property pane and the status line; `Grid` toggles on (dot, status and console agree). |
-| **M3** | **Live 3D in the shell** | `DeferredView`; presenter on wasm (format/MSAA); the sample scene through `InventorViewport`; orbit/zoom/pick. | The existing probe baseline still holds (40 triangles, `selected=Gl`, 22 027 / 26 127 / 0) with the shell around it. |
+| **M3** | **Live 3D in the shell** — **done 2026-11-03** | `DeferredView` + `ShellView`; presenter allowed on wasm (`surface.format()`, `SAMPLES = 1`); `enable_viewport` on wasm; `SampleBackend::stage_meshes` (hand-tessellated boxes); CPU picking instead of the G-buffer. | Headless Chrome shows both boxes through `InventorViewport` with the shell around them; `?drag=1` orbits (75 434 px differ), `?wheel=1` zooms (42 132 px), and a click on a box selects it — tree row, properties, status line and gizmo. 308 native tests still pass. |
 | **M4** | **Real Rust document** | `WasmAppBackend` over `ferrocad_core::Document` + `ferrocad_part` + `OcctBackend`; tree/properties/stage from the document. | A `Part::Box` + `Part::Fillet` document renders in the browser, the tree lists it, the properties show its rows. |
 | **M5** | **Editing** | `set_property`, `run_command`, toggles, recompute, stage refresh; visibility. | Changing a property in the browser recomputes the document and the viewport updates. |
 
-M0–M2 are done: the boundary, the wasm build and a real shell in Chrome. M3 is
-the regression-proof 3D step; M4/M5 make the backend a real document.
+M0–M3 are done: the boundary, the wasm build, a real shell in Chrome and the live
+3D viewport in it. M4/M5 make the backend a real document.
 
 ## 8. Non-goals
 
@@ -308,9 +316,20 @@ the regression-proof 3D step; M4/M5 make the backend a real document.
 
 ## 9. Risks and open questions
 
-- **`InventorViewport` + `Presenter` on wasm is unproven.** The probe draws a raw
-  `gpu_canvas`; the viewport adds navicube text, overlays, tape and picking. M3 is
-  the spike; keep the probe's assertions.
+- **`InventorViewport` + `Presenter` on wasm is proven (M3).** The element draws the
+  sample stage through the presenter's same-device target, with the navicube, the
+  axis cross and the overlay labels. Two things observed:
+  - **GPU picking is unusable in the browser.** `pick_at` reads a texel back with
+    `map_async` + `poll(wait_indefinitely)`; the poll is a no-op on the web, so the
+    read fails and the presenter would report "empty space" for every click. The
+    presenter therefore claims `supports_pick() == false` on wasm and the viewport
+    uses its CPU ray cast. This is a browser fact, not a presenter defect.
+  - **Two validation warnings at startup.** For the first frames the window surface
+    is still being sized by the DOM's resize observer, so a clip rect (the 148 px
+    navicube labels) can exceed it: `gpui_wgpu` logs
+    `Scissor Rect … is not contained in the render target` twice and recovers. The
+    same run also logs `Failed to poll device during resize: Timeout`, which the
+    probe had too. Neither affects the rendered frame; neither is a panic.
 - **One-window panels.** The editor, properties and console must be laid out for
   the main window; the current `dev_tools_body` assumes a second window and
   double key handling (`panels_open` must not also route keys through the shell).
@@ -335,8 +354,10 @@ the regression-proof 3D step; M4/M5 make the backend a real document.
   dev-dependency is **path-only on purpose**: a packaging build strips it from the
   normalized manifest, so the crates.io order stays `ferrocad_shell_api` →
   `ferrocad_shell_core` → `ferrocad_shell_gpui` with no publish cycle.
-- **Cargo.lock churn.** No new third-party packages are required (`web-time` and
-  `wgpu` are already in the lock); the new dependency edges are the only change.
+- **Cargo.lock churn.** No new third-party packages are required (`web-time`,
+  `wgpu` and `bite-gp-wgpu` are already in the lock); the new dependency edges are
+  the only change (`ferrocad_web_gpui` now names `bite-gp-wgpu` so its
+  `wasm-interop` feature is on, which the presenter's imported-texture path needs).
 
 ## 10. File-level checklist (M0) — **done (2026-11-03)**
 

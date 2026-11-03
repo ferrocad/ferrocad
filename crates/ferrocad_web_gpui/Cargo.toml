@@ -1,9 +1,9 @@
 # The browser host: the real FerroCAD shell (`ferrocad_shell_core`) in a GPUI window
 # on WebGL2, with a Rust `AppBackend` and no CPython anywhere in the graph.
 #
-# Built for `wasm32-unknown-unknown` only; see README.md. The 3D viewport (the
-# zero-copy presenter and `InventorViewport`) is M3; this host renders the shell
-# around a placeholder canvas.
+# Built for `wasm32-unknown-unknown` only; see README.md. The 3D viewport is presented
+# zero-copy by `ferrocad_shell_core`'s interop presenter on the window's own wgpu
+# device; no kernel is linked yet, so the scene is a hand-built sample stage.
 [package]
 name = "ferrocad_web_gpui"
 version.workspace = true
@@ -23,9 +23,15 @@ crate-type = ["cdylib"]
 # (it would pull the nightly-only `wasm_thread`).
 gpui = { package = "bite-gpui", version = "=1.25.203" }
 # The platform-neutral shell: `Shell`, the chrome, panels and the `AppBackend` seam.
-# `gpu-interop` is off: the browser has no dma-buf and no same-device texture yet
-# (M3 restores the viewport through `gpui_interop`'s same-device path).
-ferrocad_shell_core = { workspace = true }
+# `gpu-interop` is the browser's only presentation path: the presenter negotiates
+# with the window's own wgpu device on the first paint and composites the viewport
+# with `paint_texture` (same device, no dma-buf, no readback).
+ferrocad_shell_core = { workspace = true, features = ["gpu-interop"] }
+# `gpu-interop` compiles the presenter against `gpui_wgpu`, whose imported-texture
+# impl exists on wasm only with `wasm-interop` (it turns on wgpu's
+# `fragile-send-sync-non-atomic-wasm`). The web host is the crate that needs the
+# impl, so it is declared here as a wasm-only dependency.
+gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.203", features = ["wasm-interop"] }
 wasm-bindgen = "0.2"
 # The logger `gpui::web_init` installs forwards to the browser console.
 log = "0.4"

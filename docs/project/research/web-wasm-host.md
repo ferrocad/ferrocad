@@ -1070,3 +1070,30 @@ One workspace bug fell out: `.cargo/config.toml` applied the OCCT `-Wl,-rpath`
 link args to every target, and `rust-lld` rejects them, so any host
 `--target wasm32-unknown-unknown` build failed while linking. They are now scoped
 to `cfg(target_os = "linux")`.
+
+### The shell's own viewport (2026-11-03)
+
+The probe above is now `ferrocad_shell_core`'s real `InventorViewport`, presented by
+the presenter in `runtime/interop.rs` (see
+[`../tasks/wasm-shell.md`](../tasks/wasm-shell.md) §7, M3). The shell owns no
+renderer in a browser window: `enable_viewport` builds the element with a
+`DeferredView` that only records its size, and the presenter creates the
+`ferrocad_wgpu` renderer on the window's own device during the first paint
+(`SAMPLES = 1`, the surface's colour format). Three findings are worth keeping:
+
+- **Picking must not use the G-buffer in a browser.** `ferrocad_wgpu::pick_at`
+  reads its texel back with `map_async` + `poll(wait_indefinitely)`, the same
+  mechanism the image path uses; the poll is a no-op on the web, so the read never
+  completes. A presenter that claims `supports_pick()` makes every click "empty
+  space". The wasm presenter reports `false` and the viewport's CPU ray cast — pure
+  math over the same queue and camera — is the pick. It selects correctly.
+- **MSAA and the colour format come from the target, not a constant.** The same
+  device path allocates a `WgpuSurface` first and builds the renderer with
+  `surface.format()`; the browser target is single-sampled.
+- **The first frames can outrun the canvas size.** `bite-gp-web` starts its surface
+  at 0×0 and the resize observer sets the real size a moment later. A frame laid out
+  for the full window but submitted into the smaller surface makes `gpui_wgpu` log
+  `Scissor Rect … is not contained in the render target` (twice, for the 148 px
+  navicube labels) and `Failed to poll device during resize: Timeout`; it retries and
+  the next frame is correct. Nothing to fix on this side, but a headless test that
+  fails on console errors will see it.

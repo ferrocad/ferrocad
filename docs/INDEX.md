@@ -268,5 +268,5 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/tasks/creation-tools-ownership.md](project/tasks/creation-tools-ownership.md) — whether creation tools are a core default or an edition/mod choice, and how override precedence works.
 - [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.
 - [project/tasks/workplanes.md](project/tasks/workplanes.md) — one workplane state (the world plane is a real plane), ephemeral face binding while drawing, and the `WP` menu as plane choices rather than plumbing.
-- [project/tasks/wasm-shell.md](project/tasks/wasm-shell.md) — the browser shell, planned not built: `ferrocad_shell_core`/`ferrocad_shell_gpui`, the `AppBackend` seam, and stages M0–M5.
+- [project/tasks/wasm-shell.md](project/tasks/wasm-shell.md) — the browser shell: **M0 (the crate split) done**; `ferrocad_shell_api`/`ferrocad_shell_core`/`ferrocad_shell_gpui`, the `AppBackend` seam, and stages M1–M5 planned.
 - [project/tasks/stroke-units.md](project/tasks/stroke-units.md) — the recorded decision that viewport strokes are device pixels, the rejected logical-pixel option, and the plan for reopening it.

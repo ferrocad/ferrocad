@@ -430,7 +430,7 @@ API, `Base = (box, ["Edge1"])`, recompute, a non-null `Shape`).
 The geometry job sets `OCCT_INCLUDE_DIR` / `OpenCASCADE_DIR` / `LD_LIBRARY_PATH` from a
 fetched OCCT prefix, as [`occt-integration.md`](../architecture/occt-integration.md) §8 describes.
 Headless checks use `WgpuRenderer::new_default` + `ViewSpec` + `renderer.image()` (the
-pattern in `crates/ferrocad_gpui/examples/inventor_roundtrip.rs`), with a per-part
+pattern in `crates/ferrocad_shell_core/examples/inventor_roundtrip.rs`), with a per-part
 colour probe to confirm the part ids reached the vertex buffer.
 
 Two local prefixes are supported:

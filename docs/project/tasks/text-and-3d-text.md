@@ -27,7 +27,7 @@ must become geometry, it crosses into Part — and only the *binding*
 ## 2. Can the toy edition have a text tool? Should we add `ferrocad_parametric_toy`?
 
 **The toy can preview text, and cannot make 3D text.** `crates/ferrocad_toy/Cargo.toml`
-links `ferrocad`, `ferrocad_gpui`, `ferrocad_stage`, `ferrocad_geom`, `ferrocad_graphics`
+links `ferrocad`, `ferrocad_shell_gpui`, `ferrocad_stage`, `ferrocad_geom`, `ferrocad_graphics`
 and `ferrocad_types` — no `ferrocad_part`, no OCCT. Its objects are `App::FeaturePython`
 with float lists and its slab is a mesh, so `Part.makeWireString`, `Part.Wire`,
 `Part.Face` and `extrude` do not exist there. A toy text tool could compute contours with

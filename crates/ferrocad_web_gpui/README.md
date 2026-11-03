@@ -77,9 +77,11 @@ the first load takes a moment.
   Status goes to the browser console through the logger `gpui::web_init`
   installs.
 - **No shell yet.** The shell embeds CPython (`pyo3 auto-initialize`), which does
-  not build for `wasm32-unknown-unknown`. The planned crate split —
-  `ferrocad_shell_core` / `ferrocad_shell_gpui`, with `AppBackend` as the seam —
-  is [`docs/project/tasks/wasm-shell.md`](../../docs/project/tasks/wasm-shell.md).
+  not build for `wasm32-unknown-unknown`. The crate split for it —
+  `ferrocad_shell_api` / `ferrocad_shell_core` / `ferrocad_shell_gpui`, with
+  `AppBackend` as the seam — **landed (M0)**; this probe still depends on none of
+  them. M1 wires it to `ferrocad_shell_core` alone; see
+  [`docs/project/tasks/wasm-shell.md`](../../docs/project/tasks/wasm-shell.md).
 - **No image fallback and no picking.** The native presenter degrades to a
   readback image when the device is unavailable; that path needs an async
   `map_async` on WebGL2 and is not covered here.

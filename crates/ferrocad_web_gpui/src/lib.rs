@@ -10,7 +10,7 @@
 //! gateway, so the gesture survives leaving the canvas without any state of ours,
 //! and the wheel is the view's own handler because the gateway has no scroll.
 //!
-//! What this still is not: no CPython, no shell. `ferrocad_gpui` embeds CPython
+//! What this still is not: no CPython, no shell. `ferrocad_shell_gpui` embeds CPython
 //! and cannot be the wasm crate until that dependency is split; this probe stops
 //! at the document layer, which is the last one that does not need Python.
 //!

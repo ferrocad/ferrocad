@@ -16,7 +16,6 @@
 //! [`ferrocad_inventor`] `Node`; the generational arena is deferred (see
 //! `docs/developer/viewport/inventor-plan.md`).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use ferrocad_inventor::node::{depth_function, light_model, pick_style};
@@ -603,16 +602,16 @@ pub fn extract_scene(root: &Bound<'_, PyAny>) -> PyResult<Scene> {
 // The pull-based overlay bridge (G5)
 // ---------------------------------------------------------------------------
 
-/// One registered overlay: its extracted scene plus the Python wrapper it came
-/// from.
+/// One registered overlay: the Python wrapper it came from.
 ///
 /// The wrapper is kept for **identity only**. Coin's scene graph is live; ours is
 /// an owned tree, and `addChild` copies, so an overlay is re-extracted from its
 /// wrapper on every refresh rather than mutated in place (`_rebind()` on the
-/// Python side). Extraction is the documented copy boundary.
+/// Python side). Extraction is the documented copy boundary. The extracted scenes
+/// themselves live in [`ferrocad_inventor::overlays`], keyed by this identity, so a
+/// platform-neutral host can drain the same registry.
 struct OverlayEntry {
     node: Py<PyAny>,
-    scene: Scene,
 }
 
 fn overlay_entries() -> &'static Mutex<Vec<OverlayEntry>> {
@@ -620,8 +619,10 @@ fn overlay_entries() -> &'static Mutex<Vec<OverlayEntry>> {
     OVERLAYS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Whether the registered set changed since the last [`overlay_scenes`] call.
-static OVERLAYS_DIRTY: AtomicBool = AtomicBool::new(false);
+/// The Python object's identity: the address the pure registry keys on.
+fn key(node: &Bound<'_, PyAny>) -> usize {
+    node.as_ptr() as usize
+}
 
 /// `coin.addOverlay(node)` — extract `node` now and keep it for the shell.
 ///
@@ -632,21 +633,15 @@ static OVERLAYS_DIRTY: AtomicBool = AtomicBool::new(false);
 #[pyo3(name = "addOverlay")]
 pub fn add_overlay(node: &Bound<'_, PyAny>) -> PyResult<()> {
     let scene = extract_scene(node)?;
+    let key = key(node);
+    ferrocad_inventor::overlays::put(key, scene);
     let handle = node.clone().unbind();
     let mut entries = overlay_entries()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match entries
-        .iter_mut()
-        .find(|entry| entry.node.as_ptr() == handle.as_ptr())
-    {
-        Some(entry) => entry.scene = scene,
-        None => entries.push(OverlayEntry {
-            node: handle,
-            scene,
-        }),
+    if !entries.iter().any(|entry| entry.node.as_ptr() == handle.as_ptr()) {
+        entries.push(OverlayEntry { node: handle });
     }
-    OVERLAYS_DIRTY.store(true, Ordering::Release);
     Ok(())
 }
 
@@ -664,10 +659,8 @@ pub fn remove_overlay(node: &Bound<'_, PyAny>) -> bool {
     let before = entries.len();
     entries.retain(|entry| entry.node.as_ptr() != ptr);
     let removed = entries.len() != before;
-    if removed {
-        OVERLAYS_DIRTY.store(true, Ordering::Release);
-    }
-    removed
+    drop(entries);
+    ferrocad_inventor::overlays::remove(key(node)) || removed
 }
 
 /// `coin.clearOverlays()` — drop every registered overlay.
@@ -679,10 +672,8 @@ pub fn clear_overlays() -> bool {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let cleared = !entries.is_empty();
     entries.clear();
-    if cleared {
-        OVERLAYS_DIRTY.store(true, Ordering::Release);
-    }
-    cleared
+    drop(entries);
+    ferrocad_inventor::overlays::clear() || cleared
 }
 
 /// Whether the registered overlay set changed since the last [`overlay_scenes`].
@@ -690,7 +681,7 @@ pub fn clear_overlays() -> bool {
 /// A pure check: the shell calls this cheaply on every refresh and only pays for
 /// the clone below when it returns `true`.
 pub fn overlays_dirty() -> bool {
-    OVERLAYS_DIRTY.load(Ordering::Acquire)
+    ferrocad_inventor::overlays::dirty()
 }
 
 /// The registered overlay scenes, in registration order.
@@ -699,14 +690,7 @@ pub fn overlays_dirty() -> bool {
 /// bridge. The shell merges the returned roots into the viewport's draw without
 /// re-extracting or recompiling anything else.
 pub fn overlay_scenes() -> Vec<Scene> {
-    let entries = overlay_entries()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let scenes: Vec<Scene> = entries.iter().map(|entry| entry.scene.clone()).collect();
-    // Clear under the lock: an add between the clone and the store would otherwise
-    // lose its dirty notification.
-    OVERLAYS_DIRTY.store(false, Ordering::Release);
-    scenes
+    ferrocad_inventor::overlays::take_scenes()
 }
 
 #[cfg(test)]

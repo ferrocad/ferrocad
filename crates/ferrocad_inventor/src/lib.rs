@@ -42,6 +42,9 @@
 pub mod compile;
 pub mod event;
 pub mod node;
+// The pull-based overlay registry a producer fills and the host drains. Pure data, so
+// a platform-neutral host can use it without the Python facade.
+pub mod overlays;
 pub mod registry;
 pub mod state;
 pub mod view;

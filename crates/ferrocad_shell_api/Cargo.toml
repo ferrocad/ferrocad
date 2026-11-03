@@ -1,0 +1,22 @@
+[package]
+name = "ferrocad_shell_api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's shell/engine contract: the AppBackend seam and the view models it returns"
+keywords = ["cad", "gui", "freecad"]
+categories = ["gui"]
+documentation = "https://docs.rs/ferrocad_shell_api"
+
+[dependencies]
+# The seam's data vocabulary. All pure crates: no gpui, no CPython, no GPU.
+ferrocad_types.workspace = true
+ferrocad_stage.workspace = true
+ferrocad_inventor.workspace = true
+ferrocad_geom.workspace = true
+serde.workspace = true
+serde_json.workspace = true

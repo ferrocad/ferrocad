@@ -39,7 +39,7 @@ It also turns the engine's existing data into a **product surface**: the engine
 already has documents, typed properties, dependencies, observers, undo/redo and
 save/load — the shell is what makes them *visible and usable*.
 
-The `ferrocad_gpui` spike already demonstrated the hard parts in the small:
+The `ferrocad_shell_gpui` spike already demonstrated the hard parts in the small:
 Rust embeds CPython, Python *declares* a UI tree, `bite-gpui` renders it, a click
 round-trips through a Python callback, and a raising handler is isolated without
 crashing the host ([`python-ui-research.md`](../research/python-ui-research.md) §E,§F).
@@ -115,7 +115,7 @@ Key decisions (carried from the spike and the UI research):
 
 Ordered by value; each slice is independently demoable. Sizes are rough.
 
-- **S1 · App-shell skeleton. ✅ done (first cut).** `ferrocad_gpui` boots an
+- **S1 · App-shell skeleton. ✅ done (first cut).** `ferrocad_shell_gpui` boots an
   embedded CPython interpreter, imports `FreeCAD` and creates a **sample
   document** (`Params` + `Derived` wired by an expression + a `Group`), then
   renders a titled window: a **model inspector** (documents → objects, selectable),
@@ -138,7 +138,7 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
 - **S1.5 · Viewport host wiring ✅ (F1).** The viewport's stage is filled from the
   document through **module hooks** (see [`architecture.md`](../../developer/architecture.md) §9): a
   workbench registers `FerroCAD.display_mesh` / `FerroCAD.interaction` providers, so
-  `ferrocad_shell` names no workbench. `ferrocad_gpui::display::DisplaySync` maps
+  `ferrocad_shell` names no workbench. `ferrocad_shell_gpui::display::DisplaySync` maps
   entity ids to object names and builds the stage. A workbench manipulator is
   **contributed by the edition**
   (`Contributions::with_manipulator(ferrocad_part_gui::fillet_manipulator)`) and hosted
@@ -155,7 +155,7 @@ Ordered by value; each slice is independently demoable. Sizes are rough.
   The registry and the workbench command contract are specified in
   [`actions-and-tools.md`](../../developer/workbenches/actions-and-tools.md).
   *Preview:* the registry and its first consumers are built (**A0–A4**).
-  `python/FreeCADGui` holds the commands, `ferrocad_gpui::commands` types them, and the
+  `python/FreeCADGui` holds the commands, `ferrocad_shell_gpui::commands` types them, and the
   shell renders an **actions bar** above the panes whenever the app or a workbench
   registered something — with live `IsActive`/`IsChecked` state,
   rebuilt after a selection or a document edit rather than per frame. A command can

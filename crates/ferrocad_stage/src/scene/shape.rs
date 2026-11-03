@@ -140,7 +140,7 @@ pub struct ShapeItem {
     edge_color: [f32; 4],
     /// Emit a second, depth-`Greater` wire pass for the occluded edges. Off by
     /// default so gizmos, the navicube and transient tools keep their overlay look;
-    /// a document entity opts in (see `ferrocad_gpui::display`).
+    /// a document entity opts in (see `ferrocad_shell_gpui::display`).
     ghost_edges: bool,
     /// Emit a second, depth-`Greater` surface/wire pass at [`GHOST_SURFACE_ALPHA`], so
     /// an occluded gizmo handle stays readable behind a solid.
@@ -438,7 +438,7 @@ impl ShapeItem {
     /// Set the side/down-facing colour for a two-tone surface.
     ///
     /// The surface colour is the up-facing (glass-top) ink; this is the shade. A
-    /// document entity opts in through `ferrocad_gpui::display`.
+    /// document entity opts in through `ferrocad_shell_gpui::display`.
     pub fn with_shade_color(mut self, color: [f32; 4]) -> Self {
         self.shade_color = Some(color);
         self

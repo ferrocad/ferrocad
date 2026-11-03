@@ -7,7 +7,7 @@
 //!
 //! Zero-copy presentation is **outside** this choice: `gpui` builds the
 //! presenter's renderer on the window compositor's adapter, so while zero-copy is
-//! active that adapter wins. See `crates/ferrocad_gpui/src/interop.rs`.
+//! active that adapter wins. See `crates/ferrocad_shell_core/src/runtime/interop.rs`.
 
 use crate::renderer::block_on;
 

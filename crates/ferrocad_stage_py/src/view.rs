@@ -31,7 +31,6 @@
 //! `ShapeItem` emits) is never reported, because a click cannot select it.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_graphics as gfx;
 use ferrocad_graphics::pick::LINE_PICK_PIXELS;
@@ -42,140 +41,12 @@ use pyo3::prelude::*;
 use crate::camera::Camera;
 use crate::stage::Stage;
 
-/// The stage a host last drew, compiled once so a pick does not recompile it.
-struct PublishedStage {
-    /// The stage's draw queue: the same packets the viewport picks against.
-    queue: gfx::RenderQueue,
-    /// Pick id → document object name (`"Slab"`).
-    objects: HashMap<u32, String>,
-    /// Pick id → sub-element name table (`["", "Face1", …]`).
-    parts: HashMap<u32, Vec<String>>,
-}
-
-fn camera_cell() -> &'static Mutex<Option<gfx::Camera>> {
-    static CELL: OnceLock<Mutex<Option<gfx::Camera>>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(None))
-}
-
-fn stage_cell() -> &'static Mutex<Option<Arc<PublishedStage>>> {
-    static CELL: OnceLock<Mutex<Option<Arc<PublishedStage>>>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(None))
-}
-
-/// The transient preview items a script published (S4.6).
-///
-/// A preview is drawn over the document but is **not** part of the published stage:
-/// it is unpickable by construction ([`force_unpickable`] clears `selectable`), and
-/// the ranked picker therefore never reports it. The generation counter lets a host
-/// that owns the draw (the shell) notice a change without cloning the list.
-#[derive(Default)]
-struct PreviewState {
-    items: Vec<fs::ShapeItem>,
-    generation: u64,
-}
-
-fn preview_cell() -> &'static Mutex<PreviewState> {
-    static CELL: OnceLock<Mutex<PreviewState>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(PreviewState::default()))
-}
-
-/// Replace the transient preview items with `items`.
-///
-/// Every item is forced non-selectable: a preview is a visual, so a click must pass
-/// through it to the geometry underneath (the same rule the grid follows). Returns
-/// the new generation.
-pub fn set_preview_items(items: Vec<fs::ShapeItem>) -> u64 {
-    let mut state = preview_cell().lock().unwrap_or_else(|e| e.into_inner());
-    state.items = items.into_iter().map(force_unpickable).collect();
-    state.generation += 1;
-    state.generation
-}
-
-/// Drop every transient preview. Returns the new generation.
-pub fn clear_previews() -> u64 {
-    let mut state = preview_cell().lock().unwrap_or_else(|e| e.into_inner());
-    state.items.clear();
-    state.generation += 1;
-    state.generation
-}
-
-/// The transient preview items, in publication order.
-pub fn preview_items() -> Vec<fs::ShapeItem> {
-    preview_cell()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .items
-        .clone()
-}
-
-/// A counter that changes whenever the preview set does.
-pub fn preview_generation() -> u64 {
-    preview_cell()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .generation
-}
-
-fn force_unpickable(item: fs::ShapeItem) -> fs::ShapeItem {
-    if item.selectable() {
-        item.with_selectable(false)
-    } else {
-        item
-    }
-}
-
-/// Publish the camera the shell is drawing with.
-///
-/// Cheap enough to call every frame: two matrices and the viewport.
-pub fn publish_camera(camera: gfx::Camera) {
-    *camera_cell().lock().unwrap() = Some(camera);
-}
-
-/// Publish the compiled stage and the name tables a pick reports.
-///
-/// `objects` maps a pick id to its document object name; `parts` optionally overrides
-/// the per-item name tables (a host that builds the stage itself leaves it `None`, and
-/// the items' own [`ferrocad_stage::ShapeItem::part_names`] are used).
-pub fn publish_stage(
-    stage: &fs::Stage,
-    objects: HashMap<u32, String>,
-    parts: Option<HashMap<u32, Vec<String>>>,
-) {
-    let parts = parts.unwrap_or_else(|| {
-        stage
-            .items()
-            .iter()
-            .filter(|item| !item.part_names().is_empty())
-            .map(|item| (item.entity_id(), item.part_names().to_vec()))
-            .collect()
-    });
-    let published = PublishedStage {
-        queue: stage.to_queue(),
-        objects,
-        parts,
-    };
-    *stage_cell().lock().unwrap() = Some(Arc::new(published));
-}
-
-/// Forget the published view (document close, or a headless test's teardown).
-pub fn clear_view() {
-    *camera_cell().lock().unwrap() = None;
-    *stage_cell().lock().unwrap() = None;
-}
-
-/// The published camera, if a host has published one.
-pub fn published_camera() -> Option<gfx::Camera> {
-    camera_cell().lock().unwrap().clone()
-}
-
-/// Whether a stage has been published.
-///
-/// The shell uses this to publish the stage the viewport was **built** with (boot,
-/// or a viewport recreated for a new GPU adapter) exactly once, without cloning it on
-/// every frame.
-pub fn has_stage() -> bool {
-    stage_cell().lock().unwrap().is_some()
-}
+/// The published camera and stage live in the pure stage crate so a platform-neutral
+/// host can publish them without linking CPython; these are the same functions.
+pub use fs::view::{
+    PublishedStage, clear_previews, clear_view, has_stage, preview_generation, preview_items,
+    publish_camera, publish_stage, published_camera, published_stage, set_preview_items,
+};
 
 /// One pick result: what the pointer is over and where.
 ///
@@ -250,7 +121,7 @@ fn pick_all(
         return Vec::new();
     };
     let mut found = Vec::new();
-    for packet in &view.queue.packets {
+    for packet in &view.queue().packets {
         // Same rule as `ferrocad_graphics`' pick: an authored program draws a
         // placeholder quad, and an unpickable packet opts out outright.
         if packet.state.program.is_some() || !packet.state.pickable {
@@ -343,12 +214,12 @@ fn resolve(view: &PublishedStage, raw: RawHit) -> PickHit {
         entity_id: raw.entity,
         part_idx: raw.part,
         part: view
-            .parts
+            .parts()
             .get(&raw.entity)
             .and_then(|names| names.get(raw.part as usize))
             .filter(|name| !name.is_empty())
             .cloned(),
-        object: view.objects.get(&raw.entity).cloned(),
+        object: view.objects().get(&raw.entity).cloned(),
         point: (raw.point[0], raw.point[1], raw.point[2]),
         normal: (raw.normal[0], raw.normal[1], raw.normal[2]),
         distance: raw.distance,
@@ -364,10 +235,7 @@ fn resolve(view: &PublishedStage, raw: RawHit) -> PickHit {
 #[pyfunction]
 #[pyo3(signature = (x, y, max_hits=0))]
 fn pick_at(x: i32, y: i32, max_hits: usize) -> Vec<PickHit> {
-    let (Some(camera), Some(stage)) = (
-        camera_cell().lock().unwrap().clone(),
-        stage_cell().lock().unwrap().clone(),
-    ) else {
+    let (Some(camera), Some(stage)) = (published_camera(), published_stage()) else {
         return Vec::new();
     };
     pick_all(&stage, &camera, [x, y], max_hits)
@@ -489,6 +357,7 @@ fn normal_of(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
 mod tests {
     use super::*;
     use ferrocad_stage::ShapeItem;
+    use std::sync::Mutex;
 
     /// The published view is process-global, so the tests that write it must not
     /// run concurrently with each other (`publish_stage` would make `has_stage`
@@ -558,7 +427,7 @@ mod tests {
 
         let camera = camera([100, 100], 50.0);
         let hits = pick_all(
-            &stage_cell().lock().unwrap().clone().unwrap(),
+            &published_stage().expect("the stage was published"),
             &camera,
             [50, 50],
             0,
@@ -575,11 +444,7 @@ mod tests {
         stage.add_item(quad(2, -5.0, "Face2"));
         let camera = camera([100, 100], 50.0);
         let ranked = pick_all(
-            &PublishedStage {
-                queue: stage.to_queue(),
-                objects: HashMap::new(),
-                parts: HashMap::new(),
-            },
+            &PublishedStage::new(stage.to_queue(), HashMap::new(), HashMap::new()),
             &camera,
             [50, 50],
             0,
@@ -597,11 +462,7 @@ mod tests {
         stage.add_item(quad(1, 0.0, "Face1"));
         let camera = camera([100, 100], 50.0);
         let hits = pick_all(
-            &PublishedStage {
-                queue: stage.to_queue(),
-                objects: HashMap::new(),
-                parts: HashMap::new(),
-            },
+            &PublishedStage::new(stage.to_queue(), HashMap::new(), HashMap::new()),
             &camera,
             [0, 0],
             0,

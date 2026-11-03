@@ -111,7 +111,7 @@ controller are one viewport module tree and the controller drives a trait object
   tests with it. `ferrocad_viewport/src/inventor_view.rs` keeps its imports via
   `crate::navicube::…`.
 - `InventorViewport` is unchanged externally; the shell/example
-  (`ferrocad_gpui`) `NaviCube::new(viewport)` call is unchanged.
+  (`ferrocad_shell_gpui`) `NaviCube::new(viewport)` call is unchanged.
 
 **Gate:** every existing test passes unchanged (behaviour identical); new model tests
 (ids round-trip, orientation, geometry constants) and a trait-object controller test; the

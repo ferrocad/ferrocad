@@ -29,13 +29,13 @@ include = [
 name = "ferrocad"
 
 # The base application: the general FerroCAD edition. Editions (FerroCAD:
-# Architecture, ...) are thin binaries that depend on `ferrocad_gpui` directly.
+# Architecture, ...) are thin binaries that depend on `ferrocad_shell_gpui` directly.
 [[bin]]
 name = "ferrocad"
 path = "src/main.rs"
 
 [dependencies]
-ferrocad_gpui.workspace = true
+ferrocad_shell_gpui.workspace = true
 # The base contribution registry names the stage's native tools, so the app links the
 # stage directly (it used to be a test-only dependency).
 ferrocad_stage.workspace = true

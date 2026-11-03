@@ -8,8 +8,8 @@
 
 use std::sync::Once;
 
-use ferrocad_gpui::Shell;
-use ferrocad_gpui::python;
+use ferrocad_shell_gpui::Shell;
+use ferrocad_shell_gpui::python;
 
 static BOOT: Once = Once::new();
 
@@ -35,7 +35,8 @@ fn the_shell_opens_a_saved_document_and_lists_its_objects() {
 
     // The next boot is what `ferrocad_toy --open <file>` does.
     python::configure_startup_document(Some(&path));
-    let model = Shell::boot().expect("boot with a startup document");
+    let model = Shell::boot_with(&mut ferrocad_shell_gpui::PythonAppBackend::new())
+        .expect("boot with a startup document");
     let tree = model.lock().unwrap().tree.clone();
 
     let opened = tree

@@ -8,7 +8,7 @@
 //!
 //! This trait is deliberately **renderer-agnostic**: it names only gpui types and the
 //! neutral [`ViewSpec`] batch vocabulary, so `ferrocad_viewport` keeps its "no wgpu,
-//! no Python" boundary. The host (`ferrocad_gpui`) implements it.
+//! no Python" boundary. The host (`ferrocad_shell_gpui`) implements it.
 
 use ferrocad_graphics::{Camera, Hit, RenderQueue};
 use ferrocad_inventor::ViewSpec;

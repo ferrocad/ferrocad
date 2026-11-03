@@ -8,7 +8,7 @@ This note answers three questions that the crate list alone does not make
 obvious:
 
 1. What calls what, at runtime?
-2. Does `ferrocad_gpui` call `ferrocad_core` directly, through PyO3, or both?
+2. Does `ferrocad_shell_gpui` call `ferrocad_core` directly, through PyO3, or both?
 3. Is the `ctypes` backend (`ferrocad_ctypes`) needed, or is it dead weight?
 
 ## 1. The components
@@ -38,8 +38,8 @@ obvious:
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` and the shared `ferrocad_theme` tokens. |
-| `ferrocad_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython, provides `Shell`, `run`/`run_with`/`run_edition_with`, `HostConfig`, mounts the `ferrocad_viewport`, syncs document meshes into the stage (`display::DisplaySync`), hosts the edition's workbench manipulators (`contributions::Contributions`), and bridges the **workbench commands, selection, dialogs, accelerators, view/tool requests** (`commands`, `selection`, `dialog`, `shortcuts`, `view` — typed JSON over `FreeCADGui`). Ships no application scripts and names no workbench. |
-| `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_gpui::run_with`. |
+| `ferrocad_shell_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython, provides `Shell`, `run`/`run_with`/`run_edition_with`, `HostConfig`, mounts the `ferrocad_viewport`, syncs document meshes into the stage (`display::DisplaySync`), hosts the edition's workbench manipulators (`contributions::Contributions`), and bridges the **workbench commands, selection, dialogs, accelerators, view/tool requests** (`commands`, `selection`, `dialog`, `shortcuts`, `view` — typed JSON over `FreeCADGui`). Ships no application scripts and names no workbench. |
+| `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_shell_gpui::run_with`. |
 | `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](workbenches/toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
 | `ferrocad_gen` | `cdylib` | Generated PyO3 skeletons (M3c). A build-time experiment, not wired into the facade. |
@@ -61,15 +61,33 @@ ferrocad_stage/src/
   transform/   gizmo, session, protractor, measure_tape
   workplane/   workplane, stem
 
-ferrocad_gpui/src/
-  model/       display, selection, view
-  runtime/     python, interop, headless
-  ui/          chrome, dialog, forms, shortcuts, dev_tools
-  workbench/   commands, contributions, manipulators
+ferrocad_shell_api/src/          the shell/engine contract (no gpui, no CPython)
+  app.rs       AppBackend
+  types.rs     Bootstrap, PropRow, DocumentNode, …
+  commands.rs  CommandInfo, CommandOutcome, Surface
+  dialog.rs    DialogSpec, DialogField, Kind, ValueState
+  view.rs      ViewState, ViewRequest, ProjectionName
+  selection.rs SelectionItem
+  display.rs   StageMesh
+
+ferrocad_shell_core/src/         the platform-neutral GPUI shell
+  app.rs       AppBackendSlot, install_backend, with_backend, the cx helpers
+  model/       display (DisplaySync), selection (push), view (re-export)
+  runtime/     interop (the zero-copy presenter)
+  stage_view.rs  the published camera/stage/previews the facade pulls
+  ui/          chrome, dialog (re-export), forms, shortcuts, dev_tools
+  workbench/   commands (the four bridge fns), contributions, manipulators
   shell/       Shell + render.rs
     bridge/    context, dispatch, picking, viewport
     hud/       move_hud, pill
     panels/    properties, palette, popovers, dialogs, forms, loadout, devtools
+
+ferrocad_shell_gpui/src/         the native assembly (core + CPython)
+  lib.rs       run/run_with/HostConfig
+  python.rs    the interpreter and the JSON boundary
+  backend.rs   PythonAppBackend: AppBackend
+  events.rs    the SoEventCallback listener
+  headless.rs  offscreen render / STL export
 ```
 
 The open-document registry lives in `ferrocad_core::Application` (the analog of FreeCAD's
@@ -85,7 +103,7 @@ The stack starts in exactly one of two ways.
 **A. Rust owns the process** (the app shell):
 
 ```
-ferrocad_gpui
+ferrocad_shell_gpui
    |  embeds CPython (pyo3 "auto-initialize")
    v
 CPython interpreter
@@ -116,7 +134,7 @@ ferrocad_core
 ```
 
 The facade and everything below it are identical in both. The only difference is
-whether `ferrocad_gpui` or `python3` started the interpreter.
+whether `ferrocad_shell_gpui` or `python3` started the interpreter.
 
 ## 3. "Does the host call core, PyO3, and CPython?"
 
@@ -236,19 +254,19 @@ ferrocad_web       -> ferrocad_web_viewport, ferrocad_geom,
                       ferrocad_occt, ferrocad_stage,
                       ferrocad_graphics, ferrocad_types
                                                      [browser demo host; links the kernel]
-ferrocad_gpui      -> ferrocad_widgets, ferrocad_viewport,
+ferrocad_shell_gpui      -> ferrocad_widgets, ferrocad_viewport,
                       ferrocad_inventor, ferrocad_wgpu,
                       ferrocad_geom, ferrocad_stage,
                       ferrocad_types, pyo3 (embed)   [the host/glue owns the window]
                       must NOT -> ferrocad_py        [the *app* links it, not the shell]
                       must NOT -> ferrocad_part/occt [the document side is Python]
                       must NOT -> ferrocad_part_gui  [a workbench's manipulator is the edition's]
-ferrocad           -> ferrocad_gpui, ferrocad_py     [base app: links the module in, embeds payload]
+ferrocad           -> ferrocad_shell_gpui, ferrocad_py     [base app: links the module in, embeds payload]
                                                      [run_edition: an edition's app script]
 ferrocad_parametric -> ferrocad, ferrocad_part_py,
                        ferrocad_mesh_py,
                        ferrocad_part_gui             [the edition registers Part and Mesh]
-ferrocad_toy       -> ferrocad, ferrocad_gpui, ferrocad_stage,
+ferrocad_toy       -> ferrocad, ferrocad_shell_gpui, ferrocad_stage,
                       ferrocad_geom, ferrocad_graphics,
                       ferrocad_types                 [kernel-free edition + testbed]
 python/FreeCAD     -> ferrocad (built-in module when linked, else a .so on sys.path)
@@ -276,18 +294,18 @@ added deliberately, not by accident, and it must never bypass the same
 `ferrocad_core` that Python uses. A second rule follows from the editions: **the
 shell names no workbench** — a module reaches the window by registering the hooks
 in §9, and a workbench's Rust-side manipulator reaches it through the
-[`Contributions`](../../crates/ferrocad_gpui/src/workbench/contributions.rs) registry (§10).
+[`Contributions`](../../crates/ferrocad_shell_core/src/workbench/contributions.rs) registry (§10).
 
 ## 7. Editions and repackaging
 
 The shell library is the base of a family of product editions (FerroCAD: Architecture,
 Furniture, and so on). The plan is a shell **library** plus thin per-edition
-binaries, not forks; that is why the crate is `ferrocad_gpui` and not named for a
+binaries, not forks; that is why the crate is `ferrocad_shell_gpui` and not named for a
 platform. See [`repackaging.md`](architecture/repackaging.md).
 
 ## 8. Where the Python lives
 
-The shell library (`ferrocad_gpui`) owns the **interpreter**: it boots CPython,
+The shell library (`ferrocad_shell_gpui`) owns the **interpreter**: it boots CPython,
 puts directories on `sys.path`, and marshals JSON. It ships **no** application
 scripts, so it can serve any app or edition.
 
@@ -356,7 +374,7 @@ script's `interaction` hook, and that provider decides what the edit means.
 A **manipulator** is a workbench's draggable overlay (the Part edge fillet arc, a BIM
 wall-thickness grip, a rebar hook). It is not generic presentation, so it does not
 live in `ferrocad_stage`; and it is not shell behaviour, so it does not live in
-`ferrocad_gpui`. The shared thing is the **seam**, and each workbench brings its own
+`ferrocad_shell_gpui`. The shared thing is the **seam**, and each workbench brings its own
 implementation:
 
 ```
@@ -366,7 +384,7 @@ ferrocad_part_gui     DressUpScrubber · dress_up_scrubber_for · fillet_manipul
       ▲
 ferrocad_parametric   base_contributions().with_manipulator(fillet_manipulator)
       ▲
-ferrocad_gpui         hosts whatever factories the edition registered; names none
+ferrocad_shell_gpui         hosts whatever factories the edition registered; names none
 ```
 
 Why not let `ferrocad_stage::Stage` own the dress-up mapping? Because BIM has no
@@ -376,7 +394,7 @@ manipulator it can never satisfy. The stage owns only what **every** workbench
 shares: shapes, tools, snapping and the transform gizmo.
 
 Why not a typed commit enum? The commit crosses three crates that must not name any
-workbench (`ferrocad_stage`, `ferrocad_viewport`, `ferrocad_gpui`). A closed enum
+workbench (`ferrocad_stage`, `ferrocad_viewport`, `ferrocad_shell_gpui`). A closed enum
 would put every workbench's payload in all three. Instead the commit carries:
 
 ```rust
@@ -432,7 +450,7 @@ The guarantees in this note are checked by the default test suite:
   round-trip (`DressUpChange::from_commit`);
 * `ferrocad_viewport` — a **fake** manipulator (no Part linked) is hovered, dragged,
   committed, cancelled, and wins over the gizmo;
-* `ferrocad_gpui` — `Contributions` routing (manipulator **and** gizmo factories) and
+* `ferrocad_shell_gpui` — `Contributions` routing (manipulator **and** gizmo factories) and
   `DisplaySync`'s entity map, colour and draw-mode plumbing;
 * `ferrocad_toy` — the whole workbench surface with **no kernel**: it creates an
   object (and undoes/redoes it), represents it, resizes it with the grip, moves it

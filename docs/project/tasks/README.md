@@ -38,8 +38,9 @@ Status: index (2026-11-03). Eleven active specs and one recorded decision:
 - [workplanes.md](workplanes.md) — make the world plane a real state, bind a face
   ephemerally during a creation tool, and replace the `WP` plumbing menu with plane
   choices.
-- [wasm-shell.md](wasm-shell.md) — **the browser shell, planned not built**: the
-  `ferrocad_shell_core` / `ferrocad_shell_gpui` split, the `AppBackend` seam, and the
+- [wasm-shell.md](wasm-shell.md) — **the browser shell, M0 done**: the
+  `ferrocad_shell_api` / `ferrocad_shell_core` / `ferrocad_shell_gpui` split, the
+  `AppBackend` seam, and the browser stages M1–M5.
   wasm blockers (time, one window, presenter, fonts). Stages **M0–M5**; M0 is the
   crate split.
 - [stroke-units.md](stroke-units.md) — **decided, not open work**: viewport strokes are

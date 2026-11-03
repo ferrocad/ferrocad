@@ -1,0 +1,63 @@
+[package]
+name = "ferrocad_shell_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's platform-neutral bite-gpui shell: window, chrome, panels and the AppBackend seam"
+keywords = ["cad", "gui", "gpui", "freecad"]
+categories = ["gui"]
+documentation = "https://docs.rs/ferrocad_shell_core"
+
+[dependencies]
+# The shell/engine contract: the `AppBackend` trait and every view model it returns.
+ferrocad_shell_api.workspace = true
+ferrocad_widgets.workspace = true
+# The token table: the shell re-exports the packed sRGB half for its modules.
+ferrocad_theme.workspace = true
+# Q3a: the typed Qt Designer form tree that `forms` renders.
+ferrocad_ui.workspace = true
+ferrocad_inventor.workspace = true
+# The selection vocabulary (`SelectionRef`) and tessellation the host fills a stage from.
+ferrocad_geom.workspace = true
+# The declarative stage and the dress-up types the host wires to the document.
+ferrocad_stage.workspace = true
+# The viewport: presents the invented scene (image path) and the navigation cube.
+ferrocad_viewport.workspace = true
+ferrocad_wgpu.workspace = true
+ferrocad_types.workspace = true
+bite-gpui = { version = "=1.25.203" }
+# Zero-copy presentation: hand the viewport's wgpu target to gpui's window renderer,
+# as a dma-buf when the device can export one and as a same-device view otherwise.
+# `bite-gpui` and the renderer must share a wgpu major: the viewport hands its
+# target to the window renderer through `try_device::<WgpuRenderer>()`, so the
+# two halves only typecheck together. 1.25.203 is the wgpu 30 line, matching
+# `ferrocad_wgpu`; bump both together with the renderer.
+# Keep every transitive `bite-gp-*` crate on the same 1.25.203 release: their
+# requirements are caret ranges, so a plain `cargo update` can float one of them
+# while `bite-gpui` stays put, mixing wgpu majors.
+gpui_interop = { version = "0.2.1", features = ["gpui", "wgpu"], optional = true }
+# The window renderer's device and the `ImportedTextureExt` handle used by the
+# same-device path. Must match the `bite-gpui` release above.
+gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.203", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+default = ["gpu-interop"]
+# Present the viewport zero-copy through gpui's wgpu device. Runtime fallback: the
+# image path stays in use where the window has no compatible device (headless,
+# macOS, a Direct3D window, or a driver without dma-buf export).
+gpu-interop = ["dep:gpui_interop", "dep:gpui_wgpu"]
+
+[dev-dependencies]
+# `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
+bite-gpui = { version = "=1.25.203", features = ["test-support"] }
+# The shell tests drive the real Python bridge (no stub): the native assembly
+# installs its `AppBackend` and the tests call `python::` directly. Path-only on
+# purpose: a published `ferrocad_shell_core` strips it, so the crates.io publish
+# order does not need `ferrocad_shell_gpui` (which depends on this crate).
+ferrocad_shell_gpui = { path = "../ferrocad_shell_gpui" }

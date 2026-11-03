@@ -8,7 +8,7 @@
 //! the first time no on-disk copy is found, unpacked into the per-user data
 //! directory and handed to the shell.
 //!
-//! Resolution is deliberately shared with [`ferrocad_gpui::python`]:
+//! Resolution is deliberately shared with [`ferrocad_shell_gpui::python`]:
 //!
 //! | Order | Source | Handled by |
 //! | ----- | ------ | ---------- |
@@ -45,7 +45,7 @@ pub fn resolve() -> Payload {
     // Cases 1-3: anything the shell can already find wins. The embedded copy is
     // a last resort, never a preference (a developer editing `python/` must see
     // their edits, not a stale extraction).
-    if ferrocad_gpui::python::find_python_dir().is_ok() {
+    if ferrocad_shell_gpui::python::find_python_dir().is_ok() {
         return Payload::default();
     }
     #[cfg(have_embedded_python)]

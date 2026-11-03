@@ -130,7 +130,7 @@ const RULES: &[Rule] = &[
         required: &[],
     },
     Rule {
-        package: "ferrocad_gpui",
+        package: "ferrocad_shell_gpui",
         reason: "the shell sits below Part",
         forbidden: KERNEL_FREE,
         required: &[],
@@ -993,7 +993,7 @@ mod tests {
         for edition in [
             "ferrocad",
             "ferrocad_toy",
-            "ferrocad_gpui",
+            "ferrocad_shell_gpui",
             "ferrocad_stage",
             "ferrocad_viewport",
             "ferrocad_widgets",

@@ -6,7 +6,7 @@
 
 use std::sync::{Mutex, Once};
 
-use ferrocad_gpui::python;
+use ferrocad_shell_gpui::python;
 
 /// The tests share one interpreter and one document registry.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -63,7 +63,7 @@ fn the_toy_command_is_listed_and_creates_an_object() {
     );
 
     let values = serde_json::json!({"Width": 50.0, "Depth": 40.0, "Height": 25.0});
-    let accepted = ferrocad_gpui::commands::accept(&token, &values).expect("the bridge returned");
+    let accepted = python::dialog_accept(&token, &values).expect("the bridge returned");
     assert!(accepted.ok, "accept failed: {}", accepted.error);
     assert!(
         accepted.status.starts_with("created"),
@@ -73,7 +73,7 @@ fn the_toy_command_is_listed_and_creates_an_object() {
     assert_eq!(slab_count(), 2, "the callback created the slab");
 
     // A token is single use.
-    let again = ferrocad_gpui::commands::accept(&token, &values).expect("the bridge returned");
+    let again = python::dialog_accept(&token, &values).expect("the bridge returned");
     assert!(!again.ok, "a spent token is rejected");
     assert!(
         again.error.contains("no open dialog"),

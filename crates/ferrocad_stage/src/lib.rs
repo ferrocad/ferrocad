@@ -86,6 +86,10 @@ pub mod interaction;
 pub mod render;
 pub mod scene;
 pub mod transform;
+// The published view (camera, stage and previews a host last drew). It lives in the
+// pure stage crate so the platform-neutral shell can publish it without linking
+// CPython; `ferrocad_stage_py` wraps it for the `FreeCADGui` facade.
+pub mod view;
 pub mod workplane;
 
 // The flat module paths predate the folder hierarchy and remain part of the stable

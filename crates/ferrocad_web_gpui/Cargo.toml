@@ -1,6 +1,6 @@
 # The step-2 browser probe: a GPUI window compositing a wgpu surface.
 #
-# It exercises the seam `ferrocad_gpui`'s interop presenter needs on wasm — the
+# It exercises the seam `ferrocad_shell_gpui`'s interop presenter needs on wasm — the
 # window renderer's device (`GpuRenderer::device`), a `WgpuSurface` allocated on
 # that device, and `paint_texture` — without CPython, the document layer or the
 # OCCT kernel. Built for `wasm32-unknown-unknown` only; see README.md.

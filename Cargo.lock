@@ -2245,8 +2245,8 @@ name = "ferrocad"
 version = "0.1.5"
 dependencies = [
  "ferrocad_geom",
- "ferrocad_gpui",
  "ferrocad_py",
+ "ferrocad_shell_gpui",
  "ferrocad_stage",
  "include_dir",
  "pyo3",
@@ -2295,30 +2295,6 @@ dependencies = [
  "ferrocad_curves",
  "ferrocad_lineage",
  "ferrocad_types",
-]
-
-[[package]]
-name = "ferrocad_gpui"
-version = "0.1.5"
-dependencies = [
- "bite-gp-wgpu",
- "bite-gpui",
- "ferrocad_geom",
- "ferrocad_inventor",
- "ferrocad_inventor_py",
- "ferrocad_stage",
- "ferrocad_stage_py",
- "ferrocad_theme",
- "ferrocad_types",
- "ferrocad_ui",
- "ferrocad_viewport",
- "ferrocad_wgpu",
- "ferrocad_widgets",
- "gpui_interop",
- "image",
- "pyo3",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2407,10 +2383,10 @@ dependencies = [
  "ferrocad",
  "ferrocad_combined_py",
  "ferrocad_geom",
- "ferrocad_gpui",
  "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_part_gui",
+ "ferrocad_shell_gpui",
  "ferrocad_stage",
  "ferrocad_types",
  "ferrocad_viewport",
@@ -2467,6 +2443,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_shell_api"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_geom",
+ "ferrocad_inventor",
+ "ferrocad_stage",
+ "ferrocad_types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrocad_shell_core"
+version = "0.1.5"
+dependencies = [
+ "bite-gp-wgpu",
+ "bite-gpui",
+ "ferrocad_geom",
+ "ferrocad_inventor",
+ "ferrocad_shell_api",
+ "ferrocad_shell_gpui",
+ "ferrocad_stage",
+ "ferrocad_theme",
+ "ferrocad_types",
+ "ferrocad_ui",
+ "ferrocad_viewport",
+ "ferrocad_wgpu",
+ "ferrocad_widgets",
+ "gpui_interop",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrocad_shell_gpui"
+version = "0.1.5"
+dependencies = [
+ "bite-gpui",
+ "ferrocad_inventor",
+ "ferrocad_inventor_py",
+ "ferrocad_shell_core",
+ "ferrocad_stage",
+ "ferrocad_stage_py",
+ "ferrocad_types",
+ "ferrocad_viewport",
+ "ferrocad_wgpu",
+ "image",
+ "pyo3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ferrocad_snapshot"
 version = "0.1.5"
 dependencies = [
@@ -2512,10 +2541,10 @@ version = "0.1.5"
 dependencies = [
  "ferrocad",
  "ferrocad_geom",
- "ferrocad_gpui",
  "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_inventor_py",
+ "ferrocad_shell_gpui",
  "ferrocad_stage",
  "ferrocad_types",
  "serde_json",

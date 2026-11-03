@@ -40,24 +40,26 @@ members = [
     "crates/ferrocad_ui_py",
     "crates/ferrocad_viewport",
     "crates/ferrocad_widgets",
-    "crates/ferrocad_gpui",
+    "crates/ferrocad_shell_api",
+    "crates/ferrocad_shell_core",
+    "crates/ferrocad_shell_gpui",
     "crates/ferrocad_parametric",
     "crates/ferrocad_toy",
     "crates/xtask",
 ]
-# The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`,
-# `ferrocad`), the renderer (`ferrocad_wgpu`, which pulls in the whole GPU stack) and
-# the pivy facade (`ferrocad_inventor_py`, which needs CPython headers), plus the
-# OCCT-backed editions (`ferrocad_parametric`, via `ferrocad_part_py`), are workspace
-# members so `-p <crate>` works, but they are excluded from `default-members` because
-# building them is slow. The pure `ferrocad_graphics`, scene core `ferrocad_inventor`,
-# `ferrocad_stage`, `ferrocad_mesh` (pure data: no kernel, no OCCT, no Python) and
-# `ferrocad_part_gui` (presentation only: no kernel, no GPU, no CPython) stay in
-# `default-members`.
-# `ferrocad_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
+# The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_shell_core`,
+# `ferrocad_shell_gpui`, `ferrocad`), the renderer (`ferrocad_wgpu`, which pulls in the
+# whole GPU stack) and the pivy facade (`ferrocad_inventor_py`, which needs CPython
+# headers), plus the OCCT-backed editions (`ferrocad_parametric`, via
+# `ferrocad_part_py`), are workspace members so `-p <crate>` works, but they are
+# excluded from `default-members` because building them is slow. The pure
+# `ferrocad_graphics`, scene core `ferrocad_inventor`, `ferrocad_stage`,
+# `ferrocad_mesh` (pure data: no kernel, no OCCT, no Python) and `ferrocad_part_gui`
+# (presentation only: no kernel, no GPU, no CPython) stay in `default-members`.
+# `ferrocad_shell_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
 # full `cargo build --workspace` because the extension crates keep
 # `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
-# link conflict.
+# link conflict. `ferrocad_shell_core` must never depend on `pyo3` or a `*_py` crate.
 default-members = [
     "crates/ferrocad_types",
     "crates/ferrocad_theme",
@@ -100,7 +102,8 @@ unicode-segmentation = "1"
 # `ferrocad_mesh_py`, `ferrocad_part_py`,
 # `ferrocad_stage`,
 # `ferrocad_part_gui`, `ferrocad_stage_py`, `ferrocad_viewport`, `ferrocad_widgets`,
-# `ferrocad_gpui` and finally the `ferrocad` app. See docs/developer/architecture/releasing.md.
+# `ferrocad_shell_core`, `ferrocad_shell_gpui` and finally the `ferrocad` app. See
+# docs/developer/architecture/releasing.md.
 #
 # Versions are per crate, not workspace-wide: a release may bump only the crates
 # whose sources changed, so the publish workflow skips the rest (their version is
@@ -134,7 +137,12 @@ ferrocad_inventor_py = { path = "crates/ferrocad_inventor_py", version = "0.1.4"
 ferrocad_stage_py = { path = "crates/ferrocad_stage_py", version = "0.1.4" }
 ferrocad_ui = { path = "crates/ferrocad_ui", version = "0.1.4" }
 ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.4" }
-ferrocad_gpui = { path = "crates/ferrocad_gpui", version = "0.1.4" }
+# The platform-neutral shell (no CPython) and its native assembly. Both are new
+# packages: the published `ferrocad_gpui` (up to 0.1.5) is retired; see
+# `docs/developer/architecture/releasing.md` for the discontinuity.
+ferrocad_shell_api = { path = "crates/ferrocad_shell_api", version = "0.1.5" }
+ferrocad_shell_core = { path = "crates/ferrocad_shell_core", version = "0.1.5" }
+ferrocad_shell_gpui = { path = "crates/ferrocad_shell_gpui", version = "0.1.5" }
 ferrocad = { path = "crates/ferrocad", version = "0.1.4" }
 
 # Cargo cannot express "gpu-allocator must use the same `windows` crate as

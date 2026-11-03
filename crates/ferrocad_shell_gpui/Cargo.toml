@@ -1,0 +1,43 @@
+[package]
+name = "ferrocad_shell_gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's native bite-gpui shell assembly: boots CPython and installs the shell's AppBackend"
+keywords = ["cad", "gui", "gpui", "freecad"]
+categories = ["gui"]
+documentation = "https://docs.rs/ferrocad_shell_gpui"
+
+[dependencies]
+# The platform-neutral shell: window, chrome, panels, viewport element and the
+# `AppBackend` seam. Every public path is re-exported below.
+ferrocad_shell_core.workspace = true
+# The scene a scripted tool and the event listener hand back.
+ferrocad_inventor.workspace = true
+# `Tool` is the trait the backend's scripted bridge returns.
+ferrocad_stage.workspace = true
+# The `pivy.coin` facade: the host registers it into the embedded interpreter and
+# extracts the scene a workbench script builds.
+ferrocad_inventor_py.workspace = true
+# The modern-stack Python surface (`ferrocad.stage`), registered alongside `pivy.coin`.
+ferrocad_stage_py.workspace = true
+# Headless rendering: the offscreen readback and the scene it compiles.
+ferrocad_viewport.workspace = true
+ferrocad_wgpu.workspace = true
+ferrocad_types.workspace = true
+bite-gpui = { version = "=1.25.203" }
+# Embedding CPython in the host (not the extension-module mode).
+pyo3 = { version = "0.25", features = ["auto-initialize"] }
+serde.workspace = true
+serde_json.workspace = true
+# The image path wraps readback pixels as a gpui `RenderImage`, which holds
+# `image::Frame`s; gpui does not re-export the `image` crate.
+image = "0.25"
+
+[dev-dependencies]
+# `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
+bite-gpui = { version = "=1.25.203", features = ["test-support"] }

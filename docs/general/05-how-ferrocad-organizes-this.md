@@ -86,7 +86,7 @@ kernel:
 | `ferrocad_wgpu` | The wgpu backend: pipelines, uniforms, MSAA, offscreen target, readback and the deterministic snapshot path. |
 | `ferrocad_viewport` | The gpui viewport over the scene: picking, selection, the navigation cube and the workbench manipulators. |
 | `ferrocad_ui` / `ferrocad_ui_py` | The Qt Designer `.ui` reader and typed form model. No Qt. |
-| `ferrocad_widgets` / `ferrocad_gpui` | The reusable shell widgets and the app shell that boots CPython. |
+| `ferrocad_widgets` / `ferrocad_shell_gpui` | The reusable shell widgets and the app shell that boots CPython. |
 
 `ferrocad_inventor_py` is the `pivy.coin` facade over the scene core, which is what
 keeps upstream-style workbench code working. `ferrocad_stage` is the modern

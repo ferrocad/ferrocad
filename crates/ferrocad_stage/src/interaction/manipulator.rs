@@ -20,7 +20,7 @@
 //! A commit is **data**, not a typed Rust variant: it names the manipulator, the
 //! target and the operation, carries the numbers in the manipulator's documented
 //! order, and carries the display readout. That is what lets `ferrocad_viewport`
-//! and `ferrocad_gpui` route any workbench's interaction without naming one.
+//! and `ferrocad_shell_gpui` route any workbench's interaction without naming one.
 //!
 //! [`Tool`]: crate::Tool
 //! [`TransformGizmo`]: crate::TransformGizmo

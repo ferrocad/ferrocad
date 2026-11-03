@@ -1,6 +1,6 @@
 # The wasm shell: one GPUI UI crate, two backends
 
-Status: **task (2026-11-03). Plan only — nothing in this note is built.**
+Status: **task (2026-11-03). M0 done (2026-11-03); M1–M5 planned.**
 Companions: [`../research/web-wasm-host.md`](../research/web-wasm-host.md) (the
 probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md)
@@ -11,18 +11,29 @@ probe and the wasm findings), [`../../developer/architecture/repackaging.md`](..
 ## 0. Decision
 
 The Python dependency is removed from the browser target by a **physical crate
-boundary**, not by a feature flag. Three crates:
+boundary**, not by a feature flag. Four crates:
 
 | Crate | Role | Python | wasm |
 | --- | --- | --- | --- |
-| **`ferrocad_shell_core`** | The GPUI shell: `Shell`, chrome, panels, the viewport element, the shell view models, and the `AppBackend` trait. | **No** | Yes |
-| **`ferrocad_shell_gpui`** | The native shell assembly: depends on `ferrocad_shell_core` (the native build is core + Python), owns `pyo3`, `ferrocad_inventor_py`, `ferrocad_stage_py`, the Python `AppBackend`, and the `run`/`run_with`/`HostConfig` entry points. **Renamed from `ferrocad_gpui`.** | Yes | No |
+| **`ferrocad_shell_api`** | The **contract**: the `AppBackend` trait and every view model it returns (bootstrap, tree rows, property rows, stage meshes, commands, dialogs, view requests, selection items). Depends only on pure crates. | **No** | Yes |
+| **`ferrocad_shell_core`** | The GPUI shell: `Shell`, chrome, panels, the viewport element, the shell view models, and the backend slot/helpers. | **No** | Yes |
+| **`ferrocad_shell_gpui`** | The native shell assembly: depends on `ferrocad_shell_core` (the native build is core + Python), owns `pyo3`, `ferrocad_inventor_py`, `ferrocad_stage_py`, the Python `AppBackend`, and the `run`/`run_with`/`HostConfig` entry points. **Renamed from `ferrocad_shell_gpui`.** | Yes | No |
 | **`ferrocad_web_gpui`** | The browser host: depends **only** on `ferrocad_shell_core`, supplies the Rust `AppBackend` over `ferrocad_core`/`ferrocad_part`/`ferrocad_occt`, and keeps the existing `wasm-bindgen` entry point. | No | Yes |
 
-The seam is named **`AppBackend`**, in `ferrocad_shell_core::app`. It is not
-`HostDocument`: it is a *view-model/provider seam* for a live workspace, not the
-document API. `ferrocad_core::Document` remains the engine; the browser's
-`AppBackend` reads it and returns the rows, trees and meshes the UI paints.
+`ferrocad_shell_api` was added during M0, after the original three-crate plan
+turned out to be untestable: the shell's unit tests live in `ferrocad_shell_core` and
+install the native backend from `ferrocad_shell_gpui`, so a dev-dependency cycle
+(legal in Cargo) builds the core crate **twice** — once as the test harness and
+once as a dependency. The duplicate copies make the trait object and every payload
+type distinct, so `Box<dyn AppBackend>` from the host cannot be installed in the
+test build. Moving the contract into its own crate gives both copies one definition
+each. See §9.
+
+The seam is named **`AppBackend`**, in `ferrocad_shell_api::app` and re-exported
+by `ferrocad_shell_core::app`. It is not `HostDocument`: it is a *view-model/provider
+seam* for a live workspace, not the document API. `ferrocad_core::Document` remains
+the engine; the browser's `AppBackend` reads it and returns the rows, trees and
+meshes the UI paints.
 
 Naming rationale:
 
@@ -46,10 +57,10 @@ Naming rationale:
 
 The probe already proves every hard part of the browser path (OCCT wasm, wgpu,
 `GpuSurface`/`paint_texture`, 40 triangles, drag/wheel captures). What is missing
-is the **shell**: `ferrocad_gpui` embeds CPython, so the window, chrome, panels and
+is the **shell**: `ferrocad_shell_gpui` embeds CPython, so the window, chrome, panels and
 viewport element cannot be compiled for `wasm32-unknown-unknown`.
 
-`ferrocad_gpui` calls Python synchronously from the UI thread in 66 production
+`ferrocad_shell_gpui` calls Python synchronously from the UI thread in 66 production
 lines across 14 files (`runtime/python.rs` is 40 functions + 18 types). A wasm
 build cannot link any of it. Two shapes were considered:
 
@@ -109,30 +120,25 @@ the Python bridge (and keeps the existing `Part`/Draft behaviour).
 
 ### 3.2 Definition
 
+The trait lives in `ferrocad_shell_api::app`; the shape below is the M0 form (every
+method has a default, so a read-only backend implements only what it can answer).
+
 ```rust
 pub trait AppBackend {
-    fn bootstrap(&mut self) -> Bootstrap;
-    fn model_tree(&self) -> Vec<DocumentNode>;
-    fn properties(&self, object: &str) -> Vec<PropRow>;
-    fn stage_meshes(&self) -> Vec<StageMesh>;
-    fn commands(&self) -> Vec<CommandInfo>;
-    fn set_view_state(&mut self, state: &ViewState);
-    fn set_selection(&mut self, items: &[SelectionItem]);
+    fn bootstrap(&mut self) -> Result<Bootstrap, String>;
+    fn model_tree(&self) -> Result<Vec<DocumentNode>, String>;
+    fn properties(&self, object: &str) -> Result<Vec<PropRow>, String>;
+    fn stage_meshes(&self) -> Result<Vec<StageMesh>, String>;
+    fn commands(&self) -> Result<Vec<CommandInfo>, String>;
+    fn set_view_state(&self, state: &ViewState) -> Result<(), String>;
+    fn set_selection(&self, items: &[SelectionItem]) -> Result<(), String>;
 
-    // Editing and scripted hooks. The first milestone leaves the defaults in
-    // place; a backend that cannot edit still renders a read-only viewer.
-    fn set_property(&mut self, object: &str, property: &str, value: &str) -> SetResult {
-        SetResult { ok: false, error: "not supported".into(), view: None }
-    }
-    fn run_command(&mut self, id: &str) -> CommandOutcome {
-        CommandOutcome::default()
-    }
-    fn rotation_quaternion(&self, object: &str) -> Option<[f64; 4]> {
-        None
-    }
-    fn take_selection_requests(&mut self) -> Vec<SelectionRequest> {
-        Vec::new()
-    }
+    // Editing and scripted hooks. The defaults leave a backend that cannot edit
+    // rendering a read-only viewer.
+    fn set_property(&mut self, object: &str, property: &str, value: &str) -> Result<SetResult, String>;
+    fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String>;
+    fn rotation_quaternion(&self, object: &str) -> Option<[f64; 4]>;
+    fn take_selection_requests(&mut self) -> Result<Vec<SelectionRequest>, String>;
 }
 ```
 
@@ -141,8 +147,9 @@ thread only. (`HostDocument: Send` in earlier sketches was wrong for GPUI.)
 
 ### 3.3 Installation and access
 
-Store the backend as a GPUI `Global`, like `gpui_interop` stores its pressed
-surface, not in a process `static`:
+The trait is in `ferrocad_shell_api`; the slot and the `cx` helpers are in
+`ferrocad_shell_core::app`. Store the backend as a GPUI `Global`, like
+`gpui_interop` stores its pressed surface, not in a process `static`:
 
 ```rust
 struct AppBackendSlot(RefCell<Box<dyn AppBackend>>);
@@ -161,62 +168,73 @@ functions (`commands::list()` in `workbench/commands.rs`, the panel helpers)
 without an `App`. The compiler will list them; move each call to a method that
 has `ctx`, or pass `&App` explicitly. Do not add a process global to avoid this.
 
-### 3.4 The per-frame statics stay in the core
+### 3.4 The per-frame statics stay in the pure crates
 
 `ferrocad_stage_py::view` and `ferrocad_inventor_py` expose pure Rust statics the
 shell calls every frame (`preview_generation`, `preview_items`, `publish_camera`,
 `publish_stage`, `has_stage`, `overlays_dirty`, `overlay_scenes`). They are not
-Python calls. Move those statics down to `ferrocad_stage` and
-`ferrocad_inventor` (or a small `stage_view` module in the core) and re-export
-them from the `*_py` crates. That removes the shell's 13 references to `*_py`
-without a trait, and the browser gets the same queue.
+Python calls. **M0 moved them down**: the published camera/stage/preview state is
+now `ferrocad_stage::view`, the overlay registry is
+`ferrocad_inventor::overlays`, and both `*_py` crates delegate to them. The shell
+reads them through `ferrocad_shell_core::stage_view`; the browser gets the same
+queue.
 
 `PythonEventCallbacks` is the other Python-typed shell value: the shell's event
-listener becomes `Box<dyn EventListener>` (the trait already lives in a pure
-crate), with the Python implementation constructed by `ferrocad_shell_gpui` and
-the browser implementation by `ferrocad_web_gpui`.
+listener is `Box<dyn EventListener>` (the trait already lives in a pure crate),
+with the Python implementation in `ferrocad_shell_gpui::events` and the browser
+implementation supplied by `ferrocad_web_gpui`.
 
 ## 4. Crate layout and moves
 
 ```
 crates/
-  ferrocad_shell_core/          # new; from ferrocad_gpui's UI half
+  ferrocad_shell_api/           # new: the shell/engine contract (no gpui, no Python)
     src/
       lib.rs
-      app.rs                    # AppBackend, AppBackendSlot, with_backend
+      app.rs                    # AppBackend + NoopListener
+      types.rs                  # Bootstrap, PropRow, DocumentNode, …
+      commands.rs               # CommandInfo, CommandOutcome, Surface, grouping
+      dialog.rs                 # DialogSpec, DialogField, Kind, ValueState
+      view.rs                   # ViewState, ViewRequest, ProjectionName, …
+      selection.rs              # SelectionItem
+      display.rs                # StageMesh
+  ferrocad_shell_core/          # new; from ferrocad_shell_gpui's UI half
+    src/
+      lib.rs
+      app.rs                    # AppBackendSlot, install_backend, with_backend, helpers
+      types.rs / model/view.rs  # re-exports of the api crate, same paths as before
       shell/                    # moved: shell/{mod,render,context,...}.rs
       ui/                       # moved: chrome, dev_tools, forms, ...
-      panels/                   # moved
-      hud/                      # moved
-      workbench/                # moved
-      model/                    # moved (selection, display)
+      panels/                   # moved (inside shell/)
+      hud/                      # moved (inside shell/)
+      workbench/                # moved (commands keeps the four bridge fns)
+      model/                    # moved (display keeps DisplaySync; selection keeps push)
+      stage_view.rs             # re-export of the pure statics (see §3.4)
       runtime/
-        mod.rs                  # cfg-selects backend-only modules
+        mod.rs                  # cfg-selects the interop module
         interop.rs              # the zero-copy presenter (gpu-interop)
-        fonts.rs                # embedded UI font (wasm) / system (native)
-        render_view.rs          # DeferredView (wasm) / ShellView alias
-        stage_view.rs           # pure statics re-export (see §3.4)
-  ferrocad_shell_gpui/          # renamed from ferrocad_gpui
+        fonts.rs                # embedded UI font (wasm) / system (native)  [M2]
+        render_view.rs          # DeferredView (wasm) / ShellView alias      [M3]
+  ferrocad_shell_gpui/          # renamed from ferrocad_gpui (M0)
     src/
-      lib.rs                    # run/run_with/HostConfig, Python install
-      python/                   # the current runtime/python.rs, split into
-                                # {mod,types,embedded}.rs
-      backend.rs                # PythonAppBackend: AppBackend
+      lib.rs                    # run/run_with/HostConfig, backend install
+      python.rs                 # the old runtime/python.rs (still one file at M0)
+      backend.rs                # PythonAppBackend: AppBackend, scripted tools
       events.rs                 # PythonEventCallbacks: EventListener
+      headless.rs               # offscreen render / STL export (native only)
   ferrocad_web_gpui/            # existing probe → host
     src/
-      lib.rs                    # wasm entry: install Rust backend, run core
-      backend.rs                # WasmAppBackend: AppBackend
-      document.rs               # ferrocad_core/Part/OCCT → view models
-      commands.rs               # static CommandInfo / toggle outcomes
+      lib.rs                    # wasm entry: install Rust backend, run core     [M2]
+      backend.rs                # WasmAppBackend: AppBackend                      [M2]
+      document.rs               # ferrocad_core/Part/OCCT → view models          [M4]
+      commands.rs               # static CommandInfo / toggle outcomes           [M2]
   ferrocad/                     # base binary: depend on ferrocad_shell_gpui
   ferrocad_parametric/          # edition: depend on ferrocad_shell_gpui
 ```
 
-`HostConfig` belongs to the native assembly, but the browser host needs the same
-window title/name knobs. Put the **struct** in the core with the Python/edition
-fields behind the native assembly's extension (or keep two constructors); do not
-put `python_paths`/`entry_module` in the core.
+`HostConfig` stays in `ferrocad_shell_gpui` at M0 (its fields are the app's Python
+script configuration). The browser host needs only a window title; M2 can add a
+small `WindowConfig` to the core rather than moving `HostConfig`.
 
 ## 5. What the browser host supplies
 
@@ -256,7 +274,7 @@ The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research
 
 | # | Stage | Work | Acceptance |
 | --- | --- | --- | --- |
-| **M0** | **Crate split, no behaviour change** | Create `ferrocad_shell_core`; move the UI; rename `ferrocad_gpui` to `ferrocad_shell_gpui`; move the Python backend behind `AppBackend`; update `ferrocad`/`ferrocad_parametric`/docs. | The current 308 `ferrocad_gpui` tests pass in their new home; the native app boots and `--check-init` is unchanged; `ferrocad_shell_core` has no pyo3 in `cargo tree`. |
+| **M0** | **Crate split, no behaviour change** — **done 2026-11-03** | Create `ferrocad_shell_api` and `ferrocad_shell_core`; move the UI; rename `ferrocad_shell_gpui` to `ferrocad_shell_gpui`; move the Python backend behind `AppBackend`; move the per-frame statics into the pure crates; update `ferrocad`/`ferrocad_parametric`/`ferrocad_toy`/`xtask`/docs. | 250 core + 52 api + 6 shell_gpui tests pass (the old 308); the native app boots and `--check-init` prints `ferrocad: init OK`; `cargo tree -p ferrocad_shell_core -e normal` has no pyo3. |
 | **M1** | **Compile for wasm (no window)** | `web-time`; cfg `interop`/`headless`; wasm app depends only on the core; CI check. | `cargo check -p ferrocad_web_gpui --target wasm32-unknown-unknown` in the cross image (the OCCT kernel is only needed once the document backend is wired; M1 can use the sample backend). |
 | **M2** | **A shell window in Chrome** | Embedded font; wasm entry (`WebGl`, `web_init`, no `process::exit`); in-window panels; static `AppBackend`; placeholder viewport. | Browser shows the leading bar, status line, tree/properties/console, no panic; the console proves the backend was installed. |
 | **M3** | **Live 3D in the shell** | `DeferredView`; presenter on wasm (format/MSAA); the sample scene through `InventorViewport`; orbit/zoom/pick. | The existing probe baseline still holds (40 triangles, `selected=Gl`, 22 027 / 26 127 / 0) with the shell around it. |
@@ -291,27 +309,48 @@ the first user-visible demo. M3 is the regression-proof 3D step.
 - **The `cx` threading.** `AppBackend` access needs `&App`/`&mut App` at every
   call site; if a free function genuinely has none, move the call rather than
   reintroducing a global.
-- **The rename.** `ferrocad_gpui` 0.1.5 is published; `ferrocad_shell_gpui` is a
+- **The rename.** `ferrocad_shell_gpui` 0.1.5 is published; `ferrocad_shell_gpui` is a
   new package. Record the discontinuity in `releasing.md` and update the edition
   manifests in the same change.
 - **Test policy.** Native tests keep the Python backend (`ferrocad_shell_gpui`);
   do not run the suite with a stub. The wasm backend is tested by the browser
   harness and by `cargo check` in CI.
-- **Cargo.lock churn.** No new packages are required (`web-time` and `wgpu` are
-  already in the lock); the new dependency edges are the only change.
+- **The test-build cycle (discovered in M0).** `ferrocad_shell_core`'s tests need a
+  real backend, so it dev-depends on `ferrocad_shell_gpui`, which depends on
+  `ferrocad_shell_core`. Cargo permits that, but builds the core crate **twice**
+  (test harness + dependency). Everything crossing the seam must therefore live in
+  `ferrocad_shell_api`, including the `AppBackendSlot` key: the tests install the
+  host's backend through `ferrocad_shell_core::app::install_backend`, not through
+  `ferrocad_shell_gpui::backend::install` (that would write a different `Global`).
+  Verify the isolation with `cargo tree -p ferrocad_shell_core -e normal`; the
+  default `cargo tree` includes the dev dependency and will list `pyo3`. The
+  dev-dependency is **path-only on purpose**: a packaging build strips it from the
+  normalized manifest, so the crates.io order stays `ferrocad_shell_api` →
+  `ferrocad_shell_core` → `ferrocad_shell_gpui` with no publish cycle.
+- **Cargo.lock churn.** No new third-party packages are required (`web-time` and
+  `wgpu` are already in the lock); the new dependency edges are the only change.
 
-## 10. File-level checklist (M0)
+## 10. File-level checklist (M0) — **done (2026-11-03)**
 
-- Add `crates/ferrocad_shell_core/` (manifest + `src/{lib,app}.rs` + moved
-  `shell/`, `ui/`, `panels/`, `hud/`, `workbench/`, `model/`, `runtime/`).
-- Rename `crates/ferrocad_gpui` → `crates/ferrocad_shell_gpui`; keep
-  `src/{lib,python,backend,events}.rs`.
-- Update `Cargo.toml` members and the `[workspace.dependencies]` entries.
-- Update `ferrocad` and `ferrocad_parametric` imports and `Cargo.toml`s.
-- Route the 66 `python::` call sites through `with_backend`/`with_backend_mut`.
-- Move the per-frame statics to the pure crates and re-export from `*_py`.
-- Update `docs/developer/architecture/repackaging.md`, the web probe README, and
+- [x] Add `crates/ferrocad_shell_api/` (the `AppBackend` trait and every view model).
+- [x] Add `crates/ferrocad_shell_core/` (manifest + `src/{lib,app}.rs` + moved
+  `shell/`, `ui/`, `workbench/`, `model/`, `runtime/`; panels/hud stay inside
+  `shell/`).
+- [x] Rename `crates/ferrocad_shell_gpui` → `crates/ferrocad_shell_gpui`; keep
+  `src/{lib,python,backend,events}.rs` and the native `headless.rs`.
+- [x] Update `Cargo.toml` members and the `[workspace.dependencies]` entries.
+- [x] Update `ferrocad`, `ferrocad_parametric`, `ferrocad_toy` and `xtask`
+  imports/manifests, and `contracts/editions.json`.
+- [x] Route the `python::` call sites through the `AppBackend` helpers (the two
+  direct `with_gil` tool sites now sit in `ferrocad_shell_gpui::backend`).
+- [x] Move the per-frame statics to `ferrocad_stage::view` /
+  `ferrocad_inventor::overlays`; the `*_py` crates delegate.
+- [x] Update `docs/developer/architecture/repackaging.md`, the web probe README, and
   this task's index entries; record the rename in `releasing.md`.
+- [x] Validation: the 308 tests (250 core + 52 api + 6 shell_gpui) pass;
+  `ferrocad_parametric --check-init` prints `ferrocad: init OK`;
+  `cargo xtask editions --check` is clean; `cargo tree -p ferrocad_shell_core -e
+  normal` has no `pyo3`.
 
 ## 11. References
 

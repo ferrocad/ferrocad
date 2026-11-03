@@ -34,7 +34,7 @@ pyo3 = { version = "0.25", features = ["auto-initialize"] }
 
 [dev-dependencies]
 # The end-to-end test drives the same registry + Python bridge the shell uses.
-ferrocad_gpui.workspace = true
+ferrocad_shell_gpui.workspace = true
 ferrocad_geom.workspace = true
 ferrocad_graphics.workspace = true
 ferrocad_stage.workspace = true

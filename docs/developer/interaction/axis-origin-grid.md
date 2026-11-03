@@ -378,7 +378,7 @@ active `n`. Keeping the cube world-only is deliberate: mixing the two would make
 | `ferrocad_graphics` | `Vertex.color` (G0); `Topology::{Points, Lines}` already |
 | `ferrocad_stage` | `Workplane`, `FaceFrame` (face → frame from the tessellation), `GridSpec`, `GridStyle`, `SnapContext`, the grid producer, the triad builder, `SnapKind` extensions. Pure math: no kernel, no gpui, no Python |
 | `ferrocad_viewport` | building the frames from the display tessellation (`SelectionRef` → `WorkplaneKind::Face`), drawing the producer and the local layers, routing hover/clicks, the aurora and pill, `set_workplane`/`set_grid` |
-| `ferrocad_gpui` / the edition | the **policy**: grid on/off, steps, units, sketch mode, the command that activates a datum plane. Preferences come from `App::ParamGet` |
+| `ferrocad_shell_gpui` / the edition | the **policy**: grid on/off, steps, units, sketch mode, the command that activates a datum plane. Preferences come from `App::ParamGet` |
 | `ferrocad_part` and others | nothing — a workplane is a frame, not a shape |
 
 Resolving a face frame uses only the tessellation already on the stage: triangle
@@ -526,7 +526,7 @@ landed in G5.)
   keyed on the `GridSpec` and its ink (camera-independent, so an orbit does not rebuild
   it), the triad on the camera's view/projection, device height and alpha. `set_grid` /
   `grid_enabled` toggle it; `sync_grid` runs on every `recompile` and every paint.
-- **`ferrocad_gpui`** — `apply_view` forwards `ViewState.grid` to the viewport, and
+- **`ferrocad_shell_gpui`** — `apply_view` forwards `ViewState.grid` to the viewport, and
   `enable_viewport` applies the current state at creation.
 
 ---
@@ -608,7 +608,7 @@ pattern (G0–G2 are built; the entries for them are live tests):
   cube.
 - **`ferrocad_wgpu`** — the per-vertex colour multiply (a readback of a two-colour
   triangle), and the grid's line/point primitives in a real pass.
-- **`ferrocad_gpui`** — `ViewState::apply` validation and summaries, `App_ToggleGrid` /
+- **`ferrocad_shell_gpui`** — `ViewState::apply` validation and summaries, `App_ToggleGrid` /
   `App_ToggleAxisCross` staying independent, `App_ReloadGridSettings` reaching the
   viewport (steps, radius), and a workplane action reporting cleanly without a viewport.
 

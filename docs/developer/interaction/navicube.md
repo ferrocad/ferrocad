@@ -318,7 +318,7 @@ are now **yaw** controls (`InventorViewport::yaw`, `YawDirection`) about world +
 AZ/EL readout changes and the ring never tilts; the roll-view helper is gone.
 
 **Crate:** these viewport pieces (the element, the controller and the cube) live in
-**`ferrocad_viewport`**, extracted from `ferrocad_gpui`; it depends only on
+**`ferrocad_viewport`**, extracted from `ferrocad_shell_gpui`; it depends only on
 `ferrocad_inventor` (no `ferrocad_wgpu`, no Python). The `InventorView` capability
 trait — implemented by `ferrocad_wgpu`, supplied by the shell — is the seam.
 

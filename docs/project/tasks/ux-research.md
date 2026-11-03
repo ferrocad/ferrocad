@@ -149,7 +149,7 @@ does not collide with SK4's HUD work.
 
 | Operation | Typed input today | Evidence |
 | --- | --- | --- |
-| Move the selection | **yes** — ΔX/ΔY/ΔZ quantity fields, two-way with the gizmo drag | `_MoveCommand`, `python/ferrocad_shell/__init__.py:1134-1138`; `dialog::translation_preview`, `crates/ferrocad_gpui/src/ui/dialog.rs:283-313`; drag to field `shell/dialogs.rs:327-339` |
+| Move the selection | **yes** — ΔX/ΔY/ΔZ quantity fields, two-way with the gizmo drag | `_MoveCommand`, `python/ferrocad_shell/__init__.py:1134-1138`; `dialog::translation_preview`, `crates/ferrocad_shell_api/src/dialog.rs:283-313`; drag to field `shell/dialogs.rs:327-339` |
 | Offset the workplane | **yes** — one “Offset along normal (mm)” field, two-way with the `+N` stem | `_OffsetWorkplaneCommand`, `ferrocad_shell/__init__.py:2111-2131`; readout `crates/ferrocad_stage/src/workplane/stem.rs:255-258`; field and stem `shell/viewport.rs:956-1004` |
 | Extrude or pocket a face (push/pull) | **no** — drag only; readout `extrude 12.30 mm` | `crates/ferrocad_part_gui/src/push_pull.rs:86-89,214-235`; hosted as a manipulator, `crates/ferrocad_parametric/src/main.rs:93-95` |
 | Fillet or chamfer an edge | **no** at the gesture; the committed feature's radius is typed in the property pane | `crates/ferrocad_part_gui/src/dress_up.rs:103-114`; `shell/properties.rs:11-58` |

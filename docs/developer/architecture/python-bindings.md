@@ -14,7 +14,7 @@ talk in two directions:
 - **Extension module.** Python owns the process; it imports a native module and
   calls into Rust. This is the `ferrocad` wheel.
 - **Embedding.** Rust owns the process; it starts a CPython interpreter and runs
-  Python (workbench scripts, the console). This is `ferrocad_gpui`.
+  Python (workbench scripts, the console). This is `ferrocad_shell_gpui`.
 
 Both need a bridge, and the bridge can be built at three levels: the CPython
 C-API directly, a Rust binding to that C-API (PyO3), or a plain C ABI that Python
@@ -105,7 +105,7 @@ failure:
   interpreter that imports the module already provides it. Hence the opt-in
   `extension-module` feature. Linking a second `libpython` produces a wheel that
   imports and then crashes.
-- **Embedding** (`ferrocad_gpui`): Rust initializes CPython
+- **Embedding** (`ferrocad_shell_gpui`): Rust initializes CPython
   (`pyo3::prepare_freethreaded_python` / `Python::with_gil`) and imports the
   `FreeCAD` facade. Here PyO3 *must* link `libpython`. The host does not link the
   extension crate; it loads the facade, which imports the `ferrocad` module the

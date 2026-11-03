@@ -8,7 +8,7 @@ Python interpreter and packaging scripts.
 ## 1. Two modes, one codebase
 
 There are two ways to start the application, and they call the **same**
-`ferrocad_gpui::run()`:
+`ferrocad_shell_gpui::run()`:
 
 1. **Development / direct run.** `cargo run -p ferrocad` starts the base app and
    uses the *system* CPython (whatever `python3` and `libpython` the machine has).
@@ -77,7 +77,7 @@ ferrocad.AppImage
 ├── AppRun                        -> sets PYTHONHOME/FERROCAD_PYTHON_PATH and
 │                                 LD_LIBRARY_PATH, exec bin/ferrocad
 ├── ferrocad.desktop, ferro.png
-├── bin/ferrocad                  Rust bin (crate `ferrocad` -> ferrocad_gpui::run_with)
+├── bin/ferrocad                  Rust bin (crate `ferrocad` -> ferrocad_shell_gpui::run_with)
 │                                 links the PyO3 bindings; `ferrocad` is a built-in module
 ├── lib/                          OCCT toolkit .so (the closure of the binary's DT_NEEDED)
 ├── mods/                         the workbenches (FreeCAD's Mod/ equivalent)
@@ -92,7 +92,7 @@ geometry-free), so `lib/` appears only once the geometry slices land; see
 [`occt-bundling.md`](occt-bundling.md).
 
 The shell already resolves the facade via `FERROCAD_PYTHON_PATH` (see
-`crates/ferrocad_gpui/src/runtime/python.rs`); the bundle sets it (and `PYTHONHOME`) at
+`crates/ferrocad_shell_gpui/src/python.rs`); the bundle sets it (and `PYTHONHOME`) at
 `AppRun`, and the app adds its `mods/` directory through `HostConfig.mods_paths`,
 so no code change is needed to point at the bundled Python and scripts. There is
 no `lib/ferrocad.abi3.so` in the app: the binary registers the PyO3 module as a
@@ -140,7 +140,7 @@ with the artifacts.
   and workbenches are embedded at compile time and unpacked to the per-user data
   directory on first run (see §8). This is the one distribution path with no
   installer to place data files.
-- It depends on the reusable `ferrocad_gpui` library, which boots CPython and
+- It depends on the reusable `ferrocad_shell_gpui` library, which boots CPython and
   provides the shell (`run_with(HostConfig)`).
 - The app owns its Python: `HostConfig.entry_module` names the startup module and
   `HostConfig.python_paths` the script and mod directories. In the repository the
@@ -198,7 +198,7 @@ the crate's own docs recommend when tests must carry the manifest.
 The symptom, when it bites, is a startup crash with no test output (`0xc0000139`),
 not a compile failure — so add the test job before trusting a Windows build. This
 is why `ci.yml` now has a `windows` job that runs `ferrocad_widgets` and
-`ferrocad_gpui` under `cargo test`: the manifest path is otherwise never exercised
+`ferrocad_shell_gpui` under `cargo test`: the manifest path is otherwise never exercised
 on the platform where it matters. If it fails, the fix belongs in the embedding
 crate's `build.rs` (upstream `bite-gpui`, or a patched fork), not a workflow
 workaround.
@@ -271,7 +271,7 @@ Revisit `cargo-packager` if we want one Rust tool for AppImage, `.dmg` and `.msi
 
 ## 7. Roadmap slices
 
-- **D1 (done).** Promote the shell to a library (`ferrocad_gpui`) and make
+- **D1 (done).** Promote the shell to a library (`ferrocad_shell_gpui`) and make
   `ferrocad` the base app binary; `HostConfig` carries `entry_module` and
   `python_paths`.
 - **D2 (done).** A `mods/` directory sits next to the repository `python/` tree,
@@ -315,7 +315,7 @@ moved into any crate's source tree. Packaging copies them:
   embedded in the binary and unpacked on first run.
 
 The three paths share one resolution order in the shell
-(`crates/ferrocad_gpui/src/runtime/python.rs::find_python_dir`), so the code never needs to
+(`crates/ferrocad_shell_gpui/src/python.rs::find_python_dir`), so the code never needs to
 know which one it is in:
 
 | Order | Source | Who provides it |

@@ -151,8 +151,8 @@ workbench) can use:
 
 | Contract | Addition |
 | --- | --- |
-| display (`ferrocad_gpui::DisplaySync`) | `StageMesh.color` (RGBA) and `StageMesh.display` (`shaded` / `shaded_edges` / `wireframe`) |
-| contributions (`ferrocad_gpui::Contributions`) | `with_gizmo` / `gizmo_for` next to the manipulator factories |
+| display (`ferrocad_shell_gpui::DisplaySync`) | `StageMesh.color` (RGBA) and `StageMesh.display` (`shaded` / `shaded_edges` / `wireframe`) |
+| contributions (`ferrocad_shell_gpui::Contributions`) | `with_gizmo` / `gizmo_for` next to the manipulator factories |
 | viewport events | `ViewportEvent::TransformPreview(TransformPreview)` — every drag tick (`Begin`/`Update`/`End`) with the snapped `GizmoValue`; the host commits its session |
 | commits (`ferrocad_stage`) | `TRANSFORM_ID` and `GizmoCommitEvent::to_interaction` |
 | console | `ferrocad_shell.add_namespace(name, value)` |

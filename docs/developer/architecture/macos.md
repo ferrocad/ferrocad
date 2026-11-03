@@ -100,7 +100,7 @@ release job installs only `unzip` — add `p7zip-full` when a `.dmg` returns.
   `MACOSX_DEPLOYMENT_TARGET` to match `Info.plist`.
 - The `linux-desktop-deps` action and the OCCT micromamba step are already
   `if: runner.os == 'Linux'`; a macOS OCCT fetch would need `osx-arm64`.
-- Add a macOS leg to `ci.yml` (extension build + `cargo test -p ferrocad_gpui`
+- Add a macOS leg to `ci.yml` (extension build + `cargo test -p ferrocad_shell_gpui`
   and friends) and a macOS `geometry` leg so `opencascade-sys` is exercised.
 - The edition job mirrors `build` with `packaging/macos/app.sh --edition
   parametric --occt`; the release job already globs everything under `dist/`.
@@ -111,7 +111,7 @@ release job installs only `unzip` — add `p7zip-full` when a `.dmg` returns.
   jobs compile it, but no macOS host or SDK has been available in this
   workspace.
 - Whether `xcrun metal`/`metallib` succeed with the runner's Xcode.
-- Whether the 64 `#[gpui::test]` tests in `ferrocad_gpui` run headless on a
+- Whether the 64 `#[gpui::test]` tests in `ferrocad_shell_gpui` run headless on a
   GitHub macOS VM (Metal device / WindowServer availability).
 - Whether the Metal backend renders a real window (titlebar, client decorations).
 - Whether conda-forge publishes `occt=8.0.1` for `osx-arm64`, and what its dylib

@@ -381,7 +381,7 @@ crate mean afterwards".
 
 | Candidate | Today's meaning | What adding curves does | Cost if wrong |
 | --- | --- | --- | --- |
-| `ferrocad_geom` | "the kernel-neutral **B-Rep seam**": `Shape`, `History`, `ElementMap`, `GeometryBackend` (1110 lines, one `lib.rs`) | Widens a crate that `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_gpui`, `ferrocad_toy`, `ferrocad_part` and `ferrocad_occt` all depend on. The name says "B-Rep"; the docs say "kernel-independent vocabulary". Those two statements would have to be reconciled. | Low-to-medium: one new module and one new edge; removing it later is mechanical but is a published-API change. |
+| `ferrocad_geom` | "the kernel-neutral **B-Rep seam**": `Shape`, `History`, `ElementMap`, `GeometryBackend` (1110 lines, one `lib.rs`) | Widens a crate that `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_shell_gpui`, `ferrocad_toy`, `ferrocad_part` and `ferrocad_occt` all depend on. The name says "B-Rep"; the docs say "kernel-independent vocabulary". Those two statements would have to be reconciled. | Low-to-medium: one new module and one new edge; removing it later is mechanical but is a published-API change. |
 | **new `ferrocad_curves`** | does not exist | A leaf over `ferrocad_types`: analytic curves, wire assembly, tolerances, no `Shape`, no OCCT, no document. | Low: a new internal crate; a rename or a re-home is a mechanical import change across at most four crates. |
 | `ferrocad_types` | base values (`Vector3`, `Matrix4`, `Rotation`, `Placement`, `Quantity`); every crate in the workspace depends on it | Turns a value crate into an algebra crate. Compile-time and API blast radius is the whole workspace. | High: every crate rebuilds for every curve change, and "types" stops being a stable leaf. |
 

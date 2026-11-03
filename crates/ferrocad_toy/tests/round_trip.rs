@@ -15,8 +15,8 @@
 use std::sync::{Mutex, Once};
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_gpui::python;
-use ferrocad_gpui::{Contributions, DisplaySync, StageMesh};
+use ferrocad_shell_gpui::python;
+use ferrocad_shell_gpui::{Contributions, DisplaySync, StageMesh};
 use ferrocad_graphics::{Camera, Projection, Viewport};
 use ferrocad_stage::screen::project_device;
 use ferrocad_stage::{GizmoHandle, Stage};

@@ -21,7 +21,7 @@
 //! `RenderQueue`, `PickId`, `Rect`, `Hit`, picking) and the [`ferrocad_inventor`] scene
 //! vocabulary (`Scene`, `Event`/`EventListener`, `ViewSpec`, the `InventorView`
 //! capability trait) — and on no concrete renderer or Python. `ferrocad_wgpu`
-//! implements `InventorView`; the host (`ferrocad_gpui`) supplies it and owns the window.
+//! implements `InventorView`; the host (`ferrocad_shell_gpui`) supplies it and owns the window.
 //!
 //! ```text
 //! ferrocad_viewport ── uses ──▶ ferrocad_graphics  (Camera, RenderQueue, PickId, …)
@@ -29,7 +29,7 @@
 //!                   ── uses ──▶ ferrocad_inventor  (Scene, Event, InventorView, …)
 //!        ▲
 //!        │ host supplies the window          backend implements InventorView
-//! ferrocad_gpui                        ferrocad_wgpu
+//! ferrocad_shell_gpui                        ferrocad_wgpu
 //! ```
 
 pub mod inventor_view;

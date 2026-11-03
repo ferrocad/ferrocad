@@ -93,7 +93,7 @@ Notes:
 A mesh with empty `positions` is skipped when the shell builds the stage. An
 empty list means "nothing to show", and the shell keeps its sample scene.
 
-The Rust side (`ferrocad_gpui::display::DisplaySync::build`) turns each entry
+The Rust side (`ferrocad_shell_gpui::display::DisplaySync::build`) turns each entry
 into a `ShapeItem`, applies `display` as the draw mode and `color` as the
 surface/edge colour, and keeps the `entity -> object` map a pick needs.
 

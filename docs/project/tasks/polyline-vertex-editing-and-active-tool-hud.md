@@ -33,13 +33,13 @@ Read from this checkout; the descriptions in the brief that follow are checked a
   available to a tool, so it cannot project its own points to screen space.
 - **The `Tool` trait has three jobs, not four.** `on_event`, `items`, `status`, `cancel`
   (`tool.rs:79`). There is no `finish`: `Enter` ends the session in the host
-  (`crates/ferrocad_gpui/src/shell/bridge/dispatch.rs:599`), and it produced no `InteractionCommit`,
+  (`crates/ferrocad_shell_core/src/shell/bridge/dispatch.rs:599`), and it produced no `InteractionCommit`,
   so finishing drew nothing. *(Superseded 2026-10-29: `Tool::finish` exists and returns a
   creating commit; see §6.)*
 - **Tool visuals are never selectable**, which is the property to preserve:
   `wire_item` sets `with_selectable(false)` (`tool.rs:243`).
 - **The strip is an opaque flex row above the canvas with an accent Cancel.** `tool_strip`
-  (`crates/ferrocad_gpui/src/shell/render.rs:11`) uses `bg(PANEL_ALT)` rather than the
+  (`crates/ferrocad_shell_core/src/shell/render.rs:11`) uses `bg(PANEL_ALT)` rather than the
   floating-HUD `WHEEL_GLASS`, and has a single **Cancel** button painted `bg(ACCENT)` — the
   primary accent on an abort action (`render.rs:45`). There is no **Finish** button; the
   hint says "Enter to finish". It is added as a child of the viewport *column* above the
@@ -186,7 +186,7 @@ empty object.
 - **Numeric test.** Typing `X`/`Y` for point 3 moves it, the adjacent segments follow, and
   the committed wire (once §3.5 lands) contains the edited point.
 - **No regression:** `tools/conformance.py --simplecad` and the Part suites are untouched
-  by this work; `ferrocad_gpui` and `ferrocad_stage` test counts must not drop.
+  by this work; `ferrocad_shell_gpui` and `ferrocad_stage` test counts must not drop.
 
 ## 5. Open decisions
 
@@ -220,7 +220,7 @@ Built by two parallel agents against disjoint write scopes; verified centrally.
   edits; `inventor_view::handle_key` forwards an unowned key to it and rebuilds the
   transients when consumed.
 
-**HUD side (`ferrocad_gpui`).**
+**HUD side (`ferrocad_shell_gpui`).**
 
 - `tool_strip` is an absolutely positioned bottom-centre pill in the canvas
   (`WHEEL_GLASS` + `DOCK_BORDER`), in the same slot as `action_dock`; the shell renders
@@ -229,7 +229,7 @@ Built by two parallel agents against disjoint write scopes; verified centrally.
   `Shell::finish_active_tool`, the same handler the shell's `Enter` path now uses for any
   active tool (previously Python-backed tools only).
 
-**Verified.** `ferrocad_stage` 185 passed, `ferrocad_gpui --lib` 216, `ferrocad_viewport`
+**Verified.** `ferrocad_stage` 185 passed, `ferrocad_shell_gpui --lib` 216, `ferrocad_viewport`
 160, `ferrocad_toy` 18 plus its round trips (including the new polyline creation), and
 `tools/run_tests.py --extension Part --extension Mesh --extension MeshPart` at 714 passed
 / 3 skipped / 0 errors. The shell test `an_active_tool_overlays_the_canvas_without_moving_it`

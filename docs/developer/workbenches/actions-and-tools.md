@@ -182,7 +182,7 @@ def dialog_accept(token: str, values_json: str) -> str: ...
 def dialog_cancel(token: str) -> str: ...
 ```
 
-`ferrocad_gpui` gains a thin `commands` module:
+`ferrocad_shell_gpui` gains a thin `commands` module:
 
 ```rust
 pub fn list() -> Result<Vec<CommandInfo>, String>;   // via call_json("commands")
@@ -547,7 +547,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 
 ## 10. Shortcuts, tooltips and icons
 
-- `Accel` is a string like `"Ctrl+Shift+S"` or `"Del"`. `ferrocad_gpui::shortcuts`
+- `Accel` is a string like `"Ctrl+Shift+S"` or `"Del"`. `ferrocad_shell_gpui::shortcuts`
   parses that subset (modifiers joined with `+`/`-`, then one key; `Del`/`Esc`/
   `Return` and `F1`–`F24` are mapped to gpui names) and matches it against the key
   events that bubble to the shell root.
@@ -592,7 +592,7 @@ using it to auto-wrap transactions is deliberately not done (§3.3).
 | Slice | Deliverable | Acceptance |
 | --- | --- | --- |
 | **A0 — registry** ✅ | `FreeCADGui.addCommand/runCommand/listCommands`, resource defaults, duplicate/error isolation; `GuiUp` flag plumbing; Python conformance tests | a registered command runs and returns its value; a raising `Activated`/`IsActive` is isolated; duplicates raise |
-| **A1 — shell bridge + placement** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_gpui::commands`, a surface-placed command list with enabled/checked (the A1 flat bar was replaced by the P0.6 header/dock), rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the command list surfaces the toy command, a run creates the object, undo removes it |
+| **A1 — shell bridge + placement** ✅ | `ferrocad_shell.commands()/run_command()`, `ferrocad_shell_gpui::commands`, a surface-placed command list with enabled/checked (the A1 flat bar was replaced by the P0.6 header/dock), rebuild on selection/doc events; `Toy_MakeSlab` registered | headless toy test: the command list surfaces the toy command, a run creates the object, undo removes it |
 | **A2 — selection + built-ins** ✅ | `FreeCADGui.Selection` snapshot pushed by the shell, multi-selection in the inspector (Ctrl/Cmd·Shift toggle), `App_Delete`, `App_Move` (delta via `runCommand`; the dialog is A3), `App_Rotate` (session gizmo mode) | deleting two selected objects is one undo step; `IsActive` flips with the selection; Rotate returns `gizmo: rotate` |
 | **A3 — dialogs** ✅ | the spec + token protocol, the glass modal **and the floating HUD** (`presentation`, `preview`), `text/int/float/quantity/bool/enum` fields, validation, cancel; `Toy_MakeSlab` and `App_Move` use it | create via the dialog; cancel creates nothing and leaves no transaction or token; a bad value is rejected in the shell; `App_Move` floats beside the gizmo and previews its delta |
 | **A4 — shortcuts + status** ✅ | `Accel` parsing and window-root bindings, tooltips (ToolTip + Accel), `{"status"}` results, the `HoverReport` pass-through line | a shortcut runs the same command as a click; the status bar shows the command's message and the overlay pass-through |
@@ -641,7 +641,7 @@ what makes it able to ask the user something.
   controls, popover rows, dock rows and the Dev Tools list), a run refreshes
   the model, a multi-selection is pushed and flips `IsActive`, a dialog validates,
   accepts once, renders, and cancels on `Esc`, and a registered `Accel` runs its
-  command. ✅ `crates/ferrocad_gpui/src/shell/mod.rs` has
+  command. ✅ `crates/ferrocad_shell_core/src/shell/mod.rs` has
   `a_multi_selection_is_pushed_and_enables_the_built_ins`,
   `a_command_dialog_validates_accepts_and_cancels`,
   `the_command_dialog_renders_and_escape_cancels`, `a_shortcut_runs_the_command` and
@@ -650,7 +650,7 @@ what makes it able to ask the user something.
 - **Viewport (A4)** — `navicube_negative_space_reaches_the_scene` also asserts the
   `HoverReport` names the overlay a click passes through. ✅
 - **View/tools (A5)** — `tests/test_view_tools.py`: the defaults, the checkable grid
-  loop, and the `tool`/`view` payload; `crates/ferrocad_gpui/src/shell/mod.rs` has
+  loop, and the `tool`/`view` payload; `crates/ferrocad_shell_core/src/shell/mod.rs` has
   `a_view_request_toggles_the_grid_and_its_check_mark` and
   `a_tool_request_resolves_by_id` (known and unknown ids). ✅
 - **Dialogs (A3)** — `tests/test_dialogs.py`: the token protocol, single use, cancel,
@@ -681,7 +681,7 @@ through — without the shell naming the workbench.
 | File | What it does |
 | --- | --- |
 | `python/FreeCADGui/__init__.py` | the registry (`addCommand`, `removeCommand`, `listCommands`, `runCommand`); `Command` duck-typing (`Activated` required, `GetResources`/`IsActive`/`IsChecked` optional); per-command error isolation with `_report_once`; the private bridge `_command_list()` / `_run(name)`; the **token registry** `_accept`/`_cancel`/`_cancel_all`; the read-only `Selection` snapshot |
-| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_gpui::python::call_json` calls; `set_selection(payload)` (the snapshot push); `set_view_state(payload)` (the view mirror); `dialog_accept(payload)` / `dialog_cancel(token)`; the built-ins `App_Delete`, `App_Move`, `App_Rotate` and the checkable `App_ToggleGrid` |
+| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_shell_gpui::python::call_json` calls; `set_selection(payload)` (the snapshot push); `set_view_state(payload)` (the view mirror); `dialog_accept(payload)` / `dialog_cancel(token)`; the built-ins `App_Delete`, `App_Move`, `App_Rotate` and the checkable `App_ToggleGrid` |
 | `python/ferrocad_toy/__init__.py` | `Toy_MakeSlab` (`MenuText` "Create Slab", `ToolTip`, `Accel` "Ctrl+Shift+S", `Group` "Toy", `CmdType` "ForEdit") returns a three-quantity dialog whose `_make_from_dialog` callback creates the slab; `Toy_Polyline` returns `{"tool": "toy_polyline"}` |
 
 Two shape decisions fell out of the build:
@@ -698,15 +698,15 @@ Two shape decisions fell out of the build:
 
 | File | What it does |
 | --- | --- |
-| `ferrocad_gpui/src/workbench/commands.rs` | `CommandInfo` (id/menu/tooltip/accel/group/cmd_type/surface/parent/enabled/checked + `label()`, `surface()`, `parent()`) and `CommandOutcome` (`ok`/`error`/`status`/`value`/`dialog`/`token`/`view`/`tool`/`select`); `Surface` + `group_by_surface`/`popover_commands`; `list()`, `run(id)`, `accept(token, values)`, `cancel(token)` |
-| `ferrocad_gpui/src/ui/dialog.rs` | `DialogSpec`/`DialogField`/`Kind`/`ValueState` and the pure `collect()` validation (typed values, `min`/`max`, `required`, quantity parsing, unknown-kind rejection) |
-| `ferrocad_gpui/src/model/view.rs` | `ViewRequest` (`grid`, `projection`), `ViewState` (grid + `ProjectionName`) and `apply()` — validation-first, returning a one-line summary |
-| `ferrocad_gpui/src/model/selection.rs` | `SelectionItem` (`object` + `elements`, the last item is primary); `push()` — the one call that makes the UI selection visible to Python |
-| `ferrocad_gpui/src/ui/shortcuts.rs` | `Accelerator::parse` (the documented `Accel` subset), `is_global` (chords/named keys only) and `matches` (exact modifiers); the shell binds the globals to a window-root key handler |
-| `ferrocad_gpui/src/workbench/contributions.rs` | the manipulator/gizmo factories plus `ToolFactory` and `with_tool(id, factory)` / `tool_for(id)` — the edition-level tool registry |
-| `ferrocad_gpui/src/runtime/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` / `set_selection(items)` / `dialog_accept(token, values)` / `dialog_cancel(token)` |
-| `ferrocad_gpui/src/shell/mod.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (Dev Tools / dialog / view / tool / select / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`/`open_dev_tools`; `dialog_overlay`; `settings_card_view`/`open_settings_card`/`commit_property`; `dev_tools_body`; `hover_line` and the Dev Tools bug button in the status bar; `start_scrub`/`drag_scrub`/`end_scrub` for the direct property handle and its scale overlay |
-| `ferrocad_gpui/src/ui/chrome.rs` | the P0.6 primitives: `viewport_header` (grid/axes/workplane/snap/mods), `split_button`, the anchored `popover` **adapter** over `ferrocad_widgets::menu`, `action_dock`, and the Dev Tools panes (`providers_panel`, `gpu_panel`, `command_list_panel`) — the panes carry no header of their own; the accordion supplies it |
+| `ferrocad_shell_core/src/workbench/commands.rs` | `CommandInfo` (id/menu/tooltip/accel/group/cmd_type/surface/parent/enabled/checked + `label()`, `surface()`, `parent()`) and `CommandOutcome` (`ok`/`error`/`status`/`value`/`dialog`/`token`/`view`/`tool`/`select`); `Surface` + `group_by_surface`/`popover_commands`; `list()`, `run(id)`, `accept(token, values)`, `cancel(token)` |
+| `ferrocad_shell_api/src/dialog.rs` | `DialogSpec`/`DialogField`/`Kind`/`ValueState` and the pure `collect()` validation (typed values, `min`/`max`, `required`, quantity parsing, unknown-kind rejection) |
+| `ferrocad_shell_api/src/view.rs` | `ViewRequest` (`grid`, `projection`), `ViewState` (grid + `ProjectionName`) and `apply()` — validation-first, returning a one-line summary |
+| `ferrocad_shell_core/src/model/selection.rs` | `SelectionItem` (`object` + `elements`, the last item is primary); `push()` — the one call that makes the UI selection visible to Python |
+| `ferrocad_shell_core/src/ui/shortcuts.rs` | `Accelerator::parse` (the documented `Accel` subset), `is_global` (chords/named keys only) and `matches` (exact modifiers); the shell binds the globals to a window-root key handler |
+| `ferrocad_shell_core/src/workbench/contributions.rs` | the manipulator/gizmo factories plus `ToolFactory` and `with_tool(id, factory)` / `tool_for(id)` — the edition-level tool registry |
+| `ferrocad_shell_gpui/src/python.rs` | `GUI: OnceLock<bool>`; `gui()`; `configure(..., gui)`; `FreeCAD.GuiUp = 1` set **before** the app script is imported so import-time workbench code sees it; `commands()` / `run_command(name)` / `set_selection(items)` / `dialog_accept(token, values)` / `dialog_cancel(token)` |
+| `ferrocad_shell_core/src/shell/mod.rs` | `ShellModel.commands`, `.selection` and `.view`; `refresh_commands` (rebuilds the shortcut list too); `run_command` (Dev Tools / dialog / view / tool / select / run → refresh → stage → status → console); `replace_selection` / `toggle_select` / `clear_selection`; the dialog state machine (`open_dialog_state`, `accept_dialog`, `finish_dialog`, `cancel_dialog`, `toggle_flag`, `cycle_choice`); `apply_view` (state + mirror + projection + re-list); `start_tool` (registry → viewport, pending until a viewport exists); `handle_key` (both windows); `toggle_dev_tools`/`open_dev_tools`; `dialog_overlay`; `settings_card_view`/`open_settings_card`/`commit_property`; `dev_tools_body`; `hover_line` and the Dev Tools bug button in the status bar; `start_scrub`/`drag_scrub`/`end_scrub` for the direct property handle and its scale overlay |
+| `ferrocad_shell_core/src/ui/chrome.rs` | the P0.6 primitives: `viewport_header` (grid/axes/workplane/snap/mods), `split_button`, the anchored `popover` **adapter** over `ferrocad_widgets::menu`, `action_dock`, and the Dev Tools panes (`providers_panel`, `gpu_panel`, `command_list_panel`) — the panes carry no header of their own; the accordion supplies it |
 | `ferrocad_widgets/src/menu.rs` | the domain-free menu panel: `MenuInfoRow`/`MenuRow`, the status dot, additive hover, dividers and outside-press dismissal; the caller supplies `on_row`/`on_dismiss` and owns the command semantics |
 | `ferrocad_widgets/src/wheel.rs` | the radial marking menu: `WheelSlot`/`WheelTone`, pure `slot_at`/`slot_offset`, the custom-painted glass torus, hover tint, tone arc and labels, and the `WheelMenu` sidecar that owns the gesture and its overlay (`WheelEvent::{Selected, Closed}`) |
 | `ferrocad_widgets/src/accordion.rs` | the vertical accordion: `AccordionSection` (title, optional summary, preferred height), `AccordionState` (any number of open sections, plus whether the user took the choice over), and the pure `resolve_layout`/`preferred_height` that decide between `All` and a shared-height `Expanded` set. Used by the Dev Tools window; `window_chrome::content_height` reports the height a framed window really leaves for it |
@@ -716,7 +716,7 @@ Two shape decisions fell out of the build:
 | `ferrocad_widgets/src/slider.rs` | the range slider's geometry: `fraction`/`value_at` (log when `min > 0`, linear otherwise), `format_value` for the committed editor string, and `trigger` (the mini track in the row that opens the overlay). The host selects it only for a row that declares both `min` and `max` |
 | `ferrocad_widgets/src/scrub.rs` | the unbounded numeric control: `value_for` maps vertical travel to a value by a ratio (`48 px` doubles it; zero scrubs linearly), `Scrub` owns the starting value and travel, and `Scale`/`Tick` are the pure overlay model (a log window above zero, linear around zero and negatives, labelled ticks). `handle` paints the draggable double arrow and `scale` the overlay with its live readout and marker. Used for a quantity without a declared range; the host starts the gesture on the handle press, forwards moves from its window root and commits `Scrub::text` with the row's unit |
 | `ferrocad_widgets/src/form.rs` | the form controls: `toggle` (a pill switch for a `bool`), `select_box` (the closed `enum`) and `choice_list` (the dropdown body the host anchors under it). Both the property pane and the command dialog use them, so `true`/`false` is never typed and an option is never spelled by hand. The pane draws document-object rows and `Settings/*` rows with the same code, so an object's own `App::PropertyBool`/`App::PropertyEnumeration` gets them too |
-| `ferrocad_gpui/src/ui/dev_tools.rs` | the `DevTools` second-window view over `Entity<Shell>` and its window options |
+| `ferrocad_shell_core/src/ui/dev_tools.rs` | the `DevTools` second-window view over `Entity<Shell>` and its window options |
 | `ferrocad_viewport/src/inventor_view.rs` | `HoverReport { target, through }` — updated on every pointer move from the same pick and overlay tests the click uses; `hover_report()` |
 
 The commands are dispatched from the chrome (the floating viewport pill, popovers, dock)
@@ -744,8 +744,8 @@ pushes the pruned set, so `IsActive` cannot latch onto a dead object.
 | `tests/test_view_tools.py` (4) | the view-state defaults; the checkable grid command closes the loop through the mirror; `tool` and `view` survive the payload; a status and a view can coexist |
 | `crates/ferrocad_toy/tests/commands.rs` | `Toy_MakeSlab` is listed with its label/group/type and enabled; running it returns a dialog and creates nothing; accepting creates the slab; the token is spent; one undo removes it |
 | `crates/ferrocad_toy/tests/selection.rs` | the shell bridge's push flips `App_Delete`/`App_Move` enabled; two slabs delete in one undo step; the move dialog opens and can be cancelled; a delta path moves and undoes as one step |
-| `ferrocad_gpui` unit tests | the JSON shapes (`CommandInfo`, `SelectionItem`, `DialogSpec`); `dialog` validation (types, ranges, required text, unknown kinds); the `Accel` parser and matcher; `view` apply/validation; tool-registry routing; `a_multi_selection_is_pushed_and_enables_the_built_ins`; `a_command_dialog_validates_accepts_and_cancels`; `the_command_dialog_renders_and_escape_cancels`; `a_shortcut_runs_the_command`; `the_pass_through_line_names_the_overlay_and_target`; `a_view_request_toggles_the_grid_and_its_check_mark`; `a_tool_request_resolves_by_id` |
-| `ferrocad_gpui` P0.5/P0.6 tests | `the_main_window_carries_only_the_viewport_and_status`; `the_dev_tools_window_lists_commands_with_enablement`; `toggling_dev_tools_preserves_the_model`; `the_dev_tools_command_has_a_headless_status`; `every_registered_command_lands_on_exactly_one_surface`; `the_grid_split_button_runs_the_label_and_the_caret_opens`; `the_grid_popover_reports_the_active_provider_and_spacing`; `view_grid_settings_selects_the_settings_node`; `the_action_dock_follows_the_selection`; `the_app_menu_opens_dev_tools` |
+| `ferrocad_shell_gpui` unit tests | the JSON shapes (`CommandInfo`, `SelectionItem`, `DialogSpec`); `dialog` validation (types, ranges, required text, unknown kinds); the `Accel` parser and matcher; `view` apply/validation; tool-registry routing; `a_multi_selection_is_pushed_and_enables_the_built_ins`; `a_command_dialog_validates_accepts_and_cancels`; `the_command_dialog_renders_and_escape_cancels`; `a_shortcut_runs_the_command`; `the_pass_through_line_names_the_overlay_and_target`; `a_view_request_toggles_the_grid_and_its_check_mark`; `a_tool_request_resolves_by_id` |
+| `ferrocad_shell_gpui` P0.5/P0.6 tests | `the_main_window_carries_only_the_viewport_and_status`; `the_dev_tools_window_lists_commands_with_enablement`; `toggling_dev_tools_preserves_the_model`; `the_dev_tools_command_has_a_headless_status`; `every_registered_command_lands_on_exactly_one_surface`; `the_grid_split_button_runs_the_label_and_the_caret_opens`; `the_grid_popover_reports_the_active_provider_and_spacing`; `view_grid_settings_selects_the_settings_node`; `the_action_dock_follows_the_selection`; `the_app_menu_opens_dev_tools` |
 | `ferrocad_viewport` | `navicube_negative_space_reaches_the_scene` also asserts the hover report names the navicube as the overlay a click passes through |
 
 ### Known gaps

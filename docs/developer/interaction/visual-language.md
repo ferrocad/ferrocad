@@ -122,7 +122,7 @@ no depth — not the ordered translucency V2c is about.
 | Entity occluded edge | `#D6E0F0` @ 0.10 | `theme::EDGE_OCCLUDED` ✅ (V1 ghost pass) |
 | Entity surface (default) | glass-shade composite | `theme::GLASS_SHADE` ✅ |
 
-The entity defaults are now the tokens. `ferrocad_gpui::display` opts document
+The entity defaults are now the tokens. `ferrocad_shell_gpui::display` opts document
 entities into `.with_ghost_edges()`; gizmos, the navicube and transient tools stay
 overlays without a ghost pass. The display provider can still override per object
 (the toy does).
@@ -218,7 +218,7 @@ the V0 extraction is under way, the normalisation (V0b) is not done.
   `StateSnapshot.color`, so the cube's edges render brighter than their nominal hex.
   `ferrocad_viewport::navicube::theme` re-exports it and keeps the role layer.
 - `ferrocad_theme::ui` — packed `u32` sRGB (`0xD8DBE0`), which is what gpui wants;
-  `ferrocad_gpui`, `ferrocad_widgets` and the viewport chrome bind it.
+  `ferrocad_shell_gpui`, `ferrocad_widgets` and the viewport chrome bind it.
 
 V0b normalises the navicube palette onto the same convention — **linear at the draw
 contract, packed sRGB at the gpui boundary** — and extends the `ferrocad_theme`

@@ -45,15 +45,6 @@ members = [
     "crates/ferrocad_toy",
     "crates/xtask",
 ]
-# `third_party/` holds the `[patch.crates-io]` source for `gpui_interop`.
-# It is a dependency, not a member, but it lives inside this directory tree, so
-# Cargo would otherwise consider it part of this workspace and refuse to check it
-# standalone. That standalone check is how the vendored crate's own examples are
-# validated: our packages never build them (`gpui_interop`'s require its `example`
-# feature).
-exclude = [
-    "third_party/gpui_interop",
-]
 # The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`,
 # `ferrocad`), the renderer (`ferrocad_wgpu`, which pulls in the whole GPU stack) and
 # the pivy facade (`ferrocad_inventor_py`, which needs CPython headers), plus the
@@ -166,13 +157,5 @@ lto = true
 # `opencascade_sys` and the cxx include prefix `opencascade-sys`, so it is a
 # drop-in for the rest of the tree.
 # https://github.com/ferrocad/ferrocad_occt_cxx
-#
-# `bite-gp-*` need no patch any more: 1.25.203 fixes the cocoa import, the wasm
-# default feature, the two cfg mismatches, the `Send + Sync` bound and the
-# missing browser `GpuRenderer` (the three vendored copies are gone).
-#
-# `gpui_interop` is still vendored for its input-gateway gaps (scroll,
-# `click_count`, enter/leave, the off-surface up); see its PATCHES.md.
 [patch.crates-io]
-gpui_interop = { path = "third_party/gpui_interop" }
 ferrocad_occt_cxx = { git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.29" }

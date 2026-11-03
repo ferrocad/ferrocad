@@ -157,9 +157,9 @@ impl Render for Probe {
         .size_full();
 
         // Input is the gateway's: drag orbits, the wheel zooms (through
-        // `SurfaceEvent::Scroll`, which our vendored copy adds), and a double-click
-        // recentres the view. The gateway founds GPUI's drag on the down, so the
-        // gesture keeps arriving past the canvas edge.
+        // `SurfaceEvent::Scroll`), and a double-click recentres the view. The
+        // gateway founds GPUI's drag on the down, so the gesture keeps arriving
+        // past the canvas edge.
         let grab = Rc::clone(&self.grab);
         let last = Rc::clone(&self.last);
         let element = surface_input(canvas, move |input: SurfaceInput| {
@@ -183,9 +183,11 @@ impl Render for Probe {
                 SurfaceEvent::Scroll { delta, .. } => {
                     // The sign is the engine's (positive is "up"); scrolling down
                     // zooms out, as the canvas demo does.
+                    // Pixel deltas are physical (the gateway scales them like every
+                    // other distance), so a notch is 40 *logical* pixels.
                     let notches = match delta {
                         SurfaceScroll::Lines { y, .. } => y,
-                        SurfaceScroll::Pixels { y, .. } => y / PIXELS_PER_LINE,
+                        SurfaceScroll::Pixels { y, .. } => y / (PIXELS_PER_LINE * scale),
                     };
                     camera
                         .borrow_mut()

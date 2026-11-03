@@ -30,9 +30,9 @@ geometry:
 6. **Pointer input is `gpui_interop`'s own gateway**: `surface_input(canvas, ..)`
    reports `SurfaceEvent`s in physical pixels from the canvas's top-left corner
    and founds GPUI's drag on the down, so a drag keeps orbiting after the pointer
-   leaves the canvas. Scroll, `click_count` and enter/leave come from our vendored
-   copy of the gateway (see `third_party/gpui_interop/PATCHES.md`): the wheel zooms
-   through `SurfaceEvent::Scroll`, and a double-click recentres the camera.
+   leaves the canvas. Scroll, `click_count` and enter/leave come from
+   `gpui_interop` 0.2.1's gateway: the wheel zooms through
+   `SurfaceEvent::Scroll`, and a double-click recentres the camera.
 
 The camera starts at the demo pose and moves only when the pointer does, so the
 probe draws a live surface rather than a cached texture.

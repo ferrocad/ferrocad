@@ -35,7 +35,7 @@ ferrocad_types.workspace = true
 bite-gpui = { version = "=1.25.203" }
 # Zero-copy presentation: hand the viewport's wgpu target to gpui's window renderer,
 # as a dma-buf when the device can export one and as a same-device view otherwise.
-# 0.2.0 ships `WgpuSharedBufferRing`, the producer-side fix for the residual black
+# 0.2.1 ships `WgpuSharedBufferRing`, the producer-side fix for the residual black
 # frames (bite-gpui/gpui_interop#1): present only a fence-free frame and recycle a
 # slot on the consumer's release.
 # `bite-gpui` and the renderer must share a wgpu major: the viewport hands its
@@ -45,7 +45,7 @@ bite-gpui = { version = "=1.25.203" }
 # Keep every transitive `bite-gp-*` crate on the same 1.25.203 release: their
 # requirements are caret ranges, so a plain `cargo update` can float one of them
 # while `bite-gpui` stays put, mixing wgpu majors.
-gpui_interop = { version = "0.2.0", features = ["gpui", "wgpu"], optional = true }
+gpui_interop = { version = "0.2.1", features = ["gpui", "wgpu"], optional = true }
 # The window renderer's device and the `ImportedTextureExt` handle used by the
 # same-device path. Must match the `bite-gpui` release above.
 gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.203", optional = true }

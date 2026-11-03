@@ -45,15 +45,13 @@ members = [
     "crates/ferrocad_toy",
     "crates/xtask",
 ]
-# `third_party/` holds the `[patch.crates-io]` sources. They are dependencies, not
-# members, but they live inside this directory tree, so Cargo would otherwise
-# consider them part of this workspace and refuse to check them standalone. That
-# standalone check is how the vendored crates' own examples are validated: our
-# packages never build them (`gpui_interop`'s require its `example` feature).
+# `third_party/` holds the `[patch.crates-io]` source for `gpui_interop`.
+# It is a dependency, not a member, but it lives inside this directory tree, so
+# Cargo would otherwise consider it part of this workspace and refuse to check it
+# standalone. That standalone check is how the vendored crate's own examples are
+# validated: our packages never build them (`gpui_interop`'s require its `example`
+# feature).
 exclude = [
-    "third_party/bite-gp-apple",
-    "third_party/bite-gp-web",
-    "third_party/bite-gp-wgpu",
     "third_party/gpui_interop",
 ]
 # The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_gpui`,
@@ -162,29 +160,19 @@ windows = "0.62.2"
 opt-level = 3
 lto = true
 
-# Temporary patch: bite-gp-apple 1.25.202 imports `cocoa` without declaring it.
-# See third_party/bite-gp-apple/PATCHES.md.
-#
-# Temporary patches: bite-gp-web and bite-gp-wgpu do not compile for
-# `wasm32-unknown-unknown` (a nightly-only default feature, Linux-only dma-buf
-# code compiled unconditionally, two wrong `cfg`s, a `Send + Sync` bound the wasm
-# wgpu handles cannot meet, and no browser `GpuRenderer`). No behaviour change on
-# a native target. See third_party/bite-gp-web/PATCHES.md and
-# third_party/bite-gp-wgpu/PATCHES.md; drop both when the fixes reach the family.
-#
 # `opencascade-sys` 0.3.0 does not compile with MSVC: OCCT's `Handle_T` is a
 # derived class there, not the `Handle(T)` alias. This resolves it to FerroCAD's
 # fork, which carries upstream PR #234. The fork keeps the library name
 # `opencascade_sys` and the cxx include prefix `opencascade-sys`, so it is a
 # drop-in for the rest of the tree.
 # https://github.com/ferrocad/ferrocad_occt_cxx
+#
+# `bite-gp-*` need no patch any more: 1.25.203 fixes the cocoa import, the wasm
+# default feature, the two cfg mismatches, the `Send + Sync` bound and the
+# missing browser `GpuRenderer` (the three vendored copies are gone).
+#
+# `gpui_interop` is still vendored for its input-gateway gaps (scroll,
+# `click_count`, enter/leave, the off-surface up); see its PATCHES.md.
 [patch.crates-io]
-bite-gp-apple = { path = "third_party/bite-gp-apple" }
-bite-gp-web = { path = "third_party/bite-gp-web" }
-bite-gp-wgpu = { path = "third_party/bite-gp-wgpu" }
-# Temporary patch: the surface-input gateway has no scroll vocabulary, drops
-# `PointerDown.click_count`, has no enter/leave, and loses the up of a press that
-# never founded the engine's drag (right/middle, released off the surface). See
-# third_party/gpui_interop/PATCHES.md and file upstream.
 gpui_interop = { path = "third_party/gpui_interop" }
 ferrocad_occt_cxx = { git = "https://github.com/ferrocad/ferrocad_occt_cxx", tag = "v0.3.0-ferrocad.29" }

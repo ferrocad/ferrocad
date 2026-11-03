@@ -19,15 +19,13 @@ crate-type = ["cdylib"]
 [target.'cfg(target_family = "wasm")'.dependencies]
 # The GUI framework, with its browser backend: `bite-gp-web` gives one
 # document-owned canvas, WebGPU preferred and WebGL2 as the fallback we force.
-# 1.25 added `multithreaded` to `bite-gpui`'s defaults, which turns on
-# `bite-gp-web/multithreaded` and with it `wasm_thread` — a nightly-only
-# `#![feature(stdarch_wasm_atomic_wait)]`. Nothing here uses worker threads, so
-# take the same default set 1.24 had (`platform`) and leave `multithreaded` off.
-gpui = { package = "bite-gpui", version = "=1.25.202", default-features = false, features = ["platform"] }
+# 1.25.203's default feature set is `platform`; `multithreaded` is opt-in again
+# (it would pull the nightly-only `wasm_thread`).
+gpui = { package = "bite-gpui", version = "=1.25.203" }
 # The renderer, and the `ImportedTextureExt` that turns a texture made on its
-# device into a handle GPUI can composite. `wasm-interop` re-enables that impl in
-# our vendored copy; see third_party/bite-gp-wgpu/PATCHES.md.
-gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.202", features = ["wasm-interop"] }
+# device into a handle GPUI can composite. `wasm-interop` compiles that impl and
+# enables wgpu's `fragile-send-sync-non-atomic-wasm` from the feature itself.
+gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.203", features = ["wasm-interop"] }
 # `WgpuSurface`: the same-device offscreen target, no dma-buf and no fence.
 gpui_interop = { version = "0.2.0", default-features = false, features = ["gpui", "wgpu"] }
 # The real scene path: the stage's draw packets, the camera, and the renderer
@@ -45,10 +43,9 @@ ferrocad_part.workspace = true
 ferrocad_occt.workspace = true
 # Link-time WASI stubs for the wasm OCCT kernel, shared with `ferrocad_web`.
 ferrocad_wasm.workspace = true
-# `fragile-send-sync-non-atomic-wasm` is what makes wgpu's wasm handles
-# `Send + Sync`, which the imported-texture handle requires. Without it the
-# interop path does not typecheck for wasm.
-wgpu = { version = "30", features = ["fragile-send-sync-non-atomic-wasm"] }
+# `wasm-interop` enables this through the renderer; it is kept as a direct
+# dependency because the probe names wgpu types itself.
+wgpu = "30"
 wasm-bindgen = "0.2"
 # The logger `gpui::web_init` installs forwards to the browser console; the probe
 # reports through it instead of drawing text (see README.md).

@@ -22,12 +22,11 @@ geometry:
    `WgpuRenderer::render` takes any texture view, so the offscreen target needed
    no renderer changes.
 4. `surface.view().to_imported_handle()` + `paint_texture` composite it into the
-   GPUI scene. That needs the `wasm-interop` feature on our vendored
-   `bite-gp-wgpu` and wgpu's `fragile-send-sync-non-atomic-wasm`; see
-   `third_party/bite-gp-wgpu/PATCHES.md`.
+   GPUI scene. That needs `bite-gp-wgpu`'s `wasm-interop` feature (present since
+   1.25.203), which also enables wgpu's `fragile-send-sync-non-atomic-wasm`.
 5. The window's device comes from
-   `GpuCanvasContext::try_device::<gpui_wgpu::WgpuRenderer>()`, which needs a
-   wasm `GpuRenderer` impl that upstream gates out (change 3 in the same file).
+   `GpuCanvasContext::try_device::<gpui_wgpu::WgpuRenderer>()`; 1.25.203 has the
+   browser `GpuRenderer` impl this needs.
 6. **Pointer input is `gpui_interop`'s own gateway**: `surface_input(canvas, ..)`
    reports `SurfaceEvent`s in physical pixels from the canvas's top-left corner
    and founds GPUI's drag on the down, so a drag keeps orbiting after the pointer

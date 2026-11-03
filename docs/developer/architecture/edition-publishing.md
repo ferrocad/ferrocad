@@ -176,14 +176,13 @@ puts `bin/` (and `lib/`, for an alternate layout) on `PATH`. That path is now
 exercised for real: the 2026-10-25 `edition-windows` run built the edition,
 bundled the DLLs, packaged the zip and passed `ferrocad.bat --check-init` on the
 unpacked artifact. OCCT license staging is shared by every platform. macOS
-remains deliberately blocked on upstream `bite-gp-apple 1.25.202` (it imports
-`cocoa` without declaring it, and the import is dead); `xtask` reports that and
-does not attempt an `otool`/`install_name_tool` walk. The diagnosis, the temporary
-vendored patch (`third_party/bite-gp-apple`) and the full re-enable checklist are
-in [`macos.md`](macos.md); the upstream report is
+remains deliberately blocked: the upstream compile bug (`bite-gp-apple` imported
+`cocoa` without declaring it) is fixed in `bite-gpui` 1.25.203, but `xtask`'s
+Mach-O closure (`otool`/`install_name_tool`, signing) is not implemented yet, so
+`xtask` still reports that and does not attempt the walk. The full re-enable
+checklist is in [`macos.md`](macos.md); the upstream report is
 [bite-gpui/bite-gpui#14](https://github.com/bite-gpui/bite-gpui/issues/14). Do not
-re-enable the macOS release leg until a fixed GPUI fork lands and the checklist's
-signing/closure work exists.
+re-enable the macOS release leg until the checklist's signing/closure work exists.
 
 E4 (the bundled wheel) is still out of scope; §8 describes the composition it would
 reuse.

@@ -16,11 +16,11 @@ documentation = "https://docs.rs/ferrocad_widgets"
 name = "ferrocad_widgets"
 
 [dependencies]
-bite-gpui = { version = "=1.25.202" }
+bite-gpui = { version = "=1.25.203" }
 unicode-segmentation.workspace = true
 # The shared packed-sRGB tokens: widgets must not import the shell's copy.
 ferrocad_theme.workspace = true
 
 [dev-dependencies]
 # Enables TestAppContext / #[gpui::test] for the headless component tests.
-bite-gpui = { version = "=1.25.202", features = ["test-support"] }
+bite-gpui = { version = "=1.25.203", features = ["test-support"] }

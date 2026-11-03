@@ -1,14 +1,15 @@
 # macOS
 
-Status: **blocked upstream** (2026-10-25). The Linux and Windows artifacts ship;
-macOS does not build yet. This page records the diagnosis, the temporary patch in
-this tree, and the checklist for turning the platform back on.
+Status: **not shipped** (2026-11-03). The Linux and Windows artifacts ship. The
+upstream compile blocker is gone in `bite-gpui` 1.25.203; what remains is the
+Mach-O closure, signing and packaging path, which is unverified. This page
+records the history and the checklist for turning the platform back on.
 
-## 1. The blocker
+## 1. The blocker, and its fix
 
-`bite-gp-apple` (the GPUI Metal backend) does not compile for
-`cfg(any(target_os = "macos", target_os = "ios"))`. The cause is a **dead import**,
-not a missing feature or a missing manifest entry:
+`bite-gp-apple` 1.25.202 (the GPUI Metal backend) did not compile for
+`cfg(any(target_os = "macos", target_os = "ios"))`. The cause was a **dead
+import**, not a missing feature or a missing manifest entry:
 
 ```rust
 // bite-gp-apple 1.25.202, src/metal_renderer.rs
@@ -21,7 +22,7 @@ use cocoa::{
 
 `Cargo.toml` declares `block2`, `core-foundation`, `core-graphics`, `core-video`,
 `dispatch2`, `mach2`, `metal`, `objc2`, `objc2-foundation`,
-`objc2-quartz-core`, … and **not** `cocoa`. Adding `cocoa` does not help:
+`objc2-quartz-core`, … and **not** `cocoa`. Adding `cocoa` did not help:
 
 - `NO`, `YES`, `NSSize` and `AutoresizingMask` are unused; the `setAutoresizingMask`
   call site uses `objc2_quartz_core::CAAutoresizingMask`.
@@ -30,35 +31,21 @@ use cocoa::{
 - `cocoa`'s `quartzcore` module is `#[cfg(target_os = "macos")]`, so the import
   would still fail for iOS.
 
-`1.25.202` has the same import plus a second instance in `src/text_system.rs`
+1.25.202 had the same import plus a second instance in `src/text_system.rs`
 (`use cocoa::appkit::CGFloat;`, while the file already imports `CGFloat` from
 `core_graphics::base` — the same duplicate-import error).
 
-Reported upstream as [bite-gpui/bite-gpui#14](https://github.com/bite-gpui/bite-gpui/issues/14)
-with the evidence and the one-line-per-file fix.
+Reported upstream as [bite-gpui/bite-gpui#14](https://github.com/bite-gpui/bite-gpui/issues/14),
+and **fixed in 1.25.203** ([PR #22](https://github.com/bite-gpui/bite-gpui/pull/22)):
+the imports are gone, `open_type.rs`'s duplicate font imports are cleaned up, and
+the `gpui_macos`/`metal_renderer` compile errors found in the same feature-gated
+build are fixed too. FerroCAD carried a vendored `bite-gp-apple` until then; the
+three `third_party/bite-gp-*` copies are now gone.
 
-### The temporary patch in this repository
-
-`third_party/bite-gp-apple/` is a verbatim copy of the 1.25.202 crate with
-those imports deleted, wired in from the workspace root:
-
-```toml
-[patch.crates-io]
-bite-gp-apple = { path = "third_party/bite-gp-apple" }
-```
-
-`third_party/bite-gp-apple/PATCHES.md` has the full rationale, the verification
-performed here, and the removal condition. The patch adds no dependency and no
-lock package, and nothing changes on Linux or Windows (the crate is not selected
-there). The family stays on 1.25.202: its members declare caret requirements,
-so a plain `cargo update` floats some of them while `bite-gpui` stays put and
-splits the wgpu device between the window renderer and `ferrocad_wgpu`. The
-1.25 line also turned `multithreaded` on by default, which needs a nightly
-wasm-thread shim on the browser target — see
-[`third_party/bite-gp-web/PATCHES.md`](../../../third_party/bite-gp-web/PATCHES.md).
-
-Delete the directory and the `[patch]` block once upstream ships a release that
-compiles on macOS.
+The family stays on the same exact 1.25.203 release: its members declare caret
+requirements, so a plain `cargo update` floats some of them while `bite-gpui`
+stays put and splits the wgpu device between the window renderer and
+`ferrocad_wgpu`.
 
 ## 2. What a re-enable needs
 
@@ -142,8 +129,9 @@ release job installs only `unzip` — add `p7zip-full` when a `.dmg` returns.
 
 ## 3. Unknown without hardware
 
-- Whether `bite-gp-apple` builds after the import removal — or whether further
-  Apple-only errors follow.
+- Whether the Apple target really builds with 1.25.203 in CI: the import fix is
+  in the release, but the rest of the feature-gated Apple code has never been
+  compiled here (the upstream macOS CI jobs do compile it, though).
 - Whether `xcrun metal`/`metallib` succeed with the runner's Xcode.
 - Whether the 64 `#[gpui::test]` tests in `ferrocad_gpui` run headless on a
   GitHub macOS VM (Metal device / WindowServer availability).

@@ -164,9 +164,9 @@ application. See [`releasing.md`](releasing.md).
 Windows `.zip` for the base app, plus the Parametric Linux AppImage
 (`ferrocad-parametric-*`, with the OCCT closure under `lib/`); the Parametric
 Windows zip joins them from the next tag (the MSVC bridge fix is in
-[`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)). The macOS `.dmg` is still blocked on the Mach-O closure, signing and packaging
-work (the upstream `cocoa` compile bug was fixed in `bite-gpui` 1.25.203). See
-[`macos.md`](macos.md) and [`releasing.md`](releasing.md) §5. Each artifact bundles the pinned
+[`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx)). The macOS `.dmg` is still blocked on the Mach-O closure,
+signing and packaging work. See [`macos.md`](macos.md) and
+[`releasing.md`](releasing.md) §5. Each artifact bundles the pinned
 `python-build-standalone` runtime (the build job runs `cargo xtask python` before
 `bundle`, so the host is compiled against that interpreter and the runtime ships
 as `runtime/`). The Windows leg was re-enabled at `v0.1.1`: the upstream

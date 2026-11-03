@@ -1,46 +1,24 @@
 # macOS
 
 Status: **not shipped** (2026-11-03). The Linux and Windows artifacts ship. The
-upstream compile blocker is gone in `bite-gpui` 1.25.203; what remains is the
-Mach-O closure, signing and packaging path, which is unverified. This page
-records the history and the checklist for turning the platform back on.
+Apple target compiles against `bite-gpui` 1.25.203; what remains is the Mach-O
+closure, signing and packaging path, which is unverified. This page is the
+checklist for turning the platform on.
 
-## 1. The blocker, and its fix
+## 1. What still blocks a release
 
-`bite-gp-apple` 1.25.202 (the GPUI Metal backend) did not compile for
-`cfg(any(target_os = "macos", target_os = "ios"))`. The cause was a **dead
-import**, not a missing feature or a missing manifest entry:
+The compile blocker is gone. `bite-gp-apple` used to import `cocoa` without
+declaring it, which broke `cfg(any(target_os = "macos", target_os = "ios"))`;
+1.25.203 removed those imports (along with the duplicate font imports and the
+two feature-gated `gpui_macos`/`metal_renderer` errors found at the same time),
+and the upstream macOS CI jobs compile the family.
 
-```rust
-// bite-gp-apple 1.25.202, src/metal_renderer.rs
-use cocoa::{
-    base::{NO, YES},
-    foundation::{NSSize, NSUInteger},
-    quartzcore::AutoresizingMask,
-};
-```
+What is still missing is the packaging path:
 
-`Cargo.toml` declares `block2`, `core-foundation`, `core-graphics`, `core-video`,
-`dispatch2`, `mach2`, `metal`, `objc2`, `objc2-foundation`,
-`objc2-quartz-core`, … and **not** `cocoa`. Adding `cocoa` did not help:
-
-- `NO`, `YES`, `NSSize` and `AutoresizingMask` are unused; the `setAutoresizingMask`
-  call site uses `objc2_quartz_core::CAAutoresizingMask`.
-- `NSUInteger` is already imported from `metal` in the same file, so declaring
-  `cocoa` produces `E0252` (the name is defined twice), not a working build.
-- `cocoa`'s `quartzcore` module is `#[cfg(target_os = "macos")]`, so the import
-  would still fail for iOS.
-
-1.25.202 had the same import plus a second instance in `src/text_system.rs`
-(`use cocoa::appkit::CGFloat;`, while the file already imports `CGFloat` from
-`core_graphics::base` — the same duplicate-import error).
-
-Reported upstream as [bite-gpui/bite-gpui#14](https://github.com/bite-gpui/bite-gpui/issues/14),
-and **fixed in 1.25.203** ([PR #22](https://github.com/bite-gpui/bite-gpui/pull/22)):
-the imports are gone, `open_type.rs`'s duplicate font imports are cleaned up, and
-the `gpui_macos`/`metal_renderer` compile errors found in the same feature-gated
-build are fixed too. FerroCAD carried a vendored `bite-gp-apple` until then; the
-three `third_party/bite-gp-*` copies are now gone.
+- the Mach-O closure (`otool -L` / `otool -D`, `install_name_tool`, signing)
+  that `xtask` implements for ELF and PE but not Mach-O;
+- the `.app`/`.dmg` assembly, signing and verification;
+- a macOS CI leg and the release matrix leg.
 
 The family stays on the same exact 1.25.203 release: its members declare caret
 requirements, so a plain `cargo update` floats some of them while `bite-gpui`
@@ -129,9 +107,9 @@ release job installs only `unzip` — add `p7zip-full` when a `.dmg` returns.
 
 ## 3. Unknown without hardware
 
-- Whether the Apple target really builds with 1.25.203 in CI: the import fix is
-  in the release, but the rest of the feature-gated Apple code has never been
-  compiled here (the upstream macOS CI jobs do compile it, though).
+- Whether the Apple target really builds and runs here: the upstream macOS CI
+  jobs compile it, but no macOS host or SDK has been available in this
+  workspace.
 - Whether `xcrun metal`/`metallib` succeed with the runner's Xcode.
 - Whether the 64 `#[gpui::test]` tests in `ferrocad_gpui` run headless on a
   GitHub macOS VM (Metal device / WindowServer availability).

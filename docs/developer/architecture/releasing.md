@@ -301,11 +301,11 @@ classes plus `advapi32`). Publishing `ferrocad_occt` therefore requires
 [`edition-publishing.md`](edition-publishing.md) §6 and
 [ferrocad#1](https://github.com/ferrocad/ferrocad/issues/1).
 
-**macOS is not shipped.** The upstream compile bug (`bite-gp-apple` imported
-`cocoa` without declaring it) is fixed in `bite-gpui` 1.25.203, but the macOS
-release leg was not re-enabled yet: the Mach-O closure, signing and packaging
-path is still unverified. The `.dmg` packager (`packaging/macos/app.sh`) remains
-in the tree for that day; see [`macos.md`](macos.md).
+**macOS is not shipped.** The Apple target compiles against `bite-gpui` 1.25.203,
+but the macOS release leg is not enabled: the Mach-O closure, signing and
+packaging path is still unverified. The `.dmg` packager
+(`packaging/macos/app.sh`) remains in the tree for that day; see
+[`macos.md`](macos.md).
 
 The trade is settled in favour of **bundling CPython**: a larger artifact
 (~70-80 MB) that depends on nothing on the user's machine. Users who want extra
@@ -367,11 +367,8 @@ there; see the note below. The crates themselves are a patch bump of the same 21
 Parametric zip is included too**, so a `v*` tag yields four.
 
 **macOS is absent from `v0.1.3`.** The release with these crates published is
-Linux and Windows only. The original cause was a compile error in
-`bite-gp-apple` 1.25.202 (it imported `cocoa` without declaring it), fixed
-upstream in 1.25.203; the release leg has not been re-enabled because the macOS
-closure/signing/packaging work is still unverified. The same applies to the
-Parametric edition on macOS: its bundler reports the blocker instead of
+Linux and Windows only. The macOS release leg has not been enabled because the
+Mach-O closure/signing/packaging work is still unverified. The same applies to
+the Parametric edition on macOS: its bundler reports the blocker instead of
 attempting an `otool`/`install_name_tool` walk. The re-enable checklist is in
-[`macos.md`](macos.md); the upstream report is
-[bite-gpui/bite-gpui#14](https://github.com/bite-gpui/bite-gpui/issues/14).
+[`macos.md`](macos.md).

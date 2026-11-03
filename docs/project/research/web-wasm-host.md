@@ -1046,15 +1046,15 @@ is exercised by behaviour, not only by linking.
 
 ### GPUI in the browser (same day)
 
-`bite-gpui` 1.24.402 already ships a browser platform (`bite-gp-web`: one
+`bite-gpui` 1.24.402 already shipped a browser platform (`bite-gp-web`: one
 document-owned canvas, WebGPU preferred with an automatic WebGL2 fallback), so
-"GPUI in wasm" is a repair job, not a port. Five defects stood in the way, all
-filed upstream (`bite-gpui/bite-gpui` #15–#19): a default feature that pulls a
+"GPUI in wasm" was a repair job, not a port. Five defects stood in the way, all
+filed upstream (`bite-gpui/bite-gpui` #15–#19): a default feature that pulled a
 nightly-only `wasm_thread`, two wrong `cfg`s in `bite-gp-wgpu`, two imports from
-the wrong crate, and — the one that matters here — no `GpuRenderer` impl for the
+the wrong crate, and — the one that mattered here — no `GpuRenderer` impl for the
 browser, which is the door `gpui_interop`'s same-device producer knocks on.
-`third_party/bite-gp-web` and `third_party/bite-gp-wgpu` carry the patches, each
-with a `PATCHES.md` recording the upstream issue and the removal condition.
+`bite-gpui` 1.25.203 fixed all five, so the browser backend builds from the
+published crates with no patch.
 
 `crates/ferrocad_web_gpui` is the probe: a GPUI window in Chrome on WebGL2 doing
 `try_device::<WgpuRenderer>()` → `gpui_interop::WgpuSurface` →

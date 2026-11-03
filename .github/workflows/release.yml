@@ -9,10 +9,9 @@ name: Release
 # produces the Parametric edition's AppImage and Windows zip (with the OCCT
 # closure); `release` attaches them to a GitHub Release.
 #
-# macOS is deliberately absent: the upstream compile bug (`bite-gp-apple`
-# imported `cocoa` without declaring it) is fixed in `bite-gpui` 1.25.203, but the
-# Mach-O closure, signing and packaging path is still unverified. See
-# docs/developer/architecture/macos.md.
+# macOS is deliberately absent: the Apple target compiles against `bite-gpui`
+# 1.25.203, but the Mach-O closure, signing and packaging path is unverified.
+# See docs/developer/architecture/macos.md.
 on:
   push:
     tags: ["v*"]

@@ -37,7 +37,16 @@ So the two roles are split by name:
 - **`ferrocad_gpui`** is the reusable **shell library**: it boots CPython, wires
   the window and panels, and exposes `run`/`run_with` plus `HostConfig`. The name
   says both what it is (a `bite-gpui` app shell) and that it is a layer an app is
-  built *on*, not the app itself. It does not promise a platform.
+  built *on*, not the app itself. It does not promise a platform; the planned
+  split below makes that structural.
+
+**Planned split (2026-11-03, not built).** The browser host needs the same UI
+without CPython. The reference is
+[`wasm-shell.md`](../../project/tasks/wasm-shell.md): `ferrocad_gpui` becomes
+`ferrocad_shell_gpui` (the native assembly: `ferrocad_shell_core` plus the Python
+`AppBackend`) and the new `ferrocad_shell_core` carries the GPUI shell, its view
+models and the `AppBackend` trait; `ferrocad_web_gpui` depends on the core only.
+Until that lands, the names in this section are the current ones.
 
 ## 3. Shape: a shell library plus thin edition binaries
 

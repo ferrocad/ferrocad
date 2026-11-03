@@ -76,9 +76,10 @@ the first load takes a moment.
   (`DefaultTextSystem::resolve_font`), and loading fonts is `ferrocad_text`'s job.
   Status goes to the browser console through the logger `gpui::web_init`
   installs.
-- **No `ferrocad_gpui`.** The shell embeds CPython (`pyo3 auto-initialize`), which
-  does not build for `wasm32-unknown-unknown`; a wasm shell needs a separate crate
-  or a `no-python` feature first.
+- **No shell yet.** The shell embeds CPython (`pyo3 auto-initialize`), which does
+  not build for `wasm32-unknown-unknown`. The planned crate split —
+  `ferrocad_shell_core` / `ferrocad_shell_gpui`, with `AppBackend` as the seam —
+  is [`docs/project/tasks/wasm-shell.md`](../../docs/project/tasks/wasm-shell.md).
 - **No image fallback and no picking.** The native presenter degrades to a
   readback image when the device is unavailable; that path needs an async
   `map_async` on WebGL2 and is not covered here.

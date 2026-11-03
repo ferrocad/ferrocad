@@ -1,16 +1,16 @@
-# The step-2 browser probe: a GPUI window compositing a wgpu surface.
+# The browser host: the real FerroCAD shell (`ferrocad_shell_core`) in a GPUI window
+# on WebGL2, with a Rust `AppBackend` and no CPython anywhere in the graph.
 #
-# It exercises the seam `ferrocad_shell_gpui`'s interop presenter needs on wasm — the
-# window renderer's device (`GpuRenderer::device`), a `WgpuSurface` allocated on
-# that device, and `paint_texture` — without CPython, the document layer or the
-# OCCT kernel. Built for `wasm32-unknown-unknown` only; see README.md.
+# Built for `wasm32-unknown-unknown` only; see README.md. The 3D viewport (the
+# zero-copy presenter and `InventorViewport`) is M3; this host renders the shell
+# around a placeholder canvas.
 [package]
 name = "ferrocad_web_gpui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Browser (wasm32) probe: a GPUI window compositing a wgpu surface through gpui_interop"
+description = "Browser (wasm32) FerroCAD shell: ferrocad_shell_core on GPUI's WebGL2 backend"
 
 [lib]
 name = "ferrocad_web_gpui"
@@ -22,31 +22,10 @@ crate-type = ["cdylib"]
 # 1.25.203's default feature set is `platform`; `multithreaded` is opt-in again
 # (it would pull the nightly-only `wasm_thread`).
 gpui = { package = "bite-gpui", version = "=1.25.203" }
-# The renderer, and the `ImportedTextureExt` that turns a texture made on its
-# device into a handle GPUI can composite. `wasm-interop` compiles that impl and
-# enables wgpu's `fragile-send-sync-non-atomic-wasm` from the feature itself.
-gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.203", features = ["wasm-interop"] }
-# `WgpuSurface`: the same-device offscreen target, no dma-buf and no fence.
-gpui_interop = { version = "0.2.1", default-features = false, features = ["gpui", "wgpu"] }
-# The real scene path: the stage's draw packets, the camera, and the renderer
-# that the canvas demo uses. This is the same trio `ferrocad_web_viewport` drives.
-ferrocad_graphics.workspace = true
-ferrocad_stage.workspace = true
-ferrocad_wgpu.workspace = true
-ferrocad_geom.workspace = true
-ferrocad_types.workspace = true
-# The document layer and the kernel behind it: the scene is a `Part::Box` with a
-# `Part::Fillet`, recomputed, not hand-built geometry. On wasm this links the
-# prebuilt OCCT kernel (see README.md for the cross-image build).
-ferrocad_core.workspace = true
-ferrocad_part.workspace = true
-ferrocad_occt.workspace = true
-# Link-time WASI stubs for the wasm OCCT kernel, shared with `ferrocad_web`.
-ferrocad_wasm.workspace = true
-# `wasm-interop` enables this through the renderer; it is kept as a direct
-# dependency because the probe names wgpu types itself.
-wgpu = "30"
+# The platform-neutral shell: `Shell`, the chrome, panels and the `AppBackend` seam.
+# `gpu-interop` is off: the browser has no dma-buf and no same-device texture yet
+# (M3 restores the viewport through `gpui_interop`'s same-device path).
+ferrocad_shell_core = { workspace = true }
 wasm-bindgen = "0.2"
-# The logger `gpui::web_init` installs forwards to the browser console; the probe
-# reports through it instead of drawing text (see README.md).
+# The logger `gpui::web_init` installs forwards to the browser console.
 log = "0.4"

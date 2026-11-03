@@ -28,7 +28,7 @@
 
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::Instant;
+use web_time::Instant;
 
 /// The environment variable that switches tracing on.
 pub const ENV: &str = "FERROCAD_TRACE";

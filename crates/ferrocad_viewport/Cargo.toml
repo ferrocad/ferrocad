@@ -13,6 +13,9 @@ categories = ["gui"]
 documentation = "https://docs.rs/ferrocad_viewport"
 
 [dependencies]
+# A wasm-safe clock: `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
+# Native builds use `std` underneath, so behaviour is unchanged.
+web-time = "1"
 # The neutral primitives the viewport presents (Camera/RenderQueue/PickId/Rect/…).
 ferrocad_graphics.workspace = true
 # The shared token table (the navicube and the inventor chrome draw from it).

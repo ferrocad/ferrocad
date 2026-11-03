@@ -16,7 +16,9 @@
 //! additive, `#EF4444` destructive).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use gpui::{
     Anchor, Bounds, Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent,

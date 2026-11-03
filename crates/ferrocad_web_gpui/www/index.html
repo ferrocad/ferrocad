@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FerroCAD · GPUI browser probe</title>
+  <title>FerroCAD · browser shell</title>
   <style>
     /* GPUI's web platform appends its own full-size canvas to `body`. */
     html, body { margin: 0; height: 100%; overflow: hidden; background: #101014; }
@@ -16,6 +16,34 @@
     // `#[wasm_bindgen(start)]` entry point (log setup, then GPUI's application).
     import init from "./pkg/ferrocad_web_gpui.js";
     await init();
+
+    // `?click=x,y` fires one pointer press/release at a client coordinate, so a
+    // headless capture can drive the shell (select a tree row, run a header command).
+    if (new URLSearchParams(location.search).has("click")) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const canvas = document.querySelector("canvas");
+      const [x, y] = new URLSearchParams(location.search)
+        .get("click")
+        .split(",")
+        .map(Number);
+      if (canvas) {
+        const fire = (type, buttons) =>
+          canvas.dispatchEvent(
+            new PointerEvent(type, {
+              pointerId: 1,
+              pointerType: "mouse",
+              isPrimary: true,
+              clientX: x,
+              clientY: y,
+              buttons,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        fire("pointerdown", 1);
+        fire("pointerup", 0);
+      }
+    }
 
     // `?drag=1` synthesises one pointer drag across the canvas, so a headless
     // screenshot can show that `surface_input` drives the camera. Real pointer

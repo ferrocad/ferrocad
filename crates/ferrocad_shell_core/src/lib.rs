@@ -33,6 +33,7 @@
 //! `::commands`, …) are kept as re-exports of the same modules.
 
 pub mod app;
+pub mod fonts;
 pub mod model;
 pub mod runtime;
 pub mod shell;

@@ -16,6 +16,9 @@ documentation = "https://docs.rs/ferrocad_wgpu"
 name = "ferrocad_wgpu"
 
 [dependencies]
+# A wasm-safe clock: `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
+# Only the opt-in diagnostics use it, but they must not abort a browser build.
+web-time = "1"
 # The neutral draw contract it consumes (DrawPacket/Geometry/Camera/Rect/…).
 ferrocad_graphics.workspace = true
 # The presentation seam (`InventorView`/`ViewSpec`/`ImageData`) still lives with the

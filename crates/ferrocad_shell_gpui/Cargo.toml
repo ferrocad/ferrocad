@@ -15,7 +15,7 @@ documentation = "https://docs.rs/ferrocad_shell_gpui"
 [dependencies]
 # The platform-neutral shell: window, chrome, panels, viewport element and the
 # `AppBackend` seam. Every public path is re-exported below.
-ferrocad_shell_core.workspace = true
+ferrocad_shell_core = { workspace = true, features = ["gpu-interop"] }
 # The scene a scripted tool and the event listener hand back.
 ferrocad_inventor.workspace = true
 # `Tool` is the trait the backend's scripted bridge returns.

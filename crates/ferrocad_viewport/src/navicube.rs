@@ -28,6 +28,8 @@ pub use stage::StageProducer;
 pub use theme::{NavicubeRole, NavicubeTheme};
 pub use view::{NavicubeView, NavicubeVisual};
 
+use web_time::Instant;
+
 use ferrocad_graphics::{Camera, Rect, Viewport, pick_at_rect};
 use ferrocad_inventor::{NaviCubeDirective, ViewSpec};
 use ferrocad_types::{Matrix4, Placement, Rotation, Vector3};
@@ -579,7 +581,7 @@ pub struct SnapAnimation {
     start: Rotation,
     end: Rotation,
     base: Vector3,
-    start_time: std::time::Instant,
+    start_time: Instant,
     duration: std::time::Duration,
 }
 
@@ -596,7 +598,7 @@ impl SnapAnimation {
             start: Rotation::from_matrix(&main.view),
             end,
             base: Vector3::new(main.view.m[3], main.view.m[7], main.view.m[11]),
-            start_time: std::time::Instant::now(),
+            start_time: Instant::now(),
             duration,
         }
     }

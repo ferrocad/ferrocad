@@ -456,6 +456,8 @@ pub struct Shell {
     /// The Dev Tools second window, if one has been opened. The window owns no model:
     /// its view reads this `Shell` entity. A closed window leaves the handle stale
     /// until the next toggle notices and reopens.
+    // The browser host has one window, so it shows the panels inline instead.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     dev_tools: Option<WindowHandle<DevTools>>,
     /// Which Dev Tools panel is expanded. The window's column cannot hold every
     /// pane, so the inactive ones collapse to their headers (see
@@ -466,6 +468,11 @@ pub struct Shell {
     /// its thumb; owning them here keeps a pane's position across repaints and a
     /// closed/reopened window.
     dev_scroll: DevScroll,
+    /// Whether the inspector/properties/console are shown **beside the canvas** instead
+    /// of in the second Dev Tools window. Only a host with one window (the browser)
+    /// compiles this in; see [`Shell::dev_tools_open`].
+    #[cfg(target_family = "wasm")]
+    panels_open: bool,
     /// The viewport's event subscription (selection and interaction commits).
     _viewport_events: Option<Subscription>,
     /// The viewport's **notification** observation: a wheel zoom or an orbit moves the
@@ -829,6 +836,8 @@ impl Shell {
                 dev_section::PROPERTIES,
             ]),
             dev_scroll: DevScroll::default(),
+            #[cfg(target_family = "wasm")]
+            panels_open: true,
             _viewport_events: None,
             _viewport_camera: None,
             last_stage: None,
@@ -1805,6 +1814,19 @@ impl Render for Shell {
         }
         let viewport = viewport.child(canvas);
 
+        // The browser host has one window, so the inspector, property editor and console
+        // sit beside the canvas there instead of in Dev Tools. The panels column is a
+        // sibling of the viewport, not an overlay: it narrows the canvas and never takes
+        // the pointer away from the scene beside it.
+        let workspace = div().flex().flex_row().flex_1().min_h_0().child(viewport);
+        #[cfg(target_family = "wasm")]
+        let workspace = if self.panels_open {
+            let panel = panels_sidebar(self, &model, window, cx);
+            workspace.child(panel)
+        } else {
+            workspace
+        };
+
         let hover = self.hover_line(cx);
         let status = div()
             .flex()
@@ -1846,7 +1868,7 @@ impl Render for Shell {
             .size_full()
             .bg(rgb(BG))
             .text_color(rgb(FG))
-            .child(viewport)
+            .child(workspace)
             .child(status);
 
         let body = div()

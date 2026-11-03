@@ -1,15 +1,29 @@
 //! `Shell` methods: devtools.
 //!
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
+//!
+//! The browser host has one window, so there the inspector column is a pane beside the
+//! canvas rather than a floating Dev Tools window (see `Shell::panels_open`).
 
 use crate::shell::*;
 
 impl Shell {
-    /// Whether the Dev Tools window is currently open.
+    /// Whether the inspector/properties/console are currently shown.
+    ///
+    /// On native that is the Dev Tools window; in the browser it is the in-window
+    /// column ([`panels_sidebar`](crate::shell::panels_sidebar)).
+    #[allow(unused_variables)]
     pub fn dev_tools_open(&self, cx: &App) -> bool {
-        self.dev_tools
-            .and_then(|handle| cx.window_handle(handle.window_id()))
-            .is_some()
+        #[cfg(target_family = "wasm")]
+        {
+            self.panels_open
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.dev_tools
+                .and_then(|handle| cx.window_handle(handle.window_id()))
+                .is_some()
+        }
     }
 
     /// Open, focus or close the Dev Tools window (`Dev_ToggleTools`, `Ctrl+Shift+D`).
@@ -23,21 +37,37 @@ impl Shell {
     /// Returns the status line for the toggle; the deferred open replaces it with
     /// `dev tools: open` once the window exists.
     pub fn toggle_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
-        if self.dev_tools_open(cx) {
-            let Some(handle) = self.dev_tools.take() else {
-                return "dev tools: closed".to_string();
+        #[cfg(target_family = "wasm")]
+        {
+            self.panels_open = !self.panels_open;
+            let status = if self.panels_open {
+                "panels: open"
+            } else {
+                "panels: closed"
             };
-            return match handle.update(cx, |_view, window, _cx| window.remove_window()) {
-                Ok(()) => "dev tools: closed".to_string(),
-                Err(_) => "dev tools: window already closed".to_string(),
-            };
+            self.model.lock().unwrap().status = status.to_string();
+            cx.notify();
+            return status.to_string();
         }
-        // The handle may name a window the user closed with the title bar.
-        self.dev_tools = None;
-        self.open_dev_tools(cx)
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if self.dev_tools_open(cx) {
+                let Some(handle) = self.dev_tools.take() else {
+                    return "dev tools: closed".to_string();
+                };
+                return match handle.update(cx, |_view, window, _cx| window.remove_window()) {
+                    Ok(()) => "dev tools: closed".to_string(),
+                    Err(_) => "dev tools: window already closed".to_string(),
+                };
+            }
+            // The handle may name a window the user closed with the title bar.
+            self.dev_tools = None;
+            self.open_dev_tools(cx)
+        }
     }
 
     /// Create the Dev Tools window around this shell entity.
+    #[cfg(not(target_family = "wasm"))]
     pub(in crate::shell) fn open_dev_tools(&mut self, cx: &mut Context<Self>) -> String {
         // The providers and GPU panels read their state once per open, not per frame.
         self.provider_features = crate::app::provider_features(cx).ok();
@@ -74,5 +104,4 @@ impl Shell {
         });
         "dev tools: opening".to_string()
     }
-
 }

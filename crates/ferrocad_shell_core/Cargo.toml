@@ -43,6 +43,8 @@ gpui_interop = { version = "0.2.1", features = ["gpui", "wgpu"], optional = true
 # The window renderer's device and the `ImportedTextureExt` handle used by the
 # same-device path. Must match the `bite-gpui` release above.
 gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.203", optional = true }
+# The bundled-font registration reports to the host's logger on wasm.
+log = "0.4"
 serde.workspace = true
 serde_json.workspace = true
 

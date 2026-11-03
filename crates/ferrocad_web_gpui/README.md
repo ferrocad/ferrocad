@@ -1,120 +1,97 @@
 # ferrocad_web_gpui
 
-A GPUI window in the browser, compositing a FerroCAD **`Part` document** through
-[`gpui_interop`](https://crates.io/crates/gpui_interop).
+FerroCAD's **browser shell**: the real `ferrocad_shell_core` UI — leading bar,
+viewport header, status line, model inspector, property editor and console — in a
+GPUI window on WebGL2, with a Rust `AppBackend` and no CPython anywhere in the
+dependency graph.
 
-This is step 2's probe: the smallest thing that puts the real product path —
-document, OCCT kernel, stage, renderer — inside a GPUI window on WebGL2, and
-composites the result without a CPU copy. It has no CPython and no shell; see
-"What it does not have".
+This crate used to be the step-2 probe (a `Part::Box` composited through
+`gpui_interop`). The shell split (M0) and the wasm build (M1) made it a host; M2
+replaced the probe's demo with the shell. The 3D viewport returns in M3; the plan
+and the verified probe baseline are in
+[`docs/project/tasks/wasm-shell.md`](../../docs/project/tasks/wasm-shell.md).
 
 ## What it proves
 
-The filleted box on the page comes from `Document::recompute`, not from literal
-geometry:
+1. **The same shell crate as the desktop app.** `ferrocad_shell_core` compiles for
+   `wasm32-unknown-unknown` and opens its window through `gpui`'s web backend. There
+   is no second implementation of the chrome, panels or key handling.
+2. **The seam, not a stub.** `SampleBackend` implements `ferrocad_shell_api`'s
+   `AppBackend`. The shell asks it for the tree, properties and commands exactly as it
+   asks the Python backend natively: clicking `Box` in the tree fills the property
+   pane and the status line; `Grid`/`Axes`/`Gizmo`/`Snap` toggle through a
+   `ViewRequest` and report their new state on the next command refresh.
+3. **One window, panels in-window.** The web backend rejects `Floating`/`Dialog`, so
+   the inspector column (`panels_sidebar`) sits beside the canvas instead of in Dev
+   Tools: Model, Properties and Console are stacked and all visible at once.
+4. **Text works.** GPUI's web platform starts with an empty font database and panics
+   when it cannot resolve a font. The shell registers a bundled DejaVu Sans
+   (`ferrocad_shell_core::fonts`), whose family is already in GPUI's fallback stack,
+   before opening the window.
 
-1. `Document` with `Part::Box` and `Part::Fillet` is recomputed by the OCCT kernel
-   compiled to wasm (`ferrocad_occt`), exactly as `ferrocad_web`'s demo does.
-2. The resulting shape is tessellated and turned into `ferrocad_stage` draw
-   packets (shaded faces + edges: 2 packets, 40 triangles for the 10 mm box).
-3. `ferrocad_wgpu` — the renderer the canvas demo uses — draws them into a
-   `gpui_interop::WgpuSurface` created on the GPUI window's own device.
-   `WgpuRenderer::render` takes any texture view, so the offscreen target needed
-   no renderer changes.
-4. `surface.view().to_imported_handle()` + `paint_texture` composite it into the
-   GPUI scene. That needs `bite-gp-wgpu`'s `wasm-interop` feature (present since
-   1.25.203), which also enables wgpu's `fragile-send-sync-non-atomic-wasm`.
-5. The window's device comes from
-   `GpuCanvasContext::try_device::<gpui_wgpu::WgpuRenderer>()`; 1.25.203 has the
-   browser `GpuRenderer` impl this needs.
-6. **Pointer input is `gpui_interop`'s own gateway**: `surface_input(canvas, ..)`
-   reports `SurfaceEvent`s in physical pixels from the canvas's top-left corner
-   and founds GPUI's drag on the down, so a drag keeps orbiting after the pointer
-   leaves the canvas. Scroll, `click_count` and enter/leave come from
-   `gpui_interop` 0.2.1's gateway: the wheel zooms through
-   `SurfaceEvent::Scroll`, and a double-click recentres the camera.
-
-The camera starts at the demo pose and moves only when the pointer does, so the
-probe draws a live surface rather than a cached texture.
-
-The 13 WASI link stubs the wasm kernel needs live in `crates/ferrocad_wasm`
-(shared with `ferrocad_web`); `ferrocad_wasm::install()` keeps them linked.
+The document is an in-memory sample (`Sample`: `Box`, `Box001`) and the canvas shows
+the shell's `viewport (no GPU)` placeholder. There is no OCCT kernel in this build.
 
 ## Run it
 
-Linking OCCT needs the wasi-sdk toolchain whose wasm-EH encoding matches the
-prebuilt kernel, so — like `ferrocad_web` — this builds inside
-`ghcr.io/lzpel/cross-wasm32-unknown-unknown`. If you have never run the demo,
-`crates/ferrocad_web/run.sh --build-only` once first: it fetches the kernel into
-`.occt-wasm/` and the pinned wasm-bindgen CLI.
+This build needs no OCCT, so any toolchain with the wasm target works — no cross
+image:
 
 ```sh
-docker run --rm -v "$PWD":/work -w /work \
-    -e OCCT_WASM_ROOT=/work/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown \
-    -e CARGO_HOME=/work/target/wasm-cargo-home \
-    -e CARGO_TARGET_DIR=/work/target/wasm-cargo \
-    ghcr.io/lzpel/cross-wasm32-unknown-unknown \
-    cargo build --release -p ferrocad_web_gpui --target wasm32-unknown-unknown
+rustup target add wasm32-unknown-unknown
+cargo build --release -p ferrocad_web_gpui --target wasm32-unknown-unknown
 
-# The container runs as root; hand the caches back.
-docker run --rm -v "$PWD":/work ghcr.io/lzpel/cross-wasm32-unknown-unknown \
-    chown -R "$(id -u):$(id -g)" /work/target/wasm-cargo /work/target/wasm-cargo-home
-
-target/wasm-bindgen/wasm-bindgen --target web \
-    --out-dir crates/ferrocad_web_gpui/www/pkg \
-    target/wasm-cargo/wasm32-unknown-unknown/release/ferrocad_web_gpui.wasm
+# `--out-dir` is gitignored; the CLI version must match `wasm-bindgen` in Cargo.lock.
+wasm-bindgen --target web --out-dir crates/ferrocad_web_gpui/www/pkg \
+    target/wasm32-unknown-unknown/release/ferrocad_web_gpui.wasm
 
 cd crates/ferrocad_web_gpui/www && python3 -m http.server 8081
 ```
 
-Then open <http://localhost:8081>. The module is ~32 MB (GPUI + wgpu + OCCT);
+Then open <http://localhost:8081>. The module is ~16 MB (GPUI + wgpu, no kernel);
 the first load takes a moment.
 
-## What it does not have
+`www/index.html` also drives the shell for headless captures:
 
-- **No text.** GPUI panics when it has to resolve a font and none was added
-  (`DefaultTextSystem::resolve_font`), and loading fonts is `ferrocad_text`'s job.
-  Status goes to the browser console through the logger `gpui::web_init`
-  installs.
-- **No shell yet.** The shell embeds CPython (`pyo3 auto-initialize`), which does
-  not build for `wasm32-unknown-unknown`. The crate split for it —
-  `ferrocad_shell_api` / `ferrocad_shell_core` / `ferrocad_shell_gpui`, with
-  `AppBackend` as the seam — **landed (M0)**; this probe still depends on none of
-  them. M1 wires it to `ferrocad_shell_core` alone; see
-  [`docs/project/tasks/wasm-shell.md`](../../docs/project/tasks/wasm-shell.md).
-- **No image fallback and no picking.** The native presenter degrades to a
-  readback image when the device is unavailable; that path needs an async
-  `map_async` on WebGL2 and is not covered here.
+| Query | Effect |
+| --- | --- |
+| `?click=x,y` | one pointer press/release at a client coordinate (select a tree row, run a header command) |
+| `?drag=1` | one pointer drag across the canvas (for the M3 viewport) |
+| `?wheel=1` | one scroll notch (for the M3 viewport) |
+| `?dblclick=1` | a drag then two quick clicks (for the M3 viewport) |
 
 ## Verified
 
-Headless Chrome, WebGL2 through ANGLE/SwiftShader (`--use-angle=swiftshader
---enable-unsafe-swiftshader`):
+Headless Chrome, WebGL2 through ANGLE/SwiftShader
+(`--use-angle=swiftshader --enable-unsafe-swiftshader`), 1280×800:
 
 ```
-[INFO] ferrocad probe: document tessellated to 40 triangles
-[INFO] ferrocad probe: 2 packets from the document
 [INFO] gpui_wgpu::wgpu_context: Browser graphics initialized: requested=WebGl, selected=Gl, adapter="ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device ...))"
-[INFO] ferrocad probe: 2 packets, 320x320, frame 1
+[INFO] ferrocad_shell_core::fonts: ferrocad: bundled UI font (DejaVu Sans) registered
 ```
 
-The screenshot shows the 10 mm box with a 3 mm fillet on `Edge1` — the rounded
-lower-left edge — shaded with its twelve edges.
+- The window shows the leading bar (`☰`), the viewport header
+  (`Grid / Axes / WP / Gizmo / Select: Body / Snap`), the `viewport (no GPU)`
+  placeholder, the in-window `Model` / `Properties` / `Console` column, the loadout
+  bar and the status line (`2 object(s) · Sample`, `FreeCAD 0.1.5 · rust`).
+- The console's first line is `FerroCAD browser shell · Rust backend (no CPython)`:
+  the Rust backend really is the one answering.
+- `?click=1004,100` selects `Box`: the tree row highlights, `Properties` shows
+  `Label`, `Length`, `Width`, `Height`, and the status line reads `selected Box`.
+- `?click=40,58` runs `App_ToggleGrid`: the header dot turns accent, the console logs
+  `grid on`, and the status line shows `grid on` (the view request round-trips
+  through the shell and back through `set_view_state`).
+- No panic and no unhandled error in the console.
 
-Pointer input was checked the same way: `index.html` honours `?drag=1` (one
-`pointerdown`/`pointermove`×12/`pointerup`), `?wheel=1` (one scroll) and
-`?dblclick=1` (a drag, then two quick clicks), so a headless capture can show each
-handler working. Against the untouched page:
+## What it does not have (yet)
 
-| Capture | Differing pixels | What it shows |
-| --- | ---: | --- |
-| `?drag=1` | 22 027 | orbit; the box turns front-on → corner-on |
-| `?wheel=1` | 26 127 | zoom out, through the gateway's `Scroll` |
-| `?dblclick=1` | **0** | the double-click recentred to the demo pose exactly |
-
-One notch zooms out on scroll-down because GPUI's web backend negates the DOM
-wheel delta (`bite-gp-web/src/events.rs`), so its positive notch is "up"; the
-exponent is the canvas demo's.
-
-`ferrocad_web`'s smoke test still passes after the WASI-stub extraction (40
-triangles, refused fillet reported, `split: 1 direct, 1 left`).
+- **The 3D viewport.** M3: `DeferredView`, a presenter on wasm (`SAMPLES = 1`,
+  `surface.format()`), and the sample scene through `InventorViewport`. The probe's
+  verified baseline (40 triangles, `selected=Gl`, drag/wheel pixel diffs) is the
+  regression target, and it needs the cross image with the prebuilt wasm OCCT.
+- **A real document.** M4: `ferrocad_core::Document` + `ferrocad_part` +
+  `OcctBackend` behind the same `AppBackend`.
+- **Editing a document.** M5: property writes recompute and refresh the stage.
+- **Python.** No interpreter, no workbench scripts, no `FreeCAD` facade, no `.ui`
+  task panels. `evaluate` reports that honestly.
+- **File I/O and multiple windows.** Browser file input / one window only.

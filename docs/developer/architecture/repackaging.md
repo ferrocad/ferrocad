@@ -48,7 +48,10 @@ So the two roles are split by name:
 `ferrocad_shell_core` owns the GPUI UI and the `cx`-threaded helpers, and
 `ferrocad_shell_gpui` (renamed from `ferrocad_gpui`) owns CPython. The browser host
 `ferrocad_web_gpui` depends on the core only. `ferrocad_gpui` stops at 0.1.5; see
-[`releasing.md`](releasing.md) for the package discontinuity.
+[`releasing.md`](releasing.md) for the package discontinuity. The browser host is
+already a real shell (M2): the same `ferrocad_shell_core` window runs in Chrome on
+WebGL2 with a Rust `AppBackend`, one in-window inspector column instead of the
+Dev Tools window, and a bundled font.
 
 ## 3. Shape: a shell library plus thin edition binaries
 

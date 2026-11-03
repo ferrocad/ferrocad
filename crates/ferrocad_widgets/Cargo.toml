@@ -16,6 +16,8 @@ documentation = "https://docs.rs/ferrocad_widgets"
 name = "ferrocad_widgets"
 
 [dependencies]
+# A wasm-safe clock: `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
+web-time = "1"
 bite-gpui = { version = "=1.25.203" }
 unicode-segmentation.workspace = true
 # The shared packed-sRGB tokens: widgets must not import the shell's copy.

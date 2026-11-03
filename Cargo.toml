@@ -141,7 +141,9 @@ ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.4" }
 # packages: the published `ferrocad_gpui` (up to 0.1.5) is retired; see
 # `docs/developer/architecture/releasing.md` for the discontinuity.
 ferrocad_shell_api = { path = "crates/ferrocad_shell_api", version = "0.1.5" }
-ferrocad_shell_core = { path = "crates/ferrocad_shell_core", version = "0.1.5" }
+# Default features are off here so the browser host (which inherits this entry) does
+# not compile the zero-copy presenter; the native assembly turns `gpu-interop` on.
+ferrocad_shell_core = { path = "crates/ferrocad_shell_core", version = "0.1.5", default-features = false }
 ferrocad_shell_gpui = { path = "crates/ferrocad_shell_gpui", version = "0.1.5" }
 ferrocad = { path = "crates/ferrocad", version = "0.1.4" }
 

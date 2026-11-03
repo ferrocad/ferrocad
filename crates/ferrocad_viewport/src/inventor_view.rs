@@ -15,7 +15,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::{
@@ -531,7 +533,7 @@ pub struct InventorViewport<V: InventorView> {
     /// The smoothed orbit velocity while dragging (logical px/s).
     orbit_velocity: [f32; 2],
     /// When the orbit velocity was last sampled.
-    last_drag_time: Option<std::time::Instant>,
+    last_drag_time: Option<Instant>,
     /// The inertial orbit running after the pointer was released.
     inertia: Option<Inertia>,
     /// An in-progress animated snap of the camera onto a cube piece.
@@ -681,7 +683,7 @@ struct OrbitDrag {
 /// **logical pixels per second**, and when it was last integrated.
 struct Inertia {
     velocity: [f32; 2],
-    last: std::time::Instant,
+    last: Instant,
 }
 
 /// A compass-ring scrub in progress.
@@ -4440,7 +4442,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// longer than the sample window drops the velocity, so releasing after a stop does
     /// not fling the view.
     fn track_orbit_velocity(&mut self, delta: [f32; 2]) {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         if let Some(last) = self.last_drag_time {
             let dt = now.saturating_duration_since(last).as_secs_f32();
             if (1e-3..=0.2).contains(&dt) {
@@ -4469,7 +4471,7 @@ impl<V: InventorView> InventorViewport<V> {
         if (vx * vx + vy * vy).sqrt() >= ORBIT_INERTIA_START {
             self.inertia = Some(Inertia {
                 velocity: self.orbit_velocity,
-                last: std::time::Instant::now(),
+                last: Instant::now(),
             });
         }
         self.orbit_velocity = [0.0, 0.0];
@@ -4481,7 +4483,7 @@ impl<V: InventorView> InventorViewport<V> {
         let Some(inertia) = self.inertia.as_ref() else {
             return false;
         };
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let dt = now.saturating_duration_since(inertia.last);
         if let Some(inertia) = self.inertia.as_mut() {
             inertia.last = now;
@@ -8174,7 +8176,7 @@ mod tests {
         let mut view =
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
         view.orbit_velocity = [600.0, 0.0];
-        view.last_drag_time = Some(std::time::Instant::now());
+        view.last_drag_time = Some(Instant::now());
         view.start_inertia();
         assert!(view.inertia.is_some(), "a fast release glides");
 
@@ -8199,7 +8201,7 @@ mod tests {
         let mut view =
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
         view.orbit_velocity = [600.0, 0.0];
-        view.last_drag_time = Some(std::time::Instant::now() - Duration::from_millis(400));
+        view.last_drag_time = Some(Instant::now() - Duration::from_millis(400));
         view.start_inertia();
         assert!(view.inertia.is_none(), "a paused pointer releases without a fling");
     }
@@ -8214,7 +8216,7 @@ mod tests {
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
         view.inertia = Some(Inertia {
             velocity: [600.0, 0.0],
-            last: std::time::Instant::now(),
+            last: Instant::now(),
         });
         assert!(!view.handle_button([20.0, 20.0], 1, true));
         assert!(view.inertia.is_none(), "grabbing the view stops the glide");
@@ -11266,7 +11268,7 @@ mod tests {
         // Before the dwell only the world layer is drawn — no depth-biased local
         // layer — at full strength. (Pin the dwell start: under a loaded test runner a
         // scheduling pause longer than the dwell would bloom it before the assert.)
-        view.hover_face.as_mut().unwrap().since = std::time::Instant::now();
+        view.hover_face.as_mut().unwrap().since = Instant::now();
         view.sync_grid();
         assert_eq!(local_packets(&view), 0, "no face grid before the dwell");
         let world_alpha = max_alpha(&view.grid_queue.packets[0]);
@@ -12074,7 +12076,7 @@ mod tests {
         // Face2 is a different part, so its grid must wait out its own dwell. Pin the
         // dwell start so a scheduling pause longer than the dwell cannot bloom it.
         assert!(view.handle_pointer([70.0, 50.0]));
-        view.hover_face.as_mut().unwrap().since = std::time::Instant::now();
+        view.hover_face.as_mut().unwrap().since = Instant::now();
         view.sync_grid();
         assert_eq!(view.hover_face.as_ref().unwrap().part, 1);
         assert_eq!(local_packets(&view), 0, "the new face has not rested yet");

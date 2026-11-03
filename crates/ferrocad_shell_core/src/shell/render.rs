@@ -2136,6 +2136,66 @@ pub(super) mod dev_section {
     pub const CONSOLE: usize = 5;
 }
 
+/// The in-window inspector column used where a second window is unavailable.
+///
+/// The browser backend owns one window, so the model inspector, the property editor
+/// and the console sit beside the canvas instead of in Dev Tools. Unlike the Dev Tools
+/// accordion, the panes are stacked: the column has the window's full height, and the
+/// browser shell's contract is that all three are visible at once.
+#[cfg(target_family = "wasm")]
+pub(crate) fn panels_sidebar(
+    shell: &mut Shell,
+    model: &ShellModel,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    // Clone the tracked scroll handles first, as `dev_tools_body` does, so the
+    // mutable `shell` borrow stays out of the argument lists below.
+    let model_scroll = shell.dev_scroll.model.clone();
+    let properties_scroll = shell.dev_scroll.properties.clone();
+    let tree = tree_panel(model, &model_scroll, cx).into_any_element();
+    let properties =
+        properties_panel(shell, model, window, &properties_scroll, cx).into_any_element();
+    let console = console_panel(&shell.console, cx).into_any_element();
+
+    div()
+        .flex()
+        .flex_col()
+        .w(px(400.))
+        .h_full()
+        .min_h_0()
+        .border_l_1()
+        .border_color(rgb(PANEL_ALT))
+        .debug_selector(|| "panels-sidebar".to_string())
+        .child(panel_section("Model", tree))
+        .child(panel_section("Properties", properties))
+        .child(panel_section("Console", console))
+        .into_any_element()
+}
+
+/// One titled pane in the in-window inspector column.
+#[cfg(target_family = "wasm")]
+fn panel_section(title: &'static str, body: AnyElement) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .border_t_1()
+        .border_color(rgb(PANEL_ALT))
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .bg(rgb(PANEL_ALT))
+                .text_color(rgb(MUTED))
+                .child(title),
+        )
+        .child(div().flex_1().min_h_0().child(body))
+        .into_any_element()
+}
+
 /// The Dev Tools window's body: the whole command surface, the inspector, the property
 /// editor and the console in one column (P0.5).
 ///

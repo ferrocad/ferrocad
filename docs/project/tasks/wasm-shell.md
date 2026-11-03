@@ -1,6 +1,6 @@
 # The wasm shell: one GPUI UI crate, two backends
 
-Status: **task (2026-11-03). M0 done (2026-11-03); M1–M5 planned.**
+Status: **task (2026-11-03). M0–M2 done (2026-11-03); M3–M5 planned.**
 Companions: [`../research/web-wasm-host.md`](../research/web-wasm-host.md) (the
 probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md)
@@ -210,10 +210,11 @@ crates/
       workbench/                # moved (commands keeps the four bridge fns)
       model/                    # moved (display keeps DisplaySync; selection keeps push)
       stage_view.rs             # re-export of the pure statics (see §3.4)
+      fonts.rs                  # bundled DejaVu Sans + add_fonts (wasm)        [M2]
+      assets/                   # DejaVuSans.ttf + licence                      [M2]
       runtime/
         mod.rs                  # cfg-selects the interop module
         interop.rs              # the zero-copy presenter (gpu-interop)
-        fonts.rs                # embedded UI font (wasm) / system (native)  [M2]
         render_view.rs          # DeferredView (wasm) / ShellView alias      [M3]
   ferrocad_shell_gpui/          # renamed from ferrocad_gpui (M0)
     src/
@@ -224,10 +225,10 @@ crates/
       headless.rs               # offscreen render / STL export (native only)
   ferrocad_web_gpui/            # existing probe → host
     src/
-      lib.rs                    # wasm entry: install Rust backend, run core     [M2]
-      backend.rs                # WasmAppBackend: AppBackend                      [M2]
-      document.rs               # ferrocad_core/Part/OCCT → view models          [M4]
-      commands.rs               # static CommandInfo / toggle outcomes           [M2]
+      lib.rs                    # wasm entry: fonts, backend, WebGl, window  [M2]
+      backend.rs                # SampleBackend: AppBackend (two boxes)       [M2]
+      document.rs               # ferrocad_core/Part/OCCT → view models       [M4]
+    www/                        # the browser harness (index.html, pkg/)
   ferrocad/                     # base binary: depend on ferrocad_shell_gpui
   ferrocad_parametric/          # edition: depend on ferrocad_shell_gpui
 ```
@@ -238,35 +239,42 @@ small `WindowConfig` to the core rather than moving `HostConfig`.
 
 ## 5. What the browser host supplies
 
-A read-only viewer is enough for M2–M3:
+**M2 ships `SampleBackend`** (`ferrocad_web_gpui/src/backend.rs`), which is enough
+to make the shell real without any kernel:
 
-- `bootstrap`: `version = env!("CARGO_PKG_VERSION")`, `backend = "occt-wasm"`,
-  `document` from the Rust document (or `"Untitled"`).
-- `model_tree`, `properties`, `stage_meshes`: from `ferrocad_core::Document` +
-  `ferrocad_part` + `OcctBackend`, tessellated by `ferrocad_mesh`/the stage path.
-- `commands`: a static list carrying at least the header ids (`App_ToggleGrid`,
-  `App_ToggleAxisCross`, `App_ViewWorkplane`, `App_ToggleGizmo`, `Draft_Snap_Lock`)
-  plus Fit/Ortho and the Dev Tools toggle, so the chrome is not empty.
-- `set_view_state`: store the state; the grid/axis/gizmo producers read it.
-- `set_selection`, `set_property`, `run_command`: M5.
+- `bootstrap`: `version = env!("CARGO_PKG_VERSION")`, `backend = "rust"`,
+  `document = "Sample"`.
+- `model_tree`: one `Sample` document with `Box` and `Box001` (`Part::Box` rows).
+- `properties`: `Label`/`Length`/`Width`/`Height` per object; `set_property` stores
+  an override and the pane re-reads it.
+- `commands`: the five header ids plus `Dev_ToggleTools` and a dock `App_Fit`.
+  `Grid`/`Axes`/`Gizmo`/`Snap` report `checked` from the stored state and return a
+  `ViewRequest`; `Fit`/`WP` report that there is no viewport yet.
+- `set_view_state`: stores the shell's state so the next command list agrees with
+  the toggles.
+- `evaluate`: reports that the browser build has no interpreter (the console is
+  still a real transcript, and `hello` names the Rust backend).
+
+M4 replaces the sample with `ferrocad_core::Document` + `ferrocad_part` +
+`OcctBackend`, tessellated through the stage path.
 
 ## 6. Blockers to clear (from the research note)
 
-| # | Blocker | Fix |
-| --- | --- | --- |
-| 1 | pyo3 | The crate boundary; `ferrocad_web_gpui` cannot name a Python crate. |
-| 2 | `Instant::now()` panics on wasm | `web-time::Instant` in `ferrocad_viewport` (`inventor_view.rs`, `navicube.rs`), `ferrocad_widgets/wheel.rs`, optionally `ferrocad_wgpu/trace.rs`. |
-| 3 | `std::env::args()` panics | `configure_trace` is native-only; the wasm entry does not call it. |
-| 4 | `block_on` adapter/device creation hangs | Never create a renderer/adapter on wasm; the presenter supplies the device. |
-| 5 | Shell creates its own `WgpuRenderer` before paint | `DeferredView` on wasm; the real renderer is created in `Presenter::prepare`. |
-| 6 | Presenter cfg excludes wasm | Allow `cfg(all(feature = "gpu-interop", not(target_os = "macos")))`; its same-device branch is the probe's path. |
-| 7 | Presenter format/MSAA | Use `surface.format()` and `SAMPLES = 1` on wasm. |
-| 8 | One window only | Render tree/properties/console **in the main window** behind a `panels_open` flag; do not use `Floating`/`Dialog`. |
-| 9 | Adapter enumeration | Empty on wasm (the Dev Tools GPU panel is read-only). |
-| 10 | Fonts absent → `resolve_font` panic | Embed a UI font and call `add_fonts` before opening the window; set the root family. |
-| 11 | WebGPU-first entry | `application_with_web_backend(WebBackendPreference::WebGl)` + `gpui::web_init()`. |
-| 12 | `process::exit(1)` on boot error | Log and show an error overlay on wasm. |
-| 13 | Readback image path cannot work | The presenter is mandatory; an `Unsupported` presenter shows a diagnostic, not the image path. |
+| # | Blocker | Fix | Status |
+| --- | --- | --- | --- |
+| 1 | pyo3 | The crate boundary; `ferrocad_web_gpui` cannot name a Python crate. | **M0 done** |
+| 2 | `Instant::now()` panics on wasm | `web-time::Instant` in `ferrocad_viewport` (`inventor_view.rs`, `navicube.rs`), `ferrocad_widgets/wheel.rs`, `ferrocad_wgpu/trace.rs`. | **M1 done** (a runtime panic, not a compile one) |
+| 3 | `std::env::args()` panics | `configure_trace` is native-only; the wasm entry does not call it. | **M1 done** (no wasm entry calls it) |
+| 4 | `block_on` adapter/device creation hangs | Never create a renderer/adapter on wasm; the presenter supplies the device. | M2 avoids it (no `enable_viewport`); M3 |
+| 5 | Shell creates its own `WgpuRenderer` before paint | `DeferredView` on wasm; the real renderer is created in `Presenter::prepare`. | M3 |
+| 6 | Presenter cfg excludes wasm | Allow `cfg(all(feature = "gpu-interop", not(target_os = "macos")))`; its same-device branch is the probe's path. | M3 |
+| 7 | Presenter format/MSAA | Use `surface.format()` and `SAMPLES = 1` on wasm. | M3 |
+| 8 | One window only | Render tree/properties/console **in the main window** behind a `panels_open` flag; do not use `Floating`/`Dialog`. | **M2 done** (`panels_sidebar`) |
+| 9 | Adapter enumeration | Empty on wasm (the Dev Tools GPU panel is read-only). | **M2 done** (`open_dev_tools` is native-only) |
+| 10 | Fonts absent → `resolve_font` panic | Embed a UI font and call `add_fonts` before opening the window. | **M2 done** (DejaVu Sans; its family is in GPUI's fallback stack, so no per-element family is needed) |
+| 11 | WebGPU-first entry | `application_with_web_backend(WebBackendPreference::WebGl)` + `gpui::web_init()`. | **M2 done** |
+| 12 | `process::exit(1)` on boot error | Log and return; the page stays usable. | **M2 done** |
+| 13 | Readback image path cannot work | The presenter is mandatory; an `Unsupported` presenter shows a diagnostic, not the image path. | M3 |
 
 The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research/web-wasm-host.md).
 
@@ -274,15 +282,15 @@ The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research
 
 | # | Stage | Work | Acceptance |
 | --- | --- | --- | --- |
-| **M0** | **Crate split, no behaviour change** — **done 2026-11-03** | Create `ferrocad_shell_api` and `ferrocad_shell_core`; move the UI; rename `ferrocad_shell_gpui` to `ferrocad_shell_gpui`; move the Python backend behind `AppBackend`; move the per-frame statics into the pure crates; update `ferrocad`/`ferrocad_parametric`/`ferrocad_toy`/`xtask`/docs. | 250 core + 52 api + 6 shell_gpui tests pass (the old 308); the native app boots and `--check-init` prints `ferrocad: init OK`; `cargo tree -p ferrocad_shell_core -e normal` has no pyo3. |
-| **M1** | **Compile for wasm (no window)** | `web-time`; cfg `interop`/`headless`; wasm app depends only on the core; CI check. | `cargo check -p ferrocad_web_gpui --target wasm32-unknown-unknown` in the cross image (the OCCT kernel is only needed once the document backend is wired; M1 can use the sample backend). |
-| **M2** | **A shell window in Chrome** | Embedded font; wasm entry (`WebGl`, `web_init`, no `process::exit`); in-window panels; static `AppBackend`; placeholder viewport. | Browser shows the leading bar, status line, tree/properties/console, no panic; the console proves the backend was installed. |
+| **M0** | **Crate split, no behaviour change** — **done 2026-11-03** | Create `ferrocad_shell_api` and `ferrocad_shell_core`; move the UI; rename `ferrocad_gpui` to `ferrocad_shell_gpui`; move the Python backend behind `AppBackend`; move the per-frame statics into the pure crates; update `ferrocad`/`ferrocad_parametric`/`ferrocad_toy`/`xtask`/docs. | 250 core + 52 api + 6 shell_gpui tests pass (the old 308); the native app boots and `--check-init` prints `ferrocad: init OK`; `cargo tree -p ferrocad_shell_core -e normal` has no pyo3. |
+| **M1** | **Compile for wasm (no window)** — **done 2026-11-03** | `web-time` in the three crates that read a clock; `interop` stays cfg'd off wasm and `headless` stays native; the browser host depends on the core (plus gpui); CI check. | `cargo check -p ferrocad_web_gpui --target wasm32-unknown-unknown --locked` passes (CI `wasm` job); the result links no OCCT and no CPython. |
+| **M2** | **A shell window in Chrome** — **done 2026-11-03** | Bundled DejaVu Sans + `fonts::install`; WebGL entry (`web_init`, no `process::exit`); `panels_open` in-window sidebar (Model/Properties/Console stacked); `SampleBackend` (two boxes, editable rows, header commands); placeholder viewport. | Headless Chrome shows the leading bar, viewport header, status line, tree, properties and console, with no panic. The console prints `FerroCAD browser shell · Rust backend (no CPython)`; clicking `Box` fills the property pane and the status line; `Grid` toggles on (dot, status and console agree). |
 | **M3** | **Live 3D in the shell** | `DeferredView`; presenter on wasm (format/MSAA); the sample scene through `InventorViewport`; orbit/zoom/pick. | The existing probe baseline still holds (40 triangles, `selected=Gl`, 22 027 / 26 127 / 0) with the shell around it. |
 | **M4** | **Real Rust document** | `WasmAppBackend` over `ferrocad_core::Document` + `ferrocad_part` + `OcctBackend`; tree/properties/stage from the document. | A `Part::Box` + `Part::Fillet` document renders in the browser, the tree lists it, the properties show its rows. |
 | **M5** | **Editing** | `set_property`, `run_command`, toggles, recompute, stage refresh; visibility. | Changing a property in the browser recomputes the document and the viewport updates. |
 
-M0–M1 are the gate: they prove the boundary without touching the renderer. M2 is
-the first user-visible demo. M3 is the regression-proof 3D step.
+M0–M2 are done: the boundary, the wasm build and a real shell in Chrome. M3 is
+the regression-proof 3D step; M4/M5 make the backend a real document.
 
 ## 8. Non-goals
 

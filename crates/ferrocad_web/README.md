@@ -5,6 +5,10 @@ The real OCCT kernel, compiled to WebAssembly, drawing a **`Part` document** on 
 the same `GeometryBackend` seam the desktop app uses, and the recomputed shape is
 tessellated and drawn every animation frame.
 
+This is the **standalone canvas demo**. The full GPUI shell — the same document in
+`ferrocad_shell_core`'s window, with the model tree, property editor and 3D
+viewport — is `crates/ferrocad_web_gpui/run.sh`.
+
 The page drives the feature: a radius slider rebuilds the document, and a radius
 the kernel refuses is **reported, not fatal** — the box that is still valid stays
 on screen and the reason is shown (`OCCT operation \`fillet\` did not complete`).

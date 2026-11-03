@@ -45,34 +45,40 @@ document. The plan and the verified baselines are in
 
 ## Run it
 
-The document links the prebuilt wasm OCCT kernel, so this build needs the cross image
-(the same one `crates/ferrocad_web` uses: the C++ bindings and the kernel must agree on
-the wasm-EH encoding). The kernel tarball is `occt-8_0_1_rev3-wasm32_unknown_unknown`;
-`crates/ferrocad_web/run.sh` fetches it, builds the missing `TKFeat` archive, and is a
-good reference for the whole recipe.
-
 ```sh
-IMAGE=ghcr.io/lzpel/cross-wasm32-unknown-unknown@sha256:4dc88df287da141e67588ba80ebf1d14d5cb24f5b05302c57b11b2a1e9bed1df
-
-docker run --rm -v "$PWD":/work -w /work \
-    -v "$HOME/.cargo/registry":/cargo-home/registry:ro \
-    -v "$HOME/.cargo/git":/cargo-home/git:ro \
-    -v /tmp/ferrocad-wasm-target:/target \
-    -e OCCT_WASM_ROOT=/work/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown \
-    -e CARGO_HOME=/cargo-home -e CARGO_TARGET_DIR=/target \
-    "$IMAGE" \
-    cargo build --release -p ferrocad_web_gpui --target wasm32-unknown-unknown --locked
-
-# `--out-dir` is gitignored; the CLI version must match `wasm-bindgen` in Cargo.lock.
-wasm-bindgen --target web --out-dir crates/ferrocad_web_gpui/www/pkg \
-    /tmp/ferrocad-wasm-target/wasm32-unknown-unknown/release/ferrocad_web_gpui.wasm
-
-cd crates/ferrocad_web_gpui/www && python3 -m http.server 8081
+crates/ferrocad_web_gpui/run.sh
 ```
 
-The two read-only cargo mounts are only there so the container needs no network; any
-cargo home with the lock's crates works. Then open <http://localhost:8081>. The module
-is ~37 MB (GPUI + wgpu + OCCT); the first load takes a moment.
+Then open <http://localhost:8081> (the script opens it for you unless `--no-open`).
+The module is ~37 MB (GPUI + wgpu + OCCT); the first load takes a moment.
+
+The document links the prebuilt wasm OCCT kernel, so the build happens inside the
+digest-pinned `ghcr.io/lzpel/cross-wasm32-unknown-unknown` image (the C++ bindings and
+the kernel must agree on the wasm-EH encoding). On the first run the script:
+
+1. downloads cadrum's prebuilt **OCCT 8.0.1** for `wasm32-unknown-unknown` into
+   `.occt-wasm/` and builds the one toolkit that tarball prunes (**`TKFeat`**) — both
+   shared with `crates/ferrocad_web/run.sh` through `tools/wasm-prepare.sh`;
+2. installs the **wasm-bindgen CLI version pinned by `Cargo.lock`** into
+   `target/wasm-bindgen/`;
+3. builds `ferrocad_web_gpui` in the cross image, with the build output and Cargo's
+   home kept on the host (`target/wasm-cargo/`, `target/wasm-cargo-home/`) so later
+   runs are incremental;
+4. generates `www/pkg/` and serves `www/` with `python3 -m http.server`.
+
+Options:
+
+```sh
+PORT=9000 crates/ferrocad_web_gpui/run.sh      # another port
+JOBS=4 crates/ferrocad_web_gpui/run.sh         # more build parallelism (default 2)
+crates/ferrocad_web_gpui/run.sh --no-open      # don't open a browser
+crates/ferrocad_web_gpui/run.sh --build-only   # build www/pkg and stop
+WASM_OFFLINE=1 crates/ferrocad_web_gpui/run.sh # no network; seed the cargo home first
+```
+
+Requirements: Docker (usable without `sudo`), `curl`, `tar`, `git` and `python3`.
+A host Rust toolchain is not needed. `crates/ferrocad_web/run.sh` is the older
+standalone canvas demo, which draws the same document without the shell.
 
 `www/index.html` also drives the shell for headless captures:
 

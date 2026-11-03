@@ -1097,3 +1097,31 @@ renderer in a browser window: `enable_viewport` builds the element with a
   navicube labels) and `Failed to poll device during resize: Timeout`; it retries and
   the next frame is correct. Nothing to fix on this side, but a headless test that
   fails on console errors will see it.
+
+### The shell's own document (2026-11-03)
+
+M4 replaced the hand-built sample stage with a real `ferrocad_core::Document`:
+`Part::Box` (10 mm, centred by `Placement`) and `Part::Fillet` on `Edge1` (3 mm),
+recomputed by the wasm OCCT kernel and tessellated at 0.2 mm. The browser console
+logs `Box · 12 triangles` and `Fillet · 40 triangles` — the probe's 40-triangle
+baseline for a filleted 10 mm box, from the same kernel, now reached through the
+document instead of a direct kernel call. The tree, the property rows (`Base`
+`Box: Edge1`, `Radius 3.0 mm`, `Shape` `Output`) and the viewport all read that one
+document.
+
+Three build-side facts this settled:
+
+- **The host links the kernel, so it must be built in the cross image.**
+  `ferrocad_occt`'s build script compiles C++ against `OCCT_WASM_ROOT`; the host's
+  C++ and the prebuilt kernel only agree on the wasm-EH encoding when both come from
+  `ghcr.io/lzpel/cross-wasm32-unknown-unknown`. A `cargo check` on a machine without
+  the kernel fails in the build script, and a `cargo check` anywhere cannot prove the
+  link: the CI `wasm` job now **builds** `ferrocad_web_gpui`, and the cheap early
+  check moved to `ferrocad_shell_core` (which needs no kernel).
+- **Boot order matters.** `ferrocad_wasm::install()` and `__wasm_call_ctors()` must
+  run before the first kernel call, so the backend is constructed inside the
+  application closure, not in a `static`.
+- **`ImportedTextureExt` on wasm needs the `wasm-interop` feature.** It is enabled
+  by `ferrocad_shell_core`'s `gpu-interop` feature now (it is inert on native), so
+  the crate that compiles the presenter is self-contained instead of relying on the
+  host to turn the feature on.

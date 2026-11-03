@@ -51,7 +51,8 @@ So the two roles are split by name:
 [`releasing.md`](releasing.md) for the package discontinuity. The browser host is
 already a real shell (M2): the same `ferrocad_shell_core` window runs in Chrome on
 WebGL2 with a Rust `AppBackend`, one in-window inspector column instead of the
-Dev Tools window, and a bundled font.
+Dev Tools window, and a bundled font. It also has the live viewport (M3) and a real
+`ferrocad_core::Document` on the wasm OCCT kernel (M4).
 
 ## 3. Shape: a shell library plus thin edition binaries
 

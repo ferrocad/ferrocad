@@ -2615,9 +2615,14 @@ dependencies = [
 name = "ferrocad_web_gpui"
 version = "0.1.5"
 dependencies = [
- "bite-gp-wgpu",
  "bite-gpui",
+ "ferrocad_core",
+ "ferrocad_geom",
+ "ferrocad_occt",
+ "ferrocad_part",
  "ferrocad_shell_core",
+ "ferrocad_types",
+ "ferrocad_wasm",
  "log",
  "wasm-bindgen",
 ]

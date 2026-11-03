@@ -1,6 +1,6 @@
 # The wasm shell: one GPUI UI crate, two backends
 
-Status: **task (2026-11-03). M0–M3 done (2026-11-03); M4–M5 planned.**
+Status: **task (2026-11-03). M0–M4 done (2026-11-03); M5 planned.**
 Companions: [`../research/web-wasm-host.md`](../research/web-wasm-host.md) (the
 probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md)
@@ -225,9 +225,8 @@ crates/
       headless.rs               # offscreen render / STL export (native only)
   ferrocad_web_gpui/            # existing probe → host
     src/
-      lib.rs                    # wasm entry: fonts, backend, WebGl, window  [M2]
-      backend.rs                # SampleBackend: AppBackend (two boxes)       [M2]
-      document.rs               # ferrocad_core/Part/OCCT → view models       [M4]
+      lib.rs                    # wasm entry: CTORS, fonts, backend, WebGl, window
+      document.rs               # DocumentBackend over ferrocad_core/Part/OCCT  [M4]
     www/                        # the browser harness (index.html, pkg/)
   ferrocad/                     # base binary: depend on ferrocad_shell_gpui
   ferrocad_parametric/          # edition: depend on ferrocad_shell_gpui
@@ -239,31 +238,38 @@ small `WindowConfig` to the core rather than moving `HostConfig`.
 
 ## 5. What the browser host supplies
 
-**M2 ships `SampleBackend`** (`ferrocad_web_gpui/src/backend.rs`), which is enough
-to make the shell real without any kernel:
+**M2 shipped `SampleBackend`**, which made the shell real without any kernel. **M4
+replaces it with `DocumentBackend`** (`ferrocad_web_gpui/src/document.rs`), over a
+real `ferrocad_core::Document` on the Part workbench and the wasm OCCT kernel:
 
 - `bootstrap`: `version = env!("CARGO_PKG_VERSION")`, `backend = "rust"`,
-  `document = "Sample"`.
-- `model_tree`: one `Sample` document with `Box` and `Box001` (`Part::Box` rows).
-- `properties`: `Label`/`Length`/`Width`/`Height` per object; `set_property` stores
-  an override and the pane re-reads it.
+  `document = "Sample"`; a document that failed to build reports the reason rather
+  than booting empty.
+- **The document** (M4): a `Part::Box` (10 mm, centred through its `Placement`) and a
+  `Part::Fillet` on `Edge1` with radius 3 mm, through `Document::add_object` /
+  `set_property` / `recompute` — no hand-built geometry. The log names both shapes
+  (`Box · 12 triangles`, `Fillet · 40 triangles`), which is the probe's baseline and
+  the proof that the fillet really rebuilt from its `LinkSub`.
+- `model_tree`: `Document::object_ids()` with each object's name, label and type id.
+- `properties`: a `Label` row plus every property-container entry, with the editor
+  kind from its type id (this document's lengths are `Property::Float`, so
+  `Length`/`Width`/`Height`/`Radius` are presented as `quantity` rows in mm, as the
+  desktop Part workbench does), the `status_names` mask (`Output`, …), and expression
+  rows read-only. `set_property` writes the value and recomputes; a feature the kernel
+  refuses keeps its last good shape and reports why.
+- `stage_meshes`: every visible object with a `Shape`, tessellated by
+  `ferrocad_part::backend()` at 0.2 mm and copied into `StageMesh` (positions, normals,
+  triangles, edges, and the `parts` names a pick reports). The entity id is the object
+  id + 1, the origin is the placement's base point, and the colour is the object's view
+  colour (default: the Part steel grey).
 - `commands`: the five header ids plus `Dev_ToggleTools` and a dock `App_Fit`.
   `Grid`/`Axes`/`Gizmo`/`Snap` report `checked` from the stored state and return a
-  `ViewRequest`; `Fit` reports that the sample is framed on load and `WP` that no
+  `ViewRequest`; `Fit` reports that the document is framed on load and `WP` that no
   workplane command is wired yet.
 - `set_view_state`: stores the shell's state so the next command list agrees with
   the toggles.
 - `evaluate`: reports that the browser build has no interpreter (the console is
-  still a real transcript, and `hello` names the Rust backend).
-- `stage_meshes` (**M3**): the two boxes as hand-tessellated `StageMesh`es — eight
-  shared corners, twelve triangles and twelve edges each, with one `parts` entry per
-  face and edge. That is a real document stage: `frame_stage` frames it on boot, a
-  viewport click picks it, the entity → object map names it in the tree, and the
-  gizmo arms from the selection. The boxes are tessellated in Rust because there is
-  no kernel in this build; `Part::Box` would produce the same shape.
-
-M4 replaces the hand-built meshes with `ferrocad_core::Document` + `ferrocad_part` +
-`OcctBackend`, tessellated through the same stage path.
+  still a real transcript, and `hello` names the Rust document backend).
 
 ## 6. Blockers to clear (from the research note)
 
@@ -283,6 +289,7 @@ M4 replaces the hand-built meshes with `ferrocad_core::Document` + `ferrocad_par
 | 12 | `process::exit(1)` on boot error | Log and return; the page stays usable. | **M2 done** |
 | 13 | Readback image path cannot work | The presenter is mandatory; an `Unsupported` presenter shows a diagnostic, not the image path. | **M3 done** (the presenter is the only renderer; `DeferredView` draws nothing) |
 | 14 | G-buffer picking needs a synchronous readback | `pick::read_texel` uses `map_async` + `poll(wait_indefinitely)`, which cannot complete in a browser. The presenter reports `supports_pick() == false` on wasm, so the viewport uses its CPU ray cast — pure math over the same queue and camera. | **M3 done** (clicking a box selects it) |
+| 15 | The document links the OCCT kernel | The host must build inside `ghcr.io/lzpel/cross-wasm32-unknown-unknown` (the C++ and the kernel agree on the wasm-EH encoding), with `OCCT_WASM_ROOT` pointing at the fetched `occt-8_0_1_rev3-wasm32_unknown_unknown`, and `ferrocad_wasm::install()` + `__wasm_call_ctors()` before the first kernel call. | **M4 done** (`DocumentBackend`; the `wasm` CI job links the host) |
 
 The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research/web-wasm-host.md).
 
@@ -294,11 +301,12 @@ The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research
 | **M1** | **Compile for wasm (no window)** — **done 2026-11-03** | `web-time` in the three crates that read a clock; `interop` stays cfg'd off wasm and `headless` stays native; the browser host depends on the core (plus gpui); CI check. | `cargo check -p ferrocad_web_gpui --target wasm32-unknown-unknown --locked` passes (CI `wasm` job); the result links no OCCT and no CPython. |
 | **M2** | **A shell window in Chrome** — **done 2026-11-03** | Bundled DejaVu Sans + `fonts::install`; WebGL entry (`web_init`, no `process::exit`); `panels_open` in-window sidebar (Model/Properties/Console stacked); `SampleBackend` (two boxes, editable rows, header commands); placeholder viewport. | Headless Chrome shows the leading bar, viewport header, status line, tree, properties and console, with no panic. The console prints `FerroCAD browser shell · Rust backend (no CPython)`; clicking `Box` fills the property pane and the status line; `Grid` toggles on (dot, status and console agree). |
 | **M3** | **Live 3D in the shell** — **done 2026-11-03** | `DeferredView` + `ShellView`; presenter allowed on wasm (`surface.format()`, `SAMPLES = 1`); `enable_viewport` on wasm; `SampleBackend::stage_meshes` (hand-tessellated boxes); CPU picking instead of the G-buffer. | Headless Chrome shows both boxes through `InventorViewport` with the shell around them; `?drag=1` orbits (75 434 px differ), `?wheel=1` zooms (42 132 px), and a click on a box selects it — tree row, properties, status line and gizmo. 308 native tests still pass. |
-| **M4** | **Real Rust document** | `WasmAppBackend` over `ferrocad_core::Document` + `ferrocad_part` + `OcctBackend`; tree/properties/stage from the document. | A `Part::Box` + `Part::Fillet` document renders in the browser, the tree lists it, the properties show its rows. |
+| **M4** | **Real Rust document** — **done 2026-11-03** | `DocumentBackend` over `ferrocad_core::Document` + `ferrocad_part` + `OcctBackend`; tree, property rows and stage all read the document; `set_property` recomputes. The host links the prebuilt wasm kernel (`ferrocad_wasm` stubs + `__wasm_call_ctors`). | Headless Chrome shows `Sample`: `Box` (`Part::Box`) and `Fillet` (`Part::Fillet`) in the tree, the fillet's real rows (`Base` `Box: Edge1`, `Radius 3.0 mm`, `Shape` `Output`), and the filleted box in the viewport. The console logs `Box · 12 triangles` and `Fillet · 40 triangles` — the probe's baseline. The `wasm` CI job links the host. |
 | **M5** | **Editing** | `set_property`, `run_command`, toggles, recompute, stage refresh; visibility. | Changing a property in the browser recomputes the document and the viewport updates. |
 
-M0–M3 are done: the boundary, the wasm build, a real shell in Chrome and the live
-3D viewport in it. M4/M5 make the backend a real document.
+M0–M4 are done: the boundary, the wasm build, a real shell in Chrome, the live 3D
+viewport in it, and a real document behind both. M5 makes a viewport drag edit the
+document.
 
 ## 8. Non-goals
 
@@ -330,6 +338,24 @@ M0–M3 are done: the boundary, the wasm build, a real shell in Chrome and the l
     `Scissor Rect … is not contained in the render target` twice and recovers. The
     same run also logs `Failed to poll device during resize: Timeout`, which the
     probe had too. Neither affects the rendered frame; neither is a panic.
+- **The document bring-up (M4).** Three things are load-bearing:
+  - **The build needs the cross image and the kernel.** `ferrocad_occt`'s build
+    script compiles C++ against `OCCT_WASM_ROOT`; the host C++ and the prebuilt
+    kernel only link if both are built by
+    `ghcr.io/lzpel/cross-wasm32-unknown-unknown` (wasm-EH encoding). `cargo check` on
+    the host cannot see a link failure, so the `wasm` CI job **builds** the host, not
+    just checks it. `ferrocad_wasm::install()` and `__wasm_call_ctors()` must run
+    before the first kernel call, which is why the backend is constructed inside
+    `main` rather than in a `static`.
+  - **The lengths are `Property::Float`, not `Property::PropertyLength`.** The Rust
+    Part primitives store them as plain floats, so `DocumentBackend` presents
+    `Length`/`Width`/`Height`/`Radius` as `quantity` rows in mm itself; reading the
+    type id alone would give a unitless `float` row. If Part moves to typed lengths,
+    the name-based mapping in `editor_kind` can go.
+  - **Both objects are drawn.** `Box` and `Fillet` are both visible in FreeCAD's
+    sense, and the fillet's shape is the filleted box, so the stage holds two nearly
+    coincident solids (as the desktop does). Hiding the base is a document edit, not a
+    display rule; M5 can offer it.
 - **One-window panels.** The editor, properties and console must be laid out for
   the main window; the current `dev_tools_body` assumes a second window and
   double key handling (`panels_open` must not also route keys through the shell).
@@ -341,7 +367,7 @@ M0–M3 are done: the boundary, the wasm build, a real shell in Chrome and the l
   manifests in the same change.
 - **Test policy.** Native tests keep the Python backend (`ferrocad_shell_gpui`);
   do not run the suite with a stub. The wasm backend is tested by the browser
-  harness and by `cargo check` in CI.
+  harness and by the `wasm` CI job, which now builds the host against the kernel.
 - **The test-build cycle (discovered in M0).** `ferrocad_shell_core`'s tests need a
   real backend, so it dev-depends on `ferrocad_shell_gpui`, which depends on
   `ferrocad_shell_core`. Cargo permits that, but builds the core crate **twice**

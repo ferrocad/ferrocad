@@ -304,11 +304,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the kernel-free model to wasm32
         run: cargo build -p wasm-example --release --target wasm32-unknown-unknown
-      # The browser shell (M1): `ferrocad_shell_core` and its Rust backend must compile
-      # for wasm. It needs no OCCT, so this runs before the kernel fetch; the 3D
-      # viewport (M3) is the step that links the prebuilt kernel again.
-      - name: Check the browser shell for wasm32
-        run: cargo check -p ferrocad_web_gpui --target wasm32-unknown-unknown --locked
+      # The platform-neutral shell: `ferrocad_shell_core` and the AppBackend seam must
+      # compile for wasm. It needs no OCCT, so this runs before the kernel fetch and
+      # fails fast on a GPUI/wgpu regression.
+      - name: Check the shell core for wasm32
+        run: cargo check -p ferrocad_shell_core --target wasm32-unknown-unknown --locked
       - name: Fetch the prebuilt wasm OCCT 8.0.1
         env:
           OCCT_WASM_URL: https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz
@@ -322,6 +322,13 @@ jobs:
         run: |
           cargo check -p ferrocad_occt_cxx --target wasm32-unknown-unknown --locked
           cargo check -p ferrocad_occt --target wasm32-unknown-unknown --locked
+      # The browser host's backend tessellates a real document, so the host itself
+      # needs the kernel. This links the cdylib, which also proves the WASI stubs
+      # `ferrocad_wasm` provides are enough for the reachable kernel subset.
+      - name: Link the browser host (document + kernel)
+        env:
+          OCCT_WASM_ROOT: ${{ github.workspace }}/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown
+        run: cargo build -p ferrocad_web_gpui --release --target wasm32-unknown-unknown --locked
       - name: Link the wasm cdylib (box, fillet, tessellate)
         env:
           OCCT_WASM_ROOT: ${{ github.workspace }}/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown

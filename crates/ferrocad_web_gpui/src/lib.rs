@@ -4,8 +4,9 @@
 //! [`ferrocad_shell_core`](https://crates.io/crates/ferrocad_shell_core) window —
 //! leading bar, viewport header, status line, model inspector, property editor and
 //! console — and supplies a Rust [`AppBackend`](ferrocad_shell_core::AppBackend)
-//! instead of CPython. There is no interpreter and no OCCT kernel: the document is a
-//! small in-memory sample, and the 3D viewport draws a hand-built stage for it.
+//! instead of CPython. The engine is a real `ferrocad_core::Document` whose geometry
+//! is built by the OCCT kernel compiled to wasm (`ferrocad_part` + `ferrocad_occt`),
+//! so the tree, the property rows and the viewport all come from one document.
 //!
 //! The viewport is the shell's real `InventorViewport` element; its renderer is the
 //! zero-copy presenter, which negotiates with the window's own wgpu device on the
@@ -19,7 +20,7 @@
 
 #![cfg(target_family = "wasm")]
 
-mod backend;
+mod document;
 
 use gpui::{
     App, TitlebarOptions, WebBackendPreference, WindowBackgroundAppearance, WindowBounds,
@@ -28,8 +29,18 @@ use gpui::{
 };
 use wasm_bindgen::prelude::*;
 
+unsafe extern "C" {
+    /// Emitted by wasm-ld: runs the module's static constructors. OCCT's C++
+    /// initialisers must run before any kernel call.
+    fn __wasm_call_ctors();
+}
+
 #[wasm_bindgen(start)]
 pub fn main() {
+    // Retain the WASI stubs before the kernel's objects are linked in.
+    ferrocad_wasm::install();
+    // The C++ runtime behind the kernel, before anything can call it.
+    unsafe { __wasm_call_ctors() };
     // Logging and the panic hook; must run before the application.
     gpui::web_init();
 
@@ -39,8 +50,9 @@ pub fn main() {
         // A font before any text: GPUI resolves fonts during layout and panics if
         // there is nothing to fall back to.
         ferrocad_shell_core::fonts::install(cx);
-        // The Rust engine. Boot reads it, so it must be installed first.
-        ferrocad_shell_core::app::install_backend(cx, Box::new(backend::SampleBackend::new()));
+        // The Rust engine: the real document, over the wasm OCCT kernel. Boot reads
+        // it, so it must be installed first.
+        ferrocad_shell_core::app::install_backend(cx, Box::new(document::DocumentBackend::new()));
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {
             Ok(model) => model,

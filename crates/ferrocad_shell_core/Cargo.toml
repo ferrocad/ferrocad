@@ -53,7 +53,13 @@ default = ["gpu-interop"]
 # Present the viewport zero-copy through gpui's wgpu device. Runtime fallback: the
 # image path stays in use where the window has no compatible device (headless,
 # macOS, a Direct3D window, or a driver without dma-buf export).
-gpu-interop = ["dep:gpui_interop", "dep:gpui_wgpu"]
+#
+# `gpui_wgpu/wasm-interop` is what compiles `ImportedTextureExt` on wasm (it turns
+# on wgpu's `fragile-send-sync-non-atomic-wasm`), which the same-device presenter
+# calls. It is inert on native targets, and enabling it here keeps the crate
+# self-contained: a standalone `cargo check -p ferrocad_shell_core --target
+# wasm32-unknown-unknown` compiles the presenter.
+gpu-interop = ["dep:gpui_interop", "dep:gpui_wgpu", "gpui_wgpu/wasm-interop"]
 
 [dev-dependencies]
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].

@@ -1,0 +1,750 @@
+//! The browser's engine: a real `ferrocad_core::Document` behind `AppBackend`.
+//!
+//! This replaces the M2 sample: the tree, the property rows and the viewport stage
+//! are read from one document, and the geometry is built by the OCCT kernel compiled
+//! to wasm. The sample document is a `Part::Box` with a `Part::Fillet` on one edge —
+//! the smallest document that exercises a dependency (the fillet recomputes after
+//! the box), a parametric feature (`Radius`) and a real tessellation.
+//!
+//! # What is real, and what is not
+//!
+//! Real: `Document::recompute`, the Part object types, the kernel, tessellation into
+//! `StageMesh`es, picking (the shell's CPU ray cast over that stage), and property
+//! edits through [`AppBackend::set_property`] followed by a recompute.
+//!
+//! Not yet: undo/redo (the browser has no UI for it), expressions, binary file I/O,
+//! and anything scripted — there is no interpreter in this build, so `evaluate`
+//! says so rather than pretending.
+
+use std::cell::RefCell;
+use std::sync::Arc;
+
+use ferrocad_core::{Document, ObjectId, Placement, Property, Rotation, Vector3, status_names};
+use ferrocad_geom::TessellationOptions;
+use ferrocad_occt::OcctBackend;
+use ferrocad_part::{BOX_TYPE, FILLET_TYPE, backend, shape_of};
+use ferrocad_shell_core::app::AppBackend;
+use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
+use ferrocad_shell_core::display::StageMesh;
+use ferrocad_shell_core::types::{
+    Bootstrap, DocumentNode, EvalResult, ObjectNode, PropRow, SetResult,
+};
+use ferrocad_shell_core::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
+use ferrocad_types::Quantity;
+
+/// Document and command ids shared with the native registry, so the chrome's controls
+/// and the app menu resolve exactly as they do natively.
+const GRID: &str = "App_ToggleGrid";
+const AXIS: &str = "App_ToggleAxisCross";
+const WORKPLANE: &str = "App_ViewWorkplane";
+const GIZMO: &str = "App_ToggleGizmo";
+const SNAP: &str = "Draft_Snap_Lock";
+const DEV_TOOLS: &str = "Dev_ToggleTools";
+const FIT: &str = "App_Fit";
+
+/// The sample document's name (the window title and the status line use it).
+const DOCUMENT: &str = "Sample";
+
+/// The edge the fillet is applied to, as the canvas demo does.
+const EDGE: &str = "Edge1";
+
+/// The fillet radius, in millimetres. Large enough to see, well under the radius at
+/// which the kernel refuses it (the demo's 10 mm box fails at 10 or more).
+const RADIUS: f64 = 3.0;
+
+/// The tessellation tolerance, in millimetres (the probe's).
+const TOLERANCE: f64 = 0.2;
+
+/// The opaque steel grey the desktop Part workbench gives document solids.
+const DEFAULT_COLOR: [f32; 4] = [0.30, 0.34, 0.40, 1.0];
+
+/// The mutable half of the backend: the document and the state the view commands
+/// toggle.
+struct State {
+    document: Document,
+    view: ShellViewState,
+    snap: bool,
+}
+
+/// The browser's `AppBackend`, over a real document.
+pub struct DocumentBackend {
+    state: RefCell<State>,
+    /// Why the sample document could not be built, if it could not.
+    boot_error: Option<String>,
+}
+
+impl DocumentBackend {
+    /// Compose Part with the wasm OCCT kernel and build the sample document.
+    ///
+    /// Must run after the module's static constructors (`__wasm_call_ctors`): the
+    /// kernel's C++ runtime has to be initialised before the first call.
+    pub fn new() -> Self {
+        // Idempotent: the Part module keeps one backend per process.
+        ferrocad_part::register(Arc::new(OcctBackend::new()));
+
+        let mut document = Document::new();
+        let boot_error = build_sample(&mut document).err();
+        match boot_error.as_deref() {
+            Some(error) => log::error!("ferrocad: the sample document did not build: {error}"),
+            None => log_shapes(&document),
+        }
+
+        Self {
+            state: RefCell::new(State {
+                document,
+                view: ShellViewState::default(),
+                snap: false,
+            }),
+            boot_error,
+        }
+    }
+
+    /// The document's object for an internal name.
+    fn object_id(state: &State, name: &str) -> Option<ObjectId> {
+        state.document.get_by_name(name)
+    }
+}
+
+impl Default for DocumentBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AppBackend for DocumentBackend {
+    fn bootstrap(&mut self) -> Result<Bootstrap, String> {
+        if let Some(error) = self.boot_error.clone() {
+            return Err(error);
+        }
+        Ok(Bootstrap {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            backend: "rust".to_string(),
+            document: DOCUMENT.to_string(),
+        })
+    }
+
+    fn hello(&self) -> Result<String, String> {
+        Ok("FerroCAD browser shell · Rust document backend · OCCT wasm · no CPython".to_string())
+    }
+
+    fn model_tree(&self) -> Result<Vec<DocumentNode>, String> {
+        let state = self.state.borrow();
+        let objects = state
+            .document
+            .object_ids()
+            .iter()
+            .filter_map(|id| state.document.object(*id))
+            .map(|object| ObjectNode {
+                name: object.name.clone(),
+                label: object.label.clone(),
+                type_id: object.type_id.clone(),
+            })
+            .collect();
+        Ok(vec![DocumentNode {
+            name: DOCUMENT.to_string(),
+            label: DOCUMENT.to_string(),
+            objects,
+        }])
+    }
+
+    fn properties(&self, object: &str) -> Result<Vec<PropRow>, String> {
+        let state = self.state.borrow();
+        let Some(id) = Self::object_id(&state, object) else {
+            return Ok(Vec::new());
+        };
+        let Some(object) = state.document.object(id) else {
+            return Ok(Vec::new());
+        };
+
+        let mut rows = Vec::with_capacity(object.properties.len() + 1);
+        // `Label` is a document-object field, not a property-container entry; FreeCAD
+        // presents it as an ordinary row and so does the native backend.
+        rows.push(PropRow {
+            name: "Label".to_string(),
+            label: String::new(),
+            type_id: "App::PropertyString".to_string(),
+            value: object.label.clone(),
+            status: String::new(),
+            editable: true,
+            command: None,
+            kind: "text".to_string(),
+            min: None,
+            max: None,
+            unit: None,
+            choices: Vec::new(),
+        });
+
+        for (name, value) in object.properties.iter() {
+            let type_id = value.type_name().to_string();
+            let kind = editor_kind(name, &type_id);
+            let driven = object.expressions.contains_key(name);
+            let mut row = PropRow {
+                name: name.clone(),
+                label: String::new(),
+                value: property_text(value),
+                status: object
+                    .properties
+                    .status(name)
+                    .map(|status| status_names(status).join(", "))
+                    .unwrap_or_default(),
+                editable: !kind.is_empty() && !driven,
+                command: None,
+                type_id,
+                kind: kind.to_string(),
+                min: None,
+                max: None,
+                unit: None,
+                choices: Vec::new(),
+            };
+            match kind {
+                "quantity" => {
+                    // This document's lengths are plain floats in millimetres; the
+                    // desktop Part workbench presents them with their unit.
+                    row.unit = Some("mm".to_string());
+                    row.value = format!("{} mm", number(value_as_f64(value).unwrap_or(0.0)));
+                }
+                "enum" => {
+                    if let Property::Enumeration(values, _) = value {
+                        row.choices = values.clone();
+                    }
+                }
+                _ => {}
+            }
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
+    fn stage_meshes(&self) -> Result<Vec<StageMesh>, String> {
+        let state = self.state.borrow();
+        let state = &*state;
+        let backend = backend();
+        let mut meshes = Vec::new();
+        for id in state.document.object_ids() {
+            let Some(object) = state.document.object(id) else {
+                continue;
+            };
+            if !visible(object) {
+                continue;
+            }
+            let Some(shape) = object
+                .properties
+                .get("Shape")
+                .and_then(shape_of)
+                .and_then(|property| property.shape())
+            else {
+                continue;
+            };
+            let mesh = backend
+                .tessellate(&shape, &TessellationOptions::absolute(TOLERANCE))
+                .map_err(|error| format!("{}: {error}", object.name))?;
+            meshes.push(StageMesh {
+                // A stable per-document pick id; `DisplaySync` maps it to the name.
+                entity: id as u32 + 1,
+                object: object.name.clone(),
+                label: object.label.clone(),
+                positions: mesh.positions,
+                normals: mesh.normals,
+                triangles: mesh.triangles,
+                triangle_parts: mesh.triangle_parts,
+                edges: mesh.edges,
+                segment_parts: mesh.segment_parts,
+                vertices: mesh.vertices,
+                vertex_parts: mesh.vertex_parts,
+                parts: mesh.parts,
+                origin: placement_base(object),
+                color: Some(object_color(object)),
+                display: None,
+            });
+        }
+        Ok(meshes)
+    }
+
+    fn commands(&self) -> Result<Vec<CommandInfo>, String> {
+        let state = self.state.borrow();
+        let mut commands = vec![
+            command(GRID, "Grid", "grid", true, state.view.grid),
+            command(AXIS, "Axes", "axis", true, state.view.axis_cross),
+            command(WORKPLANE, "WP", "workplane", false, false),
+            command(GIZMO, "Gizmo", "gizmo", true, state.view.gizmo.enabled),
+            command(SNAP, "Snap", "snap", true, state.snap),
+            command(DEV_TOOLS, "Dev Tools", "hidden", false, false),
+            command(FIT, "Fit", "dock", false, false),
+        ];
+        // The app menu lists the first entry by id; give Fit a friendly tooltip too.
+        for command in &mut commands {
+            command.cmd_type = "ForView".to_string();
+            command.group = "View".to_string();
+        }
+        if let Some(fit) = commands.iter_mut().find(|command| command.id == FIT) {
+            fit.tooltip = "Frame the document".to_string();
+        }
+        Ok(commands)
+    }
+
+    fn set_view_state(&self, state: &ShellViewState) -> Result<(), String> {
+        self.state.borrow_mut().view = state.clone();
+        Ok(())
+    }
+
+    fn set_selection(&self, _items: &[ferrocad_shell_core::SelectionItem]) -> Result<(), String> {
+        // The document has no selection facade yet; the shell owns the selection and
+        // asks it for the rows it shows.
+        Ok(())
+    }
+
+    fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
+        Ok(EvalResult {
+            ok: false,
+            output: "the browser build has no Python interpreter".to_string(),
+        })
+    }
+
+    fn set_property(
+        &mut self,
+        object: &str,
+        property: &str,
+        value: &str,
+    ) -> Result<SetResult, String> {
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let Some(id) = Self::object_id(state, object) else {
+            return Ok(refused(format!("no object {object}")));
+        };
+
+        if property == "Label" {
+            state.document.set_label(id, value);
+            return Ok(SetResult {
+                ok: true,
+                error: String::new(),
+                view: None,
+            });
+        }
+
+        let Some(current) = state
+            .document
+            .object(id)
+            .and_then(|object| object.properties.get(property))
+            .cloned()
+        else {
+            return Ok(refused(format!("no property {property}")));
+        };
+        if state
+            .document
+            .object(id)
+            .is_some_and(|object| object.expressions.contains_key(property))
+        {
+            return Ok(refused(format!("{property} is set by an expression")));
+        }
+        let next = match coerce(&current, value) {
+            Ok(next) => next,
+            Err(error) => return Ok(refused(error)),
+        };
+        if let Err(error) = state.document.set_property(id, property, next) {
+            return Ok(refused(error));
+        }
+        match state.document.recompute() {
+            Ok(_) => {
+                // A feature that refuses its input keeps its last good shape and
+                // reports the reason. That is document state, not a failed edit:
+                // the value was stored, so the pane keeps it.
+                if let Some(error) = state
+                    .document
+                    .object(id)
+                    .and_then(|object| object.invalid.then(|| object.error.clone()))
+                    .flatten()
+                {
+                    return Ok(SetResult {
+                        ok: true,
+                        error,
+                        view: None,
+                    });
+                }
+                Ok(SetResult {
+                    ok: true,
+                    error: String::new(),
+                    view: None,
+                })
+            }
+            Err(error) => Ok(refused(error)),
+        }
+    }
+
+    fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String> {
+        let mut state = self.state.borrow_mut();
+        let (status, view) = match id {
+            GRID => {
+                state.view.grid = !state.view.grid;
+                (
+                    format!("grid {}", if state.view.grid { "on" } else { "off" }),
+                    Some(ViewRequest {
+                        grid: Some(state.view.grid),
+                        ..Default::default()
+                    }),
+                )
+            }
+            AXIS => {
+                let on = !state.view.axis_cross;
+                state.view.axis.enabled = on;
+                (
+                    format!("axes {}", if on { "on" } else { "off" }),
+                    Some(ViewRequest {
+                        axis_cross: Some(on),
+                        ..Default::default()
+                    }),
+                )
+            }
+            GIZMO => {
+                let on = !state.view.gizmo.enabled;
+                (
+                    format!("gizmo {}", if on { "on" } else { "off" }),
+                    Some(ViewRequest {
+                        gizmo: Some(GizmoRequest {
+                            enabled: Some(on),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                )
+            }
+            SNAP => {
+                state.snap = !state.snap;
+                (
+                    format!("snap {}", if state.snap { "on" } else { "off" }),
+                    None,
+                )
+            }
+            WORKPLANE => (
+                "workplane: not wired in the browser build".to_string(),
+                None,
+            ),
+            FIT => ("fit: the document is framed on load".to_string(), None),
+            other => {
+                return Ok(CommandOutcome {
+                    ok: false,
+                    error: format!("{other} is not available in the browser build"),
+                    ..Default::default()
+                });
+            }
+        };
+        Ok(CommandOutcome {
+            ok: true,
+            status,
+            view,
+            ..Default::default()
+        })
+    }
+
+    fn refresh_providers(&mut self, _feature: &str) -> Result<CommandOutcome, String> {
+        Ok(CommandOutcome::default())
+    }
+}
+
+/// Report the sample document's shapes: one line per tessellated object.
+///
+/// A feature the kernel refuses keeps its last good shape and records why; that is
+/// document state, so it is logged rather than treated as a failed boot. The
+/// triangle counts are the browser build's version of the probe's "40 triangles"
+/// baseline, and make a silent tessellation change visible in the console.
+fn log_shapes(document: &Document) {
+    let backend = backend();
+    for id in document.object_ids() {
+        let Some(object) = document.object(id) else {
+            continue;
+        };
+        if object.invalid {
+            log::warn!(
+                "ferrocad: {} is invalid: {}",
+                object.name,
+                object.error.as_deref().unwrap_or("no reason recorded")
+            );
+        }
+        let Some(shape) = object
+            .properties
+            .get("Shape")
+            .and_then(shape_of)
+            .and_then(|property| property.shape())
+        else {
+            continue;
+        };
+        match backend.tessellate(&shape, &TessellationOptions::absolute(TOLERANCE)) {
+            Ok(mesh) => log::info!(
+                "ferrocad: {} · {} triangles, {} edges",
+                object.name,
+                mesh.triangles.len() / 3,
+                mesh.edges.len() / 2
+            ),
+            Err(error) => log::error!("ferrocad: {} did not tessellate: {error}", object.name),
+        }
+    }
+}
+
+/// The sample document: a box centred on the origin with a fillet on `Edge1`.
+fn build_sample(document: &mut Document) -> Result<(), String> {
+    // `make_box` builds from the corner at the origin; centre it so the orbit camera,
+    // which pivots on the origin, frames the whole box.
+    let base = document.add_object("Box", BOX_TYPE);
+    document.set_property(
+        base,
+        "Placement",
+        Property::Placement(Placement::new(
+            Vector3::new(-5.0, -5.0, -5.0),
+            Rotation::identity(),
+        )),
+    )?;
+
+    let fillet = document.add_object("Fillet", FILLET_TYPE);
+    document.set_property(
+        fillet,
+        "Base",
+        Property::LinkSub("Box".to_string(), vec![EDGE.to_string()]),
+    )?;
+    document.set_property(fillet, "Radius", Property::Float(RADIUS))?;
+    document.recompute()?;
+    Ok(())
+}
+
+/// Whether the object is shown. Objects start visible; the view state can hide them.
+fn visible(object: &ferrocad_core::DocumentObject) -> bool {
+    object
+        .view
+        .as_ref()
+        .map(|view| view.visibility)
+        .unwrap_or(true)
+}
+
+/// The object's own origin in world space (the placement's base point), which the
+/// transform triad hugs and a rotate pivot turns about.
+fn placement_base(object: &ferrocad_core::DocumentObject) -> Option<[f32; 3]> {
+    match object.properties.get("Placement") {
+        Some(Property::Placement(placement)) => Some([
+            placement.base.x as f32,
+            placement.base.y as f32,
+            placement.base.z as f32,
+        ]),
+        _ => None,
+    }
+}
+
+/// The object's surface colour: its view state's effective colour, or the Part default.
+fn object_color(object: &ferrocad_core::DocumentObject) -> [f32; 4] {
+    match object.view.as_ref() {
+        Some(view) => {
+            let color = view.effective_color();
+            [
+                color[0] as f32,
+                color[1] as f32,
+                color[2] as f32,
+                color[3] as f32,
+            ]
+        }
+        None => DEFAULT_COLOR,
+    }
+}
+
+/// The editor kind for a property: which control the pane shows and how it coerces.
+///
+/// `name` is needed because the Rust Part primitives store their lengths as plain
+/// floats (`App::PropertyFloat`), while the desktop workbench presents them with
+/// their unit.
+fn editor_kind(name: &str, type_id: &str) -> &'static str {
+    match type_id {
+        "App::PropertyString" | "App::PropertyFileIncluded" | "App::PropertyPythonObject" => "text",
+        "App::PropertyBool" => "bool",
+        "App::PropertyInteger" | "App::PropertyIntegerConstraint" => "int",
+        "App::PropertyFloat" | "App::PropertyFloatConstraint" => {
+            if matches!(name, "Length" | "Width" | "Height" | "Radius" | "Distance") {
+                "quantity"
+            } else {
+                "float"
+            }
+        }
+        "App::PropertyLength"
+        | "App::PropertyDistance"
+        | "App::PropertyAngle"
+        | "App::PropertyQuantity" => "quantity",
+        "App::PropertyEnumeration" => "enum",
+        "App::PropertyColorList" => "color",
+        _ => "",
+    }
+}
+
+/// A property's value as the editor shows it.
+fn property_text(property: &Property) -> String {
+    match property {
+        Property::String(value) => value.clone(),
+        Property::Float(value) => number(*value),
+        Property::Bool(value) => value.to_string(),
+        Property::Integer(value) => value.to_string(),
+        Property::Quantity(value) => value.to_string(),
+        Property::FloatConstraint { value, .. } => number(*value),
+        Property::IntegerConstraint { value, .. } => value.to_string(),
+        Property::Placement(placement) => format!(
+            "({}, {}, {})",
+            number(placement.base.x),
+            number(placement.base.y),
+            number(placement.base.z)
+        ),
+        Property::Vector(vector) => format!(
+            "({}, {}, {})",
+            number(vector.x),
+            number(vector.y),
+            number(vector.z)
+        ),
+        Property::Link(name) => name.clone(),
+        Property::LinkSub(name, subs) => {
+            if subs.is_empty() {
+                name.clone()
+            } else {
+                format!("{name}: {}", subs.join(", "))
+            }
+        }
+        Property::LinkList(names) => names.join(", "),
+        Property::LinkSubList(links) => links
+            .iter()
+            .map(|(name, subs)| {
+                if subs.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}: {}", subs.join(", "))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        Property::Enumeration(values, index) => values.get(*index).cloned().unwrap_or_default(),
+        Property::StringList(values) => values.join(", "),
+        Property::FloatList(values) => values
+            .iter()
+            .map(|value| number(*value))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Property::IntegerList(values) => values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Property::BoolList(values) => values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Property::IntPairList(values) => values
+            .iter()
+            .map(|(a, b)| format!("({a}, {b})"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Property::ColorList(values) => values
+            .iter()
+            .map(|color| {
+                format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (color[2].clamp(0.0, 1.0) * 255.0).round() as u8
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        // A kernel shape holds an opaque payload; its bytes are not a value a person
+        // reads. The type is in the row's type column already.
+        Property::Extension(_) => "<shape>".to_string(),
+        Property::PythonObject(_) => "<python object>".to_string(),
+        Property::FileIncluded(path) => path.clone(),
+        Property::Matrix(_) => "<matrix>".to_string(),
+        Property::Rotation(_) => "<rotation>".to_string(),
+        Property::RotationList(values) => format!("{} rotation(s)", values.len()),
+        Property::PlacementList(values) => format!("{} placement(s)", values.len()),
+        Property::VectorList(values) => format!("{} vector(s)", values.len()),
+    }
+}
+
+/// A float as a person reads it: `10.0`, not `10`.
+fn number(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{value:.1}")
+    } else {
+        format!("{value}")
+    }
+}
+
+/// The numeric value of a property that the quantity rows format with a unit.
+fn value_as_f64(property: &Property) -> Option<f64> {
+    match property {
+        Property::Float(value) => Some(*value),
+        Property::Integer(value) => Some(*value as f64),
+        Property::Quantity(value) => Some(value.value()),
+        Property::FloatConstraint { value, .. } => Some(*value),
+        Property::IntegerConstraint { value, .. } => Some(*value as f64),
+        _ => None,
+    }
+}
+
+/// Turn an editor string into the value a property of `current`'s shape expects.
+fn coerce(current: &Property, text: &str) -> Result<Property, String> {
+    let text = text.trim();
+    Ok(match current {
+        Property::String(_) => Property::String(text.to_string()),
+        Property::Bool(_) => Property::Bool(matches!(
+            text.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )),
+        Property::Integer(_) => Property::Integer(
+            text.parse()
+                .map_err(|_| format!("{text:?} is not an integer"))?,
+        ),
+        Property::Float(_) => Property::Float(parse_length(text)?),
+        Property::Quantity(_) => {
+            Property::Quantity(Quantity::parse(text).map_err(|error| format!("{text:?}: {error}"))?)
+        }
+        Property::Enumeration(values, _) => {
+            let index = values
+                .iter()
+                .position(|value| value == text)
+                .ok_or_else(|| format!("{text:?} is not one of {values:?}"))?;
+            Property::Enumeration(values.clone(), index)
+        }
+        other => return Err(format!("{} is not editable", other.type_name())),
+    })
+}
+
+/// A length as the editor types it: `20`, `20.5`, `20 mm`.
+fn parse_length(text: &str) -> Result<f64, String> {
+    let text = text.trim();
+    let text = text
+        .strip_suffix("mm")
+        .or_else(|| text.strip_suffix("MM"))
+        .unwrap_or(text)
+        .trim();
+    text.parse::<f64>()
+        .map_err(|_| format!("{text:?} is not a number"))
+}
+
+/// A refused edit: `ok` is false, so the pane keeps the old value and shows why.
+fn refused(error: String) -> SetResult {
+    SetResult {
+        ok: false,
+        error,
+        view: None,
+    }
+}
+
+/// One header command. Checkable controls report their state through `checked`.
+fn command(id: &str, menu: &str, surface: &str, checkable: bool, checked: bool) -> CommandInfo {
+    CommandInfo {
+        id: id.to_string(),
+        menu: menu.to_string(),
+        tooltip: menu.to_string(),
+        accel: String::new(),
+        group: "View".to_string(),
+        cmd_type: "ForView".to_string(),
+        surface: surface.to_string(),
+        short: menu.to_string(),
+        tone: String::new(),
+        parent: String::new(),
+        wheel: false,
+        enabled: true,
+        checked,
+        checkable,
+        dev_only: false,
+    }
+}

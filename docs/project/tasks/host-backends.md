@@ -378,6 +378,8 @@ pub fn json_text() -> String;
   overrides beside it, not in the table.
 - `cargo run -p ferrocad_shell_api --example catalog >
   python/ferrocad_shell/catalog.json` **generates** the file; it is committed.
+  Object keys are sorted, so the file does not depend on whether another crate in
+  the build turned on `serde_json`'s `preserve_order` (the shell builds do).
   Every built-in's `GetResources()` in `python/ferrocad_shell` reads it
   (`_catalog_resources`), so Python owns behaviour only.
 - Drift fails in two places, not one: the crate's own test

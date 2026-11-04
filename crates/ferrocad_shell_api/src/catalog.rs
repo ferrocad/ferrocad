@@ -270,44 +270,60 @@ pub const MOVE_GIZMO: &str = "translate";
 ///
 /// Resource keys are spelled the way FreeCAD's `GetResources` spells them, so the
 /// Python side is a straight lookup; the shell's field names are an internal detail.
+///
+/// Object keys come out sorted. `serde_json`'s map is a `BTreeMap` unless some crate
+/// in the build turns on `preserve_order` (the shell builds do, through gpui), so
+/// without this the checked-in file's byte order would depend on the feature graph.
 pub fn to_json() -> Value {
-    let commands: Vec<Value> = BUILTIN
-        .iter()
-        .map(|def| {
-            let mut object = serde_json::Map::new();
-            object.insert("id".to_string(), json!(def.id));
-            object.insert("menu".to_string(), json!(def.menu));
-            object.insert("tooltip".to_string(), json!(def.tooltip));
-            if !def.accel.is_empty() {
-                object.insert("accel".to_string(), json!(def.accel));
-            }
-            object.insert("group".to_string(), json!(def.group));
-            object.insert("cmd_type".to_string(), json!(def.cmd_type));
-            if !def.surface.is_empty() {
-                object.insert("surface".to_string(), json!(def.surface));
-            }
-            if !def.short.is_empty() {
-                object.insert("short".to_string(), json!(def.short));
-            }
-            if !def.tone.is_empty() {
-                object.insert("tone".to_string(), json!(def.tone));
-            }
-            if !def.parent.is_empty() {
-                object.insert("parent".to_string(), json!(def.parent));
-            }
-            if def.wheel {
-                object.insert("wheel".to_string(), json!(true));
-            }
-            if def.checkable {
-                object.insert("checkable".to_string(), json!(true));
-            }
-            if def.dev_only {
-                object.insert("dev_only".to_string(), json!(true));
-            }
-            Value::Object(object)
-        })
-        .collect();
+    canonical(json!({
+        "generated_by": "ferrocad_shell_api::catalog",
+        "commands": commands_json(),
+        "dialogs": dialogs_json(),
+    }))
+}
 
+fn commands_json() -> Value {
+    Value::Array(
+        BUILTIN
+            .iter()
+            .map(|def| {
+                let mut object = serde_json::Map::new();
+                object.insert("id".to_string(), json!(def.id));
+                object.insert("menu".to_string(), json!(def.menu));
+                object.insert("tooltip".to_string(), json!(def.tooltip));
+                if !def.accel.is_empty() {
+                    object.insert("accel".to_string(), json!(def.accel));
+                }
+                object.insert("group".to_string(), json!(def.group));
+                object.insert("cmd_type".to_string(), json!(def.cmd_type));
+                if !def.surface.is_empty() {
+                    object.insert("surface".to_string(), json!(def.surface));
+                }
+                if !def.short.is_empty() {
+                    object.insert("short".to_string(), json!(def.short));
+                }
+                if !def.tone.is_empty() {
+                    object.insert("tone".to_string(), json!(def.tone));
+                }
+                if !def.parent.is_empty() {
+                    object.insert("parent".to_string(), json!(def.parent));
+                }
+                if def.wheel {
+                    object.insert("wheel".to_string(), json!(true));
+                }
+                if def.checkable {
+                    object.insert("checkable".to_string(), json!(true));
+                }
+                if def.dev_only {
+                    object.insert("dev_only".to_string(), json!(true));
+                }
+                Value::Object(object)
+            })
+            .collect(),
+    )
+}
+
+fn dialogs_json() -> Value {
     let dialog = move_dialog();
     let fields: Vec<Value> = dialog
         .fields
@@ -323,19 +339,34 @@ pub fn to_json() -> Value {
         .collect();
 
     json!({
-        "generated_by": "ferrocad_shell_api::catalog",
-        "commands": commands,
-        "dialogs": {
-            (MOVE): {
-                "title": dialog.title,
-                "accept": dialog.accept,
-                "presentation": dialog.presentation,
-                "preview": dialog.preview,
-                "gizmo": MOVE_GIZMO,
-                "fields": fields,
-            }
+        (MOVE): {
+            "title": dialog.title,
+            "accept": dialog.accept,
+            "presentation": dialog.presentation,
+            "preview": dialog.preview,
+            "gizmo": MOVE_GIZMO,
+            "fields": fields,
         }
     })
+}
+
+/// Sort every object's keys, recursively.
+///
+/// The generator's output must not depend on a feature another crate enabled, so a
+/// rebuild in a different build graph does not rewrite the committed file.
+fn canonical(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map
+                .into_iter()
+                .map(|(key, value)| (key, canonical(value)))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().collect())
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(canonical).collect()),
+        other => other,
+    }
 }
 
 /// [`to_json`], pretty-printed (what lands in `python/ferrocad_shell/catalog.json`).
@@ -382,6 +413,22 @@ mod tests {
         assert!(row.wheel);
         assert!(row.enabled, "metadata only: the host fills live state");
         assert!(!row.checked);
+    }
+
+    /// The generated text does not depend on a feature another crate enabled.
+    ///
+    /// `serde_json`'s map is a `BTreeMap` unless something in the build graph turns
+    /// on `preserve_order` (the shell builds do, through gpui), which would emit
+    /// insertion order instead; the generator sorts explicitly so the committed file
+    /// does not flip between builds.
+    #[test]
+    fn object_keys_come_out_sorted() {
+        let text = json_text();
+        assert!(text.starts_with("{\n  \"commands\""), "{text}");
+        assert!(
+            text.find("\"checkable\"").unwrap() < text.find("\"id\"").unwrap(),
+            "a command's keys are sorted"
+        );
     }
 
     /// The JSON checked into the Python package is this table, field for field.

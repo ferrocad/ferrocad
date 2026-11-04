@@ -99,6 +99,10 @@ Worth stating, because the plan below must not break it:
 
 ## 2. The model
 
+![The three layers: the shared shell and `AppBackend` contract, the four host
+backends (native CPython, browser Rust, planned JS/WASI and wasm Python), and the
+shared engine](../../developer/images/host-backends.svg)
+
 ### 2.1 Runtimes, not platforms
 
 A **host** owns a window and a platform. A **backend** owns a document and,

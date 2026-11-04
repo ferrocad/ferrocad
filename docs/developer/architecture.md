@@ -11,6 +11,25 @@ obvious:
 2. Does `ferrocad_shell_gpui` call `ferrocad_core` directly, through PyO3, or both?
 3. Is the `ctypes` backend (`ferrocad_ctypes`) needed, or is it dead weight?
 
+## 0. The picture
+
+![The three layers: the shared shell and `AppBackend` contract, the four host
+backends (native CPython, browser Rust, planned JS/WASI and wasm Python), and the
+shared engine](images/host-backends.svg)
+
+The stack has three layers. **The seam** is `ferrocad_shell_core` (window, chrome,
+panels, viewport) over the `AppBackend` trait in `ferrocad_shell_api`; neither depends
+on the engine. **A host backend** implements that trait: `PythonAppBackend` embeds
+CPython and reaches the engine through `ferrocad_py`, while `DocumentBackend` links
+`ferrocad_core`/`ferrocad_part` directly. **The engine** is `ferrocad_core` +
+`ferrocad_part` over OCCT — the system library natively, the prebuilt wasm kernel in
+the browser.
+
+Only the browser is missing CPython; that is why the two shipped backends exist and
+why the seam is a trait rather than a Python module. The planned JS/WASI and wasm
+Python hosts are the same shape with a different runtime (see
+[`../project/tasks/host-backends.md`](../project/tasks/host-backends.md) §2 and §6.3).
+
 ## 1. The components
 
 | Component | Kind | Role |

@@ -251,6 +251,18 @@ def open_document(path: str) -> str:
     return _json({"document": doc.Name, "objects": len(doc.Objects)})
 
 
+def save_document(path: str) -> str:
+    """Save the active document to ``path`` (the shell picked it).
+
+    ``saveAs`` is FreeCAD's own verb: the suffix selects the serializer
+    (``.FCStd`` upstream, ``.ferrocad`` native) and the file name is recorded, so a
+    later save goes back to the same file.
+    """
+    doc = _active_doc()
+    doc.saveAs(path)
+    return _json({"ok": True})
+
+
 def close_document(name: str) -> str:
     """Close a document by name.
 
@@ -2204,6 +2216,67 @@ FreeCADGui.addCommand("App_OffsetWorkplane", _OffsetWorkplaneCommand())
 FreeCADGui.addCommand("App_Workplane3Points", _ThreePointWorkplaneCommand())
 FreeCADGui.addCommand("App_ActivateWorkplane", _ActivateWorkplaneCommand())
 FreeCADGui.addCommand("App_ClearWorkplane", _ClearWorkplaneCommand())
+
+
+class _OpenCommand:
+    """``App_Open`` — replace the document with a saved one.
+
+    The GPUI shell owns the file dialog: it is the only layer with a window and a
+    platform prompt (xdg-desktop-portal natively, a file input in the browser).
+    This entry gives the command its label, accelerator and palette row; running
+    it headlessly reports who owns the work.
+
+    It has no viewport surface of its own: a file verb is not a creation tool, so
+    it lives on the accelerator (``Ctrl+O``) and in the command palette, and the
+    action dock keeps its space for the object verbs.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Open…",
+            "ToolTip": "Open a saved document",
+            "Accel": "Ctrl+O",
+            "Group": "File",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "hidden",
+        }
+
+    def IsActive(self):
+        return True
+
+    def Activated(self):
+        return {"status": "open: the window owns the file dialog"}
+
+
+FreeCADGui.addCommand("App_Open", _OpenCommand())
+
+
+class _SaveCommand:
+    """``App_Save`` — write the active document to a file.
+
+    Like ``App_Open``, the host owns the dialog and the filesystem; the engine's
+    ``saveAs`` is what actually writes, and it records the file name so the next
+    save does not prompt again. Reachable on ``Ctrl+S`` and in the palette.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Save As…",
+            "ToolTip": "Save the document as a file",
+            "Accel": "Ctrl+S",
+            "Group": "File",
+            "CmdType": "ForView",
+            "FerroCAD_Surface": "hidden",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def Activated(self):
+        return {"status": "save: the window owns the file dialog"}
+
+
+FreeCADGui.addCommand("App_Save", _SaveCommand())
 
 
 class _DevToggleToolsCommand:

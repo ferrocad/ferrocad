@@ -405,4 +405,5 @@ mod viewport;
 
 mod picking;
 mod escalation;
+mod files;
 mod loadout;

@@ -98,6 +98,16 @@ pub fn save_document(cx: &App) -> Result<Vec<u8>, String> {
     with_backend(cx, |backend| backend.save_document()).unwrap_or_else(|| Err(no_backend()))
 }
 
+/// Open a document from a path the host picked (the native file dialog).
+pub fn open_path(cx: &mut App, path: &std::path::Path) -> Result<OpenedDocument, String> {
+    with_backend_mut(cx, |backend| backend.open_path(path)).unwrap_or_else(|| Err(no_backend()))
+}
+
+/// Save the active document to a path the host picked.
+pub fn save_path(cx: &App, path: &std::path::Path) -> Result<(), String> {
+    with_backend(cx, |backend| backend.save_path(path)).unwrap_or_else(|| Err(no_backend()))
+}
+
 pub fn load_workbenches(cx: &App) -> Result<WorkbenchReport, String> {
     with_backend(cx, |backend| backend.load_workbenches()).unwrap_or_else(|| Err(no_backend()))
 }

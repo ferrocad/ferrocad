@@ -1,6 +1,6 @@
 # Host backends: one shell, one contract, several runtimes
 
-Status: **task (2026-11-04). Proposal; S1–S4 are unblocked and ready to start.**
+Status: **task (2026-11-04). S1 done; S2–S4 are unblocked.**
 Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../research/web-wasm-host.md`](../research/web-wasm-host.md)
 (the browser findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../../developer/architecture.md`](../../developer/architecture.md)
@@ -375,11 +375,13 @@ already are (`shell/bridge/dispatch.rs:199-241`). The shell:
 
 1. calls `cx.prompt_for_paths(PathPromptOptions { files: true, .. })` (open) or
    `cx.prompt_for_new_path(dir, Some("<doc>.FCStd"))` (save);
-2. validates the `.FCStd` suffix itself (the portal has no filter field);
-3. reads/writes the bytes on the background executor;
-4. calls `AppBackend::open_document(name, &bytes)` / `save_document()`, then the
-   existing `self.refresh(cx)` + `self.sync_stage(cx)` pair
-   (`dispatch.rs:341,392`).
+2. hands the **path** to `AppBackend::open_path`/`save_path` (S1), whose defaults
+   read/write the bytes and whose filesystem-aware overrides (the interpreter) use
+   the path directly — the suffix, not a shell-side filter, picks the serializer
+   (the portal has no filter field, so an unknown suffix is the engine's error);
+3. replaces the document through the one `Shell::replace_document`, which is also
+   the byte path's (`open_document`) — one place does the rollback, the refresh and
+   the fit.
 
 Nothing in `AppBackend` changes. On `wasm32` the browser keeps its current path
 (`App_Open`/`App_Save` handled by `DocumentBackend` + the `window.__ferrocad`
@@ -463,7 +465,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 
 | # | Stage | Delivers | Effort |
 | --- | --- | --- | --- |
-| **S1** | **Desktop file verbs** (D8/D9) | `Ctrl+O`/`Ctrl+S` in the native app through the portal; `App_Open`/`App_Save` in the Python registry; works for every backend | 3–4 d |
+| **S1** | **Desktop file verbs** (D8/D9) — **done (2026-11-04)** | `Ctrl+O`/`Ctrl+S` in the native app through the portal; `App_Open`/`App_Save` in the Python registry; works for every backend | 3–4 d |
 | **S2** | **One display path** (D6) | `display::dress` in `ferrocad_shell_api`; the fillet stops drawing over its box; `ferrocad_web` retired with its smoke checks moved | 2–3 d |
 | **S3** | **Shared property presentation** (D4/D5) | `ferrocad_core::present` + `ferrocad.property.*`; Part lengths are `Quantity`; one kind/format/coerce table | 4–6 d |
 | **S4** | **Catalogue as data** (D10) | `catalog.rs` + generated `catalog.json` + `--check`; one `App_Move` spec | 4–5 d |
@@ -476,7 +478,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 
 | Stage | The check |
 | --- | --- |
-| S1 | `#[gpui::test]` drives `select_paths` → tree/stage change; `Ctrl+S` writes a `.FCStd` that decodes back to the same object count; without a portal the status line shows the error. |
+| S1 | `#[gpui::test]`s drive the prompt hooks: the picked path reaches the backend and the title/status update; Save hands its path over; a cancelled prompt changes nothing; without a portal the status line shows the error. |
 | S2 | The browser smoke log shows `Box · 12 triangles` and **no** separate `Fillet` mesh for the same document; desktop output unchanged; `cargo test -p ferrocad_shell_core` green. |
 | S3 | New test: decode `App::PropertyLength`, `from_saved`, `recompute`, dimension survives. Both hosts show `10.0 mm`. `cargo xtask api-docs --check` and the Python doc checks pass. |
 | S4 | `cargo xtask catalog --check` fails when a Python built-in is added without the Rust table; `App_Move` exists once. |
@@ -493,10 +495,14 @@ would otherwise inherit the split seam.
 
 | File | Change |
 | --- | --- |
-| `crates/ferrocad_shell_core/src/files.rs` **(new)** | `open`/`save` verbs: prompt, suffix check, bytes, `refresh` + `sync_stage` |
+| `crates/ferrocad_shell_api/src/app.rs` | `open_path`/`save_path` with byte-level defaults, overridden by a path-aware backend |
+| `crates/ferrocad_shell_core/src/app.rs` | the two shell-facing helpers (`open_path`, `save_path`) |
+| `crates/ferrocad_shell_core/src/shell/files.rs` **(new)** | the verbs: prompt, spawn, `open_path`, status |
+| `crates/ferrocad_shell_core/src/shell/bridge/document.rs` | one `replace_document` behind both `open_document` and `open_path` |
 | `crates/ferrocad_shell_core/src/shell/bridge/dispatch.rs` | intercept `App_Open`/`App_Save` next to the existing shell ids |
-| `crates/ferrocad_shell_core/src/lib.rs` | `pub mod files` |
-| `python/ferrocad_shell/__init__.py` | register `App_Open`/`App_Save` (labels `Open…`, `Save As…`, accels `Ctrl+O`, `Ctrl+S`) |
+| `crates/ferrocad_shell_gpui/src/backend.rs`, `src/python.rs` | `open_path` → `FreeCAD.open`, `save_path` → `Document.saveAs` |
+| `python/ferrocad_shell/__init__.py` | `save_document(path)` plus the `App_Open`/`App_Save` registry rows (labels `Open…`, `Save As…`, accels `Ctrl+O`, `Ctrl+S`, surface `hidden`) |
+| `crates/ferrocad_shell_core/src/shell/tests/files.rs` **(new)** | the prompt → path → backend plumbing, driven by `select_paths` |
 | `crates/ferrocad_shell_api/src/display.rs` | `drawable`, `colour`, `origin`; `StageMesh` unchanged |
 | `crates/ferrocad_web_gpui/src/document.rs` | use `display::dress`; delete the local colour/visibility duplicates |
 | `python/ferrocad_shell/__init__.py`, `python/ferrocad_parametric/__init__.py` | use the shared dressing rules where a row's presence depends on it |
@@ -522,6 +528,7 @@ would otherwise inherit the split seam.
 | **S1 without a portal** | Headless CI and minimal desktops have no xdg portal. | Treat `PortalNotFound` as a status line; keep `--open` for tests; drive S1's test through `select_paths`. |
 | **The wasm-Python choice is unmade** | S8 could invalidate the module API chosen in S7. | Do S7 against the `mod-events` contract (E1), not against JS specifics; treat `ferrocad_py` as native-only until S8 reports. |
 | **Doc debt: `architecture.md` §1/§6 predate the shell split** | It still describes `ferrocad_shell_gpui` as owning `Shell`, and lists neither `ferrocad_shell_api`/`_core` nor `ferrocad_web_gpui`. | Update those two sections when S5 adds `ferrocad_shell_rust` (one edit, no new note). |
+| **The action dock overlaps the Inspect bar when it wraps** (found in S1) | The dock is absolutely positioned at the bottom and `flex_wrap`s, so adding two pills made it wrap upward over the loadout/inspect strip and swallow a click. | S1 keeps file verbs off the dock (`FerroCAD_Surface: hidden`; palette + accelerators reach them). Proper fix: anchor the dock's height against the footer, or give the app menu a File section. |
 
 Open questions:
 

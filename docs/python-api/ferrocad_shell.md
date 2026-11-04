@@ -36,6 +36,7 @@ _Every entry point returns a JSON string._
 | `provider_skin(payload_json: str) -> str` | One feature's provider-supplied WGSL source, for the shell to build. |
 | `refresh_providers(feature: str) -> str` | Ask a feature's active backend to re-read the shared state. |
 | `run_command(name: str) -> str` | Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``. |
+| `save_document(path: str) -> str` | Save the active document to ``path`` (the shell picked it). |
 | `set_gpu_adapter(payload_json: str) -> str` | Persist the viewport's GPU adapter choice from the Dev Tools panel. |
 | `set_property(object_name: str, prop: str, text: str) -> str` | Set one property from its editor string, in a named transaction. |
 | `set_provider(payload_json: str) -> str` | Switch one feature's active provider from the shell's popover. |

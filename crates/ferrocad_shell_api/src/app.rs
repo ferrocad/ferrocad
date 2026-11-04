@@ -75,6 +75,33 @@ pub trait AppBackend {
         Err("saving a document is not supported by this backend".to_string())
     }
 
+    /// Open a document from a path the host picked in its file dialog.
+    ///
+    /// The default reads the bytes and hands them to
+    /// [`open_document`](Self::open_document); a backend that owns a
+    /// filesystem-aware engine (the embedded interpreter) overrides it so the
+    /// document keeps its real file name — and a later save goes back to the same
+    /// file instead of prompting again.
+    ///
+    /// The shell calls this only on a native host: the browser has no paths.
+    fn open_path(&mut self, path: &std::path::Path) -> Result<OpenedDocument, String> {
+        let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled".to_string());
+        self.open_document(&name, &bytes)
+    }
+
+    /// Save the active document to a path the host picked.
+    ///
+    /// The default serializes with [`save_document`](Self::save_document) and
+    /// writes the bytes; a path-aware backend overrides it.
+    fn save_path(&self, path: &std::path::Path) -> Result<(), String> {
+        let bytes = self.save_document()?;
+        std::fs::write(path, bytes).map_err(|error| format!("{}: {error}", path.display()))
+    }
+
     /// The console's greeting line.
     fn hello(&self) -> Result<String, String> {
         Ok("FerroCAD shell · no engine backend".to_string())

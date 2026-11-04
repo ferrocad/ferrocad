@@ -61,6 +61,8 @@ use crate::types::{AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
 pub mod bridge;
+#[cfg(not(target_family = "wasm"))]
+mod files;
 pub mod hud;
 pub mod panels;
 

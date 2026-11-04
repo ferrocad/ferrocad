@@ -50,7 +50,7 @@ Status: index (2026-11-04). Twelve active specs and one recorded decision:
   the three scripting surfaces (Rust, CPython, JS/wasm, and later Python-in-wasm),
   the dedup of property presentation, stage dressing and the command catalogue,
   desktop Open/Save through the xdg portal, and the `ScriptHost`/`FilePicker` seam
-  changes. Stages **S1–S8**; S1–S4 are unblocked.
+  changes. Stages **S1–S8**; S1 (desktop file verbs) is done, S2–S4 are unblocked.
 - [stroke-units.md](stroke-units.md) — **decided, not open work**: viewport strokes are
   device pixels (gpui interop); a logical-pixel/UI-scale option was considered and
   deferred, with the reasons and the reopening plan.

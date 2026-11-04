@@ -46,6 +46,17 @@ impl AppBackend for PythonAppBackend {
         python::open_startup_document(boot)
     }
 
+    /// Open the file the host picked. The interpreter owns the path, so the
+    /// document keeps its real file name and a later save returns to it.
+    fn open_path(&mut self, path: &std::path::Path) -> Result<OpenedDocument, String> {
+        python::open_document(path)
+    }
+
+    /// Write the active document to the host's path, through `saveAs`.
+    fn save_path(&self, path: &std::path::Path) -> Result<(), String> {
+        python::save_document(path)
+    }
+
     fn hello(&self) -> Result<String, String> {
         python::hello()
     }

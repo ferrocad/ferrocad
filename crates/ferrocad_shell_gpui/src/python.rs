@@ -218,6 +218,17 @@ pub fn open_document(path: &Path) -> Result<OpenedDocument, String> {
     call_json("open_document", Some(path.as_ref()))
 }
 
+/// Save the active document under `path`; the suffix selects the serializer
+/// (`.FCStd` upstream, `.ferrocad` native).
+///
+/// The host picked the path (the platform dialog). `saveAs` is FreeCAD's own verb,
+/// and it records the file name, so a later save goes back to the same file.
+pub fn save_document(path: &Path) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    let _: serde_json::Value = call_json("save_document", Some(path.as_ref()))?;
+    Ok(())
+}
+
 /// Close a document by name (used to drop the bootstrap sample).
 pub fn close_document(name: &str) -> Result<(), String> {
     let _: serde_json::Value = call_json("close_document", Some(name))?;

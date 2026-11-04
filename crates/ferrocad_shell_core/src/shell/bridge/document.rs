@@ -13,6 +13,28 @@ impl Shell {
     /// Returns the status line's text. The host reports it (the browser console) and
     /// the shell shows it in the status line and the transcript.
     pub fn open_document(&mut self, name: &str, bytes: &[u8], cx: &mut Context<Self>) -> String {
+        self.replace_document(|cx| crate::app::open_document(cx, name, bytes), cx)
+    }
+
+    /// Replace the active document with the file at `path`.
+    ///
+    /// The native file verbs use this, and the path stays a path: a backend that owns
+    /// a filesystem-aware engine opens the file itself, so the document keeps its real
+    /// file name (and a later save goes back to it rather than prompting again).
+    pub fn open_path(&mut self, path: &std::path::Path, cx: &mut Context<Self>) -> String {
+        self.replace_document(|cx| crate::app::open_path(cx, path), cx)
+    }
+
+    /// The one place a document is replaced.
+    ///
+    /// Everything that described the old document is reset before the backend is
+    /// asked, and re-read after — so a failed open leaves an empty shell rather than
+    /// a half-replaced one.
+    fn replace_document(
+        &mut self,
+        open: impl FnOnce(&mut App) -> Result<crate::types::OpenedDocument, String>,
+        cx: &mut Context<Self>,
+    ) -> String {
         // A modal, a form or a pending move belongs to the document being replaced.
         if self.modal_open() || self.form_dialog.is_some() {
             return "open: finish or cancel the open dialog first".to_string();
@@ -30,7 +52,7 @@ impl Shell {
         // Clear the selection while it still names the old document's objects.
         self.clear_selection(cx);
 
-        let status = match crate::app::open_document(cx, name, bytes) {
+        let status = match open(cx) {
             Ok(opened) => {
                 {
                     let mut model = self.model.lock().unwrap();

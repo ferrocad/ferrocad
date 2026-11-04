@@ -5,9 +5,9 @@
 //! element-map calls without patching or forking `opencascade-sys`.
 //!
 //! The include directory is `OCCT_INCLUDE_DIR` when set. Otherwise this script
-//! discovers it from `OCCT_ROOT`/`CASROOT`/`OpenCASCADE_DIR`, the workspace's
-//! `.occt/prefix` (the prefix CI fetches), or a common system prefix. See
-//! docs/developer/architecture/occt-bundling.md.
+//! discovers it from `OCCT_ROOT`/`CASROOT`/`OpenCASCADE_DIR`/`OCCT_WASM_ROOT`, the
+//! workspace's `.occt/prefix` (the native prefix CI fetches), or a common system
+//! prefix. See docs/developer/architecture/occt-bundling.md.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ fn main() {
         "OCCT_ROOT",
         "CASROOT",
         "OpenCASCADE_DIR",
+        "OCCT_WASM_ROOT",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
@@ -54,7 +55,9 @@ fn find_include() -> Option<PathBuf> {
         );
     }
 
-    for var in ["OCCT_ROOT", "CASROOT", "OpenCASCADE_DIR"] {
+    // `OCCT_WASM_ROOT` is the prebuilt wasm kernel root CI and the wasm build scripts
+    // set; it is a prefix, so its `include/opencascade` is found by `under`.
+    for var in ["OCCT_ROOT", "CASROOT", "OpenCASCADE_DIR", "OCCT_WASM_ROOT"] {
         if let Ok(value) = std::env::var(var) {
             if let Some(found) = under(Path::new(&value)) {
                 return Some(found);

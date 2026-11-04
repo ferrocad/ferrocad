@@ -90,9 +90,10 @@ jobs:
           PYTHONPATH=python python3 tools/test_docs_tooling.py
           PYTHONPATH=python python3 tools/test_screenshot.py
 
-      - name: ferrocad_gpui headless tests (bite-gpui + embedded CPython)
-        working-directory: crates/ferrocad_gpui
-        run: cargo test
+      - name: Shell headless tests (bite-gpui + embedded CPython)
+        # The M0 split moved the UI to `ferrocad_shell_core` and the CPython half to
+        # `ferrocad_shell_gpui`; the API crate is pure Rust and fast to test.
+        run: cargo test -p ferrocad_shell_api -p ferrocad_shell_core -p ferrocad_shell_gpui
 
       - name: ferrocad_toy end-to-end test (the generic interaction registry, no kernel)
         working-directory: crates/ferrocad_toy
@@ -140,8 +141,8 @@ jobs:
           cargo build -p ferrocad_py --features extension-module
           Copy-Item target\debug\ferrocad_py.dll python\ferrocad.pyd
 
-      - name: ferrocad_widgets + ferrocad_gpui + ferrocad_toy headless tests
-        run: cargo test -p ferrocad_widgets -p ferrocad_gpui -p ferrocad_toy
+      - name: ferrocad_widgets + the shell + ferrocad_toy headless tests
+        run: cargo test -p ferrocad_widgets -p ferrocad_shell_api -p ferrocad_shell_core -p ferrocad_shell_gpui -p ferrocad_toy
 
   # Real-window smoke test: opens a bite-gpui window under Xvfb using the
   # lavapipe software Vulkan driver. This exercises the non-headless path that
@@ -296,6 +297,10 @@ jobs:
   wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      # A container job runs with HOME=/github/home, so rustup would look for its
+      # toolchains there and find none. The image installs them under /root/.rustup.
+      RUSTUP_HOME: /root/.rustup
     container:
       # Pinned by digest: the toolchain's wasm-EH encoding must match the OCCT
       # tarball, so an image update is a deliberate change.

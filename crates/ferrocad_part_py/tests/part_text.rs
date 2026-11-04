@@ -104,7 +104,7 @@ fn tracking_moves_the_next_glyph_by_its_value() {
 
 #[test]
 fn a_full_font_path_is_the_three_argument_form() {
-    """Upstream also accepts `(text, fontspec, height)`, which Draft uses."""
+    // Upstream also accepts `(text, fontspec, height)`, which Draft uses.
     boot();
     Python::with_gil(|py| {
         let part = PyModule::import(py, "Part").expect("import Part");

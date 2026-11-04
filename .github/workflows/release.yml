@@ -53,7 +53,7 @@ jobs:
           cp target/debug/libferrocad_py.so python/ferrocad.abi3.so
 
       - name: Headless shell tests (embedded CPython)
-        run: cargo test -p ferrocad_gpui
+        run: cargo test -p ferrocad_shell_api -p ferrocad_shell_core -p ferrocad_shell_gpui
 
   build:
     needs: verify

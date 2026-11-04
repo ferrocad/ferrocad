@@ -209,6 +209,9 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/research/python-ui-research.md](project/research/python-ui-research.md) — Python scripting and a Python-built UI: the research behind the shell.
 - [project/research/grid-overlay-bringup.md](project/research/grid-overlay-bringup.md) — a third-party Coin/GLSL addon as a shader/extraction fixture.
 - [project/research/simplecad-bringup.md](project/research/simplecad-bringup.md) — SimpleCAD as the canvas-first proving ground: the measured tree and S0–S5.
+- [project/research/web-wasm-host.md](project/research/web-wasm-host.md) — a minimal wgpu/WebGL2 host for the wasm kernel: the verified repro, the browser's limits (no readback, one window) and the implementation it produced.
+- [project/research/occt-8-upgrade.md](project/research/occt-8-upgrade.md) — what the OCCT 7.8 → 8.0.1 upgrade costs and buys, the first build on 8.0.1, and what stays unverified.
+- [project/research/occt-8-api-audit.md](project/research/occt-8-api-audit.md) — the symbol-level audit of everything the binding crate reaches in OCCT 8.0.1, diffed against 7.8.1.
 
 ### Closed history
 
@@ -258,6 +261,7 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Active task specs
 
 - [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
+- [project/tasks/operation-failure-modelling.md](project/tasks/operation-failure-modelling.md) — typed, recoverable Part failures: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the `FilletRef`/`Recovery` affordances and the `SESSION_HOLD(failure)` payload. Stages F1–F5.
 - [project/tasks/simplecad-bringup.md](project/tasks/simplecad-bringup.md) — the SC0–SC8 cut of the SimpleCAD bring-up, including `makeWireString` on the Rust text stack.
 - [project/tasks/text-and-3d-text.md](project/tasks/text-and-3d-text.md) — text boundaries: kernel-free outlines vs Part wires/faces, the wire→shell vs face→solid rule, and why there is no DPI or point size.
 - [project/tasks/transform-session.md](project/tasks/transform-session.md) — the transform session, planned not built: explicit uncommitted state (`PendingEdit`/`EditView`), one cumulative move session, the pill and the 3-D tape. Stages A0–A3 then U1–U3.
@@ -268,5 +272,5 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/tasks/creation-tools-ownership.md](project/tasks/creation-tools-ownership.md) — whether creation tools are a core default or an edition/mod choice, and how override precedence works.
 - [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.
 - [project/tasks/workplanes.md](project/tasks/workplanes.md) — one workplane state (the world plane is a real plane), ephemeral face binding while drawing, and the `WP` menu as plane choices rather than plumbing.
-- [project/tasks/wasm-shell.md](project/tasks/wasm-shell.md) — the browser shell: **M0–M2 done** (the crate split, the wasm build and the real shell in Chrome with a Rust backend); the 3D viewport, the document and editing (M3–M5) are planned.
+- [project/tasks/wasm-shell.md](project/tasks/wasm-shell.md) — the browser shell: **M0–M5 done** (the crate split, the wasm build, the real shell in Chrome, the 3D viewport, a real Part document and editing that writes it).
 - [project/tasks/stroke-units.md](project/tasks/stroke-units.md) — the recorded decision that viewport strokes are device pixels, the rejected logical-pixel option, and the plan for reopening it.

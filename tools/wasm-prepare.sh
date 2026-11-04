@@ -1,9 +1,8 @@
 #!/usr/bin/env sh
-# Shared preparation for the two browser hosts.
+# Preparation for the browser host.
 #
-# Sourced by `crates/ferrocad_web/run.sh` (the standalone canvas demo) and
-# `crates/ferrocad_web_gpui/run.sh` (the GPUI shell). It prepares the one thing both
-# need and neither should duplicate:
+# Sourced by `crates/ferrocad_web_gpui/run.sh` (the GPUI shell). It prepares the
+# one thing the host needs and should not duplicate:
 #
 #   1. cadrum's prebuilt OCCT 8.0.1 for `wasm32-unknown-unknown`, fetched into
 #      `.occt-wasm/`;

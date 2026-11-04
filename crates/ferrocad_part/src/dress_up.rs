@@ -788,4 +788,41 @@ mod tests {
         assert!(!object.invalid);
         assert!(object.error.is_none(), "a good rebuild clears the reason");
     }
+
+    /// A radius the **kernel** refuses (not the workbench's own pre-check) also
+    /// leaves the last good body in place and records why.
+    ///
+    /// This is the browser demo's `set_fillet_radius(12)` case, carried over when
+    /// that demo was retired: on a 10 mm box the kernel cannot build a 12 mm round,
+    /// so the failure arrives from `GeometryBackend::fillet` rather than from the
+    /// radius validation above.
+    #[test]
+    fn a_fillet_the_kernel_refuses_keeps_the_last_good_shape() {
+        setup();
+        let mut doc = Document::new();
+        let box_id = box_feature(&mut doc, 10.0);
+        let fillet = add_fillet(&mut doc, box_id, &["Edge1"]);
+        doc.recompute().unwrap();
+        let good = stored_shape(&doc, fillet).expect("the first rebuild produces a shape");
+        let good_faces = face_count(&good);
+        assert_eq!(good_faces, 7, "the premise: a filleted box");
+
+        doc.set_property(fillet, "Radius", Property::Float(12.0))
+            .unwrap();
+        doc.recompute().unwrap();
+
+        let object = doc.object(fillet).unwrap();
+        assert!(object.invalid, "the kernel refused the 12 mm round");
+        assert!(
+            object.error.is_some(),
+            "the refusal is reported for getStatusString"
+        );
+        let kept = stored_shape(&doc, fillet).expect("the last good shape is kept");
+        assert_eq!(face_count(&kept), good_faces, "the body did not disappear");
+
+        doc.set_property(fillet, "Radius", Property::Float(2.0))
+            .unwrap();
+        doc.recompute().unwrap();
+        assert!(!doc.object(fillet).unwrap().invalid);
+    }
 }

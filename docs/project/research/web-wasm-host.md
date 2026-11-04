@@ -1,5 +1,12 @@
 # A minimal wgpu/WebGL host for the wasm kernel
 
+> **Status (2026-11-04).** This note describes the **probe** (`crates/ferrocad_web` +
+> `crates/ferrocad_web_viewport`), which was **retired** in S2. The browser host is
+> now `crates/ferrocad_web_gpui` — the real shell on the same stack. The note stays as
+> the record of how the wasm path was established, and the constraints it documents
+> (WebGL2, no readback, the WASI stubs, the cross image) still apply. See
+> [`../tasks/wasm-shell.md`](../tasks/wasm-shell.md) for what shipped.
+
 Status: **research note (2026-11-02)**, followed by the first implementation
 (`crates/ferrocad_web`, §11). The research itself changed no crate, manifest or
 lockfile; the implementation is a separate commit.

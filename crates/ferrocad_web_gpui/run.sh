@@ -9,8 +9,7 @@
 #   WASM_OFFLINE=1 crates/ferrocad_web_gpui/run.sh   # build with no network
 #
 # This is the shell host: `ferrocad_shell_core`'s window with a real
-# `ferrocad_core::Document` on the wasm OCCT kernel. `crates/ferrocad_web/run.sh` is
-# the older standalone canvas demo, which draws the same document without the shell.
+# `ferrocad_core::Document` on the wasm OCCT kernel.
 #
 # The document tessellates through the kernel, so the build happens inside the
 # digest-pinned cross image (`tools/wasm-prepare.sh` fetches the kernel, the TKFeat

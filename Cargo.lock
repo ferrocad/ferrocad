@@ -2593,25 +2593,6 @@ name = "ferrocad_wasm"
 version = "0.1.5"
 
 [[package]]
-name = "ferrocad_web"
-version = "0.1.5"
-dependencies = [
- "console_error_panic_hook",
- "ferrocad_core",
- "ferrocad_geom",
- "ferrocad_graphics",
- "ferrocad_occt",
- "ferrocad_part",
- "ferrocad_stage",
- "ferrocad_types",
- "ferrocad_wasm",
- "ferrocad_web_viewport",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "ferrocad_web_gpui"
 version = "0.1.5"
 dependencies = [
@@ -2627,17 +2608,6 @@ dependencies = [
  "log",
  "serde_json",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "ferrocad_web_viewport"
-version = "0.1.5"
-dependencies = [
- "ferrocad_graphics",
- "ferrocad_wgpu",
- "wasm-bindgen",
- "web-sys",
- "wgpu",
 ]
 
 [[package]]

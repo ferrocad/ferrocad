@@ -1,6 +1,6 @@
 # Host backends: one shell, one contract, several runtimes
 
-Status: **task (2026-11-04). S1 done; S2–S4 are unblocked.**
+Status: **task (2026-11-04). S1 and S2 done; S3–S4 are unblocked.**
 Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../research/web-wasm-host.md`](../research/web-wasm-host.md)
 (the browser findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../../developer/architecture.md`](../../developer/architecture.md)
@@ -24,7 +24,7 @@ version.
 | **D8** | File verbs (**Open/Save**) are a **host** concern: the shell picks a path and moves bytes; the backend only decodes/encodes them. | `open_document(name, bytes)`/`save_document() -> Vec<u8>` are already byte-based, and the browser proved that shape works. | S1 |
 | **D9** | Native dialogs use GPUI's `App::prompt_for_paths` / `prompt_for_new_path` — xdg-desktop-portal on Linux. | Already in the framework; no dialog crate needed. | S1 |
 | **D10** | The built-in **command catalogue** becomes data in `ferrocad_shell_api::catalog`, generated into the Python package and diffed in CI. | One list of ids/labels/accels; Python still owns dynamic `addCommand`. | S4 |
-| **D11** | `ferrocad_web` (the old canvas demo) is retired once its smoke coverage moves to the shell host. | It duplicates nothing renderable but owns the only TKFeat/fillet-refusal runtime check. | S2 exit |
+| **D11** | `ferrocad_web` (the old canvas demo) is retired once its smoke coverage moves to the shell host. | It duplicates nothing renderable but owned the only TKFeat/fillet-refusal runtime check. | S2 ✓ |
 
 ### 0.1 The four questions this document answers
 
@@ -466,7 +466,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | # | Stage | Delivers | Effort |
 | --- | --- | --- | --- |
 | **S1** | **Desktop file verbs** (D8/D9) — **done (2026-11-04)** | `Ctrl+O`/`Ctrl+S` in the native app through the portal; `App_Open`/`App_Save` in the Python registry; works for every backend | 3–4 d |
-| **S2** | **One display path** (D6) | `display::dress` in `ferrocad_shell_api`; the fillet stops drawing over its box; `ferrocad_web` retired with its smoke checks moved | 2–3 d |
+| **S2** | **One display path** (D6/D11) — **done (2026-11-04)** | `ferrocad_core::drawable` (the fillet is drawn instead of the box it consumed); both hosts ask it; `ferrocad_web` and `ferrocad_web_viewport` retired with their checks ported | 2–3 d |
 | **S3** | **Shared property presentation** (D4/D5) | `ferrocad_core::present` + `ferrocad.property.*`; Part lengths are `Quantity`; one kind/format/coerce table | 4–6 d |
 | **S4** | **Catalogue as data** (D10) | `catalog.rs` + generated `catalog.json` + `--check`; one `App_Move` spec | 4–5 d |
 | **S5** | **`ferrocad_shell_rust`** (D3) | the Rust backend as a crate; a headless desktop edition proves it is not browser-only | 2–3 d |

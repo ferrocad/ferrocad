@@ -4,7 +4,7 @@
 # OCCT prefix fetched by the geometry CI job / local geometry work
 /.occt/
 
-# Prebuilt wasm OCCT fetched by crates/ferrocad_web/run.sh
+# Prebuilt wasm OCCT fetched by crates/ferrocad_web_gpui/run.sh
 /.occt-wasm/
 
 # Packaged native libraries (build artifacts)

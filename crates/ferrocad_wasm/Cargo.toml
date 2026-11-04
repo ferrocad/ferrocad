@@ -4,7 +4,7 @@
 # `wasm32-unknown-unknown` cdylib leaves the libc wrappers it kept as undefined
 # WASI imports. Defining them in the module makes the shipped artefact import
 # nothing, which is what lets wasm-bindgen's `--target web` glue load it without
-# a WASI polyfill. See src/lib.rs and crates/ferrocad_web/README.md.
+# a WASI polyfill. See src/lib.rs and crates/ferrocad_web_gpui/README.md.
 [package]
 name = "ferrocad_wasm"
 version.workspace = true

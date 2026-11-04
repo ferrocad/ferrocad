@@ -31,9 +31,10 @@ result becomes a stable design, the decision is written in
   includes, 156 member and 30 static bindings and 14 mirrored enums checked against
   `V8_0_1`, with the incompatibilities ordered by severity.
 - [web-wasm-host.md](web-wasm-host.md) — the minimal browser host, now implemented as
-  `crates/ferrocad_web`: `ferrocad_wgpu`'s measured wasm status (it compiles; the
-  canvas colour format was the blocker), the 13-symbol WASI shim that leaves zero
-  imports, and the 10.4 MB optimized module.
+  `crates/ferrocad_web_gpui` (the probe crate `ferrocad_web` was retired in S2 once
+  the shell host took over its checks): `ferrocad_wgpu`'s measured wasm status (it
+  compiles; the canvas colour format was the blocker), the 13-symbol WASI shim that
+  leaves zero imports, and the 10.4 MB optimized module.
 
 The complete folder list is in [`../../README.md`](../../README.md); the file-by-file
 map is [`../../INDEX.md`](../../INDEX.md).

@@ -58,7 +58,7 @@ the kernel must agree on the wasm-EH encoding). On the first run the script:
 
 1. downloads cadrum's prebuilt **OCCT 8.0.1** for `wasm32-unknown-unknown` into
    `.occt-wasm/` and builds the one toolkit that tarball prunes (**`TKFeat`**) — both
-   shared with `crates/ferrocad_web/run.sh` through `tools/wasm-prepare.sh`;
+   prepared by `tools/wasm-prepare.sh`;
 2. installs the **wasm-bindgen CLI version pinned by `Cargo.lock`** into
    `target/wasm-bindgen/`;
 3. builds `ferrocad_web_gpui` in the cross image, with the build output and Cargo's
@@ -77,8 +77,7 @@ WASM_OFFLINE=1 crates/ferrocad_web_gpui/run.sh # no network; seed the cargo home
 ```
 
 Requirements: Docker (usable without `sudo`), `curl`, `tar`, `git` and `python3`.
-A host Rust toolchain is not needed. `crates/ferrocad_web/run.sh` is the older
-standalone canvas demo, which draws the same document without the shell.
+A host Rust toolchain is not needed.
 
 `Ctrl+O` opens a `.FCStd` file from the browser's file picker, `Ctrl+S` downloads
 the active document, and dropping a `.FCStd` on the window opens it.

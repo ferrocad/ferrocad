@@ -219,7 +219,7 @@ and [`../../project/research/occt-8-api-audit.md`](../../project/research/occt-8
 
 The browser build does not use the conda prefix: `wasm32-unknown-unknown` links
 cadrum's prebuilt OCCT 8.0.1 (`occt-8_0_1_rev3-wasm32_unknown_unknown`, fetched into
-`.occt-wasm/` by `crates/ferrocad_web/run.sh`) and must be compiled inside
+`.occt-wasm/` by `crates/ferrocad_web_gpui/run.sh`) and must be compiled inside
 `ghcr.io/lzpel/cross-wasm32-unknown-unknown` so the C++ and the kernel agree on the
 wasm-EH encoding. It ships **19 headless `TK*` libraries** — `TKernel`, `TKMath`,
 `TKG2d`, `TKG3d`, `TKGeomBase`, `TKGeomAlgo`, `TKBRep`, `TKTopAlgo`, `TKPrim`,
@@ -233,7 +233,7 @@ It omits the data-exchange and application-framework libraries the desktop prefi
 materialises the whole trait vtable, so that binding is reachable even when nothing
 calls it. Rebuilding OCCT for that is unnecessary — `TKFeat` is 35 translation units
 (`src/ModelingAlgorithms/TKFeat/{BRepFeat,LocOpe}/*.cxx`) that compile against the
-kernel's own headers. `crates/ferrocad_web/run.sh` sparse-clones those sources into
+kernel's own headers. `crates/ferrocad_web_gpui/run.sh` sparse-clones those sources into
 `target/occt-src` (tag `V8_0_1`, ~1 MB) and compiles them in the same cross image
 with the kernel's flags, writing `.occt-wasm/<kernel>/lib/libTKFeat.a`; the step is
 skipped once the archive exists. The fork links `-lTKFeat` only when the archive is

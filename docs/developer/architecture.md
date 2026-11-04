@@ -33,12 +33,13 @@ obvious:
 | `ferrocad_part_gui` | `rlib` | The Part workbench's **presentation**: the edge dress-up manipulator (`DressUpScrubber`) and the planar-face push/pull stem (`PushPullStem`), with their factories. Implements `ferrocad_stage::Manipulator`. **No kernel, no document, no `pyo3`, no OCCT.** Linked only by an edition that has Part. |
 | `ferrocad_wgpu` | `rlib` | The wgpu backend: consumes `ferrocad_graphics` draw batches (pipelines, uniforms, MSAA, offscreen target, readback) and owns the deterministic snapshot path (`snapshot`). |
 | `ferrocad_snapshot` | `bin` | The docs-screenshot bridge over `ferrocad_wgpu::snapshot`: `ferrocad_snapshot <spec.json> <out.png>`, `--validate`, stdin/stdout, atomic writes and the no-adapter exit code. Not published; see [`workbenches/screenshot-tool.md`](workbenches/screenshot-tool.md). |
-| `ferrocad_web_viewport` | `rlib` (wasm32) | The **browser** viewport: a canvas surface (`BROWSER_WEBGPU | GL`, so WebGL2 is the required path), the wgpu device, the per-frame draw into that surface, and primary-button drag orbit + wheel dolly. Owns no scene. The wasm analogue of `ferrocad_viewport`; orbit/zoom are `Camera::orbit`/`Camera::dolly` from `ferrocad_graphics`, so the two viewports move alike. Not published. |
-| `ferrocad_web` | `cdylib` (wasm32) | The browser demo host: builds a filleted box with `ferrocad_occt`, dresses it through `ferrocad_stage`, hands the packets to `ferrocad_web_viewport`, and exports `triangles()` for the Node smoke test. Links the prebuilt wasm OCCT. Not published. |
 | `ferrocad_inventor_py` | `cdylib` | The `pivy.coin` facade (scaffolding) over `ferrocad_inventor`. |
 | `ferrocad_stage_py` | `cdylib` | The `ferrocad.stage` facade over `ferrocad_stage` (the modern stack's Python surface). |
 | `ferrocad_viewport` | `rlib` | The `bite-gpui` viewport over an invented scene: `InventorViewport` (image path, pointer→pick→listener, clicks → `SelectionEvent`/`SelectionRef`, and the workbench `Manipulator` registry) plus a hosted `ferrocad_stage` (declarative items and interactive tools), the navigation cube (`NaviCube`), and the sample scene. Depends on `ferrocad_graphics`/`ferrocad_geom`/`ferrocad_inventor`/`ferrocad_stage` and the shared `ferrocad_theme` tokens. |
-| `ferrocad_shell_gpui` | `rlib` | The `bite-gpui` application-shell library: boots CPython, provides `Shell`, `run`/`run_with`/`run_edition_with`, `HostConfig`, mounts the `ferrocad_viewport`, syncs document meshes into the stage (`display::DisplaySync`), hosts the edition's workbench manipulators (`contributions::Contributions`), and bridges the **workbench commands, selection, dialogs, accelerators, view/tool requests** (`commands`, `selection`, `dialog`, `shortcuts`, `view` — typed JSON over `FreeCADGui`). Ships no application scripts and names no workbench. |
+| `ferrocad_shell_api` | `rlib` | The **contract**: the `AppBackend` trait and every view model it returns (bootstrap, tree rows, property rows, stage meshes, commands, dialogs, view requests, selection items). Depends only on pure crates — no gpui, no CPython, no GPU. |
+| `ferrocad_shell_core` | `rlib` | The GPUI shell: `Shell`, the chrome, the panels, the viewport element, `DisplaySync`, the edition `Contributions` registry and the native file verbs. Platform-neutral, engine-neutral: it talks to an installed `AppBackend`. |
+| `ferrocad_shell_gpui` | `rlib` | The **native** assembly: boots CPython (`pyo3` embed), implements `AppBackend` over the `FreeCAD`/`FreeCADGui` facades, and exports `run`/`run_with`/`run_edition_with` and `HostConfig`. |
+| `ferrocad_web_gpui` | `cdylib` (wasm32) | The **browser** host: `ferrocad_shell_core` on GPUI's WebGL2 backend with a Rust `AppBackend` over `ferrocad_core`/`ferrocad_part` — **no CPython anywhere in the graph**. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_shell_gpui::run_with`. |
 | `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](workbenches/toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
@@ -248,19 +249,20 @@ ferrocad_viewport  -> ferrocad_graphics, ferrocad_geom,
                       ferrocad_inventor, ferrocad_stage,
                       ferrocad_types, bite-gpui            [the gpui viewport; no wgpu, no pyo3]
                                                      [geom is a leaf: SelectionRef]
-ferrocad_web_viewport -> ferrocad_graphics, ferrocad_wgpu, wgpu
-                                                     [browser viewport: surface + input; wasm32 only]
-ferrocad_web       -> ferrocad_web_viewport, ferrocad_geom,
-                      ferrocad_occt, ferrocad_stage,
-                      ferrocad_graphics, ferrocad_types
-                                                     [browser demo host; links the kernel]
-ferrocad_shell_gpui      -> ferrocad_widgets, ferrocad_viewport,
-                      ferrocad_inventor, ferrocad_wgpu,
-                      ferrocad_geom, ferrocad_stage,
-                      ferrocad_types, pyo3 (embed)   [the host/glue owns the window]
+ferrocad_shell_api -> ferrocad_stage, ferrocad_inventor,
+                      ferrocad_geom, ferrocad_types    [the AppBackend contract; pure]
+ferrocad_shell_core -> ferrocad_shell_api, ferrocad_widgets,
+                      ferrocad_viewport, ferrocad_stage,
+                      ferrocad_inventor, bite-gpui     [the shell; no CPython]
+ferrocad_shell_gpui -> ferrocad_shell_core, ferrocad_viewport,
+                      ferrocad_wgpu, ferrocad_inventor_py,
+                      ferrocad_stage_py, pyo3 (embed)  [native assembly: CPython backend]
                       must NOT -> ferrocad_py        [the *app* links it, not the shell]
                       must NOT -> ferrocad_part/occt [the document side is Python]
                       must NOT -> ferrocad_part_gui  [a workbench's manipulator is the edition's]
+ferrocad_web_gpui  -> ferrocad_shell_core, ferrocad_core,
+                      ferrocad_part, ferrocad_occt,
+                      wasm-bindgen                     [browser host; no CPython]
 ferrocad           -> ferrocad_shell_gpui, ferrocad_py     [base app: links the module in, embeds payload]
                                                      [run_edition: an edition's app script]
 ferrocad_parametric -> ferrocad, ferrocad_part_py,

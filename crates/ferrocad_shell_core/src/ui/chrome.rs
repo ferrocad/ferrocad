@@ -458,7 +458,7 @@ pub(crate) fn viewport_header(
 /// on a surface. Today that is the Dev Tools toggle — it is deliberately hidden from
 /// the header/dock, and the window starts closed, so without this menu the only way
 /// in is the shortcut. The list is the place for About and Preferences as they land.
-pub(crate) fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
+fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
     let mut rows = Vec::new();
     // File verbs (`Open…`, `Save As…`) are the host's: they have no viewport
     // surface, so the app menu is where they are discoverable. Any command whose

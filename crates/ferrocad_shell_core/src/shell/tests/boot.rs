@@ -48,9 +48,7 @@ fn a_stored_visibility_switch_reaches_the_first_window() {
 #[gpui::test]
 fn shell_boots_lists_the_sample_document_and_is_renderable(cx: &mut TestAppContext) {
     // Tests share one CPython instance (module-global state); serialize them.
-    let _guard = crate::PYTHON_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let model = boot_shell(cx);
     {
@@ -108,7 +106,11 @@ fn shell_boots_lists_the_sample_document_and_is_renderable(cx: &mut TestAppConte
             "console: {:?}",
             m.console
         );
-        assert!(m.console.iter().any(|l| l == "3"), "console: {:?}", m.console);
+        assert!(
+            m.console.iter().any(|l| l == "3"),
+            "console: {:?}",
+            m.console
+        );
     }
 }
 
@@ -181,6 +183,80 @@ fn editing_a_property_commits_in_a_transaction(cx: &mut TestAppContext) {
         .map(|row| row.value.clone())
         .unwrap_or_default();
     assert!(result.contains("50"), "Derived.Result = {result:?}");
+}
+
+/// The browser shell docks the property editor in the main window, where the shell
+/// root's key handler runs first. A digit typed into a focused property field must
+/// reach the field, not equip a loadout slot; with the canvas focused the same digit
+/// is still the loadout hotkey.
+#[gpui::test]
+fn a_focused_property_field_owns_its_digits(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let model = boot_shell(cx);
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    let mut dev_cx = open_dev_tools(&mut cx, &shell);
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.select("Params", cx);
+            cx.notify();
+        });
+    });
+    show_dev_section(&mut cx, &shell, &mut dev_cx, dev_section::PROPERTIES);
+
+    let field = shell.read_with(&cx, |shell, _| {
+        shell
+            .prop_inputs
+            .get("Params.Length")
+            .expect("Length field")
+            .state
+            .clone()
+    });
+    shell.update(&mut cx, |shell, cx| {
+        shell.set_loadout_slot(Slot::PushPull, cx)
+    });
+    let digit = |key: &str| gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke::parse(key).expect("a keystroke"),
+        is_held: false,
+        prefer_character_input: false,
+    };
+
+    // Focused field: the digit bubbles, and the hand stays where it was.
+    cx.update(|window, cx| {
+        window.focus(&field.read(cx).focus_handle(cx), cx);
+        let handled = shell.update(cx, |shell, cx| {
+            shell.handle_key(&digit("1"), false, window, cx)
+        });
+        assert!(
+            !handled,
+            "a digit typed into a field is not a shell shortcut"
+        );
+        assert_eq!(
+            shell.read(cx).loadout.slot(),
+            Slot::PushPull,
+            "the loadout is not equipped while a property field owns the keyboard"
+        );
+    });
+
+    // Root focused: the same digit equips the Move slot, so the guard is narrow.
+    let root = cx.update(|_window, cx| shell.read(cx).root_focus.clone());
+    cx.update(|window, cx| {
+        window.focus(&root, cx);
+        let handled = shell.update(cx, |shell, cx| {
+            shell.handle_key(&digit("1"), false, window, cx)
+        });
+        assert!(handled, "the canvas keeps its loadout hotkeys");
+        assert_eq!(shell.read(cx).loadout.slot(), Slot::Move);
+    });
 }
 
 /// A document object's own enum and colour properties get the same controls as

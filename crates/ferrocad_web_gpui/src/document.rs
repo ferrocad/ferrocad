@@ -19,17 +19,23 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use ferrocad_core::{Document, ObjectId, Placement, Property, Rotation, Vector3, status_names};
+use ferrocad_core::{
+    Document, Matrix4, ObjectId, Placement, Property, Rotation, Vector3, ViewState, status_names,
+};
 use ferrocad_geom::TessellationOptions;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{BOX_TYPE, FILLET_TYPE, backend, shape_of};
 use ferrocad_shell_core::app::AppBackend;
 use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_core::display::StageMesh;
+use ferrocad_shell_core::selection::SelectionItem;
 use ferrocad_shell_core::types::{
-    Bootstrap, DocumentNode, EvalResult, ObjectNode, PropRow, SetResult,
+    ApplyResult, Bootstrap, DocumentNode, EvalResult, ObjectNode, PropRow, SetResult,
+    VisibilityOutcome,
 };
 use ferrocad_shell_core::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
+use ferrocad_shell_core::{DialogField, DialogSpec};
+use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 use ferrocad_types::Quantity;
 
 /// Document and command ids shared with the native registry, so the chrome's controls
@@ -41,6 +47,16 @@ const GIZMO: &str = "App_ToggleGizmo";
 const SNAP: &str = "Draft_Snap_Lock";
 const DEV_TOOLS: &str = "Dev_ToggleTools";
 const FIT: &str = "App_Fit";
+const MOVE: &str = "App_Move";
+const ROTATE: &str = "App_Rotate";
+const VISIBILITY: &str = "App_ToggleVisibility";
+
+/// The prefix of the dialog tokens this backend mints for `App_Move`.
+///
+/// The shell's Move form is the typed twin of the gizmo: `App_Move` returns a token
+/// and `dialog_accept` applies the delta. The native backend hands the token to
+/// Python; here it is only a marker, so any token carrying this prefix is ours.
+const MOVE_TOKEN: &str = "browser-move";
 
 /// The sample document's name (the window title and the status line use it).
 const DOCUMENT: &str = "Sample";
@@ -64,6 +80,12 @@ struct State {
     document: Document,
     view: ShellViewState,
     snap: bool,
+    /// The shell's selection, mirrored for `App_Move`: the typed move applies to the
+    /// selection, not to a named target.
+    selection: Vec<String>,
+    /// How many Move dialogs this backend has minted, so two open forms cannot spend
+    /// each other's token.
+    move_dialogs: u64,
 }
 
 /// The browser's `AppBackend`, over a real document.
@@ -94,6 +116,8 @@ impl DocumentBackend {
                 document,
                 view: ShellViewState::default(),
                 snap: false,
+                selection: Vec::new(),
+                move_dialogs: 0,
             }),
             boot_error,
         }
@@ -270,6 +294,19 @@ impl AppBackend for DocumentBackend {
             command(SNAP, "Snap", "snap", true, state.snap),
             command(DEV_TOOLS, "Dev Tools", "hidden", false, false),
             command(FIT, "Fit", "dock", false, false),
+            command(MOVE, "Move", "radial", false, false),
+            command(ROTATE, "Rotate", "radial", false, false),
+            command(
+                VISIBILITY,
+                if selection_visible(&state) == Some(false) {
+                    "Show"
+                } else {
+                    "Hide"
+                },
+                "radial",
+                false,
+                false,
+            ),
         ];
         // The app menu lists the first entry by id; give Fit a friendly tooltip too.
         for command in &mut commands {
@@ -279,6 +316,23 @@ impl AppBackend for DocumentBackend {
         if let Some(fit) = commands.iter_mut().find(|command| command.id == FIT) {
             fit.tooltip = "Frame the document".to_string();
         }
+        // The object verbs are the right-click wheel's: Move opens the typed Move form
+        // (the same one the gizmo's arrows fill), Rotate switches the triad's rings on,
+        // and Hide/Show toggles the selection. Their accelerators are the native
+        // registry's, so the muscle memory carries.
+        for (id, accel, tooltip) in [
+            (MOVE, "Ctrl+Shift+M", "Move the selected objects by a delta"),
+            (ROTATE, "Ctrl+Shift+R", "Rotate the selected object"),
+            (VISIBILITY, "", "Hide or show the selected objects"),
+        ] {
+            if let Some(command) = commands.iter_mut().find(|command| command.id == id) {
+                command.cmd_type = "ForEdit".to_string();
+                command.group = "Edit".to_string();
+                command.tooltip = tooltip.to_string();
+                command.accel = accel.to_string();
+                command.wheel = true;
+            }
+        }
         Ok(commands)
     }
 
@@ -287,10 +341,49 @@ impl AppBackend for DocumentBackend {
         Ok(())
     }
 
-    fn set_selection(&self, _items: &[ferrocad_shell_core::SelectionItem]) -> Result<(), String> {
-        // The document has no selection facade yet; the shell owns the selection and
-        // asks it for the rows it shows.
+    fn set_selection(&self, items: &[SelectionItem]) -> Result<(), String> {
+        // The shell owns the selection; the document needs it for `App_Move`, whose
+        // delta applies to whatever is selected rather than to a named target.
+        let mut state = self.state.borrow_mut();
+        state.selection = items.iter().map(|item| item.object.clone()).collect();
+        state.selection.dedup();
         Ok(())
+    }
+
+    fn set_visibility(
+        &mut self,
+        object: &str,
+        visible: Option<bool>,
+    ) -> Result<VisibilityOutcome, String> {
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let Some(id) = Self::object_id(state, object) else {
+            return Ok(VisibilityOutcome {
+                ok: false,
+                visible: false,
+                error: format!("no object {object}"),
+            });
+        };
+        let Some(next) = hide_object(&mut state.document, id, visible) else {
+            return Ok(VisibilityOutcome {
+                ok: false,
+                visible: false,
+                error: format!("no object {object}"),
+            });
+        };
+        Ok(VisibilityOutcome {
+            ok: true,
+            visible: next,
+            error: String::new(),
+        })
+    }
+
+    fn rotation_quaternion(&self, object: &str) -> Option<[f64; 4]> {
+        // The stage is world-space with an identity placement, so the object's own
+        // orientation is only in the document. `Rotation::q` is already `[w, x, y, z]`.
+        let state = self.state.borrow();
+        let id = state.document.get_by_name(object)?;
+        Some(current_placement(&state.document, id)?.rotation.q)
     }
 
     fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
@@ -372,6 +465,57 @@ impl AppBackend for DocumentBackend {
 
     fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String> {
         let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        // The two object verbs are not view toggles: they hand the shell a session
+        // (a gizmo mode, and for Move a token its form spends).
+        if id == MOVE {
+            state.move_dialogs += 1;
+            let token = format!("{MOVE_TOKEN}-{}", state.move_dialogs);
+            return Ok(CommandOutcome {
+                ok: true,
+                status: "move: drag a handle or type a value".to_string(),
+                gizmo: Some("translate".to_string()),
+                dialog: Some(move_dialog()),
+                token: Some(token),
+                ..Default::default()
+            });
+        }
+        if id == ROTATE {
+            return Ok(CommandOutcome {
+                ok: true,
+                status: "rotate: drag a ring".to_string(),
+                gizmo: Some("rotate".to_string()),
+                ..Default::default()
+            });
+        }
+        if id == VISIBILITY {
+            let selection = state.selection.clone();
+            if selection.is_empty() {
+                return Ok(CommandOutcome {
+                    ok: false,
+                    error: "nothing selected".to_string(),
+                    ..Default::default()
+                });
+            }
+            // One verb for the whole selection: if anything is still visible, hide
+            // them all; otherwise show them all.
+            let hide = selection_visible(state) != Some(false);
+            let mut changed = 0;
+            for name in &selection {
+                let Some(id) = state.document.get_by_name(name) else {
+                    continue;
+                };
+                if hide_object(&mut state.document, id, Some(!hide)).is_some() {
+                    changed += 1;
+                }
+            }
+            let verb = if hide { "hid" } else { "showed" };
+            return Ok(CommandOutcome {
+                ok: true,
+                status: format!("{verb} {changed} object(s)"),
+                ..Default::default()
+            });
+        }
         let (status, view) = match id {
             GRID => {
                 state.view.grid = !state.view.grid;
@@ -438,6 +582,229 @@ impl AppBackend for DocumentBackend {
     fn refresh_providers(&mut self, _feature: &str) -> Result<CommandOutcome, String> {
         Ok(CommandOutcome::default())
     }
+
+    /// The typed half of the Move gesture: apply `(dx, dy, dz)` to the selection.
+    ///
+    /// The shell's Move form and the gizmo arrows commit through this one call, so a
+    /// typed move and a dragged one cannot drift. The token is the one `App_Move`
+    /// handed out; there is no pending Python callback to spend.
+    fn dialog_accept(
+        &mut self,
+        token: &str,
+        values: &serde_json::Value,
+    ) -> Result<CommandOutcome, String> {
+        if !token.starts_with(MOVE_TOKEN) {
+            return Ok(CommandOutcome {
+                ok: false,
+                error: format!("{token} is not a dialog this build opened"),
+                ..Default::default()
+            });
+        }
+        let delta = Vector3::new(
+            values
+                .get("dx")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
+            values
+                .get("dy")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
+            values
+                .get("dz")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0),
+        );
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let selection = state.selection.clone();
+        if selection.is_empty() {
+            return Ok(CommandOutcome {
+                ok: false,
+                error: "nothing selected".to_string(),
+                ..Default::default()
+            });
+        }
+        match translate(state, &selection, delta) {
+            Ok(moved) => Ok(CommandOutcome {
+                ok: true,
+                status: format!("moved {moved} object(s)"),
+                ..Default::default()
+            }),
+            Err(error) => Ok(CommandOutcome {
+                ok: false,
+                error,
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn dialog_cancel(&mut self, _token: &str) -> Result<CommandOutcome, String> {
+        // Nothing is pending on this side: the values come back through
+        // `dialog_accept`, and a cancelled form simply writes nothing.
+        Ok(CommandOutcome::default())
+    }
+
+    /// A manipulator commit: the rotation rings' `transform`/`apply`, and nothing else.
+    ///
+    /// The contract matches the native workbench's: `values` are the 16 row-major
+    /// elements of the **world-space** transform, composed on the left of the object's
+    /// placement (`delta · placement`). Dress-up manipulators (fillet/chamfer handles)
+    /// need a Part workbench behind them; the sample document has no handles to grab.
+    fn apply_interaction(
+        &mut self,
+        commit: &InteractionCommit,
+        object: &str,
+    ) -> Result<ApplyResult, String> {
+        if commit.manipulator != TRANSFORM_ID || commit.action != "apply" {
+            return Ok(ApplyResult {
+                ok: false,
+                error: format!(
+                    "{} {} is not available in the browser build",
+                    commit.manipulator, commit.action
+                ),
+            });
+        }
+        let Ok(elements) = <[f64; 16]>::try_from(commit.values.as_slice()) else {
+            return Ok(ApplyResult {
+                ok: false,
+                error: "a transform commit needs 16 matrix values".to_string(),
+            });
+        };
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let Some(id) = Self::object_id(state, object) else {
+            return Ok(ApplyResult {
+                ok: false,
+                error: format!("no object {object}"),
+            });
+        };
+        let Some(placement) = current_placement(&state.document, id) else {
+            return Ok(ApplyResult {
+                ok: false,
+                error: format!("{object} has no Placement"),
+            });
+        };
+        let delta = Matrix4 { m: elements };
+        let composed = delta.mul(&placement.to_matrix());
+        let next = Placement::new(
+            Vector3::new(composed.m[3], composed.m[7], composed.m[11]),
+            Rotation::from_matrix(&composed),
+        );
+        state
+            .document
+            .set_property(id, "Placement", Property::Placement(next))?;
+        state.document.recompute()?;
+        Ok(ApplyResult {
+            ok: true,
+            error: String::new(),
+        })
+    }
+}
+
+/// The Move form: the same floating HUD the native `App_Move` opens.
+///
+/// `preview: "translation"` is what tells the shell to present it as the hand's
+/// always-on form (and to drop the token it handed in) rather than a modal. The
+/// fields are the Δ quantities the gizmo's arrows fill while dragging.
+fn move_dialog() -> DialogSpec {
+    let field = |name: &str, label: &str| DialogField {
+        name: name.to_string(),
+        label: label.to_string(),
+        kind: "quantity".to_string(),
+        value: Some(serde_json::json!(0.0)),
+        ..Default::default()
+    };
+    DialogSpec {
+        title: "Move".to_string(),
+        accept: "Move".to_string(),
+        presentation: "float".to_string(),
+        preview: "translation".to_string(),
+        fields: vec![field("dx", "ΔX"), field("dy", "ΔY"), field("dz", "ΔZ")],
+        ..Default::default()
+    }
+}
+
+/// Move `names` by a world-space `delta`, one property write per object.
+///
+/// This is the native `App_Move` contract (`obj.Placement = delta * obj.Placement`),
+/// applied to the placement's base only: a pure translation does not change the
+/// rotation, so the rotation is kept as it is.
+fn translate(state: &mut State, names: &[String], delta: Vector3) -> Result<usize, String> {
+    let ids: Vec<ObjectId> = names
+        .iter()
+        .filter_map(|name| state.document.get_by_name(name))
+        .collect();
+    if ids.is_empty() {
+        return Err("nothing selected".to_string());
+    }
+    let mut moved = 0;
+    for id in ids {
+        let Some(placement) = current_placement(&state.document, id) else {
+            continue;
+        };
+        let next = Placement::new(placement.base.add(&delta), placement.rotation);
+        state
+            .document
+            .set_property(id, "Placement", Property::Placement(next))?;
+        moved += 1;
+    }
+    state.document.recompute()?;
+    Ok(moved)
+}
+
+/// The object's placement property, if it has one.
+fn current_placement(document: &Document, id: ObjectId) -> Option<Placement> {
+    match document.object(id)?.properties.get("Placement")? {
+        Property::Placement(placement) => Some(*placement),
+        _ => None,
+    }
+}
+
+/// Apply a visibility change to one object; `None` toggles.
+///
+/// Returns the state that now applies, or `None` when the object is gone. A headless
+/// view state is enough: the display path (`stage_meshes`) reads it, and the browser
+/// build has no transaction engine to record the write in.
+fn hide_object(document: &mut Document, id: ObjectId, visible: Option<bool>) -> Option<bool> {
+    let object = document.object_mut(id)?;
+    let current = object
+        .view
+        .as_ref()
+        .map(|view| view.visibility)
+        .unwrap_or(true);
+    let next = visible.unwrap_or(!current);
+    object.view.get_or_insert_with(default_view).visibility = next;
+    Some(next)
+}
+
+/// Whether one named object is currently drawn.
+fn object_visible(document: &Document, name: &str) -> bool {
+    document
+        .get_by_name(name)
+        .and_then(|id| document.object(id))
+        .map(visible)
+        .unwrap_or(true)
+}
+
+/// Whether the whole selection is drawn: `None` when nothing is selected.
+fn selection_visible(state: &State) -> Option<bool> {
+    if state.selection.is_empty() {
+        return None;
+    }
+    Some(
+        state
+            .selection
+            .iter()
+            .all(|name| object_visible(&state.document, name)),
+    )
+}
+
+/// A view state for an object that has none yet (created by the first hide).
+///
+/// It keeps the Part steel grey the document items are drawn with, so hiding and
+/// showing an object does not change its colour.
+fn default_view() -> ViewState {
+    ViewState::new(0, DEFAULT_COLOR.map(f64::from))
 }
 
 /// Report the sample document's shapes: one line per tessellated object.

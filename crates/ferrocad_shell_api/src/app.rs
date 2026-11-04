@@ -30,8 +30,9 @@ use crate::commands::{CommandInfo, CommandOutcome};
 use crate::display::StageMesh;
 use crate::selection::SelectionItem;
 use crate::types::{
-    AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome, GridSummary,
-    OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult, WorkbenchReport,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
+    GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult,
+    VisibilityOutcome, WorkbenchReport,
 };
 use crate::view::ViewState;
 
@@ -102,6 +103,19 @@ pub trait AppBackend {
     /// Mirror the shell's selection to the engine's selection facade.
     fn set_selection(&self, _items: &[SelectionItem]) -> Result<(), String> {
         Ok(())
+    }
+
+    /// Show or hide an object. `visible` is `None` to toggle the current state.
+    ///
+    /// The backend owns what visibility *is* — the native one writes a document
+    /// `Visibility` property, the browser one a headless view state — and answers with
+    /// the state that now applies. A backend that cannot change it leaves the default.
+    fn set_visibility(
+        &mut self,
+        _object: &str,
+        _visible: Option<bool>,
+    ) -> Result<VisibilityOutcome, String> {
+        Err("visibility is not supported by this backend".to_string())
     }
 
     /// Drain the selection writes a script queued.

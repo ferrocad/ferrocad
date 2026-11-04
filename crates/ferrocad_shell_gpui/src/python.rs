@@ -28,9 +28,9 @@ use ferrocad_types::Vector3;
 // platform-neutral core so a Rust backend can return the same shapes. Re-exported
 // here because `ferrocad_shell_gpui::python::PropRow` is part of the public surface.
 pub use ferrocad_shell_core::types::{
-    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome, GridProvider,
-    GridSummary, ObjectNode, OpenedDocument, PropRow, ProviderFeature, ProviderSkin,
-    SelectionRequest, SetResult, WorkbenchError, WorkbenchReport,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
+    GridProvider, GridSummary, ObjectNode, OpenedDocument, PropRow, ProviderFeature, ProviderSkin,
+    SelectionRequest, SetResult, VisibilityOutcome, WorkbenchError, WorkbenchReport,
 };
 
 /// The Python module the shell boots and then calls. It is the app's script, so
@@ -88,7 +88,10 @@ fn gui() -> bool {
 /// Falls back to the base app's development module so the library's own tests can
 /// boot without a host; a real app always calls [`configure`].
 fn entry_module() -> &'static str {
-    ENTRY_MODULE.get().map(String::as_str).unwrap_or("ferrocad_shell")
+    ENTRY_MODULE
+        .get()
+        .map(String::as_str)
+        .unwrap_or("ferrocad_shell")
 }
 
 /// Locate the `python/` facade directory (the one containing `FreeCAD/`).
@@ -178,7 +181,8 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
             path.call_method1("insert", (0, p.as_str()))
                 .map_err(|e| e.to_string())?;
         }
-        path.call_method1("insert", (0, dir.as_str())).map_err(|e| e.to_string())?;
+        path.call_method1("insert", (0, dir.as_str()))
+            .map_err(|e| e.to_string())?;
 
         // Bring the scene layer (`pivy.coin`) up before any script imports it — the
         // analogue of `SoFCDB::init()` at GUI startup.
@@ -496,10 +500,7 @@ pub fn run_command(name: &str) -> Result<CommandOutcome, String> {
 /// The payload is `{"feature": ..., "backend": ...}`; the answer is the same
 /// `CommandOutcome` shape as `run_command`, carrying the merged `view` request and
 /// a status line.
-pub fn set_provider(
-    feature: &str,
-    backend: &str,
-) -> Result<CommandOutcome, String> {
+pub fn set_provider(feature: &str, backend: &str) -> Result<CommandOutcome, String> {
     let payload = serde_json::json!({"feature": feature, "backend": backend}).to_string();
     call_json("set_provider", Some(&payload))
 }
@@ -521,10 +522,7 @@ pub fn provider_skin(feature: &str) -> Result<Option<String>, String> {
 }
 
 /// Accept an open dialog: one JSON payload (the token and the typed values).
-pub fn dialog_accept(
-    token: &str,
-    values: &serde_json::Value,
-) -> Result<CommandOutcome, String> {
+pub fn dialog_accept(token: &str, values: &serde_json::Value) -> Result<CommandOutcome, String> {
     let payload = serde_json::json!({ "token": token, "values": values }).to_string();
     call_json("dialog_accept", Some(&payload))
 }
@@ -586,6 +584,62 @@ pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResu
             .map_err(|e| e.to_string())
     })?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// Toggle or set one object's visibility, in one named transaction.
+///
+/// FreeCAD keeps `Visibility` on the view object; the document property this adds is
+/// what makes the change part of the undo history and what the Part display hook
+/// reads. A toggle reads the view state first because a freshly added
+/// `App::PropertyBool` defaults to false and would otherwise hide on the first
+/// "show" as well.
+///
+/// `visible` is `None` to toggle. The returned outcome carries the state that now
+/// applies, so the shell's status line can say `show X` or `hide X` without a second
+/// read.
+pub fn set_visibility(object: &str, visible: Option<bool>) -> Result<VisibilityOutcome, String> {
+    let name = serde_json::to_string(object).map_err(|error| error.to_string())?;
+    // Python literals: `None`, `True`, `False`.
+    let want = match visible {
+        Some(true) => "True",
+        Some(false) => "False",
+        None => "None",
+    };
+    let code = format!(
+        r#"
+import json
+import FreeCAD
+doc = FreeCAD.ActiveDocument
+obj = doc.getObject({name}) if doc is not None else None
+if obj is None:
+    print(json.dumps({{"ok": False, "visible": False, "error": "no object"}}))
+else:
+    want = {want}
+    doc.openTransaction("Toggle visibility")
+    try:
+        if "Visibility" in obj.PropertiesList:
+            current = bool(obj.Visibility)
+        else:
+            current = bool(obj.ViewObject.Visibility)
+            obj.addProperty("App::PropertyBool", "Visibility", "Base", "Whether the object is shown")
+        obj.Visibility = (not current) if want is None else bool(want)
+        doc.commitTransaction()
+        doc.recompute()
+        print(json.dumps({{"ok": True, "visible": bool(obj.Visibility)}}))
+    except Exception as exc:
+        doc.abortTransaction()
+        print(json.dumps({{"ok": False, "visible": False, "error": str(exc)}}))
+"#
+    );
+    let result = evaluate(&code)?;
+    if !result.ok {
+        return Ok(VisibilityOutcome {
+            ok: false,
+            visible: false,
+            error: result.output,
+        });
+    }
+    serde_json::from_str(result.output.trim()).map_err(|error| error.to_string())
 }
 
 /// The answer [`add_datum_plane`] reads back: the created object's name, or why not.
@@ -682,7 +736,8 @@ pub fn inventor_scene() -> Result<Scene, String> {
         ferrocad_inventor_py::install(py).map_err(|e| e.to_string())?;
         let globals = PyDict::new(py);
         let code = std::ffi::CString::new(INVENTOR_SCENE_SCRIPT).map_err(|e| e.to_string())?;
-        py.run(&code, Some(&globals), None).map_err(|e| e.to_string())?;
+        py.run(&code, Some(&globals), None)
+            .map_err(|e| e.to_string())?;
         let root = globals
             .get_item("root")
             .map_err(|e| e.to_string())?
@@ -778,7 +833,9 @@ mod tests {
                 .call_method1("insert", (0, dir.to_string_lossy().to_string()))
                 .unwrap();
 
-            let ferrocad = py.import("ferrocad").expect("import the ferrocad extension");
+            let ferrocad = py
+                .import("ferrocad")
+                .expect("import the ferrocad extension");
             ferrocad_stage_py::install(py).expect("install ferrocad.stage");
             let stage = ferrocad.getattr("stage").expect("ferrocad.stage");
             assert!(stage.getattr("ShapeItem").is_ok(), "stage.ShapeItem");

@@ -17,6 +17,158 @@
     import init from "./pkg/ferrocad_web_gpui.js";
     await init();
 
+    // `?select=x,y` clicks a row, then `?keys=` and `?type=` drive the keyboard.
+    // Together they let a headless capture exercise the editing path: select an
+    // object, run an accelerated command, type a value into a field, commit with
+    // Enter. GPUI's web backend takes keyboard input through a hidden IME mirror
+    // (`body > textarea`), which is where these events go.
+    const params = new URLSearchParams(location.search);
+    if (params.has("select") || params.has("keys") || params.has("type")) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const canvas = document.querySelector("canvas");
+      const mirror = document.querySelector("body > textarea");
+      if (canvas && mirror) {
+        const press = (x, y, buttons) =>
+          ["pointerdown", "pointerup"].forEach((type, index) =>
+            canvas.dispatchEvent(
+              new PointerEvent(type, {
+                pointerId: 1,
+                pointerType: "mouse",
+                isPrimary: true,
+                clientX: x,
+                clientY: y,
+                buttons: index === 0 ? buttons : 0,
+                bubbles: true,
+                cancelable: true,
+              }),
+            ),
+          );
+        // A held-button drag, one pointer per call: the scrub handles and the
+        // viewport read moves only while `buttons` reports the press.
+        const drag = async (x1, y1, x2, y2) => {
+          const fire = (type, x, y, buttons) =>
+            canvas.dispatchEvent(
+              new PointerEvent(type, {
+                pointerId: 1,
+                pointerType: "mouse",
+                isPrimary: true,
+                clientX: x,
+                clientY: y,
+                buttons,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          fire("pointerdown", x1, y1, 1);
+          for (let step = 1; step <= 8; step += 1) {
+            fire("pointermove", x1 + ((x2 - x1) * step) / 8, y1 + ((y2 - y1) * step) / 8, 1);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          fire("pointerup", x2, y2, 0);
+        };
+        // `ctrl-shift-m`, `space`, `enter`, `backspace` or one character.
+        const key = (spec) => {
+          const parts = spec.split("-");
+          const name = parts.pop();
+          const named = {
+            space: " ",
+            enter: "Enter",
+            escape: "Escape",
+            tab: "Tab",
+            backspace: "Backspace",
+            delete: "Delete",
+          };
+          mirror.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: named[name] ?? name,
+              ctrlKey: parts.includes("ctrl"),
+              shiftKey: parts.includes("shift"),
+              altKey: parts.includes("alt"),
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        };
+        if (params.has("select")) {
+          const [x, y] = params.get("select").split(",").map(Number);
+          press(x, y, 1);
+          // Selecting an object builds the property rows on the next frames. The
+          // hit test a click uses is computed from the *rendered* frame, so give the
+          // pane time to lay out before any later press targets a row.
+          await new Promise((resolve) => setTimeout(resolve, 900));
+        }
+        if (params.has("keys")) {
+          // Steps are `;`-separated so a `move:x,y` step keeps its comma:
+          // `keys=space;move:600,384;space` is "open the wheel, hover Hide, commit".
+          for (const spec of params.get("keys").split(";")) {
+            if (spec.startsWith("press:")) {
+              const [x, y] = spec.slice(6).split(",").map(Number);
+              press(x, y, 1);
+            } else if (spec.startsWith("wait:")) {
+              await new Promise((resolve) => setTimeout(resolve, Number(spec.slice(5))));
+            } else if (spec.startsWith("move:")) {
+              const [x, y] = spec.slice(5).split(",").map(Number);
+              canvas.dispatchEvent(
+                new PointerEvent("pointermove", {
+                  pointerId: 1,
+                  pointerType: "mouse",
+                  isPrimary: true,
+                  clientX: x,
+                  clientY: y,
+                  buttons: 0,
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              );
+            } else if (spec.startsWith("drag:")) {
+              const [x1, y1, x2, y2] = spec.slice(5).split(",").map(Number);
+              await drag(x1, y1, x2, y2);
+            } else {
+              key(spec);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 80));
+          }
+        }
+        if (params.has("type")) {
+          const [x, y, text] = params.get("type").split(",");
+          // A real pointer hovers before it presses; the field's hitbox only claims
+          // the press once the move has made it the hovered element. The move is sent
+          // twice: the first may land before the pane has laid out, and the hit test
+          // is taken from the rendered frame of the preceding move.
+          const hover = () =>
+            canvas.dispatchEvent(
+              new PointerEvent("pointermove", {
+                pointerId: 1,
+                pointerType: "mouse",
+                isPrimary: true,
+                clientX: Number(x),
+                clientY: Number(y),
+                buttons: 0,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          hover();
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          hover();
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          press(Number(x), Number(y), 1);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          // The field keeps its old value on focus, so clear it first. Every key
+          // goes through the same `keydown` path a real browser sends; GPUI inserts
+          // printable characters into the focused input handler from there.
+          for (let i = 0; i < 12; i += 1) key("backspace");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          for (const character of text) {
+            key(character);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          key("enter");
+        }
+      }
+    }
+
     // `?click=x,y` fires one pointer press/release at a client coordinate, so a
     // headless capture can drive the shell (select a tree row, run a header command).
     if (new URLSearchParams(location.search).has("click")) {

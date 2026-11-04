@@ -12,8 +12,9 @@ use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_core::display::StageMesh;
 use ferrocad_shell_core::selection::SelectionItem;
 use ferrocad_shell_core::types::{
-    AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome, GridSummary,
-    OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult, WorkbenchReport,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
+    GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult,
+    VisibilityOutcome, WorkbenchReport,
 };
 use ferrocad_shell_core::view::ViewState;
 use ferrocad_stage::InteractionCommit;
@@ -81,6 +82,14 @@ impl AppBackend for PythonAppBackend {
         python::set_selection(items)
     }
 
+    fn set_visibility(
+        &mut self,
+        object: &str,
+        visible: Option<bool>,
+    ) -> Result<VisibilityOutcome, String> {
+        python::set_visibility(object, visible)
+    }
+
     fn take_selection_requests(&mut self) -> Result<Vec<SelectionRequest>, String> {
         python::take_selection_requests()
     }
@@ -101,7 +110,12 @@ impl AppBackend for PythonAppBackend {
         python_tool_command(name, verb)
     }
 
-    fn set_property(&mut self, object: &str, property: &str, value: &str) -> Result<SetResult, String> {
+    fn set_property(
+        &mut self,
+        object: &str,
+        property: &str,
+        value: &str,
+    ) -> Result<SetResult, String> {
         python::set_property(object, property, value)
     }
 

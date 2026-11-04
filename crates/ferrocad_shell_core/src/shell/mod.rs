@@ -1032,6 +1032,11 @@ impl Shell {
         // digit belongs to that field, not to the loadout. `handle_key` returning `true`
         // stops propagation, so without this check a typed `1` was eaten by the slot
         // hotkey and never reached the text input.
+        //
+        // A property row's field is a third case, and the one the single-window browser
+        // shell exposed: natively the property editor lives in Dev Tools, whose body
+        // takes the keys, but when the panels are docked in the main window the shell
+        // root's handler runs first and would take every digit for a loadout slot.
         let field_focused = self.dialog.as_ref().is_some_and(|dialog| {
             dialog
                 .inputs
@@ -1043,7 +1048,10 @@ impl Shell {
                 .iter()
                 .chain(std::iter::once(&hud.angle))
                 .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
-        });
+        }) || self
+            .prop_inputs
+            .values()
+            .any(|input| input.state.read(cx).focus_handle(cx).is_focused(window));
         // `=` flips the Move form between offsets and coordinates. It is not a number
         // character, so it works whether a field owns the keyboard or the canvas does —
         // but another surface with a text field (a modal, the settings card, the palette)
@@ -1220,15 +1228,15 @@ impl Shell {
         false
     }
 
-    /// Toggle the selected object's `Visibility` (the tree's `Space`).
+    /// Toggle the selected object's visibility (the tree's `Space`).
     ///
-    /// The write is one named transaction, so it is one undo step. `Visibility` is
-    /// the object's own `App::PropertyBool` when it declares one; an object that
-    /// does not get it added on the first toggle. That is deliberate: a bare
-    /// view-state write is not recorded in the undo engine, while a document
-    /// property is — and the Part display hook reads `obj.Visibility`, which
-    /// resolves to the added property, so the toggle reaches the display path and
-    /// `undo` restores it.
+    /// The backend owns what that means. Natively the write is one named transaction,
+    /// so it is one undo step: `Visibility` is the object's own `App::PropertyBool`
+    /// when it declares one, and an object that does not gets it added on the first
+    /// toggle — the Part display hook reads `obj.Visibility`, so the toggle reaches the
+    /// display path and `undo` restores it. The browser backend has no transaction
+    /// engine; it flips the object's headless view state, which the stage rebuild
+    /// reads.
     ///
     /// Returns whether an object was toggled (a `Settings/...` node or no
     /// selection is not).
@@ -1237,49 +1245,13 @@ impl Shell {
             Some(object) if !object.starts_with("Settings/") => object,
             _ => return false,
         };
-        let Some(name) = serde_json::to_string(&object).ok() else {
-            return false;
-        };
-        // `{name}` is a JSON string literal, so a document name cannot inject code.
-        let script = format!(
-            r#"
-import json
-import FreeCAD
-doc = FreeCAD.ActiveDocument
-obj = doc.getObject({name}) if doc is not None else None
-if obj is None:
-    print(json.dumps({{"ok": False, "visible": False, "error": "no object"}}))
-else:
-    doc.openTransaction("Toggle visibility")
-    try:
-        if "Visibility" in obj.PropertiesList:
-            current = bool(obj.Visibility)
-        else:
-            # The view state is the only visibility before the first toggle. A
-            # freshly added `App::PropertyBool` defaults to false, so read the
-            # current value first and write the toggle explicitly.
-            current = bool(obj.ViewObject.Visibility)
-            obj.addProperty("App::PropertyBool", "Visibility", "Base", "Whether the object is shown")
-        obj.Visibility = not current
-        doc.commitTransaction()
-        doc.recompute()
-        print(json.dumps({{"ok": True, "visible": bool(obj.Visibility)}}))
-    except Exception as exc:
-        doc.abortTransaction()
-        print(json.dumps({{"ok": False, "visible": False, "error": str(exc)}}))
-"#
-        );
-        let outcome = crate::app::evaluate(cx, &script);
-        let (status, ok) = match outcome {
-            Ok(result) if result.ok => {
-                let value: serde_json::Value =
-                    serde_json::from_str(result.output.trim()).unwrap_or_default();
-                let visible = value["visible"].as_bool().unwrap_or(false);
-                let ok = value["ok"].as_bool().unwrap_or(false);
-                let verb = if visible { "show" } else { "hide" };
-                (format!("{verb} {object}"), ok)
+        let (status, ok) = match crate::app::set_visibility(cx, &object, None) {
+            Ok(outcome) if outcome.ok => {
+                let verb = if outcome.visible { "show" } else { "hide" };
+                (format!("{verb} {object}"), true)
             }
-            Ok(result) => (format!("visibility: {}", result.output), false),
+            Ok(outcome) if outcome.error.is_empty() => ("visibility failed".to_string(), false),
+            Ok(outcome) => (format!("visibility: {}", outcome.error), false),
             Err(error) => (format!("visibility: {error}"), false),
         };
         if ok {

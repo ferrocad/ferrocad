@@ -35,8 +35,11 @@ ferrocad_core.workspace = true
 ferrocad_part.workspace = true
 ferrocad_occt.workspace = true
 ferrocad_geom.workspace = true
+ferrocad_stage.workspace = true
 ferrocad_types.workspace = true
 ferrocad_wasm.workspace = true
+# The Move form's values arrive as JSON, as they do on the native bridge.
+serde_json.workspace = true
 wasm-bindgen = "0.2"
 # The logger `gpui::web_init` installs forwards to the browser console.
 log = "0.4"

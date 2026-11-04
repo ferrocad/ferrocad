@@ -1,6 +1,6 @@
 # The wasm shell: one GPUI UI crate, two backends
 
-Status: **task (2026-11-03). M0–M4 done (2026-11-03); M5 planned.**
+Status: **task (2026-11-03). M0–M5 done (2026-11-04).**
 Companions: [`../research/web-wasm-host.md`](../research/web-wasm-host.md) (the
 probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md)
@@ -240,7 +240,11 @@ small `WindowConfig` to the core rather than moving `HostConfig`.
 
 **M2 shipped `SampleBackend`**, which made the shell real without any kernel. **M4
 replaces it with `DocumentBackend`** (`ferrocad_web_gpui/src/document.rs`), over a
-real `ferrocad_core::Document` on the Part workbench and the wasm OCCT kernel:
+real `ferrocad_core::Document` on the Part workbench and the wasm OCCT kernel. **M5
+makes its writes reach the document** through the same `AppBackend` methods the
+native shell uses (`set_property`, `set_visibility`, `run_command`,
+`dialog_accept`, `apply_interaction`), so the shell's editing surface is not a
+second implementation:
 
 - `bootstrap`: `version = env!("CARGO_PKG_VERSION")`, `backend = "rust"`,
   `document = "Sample"`; a document that failed to build reports the reason rather
@@ -268,6 +272,19 @@ real `ferrocad_core::Document` on the Part workbench and the wasm OCCT kernel:
   workplane command is wired yet.
 - `set_view_state`: stores the shell's state so the next command list agrees with
   the toggles.
+- **Editing** (M5): `set_property` writes the value, recomputes and keeps a feature's
+  last good shape on refusal; `set_selection` mirrors the shell's selection so
+  `App_Move` knows its target; `set_visibility(object, None)` toggles the object's
+  `Visibility` in one transaction (adding the `PropertyBool` on first use) and
+  `hide_object`/`object_visible` read it; `rotation_quaternion` reports the
+  placement's rotation for the viewport's rotate ring. `run_command` serves
+  `App_Move` (a token plus the floating delta form), `App_Rotate` (the ring) and
+  `App_ToggleVisibility` (the wheel's Hide/Show, whose label follows the selection).
+  `dialog_accept` parses the typed `(dx, dy, dz)` and translates the selection in one
+  transaction; `dialog_cancel` spends the token. `apply_interaction` accepts the
+  `transform`/`apply` commit with its 16-value world matrix, composes it as
+  `delta · placement` and writes the resulting `Placement` — the same hook the
+  desktop gizmo uses.
 - `evaluate`: reports that the browser build has no interpreter (the console is
   still a real transcript, and `hello` names the Rust document backend).
 
@@ -302,11 +319,11 @@ The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research
 | **M2** | **A shell window in Chrome** — **done 2026-11-03** | Bundled DejaVu Sans + `fonts::install`; WebGL entry (`web_init`, no `process::exit`); `panels_open` in-window sidebar (Model/Properties/Console stacked); `SampleBackend` (two boxes, editable rows, header commands); placeholder viewport. | Headless Chrome shows the leading bar, viewport header, status line, tree, properties and console, with no panic. The console prints `FerroCAD browser shell · Rust backend (no CPython)`; clicking `Box` fills the property pane and the status line; `Grid` toggles on (dot, status and console agree). |
 | **M3** | **Live 3D in the shell** — **done 2026-11-03** | `DeferredView` + `ShellView`; presenter allowed on wasm (`surface.format()`, `SAMPLES = 1`); `enable_viewport` on wasm; `SampleBackend::stage_meshes` (hand-tessellated boxes); CPU picking instead of the G-buffer. | Headless Chrome shows both boxes through `InventorViewport` with the shell around them; `?drag=1` orbits (75 434 px differ), `?wheel=1` zooms (42 132 px), and a click on a box selects it — tree row, properties, status line and gizmo. 308 native tests still pass. |
 | **M4** | **Real Rust document** — **done 2026-11-03** | `DocumentBackend` over `ferrocad_core::Document` + `ferrocad_part` + `OcctBackend`; tree, property rows and stage all read the document; `set_property` recomputes. The host links the prebuilt wasm kernel (`ferrocad_wasm` stubs + `__wasm_call_ctors`). | Headless Chrome shows `Sample`: `Box` (`Part::Box`) and `Fillet` (`Part::Fillet`) in the tree, the fillet's real rows (`Base` `Box: Edge1`, `Radius 3.0 mm`, `Shape` `Output`), and the filleted box in the viewport. The console logs `Box · 12 triangles` and `Fillet · 40 triangles` — the probe's baseline. The `wasm` CI job links the host. |
-| **M5** | **Editing** | `set_property`, `run_command`, toggles, recompute, stage refresh; visibility. | Changing a property in the browser recomputes the document and the viewport updates. |
+| **M5** | **Editing** — **done 2026-11-04** | `AppBackend::set_visibility` (+ `VisibilityOutcome`) on the API, implemented by `PythonAppBackend` (one `Visibility` transaction) and `DocumentBackend`; `Shell::toggle_visibility` goes through the backend instead of a Python script. `DocumentBackend` gains `set_selection`, `rotation_quaternion`, `App_Move` (typed delta dialog), `App_Rotate`, `App_ToggleVisibility`, `dialog_accept`/`dialog_cancel` and `apply_interaction` (`transform`/`apply`: the 16-value world matrix composed `delta · placement`, then `Rotation::from_matrix`), each editing through `set_property` + `recompute` and re-syncing the stage. `handle_key` now treats a focused property field as editing, so the single-window shell does not take its digits for loadout slots. | In headless Chrome: **Move** (`?select=1004,100&keys=ctrl-shift-m;tab;1;5;enter`) commits `moved 1 object(s)` and `Placement` becomes `(10.0, -5.0, -5.0)` with the stage following; **Rotate** (space wheel → `Rotate`, then `Enter`) commits `rotated` through `apply_interaction` and the box turns; **Hide/Show** (space wheel → `Hide`) commits `hid 1 object(s)` and the base box leaves the stage; **the property pane** (type `25` into `Length`, `Enter`) commits `set Box.Length` and the box lengthens. `ferrocad_shell_core` gains `a_focused_property_field_owns_its_digits`; the native suites are 251 + 52 + 6. |
 
-M0–M4 are done: the boundary, the wasm build, a real shell in Chrome, the live 3D
-viewport in it, and a real document behind both. M5 makes a viewport drag edit the
-document.
+M0–M5 are done: the boundary, the wasm build, a real shell in Chrome, the live 3D
+viewport in it, a real document behind both, and edits that write that document
+(recompute and stage refresh follow every commit).
 
 ## 8. Non-goals
 
@@ -354,8 +371,21 @@ document.
     the name-based mapping in `editor_kind` can go.
   - **Both objects are drawn.** `Box` and `Fillet` are both visible in FreeCAD's
     sense, and the fillet's shape is the filleted box, so the stage holds two nearly
-    coincident solids (as the desktop does). Hiding the base is a document edit, not a
-    display rule; M5 can offer it.
+    coincident solids (as the desktop does). Hiding the base is a document edit: the
+    wheel's `Hide` verb commits it and the stage drops the base (M5).
+- **A focused field owns the keyboard (M5).** Natively the property editor lives in
+  Dev Tools, whose body takes the keys. In the one-window browser shell the shell
+  root's `on_key_down` is an ancestor of the same fields, so it must include
+  `prop_inputs` in `field_focused` or a typed digit equips a loadout slot instead of
+  reaching the field. The unit test is `a_focused_property_field_owns_its_digits`;
+  keep this check whenever a new text field is added to the main window.
+- **Headless text entry is a harness limit, not a shell one.** GPUI focuses a text
+  field from `on_mouse_down`, which is gated on the hitbox being *hovered*. Synthetic
+  `PointerEvent`s in headless Chrome race the frame the hit test is taken from, so a
+  click on a property field sometimes lands in the previous layout (and the field
+  does not focus). The palette and the Move HUD are reliable because they focus
+  programmatically. A real browser is the check for pointer-driven focus; the
+  harness proves the typing path once focused (`?type=`).
 - **One-window panels.** The editor, properties and console must be laid out for
   the main window; the current `dev_tools_body` assumes a second window and
   double key handling (`panels_open` must not also route keys through the shell).

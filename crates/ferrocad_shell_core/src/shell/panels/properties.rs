@@ -51,7 +51,12 @@ impl Shell {
     }
 
     /// Commit a property field: one filtered edit inside one transaction.
-    pub(in crate::shell) fn commit_property(&mut self, key: &str, text: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn commit_property(
+        &mut self,
+        key: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some((object, property)) = key.split_once('.') else {
             return;
         };
@@ -246,7 +251,12 @@ impl Shell {
     }
 
     /// Pick a dialog enum's option from the dropdown.
-    pub(in crate::shell) fn set_dialog_choice(&mut self, index: usize, choice: &str, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn set_dialog_choice(
+        &mut self,
+        index: usize,
+        choice: &str,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(dialog) = self.dialog.as_mut() {
             let position = dialog
                 .spec
@@ -270,5 +280,4 @@ impl Shell {
             cx.notify();
         }
     }
-
 }

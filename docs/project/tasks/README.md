@@ -38,12 +38,13 @@ Status: index (2026-11-03). Eleven active specs and one recorded decision:
 - [workplanes.md](workplanes.md) — make the world plane a real state, bind a face
   ephemerally during a creation tool, and replace the `WP` plumbing menu with plane
   choices.
-- [wasm-shell.md](wasm-shell.md) — **the browser shell, M0–M4 done**: the
+- [wasm-shell.md](wasm-shell.md) — **the browser shell, M0–M5 done**: the
   `ferrocad_shell_api` / `ferrocad_shell_core` / `ferrocad_shell_gpui` split, the
   `AppBackend` seam, the wasm build, the real shell in Chrome with a Rust backend, the
-  live 3D viewport through the zero-copy presenter, and a real `Part::Box` +
-  `Part::Fillet` document on the wasm OCCT kernel; gizmo edits (M5) are planned.
-  Stages **M0–M5**; M0 is the crate split.
+  live 3D viewport through the zero-copy presenter, a real `Part::Box` +
+  `Part::Fillet` document on the wasm OCCT kernel, and editing (typed Move/Rotate,
+  Hide/Show, property rows) that writes and recomputes that document. Stages
+  **M0–M5**; M0 is the crate split.
 - [stroke-units.md](stroke-units.md) — **decided, not open work**: viewport strokes are
   device pixels (gpui interop); a logical-pixel/UI-scale option was considered and
   deferred, with the reasons and the reopening plan.

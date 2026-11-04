@@ -85,9 +85,17 @@ standalone canvas demo, which draws the same document without the shell.
 | Query | Effect |
 | --- | --- |
 | `?click=x,y` | one pointer press/release at a client coordinate (select a tree row, run a header command, click a shape) |
+| `?select=x,y` | the same press, then a short settle (an object's property rows are built from it) |
+| `?keys=step;…` | `;`-separated steps: `press:x,y`, `move:x,y`, `drag:x1,y1,x2,y2`, `wait:ms`, a named key (`space`, `tab`, `enter`, `escape`, `backspace`, `delete`) or one character; modifiers prefix with `ctrl-`/`shift-`/`alt-` |
+| `?type=x,y,text` | hover, click a text field, clear it, type `text`, `Enter` |
 | `?drag=1` | one pointer drag across the canvas (orbits the camera) |
 | `?wheel=1` | one scroll notch (zooms) |
 | `?dblclick=1` | a drag then two quick clicks (the viewport's double-click) |
+
+`?type=` still depends on the field taking pointer focus, and synthetic pointer events
+race the frame GPUI takes its hit test from; treat it as best-effort in headless
+captures. The palette (`Ctrl+K`) and the Move HUD focus programmatically and are
+reliable there.
 
 ## Verified
 
@@ -118,6 +126,14 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   presenter drew.
 - `?drag=1` orbits and `?wheel=1` zooms the camera; the presenter re-composites each
   frame. `?click=40,58` runs `App_ToggleGrid` (dot, status and console agree).
+- **Editing writes the document.** `?select=1004,100&keys=ctrl-shift-m;tab;1;5;enter`
+  runs `App_Move`, accepts `browser-move-2 {"dx":15.0,…}`, prints `moved 1 object(s)`
+  and the box's `Placement` row becomes `(10.0, -5.0, -5.0)` with the stage following.
+  `?select=1004,100&keys=space;move:600,384;space` opens the object wheel, hovers
+  `Hide` and commits it: `hid 1 object(s)`, and the base box leaves the stage (the
+  fillet stays). The wheel's `Rotate` verb plus `Enter` commits through
+  `apply_interaction` (`rotated`) and the box turns. Typing `25` into the property
+  pane's `Length` field commits `set Box.Length` and the box lengthens.
 - No panic. Startup logs two
   `Scissor Rect … is not contained in the render target` validation errors from
   `gpui_wgpu` while the DOM canvas is still being sized (and the resize poll timeout
@@ -130,10 +146,13 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 - **Undo/redo, expressions and file I/O in the UI.** The document supports them; the
   browser has no menu for them and no file input. `evaluate` reports that there is no
   interpreter rather than pretending.
+- **A gizmo *drag* that writes back.** Typed Move, Rotate and Hide/Show commit; a
+  pointer drag on the transform gizmo reaches the same `apply_interaction` hook but
+  the headless capture drives it with zero deltas, so it is unverified there.
+- **`App_Fit` and `WP`.** `Fit` reports that the document is framed on load (there is
+  no `ViewRequest` field for it yet); `WP` reports that no workplane command is wired.
 - **Python.** No interpreter, no workbench scripts, no `FreeCAD` facade, no `.ui`
   task panels.
-- **Gizmo edits.** The transform gizmo draws and picks, but a drag does not yet write
-  `Placement` back to the document (M5).
 - **Multiple windows.** The browser backend has one window.
 - **Hardware (G-buffer) picking.** It reads a texel back with a blocking `poll`, which
   cannot complete on the web, so the browser uses the viewport's CPU ray cast instead

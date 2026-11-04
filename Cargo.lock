@@ -2621,9 +2621,11 @@ dependencies = [
  "ferrocad_occt",
  "ferrocad_part",
  "ferrocad_shell_core",
+ "ferrocad_stage",
  "ferrocad_types",
  "ferrocad_wasm",
  "log",
+ "serde_json",
  "wasm-bindgen",
 ]
 

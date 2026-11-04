@@ -22,8 +22,9 @@ use crate::model::display::StageMesh;
 use crate::model::selection::SelectionItem;
 use crate::model::view::ViewState;
 use crate::types::{
-    AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome, GridSummary,
-    OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult, WorkbenchReport,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
+    GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult,
+    VisibilityOutcome, WorkbenchReport,
 };
 use crate::workbench::commands::{CommandInfo, CommandOutcome};
 
@@ -119,8 +120,18 @@ pub fn set_selection(cx: &App, items: &[SelectionItem]) -> Result<(), String> {
     with_backend(cx, |backend| backend.set_selection(items)).unwrap_or(Ok(()))
 }
 
+pub fn set_visibility(
+    cx: &mut App,
+    object: &str,
+    visible: Option<bool>,
+) -> Result<VisibilityOutcome, String> {
+    with_backend_mut(cx, |backend| backend.set_visibility(object, visible))
+        .unwrap_or_else(|| Err(no_backend()))
+}
+
 pub fn take_selection_requests(cx: &mut App) -> Result<Vec<SelectionRequest>, String> {
-    with_backend_mut(cx, |backend| backend.take_selection_requests()).unwrap_or_else(|| Ok(Vec::new()))
+    with_backend_mut(cx, |backend| backend.take_selection_requests())
+        .unwrap_or_else(|| Ok(Vec::new()))
 }
 
 pub fn evaluate(cx: &App, code: &str) -> Result<EvalResult, String> {
@@ -173,7 +184,8 @@ pub fn dialog_accept(
 }
 
 pub fn dialog_cancel(cx: &mut App, token: &str) -> Result<CommandOutcome, String> {
-    with_backend_mut(cx, |backend| backend.dialog_cancel(token)).unwrap_or_else(|| Err(no_backend()))
+    with_backend_mut(cx, |backend| backend.dialog_cancel(token))
+        .unwrap_or_else(|| Err(no_backend()))
 }
 
 pub fn add_datum_plane(

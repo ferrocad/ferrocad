@@ -120,6 +120,27 @@ impl Default for SetResult {
     }
 }
 
+/// The outcome of a visibility change.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VisibilityOutcome {
+    pub ok: bool,
+    /// The visibility that now applies. Meaningless when `ok` is false.
+    #[serde(default)]
+    pub visible: bool,
+    #[serde(default)]
+    pub error: String,
+}
+
+impl Default for VisibilityOutcome {
+    fn default() -> Self {
+        Self {
+            ok: false,
+            visible: true,
+            error: String::new(),
+        }
+    }
+}
+
 /// The outcome of evaluating a console line.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EvalResult {

@@ -42,9 +42,10 @@ Status: index (2026-11-03). Eleven active specs and one recorded decision:
   `ferrocad_shell_api` / `ferrocad_shell_core` / `ferrocad_shell_gpui` split, the
   `AppBackend` seam, the wasm build, the real shell in Chrome with a Rust backend, the
   live 3D viewport through the zero-copy presenter, a real `Part::Box` +
-  `Part::Fillet` document on the wasm OCCT kernel, and editing (typed Move/Rotate,
-  Hide/Show, property rows) that writes and recomputes that document. Stages
-  **M0–M5**; M0 is the crate split.
+  `Part::Fillet` document on the wasm OCCT kernel, editing (typed Move/Rotate,
+  Hide/Show, undo/redo, fit, property rows) that writes and recomputes that document,
+  and a headless smoke check (`run.sh --check`). Stages **M0–M5**; M0 is the crate
+  split.
 - [stroke-units.md](stroke-units.md) — **decided, not open work**: viewport strokes are
   device pixels (gpui interop); a logical-pixel/UI-scale option was considered and
   deferred, with the reasons and the reopening plan.

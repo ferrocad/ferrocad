@@ -7,6 +7,7 @@
 //!
 //! A `workplane` request is an **action**, not state: it activates, clears or looks down
 //! the active workplane. The shell performs it on the viewport and reports the outcome.
+//! `fit` is an action in the same sense: it frames the whole stage once and stores nothing.
 
 use ferrocad_stage::grid;
 use ferrocad_stage::{
@@ -81,6 +82,10 @@ pub struct ViewRequest {
     /// and its two in-plane axes (the normal is `u × v`), in millimetres.
     #[serde(default)]
     pub workplane_frame: Option<WorkplaneFrameRequest>,
+    /// Frame the whole stage in the viewport. An **action**, not state: it is
+    /// performed once by the shell and is not stored in the presentation state.
+    #[serde(default)]
+    pub fit: Option<bool>,
 }
 
 /// An explicit workplane frame (`view.workplane_frame`): the origin and the two
@@ -845,6 +850,11 @@ impl ViewState {
         // rather than silently accepting a value the viewport will not use.
         if self.grid_overlay && request.grid_radius.is_some() {
             changes.push("grid radius ignored (shader grid)".to_string());
+        }
+        // `fit` is an action too: the shell frames the stage on the viewport, so it only
+        // contributes to the summary and nothing here is stored.
+        if request.fit == Some(true) {
+            changes.push("fit".to_string());
         }
         Ok(if changes.is_empty() {
             "view unchanged".to_string()
@@ -1772,5 +1782,26 @@ mod tests {
         assert_eq!(request.grid_overlay, Some(true));
         let empty: ViewRequest = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.grid_overlay, None);
+    }
+
+    #[test]
+    fn a_fit_request_is_an_action_not_state() {
+        let request: ViewRequest = serde_json::from_str(r#"{"fit": true}"#).unwrap();
+        assert_eq!(request.fit, Some(true));
+        let empty: ViewRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.fit, None);
+
+        let mut state = ViewState::default();
+        let before = state.clone();
+        assert_eq!(
+            state.apply(&ViewRequest::default()).unwrap(),
+            "view unchanged"
+        );
+        let fit = ViewRequest {
+            fit: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(state.apply(&fit).unwrap(), "fit");
+        assert_eq!(state, before, "fit is an action, not state");
     }
 }

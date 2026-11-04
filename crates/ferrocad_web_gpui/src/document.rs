@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use ferrocad_core::{
-    Document, Matrix4, ObjectId, Placement, Property, Rotation, Vector3, ViewState, status_names,
+    Document, Matrix4, ObjectId, Placement, Property, Rotation, Vector3, status_names,
 };
 use ferrocad_geom::TessellationOptions;
 use ferrocad_occt::OcctBackend;
@@ -50,6 +50,8 @@ const FIT: &str = "App_Fit";
 const MOVE: &str = "App_Move";
 const ROTATE: &str = "App_Rotate";
 const VISIBILITY: &str = "App_ToggleVisibility";
+const UNDO: &str = "App_Undo";
+const REDO: &str = "App_Redo";
 
 /// The prefix of the dialog tokens this backend mints for `App_Move`.
 ///
@@ -57,6 +59,10 @@ const VISIBILITY: &str = "App_ToggleVisibility";
 /// and `dialog_accept` applies the delta. The native backend hands the token to
 /// Python; here it is only a marker, so any token carrying this prefix is ours.
 const MOVE_TOKEN: &str = "browser-move";
+
+/// The document property a hide adds on first use. The native backend writes the same
+/// switch, and keeping it on the document is what makes a hide undoable.
+const VISIBILITY_PROPERTY: &str = "Visibility";
 
 /// The sample document's name (the window title and the status line use it).
 const DOCUMENT: &str = "Sample";
@@ -294,6 +300,8 @@ impl AppBackend for DocumentBackend {
             command(SNAP, "Snap", "snap", true, state.snap),
             command(DEV_TOOLS, "Dev Tools", "hidden", false, false),
             command(FIT, "Fit", "dock", false, false),
+            command(UNDO, "Undo", "dock", false, false),
+            command(REDO, "Redo", "dock", false, false),
             command(MOVE, "Move", "radial", false, false),
             command(ROTATE, "Rotate", "radial", false, false),
             command(
@@ -333,6 +341,28 @@ impl AppBackend for DocumentBackend {
                 command.wheel = true;
             }
         }
+        // Undo and redo are plain edit commands: the action dock lists them and the
+        // accelerators run them, but they are not wheel verbs.
+        for (id, accel, tooltip) in [
+            (UNDO, "Ctrl+Z", "Undo the last edit"),
+            (REDO, "Ctrl+Shift+Z", "Redo the last undone edit"),
+        ] {
+            if let Some(command) = commands.iter_mut().find(|command| command.id == id) {
+                command.cmd_type = "ForEdit".to_string();
+                command.group = "Edit".to_string();
+                command.tooltip = tooltip.to_string();
+                command.accel = accel.to_string();
+            }
+        }
+        // Undo/redo report their availability from the document's transaction stack.
+        // The shell refreshes the tree, the properties and the stage after the run, so
+        // an undone edit is removed everywhere, not just from the viewport.
+        if let Some(command) = commands.iter_mut().find(|command| command.id == UNDO) {
+            command.enabled = state.document.has_undo();
+        }
+        if let Some(command) = commands.iter_mut().find(|command| command.id == REDO) {
+            command.enabled = state.document.has_redo();
+        }
         Ok(commands)
     }
 
@@ -364,18 +394,20 @@ impl AppBackend for DocumentBackend {
                 error: format!("no object {object}"),
             });
         };
-        let Some(next) = hide_object(&mut state.document, id, visible) else {
-            return Ok(VisibilityOutcome {
+        match in_transaction(&mut state.document, "Toggle visibility", |document| {
+            hide_object(document, id, visible).ok_or_else(|| format!("no object {object}"))
+        }) {
+            Ok(next) => Ok(VisibilityOutcome {
+                ok: true,
+                visible: next,
+                error: String::new(),
+            }),
+            Err(error) => Ok(VisibilityOutcome {
                 ok: false,
                 visible: false,
-                error: format!("no object {object}"),
-            });
-        };
-        Ok(VisibilityOutcome {
-            ok: true,
-            visible: next,
-            error: String::new(),
-        })
+                error,
+            }),
+        }
     }
 
     fn rotation_quaternion(&self, object: &str) -> Option<[f64; 4]> {
@@ -406,7 +438,10 @@ impl AppBackend for DocumentBackend {
         };
 
         if property == "Label" {
-            state.document.set_label(id, value);
+            in_transaction(&mut state.document, "Rename", |document| {
+                document.set_label(id, value);
+                Ok(())
+            })?;
             return Ok(SetResult {
                 ok: true,
                 error: String::new(),
@@ -433,10 +468,16 @@ impl AppBackend for DocumentBackend {
             Ok(next) => next,
             Err(error) => return Ok(refused(error)),
         };
+        // One named transaction per edit: the property pane, the typed Move and a
+        // transform commit all land in the undo history, as they do natively.
+        state.document.open_transaction_named("Set property");
         if let Err(error) = state.document.set_property(id, property, next) {
+            state.document.abort_transaction();
             return Ok(refused(error));
         }
-        match state.document.recompute() {
+        let recomputed = state.document.recompute();
+        state.document.commit_transaction();
+        match recomputed {
             Ok(_) => {
                 // A feature that refuses its input keeps its last good shape and
                 // reports the reason. That is document state, not a failed edit:
@@ -498,17 +539,21 @@ impl AppBackend for DocumentBackend {
                 });
             }
             // One verb for the whole selection: if anything is still visible, hide
-            // them all; otherwise show them all.
+            // them all; otherwise show them all. One transaction, so one undo step.
             let hide = selection_visible(state) != Some(false);
-            let mut changed = 0;
-            for name in &selection {
-                let Some(id) = state.document.get_by_name(name) else {
-                    continue;
-                };
-                if hide_object(&mut state.document, id, Some(!hide)).is_some() {
-                    changed += 1;
+            let verb = if hide { "Hide" } else { "Show" };
+            let changed = in_transaction(&mut state.document, verb, |document| {
+                let mut changed = 0;
+                for name in &selection {
+                    let Some(id) = document.get_by_name(name) else {
+                        continue;
+                    };
+                    if hide_object(document, id, Some(!hide)).is_some() {
+                        changed += 1;
+                    }
                 }
-            }
+                Ok(changed)
+            })?;
             let verb = if hide { "hid" } else { "showed" };
             return Ok(CommandOutcome {
                 ok: true,
@@ -562,7 +607,47 @@ impl AppBackend for DocumentBackend {
                 "workplane: not wired in the browser build".to_string(),
                 None,
             ),
-            FIT => ("fit: the document is framed on load".to_string(), None),
+            FIT => (
+                "fit".to_string(),
+                Some(ViewRequest {
+                    fit: Some(true),
+                    ..Default::default()
+                }),
+            ),
+            UNDO => {
+                let name = state
+                    .document
+                    .undo_names()
+                    .first()
+                    .cloned()
+                    .unwrap_or_default();
+                if !state.document.undo() {
+                    return Ok(CommandOutcome {
+                        ok: false,
+                        error: "nothing to undo".to_string(),
+                        ..Default::default()
+                    });
+                }
+                state.document.recompute()?;
+                (history_status("undo", &name), None)
+            }
+            REDO => {
+                let name = state
+                    .document
+                    .redo_names()
+                    .first()
+                    .cloned()
+                    .unwrap_or_default();
+                if !state.document.redo() {
+                    return Ok(CommandOutcome {
+                        ok: false,
+                        error: "nothing to redo".to_string(),
+                        ..Default::default()
+                    });
+                }
+                state.document.recompute()?;
+                (history_status("redo", &name), None)
+            }
             other => {
                 return Ok(CommandOutcome {
                     ok: false,
@@ -690,10 +775,12 @@ impl AppBackend for DocumentBackend {
             Vector3::new(composed.m[3], composed.m[7], composed.m[11]),
             Rotation::from_matrix(&composed),
         );
-        state
-            .document
-            .set_property(id, "Placement", Property::Placement(next))?;
-        state.document.recompute()?;
+        // One transaction per commit, so a rotate ring drag is one undo step.
+        in_transaction(&mut state.document, "Transform", |document| {
+            document.set_property(id, "Placement", Property::Placement(next))?;
+            document.recompute()?;
+            Ok(())
+        })?;
         Ok(ApplyResult {
             ok: true,
             error: String::new(),
@@ -737,19 +824,51 @@ fn translate(state: &mut State, names: &[String], delta: Vector3) -> Result<usiz
     if ids.is_empty() {
         return Err("nothing selected".to_string());
     }
-    let mut moved = 0;
-    for id in ids {
-        let Some(placement) = current_placement(&state.document, id) else {
-            continue;
-        };
-        let next = Placement::new(placement.base.add(&delta), placement.rotation);
-        state
-            .document
-            .set_property(id, "Placement", Property::Placement(next))?;
-        moved += 1;
+    // One transaction for the whole selection: a typed move is one undo step.
+    in_transaction(&mut state.document, "Move", |document| {
+        let mut moved = 0;
+        for id in ids {
+            let Some(placement) = current_placement(document, id) else {
+                continue;
+            };
+            let next = Placement::new(placement.base.add(&delta), placement.rotation);
+            document.set_property(id, "Placement", Property::Placement(next))?;
+            moved += 1;
+        }
+        document.recompute()?;
+        Ok(moved)
+    })
+}
+
+/// The status line for an undo or redo: the transaction's name when it has one.
+fn history_status(verb: &str, name: &str) -> String {
+    if name.is_empty() {
+        verb.to_string()
+    } else {
+        format!("{verb}: {name}")
     }
-    state.document.recompute()?;
-    Ok(moved)
+}
+
+/// Run `edit` inside one named transaction, aborting it when `edit` fails.
+///
+/// A transaction is what puts an edit into the document's undo stack; the shell's
+/// `App_Undo`/`App_Redo` then find it by name.
+fn in_transaction<T>(
+    document: &mut Document,
+    name: &str,
+    edit: impl FnOnce(&mut Document) -> Result<T, String>,
+) -> Result<T, String> {
+    document.open_transaction_named(name);
+    match edit(document) {
+        Ok(value) => {
+            document.commit_transaction();
+            Ok(value)
+        }
+        Err(error) => {
+            document.abort_transaction();
+            Err(error)
+        }
+    }
 }
 
 /// The object's placement property, if it has one.
@@ -762,18 +881,36 @@ fn current_placement(document: &Document, id: ObjectId) -> Option<Placement> {
 
 /// Apply a visibility change to one object; `None` toggles.
 ///
-/// Returns the state that now applies, or `None` when the object is gone. A headless
-/// view state is enough: the display path (`stage_meshes`) reads it, and the browser
-/// build has no transaction engine to record the write in.
+/// Returns the state that now applies, or `None` when the object is gone. The switch is
+/// a document `Visibility` property (added on first use, as the native backend does),
+/// not a display-only flag: that is what puts a hide in the undo history and what
+/// `stage_meshes` reads.
+///
+/// The caller owns the transaction; this only writes the property.
 fn hide_object(document: &mut Document, id: ObjectId, visible: Option<bool>) -> Option<bool> {
-    let object = document.object_mut(id)?;
-    let current = object
-        .view
-        .as_ref()
-        .map(|view| view.visibility)
+    let object = document.object(id)?;
+    let current = visibility_property(object)
+        .or_else(|| object.view.as_ref().map(|view| view.visibility))
         .unwrap_or(true);
     let next = visible.unwrap_or(!current);
-    object.view.get_or_insert_with(default_view).visibility = next;
+    if object.properties.get(VISIBILITY_PROPERTY).is_some() {
+        document
+            .set_property(id, VISIBILITY_PROPERTY, Property::Bool(next))
+            .ok()?;
+    } else {
+        // A fresh boolean defaults to false, so the first write states the value
+        // explicitly; `add_property` records it, so undo removes it again.
+        document
+            .add_property(
+                id,
+                VISIBILITY_PROPERTY,
+                Property::Bool(next),
+                0,
+                "Base",
+                "Whether the object is shown",
+            )
+            .ok()?;
+    }
     Some(next)
 }
 
@@ -797,14 +934,6 @@ fn selection_visible(state: &State) -> Option<bool> {
             .iter()
             .all(|name| object_visible(&state.document, name)),
     )
-}
-
-/// A view state for an object that has none yet (created by the first hide).
-///
-/// It keeps the Part steel grey the document items are drawn with, so hiding and
-/// showing an object does not change its colour.
-fn default_view() -> ViewState {
-    ViewState::new(0, DEFAULT_COLOR.map(f64::from))
 }
 
 /// Report the sample document's shapes: one line per tessellated object.
@@ -873,11 +1002,20 @@ fn build_sample(document: &mut Document) -> Result<(), String> {
 
 /// Whether the object is shown. Objects start visible; the view state can hide them.
 fn visible(object: &ferrocad_core::DocumentObject) -> bool {
-    object
-        .view
-        .as_ref()
-        .map(|view| view.visibility)
+    visibility_property(object)
+        .or_else(|| object.view.as_ref().map(|view| view.visibility))
         .unwrap_or(true)
+}
+
+/// The object's document `Visibility` switch, when it has one.
+///
+/// The native backend keeps visibility on the view object; here the first hide adds a
+/// document property so the edit is undoable and appears in the property pane.
+fn visibility_property(object: &ferrocad_core::DocumentObject) -> Option<bool> {
+    match object.properties.get(VISIBILITY_PROPERTY)? {
+        Property::Bool(value) => Some(*value),
+        _ => None,
+    }
 }
 
 /// The object's own origin in world space (the placement's base point), which the

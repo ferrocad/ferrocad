@@ -512,7 +512,9 @@ impl Shell {
                 state.grid_minor_width,
             );
             let gizmo = state.gizmo.clone();
-            viewport.update(cx, |viewport, cx| {
+            // `fit` is an action: performed once here and never stored in the state.
+            let fit = request.fit == Some(true);
+            let framed = viewport.update(cx, |viewport, cx| {
                 let mut changed = viewport.set_orthographic(orthographic);
                 changed |= viewport.set_grid(grid);
                 changed |= if axis_style_requested {
@@ -528,10 +530,17 @@ impl Shell {
                 changed |= viewport.set_grid_alpha(alpha);
                 changed |= viewport.set_grid_overlay(grid_overlay);
                 changed |= viewport.set_gizmo_style(gizmo);
+                // The camera moved, so the frame is stale even when nothing else did.
+                let framed = !fit || viewport.frame_stage();
+                changed |= fit && framed;
                 if changed {
                     cx.notify();
                 }
+                framed
             });
+            if !framed {
+                summary = "fit: nothing to frame".to_string();
+            }
         }
         // The mirror above makes `IsChecked` see the new state.
         self.refresh_commands(cx);

@@ -86,7 +86,7 @@ standalone canvas demo, which draws the same document without the shell.
 | --- | --- |
 | `?click=x,y` | one pointer press/release at a client coordinate (select a tree row, run a header command, click a shape) |
 | `?select=x,y` | the same press, then a short settle (an object's property rows are built from it) |
-| `?keys=step;…` | `;`-separated steps: `press:x,y`, `move:x,y`, `drag:x1,y1,x2,y2`, `wait:ms`, a named key (`space`, `tab`, `enter`, `escape`, `backspace`, `delete`) or one character; modifiers prefix with `ctrl-`/`shift-`/`alt-` |
+| `?keys=step;…` | `;`-separated steps: `press:x,y`, `move:x,y`, `drag:x1,y1,x2,y2`, `wheel:x,y`, `wait:ms`, a named key (`space`, `tab`, `enter`, `escape`, `backspace`, `delete`) or one character; modifiers prefix with `ctrl-`/`shift-`/`alt` |
 | `?type=x,y,text` | hover, click a text field, clear it, type `text`, `Enter` |
 | `?drag=1` | one pointer drag across the canvas (orbits the camera) |
 | `?wheel=1` | one scroll notch (zooms) |
@@ -95,7 +95,12 @@ standalone canvas demo, which draws the same document without the shell.
 `?type=` still depends on the field taking pointer focus, and synthetic pointer events
 race the frame GPUI takes its hit test from; treat it as best-effort in headless
 captures. The palette (`Ctrl+K`) and the Move HUD focus programmatically and are
-reliable there.
+reliable there. The bottom action dock is also unreliable under synthetic input; run
+a dock-only command through the palette instead (e.g. `ctrl-k;f;i;t;enter` for `Fit`).
+
+`crates/ferrocad_web_gpui/smoke.sh` runs the baseline capture and asserts it, and
+`crates/ferrocad_web_gpui/run.sh --check` builds and runs it in one step (it skips
+cleanly when Chrome or `www/pkg` is missing).
 
 ## Verified
 
@@ -130,10 +135,17 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   runs `App_Move`, accepts `browser-move-2 {"dx":15.0,…}`, prints `moved 1 object(s)`
   and the box's `Placement` row becomes `(10.0, -5.0, -5.0)` with the stage following.
   `?select=1004,100&keys=space;move:600,384;space` opens the object wheel, hovers
-  `Hide` and commits it: `hid 1 object(s)`, and the base box leaves the stage (the
-  fillet stays). The wheel's `Rotate` verb plus `Enter` commits through
-  `apply_interaction` (`rotated`) and the box turns. Typing `25` into the property
-  pane's `Length` field commits `set Box.Length` and the box lengthens.
+  `Hide` and commits it: `hid 1 object(s)`, the base box leaves the stage (the fillet
+  stays), and a `Visibility App::PropertyBool` row appears switched off — the hide is
+  a document property, not a display flag. The wheel's `Rotate` verb plus `Enter`
+  commits through `apply_interaction` (`rotated`) and the box turns. Typing `25` into
+  the property pane's `Length` field commits `set Box.Length` and the box lengthens.
+- **Undo, redo and fit.** Appending `ctrl-z` to the Move run prints `undo: Move` and
+  puts `Placement` back to `(-5.0, -5.0, -5.0)`; `ctrl-shift-z` prints `redo: Move` and
+  the box moves again. Every backend edit opens one named document transaction, so an
+  edit is one step. Zooming out three notches and running `Fit` through the palette
+  (`ctrl-k;f;i;t;enter`) reframes the stage and prints `fit`; `Fit` is a view request,
+  so it changes no stored presentation state.
 - No panic. Startup logs two
   `Scissor Rect … is not contained in the render target` validation errors from
   `gpui_wgpu` while the DOM canvas is still being sized (and the resize poll timeout
@@ -143,14 +155,17 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 
 ## What it does not have (yet)
 
-- **Undo/redo, expressions and file I/O in the UI.** The document supports them; the
-  browser has no menu for them and no file input. `evaluate` reports that there is no
+- **Expressions and file I/O in the UI.** The document supports expressions; the
+  browser has no editor for them and no file input. The bytes-level reader
+  (`ferrocad_core::document::fcstd::decode_fcstd`) exists for a future file picker;
+  only the JS/`AppBackend` plumbing is missing. `evaluate` reports that there is no
   interpreter rather than pretending.
-- **A gizmo *drag* that writes back.** Typed Move, Rotate and Hide/Show commit; a
-  pointer drag on the transform gizmo reaches the same `apply_interaction` hook but
-  the headless capture drives it with zero deltas, so it is unverified there.
-- **`App_Fit` and `WP`.** `Fit` reports that the document is framed on load (there is
-  no `ViewRequest` field for it yet); `WP` reports that no workplane command is wired.
+- **A gizmo *drag* that writes back.** Typed Move, Rotate, Hide/Show, undo/redo and
+  Fit are wired; a pointer drag on the transform gizmo reaches the same
+  `apply_interaction` hook but the headless capture drives it with zero deltas, so it
+  is unverified there.
+- **`WP`.** The workplane command reports that none is wired (see
+  [workplanes.md](../../docs/project/tasks/workplanes.md)); `Fit` is wired.
 - **Python.** No interpreter, no workbench scripts, no `FreeCAD` facade, no `.ui`
   task panels.
 - **Multiple windows.** The browser backend has one window.

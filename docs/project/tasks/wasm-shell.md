@@ -266,14 +266,21 @@ second implementation:
   triangles, edges, and the `parts` names a pick reports). The entity id is the object
   id + 1, the origin is the placement's base point, and the colour is the object's view
   colour (default: the Part steel grey).
-- `commands`: the five header ids plus `Dev_ToggleTools` and a dock `App_Fit`.
+- `commands`: the five header ids, `Dev_ToggleTools`, a dock `App_Fit`, `App_Undo` /
+  `App_Redo` (enabled from the document's transaction stacks, `Ctrl+Z` /
+  `Ctrl+Shift+Z`) and the wheel's `App_Move` / `App_Rotate` / `App_ToggleVisibility`.
   `Grid`/`Axes`/`Gizmo`/`Snap` report `checked` from the stored state and return a
-  `ViewRequest`; `Fit` reports that the document is framed on load and `WP` that no
-  workplane command is wired yet.
+  `ViewRequest`; `Fit` returns `{"fit": true}`, which the shell performs once on the
+  viewport (frame the stage) without storing anything. `WP` reports that no workplane
+  command is wired yet.
 - `set_view_state`: stores the shell's state so the next command list agrees with
   the toggles.
-- **Editing** (M5): `set_property` writes the value, recomputes and keeps a feature's
-  last good shape on refusal; `set_selection` mirrors the shell's selection so
+- **Editing** (M5): every write is one **named document transaction**
+  (`open_transaction_named` + `commit_transaction`, aborting on error), so an edit is
+  one undo step; `App_Undo`/`App_Redo` then run `Document::undo`/`redo` and recompute,
+  and the shell's normal refresh removes the edit from tree, properties and stage.
+  `set_property` writes the value, recomputes and keeps a feature's last good shape on
+  refusal; `set_selection` mirrors the shell's selection so
   `App_Move` knows its target; `set_visibility(object, None)` toggles the object's
   `Visibility` in one transaction (adding the `PropertyBool` on first use) and
   `hide_object`/`object_visible` read it; `rotation_quaternion` reports the
@@ -319,7 +326,7 @@ The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research
 | **M2** | **A shell window in Chrome** — **done 2026-11-03** | Bundled DejaVu Sans + `fonts::install`; WebGL entry (`web_init`, no `process::exit`); `panels_open` in-window sidebar (Model/Properties/Console stacked); `SampleBackend` (two boxes, editable rows, header commands); placeholder viewport. | Headless Chrome shows the leading bar, viewport header, status line, tree, properties and console, with no panic. The console prints `FerroCAD browser shell · Rust backend (no CPython)`; clicking `Box` fills the property pane and the status line; `Grid` toggles on (dot, status and console agree). |
 | **M3** | **Live 3D in the shell** — **done 2026-11-03** | `DeferredView` + `ShellView`; presenter allowed on wasm (`surface.format()`, `SAMPLES = 1`); `enable_viewport` on wasm; `SampleBackend::stage_meshes` (hand-tessellated boxes); CPU picking instead of the G-buffer. | Headless Chrome shows both boxes through `InventorViewport` with the shell around them; `?drag=1` orbits (75 434 px differ), `?wheel=1` zooms (42 132 px), and a click on a box selects it — tree row, properties, status line and gizmo. 308 native tests still pass. |
 | **M4** | **Real Rust document** — **done 2026-11-03** | `DocumentBackend` over `ferrocad_core::Document` + `ferrocad_part` + `OcctBackend`; tree, property rows and stage all read the document; `set_property` recomputes. The host links the prebuilt wasm kernel (`ferrocad_wasm` stubs + `__wasm_call_ctors`). | Headless Chrome shows `Sample`: `Box` (`Part::Box`) and `Fillet` (`Part::Fillet`) in the tree, the fillet's real rows (`Base` `Box: Edge1`, `Radius 3.0 mm`, `Shape` `Output`), and the filleted box in the viewport. The console logs `Box · 12 triangles` and `Fillet · 40 triangles` — the probe's baseline. The `wasm` CI job links the host. |
-| **M5** | **Editing** — **done 2026-11-04** | `AppBackend::set_visibility` (+ `VisibilityOutcome`) on the API, implemented by `PythonAppBackend` (one `Visibility` transaction) and `DocumentBackend`; `Shell::toggle_visibility` goes through the backend instead of a Python script. `DocumentBackend` gains `set_selection`, `rotation_quaternion`, `App_Move` (typed delta dialog), `App_Rotate`, `App_ToggleVisibility`, `dialog_accept`/`dialog_cancel` and `apply_interaction` (`transform`/`apply`: the 16-value world matrix composed `delta · placement`, then `Rotation::from_matrix`), each editing through `set_property` + `recompute` and re-syncing the stage. `handle_key` now treats a focused property field as editing, so the single-window shell does not take its digits for loadout slots. | In headless Chrome: **Move** (`?select=1004,100&keys=ctrl-shift-m;tab;1;5;enter`) commits `moved 1 object(s)` and `Placement` becomes `(10.0, -5.0, -5.0)` with the stage following; **Rotate** (space wheel → `Rotate`, then `Enter`) commits `rotated` through `apply_interaction` and the box turns; **Hide/Show** (space wheel → `Hide`) commits `hid 1 object(s)` and the base box leaves the stage; **the property pane** (type `25` into `Length`, `Enter`) commits `set Box.Length` and the box lengthens. `ferrocad_shell_core` gains `a_focused_property_field_owns_its_digits`; the native suites are 251 + 52 + 6. |
+| **M5** | **Editing** — **done 2026-11-04** | `AppBackend::set_visibility` (+ `VisibilityOutcome`) on the API, implemented by `PythonAppBackend` (one `Visibility` transaction) and `DocumentBackend`; `Shell::toggle_visibility` goes through the backend instead of a Python script. `DocumentBackend` gains `set_selection`, `rotation_quaternion`, `App_Move` (typed delta dialog), `App_Rotate`, `App_ToggleVisibility`, `App_Undo`/`App_Redo`, `App_Fit`, `dialog_accept`/`dialog_cancel` and `apply_interaction` (`transform`/`apply`: the 16-value world matrix composed `delta · placement`, then `Rotation::from_matrix`). Every edit runs in one named transaction through `set_property` + `recompute` and re-syncs the stage; visibility is the document's `Visibility` bool (added on first use), so it is in the undo history too. `ViewRequest` gains `fit` (an action the shell performs once with `InventorView::frame_stage`, never stored). `handle_key` now treats a focused property field as editing, so the single-window shell does not take its digits for loadout slots. | In headless Chrome: **Move** (`?select=1004,100&keys=ctrl-shift-m;tab;1;5;enter`) commits `moved 1 object(s)` and `Placement` becomes `(10.0, -5.0, -5.0)` with the stage following; **Rotate** (space wheel → `Rotate`, then `Enter`) commits `rotated` through `apply_interaction` and the box turns; **Hide/Show** (space wheel → `Hide`) commits `hid 1 object(s)`, the base box leaves the stage, and a `Visibility` (`App::PropertyBool`, off) row appears; **undo/redo** (`ctrl-z` / `ctrl-shift-z`) print `undo: Move` / `redo: Move` and move `Placement` back and forth; **Fit** (palette `ctrl-k;f;i;t;enter` after three zoom-out notches) reframes the stage and prints `fit`; **the property pane** (type `25` into `Length`, `Enter`) commits `set Box.Length` and the box lengthens. `ferrocad_shell_core` gains `a_focused_property_field_owns_its_digits` and `a_fit_request_frames_the_stage_without_touching_the_state`; the native suites are 252 + 53 + 6. |
 
 M0–M5 are done: the boundary, the wasm build, a real shell in Chrome, the live 3D
 viewport in it, a real document behind both, and edits that write that document
@@ -385,7 +392,9 @@ viewport in it, a real document behind both, and edits that write that document
   click on a property field sometimes lands in the previous layout (and the field
   does not focus). The palette and the Move HUD are reliable because they focus
   programmatically. A real browser is the check for pointer-driven focus; the
-  harness proves the typing path once focused (`?type=`).
+  harness proves the typing path once focused (`?type=`). The bottom action dock is
+  unreliable under synthetic input in the same way, so run a dock-only command through
+  the palette in a capture (that is how `Fit` is verified).
 - **One-window panels.** The editor, properties and console must be laid out for
   the main window; the current `dev_tools_body` assumes a second window and
   double key handling (`panels_open` must not also route keys through the shell).

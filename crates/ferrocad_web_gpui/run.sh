@@ -5,6 +5,7 @@
 #   PORT=9000 crates/ferrocad_web_gpui/run.sh
 #   JOBS=4 crates/ferrocad_web_gpui/run.sh
 #   crates/ferrocad_web_gpui/run.sh --build-only
+#   crates/ferrocad_web_gpui/run.sh --check        # build, headless smoke check, stop
 #   WASM_OFFLINE=1 crates/ferrocad_web_gpui/run.sh   # build with no network
 #
 # This is the shell host: `ferrocad_shell_core`'s window with a real
@@ -22,7 +23,8 @@
 # home with the lock's crates to build without network (with `WASM_OFFLINE=1`).
 set -eu
 
-cd "$(dirname "$0")/../.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/../.."
 # shellcheck source=/dev/null
 . tools/wasm-prepare.sh
 
@@ -30,18 +32,21 @@ PORT="${PORT:-8081}"
 CARGO_TARGET="${CARGO_TARGET:-target/wasm-cargo}"
 CARGO_HOME_HOST="${CARGO_HOME_HOST:-target/wasm-cargo-home}"
 BUILD_ONLY=0
+CHECK=0
 NO_OPEN=0
 # `CARGO_NET_OFFLINE` takes `true`/`false`, not `1`/`0`.
 OFFLINE=false
 [ -z "${WASM_OFFLINE:-}" ] || OFFLINE=true
 
 usage() {
-    sed -n '2,22p' "$0"
+    # The header comment block is the usage text; drop the trailing `set -eu`.
+    sed -n '2,/^set -eu$/p' "$0" | sed '$d'
 }
 
 for arg in "$@"; do
     case "$arg" in
         --build-only) BUILD_ONLY=1 ;;
+        --check) CHECK=1 ;;
         --no-open) NO_OPEN=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
@@ -78,6 +83,11 @@ docker run --rm -v "$PWD":/work "$IMAGE" \
 if [ "$BUILD_ONLY" = 1 ]; then
     echo "built crates/ferrocad_web_gpui/www/pkg"
     exit 0
+fi
+
+if [ "$CHECK" = 1 ]; then
+    echo "built crates/ferrocad_web_gpui/www/pkg; running the headless smoke check"
+    exec "$SCRIPT_DIR/smoke.sh"
 fi
 
 # wasm-bindgen's `--target web` output must be fetched over HTTP.

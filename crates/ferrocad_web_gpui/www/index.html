@@ -120,6 +120,17 @@
                   cancelable: true,
                 }),
               );
+            } else if (spec.startsWith("wheel:")) {
+              const [x, y] = spec.slice(6).split(",").map(Number);
+              canvas.dispatchEvent(
+                new WheelEvent("wheel", {
+                  deltaY: 240,
+                  clientX: x,
+                  clientY: y,
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              );
             } else if (spec.startsWith("drag:")) {
               const [x1, y1, x2, y2] = spec.slice(5).split(",").map(Number);
               await drag(x1, y1, x2, y2);

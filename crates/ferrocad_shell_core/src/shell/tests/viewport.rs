@@ -326,6 +326,60 @@ fn a_set_request_reaches_the_viewport(cx: &mut TestAppContext) {
     assert!(status.starts_with("datum plane: "), "status: {status}");
 }
 
+/// Fit is an action, not stored state: a `fit` request reaches the viewport and
+/// leaves the shell's presentation state untouched. Skips without a GPU adapter.
+///
+/// This harness's sample document has no tessellated shapes, so the frame action runs
+/// against an empty stage and reports that; either spelling proves the request reached
+/// the viewport (a shell without one answers with an error, not a summary). The
+/// geometry case is the browser smoke check's `?keys=` fit path.
+#[gpui::test]
+fn a_fit_request_frames_the_stage_without_touching_the_state(cx: &mut TestAppContext) {
+    use crate::view::ViewRequest;
+
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    let attached = cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.enable_viewport(cx);
+            shell.viewport.is_some()
+        })
+    });
+    if !attached {
+        eprintln!("no GPU adapter available; skipping fit test");
+        return;
+    }
+
+    let before = cx.update(|_window, cx| shell.read(cx).model.lock().unwrap().view.clone());
+    let request = ViewRequest {
+        fit: Some(true),
+        ..Default::default()
+    };
+    let summary = cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.apply_view(&request, cx))
+    });
+    // "fit", or "fit: nothing to frame" when the harness's document has no shapes:
+    // both mean the viewport performed the action. A shell without a viewport would
+    // have returned an error instead (the workplane path's behaviour).
+    let summary = summary.expect("a fit request is never an error");
+    assert!(
+        summary == "fit" || summary == "fit: nothing to frame",
+        "summary: {summary}"
+    );
+    let after = cx.update(|_window, cx| shell.read(cx).model.lock().unwrap().view.clone());
+    assert_eq!(before, after, "fit must not store view state");
+}
+
 /// G5: saving a datum plane reads the live frame, so a headless shell says it has none.
 #[gpui::test]
 fn saving_a_datum_plane_needs_a_viewport(cx: &mut TestAppContext) {

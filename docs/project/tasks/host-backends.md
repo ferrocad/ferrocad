@@ -19,10 +19,10 @@ version.
 | **D3** | The Rust backend becomes its own crate, `ferrocad_shell_rust`, used by **both** the browser host and a desktop edition. | Today the only Rust backend lives inside the web host (`document.rs`), so "Rust document" reads as "browser-only". It is not. | S5 ✓ |
 | **D4** | Property **presentation** (editor kind, formatting, text→value) moves into `ferrocad_core` and is exposed to Python by `ferrocad_py`. | It is a property of the `Property` enum, not of a GUI. `ferrocad_py` stays a pure core binding. | S3 ✓ |
 | **D5** | Part primitives store lengths as `Property::Quantity` (mm), not `Property::Float`. | That is what a FreeCAD `Part::Box.Length` is on disk, and the current mismatch loses data (§3.3). | S3 ✓ |
-| **D6** | **One** display path: document → `StageMesh`, with the "which object is drawable, how is it coloured" logic in `ferrocad_shell_api::display`. | Two copies exist today; one of them draws a fillet on top of the box it consumed (§3.2). | S2 |
+| **D6** | **One** display path: document → `StageMesh`, with the "which object is drawable, how is it coloured" logic in **`ferrocad_core`** (`drawable`, `effective_color`, `origin` — a document question, so it lives with the document). `ferrocad_shell_api::display` keeps only `StageMesh`, the payload that crosses the seam. | Two copies exist today; one of them draws a fillet on top of the box it consumed (§3.2). | S2 ✓ |
 | **D7** | `ferrocad_inventor` becomes a **producer-side compatibility adapter** (pivy scenes → `Stage`), not a second render path. The legacy methods leave `AppBackend` for a `ScriptHost` trait. | Keeps FreeCAD compatibility for legacy workbenches without making every backend implement a scenegraph. | S6 (split ✓; overlay replacement later) |
-| **D8** | File verbs (**Open/Save**) are a **host** concern: the shell picks a path and moves bytes; the backend only decodes/encodes them. | `open_document(name, bytes)`/`save_document() -> Vec<u8>` are already byte-based, and the browser proved that shape works. | S1 |
-| **D9** | Native dialogs use GPUI's `App::prompt_for_paths` / `prompt_for_new_path` — xdg-desktop-portal on Linux. | Already in the framework; no dialog crate needed. | S1 |
+| **D8** | File verbs (**Open/Save**) are a **host** concern: the shell picks a path and moves bytes; the backend only decodes/encodes them. | `open_document(name, bytes)`/`save_document() -> Vec<u8>` are already byte-based, and the browser proved that shape works. | S1 ✓ |
+| **D9** | Native dialogs use GPUI's `App::prompt_for_paths` / `prompt_for_new_path` — xdg-desktop-portal on Linux. | Already in the framework; no dialog crate needed. | S1 ✓ |
 | **D10** | The built-in **command catalogue** becomes data in `ferrocad_shell_api::catalog`, generated into the Python package and diffed in CI. | One list of ids/labels/accels; Python still owns dynamic `addCommand`. | S4 ✓ |
 | **D11** | `ferrocad_web` (the old canvas demo) is retired once its smoke coverage moves to the shell host. | It duplicates nothing renderable but owned the only TKFeat/fillet-refusal runtime check. | S2 ✓ |
 
@@ -102,9 +102,10 @@ Worth stating, because the plan below must not break it:
 
 ## 2. The model
 
-![The three layers: the shared shell and `AppBackend` contract, the four host
-backends (native CPython, browser Rust, planned JS/WASI and wasm Python), and the
-shared engine](../../developer/images/host-backends.svg)
+![The four layers: the platform hosts (native desktop, browser wasm), the seam
+(`ferrocad_shell_core` over `AppBackend` + optional `ScriptHost`), the pluggable
+backends named by runtime (CPython, no-runtime Rust, planned JS and wasm Python), and
+the shared engine](../../developer/images/host-backends.svg)
 
 ### 2.1 Runtimes, not platforms
 
@@ -115,6 +116,7 @@ optionally, an interpreter. The shell knows only the backend.
              ┌──────────────────────────────────────────────┐
    native ──▶│ ferrocad_shell_core (GPUI window, chrome)     │
    wasm   ──▶│   Shell + Box<dyn AppBackend>                 │
+             │   + optional ScriptHost (script_host())       │
              └───────────────┬──────────────────────────────┘
                              │ AppBackend
         ┌────────────────────┼────────────────────┬───────────────┐
@@ -122,6 +124,7 @@ optionally, an interpreter. The shell knows only the backend.
   RustAppBackend      PythonAppBackend      JsAppBackend    PywasmBackend
   (no runtime)        (CPython, native)     (wasm + JS)     (wasm + Python)
   native + wasm       native                wasm            wasm (research)
+  ScriptHost: none    ScriptHost: yes       ScriptHost: yes ScriptHost: yes
 ```
 
 The two browsers-only backends differ in **who runs the user's code**, not in what
@@ -148,11 +151,12 @@ work.
 | --- | --- | --- |
 | The contract | `ferrocad_shell_api` | unchanged |
 | The shell | `ferrocad_shell_core` | unchanged |
-| Native CPython assembly | `ferrocad_shell_gpui` | unchanged (it is the *native* assembly, hence "gpui") |
+| Native CPython assembly | `ferrocad_shell_gpui` | unchanged (it is the *native* assembly, hence "gpui"); it is host **and** backend — see §4.3 |
 | Rust document backend | **`ferrocad_shell_rust`** | primary; `ferrocad_shell_doc` is the alternative. Decided (S5). |
-| Browser host | `ferrocad_web_gpui` | unchanged |
+| Browser host | `ferrocad_web_gpui` | unchanged; a pure host since S5 |
 | Future JS backend | `ferrocad_shell_js` | wasm32 only |
 | Future wasm Python backend | `ferrocad_shell_pywasm` | wasm32 only, if the spike passes |
+| Future CPython backend crate | `ferrocad_shell_python` | only if a pure-Rust desktop edition needs `ferrocad_shell_gpui` to stop linking `pyo3` (§4.3) |
 
 `ferrocad_shell_rust` is named for the runtime it embeds (none — the document *is*
 Rust), not for a scripting language. That is consistent with `ferrocad_shell_gpui`
@@ -223,9 +227,10 @@ storages, so files written before S3 still load; and `Document::set_property` ke
 a quantity's unit when a bare number is assigned (`obj.Length = 25` stays 25 mm).
 
 *Confidence:* high — five small, specific code paths. *Not verified by execution*:
-no `.FCStd` fixture from upstream FreeCAD exists in the repo. S3 opens with the
-15-line test that settles it (a saved document with `App::PropertyLength`, then
-`from_saved` + `recompute` + assert the dimension survived).
+no `.FCStd` fixture from upstream FreeCAD exists in the repo. S3 added the 15-line
+test that settles it (a saved document with `App::PropertyLength`, then
+`from_saved` + `recompute` + assert the dimension survived), so the claim rests on
+that test rather than on an imported fixture.
 
 ## 4. Target crate graph
 
@@ -238,7 +243,7 @@ Only the new/moved ones are listed; everything else keeps its place.
 | `ferrocad_shell_api` | contract + `display` (dressing) + `catalog` (command data) | unchanged, plus nothing new |
 | `ferrocad_shell_core` | shell + `files` (picker/file verbs) | unchanged |
 | `ferrocad_shell_rust` **(new)** | `RustAppBackend`: the current `web_gpui/src/document.rs`, plus the sample document | `ferrocad_core`, `ferrocad_part`, `ferrocad_occt`, `ferrocad_stage`, `ferrocad_shell_api`, `serde_json` |
-| `ferrocad_shell_gpui` | native assembly: CPython + `run_with` | unchanged (may depend on `ferrocad_shell_rust` for a Rust-desktop edition) |
+| `ferrocad_shell_gpui` | native assembly: CPython + `run_with` | unchanged (host *and* CPython backend — §4.3; may depend on `ferrocad_shell_rust` for a Rust-desktop edition) |
 | `ferrocad_web_gpui` | browser host: entry point, JS bridge, harness | `ferrocad_shell_core`, `ferrocad_shell_rust`, `wasm-bindgen` |
 | `ferrocad_core` | + `present` module (D4) | unchanged |
 | `ferrocad_py` | + thin `ferrocad.property` functions over `present` | still **only** `ferrocad_core` + `pyo3` |
@@ -262,6 +267,37 @@ ferrocad_shell_api  -> ferrocad_stage, ferrocad_geom, ferrocad_types
 
 `ferrocad_shell_rust` must not name `gpui`: it is the same backend on desktop and in
 the browser, and a gpui edge would make that impossible.
+
+### 4.3 Hosts vs backends
+
+D2 is a *naming* rule with a structural consequence: a **host** owns the process
+entry, the window and the platform APIs; a **backend** is a runtime behind
+`AppBackend` (+ optional `ScriptHost`) and is otherwise platform-free. After S5 the
+split is visible in the crate graph:
+
+| Layer | Role | Crate | What it is |
+| --- | --- | --- | --- |
+| Contract | trait + DTOs | `ferrocad_shell_api` | `AppBackend`, `ScriptHost`, the view models, `catalog` |
+| UI shell | window, chrome, panels | `ferrocad_shell_core` | platform-neutral GPUI `Shell` |
+| **Backends** (D2, by runtime) | none | `ferrocad_shell_rust` | `RustAppBackend` — desktop *or* wasm |
+| | CPython | *inside `ferrocad_shell_gpui`* | `PythonAppBackend` (`backend.rs`, `python.rs`) |
+| | JS / wasm modules | `ferrocad_shell_js` (planned) | `JsAppBackend`, over `ferrocad_shell_rust` |
+| | wasm Python | `ferrocad_shell_pywasm` (planned) | `PywasmBackend` |
+| **Hosts** | browser entry | `ferrocad_web_gpui` | wasm `cdylib`, page bridge, installs a backend |
+| | native entry | `ferrocad_shell_gpui` | `run_with` + headless, **and** the CPython backend |
+| | editions | `ferrocad`, `ferrocad_parametric` | the binaries an edition ships |
+
+`ferrocad_web_gpui` is now a **pure host** (S5 moved the backend out), while
+`ferrocad_shell_gpui` still straddles both: it is the native host *and* the CPython
+backend. That is deliberate for now — the shipped edition needs both, and a separate
+crate would not remove a dependency from any current build.
+
+It becomes worth splitting only when a **pure-Rust desktop edition** exists (Open
+Question 1). That edition must not link `pyo3`/CPython at all, at which point
+`PythonAppBackend` moves to `ferrocad_shell_python` and `ferrocad_shell_gpui` is left
+as a thin native host runner. The desktop then mirrors the browser exactly:
+*host crate + `ferrocad_shell_rust`*, with the runtime as a separate, replaceable
+crate. No rename is needed to reach that: the boundary is already `script_host()`.
 
 ## 5. Seams
 
@@ -318,21 +354,27 @@ no-script-host defaults.
 
 ```
 Document ──(backend)──▶ Vec<StageMesh> ──(DisplaySync)──▶ Stage ──▶ draw
-                     ▲
-      ferrocad_shell_api::display::dress(document)   ← the shared part
+                          ▲
+   ferrocad_core::{drawable, effective_color, origin}(document)  ← the shared rules
 ```
 
-`dress` owns the three decisions that are duplicated today:
+The rules are **document** questions, so they live in `ferrocad_core`
+(`ferrocad_core/src/document/view.rs`), and both hosts call them. They own the three
+decisions that were duplicated:
 
 ```rust
+// ferrocad_core::document::view (re-exported at the crate root)
 /// Objects a feature consumes (`Base` links) are not drawn on their own; the
-/// feature's shape replaces them. This is the rule the browser is missing.
+/// feature's shape replaces them. This is the rule the browser was missing.
 pub fn drawable(document: &Document) -> Vec<ObjectId>;
-/// RGBA from `ViewObject.Color` (linear 0..1), else the module default.
-pub fn colour(object: &DocumentObject) -> Option<[f32; 4]>;
+/// The object's effective RGBA (its view colour, else the module default).
+pub fn effective_color(object: &DocumentObject) -> Option<[f32; 4]>;
 /// The placement origin a `StageMesh` carries.
 pub fn origin(object: &DocumentObject) -> Option<[f32; 3]>;
 ```
+
+`ferrocad_shell_api::display` keeps only `StageMesh` — the mesh payload that crosses
+the seam. It cannot hold `drawable`: it does not depend on `ferrocad_core` (§4.2).
 
 The backend keeps `tessellate` (it owns the kernel) and the `StageMesh` assembly;
 it stops deciding *which* objects exist in the picture.
@@ -547,7 +589,8 @@ would otherwise inherit the split seam.
 | `crates/ferrocad_shell_gpui/src/backend.rs`, `src/python.rs` | `open_path` → `FreeCAD.open`, `save_path` → `Document.saveAs` |
 | `python/ferrocad_shell/__init__.py` | `save_document(path)` plus the `App_Open`/`App_Save` registry rows (labels `Open…`, `Save As…`, accels `Ctrl+O`, `Ctrl+S`, surface `hidden`) |
 | `crates/ferrocad_shell_core/src/shell/tests/files.rs` **(new)** | the prompt → path → backend plumbing, driven by `select_paths` |
-| `crates/ferrocad_shell_api/src/display.rs` | `drawable`, `colour`, `origin`; `StageMesh` unchanged |
+| `crates/ferrocad_core/src/document/view.rs` | `drawable`, `effective_color`, `origin`, `is_visible` (the shared dressing rules; re-exported at the crate root) |
+| `crates/ferrocad_shell_api/src/display.rs` | `StageMesh` only — the mesh payload that crosses the seam |
 | `crates/ferrocad_web_gpui/src/document.rs` | use `display::dress`; delete the local colour/visibility duplicates |
 | `python/ferrocad_shell/__init__.py`, `python/ferrocad_parametric/__init__.py` | use the shared dressing rules where a row's presence depends on it |
 | `crates/ferrocad_core/src/present.rs` **(new)** | `EditorKind`, `kind`, `kind_for_type`, `format`, `coerce`, `parse_color` |
@@ -581,14 +624,17 @@ Open questions:
 
 1. Does `ferrocad_shell_rust` gain a desktop edition of its own (a "Rust" edition
    beside `ferrocad`/`ferrocad_parametric`), or is it only linked by the browser
-   until a mod ships? S5's acceptance only needs a headless check.
+   until a mod ships? S5's acceptance only needs a headless check. If such an edition
+   ships, split `PythonAppBackend` out of `ferrocad_shell_gpui` into
+   `ferrocad_shell_python` first, so the pure-Rust binary links no CPython at all
+   (§4.3).
 2. Does the browser keep `App_Open`/`App_Save` inside the backend after S6's
    `FilePicker`, or does the shell own the ids on both platforms? The picker
    abstraction assumes the shell owns them; that is one behaviour change to the
    browser smoke conventions.
 3. Should `overlays()` return `ferrocad_stage` items directly (S6) or keep
    `ferrocad_inventor::Scene` and convert in the viewport? The former removes the
-   last inventar dependency from `AppBackend`; the latter is a smaller diff.
+   last `ferrocad_inventor` dependency from `AppBackend`; the latter is a smaller diff.
 
 ## 11. Non-goals
 

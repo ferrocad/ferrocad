@@ -13,17 +13,20 @@ obvious:
 
 ## 0. The picture
 
-![The three layers: the shared shell and `AppBackend` contract, the four host
-backends (native CPython, browser Rust, planned JS/WASI and wasm Python), and the
-shared engine](images/host-backends.svg)
+![The four layers: the platform hosts (native desktop, browser wasm), the seam
+(`ferrocad_shell_core` over `AppBackend` + optional `ScriptHost`), the pluggable
+backends named by runtime (CPython, no-runtime Rust, planned JS and wasm Python), and
+the shared engine](images/host-backends.svg)
 
-The stack has three layers. **The seam** is `ferrocad_shell_core` (window, chrome,
-panels, viewport) over the `AppBackend` trait in `ferrocad_shell_api`; neither depends
-on the engine. **A host backend** implements that trait: `PythonAppBackend` embeds
-CPython and reaches the engine through `ferrocad_py`, while `ferrocad_shell_rust`'s
-`RustAppBackend` links `ferrocad_core`/`ferrocad_part` directly. **The engine** is
-`ferrocad_core` + `ferrocad_part` over OCCT — the system library natively, the prebuilt
-wasm kernel in the browser.
+The picture has four bands: **hosts** own the process entry and the window, the
+**seam** is shared, **backends** are named by the runtime they embed, and the
+**engine** is one. In code: **the seam** is `ferrocad_shell_core` (window, chrome,
+panels, viewport) over the `AppBackend`/`ScriptHost` traits in `ferrocad_shell_api`;
+neither depends on the engine. **A host backend** implements them:
+`PythonAppBackend` embeds CPython and reaches the engine through `ferrocad_py`, while
+`ferrocad_shell_rust`'s `RustAppBackend` links `ferrocad_core`/`ferrocad_part`
+directly. **The engine** is `ferrocad_core` + `ferrocad_part` over OCCT — the system
+library natively, the prebuilt wasm kernel in the browser.
 
 Only the browser is missing CPython; that is why the two shipped backends exist and
 why the seam is a trait rather than a Python module. The planned JS/WASI and wasm

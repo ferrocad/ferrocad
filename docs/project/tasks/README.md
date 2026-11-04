@@ -1,6 +1,6 @@
 # Active task specs
 
-Status: index (2026-11-03). Eleven active specs and one recorded decision:
+Status: index (2026-11-04). Twelve active specs and one recorded decision:
 
 - [operation-failure-modelling.md](operation-failure-modelling.md) — **typed, recoverable
   failures**: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the
@@ -46,6 +46,11 @@ Status: index (2026-11-03). Eleven active specs and one recorded decision:
   Hide/Show, undo/redo, fit, property rows) that writes and recomputes that document,
   `.FCStd` open/save through the browser's file picker, and a headless smoke check
   (`run.sh --check`). Stages **M0–M6**; M0 is the crate split.
+- [host-backends.md](host-backends.md) — **one shell, one contract, several runtimes**:
+  the three scripting surfaces (Rust, CPython, JS/wasm, and later Python-in-wasm),
+  the dedup of property presentation, stage dressing and the command catalogue,
+  desktop Open/Save through the xdg portal, and the `ScriptHost`/`FilePicker` seam
+  changes. Stages **S1–S8**; S1–S4 are unblocked.
 - [stroke-units.md](stroke-units.md) — **decided, not open work**: viewport strokes are
   device pixels (gpui interop); a logical-pixel/UI-scale option was considered and
   deferred, with the reasons and the reopening plan.

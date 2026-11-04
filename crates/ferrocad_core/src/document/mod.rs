@@ -526,6 +526,18 @@ impl Document {
                 .ok_or_else(|| format!("no object {object}"))?;
             obj.properties.get(name).cloned()
         };
+        // A bare number assigned to an existing quantity keeps its unit, the way
+        // upstream's `PropertyLength` does: `obj.Length = 25` stays 25 mm rather than
+        // silently replacing the property with a dimensionless float.
+        let value = match (&old, value) {
+            (Some(Property::Quantity(current)), Property::Float(raw)) => {
+                Property::Quantity(crate::quantity::Quantity::new(raw, current.unit()))
+            }
+            (Some(Property::Quantity(current)), Property::Integer(raw)) => {
+                Property::Quantity(crate::quantity::Quantity::new(raw as f64, current.unit()))
+            }
+            (_, value) => value,
+        };
         // Let the registered type veto the write before anything is committed.
         // The hook sees the pre-assignment state, and its error text carries the
         // Python exception class (see `PropertyChangeError`).

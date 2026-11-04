@@ -36,13 +36,26 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 use ferrocad_core::object_registry::{self, ObjectType};
-use ferrocad_core::{Document, ExtensionData, ExtensionValue, ObjectId, Property, prop_status};
+use ferrocad_core::{
+    Document, ExtensionData, ExtensionValue, ObjectId, Property, Quantity, Unit, prop_status,
+};
 use ferrocad_core::property_types;
+
 use ferrocad_geom::{GeometryBackend, Shape};
 use ferrocad_types::{Placement, Vector3};
 
 pub use datum::DATUM_PLANE_TYPE;
 pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
+
+/// A millimetre length as the property a Part feature stores.
+///
+/// Upstream FreeCAD stores these as `App::PropertyLength`, so this is a
+/// `Property::Quantity`: the property pane shows the unit, and a document saved by
+/// FreeCAD recomputes through [`float_property`] instead of falling back to a default
+/// because the value was a `Quantity` rather than a bare float.
+pub(crate) fn length(value: f64) -> Property {
+    Property::Quantity(Quantity::new(value, Unit::Millimeter))
+}
 pub use containers::{
     COMMON_TYPE, COMPOUND_TYPE, CUT_TYPE, FUSE_TYPE, MULTICOMMON_TYPE, MULTIFUSE_TYPE,
 };
@@ -312,6 +325,7 @@ fn float_property(doc: &Document, id: ObjectId, name: &str, default: f64) -> f64
         .and_then(|value| match value {
             Property::Float(value) => Some(*value),
             Property::Integer(value) => Some(*value as f64),
+            Property::Quantity(value) => Some(value.value_mm()),
             _ => None,
         })
         .unwrap_or(default)
@@ -320,21 +334,9 @@ fn float_property(doc: &Document, id: ObjectId, name: &str, default: f64) -> f64
 impl ObjectType for BoxPrimitive {
     fn default_properties(&self) -> Vec<(String, Property, u32)> {
         vec![
-            (
-                "Length".to_string(),
-                Property::Float(10.0),
-                prop_status::NONE,
-            ),
-            (
-                "Width".to_string(),
-                Property::Float(10.0),
-                prop_status::NONE,
-            ),
-            (
-                "Height".to_string(),
-                Property::Float(10.0),
-                prop_status::NONE,
-            ),
+            ("Length".to_string(), length(10.0), prop_status::NONE),
+            ("Width".to_string(), length(10.0), prop_status::NONE),
+            ("Height".to_string(), length(10.0), prop_status::NONE),
             (
                 "Placement".to_string(),
                 Property::Placement(Placement::identity()),
@@ -397,8 +399,8 @@ struct CylinderPrimitive;
 impl ObjectType for CylinderPrimitive {
     fn default_properties(&self) -> Vec<(String, Property, u32)> {
         vec![
-            ("Radius".to_string(), Property::Float(2.0), prop_status::NONE),
-            ("Height".to_string(), Property::Float(10.0), prop_status::NONE),
+            ("Radius".to_string(), length(2.0), prop_status::NONE),
+            ("Height".to_string(), length(10.0), prop_status::NONE),
             ("Angle".to_string(), Property::Float(360.0), prop_status::NONE),
             (
                 "Placement".to_string(),
@@ -468,7 +470,7 @@ struct SpherePrimitive;
 impl ObjectType for SpherePrimitive {
     fn default_properties(&self) -> Vec<(String, Property, u32)> {
         vec![
-            ("Radius".to_string(), Property::Float(5.0), prop_status::NONE),
+            ("Radius".to_string(), length(5.0), prop_status::NONE),
             (
                 "Angle1".to_string(),
                 Property::Float(-90.0),
@@ -552,21 +554,9 @@ struct ConePrimitive;
 impl ObjectType for ConePrimitive {
     fn default_properties(&self) -> Vec<(String, Property, u32)> {
         vec![
-            (
-                "Radius1".to_string(),
-                Property::Float(2.0),
-                prop_status::NONE,
-            ),
-            (
-                "Radius2".to_string(),
-                Property::Float(4.0),
-                prop_status::NONE,
-            ),
-            (
-                "Height".to_string(),
-                Property::Float(10.0),
-                prop_status::NONE,
-            ),
+            ("Radius1".to_string(), length(2.0), prop_status::NONE),
+            ("Radius2".to_string(), length(4.0), prop_status::NONE),
+            ("Height".to_string(), length(10.0), prop_status::NONE),
             (
                 "Angle".to_string(),
                 Property::Float(360.0),
@@ -662,11 +652,7 @@ impl ObjectType for RegularPolygonPrimitive {
                 Property::Integer(6),
                 prop_status::NONE,
             ),
-            (
-                "Circumradius".to_string(),
-                Property::Float(2.0),
-                prop_status::NONE,
-            ),
+            ("Circumradius".to_string(), length(2.0), prop_status::NONE),
             (
                 "Placement".to_string(),
                 Property::Placement(Placement::identity()),
@@ -801,7 +787,7 @@ mod tests {
         let object = doc.object(id).unwrap();
         assert_eq!(
             object.properties.get("Length"),
-            Some(&Property::Float(10.0))
+            Some(&length(10.0))
         );
         assert!(object.properties.get("Width").is_some());
         assert!(object.properties.get("Height").is_some());

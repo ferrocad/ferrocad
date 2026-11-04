@@ -95,11 +95,7 @@ impl ObjectType for Fillet {
                 Property::StringList(Vec::new()),
                 prop_status::NONE,
             ),
-            (
-                "Radius".to_string(),
-                Property::Float(1.0),
-                prop_status::NONE,
-            ),
+            ("Radius".to_string(), crate::length(1.0), prop_status::NONE),
             (
                 PROPAGATE.to_string(),
                 Property::Bool(true),
@@ -139,12 +135,12 @@ impl ObjectType for Chamfer {
             ),
             (
                 "Distance".to_string(),
-                Property::Float(1.0),
+                crate::length(1.0),
                 prop_status::NONE,
             ),
             (
                 "Distance2".to_string(),
-                Property::Float(0.0),
+                crate::length(0.0),
                 prop_status::NONE,
             ),
             (
@@ -309,6 +305,7 @@ fn property<'a>(doc: &'a Document, id: ObjectId, name: &str) -> Option<&'a Prope
 fn float_property(doc: &Document, id: ObjectId, name: &str) -> Option<f64> {
     match property(doc, id, name) {
         Some(Property::Float(value)) => Some(*value),
+        Some(Property::Quantity(value)) => Some(value.value_mm()),
         _ => None,
     }
 }
@@ -618,7 +615,7 @@ mod tests {
         assert!(doc.undo());
         assert_eq!(
             doc.object(fillet).unwrap().properties.get("Radius"),
-            Some(&Property::Float(1.0))
+            Some(&crate::length(1.0))
         );
         doc.recompute().unwrap();
         let reverted = stored_shape(&doc, fillet).unwrap();

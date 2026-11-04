@@ -109,6 +109,7 @@ mod extension;
 mod kernel;
 mod observer;
 pub mod object_registry;
+pub mod present;
 mod property;
 pub mod property_types;
 mod stringhasher;

@@ -574,7 +574,7 @@ class SettingsModelTests(unittest.TestCase):
 
         rejected = json.loads(ferrocad_shell.set_property("Params", "Color", "nope"))
         self.assertFalse(rejected["ok"])
-        self.assertIn("invalid colour", rejected["error"])
+        self.assertIn("is not a colour", rejected["error"])
         # The failed edit left the stored colour (and its alpha) alone.
         self.assertEqual(
             [round(channel, 4) for channel in obj.Color[0]],

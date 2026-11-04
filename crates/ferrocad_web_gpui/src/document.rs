@@ -36,7 +36,6 @@ use ferrocad_shell_core::types::{
 use ferrocad_shell_core::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_shell_core::{DialogField, DialogSpec};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
-use ferrocad_types::Quantity;
 
 /// Document and command ids shared with the native registry, so the chrome's controls
 /// and the app menu resolve exactly as they do natively.
@@ -238,42 +237,43 @@ impl AppBackend for DocumentBackend {
         });
 
         for (name, value) in object.properties.iter() {
-            let type_id = value.type_name().to_string();
-            let kind = editor_kind(name, &type_id);
+            // One rule for both hosts: the kind and the text come from the value, so
+            // a Part length reads as `10 mm` here exactly as it does natively.
+            let kind = ferrocad_core::present::kind(value);
             let driven = object.expressions.contains_key(name);
-            let mut row = PropRow {
+            let (min, max) = match value {
+                Property::FloatConstraint { min, max, .. } => (Some(*min), Some(*max)),
+                Property::IntegerConstraint { min, max, .. } => {
+                    (Some(*min as f64), Some(*max as f64))
+                }
+                _ => (None, None),
+            };
+            rows.push(PropRow {
                 name: name.clone(),
                 label: String::new(),
-                value: property_text(value),
+                value: ferrocad_core::present::format(value),
                 status: object
                     .properties
                     .status(name)
                     .map(|status| status_names(status).join(", "))
                     .unwrap_or_default(),
-                editable: !kind.is_empty() && !driven,
+                editable: kind.is_some() && !driven,
                 command: None,
-                type_id,
-                kind: kind.to_string(),
-                min: None,
-                max: None,
+                type_id: value.type_name().to_string(),
+                kind: kind
+                    .map(|kind| kind.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                min,
+                max,
+                // A document quantity carries its unit in the text; a schema row
+                // declares one instead. `row_unit` reads either.
                 unit: None,
-                choices: Vec::new(),
-            };
-            match kind {
-                "quantity" => {
-                    // This document's lengths are plain floats in millimetres; the
-                    // desktop Part workbench presents them with their unit.
-                    row.unit = Some("mm".to_string());
-                    row.value = format!("{} mm", number(value_as_f64(value).unwrap_or(0.0)));
-                }
-                "enum" => {
-                    if let Property::Enumeration(values, _) = value {
-                        row.choices = values.clone();
-                    }
-                }
-                _ => {}
-            }
-            rows.push(row);
+                choices: match value {
+                    Property::Enumeration(values, _) => values.clone(),
+                    _ => Vec::new(),
+                },
+            });
         }
         Ok(rows)
     }
@@ -523,7 +523,7 @@ impl AppBackend for DocumentBackend {
         {
             return Ok(refused(format!("{property} is set by an expression")));
         }
-        let next = match coerce(&current, value) {
+        let next = match ferrocad_core::present::coerce(&current, value) {
             Ok(next) => next,
             Err(error) => return Ok(refused(error)),
         };
@@ -1098,7 +1098,6 @@ fn build_sample(document: &mut Document) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the object is shown. Objects start visible; the view state can hide them.
 /// The object's document `Visibility` switch, when it has one.
 ///
 /// The native backend keeps visibility on the view object; here the first hide adds a
@@ -1127,183 +1126,6 @@ fn object_color(object: &ferrocad_core::DocumentObject) -> [f32; 4] {
         ],
         None => DEFAULT_COLOR,
     }
-}
-
-/// The editor kind for a property: which control the pane shows and how it coerces.
-///
-/// `name` is needed because the Rust Part primitives store their lengths as plain
-/// floats (`App::PropertyFloat`), while the desktop workbench presents them with
-/// their unit.
-fn editor_kind(name: &str, type_id: &str) -> &'static str {
-    match type_id {
-        "App::PropertyString" | "App::PropertyFileIncluded" | "App::PropertyPythonObject" => "text",
-        "App::PropertyBool" => "bool",
-        "App::PropertyInteger" | "App::PropertyIntegerConstraint" => "int",
-        "App::PropertyFloat" | "App::PropertyFloatConstraint" => {
-            if matches!(name, "Length" | "Width" | "Height" | "Radius" | "Distance") {
-                "quantity"
-            } else {
-                "float"
-            }
-        }
-        "App::PropertyLength"
-        | "App::PropertyDistance"
-        | "App::PropertyAngle"
-        | "App::PropertyQuantity" => "quantity",
-        "App::PropertyEnumeration" => "enum",
-        "App::PropertyColorList" => "color",
-        _ => "",
-    }
-}
-
-/// A property's value as the editor shows it.
-fn property_text(property: &Property) -> String {
-    match property {
-        Property::String(value) => value.clone(),
-        Property::Float(value) => number(*value),
-        Property::Bool(value) => value.to_string(),
-        Property::Integer(value) => value.to_string(),
-        Property::Quantity(value) => value.to_string(),
-        Property::FloatConstraint { value, .. } => number(*value),
-        Property::IntegerConstraint { value, .. } => value.to_string(),
-        Property::Placement(placement) => format!(
-            "({}, {}, {})",
-            number(placement.base.x),
-            number(placement.base.y),
-            number(placement.base.z)
-        ),
-        Property::Vector(vector) => format!(
-            "({}, {}, {})",
-            number(vector.x),
-            number(vector.y),
-            number(vector.z)
-        ),
-        Property::Link(name) => name.clone(),
-        Property::LinkSub(name, subs) => {
-            if subs.is_empty() {
-                name.clone()
-            } else {
-                format!("{name}: {}", subs.join(", "))
-            }
-        }
-        Property::LinkList(names) => names.join(", "),
-        Property::LinkSubList(links) => links
-            .iter()
-            .map(|(name, subs)| {
-                if subs.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{name}: {}", subs.join(", "))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("; "),
-        Property::Enumeration(values, index) => values.get(*index).cloned().unwrap_or_default(),
-        Property::StringList(values) => values.join(", "),
-        Property::FloatList(values) => values
-            .iter()
-            .map(|value| number(*value))
-            .collect::<Vec<_>>()
-            .join(", "),
-        Property::IntegerList(values) => values
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", "),
-        Property::BoolList(values) => values
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", "),
-        Property::IntPairList(values) => values
-            .iter()
-            .map(|(a, b)| format!("({a}, {b})"))
-            .collect::<Vec<_>>()
-            .join(", "),
-        Property::ColorList(values) => values
-            .iter()
-            .map(|color| {
-                format!(
-                    "#{:02x}{:02x}{:02x}",
-                    (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
-                    (color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
-                    (color[2].clamp(0.0, 1.0) * 255.0).round() as u8
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-        // A kernel shape holds an opaque payload; its bytes are not a value a person
-        // reads. The type is in the row's type column already.
-        Property::Extension(_) => "<shape>".to_string(),
-        Property::PythonObject(_) => "<python object>".to_string(),
-        Property::FileIncluded(path) => path.clone(),
-        Property::Matrix(_) => "<matrix>".to_string(),
-        Property::Rotation(_) => "<rotation>".to_string(),
-        Property::RotationList(values) => format!("{} rotation(s)", values.len()),
-        Property::PlacementList(values) => format!("{} placement(s)", values.len()),
-        Property::VectorList(values) => format!("{} vector(s)", values.len()),
-    }
-}
-
-/// A float as a person reads it: `10.0`, not `10`.
-fn number(value: f64) -> String {
-    if value.is_finite() && value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{value:.1}")
-    } else {
-        format!("{value}")
-    }
-}
-
-/// The numeric value of a property that the quantity rows format with a unit.
-fn value_as_f64(property: &Property) -> Option<f64> {
-    match property {
-        Property::Float(value) => Some(*value),
-        Property::Integer(value) => Some(*value as f64),
-        Property::Quantity(value) => Some(value.value()),
-        Property::FloatConstraint { value, .. } => Some(*value),
-        Property::IntegerConstraint { value, .. } => Some(*value as f64),
-        _ => None,
-    }
-}
-
-/// Turn an editor string into the value a property of `current`'s shape expects.
-fn coerce(current: &Property, text: &str) -> Result<Property, String> {
-    let text = text.trim();
-    Ok(match current {
-        Property::String(_) => Property::String(text.to_string()),
-        Property::Bool(_) => Property::Bool(matches!(
-            text.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )),
-        Property::Integer(_) => Property::Integer(
-            text.parse()
-                .map_err(|_| format!("{text:?} is not an integer"))?,
-        ),
-        Property::Float(_) => Property::Float(parse_length(text)?),
-        Property::Quantity(_) => {
-            Property::Quantity(Quantity::parse(text).map_err(|error| format!("{text:?}: {error}"))?)
-        }
-        Property::Enumeration(values, _) => {
-            let index = values
-                .iter()
-                .position(|value| value == text)
-                .ok_or_else(|| format!("{text:?} is not one of {values:?}"))?;
-            Property::Enumeration(values.clone(), index)
-        }
-        other => return Err(format!("{} is not editable", other.type_name())),
-    })
-}
-
-/// A length as the editor types it: `20`, `20.5`, `20 mm`.
-fn parse_length(text: &str) -> Result<f64, String> {
-    let text = text.trim();
-    let text = text
-        .strip_suffix("mm")
-        .or_else(|| text.strip_suffix("MM"))
-        .unwrap_or(text)
-        .trim();
-    text.parse::<f64>()
-        .map_err(|_| format!("{text:?} is not a number"))
 }
 
 /// A refused edit: `ok` is false, so the pane keeps the old value and shows why.

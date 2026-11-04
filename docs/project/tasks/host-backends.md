@@ -1,6 +1,6 @@
 # Host backends: one shell, one contract, several runtimes
 
-Status: **task (2026-11-04). S1 and S2 done; S3–S4 are unblocked.**
+Status: **task (2026-11-04). S1–S3 done; S4 is unblocked.**
 Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../research/web-wasm-host.md`](../research/web-wasm-host.md)
 (the browser findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../../developer/architecture.md`](../../developer/architecture.md)
@@ -17,8 +17,8 @@ version.
 | **D1** | `AppBackend` stays the **only** shell↔engine contract. Backends are not shell forks. | The shell already installs one `Box<dyn AppBackend>` and needs no other knowledge of the engine. | — |
 | **D2** | Backends are named by the **runtime they embed**, not by platform: `RustAppBackend` (none), `PythonAppBackend` (CPython), `JsAppBackend` (JS/WASM mods), and later a wasm-Python backend. | Platform is a property of the *host*; the document API is identical. | S5 |
 | **D3** | The Rust backend becomes its own crate, `ferrocad_shell_rust`, used by **both** the browser host and a desktop edition. | Today the only Rust backend lives inside the web host (`document.rs`), so "Rust document" reads as "browser-only". It is not. | S5 |
-| **D4** | Property **presentation** (editor kind, formatting, text→value) moves into `ferrocad_core` and is exposed to Python by `ferrocad_py`. | It is a property of the `Property` enum, not of a GUI. `ferrocad_py` stays a pure core binding. | S3 |
-| **D5** | Part primitives store lengths as `Property::Quantity` (mm), not `Property::Float`. | That is what a FreeCAD `Part::Box.Length` is on disk, and the current mismatch loses data (§3.3). | S3 |
+| **D4** | Property **presentation** (editor kind, formatting, text→value) moves into `ferrocad_core` and is exposed to Python by `ferrocad_py`. | It is a property of the `Property` enum, not of a GUI. `ferrocad_py` stays a pure core binding. | S3 ✓ |
+| **D5** | Part primitives store lengths as `Property::Quantity` (mm), not `Property::Float`. | That is what a FreeCAD `Part::Box.Length` is on disk, and the current mismatch loses data (§3.3). | S3 ✓ |
 | **D6** | **One** display path: document → `StageMesh`, with the "which object is drawable, how is it coloured" logic in `ferrocad_shell_api::display`. | Two copies exist today; one of them draws a fillet on top of the box it consumed (§3.2). | S2 |
 | **D7** | `ferrocad_inventor` becomes a **producer-side compatibility adapter** (pivy scenes → `Stage`), not a second render path. The legacy methods leave `AppBackend` for a `ScriptHost` trait. | Keeps FreeCAD compatibility for legacy workbenches without making every backend implement a scenegraph. | S6 |
 | **D8** | File verbs (**Open/Save**) are a **host** concern: the shell picks a path and moves bytes; the backend only decodes/encodes them. | `open_document(name, bytes)`/`save_document() -> Vec<u8>` are already byte-based, and the browser proved that shape works. | S1 |
@@ -210,6 +210,11 @@ recompute ignores. The native path is unaffected only because
 `ferrocad_py::openDocument` does not recompute
 (`ferrocad_py/src/lib.rs:7381-7404`).
 
+**Fixed in S3.** Part dimension properties are `Property::Quantity` now, so a
+FreeCAD-authored box recomputes from its real size; `float_property` accepts both
+storages, so files written before S3 still load; and `Document::set_property` keeps
+a quantity's unit when a bare number is assigned (`obj.Length = 25` stays 25 mm).
+
 *Confidence:* high — five small, specific code paths. *Not verified by execution*:
 no `.FCStd` fixture from upstream FreeCAD exists in the repo. S3 opens with the
 15-line test that settles it (a saved document with `App::PropertyLength`, then
@@ -313,31 +318,31 @@ pub fn origin(object: &DocumentObject) -> Option<[f32; 3]>;
 The backend keeps `tessellate` (it owns the kernel) and the `StageMesh` assembly;
 it stops deciding *which* objects exist in the picture.
 
-### 5.3 Property presentation (D4)
+### 5.3 Property presentation (D4) — **done**
 
 ```rust
-// ferrocad_core/src/present.rs
+// ferrocad_core/src/present.rs — pure, no window, no Python, no kernel
 pub enum EditorKind { Text, Bool, Int, Float, Quantity, Enum, Color }
-
-pub fn editor_kind(property: &Property) -> Option<EditorKind>;
-pub fn format(property: &Property) -> String;
+pub fn kind(value: &Property) -> Option<EditorKind>;
+pub fn kind_for_type(type_id: &str) -> Option<EditorKind>;   // via the type registry's default
+pub fn format(value: &Property) -> String;
 pub fn coerce(current: &Property, text: &str) -> Result<Property, String>;
 ```
 
-Rules:
+Rules that the old duplicate tables got wrong:
 
-- The kind is a property of the **value**, not its name. A `Quantity` is a
-  quantity; a `Float` is a float. This deletes both name lists
-  (`document.rs:1148` and the Python table).
-- `format` is the single source of `10.0` vs `10.0 mm`, `#rrggbb`, `<shape>`,
-  `<python object>`, `(x, y, z)` and list joins.
-- `coerce` refuses a type it cannot represent (`colour`, `constraint`, `link`) with
-  a message, instead of offering an editor that always fails.
-- `ferrocad_py` exposes exactly these three as `ferrocad.property.*`
-  (plain functions, no classes, no shell types). The Python backend calls them and
-  keeps only its **FreeCAD-specific** rows local: `Extension` (kernel shape),
-  `PythonObject`, `Link`/`LinkSub` semantics and the synthetic `Settings/<Feature>`
-  rows.
+- the kind comes from the **value**, never its name (a `Quantity` carries a unit), so
+  a Part length and a module float cannot diverge;
+- one spelling of each value (`True`, `80.0`, `10 mm`, `#428cd9`, `Box: Edge1`);
+- a colour edit keeps the current alpha, and a multi-colour list **refuses** a
+  single-colour edit instead of truncating it;
+- a constraint clamps, an integer refuses `3.7`, and a bare float still accepts a
+  typed `25 mm`.
+
+`ferrocad_py` exposes exactly these to Python — `propertyKindOf(obj, prop)`,
+`formatProperty(obj, prop)`, `coercePropertyText(obj, prop, text)` — and
+`ferrocad_shell.properties`/`set_property` call them; the shell keeps only the
+FreeCAD-specific rows (`Settings/<Feature>`, enum choices).
 
 D5 (lengths as `Quantity`) is what makes the kind rule correct rather than a
 heuristic. `float_property` grows a `Quantity` arm so both storage shapes execute;
@@ -467,7 +472,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | --- | --- | --- | --- |
 | **S1** | **Desktop file verbs** (D8/D9) — **done (2026-11-04)** | `Ctrl+O`/`Ctrl+S` in the native app through the portal; `App_Open`/`App_Save` in the Python registry; works for every backend | 3–4 d |
 | **S2** | **One display path** (D6/D11) — **done (2026-11-04)** | `ferrocad_core::drawable` (the fillet is drawn instead of the box it consumed); both hosts ask it; `ferrocad_web` and `ferrocad_web_viewport` retired with their checks ported | 2–3 d |
-| **S3** | **Shared property presentation** (D4/D5) | `ferrocad_core::present` + `ferrocad.property.*`; Part lengths are `Quantity`; one kind/format/coerce table | 4–6 d |
+| **S3** | **Shared property presentation** (D4/D5) — **done (2026-11-04)** | `ferrocad_core::present` (`kind`/`format`/`coerce`); `ferrocad_py` exposes `propertyKindOf`/`formatProperty`/`coercePropertyText`; Part lengths are `Quantity` (datum planes already were); `set_property` keeps a quantity's unit when given a bare number | 4–6 d |
 | **S4** | **Catalogue as data** (D10) | `catalog.rs` + generated `catalog.json` + `--check`; one `App_Move` spec | 4–5 d |
 | **S5** | **`ferrocad_shell_rust`** (D3) | the Rust backend as a crate; a headless desktop edition proves it is not browser-only | 2–3 d |
 | **S6** | **Seam split** (D7) | `ScriptHost`; `inventor_scene`/`event_listener` demoted; `FilePicker` unifies native and web | 3–4 d |
@@ -480,7 +485,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | --- | --- |
 | S1 | `#[gpui::test]`s drive the prompt hooks: the picked path reaches the backend and the title/status update; Save hands its path over; a cancelled prompt changes nothing; without a portal the status line shows the error. |
 | S2 | The browser smoke log shows `stage draws Fillet` and **not** `stage draws Box` (the feature replaced its base), while both shapes still tessellate; desktop output unchanged; `cargo test -p ferrocad_shell_core` green. |
-| S3 | New test: decode `App::PropertyLength`, `from_saved`, `recompute`, dimension survives. Both hosts show `10.0 mm`. `cargo xtask api-docs --check` and the Python doc checks pass. |
+| S3 | `present` unit tests (kind/format/coerce, colour alpha, constraints, multi-colour refusal); `ferrocad_core` and `ferrocad_part` suites green; the base Python suites green (687); the browser smoke shows the same rows; doc checks pass. *Follow-up:* a `.FCStd` fixture from upstream FreeCAD (none in the repo) to pin the open+recompute path end to end. |
 | S4 | `cargo xtask catalog --check` fails when a Python built-in is added without the Rust table; `App_Move` exists once. |
 | S5 | `cargo check -p ferrocad_shell_rust` (native) and `--target wasm32-unknown-unknown` both pass; no gpui/pyo3 in its graph (`cargo tree`). |
 | S6 | `AppBackend`'s scripting methods are behind `script_host()`; the browser still builds with no scripting backend; `inventor_scene` is gone from the trait. |
@@ -506,11 +511,11 @@ would otherwise inherit the split seam.
 | `crates/ferrocad_shell_api/src/display.rs` | `drawable`, `colour`, `origin`; `StageMesh` unchanged |
 | `crates/ferrocad_web_gpui/src/document.rs` | use `display::dress`; delete the local colour/visibility duplicates |
 | `python/ferrocad_shell/__init__.py`, `python/ferrocad_parametric/__init__.py` | use the shared dressing rules where a row's presence depends on it |
-| `crates/ferrocad_core/src/present.rs` **(new)** | `EditorKind`, `format`, `coerce` |
+| `crates/ferrocad_core/src/present.rs` **(new)** | `EditorKind`, `kind`, `kind_for_type`, `format`, `coerce`, `parse_color` |
 | `crates/ferrocad_core/src/lib.rs` | `pub mod present` |
-| `crates/ferrocad_part/src/lib.rs` | `Quantity` lengths; `float_property` accepts `Quantity` |
-| `crates/ferrocad_py/src/lib.rs` | `ferrocad.property.{editor_kind,format,coerce}` |
-| `python/ferrocad_shell/__init__.py` | `properties`/`_coerce` call the shared functions; `_EDITABLE_KINDS` shrinks to the FreeCAD-only rows |
+| `crates/ferrocad_part/src/lib.rs`, `src/dress_up.rs` | dimensions default to `Quantity`; `float_property` accepts both |
+| `crates/ferrocad_py/src/lib.rs` | `propertyKindOf`, `formatProperty`, `coercePropertyText` |
+| `python/ferrocad_shell/__init__.py` | `properties`/`set_property` call the shared functions; `_EDITABLE_KINDS`, `_coerce` and the colour parsing are gone |
 | `crates/ferrocad_shell_api/src/catalog.rs` **(new)** | `CommandDef`, `builtin()`, `info()` |
 | `crates/ferrocad_web_gpui/src/document.rs` | `commands()` becomes `catalog::builtin()` + state |
 | `python/ferrocad_shell/catalog.json` **(generated)** | built-ins for the Python registry |

@@ -7506,6 +7506,62 @@ fn removeDocumentObserver(observer: &Bound<'_, PyAny>) {
     drop(removed);
 }
 
+/// The editor a **property of this object** gets (`""` when it has none).
+///
+/// Unlike [`propertyKind`], this reads the value: a two-colour `ColorList` has no
+/// single swatch to edit even though the *type* is editable.
+#[pyfunction]
+fn propertyKindOf(obj: &Bound<'_, PyDocumentObject>, prop: &str) -> &'static str {
+    let value = {
+        let this = obj.borrow();
+        let doc = this.inner.lock().unwrap();
+        doc.object(this.id)
+            .and_then(|object| object.properties.get(prop))
+            .cloned()
+    };
+    value
+        .as_ref()
+        .and_then(ferrocad_core::present::kind)
+        .map(ferrocad_core::present::EditorKind::as_str)
+        .unwrap_or("")
+}
+
+/// A property's value as the inspector shows it.
+#[pyfunction]
+fn formatProperty(obj: &Bound<'_, PyDocumentObject>, prop: &str) -> PyResult<String> {
+    let value = {
+        let this = obj.borrow();
+        let doc = this.inner.lock().unwrap();
+        doc.object(this.id)
+            .and_then(|object| object.properties.get(prop))
+            .cloned()
+    };
+    value
+        .map(|value| ferrocad_core::present::format(&value))
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(prop.to_string()))
+}
+
+/// A property's value from its editor string, using the shared coercion.
+#[pyfunction]
+fn coercePropertyText(
+    py: Python<'_>,
+    obj: &Bound<'_, PyDocumentObject>,
+    prop: &str,
+    text: &str,
+) -> PyResult<PyObject> {
+    let current = {
+        let this = obj.borrow();
+        let doc = this.inner.lock().unwrap();
+        doc.object(this.id)
+            .and_then(|object| object.properties.get(prop))
+            .cloned()
+    }
+    .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(prop.to_string()))?;
+    let value = ferrocad_core::present::coerce(&current, text)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok(property_to_py(py, &value))
+}
+
 #[pymodule]
 pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Python-feature `execute` requests (Part::FeaturePython and friends) are
@@ -7538,6 +7594,9 @@ pub fn ferrocad(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(activeDocument, m)?)?;
     m.add_function(wrap_pyfunction!(addDocumentObserver, m)?)?;
     m.add_function(wrap_pyfunction!(removeDocumentObserver, m)?)?;
+    m.add_function(wrap_pyfunction!(propertyKindOf, m)?)?;
+    m.add_function(wrap_pyfunction!(formatProperty, m)?)?;
+    m.add_function(wrap_pyfunction!(coercePropertyText, m)?)?;
     Ok(())
 }
 

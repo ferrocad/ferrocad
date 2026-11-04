@@ -308,19 +308,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the kernel-free model to wasm32
-        run: cargo build -p wasm-example --release --target wasm32-unknown-unknown
+        run: cargo check -p ferrocad_core --target wasm32-unknown-unknown --locked
       # The platform-neutral shell: `ferrocad_shell_core` and the AppBackend seam must
       # compile for wasm. It needs no OCCT, so this runs before the kernel fetch and
       # fails fast on a GPUI/wgpu regression.
       - name: Check the shell core for wasm32
         run: cargo check -p ferrocad_shell_core --target wasm32-unknown-unknown --locked
-      - name: Fetch the prebuilt wasm OCCT 8.0.1
+      - name: Fetch the prebuilt wasm OCCT 8.0.1 and build TKFeat
         env:
           OCCT_WASM_URL: https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz
         run: |
           curl -sSL -o /tmp/occt-wasm.tar.gz "$OCCT_WASM_URL"
           mkdir -p "$GITHUB_WORKSPACE/.occt-wasm"
           tar xzf /tmp/occt-wasm.tar.gz -C "$GITHUB_WORKSPACE/.occt-wasm"
+          # The tarball prunes TKFeat, which `ferrocad_part`'s vtable keeps alive.
+          # This step already runs inside the cross image, so the toolkit is built
+          # directly (no docker-in-docker).
+          SRC="$GITHUB_WORKSPACE/target/occt-src" \
+            OUT="$GITHUB_WORKSPACE/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown" \
+            sh tools/wasm-tkfeat.sh
       - name: Check the bridge and the Part layer for wasm32
         env:
           OCCT_WASM_ROOT: ${{ github.workspace }}/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown
@@ -354,11 +360,10 @@ jobs:
           version=$(cargo tree -p wasm-bindgen --depth 0 | awk 'NR==1 {print $2}' | tr -d v)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "wasm-bindgen $version"
-      - name: Fetch the prebuilt wasm OCCT 8.0.1
+      - name: Fetch the prebuilt wasm OCCT 8.0.1 and build TKFeat
         run: |
-          curl -sSL -o /tmp/occt-wasm.tar.gz https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz
-          mkdir -p .occt-wasm
-          tar xzf /tmp/occt-wasm.tar.gz -C .occt-wasm
+          . tools/wasm-prepare.sh
+          prepare_wasm_kernel
       - name: Build ferrocad_web in the cross image
         run: |
           mkdir -p target

@@ -24,8 +24,6 @@
 IMAGE='ghcr.io/lzpel/cross-wasm32-unknown-unknown@sha256:4dc88df287da141e67588ba80ebf1d14d5cb24f5b05302c57b11b2a1e9bed1df'
 OCCT_TARBALL='https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz'
 OCCT_NAME='occt-8_0_1_rev3-wasm32_unknown_unknown'
-# The OCCT release the tarball was built from, for the TKFeat sources below.
-OCCT_GIT_TAG='V8_0_1'
 KERNEL=".occt-wasm/$OCCT_NAME"
 BINDGEN='target/wasm-bindgen/wasm-bindgen'
 
@@ -41,40 +39,18 @@ prepare_wasm_kernel() {
     fi
 
     # `ferrocad_part` coerces its backend to `Arc<dyn GeometryBackend>`, which keeps
-    # `split_shape` (BRepFeat) in the vtable, and the tarball prunes TKFeat. OCCT is
-    # not rebuilt: the toolkit compiles against the kernel's own headers with the
-    # kernel's wasi-sdk, in the same image so the wasm-EH encoding matches. The
-    # container runs as the invoking user so the archive is not root-owned.
+    # `split_shape` (BRepFeat) in the vtable, and the tarball prunes TKFeat. The build
+    # itself lives in `tools/wasm-tkfeat.sh` so CI (which runs it inside the cross
+    # image directly) shares one recipe. The container runs as the invoking user so
+    # the archive is not root-owned.
     if [ ! -f "$KERNEL/lib/libTKFeat.a" ]; then
         echo "building TKFeat into the wasm kernel (one-off) ..." >&2
-        if [ ! -d target/occt-src/src/ModelingAlgorithms/TKFeat ]; then
-            rm -rf target/occt-src
-            git -c advice.detachedHead=false clone --depth 1 --branch "$OCCT_GIT_TAG" \
-                --filter=blob:none --sparse \
-                https://github.com/Open-Cascade-SAS/OCCT.git target/occt-src
-            git -C target/occt-src sparse-checkout set src/ModelingAlgorithms/TKFeat
-        fi
         docker run --rm --user "$(id -u):$(id -g)" \
             -v "$PWD":/work -w /work \
             -e SRC=/work/target/occt-src \
             -e OUT="/work/$KERNEL" \
             -e SYSROOT=/opt/wasi-sdk/share/wasi-sysroot \
-            "$IMAGE" sh -ec '
-                mkdir -p /tmp/tkfeat
-                cd /tmp/tkfeat
-                for f in "$SRC"/src/ModelingAlgorithms/TKFeat/BRepFeat/*.cxx \
-                         "$SRC"/src/ModelingAlgorithms/TKFeat/LocOpe/*.cxx; do
-                    clang++ --target=wasm32-wasip1 --sysroot="$SYSROOT" \
-                        -fwasm-exceptions -fexceptions -mllvm -wasm-use-legacy-eh=true \
-                        -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_SIGNAL \
-                        -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID \
-                        -D_USE_MATH_DEFINES -DFEATURE_COLOR -std=c++17 -O2 \
-                        -I "$OUT/include/opencascade" \
-                        -I "$SRC/src/ModelingAlgorithms/TKFeat" \
-                        -c "$f" -o "$(basename "$f" .cxx).o"
-                done
-                ar rcs "$OUT/lib/libTKFeat.a" ./*.o
-            '
+            "$IMAGE" sh /work/tools/wasm-tkfeat.sh
         echo "built $KERNEL/lib/libTKFeat.a" >&2
     fi
 }

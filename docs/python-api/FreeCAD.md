@@ -49,6 +49,7 @@ A drop-in, Rust-backed stand-in for FreeCAD's Python ``App`` module.
 | clearUndos() | Drop the whole undo/redo history (FreeCAD `clearUndos`). |
 | commitTransaction() | — |
 | copyObject(object, recursive=False, return_all=False) | Copy one object (or a sequence of objects) from another document. |
+| drawableObjects() | The names of the objects the viewport draws, in document order. |
 | dumpContent(Compression=0) | — |
 | findObjects(Type='', Name='', Label='') | — |
 | getAvailableRedos(id=0) | The number of redo steps, or the depth of transaction `id` (FreeCAD `getAvailableRedos`). |

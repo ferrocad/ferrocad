@@ -16,9 +16,9 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -35,13 +35,13 @@ jobs:
   headless:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # Pin the interpreter: `tools/api_docs.py` reads signatures from the live
       # modules, and CPython point releases report inherited builtins differently
       # (the generator now ignores those, but pinning keeps the whole facade and
       # the doc build reproducible). Keep this in step with docs/project/documentation.md.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install CPython headers + GPUI system libraries (PyO3, X11/xkb/fontconfig)
@@ -112,9 +112,9 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -154,7 +154,7 @@ jobs:
   real-window:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Xvfb + software Vulkan (lavapipe) + CPython headers + GPUI libs
         uses: ./.github/actions/linux-desktop-deps
@@ -197,7 +197,7 @@ jobs:
   geometry:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install CPython headers + GPUI system libraries (the edition links GPUI)
         uses: ./.github/actions/linux-desktop-deps
@@ -306,7 +306,7 @@ jobs:
       # tarball, so an image update is a deliberate change.
       image: ghcr.io/lzpel/cross-wasm32-unknown-unknown@sha256:4dc88df287da141e67588ba80ebf1d14d5cb24f5b05302c57b11b2a1e9bed1df
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the kernel-free model to wasm32
         run: cargo check -p ferrocad_core --target wasm32-unknown-unknown --locked
       # The platform-neutral shell: `ferrocad_shell_core` and the AppBackend seam must
@@ -353,7 +353,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Read the wasm-bindgen version from the lock
         id: bindgen
         run: |

@@ -23,9 +23,9 @@ jobs:
   bundle:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -74,7 +74,7 @@ jobs:
           & "$scratch\ferrocad.bat" --check-init
           if ($LASTEXITCODE -ne 0) { throw "ferrocad --check-init failed with exit code $LASTEXITCODE" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ferrocad-parametric-windows
           path: target/dist/ferrocad-parametric-windows-x86_64.zip

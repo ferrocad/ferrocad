@@ -365,7 +365,7 @@ fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
 }
 
 // ---------------------------------------------------------------------------
-// Public entry point
+// Public entry points
 // ---------------------------------------------------------------------------
 
 /// Read a binary FreeCAD `.FCStd` file into a [`SavedDocument`].
@@ -376,19 +376,51 @@ fn u32_at(data: &[u8], offset: usize) -> Option<u32> {
 /// property-type registry when the owning module is loaded, and `GuiDocument.xml`
 /// supplies the view state. Skipped values and the payload/registry rule are
 /// described in the module documentation.
+///
+/// When the archive is already in memory, use [`decode_fcstd`] instead: both
+/// entry points share the same parser.
 pub fn read_fcstd(path: &str) -> Result<SavedDocument, FcstdError> {
     let data = std::fs::read(path)?;
-    let archive = ZipArchive::parse(&data)?;
-    let xml_bytes = archive.read("Document.xml")?;
-    let xml = std::str::from_utf8(&xml_bytes)
-        .map_err(|e| FcstdError::Encoding(e.to_string()))?;
 
     let name = Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
-        .unwrap_or("Unnamed")
+        .unwrap_or(UNNAMED_DOCUMENT)
         .to_string();
+
+    parse_fcstd(&data, name)
+}
+
+/// Read a binary FreeCAD `.FCStd` archive from memory into a [`SavedDocument`].
+///
+/// This is the entry point for a caller that has the bytes but no filesystem
+/// path: the browser shell receives the archive as a JavaScript buffer, so it
+/// cannot pass a path to [`read_fcstd`]. The bytes are parsed exactly as a file
+/// would be — the same members, the same property-type registry, the same
+/// `GuiDocument.xml` pass — so malformed bytes fail the same way a malformed
+/// file does, with the same [`FcstdError`] variants.
+///
+/// With no path there is no file stem to name the document with, so
+/// [`SavedDocument::name`] is `"Unnamed"` (the same fallback [`read_fcstd`] uses
+/// for a path without one).
+pub fn decode_fcstd(bytes: &[u8]) -> Result<SavedDocument, FcstdError> {
+    parse_fcstd(bytes, UNNAMED_DOCUMENT.to_string())
+}
+
+/// The name given to a document read without a file stem.
+const UNNAMED_DOCUMENT: &str = "Unnamed";
+
+const GUI_DOCUMENT: &str = "GuiDocument.xml";
+
+/// Parse an in-memory `.FCStd` archive, shared by [`read_fcstd`] and
+/// [`decode_fcstd`]. `name` becomes [`SavedDocument::name`]; `Document.xml`
+/// stores no document name, so the caller supplies it.
+fn parse_fcstd(data: &[u8], name: String) -> Result<SavedDocument, FcstdError> {
+    let archive = ZipArchive::parse(data)?;
+    let xml_bytes = archive.read("Document.xml")?;
+    let xml = std::str::from_utf8(&xml_bytes)
+        .map_err(|e| FcstdError::Encoding(e.to_string()))?;
 
     let mut saved = parse_document(xml, name, Some(&archive))?;
 
@@ -403,8 +435,6 @@ pub fn read_fcstd(path: &str) -> Result<SavedDocument, FcstdError> {
 
     Ok(saved)
 }
-
-const GUI_DOCUMENT: &str = "GuiDocument.xml";
 
 // ---------------------------------------------------------------------------
 // Document.xml
@@ -1550,5 +1580,125 @@ mod tests {
         assert_eq!(translate_status("16777216"), prop_status::READONLY);
         assert_eq!(translate_status("268435456"), prop_status::INPUT);
         assert_eq!(translate_status("not-a-number"), prop_status::NONE);
+    }
+
+    /// A small document assembled from the model types, the way the writer's
+    /// tests build one. Every field here is one the reader and the writer agree
+    /// on, so it doubles as a round-trip fixture.
+    fn round_trip_fixture() -> SavedDocument {
+        let mut properties = BTreeMap::new();
+        properties.insert(
+            "Name".to_string(),
+            Property::String("a \"quoted\" & <tagged> name".to_string()),
+        );
+        properties.insert("Count".to_string(), Property::Integer(-7));
+        properties.insert("Ratio".to_string(), Property::Float(0.125));
+        properties.insert("Enabled".to_string(), Property::Bool(true));
+        properties.insert(
+            "Size".to_string(),
+            Property::Quantity(Quantity::new(12.5, Unit::Millimeter)),
+        );
+        properties.insert(
+            "Direction".to_string(),
+            Property::Vector(Vector3::new(1.0, 2.0, 3.0)),
+        );
+        properties.insert("Target".to_string(), Property::Link("Tool".to_string()));
+        properties.insert(
+            "Group".to_string(),
+            Property::LinkList(vec!["Box".to_string(), "Tool".to_string()]),
+        );
+        properties.insert(
+            "Support".to_string(),
+            Property::LinkSubList(vec![(
+                "Tool".to_string(),
+                vec!["Face1".to_string(), "Face2".to_string()],
+            )]),
+        );
+        properties.insert(
+            "Tags".to_string(),
+            Property::StringList(vec!["one".to_string(), "two".to_string()]),
+        );
+        properties.insert(
+            "Mode".to_string(),
+            Property::Enumeration(vec!["Zero".to_string(), "One".to_string()], 1),
+        );
+
+        let mut property_status = BTreeMap::new();
+        property_status.insert(
+            "Direction".to_string(),
+            prop_status::READONLY | prop_status::HIDDEN,
+        );
+
+        let mut expressions = BTreeMap::new();
+        expressions.insert("Count".to_string(), "Ratio * 10".to_string());
+
+        // Colour components are multiples of 1/255, so the packed RGBA round
+        // trip is exact.
+        let colour = [0.2, 0.4, 0.6, 1.0];
+        let mut view = ViewState::new(35, colour);
+        view.visibility = false;
+        view.shape_color = Some(colour);
+        view.diffuse_color = Some(vec![[1.0, 0.0, 0.6, 1.0]]);
+
+        SavedDocument {
+            format: super::super::native::default_format(),
+            version: super::super::native::default_version(),
+            name: "Fixture".to_string(),
+            objects: vec![SavedObject {
+                name: "Box".to_string(),
+                label: "A box & <tag>".to_string(),
+                type_id: "App::FeaturePython".to_string(),
+                properties,
+                property_status,
+                expressions,
+                extensions: BTreeSet::new(),
+                python_state: None,
+                view: Some(view),
+            }],
+        }
+    }
+
+    /// The bytes entry point is the reader the browser shell uses: encode an
+    /// in-memory document, decode the bytes, and compare the model fields that
+    /// the `.FCStd` schema carries.
+    #[test]
+    fn decode_fcstd_round_trips_an_encoded_document() {
+        let original = round_trip_fixture();
+        let bytes = crate::fcstd_write::encode_fcstd(&original).expect("encode .FCStd");
+
+        let decoded = decode_fcstd(&bytes).expect("decode in-memory bytes");
+
+        // There is no path, so the name comes from the reader's fallback.
+        assert_eq!(decoded.name, UNNAMED_DOCUMENT);
+        assert_eq!(decoded.format, original.format);
+        assert_eq!(decoded.version, original.version);
+        assert_eq!(decoded.objects.len(), 1);
+
+        let (want, got) = (&original.objects[0], &decoded.objects[0]);
+        assert_eq!(got.name, want.name);
+        assert_eq!(got.label, want.label);
+        assert_eq!(got.type_id, want.type_id);
+        assert_eq!(got.expressions, want.expressions);
+        assert_eq!(got.property_status, want.property_status);
+        assert_eq!(got.view, want.view);
+
+        for (name, value) in &want.properties {
+            assert_eq!(got.properties.get(name), Some(value), "property {name}");
+        }
+        // The writer always emits `Label` from `SavedObject::label`, so the
+        // reader returns it as one extra property.
+        assert_eq!(got.properties.len(), want.properties.len() + 1);
+        assert_eq!(
+            got.properties.get("Label"),
+            Some(&Property::String(want.label.clone()))
+        );
+    }
+
+    #[test]
+    fn decode_fcstd_rejects_bytes_that_are_not_a_zip_archive() {
+        assert!(matches!(
+            decode_fcstd(b"not a zip"),
+            Err(FcstdError::NotZip)
+        ));
     }
 }

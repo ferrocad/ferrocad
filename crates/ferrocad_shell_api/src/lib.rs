@@ -24,7 +24,7 @@ pub mod selection;
 pub mod types;
 pub mod view;
 
-pub use app::{AppBackend, NoopListener};
+pub use app::{AppBackend, NoopListener, ScriptHost};
 pub use commands::{CommandInfo, CommandOutcome, Surface, SurfaceGroups, find, group_by_surface};
 pub use dialog::{DialogField, DialogSpec, Kind, ValueState};
 pub use display::StageMesh;

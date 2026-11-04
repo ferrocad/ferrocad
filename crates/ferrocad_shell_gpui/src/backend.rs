@@ -7,7 +7,7 @@
 use pyo3::prelude::{PyAnyMethods, Python};
 
 use ferrocad_inventor::{EventListener, Scene};
-use ferrocad_shell_core::app::AppBackend;
+use ferrocad_shell_core::app::{AppBackend, ScriptHost};
 use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_core::display::StageMesh;
 use ferrocad_shell_core::selection::SelectionItem;
@@ -61,8 +61,10 @@ impl AppBackend for PythonAppBackend {
         python::hello()
     }
 
-    fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
-        python::load_workbenches()
+    /// This backend embeds CPython, so it is both halves: the document methods here
+    /// and the scripting methods on [`ScriptHost`].
+    fn script_host(&self) -> Option<&dyn ScriptHost> {
+        Some(self)
     }
 
     fn model_tree(&self) -> Result<Vec<DocumentNode>, String> {
@@ -105,20 +107,8 @@ impl AppBackend for PythonAppBackend {
         python::take_selection_requests()
     }
 
-    fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
-        python::evaluate(code)
-    }
-
     fn rotation_quaternion(&self, object: &str) -> Option<[f64; 4]> {
         python::rotation_quaternion(object)
-    }
-
-    fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
-        python_tool(name)
-    }
-
-    fn tool_command(&self, name: &str, verb: &str) -> bool {
-        python_tool_command(name, verb)
     }
 
     fn set_property(
@@ -201,6 +191,28 @@ impl AppBackend for PythonAppBackend {
 
     fn set_gpu_adapter(&mut self, value: &str) -> Result<GpuPreferenceOutcome, String> {
         python::set_gpu_adapter(value)
+    }
+}
+
+/// The scripting half: the embedded interpreter and the facades it exposes.
+///
+/// These are the methods the shell asks for through [`AppBackend::script_host`]; a
+/// backend with no interpreter does not implement them at all.
+impl ScriptHost for PythonAppBackend {
+    fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
+        python::evaluate(code)
+    }
+
+    fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
+        python::load_workbenches()
+    }
+
+    fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+        python_tool(name)
+    }
+
+    fn tool_command(&self, name: &str, verb: &str) -> bool {
+        python_tool_command(name, verb)
     }
 
     fn inventor_scene(&self) -> Result<Scene, String> {

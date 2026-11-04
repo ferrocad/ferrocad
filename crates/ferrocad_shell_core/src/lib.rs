@@ -51,7 +51,7 @@ pub use runtime::interop;
 pub use ui::{chrome, dev_tools, dialog, forms, shortcuts};
 pub use workbench::{commands, contributions, manipulators};
 
-pub use app::{AppBackend, install_backend, with_backend, with_backend_mut};
+pub use app::{AppBackend, ScriptHost, install_backend, with_backend, with_backend_mut};
 pub use commands::{CommandInfo, CommandOutcome, Surface};
 pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory, translate_gizmo};
 pub use dev_tools::DevTools;

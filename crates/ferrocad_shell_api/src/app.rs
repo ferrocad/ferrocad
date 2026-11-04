@@ -39,6 +39,11 @@ use crate::view::ViewState;
 /// The engine behind the shell.
 ///
 /// Reads take `&self`; anything that can change the document takes `&mut self`.
+///
+/// This is the **document** half only. A backend that also has a scripting runtime
+/// exposes it separately, through [`script_host`](Self::script_host) — see
+/// [`ScriptHost`]. The two halves are disjoint so a Rust document backend is not
+/// asked to pretend it has an interpreter.
 pub trait AppBackend {
     // --- boot -----------------------------------------------------------------
 
@@ -109,7 +114,10 @@ pub trait AppBackend {
 
     /// Load workbench (`Init.py`/`InitGui.py`) scripts. Best-effort.
     fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
-        Ok(WorkbenchReport::default())
+        match self.script_host() {
+            Some(host) => host.load_workbenches(),
+            None => Ok(WorkbenchReport::default()),
+        }
     }
 
     // --- view models ----------------------------------------------------------
@@ -168,8 +176,21 @@ pub trait AppBackend {
 
     // --- scripting ------------------------------------------------------------
 
-    fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
-        Err("scripting is not available in this build".to_string())
+    /// The scripting half, when this backend has an interpreter.
+    ///
+    /// `ferrocad_shell_rust` has none and returns the default; the Python backend
+    /// returns `Some(self)`. The scripting methods below forward here, so a host that
+    /// overrides nothing reports "not available" instead of pretending.
+    fn script_host(&self) -> Option<&dyn ScriptHost> {
+        None
+    }
+
+    /// Evaluate a console line.
+    fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
+        match self.script_host() {
+            Some(host) => host.evaluate(code),
+            None => Err("scripting is not available in this build".to_string()),
+        }
     }
 
     fn rotation_quaternion(&self, _object: &str) -> Option<[f64; 4]> {
@@ -177,13 +198,17 @@ pub trait AppBackend {
     }
 
     /// Resolve a scripted interactive tool (`python:<name>`) to its native handle.
-    fn tool(&self, _name: &str) -> Result<Box<dyn Tool>, String> {
-        Err("scripted tools are not available in this build".to_string())
+    fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {
+        match self.script_host() {
+            Some(host) => host.tool(name),
+            None => Err("scripted tools are not available in this build".to_string()),
+        }
     }
 
     /// Send a session verb (`cancel`/`finish`) to a scripted tool.
-    fn tool_command(&self, _name: &str, _verb: &str) -> bool {
-        false
+    fn tool_command(&self, name: &str, verb: &str) -> bool {
+        self.script_host()
+            .is_some_and(|host| host.tool_command(name, verb))
     }
 
     // --- editing --------------------------------------------------------------
@@ -286,14 +311,62 @@ pub trait AppBackend {
     // --- scene and events -----------------------------------------------------
 
     /// The `pivy.coin`-style scene the viewport falls back to when the stage is empty.
+    ///
+    /// This is a **scripting** capability (the host runs a script to build the
+    /// scene), so only a [`ScriptHost`] answers it; a document backend gets the empty
+    /// scene, which is what the shell already treats as "nothing to fall back to".
     fn inventor_scene(&self) -> Result<Scene, String> {
-        Ok(Scene::default())
+        match self.script_host() {
+            Some(host) => host.inventor_scene(),
+            None => Ok(Scene::default()),
+        }
     }
 
     /// The listener that forwards viewport events to the engine's callbacks.
     fn event_listener(&self) -> Box<dyn EventListener> {
-        Box::new(NoopListener)
+        match self.script_host() {
+            Some(host) => host.event_listener(),
+            None => Box::new(NoopListener),
+        }
     }
+}
+
+/// The scripting half of a backend: an interpreter and what it exposes.
+///
+/// It is a separate trait because it is **optional**: a backend with no interpreter
+/// (`ferrocad_shell_rust`) implements [`AppBackend`] alone, and the shell finds this
+/// half through [`AppBackend::script_host`]. Keeping it here — rather than behind a
+/// `cfg` or a second registry — is what lets the shell write one code path.
+///
+/// Every method takes `&self`: a host that needs mutable state guards it internally
+/// (the embedded interpreter does, on its own lock). None of these touch the document
+/// model; that is [`AppBackend`]'s half.
+pub trait ScriptHost {
+    /// Evaluate a console line, returning what it printed.
+    fn evaluate(&self, code: &str) -> Result<EvalResult, String>;
+
+    /// Load workbench (`Init.py`/`InitGui.py`) scripts. Best-effort.
+    fn load_workbenches(&self) -> Result<WorkbenchReport, String>;
+
+    /// Resolve a scripted interactive tool (`python:<name>`) to its native handle.
+    fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String>;
+
+    /// Send a session verb (`cancel`/`finish`) to a scripted tool.
+    fn tool_command(&self, name: &str, verb: &str) -> bool;
+
+    /// The `pivy.coin`-style scene the viewport falls back to when the stage is empty.
+    ///
+    /// The compatibility path for a workbench that builds its own Coin tree
+    /// (`ActiveView.getSceneGraph().addChild(...)`): the facade extracts that tree, so a
+    /// script's nodes still reach the screen. A later stage replaces this with
+    /// stage-native overlays; until then it is the same capability under a new trait.
+    fn inventor_scene(&self) -> Result<Scene, String>;
+
+    /// The listener that forwards viewport events to the script's callbacks.
+    ///
+    /// This is what makes `ActiveView.addEventCallbackPivy` work: the listener
+    /// dispatches to the `SoEventCallback` callables the script registered.
+    fn event_listener(&self) -> Box<dyn EventListener>;
 }
 
 /// Forwards nothing. The listener a host gets when it supplies none.
@@ -308,5 +381,98 @@ impl EventListener for NoopListener {
         _directives: &ferrocad_inventor::Directives,
     ) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A script host that stamps its own answers, so forwarding is visible.
+    struct Scripted;
+
+    impl ScriptHost for Scripted {
+        fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
+            Ok(EvalResult {
+                ok: true,
+                output: format!("ran {code}"),
+            })
+        }
+
+        fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
+            Ok(WorkbenchReport {
+                loaded: vec!["Toy/Init.py".to_string()],
+                errors: Vec::new(),
+            })
+        }
+
+        fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {
+            Err(format!("no tool {name}"))
+        }
+
+        fn tool_command(&self, _name: &str, verb: &str) -> bool {
+            verb == "cancel"
+        }
+
+        fn inventor_scene(&self) -> Result<Scene, String> {
+            Err("scripted scene".to_string())
+        }
+
+        fn event_listener(&self) -> Box<dyn EventListener> {
+            Box::new(NoopListener)
+        }
+    }
+
+    static SCRIPTED: Scripted = Scripted;
+
+    struct ScriptedBackend;
+
+    impl AppBackend for ScriptedBackend {
+        fn script_host(&self) -> Option<&dyn ScriptHost> {
+            Some(&SCRIPTED)
+        }
+    }
+
+    struct PlainBackend;
+
+    impl AppBackend for PlainBackend {}
+
+    /// The document half keeps working without any of this: every scripting method
+    /// has a default that forwards, so an implementor writes only what it has.
+    #[test]
+    fn the_scripting_methods_forward_to_the_script_host() {
+        let backend = ScriptedBackend;
+        assert_eq!(backend.evaluate("1 + 1").unwrap().output, "ran 1 + 1");
+        assert_eq!(
+            backend.load_workbenches().unwrap().loaded,
+            vec!["Toy/Init.py".to_string()]
+        );
+        assert!(backend.tool("draft").is_err());
+        assert!(backend.tool_command("draft", "cancel"));
+        assert!(!backend.tool_command("draft", "finish"));
+        assert_eq!(
+            backend.inventor_scene().err().as_deref(),
+            Some("scripted scene")
+        );
+        let _listener = backend.event_listener();
+    }
+
+    /// A document-only backend says so rather than pretending to script.
+    #[test]
+    fn a_backend_without_a_script_host_says_so() {
+        let backend = PlainBackend;
+        assert!(backend.script_host().is_none());
+        assert_eq!(
+            backend.evaluate("1").unwrap_err(),
+            "scripting is not available in this build"
+        );
+        assert_eq!(
+            backend.tool("draft").err().as_deref(),
+            Some("scripted tools are not available in this build")
+        );
+        assert!(!backend.tool_command("draft", "cancel"));
+        assert!(backend.load_workbenches().unwrap().loaded.is_empty());
+        assert_eq!(backend.inventor_scene().unwrap().root.children.len(), 0);
+        let _ = backend.event_listener();
     }
 }

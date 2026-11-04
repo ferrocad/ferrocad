@@ -28,7 +28,7 @@ use crate::types::{
 };
 use crate::workbench::commands::{CommandInfo, CommandOutcome};
 
-pub use ferrocad_shell_api::app::{AppBackend, NoopListener};
+pub use ferrocad_shell_api::app::{AppBackend, NoopListener, ScriptHost};
 
 /// The installed backend. One per `App`; the host installs it before `Shell::boot`.
 struct AppBackendSlot(RefCell<Box<dyn AppBackend>>);

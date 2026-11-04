@@ -1,6 +1,6 @@
 # Host backends: one shell, one contract, several runtimes
 
-Status: **task (2026-11-04). S1–S5 done; S6 is next.**
+Status: **task (2026-11-04). S1–S5 done; S6 in progress (the scripting half is done).**
 Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../research/web-wasm-host.md`](../research/web-wasm-host.md)
 (the browser findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../../developer/architecture.md`](../../developer/architecture.md)
@@ -20,7 +20,7 @@ version.
 | **D4** | Property **presentation** (editor kind, formatting, text→value) moves into `ferrocad_core` and is exposed to Python by `ferrocad_py`. | It is a property of the `Property` enum, not of a GUI. `ferrocad_py` stays a pure core binding. | S3 ✓ |
 | **D5** | Part primitives store lengths as `Property::Quantity` (mm), not `Property::Float`. | That is what a FreeCAD `Part::Box.Length` is on disk, and the current mismatch loses data (§3.3). | S3 ✓ |
 | **D6** | **One** display path: document → `StageMesh`, with the "which object is drawable, how is it coloured" logic in `ferrocad_shell_api::display`. | Two copies exist today; one of them draws a fillet on top of the box it consumed (§3.2). | S2 |
-| **D7** | `ferrocad_inventor` becomes a **producer-side compatibility adapter** (pivy scenes → `Stage`), not a second render path. The legacy methods leave `AppBackend` for a `ScriptHost` trait. | Keeps FreeCAD compatibility for legacy workbenches without making every backend implement a scenegraph. | S6 |
+| **D7** | `ferrocad_inventor` becomes a **producer-side compatibility adapter** (pivy scenes → `Stage`), not a second render path. The legacy methods leave `AppBackend` for a `ScriptHost` trait. | Keeps FreeCAD compatibility for legacy workbenches without making every backend implement a scenegraph. | S6 (split ✓; overlay replacement later) |
 | **D8** | File verbs (**Open/Save**) are a **host** concern: the shell picks a path and moves bytes; the backend only decodes/encodes them. | `open_document(name, bytes)`/`save_document() -> Vec<u8>` are already byte-based, and the browser proved that shape works. | S1 |
 | **D9** | Native dialogs use GPUI's `App::prompt_for_paths` / `prompt_for_new_path` — xdg-desktop-portal on Linux. | Already in the framework; no dialog crate needed. | S1 |
 | **D10** | The built-in **command catalogue** becomes data in `ferrocad_shell_api::catalog`, generated into the Python package and diffed in CI. | One list of ids/labels/accels; Python still owns dynamic `addCommand`. | S4 ✓ |
@@ -265,7 +265,7 @@ the browser, and a gpui edge would make that impossible.
 
 ## 5. Seams
 
-### 5.1 `AppBackend` → `DocumentHost` + `ScriptHost`
+### 5.1 `AppBackend` → `DocumentHost` + `ScriptHost` — **done (2026-11-05)**
 
 The split is a **disjoint** one: a backend implements the document half, and
 *optionally* exposes a script half.
@@ -274,33 +274,45 @@ The split is a **disjoint** one: a backend implements the document half, and
 pub trait AppBackend {
     // boot, document, properties, stage, view, selection, commands, dialogs,
     // manipulators  — the 26 methods both hosts already implement
+    fn script_host(&self) -> Option<&dyn ScriptHost> { None }
 }
 
 /// The scripting half. `None` for a backend with no interpreter.
 pub trait ScriptHost {
     fn evaluate(&self, code: &str) -> Result<EvalResult, String>;
-    fn load_workbenches(&mut self) -> Result<WorkbenchReport, String>;
-    fn tool(&mut self, name: &str) -> Result<Box<dyn Tool>, String>;
-    fn tool_command(&mut self, name: &str, verb: &str) -> bool;
-    fn event_listener(&mut self) -> Box<dyn EventListener>;
-    fn overlays(&mut self) -> Result<Vec<OverlayScene>, String>;
-}
-
-pub trait AppBackend {
-    fn script_host(&mut self) -> Option<&mut dyn ScriptHost> { None }
+    fn load_workbenches(&self) -> Result<WorkbenchReport, String>;
+    fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String>;
+    fn tool_command(&self, name: &str, verb: &str) -> bool;
+    fn inventor_scene(&self) -> Result<Scene, String>;
+    fn event_listener(&self) -> Box<dyn EventListener>;
 }
 ```
 
-Migration is source-compatible if the existing defaulted methods stay on
-`AppBackend` for one release and simply forward. The shell calls
-`backend.script_host()` where it currently calls `evaluate`/`tool`/`event_listener`.
+- The scripting methods stay on `AppBackend` **defaulted and forwarding**, so every
+  existing call site (`ferrocad_shell_core::app::evaluate`, `tool`, …, and the shell's
+  console and dispatch) is unchanged. `ferrocad_shell_rust` inherits the defaults and
+  therefore reports "scripting is not available in this build";
+  `PythonAppBackend` returns `Some(self)`.
+- `ScriptHost` is all `&self`: none of it touches the document model, and the
+  interpreter guards its own state.
 
-**`inventor_scene` does not move to `ScriptHost`.** It is the legacy *display*
-fallback and is replaced by `overlays()` returning stage-native scenes (D7). The
-conversion (`ferrocad_inventor::Scene` → `ferrocad_stage::Stage`) already exists in
-`ferrocad_viewport`, so this is a move, not new code. `ferrocad_inventor` stays for
-the `pivy.coin` facade and for workbench scripts that build scenes; it stops being
-something the shell asks a backend for.
+**`inventor_scene` moved rather than disappeared.** It stays on `ScriptHost` (it is a
+scripting capability: the host runs a `pivy.coin` script and extracts the tree). It is
+the compatibility path for workbenches that build their own Coin scene —
+`ActiveView.getSceneGraph().addChild(...)`, which the facade registers through
+`FerroCADGui.addOverlay` — and it is what the base app's fallback scene uses. Its
+documented eventual replacement is `ScriptHost::overlays()` returning stage-native
+scenes (D7), which is a later stage; deleting it now would remove the demo scene and
+nothing else.
+
+`event_listener` also moved onto `ScriptHost`, so `ActiveView.addEventCallbackPivy`
+(`SoEventCallback` dispatch) keeps working exactly as before: the shell asks the
+script half for the listener, and a document-only backend gets the no-op.
+
+Compatibility is checked by the Draft conformance group: `test_pivy` (2/2) adds a
+node via `getSceneGraph()` and passes on the split build, the group's summary is
+unchanged, and `ferrocad_shell_api`'s new tests pin the forwarding and the
+no-script-host defaults.
 
 ### 5.2 One display path (D6)
 
@@ -502,7 +514,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | **S3** | **Shared property presentation** (D4/D5) — **done (2026-11-04)** | `ferrocad_core::present` (`kind`/`format`/`coerce`); `ferrocad_py` exposes `propertyKindOf`/`formatProperty`/`coercePropertyText`; Part lengths are `Quantity` (datum planes already were); `set_property` keeps a quantity's unit when given a bare number | 4–6 d |
 | **S4** | **Catalogue as data** (D10) — **done (2026-11-04)** | `ferrocad_shell_api::catalog` (the table, the named ids, the Move form), generated `python/ferrocad_shell/catalog.json`, the browser backend reading `builtin()`, Python's `GetResources()` reading the JSON, and a drift test on each side | 4–5 d |
 | **S5** | **`ferrocad_shell_rust`** (D2/D3) — **done (2026-11-05)** | `RustAppBackend` moved out of `ferrocad_web_gpui` into its own platform-neutral crate (no gpui, no pyo3, no wasm-bindgen); the browser installs it with two file-picker hooks and keeps only its window and page bridge; `cargo run -p ferrocad_shell_rust --example headless` boots it with no window and prints the same document | 2–3 d |
-| **S6** | **Seam split** (D7) | `ScriptHost`; `inventor_scene`/`event_listener` demoted; `FilePicker` unifies native and web | 3–4 d |
+| **S6** | **Seam split** (D7) — **in progress: the scripting half is done (2026-11-05)** | `ScriptHost` (`evaluate`, `load_workbenches`, `tool`, `tool_command`, `inventor_scene`, `event_listener`) with `AppBackend::script_host()`; the document half unchanged; `FilePicker` unifies native and web next | 3–4 d |
 | **S7** | **JS backend spike** | a page that loads an ES module and calls `Document` through `wasm-bindgen`; one command registered from JS | 5–8 d |
 | **S8** | **wasm Python spike** | pick a runtime from §6.3 and run `python/ferrocad_shell`'s `properties` | research |
 
@@ -515,7 +527,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | S3 | `present` unit tests (kind/format/coerce, colour alpha, constraints, multi-colour refusal); `ferrocad_core` and `ferrocad_part` suites green; the base Python suites green (687); the browser smoke shows the same rows; doc checks pass. *Follow-up:* a `.FCStd` fixture from upstream FreeCAD (none in the repo) to pin the open+recompute path end to end. |
 | S4 | The crate's `the_checked_in_catalogue_is_current` fails when `python/ferrocad_shell/catalog.json` is stale, and `CatalogTests` fails when a built-in exists on only one side (Python registry vs. JSON); `App_Move` exists once, in `catalog::move_dialog()`. |
 | S5 | `cargo check -p ferrocad_shell_rust` (native) passes, `cargo tree -p ferrocad_shell_rust` has no gpui/pyo3/wasm-bindgen, and the browser still builds and passes its smoke check on the extracted crate (`run.sh --check`). The native example prints `document Sample (2 object(s))` and `Fillet · 40 triangles`, the same document the browser draws. |
-| S6 | `AppBackend`'s scripting methods are behind `script_host()`; the browser still builds with no scripting backend; `inventor_scene` is gone from the trait. |
+| S6 | `AppBackend`'s scripting methods are behind `script_host()` (done); the browser still builds with no scripting backend (done); `inventor_scene` returns from the trait with the same behaviour (done); the Draft conformance group is unchanged (`test_pivy` 2/2). **Remaining:** `FilePicker`. |
 | S7 | A browser page registers one JS command and receives one document event; no panic in the console. |
 | S8 | `properties()` from a wasm interpreter over the sample document. |
 

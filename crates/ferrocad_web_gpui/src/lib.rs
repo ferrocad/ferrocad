@@ -21,6 +21,10 @@
 #![cfg(target_family = "wasm")]
 
 mod document;
+mod host;
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use gpui::{
     App, TitlebarOptions, WebBackendPreference, WindowBackgroundAppearance, WindowBounds,
@@ -64,6 +68,12 @@ pub fn main() {
             }
         };
 
+        // The page needs the shell back after a file picker or a drop; GPUI has no
+        // global app handle outside a callback, so keep both here.
+        let async_app = cx.to_async();
+        let shell_slot: Rc<RefCell<Option<gpui::Entity<ferrocad_shell_core::Shell>>>> =
+            Rc::new(RefCell::new(None));
+        let slot = shell_slot.clone();
         let window = cx.open_window(window_options(), move |window, cx| {
             let shell = cx.new(|cx| ferrocad_shell_core::Shell::from_model(model, cx));
             // The viewport: the element itself is the shell's, and on the web its
@@ -73,10 +83,16 @@ pub fn main() {
             // root: `Esc` and the command shortcuts bubble from there.
             let root = shell.read(cx).root_focus_handle();
             window.focus(&root, cx);
+            *slot.borrow_mut() = Some(shell.clone());
             shell
         });
         match window {
-            Ok(_) => cx.activate(true),
+            Ok(_) => {
+                if let Some(shell) = shell_slot.borrow().as_ref() {
+                    host::install(async_app, shell.downgrade());
+                }
+                cx.activate(true)
+            }
             Err(error) => log::error!("ferrocad shell: no window: {error}"),
         }
     });

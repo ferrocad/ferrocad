@@ -80,6 +80,9 @@ Requirements: Docker (usable without `sudo`), `curl`, `tar`, `git` and `python3`
 A host Rust toolchain is not needed. `crates/ferrocad_web/run.sh` is the older
 standalone canvas demo, which draws the same document without the shell.
 
+`Ctrl+O` opens a `.FCStd` file from the browser's file picker, `Ctrl+S` downloads
+the active document, and dropping a `.FCStd` on the window opens it.
+
 `www/index.html` also drives the shell for headless captures:
 
 | Query | Effect |
@@ -91,6 +94,8 @@ standalone canvas demo, which draws the same document without the shell.
 | `?drag=1` | one pointer drag across the canvas (orbits the camera) |
 | `?wheel=1` | one scroll notch (zooms) |
 | `?dblclick=1` | a drag then two quick clicks (the viewport's double-click) |
+| `?save=1` | run `App_Save` (`Ctrl+S`); the page logs the bytes it was asked to download |
+| `?reopen=1` | save, capture those bytes instead of downloading, then open them again |
 
 `?type=` still depends on the field taking pointer focus, and synthetic pointer events
 race the frame GPUI takes its hit test from; treat it as best-effort in headless
@@ -146,6 +151,12 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   edit is one step. Zooming out three notches and running `Fit` through the palette
   (`ctrl-k;f;i;t;enter`) reframes the stage and prints `fit`; `Fit` is a view request,
   so it changes no stored presentation state.
+- **Open and save.** `?reopen=1` runs `App_Save` (`saved Sample (3788 bytes)`), captures
+  the bytes the page would have downloaded, and opens them through the file seam:
+  `opened Sample (2 object(s))`. The tree, the stage, the title and the status line all
+  come from the decoded document, and the selection is cleared. `?keys=ctrl-o` reaches
+  the page bridge (`open requested`) — the picker, the download and drag-and-drop are
+  the page's half.
 - No panic. Startup logs two
   `Scissor Rect … is not contained in the render target` validation errors from
   `gpui_wgpu` while the DOM canvas is still being sized (and the resize poll timeout
@@ -155,11 +166,10 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 
 ## What it does not have (yet)
 
-- **Expressions and file I/O in the UI.** The document supports expressions; the
-  browser has no editor for them and no file input. The bytes-level reader
-  (`ferrocad_core::document::fcstd::decode_fcstd`) exists for a future file picker;
-  only the JS/`AppBackend` plumbing is missing. `evaluate` reports that there is no
-  interpreter rather than pretending.
+- **Expressions in the UI.** The document supports them; the browser has no editor for
+  them. `evaluate` reports that there is no interpreter rather than pretending.
+- **STEP/IGES/STL.** The prebuilt wasm kernel omits the exchange toolkits. `.FCStd`
+  itself round-trips (see above).
 - **A gizmo *drag* that writes back.** Typed Move, Rotate, Hide/Show, undo/redo and
   Fit are wired; a pointer drag on the transform gizmo reaches the same
   `apply_interaction` hook but the headless capture drives it with zero deltas, so it

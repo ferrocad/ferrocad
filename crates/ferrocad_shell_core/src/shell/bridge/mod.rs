@@ -6,5 +6,6 @@
 
 pub mod context;
 pub mod dispatch;
+pub mod document;
 pub mod picking;
 pub mod viewport;

@@ -59,6 +59,22 @@ pub trait AppBackend {
         Ok(None)
     }
 
+    /// Replace the active document with one the host decoded from bytes.
+    ///
+    /// The browser host owns the file picker, so it hands over the file's name (for
+    /// the title and the next save) and its bytes (`ferrocad_core::fcstd`); a backend
+    /// that owns paths can leave this at the refusal.
+    fn open_document(&mut self, _name: &str, _bytes: &[u8]) -> Result<OpenedDocument, String> {
+        Err("opening a document is not supported by this backend".to_string())
+    }
+
+    /// Serialize the active document for the host to save.
+    ///
+    /// The host writes the bytes (a browser download); the format is the backend's.
+    fn save_document(&self) -> Result<Vec<u8>, String> {
+        Err("saving a document is not supported by this backend".to_string())
+    }
+
     /// The console's greeting line.
     fn hello(&self) -> Result<String, String> {
         Ok("FerroCAD shell · no engine backend".to_string())

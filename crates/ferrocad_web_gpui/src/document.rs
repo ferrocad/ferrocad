@@ -30,8 +30,8 @@ use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_core::display::StageMesh;
 use ferrocad_shell_core::selection::SelectionItem;
 use ferrocad_shell_core::types::{
-    ApplyResult, Bootstrap, DocumentNode, EvalResult, ObjectNode, PropRow, SetResult,
-    VisibilityOutcome,
+    ApplyResult, Bootstrap, DocumentNode, EvalResult, ObjectNode, OpenedDocument, PropRow,
+    SetResult, VisibilityOutcome,
 };
 use ferrocad_shell_core::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_shell_core::{DialogField, DialogSpec};
@@ -52,6 +52,8 @@ const ROTATE: &str = "App_Rotate";
 const VISIBILITY: &str = "App_ToggleVisibility";
 const UNDO: &str = "App_Undo";
 const REDO: &str = "App_Redo";
+const OPEN: &str = "App_Open";
+const SAVE: &str = "App_Save";
 
 /// The prefix of the dialog tokens this backend mints for `App_Move`.
 ///
@@ -84,6 +86,9 @@ const DEFAULT_COLOR: [f32; 4] = [0.30, 0.34, 0.40, 1.0];
 /// toggle.
 struct State {
     document: Document,
+    /// The document's display name: the sample's at boot, the file's after an open.
+    /// It is what the next save writes and what the title shows.
+    name: String,
     view: ShellViewState,
     snap: bool,
     /// The shell's selection, mirrored for `App_Move`: the typed move applies to the
@@ -120,6 +125,7 @@ impl DocumentBackend {
         Self {
             state: RefCell::new(State {
                 document,
+                name: DOCUMENT.to_string(),
                 view: ShellViewState::default(),
                 snap: false,
                 selection: Vec::new(),
@@ -149,12 +155,39 @@ impl AppBackend for DocumentBackend {
         Ok(Bootstrap {
             version: env!("CARGO_PKG_VERSION").to_string(),
             backend: "rust".to_string(),
-            document: DOCUMENT.to_string(),
+            document: self.state.borrow().name.clone(),
         })
     }
 
     fn hello(&self) -> Result<String, String> {
         Ok("FerroCAD browser shell · Rust document backend · OCCT wasm · no CPython".to_string())
+    }
+
+    /// Replace the sample with a decoded `.FCStd` file.
+    ///
+    /// The host owns the picker, so this is the only place a document arrives from
+    /// outside the build. The saved shapes are recomputed so a file from another build
+    /// cannot rely on geometry it did not rebuild here.
+    fn open_document(&mut self, name: &str, bytes: &[u8]) -> Result<OpenedDocument, String> {
+        let saved = ferrocad_core::fcstd::decode_fcstd(bytes).map_err(|error| error.to_string())?;
+        let mut document = Document::from_saved(&saved);
+        document.recompute()?;
+        let objects = document.object_ids().len();
+        let mut state = self.state.borrow_mut();
+        state.document = document;
+        state.name = name.to_string();
+        state.selection.clear();
+        state.move_dialogs = 0;
+        Ok(OpenedDocument {
+            document: state.name.clone(),
+            objects,
+        })
+    }
+
+    fn save_document(&self) -> Result<Vec<u8>, String> {
+        let state = self.state.borrow();
+        let saved = state.document.to_saved(&state.name);
+        ferrocad_core::fcstd_write::encode_fcstd(&saved).map_err(|error| error.to_string())
     }
 
     fn model_tree(&self) -> Result<Vec<DocumentNode>, String> {
@@ -171,8 +204,8 @@ impl AppBackend for DocumentBackend {
             })
             .collect();
         Ok(vec![DocumentNode {
-            name: DOCUMENT.to_string(),
-            label: DOCUMENT.to_string(),
+            name: state.name.clone(),
+            label: state.name.clone(),
             objects,
         }])
     }
@@ -302,6 +335,8 @@ impl AppBackend for DocumentBackend {
             command(FIT, "Fit", "dock", false, false),
             command(UNDO, "Undo", "dock", false, false),
             command(REDO, "Redo", "dock", false, false),
+            command(OPEN, "Open…", "dock", false, false),
+            command(SAVE, "Save As…", "dock", false, false),
             command(MOVE, "Move", "radial", false, false),
             command(ROTATE, "Rotate", "radial", false, false),
             command(
@@ -362,6 +397,19 @@ impl AppBackend for DocumentBackend {
         }
         if let Some(command) = commands.iter_mut().find(|command| command.id == REDO) {
             command.enabled = state.document.has_redo();
+        }
+        // File verbs live in the dock and on the browser's own chords. Opening takes
+        // the document's place, so it is gated like an edit; saving only reads it.
+        for (id, accel, tooltip, cmd_type) in [
+            (OPEN, "Ctrl+O", "Open a .FCStd document", "ForEdit"),
+            (SAVE, "Ctrl+S", "Download the document as .FCStd", "ForView"),
+        ] {
+            if let Some(command) = commands.iter_mut().find(|command| command.id == id) {
+                command.cmd_type = cmd_type.to_string();
+                command.group = "File".to_string();
+                command.tooltip = tooltip.to_string();
+                command.accel = accel.to_string();
+            }
         }
         Ok(commands)
     }
@@ -505,6 +553,45 @@ impl AppBackend for DocumentBackend {
     }
 
     fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String> {
+        // The file verbs are the host's half of I/O: the browser owns the picker and
+        // the download, the backend owns the bytes. They run before the state borrow
+        // because `save_document` borrows it again.
+        if id == OPEN {
+            return Ok(match crate::host::request_open() {
+                Ok(()) => CommandOutcome {
+                    ok: true,
+                    status: "open: choose a .FCStd file".to_string(),
+                    ..Default::default()
+                },
+                Err(error) => CommandOutcome {
+                    ok: false,
+                    error: format!("open: {error:?}"),
+                    ..Default::default()
+                },
+            });
+        }
+        if id == SAVE {
+            let name = self.state.borrow().name.clone();
+            return Ok(match self.save_document() {
+                Ok(bytes) => match crate::host::download(&name, &bytes) {
+                    Ok(()) => CommandOutcome {
+                        ok: true,
+                        status: format!("saved {name} ({} bytes)", bytes.len()),
+                        ..Default::default()
+                    },
+                    Err(error) => CommandOutcome {
+                        ok: false,
+                        error: format!("save: {error:?}"),
+                        ..Default::default()
+                    },
+                },
+                Err(error) => CommandOutcome {
+                    ok: false,
+                    error,
+                    ..Default::default()
+                },
+            });
+        }
         let mut state = self.state.borrow_mut();
         let state = &mut *state;
         // The two object verbs are not view toggles: they hand the shell a session

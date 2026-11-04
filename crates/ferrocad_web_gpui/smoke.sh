@@ -7,8 +7,9 @@
 #
 # Serves the already-built `www/pkg` and loads it in headless Chrome, asserting
 # the documented console baseline: the box and the fillet both tessellate through
-# the wasm kernel, and nothing panics. Without a browser or a build it prints
-# `skipped: …` and exits 0, so it never blocks a developer who has not built.
+# the wasm kernel, a save/open round trip keeps them, and nothing panics. Without a
+# browser or a build it prints `skipped: …` and exits 0, so it never blocks a
+# developer who has not built.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -97,10 +98,12 @@ capture() {
 }
 
 # Add a line here to cover another harness URL (`?click=`, `?select=`, `?keys=`,
-# `?drag=`). Every run is held to the same console contract.
+# `?drag=`, `?save=`). Every run is held to the same console contract; the
+# round-trip line is asserted separately because only `?reopen=1` saves.
 capture_urls() {
     capture "/"
     capture "/?click=950,131"
+    capture "/?reopen=1"
 }
 
 require_line() {
@@ -129,6 +132,10 @@ check_console() {
 ferrocad: Box · 12 triangles, 12 edges
 ferrocad: Fillet · 40 triangles, 21 edges
 EOF
+
+    echo "round-trip console lines:"
+    require_line 'ferrocad harness: save Sample'
+    require_line 'ferrocad harness: reopened -> opened reopened.FCStd (2 object(s))'
 
     echo "forbidden console patterns:"
     while IFS= read -r pattern; do

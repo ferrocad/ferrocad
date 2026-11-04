@@ -1,6 +1,6 @@
 # The wasm shell: one GPUI UI crate, two backends
 
-Status: **task (2026-11-03). M0–M5 done (2026-11-04).**
+Status: **task (2026-11-03). M0–M6 done (2026-11-04).**
 Companions: [`../research/web-wasm-host.md`](../research/web-wasm-host.md) (the
 probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md)
@@ -292,6 +292,13 @@ second implementation:
   `transform`/`apply` commit with its 16-value world matrix, composes it as
   `delta · placement` and writes the resulting `Placement` — the same hook the
   desktop gizmo uses.
+- **File I/O** (M6): `open_document(name, bytes)` decodes with
+  `ferrocad_core::fcstd::decode_fcstd`, rebuilds with `Document::from_saved`, recomputes
+  and remembers the file's name; `save_document()` serializes with `to_saved(name)` and
+  `encode_fcstd`. Both are the `AppBackend` seam's methods, so a native backend can
+  implement them the same way. `run_command` serves `App_Open` (asks the page for its
+  picker) and `App_Save` (hands the page the bytes to download); the page owns the
+  `<input type=file>`, the download and drag-and-drop.
 - `evaluate`: reports that the browser build has no interpreter (the console is
   still a real transcript, and `hello` names the Rust document backend).
 
@@ -327,19 +334,22 @@ The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research
 | **M3** | **Live 3D in the shell** — **done 2026-11-03** | `DeferredView` + `ShellView`; presenter allowed on wasm (`surface.format()`, `SAMPLES = 1`); `enable_viewport` on wasm; `SampleBackend::stage_meshes` (hand-tessellated boxes); CPU picking instead of the G-buffer. | Headless Chrome shows both boxes through `InventorViewport` with the shell around them; `?drag=1` orbits (75 434 px differ), `?wheel=1` zooms (42 132 px), and a click on a box selects it — tree row, properties, status line and gizmo. 308 native tests still pass. |
 | **M4** | **Real Rust document** — **done 2026-11-03** | `DocumentBackend` over `ferrocad_core::Document` + `ferrocad_part` + `OcctBackend`; tree, property rows and stage all read the document; `set_property` recomputes. The host links the prebuilt wasm kernel (`ferrocad_wasm` stubs + `__wasm_call_ctors`). | Headless Chrome shows `Sample`: `Box` (`Part::Box`) and `Fillet` (`Part::Fillet`) in the tree, the fillet's real rows (`Base` `Box: Edge1`, `Radius 3.0 mm`, `Shape` `Output`), and the filleted box in the viewport. The console logs `Box · 12 triangles` and `Fillet · 40 triangles` — the probe's baseline. The `wasm` CI job links the host. |
 | **M5** | **Editing** — **done 2026-11-04** | `AppBackend::set_visibility` (+ `VisibilityOutcome`) on the API, implemented by `PythonAppBackend` (one `Visibility` transaction) and `DocumentBackend`; `Shell::toggle_visibility` goes through the backend instead of a Python script. `DocumentBackend` gains `set_selection`, `rotation_quaternion`, `App_Move` (typed delta dialog), `App_Rotate`, `App_ToggleVisibility`, `App_Undo`/`App_Redo`, `App_Fit`, `dialog_accept`/`dialog_cancel` and `apply_interaction` (`transform`/`apply`: the 16-value world matrix composed `delta · placement`, then `Rotation::from_matrix`). Every edit runs in one named transaction through `set_property` + `recompute` and re-syncs the stage; visibility is the document's `Visibility` bool (added on first use), so it is in the undo history too. `ViewRequest` gains `fit` (an action the shell performs once with `InventorView::frame_stage`, never stored). `handle_key` now treats a focused property field as editing, so the single-window shell does not take its digits for loadout slots. | In headless Chrome: **Move** (`?select=1004,100&keys=ctrl-shift-m;tab;1;5;enter`) commits `moved 1 object(s)` and `Placement` becomes `(10.0, -5.0, -5.0)` with the stage following; **Rotate** (space wheel → `Rotate`, then `Enter`) commits `rotated` through `apply_interaction` and the box turns; **Hide/Show** (space wheel → `Hide`) commits `hid 1 object(s)`, the base box leaves the stage, and a `Visibility` (`App::PropertyBool`, off) row appears; **undo/redo** (`ctrl-z` / `ctrl-shift-z`) print `undo: Move` / `redo: Move` and move `Placement` back and forth; **Fit** (palette `ctrl-k;f;i;t;enter` after three zoom-out notches) reframes the stage and prints `fit`; **the property pane** (type `25` into `Length`, `Enter`) commits `set Box.Length` and the box lengthens. `ferrocad_shell_core` gains `a_focused_property_field_owns_its_digits` and `a_fit_request_frames_the_stage_without_touching_the_state`; the native suites are 252 + 53 + 6. |
+| **M6** | **Browser file I/O** — **done 2026-11-04** | `AppBackend::open_document(name, bytes)` / `save_document()`: bytes in, bytes out, at the same seam the native backend implements (the defaults refuse). `DocumentBackend` implements them over `ferrocad_core::fcstd` (`decode_fcstd` + `encode_fcstd`, `Document::from_saved` / `to_saved`, recompute on open) and keeps the document's name for the title and the next save. `Shell::open_document` replaces the document and refreshes the model, the selection, the stage and the camera. The host registers `App_Open` / `App_Save` (`Ctrl+O` / `Ctrl+S`, dock + palette) and the page owns the picker, the download and drag-and-drop; a `ferrocad_open(name, bytes)` wasm export re-enters GPUI through an `AsyncApp` kept at boot. | In headless Chrome, `?reopen=1` saves the sample (`saved Sample (3788 bytes)`) and reopens those bytes (`opened Sample (2 object(s))`): the tree, the stage, the title and the status line all come from the decoded document, and the selection is cleared. `?keys=ctrl-o` reaches the page bridge (`open requested`). `run.sh --check` asserts the round trip, and the native suites stay 252 + 53 + 6. |
 
-M0–M5 are done: the boundary, the wasm build, a real shell in Chrome, the live 3D
-viewport in it, a real document behind both, and edits that write that document
-(recompute and stage refresh follow every commit).
+M0–M6 are done: the boundary, the wasm build, a real shell in Chrome, the live 3D
+viewport in it, a real document behind both, edits that write that document
+(recompute and stage refresh follow every commit), and `.FCStd` open/save that keeps
+the document in the browser's own file system.
 
 ## 8. Non-goals
 
 - **Python in the browser.** `pyo3`/CPython cannot run on `wasm32-unknown-unknown`;
   no app/workbench scripts, no `FreeCAD` facade, no Python tools, no `.ui`-driven
   task panels in the browser.
-- **STEP/IGES/STL and `.FCStd` C++/Python serialization.** The prebuilt wasm
-  kernel omits the exchange and CAF toolkits. Bytes-level native-format I/O is a
-  separate task.
+- **STEP/IGES/STL.** The prebuilt wasm kernel omits the exchange and CAF toolkits.
+  `.FCStd` itself is supported in Rust (`ferrocad_core::fcstd`), which is why the
+  browser can open and save documents; only the exchange formats and the C++/Python
+  serializers are out of reach.
 - **Multiple windows.** The browser backend has one window; the Dev Tools panels
   move in-window.
 - **The readback image fallback** and **adapter enumeration** on wasm.
@@ -395,6 +405,14 @@ viewport in it, a real document behind both, and edits that write that document
   harness proves the typing path once focused (`?type=`). The bottom action dock is
   unreliable under synthetic input in the same way, so run a dock-only command through
   the palette in a capture (that is how `Fit` is verified).
+- **The two web-only seams in file I/O (M6).** Rust hands JS a `&[u8]` as a **view
+  into wasm memory**, valid only for that call; the page must copy it before keeping
+  it (`new Uint8Array(bytes)`), or the stored bytes are recycled memory. The first
+  round trip failed with `not a ZIP archive` for exactly that reason. In the other
+  direction, `ferrocad_open` re-enters GPUI from a DOM callback through the
+  `AsyncApp` the window keeps at boot; it must run outside an active app borrow (a
+  picker `change` or a `drop` is), and it calls the shell's public `open_document`
+  so the model, stage and camera all refresh through the normal paths.
 - **One-window panels.** The editor, properties and console must be laid out for
   the main window; the current `dev_tools_body` assumes a second window and
   double key handling (`panels_open` must not also route keys through the shell).

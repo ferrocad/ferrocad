@@ -87,6 +87,17 @@ pub fn hello(cx: &App) -> Result<String, String> {
     with_backend(cx, |backend| backend.hello()).unwrap_or_else(|| Err(no_backend()))
 }
 
+/// Replace the active document with bytes the host decoded (a browser file picker).
+pub fn open_document(cx: &mut App, name: &str, bytes: &[u8]) -> Result<OpenedDocument, String> {
+    with_backend_mut(cx, |backend| backend.open_document(name, bytes))
+        .unwrap_or_else(|| Err(no_backend()))
+}
+
+/// Serialize the active document for the host to save (a browser download).
+pub fn save_document(cx: &App) -> Result<Vec<u8>, String> {
+    with_backend(cx, |backend| backend.save_document()).unwrap_or_else(|| Err(no_backend()))
+}
+
 pub fn load_workbenches(cx: &App) -> Result<WorkbenchReport, String> {
     with_backend(cx, |backend| backend.load_workbenches()).unwrap_or_else(|| Err(no_backend()))
 }

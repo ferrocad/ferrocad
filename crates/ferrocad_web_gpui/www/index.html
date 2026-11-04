@@ -14,7 +14,72 @@
   <script type="module">
     // `--target web` glue. `init` instantiates the module, which runs the
     // `#[wasm_bindgen(start)]` entry point (log setup, then GPUI's application).
-    import init from "./pkg/ferrocad_web_gpui.js";
+    import init, { ferrocad_open } from "./pkg/ferrocad_web_gpui.js";
+
+    const params = new URLSearchParams(location.search);
+    // `?reopen=1` captures the next save instead of downloading it, then opens those
+    // bytes again -- the save/open round trip through the real commands.
+    const captureSave = params.has("reopen");
+    let saved = null;
+
+    // The page owns what Rust cannot do: the file picker and the download. The host
+    // calls these two; `ferrocad_open` (the wasm export) hands a chosen file back.
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".FCStd,.fcstd";
+    fileInput.style.display = "none";
+    document.body.appendChild(fileInput);
+
+    const fileName = (name) =>
+      /\.fcstd$/i.test(name) ? name : `${name}.FCStd`;
+
+    const openFile = async (file) => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      try {
+        const status = ferrocad_open(file.name, bytes);
+        console.log("ferrocad harness: open ->", status);
+      } catch (error) {
+        console.log("ferrocad harness: open failed:", String(error));
+      }
+    };
+
+    window.__ferrocad = {
+      requestOpen() {
+        console.log("ferrocad harness: open requested");
+        fileInput.click();
+      },
+      download(name, bytes) {
+        console.log("ferrocad harness: save", name, bytes.length);
+        if (captureSave) {
+          // Rust passes `&[u8]` to JS as a view into wasm memory, valid only for
+          // this call; copy before keeping it.
+          saved = { name, bytes: new Uint8Array(bytes) };
+          return;
+        }
+        const blob = new Blob([bytes], { type: "application/octet-stream" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = fileName(name);
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      },
+    };
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      // Clearing the value lets the same file be chosen twice.
+      fileInput.value = "";
+      if (file) await openFile(file);
+    });
+
+    // A dropped `.FCStd` opens it, the way a desktop app accepts a dragged document.
+    document.addEventListener("dragover", (event) => event.preventDefault());
+    document.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      const file = event.dataTransfer?.files?.[0];
+      if (file) await openFile(file);
+    });
+
     await init();
 
     // `?select=x,y` clicks a row, then `?keys=` and `?type=` drive the keyboard.
@@ -22,8 +87,7 @@
     // object, run an accelerated command, type a value into a field, commit with
     // Enter. GPUI's web backend takes keyboard input through a hidden IME mirror
     // (`body > textarea`), which is where these events go.
-    const params = new URLSearchParams(location.search);
-    if (params.has("select") || params.has("keys") || params.has("type")) {
+    if (params.has("select") || params.has("keys") || params.has("type") || params.has("save") || params.has("reopen")) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const canvas = document.querySelector("canvas");
       const mirror = document.querySelector("body > textarea");
@@ -176,6 +240,26 @@
           }
           await new Promise((resolve) => setTimeout(resolve, 50));
           key("enter");
+        }
+
+        // `?save=1` runs Save through the shell's accelerator; the page logs the
+        // bytes it is asked to download. `?reopen=1` captures those bytes and opens
+        // them again, so the same run proves save and open.
+        if (params.has("save") || params.has("reopen")) {
+          key("ctrl-s");
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          if (params.has("reopen")) {
+            if (saved) {
+              try {
+                const status = ferrocad_open("reopened.FCStd", saved.bytes);
+                console.log("ferrocad harness: reopened ->", status);
+              } catch (error) {
+                console.log("ferrocad harness: reopen failed:", String(error));
+              }
+            } else {
+              console.log("ferrocad harness: reopen captured no bytes");
+            }
+          }
         }
       }
     }

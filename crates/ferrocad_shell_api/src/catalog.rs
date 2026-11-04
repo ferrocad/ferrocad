@@ -443,6 +443,9 @@ mod tests {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return;
         };
+        // A Windows checkout may have rewritten the line endings; the generator always
+        // emits LF, and the content is what is being compared.
+        let text = text.replace("\r\n", "\n");
         assert_eq!(
             text,
             json_text(),

@@ -1,6 +1,6 @@
 # Host backends: one shell, one contract, several runtimes
 
-Status: **task (2026-11-04). S1–S3 done; S4 is unblocked.**
+Status: **task (2026-11-04). S1–S4 done; S5 is next.**
 Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../research/web-wasm-host.md`](../research/web-wasm-host.md)
 (the browser findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../../developer/architecture.md`](../../developer/architecture.md)
@@ -23,7 +23,7 @@ version.
 | **D7** | `ferrocad_inventor` becomes a **producer-side compatibility adapter** (pivy scenes → `Stage`), not a second render path. The legacy methods leave `AppBackend` for a `ScriptHost` trait. | Keeps FreeCAD compatibility for legacy workbenches without making every backend implement a scenegraph. | S6 |
 | **D8** | File verbs (**Open/Save**) are a **host** concern: the shell picks a path and moves bytes; the backend only decodes/encodes them. | `open_document(name, bytes)`/`save_document() -> Vec<u8>` are already byte-based, and the browser proved that shape works. | S1 |
 | **D9** | Native dialogs use GPUI's `App::prompt_for_paths` / `prompt_for_new_path` — xdg-desktop-portal on Linux. | Already in the framework; no dialog crate needed. | S1 |
-| **D10** | The built-in **command catalogue** becomes data in `ferrocad_shell_api::catalog`, generated into the Python package and diffed in CI. | One list of ids/labels/accels; Python still owns dynamic `addCommand`. | S4 |
+| **D10** | The built-in **command catalogue** becomes data in `ferrocad_shell_api::catalog`, generated into the Python package and diffed in CI. | One list of ids/labels/accels; Python still owns dynamic `addCommand`. | S4 ✓ |
 | **D11** | `ferrocad_web` (the old canvas demo) is retired once its smoke coverage moves to the shell host. | It duplicates nothing renderable but owned the only TKFeat/fillet-refusal runtime check. | S2 ✓ |
 
 ### 0.1 The four questions this document answers
@@ -357,24 +357,39 @@ Migration note: an existing Rust-written `.FCStd` stores `App::PropertyFloat` fo
 `Part::Box.Length`. `float_property` must keep accepting `Float` so those files keep
 working; only newly created objects use `Quantity`.
 
-### 5.4 Command catalogue as data (D10)
+### 5.4 Command catalogue as data (D10) — done
 
 ```rust
 // ferrocad_shell_api/src/catalog.rs
 pub struct CommandDef { /* id, menu, tooltip, accel, group, cmd_type, surface,
-                          short, tone, parent, wheel, dev_only */ }
+                          short, tone, parent, wheel, checkable, dev_only */ }
+pub const TOGGLE_GRID: &str = "App_ToggleGrid";   // …and the other ids, named once
 pub fn builtin() -> &'static [CommandDef];
-pub fn info(def: &CommandDef, state: &ViewState, enabled: bool) -> CommandInfo;
+pub fn find(id: &str) -> Option<&'static CommandDef>;
+impl CommandDef { pub fn info(&self) -> CommandInfo; }
+pub fn move_dialog() -> DialogSpec;
+pub fn to_json() -> serde_json::Value;
+pub fn json_text() -> String;
 ```
 
-- The Rust backend uses `builtin()` directly; `document.rs:43-56` and its
-  hand-written rows disappear.
-- Python generates `python/ferrocad_shell/catalog.json` from the same table
-  (`cargo xtask catalog --write`), and `FreeCADGui`'s built-ins read it. A
-  `--check` mode diffs the live `FreeCADGui.listCommands()` against the JSON, so
-  drift fails CI rather than showing up as a missing menu row.
+- The Rust backend uses `builtin()` directly: `ferrocad_web_gpui`'s
+  `commands()` is the catalogue plus live state (`checked`, `enabled`), with
+  browser-only verbs (`App_Fit`, undo/redo, `Draft_Snap_Lock`, hide/show) as
+  overrides beside it, not in the table.
+- `cargo run -p ferrocad_shell_api --example catalog >
+  python/ferrocad_shell/catalog.json` **generates** the file; it is committed.
+  Every built-in's `GetResources()` in `python/ferrocad_shell` reads it
+  (`_catalog_resources`), so Python owns behaviour only.
+- Drift fails in two places, not one: the crate's own test
+  (`the_checked_in_catalogue_is_current`) fails when the JSON falls behind the
+  table, and `tests/test_commands.py::CatalogTests` fails when the live
+  `FreeCADGui` registry and the JSON disagree in either direction (a built-in on
+  one side without the other). `cargo test -p ferrocad_shell_api` and the base
+  Python suites are both in CI.
 - Python mods keep `FreeCADGui.addCommand` — the catalogue is only the built-in set.
-- `App_Move`'s dialog spec exists once (in Rust) and is read by both hosts.
+- `App_Move`'s dialog spec exists once (in Rust) and is read by both hosts: the
+  browser calls `catalog::move_dialog()`, Python's `_MoveCommand` reads
+  `catalog.json["dialogs"]["App_Move"]`.
 
 ### 5.5 File verbs (D8, D9)
 
@@ -480,7 +495,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | **S1** | **Desktop file verbs** (D8/D9) — **done (2026-11-04)** | `Ctrl+O`/`Ctrl+S` in the native app through the portal; `App_Open`/`App_Save` in the Python registry; works for every backend | 3–4 d |
 | **S2** | **One display path** (D6/D11) — **done (2026-11-04)** | `ferrocad_core::drawable` (the fillet is drawn instead of the box it consumed); both hosts ask it; `ferrocad_web` and `ferrocad_web_viewport` retired with their checks ported | 2–3 d |
 | **S3** | **Shared property presentation** (D4/D5) — **done (2026-11-04)** | `ferrocad_core::present` (`kind`/`format`/`coerce`); `ferrocad_py` exposes `propertyKindOf`/`formatProperty`/`coercePropertyText`; Part lengths are `Quantity` (datum planes already were); `set_property` keeps a quantity's unit when given a bare number | 4–6 d |
-| **S4** | **Catalogue as data** (D10) | `catalog.rs` + generated `catalog.json` + `--check`; one `App_Move` spec | 4–5 d |
+| **S4** | **Catalogue as data** (D10) — **done (2026-11-04)** | `ferrocad_shell_api::catalog` (the table, the named ids, the Move form), generated `python/ferrocad_shell/catalog.json`, the browser backend reading `builtin()`, Python's `GetResources()` reading the JSON, and a drift test on each side | 4–5 d |
 | **S5** | **`ferrocad_shell_rust`** (D3) | the Rust backend as a crate; a headless desktop edition proves it is not browser-only | 2–3 d |
 | **S6** | **Seam split** (D7) | `ScriptHost`; `inventor_scene`/`event_listener` demoted; `FilePicker` unifies native and web | 3–4 d |
 | **S7** | **JS backend spike** | a page that loads an ES module and calls `Document` through `wasm-bindgen`; one command registered from JS | 5–8 d |
@@ -493,7 +508,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | S1 | `#[gpui::test]`s drive the prompt hooks: the picked path reaches the backend and the title/status update; Save hands its path over; a cancelled prompt changes nothing; without a portal the status line shows the error. |
 | S2 | The browser smoke log shows `stage draws Fillet` and **not** `stage draws Box` (the feature replaced its base), while both shapes still tessellate; desktop output unchanged; `cargo test -p ferrocad_shell_core` green. |
 | S3 | `present` unit tests (kind/format/coerce, colour alpha, constraints, multi-colour refusal); `ferrocad_core` and `ferrocad_part` suites green; the base Python suites green (687); the browser smoke shows the same rows; doc checks pass. *Follow-up:* a `.FCStd` fixture from upstream FreeCAD (none in the repo) to pin the open+recompute path end to end. |
-| S4 | `cargo xtask catalog --check` fails when a Python built-in is added without the Rust table; `App_Move` exists once. |
+| S4 | The crate's `the_checked_in_catalogue_is_current` fails when `python/ferrocad_shell/catalog.json` is stale, and `CatalogTests` fails when a built-in exists on only one side (Python registry vs. JSON); `App_Move` exists once, in `catalog::move_dialog()`. |
 | S5 | `cargo check -p ferrocad_shell_rust` (native) and `--target wasm32-unknown-unknown` both pass; no gpui/pyo3 in its graph (`cargo tree`). |
 | S6 | `AppBackend`'s scripting methods are behind `script_host()`; the browser still builds with no scripting backend; `inventor_scene` is gone from the trait. |
 | S7 | A browser page registers one JS command and receives one document event; no panic in the console. |
@@ -523,11 +538,12 @@ would otherwise inherit the split seam.
 | `crates/ferrocad_part/src/lib.rs`, `src/dress_up.rs` | dimensions default to `Quantity`; `float_property` accepts both |
 | `crates/ferrocad_py/src/lib.rs` | `propertyKindOf`, `formatProperty`, `coercePropertyText` |
 | `python/ferrocad_shell/__init__.py` | `properties`/`set_property` call the shared functions; `_EDITABLE_KINDS`, `_coerce` and the colour parsing are gone |
-| `crates/ferrocad_shell_api/src/catalog.rs` **(new)** | `CommandDef`, `builtin()`, `info()` |
-| `crates/ferrocad_web_gpui/src/document.rs` | `commands()` becomes `catalog::builtin()` + state |
+| `crates/ferrocad_shell_api/src/catalog.rs` **(new)** | `CommandDef`, the named ids, `builtin()`, `find()`, `info()`, `move_dialog()`, `to_json`/`json_text` |
+| `crates/ferrocad_shell_api/examples/catalog.rs` **(new)** | writes `python/ferrocad_shell/catalog.json` |
+| `crates/ferrocad_web_gpui/src/document.rs` | `commands()` becomes `catalog::builtin()` + live state; the local id constants and `move_dialog()` go |
 | `python/ferrocad_shell/catalog.json` **(generated)** | built-ins for the Python registry |
-| `python/FreeCADGui/__init__.py` | load the JSON for built-ins; keep `addCommand` |
-| `crates/xtask/src/…` | `catalog --write` / `--check` subcommand |
+| `python/ferrocad_shell/__init__.py` | `_catalog_resources()`; the built-ins' `GetResources()` read the JSON; `_MoveCommand` builds its form from it; `_BUILTIN_COMMANDS` names the set |
+| `tests/test_commands.py` | `CatalogTests`: registry vs. catalogue, both directions |
 | `docs/INDEX.md`, `docs/project/tasks/README.md` | this note |
 
 ## 10. Risks, open questions and doc debt
@@ -536,7 +552,7 @@ would otherwise inherit the split seam.
 | --- | --- | --- |
 | **`Quantity` migration changes file output** | A box created now writes `App::PropertyFloat`; after S3 it writes `App::PropertyLength`. Old files must keep loading. | `float_property` accepts both; a round-trip test with a pre-S3 file; no schema bump. |
 | **S3 reaches into Python-visible behaviour** | `properties()` output changes (units appear), and `set_property` coercion changes. | Run `tools/api_docs.py`, the Python suites and the doc checks; call the change out in the release notes. |
-| **Catalogue generation adds a build step** | A generated file in `python/` can drift if `--check` is not in CI. | Wire `catalog --check` into the same job as `api_docs.py --check`; fail on drift. |
+| **Catalogue generation adds a build step** | A generated file in `python/` can drift if nothing checks it. | Two tests do: the crate's own (stale JSON) and `CatalogTests` (registry vs. JSON, both directions). Regenerate with `cargo run -p ferrocad_shell_api --example catalog > python/ferrocad_shell/catalog.json`. |
 | **S1 without a portal** | Headless CI and minimal desktops have no xdg portal. | Treat `PortalNotFound` as a status line; keep `--open` for tests; drive S1's test through `select_paths`. |
 | **The wasm-Python choice is unmade** | S8 could invalidate the module API chosen in S7. | Do S7 against the `mod-events` contract (E1), not against JS specifics; treat `ferrocad_py` as native-only until S8 reports. |
 | **Doc debt: `architecture.md` §1/§6 predate the shell split** | It still describes `ferrocad_shell_gpui` as owning `Shell`, and lists neither `ferrocad_shell_api`/`_core` nor `ferrocad_web_gpui`. | Update those two sections when S5 adds `ferrocad_shell_rust` (one edit, no new note). |

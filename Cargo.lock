@@ -2601,6 +2601,7 @@ dependencies = [
  "ferrocad_geom",
  "ferrocad_occt",
  "ferrocad_part",
+ "ferrocad_shell_api",
  "ferrocad_shell_core",
  "ferrocad_stage",
  "ferrocad_types",

@@ -1,0 +1,121 @@
+{
+  "commands": [
+    {
+      "checkable": true,
+      "cmd_type": "ForView",
+      "group": "View",
+      "id": "App_ToggleGrid",
+      "menu": "Grid",
+      "surface": "grid",
+      "tooltip": "Show the reference grid"
+    },
+    {
+      "checkable": true,
+      "cmd_type": "ForView",
+      "group": "View",
+      "id": "App_ToggleAxisCross",
+      "menu": "Axis cross",
+      "short": "Axes",
+      "surface": "axis",
+      "tooltip": "Show the world axis cross"
+    },
+    {
+      "cmd_type": "ForView",
+      "group": "View",
+      "id": "App_ViewWorkplane",
+      "menu": "Align camera to WP",
+      "parent": "App_Workplane",
+      "short": "WP",
+      "surface": "workplane",
+      "tooltip": "Look down the active workplane's normal"
+    },
+    {
+      "checkable": true,
+      "cmd_type": "ForView",
+      "group": "View",
+      "id": "App_ToggleGizmo",
+      "menu": "Gizmo",
+      "surface": "gizmo",
+      "tooltip": "Show the transform gizmo"
+    },
+    {
+      "accel": "Ctrl+Shift+D",
+      "cmd_type": "ForView",
+      "group": "View",
+      "id": "Dev_ToggleTools",
+      "menu": "Dev Tools",
+      "surface": "hidden",
+      "tooltip": "Open or close the developer tools window"
+    },
+    {
+      "accel": "Ctrl+O",
+      "cmd_type": "ForView",
+      "group": "File",
+      "id": "App_Open",
+      "menu": "Open…",
+      "surface": "hidden",
+      "tooltip": "Open a saved document"
+    },
+    {
+      "accel": "Ctrl+S",
+      "cmd_type": "ForView",
+      "group": "File",
+      "id": "App_Save",
+      "menu": "Save As…",
+      "surface": "hidden",
+      "tooltip": "Save the document as a file"
+    },
+    {
+      "accel": "Ctrl+Shift+M",
+      "cmd_type": "ForEdit",
+      "group": "Edit",
+      "id": "App_Move",
+      "menu": "Move",
+      "surface": "radial",
+      "tone": "structural",
+      "tooltip": "Move the selected objects by a delta",
+      "wheel": true
+    },
+    {
+      "accel": "Ctrl+Shift+R",
+      "cmd_type": "ForEdit",
+      "group": "Edit",
+      "id": "App_Rotate",
+      "menu": "Rotate",
+      "surface": "radial",
+      "tone": "structural",
+      "tooltip": "Rotate the selected objects about the gizmo origin",
+      "wheel": true
+    }
+  ],
+  "dialogs": {
+    "App_Move": {
+      "accept": "Move",
+      "fields": [
+        {
+          "kind": "quantity",
+          "label": "ΔX",
+          "name": "dx",
+          "value": 0.0
+        },
+        {
+          "kind": "quantity",
+          "label": "ΔY",
+          "name": "dy",
+          "value": 0.0
+        },
+        {
+          "kind": "quantity",
+          "label": "ΔZ",
+          "name": "dz",
+          "value": 0.0
+        }
+      ],
+      "gizmo": "translate",
+      "presentation": "float",
+      "preview": "translation",
+      "title": "Move"
+    }
+  },
+  "generated_by": "ferrocad_shell_api::catalog"
+}

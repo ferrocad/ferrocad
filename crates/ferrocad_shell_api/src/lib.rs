@@ -16,6 +16,7 @@
 //! crate. It depends only on pure crates — no gpui, no CPython, no GPU.
 
 pub mod app;
+pub mod catalog;
 pub mod commands;
 pub mod dialog;
 pub mod display;

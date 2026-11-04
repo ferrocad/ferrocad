@@ -34,6 +34,9 @@ ferrocad_shell_core = { workspace = true, features = ["gpu-interop"] }
 ferrocad_core.workspace = true
 ferrocad_part.workspace = true
 ferrocad_occt.workspace = true
+# The built-in command catalogue: the same table the native registry reads from
+# `python/ferrocad_shell/catalog.json`, so both hosts spell a label the same way.
+ferrocad_shell_api.workspace = true
 ferrocad_geom.workspace = true
 ferrocad_stage.workspace = true
 ferrocad_types.workspace = true

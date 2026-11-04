@@ -25,6 +25,7 @@ use ferrocad_core::{
 use ferrocad_geom::TessellationOptions;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{BOX_TYPE, FILLET_TYPE, backend, shape_of};
+use ferrocad_shell_api::catalog::{self, CommandDef};
 use ferrocad_shell_core::app::AppBackend;
 use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_core::display::StageMesh;
@@ -34,25 +35,17 @@ use ferrocad_shell_core::types::{
     SetResult, VisibilityOutcome,
 };
 use ferrocad_shell_core::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
-use ferrocad_shell_core::{DialogField, DialogSpec};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
-/// Document and command ids shared with the native registry, so the chrome's controls
-/// and the app menu resolve exactly as they do natively.
-const GRID: &str = "App_ToggleGrid";
-const AXIS: &str = "App_ToggleAxisCross";
-const WORKPLANE: &str = "App_ViewWorkplane";
-const GIZMO: &str = "App_ToggleGizmo";
+/// The commands only the browser offers.
+///
+/// Their metadata is not in the shared catalogue: Fit, undo/redo and hide/show are
+/// this host's own verbs, and Draft's snap switch is not a shell built-in.
 const SNAP: &str = "Draft_Snap_Lock";
-const DEV_TOOLS: &str = "Dev_ToggleTools";
 const FIT: &str = "App_Fit";
-const MOVE: &str = "App_Move";
-const ROTATE: &str = "App_Rotate";
 const VISIBILITY: &str = "App_ToggleVisibility";
 const UNDO: &str = "App_Undo";
 const REDO: &str = "App_Redo";
-const OPEN: &str = "App_Open";
-const SAVE: &str = "App_Save";
 
 /// The prefix of the dialog tokens this backend mints for `App_Move`.
 ///
@@ -336,92 +329,61 @@ impl AppBackend for DocumentBackend {
 
     fn commands(&self) -> Result<Vec<CommandInfo>, String> {
         let state = self.state.borrow();
-        let mut commands = vec![
-            command(GRID, "Grid", "grid", true, state.view.grid),
-            command(AXIS, "Axes", "axis", true, state.view.axis_cross),
-            command(WORKPLANE, "WP", "workplane", false, false),
-            command(GIZMO, "Gizmo", "gizmo", true, state.view.gizmo.enabled),
-            command(SNAP, "Snap", "snap", true, state.snap),
-            command(DEV_TOOLS, "Dev Tools", "hidden", false, false),
-            command(FIT, "Fit", "dock", false, false),
-            command(UNDO, "Undo", "dock", false, false),
-            command(REDO, "Redo", "dock", false, false),
-            command(OPEN, "Open…", "dock", false, false),
-            command(SAVE, "Save As…", "dock", false, false),
-            command(MOVE, "Move", "radial", false, false),
-            command(ROTATE, "Rotate", "radial", false, false),
-            command(
-                VISIBILITY,
-                if selection_visible(&state) == Some(false) {
-                    "Show"
-                } else {
-                    "Hide"
-                },
-                "radial",
-                false,
-                false,
-            ),
-        ];
-        // The app menu lists the first entry by id; give Fit a friendly tooltip too.
+        // The shared catalogue is the source of every built-in's metadata; this
+        // backend fills in the live state and appends the verbs only it offers.
+        let mut commands: Vec<CommandInfo> =
+            catalog::builtin().iter().map(CommandDef::info).collect();
         for command in &mut commands {
-            command.cmd_type = "ForView".to_string();
-            command.group = "View".to_string();
-        }
-        if let Some(fit) = commands.iter_mut().find(|command| command.id == FIT) {
-            fit.tooltip = "Frame the document".to_string();
-        }
-        // The object verbs are the right-click wheel's: Move opens the typed Move form
-        // (the same one the gizmo's arrows fill), Rotate switches the triad's rings on,
-        // and Hide/Show toggles the selection. Their accelerators are the native
-        // registry's, so the muscle memory carries.
-        for (id, accel, tooltip) in [
-            (MOVE, "Ctrl+Shift+M", "Move the selected objects by a delta"),
-            (ROTATE, "Ctrl+Shift+R", "Rotate the selected object"),
-            (VISIBILITY, "", "Hide or show the selected objects"),
-        ] {
-            if let Some(command) = commands.iter_mut().find(|command| command.id == id) {
-                command.cmd_type = "ForEdit".to_string();
-                command.group = "Edit".to_string();
-                command.tooltip = tooltip.to_string();
-                command.accel = accel.to_string();
-                command.wheel = true;
+            match command.id.as_str() {
+                catalog::TOGGLE_GRID => command.checked = state.view.grid,
+                catalog::TOGGLE_AXIS_CROSS => command.checked = state.view.axis_cross,
+                catalog::TOGGLE_GIZMO => command.checked = state.view.gizmo.enabled,
+                _ => {}
             }
         }
-        // Undo and redo are plain edit commands: the action dock lists them and the
-        // accelerators run them, but they are not wheel verbs.
-        for (id, accel, tooltip) in [
-            (UNDO, "Ctrl+Z", "Undo the last edit"),
-            (REDO, "Ctrl+Shift+Z", "Redo the last undone edit"),
-        ] {
-            if let Some(command) = commands.iter_mut().find(|command| command.id == id) {
-                command.cmd_type = "ForEdit".to_string();
-                command.group = "Edit".to_string();
-                command.tooltip = tooltip.to_string();
-                command.accel = accel.to_string();
-            }
-        }
-        // Undo/redo report their availability from the document's transaction stack.
-        // The shell refreshes the tree, the properties and the stage after the run, so
-        // an undone edit is removed everywhere, not just from the viewport.
-        if let Some(command) = commands.iter_mut().find(|command| command.id == UNDO) {
-            command.enabled = state.document.has_undo();
-        }
-        if let Some(command) = commands.iter_mut().find(|command| command.id == REDO) {
-            command.enabled = state.document.has_redo();
-        }
-        // File verbs live in the dock and on the browser's own chords. Opening takes
-        // the document's place, so it is gated like an edit; saving only reads it.
-        for (id, accel, tooltip, cmd_type) in [
-            (OPEN, "Ctrl+O", "Open a .FCStd document", "ForEdit"),
-            (SAVE, "Ctrl+S", "Download the document as .FCStd", "ForView"),
-        ] {
-            if let Some(command) = commands.iter_mut().find(|command| command.id == id) {
-                command.cmd_type = cmd_type.to_string();
-                command.group = "File".to_string();
-                command.tooltip = tooltip.to_string();
-                command.accel = accel.to_string();
-            }
-        }
+
+        // Snap is Draft's, not a shell built-in: the browser's own switch, with no
+        // engine-side effect yet.
+        let mut snap = row(SNAP, "Snap", "snap");
+        snap.checkable = true;
+        snap.checked = state.snap;
+        commands.push(snap);
+
+        // Fit frames the document; undo and redo are plain edit commands (the dock
+        // lists them and the accelerators run them, but they are not wheel verbs).
+        let mut fit = row(FIT, "Fit", "dock");
+        fit.tooltip = "Frame the document".to_string();
+        commands.push(fit);
+        let mut undo = row(UNDO, "Undo", "dock");
+        undo.cmd_type = "ForEdit".to_string();
+        undo.group = "Edit".to_string();
+        undo.tooltip = "Undo the last edit".to_string();
+        undo.accel = "Ctrl+Z".to_string();
+        undo.enabled = state.document.has_undo();
+        commands.push(undo);
+        let mut redo = row(REDO, "Redo", "dock");
+        redo.cmd_type = "ForEdit".to_string();
+        redo.group = "Edit".to_string();
+        redo.tooltip = "Redo the last undone edit".to_string();
+        redo.accel = "Ctrl+Shift+Z".to_string();
+        redo.enabled = state.document.has_redo();
+        commands.push(redo);
+
+        // Hide/Show is the wheel's third object verb and toggles the selection.
+        let mut visibility = row(
+            VISIBILITY,
+            if selection_visible(&state) == Some(false) {
+                "Show"
+            } else {
+                "Hide"
+            },
+            "radial",
+        );
+        visibility.cmd_type = "ForEdit".to_string();
+        visibility.group = "Edit".to_string();
+        visibility.tooltip = "Hide or show the selected objects".to_string();
+        visibility.wheel = true;
+        commands.push(visibility);
         Ok(commands)
     }
 
@@ -567,7 +529,7 @@ impl AppBackend for DocumentBackend {
         // The file verbs are the host's half of I/O: the browser owns the picker and
         // the download, the backend owns the bytes. They run before the state borrow
         // because `save_document` borrows it again.
-        if id == OPEN {
+        if id == catalog::OPEN {
             return Ok(match crate::host::request_open() {
                 Ok(()) => CommandOutcome {
                     ok: true,
@@ -581,7 +543,7 @@ impl AppBackend for DocumentBackend {
                 },
             });
         }
-        if id == SAVE {
+        if id == catalog::SAVE {
             let name = self.state.borrow().name.clone();
             return Ok(match self.save_document() {
                 Ok(bytes) => match crate::host::download(&name, &bytes) {
@@ -607,19 +569,19 @@ impl AppBackend for DocumentBackend {
         let state = &mut *state;
         // The two object verbs are not view toggles: they hand the shell a session
         // (a gizmo mode, and for Move a token its form spends).
-        if id == MOVE {
+        if id == catalog::MOVE {
             state.move_dialogs += 1;
             let token = format!("{MOVE_TOKEN}-{}", state.move_dialogs);
             return Ok(CommandOutcome {
                 ok: true,
                 status: "move: drag a handle or type a value".to_string(),
-                gizmo: Some("translate".to_string()),
-                dialog: Some(move_dialog()),
+                gizmo: Some(catalog::MOVE_GIZMO.to_string()),
+                dialog: Some(catalog::move_dialog()),
                 token: Some(token),
                 ..Default::default()
             });
         }
-        if id == ROTATE {
+        if id == catalog::ROTATE {
             return Ok(CommandOutcome {
                 ok: true,
                 status: "rotate: drag a ring".to_string(),
@@ -660,7 +622,7 @@ impl AppBackend for DocumentBackend {
             });
         }
         let (status, view) = match id {
-            GRID => {
+            catalog::TOGGLE_GRID => {
                 state.view.grid = !state.view.grid;
                 (
                     format!("grid {}", if state.view.grid { "on" } else { "off" }),
@@ -670,7 +632,7 @@ impl AppBackend for DocumentBackend {
                     }),
                 )
             }
-            AXIS => {
+            catalog::TOGGLE_AXIS_CROSS => {
                 let on = !state.view.axis_cross;
                 state.view.axis.enabled = on;
                 (
@@ -681,7 +643,7 @@ impl AppBackend for DocumentBackend {
                     }),
                 )
             }
-            GIZMO => {
+            catalog::TOGGLE_GIZMO => {
                 let on = !state.view.gizmo.enabled;
                 (
                     format!("gizmo {}", if on { "on" } else { "off" }),
@@ -701,7 +663,7 @@ impl AppBackend for DocumentBackend {
                     None,
                 )
             }
-            WORKPLANE => (
+            catalog::VIEW_WORKPLANE => (
                 "workplane: not wired in the browser build".to_string(),
                 None,
             ),
@@ -883,29 +845,6 @@ impl AppBackend for DocumentBackend {
             ok: true,
             error: String::new(),
         })
-    }
-}
-
-/// The Move form: the same floating HUD the native `App_Move` opens.
-///
-/// `preview: "translation"` is what tells the shell to present it as the hand's
-/// always-on form (and to drop the token it handed in) rather than a modal. The
-/// fields are the Δ quantities the gizmo's arrows fill while dragging.
-fn move_dialog() -> DialogSpec {
-    let field = |name: &str, label: &str| DialogField {
-        name: name.to_string(),
-        label: label.to_string(),
-        kind: "quantity".to_string(),
-        value: Some(serde_json::json!(0.0)),
-        ..Default::default()
-    };
-    DialogSpec {
-        title: "Move".to_string(),
-        accept: "Move".to_string(),
-        presentation: "float".to_string(),
-        preview: "translation".to_string(),
-        fields: vec![field("dx", "ΔX"), field("dy", "ΔY"), field("dz", "ΔZ")],
-        ..Default::default()
     }
 }
 
@@ -1137,8 +1076,10 @@ fn refused(error: String) -> SetResult {
     }
 }
 
-/// One header command. Checkable controls report their state through `checked`.
-fn command(id: &str, menu: &str, surface: &str, checkable: bool, checked: bool) -> CommandInfo {
+/// One browser-only command row, in the shape the catalogue gives the built-ins.
+///
+/// Only the fields this host sets differ; the rest keep the shell's defaults.
+fn row(id: &str, menu: &str, surface: &str) -> CommandInfo {
     CommandInfo {
         id: id.to_string(),
         menu: menu.to_string(),
@@ -1147,13 +1088,13 @@ fn command(id: &str, menu: &str, surface: &str, checkable: bool, checked: bool) 
         group: "View".to_string(),
         cmd_type: "ForView".to_string(),
         surface: surface.to_string(),
-        short: menu.to_string(),
+        short: String::new(),
         tone: String::new(),
         parent: String::new(),
         wheel: false,
         enabled: true,
-        checked,
-        checkable,
+        checked: false,
+        checkable: false,
         dev_only: false,
     }
 }

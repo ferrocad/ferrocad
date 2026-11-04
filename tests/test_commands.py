@@ -225,6 +225,67 @@ class CommandRegistryTests(unittest.TestCase):
             FreeCADGui.runCommand("Test_None")
 
 
+class CatalogTests(unittest.TestCase):
+    """The built-in metadata comes from one table (D10).
+
+    ``python/ferrocad_shell/catalog.json`` is generated from
+    ``crates/ferrocad_shell_api/src/catalog.rs`` by
+    ``cargo run -p ferrocad_shell_api --example catalog``; that crate's test fails
+    when the file is stale, and these fail when this registry and the file
+    disagree.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        path = pathlib.Path(ferrocad_shell.__file__).with_name("catalog.json")
+        cls.catalog = json.loads(path.read_text(encoding="utf-8"))
+        cls.commands = {entry["id"]: entry for entry in cls.catalog["commands"]}
+
+    def test_python_and_the_catalogue_have_the_same_builtins(self):
+        self.assertEqual(
+            set(ferrocad_shell._BUILTIN_COMMANDS),
+            set(self.commands),
+            "a built-in is registered on one side only: add it to "
+            "crates/ferrocad_shell_api/src/catalog.rs and regenerate catalog.json",
+        )
+
+    def test_every_catalogued_command_is_registered(self):
+        live = set(FreeCADGui.listCommands())
+        for command_id in self.commands:
+            with self.subTest(command=command_id):
+                self.assertIn(command_id, live)
+
+    def test_the_registry_row_matches_the_catalogue(self):
+        rows = {
+            entry["id"]: entry for entry in json.loads(ferrocad_shell.commands())
+        }
+        for command_id, entry in self.commands.items():
+            with self.subTest(command=command_id):
+                row = rows[command_id]
+                self.assertEqual(row["menu"], entry["menu"])
+                self.assertEqual(row["tooltip"], entry["tooltip"])
+                self.assertEqual(row["accel"], entry.get("accel", ""))
+                self.assertEqual(row["group"], entry["group"])
+                self.assertEqual(row["cmd_type"], entry["cmd_type"])
+                self.assertEqual(row["surface"], entry.get("surface", ""))
+                self.assertEqual(row["short"], entry.get("short", ""))
+                self.assertEqual(row["tone"], entry.get("tone", ""))
+                self.assertEqual(row["parent"], entry.get("parent", ""))
+                self.assertEqual(row["wheel"], entry.get("wheel", False))
+                self.assertEqual(row["checkable"], entry.get("checkable", False))
+                self.assertEqual(row["dev_only"], entry.get("dev_only", False))
+
+    def test_the_move_form_is_the_catalogues(self):
+        spec = ferrocad_shell._MoveCommand().Activated()
+        dialog = self.catalog["dialogs"]["App_Move"]
+        self.assertEqual(spec["title"], dialog["title"])
+        self.assertEqual(spec["accept"], dialog["accept"])
+        self.assertEqual(spec["presentation"], dialog["presentation"])
+        self.assertEqual(spec["preview"], dialog["preview"])
+        self.assertEqual(spec["gizmo"], dialog["gizmo"])
+        self.assertEqual(spec["fields"], dialog["fields"])
+
+
 class ProviderFeaturesTests(unittest.TestCase):
     """The Dev Tools providers panel's data."""
 

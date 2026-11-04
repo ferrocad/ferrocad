@@ -4,7 +4,9 @@ FerroCAD's **browser shell**: the real `ferrocad_shell_core` UI — leading bar,
 viewport header, status line, model inspector, property editor and console — in a
 GPUI window on WebGL2, over a real `ferrocad_core::Document` whose geometry is built
 by the OCCT kernel compiled to wasm, with no CPython anywhere in the dependency
-graph.
+graph. The document backend itself is `ferrocad_shell_rust`'s `RustAppBackend` —
+the same crate a desktop edition installs — so the browser host owns only the
+window, the page bridge and the file picker.
 
 This crate used to be the step-2 probe (a `Part::Box` composited through
 `gpui_interop`). The shell split (M0) and the wasm build (M1) made it a host; M2
@@ -18,12 +20,12 @@ document. The plan and the verified baselines are in
 1. **The same shell crate as the desktop app.** `ferrocad_shell_core` compiles for
    `wasm32-unknown-unknown` and opens its window through `gpui`'s web backend. There
    is no second implementation of the chrome, panels or key handling.
-2. **The seam, not a stub.** `DocumentBackend` implements `ferrocad_shell_api`'s
-   `AppBackend` over a real document. The shell asks it for the tree, the property
-   rows, the commands and the stage exactly as it asks the Python backend natively:
-   clicking a shape (or a tree row) fills the property pane and the status line;
-   `Grid`/`Axes`/`Gizmo`/`Snap` toggle through a `ViewRequest` and report their new
-   state on the next command refresh.
+2. **The seam, not a stub.** `ferrocad_shell_rust::RustAppBackend` implements
+   `ferrocad_shell_api`'s `AppBackend` over a real document. The shell asks it for
+   the tree, the property rows, the commands and the stage exactly as it asks the
+   Python backend natively: clicking a shape (or a tree row) fills the property pane
+   and the status line; `Grid`/`Axes`/`Gizmo`/`Snap` toggle through a `ViewRequest`
+   and report their new state on the next command refresh.
 3. **A real document in the browser.** `Sample` is a `Part::Box` with a `Part::Fillet`
    on `Edge1`, recomputed by the wasm OCCT kernel: the fillet's `Base` is a
    `LinkSub` to the box, and its rebuild produces 40 triangles where the box has 12.
@@ -131,8 +133,8 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   filleted shape, the axis cross and the navigation cube), the in-window `Model` /
   `Properties` / `Console` column, the loadout bar and the status line
   (`2 object(s) · Sample`, `FreeCAD 0.1.5 · rust`).
-- The console greets with `FerroCAD browser shell · Rust document backend · OCCT wasm
-  · no CPython`: the Rust document really is the one answering.
+- The console greets with `FerroCAD shell · Rust document backend · OCCT · no
+  CPython`: the Rust document really is the one answering.
 - The tree lists `Box` (`Part::Box`) and `Fillet` (`Part::Fillet`). `?click=950,131`
   selects the fillet and the pane shows its real rows: `Label`, `Base`
   (`Box: Edge1`), `Edges`, `Propagate` (a toggle), `Radius` (`3.0 mm`, editable) and
@@ -144,7 +146,7 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 - `?drag=1` orbits and `?wheel=1` zooms the camera; the presenter re-composites each
   frame. `?click=40,58` runs `App_ToggleGrid` (dot, status and console agree).
 - **Editing writes the document.** `?select=1004,100&keys=ctrl-shift-m;tab;1;5;enter`
-  runs `App_Move`, accepts `browser-move-2 {"dx":15.0,…}`, prints `moved 1 object(s)`
+  runs `App_Move`, accepts `rust-move-2 {"dx":15.0,…}`, prints `moved 1 object(s)`
   and the box's `Placement` row becomes `(10.0, -5.0, -5.0)` with the stage following.
   `?select=1004,100&keys=space;move:600,384;space` opens the object wheel, hovers
   `Hide` and commits it: `hid 1 object(s)`, the base box leaves the stage (the fillet

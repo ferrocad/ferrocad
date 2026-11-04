@@ -1,0 +1,27 @@
+[package]
+name = "ferrocad_shell_rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's Rust document backend: a real ferrocad_core::Document behind the shell's AppBackend"
+keywords = ["cad", "freecad"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_shell_rust"
+
+[dependencies]
+# The engine: a real document, its Part features and the kernel that tessellates them.
+ferrocad_core.workspace = true
+ferrocad_part.workspace = true
+ferrocad_occt.workspace = true
+ferrocad_geom.workspace = true
+# The interaction vocabulary a manipulator commit arrives in.
+ferrocad_stage.workspace = true
+# The seam and the command catalogue. Both are pure crates: no gpui, no CPython.
+ferrocad_shell_api.workspace = true
+# The Move form's values arrive as JSON, where they would arrive from Python.
+serde_json.workspace = true
+log = "0.4"

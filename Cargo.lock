@@ -2497,6 +2497,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_shell_rust"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_core",
+ "ferrocad_geom",
+ "ferrocad_occt",
+ "ferrocad_part",
+ "ferrocad_shell_api",
+ "ferrocad_stage",
+ "log",
+ "serde_json",
+]
+
+[[package]]
 name = "ferrocad_snapshot"
 version = "0.1.5"
 dependencies = [
@@ -2597,17 +2611,10 @@ name = "ferrocad_web_gpui"
 version = "0.1.5"
 dependencies = [
  "bite-gpui",
- "ferrocad_core",
- "ferrocad_geom",
- "ferrocad_occt",
- "ferrocad_part",
- "ferrocad_shell_api",
  "ferrocad_shell_core",
- "ferrocad_stage",
- "ferrocad_types",
+ "ferrocad_shell_rust",
  "ferrocad_wasm",
  "log",
- "serde_json",
  "wasm-bindgen",
 ]
 

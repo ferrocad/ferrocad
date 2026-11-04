@@ -1,20 +1,9 @@
-//! The browser's engine: a real `ferrocad_core::Document` behind `AppBackend`.
+//! The engine: a real `ferrocad_core::Document` behind `AppBackend`.
 //!
-//! This replaces the M2 sample: the tree, the property rows and the viewport stage
-//! are read from one document, and the geometry is built by the OCCT kernel compiled
-//! to wasm. The sample document is a `Part::Box` with a `Part::Fillet` on one edge —
-//! the smallest document that exercises a dependency (the fillet recomputes after
-//! the box), a parametric feature (`Radius`) and a real tessellation.
-//!
-//! # What is real, and what is not
-//!
-//! Real: `Document::recompute`, the Part object types, the kernel, tessellation into
-//! `StageMesh`es, picking (the shell's CPU ray cast over that stage), and property
-//! edits through [`AppBackend::set_property`] followed by a recompute.
-//!
-//! Not yet: undo/redo (the browser has no UI for it), expressions, binary file I/O,
-//! and anything scripted — there is no interpreter in this build, so `evaluate`
-//! says so rather than pretending.
+//! The tree, the property rows and the viewport stage are read from one document,
+//! and the geometry is built by the OCCT kernel (compiled to wasm in the browser,
+//! linked natively on the desktop). Nothing here knows which: the host supplies the
+//! window (or none) and, when it has one, the file-picker hooks.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -25,22 +14,22 @@ use ferrocad_core::{
 use ferrocad_geom::TessellationOptions;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{BOX_TYPE, FILLET_TYPE, backend, shape_of};
+use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_api::catalog::{self, CommandDef};
-use ferrocad_shell_core::app::AppBackend;
-use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
-use ferrocad_shell_core::display::StageMesh;
-use ferrocad_shell_core::selection::SelectionItem;
-use ferrocad_shell_core::types::{
+use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
+use ferrocad_shell_api::display::StageMesh;
+use ferrocad_shell_api::selection::SelectionItem;
+use ferrocad_shell_api::types::{
     ApplyResult, Bootstrap, DocumentNode, EvalResult, ObjectNode, OpenedDocument, PropRow,
     SetResult, VisibilityOutcome,
 };
-use ferrocad_shell_core::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
+use ferrocad_shell_api::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
-/// The commands only the browser offers.
+/// The commands the Rust backend offers beyond the shared catalogue.
 ///
-/// Their metadata is not in the shared catalogue: Fit, undo/redo and hide/show are
-/// this host's own verbs, and Draft's snap switch is not a shell built-in.
+/// Their metadata is not in the catalogue: Fit, undo/redo and hide/show are this
+/// backend's own verbs, and Draft's snap switch is not a shell built-in.
 const SNAP: &str = "Draft_Snap_Lock";
 const FIT: &str = "App_Fit";
 const VISIBILITY: &str = "App_ToggleVisibility";
@@ -50,11 +39,11 @@ const REDO: &str = "App_Redo";
 /// The prefix of the dialog tokens this backend mints for `App_Move`.
 ///
 /// The shell's Move form is the typed twin of the gizmo: `App_Move` returns a token
-/// and `dialog_accept` applies the delta. The native backend hands the token to
-/// Python; here it is only a marker, so any token carrying this prefix is ours.
-const MOVE_TOKEN: &str = "browser-move";
+/// and `dialog_accept` applies the delta. The Python backend hands the token to an
+/// interpreter; here it is only a marker, so any token carrying this prefix is ours.
+const MOVE_TOKEN: &str = "rust-move";
 
-/// The document property a hide adds on first use. The native backend writes the same
+/// The document property a hide adds on first use. The Python backend writes the same
 /// switch, and keeping it on the document is what makes a hide undoable.
 const VISIBILITY_PROPERTY: &str = "Visibility";
 
@@ -91,18 +80,27 @@ struct State {
     move_dialogs: u64,
 }
 
-/// The browser's `AppBackend`, over a real document.
-pub struct DocumentBackend {
+/// The Rust `AppBackend`: a real document, no interpreter.
+///
+/// A host installs one of these on the shell (the browser host does, and so does a
+/// desktop edition) instead of an interpreter-backed backend.
+pub struct RustAppBackend {
     state: RefCell<State>,
     /// Why the sample document could not be built, if it could not.
     boot_error: Option<String>,
+    /// The host's file picker, when it has one (a browser page owns its `<input
+    /// type=file>` and its download). A native host leaves them out: its shell
+    /// intercepts `App_Open`/`App_Save` and prompts for a path itself.
+    open: Option<Box<dyn Fn() -> Result<(), String>>>,
+    save: Option<Box<dyn Fn(&str, &[u8]) -> Result<(), String>>>,
 }
 
-impl DocumentBackend {
-    /// Compose Part with the wasm OCCT kernel and build the sample document.
+impl RustAppBackend {
+    /// Compose Part with the OCCT kernel and build the sample document.
     ///
-    /// Must run after the module's static constructors (`__wasm_call_ctors`): the
-    /// kernel's C++ runtime has to be initialised before the first call.
+    /// In a wasm build this must run after the module's static constructors
+    /// (`__wasm_call_ctors`): the kernel's C++ runtime has to be initialised before
+    /// the first call.
     pub fn new() -> Self {
         // Idempotent: the Part module keeps one backend per process.
         ferrocad_part::register(Arc::new(OcctBackend::new()));
@@ -124,7 +122,25 @@ impl DocumentBackend {
                 move_dialogs: 0,
             }),
             boot_error,
+            open: None,
+            save: None,
         }
+    }
+
+    /// Give the backend the host's half of `App_Open` and `App_Save`.
+    ///
+    /// `open` asks the host to let the user choose a file; `save` hands it the name
+    /// and bytes to write. The browser installs both (see `ferrocad_web_gpui`); a
+    /// desktop or headless host leaves them out, and the shell's own prompts are the
+    /// only file path there.
+    pub fn with_file_hooks<O, S>(mut self, open: O, save: S) -> Self
+    where
+        O: Fn() -> Result<(), String> + 'static,
+        S: Fn(&str, &[u8]) -> Result<(), String> + 'static,
+    {
+        self.open = Some(Box::new(open));
+        self.save = Some(Box::new(save));
+        self
     }
 
     /// The document's object for an internal name.
@@ -133,13 +149,13 @@ impl DocumentBackend {
     }
 }
 
-impl Default for DocumentBackend {
+impl Default for RustAppBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AppBackend for DocumentBackend {
+impl AppBackend for RustAppBackend {
     fn bootstrap(&mut self) -> Result<Bootstrap, String> {
         if let Some(error) = self.boot_error.clone() {
             return Err(error);
@@ -152,7 +168,7 @@ impl AppBackend for DocumentBackend {
     }
 
     fn hello(&self) -> Result<String, String> {
-        Ok("FerroCAD browser shell · Rust document backend · OCCT wasm · no CPython".to_string())
+        Ok("FerroCAD shell · Rust document backend · OCCT · no CPython".to_string())
     }
 
     /// Replace the sample with a decoded `.FCStd` file.
@@ -342,7 +358,7 @@ impl AppBackend for DocumentBackend {
             }
         }
 
-        // Snap is Draft's, not a shell built-in: the browser's own switch, with no
+        // Snap is Draft's, not a shell built-in: this backend's own switch, with no
         // engine-side effect yet.
         let mut snap = row(SNAP, "Snap", "snap");
         snap.checkable = true;
@@ -442,7 +458,7 @@ impl AppBackend for DocumentBackend {
     fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
         Ok(EvalResult {
             ok: false,
-            output: "the browser build has no Python interpreter".to_string(),
+            output: "this build has no Python interpreter".to_string(),
         })
     }
 
@@ -526,11 +542,15 @@ impl AppBackend for DocumentBackend {
     }
 
     fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String> {
-        // The file verbs are the host's half of I/O: the browser owns the picker and
-        // the download, the backend owns the bytes. They run before the state borrow
-        // because `save_document` borrows it again.
+        // The file verbs are the host's half of I/O: a browser owns the picker and
+        // the download, the backend owns the bytes. A host with no picker installs no
+        // hooks, and its shell intercepts both verbs before they reach a backend.
         if id == catalog::OPEN {
-            return Ok(match crate::host::request_open() {
+            let status = match &self.open {
+                Some(open) => open(),
+                None => Err("this host owns the file dialog".to_string()),
+            };
+            return Ok(match status {
                 Ok(()) => CommandOutcome {
                     ok: true,
                     status: "open: choose a .FCStd file".to_string(),
@@ -538,15 +558,22 @@ impl AppBackend for DocumentBackend {
                 },
                 Err(error) => CommandOutcome {
                     ok: false,
-                    error: format!("open: {error:?}"),
+                    error: format!("open: {error}"),
                     ..Default::default()
                 },
             });
         }
         if id == catalog::SAVE {
             let name = self.state.borrow().name.clone();
+            let Some(download) = &self.save else {
+                return Ok(CommandOutcome {
+                    ok: false,
+                    error: "save: this host owns the file dialog".to_string(),
+                    ..Default::default()
+                });
+            };
             return Ok(match self.save_document() {
-                Ok(bytes) => match crate::host::download(&name, &bytes) {
+                Ok(bytes) => match download(&name, &bytes) {
                     Ok(()) => CommandOutcome {
                         ok: true,
                         status: format!("saved {name} ({} bytes)", bytes.len()),
@@ -554,7 +581,7 @@ impl AppBackend for DocumentBackend {
                     },
                     Err(error) => CommandOutcome {
                         ok: false,
-                        error: format!("save: {error:?}"),
+                        error: format!("save: {error}"),
                         ..Default::default()
                     },
                 },
@@ -663,10 +690,7 @@ impl AppBackend for DocumentBackend {
                     None,
                 )
             }
-            catalog::VIEW_WORKPLANE => (
-                "workplane: not wired in the browser build".to_string(),
-                None,
-            ),
+            catalog::VIEW_WORKPLANE => ("workplane: not wired in this backend".to_string(), None),
             FIT => (
                 "fit".to_string(),
                 Some(ViewRequest {
@@ -711,7 +735,7 @@ impl AppBackend for DocumentBackend {
             other => {
                 return Ok(CommandOutcome {
                     ok: false,
-                    error: format!("{other} is not available in the browser build"),
+                    error: format!("{other} is not available in this build"),
                     ..Default::default()
                 });
             }
@@ -804,7 +828,7 @@ impl AppBackend for DocumentBackend {
             return Ok(ApplyResult {
                 ok: false,
                 error: format!(
-                    "{} {} is not available in the browser build",
+                    "{} {} is not available in this build",
                     commit.manipulator, commit.action
                 ),
             });
@@ -977,8 +1001,8 @@ fn selection_visible(state: &State) -> Option<bool> {
 ///
 /// A feature the kernel refuses keeps its last good shape and records why; that is
 /// document state, so it is logged rather than treated as a failed boot. The
-/// triangle counts are the browser build's version of the probe's "40 triangles"
-/// baseline, and make a silent tessellation change visible in the console.
+/// triangle counts are the probe's "40 triangles" baseline, and make a silent
+/// tessellation change visible in the browser console.
 fn log_shapes(document: &Document) {
     let backend = backend();
     for id in document.object_ids() {
@@ -1076,9 +1100,9 @@ fn refused(error: String) -> SetResult {
     }
 }
 
-/// One browser-only command row, in the shape the catalogue gives the built-ins.
+/// One command row the shared catalogue does not carry.
 ///
-/// Only the fields this host sets differ; the rest keep the shell's defaults.
+/// Only the fields this backend sets differ; the rest keep the shell's defaults.
 fn row(id: &str, menu: &str, surface: &str) -> CommandInfo {
     CommandInfo {
         id: id.to_string(),

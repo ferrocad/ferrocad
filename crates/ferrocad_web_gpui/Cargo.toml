@@ -1,5 +1,6 @@
 # The browser host: the real FerroCAD shell (`ferrocad_shell_core`) in a GPUI window
-# on WebGL2, with a Rust `AppBackend` and no CPython anywhere in the graph.
+# on WebGL2, with the shared Rust document backend (`ferrocad_shell_rust`) and no
+# CPython anywhere in the graph.
 #
 # Built for `wasm32-unknown-unknown` only; see README.md. The document is a real
 # `ferrocad_core::Document` (`Part::Box` + `Part::Fillet`) and its geometry comes from
@@ -28,21 +29,13 @@ gpui = { package = "bite-gpui", version = "=1.25.203" }
 # with the window's own wgpu device on the first paint and composites the viewport
 # with `paint_texture` (same device, no dma-buf, no readback).
 ferrocad_shell_core = { workspace = true, features = ["gpu-interop"] }
-# The engine: a real document on the Part workbench, tessellated by the prebuilt wasm
-# OCCT kernel. `ferrocad_wasm` supplies the link-time WASI stubs the kernel's
-# wasi-sdk build leaves behind; `main` must retain them before the first kernel call.
-ferrocad_core.workspace = true
-ferrocad_part.workspace = true
-ferrocad_occt.workspace = true
-# The built-in command catalogue: the same table the native registry reads from
-# `python/ferrocad_shell/catalog.json`, so both hosts spell a label the same way.
-ferrocad_shell_api.workspace = true
-ferrocad_geom.workspace = true
-ferrocad_stage.workspace = true
-ferrocad_types.workspace = true
+# The engine: the same Rust document backend a desktop edition installs, so the
+# browser is not a fork of it. It carries `ferrocad_core`, `ferrocad_part` and the
+# OCCT kernel (compiled to wasm here) behind the seam.
+ferrocad_shell_rust.workspace = true
+# `ferrocad_wasm` supplies the link-time WASI stubs the kernel's wasi-sdk build
+# leaves behind; `main` must retain them before the first kernel call.
 ferrocad_wasm.workspace = true
-# The Move form's values arrive as JSON, as they do on the native bridge.
-serde_json.workspace = true
 wasm-bindgen = "0.2"
 # The logger `gpui::web_init` installs forwards to the browser console.
 log = "0.4"

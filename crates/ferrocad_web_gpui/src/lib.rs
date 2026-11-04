@@ -3,10 +3,12 @@
 //! This is no longer a probe. It installs the actual
 //! [`ferrocad_shell_core`](https://crates.io/crates/ferrocad_shell_core) window —
 //! leading bar, viewport header, status line, model inspector, property editor and
-//! console — and supplies a Rust [`AppBackend`](ferrocad_shell_core::AppBackend)
-//! instead of CPython. The engine is a real `ferrocad_core::Document` whose geometry
-//! is built by the OCCT kernel compiled to wasm (`ferrocad_part` + `ferrocad_occt`),
-//! so the tree, the property rows and the viewport all come from one document.
+//! console — and supplies the engine through
+//! [`ferrocad_shell_rust`](https://crates.io/crates/ferrocad_shell_rust): a real
+//! `ferrocad_core::Document` whose geometry is built by the OCCT kernel compiled to
+//! wasm, so the tree, the property rows and the viewport all come from one document.
+//! The backend is the same crate a desktop edition installs; this host adds the
+//! window, the page bridge and the file picker.
 //!
 //! The viewport is the shell's real `InventorViewport` element; its renderer is the
 //! zero-copy presenter, which negotiates with the window's own wgpu device on the
@@ -20,12 +22,12 @@
 
 #![cfg(target_family = "wasm")]
 
-mod document;
 mod host;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use ferrocad_shell_rust::RustAppBackend;
 use gpui::{
     App, TitlebarOptions, WebBackendPreference, WindowBackgroundAppearance, WindowBounds,
     WindowDecorations, WindowOptions, application_with_web_backend, bounds, point, prelude::*, px,
@@ -54,9 +56,18 @@ pub fn main() {
         // A font before any text: GPUI resolves fonts during layout and panics if
         // there is nothing to fall back to.
         ferrocad_shell_core::fonts::install(cx);
-        // The Rust engine: the real document, over the wasm OCCT kernel. Boot reads
-        // it, so it must be installed first.
-        ferrocad_shell_core::app::install_backend(cx, Box::new(document::DocumentBackend::new()));
+        // The engine: the real document, over the wasm OCCT kernel. Boot reads it,
+        // so it must be installed first. The page owns the file picker and the
+        // download; the backend asks it through these two hooks.
+        ferrocad_shell_core::app::install_backend(
+            cx,
+            Box::new(RustAppBackend::new().with_file_hooks(
+                || crate::host::request_open().map_err(|error| format!("{error:?}")),
+                |name, bytes| {
+                    crate::host::download(name, bytes).map_err(|error| format!("{error:?}"))
+                },
+            )),
+        );
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {
             Ok(model) => model,

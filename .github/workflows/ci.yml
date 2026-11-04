@@ -216,6 +216,24 @@ jobs:
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
           cargo test -p ferrocad_occt -p ferrocad_part -p ferrocad_part_py -p ferrocad_parametric
 
+      - name: The Rust document backend builds and boots without a host (S5)
+        # `ferrocad_shell_rust` is the one backend both hosts install, so it must be
+        # platform-neutral: no gpui, no CPython, no wasm-bindgen. The example boots
+        # the sample document with no window and no interpreter.
+        run: |
+          export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
+          export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
+          export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
+          cargo check -p ferrocad_shell_rust
+          if cargo tree -p ferrocad_shell_rust -e normal --prefix none \
+              | grep -Eq '^(gpui|bite-gpui|pyo3|wasm-bindgen) '; then
+            echo "ferrocad_shell_rust must not depend on a host runtime" >&2
+            exit 1
+          fi
+          cargo run -q -p ferrocad_shell_rust --example headless | tee /tmp/headless.log
+          grep -q 'document Sample (2 object(s))' /tmp/headless.log
+          grep -q 'Fillet · 40 triangles' /tmp/headless.log
+
       - name: Build the combined Python extension module and import it from a host interpreter
         # `ferrocad_combined.abi3.so` is the one extension that links App + Part +
         # Mesh, so a plain host CPython can `import Part`/`import Mesh` and they

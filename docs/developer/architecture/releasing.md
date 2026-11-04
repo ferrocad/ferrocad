@@ -6,13 +6,13 @@ Status: reference (2026-10-05). Companion to
 how the workspace reaches its consumers: the Rust crates on crates.io and the
 `FreeCAD`-namespace Python distribution on PyPI.
 
-**Status (2026-10-25, `0.1.4`).** Twenty-three crates are published:
+**Status (2026-10-25, `0.1.4`).** Twenty-four crates are published:
 `ferrocad_types`, `ferrocad_theme`, `ferrocad_lineage`, `ferrocad_curves`,
 `ferrocad_ui`, `ferrocad_core`, `ferrocad_geom`, `ferrocad_graphics`,
 `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_stage`, `ferrocad_inventor_py`,
 `ferrocad_stage_py`, `ferrocad_occt`, `ferrocad_part`, `ferrocad_py`,
 `ferrocad_wgpu`, `ferrocad_viewport`, `ferrocad_part_py`, `ferrocad_shell_api`,
-`ferrocad_shell_core`, `ferrocad_shell_gpui` and
+`ferrocad_shell_core`, `ferrocad_shell_rust`, `ferrocad_shell_gpui` and
 `ferrocad`. The 0.1.3 release publishes the viewport/UI stack for the first time
 (theme, lineage, curves, ui, graphics, inventor, stage, inventor_py, stage_py,
 wgpu, viewport), because the shell and the app now depend on it. Versions are
@@ -55,6 +55,7 @@ FerroCAD is one workspace that produces two kinds of deliverable.
 | `ferrocad_widgets` | `rlib` | crates.io | yes |
 | `ferrocad_shell_api` | `rlib` | crates.io | yes (the `AppBackend` contract) |
 | `ferrocad_shell_core` | `rlib` | crates.io | yes (the platform-neutral shell) |
+| `ferrocad_shell_rust` | `rlib` | crates.io | yes (the Rust document backend; needs OCCT to build) |
 | `ferrocad_shell_gpui` | `rlib` | crates.io | yes (the native shell; links libpython) |
 | `ferrocad_gen` | `cdylib` (generated skeleton) | PyPI, via the wheel | no |
 | `ferrocad_parametric` | `bin` (an edition) | GitHub Releases / installers | no |
@@ -78,9 +79,10 @@ crates pull in with a `path`/`version` dependency must appear before them.
 interaction stack; `ferrocad_theme` and `ferrocad_widgets` are the reusable UI
 pieces; `ferrocad_ui` is the Qt-free form tree; `ferrocad_shell_api` is the
 shell/engine contract; `ferrocad_shell_core` is the platform-neutral application
-shell built on them; and `ferrocad_shell_gpui` is its native assembly (it links
-libpython, because it embeds CPython). All are ordinary `rlib`s with no path-only
-dependencies.
+shell built on them; `ferrocad_shell_rust` is the Rust document backend both the
+browser host and a desktop edition install; and `ferrocad_shell_gpui` is the
+native assembly (it links libpython, because it embeds CPython). All are ordinary
+`rlib`s with no path-only dependencies.
 
 ### 2.1 Publishing order
 
@@ -121,12 +123,16 @@ Dependencies are published before their dependents:
     `ferrocad_inventor`, `ferrocad_geom`; no gpui, no CPython).
 18. `ferrocad_shell_core` (depends on `ferrocad_shell_api`, the widgets, UI,
     inventor, stage, viewport and wgpu crates).
-19. `ferrocad_shell_gpui` (depends on `ferrocad_shell_core` and the Python
+19. `ferrocad_shell_rust` (depends on `ferrocad_core`, `ferrocad_part`,
+    `ferrocad_occt`, `ferrocad_geom`, `ferrocad_stage`, `ferrocad_shell_api`;
+    **needs OCCT**).
+20. `ferrocad_shell_gpui` (depends on `ferrocad_shell_core` and the Python
     bindings; links libpython).
-20. `ferrocad` (the app binary; depends on `ferrocad_shell_gpui` and `ferrocad_py`).
+21. `ferrocad` (the app binary; depends on `ferrocad_shell_gpui` and `ferrocad_py`).
 
-`ferrocad_occt` and `ferrocad_part_py` are the two crates whose `cargo publish`
-verify-build compiles against a kernel, so the publish job fetches OCCT 8.0.1 from
+`ferrocad_occt`, `ferrocad_part_py` and `ferrocad_shell_rust` are the crates whose
+`cargo publish` verify-build compiles against a kernel, so the publish job fetches
+OCCT 8.0.1 from
 conda-forge and exports `CMAKE_POLICY_VERSION_MINIMUM`, `OpenCASCADE_DIR`,
 `OCCT_INCLUDE_DIR` and `LD_LIBRARY_PATH` before publishing. `ferrocad_occt` also
 depends on `ferrocad_part_cxx`, so that crate (and the patched sys crate it

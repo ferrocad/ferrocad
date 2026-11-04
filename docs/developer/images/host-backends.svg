@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 680" width="1100" height="680" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 700" width="1100" height="700" role="img" aria-labelledby="title desc">
   <title id="title">FerroCAD simplified system architecture</title>
-  <desc id="desc">Three layers: the shared UI and AppBackend contract; the pluggable host backends (native CPython, browser Rust, future JS/WASI and wasm Python); and the shared engine ferrocad_core plus ferrocad_part with OCCT.</desc>
+  <desc id="desc">Three layers: the shared UI and AppBackend contract; the pluggable host backends (native CPython, future wasm Python sharing the same PyO3 bindings, browser Rust, future JS/WASI); and the shared engine ferrocad_core plus ferrocad_part with OCCT.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -9,6 +9,11 @@
     <marker id="dash-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8794"/>
     </marker>
+    <linearGradient id="shared-bindings" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f6cfa6"/>
+      <stop offset="0.5" stop-color="#e6d5b8"/>
+      <stop offset="1" stop-color="#b9dcc2"/>
+    </linearGradient>
     <style>
       .t { font-family: Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
       .title { font-size: 24px; font-weight: 700; fill: #1a202c; }
@@ -26,7 +31,7 @@
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1100" height="680" fill="#f7f9fc"/>
+  <rect x="0" y="0" width="1100" height="700" fill="#f7f9fc"/>
 
   <text class="t title" x="550" y="34" text-anchor="middle">FERROCAD SIMPLIFIED SYSTEM ARCHITECTURE</text>
   <text class="t subtitle" x="550" y="56" text-anchor="middle">How the host backends plug between the shared UI and the CAD engine</text>
@@ -64,55 +69,54 @@
   <text class="t col-head" x="205" y="221" text-anchor="middle">NATIVE HOST (DESKTOP)</text>
   <rect class="box" x="104" y="242" width="202" height="30" rx="5" fill="#f6cfa6" stroke="#cf9a55"/>
   <text class="t box-title" x="205" y="261" text-anchor="middle">PythonAppBackend</text>
-  <line class="wire" x1="205" y1="272" x2="205" y2="288" marker-end="url(#arrow)"/>
-  <text class="t note" x="212" y="283" text-anchor="start">desktop only</text>
-  <rect class="box" x="104" y="288" width="202" height="34" rx="5" fill="#f6cfa6" stroke="#cf9a55"/>
-  <text class="t box-title" x="205" y="304" text-anchor="middle">Embedded CPython</text>
-  <text class="t box-sub" x="205" y="316" text-anchor="middle">python/ + workbenches</text>
-  <line class="wire" x1="205" y1="322" x2="205" y2="340" marker-end="url(#arrow)"/>
-  <rect class="box" x="104" y="340" width="202" height="46" rx="5" fill="#f6cfa6" stroke="#cf9a55"/>
-  <text class="t box-title" x="205" y="358" text-anchor="middle">ferrocad_py</text>
-  <text class="t box-title" x="205" y="372" text-anchor="middle">ferrocad_part_py</text>
-  <text class="t box-sub" x="205" y="383" text-anchor="middle">(PyO3 bindings)</text>
-
-  <!-- browser -->
-  <rect class="box" x="336" y="204" width="226" height="26" rx="5" fill="#e4c6e7" stroke="#b184b9"/>
-  <text class="t col-head" x="449" y="221" text-anchor="middle">BROWSER HOST (wasm)</text>
-  <text class="t note-italic" x="449" y="250" text-anchor="middle">no scripting: calls the engine directly</text>
-  <text class="t note-italic" x="449" y="264" text-anchor="middle">(no CPython in this graph)</text>
-  <rect class="box" x="348" y="294" width="202" height="58" rx="5" fill="#dcb8e2" stroke="#b184b9"/>
-  <text class="t box-title" x="449" y="313" text-anchor="middle">DocumentBackend</text>
-  <text class="t box-sub" x="449" y="327" text-anchor="middle">(pure Rust)</text>
-  <text class="t box-sub" x="449" y="342" text-anchor="middle">S5: moves to ferrocad_shell_rust</text>
-
-  <!-- future JS -->
-  <rect class="box" x="580" y="204" width="226" height="26" rx="5" fill="#d5dfea" stroke="#94a9c2"/>
-  <text class="t col-head" x="693" y="221" text-anchor="middle">FUTURE HOST (JS/WASI)</text>
-  <rect class="box" x="592" y="242" width="202" height="30" rx="5" fill="#c9d5e3" stroke="#94a9c2"/>
-  <text class="t box-title" x="693" y="261" text-anchor="middle">JsAppBackend</text>
-  <line class="wire" x1="693" y1="272" x2="693" y2="288" marker-end="url(#arrow)"/>
-  <rect class="box" x="592" y="288" width="202" height="38" rx="5" fill="#c9d5e3" stroke="#94a9c2"/>
-  <text class="t box-title" x="693" y="305" text-anchor="middle">JS runtime</text>
-  <text class="t box-sub" x="693" y="318" text-anchor="middle">(HTML / embedded)</text>
-  <line class="wire" x1="693" y1="326" x2="693" y2="342" marker-end="url(#arrow)"/>
-  <rect class="box" x="592" y="342" width="202" height="42" rx="5" fill="#c9d5e3" stroke="#94a9c2"/>
-  <text class="t box-title" x="693" y="360" text-anchor="middle">wasm-bindgen</text>
-  <text class="t box-sub" x="693" y="374" text-anchor="middle">(WASI imports / exports)</text>
+  <line class="wire" x1="205" y1="272" x2="205" y2="286" marker-end="url(#arrow)"/>
+  <text class="t note" x="212" y="282" text-anchor="start">desktop only</text>
+  <rect class="box" x="104" y="286" width="202" height="34" rx="5" fill="#f6cfa6" stroke="#cf9a55"/>
+  <text class="t box-title" x="205" y="302" text-anchor="middle">Embedded CPython</text>
+  <text class="t box-sub" x="205" y="314" text-anchor="middle">python/ + workbenches</text>
 
   <!-- future wasm python -->
-  <rect class="box" x="824" y="204" width="226" height="26" rx="5" fill="#cfe6d6" stroke="#7fb391"/>
-  <text class="t col-head" x="937" y="221" text-anchor="middle">FUTURE HOST (WASM PYTHON)</text>
-  <rect class="box" x="836" y="242" width="202" height="30" rx="5" fill="#b9dcc2" stroke="#7fb391"/>
-  <text class="t box-title" x="937" y="261" text-anchor="middle">WasmPyAppBackend</text>
-  <line class="wire" x1="937" y1="272" x2="937" y2="288" marker-end="url(#arrow)"/>
-  <rect class="box" x="836" y="288" width="202" height="46" rx="5" fill="#b9dcc2" stroke="#7fb391"/>
-  <text class="t box-title" x="937" y="305" text-anchor="middle">RustPython / MicroPython</text>
-  <text class="t box-title" x="937" y="319" text-anchor="middle">/ Pyodide</text>
-  <text class="t box-sub" x="937" y="331" text-anchor="middle">(research, not chosen)</text>
-  <line class="wire" x1="937" y1="334" x2="937" y2="350" marker-end="url(#arrow)"/>
-  <rect class="box" x="836" y="350" width="202" height="44" rx="5" fill="#b9dcc2" stroke="#7fb391"/>
-  <text class="t box-title" x="937" y="368" text-anchor="middle">wasm Python bindings</text>
-  <text class="t box-sub" x="937" y="382" text-anchor="middle">(pyo3 has no wasm32 target)</text>
+  <rect class="box" x="336" y="204" width="226" height="26" rx="5" fill="#cfe6d6" stroke="#7fb391"/>
+  <text class="t col-head" x="449" y="221" text-anchor="middle">FUTURE HOST (WASM PYTHON)</text>
+  <rect class="box" x="348" y="242" width="202" height="30" rx="5" fill="#b9dcc2" stroke="#7fb391"/>
+  <text class="t box-title" x="449" y="261" text-anchor="middle">WasmPyAppBackend</text>
+  <line class="wire" x1="449" y1="272" x2="449" y2="286" marker-end="url(#arrow)"/>
+  <rect class="box" x="348" y="286" width="202" height="54" rx="5" fill="#b9dcc2" stroke="#7fb391"/>
+  <text class="t box-title" x="449" y="304" text-anchor="middle">RustPython / MicroPython-Wasm</text>
+  <text class="t box-title" x="449" y="318" text-anchor="middle">/ Pyodide</text>
+  <text class="t box-sub" x="449" y="332" text-anchor="middle">(Pyodide is a CPython in wasm)</text>
+  <line class="wire" x1="449" y1="340" x2="449" y2="368" marker-end="url(#arrow)"/>
+  <text class="t note" x="457" y="357" text-anchor="start">wasm only</text>
+
+  <!-- the bindings both Python hosts share -->
+  <rect class="box" x="92" y="368" width="470" height="56" rx="6" fill="url(#shared-bindings)" stroke="#8a9bb0"/>
+  <text class="t box-title" x="327" y="392" text-anchor="middle">ferrocad_py / ferrocad_part_py</text>
+  <text class="t box-sub" x="327" y="408" text-anchor="middle">(shared PyO3 bindings — one binding layer for every Python host)</text>
+  <line class="wire" x1="205" y1="320" x2="205" y2="368" marker-end="url(#arrow)"/>
+
+  <!-- browser -->
+  <rect class="box" x="580" y="204" width="226" height="26" rx="5" fill="#e4c6e7" stroke="#b184b9"/>
+  <text class="t col-head" x="693" y="221" text-anchor="middle">BROWSER HOST (wasm)</text>
+  <text class="t note-italic" x="693" y="250" text-anchor="middle">no scripting: calls the engine directly</text>
+  <text class="t note-italic" x="693" y="264" text-anchor="middle">(no CPython in this graph)</text>
+  <rect class="box" x="592" y="294" width="202" height="58" rx="5" fill="#dcb8e2" stroke="#b184b9"/>
+  <text class="t box-title" x="693" y="313" text-anchor="middle">DocumentBackend</text>
+  <text class="t box-sub" x="693" y="327" text-anchor="middle">(pure Rust)</text>
+  <text class="t box-sub" x="693" y="342" text-anchor="middle">S5: moves to ferrocad_shell_rust</text>
+
+  <!-- future JS -->
+  <rect class="box" x="824" y="204" width="226" height="26" rx="5" fill="#d5dfea" stroke="#94a9c2"/>
+  <text class="t col-head" x="937" y="221" text-anchor="middle">FUTURE HOST (JS/WASI)</text>
+  <rect class="box" x="836" y="242" width="202" height="30" rx="5" fill="#c9d5e3" stroke="#94a9c2"/>
+  <text class="t box-title" x="937" y="261" text-anchor="middle">JsAppBackend</text>
+  <line class="wire" x1="937" y1="272" x2="937" y2="286" marker-end="url(#arrow)"/>
+  <rect class="box" x="836" y="286" width="202" height="38" rx="5" fill="#c9d5e3" stroke="#94a9c2"/>
+  <text class="t box-title" x="937" y="303" text-anchor="middle">JS runtime</text>
+  <text class="t box-sub" x="937" y="316" text-anchor="middle">(HTML / embedded)</text>
+  <line class="wire" x1="937" y1="324" x2="937" y2="340" marker-end="url(#arrow)"/>
+  <rect class="box" x="836" y="340" width="202" height="42" rx="5" fill="#c9d5e3" stroke="#94a9c2"/>
+  <text class="t box-title" x="937" y="358" text-anchor="middle">wasm-bindgen</text>
+  <text class="t box-sub" x="937" y="372" text-anchor="middle">(WASI imports / exports)</text>
 
   <!-- ============ layer 3: the engine ============ -->
   <rect class="band" x="76" y="516" width="1000" height="104" rx="10" fill="#cfdceb" stroke="#8fa9c6"/>
@@ -124,21 +128,20 @@
 
   <text class="t note" x="550" y="604" text-anchor="middle">OCCT: the system library on the desktop · the prebuilt wasm kernel in the browser</text>
 
-  <!-- native -> engine -->
-  <path class="wire" d="M 205 386 L 205 500 L 390 559" marker-end="url(#arrow)"/>
+  <!-- shared Python bindings -> engine -->
+  <path class="wire" d="M 327 424 L 327 500 L 390 553" marker-end="url(#arrow)"/>
   <!-- browser -> engine -->
-  <path class="wire" d="M 449 352 L 449 530" marker-end="url(#arrow)"/>
-  <text class="t note" x="459" y="452" text-anchor="start">uses</text>
+  <path class="wire" d="M 693 352 L 693 530" marker-end="url(#arrow)"/>
+  <text class="t note" x="703" y="452" text-anchor="start">uses</text>
   <!-- JS -> engine -->
-  <path class="wire" d="M 693 384 L 693 530" marker-end="url(#arrow)"/>
-  <text class="t note" x="703" y="470" text-anchor="start">wasm exports</text>
-  <!-- wasm python -> engine -->
-  <path class="wire" d="M 937 394 L 937 500 L 710 559" marker-end="url(#arrow)"/>
+  <path class="wire" d="M 937 382 L 937 500 L 710 559" marker-end="url(#arrow)"/>
+  <text class="t note" x="947" y="470" text-anchor="start">accesses</text>
 
   <!-- legend -->
   <rect x="76" y="638" width="16" height="12" rx="2" fill="#f6cfa6" stroke="#cf9a55"/>
   <text class="t note" x="99" y="648" text-anchor="start">CPython runtime (native only — it cannot run inside the browser)</text>
   <rect x="500" y="638" width="16" height="12" rx="2" fill="#b9cde4" stroke="#7d9ec4"/>
   <text class="t note" x="523" y="648" text-anchor="start">the shared engine, reached directly or through Python</text>
-  <text class="t note-italic" x="76" y="668" text-anchor="start">status: native and browser hosts shipped · JS/WASI and wasm Python are planned</text>
+  <text class="t note-italic" x="76" y="672" text-anchor="start">wasm Python reuses the same *_py bindings; compiling them for wasm32 (or adapting to a wasm CPython) is that host's open question</text>
+  <text class="t note-italic" x="76" y="690" text-anchor="start">status: native and browser hosts shipped · JS/WASI and wasm Python are planned</text>
 </svg>

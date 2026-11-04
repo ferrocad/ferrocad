@@ -27,8 +27,10 @@ the browser.
 
 Only the browser is missing CPython; that is why the two shipped backends exist and
 why the seam is a trait rather than a Python module. The planned JS/WASI and wasm
-Python hosts are the same shape with a different runtime (see
-[`../project/tasks/host-backends.md`](../project/tasks/host-backends.md) §2 and §6.3).
+Python hosts are the same shape with a different runtime, and the wasm Python one is
+drawn reusing the **same** `ferrocad_py` bindings: making those compile for `wasm32`
+(or adapting them to a wasm CPython) is that host's open question
+(see [`../project/tasks/host-backends.md`](../project/tasks/host-backends.md) §2 and §6.3).
 
 ## 1. The components
 

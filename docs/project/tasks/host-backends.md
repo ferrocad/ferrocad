@@ -442,8 +442,11 @@ not a panic.
 
 ### 6.3 The wasm-Python fork (research, not a decision)
 
-`ferrocad_py` cannot be reused in a browser: `pyo3` has no
-`wasm32-unknown-unknown` story (that is the premise of the M0 split). The options:
+The **intent is one binding layer**: the wasm-Python host should reuse
+`ferrocad_py`/`ferrocad_part_py`, not fork bindings (that is what the diagram"s
+shared bindings box shows). Today it cannot: `pyo3` has no
+`wasm32-unknown-unknown` story — that is the premise of the M0 split. The options are
+about how to reach that intent:
 
 | Option | What runs | Binding layer | Risk |
 | --- | --- | --- | --- |

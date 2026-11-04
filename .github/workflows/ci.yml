@@ -374,7 +374,7 @@ jobs:
             -e HTTP_PROXY -e HTTPS_PROXY -e ALL_PROXY \
             ghcr.io/lzpel/cross-wasm32-unknown-unknown@sha256:4dc88df287da141e67588ba80ebf1d14d5cb24f5b05302c57b11b2a1e9bed1df \
             cargo build --release -j 2 -p ferrocad_web --target wasm32-unknown-unknown --locked
-          docker cp web:/tmp/target/wasm32-unknown-unknown/release/ferrocad_web.wasm target/wasm-web.wasm
+          docker cp web:/tmp/target/wasm32-unknown-unknown/release/ferrocad_web.wasm target/ferrocad_web.wasm
           docker rm web
       - name: Install the matching wasm-bindgen CLI
         env:
@@ -389,5 +389,5 @@ jobs:
           test "$(wasm-bindgen --version | awk '{print $2}')" = "$VERSION"
       - name: Generate the JS glue and run the Node smoke test
         run: |
-          wasm-bindgen --target web --out-dir crates/ferrocad_web/www/pkg target/wasm-web.wasm
+          wasm-bindgen --target web --out-dir crates/ferrocad_web/www/pkg target/ferrocad_web.wasm
           node crates/ferrocad_web/www/smoke.mjs

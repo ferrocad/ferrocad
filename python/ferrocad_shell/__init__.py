@@ -640,29 +640,16 @@ def evaluate(code: str) -> str:
             return _json({"ok": False, "output": buf.getvalue().rstrip("\n")})
 
 
-def _base_link(obj):
-    """The ``(object_name, [subnames])`` a `Base` link-sub property holds, if any."""
-    try:
-        link = obj.Base
-    except Exception:
-        return None
-    if not isinstance(link, tuple) or not link:
-        return None
-    linked = link[0]
-    name = getattr(linked, "Name", None)
-    if name is None:
-        return None
-    return name, list(link[1]) if len(link) > 1 else []
-
-
 def stage_meshes() -> str:
     """The tessellated shapes the viewport draws, as JSON.
 
     Only objects a registered module can display are included (the mesh comes from
-    ``FerroCAD.display_mesh``, so this module names no workbench), and an object
-    consumed by a feature (its ``Base``) is skipped: the feature's shape replaces it.
-    ``entity`` is the object's 1-based position in the document, so the host can map a
-    pick back to a name.
+    ``FerroCAD.display_mesh``, so this module names no workbench), and only objects the
+    **document** says are drawn: a hidden object is skipped, and so is one consumed by
+    a feature's ``Base`` (the feature's shape replaces it). Those two rules live in the
+    engine (``doc.drawableObjects()``), so the browser host applies exactly the same
+    ones. ``entity`` is the object's 1-based position in the document, so the host can
+    map a pick back to a name.
 
     Returns ``[]`` when no module is loaded, leaving the shell's `pivy.coin` sample
     scene in place.
@@ -673,15 +660,11 @@ def stage_meshes() -> str:
         return "[]"
 
     objects = list(doc.Objects)
-    consumed = set()
-    for obj in objects:
-        link = _base_link(obj)
-        if link is not None:
-            consumed.add(link[0])
+    drawable = set(doc.drawableObjects())
 
     meshes = []
     for index, obj in enumerate(objects, start=1):
-        if obj.Name in consumed:
+        if obj.Name not in drawable:
             continue
         mesh = FerroCAD.display_mesh(obj)
         if mesh is None:

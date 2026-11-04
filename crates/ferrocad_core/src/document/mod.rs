@@ -24,7 +24,10 @@ pub mod native;
 mod transaction;
 mod view;
 
-pub use view::{color_from_packed, color_to_packed, Color, Material, ViewState};
+pub use view::{
+    BASE_PROPERTY, Color, Material, ViewState, color_from_packed, color_to_packed, drawable,
+    effective_color, is_visible, origin,
+};
 
 use transaction::{Change, PropertyChange, PropertySlot, TransactionManager};
 

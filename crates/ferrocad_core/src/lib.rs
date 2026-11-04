@@ -121,15 +121,16 @@ pub use ferrocad_types::{geometry, quantity, unit};
 
 pub use application::{application, application_id, Application, DocumentHandle, DocumentObserver};
 pub use kernel::{kernel, Kernel};
-pub use document::{
-    color_from_packed, color_to_packed, sanitize_name, Color, Document, DocumentObject, Material,
-    ObjectId, SavedDocument, ViewState,
-};
 pub use document::fcstd;
 pub use document::fcstd_write;
 pub use document::format;
 pub use document::format::DocumentFormat;
 pub use document::native;
+pub use document::{
+    BASE_PROPERTY, Color, Document, DocumentObject, Material, ObjectId, SavedDocument, ViewState,
+    color_from_packed, color_to_packed, drawable, effective_color, is_visible, origin,
+    sanitize_name,
+};
 pub use extension::{ExtensionData, ExtensionValue, FcstdKind};
 pub use geometry::{Matrix4, Placement, Rotation, ScaleType, TypeId, Vector3};
 pub use observer::Observer;

@@ -479,7 +479,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | Stage | The check |
 | --- | --- |
 | S1 | `#[gpui::test]`s drive the prompt hooks: the picked path reaches the backend and the title/status update; Save hands its path over; a cancelled prompt changes nothing; without a portal the status line shows the error. |
-| S2 | The browser smoke log shows `Box · 12 triangles` and **no** separate `Fillet` mesh for the same document; desktop output unchanged; `cargo test -p ferrocad_shell_core` green. |
+| S2 | The browser smoke log shows `stage draws Fillet` and **not** `stage draws Box` (the feature replaced its base), while both shapes still tessellate; desktop output unchanged; `cargo test -p ferrocad_shell_core` green. |
 | S3 | New test: decode `App::PropertyLength`, `from_saved`, `recompute`, dimension survives. Both hosts show `10.0 mm`. `cargo xtask api-docs --check` and the Python doc checks pass. |
 | S4 | `cargo xtask catalog --check` fails when a Python built-in is added without the Rust table; `App_Move` exists once. |
 | S5 | `cargo check -p ferrocad_shell_rust` (native) and `--target wasm32-unknown-unknown` both pass; no gpui/pyo3 in its graph (`cargo tree`). |

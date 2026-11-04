@@ -2202,6 +2202,20 @@ impl PyDocument {
             .collect()
     }
 
+    /// The names of the objects the viewport draws, in document order.
+    ///
+    /// A feature replaces the object it consumes: the box a fillet was cut from is
+    /// not drawn beside the fillet. The stage builder asks this instead of
+    /// re-deriving the rule, so the native and browser hosts agree.
+    fn drawableObjects(slf: &Bound<'_, Self>) -> Vec<String> {
+        let inner = Arc::clone(&slf.borrow().inner);
+        let doc = inner.lock().unwrap();
+        ferrocad_core::drawable(&doc)
+            .into_iter()
+            .filter_map(|id| doc.object(id).map(|object| object.name.clone()))
+            .collect()
+    }
+
     #[getter]
     fn CountObjects(&self) -> usize {
         self.inner.lock().unwrap().object_ids().len()

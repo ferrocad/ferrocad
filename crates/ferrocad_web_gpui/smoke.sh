@@ -6,10 +6,10 @@
 #   CHROME=/path/to/chrome crates/ferrocad_web_gpui/smoke.sh
 #
 # Serves the already-built `www/pkg` and loads it in headless Chrome, asserting
-# the documented console baseline: the box and the fillet both tessellate through
-# the wasm kernel, a save/open round trip keeps them, and nothing panics. Without a
-# browser or a build it prints `skipped: …` and exits 0, so it never blocks a
-# developer who has not built.
+# the documented console baseline: both shapes tessellate through the wasm kernel,
+# the stage draws the fillet **instead of** the box it consumed, a save/open round
+# trip keeps both objects, and nothing panics. Without a browser or a build it prints
+# `skipped: …` and exits 0, so it never blocks a developer who has not built.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -131,6 +131,7 @@ check_console() {
     done <<'EOF'
 ferrocad: Box · 12 triangles, 12 edges
 ferrocad: Fillet · 40 triangles, 21 edges
+ferrocad: stage draws Fillet
 EOF
 
     echo "round-trip console lines:"
@@ -142,6 +143,8 @@ EOF
         [ -n "$pattern" ] || continue
         forbid_pattern "$pattern"
     done <<'EOF'
+ferrocad: stage draws Box
+did not tessellate
 panicked at
 RuntimeError
 unreachable
@@ -174,4 +177,4 @@ if [ "$FAILED" != 0 ]; then
     exit 1
 fi
 
-echo "smoke check passed: Box and Fillet baselines logged, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, no panic or JS error"

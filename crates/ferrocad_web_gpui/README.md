@@ -117,12 +117,19 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 [INFO] ferrocad_shell_core::fonts: ferrocad: bundled UI font (DejaVu Sans) registered
 [INFO] ferrocad_web_gpui::document: ferrocad: Box · 12 triangles, 12 edges
 [INFO] ferrocad_web_gpui::document: ferrocad: Fillet · 40 triangles, 21 edges
+[INFO] ferrocad_web_gpui::document: ferrocad: stage draws Fillet
 [WARN] gpui_wgpu::wgpu_renderer: Failed to poll device during resize: Timeout
 ```
 
+- **Both shapes tessellate; only one is drawn.** The two triangle lines are
+  diagnostics over the document (they prove the kernel rebuilt both shapes).
+  `stage draws Fillet` is the set the viewport actually has: the fillet consumes the
+  box (`Base` is a `LinkSub` to it), so the box is not drawn beside it. That rule
+  lives in `ferrocad_core::document::drawable`, and the native host asks the same
+  function, so a feature cannot be drawn over its own input on either side.
 - The window shows the leading bar (`☰`), the viewport header
-  (`Grid / Axes / WP / Gizmo / Select: Body / Snap`), the live 3D viewport (the box
-  and its fillet, the axis cross and the navigation cube), the in-window `Model` /
+  (`Grid / Axes / WP / Gizmo / Select: Body / Snap`), the live 3D viewport (the
+  filleted shape, the axis cross and the navigation cube), the in-window `Model` /
   `Properties` / `Console` column, the loadout bar and the status line
   (`2 object(s) · Sample`, `FreeCAD 0.1.5 · rust`).
 - The console greets with `FerroCAD browser shell · Rust document backend · OCCT wasm
@@ -131,9 +138,10 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   selects the fillet and the pane shows its real rows: `Label`, `Base`
   (`Box: Edge1`), `Edges`, `Propagate` (a toggle), `Radius` (`3.0 mm`, editable) and
   `Shape` (`<shape>`, `Output`).
-- `?click=430,380` clicks the box **in the viewport**: same selection and properties,
-  plus the transform gizmo and its move HUD — the CPU pick ran against the stage the
-  presenter drew.
+- `?click=430,380` clicks the shape **in the viewport**: it is the fillet (the box's
+  shape after the edge round, and the only mesh drawn), so the pane shows the fillet's
+  rows and the transform gizmo and its move HUD appear — the CPU pick ran against the
+  stage the presenter drew.
 - `?drag=1` orbits and `?wheel=1` zooms the camera; the presenter re-composites each
   frame. `?click=40,58` runs `App_ToggleGrid` (dot, status and console agree).
 - **Editing writes the document.** `?select=1004,100&keys=ctrl-shift-m;tab;1;5;enter`

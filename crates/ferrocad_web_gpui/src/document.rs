@@ -283,13 +283,13 @@ impl AppBackend for DocumentBackend {
         let state = &*state;
         let backend = backend();
         let mut meshes = Vec::new();
-        for id in state.document.object_ids() {
+        // The engine decides what is drawn: a feature replaces the object it consumes
+        // (the box under a fillet), and a hidden object is skipped. The native host
+        // asks the same function, so the two cannot disagree.
+        for id in ferrocad_core::drawable(&state.document) {
             let Some(object) = state.document.object(id) else {
                 continue;
             };
-            if !visible(object) {
-                continue;
-            }
             let Some(shape) = object
                 .properties
                 .get("Shape")
@@ -320,6 +320,17 @@ impl AppBackend for DocumentBackend {
                 display: None,
             });
         }
+        // A diagnostics line, not the per-shape tessellation counts `log_shapes`
+        // prints: this is the set the stage actually draws, so the smoke check can
+        // prove that a feature is not drawn beside the object it consumed.
+        log::info!(
+            "ferrocad: stage draws {}",
+            meshes
+                .iter()
+                .map(|mesh| mesh.object.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         Ok(meshes)
     }
 
@@ -1006,7 +1017,7 @@ fn object_visible(document: &Document, name: &str) -> bool {
     document
         .get_by_name(name)
         .and_then(|id| document.object(id))
-        .map(visible)
+        .map(ferrocad_core::is_visible)
         .unwrap_or(true)
 }
 
@@ -1088,12 +1099,6 @@ fn build_sample(document: &mut Document) -> Result<(), String> {
 }
 
 /// Whether the object is shown. Objects start visible; the view state can hide them.
-fn visible(object: &ferrocad_core::DocumentObject) -> bool {
-    visibility_property(object)
-        .or_else(|| object.view.as_ref().map(|view| view.visibility))
-        .unwrap_or(true)
-}
-
 /// The object's document `Visibility` switch, when it has one.
 ///
 /// The native backend keeps visibility on the view object; here the first hide adds a
@@ -1108,28 +1113,18 @@ fn visibility_property(object: &ferrocad_core::DocumentObject) -> Option<bool> {
 /// The object's own origin in world space (the placement's base point), which the
 /// transform triad hugs and a rotate pivot turns about.
 fn placement_base(object: &ferrocad_core::DocumentObject) -> Option<[f32; 3]> {
-    match object.properties.get("Placement") {
-        Some(Property::Placement(placement)) => Some([
-            placement.base.x as f32,
-            placement.base.y as f32,
-            placement.base.z as f32,
-        ]),
-        _ => None,
-    }
+    ferrocad_core::origin(object).map(|[x, y, z]| [x as f32, y as f32, z as f32])
 }
 
 /// The object's surface colour: its view state's effective colour, or the Part default.
 fn object_color(object: &ferrocad_core::DocumentObject) -> [f32; 4] {
-    match object.view.as_ref() {
-        Some(view) => {
-            let color = view.effective_color();
-            [
-                color[0] as f32,
-                color[1] as f32,
-                color[2] as f32,
-                color[3] as f32,
-            ]
-        }
+    match ferrocad_core::effective_color(object) {
+        Some(color) => [
+            color[0] as f32,
+            color[1] as f32,
+            color[2] as f32,
+            color[3] as f32,
+        ],
         None => DEFAULT_COLOR,
     }
 }

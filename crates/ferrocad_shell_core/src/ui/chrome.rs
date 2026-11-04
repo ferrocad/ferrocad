@@ -458,8 +458,14 @@ pub(crate) fn viewport_header(
 /// on a surface. Today that is the Dev Tools toggle — it is deliberately hidden from
 /// the header/dock, and the window starts closed, so without this menu the only way
 /// in is the shortcut. The list is the place for About and Preferences as they land.
-fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
+pub(crate) fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
     let mut rows = Vec::new();
+    // File verbs (`Open…`, `Save As…`) are the host's: they have no viewport
+    // surface, so the app menu is where they are discoverable. Any command whose
+    // `Group` is `File` joins them, so a mod's file command lands here too.
+    for command in model.commands.iter().filter(|command| command.group == "File") {
+        rows.push(PopoverRow::of(command));
+    }
     if let Some(command) = commands::find(&model.commands, DEV_TOOLS) {
         rows.push(PopoverRow {
             id: command.id.clone(),
@@ -472,7 +478,8 @@ fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
             toggle: true,
             keep_open: false,
             accel: command.accel.clone(),
-            divider_before: false,
+            // The diagnostics row is a different section from the file verbs.
+            divider_before: !rows.is_empty(),
         });
     }
     rows
@@ -519,14 +526,21 @@ pub(crate) fn app_menu(
 
     if open {
         control = control.child(
-            deferred(
-                anchored()
-                    .anchor(Anchor::TopLeft)
-                    .offset(point(px(0.), px(24.)))
-                    .snap_to_window_with_margin(px(8.))
-                    .child(popover("app", rows, cx)),
-            )
-            .with_priority(1),
+            // The popover's height must not move its anchor. An anchored element's
+            // static position comes from the flex container it sits in (here the
+            // 32 px title bar, centred), so a taller menu would start above the
+            // window and snap to the top margin over the bar. A zero-size absolute
+            // wrapper pins the anchor to the control's origin instead.
+            div().absolute().top(px(0.)).left(px(0.)).child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::TopLeft)
+                        .offset(point(px(0.), px(24.)))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(popover("app", rows, cx)),
+                )
+                .with_priority(1),
+            ),
         );
     }
     control

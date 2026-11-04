@@ -12,7 +12,13 @@
 //! modes and the actual rendering stay in the GUI layers; [`ViewState`] is the
 //! model those layers (and the Python `ViewObject`) agree on.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
+
+use crate::property::Property;
+
+use super::{Document, DocumentObject, ObjectId};
 
 /// An RGBA colour, each component in `0.0..=1.0` (FreeCAD's `Base::Color`).
 pub type Color = [f64; 4];
@@ -295,6 +301,88 @@ pub fn color_to_packed(color: Color) -> u32 {
     (byte(color[0]) << 24) | (byte(color[1]) << 16) | (byte(color[2]) << 8) | byte(color[3])
 }
 
+// --- what a document draws ---------------------------------------------------
+
+/// The property a feature uses to name the object it consumed.
+///
+/// `Part::Fillet`/`Part::Chamfer` put their base edge here, and a boolean puts an
+/// operand here too.
+pub const BASE_PROPERTY: &str = "Base";
+
+/// Whether the object is drawn.
+///
+/// A document `Visibility` switch wins when it exists (the browser's first hide adds
+/// one, so the edit is undoable and visible in the property pane); otherwise the
+/// view state's `Visibility` is the answer, and an object with no view state is
+/// visible.
+pub fn is_visible(object: &DocumentObject) -> bool {
+    match object.properties.get("Visibility") {
+        Some(Property::Bool(visible)) => *visible,
+        _ => object
+            .view
+            .as_ref()
+            .map(|view| view.visibility)
+            .unwrap_or(true),
+    }
+}
+
+/// The object's effective surface colour (linear RGBA), when it has view state.
+///
+/// `None` means "no view state at all": the host picks its own default, because the
+/// default colour is a preference, not document data.
+pub fn effective_color(object: &DocumentObject) -> Option<Color> {
+    object.view.as_ref().map(|view| view.effective_color())
+}
+
+/// The object's own origin in world space: the base point of its placement.
+///
+/// The transform triad hugs it and a rotate pivot turns about it.
+pub fn origin(object: &DocumentObject) -> Option<[f64; 3]> {
+    match object.properties.get("Placement") {
+        Some(Property::Placement(placement)) => {
+            Some([placement.base.x, placement.base.y, placement.base.z])
+        }
+        _ => None,
+    }
+}
+
+/// The object names `object` consumes through `Base`.
+fn consumed(object: &DocumentObject) -> Vec<String> {
+    match object.properties.get(BASE_PROPERTY) {
+        Some(Property::Link(name)) => vec![name.clone()],
+        Some(Property::LinkSub(name, _)) => vec![name.clone()],
+        Some(Property::LinkList(names)) => names.clone(),
+        Some(Property::LinkSubList(links)) => links
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    }
+}
+
+/// The objects a document draws, in document order.
+///
+/// A feature **replaces** the object it consumes: the box a fillet was cut from is
+/// not drawn beside the fillet. A hidden object is not drawn either. This is the one
+/// rule both hosts use, so a feature can never be drawn over its own input.
+pub fn drawable(document: &Document) -> Vec<ObjectId> {
+    let mut consumed_names: BTreeSet<String> = BTreeSet::new();
+    for id in document.object_ids() {
+        if let Some(object) = document.object(id) {
+            consumed_names.extend(consumed(object));
+        }
+    }
+    document
+        .object_ids()
+        .into_iter()
+        .filter(|id| {
+            document
+                .object(*id)
+                .is_some_and(|object| is_visible(object) && !consumed_names.contains(&object.name))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +494,39 @@ mod tests {
         let material = state.material();
         assert_eq!(material.color(), [0.4, 0.5, 0.6, 0.5]);
         assert_eq!(material.transparency, 0.5);
+    }
+
+    /// A feature replaces the object it consumed: the box a fillet was cut from is
+    /// not drawn beside the fillet.
+    #[test]
+    fn a_feature_replaces_the_object_it_consumes() {
+        let mut doc = Document::new();
+        let _box_id = doc.add_object("Box", "Part::Box");
+        let fillet_id = doc.add_object("Fillet", "Part::Fillet");
+        doc.set_property(
+            fillet_id,
+            BASE_PROPERTY,
+            Property::LinkSub("Box".to_string(), vec!["Edge1".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(drawable(&doc), vec![fillet_id]);
+
+        // The view state's own switch hides an object with no document switch.
+        doc.object_mut(fillet_id).unwrap().view = Some(ViewState::new(0, [0.8, 0.8, 0.8, 1.0]));
+        assert_eq!(drawable(&doc), vec![fillet_id]);
+        doc.object_mut(fillet_id)
+            .unwrap()
+            .view
+            .as_mut()
+            .unwrap()
+            .visibility = false;
+        assert!(drawable(&doc).is_empty());
+
+        // A document `Visibility` property wins over the view state (the browser
+        // adds one on the first hide so the edit is undoable).
+        doc.set_property(fillet_id, "Visibility", Property::Bool(true))
+            .unwrap();
+        assert_eq!(drawable(&doc), vec![fillet_id]);
     }
 }

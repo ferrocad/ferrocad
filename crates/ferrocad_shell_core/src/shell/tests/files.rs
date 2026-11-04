@@ -131,3 +131,37 @@ fn a_cancelled_open_keeps_the_document(cx: &mut TestAppContext) {
     assert!(*opened.borrow() == None, "a cancelled prompt opens nothing");
     assert_eq!(model.lock().unwrap().title, before);
 }
+
+/// The app menu leads with the file verbs, then the diagnostics row. The verbs have
+/// no viewport surface, so this menu is how they are found without the accelerator.
+#[gpui::test]
+fn the_app_menu_lists_the_file_verbs(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = palette_window(cx);
+
+    // The app menu lives in the title bar; this harness renders one on its own so
+    // the popover can be clicked without the viewport.
+    let size = cx.update(|window, _| window.viewport_size());
+    let bar = cx
+        .cx
+        .open_window(size, move |_window, _cx| TitleBarHarness {
+            shell: shell.clone(),
+        });
+    let mut bar_cx = VisualTestContext::from_window(bar.into(), &cx);
+    draw(&mut bar_cx);
+    click_at(&mut bar_cx, "app-menu");
+    draw(&mut bar_cx);
+
+    assert!(
+        bar_cx.debug_bounds("app-row-App_Open").is_some(),
+        "Open is in the app menu"
+    );
+    assert!(
+        bar_cx.debug_bounds("app-row-App_Save").is_some(),
+        "Save is in the app menu"
+    );
+    assert!(
+        bar_cx.debug_bounds("app-row-Dev_ToggleTools").is_some(),
+        "Dev Tools stays in the menu"
+    );
+}

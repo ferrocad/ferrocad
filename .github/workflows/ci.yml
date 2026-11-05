@@ -340,14 +340,13 @@ jobs:
       # fails fast on a GPUI/wgpu regression.
       - name: Check the shell core for wasm32
         run: cargo check -p ferrocad_shell_core --target wasm32-unknown-unknown --locked
-      # The wasm-Python script half (S8). It is its own error surface: RustPython pulls
-      # `getrandom`, whose wasm32-unknown-unknown backend must be named by cfg. The
-      # cross image sets RUSTFLAGS, which overrides `.cargo/config.toml`, so append it
-      # here rather than relying on that table.
+      # The wasm-Python script half (S8): RustPython pulls `getrandom`, whose
+      # wasm32-unknown-unknown backend is named by the `target.cfg(wasm32)` rustflags in
+      # `.cargo/config.toml`. That entry is *joined* with the cross image's
+      # `CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS`, so the image's wasi-sdk link
+      # paths survive; no RUSTFLAGS here, which would replace both.
       - name: Check the wasm-Python backend for wasm32
-        run: |
-          export RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"wasm_js\""
-          cargo check -p ferrocad_shell_pywasm --target wasm32-unknown-unknown --locked
+        run: cargo check -p ferrocad_shell_pywasm --target wasm32-unknown-unknown --locked
       - name: Fetch the prebuilt wasm OCCT 8.0.1 and build TKFeat
         env:
           OCCT_WASM_URL: https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz

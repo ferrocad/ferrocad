@@ -17,13 +17,28 @@ use ferrocad_shell_core::types::{
     VisibilityOutcome, WorkbenchReport,
 };
 use ferrocad_shell_core::view::ViewState;
+use ferrocad_shell_rust::RustAppBackend;
 use ferrocad_stage::InteractionCommit;
 use ferrocad_types::Vector3;
 use gpui::App;
 
 use crate::python;
+use crate::script_host::PythonScriptHost;
 
 /// The engine behind the native shell: the embedded interpreter and its app script.
+/// The pre-merge engine: one `AppBackend` that answers every method through the
+/// interpreter's JSON bridge.
+///
+/// No longer installed by [`backend::install`] or by `check_init` — the desktop
+/// composes [`PythonScriptHost`](crate::PythonScriptHost) with
+/// `ferrocad_shell_rust::RustAppBackend` instead, so one document serves both halves.
+///
+/// It is kept for the harnesses that cannot use that composition: a test binary that
+/// does **not** link the `ferrocad` extension imports it from
+/// `python/ferrocad.abi3.so`, which carries its own `ferrocad_core` and therefore its
+/// own document registry. Answering everything through Python is correct there —
+/// there is no document half in the image to disagree with. Deleting it means moving
+/// those harnesses onto the composed backend and linking the extension into them.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PythonAppBackend;
 
@@ -224,11 +239,25 @@ impl ScriptHost for PythonAppBackend {
     }
 }
 
-/// Install the Python backend as this app's engine.
+/// Install the composed backend as this app's engine.
+///
+/// The desktop is one `AppBackend`: the Rust document half over the process-wide
+/// registry, with the embedded interpreter as its script half. Both halves see the
+/// same document, which is what makes `FreeCAD.ActiveDocument` in a workbench and
+/// the model tree in the window the same object.
 ///
 /// Call after `python::configure` and before `Shell::boot`.
 pub fn install(cx: &mut App) {
-    ferrocad_shell_core::app::install_backend(cx, Box::new(PythonAppBackend::new()));
+    ferrocad_shell_core::app::install_backend(cx, Box::new(engine()));
+}
+
+/// The desktop's engine, for a host that installs it itself (`--check-init`).
+///
+/// Nothing is built here: `bootstrap()` starts the interpreter and adopts the
+/// document it creates, so composing the two halves cannot put a sample document in
+/// front of the real one.
+pub fn engine() -> RustAppBackend {
+    RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost))
 }
 
 /// Build the Python-backed tool `name` through the app script's bridge.

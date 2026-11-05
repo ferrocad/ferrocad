@@ -36,12 +36,16 @@ use ferrocad_inventor::{EventListener, Scene};
 use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_api::catalog;
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
+use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::types::{
-    AxisSummary, DocumentNode, EvalResult, GpuPreferenceOutcome, GridSummary, PropRow,
-    ProviderFeature, SelectionRequest, SetResult, WorkbenchReport,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
+    GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult,
+    WorkbenchReport,
 };
 use ferrocad_shell_api::view::ViewState;
+use ferrocad_stage::InteractionCommit;
+use ferrocad_types::Vector3;
 
 use crate::backend::{python_tool, python_tool_command};
 use crate::events::PythonEventCallbacks;
@@ -116,6 +120,61 @@ impl ScriptHost for PythonScriptHost {
 
     fn event_listener(&self) -> Box<dyn EventListener> {
         Box::new(PythonEventCallbacks)
+    }
+
+    /// The app script's `bootstrap()`: it starts the interpreter, imports the entry
+    /// module and creates the sample document in the shared registry.
+    ///
+    /// This is the whole point of the hook. `Shell::boot_with` asks for the boot
+    /// report *before* it reads the model tree or loads a workbench, so the document
+    /// has to exist by the time this returns.
+    fn bootstrap(&self) -> Result<Option<Bootstrap>, String> {
+        python::bootstrap().map(Some)
+    }
+
+    /// `--open`: the app script opens the file and drops the sample it just made.
+    fn open_startup_document(
+        &self,
+        boot: &mut Bootstrap,
+    ) -> Result<Option<OpenedDocument>, String> {
+        python::open_startup_document(boot)
+    }
+
+    /// The file formats this app accepts (`.FCStd`, the native `.ferrocad`, a `.py`
+    /// startup script) are the script's to read.
+    fn open_path(&self, path: &std::path::Path) -> Option<Result<OpenedDocument, String>> {
+        Some(python::open_document(path))
+    }
+
+    fn save_path(&self, path: &std::path::Path) -> Option<Result<(), String>> {
+        Some(python::save_document(path))
+    }
+
+    fn hello(&self) -> Result<Option<String>, String> {
+        python::hello().map(Some)
+    }
+
+    /// The edition's display provider: the display mode, datum planes' glass, and
+    /// any object whose mesh is not its OCCT `Shape`.
+    fn stage_meshes(&self) -> Option<Result<Vec<StageMesh>, String>> {
+        Some(python::stage_meshes())
+    }
+
+    /// A workbench manipulator's commit (the Part edge arc, a height grip).
+    fn apply_interaction(&self, commit: &InteractionCommit, object: &str) -> Option<ApplyResult> {
+        Some(
+            python::apply_interaction(commit, object)
+                .unwrap_or_else(|error| ApplyResult { ok: false, error }),
+        )
+    }
+
+    fn add_datum_plane(
+        &self,
+        origin: Vector3,
+        u: Vector3,
+        v: Vector3,
+    ) -> Option<Result<String, String>> {
+        Some(python::add_datum_plane(origin, u, v))
     }
 
     /// A workbench's own verbs, without the catalogue's.

@@ -34,14 +34,21 @@ const OBJECT: &str = "Box";
 /// creation, so it has no settable one).
 const SAMPLE: &str = "Params";
 
-/// The composed backend over a freshly booted interpreter.
+/// The composed backend, booted the way the desktop boots it.
+///
+/// The `ScriptHost` half owns the boot: `backend.bootstrap()` starts the interpreter,
+/// imports the app script and creates the document in the shared registry, and only
+/// then does the document half read it.
 fn composed() -> RustAppBackend {
     BOOT.call_once(|| {
         ferrocad_combined_py::register_builtins();
         python::configure("ferrocad_parametric", &[], &[], true);
     });
-    python::bootstrap().expect("the edition's app script boots");
-    RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost))
+    let mut backend =
+        RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost));
+    let boot = backend.bootstrap().expect("the composed backend boots");
+    assert_eq!(boot.document, DOCUMENT, "the script half made the document");
+    backend
 }
 
 /// Register a provider so the synthetic `Settings/<Feature>` node exists.

@@ -49,6 +49,14 @@ pub trait AppBackend {
 
     /// Boot the engine and describe the sample document it created.
     fn bootstrap(&mut self) -> Result<Bootstrap, String> {
+        // A script half that owns the engine boots it: the interpreter starts and
+        // creates (or adopts) the document here, not in a constructor, so a host can
+        // compose the backend before anything has run.
+        if let Some(host) = self.script_host() {
+            if let Some(boot) = host.bootstrap()? {
+                return Ok(boot);
+            }
+        }
         Ok(Bootstrap {
             version: env!("CARGO_PKG_VERSION").to_string(),
             backend: "unavailable".to_string(),
@@ -59,9 +67,12 @@ pub trait AppBackend {
     /// Apply the document the host asked to open at boot, if any.
     fn open_startup_document(
         &mut self,
-        _boot: &mut Bootstrap,
+        boot: &mut Bootstrap,
     ) -> Result<Option<OpenedDocument>, String> {
-        Ok(None)
+        match self.script_host() {
+            Some(host) => host.open_startup_document(boot),
+            None => Ok(None),
+        }
     }
 
     /// Replace the active document with one the host decoded from bytes.
@@ -90,6 +101,12 @@ pub trait AppBackend {
     ///
     /// The shell calls this only on a native host: the browser has no paths.
     fn open_path(&mut self, path: &std::path::Path) -> Result<OpenedDocument, String> {
+        // A path-aware script half reads the file itself: it is the only half that
+        // knows every serialisation the app accepts (`.FCStd`, the native
+        // `.ferrocad`, a startup `.py`).
+        if let Some(result) = self.script_host().and_then(|host| host.open_path(path)) {
+            return result;
+        }
         let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
         let name = path
             .file_stem()
@@ -103,12 +120,22 @@ pub trait AppBackend {
     /// The default serializes with [`save_document`](Self::save_document) and
     /// writes the bytes; a path-aware backend overrides it.
     fn save_path(&self, path: &std::path::Path) -> Result<(), String> {
+        if let Some(result) = self.script_host().and_then(|host| host.save_path(path)) {
+            return result;
+        }
         let bytes = self.save_document()?;
         std::fs::write(path, bytes).map_err(|error| format!("{}: {error}", path.display()))
     }
 
     /// The console's greeting line.
     fn hello(&self) -> Result<String, String> {
+        if let Some(line) = self
+            .script_host()
+            .and_then(|host| host.hello().ok())
+            .flatten()
+        {
+            return Ok(line);
+        }
         Ok("FerroCAD shell · no engine backend".to_string())
     }
 
@@ -282,10 +309,18 @@ pub trait AppBackend {
 
     fn add_datum_plane(
         &mut self,
-        _origin: Vector3,
-        _u: Vector3,
-        _v: Vector3,
+        origin: Vector3,
+        u: Vector3,
+        v: Vector3,
     ) -> Result<String, String> {
+        // Datum geometry is the workbench's: only a script half knows how to build
+        // one for its app's feature type.
+        if let Some(result) = self
+            .script_host()
+            .and_then(|host| host.add_datum_plane(origin, u, v))
+        {
+            return result;
+        }
         Err("not supported".to_string())
     }
 
@@ -420,6 +455,86 @@ pub trait ScriptHost {
     /// This is what makes `ActiveView.addEventCallbackPivy` work: the listener
     /// dispatches to the `SoEventCallback` callables the script registered.
     fn event_listener(&self) -> Box<dyn EventListener>;
+
+    // --- boot and paths -------------------------------------------------------
+    //
+    // The document half cannot boot an engine it does not have, and it cannot read a
+    // file format it does not know. The script half can do both, so it answers first
+    // and the backend keeps its own behaviour as the fallback.
+
+    /// Boot the engine, and describe the document it created.
+    ///
+    /// `None` means "this surface boots nothing": the backend builds its own sample.
+    /// This runs before anything else in `Shell::boot_with` — before the model tree
+    /// and before the workbenches — so it is where an interpreter that owns the
+    /// document has to start.
+    fn bootstrap(&self) -> Result<Option<Bootstrap>, String> {
+        Ok(None)
+    }
+
+    /// Open the document `--open` asked for, and make it active.
+    ///
+    /// `boot` is what [`bootstrap`](Self::bootstrap) reported, so the surface can drop
+    /// the sample document it just made.
+    fn open_startup_document(
+        &self,
+        _boot: &mut Bootstrap,
+    ) -> Result<Option<OpenedDocument>, String> {
+        Ok(None)
+    }
+
+    /// Open a file by path, in whatever format this app accepts.
+    ///
+    /// `None` when this surface has no filesystem of its own (the browser's JS host).
+    fn open_path(&self, _path: &std::path::Path) -> Option<Result<OpenedDocument, String>> {
+        None
+    }
+
+    /// Save the active document to a path.
+    ///
+    /// `None` when this surface has no filesystem of its own.
+    fn save_path(&self, _path: &std::path::Path) -> Option<Result<(), String>> {
+        None
+    }
+
+    /// The console's greeting line, when the script surface has its own.
+    fn hello(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    // --- what a script owns inside the document -------------------------------
+
+    /// The stage the app's display provider builds.
+    ///
+    /// A display hook answers more than the document does: the object's
+    /// `DisplayMode` (wireframe, shaded-with-edges), a datum plane's translucent
+    /// card, and any object whose mesh is not the OCCT `Shape` at all. `None` means
+    /// "no display hook": the backend tessellates the document's shapes itself.
+    fn stage_meshes(&self) -> Option<Result<Vec<StageMesh>, String>> {
+        None
+    }
+
+    /// Apply an interaction the script's own manipulator produced.
+    ///
+    /// The shared transform gizmo is the document's; a workbench's dress-up arc (the
+    /// Part fillet, a BIM grip) knows its feature type and its own constructor, so it
+    /// answers for its own manipulator id. `None` means the commit is not the
+    /// script's.
+    fn apply_interaction(&self, _commit: &InteractionCommit, _object: &str) -> Option<ApplyResult> {
+        None
+    }
+
+    /// Create a datum plane and return the object's name.
+    ///
+    /// `None` when the surface does not own datum geometry.
+    fn add_datum_plane(
+        &self,
+        _origin: Vector3,
+        _u: Vector3,
+        _v: Vector3,
+    ) -> Option<Result<String, String>> {
+        None
+    }
 
     // --- extension hooks ------------------------------------------------------
     //

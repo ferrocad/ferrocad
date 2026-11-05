@@ -124,15 +124,15 @@ impl RustAppBackend {
 
     /// Boot against the process-wide registry `ferrocad_py` binds to.
     ///
-    /// An active document already in the registry is used as it is — that is the
-    /// `python::bootstrap()` case, where the interpreter made the document and the
-    /// shell only displays it. An empty registry gets the sample, registered under
-    /// [`DOCUMENT`], so a standalone shell still shows something.
+    /// Nothing is built here. [`bootstrap`](AppBackend::bootstrap) adopts whatever the
+    /// registry holds — the document an interpreter created, or the sample when the
+    /// registry is still empty — so composing this with a script half can never put a
+    /// second document in front of the one that half is about to make.
     ///
-    /// Nothing is captured: every access reads the registry's active document, so a
-    /// script that opens or closes one is visible on the next call.
+    /// Nothing is captured either: every access reads the registry's active document,
+    /// so a script that opens or closes one is visible on the next call.
     pub fn from_shared_registry() -> Self {
-        let mut backend = Self {
+        Self {
             state: RefCell::new(State {
                 source: DocSource::SharedRegistry,
                 view: ShellViewState::default(),
@@ -142,13 +142,7 @@ impl RustAppBackend {
             }),
             boot_error: None,
             script: None,
-        };
-        if registry().active().is_none() {
-            let (document, boot_error) = sample_document();
-            backend.boot_error = boot_error;
-            backend.install_document(DOCUMENT, document);
         }
-        backend
     }
 
     /// A backend that owns `document` under `name`.
@@ -278,6 +272,30 @@ impl AppBackend for RustAppBackend {
         if let Some(error) = self.boot_error.clone() {
             return Err(error);
         }
+        // The script half boots the engine when it has one: it starts the interpreter
+        // and creates (or adopts) the document in the registry. It runs here, not in
+        // the constructor, because `backend::install` composes the backend before
+        // `Shell::boot_with` calls this.
+        let booted = match self.script.as_deref() {
+            Some(host) => host.bootstrap()?,
+            None => None,
+        };
+        if let Some(boot) = booted {
+            self.boot_error = None;
+            return Ok(boot);
+        }
+        // No script half, and nothing in the registry: build the sample now. This is
+        // deliberately after the script half's chance to boot, so a host that makes
+        // its own document never leaves the sample behind it.
+        let shared = matches!(&self.state.borrow().source, DocSource::SharedRegistry);
+        if shared && self.active_document().is_none() {
+            let (document, boot_error) = sample_document();
+            self.install_document(DOCUMENT, document);
+            if let Some(error) = boot_error {
+                self.boot_error = Some(error.clone());
+                return Err(error);
+            }
+        }
         Ok(Bootstrap {
             version: env!("CARGO_PKG_VERSION").to_string(),
             backend: "rust".to_string(),
@@ -289,6 +307,16 @@ impl AppBackend for RustAppBackend {
     }
 
     fn hello(&self) -> Result<String, String> {
+        // An installed interpreter names itself, and its line is the honest one for
+        // this build: the document half has no interpreter of its own.
+        if let Some(line) = self
+            .script
+            .as_deref()
+            .and_then(|host| host.hello().ok())
+            .flatten()
+        {
+            return Ok(line);
+        }
         Ok("FerroCAD shell · Rust document backend · OCCT · no CPython".to_string())
     }
 
@@ -372,6 +400,12 @@ impl AppBackend for RustAppBackend {
     }
 
     fn stage_meshes(&self) -> Result<Vec<StageMesh>, String> {
+        // A display hook answers more than the document can: the object's display mode,
+        // a datum plane's translucent card, an object whose mesh is not its `Shape`.
+        // It is the edition's statement of what to draw, so it answers first.
+        if let Some(meshes) = self.script.as_deref().and_then(|host| host.stage_meshes()) {
+            return meshes;
+        }
         let meshes = self.with_document(|_, document| {
             let mut meshes = Vec::new();
             // The engine decides what is drawn: a feature replaces the object it
@@ -955,6 +989,16 @@ impl AppBackend for RustAppBackend {
         object: &str,
     ) -> Result<ApplyResult, String> {
         if commit.manipulator != TRANSFORM_ID || commit.action != "apply" {
+            // Not the shared transform gizmo. A workbench's dress-up arc (the Part
+            // fillet, a BIM grip) knows its own feature type, so the commit is the
+            // script's to apply; only when it disclaims the id is it unavailable.
+            if let Some(result) = self
+                .script
+                .as_deref()
+                .and_then(|host| host.apply_interaction(commit, object))
+            {
+                return Ok(result);
+            }
             return Ok(ApplyResult {
                 ok: false,
                 error: format!(
@@ -1735,15 +1779,83 @@ mod tests {
         guard
     }
 
+    /// A shared-registry backend that has booted.
+    ///
+    /// Nothing is built before `bootstrap()`, so a shared test starts with the run.
+    fn shared() -> RustAppBackend {
+        let mut backend = RustAppBackend::from_shared_registry();
+        backend.bootstrap().expect("boot the sample");
+        backend
+    }
+
     #[test]
     fn an_empty_registry_gets_the_sample() {
         let _serial = clear_registry();
-        let backend = RustAppBackend::from_shared_registry();
+        let mut backend = RustAppBackend::from_shared_registry();
+        // Constructing the backend builds nothing: a script half boots *after* the
+        // constructor runs, and a sample document sitting in front of the one it
+        // creates is exactly the drift the merge exists to end.
+        assert!(registry().is_empty(), "the constructor builds nothing");
+        assert!(backend.model_tree().unwrap().is_empty());
+
+        assert_eq!(backend.bootstrap().unwrap().document, DOCUMENT);
         assert_eq!(registry().active(), Some(DOCUMENT));
         let tree = backend.model_tree().unwrap();
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, DOCUMENT);
         assert!(tree[0].objects.iter().any(|object| object.name == "Box"));
+    }
+
+    #[test]
+    fn a_host_that_boots_supplies_the_document() {
+        let _serial = clear_registry();
+
+        /// The script half in this test: it starts "the interpreter" and creates its
+        /// document, then reports it.
+        struct Boots;
+
+        impl ScriptHost for Boots {
+            fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
+                Err("no interpreter".to_string())
+            }
+            fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
+                Ok(WorkbenchReport::default())
+            }
+            fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+                Err(format!("no tool {name}"))
+            }
+            fn tool_command(&self, _name: &str, _verb: &str) -> bool {
+                false
+            }
+            fn inventor_scene(&self) -> Result<Scene, String> {
+                Ok(Scene::default())
+            }
+            fn event_listener(&self) -> Box<dyn EventListener> {
+                Box::new(NoopListener)
+            }
+
+            fn bootstrap(&self) -> Result<Option<Bootstrap>, String> {
+                let mut document = Document::new();
+                document.add_object("FromHost", BOX_TYPE);
+                registry().insert_document("FromHost", document);
+                Ok(Some(Bootstrap {
+                    version: "9.9".to_string(),
+                    backend: "script".to_string(),
+                    document: "FromHost".to_string(),
+                }))
+            }
+        }
+
+        let mut backend = RustAppBackend::from_shared_registry().with_script_host(Box::new(Boots));
+        let boot = backend.bootstrap().unwrap();
+        assert_eq!(boot.backend, "script");
+        assert_eq!(boot.document, "FromHost");
+        // The sample never appeared: the registry holds exactly the script's document,
+        // because the fallback is built only after the host declines.
+        assert_eq!(registry().names(), vec!["FromHost".to_string()]);
+        let tree = backend.model_tree().unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "FromHost");
     }
 
     #[test]
@@ -1779,7 +1891,7 @@ mod tests {
             let source = RustAppBackend::new();
             source.save_document().unwrap()
         };
-        let mut backend = RustAppBackend::from_shared_registry();
+        let mut backend = shared();
         let opened = backend.open_document("Opened", &bytes).unwrap();
         assert_eq!(opened.document, "Opened");
         // `FreeCAD.ActiveDocument` is the file the shell just opened.
@@ -1797,7 +1909,7 @@ mod tests {
             let source = RustAppBackend::new();
             source.save_document().unwrap()
         };
-        let mut backend = RustAppBackend::from_shared_registry();
+        let mut backend = shared();
         let before = registry().get(DOCUMENT).unwrap();
         let name = backend.open_document(DOCUMENT, &bytes).unwrap().document;
         assert_eq!(name, DOCUMENT);
@@ -1810,7 +1922,7 @@ mod tests {
     #[test]
     fn an_edit_and_its_undo_run_against_the_registry_document() {
         let _serial = clear_registry();
-        let mut backend = RustAppBackend::from_shared_registry();
+        let mut backend = shared();
         let handle = registry().get(DOCUMENT).unwrap();
         let length = |document: &Document| {
             property_rows(
@@ -1836,7 +1948,7 @@ mod tests {
     #[test]
     fn with_no_active_document_reads_are_empty_and_writes_refused() {
         let _serial = clear_registry();
-        let mut backend = RustAppBackend::from_shared_registry();
+        let mut backend = shared();
         {
             let mut application = registry();
             let name = application.active().unwrap().to_string();

@@ -3,9 +3,9 @@
 //! [`ferrocad_shell_core`](https://crates.io/crates/ferrocad_shell_core) is the
 //! platform-neutral half (window, chrome, panels, the viewport element and the
 //! `AppBackend` seam). This crate adds the engine: it boots the embedded CPython
-//! interpreter, wires the `FreeCAD` facade, installs the [`PythonAppBackend`], and
-//! opens the window. Headless rendering lives here too, because it drives the same
-//! interpreter.
+//! interpreter, wires the `FreeCAD` facade, installs the composed backend (the Rust
+//! document half with the interpreter as its script half), and opens the window.
+//! Headless rendering lives here too, because it drives the same interpreter.
 //!
 //! The base application lives in the `ferrocad` crate and calls [`run`]. A
 //! redistribution, such as *FerroCAD: Architecture*, is a thin binary that calls
@@ -16,7 +16,8 @@
 //! # Module map
 //!
 //! ```text
-//! backend.rs  PythonAppBackend: AppBackend      (the seam implementation)
+//! backend.rs  the desktop engine: `PythonScriptHost` composed with the Rust half
+//! script_host.rs  PythonScriptHost: ScriptHost   (the scripting half)
 //! python.rs   the interpreter and JSON boundary
 //! events.rs   the SoEventCallback listener
 //! headless.rs offscreen render / STL export
@@ -210,7 +211,7 @@ pub fn check_init(config: HostConfig) -> Result<(), String> {
         false,
     );
     python::configure_startup_document(config.open_document.as_deref());
-    let mut backend = PythonAppBackend::new();
+    let mut backend = backend::engine();
     Shell::boot_with(&mut backend).map(|_| ())
 }
 

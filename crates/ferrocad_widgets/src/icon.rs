@@ -158,6 +158,12 @@ const ASSETS: &[(&str, &[u8])] = &[
         "select-pointer",
         include_bytes!("../assets/icons/select-pointer.svg"),
     ),
+    // Curves and array markers.
+    ("wave-line", include_bytes!("../assets/icons/wave-line.svg")),
+    (
+        "circle-dotted",
+        include_bytes!("../assets/icons/circle-dotted.svg"),
+    ),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

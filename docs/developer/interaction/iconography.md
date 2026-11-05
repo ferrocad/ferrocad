@@ -400,7 +400,7 @@ Seven corrections matter:
 | Ellipse | `Draft_Ellipse` | `oval` | use |
 | Rectangle | `Draft_Rectangle` | `rectangle` | use |
 | Polygon | `Draft_Polygon` | `polygon` | use |
-| B-spline | `Draft_BSpline` | — | draw |
+| B-spline | `Draft_BSpline` | `wave-line` | use |
 | Bezier curve | `Draft_BezCurve` | `bezier` | use |
 | Point (toolbar) | `Draft_Point` | `bullet` | use |
 | Point (tree) | `Draft_Dot` | `bullet` | use |
@@ -424,7 +424,7 @@ Seven corrections matter:
 | Offset | `Draft_Offset` | — | draw |
 | Clone | `Draft_Clone` | `sheep` | metaphor |
 | Array | `Draft_Array` | `grid-4x4` | use |
-| Polar array | `Draft_PolarArray` | `copy + circle` | compose |
+| Polar array | `Draft_PolarArray` | `copy + circle-dotted` | compose |
 | Path array | `Draft_PathArray` | `copy + shape-polyline` | compose |
 | Point array | `Draft_PointArray` | `copy + bullet` | compose |
 | Trim | `Draft_Trimex` | `cut-line` | use |
@@ -582,7 +582,7 @@ word-sense questions:
   `copy`.
 - **Trim.** `cut-line` (a line with a cut) replaces scissors; Extend stays a request.
 - **Arrays.** Rectangular stays `grid-4x4`; polar, path and point are a generic
-  `copy` base plus `circle`, `shape-polyline` and `bullet` markers.
+  `copy` base plus `circle-dotted`, `shape-polyline` and `bullet` markers.
 
 
 
@@ -613,7 +613,7 @@ the rest are open.
 | --- | --- |
 | Planes | workplane, select plane, plane datum, snap working plane |
 | View orientation | front, top, right, rear |
-| Geometry | arc, arc through 3 points, B-spline, facebinder |
+| Geometry | arc, arc through 3 points, facebinder |
 | Edit | offset (concentric outline), extend (line with arrow), slope (raised wedge) |
 | Snap | midpoint (half-tick), extension (dashed continuation), near (proximity asterisk) |
 | Solid verbs | extrude, loft, sweep, pocket, hole, thickness, make face, make solid |
@@ -692,10 +692,25 @@ additions are unrelated to the 27 requests (bank settings, bindle, data logger,
 decision, dungeon, fish scale, delete branch, green energy, kilometre post, laptop
 settings, notepad, parking bay, plate compactor, power steering, pumice stone,
 `terminal-x`, tiltrotor, `utility-knife`, wildlife protection). Re-searching every
-requested concept returned no new match, so all 27 requests remain open.
+requested concept returned no new match, so 26 requests remain open (the spline
+request was withdrawn on 2026-11-06; see below).
 `utility-knife` (`home`) is the only newcomer near this table; it was considered for
 Cut and Trim but rejected: clipboard Cut is the conventional `scissors`, and the CAD
 Trim is the line-with-a-cut `cut-line`, not a blade.
+
+**Design pass, 2026-11-06.** Re-reviewing the `symbols` geometry set (325 icons, all
+already indexed) resolved two rows without a new request:
+
+- **B-spline** adopts `wave-line`, a smooth curve, instead of waiting for the
+  `spline curve` request. The row was still `draw` even though the second review's
+  prose already said `wave-line`; that is corrected here and the request withdrawn, so
+  **26 remain open**.
+- **Polar array**'s marker becomes `circle-dotted`, a ring of placements, rather than a
+  plain `circle` that only repeated the wedge tint.
+
+`quarter-circle`, `circle-segment` and `semicircle` were checked again for **Arc** and
+still rejected: the first two carry a radius or chord, and the third is a half disc
+with a straight diameter, so Arc stays on the draw list.
 
 ### Contact sheets
 

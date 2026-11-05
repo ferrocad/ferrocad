@@ -51,6 +51,9 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         "Draft_Snap_Dimensions" => "ruler",
         "Draft_Snap_Special" => "star",
         "Draft_Snap_WorkingPlane" => "workplane",
+        // Draft geometry. Only the ones with a delivered glyph; the rest keep
+        // their label until the note's draw list lands.
+        "Draft_BSpline" => "wave-line",
         _ => return None,
     };
     Some(key)
@@ -182,6 +185,7 @@ mod tests {
             "Draft_Snap_Dimensions",
             "Draft_Snap_Special",
             "Draft_Snap_WorkingPlane",
+            "Draft_BSpline",
         ] {
             let key = icon_for(id).unwrap_or_else(|| panic!("{id} is curated"));
             assert!(

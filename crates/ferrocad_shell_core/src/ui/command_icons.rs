@@ -51,9 +51,23 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         "Draft_Snap_Dimensions" => "ruler",
         "Draft_Snap_Special" => "star",
         "Draft_Snap_WorkingPlane" => "workplane",
-        // Draft geometry. Only the ones with a delivered glyph; the rest keep
-        // their label until the note's draw list lands.
+        // Draft geometry. Ids are validated against upstream's `addCommand`
+        // (`freecad-upstream/src/Mod/Draft/draftguitools`). Arc, Arc through 3
+        // points and Facebinder stay on the note's draw list, so they keep their label.
+        "Draft_Line" => "line-segment",
+        "Draft_Wire" => "shape-polyline",
+        "Draft_Circle" => "circle",
+        "Draft_Ellipse" => "oval",
+        "Draft_Rectangle" => "rectangle",
+        "Draft_Polygon" => "polygon",
         "Draft_BSpline" => "wave-line",
+        "Draft_BezCurve" => "bezier",
+        "Draft_Point" => "bullet",
+        "Draft_Text" => "text-box",
+        "Draft_ShapeString" => "letter-block",
+        "Draft_Dimension" => "dimension-line",
+        "Draft_Label" => "tag",
+        "Draft_Hatch" => "pattern-crosshatch",
         _ => return None,
     };
     Some(key)
@@ -185,7 +199,20 @@ mod tests {
             "Draft_Snap_Dimensions",
             "Draft_Snap_Special",
             "Draft_Snap_WorkingPlane",
+            "Draft_Line",
+            "Draft_Wire",
+            "Draft_Circle",
+            "Draft_Ellipse",
+            "Draft_Rectangle",
+            "Draft_Polygon",
             "Draft_BSpline",
+            "Draft_BezCurve",
+            "Draft_Point",
+            "Draft_Text",
+            "Draft_ShapeString",
+            "Draft_Dimension",
+            "Draft_Label",
+            "Draft_Hatch",
         ] {
             let key = icon_for(id).unwrap_or_else(|| panic!("{id} is curated"));
             assert!(

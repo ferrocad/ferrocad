@@ -789,12 +789,19 @@ Draft icons it can draw.
   The wheel grew with the glyph: a 30 px deadzone, a 92 px outer ring and a 62 px label
   ring (`SIZE` 200), so the icon + label chip is no longer squeezed into the wedge.
 
-  The curated command rows are the built-ins (`App_Move` → `move`, `App_Delete` →
-  `trash`, `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` →
-  `cube`, `Toy_Polyline` → `shape-polyline`, `Part_Box` → `cube`,
-  `App_SaveDatumPlane` → `layers-plus`) and the snap modes (`Draft_Snap_Endpoint` →
-  `anchor-point`, …). The snap modes the note draws (midpoint, origin, vertex,
-  extension, near) keep their label alone until that glyph exists.
+  The curated command rows are the built-ins (`App_Move` → `move`, `App_Delete` → `trash`,
+  `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` → `cube`,
+  `Toy_Polyline` → `shape-polyline`, `Part_Box` → `cube`,
+  `App_SaveDatumPlane` → `layers-plus`), the snap modes (`Draft_Snap_Endpoint` →
+  `anchor-point`, …) and the **Draft geometry slice** (`Draft_Line` → `line-segment`,
+  `Draft_Wire` → `shape-polyline`, `Draft_BezCurve` → `bezier`, `Draft_Dimension` →
+  `dimension-line`, `Draft_Hatch` → `pattern-crosshatch`, …). Every Draft id was
+  checked against upstream's `addCommand` in
+  `freecad-upstream/src/Mod/Draft/draftguitools`; the note's `Draft_Dot`,
+  `Draft_DimensionAngular` and `Draft_DimensionRadius` are view-provider icon names,
+  not command ids, so they have no row. Arc, Arc through 3 points and Facebinder stay
+  on the draw list and keep their label. The snap modes the note draws (midpoint,
+  origin, vertex, extension, near) keep their label alone until that glyph exists.
 
   The tree table is category-level: exact primitives (`Part::Cylinder` → `cylinder`,
   `Part::Torus` → `torus`, …) then `Sketcher::*` → `pencil-ruler`, `Draft::*` →

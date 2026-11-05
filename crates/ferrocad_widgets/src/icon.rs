@@ -164,6 +164,29 @@ const ASSETS: &[(&str, &[u8])] = &[
         "circle-dotted",
         include_bytes!("../assets/icons/circle-dotted.svg"),
     ),
+    // Draft geometry.
+    (
+        "line-segment",
+        include_bytes!("../assets/icons/line-segment.svg"),
+    ),
+    ("oval", include_bytes!("../assets/icons/oval.svg")),
+    ("rectangle", include_bytes!("../assets/icons/rectangle.svg")),
+    ("polygon", include_bytes!("../assets/icons/polygon.svg")),
+    ("bezier", include_bytes!("../assets/icons/bezier.svg")),
+    ("text-box", include_bytes!("../assets/icons/text-box.svg")),
+    (
+        "letter-block",
+        include_bytes!("../assets/icons/letter-block.svg"),
+    ),
+    (
+        "dimension-line",
+        include_bytes!("../assets/icons/dimension-line.svg"),
+    ),
+    ("tag", include_bytes!("../assets/icons/tag.svg")),
+    (
+        "pattern-crosshatch",
+        include_bytes!("../assets/icons/pattern-crosshatch.svg"),
+    ),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

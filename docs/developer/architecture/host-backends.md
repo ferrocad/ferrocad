@@ -25,10 +25,10 @@ Platform is therefore a property of the host, and the document API is identical
 everywhere. That is what lets the browser and a desktop edition install the *same*
 `RustAppBackend`.
 
-![Four runtime configurations: RustAppBackend alone (no runtime), PythonAppBackend
-(embedded CPython, native), RustAppBackend + JsScriptHost (wasm modules) and
-RustAppBackend + PywasmScriptHost (wasm Python), all behind one shell and one
-`AppBackend`/`ScriptHost` seam](../images/host-backends-columns.svg)
+![The four layers: the hosts (native desktop, browser wasm) that own the entry point,
+window and FilePicker; the seam (`ferrocad_shell_core` over `AppBackend` plus an
+optional `ScriptHost`); the backends named by runtime; and the shared
+`ferrocad_core`/`ferrocad_part` engine](../images/host-backends.svg)
 
 The two browser configurations differ in **who runs the user's code**, not in what the
 shell sees. Both are `RustAppBackend` plus a script half —
@@ -106,6 +106,11 @@ backend still reports the real file name.
 A backend therefore carries no file hooks and no platform knowledge.
 
 ## 4. The four configurations
+
+![The four runtime configurations behind one shell: RustAppBackend alone (no
+runtime), PythonAppBackend (embedded CPython, native), RustAppBackend + JsScriptHost
+(wasm modules) and RustAppBackend + PywasmScriptHost (wasm Python), all on one
+`AppBackend`/`ScriptHost` seam](../images/host-backends-columns.svg)
 
 ### Rust, no runtime
 

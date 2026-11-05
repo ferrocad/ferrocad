@@ -34,7 +34,7 @@
   <rect x="0" y="0" width="1100" height="800" fill="#f7f9fc" />
 
   <text class="t title" x="550" y="32" text-anchor="middle">FERROCAD SYSTEM ARCHITECTURE</text>
-  <text class="t subtitle" x="550" y="54" text-anchor="middle">Hosts own the window &amp; FilePicker · backends are named by runtime · one seam and one engine (S1–S8 done)</text>
+  <text class="t subtitle" x="550" y="54" text-anchor="middle">Hosts own the window &amp; FilePicker · backends are named by runtime · one seam and one engine</text>
 
   <!-- ============ layer 1: hosts ============ -->
   <rect class="band" x="76" y="74" width="1000" height="84" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
@@ -88,7 +88,7 @@
   <rect class="band" x="76" y="316" width="1000" height="270" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
   <text class="t band-label" transform="translate(64,451) rotate(-90)" text-anchor="middle">3. BACKENDS (BY RUNTIME)</text>
 
-  <!-- CPython -->
+  <!-- embedded CPython -->
   <rect class="box" x="92" y="324" width="226" height="38" rx="5" fill="#f3d3ac" stroke="#cf9a55" />
   <text class="t col-head" x="205" y="339" text-anchor="middle">PYTHON (CPython)</text>
   <text class="t box-sub" x="205" y="354" text-anchor="middle">ferrocad_shell_gpui</text>
@@ -101,9 +101,9 @@
   <text class="t box-sub" x="205" y="452" text-anchor="middle">python/FreeCAD + mods</text>
   <line class="wire" x1="205" y1="458" x2="205" y2="472" marker-end="url(#arrow)" />
 
-  <!-- wasm Python (S8: RustPython) -->
+  <!-- wasm Python (RustPython) -->
   <rect class="box" x="336" y="324" width="226" height="38" rx="5" fill="#cfe6d6" stroke="#7fb391" />
-  <text class="t col-head" x="449" y="339" text-anchor="middle">WASM PYTHON (S8 &#10003;)</text>
+  <text class="t col-head" x="449" y="339" text-anchor="middle">WASM PYTHON</text>
   <text class="t box-sub" x="449" y="354" text-anchor="middle">ferrocad_shell_pywasm</text>
   <rect class="box" x="348" y="370" width="202" height="40" rx="5" fill="#b9dcc2" stroke="#7fb391" />
   <text class="t box-title" x="449" y="387" text-anchor="middle">PywasmScriptHost</text>
@@ -133,7 +133,7 @@
 
   <!-- Rust: no runtime -->
   <rect class="box" x="580" y="324" width="226" height="38" rx="5" fill="#e4c6e7" stroke="#b184b9" />
-  <text class="t col-head" x="693" y="339" text-anchor="middle">RUST (no runtime — S5 &#10003;)</text>
+  <text class="t col-head" x="693" y="339" text-anchor="middle">RUST (no runtime)</text>
   <text class="t box-sub" x="693" y="354" text-anchor="middle">ferrocad_shell_rust</text>
   <rect class="box" x="592" y="370" width="202" height="78" rx="5" fill="#dcb8e2" stroke="#b184b9" />
   <text class="t box-title" x="693" y="389" text-anchor="middle">RustAppBackend</text>
@@ -143,9 +143,9 @@
   <text class="t note" x="701" y="466" text-anchor="start">shared document half for</text>
   <text class="t note" x="701" y="480" text-anchor="start">browser, Pywasm &amp; JS</text>
 
-  <!-- JS (S7) -->
+  <!-- JS modules -->
   <rect class="box" x="824" y="324" width="226" height="38" rx="5" fill="#d5dfea" stroke="#94a9c2" />
-  <text class="t col-head" x="937" y="339" text-anchor="middle">JS / WASM (S7 &#10003;)</text>
+  <text class="t col-head" x="937" y="339" text-anchor="middle">JS / WASM</text>
   <text class="t box-sub" x="937" y="354" text-anchor="middle">ferrocad_shell_js</text>
   <rect class="box" x="836" y="370" width="202" height="40" rx="5" fill="#c9d5e3" stroke="#94a9c2" />
   <text class="t box-title" x="937" y="387" text-anchor="middle">JsScriptHost</text>
@@ -189,7 +189,7 @@
   <rect x="770" y="714" width="16" height="12" rx="2" fill="#b9cde4" stroke="#7d9ec4" />
   <text class="t note" x="793" y="724" text-anchor="start">the shared CAD engine</text>
 
-  <text class="t note-italic" x="76" y="748" text-anchor="start">AppBackend is the document half; ScriptHost is optional. JsScriptHost (S7) and PywasmScriptHost (S8) plug into RustAppBackend::with_script_host.</text>
-  <text class="t note-italic" x="76" y="766" text-anchor="start">S8 result (§6.3): python/ferrocad_shell + catalog.json run unchanged in both VMs; CPython reaches core via ferrocad_py (PyO3), RustPython via _ferrocad.</text>
-  <text class="t note-italic" x="76" y="784" text-anchor="start">status: S1–S8 complete · native CPython, pure-Rust, JS (?js=1) and RustPython (pywasm) backends verified</text>
+  <text class="t note-italic" x="76" y="748" text-anchor="start">AppBackend is the document half; ScriptHost is optional. JsScriptHost and PywasmScriptHost plug into RustAppBackend::with_script_host.</text>
+  <text class="t note-italic" x="76" y="766" text-anchor="start">Both Python backends reach ferrocad_core through their VM's native module: CPython via ferrocad_py (PyO3), RustPython via _ferrocad.</text>
+  <text class="t note-italic" x="76" y="784" text-anchor="start">The JS half runs behind ?js=1 in the browser host; the wasm-Python half is not installed by any host yet.</text>
 </svg>

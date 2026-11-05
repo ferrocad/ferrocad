@@ -1088,5 +1088,8 @@ fn row(id: &str, menu: &str, surface: &str) -> CommandInfo {
         checked: false,
         checkable: false,
         dev_only: false,
+        // The browser host's view switches carry no icon of their own; the shell
+        // falls back to the command id, exactly as `catalog` does for an iconless row.
+        pixmap: String::new(),
     }
 }

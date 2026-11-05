@@ -2,7 +2,8 @@
 
 Status: design (2026-10-20). Companion to [`axis-origin-grid.md`](axis-origin-grid.md)
 (spatial tokens), [`gizmo-manipulators.md`](gizmo-manipulators.md) §8 (manipulator
-tokens), [`navicube-spec.md`](navicube-spec.md) §5 (theme roles) and
+tokens), [`navicube-spec.md`](navicube-spec.md) §5 (theme roles),
+[`iconography.md`](iconography.md) (pictograms, grids and inks) and
 [`app-shell-vision.md`](../../project/direction/app-shell-vision.md) (chrome).
 
 This note is the **single source of truth for the look**: colour tokens, type scale,

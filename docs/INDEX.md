@@ -141,6 +141,7 @@ here.
 
 - [developer/interaction/axis-origin-grid.md](developer/interaction/axis-origin-grid.md) — the world triad, the ground/workplane grids, face frames and snapping.
 - [developer/interaction/gizmo-manipulators.md](developer/interaction/gizmo-manipulators.md) — the context-driven manipulator suite: the Spatial Transactor, F0 and edge dress-up.
+- [developer/interaction/iconography.md](developer/interaction/iconography.md) — the pictogram contract: the upstream and IconMCP inventory, the curated mapping and the 24 glyphs FerroCAD draws.
 - [developer/interaction/input-components.md](developer/interaction/input-components.md) — the input widget architecture.
 - [developer/interaction/navicube.md](developer/interaction/navicube.md) — the navigation cube: what it is upstream, the slice plan and the as-built map.
 - [developer/interaction/navicube-spec.md](developer/interaction/navicube-spec.md) — the producer-neutral NaviCube specification.

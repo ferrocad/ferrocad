@@ -48,7 +48,7 @@ version.
 | --- | --- | --- | --- |
 | `ferrocad_shell_api` | The contract: `AppBackend`, `StageMesh`, `CommandInfo`, `PropRow`, dialogs, view requests, selection. Depends only on pure crates (`ferrocad_stage`, `ferrocad_inventor`, `ferrocad_geom`, `ferrocad_types`). | no | yes |
 | `ferrocad_shell_core` | The GPUI shell: `Shell`, chrome, panels, viewport element, `DisplaySync`, `Contributions`. | no | yes |
-| `ferrocad_shell_gpui` | Native assembly: owns `pyo3`, `ferrocad_inventor_py`, `ferrocad_stage_py` and `PythonAppBackend`; exports `run_with`/`run_edition_with`. | yes | no |
+| `ferrocad_shell_python` | Native assembly: owns `pyo3`, `ferrocad_inventor_py`, `ferrocad_stage_py` and `PythonAppBackend`; exports `run_with`/`run_edition_with`. | yes | no |
 | `ferrocad_web_gpui` | Browser host: the `wasm-bindgen` entry point and the page bridge, over the shared Rust backend. | no | yes |
 
 ### 1.2 Two backends, same trait
@@ -156,25 +156,28 @@ work.
 | --- | --- | --- | --- |
 | The contract | `ferrocad_shell_api` | — | unchanged |
 | The shell | `ferrocad_shell_core` | — | unchanged |
-| Native CPython assembly | `ferrocad_shell_gpui` | S1–S5 | unchanged (it is the *native* assembly, hence "gpui"); it is host **and** backend — see §4.3 |
+| Native CPython assembly | `ferrocad_shell_python` | S1–S5 | was `ferrocad_shell_gpui` (renamed 2026-11-05, §2.3); it is host **and** backend — see §4.3 |
 | Rust document backend | **`ferrocad_shell_rust`** | S5 ✓ | primary; `ferrocad_shell_doc` is the alternative |
 | Browser host | `ferrocad_web_gpui` | S5 ✓ | unchanged; a pure host since S5 |
 | JS backend | `ferrocad_shell_js` | S7 ✓ | wasm32 only; the spike is `publish = false` |
 | wasm Python backend | `ferrocad_shell_pywasm` | S8 ✓ | RustPython; wasm32 at the host, `publish = false` (spike) |
-| Future CPython backend crate | `ferrocad_shell_python` | (with a Rust desktop edition, §4.3) | only if that edition needs `ferrocad_shell_gpui` to stop linking `pyo3` |
+| Future CPython backend crate | `ferrocad_shell_python` | (with a Rust desktop edition, §4.3) | only if that edition needs `ferrocad_shell_python` to stop linking `pyo3` |
 
 `ferrocad_shell_rust` is named for the runtime it embeds (none — the document *is*
-Rust), not for a scripting language. That is consistent with `ferrocad_shell_gpui`
-being named for its host framework.
+Rust), not for a scripting language.
 
-**Why `_python`, not `_cpython` — and why nothing is renamed today.** `_cpython`
-cannot distinguish the two Python backends: Pyodide *is* CPython compiled to wasm
-(§6.3). The split therefore uses `_python` (native embedding) against `_pywasm` (a
-wasm runtime), matching `_rust` and `_js` one-for-one. `ferrocad_shell_gpui` keeps
-its name until that split: it is a host *and* a backend today, D2 names backends, and
-a rename now would be a breaking release for a crate that is about to be divided
-anyway. The host names (`_gpui`, `_web_gpui`) are a separate question and are not on
-this plan's critical path.
+**Why `_python`, not `_cpython`.** `_cpython` cannot distinguish the two Python
+backends: Pyodide *is* CPython compiled to wasm (§6.3). The names are therefore
+`_python` (native embedding) against `_pywasm` (a wasm runtime), matching `_rust` and
+`_js` one-for-one.
+
+**Outcome (2026-11-05).** The plan deferred the rename: the crate is a host *and* a
+backend, D2 names backends, and a rename is a breaking release. It was carried out once
+the four backends had landed, because four crates that read as a set are worth more
+than the half-true single name — `ferrocad_shell_gpui` is now
+**`ferrocad_shell_python`**. The dual role is unchanged. If it is ever split, the
+*host* half moves out under a platform name (a `ferrocad_shell_native`) rather than the
+backend being renamed again.
 
 Each stage that adds a backend creates exactly one crate from this table, and it
 implements the two traits from §5.1; §8 states which stage depends on which.
@@ -260,7 +263,7 @@ Only the new/moved ones are listed; everything else keeps its place.
 | `ferrocad_shell_api` | contract + `display` (`StageMesh` only) + `catalog` (command data) | unchanged, plus nothing new |
 | `ferrocad_shell_core` | shell + `files` (picker/file verbs) | unchanged |
 | `ferrocad_shell_rust` **(new)** | `RustAppBackend`: the current `web_gpui/src/document.rs`, plus the sample document | `ferrocad_core`, `ferrocad_part`, `ferrocad_occt`, `ferrocad_stage`, `ferrocad_shell_api`, `serde_json` |
-| `ferrocad_shell_gpui` | native assembly: CPython + `run_with` | unchanged (host *and* CPython backend — §4.3; may depend on `ferrocad_shell_rust` for a Rust-desktop edition) |
+| `ferrocad_shell_python` | native assembly: CPython + `run_with` | unchanged (host *and* CPython backend — §4.3; may depend on `ferrocad_shell_rust` for a Rust-desktop edition) |
 | `ferrocad_web_gpui` | browser host: entry point, JS bridge, harness | `ferrocad_shell_core`, `ferrocad_shell_rust`, `wasm-bindgen` |
 | `ferrocad_core` | + `present` module (D4) and `view` dressing (D6: `drawable`/`effective_color`/`origin`) | unchanged |
 | `ferrocad_py` | + thin `ferrocad.property` functions over `present` | still **only** `ferrocad_core` + `pyo3` |
@@ -276,7 +279,7 @@ two and S7/S8 the last two:
 ferrocad_shell_rust -> ferrocad_core, ferrocad_part, ferrocad_occt,
                        ferrocad_stage, ferrocad_shell_api, serde_json
                        must NOT -> gpui, pyo3, wasm-bindgen
-ferrocad_shell_gpui -> ... (unchanged), may -> ferrocad_shell_rust
+ferrocad_shell_python -> ... (unchanged), may -> ferrocad_shell_rust
 ferrocad_web_gpui   -> ferrocad_shell_core, ferrocad_shell_rust, wasm-bindgen
                        must NOT -> pyo3, ferrocad_py, ferrocad_inventor_py
 ferrocad_py         -> ferrocad_core, pyo3         [unchanged, and now enforced]
@@ -328,21 +331,21 @@ split is visible in the crate graph:
 | Contract | trait + DTOs | `ferrocad_shell_api` | `AppBackend`, `ScriptHost`, the view models, `catalog` |
 | UI shell | window, chrome, panels | `ferrocad_shell_core` | platform-neutral GPUI `Shell` |
 | **Backends** (D2, by runtime) | none | `ferrocad_shell_rust` | `RustAppBackend` — desktop *or* wasm |
-| | CPython | *inside `ferrocad_shell_gpui`* | `PythonAppBackend` (`backend.rs`, `python.rs`) |
+| | CPython | *inside `ferrocad_shell_python`* | `PythonAppBackend` (`backend.rs`, `python.rs`) |
 | | JS / wasm modules | `ferrocad_shell_js` (S7 ✓) | `JsScriptHost`, over `ferrocad_shell_rust` |
 | | wasm Python | `ferrocad_shell_pywasm` (S8 ✓) | `PywasmScriptHost`, over `ferrocad_shell_rust` |
 | **Hosts** | browser entry | `ferrocad_web_gpui` | wasm `cdylib`, page bridge, installs a backend |
-| | native entry | `ferrocad_shell_gpui` | `run_with` + headless, **and** the CPython backend |
+| | native entry | `ferrocad_shell_python` | `run_with` + headless, **and** the CPython backend |
 | | editions | `ferrocad`, `ferrocad_parametric` | the binaries an edition ships |
 
 `ferrocad_web_gpui` is now a **pure host** (S5 moved the backend out), while
-`ferrocad_shell_gpui` still straddles both: it is the native host *and* the CPython
+`ferrocad_shell_python` still straddles both: it is the native host *and* the CPython
 backend. That is deliberate for now — the shipped edition needs both, and a separate
 crate would not remove a dependency from any current build.
 
 It becomes worth splitting only when a **pure-Rust desktop edition** exists (Open
 Question 1). That edition must not link `pyo3`/CPython at all, at which point
-`PythonAppBackend` moves to `ferrocad_shell_python` and `ferrocad_shell_gpui` is left
+`PythonAppBackend` moves to `ferrocad_shell_python` and `ferrocad_shell_python` is left
 as a thin native host runner. The desktop then mirrors the browser exactly:
 *host crate + `ferrocad_shell_rust`*, with the runtime as a separate, replaceable
 crate. No rename is needed to reach that: the boundary is already `script_host()`.
@@ -695,7 +698,7 @@ not possible today, and the layer that *is* shared is the script plus
 
 ## 7. Backends, in detail
 
-| Method group | Rust (`ferrocad_shell_rust`) | CPython (`ferrocad_shell_gpui`) | JS (`ferrocad_shell_js`, S7 ✓) | wasm Python (`ferrocad_shell_pywasm`, S8 ✓) |
+| Method group | Rust (`ferrocad_shell_rust`) | CPython (`ferrocad_shell_python`) | JS (`ferrocad_shell_js`, S7 ✓) | wasm Python (`ferrocad_shell_pywasm`, S8 ✓) |
 | --- | --- | --- | --- | --- |
 | document/tree/properties/stage | Rust document + OCCT | `ferrocad_py` | Rust document + JS callbacks | Rust document + Python |
 | commands | `catalog::builtin` | `FreeCADGui` registry | `catalog` + JS `registerCommand` | `FreeCADGui` registry |
@@ -769,7 +772,7 @@ The backend tasks tie together as follows — each one adds exactly the crate na
 | `crates/ferrocad_shell_core/src/shell/files.rs` **(new)** | the verbs: prompt, spawn, `open_path`, status |
 | `crates/ferrocad_shell_core/src/shell/bridge/document.rs` | one `replace_document` behind both `open_document` and `open_path` |
 | `crates/ferrocad_shell_core/src/shell/bridge/dispatch.rs` | intercept `App_Open`/`App_Save` next to the existing shell ids |
-| `crates/ferrocad_shell_gpui/src/backend.rs`, `src/python.rs` | `open_path` → `FreeCAD.open`, `save_path` → `Document.saveAs` |
+| `crates/ferrocad_shell_python/src/backend.rs`, `src/python.rs` | `open_path` → `FreeCAD.open`, `save_path` → `Document.saveAs` |
 | `python/ferrocad_shell/__init__.py` | `save_document(path)` plus the `App_Open`/`App_Save` registry rows (labels `Open…`, `Save As…`, accels `Ctrl+O`, `Ctrl+S`, surface `hidden`) |
 | `crates/ferrocad_shell_core/src/shell/tests/files.rs` **(new)** | the prompt → path → backend plumbing, driven by `select_paths` |
 | `crates/ferrocad_core/src/document/view.rs` | `drawable`, `effective_color`, `origin`, `is_visible` (the shared dressing rules; re-exported at the crate root) |
@@ -800,7 +803,7 @@ The backend tasks tie together as follows — each one adds exactly the crate na
 | **Catalogue generation adds a build step** | A generated file in `python/` can drift if nothing checks it. | Two tests do: the crate's own (stale JSON) and `CatalogTests` (registry vs. JSON, both directions). Regenerate with `cargo run -p ferrocad_shell_api --example catalog > python/ferrocad_shell/catalog.json`. |
 | **S1 without a portal** | Headless CI and minimal desktops have no xdg portal. | Treat `PortalNotFound` as a status line; keep `--open` for tests; drive S1's test through `select_paths`. |
 | **The wasm-Python choice** — *resolved in S8* | It was the risk that S8 would invalidate the module API chosen in S7. It did not: RustPython runs `python/ferrocad_shell` unchanged, so the script is shared while `ferrocad_py` stays native-only (§5.7, §6.3). | S7 was built against the `mod-events` contract (E1), not JS specifics, which is why S8 could reuse the same surface. |
-| **Doc debt: `architecture.md` §1/§6 predate the shell split** | It still describes `ferrocad_shell_gpui` as owning `Shell`, and listed neither `ferrocad_shell_api`/`_core` nor `ferrocad_web_gpui`. | Fixed in S5: the component table, the module tree and the dependency rules name `ferrocad_shell_api`, `_core`, `_rust` and `_web_gpui`, and record the edges this plan depends on. |
+| **Doc debt: `architecture.md` §1/§6 predate the shell split** | It still describes `ferrocad_shell_python` as owning `Shell`, and listed neither `ferrocad_shell_api`/`_core` nor `ferrocad_web_gpui`. | Fixed in S5: the component table, the module tree and the dependency rules name `ferrocad_shell_api`, `_core`, `_rust` and `_web_gpui`, and record the edges this plan depends on. |
 | **The action dock overlaps the Inspect bar when it wraps** (found in S1) | The dock is absolutely positioned at the bottom and `flex_wrap`s, so adding two pills made it wrap upward over the loadout/inspect strip and swallow a click. | S1 keeps file verbs off the dock (`FerroCAD_Surface: hidden`; palette + accelerators reach them). Proper fix: anchor the dock's height against the footer, or give the app menu a File section. |
 
 Open questions:
@@ -808,7 +811,7 @@ Open questions:
 1. Does `ferrocad_shell_rust` gain a desktop edition of its own (a "Rust" edition
    beside `ferrocad`/`ferrocad_parametric`), or is it only linked by the browser
    until a mod ships? S5's acceptance only needs a headless check. If such an edition
-   ships, split `PythonAppBackend` out of `ferrocad_shell_gpui` into
+   ships, split `PythonAppBackend` out of `ferrocad_shell_python` into
    `ferrocad_shell_python` first, so the pure-Rust binary links no CPython at all
    (§4.3).
 2. **Answered in S6:** the shell owns `App_Open`/`App_Save` on both platforms and

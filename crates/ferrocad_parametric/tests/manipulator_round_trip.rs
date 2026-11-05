@@ -15,8 +15,8 @@
 use std::sync::{Mutex, Once};
 
 use ferrocad_geom::SelectionRef;
-use ferrocad_shell_gpui::DisplaySync;
-use ferrocad_shell_gpui::python;
+use ferrocad_shell_python::DisplaySync;
+use ferrocad_shell_python::python;
 use ferrocad_graphics::{Camera, Projection, Viewport};
 use ferrocad_part_gui::{DressUpMode, dress_up_scrubber_for};
 use ferrocad_stage::screen::project_device;

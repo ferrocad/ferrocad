@@ -8,8 +8,8 @@
 
 use std::sync::{Mutex, Once};
 
-use ferrocad_shell_gpui::DisplaySync;
-use ferrocad_shell_gpui::python;
+use ferrocad_shell_python::DisplaySync;
+use ferrocad_shell_python::python;
 use ferrocad_graphics::{Camera, Projection, RenderQueue, Viewport};
 use ferrocad_inventor::{ImageData, InventorView, Scene};
 use ferrocad_stage::screen::project_device;

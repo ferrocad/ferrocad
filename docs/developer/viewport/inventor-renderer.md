@@ -20,7 +20,7 @@ and a gpui viewport wired into the app shell — exercised end to end by an exam
 | `ferrocad_inventor_py` | The **`pivy.coin` facade** (PyO3): the class spine, type registry, geometry field objects, and the `install`/`extract_scene` bridge (slices S1–S3). | `ferrocad_inventor`, `ferrocad_types`, `pyo3` |
 | `ferrocad_stage_py` | The **`ferrocad.stage` facade** (PyO3): the modern stack in Python (`ShapeItem`/`Stage`/`Tool`/`TransformGizmo`, hits/events). | `ferrocad_stage`, `ferrocad_graphics`, `ferrocad_types`, `pyo3` |
 | `ferrocad_viewport` | The **gpui viewport**: `InventorViewport` (element + interaction loop + selection), the navigation cube (`navicube`), the hosted stage, and `scene` (the Rust sample). No wgpu, no Python. | `ferrocad_graphics`, `ferrocad_geom`, `ferrocad_inventor`, `ferrocad_stage`, `ferrocad_types`, `bite-gpui` |
-| `ferrocad_shell_gpui` | The **host/glue**: the window and shell wiring, `python::inventor_scene` (the `pivy.coin` scene builder), mounting the viewport, `display::DisplaySync` (document stage sync + entity→object map), and `contributions::Contributions` (the edition's workbench manipulators, hosted generically). | `ferrocad_viewport`, `ferrocad_inventor`, `ferrocad_inventor_py`, `ferrocad_wgpu`, `ferrocad_geom`, `ferrocad_stage`, `ferrocad_types`, `bite-gpui`, `pyo3` |
+| `ferrocad_shell_python` | The **host/glue**: the window and shell wiring, `python::inventor_scene` (the `pivy.coin` scene builder), mounting the viewport, `display::DisplaySync` (document stage sync + entity→object map), and `contributions::Contributions` (the edition's workbench manipulators, hosted generically). | `ferrocad_viewport`, `ferrocad_inventor`, `ferrocad_inventor_py`, `ferrocad_wgpu`, `ferrocad_geom`, `ferrocad_stage`, `ferrocad_types`, `bite-gpui`, `pyo3` |
 
 The split follows the assessment's seam: the glossary of scene semantics stays in
 `ferrocad_inventor`; the graphics API stays behind a trait; the host owns the
@@ -222,11 +222,11 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 - `cargo test -p ferrocad_inventor_py` — the facade spine, `SoType`, the field
   objects, the S3 scene-extraction bridge, and the S4 event/dispatch surface
   (`tests/coin_boot.rs`, `coin_fields.rs`, `coin_scene.rs`, `coin_events.rs`).
-- `cargo test -p ferrocad_shell_gpui --lib` — viewport wiring, `RenderImage` swizzle,
+- `cargo test -p ferrocad_shell_python --lib` — viewport wiring, `RenderImage` swizzle,
   pointer→pick→listener, the `pivy.coin` scene builder, the scripted
   `SoEventCallback` dispatch, and a headless shell paint that attaches the viewport
   when a GPU exists.
-- `cargo run -p ferrocad_shell_gpui --example inventor_roundtrip -- --headless out.png`
+- `cargo run -p ferrocad_shell_python --example inventor_roundtrip -- --headless out.png`
   — `pick at centre -> Some(PickId(0))`, writes the (highlighted) frame.
 
 ## 7. Next

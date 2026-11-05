@@ -12,7 +12,7 @@
 //!
 //! [`InventorView`] is that capability, expressed in renderer-agnostic terms via
 //! associated types, so it lives here without depending on `gpui` or `wgpu`. A
-//! backend (`ferrocad_wgpu` today) implements it; the `ferrocad_shell_gpui` glue will
+//! backend (`ferrocad_wgpu` today) implements it; the `ferrocad_shell_python` glue will
 //! adapt `Surface`/`ImageData` to gpui's surface/`RenderImage` types.
 //!
 //! ```text

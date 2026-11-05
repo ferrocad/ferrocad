@@ -134,7 +134,7 @@ The rules themselves live in `crates/xtask/src/editions.rs`:
 | Crate | Rule |
 | --- | --- |
 | `ferrocad` (base), `ferrocad_toy` | must not reach `ferrocad_occt`, `ferrocad_part`, `ferrocad_part_py`, `ferrocad_part_gui`, `ferrocad_mesh`, `ferrocad_mesh_py`, `opencascade-sys` |
-| `ferrocad_shell_gpui`, `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_wgpu`, `ferrocad_ui` | the same list, for the same reason: they sit below Part |
+| `ferrocad_shell_python`, `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_wgpu`, `ferrocad_ui` | the same list, for the same reason: they sit below Part |
 | `ferrocad_py` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_occt` (the App-only extension) |
 | `ferrocad_parametric` | must reach `ferrocad_part_py` and `ferrocad_occt` |
 | `ferrocad_combined_py` | must reach `ferrocad_part_py` and `ferrocad_mesh_py` |

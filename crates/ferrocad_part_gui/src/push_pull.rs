@@ -662,7 +662,7 @@ pub fn push_pull_stem_for(selection: &SelectionRef, stage: &Stage) -> Option<Pus
 
 /// The Part GUI's push/pull factory: a planar-face selection arms the stem.
 ///
-/// `ferrocad_shell_gpui::Contributions` accepts a factory of this shape, so an edition wires
+/// `ferrocad_shell_python::Contributions` accepts a factory of this shape, so an edition wires
 /// the manipulator in one line and the base app stays Part-free. It returns `None` for
 /// an edge selection, leaving room for [`crate::fillet_manipulator`] beside it.
 pub fn push_pull_manipulator(

@@ -19,7 +19,7 @@ path = "src/main.rs"
 ferrocad.workspace = true
 # The contribution registry the edition registers its factory with, and the Python
 # bridge the end-to-end test drives.
-ferrocad_shell_gpui.workspace = true
+ferrocad_shell_python.workspace = true
 # The generic interaction seam (`Manipulator`, `InteractionCommit`, `Stage`).
 ferrocad_stage.workspace = true
 # `SelectionRef` and the tessellation an item is built from.

@@ -186,7 +186,7 @@ empty object.
 - **Numeric test.** Typing `X`/`Y` for point 3 moves it, the adjacent segments follow, and
   the committed wire (once §3.5 lands) contains the edited point.
 - **No regression:** `tools/conformance.py --simplecad` and the Part suites are untouched
-  by this work; `ferrocad_shell_gpui` and `ferrocad_stage` test counts must not drop.
+  by this work; `ferrocad_shell_python` and `ferrocad_stage` test counts must not drop.
 
 ## 5. Open decisions
 
@@ -220,7 +220,7 @@ Built by two parallel agents against disjoint write scopes; verified centrally.
   edits; `inventor_view::handle_key` forwards an unowned key to it and rebuilds the
   transients when consumed.
 
-**HUD side (`ferrocad_shell_gpui`).**
+**HUD side (`ferrocad_shell_python`).**
 
 - `tool_strip` is an absolutely positioned bottom-centre pill in the canvas
   (`WHEEL_GLASS` + `DOCK_BORDER`), in the same slot as `action_dock`; the shell renders
@@ -229,7 +229,7 @@ Built by two parallel agents against disjoint write scopes; verified centrally.
   `Shell::finish_active_tool`, the same handler the shell's `Enter` path now uses for any
   active tool (previously Python-backed tools only).
 
-**Verified.** `ferrocad_stage` 185 passed, `ferrocad_shell_gpui --lib` 216, `ferrocad_viewport`
+**Verified.** `ferrocad_stage` 185 passed, `ferrocad_shell_python --lib` 216, `ferrocad_viewport`
 160, `ferrocad_toy` 18 plus its round trips (including the new polyline creation), and
 `tools/run_tests.py --extension Part --extension Mesh --extension MeshPart` at 714 passed
 / 3 skipped / 0 errors. The shell test `an_active_tool_overlays_the_canvas_without_moving_it`

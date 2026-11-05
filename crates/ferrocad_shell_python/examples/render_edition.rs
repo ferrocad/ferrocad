@@ -10,7 +10,7 @@
 //! ```sh
 //! # the kernel-free toy edition, which needs no OCCT:
 //! VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
-//!   cargo run -p ferrocad_shell_gpui --example render_edition -- \
+//!   cargo run -p ferrocad_shell_python --example render_edition -- \
 //!   --entry ferrocad_toy --out target/demo/toy.png
 //! ```
 //!
@@ -23,8 +23,8 @@
 //! binary does; use `cargo run -p ferrocad_parametric -- --render …` for a Part
 //! model.
 
-use ferrocad_shell_gpui::HostConfig;
-use ferrocad_shell_gpui::headless;
+use ferrocad_shell_python::HostConfig;
+use ferrocad_shell_python::headless;
 
 const DEFAULT_SIZE: [u32; 2] = [800, 600];
 

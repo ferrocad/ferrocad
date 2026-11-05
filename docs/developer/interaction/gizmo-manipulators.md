@@ -425,10 +425,10 @@ its padded outline/area is pickable.
   `a_session_no_entry_can_serve_offers_nothing_but_keeps_the_set` and
   `a_single_hosted_gizmo_is_re_kinded_by_every_session`; `ferrocad_viewport`'s
   `hosting_a_set_re_narrows_without_dropping_the_other_kinds` and
-  `the_highest_priority_gizmo_takes_the_press`; `ferrocad_shell_gpui`'s
+  `the_highest_priority_gizmo_takes_the_press`; `ferrocad_shell_python`'s
   `the_hosted_set_keeps_a_workbench_gizmo_beside_the_shared_triad`; and
   `ferrocad_toy`'s `the_height_drag_commits_the_shared_gizmo_event` and
-  `a_head_on_stem_still_commits_a_gizmo_event`. The U4 seams are `ferrocad_shell_gpui`'s
+  `a_head_on_stem_still_commits_a_gizmo_event`. The U4 seams are `ferrocad_shell_python`'s
   `a_face_click_selects_the_body_in_the_move_slot`,
   `the_slot_sets_the_filter_and_select_overrides_it`,
   `the_wheel_verbs_equip_the_move_slot`,
@@ -637,7 +637,7 @@ stage, and **not** the shell; see `architecture.md` §10):
   document object and calls the app script's `interaction` hook, which Part implements
   with `Part::Fillet`/`Part::Chamfer` (`Radius`, or `Distance`/`Distance2`, then a
   recompute — the F0.6 features rebuild `Shape` from there).
-- `ferrocad_viewport` and `ferrocad_shell_gpui` link no kernel: the manipulator is
+- `ferrocad_viewport` and `ferrocad_shell_python` link no kernel: the manipulator is
   contributed by the edition
   (`Contributions::with_manipulator(ferrocad_part_gui::fillet_manipulator)`), and Part
   registers `display_mesh`/`interaction` in `python/ferrocad_parametric`.
@@ -648,7 +648,7 @@ hover tokens, degenerate and view-aligned edges; plus the selection → scrubber
 and the neutral-commit round-trip); `ferrocad_stage`'s `InteractionCommit` case and 2
 `ShapeItem::edge_polyline` cases; `ferrocad_viewport` 98 tests (5 manipulator cases:
 commit, pass-through, hover/draw, cancel, priority over the gizmo — all with a **fake**
-manipulator, proving the viewport names none); `ferrocad_shell_gpui` 7
+manipulator, proving the viewport names none); `ferrocad_shell_python` 7
 display/`Contributions` tests; `ferrocad_part_py`'s
 `the_shell_helpers_tessellate_and_dress_up_a_document_shape` covers the Python half
 through the edition script (hooks registered → tessellate with names → `interaction` →
@@ -682,7 +682,7 @@ a **contribution** like a manipulator, and it shares the same document route:
   then the frame commits to the new pose on release.
 
 Covered by `ferrocad_viewport`'s `the_gizmo_readout_tracks_the_drag_and_clears_on_release`
-(take + `to_interaction`), `ferrocad_shell_gpui`'s `a_registered_gizmo_factory_claims_its_objects`,
+(take + `to_interaction`), `ferrocad_shell_python`'s `a_registered_gizmo_factory_claims_its_objects`,
 and `ferrocad_toy`'s `the_toy_workbench_creates_represents_manipulates_and_records`.
 
 ## 15. Deferred and why
@@ -820,7 +820,7 @@ Covered by `ferrocad_stage`'s `a_style_ghost_alpha_reaches_every_handle` and
 `a_custom_ghost_alpha_scales_both_ghost_packets`, `ferrocad_viewport`'s
 `set_gizmo_style_reaches_a_hosted_manipulator_and_gizmo`,
 `a_disabled_style_hides_and_unpicks_the_overlays` and
-`hiding_the_readout_suppresses_the_pill_text`, `ferrocad_shell_gpui`'s
+`hiding_the_readout_suppresses_the_pill_text`, `ferrocad_shell_python`'s
 `every_gizmo_visual_field_applies` / `a_bad_gizmo_field_is_rejected_atomically` /
 `a_gizmo_backend_claim_is_reported_only_when_it_changes`, and
 `tests/test_gizmo_settings.py`.
@@ -935,7 +935,7 @@ shader, the drag axis and the commit, and the stage hosts it as an ordinary
 selection armed
   └─ FerroCAD.register_manipulator_provider(provider)   (called with object, element)
        └─ spec dicts            (the wire form below)
-            └─ ferrocad_shell.manipulator_specs → ferrocad_shell_gpui::manipulators
+            └─ ferrocad_shell.manipulator_specs → ferrocad_shell_python::manipulators
                  └─ HandleSpec → DeclarativeHandle → DeclarativeManipulator
                       └─ viewport (after the compiled manipulator)
                            └─ drag → InteractionCommit(id, action, element, [value])
@@ -1048,7 +1048,7 @@ a scene helper you can toggle in an empty scene. See
 - The triad **hugs the selected object's own origin** (the placement base point,
   reported by the display provider, else the bounding-box base corner) and pivots about
   it in every mode. The base edition registers
-  `ferrocad_shell_gpui::translate_gizmo`, so this exists in the shipped app. The **loadout's
+  `ferrocad_shell_python::translate_gizmo`, so this exists in the shipped app. The **loadout's
   `Body` filter** (Slot 1) makes a face click report the whole body before the triad is
   built, so the shipped Move hand no longer relies on the claim heuristic.
 - Choosing **`Move`** in the wheel promotes its context target and arms the triad (the
@@ -1081,5 +1081,5 @@ the header: *how the viewport is drawn*.
   material, and a compute pass would only pay off for GPU-side deformation or picking.
 
 Covered by `ferrocad_stage`'s declarative tests (defaults, world bake, hit, drag, snap,
-clamp, degenerate axis, commit, readout, style), `ferrocad_shell_gpui`'s spec-validation tests,
+clamp, degenerate axis, commit, readout, style), `ferrocad_shell_python`'s spec-validation tests,
 and `tests/test_manipulator_specs.py` (registry, bridge, ordering, failure isolation).

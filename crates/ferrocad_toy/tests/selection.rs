@@ -6,8 +6,8 @@
 
 use std::sync::{Mutex, Once};
 
-use ferrocad_shell_gpui::python;
-use ferrocad_shell_gpui::selection::SelectionItem;
+use ferrocad_shell_python::python;
+use ferrocad_shell_python::selection::SelectionItem;
 
 /// The tests share one interpreter; serialize them.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -74,7 +74,7 @@ fn the_toy_slab_names_its_edges() {
     );
 }
 
-fn command(id: &str) -> ferrocad_shell_gpui::CommandInfo {
+fn command(id: &str) -> ferrocad_shell_python::CommandInfo {
     python::commands()
         .expect("the command list")
         .into_iter()

@@ -15,7 +15,7 @@
 //! ```text
 //! # needs a GPU (a software Vulkan ICD is enough):
 //! VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
-//!   cargo run -p ferrocad_shell_gpui --example gizmo_skin_probe
+//!   cargo run -p ferrocad_shell_python --example gizmo_skin_probe
 //! ```
 
 use std::sync::Arc;

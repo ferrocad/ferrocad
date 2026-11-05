@@ -21,7 +21,7 @@ adaptations are:
 | `DrawBatchDescriptor` with raw `vertex_data: Arc<Vec<u8>>` | `DrawPacket` with `geometry: Option<Geometry>` (`Vec<Vertex>`/`Vec<u32>`) | The renderer owns the GPU layout; the packet stays typed. |
 | (not mentioned) | **CPU ray pick** ✅ (`pick`/`pick_at`), **G-buffer pick** ✅ (`ferrocad_wgpu::pick`) | Both exist; the GPU pass is preferred where a GPU is present, the CPU ray cast is the fallback. |
 | (not mentioned) | `Viewport` (device size + DPR) ✅, `InventorView` (surface/image) ✅ | HiDPI + presentation seams added since the draft. |
-| `ferrocad_shell_gpui::input_bridge` | `ferrocad_viewport::inventor_view` + `scene` | Host-side glue. |
+| `ferrocad_shell_python::input_bridge` | `ferrocad_viewport::inventor_view` + `scene` | Host-side glue. |
 
 ## 1. Boundaries & guarantees
 
@@ -122,7 +122,7 @@ shared coords → surface + wireframe batches, concave triangulation, cache reus
   them (`ferrocad_viewport::InventorViewport`). **S4** adds the `SoEventCallback` node
   (lifted into `Directive::EventCallback`), the `SoEvent`/`SoButtonEvent`/
   `SoMouseButtonEvent`/`SoLocation2Event` classes, and the dispatch bridge
-  (`ferrocad_inventor_py::dispatch_event`; `ferrocad_shell_gpui::python::PythonEventCallbacks`).
+  (`ferrocad_inventor_py::dispatch_event`; `ferrocad_shell_python::python::PythonEventCallbacks`).
   **Deferred:** the global thread-local context Coin uses (ours lives on the node for
   the duration of the call) and callbacks that change what is *rendered* (the
   extracted scene is a copy).
@@ -142,7 +142,7 @@ shared coords → surface + wireframe batches, concave triangulation, cache reus
 **Acceptance (planned):** `tests/test_coin_phase4.py` — click dispatch,
 `getPickedPoint()`, `SoFaceDetail` downcast, 1-based index, thread-local cleanup.
 *Built today:* `ferrocad_inventor_py/tests/coin_events.rs` (the Rust-side equivalent)
-and the host test `ferrocad_shell_gpui::python::tests::dispatch_reaches_the_scripted_event_callback`.
+and the host test `ferrocad_shell_python::python::tests::dispatch_reaches_the_scripted_event_callback`.
 `getPartIndex()` returns 0 until topological naming lands.
 
 ## 6. Name reconciliation
@@ -156,7 +156,7 @@ and the host test `ferrocad_shell_gpui::python::tests::dispatch_reaches_the_scri
 | `entity_id` | `PickId` |
 | `part_index` | (▢ — sub-shape id; needs topological naming) |
 | `glam::Mat4` | `ferrocad_types::Matrix4` |
-| `ferrocad_shell_gpui::input_bridge` | `ferrocad_viewport::inventor_view` |
+| `ferrocad_shell_python::input_bridge` | `ferrocad_viewport::inventor_view` |
 | (not in draft) | `Viewport`, `InventorView`, `ImageData` |
 
 ## 7. Roadmap
@@ -166,7 +166,7 @@ and the host test `ferrocad_shell_gpui::python::tests::dispatch_reaches_the_scri
 | **1 — AST & type spine** | PyO3 class spine, `SoType`/registry, arena + weakref identity, `SoPath`/`SoSearchAction` | `ferrocad_inventor::arena`/`actions`; `ferrocad_inventor_py::classes` | ◐ (spine + registry built; arena/actions ▢) |
 | **2 — fields & ingestion** | Field model, `SoMF*`, NumPy `PyBuffer`, geometry-node fields, dirty counters | `ferrocad_inventor::fields`; `ferrocad_inventor_py::fields`/`geometry` | ◐ (sequence protocol + geometry fields built; NumPy/RAII/generations ▢) |
 | **3 — traversal & compile** | State accumulator, leakage/isolation, Newell+earcut triangulation, split-vertex unroll, packets | `ferrocad_inventor::compiler`/`triangulate`/`batch` | ◐ (state + flat-shaded compile done) |
-| **4 — picking & events** | G-buffer pick, `SoPickedPoint`/`SoDetail`, `SoEventCallback`, dispatch bridge | `ferrocad_wgpu::picking`; `ferrocad_inventor_py::events`; `ferrocad_shell_gpui` | ◐ (CPU pick + events + dispatch done; G-buffer/1-based index ▢) |
+| **4 — picking & events** | G-buffer pick, `SoPickedPoint`/`SoDetail`, `SoEventCallback`, dispatch bridge | `ferrocad_wgpu::picking`; `ferrocad_inventor_py::events`; `ferrocad_shell_python` | ◐ (CPU pick + events + dispatch done; G-buffer/1-based index ▢) |
 
 The ordering that unlocks the most, given what exists: **field-driven generations**
 (turns the packet cache real) and the **triangulation** upgrade (real CAD meshes)
@@ -187,7 +187,7 @@ parts later.
 | --- | --- | --- | --- |
 | **S1 — facade spine** ✅ | 1 (selective) | PyO3 class hierarchy `SoBase`→`SoFieldContainer`→`SoNode`→`SoGroup`→`SoSeparator`/`SoSwitch` via `PyClassInitializer`, wrapping the existing `Node`/`NodeKind` (**owned tree, no arena**); `SoType` (`fromName`/`createInstance`/`isDerivedFrom`) over `TypeRegistry`; `SoGroup.addChild`/`getNumChildren`/`__len__`. *Built — `tests/coin_boot.rs`.* | arena, weakref identity, detached fields, `SoPath`/`SoSearchAction` |
 | **S2 — geometry fields** ✅ | 2 (selective) | PyO3 field wrappers with the sequence protocol over `Vec`: `SoCoordinate3.point`, `SoNormal.vector`, `SoMaterial.diffuseColor`, `SoIndexedFaceSet.coordIndex`/`normalIndex`, `SoIndexedLineSet.coordIndex`, `SoTransform`, `SoSwitch.whichChild`; edits mutate the wrapped `NodeKind`. *Built — `tests/coin_fields.rs`.* | NumPy `PyBuffer` zero-copy, detached-field RAII, generational dirty counters, slicing, `-1` polygon delimiters |
-| **S3 — scene extraction (bridge)** ✅ | 3 | A Python-built root → `Scene`/`RenderQueue` (reuse `compile`), so a `pivy.coin` tree renders in the viewport and the example. The payoff; also lets the sample cube be built from Python. *Built — `ferrocad_inventor_py::install`/`extract_scene`, `ferrocad_shell_gpui::python::inventor_scene`; `tests/coin_scene.rs` + the host test.* | Newell/earcut triangulation, split-vertex unroll, `-1` delimiters, `SoDrawStyle` |
+| **S3 — scene extraction (bridge)** ✅ | 3 | A Python-built root → `Scene`/`RenderQueue` (reuse `compile`), so a `pivy.coin` tree renders in the viewport and the example. The payoff; also lets the sample cube be built from Python. *Built — `ferrocad_inventor_py::install`/`extract_scene`, `ferrocad_shell_python::python::inventor_scene`; `tests/coin_scene.rs` + the host test.* | Newell/earcut triangulation, split-vertex unroll, `-1` delimiters, `SoDrawStyle` |
 | **S4 — events + pick** ✅ | 4 (selective) | `SoEvent`/`SoButtonEvent`/`SoMouseButtonEvent`/`SoLocation2Event` classes; an `SoEventCallback` node in the AST (lifted into `Directive::EventCallback` since V4.2); dispatch bridging host pointer events → `pick_hit` → `SoPickedPoint` (world point + normal) + `SoFaceDetail`/`SoLineDetail`; `event_cb.getPickedPoint()`/`getEvent()`. *Built — `tests/coin_events.rs` + the host `dispatch` test; the `InventorViewport` routes moves and button down/up.* | G-buffer pass, 1-based sub-shape `part_index` (needs topological naming), global thread-local context, callbacks that change the rendered scene |
 
 **Ordering:** S1 → S2 → S3 → S4. S1 is the biggest new work (the PyO3 spine);
@@ -202,11 +202,11 @@ mutation of an added child needs the arena (▢).
 **Milestone:** a Python script that builds a scene with `from pivy import coin`,
 opens it in the app, and hovers/clicks it (highlight via `SoEventCallback`) — the
 same behaviour the Rust sample scene shows today, but scripted from Python.
-*Reached by **S3 + S4**: `ferrocad_shell_gpui::python::inventor_scene` runs the `pivy.coin`
+*Reached by **S3 + S4**: `ferrocad_shell_python::python::inventor_scene` runs the `pivy.coin`
 scene script (which also registers an `SoEventCallback`), `extract_scene` copies it,
 the host dispatches each pick through the callbacks
-(`ferrocad_shell_gpui::python::PythonEventCallbacks` → `dispatch_event`), and the
-viewport/example render it (`cargo run -p ferrocad_shell_gpui --example inventor_roundtrip
+(`ferrocad_shell_python::python::PythonEventCallbacks` → `dispatch_event`), and the
+viewport/example render it (`cargo run -p ferrocad_shell_python --example inventor_roundtrip
 -- --headless frame.png` → `ferrocad: SoEventCallback picked … face N`).*
 
 **Caveat:** the scripted callback currently *observes* the pick; because the

@@ -42,16 +42,18 @@ Crates today:
 | Contract | `ferrocad_shell_api` | `AppBackend`, `ScriptHost`, and every view model |
 | UI shell | `ferrocad_shell_core` | platform-neutral GPUI; no engine, no interpreter |
 | Backend · no runtime | `ferrocad_shell_rust` | `RustAppBackend`; desktop *or* wasm |
-| Backend · CPython | inside `ferrocad_shell_gpui` | `PythonAppBackend`; that crate is host **and** backend |
+| Backend · CPython | inside `ferrocad_shell_python` | `PythonAppBackend`; that crate is host **and** backend |
 | Backend · JS modules | `ferrocad_shell_js` | `JsScriptHost`; wasm only |
 | Backend · wasm Python | `ferrocad_shell_pywasm` | `PywasmScriptHost`; RustPython |
 | Host · browser | `ferrocad_web_gpui` | `cdylib`, page bridge, a pure host |
-| Host · native | `ferrocad_shell_gpui` | `run`/`run_with`/`check_init`; the edition binaries add `--render`/`--check-init` |
+| Host · native | `ferrocad_shell_python` | `run`/`run_with`/`check_init`; the edition binaries add `--render`/`--check-init` |
 
-`ferrocad_shell_gpui` is deliberately **not** renamed: it is a host and a backend at
-once, and the name would only be half true. `ferrocad_shell_python` is the reserved
-name for the CPython backend if the host half is ever extracted so a pure-Rust desktop
-edition can link no CPython at all.
+The crate is named for the runtime it embeds, not for the fact that it is also a
+host: `ferrocad_shell_python` boots CPython *and* exports `run`/`run_with`/`check_init`.
+It was `ferrocad_shell_gpui` until the four backends had landed, when the column names
+wanted to read as a set. If a pure-Rust desktop edition ever needs to link no CPython,
+the **host** half moves out rather than the backend being renamed again — a host takes
+a platform name, and `ferrocad_shell_native` is the obvious candidate.
 
 ## 2. The seam
 
@@ -122,13 +124,13 @@ and on a desktop edition.
 
 ### Embedded CPython (native)
 
-`ferrocad_shell_gpui::backend::PythonAppBackend` embeds CPython through PyO3 and
+`ferrocad_shell_python::backend::PythonAppBackend` embeds CPython through PyO3 and
 implements both traits, so `script_host()` returns `Some(self)`. The script is
 `python/ferrocad_shell`, which reaches the engine through `ferrocad_py` (the `FreeCAD`
 facade and the `ferrocad` module) and the per-workbench extension modules.
 
 That path crosses a **JSON boundary**: each shell callback is a module function that
-returns a JSON string, which the host deserializes (`ferrocad_shell_gpui/src/python.rs`).
+returns a JSON string, which the host deserializes (`ferrocad_shell_python/src/python.rs`).
 It is cheap for a handful of objects and scales with the payload, which is why mesh
 transfer on large documents is the known cost — see §10.
 
@@ -220,7 +222,7 @@ test on each side fails when the two disagree.
 ferrocad_shell_rust   -> ferrocad_core, ferrocad_part, ferrocad_occt,
                          ferrocad_stage, ferrocad_shell_api, serde_json
                          must NOT -> gpui, pyo3, wasm-bindgen
-ferrocad_shell_gpui   -> ferrocad_shell_core, ferrocad_py, pyo3, gpui
+ferrocad_shell_python   -> ferrocad_shell_core, ferrocad_py, pyo3, gpui
                          may    -> ferrocad_shell_rust
 ferrocad_web_gpui     -> ferrocad_shell_core, ferrocad_shell_rust,
                          ferrocad_shell_js, wasm-bindgen

@@ -104,7 +104,7 @@ Why not `FerroCADGui.Grid`:
   (`python/FreeCADGui/__init__.py:258-300`). A settings object with validated
   properties fits that shape better than a bag of functions.
 - `FerroCADGui.ViewState` is a **read-only mirror** pushed by the shell
-  (`crates/ferrocad_shell_gpui/src/python.rs:376-383`,
+  (`crates/ferrocad_shell_python/src/python.rs:376-383`,
   `python/ferrocad_shell/__init__.py:407-422`). Putting the writable policy beside a
   read-only mirror would create two truths in one namespace. The writable store lives
   in `FerroCAD`; the mirror stays where it is.
@@ -232,17 +232,17 @@ surface A2 keeps — cannot work.
 ### 2.4 Where it lands in Rust
 
 No new crate. A `ferrocad_grid` crate would duplicate the producer
-(`ferrocad_stage::grid`) or the state (`ferrocad_shell_gpui::view`) and add an edge that
+(`ferrocad_stage::grid`) or the state (`ferrocad_shell_python::view`) and add an edge that
 [`architecture.md`](../architecture.md) §6 does not allow.
 
 | Layer | Type / function | Change | Why here |
 | --- | --- | --- | --- |
 | `ferrocad_stage` | `color::parse_srgb_hex(&str) -> Result<[f32; 3], String>` | **new**, pure | The tokens already live in this crate (`grid.rs:33-41`, `gizmo.rs:32-35`); one parser serves the request path and the tests. No new dependency. |
 | `ferrocad_stage` | `GridStyle`, `GridSpec` | unchanged | The producer already accepts ink and alphas; nothing to add. |
-| `ferrocad_shell_gpui` | `ViewRequest.{grid_color, grid_alpha, grid_overlay}` (`Option<String>`, `Option<f64>`, `Option<bool>`) | new fields | This is the existing presentation-request contract (`view.rs:15-38`); `grid_overlay` is the debug flag the bring-up requires (its §8.2). |
-| `ferrocad_shell_gpui` | `ViewState.{grid_color, grid_alpha, grid_overlay}` | new fields | The shell already owns the applied presentation state (`view.rs:96-122`). `grid_color` stays a canonical `"#rrggbb"` string: it is the parameter spelling, it echoes in summaries, and it avoids a lossy linear→sRGB round-trip into `FerroCADGui.ViewState`. `grid_overlay` defaults to `false`. |
-| `ferrocad_shell_gpui` | `apply_view` | parse + apply + mirror | `shell.rs:739-774`; the only place state and viewport are updated together. |
-| `ferrocad_shell_gpui` | `set_view_state` | mirror the two fields | `python.rs:376-383`. |
+| `ferrocad_shell_python` | `ViewRequest.{grid_color, grid_alpha, grid_overlay}` (`Option<String>`, `Option<f64>`, `Option<bool>`) | new fields | This is the existing presentation-request contract (`view.rs:15-38`); `grid_overlay` is the debug flag the bring-up requires (its §8.2). |
+| `ferrocad_shell_python` | `ViewState.{grid_color, grid_alpha, grid_overlay}` | new fields | The shell already owns the applied presentation state (`view.rs:96-122`). `grid_color` stays a canonical `"#rrggbb"` string: it is the parameter spelling, it echoes in summaries, and it avoids a lossy linear→sRGB round-trip into `FerroCADGui.ViewState`. `grid_overlay` defaults to `false`. |
+| `ferrocad_shell_python` | `apply_view` | parse + apply + mirror | `shell.rs:739-774`; the only place state and viewport are updated together. |
+| `ferrocad_shell_python` | `set_view_state` | mirror the two fields | `python.rs:376-383`. |
 | `ferrocad_viewport` | `InventorViewport::{set_grid_style, grid_style}`; `sync_grid` | new setters, style overrides | `sync_grid` already builds `GridStyle` locally (`inventor_view.rs:2213-2225`); the cache key includes the style (`:450-454`), so a change re-emits. |
 | `ferrocad_viewport` | `set_grid_overlay(bool)` | new, debug only | §2.5. |
 | `python/FerroCAD/_grid.py` | `_GridSettings` singleton | **new**, pure Python | Policy + ParamGet; the only place that knows the parameter keys. |
@@ -252,7 +252,7 @@ No new crate. A `ferrocad_grid` crate would duplicate the producer
 | `ferrocad_inventor_py` | — | **nothing** | A grid is not a Coin node. |
 
 The dependency direction stays `python/FreeCAD → ferrocad_py → ferrocad_core`, and
-`ferrocad_shell_gpui`/`ferrocad_viewport` talk to the model through the facade, never the
+`ferrocad_shell_python`/`ferrocad_viewport` talk to the model through the facade, never the
 reverse (architecture §6's "the shell talks to the model through the FreeCAD API").
 `FerroCAD.Grid` is therefore *policy above the shell*, and the shell is not asked to call
 into Python to learn a colour: the colour arrives in the same `ViewRequest` as every
@@ -350,7 +350,7 @@ FerroCADGui.removeOverlay(root)   # drop it
 ```
 
 The facade holds the wrapper, and the host re-extracts it on refresh through the
-existing bridge (`ferrocad_shell_gpui::python::inventor_scene` at `python.rs:493-505` calls
+existing bridge (`ferrocad_shell_python::python::inventor_scene` at `python.rs:493-505` calls
 `ferrocad_inventor_py::extract_scene`, `lib.rs:320`). This is a *pull*, so it is immune
 to the clone-on-`addChild` problem (bring-up §7.2): extraction always reads the
 wrapper's current tree. Two fork changes make the values current:
@@ -671,7 +671,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     P["python/FerroCAD (FerroCAD.Grid)"]
-    S["ferrocad_shell_gpui: ViewState / ViewRequest"]
+    S["ferrocad_shell_python: ViewState / ViewRequest"]
     V["ferrocad_viewport: grid style, overlay flag"]
     T["ferrocad_stage: GridSpec / GridStyle / grid producer"]
     I["ferrocad_inventor: node family, compiler"]
@@ -697,7 +697,7 @@ the equivalent C path at 11–14 and D at 5–7.5; the difference is that G2 (th
 API) is new work the earlier note did not include, while G0/G1 are the Coin surface both
 of those options already needed.
 
-**Parallelism.** G2 is independent of G0/G1 — it touches `ferrocad_shell_gpui::view`, the
+**Parallelism.** G2 is independent of G0/G1 — it touches `ferrocad_shell_python::view`, the
 viewport and the facade, none of the Coin crates — so it can start on day 1 and run
 beside G0→G1. G1→G3→G4 is a chain on the renderer. G6 needs only G2, so it can ship in
 parallel with G3–G5; the dashed edge means G6 may optionally use G4's overlay for a
@@ -873,7 +873,7 @@ renders, and `take_shader_error` lets the shell write the reason to the console.
 are cast from the stage's world-`XY` footprints while the world ground is the active
 plane (see §3.5).
 
-**Rendered check.** `cargo run -p ferrocad_shell_gpui --example inventor_roundtrip --
+**Rendered check.** `cargo run -p ferrocad_shell_python --example inventor_roundtrip --
 --coin-overlay frame.png` builds the A1 mod's tree through `pivy.coin`, registers it with
 `FerroCADGui.addOverlay`, merges the extracted overlay and renders with the same wgpu
 renderer the shell uses. The frame shows the procedural grid and the two axis lines; the
@@ -881,7 +881,7 @@ cube's near faces occlude it and the far face behind the plane shows it through,
 is the expected result for a plane through the model.
 
 **Test note.** The six affected crates pass serially (351 tests) and in parallel; a
-`ferrocad_shell_gpui` SIGSEGV reported once during G4 did not reproduce on a clean parallel
+`ferrocad_shell_python` SIGSEGV reported once during G4 did not reproduce on a clean parallel
 run. If it recurs, capture `coredumpctl` and the test name before changing code.
 
 **W4 — the plane in the ABI (2026-10-29).** `Frame` grew to 240 B with the host

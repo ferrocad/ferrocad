@@ -277,7 +277,7 @@ The prerequisite for all three tiers.
   (or “already World XY”), `Activate` names the plane, `View` names what it looks down.
 
 Verified: `ferrocad_stage` 186 (the frame conversion), `ferrocad_viewport` 163 (three new
-tests: default plane, face label, no-op reset), `ferrocad_shell_gpui --lib` 216, plus shell
+tests: default plane, face label, no-op reset), `ferrocad_shell_python --lib` 216, plus shell
 assertions that the default pill has no state dot and that a click on its label opens
 the menu.
 
@@ -304,7 +304,7 @@ tool ends.
 
 Verified: `ferrocad_viewport` 167 (four Tier 1 tests: bind-and-restore; a later click does
 not rebind; an empty-space start never binds; an explicit plane survives a session),
-`ferrocad_shell_gpui --lib` 216, `ferrocad_toy` 18 + round trips.
+`ferrocad_shell_python --lib` 216, `ferrocad_toy` 18 + round trips.
 
 ### 7.3 Tier 3 — the datum rows
 
@@ -348,7 +348,7 @@ row to `Surface::Radial` would hide it from the menu. `FerroCAD_Wheel: true` (fo
 
 Verified: `ferrocad_stage` 187 (the three standards' axes and right-handedness),
 `ferrocad_viewport` 172 (three new tests: standard planes, view plane, face-by-element),
-`ferrocad_shell_gpui --lib` 218 (the datum rows render in the popover, `Set WP` is flagged for
+`ferrocad_shell_python --lib` 218 (the datum rows render in the popover, `Set WP` is flagged for
 the wheel, and a GPU-gated end-to-end test drives `App_WorkplaneXZ` →
 `App_SetWorkplane` → `App_WorkplaneXY` through a real viewport).
 
@@ -384,7 +384,7 @@ Four things the first real session found:
    (`FerroCAD_Wheel`).
 
 Verified: `ferrocad_viewport` 172 (the one-grid packet count and the offset's origin,
-label and default state), `ferrocad_shell_gpui --lib` 218 (a full face-selection →
+label and default state), `ferrocad_shell_python --lib` 218 (a full face-selection →
 `App_SetWorkplane` chain over a real stage item, and `App_OffsetWorkplane` in the
 popover), `ferrocad_toy` 18.
 
@@ -435,7 +435,7 @@ datum-plane object type (a `Part::Feature` face stands in for it, §7.6).
   The real object type (`Part::DatumPlane` with attachment/expressions) remains open;
   this is a plain face, which is exactly what `Set WP` needs.
 
-Verified: `ferrocad_stage` 195, `ferrocad_viewport` 176, `ferrocad_shell_gpui --lib` 222,
+Verified: `ferrocad_stage` 195, `ferrocad_viewport` 176, `ferrocad_shell_python --lib` 222,
 `ferrocad_toy` 18, Python `tools/run_tests.py --extension Part` 721 passed / 3 skipped
 (7 new datum-plane tests, and the new module is in the extension-set contract),
 `cargo check -p ferrocad`.

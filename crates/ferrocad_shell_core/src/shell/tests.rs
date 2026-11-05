@@ -25,7 +25,7 @@ fn boot_shell(cx: &mut TestAppContext) -> Arc<Mutex<ShellModel>> {
         // host's own `backend::install` would write a different `Global`. The
         // backend value itself is type-compatible (the trait is in
         // `ferrocad_shell_api`).
-        crate::app::install_backend(cx, Box::new(ferrocad_shell_gpui::PythonAppBackend::new()));
+        crate::app::install_backend(cx, Box::new(ferrocad_shell_python::PythonAppBackend::new()));
         Shell::boot(cx).expect("boot shell")
     })
 }
@@ -41,7 +41,7 @@ fn boot_shell_without_app() -> Arc<Mutex<ShellModel>> {
 /// Boot without a gpui `App` or the appearance reset, so a test can observe the
 /// state a previous boot/write left behind.
 fn boot_again_without_app() -> Arc<Mutex<ShellModel>> {
-    let mut backend = ferrocad_shell_gpui::PythonAppBackend::new();
+    let mut backend = ferrocad_shell_python::PythonAppBackend::new();
     Shell::boot_with(&mut backend).expect("boot shell")
 }
 

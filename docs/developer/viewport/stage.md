@@ -308,7 +308,7 @@ manipulator (`with_manipulator`, `add_manipulator`/`set_manipulators`,
 the gizmo, draws their items as depth-off overlays, and renders the readout pill the
 manipulator supplies. The edition contributes the manipulator
 (`Contributions::with_manipulator(ferrocad_part_gui::fillet_manipulator)`);
-`ferrocad_shell_gpui` maps a commit's entity to the object and calls the app script's
+`ferrocad_shell_python` maps a commit's entity to the object and calls the app script's
 `interaction` hook, which Part implements with `Part::Fillet`/`Part::Chamfer`.
 Neither the viewport nor the shell links a kernel, and the base app links nothing at
 all. Covered by `ferrocad_part_gui`'s 15 tests (11 arc cases plus the factory and the
@@ -318,7 +318,7 @@ commit round-trip), `ferrocad_stage`'s `Manipulator`/`InteractionCommit` test an
 `the_manipulator_overlay_is_drawn_and_hovers`,
 `cancelling_a_manipulator_drag_ends_it_without_a_commit` and
 `a_manipulator_takes_priority_over_the_gizmo` (all driven by a **fake** manipulator,
-so no Part code is linked), `ferrocad_shell_gpui`'s `Contributions`/`DisplaySync` tests, and
+so no Part code is linked), `ferrocad_shell_python`'s `Contributions`/`DisplaySync` tests, and
 `ferrocad_part_py`'s `the_shell_helpers_tessellate_and_dress_up_a_document_shape`.
 
 ### T5 — the `ferrocad.stage` Python bindings

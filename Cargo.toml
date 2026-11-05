@@ -43,13 +43,13 @@ members = [
     "crates/ferrocad_shell_rust",
     "crates/ferrocad_shell_js",
     "crates/ferrocad_shell_pywasm",
-    "crates/ferrocad_shell_gpui",
+    "crates/ferrocad_shell_python",
     "crates/ferrocad_parametric",
     "crates/ferrocad_toy",
     "crates/xtask",
 ]
 # The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_shell_core`,
-# `ferrocad_shell_gpui`, `ferrocad`), the renderer (`ferrocad_wgpu`, which pulls in the
+# `ferrocad_shell_python`, `ferrocad`), the renderer (`ferrocad_wgpu`, which pulls in the
 # whole GPU stack) and the pivy facade (`ferrocad_inventor_py`, which needs CPython
 # headers), plus the OCCT-backed editions (`ferrocad_parametric`, via
 # `ferrocad_part_py`), are workspace members so `-p <crate>` works, but they are
@@ -57,7 +57,7 @@ members = [
 # `ferrocad_graphics`, scene core `ferrocad_inventor`, `ferrocad_stage`,
 # `ferrocad_mesh` (pure data: no kernel, no OCCT, no Python) and `ferrocad_part_gui`
 # (presentation only: no kernel, no GPU, no CPython) stay in `default-members`.
-# `ferrocad_shell_gpui` embeds CPython via PyO3 `auto-initialize`; it links fine in a
+# `ferrocad_shell_python` embeds CPython via PyO3 `auto-initialize`; it links fine in a
 # full `cargo build --workspace` because the extension crates keep
 # `pyo3/extension-module` opt-in (see their manifests), avoiding the libpython
 # link conflict. `ferrocad_shell_core` must never depend on `pyo3` or a `*_py` crate.
@@ -103,7 +103,7 @@ unicode-segmentation = "1"
 # `ferrocad_mesh_py`, `ferrocad_part_py`,
 # `ferrocad_stage`,
 # `ferrocad_part_gui`, `ferrocad_stage_py`, `ferrocad_viewport`, `ferrocad_widgets`,
-# `ferrocad_shell_core`, `ferrocad_shell_gpui` and finally the `ferrocad` app. See
+# `ferrocad_shell_core`, `ferrocad_shell_python` and finally the `ferrocad` app. See
 # docs/developer/architecture/releasing.md.
 #
 # Versions are per crate, not workspace-wide: a release may bump only the crates
@@ -147,7 +147,7 @@ ferrocad_shell_js = { path = "crates/ferrocad_shell_js", version = "0.1.5" }
 # Default features are off here so the browser host (which inherits this entry) does
 # not compile the zero-copy presenter; the native assembly turns `gpu-interop` on.
 ferrocad_shell_core = { path = "crates/ferrocad_shell_core", version = "0.1.5", default-features = false }
-ferrocad_shell_gpui = { path = "crates/ferrocad_shell_gpui", version = "0.1.5" }
+ferrocad_shell_python = { path = "crates/ferrocad_shell_python", version = "0.1.5" }
 ferrocad = { path = "crates/ferrocad", version = "0.1.4" }
 
 # Cargo cannot express "gpu-allocator must use the same `windows` crate as

@@ -1,5 +1,5 @@
 [package]
-name = "ferrocad_shell_gpui"
+name = "ferrocad_shell_python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,10 +7,10 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "FerroCAD's native bite-gpui shell assembly: boots CPython and installs the shell's AppBackend"
+description = "FerroCAD's native shell assembly: embeds CPython, implements the shell's AppBackend and exports the native entry points"
 keywords = ["cad", "gui", "gpui", "freecad"]
 categories = ["gui"]
-documentation = "https://docs.rs/ferrocad_shell_gpui"
+documentation = "https://docs.rs/ferrocad_shell_python"
 
 [dependencies]
 # The platform-neutral shell: window, chrome, panels, viewport element and the

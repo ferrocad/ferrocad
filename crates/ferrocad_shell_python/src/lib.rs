@@ -23,7 +23,7 @@
 //! ```
 //!
 //! Everything from `ferrocad_shell_core` is re-exported here, so an edition keeps
-//! its `ferrocad_shell_gpui::{Shell, commands, selection, …}` paths.
+//! its `ferrocad_shell_python::{Shell, commands, selection, …}` paths.
 
 pub mod backend;
 pub mod events;

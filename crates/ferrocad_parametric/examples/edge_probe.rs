@@ -17,7 +17,7 @@
 
 use std::sync::Once;
 
-use ferrocad_shell_gpui::{DisplaySync, python};
+use ferrocad_shell_python::{DisplaySync, python};
 use ferrocad_graphics::{Camera, RenderQueue};
 use ferrocad_inventor::{ImageData, InventorView, Scene, ViewSpec};
 use ferrocad_stage::screen::project_device;

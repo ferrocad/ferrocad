@@ -4,7 +4,7 @@
 //! window renderer) presents the viewport zero-copy through gpui's wgpu device. On
 //! the web it is the only presentation path, because the readback image path cannot
 //! complete there. The platform-specific embedding and headless paths live in the
-//! native assembly (`ferrocad_shell_gpui`).
+//! native assembly (`ferrocad_shell_python`).
 //!
 //! [`render_view`] names the view the viewport element owns: the readback renderer
 //! natively, a size-only placeholder on the web (the presenter owns the real one).

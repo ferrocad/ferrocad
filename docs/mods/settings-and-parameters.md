@@ -346,7 +346,7 @@ survives switching away and back. Visibility changes only through
 | A fallback settings dialog's `on_accept` (e.g. `mods/GridOverlay/InitGui.py:150-175`) | the facade setters, then `apply()` | Yes, `finish_dialog` calls `apply_view` (`shell.rs:2213-2224`) |
 | `Mods_Settings` (`python/ferrocad_shell/__init__.py:1500-1538`) | `setActiveProvider` per changed feature | Yes, same dialog path |
 | A provider switch from the header popover | `setActiveProvider`; the provider callbacks select the backend and claim the overlay/backend, without writing `enabled` | Yes, `activate_provider` calls `apply_view` (`shell.rs:1680-1758`) |
-| `Settings/<Feature>` in the property pane | `FerroCADGui.setSetting` / `setActiveProvider`; `setSetting` also runs the backend's `refresh` | **No.** `ferrocad_shell.set_property` returns the `view`, but the Rust `SetResult` decodes only `ok`/`error` (`crates/ferrocad_shell_gpui/src/python.rs:152-156`) and `commit_property` never calls `apply_view` (`shell.rs:2804-2832`) |
+| `Settings/<Feature>` in the property pane | `FerroCADGui.setSetting` / `setActiveProvider`; `setSetting` also runs the backend's `refresh` | **No.** `ferrocad_shell.set_property` returns the `view`, but the Rust `SetResult` decodes only `ok`/`error` (`crates/ferrocad_shell_python/src/python.rs:152-156`) and `commit_property` never calls `apply_view` (`shell.rs:2804-2832`) |
 | A direct Python write (`FerroCAD.Grid.color = …`) | the store only | No; run `App_ReloadGridSettings`/`App_ReloadAxisSettings` or a toggle |
 
 The last two are where the store and the drawing can disagree without an
@@ -399,7 +399,7 @@ the canonical `_grid` defaults (`#94a3b8`, `1.0`).
 The file is versioned JSON and is replaced atomically on every mutation
 (`python/FreeCAD/__init__.py:370-418`). Headless runs are memory-only by
 default; the GUI sets `GuiUp` before the edition module imports
-(`crates/ferrocad_shell_gpui/src/python.rs:349-356`), which enables the default path.
+(`crates/ferrocad_shell_python/src/python.rs:349-356`), which enables the default path.
 
 ### Cache and refresh
 
@@ -452,7 +452,7 @@ it replaced were:
 - **`setSetting` makes a provider "see" a value immediately**
   (`docs/mods/providers.md:101-102`). The `refresh` runs, but the
   `Settings/<Feature>` pane drops its `view` (`python/ferrocad_shell/__init__.py:518`,
-  `crates/ferrocad_shell_gpui/src/python.rs:152-156`, `crates/ferrocad_shell_core/src/shell/mod.rs:2804-2832`).
+  `crates/ferrocad_shell_python/src/python.rs:152-156`, `crates/ferrocad_shell_core/src/shell/mod.rs:2804-2832`).
 - **"The feature owns the switch and `activate` only selects an implementation"
   was documented as contradicted by the code** (`docs/mods/providers.md`). The
   mods now follow the rule: the shipped `activate`/`deactivate` callbacks no

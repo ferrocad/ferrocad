@@ -13,7 +13,7 @@ passing** across eight `Mod/Test` files (`StringHasher.py` 4/4, `UnitTests.py` 1
 the expression-parse/cycle tests, and `BaseTests` 48/49). The active track is the `Base`/`App`
 surface. Naming: the repo is `ferrocad`; older sections below use the pre-restructure crate names
 (`fc-core` → `crates/ferrocad_core`, `fc-python` → `crates/ferrocad_py`, `fc-gen` →
-`crates/ferrocad_gen`, `fc-host` → `crates/ferrocad_shell_gpui`). The Python namespace stays `FreeCAD`.
+`crates/ferrocad_gen`, `fc-host` → `crates/ferrocad_shell_python`). The Python namespace stays `FreeCAD`.
 The M1 `freecad-py` crate (`FreeCAD._core`) was removed as dead code.
 
 ---
@@ -97,7 +97,7 @@ rather than bridging the core, and PyO3 covers every capability it had. See
   facade adds the App-level layer (document registry, `ActiveDocument`, version); it stays
   importable as `FreeCAD` and is packaged as the `ferrocad` distribution (maturin `pyproject.toml`).
 - **Embedding** — the Rust host initializes CPython and runs workbenches; proven in the
-  `crates/ferrocad_shell_gpui` spike (`cargo test -p ferrocad_shell_gpui` → 3 passed, including a Python-declared
+  `crates/ferrocad_shell_python` spike (`cargo test -p ferrocad_shell_python` → 3 passed, including a Python-declared
   UI + click round-trip). Note the layering: `ferrocad_core` is pure Rust and does **not** embed
   Python; the embedding lives in the host.
 - **`abi3`** is used, built against the sandbox's CPython **3.14** via
@@ -185,7 +185,7 @@ document-object core (M2–M4) is the active track, and the **MVP app shell**
 4. **Coin strategy** — reimplement the scene graph in Rust, or temporarily keep Coin behind
    the abstraction until the renderer is ready?
 5. **Repository layout** — **settled:** a cargo workspace under `crates/` (`ferrocad_core`,
-   `ferrocad_py`, `ferrocad_gen`, `ferrocad_widgets`, `ferrocad_shell_gpui`), edition 2024, packaged as the
+   `ferrocad_py`, `ferrocad_gen`, `ferrocad_widgets`, `ferrocad_shell_python`), edition 2024, packaged as the
    `ferrocad` distribution. The `fc-ui`/`fc-render`/`fc-coin-compat`/`fc-app` crates from the
    original plan (`fc` = FerroCAD) will slot in alongside these.
 6. **Conformance scope** — the harness runs 5 curated `Mod/Test` files. Which additional
@@ -215,5 +215,5 @@ document-object core (M2–M4) is the active track, and the **MVP app shell**
   crates; the Python surface documented by convention + upstream; Sphinx later).
 - The [repository](../../..) — the artifact: `crates/ferrocad_core` (Rust core), `crates/ferrocad_py`
   (PyO3 `ferrocad` module), `crates/ferrocad_gen` (generated skeletons), `crates/ferrocad_widgets`
-  (shared widgets), `crates/ferrocad_shell_gpui` (app shell), `python/FreeCAD` (facade), `tools/`
+  (shared widgets), `crates/ferrocad_shell_python` (app shell), `python/FreeCAD` (facade), `tools/`
   (inventory/codegen/conformance), `pyproject.toml` (maturin `ferrocad` distribution).

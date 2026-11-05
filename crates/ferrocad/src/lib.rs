@@ -3,7 +3,7 @@
 //! The base FerroCAD application. The binary (`cargo install ferrocad`) boots an
 //! embedded CPython interpreter and opens the `bite-gpui` shell; the engine is
 //! [`ferrocad_core`](https://crates.io/crates/ferrocad_core) and the shell library
-//! is [`ferrocad_shell_gpui`](https://crates.io/crates/ferrocad_shell_gpui).
+//! is [`ferrocad_shell_python`](https://crates.io/crates/ferrocad_shell_python).
 //!
 //! ## The payload
 //!
@@ -18,12 +18,12 @@
 //! workbench modules and brands the window) calls. An edition registers its own
 //! built-in modules first, then delegates here; see `docs/developer/architecture/repackaging.md`.
 
-use ferrocad_shell_gpui::HostConfig;
+use ferrocad_shell_python::HostConfig;
 
 pub mod payload;
 
 /// The workbench contributions an edition registers (its manipulators).
-pub use ferrocad_shell_gpui::Contributions;
+pub use ferrocad_shell_python::Contributions;
 
 /// Register the core `ferrocad` PyO3 extension as a built-in module, so `import
 /// ferrocad` resolves without a separate `ferrocad.abi3.so` on disk. `#[pymodule]`
@@ -79,7 +79,7 @@ pub fn run_edition(app_name: &str, entry_module: &str) {
 /// ```
 pub fn base_contributions() -> Contributions {
     Contributions::new()
-        .with_gizmo(ferrocad_shell_gpui::translate_gizmo)
+        .with_gizmo(ferrocad_shell_python::translate_gizmo)
         .with_tool("workplane_points", || {
             Box::new(ferrocad_stage::PlanePointsTool::new()) as Box<dyn ferrocad_stage::Tool>
         })
@@ -113,7 +113,7 @@ pub fn run_edition_with_document(
     let mut config = app_config(app_name, entry_module);
     config.contributions = contributions;
     config.open_document = open;
-    ferrocad_shell_gpui::run_with(config);
+    ferrocad_shell_python::run_with(config);
 }
 
 /// Boot the interpreter and the payload, then exit without opening a window.
@@ -125,10 +125,10 @@ pub fn run_edition_with_document(
 /// layout before shipping (see `docs/developer/architecture/distribution.md`).
 pub fn check_init() -> Result<(), String> {
     register_core_module();
-    ferrocad_shell_gpui::check_init(base_config("FerroCAD"))
+    ferrocad_shell_python::check_init(base_config("FerroCAD"))
 }
 
-pub use ferrocad_shell_gpui::RenderReport;
+pub use ferrocad_shell_python::RenderReport;
 
 /// Render an edition's sample document headlessly to `out`.
 ///
@@ -150,7 +150,7 @@ pub fn render_edition_headless(
     register_core_module();
     let mut config = app_config(app_name, entry_module);
     config.open_document = open.map(std::path::Path::to_path_buf);
-    ferrocad_shell_gpui::headless::run(&config, render, stl, size, script)
+    ferrocad_shell_python::headless::run(&config, render, stl, size, script)
 }
 
 /// The flags an edition accepts in both its windowed and headless modes.

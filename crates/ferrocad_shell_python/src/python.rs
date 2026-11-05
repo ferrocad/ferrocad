@@ -26,7 +26,7 @@ use ferrocad_types::Vector3;
 
 // The view models themselves are shell data, not bridge data: they live in the
 // platform-neutral core so a Rust backend can return the same shapes. Re-exported
-// here because `ferrocad_shell_gpui::python::PropRow` is part of the public surface.
+// here because `ferrocad_shell_python::python::PropRow` is part of the public surface.
 pub use ferrocad_shell_core::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
     GridProvider, GridSummary, ObjectNode, OpenedDocument, PropRow, ProviderFeature, ProviderSkin,

@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Once;
 
-use ferrocad_shell_gpui::python;
+use ferrocad_shell_python::python;
 
 static BOOT: Once = Once::new();
 

@@ -76,7 +76,7 @@ jobs:
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
 
-          crates="ferrocad_types ferrocad_theme ferrocad_lineage ferrocad_curves ferrocad_ui ferrocad_core ferrocad_geom ferrocad_graphics ferrocad_widgets ferrocad_inventor ferrocad_stage ferrocad_inventor_py ferrocad_stage_py ferrocad_occt ferrocad_part ferrocad_py ferrocad_wgpu ferrocad_viewport ferrocad_part_py ferrocad_shell_api ferrocad_shell_core ferrocad_shell_rust ferrocad_shell_gpui ferrocad"
+          crates="ferrocad_types ferrocad_theme ferrocad_lineage ferrocad_curves ferrocad_ui ferrocad_core ferrocad_geom ferrocad_graphics ferrocad_widgets ferrocad_inventor ferrocad_stage ferrocad_inventor_py ferrocad_stage_py ferrocad_occt ferrocad_part ferrocad_py ferrocad_wgpu ferrocad_viewport ferrocad_part_py ferrocad_shell_api ferrocad_shell_core ferrocad_shell_rust ferrocad_shell_python ferrocad"
 
           on_crates_io() {
             code=$(curl -s -o /dev/null -w '%{http_code}' \

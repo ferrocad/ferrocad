@@ -6,7 +6,7 @@ branch when disabled: no allocation, no formatting, no logging.
 
 ## Enable
 
-Either knob works; `--trace` is checked by `ferrocad_shell_gpui::run_with` and by
+Either knob works; `--trace` is checked by `ferrocad_shell_python::run_with` and by
 `check_init`, so an edition's binary does not need to parse it.
 
 ```sh
@@ -134,7 +134,7 @@ The headless example exercises the program pipeline without a window (and does
 run the black-frame probe, because it reads back):
 
 ```sh
-PYTHONPATH=python cargo run -p ferrocad_shell_gpui --example inventor_roundtrip \
+PYTHONPATH=python cargo run -p ferrocad_shell_python --example inventor_roundtrip \
     -- --coin-overlay target/trace/coin.png
 # (rebuild the example first if the workspace changed)
 ```
@@ -142,7 +142,7 @@ PYTHONPATH=python cargo run -p ferrocad_shell_gpui --example inventor_roundtrip 
 Tests:
 
 ```sh
-CARGO_BUILD_JOBS=2 cargo test -p ferrocad_wgpu -p ferrocad_shell_gpui --offline \
+CARGO_BUILD_JOBS=2 cargo test -p ferrocad_wgpu -p ferrocad_shell_python --offline \
     -- --test-threads=1
 ```
 

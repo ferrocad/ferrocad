@@ -863,7 +863,7 @@ pub fn dress_up_scrubber_for(
 
 /// The Part GUI's manipulator factory: an edge selection arms a fillet scrubber.
 ///
-/// `ferrocad_shell_gpui::Contributions` accepts a factory of this shape, so an edition wires
+/// `ferrocad_shell_python::Contributions` accepts a factory of this shape, so an edition wires
 /// the manipulator in one line and the base app stays Part-free.
 pub fn fillet_manipulator(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
     dress_up_scrubber_for(selection, stage, DressUpMode::Fillet)

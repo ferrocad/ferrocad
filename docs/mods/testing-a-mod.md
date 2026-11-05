@@ -334,7 +334,7 @@ loaded once, or accept that each re-execution adds another provider.
   installs a fake `pivy.coin` and asserts the bridge calls; the real draw is
   manual.
 - Shader compilation, the viewport, and anything that measures pixels need a
-  GPU and `cargo run -p ferrocad_shell_gpui`.
+  GPU and `cargo run -p ferrocad_shell_python`.
 - The headless facade has `FreeCAD.GuiUp == 0`; `FerroCADGui.ViewState` is still
   writable by `set_view_state`, and `FerroCAD.Grid.snapshot()` reads it only when
   `GuiUp` is truthy.

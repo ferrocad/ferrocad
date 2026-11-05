@@ -407,7 +407,7 @@ flowchart TD
     FUI["ferrocad_ui: .ui reader, form model, widget registry"]
     WID["ferrocad_widgets + gpui components"]
     STAGE["ferrocad_stage: grid, snap, workplane, input, tool"]
-    SHELL["ferrocad_shell_gpui: window, commands, view requests, input sessions"]
+    SHELL["ferrocad_shell_python: window, commands, view requests, input sessions"]
 
     UP --> PANEL
     PANEL --> PROXY
@@ -443,7 +443,7 @@ Two rules make the diagram true:
 | `screen.rs` | projections, pixel tolerances | screen ↔ world |
 
 `ferrocad_viewport` already owns an active workplane, two local grid layers, the origin node and
-`snap_to_geometry_with`; `ferrocad_shell_gpui::view` already carries the request
+`snap_to_geometry_with`; `ferrocad_shell_python::view` already carries the request
 `ViewRequest { grid, axis_cross, projection, grid_minor, grid_major, grid_radius, workplane }`
 and mirrors `ViewState` to the facade.
 
@@ -657,7 +657,7 @@ completes; every unsupported call raises with the exact four-part message. No wi
 
 **Deliverables.** New `ferrocad_widgets` components (Label, Button, CheckBox, RadioButton,
 SpinBox, FloatSpinBox, ComboBox, GroupBox, Container, DialogButtonBox, QuantityField,
-QuantitySpinBox, ColorButton) and the form renderer/host in `ferrocad_shell_gpui`;
+QuantitySpinBox, ColorButton) and the form renderer/host in `ferrocad_shell_python`;
 `FreeCADGui.Control.showDialog/closeDialog` over an async modal.
 
 **Acceptance.** A `#[gpui::test]` mounts `TaskPanel_OrthoArray`, simulates a radio click and OK,

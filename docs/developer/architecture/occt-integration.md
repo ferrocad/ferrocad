@@ -115,7 +115,7 @@ So:
   | the base `ferrocad` app | no Part | none |
 
   That is exactly the repackaging vision ([`repackaging.md`](repackaging.md)): minimal
-  apps that do not include Part link no OCCT, and the shell library (`ferrocad_shell_gpui`,
+  apps that do not include Part link no OCCT, and the shell library (`ferrocad_shell_python`,
   formerly `ferrocad_host`) never does. The runtime `Arc<dyn GeometryBackend>` is how Part
   obtains the kernel — the edition registers it with
   `ferrocad_part::register(Arc::new(OcctBackend::new()))` at startup (via
@@ -161,7 +161,7 @@ ferrocad_core    -> ferrocad_types                          [geometry-agnostic; 
 ferrocad_part    -> ferrocad_core, ferrocad_geom, ferrocad_types     [workbench; kernel injected]
 ferrocad_part_py -> ferrocad_part, ferrocad_occt, ferrocad_py, pyo3  [module `Part`; composition root]
 ferrocad_py      -> ferrocad_core, pyo3                     [module `ferrocad`; no Part]
-ferrocad (app)   -> ferrocad_shell_gpui, ferrocad_py,
+ferrocad (app)   -> ferrocad_shell_python, ferrocad_py,
                     ferrocad_part_py                       [edition composition]
 ```
 
@@ -298,7 +298,7 @@ The extraction is a refactor with its own tests, so it lands in stages:
     `Part.Shape.tessellate` for `Mesh`/SimpleCAD, and the feature edit as
     one transaction) and seeds the demo solid. The Rust-side manipulators are
     `ferrocad_part_gui::fillet_manipulator` and `push_pull_manipulator`, contributed through
-    `Contributions`; `ferrocad_shell_gpui` maps a picked entity to the object and applies the
+    `Contributions`; `ferrocad_shell_python` maps a picked entity to the object and applies the
     neutral commit through the script's `interaction` hook. The shell still links no
     kernel (`ferrocad_part`/OCCT remain Python-side), and the base app links neither.
 

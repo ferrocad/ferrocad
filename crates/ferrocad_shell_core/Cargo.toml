@@ -67,5 +67,5 @@ bite-gpui = { version = "=1.25.203", features = ["test-support"] }
 # The shell tests drive the real Python bridge (no stub): the native assembly
 # installs its `AppBackend` and the tests call `python::` directly. Path-only on
 # purpose: a published `ferrocad_shell_core` strips it, so the crates.io publish
-# order does not need `ferrocad_shell_gpui` (which depends on this crate).
-ferrocad_shell_gpui = { path = "../ferrocad_shell_gpui" }
+# order does not need `ferrocad_shell_python` (which depends on this crate).
+ferrocad_shell_python = { path = "../ferrocad_shell_python" }

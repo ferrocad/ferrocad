@@ -21,7 +21,7 @@ branding. It is a **repackaging**, not a fork. Everything expensive (the engine,
 the widget kit, the interpreter embedding, the inspector/property editor/console)
 is written once and shared.
 
-## 2. Why the base app is `ferrocad`, the shell is `ferrocad_shell_core`, and the native assembly is `ferrocad_shell_gpui`
+## 2. Why the base app is `ferrocad`, the shell is `ferrocad_shell_core`, and the native assembly is `ferrocad_shell_python`
 
 We rejected `ferrocad_desktop` and `ferrocad_app`:
 
@@ -38,7 +38,7 @@ So the two roles are split by name:
   window, chrome, panels, viewport element and view models. The name says what it
   is (a `bite-gpui` app shell) and that it is a layer an app is built *on*, not the
   app itself. It promises no platform: the browser host compiles it directly.
-- **`ferrocad_shell_gpui`** is the **native assembly**: `ferrocad_shell_core` plus
+- **`ferrocad_shell_python`** is the **native assembly**: `ferrocad_shell_core` plus
   the embedded-CPython `AppBackend`, plus `run`/`run_with` and `HostConfig`. An
   edition depends on this crate.
 
@@ -46,7 +46,7 @@ So the two roles are split by name:
 [`wasm-shell.md`](../../project/tasks/wasm-shell.md) and is now structural:
 `ferrocad_shell_api` owns the `AppBackend` trait and every view model it returns,
 `ferrocad_shell_core` owns the GPUI UI and the `cx`-threaded helpers, and
-`ferrocad_shell_gpui` (renamed from `ferrocad_gpui`) owns CPython. The browser host
+`ferrocad_shell_python` (renamed from `ferrocad_gpui`, then `ferrocad_shell_gpui`) owns CPython. The browser host
 `ferrocad_web_gpui` depends on the core only. `ferrocad_gpui` stops at 0.1.5; see
 [`releasing.md`](releasing.md) for the package discontinuity. The browser host is
 already a real shell (M2): the same `ferrocad_shell_core` window runs in Chrome on
@@ -69,7 +69,7 @@ The shape is a shell **library** plus thin binaries:
         |   AppBackend helpers)         |
         +-------------------------------+
           ^             ^
-     ferrocad_shell_gpui   ferrocad_web_gpui     the two hosts
+     ferrocad_shell_python   ferrocad_web_gpui     the two hosts
      (CPython backend)     (Rust backend)
           ^
    ferro-arch  ferro-furn  ferro-print  ...   thin bins, one per edition
@@ -79,7 +79,7 @@ The shape is a shell **library** plus thin binaries:
 The shape, and where it stands:
 
 1. **Done.** `ferrocad_shell_core` exposes `Shell` and the view models;
-   `ferrocad_shell_gpui` adds the `python` bridge, `run()` / `run_with(config)` and
+   `ferrocad_shell_python` adds the `python` bridge, `run()` / `run_with(config)` and
    a `HostConfig`. `HostConfig` carries the application name, the Python entry
    module and the app's `python_paths`; the workbench list and startup template
    come later.
@@ -158,7 +158,7 @@ object's properties, and it contributes a manipulator **and** a gizmo through th
 `Contributions` registry. Run it with `cargo run -p ferrocad_toy`; see
 [`toy-workbench.md`](../workbenches/toy-workbench.md).
 
-The boundary between the two halves: `ferrocad_shell_gpui` owns the **interpreter**
+The boundary between the two halves: `ferrocad_shell_python` owns the **interpreter**
 (boot, `sys.path`, JSON) and ships no application script; the **app** owns the
 scripts. The app's `main` sets `HostConfig.entry_module` and
 `HostConfig.python_paths` (`run_edition` for an edition, `run_as` for the base app);
@@ -190,7 +190,7 @@ it.
 - **Base app binary:** `ferrocad` (the general edition; `cargo run -p ferrocad`).
 - **Shell library:** `ferrocad_shell_core`, the platform-neutral `bite-gpui`
   application shell that every app and edition is built on.
-- **Native assembly:** `ferrocad_shell_gpui` (the core plus the embedded-CPython
+- **Native assembly:** `ferrocad_shell_python` (the core plus the embedded-CPython
   `AppBackend` and the `run` entry points).
 - **Shell/engine contract:** `ferrocad_shell_api` (the `AppBackend` trait and the
   view models; no gpui, no CPython).
@@ -201,7 +201,7 @@ it.
   application binaries, so they are **not** published to crates.io.
 - **The App/Gui split:** `ferrocad_core` is our App, and a future `FreeCADGui`
   extension is our Gui, so reserve `ferrocad_gui` for those Gui bindings. Because
-  `ferrocad_shell_gpui` and `ferrocad_gui` differ by two letters, prefer
+  `ferrocad_shell_python` and `ferrocad_gui` differ by two letters, prefer
   `ferrocad_py_gui` for the bindings crate if the two ever sit side by side, so the
   toolkit layer (`gpui`) and the Gui bindings (`gui`) cannot be confused.
 - **Rejected:** `ferrocad_desktop` (platform in the name), `ferrocad_app`
@@ -209,7 +209,7 @@ it.
 
 ## 6. Publishing
 
-`ferrocad_shell_api`, `ferrocad_shell_core`, `ferrocad_shell_gpui` and the
+`ferrocad_shell_api`, `ferrocad_shell_core`, `ferrocad_shell_python` and the
 `ferrocad` app crate go to crates.io; the editions are distributed as
 installers/AppImages/wheels, not as crates. `cargo install ferrocad` builds the
 app binary, but it still needs the Python payload, shipped as loose files by the

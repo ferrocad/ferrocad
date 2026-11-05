@@ -6,7 +6,7 @@
 
 use std::sync::{Mutex, Once};
 
-use ferrocad_shell_gpui::python;
+use ferrocad_shell_python::python;
 
 /// The tests share one interpreter and one document registry.
 static TEST_LOCK: Mutex<()> = Mutex::new(());

@@ -15,10 +15,10 @@
 //!
 //! ```text
 //! # window (needs a display server and a GPU):
-//! cargo run -p ferrocad_shell_gpui --example inventor_roundtrip
+//! cargo run -p ferrocad_shell_python --example inventor_roundtrip
 //!
 //! # headless: simulate a hover, render, read the frame back, and write a PNG:
-//! cargo run -p ferrocad_shell_gpui --example inventor_roundtrip -- --headless frame.png
+//! cargo run -p ferrocad_shell_python --example inventor_roundtrip -- --headless frame.png
 //! ```
 
 use ferrocad_viewport::InventorViewport;
@@ -45,7 +45,7 @@ fn camera(viewport: Viewport) -> Camera {
 /// Build the scene the workbench way — a `from pivy import coin` script extracted
 /// into a [`Scene`] — and fall back to the Rust twin if the interpreter is absent.
 fn build_scene() -> Scene {
-    ferrocad_shell_gpui::python::inventor_scene().unwrap_or_else(|e| {
+    ferrocad_shell_python::python::inventor_scene().unwrap_or_else(|e| {
         eprintln!("ferrocad: python scene unavailable ({e}); using the Rust sample");
         sample_scene()
     })
@@ -84,7 +84,7 @@ fn main() {
                 let viewport = InventorViewport::new(renderer, camera, scene)
                     .with_listener(Box::new(HoverHighlight::default()))
                     .with_navicube(navicube);
-                match ferrocad_shell_gpui::zero_copy_presenter() {
+                match ferrocad_shell_python::zero_copy_presenter() {
                     Some(presenter) => viewport.with_presenter(presenter),
                     None => viewport,
                 }
@@ -167,7 +167,7 @@ fn render_headless(mut scene: Scene, camera: ferrocad_inventor::Camera, path: &s
     );
 
     // Deliver the pick to any Python `SoEventCallback`: a click at the centre.
-    ferrocad_shell_gpui::python::dispatch(
+    ferrocad_shell_python::python::dispatch(
         &directives,
         &Event::MouseButton {
             position: centre,

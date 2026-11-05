@@ -2163,7 +2163,7 @@ mod tests {
         let model = cx.update(|cx| {
             crate::app::install_backend(
                 cx,
-                Box::new(ferrocad_shell_gpui::PythonAppBackend::new()),
+                Box::new(ferrocad_shell_python::PythonAppBackend::new()),
             );
             Shell::boot(cx).expect("boot shell")
         });

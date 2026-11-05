@@ -39,7 +39,7 @@ Status: index (2026-11-05). Eleven active specs and one recorded decision:
   ephemerally during a creation tool, and replace the `WP` plumbing menu with plane
   choices.
 - [wasm-shell.md](wasm-shell.md) — **the browser shell, M0–M6 done**: the
-  `ferrocad_shell_api` / `ferrocad_shell_core` / `ferrocad_shell_gpui` split, the
+  `ferrocad_shell_api` / `ferrocad_shell_core` / `ferrocad_shell_python` split, the
   `AppBackend` seam, the wasm build, the real shell in Chrome with a Rust backend, the
   live 3D viewport through the zero-copy presenter, a real `Part::Box` +
   `Part::Fillet` document on the wasm OCCT kernel, editing (typed Move/Rotate,

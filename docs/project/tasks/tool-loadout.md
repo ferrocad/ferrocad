@@ -161,7 +161,7 @@ changing the slot.
 - Slot 1's key toggles its two hands (Move ⇄ Rotate); it no longer cycles into idle.
   Entering Slot 1 from another slot always starts at the arrows (Rotate is a sub-mode
   of the active Move pill).
-- Covered by `ferrocad_shell_gpui`'s `a_face_click_selects_the_body_in_the_move_slot`,
+- Covered by `ferrocad_shell_python`'s `a_face_click_selects_the_body_in_the_move_slot`,
   `the_slot_sets_the_filter_and_select_overrides_it`,
   `the_wheel_verbs_equip_the_move_slot`,
   `the_loadout_bar_renders_and_equips_a_slot`,
@@ -283,7 +283,7 @@ Slot 1 (Move) equipped
   selection when the pointer is away. `InventorViewport::set_inspect_highlight` reports
   whether anything changed, so a stationary pointer does not repaint. This is the
   pointer's substitute for the triad's implicit "what will a click select?" cue.
-- Covered by `ferrocad_shell_gpui`'s `a_hover_preview_promotes_its_body_when_a_drag_begins`,
+- Covered by `ferrocad_shell_python`'s `a_hover_preview_promotes_its_body_when_a_drag_begins`,
   `hover_to_arm_needs_the_move_slot_and_an_empty_selection`,
   `hover_arming_hosts_and_dissolves_the_preview` and (with a GPU)
   `the_idle_scale_dims_the_hosted_triad`; `ferrocad_stage`'s `a_scaled_opacity_clamps`,

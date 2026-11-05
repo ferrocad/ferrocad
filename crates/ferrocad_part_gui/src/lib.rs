@@ -7,7 +7,7 @@
 //!
 //! This crate is the answer to "where does a workbench's manipulator live". It is
 //! **not** in `ferrocad_stage` (which must serve every workbench, including BIM and
-//! Draft) and **not** in `ferrocad_shell_gpui` (the edition-agnostic shell). It is a
+//! Draft) and **not** in `ferrocad_shell_python` (the edition-agnostic shell). It is a
 //! presentation crate beside the workbench, and it registers through the generic
 //! [`ferrocad_stage::Manipulator`] seam:
 //!

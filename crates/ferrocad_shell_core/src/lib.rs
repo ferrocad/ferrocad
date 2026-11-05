@@ -6,7 +6,7 @@
 //! is reached — that is the [`AppBackend`](app::AppBackend) seam, which a host
 //! installs before boot:
 //!
-//! - [`ferrocad_shell_gpui`](https://crates.io/crates/ferrocad_shell_gpui) is the
+//! - [`ferrocad_shell_python`](https://crates.io/crates/ferrocad_shell_python) is the
 //!   native assembly: the shell plus the embedded-CPython backend and the
 //!   `run`/`run_with`/`HostConfig` entry points.
 //! - `ferrocad_web_gpui` is the browser host: the same shell plus a Rust backend
@@ -101,4 +101,4 @@ pub(crate) static PYTHON_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// own functions (the same ones the backend calls), which keeps them honest about
 /// what the seam forwards.
 #[cfg(test)]
-pub(crate) use ferrocad_shell_gpui::python;
+pub(crate) use ferrocad_shell_python::python;

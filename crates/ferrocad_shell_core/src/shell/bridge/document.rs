@@ -57,6 +57,7 @@ impl Shell {
                 {
                     let mut model = self.model.lock().unwrap();
                     model.title = format!("FerroCAD — {}", opened.document);
+                    model.document = opened.document.clone();
                     model.status =
                         format!("opened {} ({} object(s))", opened.document, opened.objects);
                 }

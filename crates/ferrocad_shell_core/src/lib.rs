@@ -33,6 +33,7 @@
 //! `::commands`, …) are kept as re-exports of the same modules.
 
 pub mod app;
+pub mod files;
 pub mod fonts;
 pub mod model;
 pub mod runtime;
@@ -57,6 +58,7 @@ pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory, transla
 pub use dev_tools::DevTools;
 pub use dialog::{DialogField, DialogSpec};
 pub use display::{DisplaySync, StageMesh};
+pub use files::{FilePicker, FileTask, NativeFilePicker, OpenOutcome, SaveOutcome};
 pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
 pub use shortcuts::Accelerator;

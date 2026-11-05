@@ -61,7 +61,6 @@ use crate::types::{AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
 pub mod bridge;
-#[cfg(not(target_family = "wasm"))]
 mod files;
 pub mod hud;
 pub mod panels;
@@ -193,6 +192,19 @@ fn is_palette_shortcut(event: &KeyDownEvent) -> bool {
 }
 
 /// The console transcript: the log lines plus a fresh prompt.
+/// The picker a shell starts with: the platform prompt everywhere but wasm, where
+/// the host installs the page's picker (a browser has no path API).
+fn default_file_picker() -> Option<Box<dyn crate::files::FilePicker>> {
+    #[cfg(target_family = "wasm")]
+    {
+        None
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        Some(Box::new(crate::files::NativeFilePicker))
+    }
+}
+
 fn transcript_of(model: &Arc<Mutex<ShellModel>>) -> String {
     let m = model.lock().unwrap();
     format!("{}\n>>> ", m.console.join("\n"))
@@ -273,6 +285,11 @@ pub struct ShellModel {
     pub title: String,
     pub version: String,
     pub backend: String,
+    /// The active document's name, without the window-title decoration. The file
+    /// verbs use it for the suggested/save name, so it must name the *document* and
+    /// not the first model-tree node (which is the synthetic `Settings` root when a
+    /// provider is registered).
+    pub document: String,
     pub tree: Vec<DocumentNode>,
     /// The primary selected object (the property editor's subject).
     pub selected: Option<String>,
@@ -302,6 +319,10 @@ impl ShellModel {
 
 pub struct Shell {
     model: Arc<Mutex<ShellModel>>,
+    /// The host's file picker for `App_Open`/`App_Save`. Native starts with
+    /// [`NativeFilePicker`](crate::files::NativeFilePicker); a browser installs its
+    /// own with [`Shell::set_file_picker`] before the window opens.
+    file_picker: Option<Box<dyn crate::files::FilePicker>>,
     /// The console transcript plus the live input line (S5's text area).
     console: Entity<TextAreaState>,
     /// The 3D viewport, once [`Shell::enable_viewport`] has created it.
@@ -747,6 +768,7 @@ impl Shell {
             title: format!("FerroCAD — {}", boot.document),
             version: boot.version,
             backend: boot.backend,
+            document: boot.document,
             tree,
             selected: None,
             selection: Vec::new(),
@@ -790,6 +812,7 @@ impl Shell {
         );
         Self {
             model,
+            file_picker: default_file_picker(),
             console,
             viewport: None,
             prop_inputs: HashMap::new(),

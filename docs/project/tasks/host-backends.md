@@ -463,39 +463,56 @@ pub fn json_text() -> String;
   browser calls `catalog::move_dialog()`, Python's `_MoveCommand` reads
   `catalog.json["dialogs"]["App_Move"]`.
 
-### 5.5 File verbs (D8, D9)
+### 5.5 File verbs (D8, D9) — **done (2026-11-05)**
 
-`App_Open` / `App_Save` are **shell** ids, intercepted in
+`App_Open` / `App_Save` are **shell** ids on every platform, intercepted in
 `Shell::run_command` like `SAVE_DATUM_PLANE`, `select:` and `ferrocad-provider:`
-already are (`shell/bridge/dispatch.rs:199-241`). The shell:
-
-1. calls `cx.prompt_for_paths(PathPromptOptions { files: true, .. })` (open) or
-   `cx.prompt_for_new_path(dir, Some("<doc>.FCStd"))` (save);
-2. hands the **path** to `AppBackend::open_path`/`save_path` (S1), whose defaults
-   read/write the bytes and whose filesystem-aware overrides (the interpreter) use
-   the path directly — the suffix, not a shell-side filter, picks the serializer
-   (the portal has no filter field, so an unknown suffix is the engine's error);
-3. replaces the document through the one `Shell::replace_document`, which is also
-   the byte path's (`open_document`) — one place does the rollback, the refresh and
-   the fit.
-
-Nothing in `AppBackend` changes. On `wasm32` the browser keeps its current path
-(`App_Open`/`App_Save` handled by `RustAppBackend` + the `window.__ferrocad`
-bridge, `web_gpui/src/host.rs:16-45`) until S6 introduces a picker abstraction:
+already are (`shell/bridge/dispatch.rs`). The host supplies one thing the shell cannot
+do itself: a [`FilePicker`](../../../crates/ferrocad_shell_core/src/files.rs).
 
 ```rust
-pub trait FilePicker {
-    fn open(&mut self) -> Task<Option<Vec<LoadedFile>>>;   // native: portal + fs
-    fn save(&mut self, name: &str, bytes: Vec<u8>) -> Task<Option<PathBuf>>;
+pub trait FilePicker: 'static {
+    fn open(&mut self, cx: &App) -> FileTask<Result<OpenOutcome, String>>;
+    fn save(&mut self, cx: &App, suggested: &str) -> FileTask<Result<SaveOutcome, String>>;
+    fn deliver(&mut self, name: &str, bytes: &[u8]) -> Result<(), String>;
 }
 ```
 
-Native implementation: portal + `std::fs`. Browser implementation: `<input>` +
-download. That is the D8 shape one level up: **bytes cross the seam, paths do not.**
+The outcome is an enum because a picker can be in one of three positions:
 
-Testing is cheap because the GPUI test platform has a `select_paths` hook
-(`bite-gp-authoring-1.25.203/src/platform/test/platform.rs:247`), so a
-`#[gpui::test]` can drive the whole Open flow without a display.
+| Outcome | Meaning | Who finishes |
+| --- | --- | --- |
+| `OpenOutcome::Path(p)` / `SaveOutcome::Path(p)` | the host has paths | the shell: `AppBackend::open_path`/`save_path`, so the backend keeps the real file name |
+| `OpenOutcome::Bytes { name, bytes }` | the host read the file but has no path | the shell: `Shell::open_document` |
+| `Delegated` | the host owns the picker (a browser page) | the host: it calls `Shell::open_document`, or the shell serializes and calls `deliver` |
+| `Cancelled` | the user cancelled or the prompt was dropped | nobody |
+
+Delegation is what makes one trait work on both platforms: a user gesture cannot be
+awaited by a Rust future without a channel back through the wasm boundary, so the
+browser's picker asks the page (`window.__ferrocad.requestOpen`) and returns
+`Delegated`; the page calls `ferrocad_open` → `Shell::open_document` when it has the
+bytes. Its save is `Delegated` too: the shell serializes the document and the picker
+hands the bytes to the page's download.
+
+- **Native** (`NativeFilePicker`, installed by `Shell::from_model`): GPUI's platform
+  prompt plus `std::fs` — a path goes to the backend, so the interpreter-backed
+  backend opens the file itself and records the name for the next save.
+- **Browser** (`WebFilePicker`, installed by `ferrocad_web_gpui` at boot): the page's
+  `<input type=file>` and download.
+- The shell suggests the save name from `ShellModel::document` (set at boot and on
+every open), not from the first model-tree node — that node is the synthetic
+  `Settings` root when a provider is registered, which used to suggest
+  `Settings.FCStd`.
+
+Both hosts now replace the document through the one `Shell::replace_document`, which
+is also the byte path's — one place does the rollback, the refresh and the fit.
+Nothing in `AppBackend` changes, and the backend no longer carries file hooks:
+**bytes cross the seam, paths do not.**
+
+Testing is cheap because the GPUI test platform has `select_paths`/
+`simulate_path_prompt_response` hooks
+(`bite-gp-authoring-1.25.203/src/platform/test/platform.rs:247`), and the test suite
+plugs fake pickers in for the byte and delegated shapes.
 
 ## 6. Platform facts the plan relies on
 
@@ -569,7 +586,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | **S3** | **Shared property presentation** (D4/D5) — **done (2026-11-04)** | `ferrocad_core::present` (`kind`/`format`/`coerce`); `ferrocad_py` exposes `propertyKindOf`/`formatProperty`/`coercePropertyText`; Part lengths are `Quantity` (datum planes already were); `set_property` keeps a quantity's unit when given a bare number | 4–6 d |
 | **S4** | **Catalogue as data** (D10) — **done (2026-11-04)** | `ferrocad_shell_api::catalog` (the table, the named ids, the Move form), generated `python/ferrocad_shell/catalog.json`, the browser backend reading `builtin()`, Python's `GetResources()` reading the JSON, and a drift test on each side | 4–5 d |
 | **S5** | **`ferrocad_shell_rust`** (D2/D3) — **done (2026-11-05)** | `RustAppBackend` moved out of `ferrocad_web_gpui` into its own platform-neutral crate (no gpui, no pyo3, no wasm-bindgen); the browser installs it with two file-picker hooks and keeps only its window and page bridge; `cargo run -p ferrocad_shell_rust --example headless` boots it with no window and prints the same document | 2–3 d |
-| **S6** | **Seam split** (D7) — **in progress: the scripting half is done (2026-11-05)** | `ScriptHost` (`evaluate`, `load_workbenches`, `tool`, `tool_command`, `inventor_scene`, `event_listener`) with `AppBackend::script_host()`; the document half unchanged; `FilePicker` unifies native and web next | 3–4 d |
+| **S6** | **Seam split** (D7) — **done (2026-11-05)** | `ScriptHost` (`evaluate`, `load_workbenches`, `tool`, `tool_command`, `inventor_scene`, `event_listener`) with `AppBackend::script_host()`, the document half unchanged; `FilePicker` as the host's half of `App_Open`/`App_Save` (native prompt, browser delegation), so the shell owns both ids on every platform and the backend carries no file hooks | 3–4 d |
 | **S7** | **JS backend spike** — creates `ferrocad_shell_js` (D2) | `JsAppBackend` (= `RustAppBackend`'s document half + `ScriptHost`); a page that loads an ES module and calls the document through `wasm-bindgen`; one command registered from JS | 5–8 d |
 | **S8** | **wasm Python spike** — creates `ferrocad_shell_pywasm` (D2) | pick a runtime from §6.3, implement `ScriptHost` over the *same* `python/ferrocad_shell` scripts and, where possible, the same `*_py` bindings; run `properties` | research |
 
@@ -582,7 +599,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | S3 | `present` unit tests (kind/format/coerce, colour alpha, constraints, multi-colour refusal); `ferrocad_core` and `ferrocad_part` suites green; the base Python suites green (687); the browser smoke shows the same rows; doc checks pass. *Follow-up:* a `.FCStd` fixture from upstream FreeCAD (none in the repo) to pin the open+recompute path end to end. |
 | S4 | The crate's `the_checked_in_catalogue_is_current` fails when `python/ferrocad_shell/catalog.json` is stale, and `CatalogTests` fails when a built-in exists on only one side (Python registry vs. JSON); `App_Move` exists once, in `catalog::move_dialog()`. |
 | S5 | `cargo check -p ferrocad_shell_rust` (native) passes, `cargo tree -p ferrocad_shell_rust` has no gpui/pyo3/wasm-bindgen, and the browser still builds and passes its smoke check on the extracted crate (`run.sh --check`). The native example prints `document Sample (2 object(s))` and `Fillet · 40 triangles`, the same document the browser draws. |
-| S6 | `AppBackend`'s scripting methods are behind `script_host()` (done); the browser still builds with no scripting backend (done); `inventor_scene` returns from the trait with the same behaviour (done); the Draft conformance group is unchanged (`test_pivy` 2/2). **Remaining:** `FilePicker`. |
+| S6 | `AppBackend`'s scripting methods are behind `script_host()`; the browser still builds with no scripting backend; `inventor_scene` returns from the trait with the same behaviour; the Draft conformance group is unchanged (`test_pivy` 2/2). `FilePicker` is installed by both hosts: `cargo test -p ferrocad_shell_core` covers the path, bytes, delegated and error outcomes, and the browser smoke round trip (`?reopen=1`) plus `?keys=ctrl-o` still pass with the shell owning the ids. |
 | S7 | `cargo check -p ferrocad_shell_js --target wasm32-unknown-unknown` passes and its graph has no native-only edge; a browser page registers one JS command and receives one document event; no panic in the console. |
 | S8 | `cargo check -p ferrocad_shell_pywasm --target wasm32-unknown-unknown` passes; `properties()` from a wasm interpreter over the sample document. |
 
@@ -655,10 +672,11 @@ Open questions:
    ships, split `PythonAppBackend` out of `ferrocad_shell_gpui` into
    `ferrocad_shell_python` first, so the pure-Rust binary links no CPython at all
    (§4.3).
-2. Does the browser keep `App_Open`/`App_Save` inside the backend after S6's
-   `FilePicker`, or does the shell own the ids on both platforms? The picker
-   abstraction assumes the shell owns them; that is one behaviour change to the
-   browser smoke conventions.
+2. **Answered in S6:** the shell owns `App_Open`/`App_Save` on both platforms and
+   asks the installed `FilePicker`. The browser's picker delegates to the page, so
+   the page still owns the `<input>` and the download; the difference is that the
+   shell, not the backend, runs the verb. The browser smoke conventions
+   (`?reopen=1`, `?keys=ctrl-o`) are unchanged.
 3. Should `overlays()` return `ferrocad_stage` items directly (S6) or keep
    `ferrocad_inventor::Scene` and convert in the viewport? The former removes the
    last `ferrocad_inventor` dependency from `AppBackend`; the latter is a smaller diff.

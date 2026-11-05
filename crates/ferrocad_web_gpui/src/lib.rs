@@ -57,17 +57,9 @@ pub fn main() {
         // there is nothing to fall back to.
         ferrocad_shell_core::fonts::install(cx);
         // The engine: the real document, over the wasm OCCT kernel. Boot reads it,
-        // so it must be installed first. The page owns the file picker and the
-        // download; the backend asks it through these two hooks.
-        ferrocad_shell_core::app::install_backend(
-            cx,
-            Box::new(RustAppBackend::new().with_file_hooks(
-                || crate::host::request_open().map_err(|error| format!("{error:?}")),
-                |name, bytes| {
-                    crate::host::download(name, bytes).map_err(|error| format!("{error:?}"))
-                },
-            )),
-        );
+        // so it must be installed first. The file verbs are the shell's, so the
+        // backend needs nothing else.
+        ferrocad_shell_core::app::install_backend(cx, Box::new(RustAppBackend::new()));
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {
             Ok(model) => model,
@@ -87,6 +79,11 @@ pub fn main() {
         let slot = shell_slot.clone();
         let window = cx.open_window(window_options(), move |window, cx| {
             let shell = cx.new(|cx| ferrocad_shell_core::Shell::from_model(model, cx));
+            // The page owns the `<input type=file>` and the download; install its
+            // picker before the first Open/Save can run.
+            shell.update(cx, |shell, _cx| {
+                shell.set_file_picker(Box::new(host::WebFilePicker))
+            });
             // The viewport: the element itself is the shell's, and on the web its
             // renderer is the presenter's (see `Shell::enable_viewport`).
             shell.update(cx, |shell, cx| shell.enable_viewport(cx));

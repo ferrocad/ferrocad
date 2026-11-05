@@ -88,11 +88,6 @@ pub struct RustAppBackend {
     state: RefCell<State>,
     /// Why the sample document could not be built, if it could not.
     boot_error: Option<String>,
-    /// The host's file picker, when it has one (a browser page owns its `<input
-    /// type=file>` and its download). A native host leaves them out: its shell
-    /// intercepts `App_Open`/`App_Save` and prompts for a path itself.
-    open: Option<Box<dyn Fn() -> Result<(), String>>>,
-    save: Option<Box<dyn Fn(&str, &[u8]) -> Result<(), String>>>,
 }
 
 impl RustAppBackend {
@@ -122,25 +117,7 @@ impl RustAppBackend {
                 move_dialogs: 0,
             }),
             boot_error,
-            open: None,
-            save: None,
         }
-    }
-
-    /// Give the backend the host's half of `App_Open` and `App_Save`.
-    ///
-    /// `open` asks the host to let the user choose a file; `save` hands it the name
-    /// and bytes to write. The browser installs both (see `ferrocad_web_gpui`); a
-    /// desktop or headless host leaves them out, and the shell's own prompts are the
-    /// only file path there.
-    pub fn with_file_hooks<O, S>(mut self, open: O, save: S) -> Self
-    where
-        O: Fn() -> Result<(), String> + 'static,
-        S: Fn(&str, &[u8]) -> Result<(), String> + 'static,
-    {
-        self.open = Some(Box::new(open));
-        self.save = Some(Box::new(save));
-        self
     }
 
     /// The document's object for an internal name.
@@ -542,56 +519,8 @@ impl AppBackend for RustAppBackend {
     }
 
     fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String> {
-        // The file verbs are the host's half of I/O: a browser owns the picker and
-        // the download, the backend owns the bytes. A host with no picker installs no
-        // hooks, and its shell intercepts both verbs before they reach a backend.
-        if id == catalog::OPEN {
-            let status = match &self.open {
-                Some(open) => open(),
-                None => Err("this host owns the file dialog".to_string()),
-            };
-            return Ok(match status {
-                Ok(()) => CommandOutcome {
-                    ok: true,
-                    status: "open: choose a .FCStd file".to_string(),
-                    ..Default::default()
-                },
-                Err(error) => CommandOutcome {
-                    ok: false,
-                    error: format!("open: {error}"),
-                    ..Default::default()
-                },
-            });
-        }
-        if id == catalog::SAVE {
-            let name = self.state.borrow().name.clone();
-            let Some(download) = &self.save else {
-                return Ok(CommandOutcome {
-                    ok: false,
-                    error: "save: this host owns the file dialog".to_string(),
-                    ..Default::default()
-                });
-            };
-            return Ok(match self.save_document() {
-                Ok(bytes) => match download(&name, &bytes) {
-                    Ok(()) => CommandOutcome {
-                        ok: true,
-                        status: format!("saved {name} ({} bytes)", bytes.len()),
-                        ..Default::default()
-                    },
-                    Err(error) => CommandOutcome {
-                        ok: false,
-                        error: format!("save: {error}"),
-                        ..Default::default()
-                    },
-                },
-                Err(error) => CommandOutcome {
-                    ok: false,
-                    error,
-                    ..Default::default()
-                },
-            });
-        }
+        // `App_Open`/`App_Save` never arrive here: the shell owns both ids and asks
+        // the host's `FilePicker` (S6). A backend only moves bytes.
         let mut state = self.state.borrow_mut();
         let state = &mut *state;
         // The two object verbs are not view toggles: they hand the shell a session

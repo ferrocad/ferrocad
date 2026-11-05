@@ -24,10 +24,9 @@
 //! followed by a recompute, the undo history and file I/O at the byte level.
 //!
 //! Not yet: expressions, binary file I/O, and anything scripted — there is no
-//! interpreter in this crate, so `evaluate` says so rather than pretending. A
-//! browser host owns the file picker and the download; it installs
-//! [`RustAppBackend::with_file_hooks`] for the two file verbs, and a native host
-//! leaves them out because its shell intercepts `App_Open`/`App_Save` itself.
+//! interpreter in this crate, so `evaluate` says so rather than pretending. The two
+//! file verbs are the **shell's**: a host installs a `FilePicker`, and this backend
+//! only moves bytes (`open_document`/`save_document`).
 
 pub mod backend;
 

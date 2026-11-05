@@ -164,8 +164,9 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   the bytes the page would have downloaded, and opens them through the file seam:
   `opened Sample (2 object(s))`. The tree, the stage, the title and the status line all
   come from the decoded document, and the selection is cleared. `?keys=ctrl-o` reaches
-  the page bridge (`open requested`) — the picker, the download and drag-and-drop are
-  the page's half.
+  the page bridge (`open requested`). The shell owns both verbs (S6) and asks this
+  host's `WebFilePicker`, which delegates to the page: the `<input>`, the download and
+  drag-and-drop are the page's half.
 - No panic. Startup logs two
   `Scissor Rect … is not contained in the render target` validation errors from
   `gpui_wgpu` while the DOM canvas is still being sized (and the resize poll timeout

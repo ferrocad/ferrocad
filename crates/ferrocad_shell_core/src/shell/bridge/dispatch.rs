@@ -239,13 +239,13 @@ impl Shell {
             cx.notify();
             return;
         }
-        // Open and Save are **file** verbs: the host owns the dialog and the
-        // filesystem, the backend only moves bytes. The browser host implements the
-        // same pair with its own file input and download, so this arm is native-only.
+        // Open and Save are **file** verbs: the host owns the picker and the
+        // filesystem, the backend only moves bytes. The shell owns both ids on every
+        // platform and asks the installed `FilePicker`; a browser's picker delegates,
+        // and the page calls `Shell::open_document` when the user has chosen a file.
         // They are intercepted before the context gate because replacing a document
         // rolls a pending move back (`Shell::replace_document`), exactly as `Esc`
         // would, rather than refusing the open.
-        #[cfg(not(target_family = "wasm"))]
         if id == crate::shell::files::OPEN || id == crate::shell::files::SAVE {
             if id == crate::shell::files::OPEN {
                 self.prompt_open(cx);

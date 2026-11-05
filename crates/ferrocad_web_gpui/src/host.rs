@@ -1,15 +1,17 @@
 //! The browser host's half of file I/O, and the handle a page callback re-enters.
 //!
 //! Rust cannot open a file picker or trigger a download, so `www/index.html` owns both.
-//! This module is the one place the backend and the page meet: the backend calls the
-//! page to ask for a file or to deliver bytes, and the page calls
-//! [`ferrocad_open`] once it has read a file. Replacing the document needs the GPUI
-//! app, so the window installs an [`AsyncApp`] and a weak shell handle here at boot.
+//! This module is the one place the backend and the page meet: the shell's
+//! [`WebFilePicker`] asks the page for a file (open) or hands it bytes (save), and the
+//! page calls [`ferrocad_open`] once it has read a file. Replacing the document needs
+//! the GPUI app, so the window installs an [`AsyncApp`] and a weak shell handle here at
+//! boot.
 
 use std::cell::RefCell;
 
 use ferrocad_shell_core::Shell;
-use gpui::{AsyncApp, WeakEntity};
+use ferrocad_shell_core::files::{FilePicker, FileTask, OpenOutcome, SaveOutcome};
+use gpui::{App, AsyncApp, WeakEntity};
 use wasm_bindgen::prelude::*;
 
 /// Page functions, defined by `www/index.html` before the module's entry point runs.
@@ -32,6 +34,33 @@ pub fn request_open() -> Result<(), JsValue> {
 /// Hand the page bytes to save as a file.
 pub fn download(name: &str, bytes: &[u8]) -> Result<(), JsValue> {
     js_download(name, bytes)
+}
+
+/// The page's file picker, as the shell's [`FilePicker`].
+///
+/// Open and save both **delegate**: the page owns the `<input type=file>` and the
+/// download, and a user gesture cannot be awaited across the wasm boundary. Save's
+/// bytes come back through [`FilePicker::deliver`], and open's document arrives through
+/// [`ferrocad_open`].
+pub struct WebFilePicker;
+
+impl FilePicker for WebFilePicker {
+    fn open(&mut self, _cx: &App) -> FileTask<Result<OpenOutcome, String>> {
+        // The request runs now, in the same tick as the click or accelerator: the page
+        // needs an active user gesture to open its picker.
+        let result = request_open().map_err(|error| format!("open: {error:?}"));
+        Box::pin(async move { result.map(|()| OpenOutcome::Delegated) })
+    }
+
+    fn save(&mut self, _cx: &App, _suggested: &str) -> FileTask<Result<SaveOutcome, String>> {
+        // A download needs no picker; the shell serializes the document and calls
+        // `deliver`. The suggested name is already the document's.
+        Box::pin(async { Ok(SaveOutcome::Delegated) })
+    }
+
+    fn deliver(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        download(name, bytes).map_err(|error| format!("download: {error:?}"))
+    }
 }
 
 /// The live app and shell, so a page callback can re-enter GPUI.

@@ -77,6 +77,7 @@ pub(crate) use context::Action;
 pub(crate) use loadout::{Loadout, SelectFilter, Slot};
 
 mod render;
+mod timing;
 use render::*;
 // `dev_tools.rs` renders the body through the shell module path.
 pub(crate) use render::dev_tools_body;
@@ -1661,6 +1662,7 @@ fn gpu_notice_banner(note: String, cx: &mut Context<Shell>) -> AnyElement {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let timing = timing::start();
         // A script's transient previews (S4.6) change without a document edit; the
         // generation check is a mutex read, and only a real change rebuilds the stage.
         self.sync_previews(cx);
@@ -1668,6 +1670,10 @@ impl Render for Shell {
         let model = self.snapshot();
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);
+        // Everything above take the model's lock and sync state; everything below is
+        // element building. They are the two halves `layout` cannot separate (see
+        // `timing`).
+        let timing_prep = timing::mark(timing);
 
         // A palette that closed hands the keyboard back before a dialog it may have
         // opened takes it (that run is deferred to the `focus_dialog` block below).
@@ -1992,7 +1998,9 @@ impl Render for Shell {
         // menu belongs. The Dev Tools window passes no leading element.
         let leading = crate::chrome::app_menu(self.popover_open("app"), &model, dev_tools_open, cx)
             .into_any_element();
-        window_frame_with_leading(window, model.title.clone(), Some(leading), body)
+        let frame = window_frame_with_leading(window, model.title.clone(), Some(leading), body);
+        timing::finish(timing, timing_prep);
+        frame
     }
 }
 

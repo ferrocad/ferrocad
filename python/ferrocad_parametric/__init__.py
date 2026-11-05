@@ -84,7 +84,7 @@ def _display_mesh(obj):
         if shape.isNull():
             return None
         placement = getattr(obj, "Placement", None)
-        mesh = shape.mesh(matrix=_placement_matrix(placement, shape))
+        mesh = shape.mesh(matrix=_placement_matrix(placement, shape), binary=True)
         # The object's own origin (the placement's base point). The triad hugs it — an
         # origin indicator — and a rotate pivot turns about it.
         if placement is not None:

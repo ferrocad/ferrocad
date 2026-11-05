@@ -684,6 +684,32 @@ fn bake_placement(mesh: &mut ferrocad_geom::Tessellation, matrix: &Matrix4) {
     }
 }
 
+/// A `[[f32; 3]]` array as `bytes`: little-endian, three floats per point.
+///
+/// The display hook's rows cross into a host that reads them through the C API, so
+/// handing over one buffer beats building a Python tuple per point (and re-reading it).
+fn points_bytes<'py>(py: Python<'py>, points: &[[f32; 3]]) -> PyResult<Bound<'py, PyBytes>> {
+    PyBytes::new_with(py, points.len() * 12, |buffer| {
+        for (index, point) in points.iter().enumerate() {
+            for (axis, value) in point.iter().enumerate() {
+                let at = index * 12 + axis * 4;
+                buffer[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        Ok(())
+    })
+}
+
+/// A `[u32]` array as `bytes`, little-endian (indices, part ids).
+fn indices_bytes<'py>(py: Python<'py>, values: &[u32]) -> PyResult<Bound<'py, PyBytes>> {
+    PyBytes::new_with(py, values.len() * 4, |buffer| {
+        for (index, value) in values.iter().enumerate() {
+            buffer[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        Ok(())
+    })
+}
+
 /// Parse a positional element name (`Face2`) the way upstream's
 /// `shapeTypeAndIndex` does: a known kind prefix followed by a plain integer.
 ///
@@ -1483,13 +1509,20 @@ impl PartShape {
     /// a `.FCStd` has identity geometry and the saved placement on the object). The
     /// kernel bakes it here because doing it in the display hook — one
     /// `Placement.multVec` call per vertex — costs seconds on a large shape.
-    #[pyo3(signature = (deflection = 0.5, angular = 0.5, matrix = None))]
+    ///
+    /// `binary` packs the numeric arrays as `bytes` (little-endian `f32` triples for
+    /// `positions`, `u32` for the index arrays) instead of lists. A host that reads the
+    /// row through the C API gets one copy per array that way, rather than millions of
+    /// Python tuples and ints built here and parsed back. `FerroCAD.display_mesh` uses
+    /// it; `ferrocad_shell.stage_meshes` unpacks the same bytes for its JSON form.
+    #[pyo3(signature = (deflection = 0.5, angular = 0.5, matrix = None, binary = false))]
     fn mesh(
         &self,
         py: Python<'_>,
         deflection: f64,
         angular: f64,
         matrix: Option<Vec<f64>>,
+        binary: bool,
     ) -> PyResult<Py<PyAny>> {
         let shape = self
             .shape()
@@ -1511,6 +1544,17 @@ impl PartShape {
         }
 
         let dict = PyDict::new(py);
+        if binary {
+            dict.set_item("positions", points_bytes(py, &mesh.positions)?)?;
+            dict.set_item("triangles", indices_bytes(py, &mesh.triangles)?)?;
+            dict.set_item("triangle_parts", indices_bytes(py, &mesh.triangle_parts)?)?;
+            dict.set_item("edges", indices_bytes(py, &mesh.edges)?)?;
+            dict.set_item("segment_parts", indices_bytes(py, &mesh.segment_parts)?)?;
+            dict.set_item("vertices", indices_bytes(py, &mesh.vertices)?)?;
+            dict.set_item("vertex_parts", indices_bytes(py, &mesh.vertex_parts)?)?;
+            dict.set_item("parts", mesh.parts)?;
+            return Ok(dict.into_any().unbind());
+        }
         dict.set_item(
             "positions",
             PyList::new(py, mesh.positions.iter().map(|p| (p[0], p[1], p[2])))?,

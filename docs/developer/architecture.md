@@ -403,7 +403,7 @@ module is imported:
 
 | Hook | Provider | Used by |
 | --- | --- | --- |
-| `FerroCAD.register_display_provider(f)` → `FerroCAD.display_mesh(obj)` | `f(obj) -> tessellation dict or None` | the viewport stage (`ferrocad_shell.stage_meshes`) |
+| `FerroCAD.register_display_provider(f)` → `FerroCAD.display_mesh(obj)` | `f(obj) -> tessellation dict or None` (`positions` and the index arrays may be packed `bytes`) | the viewport stage (`ferrocad_shell.stage_meshes`) |
 | `FerroCAD.register_interaction_provider(f)` → `FerroCAD.interaction(obj, manipulator, action, element, values)` | `f(obj, manipulator, action, element, values) -> {"ok": …} or None` | a manipulator commit (`ferrocad_shell.interaction`) |
 
 A provider returns `None` for a request it does not own; the shell asks each in turn.

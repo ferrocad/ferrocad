@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
+use pyo3::types::{PyAnyMethods, PyBytes, PyBytesMethods, PyDict, PyDictMethods};
 use serde::Deserialize;
 
 use ferrocad_inventor::{Directives, Event, Hit, Scene};
@@ -351,12 +351,12 @@ fn stage_mesh_from_row(row: &Bound<'_, PyDict>) -> Result<StageMesh, String> {
         label: optional::<String>(row, "label")?.unwrap_or_default(),
         positions: points(row, "positions")?,
         normals: points(row, "normals")?,
-        triangles: optional(row, "triangles")?.unwrap_or_default(),
-        triangle_parts: optional(row, "triangle_parts")?.unwrap_or_default(),
-        edges: optional(row, "edges")?.unwrap_or_default(),
-        segment_parts: optional(row, "segment_parts")?.unwrap_or_default(),
-        vertices: optional(row, "vertices")?.unwrap_or_default(),
-        vertex_parts: optional(row, "vertex_parts")?.unwrap_or_default(),
+        triangles: indices(row, "triangles")?,
+        triangle_parts: indices(row, "triangle_parts")?,
+        edges: indices(row, "edges")?,
+        segment_parts: indices(row, "segment_parts")?,
+        vertices: indices(row, "vertices")?,
+        vertex_parts: indices(row, "vertex_parts")?,
         parts: optional(row, "parts")?.unwrap_or_default(),
         origin: fixed::<3>(row, "origin")?,
         color: fixed::<4>(row, "color")?,
@@ -388,16 +388,38 @@ fn optional<'py, T: FromPyObject<'py>>(
     }
 }
 
-/// An `[[f32; 3]]` field: a sequence of points, each a `(x, y, z)` tuple or list.
+/// An `[[f32; 3]]` field: a sequence of points, each a `(x, y, z)` tuple or list,
+/// or `bytes` of packed little-endian `f32`s (three per point).
 ///
 /// The Part hook emits tuples and a mod may emit lists, and PyO3's tuple extraction is
-/// strict, so each point is read as a sequence of floats.
+/// strict, so each point is read as a sequence of floats. A hook whose kernel already
+/// holds the arrays can hand them over packed (`Shape.mesh(binary=True)`) and skip
+/// building a Python object per point.
 fn points(row: &Bound<'_, PyDict>, key: &str) -> Result<Vec<[f32; 3]>, String> {
     let Some(value) = row.get_item(key).map_err(|e| e.to_string())? else {
         return Ok(Vec::new());
     };
     if value.is_none() {
         return Ok(Vec::new());
+    }
+    if let Ok(packed) = value.downcast::<PyBytes>() {
+        let bytes = packed.as_bytes();
+        if bytes.len() % 12 != 0 {
+            return Err(format!(
+                "stage_meshes: {key}: packed points need 12 bytes each, got {}",
+                bytes.len()
+            ));
+        }
+        return Ok(bytes
+            .chunks_exact(12)
+            .map(|point| {
+                [
+                    f32::from_le_bytes([point[0], point[1], point[2], point[3]]),
+                    f32::from_le_bytes([point[4], point[5], point[6], point[7]]),
+                    f32::from_le_bytes([point[8], point[9], point[10], point[11]]),
+                ]
+            })
+            .collect());
     }
     let mut points = Vec::new();
     for point in value.try_iter().map_err(|e| e.to_string())? {
@@ -414,6 +436,32 @@ fn points(row: &Bound<'_, PyDict>, key: &str) -> Result<Vec<[f32; 3]>, String> {
         points.push([x, y, z]);
     }
     Ok(points)
+}
+
+/// A `[u32]` field: a sequence of ints, or `bytes` of packed little-endian `u32`s.
+fn indices(row: &Bound<'_, PyDict>, key: &str) -> Result<Vec<u32>, String> {
+    let Some(value) = row.get_item(key).map_err(|e| e.to_string())? else {
+        return Ok(Vec::new());
+    };
+    if value.is_none() {
+        return Ok(Vec::new());
+    }
+    if let Ok(packed) = value.downcast::<PyBytes>() {
+        let bytes = packed.as_bytes();
+        if bytes.len() % 4 != 0 {
+            return Err(format!(
+                "stage_meshes: {key}: packed indices need 4 bytes each, got {}",
+                bytes.len()
+            ));
+        }
+        return Ok(bytes
+            .chunks_exact(4)
+            .map(|value| u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+            .collect());
+    }
+    value
+        .extract()
+        .map_err(|e| format!("stage_meshes: {key}: {e}"))
 }
 
 /// A fixed-length float field (`origin` is 3, `color` is 4).

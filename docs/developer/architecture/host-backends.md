@@ -272,15 +272,17 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
 
 ## 10. Known costs and what is deferred
 
-- **The CPython mesh hop, half fixed.** The host no longer round-trips the scene through
-  JSON: `ferrocad_shell_python::python::stage_meshes` calls `stage_meshes_typed` and
-  reads the rows through PyO3, while `stage_meshes()` keeps returning the JSON string
-  for scripts and the docs tooling. What remains is the *producer*: `FerroCAD.display_mesh`
-  still returns Python lists of tuples, so every coordinate is still a `PyFloat` before
-  Rust sees it. Emitting the arrays as buffers (`bytes`/`memoryview`) from
-  `ferrocad_part_py` is the next step, and it is what makes the hop independent of the
-  triangle count. The cost is paid per edit — a drag preview repaints from the cached
-  stage — not per frame.
+- **The CPython mesh hop, closed.** The host no longer round-trips the scene through
+  JSON, and the producer no longer builds a Python object per number:
+  `ferrocad_shell_python::python::stage_meshes` calls `stage_meshes_typed` and reads
+  the rows through PyO3, and a provider may pack its arrays as `bytes` — the Part hook
+  does, through `Shape.mesh(binary=True)` (`f32` triples for `positions`, `u32` for the
+  index arrays). `stage_meshes()` and the docs tooling still get the JSON shape, because
+  the text path unpacks the same buffers. What remains is the *kernel* side: the
+  tessellation copy-out in `ferrocad_occt` is serial and walks OCCT's triangulation
+  node by node, and it now dominates a sync. Progressive tessellation (draw coarse,
+  refine) is the next step; the cost is paid per edit — a drag preview repaints from
+  the cached stage — not per frame.
 - **CPU picking on wasm.** The fallback transforms every vertex of every packet into a
   fresh buffer, then scans every triangle, with no bounding-box pre-reject or BVH. Fine
   for the sample; the first thing to fix when a large model runs in the browser.

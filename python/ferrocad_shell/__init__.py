@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import pathlib
+import struct
 import sys
 import traceback
 
@@ -555,7 +556,10 @@ def _stage_mesh_rows() -> list:
     """The rows behind :func:`stage_meshes`, as Python objects.
 
     Built once: :func:`stage_meshes` serializes them for scripts and the docs
-    tooling, and :func:`stage_meshes_typed` hands them to the Rust host as-is.
+    tooling, and :func:`stage_meshes_typed` hands them to the Rust host as-is. A
+    provider may pack its numeric arrays as `bytes` (the Part hook does, through
+    ``Shape.mesh(binary=True)``); the host reads those through the C API, and
+    :func:`_expand_packed_arrays` unpacks them for the text form.
     """
     try:
         doc = _active_doc()
@@ -594,7 +598,40 @@ def stage_meshes() -> str:
     skips the ``json.dumps``. This form stays for scripts and the docs tooling, which
     parse text (``tools/workflows/04_toy_workbench.py``).
     """
-    return _json(_stage_mesh_rows())
+    return _json([_expand_packed_arrays(row) for row in _stage_mesh_rows()])
+
+
+# The row arrays an optimised provider may pack as `bytes` (little-endian `f32`
+# triples for the point arrays, `u32` for the index arrays).
+_POINT_ARRAYS = ("positions", "normals")
+_INDEX_ARRAYS = (
+    "triangles",
+    "triangle_parts",
+    "edges",
+    "segment_parts",
+    "vertices",
+    "vertex_parts",
+)
+
+
+def _expand_packed_arrays(row: dict) -> dict:
+    """A row with any packed arrays unpacked into lists of numbers.
+
+    ``stage_meshes_typed`` hands the host ``bytes`` when the provider produced them
+    that way, because one buffer beats a Python object per number on a large
+    tessellation. ``stage_meshes`` promises the JSON shape either way, so the text
+    path unpacks here.
+    """
+    for key in _POINT_ARRAYS:
+        data = row.get(key)
+        if isinstance(data, bytes):
+            numbers = struct.unpack(f"<{len(data) // 4}f", data)
+            row[key] = [numbers[i : i + 3] for i in range(0, len(numbers), 3)]
+    for key in _INDEX_ARRAYS:
+        data = row.get(key)
+        if isinstance(data, bytes):
+            row[key] = list(struct.unpack(f"<{len(data) // 4}I", data))
+    return row
 
 
 def stage_meshes_typed() -> list:
@@ -602,7 +639,8 @@ def stage_meshes_typed() -> list:
 
     ``ferrocad_shell_python`` calls this through PyO3. Going through ``json.dumps``
     here and ``serde_json`` in Rust turned every coordinate into text and back, which
-    is the cost that grows with the triangle count; the row shape is unchanged.
+    is the cost that grows with the triangle count; the row shape is unchanged, except
+    that a provider may pack its arrays as ``bytes`` for the host to read directly.
     """
     return _stage_mesh_rows()
 

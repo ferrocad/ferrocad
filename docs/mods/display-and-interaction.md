@@ -78,6 +78,11 @@ Notes:
   them for picking but does not draw points from them (`show_vertices` is off in
   `DisplaySync`).
 - `color` and `display` are presentation only; they never affect the document.
+- A provider whose geometry already lives in Rust may pack the numeric arrays as
+  `bytes` instead of lists — little-endian `f32` triples for `positions`/`normals`,
+  `u32` for the index arrays — and the host reads them straight from the buffer.
+  `Part.Shape.mesh(binary=True)` does this; `stage_meshes()` still unpacks them for
+  its JSON form, so a script sees the lists either way.
 
 ### How the shell consumes it
 

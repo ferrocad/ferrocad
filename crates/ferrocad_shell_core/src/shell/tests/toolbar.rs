@@ -105,7 +105,7 @@ fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppCont
     let wp = cx.debug_bounds("wp-label").expect("the WP label");
     assert!(
         cx.debug_bounds("wp-state-dot").is_none(),
-        "the default world XY plane shows no dot"
+        "the icon ink carries the workplane state, not a dot"
     );
     assert!(grid.origin.x < axis.origin.x);
     assert!(axis.origin.x < wp.origin.x);
@@ -145,8 +145,8 @@ fn the_grid_split_button_runs_the_label_and_the_caret_opens(cx: &mut TestAppCont
         );
     }
     assert!(
-        cx.debug_bounds("grid-state-dot").is_some(),
-        "the Grid control carries a persistent on/off dot"
+        cx.debug_bounds("grid-state-dot").is_none(),
+        "the Grid icon ink carries the on/off state"
     );
 
     // The caret opens the grid popover and does not toggle the grid.
@@ -339,10 +339,10 @@ if "App_ReloadAxisSettings" not in FreeCADGui.listCommands():
     }
     draw(&mut cx);
 
-    // The split button carries its own persistent on/off dot.
+    // The split button carries its on/off state in the glyph ink.
     assert!(
-        cx.debug_bounds("axis-state-dot").is_some(),
-        "the Axes control carries a state dot"
+        cx.debug_bounds("axis-state-dot").is_none(),
+        "the Axes icon ink carries the state"
     );
     assert!(cx.debug_bounds("axis-label").is_some());
     assert!(cx.debug_bounds("axis-caret").is_some());
@@ -457,8 +457,8 @@ fn the_snap_control_lives_in_the_header_and_not_the_dock(cx: &mut TestAppContext
         "the pill owns the Snap control"
     );
     assert!(
-        cx.debug_bounds("snap-state-dot").is_some(),
-        "the Snap control carries a persistent on/off dot"
+        cx.debug_bounds("snap-state-dot").is_none(),
+        "the Snap icon ink carries the on/off state"
     );
 
     // The six modes are on the snap surface and parented to the switch, so the

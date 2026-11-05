@@ -160,12 +160,8 @@ fn paint_fill_alpha(window: &mut Window, builder: PathBuilder, color: u32, alpha
 }
 
 fn paint_stroke(window: &mut Window, builder: PathBuilder, color: u32) {
-    paint_stroke_alpha(window, builder, color, 0xff);
-}
-
-fn paint_stroke_alpha(window: &mut Window, builder: PathBuilder, color: u32, alpha: u32) {
     if let Ok(path) = builder.build() {
-        window.paint_path(path, rgba((color << 8) | alpha));
+        window.paint_path(path, rgba(color));
     }
 }
 
@@ -201,25 +197,29 @@ fn paint_grid(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
 
 fn paint_axes(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
     let at = scaler(bounds);
-    let alpha = if active { 0xff } else { 0xb3 };
+    let (x_col, y_col, z_col) = if active {
+        (AXIS_X, AXIS_Y, AXIS_Z)
+    } else {
+        (MUTED, MUTED, MUTED)
+    };
 
     let mut x = PathBuilder::stroke(px(1.25));
     x.add_polygon(&[at(4.5, 11.5), at(13.0, 11.5)], false);
     x.add_polygon(&[at(13.0, 11.5), at(11.4, 10.9)], false);
     x.add_polygon(&[at(13.0, 11.5), at(11.4, 12.1)], false);
-    paint_stroke_alpha(window, x, AXIS_X, alpha);
+    paint_stroke(window, x, x_col);
 
     let mut y = PathBuilder::stroke(px(1.25));
     y.add_polygon(&[at(4.5, 11.5), at(4.5, 3.0)], false);
     y.add_polygon(&[at(4.5, 3.0), at(3.9, 4.6)], false);
     y.add_polygon(&[at(4.5, 3.0), at(5.1, 4.6)], false);
-    paint_stroke_alpha(window, y, AXIS_Y, alpha);
+    paint_stroke(window, y, y_col);
 
     let mut z = PathBuilder::stroke(px(1.25));
     z.add_polygon(&[at(4.5, 11.5), at(10.5, 6.5)], false);
     z.add_polygon(&[at(10.5, 6.5), at(9.2, 7.2)], false);
     z.add_polygon(&[at(10.5, 6.5), at(10.8, 8.1)], false);
-    paint_stroke_alpha(window, z, AXIS_Z, alpha);
+    paint_stroke(window, z, z_col);
 }
 
 fn paint_workplane(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
@@ -238,17 +238,17 @@ fn paint_workplane(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Wind
 fn paint_gizmo(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
     let at = scaler(bounds);
     let scale = bounds.size.width.0.min(bounds.size.height.0) / DESIGN;
-    let alpha = if active { 0xff } else { 0xb3 };
     let handle = ink(active);
+    let (x_col, y_col, z_col) = if active {
+        (AXIS_X, AXIS_Y, AXIS_Z)
+    } else {
+        (MUTED, MUTED, MUTED)
+    };
 
-    for (x, y, colour) in [
-        (13.0, 11.0, AXIS_X),
-        (5.0, 3.0, AXIS_Y),
-        (10.5, 6.5, AXIS_Z),
-    ] {
+    for (x, y, colour) in [(13.0, 11.0, x_col), (5.0, 3.0, y_col), (10.5, 6.5, z_col)] {
         let mut line = PathBuilder::stroke(px(1.25));
         line.add_polygon(&[at(5.0, 11.0), at(x, y)], false);
-        paint_stroke_alpha(window, line, colour, alpha);
+        paint_stroke(window, line, colour);
 
         let mut square = PathBuilder::fill();
         square.add_polygon(

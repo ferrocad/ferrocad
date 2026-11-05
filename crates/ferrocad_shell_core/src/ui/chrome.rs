@@ -886,7 +886,7 @@ fn split_button(
     info: Vec<PopoverInfo>,
     providers: Vec<PopoverRow>,
     anchor: Option<Point<Pixels>>,
-    state_dot: bool,
+    stateful: bool,
     command: &CommandInfo,
     model: &ShellModel,
     cx: &mut Context<Shell>,
@@ -907,7 +907,7 @@ fn split_button(
         rows = combined;
     }
     split_button_with_rows(
-        key, label, primary, open, info, rows, anchor, state_dot, command, cx,
+        key, label, primary, open, info, rows, anchor, stateful, command, cx,
     )
 }
 
@@ -924,15 +924,14 @@ fn split_button_with_rows(
     info: Vec<PopoverInfo>,
     rows: Vec<PopoverRow>,
     anchor: Option<Point<Pixels>>,
-    state_dot: bool,
+    stateful: bool,
     command: &CommandInfo,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let label: SharedString = label.into();
-    // Dielectric: the pill's glass is the surface and the 6 px state dot carries
-    // on/off in `ACTIVE_ACCENT` (one ink with the popover rows). A checked control
-    // used to fill with `ACCENT`, which pulled the eye away from the model (the
-    // NaviCube bar is the reference look).
+    // Dielectric: the pill's glass is the surface and the glyph ink carries on/off
+    // (greyscale off, colour on). A checked control used to fill with `ACCENT`,
+    // which pulled the eye away from the model (the NaviCube bar is the reference look).
     let mut control = div()
         .relative()
         .flex()
@@ -952,16 +951,6 @@ fn split_button_with_rows(
     let mut row = div().flex().flex_row().items_center().gap_1();
     if let Some(glyph) = glyph {
         row = row.child(glyph);
-    }
-    if state_dot {
-        row = row.child(
-            div()
-                .debug_selector(move || format!("{key}-state-dot"))
-                .w(px(6.))
-                .h(px(6.))
-                .rounded_full()
-                .bg(rgb(if command.checked { ACTIVE_ACCENT } else { MUTED })),
-        );
     }
     row = row.child(label.clone());
     let mut label_control = div()
@@ -986,9 +975,9 @@ fn split_button_with_rows(
                 this.run_command(primary, cx);
             }
         }));
-    if state_dot {
-        // The dot is the persistent on/off cue; the tooltip states it in words on
-        // hover (the report was that hovering gave no indication).
+    if stateful {
+        // The glyph ink is the on/off cue; the tooltip states it in words on hover
+        // (the report was that hovering gave no indication).
         let tip: SharedString = format!(
             "{}: {}",
             label,
@@ -2106,8 +2095,8 @@ mod tests {
             "Select sits between Gizmo and Snap"
         );
         assert!(
-            cx.debug_bounds("gizmo-state-dot").is_some(),
-            "the pill carries the on/off dot"
+            cx.debug_bounds("gizmo-state-dot").is_none(),
+            "the icon ink replaces the state dot"
         );
 
         click_at(&mut cx, "gizmo-caret");

@@ -82,6 +82,23 @@ semantic channel the renderer ignores and the viewport consumes (see
   `supports_pick`/`pick_at` make the window-device G-buffer authoritative, so an empty
   hit does not run a second pass. Hover, button events and tool dispatch all use that
   one pick. The paths agree on the object id and `part`.
+  - **A hover does not block on that pass.** `WgpuRenderer::pick_at` ends in a
+    device-wide `poll`, which on a live window also waits for the frame it just
+    presented: a 1×1 pick measured **40–60 ms** against a 6 ms draw, and a pick per
+    pointer move held the app at ~1 fps on the 1.25 M-triangle document. So
+    `Presenter::hover_pick_at` submits the pick and answers only once that pixel has
+    been read back (`Some(None)` = resolved empty space, `None` = still in flight), and
+    it submits at most one pick per painted frame — a hover can never be fresher than
+    the frame on screen, and the encode alone is ~3 ms against a mouse that reports
+    125 moves/s. `Presenter::hover_pick_pending` lets the viewport keep painting, and
+    re-dispatch the stored hover, until the answer lands, so a pointer that comes to
+    rest still gets its highlight and its face dwell. The viewport keeps the answer with
+    the pixel and camera it describes, so a click there reuses it instead of paying the
+    blocking wait again; anything that recompiles the scene drops it. A click elsewhere
+    keeps the blocking `pick_at`: it must act on the pixel it was released on. The pass
+    also scissors to the one texel it reads, and its three texels share one readback
+    buffer, one submission and one poll (three blocking polls per pick were the bulk of
+    the cost).
 - **Events** are `ferrocad_inventor::Event` (`MouseMove`/`MouseButton`/`MouseLeave`)
   delivered to an `EventListener` (`on_event(event, hit, scene, directives)`) — the
   `SoEventCallback` analogue. The listener may edit the scene and report whether it

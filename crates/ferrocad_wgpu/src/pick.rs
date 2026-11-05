@@ -257,42 +257,50 @@ fn f16_to_f32(bits: u16) -> f32 {
     sign * magnitude
 }
 
-/// Copy a single texel of `texture` back to the CPU as its raw bytes.
+/// The byte stride between texel slots in a readback buffer.
 ///
-/// `bytes_per_texel` is the format's texel size (4 or 8). wgpu requires
-/// `bytes_per_row` to be a multiple of [`wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`] even for a
-/// 1×1 copy, so the staging buffer strided at 256 bytes and only the first texel is read.
-pub fn read_texel(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    aspect: wgpu::TextureAspect,
-    bytes_per_texel: u32,
-    origin: wgpu::Origin3d,
-) -> Result<Vec<u8>, &'static str> {
-    debug_assert!(bytes_per_texel <= wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("ferrocad pick readback"),
-        size: u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+/// wgpu requires `bytes_per_row` to be a multiple of
+/// [`wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`] even for a 1×1 copy, so every slot is padded to
+/// 256 bytes and only its first texel is read. The same stride is a valid destination
+/// offset, which is what lets several texels share one buffer.
+pub const SLOT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("ferrocad pick readback"),
-    });
+/// One single-texel readback: where to copy from and how big a texel is.
+pub struct ReadTexel<'a> {
+    /// The texture to copy from.
+    pub texture: &'a wgpu::Texture,
+    /// The aspect to copy (colour targets use `All`).
+    pub aspect: wgpu::TextureAspect,
+    /// The format's texel size in bytes (4 or 8).
+    pub bytes_per_texel: u32,
+    /// The texel to copy.
+    pub origin: wgpu::Origin3d,
+}
+
+/// Encode a copy of `read` into slot `index` of `buffer`.
+///
+/// The caller owns the encoder and the submission: a pick that reads three texels writes
+/// all three into one buffer and pays one submit and one blocking poll (three polls were
+/// the bulk of a hover pick on a 1×1 readback).
+pub fn encode_texel_copy(
+    encoder: &mut wgpu::CommandEncoder,
+    buffer: &wgpu::Buffer,
+    index: usize,
+    read: &ReadTexel<'_>,
+) {
+    debug_assert!(read.bytes_per_texel <= SLOT);
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
-            texture,
+            texture: read.texture,
             mip_level: 0,
-            origin,
-            aspect,
+            origin: read.origin,
+            aspect: read.aspect,
         },
         wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
+            buffer,
             layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+                offset: u64::from(SLOT) * index as u64,
+                bytes_per_row: Some(SLOT),
                 rows_per_image: Some(1),
             },
         },
@@ -302,6 +310,31 @@ pub fn read_texel(
             depth_or_array_layers: 1,
         },
     );
+}
+
+/// Copy one texel of each texture back to the CPU as their raw bytes.
+///
+/// One buffer, one submission and one blocking poll for all of them.
+pub fn read_texels(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    reads: &[ReadTexel<'_>],
+) -> Result<Vec<Vec<u8>>, &'static str> {
+    if reads.is_empty() {
+        return Ok(Vec::new());
+    }
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("ferrocad pick readback"),
+        size: u64::from(SLOT) * reads.len() as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("ferrocad pick readback"),
+    });
+    for (index, read) in reads.iter().enumerate() {
+        encode_texel_copy(&mut encoder, &buffer, index, read);
+    }
     queue.submit(Some(encoder.finish()));
 
     let slice = buffer.slice(..);
@@ -313,10 +346,15 @@ pub fn read_texel(
     let view = slice
         .get_mapped_range()
         .map_err(|_| "mapped range unavailable")?;
-    let bytes = view[..bytes_per_texel as usize].to_vec();
+    let mut texels = Vec::with_capacity(reads.len());
+    for (index, read) in reads.iter().enumerate() {
+        let start = index * SLOT as usize;
+        let end = start + read.bytes_per_texel as usize;
+        texels.push(view.get(start..end).ok_or("short readback")?.to_vec());
+    }
     drop(view);
     buffer.unmap();
-    Ok(bytes)
+    Ok(texels)
 }
 
 #[cfg(test)]

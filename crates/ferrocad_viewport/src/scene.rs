@@ -110,16 +110,28 @@ impl EventListener for HoverHighlight {
         if now_hovered == self.hovered {
             return false;
         }
+        // A staged document draws from the stage, not from Inventor materials, so there is
+        // usually nothing here to recolour. Reporting a change regardless cost a full
+        // queue re-emit — ~570 ms on the 1.25 M-triangle document — on every hover change,
+        // for a colour nothing would read.
+        if !set_object_color(scene, if now_hovered { HOVER_COLOR } else { BASE_COLOR }) {
+            return false;
+        }
         self.hovered = now_hovered;
-        set_object_color(scene, if now_hovered { HOVER_COLOR } else { BASE_COLOR });
         true
     }
 }
 
-fn set_object_color(scene: &mut Scene, color: [f32; 4]) {
+/// Recolour every `Material` node; whether any of them actually changed.
+fn set_object_color(scene: &mut Scene, color: [f32; 4]) -> bool {
+    let mut changed = false;
     for child in &mut scene.root.children {
         if let NodeKind::Material(colors) = &mut child.kind {
-            *colors = vec![color];
+            if colors.len() != 1 || colors[0] != color {
+                *colors = vec![color];
+                changed = true;
+            }
         }
     }
+    changed
 }

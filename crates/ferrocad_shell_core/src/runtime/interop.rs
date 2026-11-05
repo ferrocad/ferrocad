@@ -551,6 +551,43 @@ impl Presenter for GpuiInteropPresenter {
         }
     }
 
+    fn hover_pick_at(
+        &mut self,
+        queue: &RenderQueue,
+        camera: &Camera,
+        device: [i32; 2],
+    ) -> Option<Option<Hit>> {
+        // Same guard as `pick_at`: a browser cannot complete a mapping on this turn, and
+        // `supports_pick` is false there anyway.
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = (queue, camera, device);
+            None
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if self.status != PresenterStatus::Ready {
+                return None;
+            }
+            // The deferred pick never blocks on the window device's queue.
+            self.renderer.as_mut()?.hover_pick_at(queue, camera, device)
+        }
+    }
+
+    fn hover_pick_pending(&self) -> bool {
+        // Same guard as `hover_pick_at`: a browser never has one in flight.
+        #[cfg(target_family = "wasm")]
+        {
+            false
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.hover_pick_pending())
+        }
+    }
+
     fn supports_pick(&self) -> bool {
         // A browser pick has no synchronous readback: the pick targets live on the GPU
         // and `map_async` only completes on a later event-loop turn. Reporting `false`

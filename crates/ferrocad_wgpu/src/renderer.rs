@@ -150,6 +150,20 @@ impl Targets {
     }
 }
 
+/// A submitted hover pick whose texels have not been read back yet.
+///
+/// See [`WgpuRenderer::hover_pick_at`]: the submission carries the camera and pointer it
+/// was drawn with, because the answer is decoded on a later call against the state that
+/// produced it, not against whatever the pointer is doing by then.
+struct HoverPick {
+    buffer: wgpu::Buffer,
+    /// The `map_async` result, sent once the readback has completed.
+    mapping: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    device: [i32; 2],
+    size: [u32; 2],
+    camera: Camera,
+}
+
 /// Draws compiled scenes with wgpu and exposes the result to a host.
 pub struct WgpuRenderer {
     context: GpuContext,
@@ -177,6 +191,30 @@ pub struct WgpuRenderer {
     /// The pick targets, allocated lazily on the first [`pick_at`](Self::pick_at) and
     /// dropped on resize (they track the target size).
     pick_targets: Option<PickTargets>,
+    /// The hover pick whose readback has been submitted but not yet read.
+    ///
+    /// At most one: the pointer has one position, and an unbounded queue of pick passes
+    /// would saturate the device instead of freeing it.
+    hover_pick: Option<HoverPick>,
+    /// The last resolved [`hover_pick_at`](Self::hover_pick_at) hit, and the pixel it
+    /// describes.
+    ///
+    /// `hover_hit: None` with `hover_answer_point: Some(_)` is resolved *empty space*.
+    hover_hit: Option<Hit>,
+    hover_answer_point: Option<[i32; 2]>,
+    /// Frames encoded ([`encode_views`](Self::encode_views)), and the frame the last
+    /// hover pick was submitted in.
+    ///
+    /// A hover can never be fresher than the frame on screen, so one pick per painted
+    /// frame is the most that can be shown — and at ~3 ms of encode per pick, one per
+    /// pointer move (a mouse reports 125/s) is the entire frame budget.
+    frames: u64,
+    picked_frame: Option<u64>,
+    /// The position the last hover pick asked about. A repeat hover there has nothing new
+    /// to learn, so it does not submit another pass — which is also what lets a repaint
+    /// re-dispatch the hover to collect a
+    /// [pending](Self::hover_pick_pending) answer without starting another one.
+    hover_point: Option<[i32; 2]>,
     /// The reusable readback staging buffer for the image path (dropped on resize).
     readback: Option<wgpu::Buffer>,
     /// The byte size [`readback`](Self::readback) was allocated for.
@@ -255,6 +293,12 @@ impl WgpuRenderer {
             mesh_cache: HashMap::new(),
             pick_pipelines,
             pick_targets: None,
+            hover_pick: None,
+            hover_hit: None,
+            hover_answer_point: None,
+            frames: 0,
+            picked_frame: None,
+            hover_point: None,
             readback: None,
             readback_bytes: 0,
         }
@@ -325,6 +369,12 @@ impl WgpuRenderer {
             self.targets.color_format,
         );
         self.pick_targets = None; // re-allocated at the new size on the next pick
+        // The hover answer described the old target size (its `decode_pick` uses the size
+        // it was drawn at); a pending pick still decodes correctly, but the next hover must
+        // not be suppressed as a repeat of a pixel that has moved.
+        self.hover_hit = None;
+        self.hover_answer_point = None;
+        self.hover_point = None;
         self.readback = None; // re-allocated at the new size on the next readback
         self.readback_bytes = 0;
         self.size = size;
@@ -641,6 +691,8 @@ impl WgpuRenderer {
         target: &wgpu::TextureView,
         views: &[ViewSpec<'_>],
     ) -> Result<wgpu::CommandBuffer, RenderError> {
+        // A hover pick may be at most one per painted frame: see the field docs.
+        self.frames = self.frames.wrapping_add(1);
         let total: u32 = views
             .iter()
             .map(|view| view.queue.packets.len() as u32)
@@ -848,6 +900,94 @@ impl WgpuRenderer {
         camera: &Camera,
         device: [i32; 2],
     ) -> Option<Hit> {
+        let started = std::time::Instant::now();
+        let encoder = self.encode_pick(queue, camera, device)?;
+        let encoded = started.elapsed();
+        self.context.queue.submit(Some(encoder.finish()));
+        let submitted = started.elapsed();
+
+        let targets = self.pick_targets.as_ref()?;
+        let origin = pick_origin(device, self.size);
+        let reads = pick_reads(targets, origin);
+        let texels = pick::read_texels(&self.context.device, &self.context.queue, &reads).ok()?;
+        let hit = decode_pick(
+            &texels[0], &texels[1], &texels[2], camera, device, self.size,
+        );
+
+        if timing_enabled() {
+            let total = started.elapsed();
+            // Only slow picks: a run is one line per pick, and this is diagnostic noise.
+            if total > std::time::Duration::from_millis(5) {
+                eprintln!(
+                    "ferrocad: pick detail: encode {:.1} ms, submit {:.1} ms, readback {:.1} ms",
+                    encoded.as_secs_f64() * 1000.0,
+                    (submitted - encoded).as_secs_f64() * 1000.0,
+                    (total - submitted).as_secs_f64() * 1000.0,
+                );
+            }
+        }
+        hit
+    }
+
+    /// The hover pick, resolved from an earlier submission instead of blocking.
+    ///
+    /// [`pick_at`](Self::pick_at) ends in a device-wide `poll`: on a live window that
+    /// wait also covers the frame's own GPU work, so a 1×1 pick measured 40–60 ms against
+    /// a 6 ms draw. A hover only needs *an* answer, not a synchronous one, so this submits
+    /// the same pass and reports `Some` only once that pixel has been resolved — never
+    /// blocking the input thread. A click still uses the blocking path: it must act on the
+    /// pixel it was released on.
+    ///
+    /// At most one pick is in flight and at most one is submitted per painted frame; see
+    /// the field docs for why both limits are needed.
+    pub fn hover_pick_at(
+        &mut self,
+        queue: &RenderQueue,
+        camera: &Camera,
+        device: [i32; 2],
+    ) -> Option<Option<Hit>> {
+        let started = std::time::Instant::now();
+        self.resolve_hover_pick();
+        let resolved = started.elapsed();
+        let due = self.hover_pick.is_none()
+            && self.hover_point != Some(device)
+            && self.picked_frame != Some(self.frames);
+        if due {
+            self.submit_hover_pick(queue, camera, device);
+        }
+        if timing_enabled() {
+            let total = started.elapsed();
+            // A hover is supposed to be free; this is the line that says otherwise.
+            if total > std::time::Duration::from_millis(2) {
+                eprintln!(
+                    "ferrocad: hover pick: resolve {:.1} ms, submit {:.1} ms",
+                    resolved.as_secs_f64() * 1000.0,
+                    (total - resolved).as_secs_f64() * 1000.0,
+                );
+            }
+        }
+        if self.hover_answer_point == Some(device) {
+            Some(self.hover_hit)
+        } else {
+            None
+        }
+    }
+
+    /// Whether a hover pick has been submitted and not read back yet.
+    pub fn hover_pick_pending(&self) -> bool {
+        self.hover_pick.is_some()
+    }
+
+    /// Encode the pick pass for `device`.
+    ///
+    /// `None` when the point is outside the target or there is nothing to pick; the
+    /// caller then has no texel to read.
+    fn encode_pick(
+        &mut self,
+        queue: &RenderQueue,
+        camera: &Camera,
+        device: [i32; 2],
+    ) -> Option<wgpu::CommandEncoder> {
         let [width, height] = self.size;
         let [x, y] = device;
         if x < 0 || y < 0 || x as u32 >= width || y as u32 >= height || queue.is_empty() {
@@ -881,11 +1021,12 @@ impl WgpuRenderer {
         }
         let targets = self.pick_targets.as_ref()?;
 
-        let mut encoder = self.context.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("ferrocad pick"),
-            },
-        );
+        let mut encoder =
+            self.context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("ferrocad pick"),
+                });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ferrocad pick pass"),
@@ -931,6 +1072,11 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // Only the texel under the cursor is read back, so rasterize only that
+            // texel: a pick runs on every hover, and covering the whole window makes it
+            // cost the scene's entire fill on top of the clear. The readback uses the
+            // same row flip, so the scissor sits on the texel it copies.
+            pass.set_scissor_rect(x as u32, height - 1 - y as u32, 1, 1);
             for (index, packet) in queue.packets.iter().enumerate() {
                 // A program draws a placeholder and is never pickable; an
                 // `SoPickStyle.UNPICKABLE` packet opts out too.
@@ -954,86 +1100,109 @@ impl WgpuRenderer {
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
         }
+        Some(encoder)
+    }
+
+    /// Submit a hover pick and start its readback, without waiting for either.
+    fn submit_hover_pick(&mut self, queue: &RenderQueue, camera: &Camera, device: [i32; 2]) {
+        self.hover_point = Some(device);
+        self.picked_frame = Some(self.frames);
+        let Some(mut encoder) = self.encode_pick(queue, camera, device) else {
+            // Off the target or nothing to pick: that *is* the answer for this pixel, and
+            // keeping the previous hit would highlight a scene that is no longer there.
+            self.hover_hit = None;
+            self.hover_answer_point = Some(device);
+            return;
+        };
+        let Some(targets) = self.pick_targets.as_ref() else {
+            return;
+        };
+        let reads = pick_reads(targets, pick_origin(device, self.size));
+        let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ferrocad hover pick readback"),
+            size: u64::from(pick::SLOT) * reads.len() as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        for (index, read) in reads.iter().enumerate() {
+            pick::encode_texel_copy(&mut encoder, &buffer, index, read);
+        }
         self.context.queue.submit(Some(encoder.finish()));
 
-        // `device` is bottom-left origin; the pick targets are top-left origin, so the
-        // copy row flips. The unprojection below uses the (unflipped) device pixel centre.
-        let origin = wgpu::Origin3d {
-            x: x as u32,
-            y: height - 1 - y as u32,
-            z: 0,
-        };
-        let (gpu_device, gpu_queue) = (&self.context.device, &self.context.queue);
-        let ids = pick::read_texel(
-            gpu_device,
-            gpu_queue,
-            &targets.id,
-            wgpu::TextureAspect::All,
-            8,
-            origin,
-        )
-        .ok()?;
-        let normals = pick::read_texel(
-            gpu_device,
-            gpu_queue,
-            &targets.normal,
-            wgpu::TextureAspect::All,
-            pick::NORMAL_FORMAT.block_copy_size(None).unwrap_or(8),
-            origin,
-        )
-        .ok()?;
-        let depths = pick::read_texel(
-            gpu_device,
-            gpu_queue,
-            &targets.depth,
-            wgpu::TextureAspect::All,
-            4,
-            origin,
-        )
-        .ok()?;
+        let slice = buffer.slice(..);
+        let (sender, mapping) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        self.hover_pick = Some(HoverPick {
+            buffer,
+            mapping,
+            device,
+            size: self.size,
+            camera: camera.clone(),
+        });
+    }
 
-        let entity_raw = read_u32(&ids)?;
-        if entity_raw == 0 {
-            // Empty space: the target was cleared to 0, and a hit always writes id + 1,
-            // so `PickId(0)` (the compiler's default) remains a valid hit.
-            return None;
+    /// Read back a hover pick that finished, without ever blocking.
+    fn resolve_hover_pick(&mut self) {
+        if self.hover_pick.is_none() {
+            return;
         }
-        let entity = entity_raw - 1;
-        let part = read_u32(&ids[4..])?;
-        let decoded = pick::read_normal(&normals, pick::NORMAL_FORMAT)?;
-        let normal = [decoded[0], decoded[1], decoded[2]];
-        let topology = topology_from_ordinal(decoded[3] as u32);
-        let depth = read_f32(&depths)?;
+        // Drive whatever callbacks are already ready; `Poll` returns immediately.
+        if self.context.device.poll(wgpu::PollType::Poll).is_err() {
+            self.hover_pick = None;
+            self.hover_hit = None;
+            self.hover_answer_point = None;
+            return;
+        }
+        let mapped = {
+            let pending = self.hover_pick.as_ref().expect("checked above");
+            match pending.mapping.try_recv() {
+                Ok(Ok(())) => Some(true),
+                Ok(Err(_)) => Some(false),
+                // A device loss drops the callback without sending.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(false),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            }
+        };
+        let Some(mapped) = mapped else {
+            return; // Still in flight: keep the previous answer and try again later.
+        };
+        let pending = self.hover_pick.take().expect("checked above");
+        if !mapped {
+            self.hover_hit = None;
+            self.hover_answer_point = None;
+            return;
+        }
 
-        let [width_f, height_f] = [f64::from(width), f64::from(height)];
-        let ndc = [
-            2.0 * (f64::from(x) + 0.5) / width_f - 1.0,
-            2.0 * (f64::from(y) + 0.5) / height_f - 1.0,
-            f64::from(depth),
-        ];
-        let inverse = camera.view_projection().inverse()?;
-        let point = unproject(&inverse, ndc);
-
-        // The G-buffer carries no ray parameter; the eye is the view-space origin.
-        let eye = camera.view.inverse()?.transform(&Vector3::zero());
-        let distance = Vector3::new(
-            f64::from(point[0]),
-            f64::from(point[1]),
-            f64::from(point[2]),
-        )
-        .sub(&eye)
-        .length();
-
-        Some(Hit {
-            id: PickId(entity),
-            point,
-            normal,
-            part,
-            // The G-buffer resolves a pixel, not a primitive ordinal.
-            element: None,
-            topology,
-            distance,
-        })
+        let slice = pending.buffer.slice(..);
+        let Ok(view) = slice.get_mapped_range() else {
+            self.hover_hit = None;
+            self.hover_answer_point = None;
+            return;
+        };
+        let normal_bytes = pick::NORMAL_FORMAT.block_copy_size(None).unwrap_or(8);
+        let slot = |index: usize, bytes: usize| -> Option<&[u8]> {
+            let start = index * pick::SLOT as usize;
+            view.get(start..start + bytes)
+        };
+        let hit = (|| {
+            let ids = slot(0, 8)?;
+            let normals = slot(1, normal_bytes as usize)?;
+            let depths = slot(2, 4)?;
+            decode_pick(
+                ids,
+                normals,
+                depths,
+                &pending.camera,
+                pending.device,
+                pending.size,
+            )
+        })();
+        drop(view);
+        pending.buffer.unmap();
+        self.hover_hit = hit;
+        self.hover_answer_point = Some(pending.device);
     }
 
     /// Grow the dynamic-uniform buffer so it holds at least `count` slots.
@@ -1298,6 +1467,110 @@ fn read_u32(bytes: &[u8]) -> Option<u32> {
 /// Read a little-endian `f32` from the first four bytes.
 fn read_f32(bytes: &[u8]) -> Option<f32> {
     Some(f32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+}
+
+/// Whether `FERROCAD_TIMING` asks for the per-pick breakdown.
+///
+/// The viewport crate prints the total (`ferrocad: pick …`); this is the same switch,
+/// so one environment variable turns on the whole hover diagnosis.
+fn timing_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("FERROCAD_TIMING").is_some())
+}
+
+/// The pick-target texel for a device position.
+///
+/// `device` is bottom-left origin and the pick targets are top-left origin, so the copy
+/// row flips. [`decode_pick`] unprojects the unflipped device pixel centre.
+fn pick_origin(device: [i32; 2], size: [u32; 2]) -> wgpu::Origin3d {
+    wgpu::Origin3d {
+        x: device[0] as u32,
+        y: size[1] - 1 - device[1] as u32,
+        z: 0,
+    }
+}
+
+/// The three texels a pick reads: id/part, normal/topology and the depth value.
+fn pick_reads(targets: &PickTargets, origin: wgpu::Origin3d) -> [pick::ReadTexel<'_>; 3] {
+    let colour = wgpu::TextureAspect::All;
+    [
+        pick::ReadTexel {
+            texture: &targets.id,
+            aspect: colour,
+            bytes_per_texel: 8,
+            origin,
+        },
+        pick::ReadTexel {
+            texture: &targets.normal,
+            aspect: colour,
+            bytes_per_texel: pick::NORMAL_FORMAT.block_copy_size(None).unwrap_or(8),
+            origin,
+        },
+        pick::ReadTexel {
+            texture: &targets.depth,
+            aspect: colour,
+            bytes_per_texel: 4,
+            origin,
+        },
+    ]
+}
+
+/// Turn the three pick texels into the [`Hit`] they encode.
+///
+/// `None` is empty space, or a texel that does not decode (a cleared depth, say).
+fn decode_pick(
+    ids: &[u8],
+    normals: &[u8],
+    depths: &[u8],
+    camera: &Camera,
+    device: [i32; 2],
+    size: [u32; 2],
+) -> Option<Hit> {
+    let [width, height] = size;
+    let [x, y] = device;
+    let entity_raw = read_u32(ids)?;
+    if entity_raw == 0 {
+        // Empty space: the target was cleared to 0, and a hit always writes id + 1,
+        // so `PickId(0)` (the compiler's default) remains a valid hit.
+        return None;
+    }
+    let entity = entity_raw - 1;
+    let part = read_u32(ids[4..].as_ref())?;
+    let decoded = pick::read_normal(normals, pick::NORMAL_FORMAT)?;
+    let normal = [decoded[0], decoded[1], decoded[2]];
+    let topology = topology_from_ordinal(decoded[3] as u32);
+    let depth = read_f32(depths)?;
+
+    let [width_f, height_f] = [f64::from(width), f64::from(height)];
+    let ndc = [
+        2.0 * (f64::from(x) + 0.5) / width_f - 1.0,
+        2.0 * (f64::from(y) + 0.5) / height_f - 1.0,
+        f64::from(depth),
+    ];
+    let inverse = camera.view_projection().inverse()?;
+    let point = unproject(&inverse, ndc);
+
+    // The G-buffer carries no ray parameter; the eye is the view-space origin.
+    let eye = camera.view.inverse()?.transform(&Vector3::zero());
+    let distance = Vector3::new(
+        f64::from(point[0]),
+        f64::from(point[1]),
+        f64::from(point[2]),
+    )
+    .sub(&eye)
+    .length();
+
+    Some(Hit {
+        id: PickId(entity),
+        point,
+        normal,
+        part,
+        // The G-buffer resolves a pixel, not a primitive ordinal.
+        element: None,
+        topology,
+        distance,
+    })
 }
 
 /// Unproject a clip-space NDC point with the inverse (row-major) view-projection.
@@ -2444,6 +2717,85 @@ pub(crate) mod tests {
             renderer.pick_at(&queue, &camera, [-1, 0]),
             None,
             "outside the target"
+        );
+    }
+
+    /// A hover pick answers only once its pixel has been read back, so it never blocks the
+    /// input thread on the device's queue (which also holds the frame it just presented),
+    /// and it submits at most one pass per painted frame. Skips (rather than fails)
+    /// without a GPU adapter.
+    #[test]
+    fn a_hover_pick_is_submitted_and_read_back_later() {
+        let _gpu = gpu_guard();
+        let Ok(mut renderer) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping hover pick test");
+            return;
+        };
+        let camera = Camera::identity();
+
+        let mut queue = RenderQueue::default();
+        queue.packets.push(pick_packet(
+            1,
+            1,
+            0,
+            Topology::Triangles,
+            vec![[-0.9, -0.9, 0.5], [-0.1, -0.9, 0.5], [-0.5, 0.9, 0.5]],
+            vec![0, 1, 2],
+        ));
+        let mut draw = |renderer: &mut WgpuRenderer| {
+            renderer
+                .draw_frame(&[ViewSpec {
+                    queue: &queue,
+                    camera: &camera,
+                    rect: None,
+                    overlay: false,
+                    workplane: None,
+                }])
+                .expect("draw");
+        };
+        let settle = |renderer: &WgpuRenderer| {
+            renderer
+                .context
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
+        };
+        draw(&mut renderer);
+
+        // Nothing is in flight yet, so the first hover submits and has no answer.
+        assert_eq!(renderer.hover_pick_at(&queue, &camera, [16, 32]), None);
+        settle(&renderer);
+
+        // (48, 32) is also over the triangle but no frame has been painted since the last
+        // pick: a hover cannot be fresher than the frame on screen, so it does not submit.
+        assert_eq!(renderer.hover_pick_at(&queue, &camera, [48, 32]), None);
+        assert!(
+            !renderer.hover_pick_pending(),
+            "one pick per painted frame"
+        );
+
+        // The next frame lets the pick resolve, and the answer is for its own pixel.
+        draw(&mut renderer);
+        let left = renderer
+            .hover_pick_at(&queue, &camera, [16, 32])
+            .expect("left resolved")
+            .expect("left hit");
+        assert_eq!(left.id, PickId(1));
+        assert_eq!(left.topology, Topology::Triangles);
+
+        // Empty space is a *resolved* answer, not "not yet".
+        draw(&mut renderer);
+        assert_eq!(
+            renderer.hover_pick_at(&queue, &camera, [2, 2]),
+            None,
+            "the pick for the new pixel is in flight"
+        );
+        settle(&renderer);
+        draw(&mut renderer);
+        assert_eq!(
+            renderer.hover_pick_at(&queue, &camera, [2, 2]),
+            Some(None),
+            "empty space resolved through the same pass"
         );
     }
 

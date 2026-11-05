@@ -83,6 +83,40 @@ pub trait Presenter {
         false
     }
 
+    /// The pick for a **hover**, which a presenter may answer without blocking.
+    ///
+    /// [`pick_at`](Self::pick_at) is a GPU round trip: on a live window its blocking
+    /// readback also waits for the frame's own GPU work, which made a hover pick cost
+    /// tens of milliseconds and starved the frame loop on a large document. A presenter
+    /// that can submit the pick and read it back later overrides this.
+    ///
+    /// The answer is three-valued, because "empty space" and "not yet" are different:
+    ///
+    /// - `Some(Some(hit))` — the texel at `device` was resolved and something is there;
+    /// - `Some(None)` — the texel at `device` was resolved and it is empty space;
+    /// - `None` — the pick for `device` is still in flight (or was rate-limited).
+    ///
+    /// The default is the synchronous pick, so a presenter that does not override this
+    /// keeps exactly the behaviour it had. A click never calls this: it must act on the
+    /// pixel it was released on.
+    fn hover_pick_at(
+        &mut self,
+        queue: &RenderQueue,
+        camera: &Camera,
+        device: [i32; 2],
+    ) -> Option<Option<Hit>> {
+        Some(self.pick_at(queue, camera, device))
+    }
+
+    /// Whether a [`hover_pick_at`](Self::hover_pick_at) has been taken but not answered.
+    ///
+    /// The viewport asks so it can keep painting, and re-dispatch the hover, until the
+    /// answer lands: a pointer that comes to rest sends no further moves, and the
+    /// highlight (and the face dwell it starts) would otherwise wait for one.
+    fn hover_pick_pending(&self) -> bool {
+        false
+    }
+
     /// Why the presenter is not drawing, when it has fallen back to the image path.
     ///
     /// This is technical text (the device/transport error), not a user sentence: the

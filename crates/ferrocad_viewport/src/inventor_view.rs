@@ -104,6 +104,19 @@ pub struct HoverReport {
     pub through: Option<&'static str>,
 }
 
+/// A resolved hover pick, with the pixel and camera it describes.
+///
+/// The answer is a texel of a frame drawn with `camera`, so it is only valid for that
+/// camera and that pixel: a zoom, an orbit or a pointer move invalidates it. A click on
+/// the same pixel reuses it instead of paying another blocking readback.
+#[derive(Clone, Debug)]
+struct HoverAnswer {
+    device: [i32; 2],
+    camera: Camera,
+    /// `None` is resolved empty space, not "unknown".
+    hit: Option<Hit>,
+}
+
 /// Which sub-element a click and hover should report.
 ///
 /// The raw pick reports whatever primitive it hits (normally a face). A host whose
@@ -553,6 +566,14 @@ pub struct InventorViewport<V: InventorView> {
     press_click_count: usize,
     /// A neutral summary of what a click would do under the pointer (A4).
     hover_report: HoverReport,
+    /// The last resolved hover answer, with the pixel and camera it describes.
+    ///
+    /// A presentable hover pick is deferred, so this is what the viewport shows between
+    /// answers — and a click on that same pixel needs no second pass.
+    hover_answer: Option<HoverAnswer>,
+    /// The pointer position (element-local) and modifiers of the last hover, so a
+    /// deferred pick that lands after its frame can be re-dispatched without a move.
+    last_hover: Option<([f32; 2], GizmoModifiers)>,
     /// The world point of the hovered pick, for a host that anchors a contextual
     /// action (the `Space` wheel, a gizmo) where the user is pointing.
     hover_anchor: Option<SelectionAnchor>,
@@ -1630,6 +1651,8 @@ impl<V: InventorView> InventorViewport<V> {
             selection: None,
             press_click_count: 1,
             hover_report: HoverReport::default(),
+            hover_answer: None,
+            last_hover: None,
             hover_anchor: None,
             grid: GridMesh::new(),
             grid_enabled: false,
@@ -3109,6 +3132,9 @@ impl<V: InventorView> InventorViewport<V> {
         // reads it, and stale coordinates would bloom the wrong node.
         self.pointer = Some(device);
         self.hover_anchor = None;
+        // Remembered so a deferred pick can be re-dispatched after it lands (see
+        // `render`): a resting pointer sends no further moves.
+        self.last_hover = Some((logical, modifiers));
         // An active drag is owned by `drag_move`: hovering here would rebuild the cube per
         // event and can clear the ring's active state mid-scrub.
         if self.ring_drag.is_some() || self.navicube_drag.is_some() || self.orbit_drag.is_some() {
@@ -3275,7 +3301,7 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
 
-        let hit = self.pick(device);
+        let hit = self.hover_pick(device);
         let consumed = manipulator_hover || gizmo_hover;
         let previous_target = self.hover_report.target.clone();
         self.hover_report = HoverReport {
@@ -4553,8 +4579,80 @@ impl<V: InventorView> InventorViewport<V> {
         hit
     }
 
+    /// The scene pick for a hover.
+    ///
+    /// A GPU presenter answers asynchronously ([`Presenter::hover_pick_at`]) and keeps at
+    /// most one pick in flight, which is what bounds hover to the device's pick rate
+    /// instead of the pointer's event rate. Until the answer for the new pixel lands this
+    /// reports the previous one: the screen still shows the last drawn frame, so a hover
+    /// cannot be fresher than that anyway.
+    fn hover_pick(&mut self, device: [i32; 2]) -> Option<Hit> {
+        let started = std::time::Instant::now();
+        let hit = if self.presenter_defers_pick() {
+            let presenter = self.presenter.as_ref().expect("checked above");
+            let answer = presenter
+                .borrow_mut()
+                .hover_pick_at(&self.queue, &self.camera, device);
+            match answer {
+                Some(hit) => {
+                    self.hover_answer = Some(HoverAnswer {
+                        device,
+                        camera: self.camera.clone(),
+                        hit,
+                    });
+                    hit
+                }
+                None => self
+                    .hover_answer
+                    .as_ref()
+                    .filter(|answer| {
+                        answer.camera.view_projection() == self.camera.view_projection()
+                    })
+                    .and_then(|answer| answer.hit),
+            }
+        } else {
+            self.pick_untimed(device)
+        };
+        report_pick_time(started.elapsed());
+        hit
+    }
+
+    /// The hover answer already resolved for exactly this pixel and camera, if any.
+    ///
+    /// `Some(None)` is a resolved *empty space*: a click there must not pick again. The
+    /// camera is part of the identity because the answer is a texel of a frame drawn with
+    /// it — a zoom or an orbit since then invalidates it.
+    fn resolved_hover(&self, device: [i32; 2]) -> Option<Option<Hit>> {
+        let answer = self.hover_answer.as_ref()?;
+        if answer.device != device
+            || answer.camera.view_projection() != self.camera.view_projection()
+        {
+            return None;
+        }
+        Some(answer.hit)
+    }
+
+    /// Whether the presenter's pick is the GPU round trip worth deferring.
+    fn presenter_defers_pick(&self) -> bool {
+        self.presenter
+            .as_ref()
+            .is_some_and(|presenter| presenter.borrow().supports_pick())
+    }
+
+    /// Whether the presenter still owes the answer to a hover pick it already took.
+    fn hover_pick_outstanding(&self) -> bool {
+        self.presenter
+            .as_ref()
+            .is_some_and(|presenter| presenter.borrow().hover_pick_pending())
+    }
+
     /// The pointer's pick, without the timing wrapper.
     fn pick_untimed(&mut self, device: [i32; 2]) -> Option<Hit> {
+        // A click lands on the pixel the hover already resolved in the common case, and a
+        // blocking pick there is a device-wide wait (20–175 ms measured): reuse it.
+        if let Some(hit) = self.resolved_hover(device) {
+            return hit;
+        }
         if let Some(presenter) = self.presenter.as_ref() {
             let mut presenter = presenter.borrow_mut();
             if presenter.supports_pick() {
@@ -5968,6 +6066,17 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         if presenter_status == Some(PresenterStatus::Pending) {
             if self.presenter_frames < PRESENTER_STARTUP_FRAMES {
                 self.presenter_frames += 1;
+                window.request_animation_frame();
+            }
+        }
+        // A deferred hover pick answers one submission late, and a resting pointer sends
+        // no further moves: re-dispatch the hover for the last position so the highlight
+        // (and the face dwell it starts) catches up, and keep painting until it lands.
+        if self.hover_pick_outstanding() {
+            if let Some((logical, modifiers)) = self.last_hover {
+                self.handle_pointer_with_modifiers(logical, modifiers);
+            }
+            if self.hover_pick_outstanding() {
                 window.request_animation_frame();
             }
         }
@@ -7771,6 +7880,115 @@ mod tests {
 
         assert_eq!(draws.get(), 0, "an uninitialized presenter is not drawn");
         assert_eq!(viewport.view().image_calls, 1, "the image path is still used");
+    }
+
+    /// A presenter whose hover pick answers one call late, like the GPU readback: the
+    /// position is remembered, so a repeat hover at the same pixel only collects it.
+    struct DeferredPresenter {
+        /// The pixel a submitted pick asked about.
+        point: Option<[i32; 2]>,
+        pending: bool,
+        /// The resolved answer and the pixel it describes.
+        answer: Option<([i32; 2], Option<Hit>)>,
+    }
+
+    fn a_hit_on(id: u32, device: [i32; 2]) -> Hit {
+        Hit {
+            id: PickId(id),
+            point: [device[0] as f32, device[1] as f32, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            part: 0,
+            element: Some(0),
+            topology: Topology::Triangles,
+            distance: 1.0,
+        }
+    }
+
+    impl Presenter for DeferredPresenter {
+        fn status(&self) -> PresenterStatus {
+            PresenterStatus::Ready
+        }
+        fn set_size(&mut self, _size: [u32; 2]) {}
+        fn prepare(&mut self, _gpu: &mut gpui::GpuCanvasContext) {}
+        fn draw(&mut self, _views: &[ViewSpec<'_>]) -> bool {
+            true
+        }
+        fn present(&mut self, _gpu: &mut gpui::GpuCanvasContext) {}
+        fn pick_at(
+            &mut self,
+            _queue: &RenderQueue,
+            _camera: &Camera,
+            device: [i32; 2],
+        ) -> Option<Hit> {
+            Some(a_hit_on(7, device))
+        }
+        fn hover_pick_at(
+            &mut self,
+            _queue: &RenderQueue,
+            _camera: &Camera,
+            device: [i32; 2],
+        ) -> Option<Option<Hit>> {
+            if self.pending {
+                let point = self.point.expect("a pending pick has a position");
+                self.pending = false;
+                self.answer = Some((point, Some(a_hit_on(7, point))));
+            }
+            if !self.pending && self.point != Some(device) {
+                self.point = Some(device);
+                self.pending = true;
+            }
+            match &self.answer {
+                Some((point, hit)) if *point == device => Some(*hit),
+                _ => None,
+            }
+        }
+        fn hover_pick_pending(&self) -> bool {
+            self.pending
+        }
+        fn supports_pick(&self) -> bool {
+            true
+        }
+    }
+
+    /// The deferred pick is one move behind, so a pointer that comes to rest would never
+    /// show its highlight. `render` re-dispatches the stored hover for exactly that
+    /// reason; this is the same sequence, without a window.
+    #[test]
+    fn a_deferred_pick_is_re_dispatched_without_another_move() {
+        let camera = Camera {
+            viewport: Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene())
+                .with_presenter(Box::new(DeferredPresenter {
+                    point: None,
+                    pending: false,
+                    answer: None,
+                }));
+
+        // The first move only asks for a pick; nothing is under the pointer yet.
+        assert!(!viewport.handle_pointer([50.0, 50.0]));
+        assert_eq!(viewport.hovered(), None);
+        assert!(viewport.hover_pick_outstanding());
+
+        // What `render` does while the answer is outstanding: the same hover again.
+        let (logical, modifiers) = viewport.last_hover.expect("the hover is remembered");
+        assert!(viewport.handle_pointer_with_modifiers(logical, modifiers));
+        assert_eq!(viewport.hovered(), Some(PickId(7)));
+        assert!(
+            !viewport.hover_pick_outstanding(),
+            "the answered pick is not re-submitted for the same pixel"
+        );
+
+        // A click there reuses the answer: no second pass, and the same target.
+        assert_eq!(
+            viewport.resolved_hover(viewport.camera.viewport.to_device([50.0, 50.0])),
+            Some(Some(a_hit_on(
+                7,
+                viewport.camera.viewport.to_device([50.0, 50.0]),
+            )))
+        );
     }
 
     #[test]

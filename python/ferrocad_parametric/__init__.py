@@ -83,9 +83,8 @@ def _display_mesh(obj):
     try:
         if shape.isNull():
             return None
-        mesh = shape.mesh()
         placement = getattr(obj, "Placement", None)
-        _apply_object_placement(mesh, placement, shape=shape)
+        mesh = shape.mesh(matrix=_placement_matrix(placement, shape))
         # The object's own origin (the placement's base point). The triad hugs it — an
         # origin indicator — and a rotate pivot turns about it.
         if placement is not None:
@@ -108,14 +107,14 @@ def _display_mesh(obj):
         return None
 
 
-def _apply_object_placement(mesh, placement, shape=None):
-    """Move a tessellation from shape-local to world coordinates.
+def _placement_matrix(placement, shape):
+    """The placement to bake into a display mesh, as `Matrix.A`, or `None`.
 
     ``Shape.mesh()`` is in the shape's own coordinates; a ``Part::Feature``'s
     ``Placement`` is a separate document property, the way FreeCAD's view provider
-    applies it. The stage has no per-mesh placement field, so the display hook bakes
-    it here. An opened ``.FCStd`` with placed objects therefore lands where it was
-    saved, not at the origin.
+    applies it. The stage has no per-mesh placement field, so the kernel bakes it
+    into the positions (``Shape.mesh(matrix=...)``). An opened ``.FCStd`` with placed
+    objects therefore lands where it was saved, not at the origin.
 
     A ``PartShape``'s geometry is *always* baked with its own accumulated
     ``Placement`` (``geometry == placement · base``), and the ``Part::Feature``
@@ -123,38 +122,29 @@ def _apply_object_placement(mesh, placement, shape=None):
     object placement again would double it, so a shape whose placement already
     equals the object's is left alone. A Python proxy stores local geometry with
     an identity placement, so its object placement is applied here.
+
+    `None` means "leave the mesh in shape-local coordinates".
     """
     if placement is None:
-        return
-    if shape is not None:
-        shape_placement = getattr(shape, "Placement", None)
-        if shape_placement is not None:
-            try:
-                if shape_placement.isSame(placement, 1e-9):
-                    return
-            except Exception:
-                pass
-    positions = mesh.get("positions")
-    if positions:
-        mesh["positions"] = [
-            tuple(placement.multVec(FreeCAD.Vector(*position)))
-            for position in positions
-        ]
-    normals = mesh.get("normals")
-    if normals:
-        rotation = placement.Rotation
-        mesh["normals"] = [
-            tuple(rotation.multVec(FreeCAD.Vector(*normal))) for normal in normals
-        ]
+        return None
+    shape_placement = getattr(shape, "Placement", None)
+    if shape_placement is not None:
+        try:
+            if shape_placement.isSame(placement, 1e-9):
+                return None
+        except Exception:
+            pass
+    return list(placement.toMatrix().A)
 
 
 def _face_normal(obj, element):
     """The outward unit normal of a face, in the shape's **local** frame.
 
     The viewport's ``SelectionAnchor.normal`` is world-space because
-    :func:`_apply_object_placement` bakes the object's ``Placement`` into the display
-    tessellation. ``Part::Extrusion`` works in shape-local coordinates, so this hook
-    re-derives the normal from the shape's own mesh rather than undoing the placement.
+    :func:`_placement_matrix` has the kernel bake the object's ``Placement`` into the
+    display tessellation. ``Part::Extrusion`` works in shape-local coordinates, so this
+    hook re-derives the normal from the shape's own mesh rather than undoing the
+    placement.
 
     The kernel duplicates vertices per face and tags each triangle with its part id, so
     the named face is exactly the triangles whose part id matches; their area-weighted

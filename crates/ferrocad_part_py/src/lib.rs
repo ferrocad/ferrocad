@@ -50,8 +50,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_core::object_registry::{self, ObjectType, PropertyChangeError};
 use ferrocad_core::{
-    Document, ExtensionData, ExtensionValue, ObjectId, Placement, Property, Rotation, ScaleType,
-    Vector3,
+    Document, ExtensionData, ExtensionValue, Matrix4, ObjectId, Placement, Property, Rotation,
+    ScaleType, Vector3,
 };
 use ferrocad_geom::{
     ElementKind, ElementRef, Lineage, MapVersion, Shape, SurfaceData, TessellationOptions,
@@ -665,6 +665,23 @@ fn apply_placement_to(
     *placement_guard = new;
     *lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
     epoch.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Bake a placement into a tessellation's positions, in place.
+///
+/// This replaces the display hook's per-vertex Python loop (`Placement.multVec` in a
+/// list comprehension), which costs seconds on a shape with hundreds of thousands of
+/// vertices. Only positions need moving: the kernel's mesh is flat-shaded, so
+/// `normals` is empty and the renderer derives face normals after the transform.
+fn bake_placement(mesh: &mut ferrocad_geom::Tessellation, matrix: &Matrix4) {
+    for position in &mut mesh.positions {
+        let v = matrix.transform(&Vector3::new(
+            position[0] as f64,
+            position[1] as f64,
+            position[2] as f64,
+        ));
+        *position = [v.x as f32, v.y as f32, v.z as f32];
+    }
 }
 
 /// Parse a positional element name (`Face2`) the way upstream's
@@ -1460,8 +1477,20 @@ impl PartShape {
     /// deflection in radians. Both decide the triangle count. OCCT stores the
     /// triangulation on the shape and keeps it when the next request is not finer, so
     /// compare settings on fresh shapes.
-    #[pyo3(signature = (deflection = 0.5, angular = 0.5))]
-    fn mesh(&self, py: Python<'_>, deflection: f64, angular: f64) -> PyResult<Py<PyAny>> {
+    ///
+    /// `matrix` is `FreeCAD.Placement.toMatrix().A` for an object whose
+    /// `Placement` the shape does not already carry (a `Part::Feature` restored from
+    /// a `.FCStd` has identity geometry and the saved placement on the object). The
+    /// kernel bakes it here because doing it in the display hook — one
+    /// `Placement.multVec` call per vertex — costs seconds on a large shape.
+    #[pyo3(signature = (deflection = 0.5, angular = 0.5, matrix = None))]
+    fn mesh(
+        &self,
+        py: Python<'_>,
+        deflection: f64,
+        angular: f64,
+        matrix: Option<Vec<f64>>,
+    ) -> PyResult<Py<PyAny>> {
         let shape = self
             .shape()
             .ok_or_else(|| PyValueError::new_err("cannot tessellate a null shape"))?;
@@ -1470,9 +1499,16 @@ impl PartShape {
             angular_deflection: angular,
             relative: false,
         };
-        let mesh = ferrocad_part::backend()
+        let mut mesh = ferrocad_part::backend()
             .tessellate(&shape, &options)
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        if let Some(values) = matrix {
+            let m: [f64; 16] = values
+                .as_slice()
+                .try_into()
+                .map_err(|_| PyValueError::new_err("mesh: matrix needs Matrix.A (16 numbers)"))?;
+            bake_placement(&mut mesh, &Matrix4 { m });
+        }
 
         let dict = PyDict::new(py);
         dict.set_item(

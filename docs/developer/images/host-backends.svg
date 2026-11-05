@@ -124,8 +124,8 @@
   <text class="t box-title" x="693" y="393" text-anchor="middle">RustAppBackend</text>
   <text class="t box-sub" x="693" y="409" text-anchor="middle">AppBackend only</text>
   <text class="t box-sub" x="693" y="424" text-anchor="middle">script_host() = None</text>
-  <text class="t note" x="701" y="458" text-anchor="start">installed by browser host</text>
-  <text class="t note" x="701" y="472" text-anchor="start">&amp; native headless/editions</text>
+  <text class="t note" x="693" y="458" text-anchor="middle">installed by browser host</text>
+  <text class="t note" x="693" y="472" text-anchor="middle">&amp; native headless/editions</text>
 
   <!-- JS -->
   <rect class="box" x="824" y="324" width="226" height="40" rx="5" fill="#d5dfea" stroke="#94a9c2" stroke-dasharray="5 3" />

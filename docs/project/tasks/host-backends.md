@@ -147,20 +147,23 @@ work.
 
 ### 2.3 Names
 
-| Thing | Name | Note |
-| --- | --- | --- |
-| The contract | `ferrocad_shell_api` | unchanged |
-| The shell | `ferrocad_shell_core` | unchanged |
-| Native CPython assembly | `ferrocad_shell_gpui` | unchanged (it is the *native* assembly, hence "gpui"); it is host **and** backend — see §4.3 |
-| Rust document backend | **`ferrocad_shell_rust`** | primary; `ferrocad_shell_doc` is the alternative. Decided (S5). |
-| Browser host | `ferrocad_web_gpui` | unchanged; a pure host since S5 |
-| Future JS backend | `ferrocad_shell_js` | wasm32 only |
-| Future wasm Python backend | `ferrocad_shell_pywasm` | wasm32 only, if the spike passes |
-| Future CPython backend crate | `ferrocad_shell_python` | only if a pure-Rust desktop edition needs `ferrocad_shell_gpui` to stop linking `pyo3` (§4.3) |
+| Thing | Name | Task | Note |
+| --- | --- | --- | --- |
+| The contract | `ferrocad_shell_api` | — | unchanged |
+| The shell | `ferrocad_shell_core` | — | unchanged |
+| Native CPython assembly | `ferrocad_shell_gpui` | S1–S5 | unchanged (it is the *native* assembly, hence "gpui"); it is host **and** backend — see §4.3 |
+| Rust document backend | **`ferrocad_shell_rust`** | S5 ✓ | primary; `ferrocad_shell_doc` is the alternative |
+| Browser host | `ferrocad_web_gpui` | S5 ✓ | unchanged; a pure host since S5 |
+| Future JS backend | `ferrocad_shell_js` | S7 | wasm32 only |
+| Future wasm Python backend | `ferrocad_shell_pywasm` | S8 | wasm32 only, if the spike passes |
+| Future CPython backend crate | `ferrocad_shell_python` | (with a Rust desktop edition, §4.3) | only if that edition needs `ferrocad_shell_gpui` to stop linking `pyo3` |
 
 `ferrocad_shell_rust` is named for the runtime it embeds (none — the document *is*
 Rust), not for a scripting language. That is consistent with `ferrocad_shell_gpui`
 being named for its host framework.
+
+Each stage that adds a backend creates exactly one crate from this table, and it
+implements the two traits from §5.1; §8 states which stage depends on which.
 
 ## 3. Duplication and drift
 
@@ -247,7 +250,8 @@ Only the new/moved ones are listed; everything else keeps its place.
 | `ferrocad_web_gpui` | browser host: entry point, JS bridge, harness | `ferrocad_shell_core`, `ferrocad_shell_rust`, `wasm-bindgen` |
 | `ferrocad_core` | + `present` module (D4) | unchanged |
 | `ferrocad_py` | + thin `ferrocad.property` functions over `present` | still **only** `ferrocad_core` + `pyo3` |
-| `ferrocad_shell_js` (future) | `JsAppBackend` | wasm32 only |
+| `ferrocad_shell_js` (S7) | `JsAppBackend`: the JS runtime over `RustAppBackend`'s document half | `ferrocad_shell_rust`, `ferrocad_shell_api`, `wasm-bindgen` |
+| `ferrocad_shell_pywasm` (S8) | `PywasmBackend`: a wasm Python runtime over the same scripts | §6.3's runtime, `ferrocad_shell_api`, the `*_py` bindings if they compile |
 
 ### 4.2 Dependency rules to add
 
@@ -534,7 +538,7 @@ None is a drop-in for the existing `python/` package. That is why §2 calls this
 
 ## 7. Backends, in detail
 
-| Method group | Rust | CPython | JS (future) | wasm Python (future) |
+| Method group | Rust (`ferrocad_shell_rust`) | CPython (`ferrocad_shell_gpui`) | JS (`ferrocad_shell_js`, S7) | wasm Python (`ferrocad_shell_pywasm`, S8) |
 | --- | --- | --- | --- | --- |
 | document/tree/properties/stage | Rust document + OCCT | `ferrocad_py` | Rust document + JS callbacks | Rust document + Python |
 | commands | `catalog::builtin` | `FreeCADGui` registry | `catalog` + JS `registerCommand` | `FreeCADGui` registry |
@@ -557,8 +561,8 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | **S4** | **Catalogue as data** (D10) — **done (2026-11-04)** | `ferrocad_shell_api::catalog` (the table, the named ids, the Move form), generated `python/ferrocad_shell/catalog.json`, the browser backend reading `builtin()`, Python's `GetResources()` reading the JSON, and a drift test on each side | 4–5 d |
 | **S5** | **`ferrocad_shell_rust`** (D2/D3) — **done (2026-11-05)** | `RustAppBackend` moved out of `ferrocad_web_gpui` into its own platform-neutral crate (no gpui, no pyo3, no wasm-bindgen); the browser installs it with two file-picker hooks and keeps only its window and page bridge; `cargo run -p ferrocad_shell_rust --example headless` boots it with no window and prints the same document | 2–3 d |
 | **S6** | **Seam split** (D7) — **in progress: the scripting half is done (2026-11-05)** | `ScriptHost` (`evaluate`, `load_workbenches`, `tool`, `tool_command`, `inventor_scene`, `event_listener`) with `AppBackend::script_host()`; the document half unchanged; `FilePicker` unifies native and web next | 3–4 d |
-| **S7** | **JS backend spike** | a page that loads an ES module and calls `Document` through `wasm-bindgen`; one command registered from JS | 5–8 d |
-| **S8** | **wasm Python spike** | pick a runtime from §6.3 and run `python/ferrocad_shell`'s `properties` | research |
+| **S7** | **JS backend spike** — creates `ferrocad_shell_js` (D2) | `JsAppBackend` (= `RustAppBackend`'s document half + `ScriptHost`); a page that loads an ES module and calls the document through `wasm-bindgen`; one command registered from JS | 5–8 d |
+| **S8** | **wasm Python spike** — creates `ferrocad_shell_pywasm` (D2) | pick a runtime from §6.3, implement `ScriptHost` over the *same* `python/ferrocad_shell` scripts and, where possible, the same `*_py` bindings; run `properties` | research |
 
 ### Acceptance
 
@@ -570,12 +574,26 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | S4 | The crate's `the_checked_in_catalogue_is_current` fails when `python/ferrocad_shell/catalog.json` is stale, and `CatalogTests` fails when a built-in exists on only one side (Python registry vs. JSON); `App_Move` exists once, in `catalog::move_dialog()`. |
 | S5 | `cargo check -p ferrocad_shell_rust` (native) passes, `cargo tree -p ferrocad_shell_rust` has no gpui/pyo3/wasm-bindgen, and the browser still builds and passes its smoke check on the extracted crate (`run.sh --check`). The native example prints `document Sample (2 object(s))` and `Fillet · 40 triangles`, the same document the browser draws. |
 | S6 | `AppBackend`'s scripting methods are behind `script_host()` (done); the browser still builds with no scripting backend (done); `inventor_scene` returns from the trait with the same behaviour (done); the Draft conformance group is unchanged (`test_pivy` 2/2). **Remaining:** `FilePicker`. |
-| S7 | A browser page registers one JS command and receives one document event; no panic in the console. |
-| S8 | `properties()` from a wasm interpreter over the sample document. |
+| S7 | `cargo check -p ferrocad_shell_js --target wasm32-unknown-unknown` passes and its graph has no native-only edge; a browser page registers one JS command and receives one document event; no panic in the console. |
+| S8 | `cargo check -p ferrocad_shell_pywasm --target wasm32-unknown-unknown` passes; `properties()` from a wasm interpreter over the sample document. |
 
 S1–S4 are the "dedup" half of this document and are independent. S5–S6 are the
 "one architecture" half and should land before S7/S8, because both new backends
 would otherwise inherit the split seam.
+
+The backend tasks tie together as follows — each one adds exactly the crate named in
+§2.3 and reuses the half that already exists:
+
+- **S5 is S7's document half.** `ferrocad_shell_js` does not reimplement a document;
+  `JsAppBackend` delegates to `RustAppBackend` (§4.1) and adds only the JS runtime.
+- **S6 is both spikes' scripting half.** `ScriptHost` is the seam S7 and S8 implement;
+  `FilePicker` (§5.5) is the shared last mile for open/save, so neither spike grows
+  a second file story.
+- **S8 is S6.3's decision made concrete.** It picks one runtime and produces
+  `ferrocad_shell_pywasm`; if the bindings cannot be shared, that is the spike's
+  finding, not a licence to fork `python/`.
+- **S7 and S8 share the `mod-events` contract** ([`mod-events.md`](mod-events.md)), so
+  a module written for one is not thrown away for the other.
 
 ## 9. File-level changes for S1–S5
 

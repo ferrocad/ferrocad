@@ -89,6 +89,19 @@ const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// The default multisample count (4× anti-aliasing).
 const DEFAULT_SAMPLES: u32 = 4;
 
+/// The count [`FerrocadRenderer::new`] uses: [`DEFAULT_SAMPLES`], or `FERROCAD_MSAA`.
+///
+/// The browser build renders single-sampled, so the native 4× is a cost the two
+/// builds do not share; the override is how that cost is measured (and, for a large
+/// document on a weak adapter, avoided).
+fn default_samples() -> u32 {
+    std::env::var("FERROCAD_MSAA")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_SAMPLES)
+        .max(1)
+}
+
 /// The offscreen targets: the multisampled colour (when AA is on), the resolved
 /// single-sampled colour, and the depth attachment.
 struct Targets {
@@ -173,7 +186,7 @@ pub struct WgpuRenderer {
 impl WgpuRenderer {
     /// Create a renderer with an offscreen target `size`, at [`DEFAULT_SAMPLES`].
     pub fn new(context: GpuContext, size: [u32; 2]) -> Self {
-        Self::with_sample_count(context, size, DEFAULT_SAMPLES)
+        Self::with_sample_count(context, size, default_samples())
     }
 
     /// Create a renderer at a given `sample_count` (1 disables anti-aliasing; 4 is

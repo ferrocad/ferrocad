@@ -537,13 +537,13 @@ it leaves the draw list.
 | Compound | `Part_Compound` | `group` | use |
 | Compound filter | `Part_CompoundFilter` | `filter` | use |
 | Explode compound | `Part_ExplodeCompound` | `expand` | metaphor |
-| Shape builder | `Part_Shapebuilder` | `shapes` | use |
+| Shape builder | `Part_Builder` | `shapes` | use |
 | Make face | `Part_MakeFace` | — | draw |
 | Make solid | `Part_MakeSolid` | — | draw |
-| Refine shape | `Part_Refine_Shape` | `sparkles` | metaphor |
-| Colour face | `Part_ColorFace` | `paint-bucket` | use |
+| Refine shape | `Part_RefineShape` | `sparkles` | metaphor |
+| Colour face | `Part_ColorPerFace` | `paint-bucket` | use |
 | Projection on surface | `Part_ProjectionOnSurface` | `projector` | metaphor |
-| Reverse shape | `Part_Reverse_Shape` | `flip-horizontal` | use |
+| Reverse shape | `Part_ReverseShape` | `flip-horizontal` | use |
 | Mirror | `Part_Mirror` | `copy + flip-horizontal` | compose |
 | Scale | `Part_Scale` | `resize-handle` | use |
 | Check geometry | `Part_CheckGeometry` | `check` | use |
@@ -553,7 +553,19 @@ it leaves the draw list.
 | Join connect | `Part_JoinConnect` | `merge` | use |
 | Join embed | `Part_JoinEmbed` | `merge` | use |
 | Join cutout | `Part_JoinCutout` | `merge` | metaphor |
-| Join bypass | `Part_JoinBypass` | `merge` | metaphor |
+| Join bypass | — | `merge` | metaphor |
+
+Every id above is the registered command (`Command(...)` in `Part/Gui`, `addCommand` in
+`Part/BOPTools` and `Part/CompoundTools`). The note previously carried four `Pixmap`
+names instead: `Part_Shapebuilder` → **`Part_Builder`**, `Part_Refine_Shape` →
+**`Part_RefineShape`**, `Part_ColorFace` → **`Part_ColorPerFace`**, `Part_Reverse_Shape`
+→ **`Part_ReverseShape`**. `Part_JoinBypass` is not registered in 1.1.4, so it has no
+command id. **Pocket** and **Hole** are PartDesign verbs, not Part commands, and no Part
+extrude/loft/sweep/thickness command has an honest glyph yet, so those rows stay on the
+draw list.
+
+Mirror bakes the note's `copy + flip-horizontal` composition into the same `mirror`
+asset the Draft row uses.
 
 ### Measure
 
@@ -823,7 +835,9 @@ Draft icons it can draw.
   `move`, `Draft_Scale` → `resize-handle`, `Draft_Trimex` → `cut-line`, `Draft_Layer` →
   `layers`, …) and the **Part primitives/datums slice** (`Part_Box` → `cube`,
   `Part_Tube` → `pipe-flange`, `Part_DatumPlane` → `workplane`, `Part_DatumLine` →
-  `line-segment`, …).
+  `line-segment`, …) and the **Part operations slice** (`Part_Fuse` → `union`,
+  `Part_Cut` → `boolean-subtract`, `Part_Common` → `boolean-intersect`, `Part_Fillet` →
+  `corner-radius`, `Part_Mirror` → the baked `mirror`, …).
 
   Every workbench id was checked against upstream: `addCommand` in
   `freecad-upstream/src/Mod/Draft/draftguitools`, and `Command(...)` in

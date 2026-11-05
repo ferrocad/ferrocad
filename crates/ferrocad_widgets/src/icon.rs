@@ -238,6 +238,31 @@ const ASSETS: &[(&str, &[u8])] = &[
         "pipe-flange",
         include_bytes!("../assets/icons/pipe-flange.svg"),
     ),
+    // Part operations.
+    ("lathe", include_bytes!("../assets/icons/lathe.svg")),
+    (
+        "bevel-gauge",
+        include_bytes!("../assets/icons/bevel-gauge.svg"),
+    ),
+    ("union", include_bytes!("../assets/icons/union.svg")),
+    (
+        "boolean-subtract",
+        include_bytes!("../assets/icons/boolean-subtract.svg"),
+    ),
+    (
+        "boolean-intersect",
+        include_bytes!("../assets/icons/boolean-intersect.svg"),
+    ),
+    ("section", include_bytes!("../assets/icons/section.svg")),
+    ("filter", include_bytes!("../assets/icons/filter.svg")),
+    ("expand", include_bytes!("../assets/icons/expand.svg")),
+    ("sparkles", include_bytes!("../assets/icons/sparkles.svg")),
+    (
+        "paint-bucket",
+        include_bytes!("../assets/icons/paint-bucket.svg"),
+    ),
+    ("projector", include_bytes!("../assets/icons/projector.svg")),
+    ("eraser", include_bytes!("../assets/icons/eraser.svg")),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

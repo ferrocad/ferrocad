@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+<g mask="url(#iconmcp-bevel-gauge-m)">
+      <rect x="1.75" y="10" width="10" height="3.25" rx="1"/>
+    </g>
+    <path d="M10.614 10.609 L4.579 2.446 C4.381 2.178 4.003 2.123 3.737 2.322 L3.257 2.682 C2.993 2.88 2.938 3.254 3.135 3.519 L9.172 11.677 C9.37 11.944 9.746 11.999 10.013 11.801 L10.49 11.447 C10.755 11.25 10.811 10.875 10.614 10.609 Z"/>
+</svg>

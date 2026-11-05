@@ -776,13 +776,36 @@ through 3 points, facebinder, select plane, offset, extend, slope, pocket and ho
 The `authored` verdict exists so a shipped local glyph is not labelled "no honest
 match": the contact sheets paint it cyan and name the asset that renders it. Eleven of
 the 27 requests are withdrawn with it (workplane, the four views, extrude, loft, sweep,
-shell, make face, make solid); **12 remain open**.
+shell, make face, make solid); **12 remained open then**.
 
 **Re-check, 2026-11-06 (second).** The catalogue grew **6,590 → 6,622**: 32 added, none
 removed. None is CAD-adjacent (bags, pets, clothing, music, travel, weather, crafts), and
 re-searching the 12 open requests found no new match — the nearest are `hole-punch`
 (`business`) and `pocket-knife` (`camping`), neither of which is a modelling verb. The
 snapshot is refreshed to 6,622 and all 128 glyph names in the table resolve.
+
+**CAD-family request pass, 2026-11-06.** Most of the CAD verbs had never been asked
+for *as CAD*: `revolve` was standing in as `lathe` (an industrial lathe) and `chamfer`
+as `bevel-gauge` (a hand gauge), so the picture named the tool rather than the
+operation, and a search in those families returns machines and instruments rather than
+geometry. Fourteen requests now name the operation and the drawing family in `why`
+(`request_icon` has no category argument), so a delivered glyph arrives in the
+geometry/editor idiom instead of being borrowed from `industry`, `tools`, `travel` or
+`animals`:
+
+- **New:** `revolve profile`, `fillet edge`, `chamfer edge`, `section plane`,
+  `tube solid`, `wedge solid`.
+- **Re-asked** with the family steer — the six we authored, now worth waiting on for a
+  consistent CAD family: `extrude solid`, `loft profiles`, `sweep along path`,
+  `shell solid`, `make face`, `make solid`.
+- **Already open from the first pass:** `pocket cavity`, `hole`.
+
+That makes **33 requests filed, 24 open, 9 withdrawn** (the three snap draws, the spline,
+`workplane` and the four view orientations, all of which the repository draws itself).
+The authored glyphs stay wired meanwhile: a delivered icon replaces one only if it reads
+better at 16 px, since the six are drawn to the same grid. Until then `revolve` keeps
+`lathe` and `chamfer` keeps `bevel-gauge` — they are the two weakest metaphor rows, so
+they are first in line for replacement.
 
 ### Contact sheets
 

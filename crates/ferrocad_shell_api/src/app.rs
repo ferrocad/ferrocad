@@ -141,6 +141,9 @@ pub trait AppBackend {
     /// The appearance the edition's preset resolves to, as a command outcome whose
     /// `view` the boot path applies.
     fn appearance_view(&self) -> Result<CommandOutcome, String> {
+        if let Some(outcome) = self.script_host().and_then(|host| host.appearance_view()) {
+            return Ok(outcome);
+        }
         Ok(CommandOutcome::default())
     }
 
@@ -171,7 +174,10 @@ pub trait AppBackend {
 
     /// Drain the selection writes a script queued.
     fn take_selection_requests(&mut self) -> Result<Vec<SelectionRequest>, String> {
-        Ok(Vec::new())
+        Ok(self
+            .script_host()
+            .map(|host| host.take_selection_requests())
+            .unwrap_or_default())
     }
 
     // --- scripting ------------------------------------------------------------
@@ -230,23 +236,47 @@ pub trait AppBackend {
         Ok(CommandOutcome::default())
     }
 
-    fn set_provider(&mut self, _feature: &str, _backend: &str) -> Result<CommandOutcome, String> {
+    fn set_provider(&mut self, feature: &str, backend: &str) -> Result<CommandOutcome, String> {
+        if let Some(outcome) = self
+            .script_host()
+            .and_then(|host| host.set_provider(feature, backend))
+        {
+            return Ok(outcome);
+        }
         Ok(CommandOutcome::default())
     }
 
-    fn refresh_providers(&mut self, _feature: &str) -> Result<CommandOutcome, String> {
+    fn refresh_providers(&mut self, feature: &str) -> Result<CommandOutcome, String> {
+        if let Some(outcome) = self
+            .script_host()
+            .and_then(|host| host.refresh_providers(feature))
+        {
+            return Ok(outcome);
+        }
         Ok(CommandOutcome::default())
     }
 
     fn dialog_accept(
         &mut self,
-        _token: &str,
-        _values: &serde_json::Value,
+        token: &str,
+        values: &serde_json::Value,
     ) -> Result<CommandOutcome, String> {
+        if let Some(outcome) = self
+            .script_host()
+            .and_then(|host| host.dialog_accept(token, values))
+        {
+            return Ok(outcome);
+        }
         Ok(CommandOutcome::default())
     }
 
-    fn dialog_cancel(&mut self, _token: &str) -> Result<CommandOutcome, String> {
+    fn dialog_cancel(&mut self, token: &str) -> Result<CommandOutcome, String> {
+        if let Some(outcome) = self
+            .script_host()
+            .and_then(|host| host.dialog_cancel(token))
+        {
+            return Ok(outcome);
+        }
         Ok(CommandOutcome::default())
     }
 
@@ -261,10 +291,13 @@ pub trait AppBackend {
 
     fn manipulator_specs(
         &self,
-        _object: &str,
-        _element: Option<&str>,
+        object: &str,
+        element: Option<&str>,
     ) -> Result<Vec<serde_json::Value>, String> {
-        Ok(Vec::new())
+        Ok(self
+            .script_host()
+            .and_then(|host| host.manipulator_specs(object, element))
+            .unwrap_or_default())
     }
 
     fn apply_interaction(
@@ -281,26 +314,46 @@ pub trait AppBackend {
     // --- providers and GPU ----------------------------------------------------
 
     fn grid_summary(&self) -> Result<GridSummary, String> {
-        Ok(GridSummary::default())
+        Ok(self
+            .script_host()
+            .and_then(|host| host.grid_summary())
+            .unwrap_or_default())
     }
 
     fn axis_summary(&self) -> Result<AxisSummary, String> {
-        Ok(AxisSummary::default())
+        Ok(self
+            .script_host()
+            .and_then(|host| host.axis_summary())
+            .unwrap_or_default())
     }
 
     fn provider_features(&self) -> Result<Vec<ProviderFeature>, String> {
-        Ok(Vec::new())
+        Ok(self
+            .script_host()
+            .map(|host| host.provider_features())
+            .unwrap_or_default())
     }
 
-    fn provider_skin(&self, _feature: &str) -> Result<Option<String>, String> {
-        Ok(None)
+    fn provider_skin(&self, feature: &str) -> Result<Option<String>, String> {
+        Ok(self
+            .script_host()
+            .and_then(|host| host.provider_skin(feature)))
     }
 
     fn gpu_adapter(&self) -> Result<String, String> {
-        Ok("auto".to_string())
+        Ok(self
+            .script_host()
+            .and_then(|host| host.gpu_adapter())
+            .unwrap_or_else(|| "auto".to_string()))
     }
 
     fn set_gpu_adapter(&mut self, value: &str) -> Result<GpuPreferenceOutcome, String> {
+        if let Some(outcome) = self
+            .script_host()
+            .and_then(|host| host.set_gpu_adapter(value))
+        {
+            return Ok(outcome);
+        }
         Ok(GpuPreferenceOutcome {
             ok: true,
             value: value.to_string(),
@@ -367,6 +420,133 @@ pub trait ScriptHost {
     /// This is what makes `ActiveView.addEventCallbackPivy` work: the listener
     /// dispatches to the `SoEventCallback` callables the script registered.
     fn event_listener(&self) -> Box<dyn EventListener>;
+
+    // --- extension hooks ------------------------------------------------------
+    //
+    // A document backend answers these from its document; a script surface may own
+    // some of the answers instead. Each hook says which case it is by returning
+    // `None` (or nothing), and the backend asks it **before** its own answer — which
+    // is what lets a synthetic node the document has never heard of, such as
+    // `Settings/Grid`, resolve at all.
+
+    /// Tree nodes the script appends to the document's own.
+    ///
+    /// The native path's synthetic `Settings/<Feature>` roots are this: they live in
+    /// the provider registry, not in the document, and the model tree shows them like
+    /// objects. Empty for a script that owns none.
+    fn extra_tree_nodes(&self) -> Vec<DocumentNode> {
+        Vec::new()
+    }
+
+    /// The rows for an object the script owns, if it owns this one.
+    ///
+    /// Asked before the document is, so `Some` means "this is mine" — including the
+    /// empty list a script-owned node with no rows of its own returns.
+    fn extra_properties(&self, _object: &str) -> Option<Vec<PropRow>> {
+        None
+    }
+
+    /// Write a property on an object the script owns.
+    ///
+    /// `None` means the object is the document's and the backend writes it. A refusal
+    /// is a `SetResult` with `ok: false`, not an absence: the script answered, it just
+    /// said no.
+    fn set_extra_property(
+        &self,
+        _object: &str,
+        _property: &str,
+        _value: &str,
+    ) -> Option<SetResult> {
+        None
+    }
+
+    /// The shell's selection changed: mirror it into the script's facade.
+    ///
+    /// A notification, not a query — the write has already happened when it arrives,
+    /// so there is nothing to return.
+    fn on_selection_changed(&self, _items: &[SelectionItem]) {}
+
+    /// Drain the selection writes a script queued.
+    ///
+    /// The other direction of [`on_selection_changed`](Self::on_selection_changed):
+    /// `FreeCADGui.Selection.addSelection(...)` in a command does not run during
+    /// `set_selection`, so it lands in a queue the shell drains on its next frame.
+    fn take_selection_requests(&self) -> Vec<SelectionRequest> {
+        Vec::new()
+    }
+
+    /// The shell's presentation state changed: mirror it into the script's facade.
+    ///
+    /// What a `FreeCADGui` command reads to answer `IsChecked`.
+    fn on_view_state_changed(&self, _state: &ViewState) {}
+
+    /// The appearance preset the edition resolves to, when the script owns it.
+    ///
+    /// The boot path applies the returned outcome's `view`.
+    fn appearance_view(&self) -> Option<CommandOutcome> {
+        None
+    }
+
+    /// The active grid provider's summary, when the script owns the grid.
+    fn grid_summary(&self) -> Option<GridSummary> {
+        None
+    }
+
+    /// The active axis provider's summary, when the script owns the axes.
+    fn axis_summary(&self) -> Option<AxisSummary> {
+        None
+    }
+
+    /// The provider features the script registered, as the Dev Tools panel lists them.
+    fn provider_features(&self) -> Vec<ProviderFeature> {
+        Vec::new()
+    }
+
+    /// Switch `feature` to `backend`. `None` when the script knows neither.
+    fn set_provider(&self, _feature: &str, _backend: &str) -> Option<CommandOutcome> {
+        None
+    }
+
+    /// Re-read `feature`'s registry (a mod's `SetUp` may have changed it).
+    fn refresh_providers(&self, _feature: &str) -> Option<CommandOutcome> {
+        None
+    }
+
+    /// The WGSL skin the active provider of `feature` supplies.
+    ///
+    /// The shader lives in the mod, not the app, so the registry is the only channel.
+    fn provider_skin(&self, _feature: &str) -> Option<String> {
+        None
+    }
+
+    /// A workbench's manipulable elements on `object` (fillet and chamfer handles).
+    fn manipulator_specs(
+        &self,
+        _object: &str,
+        _element: Option<&str>,
+    ) -> Option<Vec<serde_json::Value>> {
+        None
+    }
+
+    /// Accept a dialog the script opened on `token` with the form's `values`.
+    fn dialog_accept(&self, _token: &str, _values: &serde_json::Value) -> Option<CommandOutcome> {
+        None
+    }
+
+    /// Cancel a dialog the script opened on `token`.
+    fn dialog_cancel(&self, _token: &str) -> Option<CommandOutcome> {
+        None
+    }
+
+    /// The GPU adapter preference the script's config stores.
+    fn gpu_adapter(&self) -> Option<String> {
+        None
+    }
+
+    /// Persist a GPU adapter preference. `None` when the script does not own it.
+    fn set_gpu_adapter(&self, _value: &str) -> Option<GpuPreferenceOutcome> {
+        None
+    }
 
     /// Commands this script surface registered at run time.
     ///

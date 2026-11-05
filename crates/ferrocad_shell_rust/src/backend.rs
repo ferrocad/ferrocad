@@ -194,26 +194,44 @@ impl AppBackend for RustAppBackend {
     }
 
     fn model_tree(&self) -> Result<Vec<DocumentNode>, String> {
-        let state = self.state.borrow();
-        let objects = state
-            .document
-            .object_ids()
-            .iter()
-            .filter_map(|id| state.document.object(*id))
-            .map(|object| ObjectNode {
-                name: object.name.clone(),
-                label: object.label.clone(),
-                type_id: object.type_id.clone(),
-            })
-            .collect();
-        Ok(vec![DocumentNode {
-            name: state.name.clone(),
-            label: state.name.clone(),
-            objects,
-        }])
+        let node = {
+            let state = self.state.borrow();
+            DocumentNode {
+                name: state.name.clone(),
+                label: state.name.clone(),
+                objects: state
+                    .document
+                    .object_ids()
+                    .iter()
+                    .filter_map(|id| state.document.object(*id))
+                    .map(|object| ObjectNode {
+                        name: object.name.clone(),
+                        label: object.label.clone(),
+                        type_id: object.type_id.clone(),
+                    })
+                    .collect(),
+            }
+        };
+        let mut tree = vec![node];
+        // A script surface appends what it owns after the document's own nodes (the
+        // synthetic `Settings/<Feature>` roots). The borrow above is released first:
+        // the script's walk is its own code and must not see a document lock.
+        if let Some(script) = &self.script {
+            tree.extend(script.extra_tree_nodes());
+        }
+        Ok(tree)
     }
 
     fn properties(&self, object: &str) -> Result<Vec<PropRow>, String> {
+        // A script-owned node first. `Settings/Grid` is not in the document, so the
+        // lookup below would answer "no rows" for a node the tree just showed.
+        if let Some(rows) = self
+            .script
+            .as_deref()
+            .and_then(|host| host.extra_properties(object))
+        {
+            return Ok(rows);
+        }
         let state = self.state.borrow();
         let Some(id) = Self::object_id(&state, object) else {
             return Ok(Vec::new());
@@ -416,15 +434,26 @@ impl AppBackend for RustAppBackend {
 
     fn set_view_state(&self, state: &ShellViewState) -> Result<(), String> {
         self.state.borrow_mut().view = state.clone();
+        // Mirrored, not queried: a `FreeCADGui` command answers `IsChecked` from this,
+        // so it has to be current before the next command can run. The local borrow is
+        // released first — the script's copy is its own.
+        if let Some(script) = &self.script {
+            script.on_view_state_changed(state);
+        }
         Ok(())
     }
 
     fn set_selection(&self, items: &[SelectionItem]) -> Result<(), String> {
         // The shell owns the selection; the document needs it for `App_Move`, whose
         // delta applies to whatever is selected rather than to a named target.
-        let mut state = self.state.borrow_mut();
-        state.selection = items.iter().map(|item| item.object.clone()).collect();
-        state.selection.dedup();
+        {
+            let mut state = self.state.borrow_mut();
+            state.selection = items.iter().map(|item| item.object.clone()).collect();
+            state.selection.dedup();
+        }
+        if let Some(script) = &self.script {
+            script.on_selection_changed(items);
+        }
         Ok(())
     }
 
@@ -466,11 +495,16 @@ impl AppBackend for RustAppBackend {
         Some(current_placement(&state.document, id)?.rotation.q)
     }
 
-    fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
-        Ok(EvalResult {
-            ok: false,
-            output: "this build has no Python interpreter".to_string(),
-        })
+    fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
+        // An installed script surface is the interpreter: the document half has none
+        // of its own, so without one there is nothing to evaluate against.
+        match self.script.as_deref() {
+            Some(host) => host.evaluate(code),
+            None => Ok(EvalResult {
+                ok: false,
+                output: "this build has no Python interpreter".to_string(),
+            }),
+        }
     }
 
     fn set_property(
@@ -479,6 +513,15 @@ impl AppBackend for RustAppBackend {
         property: &str,
         value: &str,
     ) -> Result<SetResult, String> {
+        // A script-owned node first: `Settings/Grid` has no `PropertyContainer`, so the
+        // document lookup below would refuse a row the tree just offered.
+        if let Some(result) = self
+            .script
+            .as_deref()
+            .and_then(|host| host.set_extra_property(object, property, value))
+        {
+            return Ok(result);
+        }
         let mut state = self.state.borrow_mut();
         let state = &mut *state;
         let Some(id) = Self::object_id(state, object) else {
@@ -716,10 +759,6 @@ impl AppBackend for RustAppBackend {
         })
     }
 
-    fn refresh_providers(&mut self, _feature: &str) -> Result<CommandOutcome, String> {
-        Ok(CommandOutcome::default())
-    }
-
     /// The typed half of the Move gesture: apply `(dx, dy, dz)` to the selection.
     ///
     /// The shell's Move form and the gizmo arrows commit through this one call, so a
@@ -731,6 +770,14 @@ impl AppBackend for RustAppBackend {
         values: &serde_json::Value,
     ) -> Result<CommandOutcome, String> {
         if !token.starts_with(MOVE_TOKEN) {
+            // Not this backend's dialog. A script surface opened it, if anything did.
+            if let Some(outcome) = self
+                .script
+                .as_deref()
+                .and_then(|host| host.dialog_accept(token, values))
+            {
+                return Ok(outcome);
+            }
             return Ok(CommandOutcome {
                 ok: false,
                 error: format!("{token} is not a dialog this build opened"),
@@ -775,7 +822,15 @@ impl AppBackend for RustAppBackend {
         }
     }
 
-    fn dialog_cancel(&mut self, _token: &str) -> Result<CommandOutcome, String> {
+    fn dialog_cancel(&mut self, token: &str) -> Result<CommandOutcome, String> {
+        // A dialog the script opened has state of its own to drop.
+        if let Some(outcome) = self
+            .script
+            .as_deref()
+            .and_then(|host| host.dialog_cancel(token))
+        {
+            return Ok(outcome);
+        }
         // Nothing is pending on this side: the values come back through
         // `dialog_accept`, and a cancelled form simply writes nothing.
         Ok(CommandOutcome::default())
@@ -1091,5 +1146,382 @@ fn row(id: &str, menu: &str, surface: &str) -> CommandInfo {
         // The browser host's view switches carry no icon of their own; the shell
         // falls back to the command id, exactly as `catalog` does for an iconless row.
         pixmap: String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use ferrocad_inventor::{EventListener, Scene};
+    use ferrocad_shell_api::app::{NoopListener, ScriptHost};
+    use ferrocad_shell_api::types::{
+        AxisSummary, GpuPreferenceOutcome, GridProvider, GridSummary, ProviderFeature,
+        SelectionRequest, WorkbenchReport,
+    };
+
+    use super::*;
+
+    /// The synthetic node the fake script owns: in the tree, absent from the document.
+    const SETTINGS_GRID: &str = "Settings/Grid";
+
+    /// What the fake records, kept outside the boxed host so a test can read it back.
+    #[derive(Default)]
+    struct Recorded {
+        selected: Mutex<Vec<SelectionItem>>,
+        view: Mutex<Option<ShellViewState>>,
+        requests: Mutex<Vec<SelectionRequest>>,
+    }
+
+    /// The script half the tests install.
+    ///
+    /// It claims one synthetic node, one synthetic property and one dialog token, and
+    /// records what the backend mirrored into it. Everything it does not own keeps the
+    /// trait's default, so each test also exercises the fall-through.
+    struct FakeHost {
+        log: Arc<Recorded>,
+    }
+
+    impl ScriptHost for FakeHost {
+        fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
+            Ok(EvalResult {
+                ok: true,
+                output: format!("ran {code}"),
+            })
+        }
+
+        fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
+            Ok(WorkbenchReport::default())
+        }
+
+        fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+            Err(format!("no tool {name}"))
+        }
+
+        fn tool_command(&self, _name: &str, _verb: &str) -> bool {
+            false
+        }
+
+        fn inventor_scene(&self) -> Result<Scene, String> {
+            Ok(Scene::default())
+        }
+
+        fn event_listener(&self) -> Box<dyn EventListener> {
+            Box::new(NoopListener)
+        }
+
+        fn extra_tree_nodes(&self) -> Vec<DocumentNode> {
+            vec![DocumentNode {
+                name: SETTINGS_GRID.to_string(),
+                label: "Grid".to_string(),
+                objects: Vec::new(),
+            }]
+        }
+
+        fn extra_properties(&self, object: &str) -> Option<Vec<PropRow>> {
+            (object == SETTINGS_GRID).then(|| {
+                vec![PropRow {
+                    name: "Spacing".to_string(),
+                    label: String::new(),
+                    type_id: "App::PropertyLength".to_string(),
+                    value: "10 mm".to_string(),
+                    status: String::new(),
+                    editable: true,
+                    command: None,
+                    kind: "quantity".to_string(),
+                    min: None,
+                    max: None,
+                    unit: Some("mm".to_string()),
+                    choices: Vec::new(),
+                }]
+            })
+        }
+
+        fn set_extra_property(
+            &self,
+            object: &str,
+            property: &str,
+            value: &str,
+        ) -> Option<SetResult> {
+            (object == SETTINGS_GRID).then(|| SetResult {
+                ok: property == "Spacing",
+                error: format!("{object}.{property} = {value}"),
+                view: None,
+            })
+        }
+
+        fn on_selection_changed(&self, items: &[SelectionItem]) {
+            *self.log.selected.lock().unwrap() = items.to_vec();
+        }
+
+        fn take_selection_requests(&self) -> Vec<SelectionRequest> {
+            std::mem::take(&mut *self.log.requests.lock().unwrap())
+        }
+
+        fn on_view_state_changed(&self, state: &ShellViewState) {
+            *self.log.view.lock().unwrap() = Some(state.clone());
+        }
+
+        fn appearance_view(&self) -> Option<CommandOutcome> {
+            Some(CommandOutcome {
+                ok: true,
+                status: "scripted appearance".to_string(),
+                ..Default::default()
+            })
+        }
+
+        fn grid_summary(&self) -> Option<GridSummary> {
+            Some(GridSummary {
+                feature: "grid".to_string(),
+                backend: Some("scripted".to_string()),
+                ..Default::default()
+            })
+        }
+
+        fn axis_summary(&self) -> Option<AxisSummary> {
+            Some(AxisSummary {
+                feature: "axis".to_string(),
+                length: Some("80 px".to_string()),
+                ..Default::default()
+            })
+        }
+
+        fn provider_features(&self) -> Vec<ProviderFeature> {
+            vec![ProviderFeature {
+                feature: "grid".to_string(),
+                providers: vec![GridProvider {
+                    backend: "scripted".to_string(),
+                    active: true,
+                    ..Default::default()
+                }],
+            }]
+        }
+
+        fn set_provider(&self, feature: &str, backend: &str) -> Option<CommandOutcome> {
+            (feature == "grid").then(|| CommandOutcome {
+                ok: true,
+                status: format!("grid: {backend}"),
+                ..Default::default()
+            })
+        }
+
+        fn refresh_providers(&self, feature: &str) -> Option<CommandOutcome> {
+            (feature == "grid").then(|| CommandOutcome {
+                ok: true,
+                status: "grid refreshed".to_string(),
+                ..Default::default()
+            })
+        }
+
+        fn provider_skin(&self, feature: &str) -> Option<String> {
+            (feature == "grid").then(|| "// scripted wgsl".to_string())
+        }
+
+        fn manipulator_specs(
+            &self,
+            object: &str,
+            element: Option<&str>,
+        ) -> Option<Vec<serde_json::Value>> {
+            (object == "Box" && element == Some("Edge1"))
+                .then(|| vec![serde_json::json!({ "kind": "fillet" })])
+        }
+
+        fn dialog_accept(&self, token: &str, values: &serde_json::Value) -> Option<CommandOutcome> {
+            (token == DIALOG).then(|| CommandOutcome {
+                ok: true,
+                status: format!("accepted {values}"),
+                ..Default::default()
+            })
+        }
+
+        fn dialog_cancel(&self, token: &str) -> Option<CommandOutcome> {
+            (token == DIALOG).then(|| CommandOutcome {
+                ok: true,
+                status: "cancelled".to_string(),
+                ..Default::default()
+            })
+        }
+
+        fn gpu_adapter(&self) -> Option<String> {
+            Some("high".to_string())
+        }
+
+        fn set_gpu_adapter(&self, value: &str) -> Option<GpuPreferenceOutcome> {
+            Some(GpuPreferenceOutcome {
+                ok: value == "high",
+                value: value.to_string(),
+                error: String::new(),
+            })
+        }
+    }
+
+    /// A dialog token only the script knows: `MOVE_TOKEN` prefixed tokens stay the
+    /// document backend's, everything else is the script's to answer.
+    const DIALOG: &str = "py-dialog-1";
+
+    fn backend_with_script() -> (RustAppBackend, Arc<Recorded>) {
+        let log = Arc::new(Recorded::default());
+        let backend =
+            RustAppBackend::new().with_script_host(Box::new(FakeHost { log: log.clone() }));
+        (backend, log)
+    }
+
+    #[test]
+    fn the_tree_carries_the_nodes_the_script_owns() {
+        let (backend, _) = backend_with_script();
+        let tree = backend.model_tree().unwrap();
+        // The document's own root first, then what the script appended.
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree[0].name, DOCUMENT);
+        assert_eq!(tree[1].name, SETTINGS_GRID);
+        assert!(tree[0].objects.iter().any(|object| object.name == "Box"));
+    }
+
+    #[test]
+    fn a_script_owned_node_is_read_before_the_document() {
+        let (backend, _) = backend_with_script();
+        // `Settings/Grid` is not in the document: without the intercept this answers
+        // an empty list and the tree row the shell just showed would open blank.
+        let rows = backend.properties(SETTINGS_GRID).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Spacing");
+        assert_eq!(rows[0].value, "10 mm");
+    }
+
+    #[test]
+    fn a_document_object_still_reads_from_the_document() {
+        let (backend, _) = backend_with_script();
+        let rows = backend.properties("Box").unwrap();
+        // The script declined this object (`None`), so the document answered.
+        assert!(rows.iter().any(|row| row.name == "Label"));
+        assert!(rows.iter().any(|row| row.name == "Length"));
+    }
+
+    #[test]
+    fn a_script_owned_property_is_written_without_the_document() {
+        let (mut backend, _) = backend_with_script();
+        let before = backend.model_tree().unwrap()[0].objects.len();
+        let result = backend
+            .set_property(SETTINGS_GRID, "Spacing", "25 mm")
+            .unwrap();
+        assert!(result.ok);
+        assert_eq!(result.error, "Settings/Grid.Spacing = 25 mm");
+        // It never reached the document: nothing was created to hold it.
+        assert_eq!(backend.model_tree().unwrap()[0].objects.len(), before);
+    }
+
+    #[test]
+    fn the_selection_and_view_state_are_mirrored_to_the_script() {
+        let (backend, log) = backend_with_script();
+        let items = vec![SelectionItem::with_elements("Box", vec!["Face6".into()])];
+        backend.set_selection(&items).unwrap();
+        backend
+            .set_view_state(&ShellViewState {
+                grid: true,
+                ..Default::default()
+            })
+            .unwrap();
+        // The fake records what the backend mirrored, so a forwarding that silently
+        // stopped would leave these empty.
+        assert_eq!(log.selected.lock().unwrap().as_slice(), items.as_slice());
+        assert!(log.view.lock().unwrap().as_ref().unwrap().grid);
+    }
+
+    #[test]
+    fn selection_requests_drain_from_the_script() {
+        let (mut backend, log) = backend_with_script();
+        log.requests.lock().unwrap().push(SelectionRequest {
+            op: "add".to_string(),
+            object: "Box".to_string(),
+            elements: Vec::new(),
+            points: Vec::new(),
+        });
+        let drained = backend.take_selection_requests().unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].object, "Box");
+        // Drained means drained: the second call is empty.
+        assert!(backend.take_selection_requests().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_provider_and_gpu_hooks_ask_the_script_first() {
+        let (mut backend, _) = backend_with_script();
+        assert_eq!(backend.grid_summary().unwrap().feature, "grid");
+        assert_eq!(backend.axis_summary().unwrap().feature, "axis");
+        assert_eq!(backend.provider_features().unwrap().len(), 1);
+        assert_eq!(
+            backend.provider_skin("grid").unwrap().as_deref(),
+            Some("// scripted wgsl")
+        );
+        assert_eq!(
+            backend.set_provider("grid", "scripted").unwrap().status,
+            "grid: scripted"
+        );
+        assert_eq!(
+            backend.refresh_providers("grid").unwrap().status,
+            "grid refreshed"
+        );
+        // A feature the script disclaims falls through to the backend's default.
+        assert!(
+            backend
+                .set_provider("axis", "anything")
+                .unwrap()
+                .status
+                .is_empty()
+        );
+        assert_eq!(backend.gpu_adapter().unwrap(), "high");
+        assert!(backend.set_gpu_adapter("high").unwrap().ok);
+        assert!(!backend.set_gpu_adapter("low").unwrap().ok);
+        assert_eq!(
+            backend
+                .manipulator_specs("Box", Some("Edge1"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(backend.manipulator_specs("Box", None).unwrap().is_empty());
+        assert_eq!(
+            backend.appearance_view().unwrap().status,
+            "scripted appearance"
+        );
+    }
+
+    #[test]
+    fn a_scripted_dialog_is_accepted_and_cancelled() {
+        let (mut backend, _) = backend_with_script();
+        let accepted = backend
+            .dialog_accept(DIALOG, &serde_json::json!({ "r": 2.0 }))
+            .unwrap();
+        assert!(accepted.ok);
+        assert!(accepted.status.starts_with("accepted"));
+        assert!(backend.dialog_cancel(DIALOG).unwrap().ok);
+        // A token neither half knows is still refused with the backend's message.
+        let unknown = backend
+            .dialog_accept("nobody-owns-this", &serde_json::json!({}))
+            .unwrap();
+        assert!(!unknown.ok);
+        assert!(unknown.error.contains("not a dialog this build opened"));
+    }
+
+    #[test]
+    fn a_scripted_console_line_reaches_the_interpreter() {
+        // The document half has no interpreter of its own, so an installed host must
+        // answer — otherwise `?js=1` would regress to "no Python interpreter".
+        let (backend, _) = backend_with_script();
+        assert_eq!(backend.evaluate("1 + 1").unwrap().output, "ran 1 + 1");
+    }
+
+    #[test]
+    fn without_a_script_the_document_answers_alone() {
+        let mut backend = RustAppBackend::new();
+        assert_eq!(backend.model_tree().unwrap().len(), 1);
+        assert!(backend.properties(SETTINGS_GRID).unwrap().is_empty());
+        assert_eq!(backend.gpu_adapter().unwrap(), "auto");
+        assert!(backend.take_selection_requests().unwrap().is_empty());
+        let unknown = backend
+            .dialog_accept("nobody-owns-this", &serde_json::json!({}))
+            .unwrap();
+        assert!(!unknown.ok);
+        assert!(!backend.evaluate("1 + 1").unwrap().ok);
     }
 }

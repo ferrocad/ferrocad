@@ -25,3 +25,8 @@ ferrocad_shell_api.workspace = true
 # The Move form's values arrive as JSON, where they would arrive from Python.
 serde_json.workspace = true
 log = "0.4"
+
+[dev-dependencies]
+# The `ScriptHost` contract names a `Scene` and an `EventListener`; the tests write a
+# fake host, so they need the vocabulary even though the document half never does.
+ferrocad_inventor.workspace = true

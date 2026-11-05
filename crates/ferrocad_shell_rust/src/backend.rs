@@ -510,10 +510,17 @@ impl AppBackend for RustAppBackend {
         visibility.wheel = true;
         commands.push(visibility);
 
-        // A scripting surface (the JS host) contributes its own verbs; they go
-        // through the same list, so the palette and the wheels resolve them.
+        // A scripting surface (the JS host, or the embedded interpreter) contributes
+        // its own verbs; they go through the same list, so the palette and the wheels
+        // resolve them. An id the catalogue already provides keeps the catalogue's row:
+        // its metadata and live state are what the chrome is built from, and a
+        // workbench that registers a class under a built-in id must not shadow it.
         if let Some(script) = &self.script {
-            commands.extend(script.commands());
+            for command in script.commands() {
+                if !commands.iter().any(|existing| existing.id == command.id) {
+                    commands.push(command);
+                }
+            }
         }
         Ok(commands)
     }

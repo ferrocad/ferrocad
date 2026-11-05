@@ -29,6 +29,7 @@ pub mod backend;
 pub mod events;
 pub mod headless;
 pub mod python;
+pub mod script_host;
 
 pub use ferrocad_shell_core::*;
 
@@ -44,6 +45,7 @@ use gpui::{
 pub use backend::PythonAppBackend;
 pub use events::PythonEventCallbacks;
 pub use headless::{RenderReport, StlReport, render as render_headless, run as run_headless};
+pub use script_host::PythonScriptHost;
 
 /// Serializes tests that drive the shared embedded CPython instance.
 #[cfg(test)]

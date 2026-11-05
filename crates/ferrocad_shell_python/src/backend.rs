@@ -238,7 +238,7 @@ pub fn install(cx: &mut App) {
 /// like the Rust tools. A missing facade or bridge is reported as "no such
 /// tool" by the caller, never as a panic: a build without the Python stage
 /// extension still runs the rest of the shell.
-fn python_tool(name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+pub(crate) fn python_tool(name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
     Python::with_gil(|py| {
         let module = py
             .import("ferrocad_shell")
@@ -255,7 +255,7 @@ fn python_tool(name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
 }
 
 /// Send a session verb (`cancel`/`finish`) to a Python-backed tool.
-fn python_tool_command(name: &str, verb: &str) -> bool {
+pub(crate) fn python_tool_command(name: &str, verb: &str) -> bool {
     Python::with_gil(|py| {
         let result = py
             .import("ferrocad_shell")

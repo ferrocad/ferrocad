@@ -29,6 +29,8 @@ ferrocad_stage_py.workspace = true
 ferrocad_viewport.workspace = true
 ferrocad_wgpu.workspace = true
 ferrocad_types.workspace = true
+# The seam's vocabulary and the command catalogue the script half filters against.
+ferrocad_shell_api.workspace = true
 bite-gpui = { version = "=1.25.203" }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }

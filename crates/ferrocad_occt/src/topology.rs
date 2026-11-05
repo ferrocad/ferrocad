@@ -144,7 +144,7 @@ pub(crate) fn tessellate(
         .ok_or(OcctError::InvalidInput { what: "null shape" })?;
 
     let (linear, angular) = mesh_deflections(s, options)?;
-    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, linear, false, angular);
+    let mesh = ffi::b_rep_mesh::IncrementalMesh_new_parallel(s, linear, false, angular, true);
     if !mesh.IsDone() {
         return Err(OcctError::NotDone {
             operation: "tessellate",
@@ -269,7 +269,7 @@ pub(crate) fn tessellate_points(
         .ok_or(OcctError::InvalidInput { what: "null shape" })?;
 
     let (linear, angular) = mesh_deflections(s, options)?;
-    let mesh = ffi::b_rep_mesh::IncrementalMesh_new(s, linear, false, angular);
+    let mesh = ffi::b_rep_mesh::IncrementalMesh_new_parallel(s, linear, false, angular, true);
     if !mesh.IsDone() {
         return Err(OcctError::NotDone {
             operation: "tessellate",

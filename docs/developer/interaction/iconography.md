@@ -720,6 +720,13 @@ already indexed) resolved two rows without a new request:
 still rejected: the first two carry a radius or chord, and the third is a half disc
 with a straight diameter, so Arc stays on the draw list.
 
+**Re-check, 2026-11-06.** The catalogue grew **6,515 → 6,590**: 76 added, 1 removed
+(`arrow-down-thick`, unused here). None of the additions is CAD-adjacent — the nearest
+are `measuring-wheel` (`industry`) and `photo-rotate` (`photo`) — and re-searching the
+26 open requests returned no new match. The `symbols`, `editor`, `interface`, `generic`
+and `files` sets are unchanged, so all 115 icon names in this note and all 79 vendored
+assets still resolve. The snapshot is refreshed to 6,590.
+
 ### Contact sheets
 
 The rendered comparison is checked in beside the design notes. Every card labels the

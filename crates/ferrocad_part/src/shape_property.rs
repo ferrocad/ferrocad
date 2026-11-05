@@ -163,6 +163,30 @@ impl ShapeProperty {
         Arc::clone(&self.tessellations)
     }
 
+    /// The display tessellation of the held shape, memoised.
+    ///
+    /// A shell asks every drawable object for its mesh on each sync, and the kernel
+    /// meshes per face whether or not the shape is already triangulated, so an
+    /// unchanged document must not re-mesh. Both backends go through this: the Rust
+    /// one directly, the Python one through the wrapper's copy of the same cache.
+    pub fn tessellate(
+        &self,
+        linear: f64,
+        angular: f64,
+    ) -> Result<Arc<ferrocad_geom::Tessellation>, ferrocad_geom::GeomError> {
+        let Some(shape) = self.shape.as_ref() else {
+            return Ok(Arc::new(ferrocad_geom::Tessellation::default()));
+        };
+        self.tessellations.get_or_build(shape, linear, angular, || {
+            let options = ferrocad_geom::TessellationOptions {
+                linear_deflection: Some(linear),
+                angular_deflection: angular,
+                relative: false,
+            };
+            crate::backend().tessellate(shape, &options)
+        })
+    }
+
     /// The accumulated placement carried beside the baked geometry.
     pub fn placement(&self) -> Placement {
         self.placement

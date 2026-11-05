@@ -213,9 +213,18 @@ pub fn bootstrap() -> Result<Bootstrap, String> {
 }
 
 /// Open a saved document and make it active (the `--open` path).
+///
+/// `FERROCAD_TIMING=1` prints how long it took: this is the parse and the shape
+/// restore, and on a large `.FCStd` it is the first thing to check.
 pub fn open_document(path: &Path) -> Result<OpenedDocument, String> {
+    let timing = std::env::var_os("FERROCAD_TIMING").is_some();
+    let started = std::time::Instant::now();
     let path = path.to_string_lossy();
-    call_json("open_document", Some(path.as_ref()))
+    let opened = call_json("open_document", Some(path.as_ref()));
+    if timing {
+        eprintln!("ferrocad: open {:?} ({path})", started.elapsed());
+    }
+    opened
 }
 
 /// Save the active document under `path`; the suffix selects the serializer

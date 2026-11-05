@@ -285,7 +285,6 @@ impl AppBackend for RustAppBackend {
     fn stage_meshes(&self) -> Result<Vec<StageMesh>, String> {
         let state = self.state.borrow();
         let state = &*state;
-        let backend = backend();
         let mut meshes = Vec::new();
         // The engine decides what is drawn: a feature replaces the object it consumes
         // (the box under a fillet), and a hidden object is skipped. The native host
@@ -294,17 +293,18 @@ impl AppBackend for RustAppBackend {
             let Some(object) = state.document.object(id) else {
                 continue;
             };
-            let Some(shape) = object
-                .properties
-                .get("Shape")
-                .and_then(shape_of)
-                .and_then(|property| property.shape())
-            else {
+            let Some(property) = object.properties.get("Shape").and_then(shape_of) else {
                 continue;
             };
-            let mesh = backend
-                .tessellate(&shape, &TessellationOptions::absolute(TOLERANCE))
+            if property.shape().is_none() {
+                continue;
+            };
+            // The property memoises: a sync of an unchanged document copies, it does
+            // not re-mesh (the kernel meshes per face either way).
+            let mesh = property
+                .tessellate(TOLERANCE, TessellationOptions::default().angular_deflection)
                 .map_err(|error| format!("{}: {error}", object.name))?;
+            let mesh = std::sync::Arc::unwrap_or_clone(mesh);
             meshes.push(StageMesh {
                 // A stable per-document pick id; `DisplaySync` maps it to the name.
                 entity: id as u32 + 1,

@@ -208,9 +208,25 @@ impl Shell {
     ///
     /// The shell names no workbench: the script routes `stage_meshes` through
     /// `FerroCAD.display_mesh`, so whatever module owns the objects supplies the mesh.
+    ///
+    /// Set `FERROCAD_TIMING=1` to print how long the read and the build each take: the
+    /// read crosses into Python and the kernel, so it is the first thing to check when
+    /// a document feels slow.
     pub(in crate::shell) fn build_stage(&mut self, cx: &App) -> Result<ferrocad_stage::Stage, String> {
+        let timing = std::env::var_os("FERROCAD_TIMING").is_some();
+        let started = std::time::Instant::now();
         let meshes: Vec<StageMesh> = crate::app::stage_meshes(cx)?;
-        Ok(self.display.build(meshes))
+        let read = started.elapsed();
+        let stage = self.display.build(meshes);
+        if timing {
+            eprintln!(
+                "ferrocad: stage sync: meshes {read:?} + build {:?} = {:?} ({} items)",
+                started.elapsed() - read,
+                started.elapsed(),
+                stage.items().len()
+            );
+        }
+        Ok(stage)
     }
 
     /// React to a viewport event: a click selection, a manipulator commit, or a

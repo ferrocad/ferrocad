@@ -54,9 +54,33 @@ time ./target/debug/ferrocad_parametric --open ~/Downloads/900a_GA3DtechProject_
 # phase split (script stdout is swallowed → write a file)
 ./target/debug/ferrocad_parametric --script /tmp/timing.py --render /tmp/s.png --size 64x64
 
+# the app's own numbers, on the UI thread
+FERROCAD_TIMING=1 ./target/debug/ferrocad_parametric --open ~/Downloads/900a_GA3DtechProject_v1.0.FCStd
+
+# the same file through the Rust backend the browser installs
+cargo run -p ferrocad_shell_rust --example timing -- ~/Downloads/900a_GA3DtechProject_v1.0.FCStd
+
 # the parallel restore, in situ: pinning to one CPU makes `available_parallelism` 1
 taskset -c 0 ./target/debug/ferrocad_parametric --script /tmp/open-only.py --render /tmp/s.png --size 64x64
 ```
+
+## 1a. The two backends, on the same file
+
+"It is blazing fast in `ferrocad_web_gpui`" was the report that started this round.
+Measured with `--example timing`, the browser's `RustAppBackend` is **not** faster at
+this work; it was slower, because it re-meshed on every sync (4.0 s each time):
+
+| | `open` | first sync | every later sync |
+| --- | --- | --- | --- |
+| Python backend (`ferrocad_parametric`) | 1.4 s | 7.5 s | 0.67 s (was 5.5 s) |
+| Rust backend (`ferrocad_web_gpui`, same kernel) | 1.5 s | 6.3 s | 16 ms (was 4.0 s) |
+
+So the open and first-sync cost is OCCT meshing in **both** backends, and a browser
+build of this file would take about as long. What differs is the residual after the
+memo: 16 ms for the Rust backend, 0.67 s for the Python one. That gap is the hop —
+the owned copy, the placement bake, the `bytes` encode and the PyO3 decode of 1.25 M
+triangles — and it is the next thing to remove (a typed handle instead of encoded
+arrays), not a reason the first frame is late.
 
 Both remaining large numbers are **OCCT**, not the shell: the ASCII BRep reader and
 `BRepMesh`. Neither is affected by our Rust profile, so these are the numbers a release
@@ -144,6 +168,8 @@ frame (it recovers a third, see §2).
 - [x] Verified invalidation on the three ways a shape changes: a repeat sync agrees
   byte for byte, moving an object shifts its geometry by exactly the offset, and
   assigning a new shape replaces the mesh (and resets the placement).
+- [x] The Rust backend the browser installs uses the same memo (`ShapeProperty::tessellate`),
+  which took its repeat sync from 4.0 s to 16 ms.
 - Measured (debug, whole document):
 
 | Sync | Before | After |

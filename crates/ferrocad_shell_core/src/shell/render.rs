@@ -6,6 +6,8 @@
 use super::*;
 use super::pill::AxisFrame;
 
+use ferrocad_widgets::icon;
+
 /// The active-action surface: the active tool's label, point count, hint and a
 /// **Cancel** / **Finish** pair, as one dielectric pill over the bottom of the canvas.
 ///
@@ -1022,6 +1024,16 @@ pub(super) fn palette_overlay(
         let enabled = command.enabled;
         let checked = command.checked;
         let is_selected = index == selected;
+        let icon_selector = id.clone();
+        let glyph = crate::ui::command_icons::resolve(command)
+            .and_then(|key| icon::named(&key, icon::ROW, if enabled { FG } else { MUTED }))
+            .map(|glyph| {
+                div()
+                    .debug_selector(move || format!("palette-row-{icon_selector}-icon"))
+                    .flex()
+                    .items_center()
+                    .child(glyph)
+            });
         let mut row = div()
             .id(SharedString::from(format!("palette-row-{id}")))
             .debug_selector(move || format!("palette-row-{selector}"))
@@ -1035,6 +1047,7 @@ pub(super) fn palette_overlay(
             .text_xs()
             .text_color(rgb(if enabled { FG } else { MUTED }))
             .when(is_selected, |el| el.bg(rgb(ACCENT)))
+            .when_some(glyph, |el, glyph| el.child(glyph))
             .when(enabled, |el| {
                 el.cursor_pointer().hover(|style| style.bg(rgb(PANEL_ALT)))
             })
@@ -1141,6 +1154,16 @@ pub(crate) fn tree_panel(
         );
         for obj in &doc.objects {
             let name = obj.name.clone();
+            let icon_name = name.clone();
+            let type_icon = crate::ui::command_icons::icon_for_type(&obj.type_id)
+                .and_then(|key| icon::named(key, icon::ROW, MUTED))
+                .map(|glyph| {
+                    div()
+                        .debug_selector(move || format!("obj-{icon_name}-icon"))
+                        .flex()
+                        .items_center()
+                        .child(glyph)
+                });
             let mut row = div()
                 .id(SharedString::from(format!("obj-{name}")))
                 .flex()
@@ -1149,6 +1172,7 @@ pub(crate) fn tree_panel(
                 .gap_2()
                 .px_4()
                 .py_1()
+                .when_some(type_icon, |el, glyph| el.child(glyph))
                 .child(div().text_sm().text_color(rgb(FG)).child(obj.label.clone()))
                 .child(
                     div()

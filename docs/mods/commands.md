@@ -67,7 +67,7 @@ The shell reads these keys when it builds the viewport header and the action doc
 | `FerroCAD_Parent` | the surface's primary command, for a row inside its popover | `""` |
 | `FerroCAD_Short` | a compact label for that popover row (`Grid` for `Snap Grid`) | `MenuText` |
 | `FerroCAD_Tone` | a `radial` slot's semantic class: `structural`, `additive` or `destructive` | `structural` |
-| `Pixmap` | accepted and ignored; the controls are text today | — |
+| `Pixmap` | the command's icon: a vendored icon key (`"cube"`, `"trash"`, `"shape-polyline"`) or an upstream command id the curated table knows (`"Draft_Snap_Endpoint"`) | `""` (the command id is tried) |
 
 `FerroCAD_Surface`, `FerroCAD_Parent`, `FerroCAD_Short` and `FerroCAD_Tone` are
 **FerroCAD extensions**. Leave them out and the command lands on the dock, which is
@@ -80,6 +80,11 @@ dock; the Dev Tools command list and the app menu can still offer it. `radial` i
 special: the command is not a dock row at all — it becomes a wedge in the in-situ
 wheel, ordered by `FerroCAD_Tone` (structural, additive, destructive), so the
 destructive slot is always last (south).
+
+`Pixmap` is upstream's own icon key, so a mod sets it rather than a new resource. The
+shell resolves it in three steps: a vendored icon key, then the curated command-id
+table, then the command id itself. An unknown value costs nothing — the row keeps its
+label and draws no glyph.
 
 A popover row keeps the menu open when it represents **state**: a command declares
 `Checkable: True` or defines `IsChecked`, and the generated provider rows are state

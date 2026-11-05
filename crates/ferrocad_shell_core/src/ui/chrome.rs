@@ -87,8 +87,8 @@ struct PopoverRow {
 }
 
 /// The curated glyph for a command, or `None` when the note has not chosen one.
-fn command_glyph(command_id: &str, size: f32, ink: u32) -> Option<AnyElement> {
-    command_icons::icon_for(command_id).and_then(|key| icon::named(key, size, ink))
+fn command_glyph(command: &CommandInfo, size: f32, ink: u32) -> Option<AnyElement> {
+    command_icons::resolve(command).and_then(|key| icon::named(&key, size, ink))
 }
 
 impl PopoverRow {
@@ -100,9 +100,7 @@ impl PopoverRow {
             label: command.short_label().to_string(),
             enabled: command.enabled,
             checked: command.checked,
-            icon: command_icons::icon_for(&command.id)
-                .unwrap_or("")
-                .to_string(),
+            icon: command_icons::resolve(command).unwrap_or_default(),
             toggle: command.checkable,
             keep_open: command.checkable,
             accel: command.accel.clone(),
@@ -304,9 +302,7 @@ fn gizmo_rows(feature: Option<&ProviderFeature>, commands: &[CommandInfo]) -> Ve
             label: "Reset to edition defaults".to_string(),
             enabled: command.enabled,
             checked: false,
-            icon: command_icons::icon_for(&command.id)
-                .unwrap_or("")
-                .to_string(),
+            icon: command_icons::resolve(command).unwrap_or_default(),
             toggle: false,
             keep_open: false,
             accel: command.accel.clone(),
@@ -487,9 +483,7 @@ fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
             id: command.id.clone(),
             label: command.label().to_string(),
             enabled: command.enabled,
-            icon: command_icons::icon_for(&command.id)
-                .unwrap_or("")
-                .to_string(),
+            icon: command_icons::resolve(command).unwrap_or_default(),
             // The registry cannot know whether a window exists; the shell can.
             checked: dev_tools_open,
             // A toggle, but the app menu is a launcher: clicking closes it so the
@@ -1435,7 +1429,7 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
         let hover_ink = if checked { ACTIVE_ACCENT } else { FG };
         // The glyph is a secondary mark beside the label, so it takes the same ink
         // as the text: muted when disabled, accented when the command is live.
-        let glyph = command_glyph(&id, icon::ROW, ink).map(|glyph| {
+        let glyph = command_glyph(command, icon::ROW, ink).map(|glyph| {
             div()
                 .debug_selector({
                     let id = id.clone();

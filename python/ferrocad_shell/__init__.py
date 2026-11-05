@@ -707,6 +707,9 @@ def commands() -> str:
         entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
         entry["short"] = str(resources.get("FerroCAD_Short") or "")
         entry["tone"] = str(resources.get("FerroCAD_Tone") or "")
+        # Upstream's icon resource. The shell resolves it as a vendored icon key
+        # first, so a mod can name a glyph directly, then as a curated command id.
+        entry["pixmap"] = str(resources.get("Pixmap") or "")
         # Also offer this command in the radial menu, beside the object verbs.
         entry["wheel"] = bool(resources.get("FerroCAD_Wheel"))
         # A command that reports checked state is a toggle even when it predates the

@@ -367,7 +367,7 @@ impl Shell {
             .map(|command| WheelSlot {
                 id: command.id.clone().into(),
                 label: command.short_label().into(),
-                icon: command_icons::icon_for(&command.id).unwrap_or("").into(),
+                icon: command_icons::resolve(command).unwrap_or_default().into(),
                 tone: match command.tone.as_str() {
                     "additive" => WheelTone::Additive,
                     "destructive" => WheelTone::Destructive,
@@ -387,7 +387,7 @@ impl Shell {
                 .map(|command| WheelSlot {
                     id: command.id.clone().into(),
                     label: command.short_label().into(),
-                    icon: command_icons::icon_for(&command.id).unwrap_or("").into(),
+                    icon: command_icons::resolve(command).unwrap_or_default().into(),
                     tone: WheelTone::Structural,
                     enabled: command.enabled,
                 })

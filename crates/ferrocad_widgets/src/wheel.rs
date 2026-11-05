@@ -33,15 +33,15 @@ use ferrocad_theme::ui::{
 use crate::icon;
 
 /// The inner radius of the active ring; a release inside it cancels.
-pub const INNER_RADIUS: f32 = 24.0;
+pub const INNER_RADIUS: f32 = 30.0;
 /// The outer radius of the active ring.
-pub const OUTER_RADIUS: f32 = 76.0;
+pub const OUTER_RADIUS: f32 = 92.0;
 /// The label ring's radius.
-pub const LABEL_RADIUS: f32 = 50.0;
+pub const LABEL_RADIUS: f32 = 62.0;
 /// The wheel element's side, including a little air around the torus.
 pub const SIZE: f32 = 2.0 * OUTER_RADIUS + 16.0;
 /// The label half-width, in logical px.
-const LABEL_HALF_WIDTH: f32 = 44.0;
+const LABEL_HALF_WIDTH: f32 = 52.0;
 /// The label line's height, in logical px, for centring the icon + label chip.
 const LABEL_LINE: f32 = 16.0;
 
@@ -670,12 +670,12 @@ mod tests {
             WheelHit::Deadzone
         );
         assert_eq!(
-            slot_at(centre, point(px(100.), px(110.)), 4),
+            slot_at(centre, point(px(100.), px(100. + INNER_RADIUS / 2.0)), 4),
             WheelHit::Deadzone,
             "inside the inner radius"
         );
         assert_eq!(
-            slot_at(centre, point(px(100.), px(180.)), 4),
+            slot_at(centre, point(px(100.), px(100. + OUTER_RADIUS + 10.0)), 4),
             WheelHit::Outside,
             "beyond the outer radius"
         );

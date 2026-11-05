@@ -78,6 +78,11 @@ fn the_dev_tools_window_lists_commands_with_enablement(cx: &mut TestAppContext) 
         dev_cx.debug_bounds("tree-panel").is_some(),
         "the model tree is open beside the commands"
     );
+    // A tree row is a document object, so its glyph comes from the type-id table.
+    assert!(
+        dev_cx.debug_bounds("obj-Params-icon").is_some(),
+        "the Params row draws its type glyph"
+    );
     assert!(
         dev_cx.debug_bounds("properties-panel").is_some(),
         "the property editor is open beside the model tree"

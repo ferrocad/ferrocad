@@ -112,6 +112,11 @@ pub struct CommandInfo {
     /// command offered in that control's popover (P0.6 extension).
     #[serde(default)]
     pub parent: String,
+    /// `GetResources()["Pixmap"]` — upstream's icon resource. The shell resolves it
+    /// **first** as a vendored icon key (so a mod can name a glyph directly), then
+    /// through the curated alias table, and finally falls back to the command id.
+    #[serde(default)]
+    pub pixmap: String,
     /// `GetResources()["FerroCAD_Wheel"]` — also offer this command in the radial
     /// menu, beside the `radial`-surface object verbs (P0.6 extension). A view-only
     /// action that still belongs to the geometry under the pointer (`Set WP`) is not

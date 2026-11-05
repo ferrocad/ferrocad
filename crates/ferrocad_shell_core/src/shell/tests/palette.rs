@@ -16,6 +16,11 @@ fn ctrl_k_opens_the_palette_and_filters_the_commands(cx: &mut TestAppContext) {
     // disabled command (it is visible but greyed, like the dock).
     assert!(cx.debug_bounds("palette-row-App_ToggleGrid").is_some());
     assert!(cx.debug_bounds("palette-row-App_Delete").is_some());
+    // A curated row draws the command's glyph before its label.
+    assert!(
+        cx.debug_bounds("palette-row-App_ToggleGrid-icon").is_some(),
+        "the grid row carries its glyph"
+    );
 
     // Case-insensitive label match: only the grid command survives.
     cx.simulate_input("GRID");

@@ -33,8 +33,8 @@ now renders (§6.2).
 | Action dock | text labels | glyph + text label | `chrome.rs` |
 | Header popovers | `PopoverRow { label, accel, checked, … }` | glyph + label + accel + status dot | `chrome.rs` |
 | Radial wheel | text label per wedge; tone only in the inner arc | glyph above the text label | `crates/ferrocad_widgets/src/wheel.rs` |
-| Palette | text rows | text rows (unchanged) | `crates/ferrocad_shell_core/src/shell/panels/palette.rs` |
-| Model tree | `▾` + label + object `type_id` as text | unchanged | `crates/ferrocad_shell_core/src/shell/render.rs:1133-1150` |
+| Palette | text rows | glyph + text row | `crates/ferrocad_shell_core/src/shell/render.rs` |
+| Model tree | `▾` + label + object `type_id` as text | type glyph + label + `type_id` | `crates/ferrocad_shell_core/src/shell/render.rs` |
 | Dev Tools | **one embedded SVG bug**, 16×16 | unchanged | `crates/ferrocad_widgets/src/icon.rs` |
 | Title bar | painted minimize/maximize/close paths | unchanged | `crates/ferrocad_widgets/src/window_chrome.rs:241` |
 | NaviCube | 3-D glass cube with `F/R/T` letters | unchanged | `crates/ferrocad_viewport/src/navicube.rs` |
@@ -52,21 +52,27 @@ Three facts matter:
 - The command id is the join key. `crates/ferrocad_shell_core/src/ui/command_icons.rs`
   is the curated **command id → icon key** table (the note's alias table in code); a
   command with no row keeps its label and draws no glyph, and a test keeps every
-  curated key pointing at a vendored asset.
+  curated key pointing at a vendored asset. `Pixmap` is now forwarded through the
+  bridge and resolved **before** the id, so upstream's own resource works and a mod can
+  name a vendored glyph directly. The model tree is a second, type-id-keyed table
+  (`icon_for_type`) because its rows are objects, not commands.
 
-The command metadata has no icon key anywhere:
+Until this round the command metadata carried no icon:
 
-- `CommandDef` (`crates/ferrocad_shell_api/src/catalog.rs:30-54`) — no icon field.
-- `CommandInfo` (`crates/ferrocad_shell_api/src/commands.rs`) — no icon field.
-- `FreeCADGui._command_list` (`python/FreeCADGui/__init__.py:1274-1292`) forwards
-  `MenuText`, `ToolTip`, `Accel`, `Group` and `CmdType` and **drops upstream's
-  `Pixmap`**, which is the key that names an icon (`"Pixmap": "Draft_Move"`,
+- `CommandDef` (`crates/ferrocad_shell_api/src/catalog.rs`) still has no icon field: the
+  built-ins resolve by command id through the curated table.
+- `CommandInfo` (`crates/ferrocad_shell_api/src/commands.rs`) now carries `pixmap`,
+  forwarded from `GetResources()["Pixmap"]`.
+- `FreeCADGui._command_list` (`python/FreeCADGui/__init__.py`) forwards `MenuText`,
+  `ToolTip`, `Accel`, `Group`, `CmdType` and now `Pixmap`, which is the key that names
+  an icon (`"Pixmap": "Draft_Move"`,
   `freecad-upstream/src/Mod/Draft/draftguitools/gui_move.py:57`).
 
-That gap is why the join key is the **command id**, not a resource: the ids already
-travel end to end (`Draft_Snap_Grid`, `App_Move`), and the curated table above can be
-added to without touching the JSON contract, the Python bridge or a mod. Forwarding
-`Pixmap` — so a mod could declare its own icon — is the follow-up described in §6.1.
+The command id remains the **primary** join key: the ids already travel end to end
+(`Draft_Snap_Grid`, `App_Move`), so the curated table works without a mod doing
+anything. `Pixmap` is the override, resolved first: a mod that wants a specific glyph
+sets `"Pixmap": "cube"`, and upstream commands keep working because their `Pixmap`
+values (`Draft_Snap_Endpoint`) are ids the same table knows.
 
 ---
 
@@ -742,23 +748,35 @@ Draft icons it can draw.
   is no separate state dot.
 
   **Surfaces (2026-11-05).** `icon::named(key, size, ink)` is the resolver the rest of
-  the chrome uses, and `ui::command_icons::icon_for(command_id)` is the curated table
-  that supplies the key:
+  the chrome uses, and `ui::command_icons` supplies the key: `resolve(command)` first
+  honours a vendored `Pixmap`, then the curated command-id table, then the id itself;
+  `icon_for_type(type_id)` covers the model tree.
 
   | Surface | Glyph | Size |
   | --- | --- | --- |
   | App menu button | `menu`, or `☰` only if the asset is missing | 16 px |
-  | App menu / header popover rows | the row command's key | 14 px (`icon::ROW`) |
-  | Action dock buttons | the command's key, followed by the label | 14 px |
+  | App menu / header popover rows | `resolve(row command)` | 14 px (`icon::ROW`) |
+  | Action dock buttons | `resolve(command)`, followed by the label | 14 px |
   | Action dock Search | `search` | 14 px |
-  | Radial wheel slots | the command's key, above the label | 12 px (`icon::WHEEL`) |
+  | Command palette rows | `resolve(command)`, before the label | 14 px |
+  | Model tree rows | `icon_for_type(type_id)`, before the label | 14 px |
+  | Radial wheel slots | `resolve(command)`, above the label | 14 px (`icon::WHEEL`) |
 
-  The curated rows are the built-ins (`App_Move` → `move`, `App_Delete` → `trash`,
-  `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` → `cube`,
-  `Toy_Polyline` → `shape-polyline`, `Part_MakeBox` → `cube`,
+  The wheel grew with the glyph: a 30 px deadzone, a 92 px outer ring and a 62 px label
+  ring (`SIZE` 200), so the icon + label chip is no longer squeezed into the wedge.
+
+  The curated command rows are the built-ins (`App_Move` → `move`, `App_Delete` →
+  `trash`, `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` →
+  `cube`, `Toy_Polyline` → `shape-polyline`, `Part_MakeBox` → `cube`,
   `Part_SaveDatumPlane` → `layers-plus`) and the snap modes (`Draft_Snap_Endpoint` →
   `anchor-point`, …). The snap modes the note draws (midpoint, origin, vertex,
   extension, near) keep their label alone until that glyph exists.
+
+  The tree table is category-level: exact primitives (`Part::Cylinder` → `cylinder`,
+  `Part::Torus` → `torus`, …) then `Sketcher::*` → `pencil-ruler`, `Draft::*` →
+  `shape-polyline`, `Spreadsheet::*` → `table`, `App::Link*` → `chain-link`,
+  `*Group` → `group`, any other `Part::*` → `cube` and `App::*` → `shapes`. A type the
+  table has never seen keeps its label alone rather than guessing.
 - **Vendored IconMCP set**: the 123 `use` icons, as outline SVGs with their MIT
   licence, rasterised by `gpui::svg()` through an `AssetSource`. Vendored, not fetched:
   the build must work offline and the same binary must render the same icons in CI.

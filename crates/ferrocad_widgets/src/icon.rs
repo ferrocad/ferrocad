@@ -33,7 +33,7 @@ pub const CONTROL: f32 = 16.0;
 pub const ROW: f32 = 14.0;
 
 /// A radial-wheel slot's glyph side.
-pub const WHEEL: f32 = 12.0;
+pub const WHEEL: f32 = 14.0;
 
 const BUG_SVG: &[u8] = include_bytes!("../assets/icons/bug.svg");
 const GRID_SVG: &[u8] = include_bytes!("../assets/icons/grid-4x4.svg");
@@ -101,6 +101,38 @@ const ASSETS: &[(&str, &[u8])] = &[
     ),
     ("ruler", include_bytes!("../assets/icons/ruler.svg")),
     ("star", include_bytes!("../assets/icons/star.svg")),
+    // Model-tree object types.
+    (
+        "pencil-ruler",
+        include_bytes!("../assets/icons/pencil-ruler.svg"),
+    ),
+    ("group", include_bytes!("../assets/icons/group.svg")),
+    (
+        "chain-link",
+        include_bytes!("../assets/icons/chain-link.svg"),
+    ),
+    ("table", include_bytes!("../assets/icons/table.svg")),
+    ("shapes", include_bytes!("../assets/icons/shapes.svg")),
+    ("cylinder", include_bytes!("../assets/icons/cylinder.svg")),
+    ("sphere", include_bytes!("../assets/icons/sphere.svg")),
+    ("cone", include_bytes!("../assets/icons/cone.svg")),
+    ("torus", include_bytes!("../assets/icons/torus.svg")),
+    ("prism", include_bytes!("../assets/icons/prism.svg")),
+    (
+        "spring-coil",
+        include_bytes!("../assets/icons/spring-coil.svg"),
+    ),
+    ("spiral", include_bytes!("../assets/icons/spiral.svg")),
+    (
+        "circle-sector",
+        include_bytes!("../assets/icons/circle-sector.svg"),
+    ),
+    (
+        "line-segment",
+        include_bytes!("../assets/icons/line-segment.svg"),
+    ),
+    ("bullet", include_bytes!("../assets/icons/bullet.svg")),
+    ("circle", include_bytes!("../assets/icons/circle.svg")),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

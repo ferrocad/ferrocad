@@ -231,6 +231,9 @@ impl CommandDef {
             short: self.short.to_string(),
             tone: self.tone.to_string(),
             parent: self.parent.to_string(),
+            // Built-ins resolve through the curated table; a workbench or mod command
+            // can override this with a vendored icon key or an upstream id.
+            pixmap: String::new(),
             wheel: self.wheel,
             enabled: true,
             checked: false,

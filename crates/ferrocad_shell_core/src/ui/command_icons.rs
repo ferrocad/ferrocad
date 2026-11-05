@@ -15,6 +15,8 @@
 //! vendor it in `crates/ferrocad_widgets/assets/icons/`. A test below keeps the two in
 //! step, so a typo cannot ship a blank slot.
 
+use crate::commands::CommandInfo;
+
 /// The vendored icon key for a command, or `None` when the note has not curated one.
 pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
     let key = match command_id {
@@ -54,9 +56,61 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
     Some(key)
 }
 
+/// The icon key for a command, honouring its `Pixmap` resource first.
+///
+/// Order: a `Pixmap` that names a vendored glyph (a mod's direct choice), then a
+/// `Pixmap` that is an id the curated table knows, then the command id itself. This is
+/// the note's `Pixmap (or command id) → alias → vendored icon` pipeline.
+pub(crate) fn resolve(command: &CommandInfo) -> Option<String> {
+    let pixmap = command.pixmap.trim();
+    if !pixmap.is_empty() {
+        if ferrocad_widgets::icon::asset(pixmap).is_some() {
+            return Some(pixmap.to_string());
+        }
+        if let Some(key) = icon_for(pixmap) {
+            return Some(key.to_string());
+        }
+    }
+    icon_for(&command.id).map(str::to_string)
+}
+
+/// The icon key for a model-tree object, by its FreeCAD `TypeId`.
+///
+/// The tree is a class list, not a command list, so this is a second curated table
+/// keyed by type id. Exact primitive types win; everything else falls back to a
+/// category icon, so a new workbench's `Part::FeaturePython` still reads as a solid.
+pub(crate) fn icon_for_type(type_id: &str) -> Option<&'static str> {
+    let key = match type_id {
+        "Part::Box" => "cube",
+        "Part::Cylinder" => "cylinder",
+        "Part::Sphere" => "sphere",
+        "Part::Cone" => "cone",
+        "Part::Torus" => "torus",
+        "Part::Prism" => "prism",
+        "Part::Wedge" => "circle-sector",
+        "Part::Helix" => "spring-coil",
+        "Part::Spiral" => "spiral",
+        "Part::Plane" => "workplane",
+        "Part::Line" => "line-segment",
+        "Part::Point" => "bullet",
+        _ if type_id.starts_with("Sketcher::") => "pencil-ruler",
+        _ if type_id.starts_with("Draft::Line") => "line-segment",
+        _ if type_id.starts_with("Draft::Circle") => "circle",
+        _ if type_id.starts_with("Draft::") => "shape-polyline",
+        _ if type_id.starts_with("Spreadsheet::") => "table",
+        _ if type_id.starts_with("App::Link") => "chain-link",
+        _ if type_id.ends_with("Group") => "group",
+        _ if type_id.starts_with("Part::") => "cube",
+        _ if type_id.starts_with("App::") => "shapes",
+        _ => return None,
+    };
+    Some(key)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::icon_for;
+    use super::{icon_for, icon_for_type, resolve};
+    use crate::commands::CommandInfo;
 
     #[test]
     fn every_curated_key_is_vendored() {
@@ -100,5 +154,50 @@ mod tests {
     fn an_uncurated_command_has_no_icon() {
         assert!(icon_for("Part_Box").is_none());
         assert!(icon_for("").is_none());
+    }
+
+    #[test]
+    fn a_pixmap_is_honoured_before_the_command_id() {
+        let mut command = CommandInfo {
+            id: "App_Move".into(),
+            ..Default::default()
+        };
+        assert_eq!(resolve(&command).as_deref(), Some("move"));
+
+        // An upstream id goes through the curated table.
+        command.pixmap = "Draft_Snap_Endpoint".into();
+        assert_eq!(resolve(&command).as_deref(), Some("anchor-point"));
+
+        // A mod names a vendored glyph directly.
+        command.pixmap = "cube".into();
+        assert_eq!(resolve(&command).as_deref(), Some("cube"));
+
+        // An unknown pixmap does not shadow the command's own row.
+        command.pixmap = "not-an-icon".into();
+        assert_eq!(resolve(&command).as_deref(), Some("move"));
+    }
+
+    #[test]
+    fn tree_types_resolve_to_vendored_icons() {
+        for type_id in [
+            "Part::Box",
+            "Part::Cylinder",
+            "Part::FeaturePython",
+            "Sketcher::SketchObject",
+            "Draft::Wire",
+            "Draft::Line",
+            "Spreadsheet::Sheet",
+            "App::Link",
+            "App::DocumentObjectGroup",
+            "App::FeaturePython",
+        ] {
+            let key =
+                icon_for_type(type_id).unwrap_or_else(|| panic!("{type_id} has a category icon"));
+            assert!(
+                ferrocad_widgets::icon::asset(key).is_some(),
+                "{type_id} -> {key} is not a vendored asset"
+            );
+        }
+        assert!(icon_for_type("Unknown::Thing").is_none());
     }
 }

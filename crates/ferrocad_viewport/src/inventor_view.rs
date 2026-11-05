@@ -5829,10 +5829,40 @@ impl<V: InventorView> InventorViewport<V> {
     }
 }
 
+/// Report the frame cadence and the refresh share, when `FERROCAD_TIMING` is set.
+///
+/// Every slow frame is printed as the interval since the previous one (what the user
+/// sees) next to the time this crate spent preparing it. A long interval with a short
+/// preparation is the GPU or the present path; the reverse is our CPU work.
+fn report_frame_time(refreshed: std::time::Duration) {
+    use std::sync::{Mutex, OnceLock};
+    if std::env::var_os("FERROCAD_TIMING").is_none() {
+        return;
+    }
+    static LAST: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+    let mut last = LAST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let now = std::time::Instant::now();
+    if let Some(previous) = last.replace(now) {
+        let interval = now - previous;
+        // Only the slow frames, so a paste from a real orbit stays short.
+        if interval > std::time::Duration::from_millis(20) {
+            eprintln!(
+                "ferrocad: frame {:.1} ms, prepare {:.1} ms",
+                interval.as_secs_f64() * 1000.0,
+                refreshed.as_secs_f64() * 1000.0
+            );
+        }
+    }
+}
+
 impl<V: InventorView + 'static> EventEmitter<ViewportEvent> for InventorViewport<V> {}
 
 impl<V: InventorView + 'static> Render for InventorViewport<V> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let frame_started = std::time::Instant::now();
         // Follow the element's physical size before drawing (the bounds were captured at
         // the previous prepaint). A change needs one more frame to take effect.
         if self.sync_size(window) {
@@ -5866,6 +5896,8 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             }
         }
         self.refresh();
+        let refreshed = frame_started.elapsed();
+        report_frame_time(refreshed);
 
         // A tool installed directly (outside a pointer or key handler) reports its
         // start here; the pointer/key handlers drain the same queue themselves.

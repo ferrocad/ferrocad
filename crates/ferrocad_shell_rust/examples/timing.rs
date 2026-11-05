@@ -31,6 +31,28 @@ fn main() -> Result<(), String> {
             started.elapsed(),
             meshes.len()
         );
+        // Where each object ended up, so the Python backend can be compared against it.
+        for mesh in &meshes {
+            let mut min = [f32::INFINITY; 3];
+            let mut max = [f32::NEG_INFINITY; 3];
+            for point in &mesh.positions {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(point[axis]);
+                    max[axis] = max[axis].max(point[axis]);
+                }
+            }
+            eprintln!(
+                "rust: bbox {} [{:.1}, {:.1}, {:.1}] .. [{:.1}, {:.1}, {:.1}] {} tri",
+                mesh.object,
+                min[0],
+                min[1],
+                min[2],
+                max[0],
+                max[1],
+                max[2],
+                mesh.triangles.len() / 3
+            );
+        }
     }
     Ok(())
 }

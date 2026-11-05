@@ -50,8 +50,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_core::object_registry::{self, ObjectType, PropertyChangeError};
 use ferrocad_core::{
-    Document, ExtensionData, ExtensionValue, Matrix4, ObjectId, Placement, Property, Rotation,
-    ScaleType, Vector3,
+    Document, ExtensionData, ExtensionValue, ObjectId, Placement, Property, Rotation, ScaleType,
+    Vector3,
 };
 use ferrocad_geom::{
     ElementKind, ElementRef, Lineage, MapVersion, Shape, SurfaceData, TessellationOptions,
@@ -706,23 +706,6 @@ fn apply_placement_to(
     *placement_guard = new;
     *lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
     epoch.fetch_add(1, Ordering::SeqCst);
-}
-
-/// Bake a placement into a tessellation's positions, in place.
-///
-/// This replaces the display hook's per-vertex Python loop (`Placement.multVec` in a
-/// list comprehension), which costs seconds on a shape with hundreds of thousands of
-/// vertices. Only positions need moving: the kernel's mesh is flat-shaded, so
-/// `normals` is empty and the renderer derives face normals after the transform.
-fn bake_placement(mesh: &mut ferrocad_geom::Tessellation, matrix: &Matrix4) {
-    for position in &mut mesh.positions {
-        let v = matrix.transform(&Vector3::new(
-            position[0] as f64,
-            position[1] as f64,
-            position[2] as f64,
-        ));
-        *position = [v.x as f32, v.y as f32, v.z as f32];
-    }
 }
 
 /// A `[[f32; 3]]` array as `bytes`: little-endian, three floats per point.
@@ -1546,39 +1529,23 @@ impl PartShape {
     /// not the shape is already triangulated: a display sync of an unchanged document
     /// is a copy, not a re-mesh.
     ///
-    /// `matrix` is `FreeCAD.Placement.toMatrix().A` for an object whose
-    /// `Placement` the shape does not already carry (a `Part::Feature` restored from
-    /// a `.FCStd` has identity geometry and the saved placement on the object). The
-    /// kernel bakes it here because doing it in the display hook — one
-    /// `Placement.multVec` call per vertex — costs seconds on a large shape.
-    ///
     /// `binary` packs the numeric arrays as `bytes` (little-endian `f32` triples for
     /// `positions`, `u32` for the index arrays) instead of lists. A host that reads the
     /// row through the C API gets one copy per array that way, rather than millions of
     /// Python tuples and ints built here and parsed back. `FerroCAD.display_mesh` uses
     /// it; `ferrocad_shell.stage_meshes` unpacks the same bytes for its JSON form.
-    #[pyo3(signature = (deflection = 0.5, angular = 0.5, matrix = None, binary = false))]
+    #[pyo3(signature = (deflection = 0.5, angular = 0.5, binary = false))]
     fn mesh(
         &self,
         py: Python<'_>,
         deflection: f64,
         angular: f64,
-        matrix: Option<Vec<f64>>,
         binary: bool,
     ) -> PyResult<Py<PyAny>> {
         let shape = self
             .shape()
             .ok_or_else(|| PyValueError::new_err("cannot tessellate a null shape"))?;
-        let tessellation = self.tessellation(&shape, deflection, angular)?;
-        // Only a placed object needs an owned copy: the placement bake is in place.
-        let mut mesh = (*tessellation).clone();
-        if let Some(values) = matrix {
-            let m: [f64; 16] = values
-                .as_slice()
-                .try_into()
-                .map_err(|_| PyValueError::new_err("mesh: matrix needs Matrix.A (16 numbers)"))?;
-            bake_placement(&mut mesh, &Matrix4 { m });
-        }
+        let mesh = self.tessellation(&shape, deflection, angular)?;
 
         let dict = PyDict::new(py);
         if binary {
@@ -1589,20 +1556,32 @@ impl PartShape {
             dict.set_item("segment_parts", indices_bytes(py, &mesh.segment_parts)?)?;
             dict.set_item("vertices", indices_bytes(py, &mesh.vertices)?)?;
             dict.set_item("vertex_parts", indices_bytes(py, &mesh.vertex_parts)?)?;
-            dict.set_item("parts", mesh.parts)?;
+            dict.set_item("parts", mesh.parts.as_slice())?;
             return Ok(dict.into_any().unbind());
         }
         dict.set_item(
             "positions",
             PyList::new(py, mesh.positions.iter().map(|p| (p[0], p[1], p[2])))?,
         )?;
-        dict.set_item("triangles", mesh.triangles)?;
-        dict.set_item("triangle_parts", mesh.triangle_parts)?;
-        dict.set_item("edges", mesh.edges)?;
-        dict.set_item("segment_parts", mesh.segment_parts)?;
-        dict.set_item("vertices", mesh.vertices)?;
-        dict.set_item("vertex_parts", mesh.vertex_parts)?;
-        dict.set_item("parts", mesh.parts)?;
+        dict.set_item(
+            "triangles",
+            PyList::new(py, mesh.triangles.iter().copied())?,
+        )?;
+        dict.set_item(
+            "triangle_parts",
+            PyList::new(py, mesh.triangle_parts.iter().copied())?,
+        )?;
+        dict.set_item("edges", PyList::new(py, mesh.edges.iter().copied())?)?;
+        dict.set_item(
+            "segment_parts",
+            PyList::new(py, mesh.segment_parts.iter().copied())?,
+        )?;
+        dict.set_item("vertices", PyList::new(py, mesh.vertices.iter().copied())?)?;
+        dict.set_item(
+            "vertex_parts",
+            PyList::new(py, mesh.vertex_parts.iter().copied())?,
+        )?;
+        dict.set_item("parts", mesh.parts.as_slice())?;
         Ok(dict.into_any().unbind())
     }
 

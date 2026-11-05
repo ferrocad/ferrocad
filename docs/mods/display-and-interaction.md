@@ -56,7 +56,7 @@ The dict is the `ferrocad.geom.Tessellation` shape plus two presentation fields.
 
 | Field | Shape | Meaning |
 | --- | --- | --- |
-| `positions` | `[[x, y, z], ...]` | vertex positions used as given; the shell applies no object transform, so bake `Placement` in |
+| `positions` | `[[x, y, z], ...]` | vertex positions used as given: the shell applies no object transform **and the shape already carries its placement**, so do not apply `obj.Placement` — that would move every object a second time |
 | `normals` | `[[x, y, z], ...]` | optional; used only when its length equals `positions`; otherwise the renderer flat-shades |
 | `triangles` | `[i, j, k, ...]` | flat indices, three per triangle |
 | `triangle_parts` | `[part_id, ...]` | one part id per triangle; a missing entry means part `0` |

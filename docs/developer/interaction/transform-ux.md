@@ -205,9 +205,10 @@ shell passes it to the app script, which keeps the triad kernel-free.
 - **Edition hook.** The parametric script builds a `Part::Extrusion` from the named
   sub-shape, then one `Part::Fuse` (outward) or `Part::Cut` (inward), in a single named
   transaction. The intermediate prism is hidden, and the boolean result inherits the
-  body's `Placement`. The extrusion direction must be **shape-local**, so the hook
-  re-derives the face normal from `obj.Shape.mesh()` rather than undoing the display
-  hook's placement bake (a rigid placement preserves the sign and the distance).
+  body's `Placement`. Shape and display are in the same coordinates — the shape stores
+  its placement already applied, and the display hook applies none — so the extrusion
+  direction is read straight off `obj.Shape.mesh()`, the same frame the picked face is
+  in.
 - **Preview and scope.** The stem and readout are live; the solid appears on release.
   A ghost prism is a deliberate follow-up. Non-planar faces, a target-aware triad and
   stable naming are out.

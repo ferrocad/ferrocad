@@ -178,8 +178,8 @@ frame (it recovers a third, see §2).
 | unchanged | 5.5 s | **0.67 s** |
 | after moving the largest object | 5.5 s | **2.7 s** |
 
-  The 0.67 s is the copy, the placement bake and the `bytes` encode; the 2.7 s is the
-  one 328 k-triangle shape re-meshing. `open + render` also dropped ~1 s (12.4–13.1 s),
+  The 0.63 s is the `bytes` encode of 1.25 M triangles; the 2.7 s is the one
+  328 k-triangle shape re-meshing. `open + render` also dropped ~1 s (12.4–13.1 s),
   because that path syncs twice.
 
 ### Stage 2 — restore the `.FCStd` members in parallel — **landed 2026-11-05**
@@ -236,8 +236,12 @@ frame (it recovers a third, see §2).
 
 ## 5. Constraints that must not regress
 
-- **Placement baking stays in the kernel** (`Shape.mesh(matrix=...)`); a display hook
-  must not loop over vertices again.
+- **The display hook applies no placement.** The stored shape is already in world
+  coordinates (`FreeCAD` applies a `Part::Feature` placement when the shape is
+  assigned, and the feature sync re-bakes it), so a host takes `positions` as given.
+  Applying `obj.Placement` again scatters an opened document — that was a real bug,
+  found by comparing this backend's bounding boxes against `RustAppBackend`'s on the
+  900a file (see §1a).
 - **The mesh crosses as packed arrays.** `stage_meshes()` keeps returning lists, so
   scripts and the docs tooling see the documented JSON shape
   ([`../../mods/display-and-interaction.md`](../../mods/display-and-interaction.md)).

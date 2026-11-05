@@ -224,11 +224,30 @@ fn sync_shape_and_placement(
             if stored_placement == placement {
                 return;
             }
+            // The display memo is keyed on the shape handle and a re-bake replaces it, so
+            // carry the cached tessellation across the rigid move. Without this, every
+            // `Placement` write re-meshed the body on the next display sync (1.4 s for the
+            // large shapes in the 900a document) to produce the mesh it already had.
+            let Some(memo) = doc
+                .object(id)
+                .and_then(|object| object.properties.get("Shape"))
+                .and_then(|property| match property {
+                    Property::Extension(value) => value
+                        .data()
+                        .as_any()
+                        .downcast_ref::<ShapeProperty>()
+                        .map(ShapeProperty::tessellation_cache),
+                    _ => None,
+                })
+            else {
+                return;
+            };
             let delta = compose_placements(&placement, &stored_placement.inverse());
             let Ok(moved) = ferrocad_part::backend().transform(&shape, &delta.to_matrix()) else {
                 return;
             };
-            let property = ShapeProperty::with_placement(moved, placement);
+            memo.record_rigid(&shape, &moved, &delta.to_matrix());
+            let property = ShapeProperty::with_placement_and_memo(moved, placement, memo);
             doc.set_property_raw(id, "Shape", make_shape_property(property));
         }
         "Shape" => {

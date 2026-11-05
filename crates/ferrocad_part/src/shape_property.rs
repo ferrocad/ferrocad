@@ -124,6 +124,26 @@ impl ShapeProperty {
         }
     }
 
+    /// A property holding already-placed `shape`, the `placement` it carries, and an
+    /// **existing** display memo.
+    ///
+    /// The memo is shared rather than replaced, so a rigid re-bake keeps the tessellation
+    /// it already had (see [`TessellationCache::record_rigid`], which the caller runs
+    /// first). A placement write used to build a fresh, empty cache here, which is why
+    /// every move re-meshed the body on the next display sync.
+    pub fn with_placement_and_memo(
+        shape: Shape,
+        placement: Placement,
+        memo: Arc<TessellationCache>,
+    ) -> Self {
+        ShapeProperty {
+            shape: Some(shape),
+            placement,
+            lineage: Lineage::default(),
+            tessellations: memo,
+        }
+    }
+
     /// A property holding `shape` and the `lineage` produced with it.
     pub fn with_lineage(shape: Shape, lineage: Lineage) -> Self {
         ShapeProperty {
@@ -773,6 +793,44 @@ mod tests {
             "ferrocad-part-shape-property-{}-{name}",
             std::process::id()
         ))
+    }
+
+    /// A rigid re-bake must hand the display memo to the replacement property.
+    ///
+    /// This is the precondition for `TessellationCache::record_rigid`: the cache is keyed on
+    /// the shape handle, a re-bake replaces it, and building the replacement with
+    /// [`ShapeProperty::with_placement`] gave it a fresh **empty** cache — which is why a
+    /// moved object used to re-mesh on the next display sync (~1.4 s for the large bodies in
+    /// the 900a document) to produce the mesh it already had.
+    #[test]
+    fn a_rigid_rebake_keeps_the_display_memo() {
+        setup();
+        let shape = crate::make_box(2.0, 2.0, 2.0).unwrap();
+        let property = ShapeProperty::new(shape.clone());
+        let memo = property.tessellation_cache();
+        property.tessellate(0.5, 0.5).expect("the box meshes");
+
+        let moved = crate::backend()
+            .transform(&shape, &ferrocad_types::Matrix4::translation(5.0, 0.0, 0.0))
+            .expect("the box moves");
+        assert!(
+            memo.record_rigid(
+                &shape,
+                &moved,
+                &ferrocad_types::Matrix4::translation(5.0, 0.0, 0.0)
+            ),
+            "the memo had an entry for the shape being re-baked"
+        );
+
+        let replaced = ShapeProperty::with_placement_and_memo(
+            moved,
+            ferrocad_types::Placement::identity(),
+            memo.clone(),
+        );
+        assert!(
+            Arc::ptr_eq(&memo, &replaced.tessellation_cache()),
+            "the replacement shares the memo instead of starting empty"
+        );
     }
 
     fn box_and_edges(size: f64) -> (Shape, Vec<ElementRef>) {

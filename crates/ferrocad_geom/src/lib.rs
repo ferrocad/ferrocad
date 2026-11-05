@@ -477,6 +477,51 @@ impl Tessellation {
         self.positions.is_empty()
     }
 
+    /// The same tessellation with a rigid `matrix` applied to its positions and normals.
+    ///
+    /// The topology, the parts and every index are unchanged, so this is the cheap way to
+    /// follow a **rigid** move: re-meshing the shape is ~1.4 s on a 300 k-triangle body,
+    /// while transforming the positions it already has is a few milliseconds. Only valid
+    /// for a transform that preserves distances — a scale would invalidate the deflection
+    /// the mesh was built for.
+    pub fn transformed(&self, matrix: &Matrix4) -> Tessellation {
+        let mut moved = self.clone();
+        for position in &mut moved.positions {
+            let point = matrix.transform(&Vector3::new(
+                f64::from(position[0]),
+                f64::from(position[1]),
+                f64::from(position[2]),
+            ));
+            *position = [point.x as f32, point.y as f32, point.z as f32];
+        }
+        for normal in &mut moved.normals {
+            // A direction, not a point: the translation column and the `w` divide are the
+            // point semantics, and applying them turned a +Z normal into (0.98, 0, 0.20)
+            // under a pure translation.
+            let [x, y, z] = [
+                f64::from(normal[0]),
+                f64::from(normal[1]),
+                f64::from(normal[2]),
+            ];
+            let m = &matrix.m;
+            let rotated = [
+                m[0] * x + m[1] * y + m[2] * z,
+                m[4] * x + m[5] * y + m[6] * z,
+                m[8] * x + m[9] * y + m[10] * z,
+            ];
+            let length =
+                (rotated[0] * rotated[0] + rotated[1] * rotated[1] + rotated[2] * rotated[2])
+                    .sqrt();
+            let scale = if length > 0.0 { 1.0 / length } else { 0.0 };
+            *normal = [
+                (rotated[0] * scale) as f32,
+                (rotated[1] * scale) as f32,
+                (rotated[2] * scale) as f32,
+            ];
+        }
+        moved
+    }
+
     /// The number of triangles.
     pub fn triangle_count(&self) -> usize {
         self.triangles.len() / 3
@@ -575,6 +620,32 @@ impl TessellationCache {
             tessellation: Arc::clone(&tessellation),
         });
         Ok(tessellation)
+    }
+
+    /// Re-key the cached tessellation onto `to`, which is `from` moved rigidly by `delta`.
+    ///
+    /// This is what a placement write needs. The memo is keyed on the shape **handle**, and
+    /// a re-bake replaces it, so without this every `obj.Placement = …` threw the memo away
+    /// and the next display sync re-meshed the body — 1.4 s on the 900a document, for a
+    /// transform the renderer could have applied itself. Re-baking rigidly does not change
+    /// the triangle set, so the cached mesh follows instead. Returns whether there was an
+    /// entry to carry over (a shape that was never tessellated needs nothing).
+    pub fn record_rigid(&self, from: &Shape, to: &Shape, delta: &Matrix4) -> bool {
+        let mut entry = self.entry.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(cached) = entry.as_ref() else {
+            return false;
+        };
+        if !cached.shape.is_same(from) {
+            return false;
+        }
+        let moved = Arc::new(cached.tessellation.transformed(delta));
+        *entry = Some(CachedTessellation {
+            shape: to.clone(),
+            linear: cached.linear,
+            angular: cached.angular,
+            tessellation: moved,
+        });
+        true
     }
 }
 
@@ -1936,6 +2007,80 @@ impl GeometryBackend for NullBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rigid_move_carries_the_cached_tessellation_to_the_new_handle() {
+        let cache = TessellationCache::new();
+        let from = Shape::new(1u32);
+        let to = Shape::new(2u32);
+        cache
+            .get_or_build(&from, 0.5, 0.5, || {
+                Ok(Tessellation {
+                    positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                    normals: vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+                    ..Tessellation::default()
+                })
+            })
+            .expect("a tessellation");
+
+        assert!(cache.record_rigid(&from, &to, &Matrix4::translation(5.0, 0.0, 0.0)));
+
+        // The moved handle answers without meshing: a build closure that must not run.
+        let moved = cache
+            .get_or_build(&to, 0.5, 0.5, || {
+                panic!("the memo must answer for the moved handle")
+            })
+            .expect("the carried tessellation");
+        assert_eq!(moved.positions[0], [5.0, 0.0, 0.0]);
+        assert_eq!(moved.positions[1], [6.0, 0.0, 0.0]);
+        assert_eq!(
+            moved.normals[0],
+            [0.0, 0.0, 1.0],
+            "a translation keeps normals"
+        );
+
+        // The entry was re-keyed, so the old handle no longer matches it.
+        assert!(!cache.record_rigid(&from, &to, &Matrix4::identity()));
+    }
+
+    #[test]
+    fn a_rotation_keeps_the_normals_unit_length() {
+        let cache = TessellationCache::new();
+        let from = Shape::new(3u32);
+        let to = Shape::new(4u32);
+        cache
+            .get_or_build(&from, 0.5, 0.5, || {
+                Ok(Tessellation {
+                    positions: vec![[1.0, 0.0, 0.0]],
+                    normals: vec![[1.0, 0.0, 0.0]],
+                    ..Tessellation::default()
+                })
+            })
+            .expect("a tessellation");
+
+        // A quarter turn about Z.
+        let mut turn = Matrix4::identity();
+        turn.m[0] = 0.0;
+        turn.m[1] = -1.0;
+        turn.m[4] = 1.0;
+        turn.m[5] = 0.0;
+        assert!(cache.record_rigid(&from, &to, &turn));
+
+        let moved = cache
+            .get_or_build(&to, 0.5, 0.5, || panic!("the memo must answer"))
+            .expect("the carried tessellation");
+        assert!(
+            (moved.positions[0][1] - 1.0).abs() < 1e-6,
+            "a quarter turn about Z sends +X to +Y: {:?}",
+            moved.positions[0]
+        );
+        let normal = moved.normals[0];
+        let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        assert!(
+            (length - 1.0).abs() < 1e-6,
+            "normal {normal:?} is not unit length"
+        );
+    }
 
     #[test]
     fn null_backend_makes_placeholder_shapes() {

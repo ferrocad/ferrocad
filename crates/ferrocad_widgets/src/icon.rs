@@ -263,6 +263,11 @@ const ASSETS: &[(&str, &[u8])] = &[
     ),
     ("projector", include_bytes!("../assets/icons/projector.svg")),
     ("eraser", include_bytes!("../assets/icons/eraser.svg")),
+    // Measure.
+    (
+        "measure-tool",
+        include_bytes!("../assets/icons/measure-tool.svg"),
+    ),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

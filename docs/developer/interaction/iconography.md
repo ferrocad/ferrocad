@@ -580,7 +580,13 @@ asset the Draft row uses.
 | Position | `Measurement-Position` | `pin` | use |
 | Inertia | `Measurement-Inertia` | `physics` | use |
 
-**Totals: 179 needs — 123 `use`, 19 `metaphor`, 11 `compose`, 26 `draw`.**
+In 1.1.4 the Measure module registers **one** command, `Std_Measure`
+(`Measure/Gui/Command.cpp`); the eight `Measurement-*` files are the icons of its
+measurement types (`Measure/Gui/Resources/icons`), not command ids. This table is
+therefore the measurement **mode** vocabulary, kept for a future measure panel; only
+`Std_Measure` is wired today (`measure-tool`).
+
+**Totals: 179 needs — 125 `use`, 19 `metaphor`, 11 `compose`, 24 `draw`.**
 
 ### Second semantic review (2026-11-05)
 
@@ -837,7 +843,8 @@ Draft icons it can draw.
   `Part_Tube` → `pipe-flange`, `Part_DatumPlane` → `workplane`, `Part_DatumLine` →
   `line-segment`, …) and the **Part operations slice** (`Part_Fuse` → `union`,
   `Part_Cut` → `boolean-subtract`, `Part_Common` → `boolean-intersect`, `Part_Fillet` →
-  `corner-radius`, `Part_Mirror` → the baked `mirror`, …).
+  `corner-radius`, `Part_Mirror` → the baked `mirror`, …) and the **measure
+  command** (`Std_Measure` → `measure-tool`).
 
   Every workbench id was checked against upstream: `addCommand` in
   `freecad-upstream/src/Mod/Draft/draftguitools`, and `Command(...)` in

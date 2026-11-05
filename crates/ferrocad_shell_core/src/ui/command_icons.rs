@@ -143,6 +143,9 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         "Part_JoinConnect" => "merge",
         "Part_JoinEmbed" => "merge",
         "Part_JoinCutout" => "merge",
+        // Measure: 1.1.4 registers one command; the eight `Measurement-*` files are its
+        // mode icons, not commands.
+        "Std_Measure" => "measure-tool",
         _ => return None,
     };
     Some(key)
@@ -351,6 +354,7 @@ mod tests {
             "Part_JoinConnect",
             "Part_JoinEmbed",
             "Part_JoinCutout",
+            "Std_Measure",
         ] {
             let key = icon_for(id).unwrap_or_else(|| panic!("{id} is curated"));
             assert!(

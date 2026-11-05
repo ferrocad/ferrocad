@@ -17,7 +17,7 @@ boundary**, not by a feature flag. Four crates:
 | --- | --- | --- | --- |
 | **`ferrocad_shell_api`** | The **contract**: the `AppBackend` trait and every view model it returns (bootstrap, tree rows, property rows, stage meshes, commands, dialogs, view requests, selection items). Depends only on pure crates. | **No** | Yes |
 | **`ferrocad_shell_core`** | The GPUI shell: `Shell`, chrome, panels, the viewport element, the shell view models, and the backend slot/helpers. | **No** | Yes |
-| **`ferrocad_shell_python`** | The native shell assembly: depends on `ferrocad_shell_core` (the native build is core + Python), owns `pyo3`, `ferrocad_inventor_py`, `ferrocad_stage_py`, the Python `AppBackend`, and the `run`/`run_with`/`HostConfig` entry points. **Renamed from `ferrocad_shell_python`.** | Yes | No |
+| **`ferrocad_shell_python`** | The native shell assembly: depends on `ferrocad_shell_core` (the native build is core + Python), owns `pyo3`, `ferrocad_inventor_py`, `ferrocad_stage_py`, the Python `AppBackend`, and the `run`/`run_with`/`HostConfig` entry points. **Renamed from `ferrocad_shell_gpui`** (2026-11-05). | Yes | No |
 | **`ferrocad_web_gpui`** | The browser host: depends **only** on `ferrocad_shell_core`, supplies the Rust `AppBackend` over `ferrocad_core`/`ferrocad_part`/`ferrocad_occt`, and keeps the existing `wasm-bindgen` entry point. | No | Yes |
 
 `ferrocad_shell_api` was added during M0, after the original three-crate plan
@@ -39,12 +39,14 @@ Naming rationale:
 
 - `ferrocad_shell_core` names the part that is actually platform-neutral and
   therefore shared by both hosts.
-- `ferrocad_shell_python` keeps the GPUI identity of the existing shell library and
-  says "shell", but it is the **native assembly** now; the Python backend is an
-  implementation detail, so `ferrocad_shell_python` would understate it.
-  `ferrocad_gpui_app` was considered and rejected: "app" collides with the real
-  edition binaries (`ferrocad`, `ferrocad_parametric`) and reads as a binary, not
-  a shell library.
+- `ferrocad_shell_python` names the **runtime it embeds** (backend-naming decision D2),
+  one-for-one with `ferrocad_shell_rust`, `ferrocad_shell_js` and
+  `ferrocad_shell_pywasm`. It is also the native assembly — `run_with` and the
+  `HostConfig` entry points live here — but the runtime is the distinguishing fact.
+  The earlier name (`ferrocad_shell_gpui`) claimed the UI toolkit, which every host
+  shares; `ferrocad_gpui_app` was considered and rejected: "app" collides with the
+  real edition binaries (`ferrocad`, `ferrocad_parametric`) and reads as a binary,
+  not a shell library.
 - `ferrocad_web_gpui` keeps its name: it already is the browser host, it is
   `publish = false`, and it carries the verified Chrome/WebGL2 baseline.
 - `ferrocad_gpui` is retired rather than kept as a façade. The three in-tree

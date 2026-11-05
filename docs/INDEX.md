@@ -265,6 +265,7 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Active task specs
 
 - [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
+- [project/tasks/opening-a-large-model.md](project/tasks/opening-a-large-model.md) — the open-and-sync budget for a 41 MB assembly: what is left after the mesh-hop changes (OCCT's ASCII BRep restore and `BRepMesh`), why a coarser first mesh only recovers a third, and the order to fix it. Stages 1–5.
 - [project/tasks/operation-failure-modelling.md](project/tasks/operation-failure-modelling.md) — typed, recoverable Part failures: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the `FilletRef`/`Recovery` affordances and the `SESSION_HOLD(failure)` payload. Stages F1–F5.
 - [project/tasks/simplecad-bringup.md](project/tasks/simplecad-bringup.md) — the SC0–SC8 cut of the SimpleCAD bring-up, including `makeWireString` on the Rust text stack.
 - [project/tasks/text-and-3d-text.md](project/tasks/text-and-3d-text.md) — text boundaries: kernel-free outlines vs Part wires/faces, the wire→shell vs face→solid rule, and why there is no DPI or point size.

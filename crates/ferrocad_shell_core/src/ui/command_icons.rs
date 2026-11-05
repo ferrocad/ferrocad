@@ -74,6 +74,47 @@ pub(crate) fn resolve(command: &CommandInfo) -> Option<String> {
     icon_for(&command.id).map(str::to_string)
 }
 
+/// The icon key for a property row, by its FreeCAD property type.
+///
+/// Properties are values, not commands, so this is a third table. It matches by
+/// substring because the type is often namespaced (`App::PropertyLength`), and the
+/// most derived kind must win: `PropertyLength` and `PropertyAngle` both derive from
+/// `PropertyQuantity`, so they are tested first.
+pub(crate) fn icon_for_property(type_id: &str) -> Option<&'static str> {
+    let key = if type_id.contains("PropertyLength")
+        || type_id.contains("PropertyDistance")
+        || type_id.contains("PropertyArea")
+        || type_id.contains("PropertyVolume")
+    {
+        "ruler"
+    } else if type_id.contains("PropertyAngle") {
+        "angle"
+    } else if type_id.contains("PropertyBool") {
+        "toggle-on"
+    } else if type_id.contains("PropertyColor") {
+        "palette"
+    } else if type_id.contains("PropertyVector")
+        || type_id.contains("PropertyPlacement")
+        || type_id.contains("PropertyRotation")
+    {
+        "axes-3d"
+    } else if type_id.contains("PropertyLink") {
+        "chain-link"
+    } else if type_id.contains("PropertyEnumeration") {
+        "list"
+    } else if type_id.contains("PropertyString") || type_id.contains("PropertyText") {
+        "type"
+    } else if type_id.contains("PropertyInteger")
+        || type_id.contains("PropertyFloat")
+        || type_id.contains("PropertyQuantity")
+    {
+        "hash"
+    } else {
+        return None;
+    };
+    Some(key)
+}
+
 /// The icon key for a model-tree object, by its FreeCAD `TypeId`.
 ///
 /// The tree is a class list, not a command list, so this is a second curated table
@@ -109,7 +150,7 @@ pub(crate) fn icon_for_type(type_id: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{icon_for, icon_for_type, resolve};
+    use super::{icon_for, icon_for_property, icon_for_type, resolve};
     use crate::commands::CommandInfo;
 
     #[test]
@@ -199,5 +240,27 @@ mod tests {
             );
         }
         assert!(icon_for_type("Unknown::Thing").is_none());
+    }
+
+    #[test]
+    fn property_types_resolve_to_vendored_icons() {
+        for (type_id, expected) in [
+            ("App::PropertyLength", "ruler"),
+            ("App::PropertyAngle", "angle"),
+            ("App::PropertyBool", "toggle-on"),
+            ("App::PropertyColor", "palette"),
+            ("App::PropertyPlacement", "axes-3d"),
+            ("App::PropertyLink", "chain-link"),
+            ("App::PropertyEnumeration", "list"),
+            ("App::PropertyString", "type"),
+            ("App::PropertyFloat", "hash"),
+        ] {
+            assert_eq!(icon_for_property(type_id), Some(expected), "{type_id}");
+            assert!(
+                ferrocad_widgets::icon::asset(expected).is_some(),
+                "{expected} is vendored"
+            );
+        }
+        assert!(icon_for_property("App::PropertyPartShape").is_none());
     }
 }

@@ -1560,6 +1560,16 @@ pub(crate) fn command_list_panel(
         // registry) but loses its click and its normal ink.
         let enabled = command.enabled && inactive_feature.is_none();
         let checked = command.checked;
+        let icon_selector = id.clone();
+        let glyph = command_icons::resolve(command)
+            .and_then(|key| icon::named(&key, icon::ROW, if enabled { FG } else { MUTED }))
+            .map(|glyph| {
+                div()
+                    .debug_selector(move || format!("dev-command-{icon_selector}-icon"))
+                    .flex()
+                    .items_center()
+                    .child(glyph)
+            });
         let mut row = div()
             .id(SharedString::from(format!("dev-command-{id}")))
             .debug_selector({
@@ -1578,6 +1588,7 @@ pub(crate) fn command_list_panel(
             .when(enabled, |el| {
                 el.cursor_pointer().hover(|style| style.bg(rgb(PANEL_ALT)))
             })
+            .when_some(glyph, |el, glyph| el.child(glyph))
             .child(command.label().to_string())
             .child(div().flex_1())
             .child(

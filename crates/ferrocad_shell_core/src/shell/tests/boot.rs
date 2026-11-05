@@ -327,6 +327,17 @@ fn a_document_enum_and_colour_use_the_rich_widgets(cx: &mut TestAppContext) {
         dev_cx.debug_bounds("color-Params.Color-swatch").is_some(),
         "the colour is a swatch"
     );
+    // Each property row carries a glyph for its value's kind.
+    for (name, selector) in [
+        ("enum", "prop-icon-Mode"),
+        ("colour", "prop-icon-Color"),
+        ("length", "prop-icon-Length"),
+    ] {
+        assert!(
+            dev_cx.debug_bounds(selector).is_some(),
+            "the {name} row draws a glyph ({selector})"
+        );
+    }
 
     // The select box commits through the normal property path.
     click_at(&mut dev_cx, "prop-enum-Params.Mode-select");

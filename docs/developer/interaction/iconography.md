@@ -35,6 +35,8 @@ now renders (§6.2).
 | Radial wheel | text label per wedge; tone only in the inner arc | glyph above the text label | `crates/ferrocad_widgets/src/wheel.rs` |
 | Palette | text rows | glyph + text row | `crates/ferrocad_shell_core/src/shell/render.rs` |
 | Model tree | `▾` + label + object `type_id` as text | type glyph + label + `type_id` | `crates/ferrocad_shell_core/src/shell/render.rs` |
+| Properties panel | rows of `name` + `type_id` | value-kind glyph + `name` + `type_id` | `crates/ferrocad_shell_core/src/shell/render.rs` |
+| Dev Tools command list | label + owning surface | glyph + label + owning surface | `crates/ferrocad_shell_core/src/ui/chrome.rs` |
 | Dev Tools | **one embedded SVG bug**, 16×16 | unchanged | `crates/ferrocad_widgets/src/icon.rs` |
 | Title bar | painted minimize/maximize/close paths | unchanged | `crates/ferrocad_widgets/src/window_chrome.rs:241` |
 | NaviCube | 3-D glass cube with `F/R/T` letters | unchanged | `crates/ferrocad_viewport/src/navicube.rs` |
@@ -54,8 +56,9 @@ Three facts matter:
   command with no row keeps its label and draws no glyph, and a test keeps every
   curated key pointing at a vendored asset. `Pixmap` is now forwarded through the
   bridge and resolved **before** the id, so upstream's own resource works and a mod can
-  name a vendored glyph directly. The model tree is a second, type-id-keyed table
-  (`icon_for_type`) because its rows are objects, not commands.
+  name a vendored glyph directly. The model tree (`icon_for_type`) and the properties
+  panel (`icon_for_property`) are keyed by FreeCAD type instead, because their rows are
+  objects and values, not commands.
 
 Until this round the command metadata carried no icon:
 
@@ -760,6 +763,8 @@ Draft icons it can draw.
   | Action dock Search | `search` | 14 px |
   | Command palette rows | `resolve(command)`, before the label | 14 px |
   | Model tree rows | `icon_for_type(type_id)`, before the label | 14 px |
+  | Properties panel rows | `icon_for_property(type_id)`, or the row command's glyph | 12 px (`icon::SMALL`) |
+  | Dev Tools command list | `resolve(command)`, before the label | 14 px |
   | Radial wheel slots | `resolve(command)`, above the label | 14 px (`icon::WHEEL`) |
 
   The wheel grew with the glyph: a 30 px deadzone, a 92 px outer ring and a 62 px label
@@ -777,6 +782,14 @@ Draft icons it can draw.
   `shape-polyline`, `Spreadsheet::*` → `table`, `App::Link*` → `chain-link`,
   `*Group` → `group`, any other `Part::*` → `cube` and `App::*` → `shapes`. A type the
   table has never seen keeps its label alone rather than guessing.
+
+  The property table is by value kind, most-derived first (a `PropertyLength` and a
+  `PropertyAngle` both derive from `PropertyQuantity`): length/distance/area/volume →
+  `ruler`, angle → `angle`, bool → `toggle-on`, colour → `palette`, vector/placement/
+  rotation → `axes-3d`, link → `chain-link`, enumeration → `list`, string → `type`,
+  integer/float/quantity → `hash`. A row that runs a command (the settings card's
+  reset) takes that command's glyph instead; an unclassified property keeps the space
+  so the names stay aligned.
 - **Vendored IconMCP set**: the 123 `use` icons, as outline SVGs with their MIT
   licence, rasterised by `gpui::svg()` through an `AssetSource`. Vendored, not fetched:
   the build must work offline and the same binary must render the same icons in CI.

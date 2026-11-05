@@ -92,6 +92,10 @@ fn the_dev_tools_window_lists_commands_with_enablement(cx: &mut TestAppContext) 
         dev_cx.debug_bounds("dev-command-App_Delete").is_some(),
         "a disabled command is still listed"
     );
+    assert!(
+        dev_cx.debug_bounds("dev-command-App_Move-icon").is_some(),
+        "a curated command row carries its glyph"
+    );
 
     // Toggling a header adds a pane without closing the others.
     click_at(&mut dev_cx, "dev-header-console");

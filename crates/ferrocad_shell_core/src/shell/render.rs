@@ -1513,6 +1513,24 @@ pub(super) fn properties_rows_panel(
                         .into_any_element()
                 };
 
+                // A property is a value, so its glyph names the value's kind; a
+                // generated action row runs a command, so it takes that command's
+                // glyph instead.
+                let prop_icon = match row.command.as_deref() {
+                    Some(command) => crate::ui::command_icons::icon_for(command)
+                        .and_then(|key| icon::named(key, icon::SMALL, FG)),
+                    None => crate::ui::command_icons::icon_for_property(&row.type_id)
+                        .and_then(|key| icon::named(key, icon::SMALL, MUTED)),
+                }
+                .map(|glyph| {
+                    let name = row.name.clone();
+                    div()
+                        .debug_selector(move || format!("prop-icon-{name}"))
+                        .flex()
+                        .items_center()
+                        .child(glyph)
+                });
+
                 rows = rows.child(
                     div()
                         .flex()
@@ -1529,6 +1547,7 @@ pub(super) fn properties_rows_panel(
                                 .gap_1()
                                 .flex_1()
                                 .min_w_0()
+                                .when_some(prop_icon, |el, glyph| el.child(glyph))
                                 .child(
                                     div()
                                         .flex_shrink_0()

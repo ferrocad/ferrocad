@@ -32,6 +32,9 @@ pub const CONTROL: f32 = 16.0;
 /// A menu row's or dock button's glyph side.
 pub const ROW: f32 = 14.0;
 
+/// A property row's glyph side, matching its `text_xs` label.
+pub const SMALL: f32 = 12.0;
+
 /// A radial-wheel slot's glyph side.
 pub const WHEEL: f32 = 14.0;
 
@@ -133,6 +136,12 @@ const ASSETS: &[(&str, &[u8])] = &[
     ),
     ("bullet", include_bytes!("../assets/icons/bullet.svg")),
     ("circle", include_bytes!("../assets/icons/circle.svg")),
+    // Property-row types.
+    ("palette", include_bytes!("../assets/icons/palette.svg")),
+    ("hash", include_bytes!("../assets/icons/hash.svg")),
+    ("type", include_bytes!("../assets/icons/type.svg")),
+    ("list", include_bytes!("../assets/icons/list.svg")),
+    ("toggle-on", include_bytes!("../assets/icons/toggle-on.svg")),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

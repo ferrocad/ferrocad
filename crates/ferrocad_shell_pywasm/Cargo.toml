@@ -1,0 +1,48 @@
+[package]
+name = "ferrocad_shell_pywasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's wasm-Python scripting surface: ScriptHost over RustPython (spike)"
+keywords = ["cad", "freecad", "wasm"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_shell_pywasm"
+publish = false
+
+[dependencies]
+# The scripting half of the seam; the document half stays `ferrocad_shell_rust`'s
+# (or, in this spike, the snapshot the bridge renders from `ferrocad_core`).
+ferrocad_shell_api.workspace = true
+ferrocad_core.workspace = true
+# The event vocabulary an `EventListener` receives, and the `Tool` its signature uses.
+ferrocad_inventor.workspace = true
+ferrocad_stage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log = "0.4"
+
+# RustPython, the §6.3 runtime this spike picks: a Python VM written in Rust, so it
+# needs no C ABI and no Pyodide download.
+#
+# Pinned to 0.5: 0.6 requires Rust 1.97 and this workspace builds on 1.95.
+# `rustpython-vm`'s default features include `host_env`, which compiles the `os` and
+# `_io` file layer; that needs a POSIX module `wasm32-unknown-unknown` does not have.
+# Without it the VM, the compiler and the frozen standard library still build, and
+# `json`/`sys` work — which is all `python/ferrocad_shell` needs for `properties()`.
+rustpython-vm = { version = "0.5.0", default-features = false, features = [
+    "compiler",
+    "freeze-stdlib",
+    "importlib",
+    "encodings",
+    "stdio",
+    # The browser's entropy source: `rustpython-common/wasm_js` gives `getrandom` a
+    # backend for `wasm32-unknown-unknown` (paired with the cfg in `.cargo/config.toml`).
+    "wasmbind",
+] }
+# `default-features = false` keeps `host_env` off, matching the line above.
+rustpython-stdlib = { version = "0.5.0", default-features = false, features = ["compiler"] }
+rustpython-pylib = { version = "0.5.0", features = ["freeze-stdlib"] }

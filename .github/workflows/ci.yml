@@ -234,6 +234,14 @@ jobs:
           grep -q 'document Sample (2 object(s))' /tmp/headless.log
           grep -q 'Fillet · 40 triangles' /tmp/headless.log
 
+      - name: The wasm-Python backend runs the real shell script (S8)
+        # The spike's proof: RustPython executes `python/ferrocad_shell/__init__.py`
+        # unchanged (included as source, with its catalogue) over the sample
+        # document, and `properties()` answers with rows `ferrocad_core::present`
+        # decided. Runs natively on purpose — the interpreter is plain Rust, so the
+        # wasm target only needs a check, and this job is where the behaviour lives.
+        run: cargo test -p ferrocad_shell_pywasm
+
       - name: Build the combined Python extension module and import it from a host interpreter
         # `ferrocad_combined.abi3.so` is the one extension that links App + Part +
         # Mesh, so a plain host CPython can `import Part`/`import Mesh` and they
@@ -332,6 +340,14 @@ jobs:
       # fails fast on a GPUI/wgpu regression.
       - name: Check the shell core for wasm32
         run: cargo check -p ferrocad_shell_core --target wasm32-unknown-unknown --locked
+      # The wasm-Python script half (S8). It is its own error surface: RustPython pulls
+      # `getrandom`, whose wasm32-unknown-unknown backend must be named by cfg. The
+      # cross image sets RUSTFLAGS, which overrides `.cargo/config.toml`, so append it
+      # here rather than relying on that table.
+      - name: Check the wasm-Python backend for wasm32
+        run: |
+          export RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"wasm_js\""
+          cargo check -p ferrocad_shell_pywasm --target wasm32-unknown-unknown --locked
       - name: Fetch the prebuilt wasm OCCT 8.0.1 and build TKFeat
         env:
           OCCT_WASM_URL: https://github.com/lzpel/cadrum/releases/download/occt-8_0_1_rev3/occt-8_0_1_rev3-wasm32_unknown_unknown.tar.gz

@@ -66,6 +66,7 @@ drawn reusing the **same** `ferrocad_py` bindings: making those compile for `was
 | `ferrocad_shell_rust` | `rlib` | The **Rust document backend**: `RustAppBackend` over a real `ferrocad_core::Document`, Part features and the OCCT kernel, with no scripting runtime (it implements `AppBackend` only, never `ScriptHost`). Platform-neutral — no gpui, no CPython, no wasm-bindgen — so the browser host and a desktop edition install the *same* backend. Carries the sample document and the one `App_Move` form usage. |
 | `ferrocad_web_gpui` | `cdylib` (wasm32) | The **browser** host: `ferrocad_shell_core` on GPUI's WebGL2 backend, `ferrocad_shell_rust` as the engine, `ferrocad_shell_js` as the optional JS script half, and the page bridge (file picker, download, `ferrocad_open`) — **no CPython anywhere in the graph**. |
 | `ferrocad_shell_js` | `rlib` (wasm32) | The **JS scripting surface**: `JsScriptHost` implements `ScriptHost` over the page's `window.__ferrocadJs` (an ES module: commands, `evaluate`, `runCommand`, `onEvent`). The JS backend is `RustAppBackend::with_script_host(JsScriptHost)`, not a second document implementation. A spike: not published, static command list. |
+| `ferrocad_shell_pywasm` | `rlib` | The **wasm-Python scripting surface**: `PywasmScriptHost` runs RustPython over the *same* `python/ferrocad_shell/__init__.py` and `catalog.json` (included as source), composed by `RustAppBackend::with_script_host`. The property rows come from `ferrocad_core::present` through one native function; `bootstrap.py` supplies the `FreeCAD` facade and the four stdlib modules `wasm32-unknown-unknown` lacks. The crate itself also builds natively so its `properties()` test can run without a browser. A spike: not published, and no host installs it yet (the browser's wasm bundle does not pay for the interpreter until it is proven worth it). |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_shell_gpui::run_with`. |
 | `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](workbenches/toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
@@ -126,6 +127,11 @@ ferrocad_web_gpui/src/           the browser host
 
 ferrocad_shell_js/src/           the JS script half (S7 spike)
   lib.rs       JsScriptHost: commands, evaluate, runCommand, onEvent
+
+ferrocad_shell_pywasm/src/       the wasm-Python script half (S8 spike)
+  lib.rs       PywasmScriptHost: the RustPython interpreter and the seam
+  snapshot.rs  the sample document's property rows, from ferrocad_core::present
+  bootstrap.py the FreeCAD facade, the ferrocad property hooks, the stdlib stubs
 ```
 
 The open-document registry lives in `ferrocad_core::Application` (the analog of FreeCAD's
@@ -308,6 +314,10 @@ ferrocad_web_gpui  -> ferrocad_shell_core, ferrocad_shell_rust,
 ferrocad_shell_js  -> ferrocad_shell_api, ferrocad_inventor,
                       ferrocad_stage, wasm-bindgen       [the JS script half]
                       must NOT -> gpui, pyo3, ferrocad_shell_rust
+ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core,
+                      ferrocad_inventor, rustpython-vm/-stdlib/-pylib
+                                                         [the wasm-Python script half]
+                      must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust
 ferrocad           -> ferrocad_shell_gpui, ferrocad_py     [base app: links the module in, embeds payload]
                                                      [run_edition: an edition's app script]
 ferrocad_parametric -> ferrocad, ferrocad_part_py,

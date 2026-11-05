@@ -42,6 +42,7 @@ members = [
     "crates/ferrocad_shell_core",
     "crates/ferrocad_shell_rust",
     "crates/ferrocad_shell_js",
+    "crates/ferrocad_shell_pywasm",
     "crates/ferrocad_shell_gpui",
     "crates/ferrocad_parametric",
     "crates/ferrocad_toy",

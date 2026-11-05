@@ -18,6 +18,15 @@ rustflags = [
     "-C", "link-arg=-Wl,-rpath,$ORIGIN/../../../.occt/prefix/lib",
 ]
 
+# RustPython's `getrandom` refuses `wasm32-unknown-unknown` unless the backend is
+# named. `wasm_js` is the browser's `crypto.getRandomValues`, enabled by
+# `rustpython-vm`'s `wasmbind` feature; the cfg is the other half getrandom asks for.
+# Nothing else in the wasm graph uses getrandom, so this is inert for the browser
+# host and the OCCT bridge. A run that sets RUSTFLAGS in the environment (the cross
+# image does) ignores this table; that job appends the same cfg explicitly.
+[target.'cfg(target_arch = "wasm32")']
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
 [env]
 # The local OCCT prefix fetched by CI (and by the recipe in
 # docs/developer/architecture/occt-bundling.md) lives at `.occt/prefix`. `relative = true`

@@ -6,8 +6,9 @@
 //! window (or none) and, when it has one, the file-picker hooks.
 
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use ferrocad_core::DocumentHandle;
 use ferrocad_core::{
     Document, Matrix4, ObjectId, Placement, Property, Rotation, Vector3, status_names,
 };
@@ -63,13 +64,30 @@ const TOLERANCE: f64 = 0.2;
 /// The opaque steel grey the desktop Part workbench gives document solids.
 const DEFAULT_COLOR: [f32; 4] = [0.30, 0.34, 0.40, 1.0];
 
-/// The mutable half of the backend: the document and the state the view commands
-/// toggle.
+/// Where the backend's document lives.
+///
+/// The same backend serves two kinds of host. A host that stands alone (the browser,
+/// the tests, an `--open` desktop) owns its document outright. A desktop build that
+/// also embeds CPython must share one with `ferrocad_py`: `FreeCAD.ActiveDocument`
+/// and the model tree have to be the *same* document, not two copies that drift.
+///
+/// The shared variant holds no handle. A script can open or close documents at run
+/// time, so the active one is looked up per access rather than captured at boot.
+enum DocSource {
+    /// A document this backend owns: the sample, a file it opened, or a test's.
+    Isolated {
+        name: String,
+        document: DocumentHandle,
+    },
+    /// The process-wide registry in `ferrocad_core::application`, which
+    /// `ferrocad_py` binds `FreeCAD.ActiveDocument` to.
+    SharedRegistry,
+}
+
+/// The mutable half of the backend: where the document lives, and the state the view
+/// commands toggle.
 struct State {
-    document: Document,
-    /// The document's display name: the sample's at boot, the file's after an open.
-    /// It is what the next save writes and what the title shows.
-    name: String,
+    source: DocSource,
     view: ShellViewState,
     snap: bool,
     /// The shell's selection, mirrored for `App_Move`: the typed move applies to the
@@ -100,20 +118,47 @@ impl RustAppBackend {
     /// (`__wasm_call_ctors`): the kernel's C++ runtime has to be initialised before
     /// the first call.
     pub fn new() -> Self {
-        // Idempotent: the Part module keeps one backend per process.
-        ferrocad_part::register(Arc::new(OcctBackend::new()));
+        let (document, boot_error) = sample_document();
+        Self::isolated(DOCUMENT, document, boot_error)
+    }
 
-        let mut document = Document::new();
-        let boot_error = build_sample(&mut document).err();
-        match boot_error.as_deref() {
-            Some(error) => log::error!("ferrocad: the sample document did not build: {error}"),
-            None => log_shapes(&document),
+    /// Boot against the process-wide registry `ferrocad_py` binds to.
+    ///
+    /// An active document already in the registry is used as it is — that is the
+    /// `python::bootstrap()` case, where the interpreter made the document and the
+    /// shell only displays it. An empty registry gets the sample, registered under
+    /// [`DOCUMENT`], so a standalone shell still shows something.
+    ///
+    /// Nothing is captured: every access reads the registry's active document, so a
+    /// script that opens or closes one is visible on the next call.
+    pub fn from_shared_registry() -> Self {
+        let mut backend = Self {
+            state: RefCell::new(State {
+                source: DocSource::SharedRegistry,
+                view: ShellViewState::default(),
+                snap: false,
+                selection: Vec::new(),
+                move_dialogs: 0,
+            }),
+            boot_error: None,
+            script: None,
+        };
+        if registry().active().is_none() {
+            let (document, boot_error) = sample_document();
+            backend.boot_error = boot_error;
+            backend.install_document(DOCUMENT, document);
         }
+        backend
+    }
 
+    /// A backend that owns `document` under `name`.
+    fn isolated(name: &str, document: Document, boot_error: Option<String>) -> Self {
         Self {
             state: RefCell::new(State {
-                document,
-                name: DOCUMENT.to_string(),
+                source: DocSource::Isolated {
+                    name: name.to_string(),
+                    document: Arc::new(Mutex::new(document)),
+                },
                 view: ShellViewState::default(),
                 snap: false,
                 selection: Vec::new(),
@@ -138,9 +183,87 @@ impl RustAppBackend {
         self
     }
 
-    /// The document's object for an internal name.
-    fn object_id(state: &State, name: &str) -> Option<ObjectId> {
-        state.document.get_by_name(name)
+    /// The active document's name and shared handle.
+    ///
+    /// The registry lock is released before this returns. Nothing may hold it while a
+    /// document is locked: a script callback that walks from the document back to the
+    /// registry would deadlock against the other order.
+    fn active_document(&self) -> Option<(String, DocumentHandle)> {
+        let isolated = {
+            let state = self.state.borrow();
+            match &state.source {
+                DocSource::Isolated { name, document } => {
+                    Some((name.clone(), Arc::clone(document)))
+                }
+                DocSource::SharedRegistry => None,
+            }
+        };
+        if isolated.is_some() {
+            return isolated;
+        }
+        let registry = registry();
+        let name = registry.active()?.to_string();
+        let handle = registry.get(&name)?;
+        drop(registry);
+        Some((name, handle))
+    }
+
+    /// Run `read` with the active document and its name.
+    ///
+    /// `None` when a shared registry has no active document — every document was
+    /// closed — which the read paths report as "nothing to show", not as an error.
+    fn with_document<R>(&self, read: impl FnOnce(&str, &Document) -> R) -> Option<R> {
+        let (name, handle) = self.active_document()?;
+        let document = lock(&handle);
+        Some(read(&name, &document))
+    }
+
+    /// Run `edit` with the active document, locked for writing.
+    ///
+    /// The edit happens inside the registry's own handle, so a document the Python
+    /// wrappers already hold is the one that changes — including its undo history,
+    /// which belongs to the document rather than to a copy of it.
+    fn with_document_mut<R>(
+        &self,
+        edit: impl FnOnce(&str, &mut Document) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let Some((name, handle)) = self.active_document() else {
+            return Err("no active document".to_string());
+        };
+        let mut document = lock(&handle);
+        edit(&name, &mut document)
+    }
+
+    /// Make `document` the active one, returning the name it is known by.
+    ///
+    /// In the registry an already-open name keeps its handle and the contents are
+    /// replaced inside it, so a `PyDocument` wrapper survives a re-open; a new name is
+    /// registered and activated, which is what makes `FreeCAD.ActiveDocument` the file
+    /// that was just opened. An isolated backend swaps its own document.
+    fn install_document(&mut self, proposed: &str, document: Document) -> String {
+        if matches!(&self.state.borrow().source, DocSource::SharedRegistry) {
+            let mut registry = registry();
+            if let Some(handle) = registry.get(proposed) {
+                registry.set_active(proposed);
+                // The document lock is taken only after the registry's is gone.
+                drop(registry);
+                *lock(&handle) = document;
+                return proposed.to_string();
+            }
+            let (name, _) = registry.insert_document(proposed, document);
+            return name;
+        }
+        let mut state = self.state.borrow_mut();
+        let DocSource::Isolated {
+            name,
+            document: handle,
+        } = &mut state.source
+        else {
+            unreachable!("the shared case returned above")
+        };
+        *lock(handle) = document;
+        *name = proposed.to_string();
+        proposed.to_string()
     }
 }
 
@@ -158,7 +281,10 @@ impl AppBackend for RustAppBackend {
         Ok(Bootstrap {
             version: env!("CARGO_PKG_VERSION").to_string(),
             backend: "rust".to_string(),
-            document: self.state.borrow().name.clone(),
+            document: self
+                .active_document()
+                .map(|(name, _)| name)
+                .unwrap_or_else(|| DOCUMENT.to_string()),
         })
     }
 
@@ -176,43 +302,43 @@ impl AppBackend for RustAppBackend {
         let mut document = Document::from_saved(&saved);
         document.recompute()?;
         let objects = document.object_ids().len();
-        let mut state = self.state.borrow_mut();
-        state.document = document;
-        state.name = name.to_string();
-        state.selection.clear();
-        state.move_dialogs = 0;
+        // The registry path registers and activates it, so `FreeCAD.ActiveDocument` is
+        // the file the shell just opened rather than a second copy of it.
+        let name = self.install_document(name, document);
+        {
+            let mut state = self.state.borrow_mut();
+            state.selection.clear();
+            state.move_dialogs = 0;
+        }
         Ok(OpenedDocument {
-            document: state.name.clone(),
+            document: name,
             objects,
         })
     }
 
     fn save_document(&self) -> Result<Vec<u8>, String> {
-        let state = self.state.borrow();
-        let saved = state.document.to_saved(&state.name);
+        let Some(saved) = self.with_document(|name, document| document.to_saved(name)) else {
+            return Err("no active document".to_string());
+        };
         ferrocad_core::fcstd_write::encode_fcstd(&saved).map_err(|error| error.to_string())
     }
 
     fn model_tree(&self) -> Result<Vec<DocumentNode>, String> {
-        let node = {
-            let state = self.state.borrow();
-            DocumentNode {
-                name: state.name.clone(),
-                label: state.name.clone(),
-                objects: state
-                    .document
-                    .object_ids()
-                    .iter()
-                    .filter_map(|id| state.document.object(*id))
-                    .map(|object| ObjectNode {
-                        name: object.name.clone(),
-                        label: object.label.clone(),
-                        type_id: object.type_id.clone(),
-                    })
-                    .collect(),
-            }
-        };
-        let mut tree = vec![node];
+        let node = self.with_document(|name, document| DocumentNode {
+            name: name.to_string(),
+            label: name.to_string(),
+            objects: document
+                .object_ids()
+                .iter()
+                .filter_map(|id| document.object(*id))
+                .map(|object| ObjectNode {
+                    name: object.name.clone(),
+                    label: object.label.clone(),
+                    type_id: object.type_id.clone(),
+                })
+                .collect(),
+        });
+        let mut tree: Vec<DocumentNode> = node.into_iter().collect();
         // A script surface appends what it owns after the document's own nodes (the
         // synthetic `Settings/<Feature>` roots). The borrow above is released first:
         // the script's walk is its own code and must not see a document lock.
@@ -232,116 +358,67 @@ impl AppBackend for RustAppBackend {
         {
             return Ok(rows);
         }
-        let state = self.state.borrow();
-        let Some(id) = Self::object_id(&state, object) else {
-            return Ok(Vec::new());
-        };
-        let Some(object) = state.document.object(id) else {
-            return Ok(Vec::new());
-        };
-
-        let mut rows = Vec::with_capacity(object.properties.len() + 1);
-        // `Label` is a document-object field, not a property-container entry; FreeCAD
-        // presents it as an ordinary row and so does the native backend.
-        rows.push(PropRow {
-            name: "Label".to_string(),
-            label: String::new(),
-            type_id: "App::PropertyString".to_string(),
-            value: object.label.clone(),
-            status: String::new(),
-            editable: true,
-            command: None,
-            kind: "text".to_string(),
-            min: None,
-            max: None,
-            unit: None,
-            choices: Vec::new(),
-        });
-
-        for (name, value) in object.properties.iter() {
-            // One rule for both hosts: the kind and the text come from the value, so
-            // a Part length reads as `10 mm` here exactly as it does natively.
-            let kind = ferrocad_core::present::kind(value);
-            let driven = object.expressions.contains_key(name);
-            let (min, max) = match value {
-                Property::FloatConstraint { min, max, .. } => (Some(*min), Some(*max)),
-                Property::IntegerConstraint { min, max, .. } => {
-                    (Some(*min as f64), Some(*max as f64))
-                }
-                _ => (None, None),
-            };
-            rows.push(PropRow {
-                name: name.clone(),
-                label: String::new(),
-                value: ferrocad_core::present::format(value),
-                status: object
-                    .properties
-                    .status(name)
-                    .map(|status| status_names(status).join(", "))
-                    .unwrap_or_default(),
-                editable: kind.is_some() && !driven,
-                command: None,
-                type_id: value.type_name().to_string(),
-                kind: kind
-                    .map(|kind| kind.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                min,
-                max,
-                // A document quantity carries its unit in the text; a schema row
-                // declares one instead. `row_unit` reads either.
-                unit: None,
-                choices: match value {
-                    Property::Enumeration(values, _) => values.clone(),
-                    _ => Vec::new(),
-                },
-            });
-        }
-        Ok(rows)
+        Ok(self
+            .with_document(|_, document| {
+                let Some(id) = document.get_by_name(object) else {
+                    return Vec::new();
+                };
+                let Some(object) = document.object(id) else {
+                    return Vec::new();
+                };
+                property_rows(object)
+            })
+            .unwrap_or_default())
     }
 
     fn stage_meshes(&self) -> Result<Vec<StageMesh>, String> {
-        let state = self.state.borrow();
-        let state = &*state;
-        let mut meshes = Vec::new();
-        // The engine decides what is drawn: a feature replaces the object it consumes
-        // (the box under a fillet), and a hidden object is skipped. The native host
-        // asks the same function, so the two cannot disagree.
-        for id in ferrocad_core::drawable(&state.document) {
-            let Some(object) = state.document.object(id) else {
-                continue;
-            };
-            let Some(property) = object.properties.get("Shape").and_then(shape_of) else {
-                continue;
-            };
-            if property.shape().is_none() {
-                continue;
-            };
-            // The property memoises: a sync of an unchanged document copies, it does
-            // not re-mesh (the kernel meshes per face either way).
-            let mesh = property
-                .tessellate(TOLERANCE, TessellationOptions::default().angular_deflection)
-                .map_err(|error| format!("{}: {error}", object.name))?;
-            let mesh = std::sync::Arc::unwrap_or_clone(mesh);
-            meshes.push(StageMesh {
-                // A stable per-document pick id; `DisplaySync` maps it to the name.
-                entity: id as u32 + 1,
-                object: object.name.clone(),
-                label: object.label.clone(),
-                positions: mesh.positions,
-                normals: mesh.normals,
-                triangles: mesh.triangles,
-                triangle_parts: mesh.triangle_parts,
-                edges: mesh.edges,
-                segment_parts: mesh.segment_parts,
-                vertices: mesh.vertices,
-                vertex_parts: mesh.vertex_parts,
-                parts: mesh.parts,
-                origin: placement_base(object),
-                color: Some(object_color(object)),
-                display: None,
-            });
-        }
+        let meshes = self.with_document(|_, document| {
+            let mut meshes = Vec::new();
+            // The engine decides what is drawn: a feature replaces the object it
+            // consumes (the box under a fillet), and a hidden object is skipped. The
+            // native host asks the same function, so the two cannot disagree.
+            for id in ferrocad_core::drawable(document) {
+                let Some(object) = document.object(id) else {
+                    continue;
+                };
+                let Some(property) = object.properties.get("Shape").and_then(shape_of) else {
+                    continue;
+                };
+                if property.shape().is_none() {
+                    continue;
+                };
+                // The property memoises: a sync of an unchanged document copies, it
+                // does not re-mesh (the kernel meshes per face either way).
+                let mesh = property
+                    .tessellate(TOLERANCE, TessellationOptions::default().angular_deflection)
+                    .map_err(|error| format!("{}: {error}", object.name))?;
+                let mesh = std::sync::Arc::unwrap_or_clone(mesh);
+                meshes.push(StageMesh {
+                    // A stable per-document pick id; `DisplaySync` maps it to the name.
+                    entity: id as u32 + 1,
+                    object: object.name.clone(),
+                    label: object.label.clone(),
+                    positions: mesh.positions,
+                    normals: mesh.normals,
+                    triangles: mesh.triangles,
+                    triangle_parts: mesh.triangle_parts,
+                    edges: mesh.edges,
+                    segment_parts: mesh.segment_parts,
+                    vertices: mesh.vertices,
+                    vertex_parts: mesh.vertex_parts,
+                    parts: mesh.parts,
+                    origin: placement_base(object),
+                    color: Some(object_color(object)),
+                    display: None,
+                });
+            }
+            Ok::<_, String>(meshes)
+        });
+        let meshes = match meshes {
+            Some(meshes) => meshes?,
+            // No active document: nothing is drawn, which is not a failure.
+            None => return Ok(Vec::new()),
+        };
         // A diagnostics line, not the per-shape tessellation counts `log_shapes`
         // prints: this is the set the stage actually draws, so the smoke check can
         // prove that a feature is not drawn beside the object it consumed.
@@ -362,26 +439,40 @@ impl AppBackend for RustAppBackend {
     /// installed a scripting surface appends the commands it registered, so a
     /// script's verb reaches the palette like a built-in.
     fn commands(&self) -> Result<Vec<CommandInfo>, String> {
-        let state = self.state.borrow();
+        let (view, snap, selection) = {
+            let state = self.state.borrow();
+            (state.view.clone(), state.snap, state.selection.clone())
+        };
+        // A document is not needed to list the commands: with none open (a shared
+        // registry whose documents were all closed) the edit verbs are simply disabled.
+        let (has_undo, has_redo, visible) = self
+            .with_document(|_, document| {
+                (
+                    document.has_undo(),
+                    document.has_redo(),
+                    selection_visible(document, &selection),
+                )
+            })
+            .unwrap_or((false, false, None));
         // The shared catalogue is the source of every built-in's metadata; this
         // backend fills in the live state and appends the verbs only it offers.
         let mut commands: Vec<CommandInfo> =
             catalog::builtin().iter().map(CommandDef::info).collect();
         for command in &mut commands {
             match command.id.as_str() {
-                catalog::TOGGLE_GRID => command.checked = state.view.grid,
-                catalog::TOGGLE_AXIS_CROSS => command.checked = state.view.axis_cross,
-                catalog::TOGGLE_GIZMO => command.checked = state.view.gizmo.enabled,
+                catalog::TOGGLE_GRID => command.checked = view.grid,
+                catalog::TOGGLE_AXIS_CROSS => command.checked = view.axis_cross,
+                catalog::TOGGLE_GIZMO => command.checked = view.gizmo.enabled,
                 _ => {}
             }
         }
 
         // Snap is Draft's, not a shell built-in: this backend's own switch, with no
         // engine-side effect yet.
-        let mut snap = row(SNAP, "Snap", "snap");
-        snap.checkable = true;
-        snap.checked = state.snap;
-        commands.push(snap);
+        let mut snap_row = row(SNAP, "Snap", "snap");
+        snap_row.checkable = true;
+        snap_row.checked = snap;
+        commands.push(snap_row);
 
         // Fit frames the document; undo and redo are plain edit commands (the dock
         // lists them and the accelerators run them, but they are not wheel verbs).
@@ -393,20 +484,20 @@ impl AppBackend for RustAppBackend {
         undo.group = "Edit".to_string();
         undo.tooltip = "Undo the last edit".to_string();
         undo.accel = "Ctrl+Z".to_string();
-        undo.enabled = state.document.has_undo();
+        undo.enabled = has_undo;
         commands.push(undo);
         let mut redo = row(REDO, "Redo", "dock");
         redo.cmd_type = "ForEdit".to_string();
         redo.group = "Edit".to_string();
         redo.tooltip = "Redo the last undone edit".to_string();
         redo.accel = "Ctrl+Shift+Z".to_string();
-        redo.enabled = state.document.has_redo();
+        redo.enabled = has_redo;
         commands.push(redo);
 
         // Hide/Show is the wheel's third object verb and toggles the selection.
         let mut visibility = row(
             VISIBILITY,
-            if selection_visible(&state) == Some(false) {
+            if visible == Some(false) {
                 "Show"
             } else {
                 "Hide"
@@ -462,37 +553,39 @@ impl AppBackend for RustAppBackend {
         object: &str,
         visible: Option<bool>,
     ) -> Result<VisibilityOutcome, String> {
-        let mut state = self.state.borrow_mut();
-        let state = &mut *state;
-        let Some(id) = Self::object_id(state, object) else {
-            return Ok(VisibilityOutcome {
-                ok: false,
-                visible: false,
-                error: format!("no object {object}"),
-            });
-        };
-        match in_transaction(&mut state.document, "Toggle visibility", |document| {
-            hide_object(document, id, visible).ok_or_else(|| format!("no object {object}"))
-        }) {
-            Ok(next) => Ok(VisibilityOutcome {
-                ok: true,
-                visible: next,
-                error: String::new(),
-            }),
-            Err(error) => Ok(VisibilityOutcome {
-                ok: false,
-                visible: false,
-                error,
-            }),
-        }
+        self.with_document_mut(|_, document| {
+            let Some(id) = document.get_by_name(object) else {
+                return Ok(VisibilityOutcome {
+                    ok: false,
+                    visible: false,
+                    error: format!("no object {object}"),
+                });
+            };
+            match in_transaction(document, "Toggle visibility", |document| {
+                hide_object(document, id, visible).ok_or_else(|| format!("no object {object}"))
+            }) {
+                Ok(next) => Ok(VisibilityOutcome {
+                    ok: true,
+                    visible: next,
+                    error: String::new(),
+                }),
+                Err(error) => Ok(VisibilityOutcome {
+                    ok: false,
+                    visible: false,
+                    error,
+                }),
+            }
+        })
     }
 
     fn rotation_quaternion(&self, object: &str) -> Option<[f64; 4]> {
         // The stage is world-space with an identity placement, so the object's own
         // orientation is only in the document. `Rotation::q` is already `[w, x, y, z]`.
-        let state = self.state.borrow();
-        let id = state.document.get_by_name(object)?;
-        Some(current_placement(&state.document, id)?.rotation.q)
+        self.with_document(|_, document| {
+            let id = document.get_by_name(object)?;
+            Some(current_placement(document, id)?.rotation.q)
+        })
+        .flatten()
     }
 
     fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
@@ -522,89 +615,87 @@ impl AppBackend for RustAppBackend {
         {
             return Ok(result);
         }
-        let mut state = self.state.borrow_mut();
-        let state = &mut *state;
-        let Some(id) = Self::object_id(state, object) else {
-            return Ok(refused(format!("no object {object}")));
-        };
+        self.with_document_mut(|_, document| {
+            let Some(id) = document.get_by_name(object) else {
+                return Ok(refused(format!("no object {object}")));
+            };
 
-        if property == "Label" {
-            in_transaction(&mut state.document, "Rename", |document| {
-                document.set_label(id, value);
-                Ok(())
-            })?;
-            return Ok(SetResult {
-                ok: true,
-                error: String::new(),
-                view: None,
-            });
-        }
-
-        let Some(current) = state
-            .document
-            .object(id)
-            .and_then(|object| object.properties.get(property))
-            .cloned()
-        else {
-            return Ok(refused(format!("no property {property}")));
-        };
-        if state
-            .document
-            .object(id)
-            .is_some_and(|object| object.expressions.contains_key(property))
-        {
-            return Ok(refused(format!("{property} is set by an expression")));
-        }
-        let next = match ferrocad_core::present::coerce(&current, value) {
-            Ok(next) => next,
-            Err(error) => return Ok(refused(error)),
-        };
-        // One named transaction per edit: the property pane, the typed Move and a
-        // transform commit all land in the undo history, as they do natively.
-        state.document.open_transaction_named("Set property");
-        if let Err(error) = state.document.set_property(id, property, next) {
-            state.document.abort_transaction();
-            return Ok(refused(error));
-        }
-        let recomputed = state.document.recompute();
-        state.document.commit_transaction();
-        match recomputed {
-            Ok(_) => {
-                // A feature that refuses its input keeps its last good shape and
-                // reports the reason. That is document state, not a failed edit:
-                // the value was stored, so the pane keeps it.
-                if let Some(error) = state
-                    .document
-                    .object(id)
-                    .and_then(|object| object.invalid.then(|| object.error.clone()))
-                    .flatten()
-                {
-                    return Ok(SetResult {
-                        ok: true,
-                        error,
-                        view: None,
-                    });
-                }
-                Ok(SetResult {
+            if property == "Label" {
+                in_transaction(document, "Rename", |document| {
+                    document.set_label(id, value);
+                    Ok(())
+                })?;
+                return Ok(SetResult {
                     ok: true,
                     error: String::new(),
                     view: None,
-                })
+                });
             }
-            Err(error) => Ok(refused(error)),
-        }
+
+            let Some(current) = document
+                .object(id)
+                .and_then(|object| object.properties.get(property))
+                .cloned()
+            else {
+                return Ok(refused(format!("no property {property}")));
+            };
+            if document
+                .object(id)
+                .is_some_and(|object| object.expressions.contains_key(property))
+            {
+                return Ok(refused(format!("{property} is set by an expression")));
+            }
+            let next = match ferrocad_core::present::coerce(&current, value) {
+                Ok(next) => next,
+                Err(error) => return Ok(refused(error)),
+            };
+            // One named transaction per edit: the property pane, the typed Move and a
+            // transform commit all land in the undo history, as they do natively.
+            document.open_transaction_named("Set property");
+            if let Err(error) = document.set_property(id, property, next) {
+                document.abort_transaction();
+                return Ok(refused(error));
+            }
+            let recomputed = document.recompute();
+            document.commit_transaction();
+            match recomputed {
+                Ok(_) => {
+                    // A feature that refuses its input keeps its last good shape and
+                    // reports the reason. That is document state, not a failed edit:
+                    // the value was stored, so the pane keeps it.
+                    if let Some(error) = document
+                        .object(id)
+                        .and_then(|object| object.invalid.then(|| object.error.clone()))
+                        .flatten()
+                    {
+                        return Ok(SetResult {
+                            ok: true,
+                            error,
+                            view: None,
+                        });
+                    }
+                    Ok(SetResult {
+                        ok: true,
+                        error: String::new(),
+                        view: None,
+                    })
+                }
+                Err(error) => Ok(refused(error)),
+            }
+        })
     }
 
     fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String> {
         // `App_Open`/`App_Save` never arrive here: the shell owns both ids and asks
         // the host's `FilePicker` (S6). A backend only moves bytes.
-        let mut state = self.state.borrow_mut();
-        let state = &mut *state;
         // The two object verbs are not view toggles: they hand the shell a session
         // (a gizmo mode, and for Move a token its form spends).
         if id == catalog::MOVE {
-            state.move_dialogs += 1;
-            let token = format!("{MOVE_TOKEN}-{}", state.move_dialogs);
+            let token = {
+                let mut state = self.state.borrow_mut();
+                state.move_dialogs += 1;
+                format!("{MOVE_TOKEN}-{}", state.move_dialogs)
+            };
             return Ok(CommandOutcome {
                 ok: true,
                 status: "move: drag a handle or type a value".to_string(),
@@ -623,7 +714,7 @@ impl AppBackend for RustAppBackend {
             });
         }
         if id == VISIBILITY {
-            let selection = state.selection.clone();
+            let selection = self.state.borrow().selection.clone();
             if selection.is_empty() {
                 return Ok(CommandOutcome {
                     ok: false,
@@ -633,19 +724,24 @@ impl AppBackend for RustAppBackend {
             }
             // One verb for the whole selection: if anything is still visible, hide
             // them all; otherwise show them all. One transaction, so one undo step.
-            let hide = selection_visible(state) != Some(false);
+            let visible = self
+                .with_document(|_, document| selection_visible(document, &selection))
+                .flatten();
+            let hide = visible != Some(false);
             let verb = if hide { "Hide" } else { "Show" };
-            let changed = in_transaction(&mut state.document, verb, |document| {
-                let mut changed = 0;
-                for name in &selection {
-                    let Some(id) = document.get_by_name(name) else {
-                        continue;
-                    };
-                    if hide_object(document, id, Some(!hide)).is_some() {
-                        changed += 1;
+            let changed = self.with_document_mut(|_, document| {
+                in_transaction(document, verb, |document| {
+                    let mut changed = 0;
+                    for name in &selection {
+                        let Some(id) = document.get_by_name(name) else {
+                            continue;
+                        };
+                        if hide_object(document, id, Some(!hide)).is_some() {
+                            changed += 1;
+                        }
                     }
-                }
-                Ok(changed)
+                    Ok(changed)
+                })
             })?;
             let verb = if hide { "hid" } else { "showed" };
             return Ok(CommandOutcome {
@@ -654,6 +750,46 @@ impl AppBackend for RustAppBackend {
                 ..Default::default()
             });
         }
+        // Undo and redo are the document's history, not the shell's: they run against
+        // the shared handle, so a script that undid something and a shell that undoes
+        // next see one history.
+        if id == UNDO || id == REDO {
+            let undo = id == UNDO;
+            let name = self.with_document_mut(|_, document| {
+                let names = if undo {
+                    document.undo_names()
+                } else {
+                    document.redo_names()
+                };
+                let name = names.first().cloned().unwrap_or_default();
+                let moved = if undo {
+                    document.undo()
+                } else {
+                    document.redo()
+                };
+                if !moved {
+                    return Ok(None);
+                }
+                document.recompute()?;
+                Ok(Some(name))
+            })?;
+            let verb = if undo { "undo" } else { "redo" };
+            return Ok(match name {
+                Some(name) => CommandOutcome {
+                    ok: true,
+                    status: history_status(verb, &name),
+                    ..Default::default()
+                },
+                None => CommandOutcome {
+                    ok: false,
+                    error: format!("nothing to {verb}"),
+                    ..Default::default()
+                },
+            });
+        }
+
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
         let (status, view) = match id {
             catalog::TOGGLE_GRID => {
                 state.view.grid = !state.view.grid;
@@ -704,40 +840,6 @@ impl AppBackend for RustAppBackend {
                     ..Default::default()
                 }),
             ),
-            UNDO => {
-                let name = state
-                    .document
-                    .undo_names()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
-                if !state.document.undo() {
-                    return Ok(CommandOutcome {
-                        ok: false,
-                        error: "nothing to undo".to_string(),
-                        ..Default::default()
-                    });
-                }
-                state.document.recompute()?;
-                (history_status("undo", &name), None)
-            }
-            REDO => {
-                let name = state
-                    .document
-                    .redo_names()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
-                if !state.document.redo() {
-                    return Ok(CommandOutcome {
-                        ok: false,
-                        error: "nothing to redo".to_string(),
-                        ..Default::default()
-                    });
-                }
-                state.document.recompute()?;
-                (history_status("redo", &name), None)
-            }
             other => {
                 // A command the scripting surface registered is not the document's:
                 // ask it, and only report "not available" when it disclaims the id too.
@@ -798,9 +900,7 @@ impl AppBackend for RustAppBackend {
                 .and_then(serde_json::Value::as_f64)
                 .unwrap_or(0.0),
         );
-        let mut state = self.state.borrow_mut();
-        let state = &mut *state;
-        let selection = state.selection.clone();
+        let selection = self.state.borrow().selection.clone();
         if selection.is_empty() {
             return Ok(CommandOutcome {
                 ok: false,
@@ -808,7 +908,7 @@ impl AppBackend for RustAppBackend {
                 ..Default::default()
             });
         }
-        match translate(state, &selection, delta) {
+        match self.with_document_mut(|_, document| translate(document, &selection, delta)) {
             Ok(moved) => Ok(CommandOutcome {
                 ok: true,
                 status: format!("moved {moved} object(s)"),
@@ -862,54 +962,117 @@ impl AppBackend for RustAppBackend {
                 error: "a transform commit needs 16 matrix values".to_string(),
             });
         };
-        let mut state = self.state.borrow_mut();
-        let state = &mut *state;
-        let Some(id) = Self::object_id(state, object) else {
-            return Ok(ApplyResult {
-                ok: false,
-                error: format!("no object {object}"),
-            });
-        };
-        let Some(placement) = current_placement(&state.document, id) else {
-            return Ok(ApplyResult {
-                ok: false,
-                error: format!("{object} has no Placement"),
-            });
-        };
-        let delta = Matrix4 { m: elements };
-        let composed = delta.mul(&placement.to_matrix());
-        let next = Placement::new(
-            Vector3::new(composed.m[3], composed.m[7], composed.m[11]),
-            Rotation::from_matrix(&composed),
-        );
-        // One transaction per commit, so a rotate ring drag is one undo step.
-        in_transaction(&mut state.document, "Transform", |document| {
-            document.set_property(id, "Placement", Property::Placement(next))?;
-            document.recompute()?;
-            Ok(())
-        })?;
-        Ok(ApplyResult {
-            ok: true,
-            error: String::new(),
+        self.with_document_mut(|_, document| {
+            let Some(id) = document.get_by_name(object) else {
+                return Ok(ApplyResult {
+                    ok: false,
+                    error: format!("no object {object}"),
+                });
+            };
+            let Some(placement) = current_placement(document, id) else {
+                return Ok(ApplyResult {
+                    ok: false,
+                    error: format!("{object} has no Placement"),
+                });
+            };
+            let delta = Matrix4 { m: elements };
+            let composed = delta.mul(&placement.to_matrix());
+            let next = Placement::new(
+                Vector3::new(composed.m[3], composed.m[7], composed.m[11]),
+                Rotation::from_matrix(&composed),
+            );
+            // One transaction per commit, so a rotate ring drag is one undo step.
+            in_transaction(document, "Transform", |document| {
+                document.set_property(id, "Placement", Property::Placement(next))?;
+                document.recompute()?;
+                Ok(())
+            })?;
+            Ok(ApplyResult {
+                ok: true,
+                error: String::new(),
+            })
         })
     }
 }
 
+/// The property editor's rows for one document object.
+///
+/// `Label` is a document-object field, not a property-container entry; FreeCAD
+/// presents it as an ordinary row and so does the native backend, so it always
+/// comes first.
+fn property_rows(object: &ferrocad_core::DocumentObject) -> Vec<PropRow> {
+    let mut rows = Vec::with_capacity(object.properties.len() + 1);
+    // `Label` is a document-object field, not a property-container entry; FreeCAD
+    // presents it as an ordinary row and so does the native backend.
+    rows.push(PropRow {
+        name: "Label".to_string(),
+        label: String::new(),
+        type_id: "App::PropertyString".to_string(),
+        value: object.label.clone(),
+        status: String::new(),
+        editable: true,
+        command: None,
+        kind: "text".to_string(),
+        min: None,
+        max: None,
+        unit: None,
+        choices: Vec::new(),
+    });
+
+    for (name, value) in object.properties.iter() {
+        // One rule for both hosts: the kind and the text come from the value, so
+        // a Part length reads as `10 mm` here exactly as it does natively.
+        let kind = ferrocad_core::present::kind(value);
+        let driven = object.expressions.contains_key(name);
+        let (min, max) = match value {
+            Property::FloatConstraint { min, max, .. } => (Some(*min), Some(*max)),
+            Property::IntegerConstraint { min, max, .. } => (Some(*min as f64), Some(*max as f64)),
+            _ => (None, None),
+        };
+        rows.push(PropRow {
+            name: name.clone(),
+            label: String::new(),
+            value: ferrocad_core::present::format(value),
+            status: object
+                .properties
+                .status(name)
+                .map(|status| status_names(status).join(", "))
+                .unwrap_or_default(),
+            editable: kind.is_some() && !driven,
+            command: None,
+            type_id: value.type_name().to_string(),
+            kind: kind
+                .map(|kind| kind.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            min,
+            max,
+            // A document quantity carries its unit in the text; a schema row
+            // declares one instead. `row_unit` reads either.
+            unit: None,
+            choices: match value {
+                Property::Enumeration(values, _) => values.clone(),
+                _ => Vec::new(),
+            },
+        });
+    }
+    rows
+}
 /// Move `names` by a world-space `delta`, one property write per object.
 ///
 /// This is the native `App_Move` contract (`obj.Placement = delta * obj.Placement`),
 /// applied to the placement's base only: a pure translation does not change the
 /// rotation, so the rotation is kept as it is.
-fn translate(state: &mut State, names: &[String], delta: Vector3) -> Result<usize, String> {
+fn translate(document: &mut Document, names: &[String], delta: Vector3) -> Result<usize, String> {
     let ids: Vec<ObjectId> = names
         .iter()
-        .filter_map(|name| state.document.get_by_name(name))
+        .filter_map(|name| document.get_by_name(name))
         .collect();
     if ids.is_empty() {
         return Err("nothing selected".to_string());
     }
     // One transaction for the whole selection: a typed move is one undo step.
-    in_transaction(&mut state.document, "Move", |document| {
+    in_transaction(document, "Move", |document| {
         let mut moved = 0;
         for id in ids {
             let Some(placement) = current_placement(document, id) else {
@@ -1008,16 +1171,41 @@ fn object_visible(document: &Document, name: &str) -> bool {
 }
 
 /// Whether the whole selection is drawn: `None` when nothing is selected.
-fn selection_visible(state: &State) -> Option<bool> {
-    if state.selection.is_empty() {
+fn selection_visible(document: &Document, selection: &[String]) -> Option<bool> {
+    if selection.is_empty() {
         return None;
     }
-    Some(
-        state
-            .selection
-            .iter()
-            .all(|name| object_visible(&state.document, name)),
-    )
+    Some(selection.iter().all(|name| object_visible(document, name)))
+}
+
+/// The process-wide document registry (`FreeCAD.ActiveDocument`).
+///
+/// A poisoned lock still has a usable registry: the panic that poisoned it was in
+/// somebody else's callback, and refusing to read the documents afterwards would turn
+/// that into a dead application.
+fn registry() -> std::sync::MutexGuard<'static, ferrocad_core::Application> {
+    ferrocad_core::application()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// A document handle, locked. Same rule as [`registry`]: a panic elsewhere does not
+/// make the document unreadable.
+fn lock(handle: &DocumentHandle) -> std::sync::MutexGuard<'_, Document> {
+    handle.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// The sample document and why it failed to build, if it did.
+fn sample_document() -> (Document, Option<String>) {
+    // Idempotent: the Part module keeps one backend per process.
+    ferrocad_part::register(Arc::new(OcctBackend::new()));
+    let mut document = Document::new();
+    let boot_error = build_sample(&mut document).err();
+    match boot_error.as_deref() {
+        Some(error) => log::error!("ferrocad: the sample document did not build: {error}"),
+        None => log_shapes(&document),
+    }
+    (document, boot_error)
 }
 
 /// Report the sample document's shapes: one line per tessellated object.
@@ -1523,5 +1711,137 @@ mod tests {
             .unwrap();
         assert!(!unknown.ok);
         assert!(!backend.evaluate("1 + 1").unwrap().ok);
+    }
+
+    /// The registry is process-wide, so the shared tests take turns and start empty.
+    static REGISTRY: Mutex<()> = Mutex::new(());
+
+    /// Serialise a shared-registry test and hand it an empty registry.
+    fn clear_registry() -> std::sync::MutexGuard<'static, ()> {
+        let guard = REGISTRY.lock().unwrap_or_else(|error| error.into_inner());
+        let names = registry().names();
+        let mut application = registry();
+        for name in names {
+            application.close_document(&name);
+        }
+        drop(application);
+        guard
+    }
+
+    #[test]
+    fn an_empty_registry_gets_the_sample() {
+        let _serial = clear_registry();
+        let backend = RustAppBackend::from_shared_registry();
+        assert_eq!(registry().active(), Some(DOCUMENT));
+        let tree = backend.model_tree().unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, DOCUMENT);
+        assert!(tree[0].objects.iter().any(|object| object.name == "Box"));
+    }
+
+    #[test]
+    fn an_existing_document_is_used_as_it_is() {
+        let _serial = clear_registry();
+        // The `python::bootstrap()` case: the interpreter made the document and the
+        // shell must display *that* one, not build a sample beside it.
+        {
+            let mut document = Document::new();
+            document.add_object("Imported", BOX_TYPE);
+            registry().insert_document("FromPython", document);
+        }
+        let mut backend = RustAppBackend::from_shared_registry();
+        assert_eq!(backend.bootstrap().unwrap().document, "FromPython");
+        let tree = backend.model_tree().unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "FromPython");
+        assert!(
+            tree[0]
+                .objects
+                .iter()
+                .any(|object| object.name == "Imported")
+        );
+        assert!(!tree[0].objects.iter().any(|object| object.name == "Box"));
+    }
+
+    #[test]
+    fn opening_a_document_registers_and_activates_it() {
+        let _serial = clear_registry();
+        // A file written by one backend and opened by another: the same path the
+        // browser host takes with bytes from its picker.
+        let bytes = {
+            let source = RustAppBackend::new();
+            source.save_document().unwrap()
+        };
+        let mut backend = RustAppBackend::from_shared_registry();
+        let opened = backend.open_document("Opened", &bytes).unwrap();
+        assert_eq!(opened.document, "Opened");
+        // `FreeCAD.ActiveDocument` is the file the shell just opened.
+        assert_eq!(registry().active(), Some("Opened"));
+        assert!(registry().contains("Opened"));
+        let tree = backend.model_tree().unwrap();
+        assert_eq!(tree[0].name, "Opened");
+        assert!(!tree[0].objects.is_empty());
+    }
+
+    #[test]
+    fn reopening_a_name_keeps_the_registry_handle() {
+        let _serial = clear_registry();
+        let bytes = {
+            let source = RustAppBackend::new();
+            source.save_document().unwrap()
+        };
+        let mut backend = RustAppBackend::from_shared_registry();
+        let before = registry().get(DOCUMENT).unwrap();
+        let name = backend.open_document(DOCUMENT, &bytes).unwrap().document;
+        assert_eq!(name, DOCUMENT);
+        let after = registry().get(DOCUMENT).unwrap();
+        // Replacing the contents inside the same handle is what keeps a `PyDocument`
+        // wrapper (and anything else holding the document) valid across a re-open.
+        assert!(Arc::ptr_eq(&before, &after));
+    }
+
+    #[test]
+    fn an_edit_and_its_undo_run_against_the_registry_document() {
+        let _serial = clear_registry();
+        let mut backend = RustAppBackend::from_shared_registry();
+        let handle = registry().get(DOCUMENT).unwrap();
+        let length = |document: &Document| {
+            property_rows(
+                document
+                    .object(document.get_by_name("Box").unwrap())
+                    .unwrap(),
+            )
+            .into_iter()
+            .find(|row| row.name == "Length")
+            .map(|row| row.value)
+        };
+        let original = length(&lock(&handle)).unwrap();
+
+        assert!(backend.set_property("Box", "Length", "7").unwrap().ok);
+        assert_ne!(length(&lock(&handle)).unwrap(), original);
+
+        assert!(backend.run_command(UNDO).unwrap().ok);
+        // Read through the registry's own handle: the undo reached the document the
+        // Python wrappers hold, not a copy of it.
+        assert_eq!(length(&lock(&handle)).unwrap(), original);
+    }
+
+    #[test]
+    fn with_no_active_document_reads_are_empty_and_writes_refused() {
+        let _serial = clear_registry();
+        let mut backend = RustAppBackend::from_shared_registry();
+        {
+            let mut application = registry();
+            let name = application.active().unwrap().to_string();
+            application.close_document(&name);
+        }
+        // A shell with every document closed shows an empty tree, not an error.
+        assert!(backend.model_tree().unwrap().is_empty());
+        assert!(backend.stage_meshes().unwrap().is_empty());
+        assert!(backend.properties("Box").unwrap().is_empty());
+        // An edit with nothing to edit is a failure, and says so.
+        assert!(backend.save_document().is_err());
+        assert!(backend.set_property("Box", "Length", "7").is_err());
+        assert!(backend.set_visibility("Box", None).is_err());
     }
 }

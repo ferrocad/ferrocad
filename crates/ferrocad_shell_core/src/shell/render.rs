@@ -8,6 +8,30 @@ use super::pill::AxisFrame;
 
 use ferrocad_widgets::icon;
 
+/// An action button's content: an embedded glyph and its word.
+fn action_label(
+    key: &'static str,
+    label: &'static str,
+    ink: u32,
+    selector: &'static str,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .debug_selector(move || selector.to_string())
+                .flex()
+                .items_center()
+                .child(
+                    icon::named(key, icon::ROW, ink).unwrap_or_else(|| div().into_any_element()),
+                ),
+        )
+        .child(label)
+}
+
 /// The active-action surface: the active tool's label, point count, hint and a
 /// **Cancel** / **Finish** pair, as one dielectric pill over the bottom of the canvas.
 ///
@@ -59,7 +83,7 @@ pub(super) fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl I
                 .text_color(rgb(FG))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(PANEL_ALT)))
-                .child("Cancel")
+                .child(action_label("close", "Cancel", FG, "tool-cancel-icon"))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.cancel_tool(cx);
                 })),
@@ -77,7 +101,7 @@ pub(super) fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl I
                 .text_color(rgb(FG))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(PANEL_ALT)))
-                .child("Finish")
+                .child(action_label("check", "Finish", FG, "tool-finish-icon"))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.finish_active_tool(cx);
                 })),
@@ -1154,9 +1178,15 @@ pub(crate) fn tree_panel(
         );
         for obj in &doc.objects {
             let name = obj.name.clone();
+            let selected = model
+                .selection
+                .iter()
+                .any(|item| same_node(&item.object, &name));
             let icon_name = name.clone();
+            // The glyph carries the row's state: full ink on the selection, muted
+            // off it, so a selected row reads as one block against the accent fill.
             let type_icon = crate::ui::command_icons::icon_for_type(&obj.type_id)
-                .and_then(|key| icon::named(key, icon::ROW, MUTED))
+                .and_then(|key| icon::named(key, icon::ROW, if selected { FG } else { MUTED }))
                 .map(|glyph| {
                     div()
                         .debug_selector(move || format!("obj-{icon_name}-icon"))
@@ -1182,11 +1212,7 @@ pub(crate) fn tree_panel(
                         .text_color(rgb(MUTED))
                         .child(obj.type_id.clone()),
                 );
-            if model
-                .selection
-                .iter()
-                .any(|item| same_node(&item.object, &name))
-            {
+            if selected {
                 row = row.bg(rgb(ACCENT));
             }
             rows = rows.child(row.on_click(cx.listener(
@@ -1519,8 +1545,11 @@ pub(super) fn properties_rows_panel(
                 let prop_icon = match row.command.as_deref() {
                     Some(command) => crate::ui::command_icons::icon_for(command)
                         .and_then(|key| icon::named(key, icon::SMALL, FG)),
-                    None => crate::ui::command_icons::icon_for_property(&row.type_id)
-                        .and_then(|key| icon::named(key, icon::SMALL, MUTED)),
+                    None => {
+                        crate::ui::command_icons::icon_for_property(&row.type_id).and_then(|key| {
+                            icon::named(key, icon::SMALL, if row.editable { FG } else { MUTED })
+                        })
+                    }
                 }
                 .map(|glyph| {
                     let name = row.name.clone();

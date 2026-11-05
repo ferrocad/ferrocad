@@ -439,6 +439,13 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
     let strip = cx.debug_bounds("tool-strip").expect("the active-action surface");
     assert!(cx.debug_bounds("tool-cancel").is_some(), "Cancel is a button");
     assert!(cx.debug_bounds("tool-finish").is_some(), "Finish is a button");
+    // Both actions carry a glyph: an X to abort, a check to commit.
+    for selector in ["tool-cancel-icon", "tool-finish-icon"] {
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "{selector} is painted"
+        );
+    }
 
     // Bottom-centre and inside the canvas: it overlays the scene, it does not sit above
     // it in the column.

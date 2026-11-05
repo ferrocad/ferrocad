@@ -31,6 +31,7 @@ now renders (§6.2).
 | App menu | Unicode `☰` text | embedded `menu` glyph; rows carry the command's glyph | `crates/ferrocad_shell_core/src/ui/chrome.rs` |
 | Header controls | status dot + text + `▾` | embedded glyph + text + `▾` | `chrome.rs`; `screenshot.png` |
 | Action dock | text labels | glyph + text label | `chrome.rs` |
+| Active-action bar (tool strip) | `Cancel` / `Finish` words | `close` / `check` glyph + word | `crates/ferrocad_shell_core/src/shell/render.rs` |
 | Header popovers | `PopoverRow { label, accel, checked, … }` | glyph + label + accel + status dot | `chrome.rs` |
 | Radial wheel | text label per wedge; tone only in the inner arc | glyph above the text label | `crates/ferrocad_widgets/src/wheel.rs` |
 | Palette | text rows | glyph + text row | `crates/ferrocad_shell_core/src/shell/render.rs` |
@@ -761,9 +762,10 @@ Draft icons it can draw.
   | App menu / header popover rows | `resolve(row command)` | 14 px (`icon::ROW`) |
   | Action dock buttons | `resolve(command)`, followed by the label | 14 px |
   | Action dock Search | `search` | 14 px |
+  | Active-action bar (`Cancel` / `Finish`) | `close` / `check` | 14 px |
   | Command palette rows | `resolve(command)`, before the label | 14 px |
-  | Model tree rows | `icon_for_type(type_id)`, before the label | 14 px |
-  | Properties panel rows | `icon_for_property(type_id)`, or the row command's glyph | 12 px (`icon::SMALL`) |
+  | Model tree rows | `icon_for_type(type_id)`, before the label | 14 px (`FG` when selected, else `MUTED`) |
+  | Properties panel rows | `icon_for_property(type_id)`, or the row command's glyph | 12 px (`FG` when editable, else `MUTED`) |
   | Dev Tools command list | `resolve(command)`, before the label | 14 px |
   | Radial wheel slots | `resolve(command)`, above the label | 14 px (`icon::WHEEL`) |
 

@@ -142,6 +142,9 @@ const ASSETS: &[(&str, &[u8])] = &[
     ("type", include_bytes!("../assets/icons/type.svg")),
     ("list", include_bytes!("../assets/icons/list.svg")),
     ("toggle-on", include_bytes!("../assets/icons/toggle-on.svg")),
+    // Dialog / active-action verbs.
+    ("close", include_bytes!("../assets/icons/close.svg")),
+    ("check", include_bytes!("../assets/icons/check.svg")),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

@@ -11,4 +11,6 @@
 
 #[cfg(all(feature = "gpu-interop", not(target_os = "macos")))]
 pub mod interop;
+#[cfg(not(target_family = "wasm"))]
+pub mod frame_timing;
 pub mod render_view;

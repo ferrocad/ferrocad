@@ -72,6 +72,8 @@ use std::sync::Arc;
 use ferrocad_inventor::{Camera, Hit, RenderQueue, ViewSpec};
 use ferrocad_viewport::{Presenter, PresenterStatus};
 use ferrocad_wgpu::{GpuContext, WgpuRenderer as FerrocadRenderer, trace};
+
+use crate::runtime::frame_timing;
 #[cfg(target_os = "linux")]
 use gpui::DmaBufHandle;
 use gpui::GpuCanvasContext;
@@ -316,6 +318,17 @@ impl Presenter for GpuiInteropPresenter {
 
         let size = self.size;
 
+        // The frame rate ceiling is the *window's* renderer: it composites the dma-buf, and
+        // it may have picked a different adapter than the one FerroCAD's settings name
+        // (those only reach the offscreen/image path). Name it once, on the timing switch.
+        if std::env::var_os("FERROCAD_TIMING").is_some() {
+            let info = device.adapter_info();
+            eprintln!(
+                "ferrocad: window adapter {:?} ({:?}, {:?})",
+                info.name, info.device_type, info.backend
+            );
+        }
+
         // Allocate the presentation target first: the same-device path takes the
         // renderer's colour format from it, so the two cannot disagree (WebGPU
         // canvases forbid sRGB surface formats, and a renderer built for the wrong
@@ -408,6 +421,14 @@ impl Presenter for GpuiInteropPresenter {
                 let reason = "every ring slot may still be in flight";
                 self.pending_reason = Some(reason);
                 trace::presenter_skip(depth, reason);
+                // A skipped frame is the ring pacing the producer. The slots come back
+                // early from the consumer's release signal and late from the timeout, so
+                // `depth / timeout` is the frame rate a broken handshake would hold us to
+                // — which is the first thing to rule out when frames are slow and no pass
+                // owns the time.
+                if frame_timing::enabled() {
+                    eprintln!("ferrocad: ring skip (no free slot of {depth})");
+                }
                 return ring.last().is_some();
             };
             let Some(renderer) = self.renderer.as_mut() else {

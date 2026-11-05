@@ -36,7 +36,8 @@ pub use ferrocad_shell_core::*;
 mod spike;
 
 use gpui::{
-    App, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions,
+    App, FramePipeline, GpuPreference, StandardImmediatePipeline, TitlebarOptions,
+    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowId, WindowOptions,
     application, bounds, point, prelude::*, px, size,
 };
 
@@ -103,6 +104,47 @@ pub fn run() {
     run_with(HostConfig::default());
 }
 
+/// Which adapter the window's renderer draws on.
+///
+/// `FERROCAD_GPU=low` (`integrated`), `high` (`discrete`) or `auto`. Unset means `high`.
+///
+/// gpui's own default is `LowPower` on Linux — the integrated adapter — and on a hybrid
+/// machine that is also the card that composites every presented frame. Measured on the
+/// 900a document (1.25 M triangles, Intel UHD 630 + GTX 1050 Ti): the integrated adapter
+/// held the window at 12–15 fps and made a blocking pick's readback 100–160 ms; the
+/// discrete one gave 17–19 fps and 3.3–4.4 ms. Layout was identical on both, because it is
+/// CPU — which is what said the adapter was the variable. A device with no discrete
+/// adapter ranks the integrated one next, so this is a preference, not a pin.
+///
+/// This is the only lever that moves the *window*: `enable_viewport`'s adapter choice
+/// reaches the offscreen and image paths only, because the window compositor keeps its own
+/// adapter. `FERROCAD_TIMING` prints the one that was actually picked.
+fn gpu_preference() -> GpuPreference {
+    let setting = std::env::var("FERROCAD_GPU").unwrap_or_default();
+    match setting.trim().to_ascii_lowercase().as_str() {
+        "low" | "integrated" | "low-power" => GpuPreference::LowPower,
+        "auto" => GpuPreference::Auto,
+        "" | "high" | "discrete" | "high-performance" => GpuPreference::HighPerformance,
+        other => {
+            eprintln!("ferrocad: unknown FERROCAD_GPU {other:?} (low, high or auto); using high");
+            GpuPreference::HighPerformance
+        }
+    }
+}
+
+/// The window's frame pipeline: the standard one, or the pass accounting under
+/// `FERROCAD_TIMING`.
+///
+/// The timing decorator forwards every pass, so it draws exactly the frames the default
+/// pipeline does; it is only installed when somebody is reading the numbers.
+fn frame_pipeline(_window: WindowId) -> Box<dyn FramePipeline> {
+    if ferrocad_shell_core::runtime::frame_timing::enabled() {
+        Box::new(ferrocad_shell_core::runtime::frame_timing::pipeline())
+    } else {
+        Box::new(StandardImmediatePipeline)
+    }
+}
+
 /// Run the application with an edition's configuration.
 pub fn run_with(config: HostConfig) {
     configure_trace();
@@ -116,7 +158,10 @@ pub fn run_with(config: HostConfig) {
     );
     python::configure_startup_document(config.open_document.as_deref());
 
-    application().run(move |cx: &mut App| {
+    let app = application()
+        .with_gpu_preference(gpu_preference())
+        .with_frame_pipeline(frame_pipeline);
+    app.run(move |cx: &mut App| {
         backend::install(cx);
         let model = match Shell::boot(cx) {
             Ok(model) => model,

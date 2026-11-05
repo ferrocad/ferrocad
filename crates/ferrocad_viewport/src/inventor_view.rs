@@ -6021,12 +6021,16 @@ impl<V: InventorView> InventorViewport<V> {
 
 /// Report a slow pointer pick under `FERROCAD_TIMING`.
 ///
-/// A native pick is a full G-buffer render of the queue plus a texel readback that
-/// blocks on the device, and it runs on every pointer move — so it is not part of
-/// `refresh`'s preparation and would otherwise be invisible in the frame numbers.
+/// A native pick is a G-buffer render plus a texel readback that blocks on the device,
+/// and it runs on every pointer move — so it is not part of `refresh`'s preparation and
+/// would otherwise be invisible in the frame numbers.
 fn report_pick_time(picked: std::time::Duration) {
-    if std::env::var_os("FERROCAD_TIMING").is_none() {
+    let Some(mut window) = timing_window() else {
         return;
+    };
+    if let Some(state) = window.as_mut() {
+        state.picked += picked;
+        state.picks += 1;
     }
     if picked > std::time::Duration::from_millis(5) {
         eprintln!("ferrocad: pick {:.1} ms", picked.as_secs_f64() * 1000.0);
@@ -6040,8 +6044,12 @@ fn report_pick_time(picked: std::time::Duration) {
 /// other half: the dma-buf hand-off and whatever the window does with it. A frame that
 /// is slow here and fast there is the present path, not the renderer.
 fn report_present_time(presented: std::time::Duration) {
-    if std::env::var_os("FERROCAD_TIMING").is_none() {
+    let Some(mut window) = timing_window() else {
         return;
+    };
+    if let Some(state) = window.as_mut() {
+        state.presented += presented;
+        state.presents += 1;
     }
     if presented > std::time::Duration::from_millis(10) {
         eprintln!(
@@ -6051,56 +6059,109 @@ fn report_present_time(presented: std::time::Duration) {
     }
 }
 
-/// Report frames per second and the preparation each frame needed, under
-/// `FERROCAD_TIMING`.
+/// One second of timing, shared by the frame, present and pick reports.
+///
+/// The three are measured in different places — the draw inside `refresh`, the paint in
+/// the `gpu_canvas` closure, the pick in the pointer handler — and a second can be slow
+/// in exactly one of them. Only adding them up makes the second's budget readable and
+/// shows what is *not* accounted for.
+struct TimingWindow {
+    started: std::time::Instant,
+    /// When the previous frame started; the frame cadence is the number that separates
+    /// "our work is slow" from "the window only paints a dozen times a second".
+    last_frame: Option<std::time::Instant>,
+    intervals: std::time::Duration,
+    worst_interval: std::time::Duration,
+    frames: u32,
+    prepared: std::time::Duration,
+    presented: std::time::Duration,
+    presents: u32,
+    picked: std::time::Duration,
+    picks: u32,
+    worst: std::time::Duration,
+}
+
+impl TimingWindow {
+    fn new(now: std::time::Instant, last_frame: Option<std::time::Instant>) -> Self {
+        Self {
+            started: now,
+            last_frame,
+            intervals: std::time::Duration::ZERO,
+            worst_interval: std::time::Duration::ZERO,
+            frames: 0,
+            prepared: std::time::Duration::ZERO,
+            presented: std::time::Duration::ZERO,
+            presents: 0,
+            picked: std::time::Duration::ZERO,
+            picks: 0,
+            worst: std::time::Duration::ZERO,
+        }
+    }
+}
+
+/// The shared window, or `None` when `FERROCAD_TIMING` is off.
+fn timing_window() -> Option<std::sync::MutexGuard<'static, Option<TimingWindow>>> {
+    use std::sync::{Mutex, OnceLock};
+
+    if std::env::var_os("FERROCAD_TIMING").is_none() {
+        return None;
+    }
+    static WINDOW: OnceLock<Mutex<Option<TimingWindow>>> = OnceLock::new();
+    let mut window = WINDOW
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    window.get_or_insert_with(|| TimingWindow::new(std::time::Instant::now(), None));
+    Some(window)
+}
+
+/// Report frames per second and what the second was spent on, under `FERROCAD_TIMING`.
 ///
 /// The gap between two `render` calls is *not* the frame rate: the element only
 /// repaints when something invalidates it, so an idle second reads as one very slow
 /// frame. Counting renders over a wall-clock second is the honest number, and it is
 /// printed once a second while the timing is on.
 fn report_frame_time(refreshed: std::time::Duration) {
-    use std::sync::{Mutex, OnceLock};
-
-    struct Window {
-        started: std::time::Instant,
-        frames: u32,
-        prepared: std::time::Duration,
-        worst: std::time::Duration,
-    }
-
-    if std::env::var_os("FERROCAD_TIMING").is_none() {
+    let Some(mut window) = timing_window() else {
         return;
-    }
-    static WINDOW: OnceLock<Mutex<Option<Window>>> = OnceLock::new();
-    let mut window = WINDOW
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    };
+    let Some(state) = window.as_mut() else {
+        return;
+    };
     let now = std::time::Instant::now();
-    let state = window.get_or_insert_with(|| Window {
-        started: now,
-        frames: 0,
-        prepared: std::time::Duration::ZERO,
-        worst: std::time::Duration::ZERO,
-    });
+    if let Some(last) = state.last_frame {
+        let interval = now - last;
+        state.intervals += interval;
+        state.worst_interval = state.worst_interval.max(interval);
+    }
+    state.last_frame = Some(now);
     state.frames += 1;
     state.prepared += refreshed;
     state.worst = state.worst.max(refreshed);
     let elapsed = now - state.started;
-    if elapsed >= std::time::Duration::from_secs(1) {
-        let fps = state.frames as f64 / elapsed.as_secs_f64();
-        eprintln!(
-            "ferrocad: fps {fps:.1}, prepare avg {:.1} ms, worst {:.1} ms",
-            state.prepared.as_secs_f64() * 1000.0 / state.frames as f64,
-            state.worst.as_secs_f64() * 1000.0
-        );
-        *window = Some(Window {
-            started: now,
-            frames: 0,
-            prepared: std::time::Duration::ZERO,
-            worst: std::time::Duration::ZERO,
-        });
+    if elapsed < std::time::Duration::from_secs(1) {
+        return;
     }
+    let ms = |total: std::time::Duration| total.as_secs_f64() * 1000.0 / state.frames as f64;
+    let fps = state.frames as f64 / elapsed.as_secs_f64();
+    // `interval` is the cadence, `prepare` + `present` + `pick` is what we spent of it.
+    // The difference is the window's own paint and composite — not this crate's.
+    eprintln!(
+        "ferrocad: fps {fps:.1}, interval avg {:.1} ms (worst {:.1} ms), \
+         prepare avg {:.1} ms, present {}/avg {:.1} ms, pick avg {:.1} ms ({})",
+        ms(state.intervals),
+        state.worst_interval.as_secs_f64() * 1000.0,
+        ms(state.prepared),
+        state.presents,
+        ms(state.presented),
+        if state.picks == 0 {
+            0.0
+        } else {
+            state.picked.as_secs_f64() * 1000.0 / state.picks as f64
+        },
+        state.picks
+    );
+    *window = Some(TimingWindow::new(now, state.last_frame));
 }
 
 impl<V: InventorView + 'static> EventEmitter<ViewportEvent> for InventorViewport<V> {}

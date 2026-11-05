@@ -20,6 +20,51 @@ FERROCAD_TRACE=1 ./target/debug/ferrocad_toy
 `FERROCAD_TRACE=0`, `false`, `off` and an empty value all mean off.
 The flag is a development/diagnosis tool: **do not ship it on**.
 
+## Timing (`FERROCAD_TIMING`)
+
+A second switch, independent of `--trace`, prints one line per second while the
+application runs. The trace answers "did the frame draw"; these answer "where did the
+second go". They are split by owner, because a slow second is only readable when each
+part is measured where it happens:
+
+| Line | Where | Contains |
+| --- | --- | --- |
+| `ferrocad: open …`, `stage sync: meshes … + build …` | boot, document sync | the open cost and the display-mesh sync, split into meshing and build |
+| `ferrocad: window adapter "…" (device_type, backend)` | presenter creation | the adapter the **window's** renderer picked. It composites every presented frame, and it is *not* the adapter the viewport's own setting chooses |
+| `ferrocad: fps …, interval …, prepare …, present n/avg …, pick avg … (n)` | once a second | the viewport's share: frame cadence, `refresh`, the `gpu_canvas` present callback, and pointer picks |
+| `ferrocad: window fps …, interval …, passes …` | once a second | the engine's share, from the `FramePipeline` decorator: `evaluate`, `layout`, `paint` (which contains the canvas callback), `finish`, `end`, and the asks the pipeline deferred |
+| `ferrocad: pick …`, `hover pick: resolve/submit …`, `pick detail: encode/submit/readback …` | per pick | a pick over 5 ms, a hover pick over 2 ms, and a blocking pick's split |
+
+`interval` is the honest frame time, and everything the two `fps` lines report is what
+was spent of it. A **window** line whose passes are cheap and whose interval is not is
+the platform's present, which no pipeline sees. A **viewport** line with `present 0` and
+a non-zero `fps` means the canvas callback did not run in that second.
+
+The window line comes from
+[`frame_timing`](../../../crates/ferrocad_shell_core/src/runtime/frame_timing.rs), a
+`FramePipeline` decorator installed with `Application::with_frame_pipeline`. It forwards
+every pass to `StandardImmediatePipeline`, so the frames it produces are the ones the
+application draws without it.
+
+### Choosing the adapter (`FERROCAD_GPU`)
+
+`low`/`integrated`, `high`/`discrete` (**the default**), or `auto`. gpui's own default is
+`LowPower` — the integrated adapter on a hybrid machine — and that is the same card that
+then composites every presented frame. Measured on the 900a document (1.25 M triangles,
+Intel UHD 630 + GTX 1050 Ti): integrated held the window at 12–15 fps with 100–160 ms
+blocking-pick readback; discrete gave 17–19 fps and 3.3–4.4 ms. `layout` was identical on
+both, which is what identified the adapter as the variable rather than the UI.
+
+`Application::with_gpu_preference` is the only lever that moves the window; the viewport's
+own adapter setting reaches the offscreen and image paths only. The `window adapter` line
+above reports the one that was actually picked. A device with no discrete adapter ranks the
+integrated one next, so the preference is not a pin.
+
+`ferrocad: ring skip (no free slot of N)` is the other line to watch while frames are slow
+and no pass owns the time: it means the dma-buf ring ran out of slots and the producer
+skipped a frame. Slots come back early from the consumer's release signal and late from a
+250 ms timeout, so a broken handshake shows up as a frame rate of `N / 0.25 s`.
+
 ## What is logged
 
 Every line starts with `ferrocad trace:` and a monotonic `t=<ms>` timestamp, so

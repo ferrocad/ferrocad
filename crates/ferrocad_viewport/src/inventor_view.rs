@@ -4636,7 +4636,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// ray cast. All three consume the same scene-and-stage queue and camera, so this
     /// is one pick, not three parallel implementations.
     fn pick(&mut self, device: [i32; 2]) -> Option<Hit> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let hit = self.pick_untimed(device);
         report_pick_time(started.elapsed());
         hit
@@ -4650,7 +4650,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// reports the previous one: the screen still shows the last drawn frame, so a hover
     /// cannot be fresher than that anyway.
     fn hover_pick(&mut self, device: [i32; 2]) -> Option<Hit> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let hit = if self.presenter_defers_pick() {
             let presenter = self.presenter.as_ref().expect("checked above");
             let answer = presenter
@@ -6066,10 +6066,10 @@ fn report_present_time(presented: std::time::Duration) {
 /// in exactly one of them. Only adding them up makes the second's budget readable and
 /// shows what is *not* accounted for.
 struct TimingWindow {
-    started: std::time::Instant,
+    started: Instant,
     /// When the previous frame started; the frame cadence is the number that separates
     /// "our work is slow" from "the window only paints a dozen times a second".
-    last_frame: Option<std::time::Instant>,
+    last_frame: Option<Instant>,
     intervals: std::time::Duration,
     worst_interval: std::time::Duration,
     frames: u32,
@@ -6082,7 +6082,7 @@ struct TimingWindow {
 }
 
 impl TimingWindow {
-    fn new(now: std::time::Instant, last_frame: Option<std::time::Instant>) -> Self {
+    fn new(now: Instant, last_frame: Option<Instant>) -> Self {
         Self {
             started: now,
             last_frame,
@@ -6111,7 +6111,7 @@ fn timing_window() -> Option<std::sync::MutexGuard<'static, Option<TimingWindow>
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    window.get_or_insert_with(|| TimingWindow::new(std::time::Instant::now(), None));
+    window.get_or_insert_with(|| TimingWindow::new(Instant::now(), None));
     Some(window)
 }
 
@@ -6128,7 +6128,7 @@ fn report_frame_time(refreshed: std::time::Duration) {
     let Some(state) = window.as_mut() else {
         return;
     };
-    let now = std::time::Instant::now();
+    let now = Instant::now();
     if let Some(last) = state.last_frame {
         let interval = now - last;
         state.intervals += interval;
@@ -6168,7 +6168,7 @@ impl<V: InventorView + 'static> EventEmitter<ViewportEvent> for InventorViewport
 
 impl<V: InventorView + 'static> Render for InventorViewport<V> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let frame_started = std::time::Instant::now();
+        let frame_started = Instant::now();
         // Follow the element's physical size before drawing (the bounds were captured at
         // the previous prepaint). A change needs one more frame to take effect.
         if self.sync_size(window) {
@@ -6240,7 +6240,7 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             {
                 let presenter = presenter.clone();
                 gpu_canvas(move |gpu| {
-                    let started = std::time::Instant::now();
+                    let started = Instant::now();
                     let mut presenter = presenter.borrow_mut();
                     presenter.prepare(gpu);
                     if presenter.status() == PresenterStatus::Ready {

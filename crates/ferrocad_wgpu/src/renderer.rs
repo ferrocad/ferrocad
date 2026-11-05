@@ -15,6 +15,10 @@
 use std::collections::HashMap;
 use std::fmt;
 
+// A wasm-safe clock: `std::time::Instant::now()` panics on `wasm32-unknown-unknown`,
+// and the pick path takes a timestamp on every hover.
+use web_time::Instant;
+
 use ferrocad_graphics::{
     Camera, DepthState, DrawBatch, DrawPacket, Generation, Geometry, Hit, MeshId,
     PickId, Rect, RenderQueue, ShaderProgram, StateSnapshot, Topology, WorkplaneFrame, theme,
@@ -900,7 +904,7 @@ impl WgpuRenderer {
         camera: &Camera,
         device: [i32; 2],
     ) -> Option<Hit> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let encoder = self.encode_pick(queue, camera, device)?;
         let encoded = started.elapsed();
         self.context.queue.submit(Some(encoder.finish()));
@@ -946,7 +950,7 @@ impl WgpuRenderer {
         camera: &Camera,
         device: [i32; 2],
     ) -> Option<Option<Hit>> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         self.resolve_hover_pick();
         let resolved = started.elapsed();
         let due = self.hover_pick.is_none()

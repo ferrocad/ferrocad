@@ -73,6 +73,9 @@ use ferrocad_inventor::{Camera, Hit, RenderQueue, ViewSpec};
 use ferrocad_viewport::{Presenter, PresenterStatus};
 use ferrocad_wgpu::{GpuContext, WgpuRenderer as FerrocadRenderer, trace};
 
+// The pass accounting is native-only (it installs a `FramePipeline` on the desktop
+// application), so the ring-skip diagnostic that reads its switch is too.
+#[cfg(not(target_family = "wasm"))]
 use crate::runtime::frame_timing;
 #[cfg(target_os = "linux")]
 use gpui::DmaBufHandle;

@@ -92,13 +92,13 @@
 //!   the `{"attrs", "proxy"}` envelope FerroCAD's own `capture_object_state`
 //!   produces.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::io::{self, Read};
 use std::path::Path;
 
 use super::{SavedDocument, SavedObject, ViewState};
-use crate::extension::ExtensionValue;
+use crate::extension::{ExtensionData, ExtensionValue};
 use crate::geometry::{Matrix4, Placement, Rotation, Vector3};
 use crate::property::Property;
 use crate::property_types;
@@ -454,6 +454,15 @@ fn parse_document(
         )));
     }
 
+    // The module payloads (`PartShapeN.brp`, …) are the bulk of an assembly and each
+    // one decodes independently, so they are inflated and restored on every core
+    // before the walk asks for them. See [`prefetch_payloads`].
+    let mut prefetched = match archive {
+        Some(archive) => prefetch_payloads(root, archive)?,
+        // `Document.xml` alone has no members to decode.
+        None => Prefetched::new(),
+    };
+
     // `<Objects>` lists the object types; `<ObjectData>` omits `type`.
     let mut types: BTreeMap<String, String> = BTreeMap::new();
     if let Some(objects) = child(root, "Objects") {
@@ -537,7 +546,7 @@ fn parse_document(
                         _ => {}
                     }
 
-                    if let Some(value) = parse_property(prop_type, prop, archive)? {
+                    if let Some(value) = parse_property(prop_type, prop, archive, &mut prefetched)? {
                         properties.insert(prop_name.to_string(), value);
                     }
                 }
@@ -569,6 +578,7 @@ fn parse_property(
     prop_type: &str,
     node: roxmltree::Node<'_, '_>,
     archive: Option<&ZipArchive<'_>>,
+    prefetched: &mut Prefetched,
 ) -> Result<Option<Property>, FcstdError> {
     let value = match prop_type {
         "App::PropertyString" => child_attr(node, "String", "value").map(|v| Property::String(v.to_string())),
@@ -654,7 +664,195 @@ fn parse_property(
         return Ok(value);
     }
     // No core mapping: a module-owned value may still be in a separate member.
-    read_extension(prop_type, node, archive)
+    read_extension(prop_type, node, archive, prefetched)
+}
+
+/// One module payload the property walk will need.
+///
+/// A single `<Part>`/`<Mesh>` member, or the members of a `<ShapeList>` (framed on
+/// decode, exactly as [`read_shape_list_payload`] frames them).
+struct PayloadJob {
+    prop_type: String,
+    members: Vec<String>,
+    /// Whether `members` is a `<ShapeList>`'s entries (framed) or one member.
+    list: bool,
+}
+
+impl PayloadJob {
+    fn key(&self) -> PayloadKey {
+        payload_key(&self.prop_type, &self.members)
+    }
+}
+
+/// What a pending payload is looked up by: its type and its member names.
+///
+/// The member names of a list are joined with a byte no ZIP member name can hold,
+/// so a list job cannot collide with a single one.
+type PayloadKey = (String, String);
+
+fn payload_key(prop_type: &str, members: &[String]) -> PayloadKey {
+    (prop_type.to_string(), members.join("\u{1f}"))
+}
+
+/// Decoded payloads, keyed by [`PayloadKey`].
+///
+/// `None` means the job was prefetched and the registered type could not restore it,
+/// which is the same answer [`parse_property`] would have got serially; an absent key
+/// means it was not prefetched (no archive, or a fallback the collector left alone).
+type Prefetched = HashMap<PayloadKey, Option<Box<dyn ExtensionData>>>;
+
+/// Inflate and restore every module payload the property walk will ask for.
+///
+/// Opening an assembly spends most of its time here: the members are independent
+/// (one BRep per object) and decoding one is a pure function of
+/// `(prop_type, bytes)`, so this is the one place in the reader that can use every
+/// core. A document with a single shape, or a platform without threads
+/// (`available_parallelism` reports 1 on wasm), runs the jobs in order instead.
+///
+/// A `<Part>` that carries a `FerroCADSidecar` prefetches only the sidecar: the raw
+/// `file` member is its fallback, and a sidecar that does not restore sends that one
+/// property down the serial path rather than decoding both up front.
+fn prefetch_payloads(
+    root: roxmltree::Node<'_, '_>,
+    archive: &ZipArchive<'_>,
+) -> Result<Prefetched, FcstdError> {
+    let jobs = collect_payload_jobs(root);
+    let mut prefetched = Prefetched::new();
+    if jobs.is_empty() {
+        return Ok(prefetched);
+    }
+
+    // `wasm32-unknown-unknown` has no threads (and `std::thread::scope` cannot spawn
+    // there), so the browser parses payloads in order.
+    let workers = if cfg!(target_family = "wasm") {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|workers| workers.get())
+            .unwrap_or(1)
+    }
+    .min(jobs.len());
+    let decoded: Vec<Result<Option<Box<dyn ExtensionData>>, FcstdError>> = if workers <= 1 {
+        jobs.iter()
+            .map(|job| decode_payload(archive, job))
+            .collect()
+    } else {
+        let chunk = jobs.len().div_ceil(workers);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = jobs
+                .chunks(chunk)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|job| decode_payload(archive, job))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().expect("a payload worker panicked"))
+                .collect()
+        })
+    };
+
+    // Errors surface in job order, so a malformed member fails the same way however
+    // many workers ran.
+    for (job, decoded) in jobs.into_iter().zip(decoded) {
+        prefetched.insert(job.key(), decoded?);
+    }
+    Ok(prefetched)
+}
+
+/// Every payload the walk will ask for, in document order, without duplicates.
+fn collect_payload_jobs(root: roxmltree::Node<'_, '_>) -> Vec<PayloadJob> {
+    let mut jobs: Vec<PayloadJob> = Vec::new();
+    let mut seen: HashSet<PayloadKey> = HashSet::new();
+    let Some(object_data) = child(root, "ObjectData") else {
+        return jobs;
+    };
+    for object in element_children(object_data, "Object") {
+        let Some(properties) = child(object, "Properties") else {
+            continue;
+        };
+        for property in element_children(properties, "Property") {
+            let prop_type = property.attribute("type").unwrap_or("");
+            // The same order [`read_extension`] dispatches in: first match wins.
+            if let Some(part) = child(property, "Part") {
+                push_single_job(&mut jobs, &mut seen, prop_type, part);
+            } else if let Some(mesh) = child(property, "Mesh") {
+                push_single_job(&mut jobs, &mut seen, prop_type, mesh);
+            } else if let Some(list) = child(property, "ShapeList") {
+                let members: Vec<String> = element_children(list, "TopoShape")
+                    .filter_map(|entry| entry.attribute("file"))
+                    .map(str::to_string)
+                    .collect();
+                push_job(&mut jobs, &mut seen, prop_type, members, true);
+            }
+        }
+    }
+    jobs
+}
+
+/// One `<Part>`/`<Mesh>` element's member: the sidecar when it carries one, else the
+/// upstream `file` member it falls back to.
+fn push_single_job(
+    jobs: &mut Vec<PayloadJob>,
+    seen: &mut HashSet<PayloadKey>,
+    prop_type: &str,
+    element: roxmltree::Node<'_, '_>,
+) {
+    if let Some(sidecar) = element.attribute("FerroCADSidecar") {
+        push_job(jobs, seen, prop_type, vec![sidecar.to_string()], false);
+    } else if let Some(file) = element.attribute("file") {
+        push_job(jobs, seen, prop_type, vec![file.to_string()], false);
+    }
+}
+
+fn push_job(
+    jobs: &mut Vec<PayloadJob>,
+    seen: &mut HashSet<PayloadKey>,
+    prop_type: &str,
+    members: Vec<String>,
+    list: bool,
+) {
+    if members.is_empty() {
+        return;
+    }
+    let job = PayloadJob {
+        prop_type: prop_type.to_string(),
+        members,
+        list,
+    };
+    if seen.insert(job.key()) {
+        jobs.push(job);
+    }
+}
+
+/// Read a job's members and hand the bytes to the registered type.
+fn decode_payload(
+    archive: &ZipArchive<'_>,
+    job: &PayloadJob,
+) -> Result<Option<Box<dyn ExtensionData>>, FcstdError> {
+    let bytes = if job.list {
+        frame_members(archive, &job.members)?
+    } else {
+        archive.read(&job.members[0])?
+    };
+    Ok(property_types::restore_extension(&job.prop_type, &bytes))
+}
+
+/// Take a decoded payload out of the table.
+///
+/// `None` means "not prefetched, decode it now"; `Some(None)` means the walk already
+/// has the answer and it is that nothing restored.
+fn take_payload(
+    prefetched: &mut Prefetched,
+    prop_type: &str,
+    members: &[String],
+) -> Option<Option<Box<dyn ExtensionData>>> {
+    prefetched.remove(&payload_key(prop_type, members))
 }
 
 /// Rebuild a module-owned property from the members a `<Part>`/`<Mesh>`/
@@ -679,6 +877,7 @@ fn read_extension(
     prop_type: &str,
     node: roxmltree::Node<'_, '_>,
     archive: Option<&ZipArchive<'_>>,
+    prefetched: &mut Prefetched,
 ) -> Result<Option<Property>, FcstdError> {
     let Some(archive) = archive else {
         // In-memory parsing (`Document.xml` without its archive) has no members.
@@ -690,12 +889,19 @@ fn read_extension(
     // selects the member layout — the property's registered type decides how the
     // bytes are decoded.
     if let Some(part) = child(node, "Part") {
-        return read_single_payload(prop_type, part, archive, false);
+        return read_single_payload(prop_type, part, archive, false, prefetched);
     }
     if let Some(mesh) = child(node, "Mesh") {
-        return read_single_payload(prop_type, mesh, archive, true);
+        return read_single_payload(prop_type, mesh, archive, true, prefetched);
     }
     if let Some(list) = child(node, "ShapeList") {
+        let members: Vec<String> = element_children(list, "TopoShape")
+            .filter_map(|entry| entry.attribute("file"))
+            .map(str::to_string)
+            .collect();
+        if let Some(value) = take_payload(prefetched, prop_type, &members) {
+            return Ok(value.map(|data| Property::Extension(ExtensionValue::new(data))));
+        }
         let bytes = read_shape_list_payload(archive, list)?;
         return Ok(property_types::restore_extension(prop_type, &bytes)
             .map(|data| Property::Extension(ExtensionValue::new(data))));
@@ -714,10 +920,15 @@ fn read_single_payload(
     element: roxmltree::Node<'_, '_>,
     archive: &ZipArchive<'_>,
     strict: bool,
+    prefetched: &mut Prefetched,
 ) -> Result<Option<Property>, FcstdError> {
     if let Some(sidecar) = element.attribute("FerroCADSidecar") {
-        let side_bytes = archive.read(sidecar)?;
-        if let Some(data) = property_types::restore_extension(prop_type, &side_bytes) {
+        let members = [sidecar.to_string()];
+        let value = match take_payload(prefetched, prop_type, &members) {
+            Some(value) => value,
+            None => property_types::restore_extension(prop_type, &archive.read(sidecar)?),
+        };
+        if let Some(data) = value {
             return Ok(Some(Property::Extension(ExtensionValue::new(data))));
         }
     }
@@ -730,36 +941,43 @@ fn read_single_payload(
         }
         return Ok(None);
     };
-    let bytes = archive.read(file)?;
-    match property_types::restore_extension(prop_type, &bytes) {
+    let members = [file.to_string()];
+    let value = match take_payload(prefetched, prop_type, &members) {
+        Some(value) => value,
+        None => property_types::restore_extension(prop_type, &archive.read(file)?),
+    };
+    match value {
         Some(data) => Ok(Some(Property::Extension(ExtensionValue::new(data)))),
-        None if strict && property_types::contains(prop_type) => {
-            Err(FcstdError::MalformedMember(format!(
-                "cannot restore '{prop_type}' from member '{file}'"
-            )))
-        }
+        None if strict && property_types::contains(prop_type) => Err(FcstdError::MalformedMember(
+            format!("cannot restore '{prop_type}' from member '{file}'"),
+        )),
         None => Ok(None),
     }
 }
 
 /// Frame per-entry shape members the way `ShapeListProperty::save` stores them:
 /// a `u64` LE count, then a `u64` LE length and the bytes for each entry.
+fn frame_members(archive: &ZipArchive<'_>, members: &[String]) -> Result<Vec<u8>, FcstdError> {
+    let mut bytes = Vec::new();
+    push_u64(&mut bytes, members.len() as u64);
+    for member in members {
+        let payload = archive.read(member)?;
+        push_u64(&mut bytes, payload.len() as u64);
+        bytes.extend_from_slice(&payload);
+    }
+    Ok(bytes)
+}
+
+/// The framed bytes of a `<ShapeList>` element (see [`frame_members`]).
 fn read_shape_list_payload(
     archive: &ZipArchive<'_>,
     list: roxmltree::Node<'_, '_>,
 ) -> Result<Vec<u8>, FcstdError> {
-    let files: Vec<&str> = element_children(list, "TopoShape")
+    let members: Vec<String> = element_children(list, "TopoShape")
         .filter_map(|entry| entry.attribute("file"))
+        .map(str::to_string)
         .collect();
-
-    let mut bytes = Vec::new();
-    push_u64(&mut bytes, files.len() as u64);
-    for file in files {
-        let member = archive.read(file)?;
-        push_u64(&mut bytes, member.len() as u64);
-        bytes.extend_from_slice(&member);
-    }
-    Ok(bytes)
+    frame_members(archive, &members)
 }
 
 fn push_u64(out: &mut Vec<u8>, value: u64) {
@@ -1700,5 +1918,57 @@ mod tests {
             decode_fcstd(b"not a zip"),
             Err(FcstdError::NotZip)
         ));
+    }
+
+    /// The prefetch must ask for exactly the members the walk will read, or the
+    /// parallel decode and the property read disagree about which payload is which.
+    #[test]
+    fn payload_jobs_match_what_the_walk_reads() {
+        let xml = r#"<Document>
+          <ObjectData>
+            <Object name="Box">
+              <Properties>
+                <Property name="Shape" type="Part::PropertyPartShape"><Part file="PartShape.brp"/></Property>
+                <Property name="Shape" type="Part::PropertyPartShape"><Part file="PartShapeSidecar.FCStd" FerroCADSidecar="PartShapeSidecar.part"/></Property>
+                <Property name="Mesh" type="Mesh::Feature"><Mesh file="MeshKernel.bms"/></Property>
+                <Property name="Shapes" type="Part::PropertyTopoShapeList">
+                  <ShapeList count="2"><TopoShape file="PartShape1.brp"/><TopoShape file="PartShape2.brp"/></ShapeList>
+                </Property>
+                <Property name="Length" type="App::PropertyLength"><Float value="1"/></Property>
+              </Properties>
+            </Object>
+          </ObjectData>
+        </Document>"#;
+        let doc = roxmltree::Document::parse(xml).expect("fixture xml");
+        let jobs = collect_payload_jobs(doc.root_element());
+
+        let summary: Vec<(&str, Vec<&str>, bool)> = jobs
+            .iter()
+            .map(|job| {
+                (
+                    job.prop_type.as_str(),
+                    job.members.iter().map(String::as_str).collect(),
+                    job.list,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("Part::PropertyPartShape", vec!["PartShape.brp"], false),
+                // A sidecar is preferred; its `file` is the on-demand fallback.
+                (
+                    "Part::PropertyPartShape",
+                    vec!["PartShapeSidecar.part"],
+                    false,
+                ),
+                ("Mesh::Feature", vec!["MeshKernel.bms"], false),
+                (
+                    "Part::PropertyTopoShapeList",
+                    vec!["PartShape1.brp", "PartShape2.brp"],
+                    true
+                ),
+            ]
+        );
     }
 }

@@ -1,6 +1,6 @@
 # Opening a large model: where the seconds are
 
-Status: **task (2026-11-05). Plan only — nothing here is built.**
+Status: **task (2026-11-05). Stage 2 landed; stages 1, 3–5 open.**
 Companion: [`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md)
 §10 (the mesh hop), and [`transform-session.md`](transform-session.md) for the
 edit-time half of the same cost.
@@ -9,11 +9,11 @@ edit-time half of the same cost.
 
 Opening `~/Downloads/900a_GA3DtechProject_v1.0.FCStd` (41 MB, 42 members, 10 drawable
 shapes, **1 251 921 triangles**, largest shape 327 954 triangles) took 46.5 s from
-process start to a rendered frame. Two changes have landed since
-(`Shape.mesh` bakes the object placement in the kernel; the mesh crosses to the host as
-packed `bytes`), and it is now **17.8 s** — but that is still far from "instant", and
-the remaining time is no longer marshaling. This document records what is left, why
-progressive tessellation alone does not fix it, and the order the fixes should land in.
+process start to a rendered frame. Three changes have landed since — `Shape.mesh` bakes
+the object placement in the kernel, the mesh crosses to the host as packed `bytes`, and
+the `.FCStd` payloads are restored in parallel — and it is now **~13.5 s**. The rest of
+this document records what is left, why progressive tessellation alone does not fix it,
+and the order the remaining fixes should land in.
 
 ## 1. The measured budget
 
@@ -23,17 +23,25 @@ swallowed) and from env-gated `eprintln!` in the phases named below.
 | Phase | Time | Where |
 | --- | --- | --- |
 | process start → interpreter ready | 0.8 s | `ferrocad_shell_python` boot |
-| `FreeCAD.open(path)` | **5.4 – 5.9 s** | `doc_format::read` → `parse_fcstd` |
+| `FreeCAD.open(path)` | **1.7 – 2.0 s** (was 5.4 – 5.9 s) | `doc_format::read` → `parse_fcstd` |
 | ├ zip index | 64 µs | `ZipArchive::parse` |
-| ├ `Document.xml` → `SavedDocument` | **5.88 s** | `parse_document` (140 KB of XML around 40 MB of `PartShapeN.brp` members) |
+| ├ `Document.xml` → `SavedDocument` | **1.8 s** (was 5.88 s) | `parse_document`: 140 KB of XML around 40 MB of `PartShapeN.brp` members |
 | ├ `GuiDocument.xml` | 11 ms | `parse_gui_document` |
 | └ `from_saved` + `insert` + Python states | 7 ms | `openDocument` |
-| `stage_meshes_typed()` (first call) | **8.5 – 9.2 s** | `_stage_mesh_rows` → `Shape.mesh(binary)` |
+| `stage_meshes_typed()` (first call) | **8.5 – 9.3 s** | `_stage_mesh_rows` → `Shape.mesh(binary)` |
 | ├ `BRepMesh_IncrementalMesh` (parallel) | 5.8 s cold / 2.8 s warm | `ferrocad_occt::topology::tessellate` |
 | ├ sub-shape maps (faces/edges/vertices) | 0.4 s | same |
 | ├ copy-out (nodes, triangles, edges) | 2.4 – 3.3 s | same |
 | └ encode to `bytes` + PyO3 decode + `StageMesh` | ≲ 0.2 s | after the packed-buffer change |
 | render (800×600 offscreen) + exit | ~3 s | `ferrocad_viewport` |
+
+The payload restore was two halves, both per object: **3.34 s of ZIP inflation** (this
+is a hand-written `inflate`, ~15 MB/s, not a fast library) and **2.04 s of BRep parse**
+in OCCT. Stage 2 runs them on one thread per payload; the wall clock is now the largest
+single member (~1.0 s) instead of the sum.
+
+The mesh half is **OCCT**, not the shell: `BRepMesh` is release-quality C++ behind the
+same numbers in any profile. The per-face floor in §2 is the thing to explain there.
 
 Reference commands:
 
@@ -44,6 +52,9 @@ time ./target/debug/ferrocad_parametric --open ~/Downloads/900a_GA3DtechProject_
 
 # phase split (script stdout is swallowed → write a file)
 ./target/debug/ferrocad_parametric --script /tmp/timing.py --render /tmp/s.png --size 64x64
+
+# the parallel restore, in situ: pinning to one CPU makes `available_parallelism` 1
+taskset -c 0 ./target/debug/ferrocad_parametric --script /tmp/open-only.py --render /tmp/s.png --size 64x64
 ```
 
 Both remaining large numbers are **OCCT**, not the shell: the ASCII BRep reader and
@@ -112,20 +123,26 @@ Each stage is independently shippable and measurable with the commands in §1.
 - Acceptance: a note in this file saying where the ~100 µs per face goes, and a
   decision recorded.
 
-### Stage 2 — restore the `.FCStd` members in parallel
+### Stage 2 — restore the `.FCStd` members in parallel — **landed 2026-11-05**
 
-- [ ] Parse `Document.xml` first and collect the payload members it names, then
-  restore them on `std::thread::scope` with one worker per object (cap at
-  `available_parallelism`), preserving the parse order in the result.
-- [ ] `property_types::restore_extension` is a `fn(&[u8])` in a registry; it must be
-  called from a thread whose result is `Send`. `Box<dyn ExtensionData>` is not
-  currently `Send` — either add the bound or keep the restore on the owning thread and
-  parallelise only the *decode* (`BRepTools::read_brep_bytes`).
-- [ ] Prove thread safety: restore the same document N times and compare all shape
-  hashes with the serial path.
-- Acceptance: `FreeCAD.open` on the 900a file **≤ 1.5 s**, byte-identical document
-  (`stage_meshes` rows equal to the serial result), and the 760 Python + 78 OCCT tests
-  green.
+- [x] Collect the payloads the walk will read from `Document.xml`, then inflate and
+  restore them on `std::thread::scope` (one worker per member, capped at
+  `available_parallelism`), and let the walk take the finished value out of the table.
+  The collector mirrors `read_extension`'s dispatch, so a job always matches what the
+  walk asks for; a test pins that (`payload_jobs_match_what_the_walk_reads`).
+- [x] `Box<dyn ExtensionData>` was already `Send`, so no bound was needed. The real
+  serialisation was elsewhere: `property_types::restore_extension` held the registry
+  mutex *while* calling the restore hook, so every BRep parse queued on one lock. The
+  lock is now released before the hook runs.
+- [x] A `<Part>` with a `FerroCADSidecar` prefetches only the sidecar (the `file` member
+  is its on-demand fallback), so a file that carries both does not decode twice.
+- [x] `wasm32-unknown-unknown` has no threads, so the browser keeps the serial order
+  (`cfg!(target_family = "wasm")` forces one worker).
+- [x] Proved equivalence: the 900×650 render of the assembly is byte-identical to the
+  pre-change PNG, two opens in one process produce the same `stage_meshes` digest, and
+  the 100 core + 760 workbench + 691 base tests pass.
+- Acceptance: `FreeCAD.open` **1.7 – 2.0 s** (target was ≤ 1.5 s — missed by the cost of
+  the largest single member, which is now the floor), document identical.
 
 ### Stage 3 — a deflection the host can choose
 
@@ -183,3 +200,7 @@ Each stage is independently shippable and measurable with the commands in §1.
 3. Should a coarse first pass also apply to `--render`/`--stl`? No for `--stl` (the
    export must be full fidelity); for `--render` it only changes the image, so it
    stays full fidelity by default.
+4. A 40 MB archive at ~15 MB/s of inflation says the ZIP reader is the next structural
+   cost once meshing is dealt with. Stage 2 hides it behind ten threads; a document
+   with one huge member cannot. Swapping in a fast inflate (`miniz_oxide`) is the
+   obvious follow-up and is a dependency decision, not a design one.

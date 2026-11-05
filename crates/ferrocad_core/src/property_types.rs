@@ -81,12 +81,14 @@ pub fn register_extension(
 
 /// Reconstruct a registered extension value from its `save()` bytes, or `None` if
 /// the type is not registered (its module is not loaded).
+///
+/// The registry lock is released before `restore` runs: restoring a shape is the
+/// expensive half (it parses a BRep), and holding the lock across it would serialise
+/// every reader — including the parallel payload prefetch in
+/// [`fcstd`](crate::document::fcstd), which is the whole point of that prefetch.
 pub fn restore_extension(name: &str, bytes: &[u8]) -> Option<Box<dyn ExtensionData>> {
-    extensions()
-        .lock()
-        .unwrap()
-        .get(name)
-        .and_then(|restore| restore(bytes))
+    let restore = *extensions().lock().unwrap().get(name)?;
+    restore(bytes)
 }
 
 /// Whether `name` is a registered property type.

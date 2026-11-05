@@ -2,11 +2,10 @@
 
 Status: index (2026-11-05). Twelve active specs and one recorded decision:
 
-- [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget, planned**: after two
-  landed changes the 900a assembly opens in 17.8 s (from 46.5 s); what is left is OCCT's
-  ASCII BRep restore (5.9 s) and `BRepMesh` (5.8 s), why a coarser first mesh
-  only recovers a third, and the order to fix them (parallel restore, a host-chosen
-  deflection, two-pass refinement, lazy geometry). Stages 1–5.
+- [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget**: stage 2 landed
+  (the `.FCStd` payloads restore in parallel, `open` 5.9 s → 1.8 s, the 900a assembly 13.5 s
+  end to end); what is left is `BRepMesh`, why a coarser first mesh only recovers a third,
+  and the order to fix it. Stages 1–5.
 
 - [operation-failure-modelling.md](operation-failure-modelling.md) — **typed, recoverable
   failures**: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the

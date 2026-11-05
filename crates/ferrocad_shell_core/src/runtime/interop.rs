@@ -104,6 +104,20 @@ const SAMPLES: u32 = 4;
 #[cfg(target_family = "wasm")]
 const SAMPLES: u32 = 1;
 
+/// The sample count the scene target is built with.
+///
+/// `FERROCAD_MSAA` overrides it, because 4× is a native-only cost the browser build
+/// does not pay (see [`SAMPLES`]): on a large document it multiplies the fill and the
+/// target's memory, and whether that is the frame cost is worth measuring rather than
+/// guessing. `1` is the browser's setting.
+fn samples() -> u32 {
+    let requested = std::env::var("FERROCAD_MSAA")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(SAMPLES);
+    requested.max(1)
+}
+
 /// What happens when the presenter cannot present, for the log line.
 #[cfg(target_family = "wasm")]
 const FALLBACK: &str = "the viewport stays blank";
@@ -362,7 +376,7 @@ impl Presenter for GpuiInteropPresenter {
         let renderer = FerrocadRenderer::with_sample_count_and_format(
             GpuContext::new(device.as_ref().clone(), queue.as_ref().clone()),
             size,
-            SAMPLES,
+            samples(),
             color_format,
         );
 

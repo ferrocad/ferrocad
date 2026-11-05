@@ -35,8 +35,8 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         // The dock's creation verbs.
         "Toy_MakeSlab" => "cube",
         "Toy_Polyline" => "shape-polyline",
-        "Part_MakeBox" => "cube",
-        "Part_SaveDatumPlane" => "layers-plus",
+        "Part_Box" => "cube",
+        "App_SaveDatumPlane" => "layers-plus",
         // Snap modes. The note draws the ones with no honest glyph (midpoint,
         // origin, vertex, extension, near) and they keep their label alone.
         "Draft_Snap_Lock" => "snap",
@@ -168,8 +168,8 @@ mod tests {
             "App_Delete",
             "Toy_MakeSlab",
             "Toy_Polyline",
-            "Part_MakeBox",
-            "Part_SaveDatumPlane",
+            "Part_Box",
+            "App_SaveDatumPlane",
             "Draft_Snap_Lock",
             "Draft_Snap_Grid",
             "Draft_Snap_Endpoint",
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn an_uncurated_command_has_no_icon() {
-        assert!(icon_for("Part_Box").is_none());
+        assert!(icon_for("Part_Cylinder").is_none());
         assert!(icon_for("").is_none());
     }
 

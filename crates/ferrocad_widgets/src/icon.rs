@@ -145,6 +145,19 @@ const ASSETS: &[(&str, &[u8])] = &[
     // Dialog / active-action verbs.
     ("close", include_bytes!("../assets/icons/close.svg")),
     ("check", include_bytes!("../assets/icons/check.svg")),
+    // Loadout hands.
+    (
+        "corner-radius",
+        include_bytes!("../assets/icons/corner-radius.svg"),
+    ),
+    (
+        "arrow-up-down",
+        include_bytes!("../assets/icons/arrow-up-down.svg"),
+    ),
+    (
+        "select-pointer",
+        include_bytes!("../assets/icons/select-pointer.svg"),
+    ),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

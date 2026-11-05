@@ -32,6 +32,7 @@ now renders (§6.2).
 | Header controls | status dot + text + `▾` | embedded glyph + text + `▾` | `chrome.rs`; `screenshot.png` |
 | Action dock | text labels | glyph + text label | `chrome.rs` |
 | Active-action bar (tool strip) | `Cancel` / `Finish` words | `close` / `check` glyph + word | `crates/ferrocad_shell_core/src/shell/render.rs` |
+| Loadout bar | hotkey + hand label | hotkey + hand glyph + label | `crates/ferrocad_shell_core/src/ui/chrome.rs` |
 | Header popovers | `PopoverRow { label, accel, checked, … }` | glyph + label + accel + status dot | `chrome.rs` |
 | Radial wheel | text label per wedge; tone only in the inner arc | glyph above the text label | `crates/ferrocad_widgets/src/wheel.rs` |
 | Palette | text rows | glyph + text row | `crates/ferrocad_shell_core/src/shell/render.rs` |
@@ -763,6 +764,7 @@ Draft icons it can draw.
   | Action dock buttons | `resolve(command)`, followed by the label | 14 px |
   | Action dock Search | `search` | 14 px |
   | Active-action bar (`Cancel` / `Finish`) | `close` / `check` | 14 px |
+  | Loadout bar slots | `move` / `rotate-object` (by gizmo mode), `arrow-up-down`, `corner-radius`, `select-pointer` | 14 px (`FG` idle, `CHROME_ACTIVE` equipped) |
   | Command palette rows | `resolve(command)`, before the label | 14 px |
   | Model tree rows | `icon_for_type(type_id)`, before the label | 14 px (`FG` when selected, else `MUTED`) |
   | Properties panel rows | `icon_for_property(type_id)`, or the row command's glyph | 12 px (`FG` when editable, else `MUTED`) |
@@ -774,8 +776,8 @@ Draft icons it can draw.
 
   The curated command rows are the built-ins (`App_Move` → `move`, `App_Delete` →
   `trash`, `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` →
-  `cube`, `Toy_Polyline` → `shape-polyline`, `Part_MakeBox` → `cube`,
-  `Part_SaveDatumPlane` → `layers-plus`) and the snap modes (`Draft_Snap_Endpoint` →
+  `cube`, `Toy_Polyline` → `shape-polyline`, `Part_Box` → `cube`,
+  `App_SaveDatumPlane` → `layers-plus`) and the snap modes (`Draft_Snap_Endpoint` →
   `anchor-point`, …). The snap modes the note draws (midpoint, origin, vertex,
   extension, near) keep their label alone until that glyph exists.
 

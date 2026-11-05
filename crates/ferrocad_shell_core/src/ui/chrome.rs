@@ -782,6 +782,20 @@ fn select_button(
     control
 }
 
+/// The loadout slot's glyph: the hand it equips.
+///
+/// Slot 1 hosts both handle sets, so it names the one the user will actually get —
+/// `rotate-object` rings or `move` arrows — exactly as [`Slot::label_for`] does.
+fn loadout_icon(slot: Slot, mode: GizmoMode) -> &'static str {
+    match (slot, mode) {
+        (Slot::Move, GizmoMode::Rotate) => "rotate-object",
+        (Slot::Move, _) => "move",
+        (Slot::PushPull, _) => "arrow-up-down",
+        (Slot::Fillet, _) => "corner-radius",
+        (Slot::Inspect, _) => "select-pointer",
+    }
+}
+
 /// The loadout bar (U4): `[1 Move] [2 Push/Pull] [3 Fillet] [0 Idle]` over the
 /// canvas' bottom-left corner. The pointer comes last because it is the neutral
 /// hand, not a fourth tool.
@@ -833,6 +847,20 @@ pub(crate) fn loadout_bar(
             .text_color(rgb(if active { CHROME_ACTIVE } else { FG }))
             .when(active, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
             .child(div().text_color(rgb(MUTED)).child(key))
+            .child(
+                div()
+                    .debug_selector(move || format!("loadout-{key}-icon"))
+                    .flex()
+                    .items_center()
+                    .child(
+                        icon::named(
+                            loadout_icon(slot, mode),
+                            icon::ROW,
+                            if active { CHROME_ACTIVE } else { FG },
+                        )
+                        .unwrap_or_else(|| div().into_any_element()),
+                    ),
+            )
             .child(slot.label_for(mode));
         if !blocked {
             button = button

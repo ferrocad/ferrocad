@@ -180,6 +180,15 @@ fn the_loadout_bar_renders_and_equips_a_slot(cx: &mut TestAppContext) {
     ] {
         assert!(cx.debug_bounds(selector).is_some(), "slot {key} has a pill");
     }
+    // Each pill carries the glyph of the hand it equips.
+    for selector in [
+        "loadout-0-icon",
+        "loadout-1-icon",
+        "loadout-2-icon",
+        "loadout-3-icon",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector} is painted");
+    }
 
     click_at(&mut cx, "loadout-2");
     assert_eq!(

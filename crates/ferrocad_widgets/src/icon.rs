@@ -60,6 +60,26 @@ const ASSETS: &[(&str, &[u8])] = &[
     ("midpoint", include_bytes!("../assets/icons/midpoint.svg")),
     ("extension", include_bytes!("../assets/icons/extension.svg")),
     ("near", include_bytes!("../assets/icons/near.svg")),
+    // View orientation and solid verbs (authored draws).
+    (
+        "view-front",
+        include_bytes!("../assets/icons/view-front.svg"),
+    ),
+    ("view-top", include_bytes!("../assets/icons/view-top.svg")),
+    (
+        "view-right",
+        include_bytes!("../assets/icons/view-right.svg"),
+    ),
+    ("view-rear", include_bytes!("../assets/icons/view-rear.svg")),
+    ("extrude", include_bytes!("../assets/icons/extrude.svg")),
+    ("loft", include_bytes!("../assets/icons/loft.svg")),
+    ("sweep", include_bytes!("../assets/icons/sweep.svg")),
+    ("thickness", include_bytes!("../assets/icons/thickness.svg")),
+    ("make-face", include_bytes!("../assets/icons/make-face.svg")),
+    (
+        "make-solid",
+        include_bytes!("../assets/icons/make-solid.svg"),
+    ),
     ("gizmo", GIZMO_SVG),
     ("snap", SNAP_SVG),
     ("menu", include_bytes!("../assets/icons/menu.svg")),

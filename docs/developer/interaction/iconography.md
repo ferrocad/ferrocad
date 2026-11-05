@@ -277,7 +277,9 @@ is reproducible: split the command name on CamelCase, expand FreeCAD vocabulary
   than the CAD operation; acceptable only with the text label present.
 - **compose** — an IconMCP base plus one drawn marker (for example a circle marker
   on `matrix` for a polar array).
-- **draw** — no honest match; draw it in `ferrocad_widgets::icon` on the 16-unit grid.
+- **authored** — no IconMCP match, so the glyph is drawn here and ships in
+  `ferrocad_widgets::icon`; §5 holds the recipe.
+- **draw** — no honest match and not drawn yet; it stays on the §5 draw list.
 
 ### Set policy
 
@@ -317,7 +319,7 @@ candidate.
 | Application menu | title | — | `menu` | use |
 | Grid toggle | header | — | `grid-4x4` | use |
 | Axis cross | header | `Std_AxisCross` | `axes-3d` | use |
-| Workplane | header | `Std_Plane` | — | draw |
+| Workplane | header | `Std_Plane` | `workplane` | authored |
 | Transform gizmo | header | `Std_TransformManip` | `axes-3d + move` | compose |
 | Snap (global) | header | `Draft_Snap_Lock` | `magnet + lock` | compose |
 | Open | app menu | `document-open` | `folder-open` | use |
@@ -350,10 +352,10 @@ candidate.
 | Zoom in | — | `zoom-in` | `zoom-in` | use |
 | Zoom out | — | `zoom-out` | `zoom-out` | use |
 | Isometric view | navicube | `view-isometric` | `cube` | metaphor |
-| Front view | navicube | `view-front` | — | draw |
-| Top view | navicube | `view-top` | — | draw |
-| Right view | navicube | `view-right` | — | draw |
-| Rear view | navicube | `view-rear` | — | draw |
+| Front view | navicube | `view-front` | `view-front` | authored |
+| Top view | navicube | `view-top` | `view-top` | authored |
+| Right view | navicube | `view-right` | `view-right` | authored |
+| Rear view | navicube | `view-rear` | `view-rear` | authored |
 | Select all | — | `edit-select-all` | `select-all` | use |
 | Box select | — | `edit-select-box` | `rectangle-select` | use |
 | Clear selection | — | `clear-selection` | `deselect` | use |
@@ -482,7 +484,7 @@ line"). The glyph is a closed polyline, hence `shape-polyline + lock`.
 | Near | `Draft_Snap_Near` | — | draw |
 | Grid | `Draft_Snap_Grid` | `grid` | use |
 | Ortho | `Draft_Snap_Ortho` | `angle-right` | use |
-| Working plane | `Draft_Snap_WorkingPlane` | — | draw |
+| Working plane | `Draft_Snap_WorkingPlane` | `workplane` | authored |
 | Lock | `Draft_Snap_Lock` | `lock` | use |
 | Dimensions | `Draft_Snap_Dimensions` | `ruler` | use |
 | Special | `Draft_Snap_Special` | `star` | use |
@@ -502,7 +504,7 @@ line"). The glyph is a closed polyline, hence `shape-polyline + lock`.
 | Helix | `Part_Helix_Parametric` | `spring-coil` | use |
 | Spiral | `Part_Spiral_Parametric` | `spiral` | use |
 | Ellipsoid | `Part_Ellipsoid_Parametric` | `sphere` | metaphor |
-| Plane datum | `Part_Plane_Parametric` | `workplane` | use |
+| Plane datum | `Part_Plane_Parametric` | `workplane` | authored |
 | Line datum | `Part_Line_Parametric` | `line-segment` | use |
 | Point datum | `Part_Point_Parametric` | `bullet` | use |
 | Primitives menu | `Part_Primitives` | `shapes` | use |
@@ -520,15 +522,15 @@ it leaves the draw list.
 
 | Need | Upstream icon (1.1.4) | IconMCP | Verdict |
 | --- | --- | --- | --- |
-| Extrude | `Part_Extrude` | — | draw |
+| Extrude | `Part_Extrude` | `extrude` | authored |
 | Revolve | `Part_Revolve` | `lathe` | metaphor |
-| Loft | `Part_Loft` | — | draw |
-| Sweep | `Part_Sweep` | — | draw |
+| Loft | `Part_Loft` | `loft` | authored |
+| Sweep | `Part_Sweep` | `sweep` | authored |
 | Pocket | — | — | draw |
 | Hole | — | — | draw |
 | Fillet | `Part_Fillet` | `corner-radius` | use |
 | Chamfer | `Part_Chamfer` | `bevel-gauge` | metaphor |
-| Thickness | `Part_Thickness` | — | draw |
+| Thickness | `Part_Thickness` | `thickness` | authored |
 | Union (fuse) | `Part_Fuse` | `union` | use |
 | Cut | `Part_Cut` | `boolean-subtract` | use |
 | Common | `Part_Common` | `boolean-intersect` | use |
@@ -538,8 +540,8 @@ it leaves the draw list.
 | Compound filter | `Part_CompoundFilter` | `filter` | use |
 | Explode compound | `Part_ExplodeCompound` | `expand` | metaphor |
 | Shape builder | `Part_Builder` | `shapes` | use |
-| Make face | `Part_MakeFace` | — | draw |
-| Make solid | `Part_MakeSolid` | — | draw |
+| Make face | `Part_MakeFace` | `make-face` | authored |
+| Make solid | `Part_MakeSolid` | `make-solid` | authored |
 | Refine shape | `Part_RefineShape` | `sparkles` | metaphor |
 | Colour face | `Part_ColorPerFace` | `paint-bucket` | use |
 | Projection on surface | `Part_ProjectionOnSurface` | `projector` | metaphor |
@@ -560,9 +562,10 @@ Every id above is the registered command (`Command(...)` in `Part/Gui`, `addComm
 names instead: `Part_Shapebuilder` → **`Part_Builder`**, `Part_Refine_Shape` →
 **`Part_RefineShape`**, `Part_ColorFace` → **`Part_ColorPerFace`**, `Part_Reverse_Shape`
 → **`Part_ReverseShape`**. `Part_JoinBypass` is not registered in 1.1.4, so it has no
-command id. **Pocket** and **Hole** are PartDesign verbs, not Part commands, and no Part
-extrude/loft/sweep/thickness command has an honest glyph yet, so those rows stay on the
-draw list.
+command id. **Pocket** and **Hole** are PartDesign verbs, not Part commands, so they
+stay on the draw list. Extrude, loft, sweep, thickness, make face and make solid ship
+as authored glyphs (§5); `Part_Extrude`, `Part_Loft`, `Part_Sweep`, `Part_Thickness`,
+`Part_MakeFace` and `Part_MakeSolid` are all registered commands.
 
 Mirror bakes the note's `copy + flip-horizontal` composition into the same `mirror`
 asset the Draft row uses.
@@ -586,7 +589,7 @@ measurement types (`Measure/Gui/Resources/icons`), not command ids. This table i
 therefore the measurement **mode** vocabulary, kept for a future measure panel; only
 `Std_Measure` is wired today (`measure-tool`).
 
-**Totals: 179 needs — 125 `use`, 19 `metaphor`, 11 `compose`, 24 `draw`.**
+**Totals: 179 needs — 124 `use`, 19 `metaphor`, 11 `compose`, 16 `authored`, 9 `draw`.**
 
 ### Second semantic review (2026-11-05)
 
@@ -641,44 +644,45 @@ name match is a hypothesis; the picture is the evidence.
 
 These are the drawings FerroCAD owns. Each is a 16-unit embedded SVG in
 `ferrocad_widgets::icon`, a 1.25 px stroke, round caps, one ink token — the same
-recipe as `bug`. The workplane and the three snap glyphs are authored:
-`workplane.svg`, `midpoint.svg` (a half-tick on the segment), `extension.svg` (a
-dashed continuation from a known endpoint) and `near.svg` (a proximity asterisk).
-The rest are open.
+recipe as `bug`. Fourteen are shipped: `workplane.svg`, the three snap glyphs
+(`midpoint.svg`, a half-tick on the segment; `extension.svg`, a dashed continuation
+from a known endpoint; `near.svg`, a proximity asterisk), the four view orientations
+(`view-front/top/right/rear.svg`, one cube with the named face filled) and the six
+solid verbs.
 
-| Group | Glyphs |
-| --- | --- |
-| Planes | workplane, select plane, plane datum, snap working plane |
-| View orientation | front, top, right, rear |
-| Geometry | arc, arc through 3 points, facebinder |
-| Edit | offset (concentric outline), extend (line with arrow), slope (raised wedge) |
-| Snap | midpoint (half-tick), extension (dashed continuation), near (proximity asterisk) |
-| Solid verbs | extrude, loft, sweep, pocket, hole, thickness, make face, make solid |
+| Group | Shipped | Still open |
+| --- | --- | --- |
+| Planes | workplane (also plane datum and snap working plane) | select plane |
+| View orientation | front, top, right, rear | — |
+| Geometry | — | arc, arc through 3 points, facebinder |
+| Edit | — | offset (concentric outline), extend (line with arrow), slope (raised wedge) |
+| Snap | midpoint (half-tick), extension (dashed continuation), near (proximity asterisk) | — |
+| Solid verbs | extrude, loft, sweep, thickness, make face, make solid | pocket, hole |
 
 Two **compose** pairs rather than new drawings:
 
 - Polar array = `matrix` + a drawn radial marker.
 - VisGroup = `group` + `eye`.
 
-That is 26 drawings and 11 compositions, instead of 179.
+That is 14 authored glyphs and 11 compositions; nine needs remain open.
 
 ### The composition rule for solid verbs
 
 A drawn CAD verb should be **the operation, not the object**:
 
-| Verb | Composition on the 16-unit grid |
+| Verb | As drawn (16-unit grid) |
 | --- | --- |
-| Extrude | profile square + a bold up arrow + a ghost top face |
-| Pocket | same, arrow into the body |
+| Extrude | profile square + a bold up arrow out of it |
+| Pocket | not drawn: a PartDesign verb with no Part command |
 | Loft | two offset profiles + two joining side lines |
-| Sweep | a profile circle + a curved path arrow |
-| Hole | a circle with a centre tick and a depth tick |
+| Sweep | a profile square travelling a curved path |
+| Hole | not drawn: a PartDesign verb with no Part command |
 | Thickness | a closed outline and its inset twin |
 | Make face | a closed wire with a filled interior |
-| Make solid | a wire becoming a shaded cube |
+| Make solid | a dashed wire becoming a shaded cube |
 
-The arrows reuse the existing `AXIS_X/Y/Z` and `PUSH_PULL_COLOR` semantics rather than
-introducing new tones. The ghost face is the existing glass-shade ink at low alpha.
+Each draws the operation, not the object, and stays inside one ink token: there are no
+per-verb tones to keep in sync with `AXIS_X/Y/Z` or `PUSH_PULL_COLOR`.
 
 ### Request log (filed 2026-11-05)
 
@@ -760,10 +764,32 @@ are `measuring-wheel` (`industry`) and `photo-rotate` (`photo`) — and re-searc
 and `files` sets are unchanged, so all 115 icon names in this note and all 79 vendored
 assets still resolve. The snapshot is refreshed to 6,590.
 
+**Draw pass, 2026-11-06.** Ten more glyphs are authored and wired, which closes most of
+the §5 list: the four **view orientations** (`Std_ViewFront/Top/Right/Rear` → the
+`view-*` cubes, the named face filled) and the six **solid verbs** (`Part_Extrude`,
+`Part_Loft`, `Part_Sweep`, `Part_Thickness`, `Part_MakeFace`, `Part_MakeSolid`). Every
+id was validated against 1.1.4 (`addCommand` in `src/Gui/CommandView.cpp`; `Command(...)`
+in `src/Mod/Part/Gui`). Together with `workplane`, the snap trio and the two datum
+reuses, **16 rows are now `authored`** and the open list is **9 needs**: arc, arc
+through 3 points, facebinder, select plane, offset, extend, slope, pocket and hole.
+
+The `authored` verdict exists so a shipped local glyph is not labelled "no honest
+match": the contact sheets paint it cyan and name the asset that renders it. Eleven of
+the 27 requests are withdrawn with it (workplane, the four views, extrude, loft, sweep,
+shell, make face, make solid); **12 remain open**.
+
+**Re-check, 2026-11-06 (second).** The catalogue grew **6,590 → 6,622**: 32 added, none
+removed. None is CAD-adjacent (bags, pets, clothing, music, travel, weather, crafts), and
+re-searching the 12 open requests found no new match — the nearest are `hole-punch`
+(`business`) and `pocket-knife` (`camping`), neither of which is a modelling verb. The
+snapshot is refreshed to 6,622 and all 128 glyph names in the table resolve.
+
 ### Contact sheets
 
 The rendered comparison is checked in beside the design notes. Every card labels the
-IconMCP **set**, so a borrow from another family is visible at a glance.
+IconMCP **set**, so a borrow from another family is visible at a glance, and an
+`authored` row shows the glyph this repository ships (with the local asset name in the
+set column) rather than an IconMCP candidate.
 
 | Surface | Sheet |
 | --- | --- |
@@ -850,9 +876,14 @@ Draft icons it can draw.
   `line-segment`, …) and the **Part operations slice** (`Part_Fuse` → `union`,
   `Part_Cut` → `boolean-subtract`, `Part_Common` → `boolean-intersect`, `Part_Fillet` →
   `corner-radius`, `Part_Mirror` → the baked `mirror`, …), the **measure
-  command** (`Std_Measure` → `measure-tool`) and the **authored snap draws**
+  command** (`Std_Measure` → `measure-tool`), the **authored snap draws**
   (`Draft_Snap_Midpoint` → `midpoint`, `Draft_Snap_Extension` → `extension`,
-  `Draft_Snap_Near` → `near`; `Draft_Snap_WorkingPlane` reuses `workplane`).
+  `Draft_Snap_Near` → `near`; `Draft_Snap_WorkingPlane` reuses `workplane`), the
+  **view orientations** (`Std_ViewFront` → `view-front`, `Std_ViewTop` → `view-top`,
+  `Std_ViewRight` → `view-right`, `Std_ViewRear` → `view-rear`) and the **solid
+  verbs** (`Part_Extrude` → `extrude`, `Part_Loft` → `loft`, `Part_Sweep` → `sweep`,
+  `Part_Thickness` → `thickness`, `Part_MakeFace` → `make-face`, `Part_MakeSolid` →
+  `make-solid`).
 
   Every workbench id was checked against upstream: `addCommand` in
   `freecad-upstream/src/Mod/Draft/draftguitools`, and `Command(...)` in
@@ -864,9 +895,9 @@ Draft icons it can draw.
   `Draft_ToggleDisplayMode` and `Draft_ToggleConstructionMode` (their `Pixmap` names
   are `Draft_SwitchMode`/`Draft_Construction`), so those two are curated. In Part,
   Prism, Wedge, Helix, Spiral and Ellipsoid have no GUI command and are covered by the
-  tree table. Arc, Arc through 3 points and Facebinder stay on the draw list; the snap
-  modes the note draws (midpoint, origin, vertex, extension, near) keep their label
-  until that glyph exists.
+  tree table. Arc, Arc through 3 points and Facebinder stay on the draw list; midpoint,
+  extension and near now have their authored glyph, while origin and vertex keep the
+  label alone.
 
   **Compositions are baked.** The note's `compose` rows (`Mirror` =
   `copy + flip-horizontal`, the three arrays, `VisGroup`, the dimension pair) ship as

@@ -150,6 +150,18 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         // Measure: 1.1.4 registers one command; the eight `Measurement-*` files are its
         // mode icons, not commands.
         "Std_Measure" => "measure-tool",
+        // Standard views (Std_View* in src/Gui/CommandView.cpp).
+        "Std_ViewFront" => "view-front",
+        "Std_ViewTop" => "view-top",
+        "Std_ViewRight" => "view-right",
+        "Std_ViewRear" => "view-rear",
+        // Solid verbs that were on the note's draw list.
+        "Part_Extrude" => "extrude",
+        "Part_Loft" => "loft",
+        "Part_Sweep" => "sweep",
+        "Part_Thickness" => "thickness",
+        "Part_MakeFace" => "make-face",
+        "Part_MakeSolid" => "make-solid",
         _ => return None,
     };
     Some(key)
@@ -362,6 +374,16 @@ mod tests {
             "Part_JoinEmbed",
             "Part_JoinCutout",
             "Std_Measure",
+            "Std_ViewFront",
+            "Std_ViewTop",
+            "Std_ViewRight",
+            "Std_ViewRear",
+            "Part_Extrude",
+            "Part_Loft",
+            "Part_Sweep",
+            "Part_Thickness",
+            "Part_MakeFace",
+            "Part_MakeSolid",
         ] {
             let key = icon_for(id).unwrap_or_else(|| panic!("{id} is curated"));
             assert!(
@@ -373,7 +395,7 @@ mod tests {
 
     #[test]
     fn an_uncurated_command_has_no_icon() {
-        assert!(icon_for("Part_Extrude").is_none());
+        assert!(icon_for("Part_XOR").is_none());
         assert!(icon_for("").is_none());
     }
 

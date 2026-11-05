@@ -340,6 +340,22 @@ jobs:
       # fails fast on a GPUI/wgpu regression.
       - name: Check the shell core for wasm32
         run: cargo check -p ferrocad_shell_core --target wasm32-unknown-unknown --locked
+      # D1/D2 written as a check: the document is `ferrocad_shell_rust`'s. The JS half
+      # only calls out to the page, so it must not name the document at all; the
+      # wasm-Python half does render property rows with `ferrocad_core::present`, but
+      # the Part/OCCT kernel stays in the document half.
+      - name: The script halves stay script halves
+        run: |
+          if cargo tree -p ferrocad_shell_js --target wasm32-unknown-unknown --locked \
+              -e normal --prefix none | grep -Eq '^ferrocad_(core|part|occt) '; then
+            echo "ferrocad_shell_js must not depend on the document" >&2
+            exit 1
+          fi
+          if cargo tree -p ferrocad_shell_pywasm --target wasm32-unknown-unknown --locked \
+              -e normal --prefix none | grep -Eq '^ferrocad_(part|occt) '; then
+            echo "ferrocad_shell_pywasm must not depend on the kernel" >&2
+            exit 1
+          fi
       # The wasm-Python script half (S8): RustPython pulls `getrandom`, whose
       # wasm32-unknown-unknown backend is named by the `target.cfg(wasm32)` rustflags in
       # `.cargo/config.toml`. That entry is *joined* with the cross image's

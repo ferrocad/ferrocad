@@ -313,11 +313,13 @@ ferrocad_web_gpui  -> ferrocad_shell_core, ferrocad_shell_rust,
                       must NOT -> pyo3, ferrocad_py, ferrocad_inventor_py
 ferrocad_shell_js  -> ferrocad_shell_api, ferrocad_inventor,
                       ferrocad_stage, wasm-bindgen       [the JS script half]
-                      must NOT -> gpui, pyo3, ferrocad_shell_rust
+                      must NOT -> gpui, pyo3, ferrocad_shell_rust,
+                                  ferrocad_core, ferrocad_part
 ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core,
                       ferrocad_inventor, rustpython-vm/-stdlib/-pylib
                                                          [the wasm-Python script half]
-                      must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust
+                      must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust,
+                                  ferrocad_part, ferrocad_occt
 ferrocad           -> ferrocad_shell_gpui, ferrocad_py     [base app: links the module in, embeds payload]
                                                      [run_edition: an edition's app script]
 ferrocad_parametric -> ferrocad, ferrocad_part_py,

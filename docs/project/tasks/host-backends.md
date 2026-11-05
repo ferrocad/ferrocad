@@ -283,24 +283,36 @@ ferrocad_shell_api  -> ferrocad_stage, ferrocad_geom, ferrocad_types
 ferrocad_shell_js   -> ferrocad_shell_api, ferrocad_inventor,
                        ferrocad_stage, wasm-bindgen
                        must NOT -> gpui, pyo3, ferrocad_py,
-                                   ferrocad_shell_rust
+                                   ferrocad_shell_rust,
+                                   ferrocad_core, ferrocad_part
 ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core,
                          rustpython-vm, rustpython-stdlib, rustpython-pylib
                          must NOT -> gpui, pyo3, ferrocad_py,
-                                     ferrocad_shell_rust
+                                     ferrocad_shell_rust,
+                                     ferrocad_part, ferrocad_occt
 ```
 
-The last two need one exception. `ferrocad_shell_pywasm` cannot carry
-`must NOT -> wasm-bindgen`: `rustpython-vm`'s `wasmbind` feature is what gives
-`getrandom` a `wasm32-unknown-unknown` backend, so `wasm-bindgen` is in its graph.
-The rule that matters is that the crate never *calls* it — it has no
-`#[wasm_bindgen]` block and no `window` bridge, unlike `ferrocad_shell_js`, whose
-entire job is one.
+The asymmetry between those two is deliberate and is the shape of each backend.
+`ferrocad_shell_js` **must not name `ferrocad_core` at all** (nor `ferrocad_part`):
+its job is to call *out* to the page and report what comes back, so the document is
+`RustAppBackend`'s in every case — a core edge there would make a second document
+implementation one `use` away again (D1). `ferrocad_shell_pywasm` **does** name
+`ferrocad_core`, because the property rows it feeds the interpreter are
+`present::kind`/`present::format` (D4) and its snapshot is built from a `Document`;
+what it must not name is the kernel, so `ferrocad_part`/`ferrocad_occt` stay in the
+document half. Both are checked in CI with `cargo tree`.
+
+The `wasm-bindgen` edge inside that block is the one exception.
+`ferrocad_shell_pywasm` cannot carry `must NOT -> wasm-bindgen`: `rustpython-vm`'s
+`wasmbind` feature is what gives `getrandom` a `wasm32-unknown-unknown` backend, so
+`wasm-bindgen` is in its graph. The rule that matters is that the crate never *calls*
+it — it has no `#[wasm_bindgen]` block and no `window` bridge, unlike
+`ferrocad_shell_js`, whose entire job is one.
 
 `ferrocad_shell_rust` must not name `gpui`: it is the same backend on desktop and in
 the browser, and a gpui edge would make that impossible. The same rule is what makes
-the two script halves composable — neither names the document crate, so the host
-chooses the pairing.
+the two script halves composable — neither names the *document backend* crate, so the
+host chooses the pairing.
 
 ### 4.3 Hosts vs backends
 

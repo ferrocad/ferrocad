@@ -941,16 +941,26 @@ pub fn inventor_scene() -> Result<Scene, String> {
 /// [`Directives`] beside the draw queue (see `docs/developer/viewport/directives.md`); the callables live
 /// on the facade side, so the tree does not need to be re-extracted to reach them.
 pub fn dispatch(directives: &Directives, event: &Event, hit: Option<&Hit>) -> bool {
+    // A document with no `SoEventCallback` has nothing to hear the event. Every pointer
+    // move comes through here, so the empty case must not cross into the interpreter at
+    // all — acquiring the GIL and flushing its streams per move showed up on the hover
+    // path long before any script ran.
+    if directives.event_callbacks().next().is_none() {
+        return false;
+    }
     Python::with_gil(|py| {
-        let result = ferrocad_inventor_py::dispatch_event(py, directives, event, hit)
+        let invoked = ferrocad_inventor_py::dispatch_event(py, directives, event, hit)
             .unwrap_or_else(|e| {
                 eprintln!("ferrocad: event dispatch failed: {e}");
                 false
             });
         // A callback's `print` is block-buffered and the embedded interpreter is not
-        // finalized, so flush the streams here rather than lose the output.
-        flush_output(py);
-        result
+        // finalized, so flush the streams rather than lose the output. Nothing can have
+        // printed when no callback ran.
+        if invoked {
+            flush_output(py);
+        }
+        invoked
     })
 }
 

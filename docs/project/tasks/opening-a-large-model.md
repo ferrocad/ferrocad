@@ -1,6 +1,6 @@
 # Opening a large model: where the seconds are
 
-Status: **task (2026-11-05). Stages 1 and 2 landed; stages 3–5 open.**
+Status: **task (2026-11-05). Stages 1 and 2 landed, plus the hover-pick fix (§1b); stages 3–5 open.**
 Companion: [`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md)
 §10 (the mesh hop), and [`transform-session.md`](transform-session.md) for the
 edit-time half of the same cost.
@@ -85,6 +85,50 @@ arrays), not a reason the first frame is late.
 Both remaining large numbers are **OCCT**, not the shell: the ASCII BRep reader and
 `BRepMesh`. Neither is affected by our Rust profile, so these are the numbers a release
 build pays too (unlike the marshaling costs the earlier changes removed).
+
+## 1b. The interactive frame is a different budget
+
+Everything above is the *open*. Orbiting and hovering the same document was the other
+half of the complaint, and it fails for a different reason. One `FERROCAD_TIMING=1` run
+(before the changes below):
+
+| Line | Reading |
+| --- | --- |
+| `open` | 1.27 s |
+| `stage sync: meshes` | 7.9 s (OCCT, once) |
+| `present` | 38.6 ms once, then never over 10 ms |
+| `fps` / `prepare` | 1.0 – 3.7 fps with `prepare avg` 4 – 22 ms |
+| `pick` | 30 – 50 lines per second, each **26 – 160 ms** |
+
+So the draw is cheap and the frame is slow: the second is spent in **hover picks**, one
+per pointer move. `WgpuRenderer::pick_at` re-draws the whole queue into the pick targets
+and then makes **three** blocking `device.poll` round trips (one per read texel), and that
+wait also covers the frame the presenter just submitted — hence 40–60 ms for a 1×1
+readback, independent of what is under the cursor.
+
+Four changes, all in the pick path:
+
+- [x] The pick pass **scissors to the one texel** it reads instead of rasterising the
+  whole window.
+- [x] The three texels share **one readback buffer, one submission and one poll**.
+- [x] A hover pick is **deferred**: it answers only once its pixel has been read back and
+  never blocks the input thread, submitting at most one pass per painted frame. The
+  viewport repaints (and re-dispatches the stored hover) until the answer lands, so a
+  resting pointer keeps its highlight and its face dwell, and it keeps the answer with
+  the pixel and camera it describes so a click there reuses it. Clicks elsewhere stay
+  synchronous.
+- [x] `HoverHighlight` reports a change **only when it changed a material**. On a staged
+  document it recolours nothing, yet it reported `true` on every hover change, which
+  re-emitted the whole queue (~570 ms here) for a colour nothing reads.
+- [x] The Python event listener **skips the interpreter** when the scene has no
+  `SoEventCallback`: it was acquiring the GIL and flushing two `sys` streams on every
+  pointer move.
+
+This is the answer to "is it the PyO3 bindings vs RustPython": for the frame, no.
+`ferrocad_viewport` has no PyO3 dependency at all, and `prepare` never entered Python;
+the interpreter was only on the *sync* path of §1a (0.67 s → 16 ms once memoised) and on
+that per-move listener, which no longer runs. Swapping interpreters would not have moved
+these numbers.
 
 ## 2. Progressive tessellation alone recovers a third
 

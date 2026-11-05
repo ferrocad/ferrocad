@@ -4547,6 +4547,14 @@ impl<V: InventorView> InventorViewport<V> {
     /// ray cast. All three consume the same scene-and-stage queue and camera, so this
     /// is one pick, not three parallel implementations.
     fn pick(&mut self, device: [i32; 2]) -> Option<Hit> {
+        let started = std::time::Instant::now();
+        let hit = self.pick_untimed(device);
+        report_pick_time(started.elapsed());
+        hit
+    }
+
+    /// The pointer's pick, without the timing wrapper.
+    fn pick_untimed(&mut self, device: [i32; 2]) -> Option<Hit> {
         if let Some(presenter) = self.presenter.as_ref() {
             let mut presenter = presenter.borrow_mut();
             if presenter.supports_pick() {
@@ -5842,6 +5850,20 @@ impl<V: InventorView> InventorViewport<V> {
     }
 }
 
+/// Report a slow pointer pick under `FERROCAD_TIMING`.
+///
+/// A native pick is a full G-buffer render of the queue plus a texel readback that
+/// blocks on the device, and it runs on every pointer move — so it is not part of
+/// `refresh`'s preparation and would otherwise be invisible in the frame numbers.
+fn report_pick_time(picked: std::time::Duration) {
+    if std::env::var_os("FERROCAD_TIMING").is_none() {
+        return;
+    }
+    if picked > std::time::Duration::from_millis(5) {
+        eprintln!("ferrocad: pick {:.1} ms", picked.as_secs_f64() * 1000.0);
+    }
+}
+
 /// Report the paint half of a frame (present + the canvas composite), under
 /// `FERROCAD_TIMING`.
 ///
@@ -5860,32 +5882,55 @@ fn report_present_time(presented: std::time::Duration) {
     }
 }
 
-/// Report the frame cadence and the refresh share, when `FERROCAD_TIMING` is set.
+/// Report frames per second and the preparation each frame needed, under
+/// `FERROCAD_TIMING`.
 ///
-/// Every slow frame is printed as the interval since the previous one (what the user
-/// sees) next to the time this crate spent preparing it. A long interval with a short
-/// preparation is the GPU or the present path; the reverse is our CPU work.
+/// The gap between two `render` calls is *not* the frame rate: the element only
+/// repaints when something invalidates it, so an idle second reads as one very slow
+/// frame. Counting renders over a wall-clock second is the honest number, and it is
+/// printed once a second while the timing is on.
 fn report_frame_time(refreshed: std::time::Duration) {
     use std::sync::{Mutex, OnceLock};
+
+    struct Window {
+        started: std::time::Instant,
+        frames: u32,
+        prepared: std::time::Duration,
+        worst: std::time::Duration,
+    }
+
     if std::env::var_os("FERROCAD_TIMING").is_none() {
         return;
     }
-    static LAST: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
-    let mut last = LAST
+    static WINDOW: OnceLock<Mutex<Option<Window>>> = OnceLock::new();
+    let mut window = WINDOW
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let now = std::time::Instant::now();
-    if let Some(previous) = last.replace(now) {
-        let interval = now - previous;
-        // Only the slow frames, so a paste from a real orbit stays short.
-        if interval > std::time::Duration::from_millis(20) {
-            eprintln!(
-                "ferrocad: frame {:.1} ms, prepare {:.1} ms",
-                interval.as_secs_f64() * 1000.0,
-                refreshed.as_secs_f64() * 1000.0
-            );
-        }
+    let state = window.get_or_insert_with(|| Window {
+        started: now,
+        frames: 0,
+        prepared: std::time::Duration::ZERO,
+        worst: std::time::Duration::ZERO,
+    });
+    state.frames += 1;
+    state.prepared += refreshed;
+    state.worst = state.worst.max(refreshed);
+    let elapsed = now - state.started;
+    if elapsed >= std::time::Duration::from_secs(1) {
+        let fps = state.frames as f64 / elapsed.as_secs_f64();
+        eprintln!(
+            "ferrocad: fps {fps:.1}, prepare avg {:.1} ms, worst {:.1} ms",
+            state.prepared.as_secs_f64() * 1000.0 / state.frames as f64,
+            state.worst.as_secs_f64() * 1000.0
+        );
+        *window = Some(Window {
+            started: now,
+            frames: 0,
+            prepared: std::time::Duration::ZERO,
+            worst: std::time::Duration::ZERO,
+        });
     }
 }
 

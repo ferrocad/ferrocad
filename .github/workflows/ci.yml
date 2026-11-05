@@ -90,6 +90,17 @@ jobs:
           PYTHONPATH=python python3 tools/test_docs_tooling.py
           PYTHONPATH=python python3 tools/test_screenshot.py
 
+      - name: wasm panic-class audit
+        # `cargo check --target wasm32-unknown-unknown` cannot catch this class: the
+        # calls type-check and the wasm backend of `std` panics only when they run. Two
+        # such calls (`std::time::Instant` in the frame timer, then again in the stage
+        # sync) reached the browser before this check existed. It reads
+        # `cargo metadata --locked`, so it needs no kernel and no wasm toolchain, and
+        # it runs here rather than in the `wasm` job so a normal PR catches it early.
+        run: |
+          python3 tools/wasm_audit.py --check
+          python3 tools/test_wasm_audit.py
+
       - name: Shell headless tests (bite-gpui + embedded CPython)
         # The M0 split moved the UI to `ferrocad_shell_core` and the CPython half to
         # `ferrocad_shell_python`; the API crate is pure Rust and fast to test.

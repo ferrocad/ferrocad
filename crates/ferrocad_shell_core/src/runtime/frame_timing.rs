@@ -16,6 +16,9 @@
 //! the platform), so a second whose passes are cheap and whose cadence is not names the
 //! compositor, not the UI.
 
+// wasm-audit: native-only — declared behind `#[cfg(not(target_family = "wasm"))]` in
+// `runtime/mod.rs`; the desktop installs it from `run_with`.
+
 use std::time::{Duration, Instant};
 
 use gpui::{

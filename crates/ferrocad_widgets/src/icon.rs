@@ -48,9 +48,9 @@ const SNAP_SVG: &[u8] = include_bytes!("../assets/icons/snap.svg");
 /// Every vendored glyph, by icon key.
 ///
 /// The key is the IconMCP icon name for a direct match, or the local name for the
-/// glyphs FerroCAD authors (`workplane`) or composes (`gizmo`, `snap`). The curated
-/// alias table in the shell maps a command id to one of these keys; this table is
-/// what actually ships.
+/// glyphs FerroCAD authors (`workplane`) or composes (`snap`); `gizmo` keeps its old
+/// key but now renders the library's `bounding-box`. The curated alias table in the
+/// shell maps a command id to one of these keys; this table is what actually ships.
 const ASSETS: &[(&str, &[u8])] = &[
     ("bug", BUG_SVG),
     ("grid-4x4", GRID_SVG),
@@ -169,6 +169,10 @@ const ASSETS: &[(&str, &[u8])] = &[
     // Dialog / active-action verbs.
     ("close", include_bytes!("../assets/icons/close.svg")),
     ("check", include_bytes!("../assets/icons/check.svg")),
+    (
+        "circle-check",
+        include_bytes!("../assets/icons/circle-check.svg"),
+    ),
     // Loadout hands.
     (
         "corner-radius",
@@ -217,7 +221,10 @@ const ASSETS: &[(&str, &[u8])] = &[
         "flip-horizontal",
         include_bytes!("../assets/icons/flip-horizontal.svg"),
     ),
-    ("sheep", include_bytes!("../assets/icons/sheep.svg")),
+    (
+        "duplicate-object",
+        include_bytes!("../assets/icons/duplicate-object.svg"),
+    ),
     ("cut-line", include_bytes!("../assets/icons/cut-line.svg")),
     ("merge", include_bytes!("../assets/icons/merge.svg")),
     ("split", include_bytes!("../assets/icons/split.svg")),
@@ -227,6 +234,10 @@ const ASSETS: &[(&str, &[u8])] = &[
     ),
     ("wrench", include_bytes!("../assets/icons/wrench.svg")),
     ("layers", include_bytes!("../assets/icons/layers.svg")),
+    (
+        "pattern-stripes",
+        include_bytes!("../assets/icons/pattern-stripes.svg"),
+    ),
     (
         "highlighter",
         include_bytes!("../assets/icons/highlighter.svg"),
@@ -263,7 +274,7 @@ const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("../assets/icons/pipe-flange.svg"),
     ),
     // Part operations.
-    ("lathe", include_bytes!("../assets/icons/lathe.svg")),
+    ("rotate-3d", include_bytes!("../assets/icons/rotate-3d.svg")),
     (
         "bevel-gauge",
         include_bytes!("../assets/icons/bevel-gauge.svg"),

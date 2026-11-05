@@ -320,7 +320,7 @@ candidate.
 | Grid toggle | header | — | `grid-4x4` | use |
 | Axis cross | header | `Std_AxisCross` | `axes-3d` | use |
 | Workplane | header | `Std_Plane` | `workplane` | authored |
-| Transform gizmo | header | `Std_TransformManip` | `axes-3d + move` | compose |
+| Transform gizmo | header | `Std_TransformManip` | `bounding-box` | use |
 | Snap (global) | header | `Draft_Snap_Lock` | `magnet + lock` | compose |
 | Open | app menu | `document-open` | `folder-open` | use |
 | Save | app menu | `document-save` | `save` | use |
@@ -424,13 +424,13 @@ Seven corrections matter:
 | Scale | `Draft_Scale` | `resize-handle` | use |
 | Mirror | `Draft_Mirror` | `copy + flip-horizontal` | compose |
 | Offset | `Draft_Offset` | — | draw |
-| Clone | `Draft_Clone` | `sheep` | metaphor |
+| Clone | `Draft_Clone` | `duplicate-object` | use |
 | Array | `Draft_OrthoArray` | `grid-4x4` | use |
 | Polar array | `Draft_PolarArray` | `copy + circle-dotted` | compose |
 | Path array | `Draft_PathArray` | `copy + shape-polyline` | compose |
 | Point array | `Draft_PointArray` | `copy + bullet` | compose |
 | Trim | `Draft_Trimex` | `cut-line` | use |
-| Extend | `Draft_Trimex` | — | draw |
+| Extend | `Draft_Trimex` | `arrow-right-from-line` | metaphor |
 | Fillet | `Draft_Fillet` | `corner-radius` | use |
 | Join | `Draft_Join` | `merge` | use |
 | Split | `Draft_Split` | `split` | use |
@@ -442,7 +442,7 @@ Seven corrections matter:
 | Finish | `Draft_Finish` | `check` | use |
 | Apply | `Draft_Apply` | `check` | use |
 | Construction | `Draft_ToggleConstructionMode` | `square-dashed` | metaphor |
-| Close polyline | `Draft_Lock` | `shape-polyline + lock` | compose |
+| Close polyline | `Draft_Lock` | `polygon` | use |
 | Layer | `Draft_Layer` | `layers` | use |
 | New layer | `Draft_NewLayer` | `layers-plus` | use |
 | Add to layer | `Draft_AddToLayer` | `layers-plus` | use |
@@ -523,7 +523,7 @@ it leaves the draw list.
 | Need | Upstream icon (1.1.4) | IconMCP | Verdict |
 | --- | --- | --- | --- |
 | Extrude | `Part_Extrude` | `extrude` | authored |
-| Revolve | `Part_Revolve` | `lathe` | metaphor |
+| Revolve | `Part_Revolve` | `rotate-3d` | metaphor |
 | Loft | `Part_Loft` | `loft` | authored |
 | Sweep | `Part_Sweep` | `sweep` | authored |
 | Pocket | — | — | draw |
@@ -535,7 +535,7 @@ it leaves the draw list.
 | Cut | `Part_Cut` | `boolean-subtract` | use |
 | Common | `Part_Common` | `boolean-intersect` | use |
 | Section | `Part_Section` | `section` | use |
-| Cross sections | `Part_CrossSections` | `layers` | metaphor |
+| Cross sections | `Part_CrossSections` | `pattern-stripes` | metaphor |
 | Compound | `Part_Compound` | `group` | use |
 | Compound filter | `Part_CompoundFilter` | `filter` | use |
 | Explode compound | `Part_ExplodeCompound` | `expand` | metaphor |
@@ -548,7 +548,7 @@ it leaves the draw list.
 | Reverse shape | `Part_ReverseShape` | `flip-horizontal` | use |
 | Mirror | `Part_Mirror` | `copy + flip-horizontal` | compose |
 | Scale | `Part_Scale` | `resize-handle` | use |
-| Check geometry | `Part_CheckGeometry` | `check` | use |
+| Check geometry | `Part_CheckGeometry` | `circle-check` | use |
 | Defeaturing | `Part_Defeaturing` | `eraser` | use |
 | Boolean fragments | `Part_BooleanFragments` | `split` | use |
 | Slice apart | `Part_SliceApart` | `split` | use |
@@ -589,7 +589,7 @@ measurement types (`Measure/Gui/Resources/icons`), not command ids. This table i
 therefore the measurement **mode** vocabulary, kept for a future measure panel; only
 `Std_Measure` is wired today (`measure-tool`).
 
-**Totals: 179 needs — 124 `use`, 19 `metaphor`, 11 `compose`, 16 `authored`, 9 `draw`.**
+**Totals: 179 needs — 127 `use`, 19 `metaphor`, 9 `compose`, 16 `authored`, 8 `draw`.**
 
 ### Second semantic review (2026-11-05)
 
@@ -616,9 +616,11 @@ word-sense questions:
 - **Scale.** `resize-handle` is the 2-D corner scale; Stretch uses `expand-diagonal`.
 - **Mirror vs flip.** Mirror is `copy + flip-horizontal`; flip alone stays for Flip
   dimension and Reverse shape.
-- **Clone.** `sheep` is the deliberate clone metaphor (animals set), distinct from
-  `copy`.
-- **Trim.** `cut-line` (a line with a cut) replaces scissors; Extend stays a request.
+- **Clone.** `sheep` was the deliberate clone metaphor (animals set); it is now
+  `duplicate-object`, an honest match, so the joke is gone and the icon names the
+  action.
+- **Trim.** `cut-line` (a line with a cut) replaces scissors; Extend shares the
+  `Draft_Trimex` command and reads as `arrow-right-from-line` when the modes split.
 - **Arrays.** Rectangular stays `grid-4x4`; polar, path and point are a generic
   `copy` base plus `circle-dotted`, `shape-polyline` and `bullet` markers.
 
@@ -655,7 +657,7 @@ solid verbs.
 | Planes | workplane (also plane datum and snap working plane) | select plane |
 | View orientation | front, top, right, rear | — |
 | Geometry | — | arc, arc through 3 points, facebinder |
-| Edit | — | offset (concentric outline), extend (line with arrow), slope (raised wedge) |
+| Edit | extend (`arrow-right-from-line`, the Extend mode of Trimex) | offset (concentric outline), slope (raised wedge) |
 | Snap | midpoint (half-tick), extension (dashed continuation), near (proximity asterisk) | — |
 | Solid verbs | extrude, loft, sweep, thickness, make face, make solid | pocket, hole |
 
@@ -664,7 +666,7 @@ Two **compose** pairs rather than new drawings:
 - Polar array = `matrix` + a drawn radial marker.
 - VisGroup = `group` + `eye`.
 
-That is 14 authored glyphs and 11 compositions; nine needs remain open.
+That is 14 authored glyphs and 9 compositions; eight needs remain open.
 
 ### The composition rule for solid verbs
 
@@ -800,12 +802,32 @@ geometry/editor idiom instead of being borrowed from `industry`, `tools`, `trave
   `shell solid`, `make face`, `make solid`.
 - **Already open from the first pass:** `pocket cavity`, `hole`.
 
-That makes **33 requests filed, 24 open, 9 withdrawn** (the three snap draws, the spline,
-`workplane` and the four view orientations, all of which the repository draws itself).
+That makes **33 requests filed, 23 open, 10 withdrawn** (the three snap draws, the spline,
+`workplane`, the four view orientations, all of which the repository draws itself, and
+`extend line`, which `arrow-right-from-line` now stands in for).
 The authored glyphs stay wired meanwhile: a delivered icon replaces one only if it reads
-better at 16 px, since the six are drawn to the same grid. Until then `revolve` keeps
-`lathe` and `chamfer` keeps `bevel-gauge` — they are the two weakest metaphor rows, so
-they are first in line for replacement.
+better at 16 px, since the six are drawn to the same grid. `revolve` already moved to
+`rotate-3d` in the swap pass below; `chamfer` keeps `bevel-gauge`, the weakest metaphor
+row left, until its request lands.
+
+**Family-cleanup swap pass, 2026-11-06.** A tag-level audit of the catalogue (then a
+28 px / 16 px look at every candidate) moved seven rows, each toward the surface's own
+family:
+
+| Row | Was | Now | Why |
+| --- | --- | --- | --- |
+| Clone | `sheep` (animals) | `duplicate-object` (editor) | tagged *duplicate, clone, copy object*; the joke was the only thing holding the metaphor |
+| Transform gizmo | `axes-3d + move` | `bounding-box` (interface) | selection handles; the triad alone is also the axis cross |
+| Close polyline | `shape-polyline + lock` | `polygon` (symbols) | tagged *closed polyline*; one composition fewer |
+| Check geometry | `check` | `circle-check` | stops sharing `check` with Confirm/Finish/Apply |
+| Cross sections | `layers` | `pattern-stripes` | parallel cutting planes, and no longer shadows the Layer rows |
+| Revolve | `lathe` | `rotate-3d` | a body spun about an axis, not a machine |
+| Extend | draw | `arrow-right-from-line` | an arrow leaving an existing edge |
+
+Rejected after the same review: `table-cells` for Spreadsheet (no better than `table`),
+`drill-bit` for Hole and `margin`/`border-inner` for Offset (a drill and table borders,
+not a bore or an offset), and `artboard` for Select plane (the authored `workplane`
+wins).
 
 ### Contact sheets
 
@@ -859,9 +881,9 @@ Draft icons it can draw.
   filesystem lookup, deterministic at any DPR. The bug and the five header controls
   use it. **As built (2026-11-05):** the header's `grid`, `axes`, `workplane`, `gizmo`
   and `snap` are embedded SVGs in `crates/ferrocad_widgets/assets/icons/` at 16 px.
-  `grid` and `axes` are the IconMCP `grid-4x4` and `axes-3d`; `gizmo` composes
-  `axes-3d + move`; `snap` composes `magnet + lock`; `workplane` is the authored
-  draw-list glyph. The ink carries the state — `MUTED` off, `HOVER_RIM` on — so there
+  `grid` and `axes` are the IconMCP `grid-4x4` and `axes-3d`; `gizmo` is the
+  IconMCP `bounding-box` (selection handles, distinct from the axis cross);
+  `snap` composes `magnet + lock`; `workplane` is the authored draw-list glyph. The ink carries the state — `MUTED` off, `HOVER_RIM` on — so there
   is no separate state dot.
 
   **Surfaces (2026-11-05).** `icon::named(key, size, ink)` is the resolver the rest of
@@ -903,10 +925,14 @@ Draft icons it can draw.
   (`Draft_Snap_Midpoint` → `midpoint`, `Draft_Snap_Extension` → `extension`,
   `Draft_Snap_Near` → `near`; `Draft_Snap_WorkingPlane` reuses `workplane`), the
   **view orientations** (`Std_ViewFront` → `view-front`, `Std_ViewTop` → `view-top`,
-  `Std_ViewRight` → `view-right`, `Std_ViewRear` → `view-rear`) and the **solid
+  `Std_ViewRight` → `view-right`, `Std_ViewRear` → `view-rear`), the **solid
   verbs** (`Part_Extrude` → `extrude`, `Part_Loft` → `loft`, `Part_Sweep` → `sweep`,
   `Part_Thickness` → `thickness`, `Part_MakeFace` → `make-face`, `Part_MakeSolid` →
-  `make-solid`).
+  `make-solid`) and the **family-cleanup swaps** (`Draft_Clone` → `duplicate-object`
+  instead of the `sheep` metaphor, `Part_Revolve` → `rotate-3d` instead of `lathe`,
+  `Part_CrossSections` → `pattern-stripes` so it stops shadowing the layer glyph,
+  `Part_CheckGeometry` → `circle-check` so it stops sharing `check` with the dialog
+  verbs).
 
   Every workbench id was checked against upstream: `addCommand` in
   `freecad-upstream/src/Mod/Draft/draftguitools`, and `Command(...)` in

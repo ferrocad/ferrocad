@@ -502,10 +502,19 @@ line"). The glyph is a closed polyline, hence `shape-polyline + lock`.
 | Helix | `Part_Helix_Parametric` | `spring-coil` | use |
 | Spiral | `Part_Spiral_Parametric` | `spiral` | use |
 | Ellipsoid | `Part_Ellipsoid_Parametric` | `sphere` | metaphor |
-| Plane datum | `Part_Plane_Parametric` | — | draw |
+| Plane datum | `Part_Plane_Parametric` | `workplane` | use |
 | Line datum | `Part_Line_Parametric` | `line-segment` | use |
 | Point datum | `Part_Point_Parametric` | `bullet` | use |
 | Primitives menu | `Part_Primitives` | `shapes` | use |
+
+The second column is FreeCAD's `Pixmap` file, **not** the command id. In 1.1.4 the GUI
+primitive commands are `Part_Box`, `Part_Cylinder`, `Part_Sphere`, `Part_Cone`,
+`Part_Torus`, `Part_Tube` (in `Part/BasicShapes/CommandShapes.py`) and the
+`Part_Primitives` dialog; the datum commands are `Part_DatumPlane`, `Part_DatumLine`
+and `Part_DatumPoint` (`Command.cpp`). **Prism, Wedge, Helix, Spiral and Ellipsoid
+have no GUI command** — they exist as `Part::*` objects, so they are covered by the
+model tree's type table instead. Plane datum reuses the authored `workplane` glyph, so
+it leaves the draw list.
 
 ### Part operations
 
@@ -804,26 +813,31 @@ Draft icons it can draw.
   The wheel grew with the glyph: a 30 px deadzone, a 92 px outer ring and a 62 px label
   ring (`SIZE` 200), so the icon + label chip is no longer squeezed into the wedge.
 
-  The curated command rows are the built-ins (`App_Move` → `move`, `App_Delete` → `trash`,
-  `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` → `cube`,
-  `Toy_Polyline` → `shape-polyline`, `Part_Box` → `cube`,
-  `App_SaveDatumPlane` → `layers-plus`), the snap modes (`Draft_Snap_Endpoint` →
-  `anchor-point`, …) and the **Draft geometry slice** (`Draft_Line` → `line-segment`,
-  `Draft_Wire` → `shape-polyline`, `Draft_BezCurve` → `bezier`, `Draft_Dimension` →
-  `dimension-line`, `Draft_Hatch` → `pattern-crosshatch`, …) and the **Draft
-  edit/layers/groups slice** (`Draft_Move` → `move`, `Draft_Scale` → `resize-handle`,
-  `Draft_Trimex` → `cut-line`, `Draft_Layer` → `layers`, …). Every Draft id was
-  checked against upstream's `addCommand` in
-  `freecad-upstream/src/Mod/Draft/draftguitools`; the note's `Draft_Dot`,
-  `Draft_DimensionAngular` and `Draft_DimensionRadius` are view-provider icon names,
-  and `Draft_Wipe`/`Draft_Finish`/`Draft_Apply`/`Draft_Lock` are
-  task-panel button icons, not command ids, as are the removed `Draft_VisGroup` and
-  `Draft_NewLayer`; none has a row. The mode toggles are registered as
+  The curated command rows are the built-ins (`App_Move` → `move`, `App_Delete` →
+  `trash`, `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` →
+  `cube`, `Toy_Polyline` → `shape-polyline`, `App_SaveDatumPlane` → `layers-plus`), the
+  snap modes (`Draft_Snap_Endpoint` → `anchor-point`, …), the **Draft geometry slice**
+  (`Draft_Line` → `line-segment`, `Draft_Wire` → `shape-polyline`, `Draft_BezCurve` →
+  `bezier`, `Draft_Dimension` → `dimension-line`, `Draft_Hatch` →
+  `pattern-crosshatch`, …), the **Draft edit/layers/groups slice** (`Draft_Move` →
+  `move`, `Draft_Scale` → `resize-handle`, `Draft_Trimex` → `cut-line`, `Draft_Layer` →
+  `layers`, …) and the **Part primitives/datums slice** (`Part_Box` → `cube`,
+  `Part_Tube` → `pipe-flange`, `Part_DatumPlane` → `workplane`, `Part_DatumLine` →
+  `line-segment`, …).
+
+  Every workbench id was checked against upstream: `addCommand` in
+  `freecad-upstream/src/Mod/Draft/draftguitools`, and `Command(...)` in
+  `src/Mod/Part/Gui` and `BasicShapes/CommandShapes.py`. Several note ids turned out to
+  be `Pixmap` file names rather than commands and have no row: the Draft view-provider
+  names (`Draft_Dot`, `Draft_DimensionAngular`, `Draft_DimensionRadius`) and the
+  task-panel buttons (`Draft_Wipe`, `Draft_Finish`, `Draft_Apply`, `Draft_Lock`), plus
+  the removed `Draft_VisGroup`/`Draft_NewLayer`. The mode toggles are registered as
   `Draft_ToggleDisplayMode` and `Draft_ToggleConstructionMode` (their `Pixmap` names
-  are `Draft_SwitchMode`/`Draft_Construction`), so those two are curated. Arc, Arc
-  through 3 points and Facebinder stay on the draw list and keep their label. The snap
+  are `Draft_SwitchMode`/`Draft_Construction`), so those two are curated. In Part,
+  Prism, Wedge, Helix, Spiral and Ellipsoid have no GUI command and are covered by the
+  tree table. Arc, Arc through 3 points and Facebinder stay on the draw list; the snap
   modes the note draws (midpoint, origin, vertex, extension, near) keep their label
-  alone until that glyph exists.
+  until that glyph exists.
 
   **Compositions are baked.** The note's `compose` rows (`Mirror` =
   `copy + flip-horizontal`, the three arrays, `VisGroup`, the dimension pair) ship as

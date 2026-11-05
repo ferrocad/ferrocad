@@ -35,7 +35,6 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         // The dock's creation verbs.
         "Toy_MakeSlab" => "cube",
         "Toy_Polyline" => "shape-polyline",
-        "Part_Box" => "cube",
         "App_SaveDatumPlane" => "layers-plus",
         // Snap modes. The note draws the ones with no honest glyph (midpoint,
         // origin, vertex, extension, near) and they keep their label alone.
@@ -103,6 +102,20 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         // command ids upstream registers.
         "Draft_ToggleDisplayMode" => "swap-horizontal",
         "Draft_ToggleConstructionMode" => "square-dashed",
+        // Part primitives and datums. Box/Cylinder/Sphere/Cone/Torus/Tube and the
+        // three datum commands are the GUI commands in 1.1.4; Prism, Wedge, Helix,
+        // Spiral and Ellipsoid exist only as `Part::*` objects, so `icon_for_type`
+        // covers them for the model tree.
+        "Part_Box" => "cube",
+        "Part_Cylinder" => "cylinder",
+        "Part_Sphere" => "sphere",
+        "Part_Cone" => "cone",
+        "Part_Torus" => "torus",
+        "Part_Tube" => "pipe-flange",
+        "Part_DatumPlane" => "workplane",
+        "Part_DatumLine" => "line-segment",
+        "Part_DatumPoint" => "bullet",
+        "Part_Primitives" => "shapes",
         _ => return None,
     };
     Some(key)
@@ -179,6 +192,8 @@ pub(crate) fn icon_for_type(type_id: &str) -> Option<&'static str> {
         "Part::Sphere" => "sphere",
         "Part::Cone" => "cone",
         "Part::Torus" => "torus",
+        "Part::Tube" => "pipe-flange",
+        "Part::Ellipsoid" => "sphere",
         "Part::Prism" => "prism",
         "Part::Wedge" => "circle-sector",
         "Part::Helix" => "spring-coil",
@@ -274,6 +289,16 @@ mod tests {
             "Draft_SubelementHighlight",
             "Draft_ToggleDisplayMode",
             "Draft_ToggleConstructionMode",
+            "Part_Box",
+            "Part_Cylinder",
+            "Part_Sphere",
+            "Part_Cone",
+            "Part_Torus",
+            "Part_Tube",
+            "Part_DatumPlane",
+            "Part_DatumLine",
+            "Part_DatumPoint",
+            "Part_Primitives",
         ] {
             let key = icon_for(id).unwrap_or_else(|| panic!("{id} is curated"));
             assert!(
@@ -285,7 +310,7 @@ mod tests {
 
     #[test]
     fn an_uncurated_command_has_no_icon() {
-        assert!(icon_for("Part_Cylinder").is_none());
+        assert!(icon_for("Part_Extrude").is_none());
         assert!(icon_for("").is_none());
     }
 
@@ -315,6 +340,15 @@ mod tests {
         for type_id in [
             "Part::Box",
             "Part::Cylinder",
+            "Part::Sphere",
+            "Part::Cone",
+            "Part::Torus",
+            "Part::Tube",
+            "Part::Ellipsoid",
+            "Part::Prism",
+            "Part::Wedge",
+            "Part::Helix",
+            "Part::Spiral",
             "Part::FeaturePython",
             "Sketcher::SketchObject",
             "Draft::Wire",

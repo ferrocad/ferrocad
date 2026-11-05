@@ -233,6 +233,11 @@ const ASSETS: &[(&str, &[u8])] = &[
         "square-dashed",
         include_bytes!("../assets/icons/square-dashed.svg"),
     ),
+    // Part primitives.
+    (
+        "pipe-flange",
+        include_bytes!("../assets/icons/pipe-flange.svg"),
+    ),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.

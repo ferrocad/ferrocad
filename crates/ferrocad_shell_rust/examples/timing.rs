@@ -6,6 +6,7 @@
 
 use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_stage::{ShapeItem, Stage};
 
 fn main() -> Result<(), String> {
     let path = std::env::args()
@@ -53,6 +54,24 @@ fn main() -> Result<(), String> {
                 mesh.triangles.len() / 3
             );
         }
+    }
+    // What a camera move used to cost: `recompile` re-emitted the whole stage, and
+    // `ShapeItem::emit` allocates a `Vertex` per position.
+    let mut stage = Stage::new();
+    for mesh in backend.stage_meshes()? {
+        stage.add_item(ShapeItem::from_tessellation_owned(
+            mesh.entity,
+            mesh.into_tessellation(),
+        ));
+    }
+    for index in 0..3 {
+        let started = std::time::Instant::now();
+        let queue = stage.to_queue();
+        eprintln!(
+            "rust: stage recompile {index} {:?} ({} packets)",
+            started.elapsed(),
+            queue.len()
+        );
     }
     Ok(())
 }

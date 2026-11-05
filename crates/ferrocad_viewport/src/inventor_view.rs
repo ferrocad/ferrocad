@@ -4387,7 +4387,7 @@ impl<V: InventorView> InventorViewport<V> {
                 drag.last_angle = angle;
             }
             self.camera.view = crate::navicube::yaw_view(&self.camera, delta);
-            self.recompile();
+            self.camera_moved();
             return true;
         }
         let threshold = navicube_drag_threshold(self.camera.viewport.device_pixel_ratio());
@@ -4409,7 +4409,7 @@ impl<V: InventorView> InventorViewport<V> {
         };
         self.track_orbit_velocity(delta);
         self.camera.view = crate::navicube::drag_view(&self.camera, delta);
-        self.recompile();
+        self.camera_moved();
         true
     }
 
@@ -4510,7 +4510,7 @@ impl<V: InventorView> InventorViewport<V> {
         let next = [velocity[0] * decay, velocity[1] * decay];
         let speed = (next[0] * next[0] + next[1] * next[1]).sqrt();
         self.camera.view = crate::navicube::drag_view(&self.camera, delta);
-        self.recompile();
+        self.camera_moved();
         if speed < ORBIT_INERTIA_STOP {
             self.inertia = None;
             false
@@ -4591,6 +4591,19 @@ impl<V: InventorView> InventorViewport<V> {
             self.recompile();
         }
         changed
+    }
+
+    /// Apply a camera-only change: the view moved, the geometry did not.
+    ///
+    /// [`recompile`](Self::recompile) re-emits the whole queue, and `ShapeItem::emit`
+    /// allocates a fresh `Vertex` per position — for a document with a million
+    /// positions that is ~100 MB per call, per pointer move while orbiting. A camera
+    /// move changes no vertex: the queue is world space and the renderer takes the
+    /// view as a uniform. The camera-dependent parts are rebuilt by
+    /// [`refresh`](Self::refresh) (the screen-invariant gizmos and the manipulators) and
+    /// by [`sync_grid`](Self::sync_grid) below.
+    fn camera_moved(&mut self) {
+        self.sync_grid();
     }
 
     fn recompile(&mut self) {

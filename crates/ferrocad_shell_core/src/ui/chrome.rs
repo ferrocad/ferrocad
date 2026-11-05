@@ -1567,9 +1567,9 @@ pub(crate) fn command_list_panel(
 
 /// The status bar's literal bug: toggles the Dev Tools window.
 ///
-/// The bug is a painted [`icon::bug`] (no font dependency), inked with the accent
-/// while the window is open. The status bar is its home because Dev Tools is a tool
-/// for the shell, not a modelling verb the viewport dock should carry.
+/// The bug is an embedded SVG ([`icon::bug`], no font dependency), inked with the
+/// accent while the window is open. The status bar is its home because Dev Tools is a
+/// tool for the shell, not a modelling verb the viewport dock should carry.
 pub(crate) fn dev_tools_button(active: bool, cx: &mut Context<Shell>) -> impl IntoElement {
     let tip: SharedString = if active {
         "Dev Tools: open (Ctrl+Shift+D)"

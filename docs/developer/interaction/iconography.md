@@ -828,9 +828,10 @@ access and its matches are heuristic. The curated alias table is the contract.
   it usually answers within a day), or draw them locally? Local drawing keeps the
   glyphs consistent with the stage ink and the 16-unit grid; a request creates a
   dependency on someone else's interpretation of "pocket".
-- The bug is now IconMCP's `bug.svg`, so the widget crate has no PathBuilder glyphs
-  left. The next decision is whether the rest of the `use` set is vendored eagerly or
-  loaded through an `AssetSource`.
+- The bug is now IconMCP's `bug.svg`, so the widget crate paints no pictograms with
+  `PathBuilder` any more (the radial wheel and the scrub track still do, as chrome
+  rather than icons). The next decision is whether the rest of the `use` set is
+  vendored eagerly or loaded through an `AssetSource`.
 - Do we need upstream orientation icons at all, or does the NaviCube remain the only
   orientation control? If it remains, front/top/right/rear drop off the draw list.
 - Is the dock icon + text, or icon-only with tooltips? The dock currently has room for

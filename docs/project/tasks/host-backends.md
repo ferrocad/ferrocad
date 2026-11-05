@@ -162,6 +162,15 @@ work.
 Rust), not for a scripting language. That is consistent with `ferrocad_shell_gpui`
 being named for its host framework.
 
+**Why `_python`, not `_cpython` — and why nothing is renamed today.** `_cpython`
+cannot distinguish the two Python backends: Pyodide *is* CPython compiled to wasm
+(§6.3). The split therefore uses `_python` (native embedding) against `_pywasm` (a
+wasm runtime), matching `_rust` and `_js` one-for-one. `ferrocad_shell_gpui` keeps
+its name until that split: it is a host *and* a backend today, D2 names backends, and
+a rename now would be a breaking release for a crate that is about to be divided
+anyway. The host names (`_gpui`, `_web_gpui`) are a separate question and are not on
+this plan's critical path.
+
 Each stage that adds a backend creates exactly one crate from this table, and it
 implements the two traits from §5.1; §8 states which stage depends on which.
 
@@ -243,12 +252,12 @@ Only the new/moved ones are listed; everything else keeps its place.
 
 | Crate | Role | Edges |
 | --- | --- | --- |
-| `ferrocad_shell_api` | contract + `display` (dressing) + `catalog` (command data) | unchanged, plus nothing new |
+| `ferrocad_shell_api` | contract + `display` (`StageMesh` only) + `catalog` (command data) | unchanged, plus nothing new |
 | `ferrocad_shell_core` | shell + `files` (picker/file verbs) | unchanged |
 | `ferrocad_shell_rust` **(new)** | `RustAppBackend`: the current `web_gpui/src/document.rs`, plus the sample document | `ferrocad_core`, `ferrocad_part`, `ferrocad_occt`, `ferrocad_stage`, `ferrocad_shell_api`, `serde_json` |
 | `ferrocad_shell_gpui` | native assembly: CPython + `run_with` | unchanged (host *and* CPython backend — §4.3; may depend on `ferrocad_shell_rust` for a Rust-desktop edition) |
 | `ferrocad_web_gpui` | browser host: entry point, JS bridge, harness | `ferrocad_shell_core`, `ferrocad_shell_rust`, `wasm-bindgen` |
-| `ferrocad_core` | + `present` module (D4) | unchanged |
+| `ferrocad_core` | + `present` module (D4) and `view` dressing (D6: `drawable`/`effective_color`/`origin`) | unchanged |
 | `ferrocad_py` | + thin `ferrocad.property` functions over `present` | still **only** `ferrocad_core` + `pyo3` |
 | `ferrocad_shell_js` (S7) | `JsAppBackend`: the JS runtime over `RustAppBackend`'s document half | `ferrocad_shell_rust`, `ferrocad_shell_api`, `wasm-bindgen` |
 | `ferrocad_shell_pywasm` (S8) | `PywasmBackend`: a wasm Python runtime over the same scripts | §6.3's runtime, `ferrocad_shell_api`, the `*_py` bindings if they compile |
@@ -433,7 +442,7 @@ pub fn to_json() -> serde_json::Value;
 pub fn json_text() -> String;
 ```
 
-- The Rust backend uses `builtin()` directly: `ferrocad_web_gpui`'s
+- The Rust backend uses `builtin()` directly: `ferrocad_shell_rust`'s
   `commands()` is the catalogue plus live state (`checked`, `enabled`), with
   browser-only verbs (`App_Fit`, undo/redo, `Draft_Snap_Lock`, hide/show) as
   overrides beside it, not in the table.
@@ -521,7 +530,7 @@ not a panic.
 ### 6.3 The wasm-Python fork (research, not a decision)
 
 The **intent is one binding layer**: the wasm-Python host should reuse
-`ferrocad_py`/`ferrocad_part_py`, not fork bindings (that is what the diagram"s
+`ferrocad_py`/`ferrocad_part_py`, not fork bindings (that is what the diagram's
 shared bindings box shows). Today it cannot: `pyo3` has no
 `wasm32-unknown-unknown` story — that is the premise of the M0 split. The options are
 about how to reach that intent:
@@ -609,7 +618,7 @@ The backend tasks tie together as follows — each one adds exactly the crate na
 | `crates/ferrocad_shell_core/src/shell/tests/files.rs` **(new)** | the prompt → path → backend plumbing, driven by `select_paths` |
 | `crates/ferrocad_core/src/document/view.rs` | `drawable`, `effective_color`, `origin`, `is_visible` (the shared dressing rules; re-exported at the crate root) |
 | `crates/ferrocad_shell_api/src/display.rs` | `StageMesh` only — the mesh payload that crosses the seam |
-| `crates/ferrocad_web_gpui/src/document.rs` | use `display::dress`; delete the local colour/visibility duplicates |
+| `crates/ferrocad_web_gpui/src/document.rs` | use `ferrocad_core::{drawable, effective_color, origin, is_visible}`; delete the local colour/visibility duplicates (S5 moved the file to `crates/ferrocad_shell_rust/src/backend.rs`) |
 | `python/ferrocad_shell/__init__.py`, `python/ferrocad_parametric/__init__.py` | use the shared dressing rules where a row's presence depends on it |
 | `crates/ferrocad_core/src/present.rs` **(new)** | `EditorKind`, `kind`, `kind_for_type`, `format`, `coerce`, `parse_color` |
 | `crates/ferrocad_core/src/lib.rs` | `pub mod present` |

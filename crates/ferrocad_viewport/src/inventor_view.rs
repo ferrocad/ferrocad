@@ -465,6 +465,13 @@ pub struct InventorViewport<V: InventorView> {
     stage: Stage,
     /// Set when the stage changed, so the queue is rebuilt before the next draw.
     stage_dirty: bool,
+    /// Where the stage's packets sit in `queue`.
+    ///
+    /// `Stage::emit_batches` appends after the compiled scene and no stage packet is a
+    /// program, so they are always one contiguous tail. That is what lets a transform-only
+    /// change patch the packet state in place instead of re-emitting the stage — see
+    /// [`patch_stage_transforms`](Self::patch_stage_transforms).
+    stage_packets: std::ops::Range<usize>,
     /// The active interactive tool (the `SoEventCallback` replacement), if any.
     tool: Option<Box<dyn Tool>>,
     /// A tool status waiting to be emitted as [`ViewportEvent::ToolState`] by the next
@@ -1603,7 +1610,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// Wrap `view`, drawing `scene` with `camera`.
     pub fn new(view: V, camera: Camera, scene: Scene) -> Self {
         let stage = Stage::new();
-        let (queue, directives, shader_error) = merge_queue(&scene, &stage, &camera.viewport);
+        let (queue, directives, shader_error, _) = merge_queue(&scene, &stage, &camera.viewport);
         let (queue, mut program_queue) = split_programs(queue);
         apply_program_shadows(&mut program_queue, &stage.shadow_footprints());
         let mut viewport = Self {
@@ -1612,6 +1619,7 @@ impl<V: InventorView> InventorViewport<V> {
             scene,
             stage,
             stage_dirty: false,
+            stage_packets: 0..0,
             tool: None,
             tool_state: None,
             transient: RenderQueue::default(),
@@ -4140,7 +4148,15 @@ impl<V: InventorView> InventorViewport<V> {
         };
         let touched = self.set_items_transform(entities, transform);
         if touched || transform.is_none() {
-            self.stage_dirty = true;
+            // A preview moves the item; it does not change one vertex. `ShapeItem::emit`
+            // puts the world matrix in the packet state, so patching that state is enough
+            // — and it is what keeps a drag tick at packet count instead of vertex count
+            // (a full `recompile` re-emits every position: ~570 ms per tick on a
+            // 1.25 M-triangle document, which is what a drag felt like).
+            let scope = transform.is_some().then_some(entities);
+            if self.patch_stage_transforms(scope).is_none() {
+                self.stage_dirty = true;
+            }
             changed = true;
         }
         if changed {
@@ -4237,6 +4253,53 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
         touched
+    }
+
+    /// Re-apply the item world matrices to the packets already in the queue.
+    ///
+    /// A preview changes *where* an item is, not its vertices: `ShapeItem::emit` writes the
+    /// world matrix into [`DrawPacket::state`], so the geometry the queue holds is still
+    /// correct. Patching the state is packet count; re-emitting the stage is vertex count —
+    /// ~570 ms per tick on a 1.25 M-triangle document, which is what made dragging slow.
+    ///
+    /// `entities` limits the patch; `None` re-applies every stage item (the path a cleared
+    /// preview takes, since it clears them all). Returns `None` when the queue is not in a
+    /// state to patch — not built yet, or the stage emitted nothing — so the caller falls
+    /// back to a full recompile.
+    fn patch_stage_transforms(&mut self, entities: Option<&[u32]>) -> Option<bool> {
+        if self.stage_dirty {
+            return None;
+        }
+        let range = self.stage_packets.clone();
+        if range.is_empty() || range.end > self.queue.packets.len() {
+            return None;
+        }
+        let mut changed = false;
+        for packet in &mut self.queue.packets[range] {
+            let entity = packet.state.id.0;
+            if entities.is_some_and(|list| !list.contains(&entity)) {
+                continue;
+            }
+            let Some(item) = self.stage.item(entity) else {
+                continue;
+            };
+            let world = item.world_matrix();
+            if packet.state.world_transform != world {
+                packet.state.world_transform = world;
+                changed = true;
+            }
+        }
+        if changed {
+            // The cached hover describes where the geometry used to be.
+            self.hover_answer = None;
+            // A program's shadow block follows the items it shades. The footprints walk
+            // every vertex, so this only runs when a program is actually drawn.
+            if !self.program_queue.is_empty() {
+                let footprints = self.effective_shadow_footprints();
+                apply_program_shadows(&mut self.program_queue, &footprints);
+            }
+        }
+        Some(changed)
     }
 
     /// Offset the overlays from the pose captured when the preview began.
@@ -4715,19 +4778,27 @@ impl<V: InventorView> InventorViewport<V> {
     fn recompile(&mut self) {
         // Keep the no-overlay path allocation-free: it is the common case and the
         // base scene can be large.
-        let (queue, directives, shader_error) = if self.overlays.is_empty() {
+        let (queue, directives, shader_error, stage_start) = if self.overlays.is_empty() {
             merge_queue(&self.scene, &self.stage, &self.camera.viewport)
         } else {
             let merged = self.merged_scene();
             merge_queue(&merged, &self.stage, &self.camera.viewport)
         };
+        let total = queue.packets.len();
         let (queue, mut program_queue) = split_programs(queue);
+        // Splitting the programs out drops packets before the stage; the stage's own are
+        // never programs, so they are still the tail of what is left.
+        let stage_count = total - stage_start;
+        let scene_len = queue.packets.len();
+        self.stage_packets = (scene_len - stage_count)..scene_len;
         apply_program_shadows(&mut program_queue, &self.effective_shadow_footprints());
         self.queue = queue;
         self.program_queue = program_queue;
         self.directives = directives;
         self.shader_error = shader_error;
         self.stage_dirty = false;
+        // The scene changed, so a hover answer describes a document that no longer exists.
+        self.hover_answer = None;
         self.sync_grid();
         self.sync_directive_cubes();
     }
@@ -6403,10 +6474,18 @@ fn merge_queue(
     scene: &Scene,
     stage: &Stage,
     viewport: &Viewport,
-) -> (RenderQueue, Directives, Option<String>) {
+) -> (RenderQueue, Directives, Option<String>, usize) {
     let (mut queue, directives, error) = compile_diagnostic(scene, viewport, None);
+    // Where the stage's packets begin: `Stage::emit_batches` appends, and a transform-only
+    // change patches that tail rather than re-emitting it.
+    let stage_start = queue.packets.len();
     stage.emit_batches(&mut queue);
-    (queue, directives, error.map(|error| error.to_string()))
+    (
+        queue,
+        directives,
+        error.map(|error| error.to_string()),
+        stage_start,
+    )
 }
 
 /// Split the program packets out of the scene queue.
@@ -7709,6 +7788,38 @@ mod tests {
                 .is_none(),
             "an empty selection cancels even with a matrix"
         );
+    }
+
+    /// A drag tick moves the packet's world matrix; it must not queue a re-emit of the
+    /// stage. The re-emit is a vertex-count rebuild (the reason a drag stuttered on a large
+    /// document), while `ShapeItem::emit` already carries the transform in the packet state.
+    #[test]
+    fn a_preview_tick_patches_the_packet_transform_without_re_emitting() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab_for(7)));
+        view.refresh();
+        let drawn = view.queue.len();
+        assert!(drawn > 0, "the stage emitted something to patch");
+        let before = view.queue.packets[0].state.world_transform;
+
+        assert!(view.preview_transform(&[7], Some(Matrix4::translation(5.0, 0.0, 0.0))));
+
+        assert!(!view.stage_dirty, "a preview must not queue a re-emit");
+        assert_eq!(view.queue.len(), drawn, "the same packets are drawn");
+        for packet in &view.queue.packets {
+            assert_eq!(
+                packet.state.world_transform.transform(&Vector3::zero()),
+                Vector3::new(5.0, 0.0, 0.0),
+                "every packet of the item carries the preview"
+            );
+        }
+
+        // Clearing is the same path, and it restores every item.
+        assert!(view.preview_transform(&[7], None));
+        assert!(!view.stage_dirty);
+        assert_eq!(view.queue.packets[0].state.world_transform, before);
     }
 
     /// Clearing a preview sweeps the whole stage, so a transform another path wrote

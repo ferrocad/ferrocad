@@ -338,6 +338,33 @@ object. The unification is U1's, when the session owns the selection (see §5, *
 deferred*). Until then the session is the value and the command is the writer — both on the mod
 side of the boundary, which is what D0 is about.
 
+### 2.9 What a drag tick and a commit each cost (measured 2026-11-05)
+
+On the 900a document (10 drawable shapes, 1.25 M triangles) with `FERROCAD_TIMING=1`:
+
+| | Cost | Why |
+| --- | --- | --- |
+| Drag tick | **was ~570 ms, now microseconds** | The preview used to mark the stage dirty, and a rebuild re-emits every position of every item. `ShapeItem::emit` already writes the world matrix into [`DrawPacket::state`](../../../crates/ferrocad_graphics/src/draw.rs), so `InventorViewport::patch_stage_transforms` writes the new matrix onto the packets the queue already holds — packet count instead of vertex count |
+| Commit | **was ~1.4 s, now a rigid transform** | The commit is right to cross into the mod layer (D0), but the display re-read after it was not cheap: a placement write re-bakes the object's `Shape`, so the handle changes — and `ShapeProperty::with_placement` built the replacement with a **fresh, empty** tessellation memo, so the next display sync re-meshed the body. `TessellationCache::record_rigid` now carries the cached mesh onto the new handle, transformed by the same delta, and `ShapeProperty::with_placement_and_memo` hands it on |
+
+The drag half was a bug in the preview path and is fixed. The commit half needed a decision about
+*where* the unplaced geometry would live, and the interop ruled out the obvious answer:
+`ShapeProperty` deliberately stores **placed** geometry (`obj.Shape.BoundBox`, `Vertexes`,
+`isInside` and every boolean depend on it, and `sync_shape_and_placement` re-bakes on every
+`Placement` write to keep that promise). Keeping an unplaced handle as the memo key would have
+made `obj.Shape` local again — a contract change for every script.
+
+So instead of moving the placement out of the geometry, the **memo follows the re-bake**:
+
+- `Tessellation::transformed(&Matrix4)` moves positions and rotates normals (the transform is
+  rigid, so the topology and the deflection the mesh was built for are still valid);
+- `TessellationCache::record_rigid(from, to, delta)` re-keys the entry onto the new handle;
+- `ShapeProperty::with_placement_and_memo` shares the cache instead of starting empty;
+- the `Placement` branch of `sync_shape_and_placement` runs all three.
+
+What is left on a commit is the kernel's own rigid BRep transform plus one pass over the cached
+positions (milliseconds), instead of a full `BRepMesh` of the body.
+
 What this deliberately does **not** add:
 
 - no new facade method for the session (`transform_begin`/`stage`/`commit` are gone from the

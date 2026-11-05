@@ -35,19 +35,19 @@ There is no iconography decision, and no icon name reaches the shell. The word
 | Radial wheel | text label per wedge; tone only in the inner arc | `crates/ferrocad_widgets/src/wheel.rs` |
 | Palette | text rows | `crates/ferrocad_shell_core/src/shell/panels/palette.rs` |
 | Model tree | `▾` + label + object `type_id` as text | `crates/ferrocad_shell_core/src/shell/render.rs:1133-1150` |
-| Dev Tools | **one painted vector bug**, 16×16 | `crates/ferrocad_widgets/src/icon.rs` |
+| Dev Tools | **one embedded SVG bug**, 16×16 | `crates/ferrocad_widgets/src/icon.rs` |
 | Title bar | painted minimize/maximize/close paths | `crates/ferrocad_widgets/src/window_chrome.rs:241` |
 | NaviCube | 3-D glass cube with `F/R/T` letters | `crates/ferrocad_viewport/src/navicube.rs` |
 
 Two facts matter:
 
-- `ferrocad_widgets::icon` is the seed of a real system: `gpui::PathBuilder`, a 16×16
-  design box, token inks (`MUTED` / `HOVER_RIM`), a `{key}-bug` debug selector and a
-  headless render test. Only `bug` is exported (`crates/ferrocad_widgets/src/lib.rs:51`).
-- There is **no asset pipeline**: no `AssetSource`, no `gpui::svg()` call and no
-  `resvg`/`usvg` dependency in any `Cargo.toml`. The pinned `bite-gpui` fork does
-  provide both (`gpui::svg()` and `gpui::AssetSource`), so an SVG route is available
-  without a new dependency.
+- `ferrocad_widgets::icon` is the seed of a real system: embedded SVG bytes, a
+  16×16 box, `text_color` ink (`MUTED` / `HOVER_RIM`), a `{key}-icon` debug selector
+  and a headless render test. The bug and the five header controls use it.
+- The control glyphs are **embedded SVGs** (`include_bytes!` + `gpui::svg().data()`),
+  so there is no `AssetSource`, no filesystem lookup and no network dependency. The
+  pinned `bite-gpui` fork also provides `AssetSource`/`svg().path()`, which the larger
+  vendored set can use when it lands.
 
 The command metadata has no icon key anywhere:
 
@@ -103,7 +103,7 @@ Two consequences are easy to miss:
   *resolution* problem, not a vendoring problem.
 - **The fetched tree is gitignored** (`/mods/*` with negations only for the authored
   mods, `.gitignore:27`). A development checkout without `cargo xtask mods` has no
-  Draft icons, so every lookup must fall back to a painted glyph or the text label.
+  Draft icons, so every lookup must fall back to an embedded glyph or the text label.
 
 ### Upstream naming is already the command id
 
@@ -297,7 +297,7 @@ candidate.
 | Grid toggle | header | — | `grid-4x4` | use |
 | Axis cross | header | `Std_AxisCross` | `axes-3d` | use |
 | Workplane | header | `Std_Plane` | — | draw |
-| Transform gizmo | header | `Std_TransformManip` | `axes-3d + hand-grab` | compose |
+| Transform gizmo | header | `Std_TransformManip` | `axes-3d + move` | compose |
 | Snap (global) | header | `Draft_Snap_Lock` | `magnet + lock` | compose |
 | Open | app menu | `document-open` | `folder-open` | use |
 | Save | app menu | `document-save` | `save` | use |
@@ -350,7 +350,8 @@ Seven corrections matter:
   header uses `grid-4x4`.
 - **Gizmo** was `free-transform` (a 2-D corner handle). `axes-3d` is the closest
   3-D triad, but it collides with Axis cross; a dedicated `transform gizmo` request
-  is filed (§5).
+  is filed (§5). The marker is `move`, not `hand-grab`: the hand's fingers merge
+  into a blob at 16 px, and the four-way arrows still read at toolbar size.
 - **Snap (global)** is `Draft_Snap_Lock`, which upstream describes as "enables or
   disables snapping globally" (`gui_snaps.py:70-72`), not a padlock. The glyph is a
   composition, `magnet + lock`.
@@ -538,8 +539,11 @@ word-sense questions:
 
 - **Dev Tools has no upstream equivalent.** FreeCAD always shows its panes, so
   `debug-start` was the wrong provenance; the row is `—` and the glyph is a bug.
-- **Gizmo vs axis cross.** The gizmo is `axes-3d + hand-grab`; the axis cross stays
-  the plain `axes-3d`.
+- **Gizmo vs axis cross.** The gizmo is `axes-3d + move`; the axis cross stays the
+  plain `axes-3d`. The marker is the same `move` glyph the Move verb uses, which is
+  honest: the gizmo is how that verb is applied to the axes. The first marker was
+  `hand-grab`, but at 16 px its fingers merge into a disc (checked at 1×, 2× and 4×),
+  so it distinguished the two buttons only by adding noise.
 - **Point vs Dot.** They are one concept: `Draft_Point` is the toolbar command and
   `Draft_Dot` is the tree-view icon for the same point object. The rows are named
   "Point (toolbar)" and "Point (tree)".
@@ -579,9 +583,10 @@ name match is a hypothesis; the picture is the evidence.
 
 ## 5. The draw list
 
-These are the drawings FerroCAD owns. Each is a 16-unit glyph in
-`ferrocad_widgets::icon`, painted with `PathBuilder`, 1.25 px, round caps, one ink
-token — the same recipe as `bug`.
+These are the drawings FerroCAD owns. Each is a 16-unit embedded SVG in
+`ferrocad_widgets::icon`, a 1.25 px stroke, round caps, one ink token — the same
+recipe as `bug`. The workplane is already authored as `assets/icons/workplane.svg`;
+the rest are open.
 
 | Group | Glyphs |
 | --- | --- |
@@ -703,7 +708,7 @@ Adopt upstream's own resource key rather than inventing one:
 Pixmap (or command id)
   → curated alias table (Draft_Line → line → cut-line)
   → vendored IconMCP icon
-  → painted core glyph
+  → embedded core glyph
   → upstream <Pixmap>.svg in mods/*/Resources/icons (provenance fallback)
   → no icon; the label keeps the slot width
 ```
@@ -714,15 +719,17 @@ Draft icons it can draw.
 
 ### 6.2 Two tiers, deliberately
 
-- **Painted core** (`ferrocad_widgets::icon`): the 26 draw-list glyphs plus the ~20
-  chrome glyphs that must never fail to load (`menu`, `check`, `close`, `grid`,
-  `magnet`, `lock`, `eye`, `search`). No asset source, no filesystem, deterministic at
-  any DPR. This is the existing `bug` pattern. **As built (2026-11-05):** the header's
-  `grid`, `axes`, `workplane`, `gizmo` and `snap` are painted from this module at
-  14 px and wired into `viewport_header`. The glyph ink carries the state — greyscale
-  when off, colour when on — so there is no separate state dot; the axis colours come
-  back only when the control is on. The gizmo adds grab handles and a centre ring so
-  it reads apart from the axis cross; `snap` is a magnet with a lock mark.
+- **Embedded SVG core** (`ferrocad_widgets::icon`): the 26 draw-list glyphs plus the
+  ~20 chrome glyphs that must never fail to load (`menu`, `check`, `close`, `grid`,
+  `magnet`, `lock`, `eye`, `search`). Each asset is `include_bytes!`-embedded and
+  rendered by `gpui::svg().data()`, with `text_color` as the ink: no asset source, no
+  filesystem lookup, deterministic at any DPR. The bug and the five header controls
+  use it. **As built (2026-11-05):** the header's `grid`, `axes`, `workplane`, `gizmo`
+  and `snap` are embedded SVGs in `crates/ferrocad_widgets/assets/icons/` at 16 px.
+  `grid` and `axes` are the IconMCP `grid-4x4` and `axes-3d`; `gizmo` composes
+  `axes-3d + move`; `snap` composes `magnet + lock`; `workplane` is the authored
+  draw-list glyph. The ink carries the state — `MUTED` off, `HOVER_RIM` on — so there
+  is no separate state dot.
 - **Vendored IconMCP set**: the 123 `use` icons, as outline SVGs with their MIT
   licence, rasterised by `gpui::svg()` through an `AssetSource`. Vendored, not fetched:
   the build must work offline and the same binary must render the same icons in CI.
@@ -782,12 +789,14 @@ If we vendor any upstream file into `crates/`, add a `CREDITS.md` listing the
 ## 8. Verification
 
 - **Resolution completeness** — a test over `catalog.json`: every command id maps to a
-  curated alias, a vendored IconMCP name, a painted glyph, or an explicit
+  curated alias, a vendored IconMCP name, an embedded glyph, or an explicit
   `no-icon`. A new command with no icon fails CI rather than silently losing its slot.
 - **Vendored-name validity** — a test that every referenced IconMCP name exists in the
   vendored set, so a typo cannot ship a blank square.
-- **Painted glyphs** — generalise `the_bug_renders_at_its_side`: the glyph paints at
-  16 × 16, its selector is `{key}-{name}`, and its ink is the supplied token.
+- **Embedded glyphs** — `the_icon_assets_are_embedded` asserts every asset is an SVG
+  with strokes; `the_bug_renders_at_its_side` and
+  `the_control_glyphs_render_at_their_side` assert the 16 × 16 wrapper and its
+  `{key}-{name}` selector.
 - **`Pixmap` plumbing** — a Python test that `GetResources()["Pixmap"]` reaches
   `catalog.json`, the same way the existing registry/JSON check guards labels.
 - **Licence** — the vendored MIT text and the upstream attribution list are present.
@@ -819,8 +828,9 @@ access and its matches are heuristic. The curated alias table is the contract.
   it usually answers within a day), or draw them locally? Local drawing keeps the
   glyphs consistent with the stage ink and the 16-unit grid; a request creates a
   dependency on someone else's interpretation of "pocket".
-- Do we replace the painted `bug` with IconMCP's `bug` as the first proof of the
-  vendoring pipeline? It would cost the zero-asset property of the Dev Tools button.
+- The bug is now IconMCP's `bug.svg`, so the widget crate has no PathBuilder glyphs
+  left. The next decision is whether the rest of the `use` set is vendored eagerly or
+  loaded through an `AssetSource`.
 - Do we need upstream orientation icons at all, or does the NaviCube remain the only
   orientation control? If it remains, front/top/right/rear drop off the draw list.
 - Is the dock icon + text, or icon-only with tooltips? The dock currently has room for

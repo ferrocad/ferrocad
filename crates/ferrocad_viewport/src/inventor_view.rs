@@ -5842,6 +5842,24 @@ impl<V: InventorView> InventorViewport<V> {
     }
 }
 
+/// Report the paint half of a frame (present + the canvas composite), under
+/// `FERROCAD_TIMING`.
+///
+/// [`report_frame_time`] covers the draw — it runs inside `refresh` — so this is the
+/// other half: the dma-buf hand-off and whatever the window does with it. A frame that
+/// is slow here and fast there is the present path, not the renderer.
+fn report_present_time(presented: std::time::Duration) {
+    if std::env::var_os("FERROCAD_TIMING").is_none() {
+        return;
+    }
+    if presented > std::time::Duration::from_millis(10) {
+        eprintln!(
+            "ferrocad: present {:.1} ms",
+            presented.as_secs_f64() * 1000.0
+        );
+    }
+}
+
 /// Report the frame cadence and the refresh share, when `FERROCAD_TIMING` is set.
 ///
 /// Every slow frame is printed as the interval since the previous one (what the user
@@ -5936,11 +5954,13 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
             {
                 let presenter = presenter.clone();
                 gpu_canvas(move |gpu| {
+                    let started = std::time::Instant::now();
                     let mut presenter = presenter.borrow_mut();
                     presenter.prepare(gpu);
                     if presenter.status() == PresenterStatus::Ready {
                         presenter.present(gpu);
                     }
+                    report_present_time(started.elapsed());
                 })
                 .w_full()
                 .h_full()

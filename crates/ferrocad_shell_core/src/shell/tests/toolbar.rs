@@ -541,6 +541,14 @@ fn the_snap_control_lives_in_the_header_and_not_the_dock(cx: &mut TestAppContext
     ] {
         assert!(cx.debug_bounds(dot).is_some(), "{dot} exists");
     }
+    // Each row also carries the resolved glyph; midpoint is one we author locally.
+    for icon in [
+        "snap-row-Draft_Snap_Grid-icon",
+        "snap-row-Draft_Snap_Endpoint-icon",
+        "snap-row-Draft_Snap_Midpoint-icon",
+    ] {
+        assert!(cx.debug_bounds(icon).is_some(), "{icon} exists");
+    }
     assert!(
         cx.debug_bounds("snap-row-Draft_Snap_Grid").is_some(),
         "the Grid mode is a row"

@@ -641,8 +641,10 @@ name match is a hypothesis; the picture is the evidence.
 
 These are the drawings FerroCAD owns. Each is a 16-unit embedded SVG in
 `ferrocad_widgets::icon`, a 1.25 px stroke, round caps, one ink token — the same
-recipe as `bug`. The workplane is already authored as `assets/icons/workplane.svg`;
-the rest are open.
+recipe as `bug`. The workplane and the three snap glyphs are authored:
+`workplane.svg`, `midpoint.svg` (a half-tick on the segment), `extension.svg` (a
+dashed continuation from a known endpoint) and `near.svg` (a proximity asterisk).
+The rest are open.
 
 | Group | Glyphs |
 | --- | --- |
@@ -727,8 +729,8 @@ additions are unrelated to the 27 requests (bank settings, bindle, data logger,
 decision, dungeon, fish scale, delete branch, green energy, kilometre post, laptop
 settings, notepad, parking bay, plate compactor, power steering, pumice stone,
 `terminal-x`, tiltrotor, `utility-knife`, wildlife protection). Re-searching every
-requested concept returned no new match, so 26 requests remain open (the spline
-request was withdrawn on 2026-11-06; see below).
+requested concept returned no new match, so 23 requests remain open (the spline
+request and the three snap draws were withdrawn on 2026-11-06; see below).
 `utility-knife` (`home`) is the only newcomer near this table; it was considered for
 Cut and Trim but rejected: clipboard Cut is the conventional `scissors`, and the CAD
 Trim is the line-with-a-cut `cut-line`, not a blade.
@@ -738,10 +740,14 @@ already indexed) resolved two rows without a new request:
 
 - **B-spline** adopts `wave-line`, a smooth curve, instead of waiting for the
   `spline curve` request. The row was still `draw` even though the second review's
-  prose already said `wave-line`; that is corrected here and the request withdrawn, so
-  **26 remain open**.
+  prose already said `wave-line`; that is corrected here and the request withdrawn.
 - **Polar array**'s marker becomes `circle-dotted`, a ring of placements, rather than a
   plain `circle` that only repeated the wedge tint.
+- **Midpoint, extension and near are drawn locally** (`midpoint.svg`,
+  `extension.svg`, `near.svg`) rather than requested, and are wired to
+  `Draft_Snap_Midpoint`, `Draft_Snap_Extension` and `Draft_Snap_Near`. Working plane
+  already reuses the authored `workplane`. Those three requests are withdrawn, so
+  **23 remain open**.
 
 `quarter-circle`, `circle-segment` and `semicircle` were checked again for **Arc** and
 still rejected: the first two carry a radius or chord, and the third is a half disc
@@ -843,8 +849,10 @@ Draft icons it can draw.
   `Part_Tube` → `pipe-flange`, `Part_DatumPlane` → `workplane`, `Part_DatumLine` →
   `line-segment`, …) and the **Part operations slice** (`Part_Fuse` → `union`,
   `Part_Cut` → `boolean-subtract`, `Part_Common` → `boolean-intersect`, `Part_Fillet` →
-  `corner-radius`, `Part_Mirror` → the baked `mirror`, …) and the **measure
-  command** (`Std_Measure` → `measure-tool`).
+  `corner-radius`, `Part_Mirror` → the baked `mirror`, …), the **measure
+  command** (`Std_Measure` → `measure-tool`) and the **authored snap draws**
+  (`Draft_Snap_Midpoint` → `midpoint`, `Draft_Snap_Extension` → `extension`,
+  `Draft_Snap_Near` → `near`; `Draft_Snap_WorkingPlane` reuses `workplane`).
 
   Every workbench id was checked against upstream: `addCommand` in
   `freecad-upstream/src/Mod/Draft/draftguitools`, and `Command(...)` in

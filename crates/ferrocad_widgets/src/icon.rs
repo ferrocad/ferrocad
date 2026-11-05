@@ -56,6 +56,10 @@ const ASSETS: &[(&str, &[u8])] = &[
     ("grid-4x4", GRID_SVG),
     ("axes-3d", AXES_SVG),
     ("workplane", WORKPLANE_SVG),
+    // Authored snap glyphs (the note's draw list).
+    ("midpoint", include_bytes!("../assets/icons/midpoint.svg")),
+    ("extension", include_bytes!("../assets/icons/extension.svg")),
+    ("near", include_bytes!("../assets/icons/near.svg")),
     ("gizmo", GIZMO_SVG),
     ("snap", SNAP_SVG),
     ("menu", include_bytes!("../assets/icons/menu.svg")),

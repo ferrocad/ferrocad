@@ -50,6 +50,10 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         "Draft_Snap_Dimensions" => "ruler",
         "Draft_Snap_Special" => "star",
         "Draft_Snap_WorkingPlane" => "workplane",
+        // Authored draws: a half-tick, a dashed continuation and a proximity asterisk.
+        "Draft_Snap_Midpoint" => "midpoint",
+        "Draft_Snap_Extension" => "extension",
+        "Draft_Snap_Near" => "near",
         // Draft geometry. Ids are validated against upstream's `addCommand`
         // (`freecad-upstream/src/Mod/Draft/draftguitools`). Arc, Arc through 3
         // points and Facebinder stay on the note's draw list, so they keep their label.
@@ -279,6 +283,9 @@ mod tests {
             "Draft_Snap_Dimensions",
             "Draft_Snap_Special",
             "Draft_Snap_WorkingPlane",
+            "Draft_Snap_Midpoint",
+            "Draft_Snap_Extension",
+            "Draft_Snap_Near",
             "Draft_Line",
             "Draft_Wire",
             "Draft_Circle",

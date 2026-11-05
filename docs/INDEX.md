@@ -117,6 +117,7 @@ here.
 - [developer/architecture/api-namespaces.md](developer/architecture/api-namespaces.md) — the namespace rule: which names stay FreeCAD-compatible and which are FerroCAD-only.
 - [developer/architecture/distribution.md](developer/architecture/distribution.md) — how the app runs and is packaged: payload, bundled runtime and artifacts.
 - [developer/architecture/edition-publishing.md](developer/architecture/edition-publishing.md) — publishing `FerroCAD: Parametric` with its linked `Part`/OCCT binary.
+- [developer/architecture/host-backends.md](developer/architecture/host-backends.md) — hosts vs backends: the `AppBackend`/`ScriptHost` seam, the host-owned file verbs, the four runtime configurations (Rust, CPython, JS, wasm Python) and the dependency rules that keep them composable.
 - [developer/architecture/kernel-state-sharing.md](developer/architecture/kernel-state-sharing.md) — the one-process-wide-core invariant, the state scopes, the linking options and decision, the supported compositions, and the deferred `PyCapsule` C-ABI.
 - [developer/architecture/lineage-and-naming.md](developer/architecture/lineage-and-naming.md) — topological naming as a lineage layer rather than a kernel concern.
 - [developer/architecture/macos.md](developer/architecture/macos.md) — why macOS is blocked upstream and the re-enable checklist.
@@ -241,6 +242,7 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/record/tasks/element-map-policy.md](project/record/tasks/element-map-policy.md) — the compound-cut element-map size gap (S6c).
 - [project/record/tasks/format-serializers.md](project/record/tasks/format-serializers.md) — split document persistence into two independent serializers.
 - [project/record/tasks/grid-visibility.md](project/record/tasks/grid-visibility.md) — the grid toggle only reached the native grid, not the Coin backend.
+- [project/record/tasks/host-backends.md](project/record/tasks/host-backends.md) — the `S1–S8` plan that delivered the shell/backend split, the host file verbs, the four backends and the `ScriptHost` seam.
 - [project/record/tasks/kernel-state-sharing.md](project/record/tasks/kernel-state-sharing.md) — the kernel-state-sharing task and its K0–K2a slices.
 - [project/record/tasks/links.md](project/record/tasks/links.md) — `App::Link`, link arrays and their interlocks.
 - [project/record/tasks/mesh-module.md](project/record/tasks/mesh-module.md) — the `Mesh`/`MeshPart`/`Mesh::Feature` contract.
@@ -275,5 +277,4 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.
 - [project/tasks/workplanes.md](project/tasks/workplanes.md) — one workplane state (the world plane is a real plane), ephemeral face binding while drawing, and the `WP` menu as plane choices rather than plumbing.
 - [project/tasks/wasm-shell.md](project/tasks/wasm-shell.md) — the browser shell: **M0–M6 done** (the crate split, the wasm build, the real shell in Chrome, the 3D viewport, a real Part document, editing that writes it, and `.FCStd` open/save).
-- [project/tasks/host-backends.md](project/tasks/host-backends.md) — one shell, one contract, several runtimes: the three scripting surfaces (Rust, CPython, JS/wasm, later Python-in-wasm), the dedup of property presentation, stage dressing and the command catalogue, desktop Open/Save through the xdg portal, and stages **S1–S8**.
 - [project/tasks/stroke-units.md](project/tasks/stroke-units.md) — the recorded decision that viewport strokes are device pixels, the rejected logical-pixel option, and the plan for reopening it.

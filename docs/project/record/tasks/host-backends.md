@@ -1,11 +1,13 @@
-# Host backends: one shell, one contract, several runtimes
+# Task — host backends: one shell, one contract, several runtimes
 
-Status: **task (2026-11-04). S1–S8 done; the backend ladder is complete.**
-Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../research/web-wasm-host.md`](../research/web-wasm-host.md)
-(the browser findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
-(the shell-library/edition shape), [`../../developer/architecture.md`](../../developer/architecture.md)
-(the crate map), [`../../developer/architecture/property-types.md`](../../developer/architecture/property-types.md)
-(the property registry) and [`mod-events.md`](mod-events.md) (the mod contract, E1).
+Status: closed task spec (moved to `record/tasks/` on 2026-11-05). Original status:
+**done — S1–S8 delivered** (2026-11-04 … 2026-11-05), with the CI run green.
+Design authority: [`../../../developer/architecture/host-backends.md`](../../../developer/architecture/host-backends.md).
+Companions: [`../../tasks/wasm-shell.md`](../../tasks/wasm-shell.md) (M0–M6, done), [`../../research/web-wasm-host.md`](../../research/web-wasm-host.md)
+(the browser findings), [`../../../developer/architecture/repackaging.md`](../../../developer/architecture/repackaging.md)
+(the shell-library/edition shape), [`../../../developer/architecture.md`](../../../developer/architecture.md)
+(the crate map), [`../../../developer/architecture/property-types.md`](../../../developer/architecture/property-types.md)
+(the property registry) and [`../../tasks/mod-events.md`](../../tasks/mod-events.md) (the mod contract, E1).
 
 ## 0. Decisions
 
@@ -105,7 +107,7 @@ Worth stating, because the plan below must not break it:
 ![The four layers: the platform hosts (native desktop, browser wasm), the seam
 (`ferrocad_shell_core` over `AppBackend` + optional `ScriptHost`), the pluggable
 backends named by runtime (CPython, no-runtime Rust, planned JS and wasm Python), and
-the shared engine](../../developer/images/host-backends.svg)
+the shared engine](../../../developer/images/host-backends.svg)
 
 ### 2.1 Runtimes, not platforms
 
@@ -267,7 +269,7 @@ Only the new/moved ones are listed; everything else keeps its place.
 
 ### 4.2 Dependency rules
 
-These live in [`architecture.md`](../../developer/architecture.md); S5 added the first
+These live in [`architecture.md`](../../../developer/architecture.md); S5 added the first
 two and S7/S8 the last two:
 
 ```
@@ -501,7 +503,7 @@ pub fn json_text() -> String;
 `App_Open` / `App_Save` are **shell** ids on every platform, intercepted in
 `Shell::run_command` like `SAVE_DATUM_PLANE`, `select:` and `ferrocad-provider:`
 already are (`shell/bridge/dispatch.rs`). The host supplies one thing the shell cannot
-do itself: a [`FilePicker`](../../../crates/ferrocad_shell_core/src/files.rs).
+do itself: a [`FilePicker`](../../../../crates/ferrocad_shell_core/src/files.rs).
 
 ```rust
 pub trait FilePicker: 'static {
@@ -578,7 +580,7 @@ commands are read once at boot, `evaluate` returns the page's string, and the
 miss).
 
 **Spike scope:** static command list, no JS tool session and no real `mod-events`
-contract yet (the next step, per [`mod-events.md`](mod-events.md)). The smoke check
+contract yet (the next step, per [`mod-events.md`](../../tasks/mod-events.md)). The smoke check
 runs the whole path its two `?js=1` captures: the module registers `Demo_JS`, the
 palette runs it, and a viewport click reaches `onEvent` with entity 2 (the fillet).
 
@@ -755,7 +757,7 @@ The backend tasks tie together as follows — each one adds exactly the crate na
   `ferrocad_shell_pywasm`. The bindings did *not* carry over — they are CPython
   C-ABI modules — so the bridge re-exposes the rows the shell asks for rather than
   forking `python/`; the script itself is still the shared artifact.
-- **S7 and S8 share the `mod-events` contract** ([`mod-events.md`](mod-events.md)), so
+- **S7 and S8 share the `mod-events` contract** ([`mod-events.md`](../../tasks/mod-events.md)), so
   a module written for one is not thrown away for the other.
 
 ## 9. File-level changes for S1–S5
@@ -835,15 +837,15 @@ Open questions:
 
 ## 12. References
 
-- [`wasm-shell.md`](wasm-shell.md) — the M0–M6 record, the crate split, the
+- [`wasm-shell.md`](../../tasks/wasm-shell.md) — the M0–M6 record, the crate split, the
   `AppBackend` rationale, the browser acceptance baselines.
-- [`../research/web-wasm-host.md`](../research/web-wasm-host.md) — the probe, the
+- [`../../research/web-wasm-host.md`](../../research/web-wasm-host.md) — the probe, the
   presenter negotiation, and the wasm limits (§6.2).
-- [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
+- [`../../../developer/architecture/repackaging.md`](../../../developer/architecture/repackaging.md)
   — why the shell is a library and the app an edition.
-- [`../../developer/architecture/property-types.md`](../../developer/architecture/property-types.md)
+- [`../../../developer/architecture/property-types.md`](../../../developer/architecture/property-types.md)
   — the name-keyed property registry that D4/D5 extend.
-- [`mod-events.md`](mod-events.md) — the event contract S7/S8 must use.
+- [`mod-events.md`](../../tasks/mod-events.md) — the event contract S7/S8 must use.
 - GPUI: `bite-gp-authoring` `App::prompt_for_paths`/`prompt_for_new_path`;
   `bite-gp-platform::prompt::PathPromptOptions`; `bite-gp-linux` `ashpd`;
   `bite-gp-web` `Unsupported`.

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 620" width="1100" height="620" role="img" aria-labelledby="title desc">
+  <title id="title">FerroCAD runtime backends and core shell architecture</title>
+  <desc id="desc">Native and wasm entry points feed ferrocad_shell_core, which branches through AppBackend and an optional ScriptHost into four runtime configurations: RustAppBackend alone (no runtime), PythonAppBackend (embedded CPython, native), RustAppBackend plus JsScriptHost (wasm modules), and RustAppBackend plus PywasmScriptHost (wasm Python).</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5568" />
+    </marker>
+    <style>
+      .t { font-family: Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .title { font-size: 20px; font-weight: 700; fill: #1a202c; }
+      .subtitle { font-size: 13px; fill: #4a5568; }
+      .box-title { font-size: 13px; font-weight: 600; fill: #1a202c; }
+      .box-sub { font-size: 11px; fill: #4a5568; }
+      .label { font-size: 12px; font-weight: 600; fill: #2d3748; }
+      .note { font-size: 11px; fill: #4a5568; }
+      .note-lead { font-size: 11px; font-weight: 700; fill: #2d3748; }
+      .wire { stroke: #4a5568; stroke-width: 1.6; fill: none; }
+      .box { stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1100" height="620" fill="#f7f9fc" />
+
+  <text class="t title" x="550" y="32" text-anchor="middle">FERROCAD RUNTIME BACKENDS &amp; CORE SHELL ARCHITECTURE</text>
+  <text class="t subtitle" x="550" y="52" text-anchor="middle">One platform-neutral UI shell branching through AppBackend and optional ScriptHost into four runtime configurations</text>
+
+  <!-- Hosts input arrows on the left -->
+  <text class="t label" x="110" y="104" text-anchor="end">native</text>
+  <path class="wire" d="M 120 100 L 190 100" marker-end="url(#arrow)" />
+
+  <text class="t label" x="110" y="132" text-anchor="end">wasm</text>
+  <path class="wire" d="M 120 128 L 190 128" marker-end="url(#arrow)" />
+
+  <!-- ferrocad_shell_core box -->
+  <rect class="box" x="190" y="74" width="720" height="88" rx="8" fill="#dbe9f6" stroke="#7d9ec4" />
+  <text class="t box-title" x="550" y="96" text-anchor="middle">ferrocad_shell_core (GPUI window, chrome)</text>
+  <text class="t box-sub" x="550" y="116" text-anchor="middle">Shell + Box&lt;dyn AppBackend&gt;</text>
+  <text class="t box-sub" x="550" y="136" text-anchor="middle">+ optional ScriptHost (script_host())</text>
+
+  <!-- Wire down to AppBackend split -->
+  <path class="wire" d="M 550 162 L 550 200" marker-end="url(#arrow)" />
+  <text class="t note" x="562" y="185" text-anchor="start">AppBackend</text>
+
+  <!-- Horizontal distribution bus -->
+  <path class="wire" d="M 205 200 L 895 200" />
+
+  <!-- Vertical drops to the 4 backends -->
+  <path class="wire" d="M 205 200 L 205 232" marker-end="url(#arrow)" />
+  <path class="wire" d="M 435 200 L 435 232" marker-end="url(#arrow)" />
+  <path class="wire" d="M 665 200 L 665 232" marker-end="url(#arrow)" />
+  <path class="wire" d="M 895 200 L 895 232" marker-end="url(#arrow)" />
+
+  <!-- Column 1: RustAppBackend (no runtime) -->
+  <rect class="box" x="110" y="232" width="190" height="150" rx="6" fill="#dcb8e2" stroke="#b184b9" />
+  <text class="t box-title" x="205" y="258" text-anchor="middle">RustAppBackend</text>
+  <text class="t box-sub" x="205" y="278" text-anchor="middle">(no runtime)</text>
+  <text class="t box-sub" x="205" y="306" text-anchor="middle">native + wasm</text>
+  <text class="t box-sub" x="205" y="344" text-anchor="middle">ScriptHost: none</text>
+
+  <!-- Column 2: PythonAppBackend (CPython) -->
+  <rect class="box" x="340" y="232" width="190" height="150" rx="6" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="435" y="258" text-anchor="middle">PythonAppBackend</text>
+  <text class="t box-sub" x="435" y="278" text-anchor="middle">(CPython, native)</text>
+  <text class="t box-sub" x="435" y="306" text-anchor="middle">native</text>
+  <text class="t box-sub" x="435" y="344" text-anchor="middle">ScriptHost: yes</text>
+
+  <!-- Column 3: RustAppBackend + JsScriptHost -->
+  <rect class="box" x="570" y="232" width="190" height="150" rx="6" fill="#c9d5e3" stroke="#94a9c2" />
+  <text class="t box-title" x="665" y="251" text-anchor="middle">RustAppBackend</text>
+  <text class="t box-title" x="665" y="269" text-anchor="middle">+ JsScriptHost</text>
+  <text class="t box-sub" x="665" y="294" text-anchor="middle">wasm + JS</text>
+  <text class="t box-sub" x="665" y="332" text-anchor="middle">ScriptHost: yes</text>
+
+  <!-- Column 4: RustAppBackend + PywasmScriptHost -->
+  <rect class="box" x="800" y="232" width="190" height="150" rx="6" fill="#b9dcc2" stroke="#7fb391" />
+  <text class="t box-title" x="895" y="251" text-anchor="middle">RustAppBackend</text>
+  <text class="t box-title" x="895" y="269" text-anchor="middle">+ PywasmScriptHost</text>
+  <text class="t box-sub" x="895" y="294" text-anchor="middle">wasm + Python</text>
+  <text class="t box-sub" x="895" y="332" text-anchor="middle">ScriptHost: yes</text>
+
+  <!-- Legend / Notes footer -->
+  <rect x="110" y="420" width="880" height="140" rx="8" fill="#eef2f8" stroke="#b6c2d2" />
+  <text class="t box-title" x="130" y="448">Architecture highlights</text>
+  <text class="t note" x="130" y="472"><tspan class="note-lead">Single UI shell (ferrocad_shell_core):</tspan> decoupled from script interpreters and platform windowing.</text>
+  <text class="t note" x="130" y="496"><tspan class="note-lead">Composition (columns 3 and 4):</tspan> both browser runtimes reuse RustAppBackend and plug in a ScriptHost.</text>
+  <text class="t note" x="130" y="520"><tspan class="note-lead">Runtime flexibility:</tspan> a pure viewer (col 1), desktop workbenches (col 2), web-native mods (cols 3 and 4).</text>
+</svg>

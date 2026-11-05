@@ -1,6 +1,6 @@
 # Closed task specs
 
-Status: index (2026-10-27). These are the task specs whose implementation is recorded as
+Status: index (2026-11-05). These are the task specs whose implementation is recorded as
 closed. They moved here from [`../../tasks/`](README.md) when their work
 landed, so `tasks/` holds only active specs. The compact history is
 [`../milestones.md`](../milestones.md); the backlogs that closed them are the
@@ -17,6 +17,7 @@ the active backlog or listed below, not kept as an open task.
 | [`element-map-policy.md`](element-map-policy.md) | Lineage `S6c` | 2026-10-24 | The compound-BOP policy and the naming cascade; every reachable guarded map size matches upstream. `FaceMakerCheese` (10) and `makeShellFromWires` (24) remain documented non-results. |
 | [`format-serializers.md`](format-serializers.md) | Serializers `F1–F8` | 2026-10-23 | Native `.ferrocad` JSON and upstream `.FCStd` as independent serializers, including the real ZIP writer, `GuiDocument.xml` and the lineage sidecar. FCStd breadth remains a backlog tail. |
 | [`grid-visibility.md`](grid-visibility.md) | Grid visibility `P0` | 2026-10-22 | One grid on/off switch over the native flag, the provider `refresh` hook and the `semantic` → `ferrocad` rename. |
+| [`host-backends.md`](host-backends.md) | Host backends `S1–S8` | 2026-11-05 | The `ScriptHost` split and the host `FilePicker`, `ferrocad_shell_rust`, one display path, shared property presentation, the catalogue as data, and the two script halves — `JsScriptHost` and `PywasmScriptHost` (RustPython) — both composed over `RustAppBackend`. Design: [`../../../developer/architecture/host-backends.md`](../../../developer/architecture/host-backends.md). |
 | [`kernel-state-sharing.md`](kernel-state-sharing.md) | Kernel `K0–K4` | 2026-10-26 | The observable one-core identity, the mixed-image guard, interpreter-scoped Python tables and the `Kernel` facade. K2c and K4 are parked, not active. |
 | [`links.md`](links.md) | Links `L0–L5` | 2026-10-24 | `App::Link`, link arrays, sub-element references and the lineage/format interlocks. Copy-on-change semantics remain a non-goal. |
 | [`mesh-module.md`](mesh-module.md) | Mesh `M1/M1b` | 2026-10-26 | `ferrocad_mesh`, `ferrocad_mesh_py`, `Part.Shape.tessellate`, facet groups, `.bms` and the `.FCStd` mesh member. |

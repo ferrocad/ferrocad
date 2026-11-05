@@ -15,7 +15,7 @@ obvious:
 
 ![The four layers: the platform hosts (native desktop, browser wasm), the seam
 (`ferrocad_shell_core` over `AppBackend` + optional `ScriptHost`), the pluggable
-backends named by runtime (CPython, no-runtime Rust, planned JS and wasm Python), and
+backends named by runtime (CPython, no-runtime Rust, JS modules, wasm Python), and
 the shared engine](images/host-backends.svg)
 
 The picture has four bands: **hosts** own the process entry and the window, the
@@ -29,11 +29,13 @@ directly. **The engine** is `ferrocad_core` + `ferrocad_part` over OCCT — the 
 library natively, the prebuilt wasm kernel in the browser.
 
 Only the browser is missing CPython; that is why the two shipped backends exist and
-why the seam is a trait rather than a Python module. The planned JS/WASI and wasm
-Python hosts are the same shape with a different runtime, and the wasm Python one is
-drawn reusing the **same** `ferrocad_py` bindings: making those compile for `wasm32`
-(or adapting them to a wasm CPython) is that host's open question
-(see [`../project/tasks/host-backends.md`](../project/tasks/host-backends.md) §2 and §6.3).
+why the seam is a trait rather than a Python module. The JS and wasm-Python
+configurations are the same shape with a different runtime, and both are
+`RustAppBackend` plus a `ScriptHost` rather than a second document implementation.
+The wasm-Python runtime is RustPython, and it does **not** reuse the `*_py` PyO3
+modules — those are CPython C-ABI extensions — so it reaches the engine through its own
+native module; the layer that is shared is the `python/ferrocad_shell` script and
+`ferrocad_core` (see [`architecture/host-backends.md`](architecture/host-backends.md)).
 
 ## 1. The components
 
@@ -125,10 +127,10 @@ ferrocad_web_gpui/src/           the browser host
   lib.rs       the wasm-bindgen entry point
   host.rs      the page's file picker / download and the re-entry handle
 
-ferrocad_shell_js/src/           the JS script half (S7 spike)
+ferrocad_shell_js/src/           the JS script half
   lib.rs       JsScriptHost: commands, evaluate, runCommand, onEvent
 
-ferrocad_shell_pywasm/src/       the wasm-Python script half (S8 spike)
+ferrocad_shell_pywasm/src/       the wasm-Python script half
   lib.rs       PywasmScriptHost: the RustPython interpreter and the seam
   snapshot.rs  the sample document's property rows, from ferrocad_core::present
   bootstrap.py the FreeCAD facade, the ferrocad property hooks, the stdlib stubs

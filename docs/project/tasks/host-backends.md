@@ -1,6 +1,6 @@
 # Host backends: one shell, one contract, several runtimes
 
-Status: **task (2026-11-04). S1–S5 done; S6 in progress (the scripting half is done).**
+Status: **task (2026-11-04). S1–S7 done; S8 is next.**
 Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../research/web-wasm-host.md`](../research/web-wasm-host.md)
 (the browser findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../../developer/architecture.md`](../../developer/architecture.md)
@@ -154,7 +154,7 @@ work.
 | Native CPython assembly | `ferrocad_shell_gpui` | S1–S5 | unchanged (it is the *native* assembly, hence "gpui"); it is host **and** backend — see §4.3 |
 | Rust document backend | **`ferrocad_shell_rust`** | S5 ✓ | primary; `ferrocad_shell_doc` is the alternative |
 | Browser host | `ferrocad_web_gpui` | S5 ✓ | unchanged; a pure host since S5 |
-| Future JS backend | `ferrocad_shell_js` | S7 | wasm32 only |
+| JS backend | `ferrocad_shell_js` | S7 ✓ | wasm32 only; the spike is `publish = false` |
 | Future wasm Python backend | `ferrocad_shell_pywasm` | S8 | wasm32 only, if the spike passes |
 | Future CPython backend crate | `ferrocad_shell_python` | (with a Rust desktop edition, §4.3) | only if that edition needs `ferrocad_shell_gpui` to stop linking `pyo3` |
 
@@ -259,7 +259,7 @@ Only the new/moved ones are listed; everything else keeps its place.
 | `ferrocad_web_gpui` | browser host: entry point, JS bridge, harness | `ferrocad_shell_core`, `ferrocad_shell_rust`, `wasm-bindgen` |
 | `ferrocad_core` | + `present` module (D4) and `view` dressing (D6: `drawable`/`effective_color`/`origin`) | unchanged |
 | `ferrocad_py` | + thin `ferrocad.property` functions over `present` | still **only** `ferrocad_core` + `pyo3` |
-| `ferrocad_shell_js` (S7) | `JsAppBackend`: the JS runtime over `RustAppBackend`'s document half | `ferrocad_shell_rust`, `ferrocad_shell_api`, `wasm-bindgen` |
+| `ferrocad_shell_js` (S7) | the JS script half: `JsScriptHost` over the page's ES module, merged into `RustAppBackend` | `ferrocad_shell_api`, `ferrocad_inventor`, `ferrocad_stage`, `wasm-bindgen` |
 | `ferrocad_shell_pywasm` (S8) | `PywasmBackend`: a wasm Python runtime over the same scripts | §6.3's runtime, `ferrocad_shell_api`, the `*_py` bindings if they compile |
 
 ### 4.2 Dependency rules to add
@@ -294,7 +294,7 @@ split is visible in the crate graph:
 | UI shell | window, chrome, panels | `ferrocad_shell_core` | platform-neutral GPUI `Shell` |
 | **Backends** (D2, by runtime) | none | `ferrocad_shell_rust` | `RustAppBackend` — desktop *or* wasm |
 | | CPython | *inside `ferrocad_shell_gpui`* | `PythonAppBackend` (`backend.rs`, `python.rs`) |
-| | JS / wasm modules | `ferrocad_shell_js` (planned) | `JsAppBackend`, over `ferrocad_shell_rust` |
+| | JS / wasm modules | `ferrocad_shell_js` (S7 ✓) | `JsScriptHost`, over `ferrocad_shell_rust` |
 | | wasm Python | `ferrocad_shell_pywasm` (planned) | `PywasmBackend` |
 | **Hosts** | browser entry | `ferrocad_web_gpui` | wasm `cdylib`, page bridge, installs a backend |
 | | native entry | `ferrocad_shell_gpui` | `run_with` + headless, **and** the CPython backend |
@@ -514,6 +514,41 @@ Testing is cheap because the GPUI test platform has `select_paths`/
 (`bite-gp-authoring-1.25.203/src/platform/test/platform.rs:247`), and the test suite
 plugs fake pickers in for the byte and delegated shapes.
 
+### 5.6 JS scripting surface (S7) — **done (2026-11-05)**
+
+The JS backend is a **composition**, not a second document implementation:
+
+```text
+ferrocad_shell_rust::RustAppBackend   (document half)
+        + ferrocad_shell_js::JsScriptHost   (script half)
+        = the JS backend
+```
+
+`RustAppBackend` gained `with_script_host(Box<dyn ScriptHost>)`; the shell already asks
+`AppBackend::script_host()`, so `evaluate`, the event listener and the script's
+commands work with no new seam. `ScriptHost` gained two defaulted methods for the
+last one:
+
+```rust
+fn commands(&self) -> Vec<CommandInfo> { Vec::new() }
+fn run_command(&self, id: &str) -> Option<CommandOutcome> { None }
+```
+
+`RustAppBackend::commands()` appends them (a script command reaches the palette like
+a built-in) and its `run_command` asks the script only for ids it does not own.
+
+**The page contract.** `www/js-demo.js` is an ES module the page imports with
+`?js=1`; it installs `window.__ferrocadJs` with `active`, `commands` (JSON),
+`evaluate`, `runCommand` and `onEvent`. `JsScriptHost` maps those onto `ScriptHost`:
+commands are read once at boot, `evaluate` returns the page's string, and the
+`EventListener` forwards every pointer event with the picked stage entity (`0` for a
+miss).
+
+**Spike scope:** static command list, no JS tool session and no real `mod-events`
+contract yet (the next step, per [`mod-events.md`](mod-events.md)). The smoke check
+runs the whole path its two `?js=1` captures: the module registers `Demo_JS`, the
+palette runs it, and a viewport click reaches `onEvent` with entity 2 (the fillet).
+
 ## 6. Platform facts the plan relies on
 
 ### 6.1 Dialogs (answer to A)
@@ -587,7 +622,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | **S4** | **Catalogue as data** (D10) — **done (2026-11-04)** | `ferrocad_shell_api::catalog` (the table, the named ids, the Move form), generated `python/ferrocad_shell/catalog.json`, the browser backend reading `builtin()`, Python's `GetResources()` reading the JSON, and a drift test on each side | 4–5 d |
 | **S5** | **`ferrocad_shell_rust`** (D2/D3) — **done (2026-11-05)** | `RustAppBackend` moved out of `ferrocad_web_gpui` into its own platform-neutral crate (no gpui, no pyo3, no wasm-bindgen); the browser installs it with two file-picker hooks and keeps only its window and page bridge; `cargo run -p ferrocad_shell_rust --example headless` boots it with no window and prints the same document | 2–3 d |
 | **S6** | **Seam split** (D7) — **done (2026-11-05)** | `ScriptHost` (`evaluate`, `load_workbenches`, `tool`, `tool_command`, `inventor_scene`, `event_listener`) with `AppBackend::script_host()`, the document half unchanged; `FilePicker` as the host's half of `App_Open`/`App_Save` (native prompt, browser delegation), so the shell owns both ids on every platform and the backend carries no file hooks | 3–4 d |
-| **S7** | **JS backend spike** — creates `ferrocad_shell_js` (D2) | `JsAppBackend` (= `RustAppBackend`'s document half + `ScriptHost`); a page that loads an ES module and calls the document through `wasm-bindgen`; one command registered from JS | 5–8 d |
+| **S7** | **JS backend spike** (D2) — **done (2026-11-05)** | `ferrocad_shell_js`: `JsScriptHost` implements `ScriptHost` over `window.__ferrocadJs` (an ES module the page loads), and `RustAppBackend::with_script_host` composes it with the document half. `ScriptHost::commands`/`run_command` were added so the page's command reaches the palette; the event listener forwards picks. The page is `www/js-demo.js`, loaded with `?js=1`. | 5–8 d |
 | **S8** | **wasm Python spike** — creates `ferrocad_shell_pywasm` (D2) | pick a runtime from §6.3, implement `ScriptHost` over the *same* `python/ferrocad_shell` scripts and, where possible, the same `*_py` bindings; run `properties` | research |
 
 ### Acceptance
@@ -600,7 +635,7 @@ Effort is engineer-days for one person who knows the tree. Each stage is demoabl
 | S4 | The crate's `the_checked_in_catalogue_is_current` fails when `python/ferrocad_shell/catalog.json` is stale, and `CatalogTests` fails when a built-in exists on only one side (Python registry vs. JSON); `App_Move` exists once, in `catalog::move_dialog()`. |
 | S5 | `cargo check -p ferrocad_shell_rust` (native) passes, `cargo tree -p ferrocad_shell_rust` has no gpui/pyo3/wasm-bindgen, and the browser still builds and passes its smoke check on the extracted crate (`run.sh --check`). The native example prints `document Sample (2 object(s))` and `Fillet · 40 triangles`, the same document the browser draws. |
 | S6 | `AppBackend`'s scripting methods are behind `script_host()`; the browser still builds with no scripting backend; `inventor_scene` returns from the trait with the same behaviour; the Draft conformance group is unchanged (`test_pivy` 2/2). `FilePicker` is installed by both hosts: `cargo test -p ferrocad_shell_core` covers the path, bytes, delegated and error outcomes, and the browser smoke round trip (`?reopen=1`) plus `?keys=ctrl-o` still pass with the shell owning the ids. |
-| S7 | `cargo check -p ferrocad_shell_js --target wasm32-unknown-unknown` passes and its graph has no native-only edge; a browser page registers one JS command and receives one document event; no panic in the console. |
+| S7 | The smoke check's `?js=1` captures prove the composition end to end: the page's ES module logs `ferrocad js: registered Demo_JS`, the palette run (`ctrl-k;d;e;m;o;enter`) logs `ferrocad js: run Demo_JS`, and the viewport click logs `ferrocad js: event press entity 2 at 430 310`. The crate compiles only for wasm and names no native-only edge. |
 | S8 | `cargo check -p ferrocad_shell_pywasm --target wasm32-unknown-unknown` passes; `properties()` from a wasm interpreter over the sample document. |
 
 S1–S4 are the "dedup" half of this document and are independent. S5–S6 are the

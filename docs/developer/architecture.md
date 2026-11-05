@@ -64,7 +64,8 @@ drawn reusing the **same** `ferrocad_py` bindings: making those compile for `was
 | `ferrocad_shell_core` | `rlib` | The GPUI shell: `Shell`, the chrome, the panels, the viewport element, `DisplaySync`, the edition `Contributions` registry, and the file verbs with their host `FilePicker`. Platform-neutral, engine-neutral: it talks to an installed `AppBackend`. |
 | `ferrocad_shell_gpui` | `rlib` | The **native** assembly: boots CPython (`pyo3` embed), implements `AppBackend` over the `FreeCAD`/`FreeCADGui` facades, and exports `run`/`run_with`/`run_edition_with` and `HostConfig`. |
 | `ferrocad_shell_rust` | `rlib` | The **Rust document backend**: `RustAppBackend` over a real `ferrocad_core::Document`, Part features and the OCCT kernel, with no scripting runtime (it implements `AppBackend` only, never `ScriptHost`). Platform-neutral — no gpui, no CPython, no wasm-bindgen — so the browser host and a desktop edition install the *same* backend. Carries the sample document and the one `App_Move` form usage. |
-| `ferrocad_web_gpui` | `cdylib` (wasm32) | The **browser** host: `ferrocad_shell_core` on GPUI's WebGL2 backend, `ferrocad_shell_rust` as the engine, and the page bridge (file picker, download, `ferrocad_open`) — **no CPython anywhere in the graph**. |
+| `ferrocad_web_gpui` | `cdylib` (wasm32) | The **browser** host: `ferrocad_shell_core` on GPUI's WebGL2 backend, `ferrocad_shell_rust` as the engine, `ferrocad_shell_js` as the optional JS script half, and the page bridge (file picker, download, `ferrocad_open`) — **no CPython anywhere in the graph**. |
+| `ferrocad_shell_js` | `rlib` (wasm32) | The **JS scripting surface**: `JsScriptHost` implements `ScriptHost` over the page's `window.__ferrocadJs` (an ES module: commands, `evaluate`, `runCommand`, `onEvent`). The JS backend is `RustAppBackend::with_script_host(JsScriptHost)`, not a second document implementation. A spike: not published, static command list. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_shell_gpui::run_with`. |
 | `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](workbenches/toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
@@ -122,6 +123,9 @@ ferrocad_shell_rust/src/         the Rust document backend (no gpui, no CPython)
 ferrocad_web_gpui/src/           the browser host
   lib.rs       the wasm-bindgen entry point
   host.rs      the page's file picker / download and the re-entry handle
+
+ferrocad_shell_js/src/           the JS script half (S7 spike)
+  lib.rs       JsScriptHost: commands, evaluate, runCommand, onEvent
 ```
 
 The open-document registry lives in `ferrocad_core::Application` (the analog of FreeCAD's
@@ -299,8 +303,11 @@ ferrocad_shell_rust -> ferrocad_core, ferrocad_part, ferrocad_occt,
                       ferrocad_shell_api, serde_json  [the Rust backend; same in both hosts]
                       must NOT -> gpui, pyo3, wasm-bindgen [it is not a host]
 ferrocad_web_gpui  -> ferrocad_shell_core, ferrocad_shell_rust,
-                      wasm-bindgen                     [browser host; no CPython]
+                      ferrocad_shell_js, wasm-bindgen  [browser host; no CPython]
                       must NOT -> pyo3, ferrocad_py, ferrocad_inventor_py
+ferrocad_shell_js  -> ferrocad_shell_api, ferrocad_inventor,
+                      ferrocad_stage, wasm-bindgen       [the JS script half]
+                      must NOT -> gpui, pyo3, ferrocad_shell_rust
 ferrocad           -> ferrocad_shell_gpui, ferrocad_py     [base app: links the module in, embeds payload]
                                                      [run_edition: an edition's app script]
 ferrocad_parametric -> ferrocad, ferrocad_part_py,

@@ -1,0 +1,25 @@
+[package]
+name = "ferrocad_shell_js"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's JS scripting surface: ScriptHost over a page's ES module (spike)"
+keywords = ["cad", "freecad", "wasm"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_shell_js"
+publish = false
+
+[dependencies]
+# The scripting half of the seam. The document half stays `ferrocad_shell_rust`'s.
+ferrocad_shell_api.workspace = true
+# The event vocabulary an `EventListener` receives, and the `Tool` its signature uses.
+ferrocad_inventor.workspace = true
+ferrocad_stage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+log = "0.4"

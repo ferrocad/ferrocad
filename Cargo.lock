@@ -2497,6 +2497,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_shell_js"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_inventor",
+ "ferrocad_shell_api",
+ "ferrocad_stage",
+ "log",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "ferrocad_shell_rust"
 version = "0.1.5"
 dependencies = [
@@ -2612,6 +2625,7 @@ version = "0.1.5"
 dependencies = [
  "bite-gpui",
  "ferrocad_shell_core",
+ "ferrocad_shell_js",
  "ferrocad_shell_rust",
  "ferrocad_wasm",
  "log",

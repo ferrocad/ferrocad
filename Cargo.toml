@@ -41,6 +41,7 @@ members = [
     "crates/ferrocad_shell_api",
     "crates/ferrocad_shell_core",
     "crates/ferrocad_shell_rust",
+    "crates/ferrocad_shell_js",
     "crates/ferrocad_shell_gpui",
     "crates/ferrocad_parametric",
     "crates/ferrocad_toy",
@@ -141,6 +142,7 @@ ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.4" }
 # `docs/developer/architecture/releasing.md` for the discontinuity.
 ferrocad_shell_api = { path = "crates/ferrocad_shell_api", version = "0.1.5" }
 ferrocad_shell_rust = { path = "crates/ferrocad_shell_rust", version = "0.1.5" }
+ferrocad_shell_js = { path = "crates/ferrocad_shell_js", version = "0.1.5" }
 # Default features are off here so the browser host (which inherits this entry) does
 # not compile the zero-copy presenter; the native assembly turns `gpu-interop` on.
 ferrocad_shell_core = { path = "crates/ferrocad_shell_core", version = "0.1.5", default-features = false }

@@ -80,6 +80,13 @@
       if (file) await openFile(file);
     });
 
+    // `?js=1` installs the page's JS scripting surface before the module boots, so
+    // its command list is part of the first `commands()` read.
+    if (params.has("js")) {
+      const { install } = await import("./js-demo.js");
+      install();
+    }
+
     await init();
 
     // `?select=x,y` clicks a row, then `?keys=` and `?type=` drive the keyboard.

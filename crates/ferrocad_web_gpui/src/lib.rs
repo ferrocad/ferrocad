@@ -58,8 +58,14 @@ pub fn main() {
         ferrocad_shell_core::fonts::install(cx);
         // The engine: the real document, over the wasm OCCT kernel. Boot reads it,
         // so it must be installed first. The file verbs are the shell's, so the
-        // backend needs nothing else.
-        ferrocad_shell_core::app::install_backend(cx, Box::new(RustAppBackend::new()));
+        // backend needs nothing else. `?js=1` loads a page module that installs
+        // `window.__ferrocadJs`; when present, the same document backend gets the JS
+        // script half (S7).
+        let mut backend = RustAppBackend::new();
+        if ferrocad_shell_js::available() {
+            backend = backend.with_script_host(Box::new(ferrocad_shell_js::JsScriptHost));
+        }
+        ferrocad_shell_core::app::install_backend(cx, Box::new(backend));
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {
             Ok(model) => model,

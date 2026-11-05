@@ -367,6 +367,21 @@ pub trait ScriptHost {
     /// This is what makes `ActiveView.addEventCallbackPivy` work: the listener
     /// dispatches to the `SoEventCallback` callables the script registered.
     fn event_listener(&self) -> Box<dyn EventListener>;
+
+    /// Commands this script surface registered at run time.
+    ///
+    /// The shell merges them with the built-in catalogue, so a script's command
+    /// reaches the palette, the app menu and the wheel like a built-in. A backend
+    /// that keeps its own registry (the Python one) leaves this empty.
+    fn commands(&self) -> Vec<CommandInfo> {
+        Vec::new()
+    }
+
+    /// Run a command this script registered. `None` when the id is not the script's,
+    /// so the backend can answer for its own ids first.
+    fn run_command(&self, _id: &str) -> Option<CommandOutcome> {
+        None
+    }
 }
 
 /// Forwards nothing. The listener a host gets when it supplies none.

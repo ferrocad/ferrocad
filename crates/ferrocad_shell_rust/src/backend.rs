@@ -88,6 +88,9 @@ pub struct RustAppBackend {
     state: RefCell<State>,
     /// Why the sample document could not be built, if it could not.
     boot_error: Option<String>,
+    /// The scripting half, when the host augments this document with one (the JS
+    /// surface, S7). The document half never needs it.
+    script: Option<Box<dyn ferrocad_shell_api::app::ScriptHost>>,
 }
 
 impl RustAppBackend {
@@ -117,7 +120,22 @@ impl RustAppBackend {
                 move_dialogs: 0,
             }),
             boot_error,
+            script: None,
         }
+    }
+
+    /// Add a scripting surface to this document backend.
+    ///
+    /// The JS host (S7) is the first user: the document stays `RustAppBackend`, and
+    /// the script half is a [`ScriptHost`](ferrocad_shell_api::app::ScriptHost) that
+    /// calls into the page. The shell finds it through `script_host()`, so
+    /// `evaluate`, the event listener and the script's commands all work unchanged.
+    pub fn with_script_host(
+        mut self,
+        script: Box<dyn ferrocad_shell_api::app::ScriptHost>,
+    ) -> Self {
+        self.script = Some(script);
+        self
     }
 
     /// The document's object for an internal name.
@@ -320,6 +338,11 @@ impl AppBackend for RustAppBackend {
         Ok(meshes)
     }
 
+    /// Commands this document offers.
+    ///
+    /// The catalogue's built-ins plus the verbs only this backend has. A host that
+    /// installed a scripting surface appends the commands it registered, so a
+    /// script's verb reaches the palette like a built-in.
     fn commands(&self) -> Result<Vec<CommandInfo>, String> {
         let state = self.state.borrow();
         // The shared catalogue is the source of every built-in's metadata; this
@@ -377,7 +400,18 @@ impl AppBackend for RustAppBackend {
         visibility.tooltip = "Hide or show the selected objects".to_string();
         visibility.wheel = true;
         commands.push(visibility);
+
+        // A scripting surface (the JS host) contributes its own verbs; they go
+        // through the same list, so the palette and the wheels resolve them.
+        if let Some(script) = &self.script {
+            commands.extend(script.commands());
+        }
         Ok(commands)
+    }
+
+    /// The scripting half, when the host installed one with `with_script_host`.
+    fn script_host(&self) -> Option<&dyn ferrocad_shell_api::app::ScriptHost> {
+        self.script.as_deref()
     }
 
     fn set_view_state(&self, state: &ShellViewState) -> Result<(), String> {
@@ -662,6 +696,11 @@ impl AppBackend for RustAppBackend {
                 (history_status("redo", &name), None)
             }
             other => {
+                // A command the scripting surface registered is not the document's:
+                // ask it, and only report "not available" when it disclaims the id too.
+                if let Some(outcome) = self.script.as_ref().and_then(|s| s.run_command(other)) {
+                    return Ok(outcome);
+                }
                 return Ok(CommandOutcome {
                     ok: false,
                     error: format!("{other} is not available in this build"),

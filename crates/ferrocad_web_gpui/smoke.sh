@@ -104,6 +104,9 @@ capture_urls() {
     capture "/"
     capture "/?click=950,131"
     capture "/?reopen=1"
+    # S7: the page's ES module registers one command and receives one viewer event.
+    capture "/?js=1&click=430,380"
+    capture "/?js=1&keys=ctrl-k;d;e;m;o;enter"
 }
 
 require_line() {
@@ -132,6 +135,9 @@ check_console() {
 ferrocad: Box · 12 triangles, 12 edges
 ferrocad: Fillet · 40 triangles, 21 edges
 ferrocad: stage draws Fillet
+ferrocad js: registered Demo_JS
+ferrocad js: run Demo_JS
+ferrocad js: event
 EOF
 
     echo "round-trip console lines:"

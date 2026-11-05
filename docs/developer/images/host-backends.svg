@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 800" width="1100" height="800" role="img" aria-labelledby="title desc">
   <title id="title">FerroCAD system architecture: hosts, the seam, backends and the engine</title>
-  <desc id="desc">Four layers: the platform hosts that own the entry point and window (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); the pluggable backends named by the runtime they embed (CPython in ferrocad_shell_gpui, the no-runtime RustAppBackend in ferrocad_shell_rust, planned JS and wasm-Python); and the shared ferrocad_core plus ferrocad_part engine over OCCT.</desc>
+  <desc id="desc">Four layers: the platform hosts that own the entry point, window and FilePicker (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); the pluggable backends named by runtime (CPython in ferrocad_shell_gpui, pure-Rust RustAppBackend in ferrocad_shell_rust, and the two ScriptHost compositions ferrocad_shell_pywasm and ferrocad_shell_js); and the shared ferrocad_core plus ferrocad_part engine over OCCT.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -9,7 +9,7 @@
     <marker id="dash-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8794" />
     </marker>
-    <linearGradient id="shared-bindings" x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id="shared-scripts" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#f6cfa6" />
       <stop offset="0.5" stop-color="#e6d5b8" />
       <stop offset="1" stop-color="#b9dcc2" />
@@ -34,7 +34,7 @@
   <rect x="0" y="0" width="1100" height="800" fill="#f7f9fc" />
 
   <text class="t title" x="550" y="32" text-anchor="middle">FERROCAD SYSTEM ARCHITECTURE</text>
-  <text class="t subtitle" x="550" y="54" text-anchor="middle">Hosts own the window · backends are named by the runtime they embed · one seam and one engine</text>
+  <text class="t subtitle" x="550" y="54" text-anchor="middle">Hosts own the window &amp; FilePicker · backends are named by runtime · one seam and one engine (S1–S8 done)</text>
 
   <!-- ============ layer 1: hosts ============ -->
   <rect class="band" x="76" y="74" width="1000" height="84" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
@@ -43,46 +43,46 @@
   <rect class="box" x="92" y="84" width="400" height="64" rx="6" fill="#e2e8f0" stroke="#94a3b8" />
   <text class="t box-title" x="292" y="105" text-anchor="middle">NATIVE DESKTOP HOST</text>
   <text class="t box-sub" x="292" y="122" text-anchor="middle">crates/ferrocad · ferrocad_parametric · ferrocad_toy (bin)</text>
-  <text class="t box-sub" x="292" y="138" text-anchor="middle">entry: ferrocad_shell_gpui::run_with · headless render/STL</text>
+  <text class="t box-sub" x="292" y="138" text-anchor="middle">ferrocad_shell_gpui::run_with · NativeFilePicker (portal)</text>
 
   <rect class="box" x="608" y="84" width="400" height="64" rx="6" fill="#e2e8f0" stroke="#94a3b8" />
   <text class="t box-title" x="808" y="105" text-anchor="middle">BROWSER WASM HOST</text>
   <text class="t box-sub" x="808" y="122" text-anchor="middle">ferrocad_web_gpui (cdylib)</text>
-  <text class="t box-sub" x="808" y="138" text-anchor="middle">wasm entry + page bridge (file picker, download)</text>
+  <text class="t box-sub" x="808" y="138" text-anchor="middle">wasm entry · WebFilePicker (&lt;input&gt; / download) · ?js=1</text>
 
   <line class="wire" x1="292" y1="148" x2="292" y2="184" marker-end="url(#arrow)" />
   <line class="wire" x1="808" y1="148" x2="808" y2="184" marker-end="url(#arrow)" />
-  <text class="t note-italic" x="302" y="170" text-anchor="start">installs a backend, then boots the shell</text>
+  <text class="t note-italic" x="302" y="170" text-anchor="start">installs a backend + FilePicker, then boots the shell</text>
 
   <!-- ============ layer 2: the seam ============ -->
   <rect class="band" x="76" y="186" width="1000" height="112" rx="10" fill="#dbe9f6" stroke="#8fb8d8" />
   <text class="t band-label" transform="translate(64,242) rotate(-90)" text-anchor="middle">2. THE SEAM</text>
 
-  <rect class="box" x="350" y="194" width="400" height="36" rx="6" fill="#c6d9ee" stroke="#7d9ec4" />
+  <rect class="box" x="330" y="194" width="440" height="36" rx="6" fill="#c6d9ee" stroke="#7d9ec4" />
   <text class="t box-title" x="550" y="209" text-anchor="middle">ferrocad_shell_core</text>
-  <text class="t box-sub" x="550" y="223" text-anchor="middle">GPUI shell · chrome · panels · viewport · DisplaySync · file verbs</text>
+  <text class="t box-sub" x="550" y="223" text-anchor="middle">GPUI shell · chrome · panels · viewport · DisplaySync · FilePicker</text>
 
-  <rect class="box" x="280" y="246" width="260" height="44" rx="6" fill="#c6d9ee" stroke="#7d9ec4" />
-  <text class="t box-title" x="410" y="264" text-anchor="middle">AppBackend</text>
-  <text class="t box-sub" x="410" y="279" text-anchor="middle">document half + catalog (ferrocad_shell_api)</text>
+  <rect class="box" x="260" y="246" width="275" height="44" rx="6" fill="#c6d9ee" stroke="#7d9ec4" />
+  <text class="t box-title" x="397" y="264" text-anchor="middle">AppBackend</text>
+  <text class="t box-sub" x="397" y="279" text-anchor="middle">document half + catalog (ferrocad_shell_api)</text>
 
-  <rect class="box" x="560" y="246" width="260" height="44" rx="6" fill="#c6d9ee" stroke="#7d9ec4" stroke-dasharray="5 3" />
-  <text class="t box-title" x="690" y="264" text-anchor="middle">ScriptHost (optional)</text>
-  <text class="t box-sub" x="690" y="279" text-anchor="middle">evaluate · tool · inventor_scene · events</text>
+  <rect class="box" x="555" y="246" width="285" height="44" rx="6" fill="#c6d9ee" stroke="#7d9ec4" stroke-dasharray="5 3" />
+  <text class="t box-title" x="697" y="264" text-anchor="middle">ScriptHost (optional)</text>
+  <text class="t box-sub" x="697" y="279" text-anchor="middle">evaluate · commands · tool · inventor_scene · events</text>
 
-  <line class="dash" x1="440" y1="230" x2="440" y2="246" marker-end="url(#dash-arrow)" />
+  <line class="dash" x1="430" y1="230" x2="430" y2="246" marker-end="url(#dash-arrow)" />
   <line class="dash" x1="660" y1="230" x2="660" y2="246" marker-end="url(#dash-arrow)" />
   <text class="t note-italic" x="668" y="242" text-anchor="start">script_host()</text>
 
   <!-- implemented-by bus -->
-  <line class="dash" x1="410" y1="290" x2="410" y2="306" />
-  <line class="dash" x1="690" y1="290" x2="690" y2="306" />
+  <line class="dash" x1="397" y1="290" x2="397" y2="306" />
+  <line class="dash" x1="697" y1="290" x2="697" y2="306" />
   <line class="dash" x1="205" y1="306" x2="937" y2="306" />
   <line class="dash" x1="205" y1="306" x2="205" y2="322" marker-end="url(#dash-arrow)" />
   <line class="dash" x1="449" y1="306" x2="449" y2="322" marker-end="url(#dash-arrow)" />
   <line class="dash" x1="693" y1="306" x2="693" y2="322" marker-end="url(#dash-arrow)" />
   <line class="dash" x1="937" y1="306" x2="937" y2="322" marker-end="url(#dash-arrow)" />
-  <text class="t note-italic" x="310" y="302" text-anchor="middle">implemented by</text>
+  <text class="t note-italic" x="300" y="302" text-anchor="middle">implemented / composed by</text>
 
   <!-- ============ layer 3: backends ============ -->
   <rect class="band" x="76" y="316" width="1000" height="270" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
@@ -92,90 +92,98 @@
   <rect class="box" x="92" y="324" width="226" height="40" rx="5" fill="#f3d3ac" stroke="#cf9a55" />
   <text class="t col-head" x="205" y="340" text-anchor="middle">PYTHON (CPython)</text>
   <text class="t box-sub" x="205" y="356" text-anchor="middle">ferrocad_shell_gpui</text>
-  <rect class="box" x="104" y="374" width="202" height="44" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
-  <text class="t box-title" x="205" y="393" text-anchor="middle">PythonAppBackend</text>
-  <text class="t note-italic" x="205" y="409" text-anchor="middle">AppBackend + ScriptHost</text>
-  <line class="wire" x1="205" y1="418" x2="205" y2="438" marker-end="url(#arrow)" />
-  <rect class="box" x="104" y="438" width="202" height="42" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
-  <text class="t box-title" x="205" y="456" text-anchor="middle">Embedded CPython</text>
-  <text class="t box-sub" x="205" y="471" text-anchor="middle">python/FreeCAD + mods</text>
-  <line class="wire" x1="205" y1="480" x2="205" y2="504" marker-end="url(#arrow)" />
-  <text class="t note" x="213" y="495" text-anchor="start">desktop only</text>
+  <rect class="box" x="104" y="372" width="202" height="42" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="205" y="390" text-anchor="middle">PythonAppBackend</text>
+  <text class="t note-italic" x="205" y="406" text-anchor="middle">AppBackend + ScriptHost</text>
+  <line class="wire" x1="205" y1="414" x2="205" y2="430" marker-end="url(#arrow)" />
+  <rect class="box" x="104" y="430" width="202" height="36" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="205" y="446" text-anchor="middle">Embedded CPython</text>
+  <text class="t box-sub" x="205" y="459" text-anchor="middle">FreeCAD facade + mods</text>
+  <line class="wire" x1="205" y1="466" x2="205" y2="480" marker-end="url(#arrow)" />
 
-  <!-- wasm Python -->
-  <rect class="box" x="336" y="324" width="226" height="40" rx="5" fill="#cfe6d6" stroke="#7fb391" stroke-dasharray="5 3" />
-  <text class="t col-head" x="449" y="340" text-anchor="middle">WASM PYTHON (planned)</text>
+  <!-- Shared python/ferrocad_shell source box spanning CPython and RustPython -->
+  <rect class="box" x="92" y="480" width="470" height="38" rx="6" fill="url(#shared-scripts)" stroke="#8a9bb0" />
+  <text class="t box-title" x="327" y="497" text-anchor="middle">python/ferrocad_shell + catalog.json (shared Python script)</text>
+  <text class="t box-sub" x="327" y="511" text-anchor="middle">runs unchanged in both native CPython and wasm RustPython (§5.7)</text>
+
+  <!-- Native-only PyO3 bindings under CPython -->
+  <line class="wire" x1="205" y1="518" x2="205" y2="532" marker-end="url(#arrow)" />
+  <rect class="box" x="92" y="532" width="226" height="42" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="205" y="550" text-anchor="middle">ferrocad_py / ferrocad_part_py</text>
+  <text class="t box-sub" x="205" y="564" text-anchor="middle">PyO3 C-ABI bindings (native only)</text>
+
+  <!-- wasm Python (S8: RustPython) -->
+  <rect class="box" x="336" y="324" width="226" height="40" rx="5" fill="#cfe6d6" stroke="#7fb391" />
+  <text class="t col-head" x="449" y="340" text-anchor="middle">WASM PYTHON (S8 &#10003;)</text>
   <text class="t box-sub" x="449" y="356" text-anchor="middle">ferrocad_shell_pywasm</text>
-  <rect class="box" x="348" y="374" width="202" height="44" rx="5" fill="#b9dcc2" stroke="#7fb391" stroke-dasharray="5 3" />
-  <text class="t box-title" x="449" y="393" text-anchor="middle">PywasmBackend</text>
-  <text class="t note-italic" x="449" y="409" text-anchor="middle">AppBackend + ScriptHost</text>
-  <line class="wire" x1="449" y1="418" x2="449" y2="438" marker-end="url(#arrow)" />
-  <rect class="box" x="348" y="438" width="202" height="42" rx="5" fill="#b9dcc2" stroke="#7fb391" stroke-dasharray="5 3" />
-  <text class="t box-title" x="449" y="456" text-anchor="middle">Pyodide / RustPython</text>
-  <text class="t box-sub" x="449" y="471" text-anchor="middle">(wasm Python runtime)</text>
-  <line class="wire" x1="449" y1="480" x2="449" y2="504" marker-end="url(#arrow)" />
-  <text class="t note" x="457" y="495" text-anchor="start">wasm only</text>
+  <rect class="box" x="348" y="372" width="202" height="42" rx="5" fill="#b9dcc2" stroke="#7fb391" />
+  <text class="t box-title" x="449" y="390" text-anchor="middle">PywasmScriptHost</text>
+  <text class="t note-italic" x="449" y="406" text-anchor="middle">plugged into RustAppBackend</text>
+  <line class="wire" x1="449" y1="414" x2="449" y2="430" marker-end="url(#arrow)" />
+  <rect class="box" x="348" y="430" width="202" height="36" rx="5" fill="#b9dcc2" stroke="#7fb391" />
+  <text class="t box-title" x="449" y="446" text-anchor="middle">RustPython VM</text>
+  <text class="t box-sub" x="449" y="459" text-anchor="middle">bootstrap.py + _ferrocad.document()</text>
+  <line class="wire" x1="449" y1="466" x2="449" y2="480" marker-end="url(#arrow)" />
 
   <!-- Rust: no runtime -->
   <rect class="box" x="580" y="324" width="226" height="40" rx="5" fill="#e4c6e7" stroke="#b184b9" />
-  <text class="t col-head" x="693" y="340" text-anchor="middle">RUST (no runtime)</text>
+  <text class="t col-head" x="693" y="340" text-anchor="middle">RUST (no runtime — S5 &#10003;)</text>
   <text class="t box-sub" x="693" y="356" text-anchor="middle">ferrocad_shell_rust</text>
-  <rect class="box" x="592" y="374" width="202" height="64" rx="5" fill="#dcb8e2" stroke="#b184b9" />
-  <text class="t box-title" x="693" y="393" text-anchor="middle">RustAppBackend</text>
-  <text class="t box-sub" x="693" y="409" text-anchor="middle">AppBackend only</text>
-  <text class="t box-sub" x="693" y="424" text-anchor="middle">script_host() = None</text>
-  <text class="t note" x="693" y="458" text-anchor="middle">installed by browser host</text>
-  <text class="t note" x="693" y="472" text-anchor="middle">&amp; native headless/editions</text>
+  <rect class="box" x="592" y="372" width="202" height="78" rx="5" fill="#dcb8e2" stroke="#b184b9" />
+  <text class="t box-title" x="693" y="391" text-anchor="middle">RustAppBackend</text>
+  <text class="t box-sub" x="693" y="407" text-anchor="middle">owns the Rust Document half</text>
+  <text class="t box-sub" x="693" y="422" text-anchor="middle">with_script_host(opt)</text>
+  <text class="t box-sub" x="693" y="437" text-anchor="middle">(default: script_host = None)</text>
+  <text class="t note" x="701" y="468" text-anchor="start">shared document half for</text>
+  <text class="t note" x="701" y="482" text-anchor="start">browser, Pywasm &amp; JS</text>
 
-  <!-- JS -->
-  <rect class="box" x="824" y="324" width="226" height="40" rx="5" fill="#d5dfea" stroke="#94a9c2" stroke-dasharray="5 3" />
-  <text class="t col-head" x="937" y="340" text-anchor="middle">JS / WASM (planned)</text>
+  <!-- JS (S7) -->
+  <rect class="box" x="824" y="324" width="226" height="40" rx="5" fill="#d5dfea" stroke="#94a9c2" />
+  <text class="t col-head" x="937" y="340" text-anchor="middle">JS / WASM (S7 &#10003;)</text>
   <text class="t box-sub" x="937" y="356" text-anchor="middle">ferrocad_shell_js</text>
-  <rect class="box" x="836" y="374" width="202" height="44" rx="5" fill="#c9d5e3" stroke="#94a9c2" stroke-dasharray="5 3" />
-  <text class="t box-title" x="937" y="393" text-anchor="middle">JsAppBackend</text>
-  <text class="t note-italic" x="937" y="409" text-anchor="middle">AppBackend + ScriptHost</text>
-  <line class="wire" x1="937" y1="418" x2="937" y2="438" marker-end="url(#arrow)" />
-  <rect class="box" x="836" y="438" width="202" height="52" rx="5" fill="#c9d5e3" stroke="#94a9c2" stroke-dasharray="5 3" />
-  <text class="t box-title" x="937" y="458" text-anchor="middle">ES modules / mod-events</text>
-  <text class="t box-sub" x="937" y="474" text-anchor="middle">over the Rust document backend</text>
-  <text class="t note" x="945" y="508" text-anchor="start">wasm only</text>
+  <rect class="box" x="836" y="372" width="202" height="42" rx="5" fill="#c9d5e3" stroke="#94a9c2" />
+  <text class="t box-title" x="937" y="390" text-anchor="middle">JsScriptHost</text>
+  <text class="t note-italic" x="937" y="406" text-anchor="middle">plugged into RustAppBackend</text>
+  <line class="wire" x1="937" y1="414" x2="937" y2="430" marker-end="url(#arrow)" />
+  <rect class="box" x="836" y="430" width="202" height="52" rx="5" fill="#c9d5e3" stroke="#94a9c2" />
+  <text class="t box-title" x="937" y="449" text-anchor="middle">window.__ferrocadJs</text>
+  <text class="t box-sub" x="937" y="465" text-anchor="middle">ES module (www/js-demo.js)</text>
 
-  <!-- the bindings both Python backends share -->
-  <rect class="box" x="92" y="504" width="470" height="46" rx="6" fill="url(#shared-bindings)" stroke="#8a9bb0" />
-  <text class="t box-title" x="327" y="524" text-anchor="middle">ferrocad_py / ferrocad_part_py</text>
-  <text class="t box-sub" x="327" y="540" text-anchor="middle">shared PyO3 bindings — one layer for every Python backend</text>
+  <!-- composition arrows into RustAppBackend -->
+  <path class="dash" d="M 550 393 L 592 393" marker-end="url(#dash-arrow)" />
+  <path class="dash" d="M 836 393 L 794 393" marker-end="url(#dash-arrow)" />
 
   <!-- ============ layer 4: the engine ============ -->
   <rect class="band" x="76" y="602" width="1000" height="104" rx="10" fill="#cfdceb" stroke="#8fa9c6" />
   <text class="t band-label" transform="translate(64,654) rotate(-90)" text-anchor="middle">4. ENGINE</text>
 
-  <rect class="box" x="390" y="612" width="320" height="54" rx="6" fill="#b9cde4" stroke="#7d9ec4" />
+  <rect class="box" x="370" y="612" width="360" height="54" rx="6" fill="#b9cde4" stroke="#7d9ec4" />
   <text class="t box-title" x="550" y="633" text-anchor="middle">ferrocad_core · ferrocad_part</text>
-  <text class="t box-sub" x="550" y="649" text-anchor="middle">(pure Rust + OCCT · present · drawable)</text>
+  <text class="t box-sub" x="550" y="649" text-anchor="middle">(pure Rust + OCCT · present · drawable · Quantity)</text>
 
   <text class="t note" x="550" y="686" text-anchor="middle">drawable / effective_color / origin / present live in ferrocad_core · OCCT: system library natively, prebuilt wasm kernel in the browser</text>
 
-  <!-- bindings -> engine -->
-  <path class="wire" d="M 327 550 L 327 588 L 420 612" marker-end="url(#arrow)" />
-  <text class="t note" x="336" y="580" text-anchor="start">calls</text>
+  <!-- PyO3 bindings -> engine -->
+  <path class="wire" d="M 205 574 L 205 592 L 410 612" marker-end="url(#arrow)" />
+  <text class="t note" x="213" y="590" text-anchor="start">calls</text>
+  <!-- RustPython -> engine -->
+  <path class="wire" d="M 449 518 L 449 588 L 500 612" marker-end="url(#arrow)" />
+  <text class="t note" x="457" y="560" text-anchor="start">present + snapshot</text>
   <!-- Rust backend -> engine -->
-  <path class="wire" d="M 693 438 L 693 612" marker-end="url(#arrow)" />
+  <path class="wire" d="M 693 450 L 693 612" marker-end="url(#arrow)" />
   <text class="t note" x="701" y="560" text-anchor="start">used directly</text>
-  <!-- JS -> engine -->
-  <path class="wire" d="M 937 490 L 937 588 L 680 612" marker-end="url(#arrow)" />
-  <text class="t note" x="945" y="580" text-anchor="start">accesses</text>
 
   <!-- legend -->
   <rect x="76" y="714" width="16" height="12" rx="2" fill="#f6cfa6" stroke="#cf9a55" />
-  <text class="t note" x="99" y="724" text-anchor="start">CPython runtime</text>
-  <rect x="236" y="714" width="16" height="12" rx="2" fill="#dcb8e2" stroke="#b184b9" />
-  <text class="t note" x="259" y="724" text-anchor="start">the no-runtime Rust backend</text>
-  <rect x="450" y="714" width="16" height="12" rx="2" fill="#d5dfea" stroke="#7b8794" stroke-dasharray="3 2" />
-  <text class="t note" x="473" y="724" text-anchor="start">planned / optional (dashed)</text>
-  <rect x="648" y="714" width="16" height="12" rx="2" fill="#b9cde4" stroke="#7d9ec4" />
-  <text class="t note" x="671" y="724" text-anchor="start">the shared engine, reached directly or through Python</text>
+  <text class="t note" x="99" y="724" text-anchor="start">CPython + PyO3 (native only)</text>
+  <rect x="280" y="714" width="16" height="12" rx="2" fill="#b9dcc2" stroke="#7fb391" />
+  <text class="t note" x="303" y="724" text-anchor="start">RustPython (wasm + native)</text>
+  <rect x="480" y="714" width="16" height="12" rx="2" fill="#dcb8e2" stroke="#b184b9" />
+  <text class="t note" x="503" y="724" text-anchor="start">RustAppBackend (shared document half)</text>
+  <rect x="730" y="714" width="16" height="12" rx="2" fill="#b9cde4" stroke="#7d9ec4" />
+  <text class="t note" x="753" y="724" text-anchor="start">the shared CAD engine</text>
 
-  <text class="t note-italic" x="76" y="748" text-anchor="start">AppBackend is the document half; ScriptHost is optional, so only a backend with a runtime implements it.</text>
-  <text class="t note-italic" x="76" y="766" text-anchor="start">wasm Python reuses the same *_py bindings; making them compile for wasm32 (or adapting them) is that backend's open question.</text>
-  <text class="t note-italic" x="76" y="784" text-anchor="start">status: native and browser hosts shipped · JS/WASM and wasm Python are planned</text>
+  <text class="t note-italic" x="76" y="748" text-anchor="start">AppBackend is the document half; ScriptHost is optional. JsScriptHost (S7) and PywasmScriptHost (S8) plug into RustAppBackend::with_script_host.</text>
+  <text class="t note-italic" x="76" y="766" text-anchor="start">S8 result (§6.3): python/ferrocad_shell + catalog.json run unchanged in RustPython; *_py PyO3 modules are CPython C-ABI and remain native-only.</text>
+  <text class="t note-italic" x="76" y="784" text-anchor="start">status: S1–S8 complete · native CPython, pure-Rust, JS (?js=1) and RustPython (pywasm) backends verified</text>
 </svg>

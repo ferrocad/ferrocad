@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
-use std::time::Instant;
+use web_time::Instant;
 
 use ferrocad_inventor::{Directives, Event, Hit, NodeKind, Topology};
 use pyo3::prelude::*;

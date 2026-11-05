@@ -214,7 +214,9 @@ impl Shell {
     /// a document feels slow.
     pub(in crate::shell) fn build_stage(&mut self, cx: &App) -> Result<ferrocad_stage::Stage, String> {
         let timing = std::env::var_os("FERROCAD_TIMING").is_some();
-        let started = std::time::Instant::now();
+        // Read on every sync, not only under the switch, so it has to be the web-safe
+        // clock: `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
+        let started = web_time::Instant::now();
         let meshes: Vec<StageMesh> = crate::app::stage_meshes(cx)?;
         let read = started.elapsed();
         let stage = self.display.build(meshes);

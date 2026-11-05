@@ -2536,6 +2536,7 @@ dependencies = [
  "ferrocad_inventor",
  "ferrocad_types",
  "pyo3",
+ "web-time",
 ]
 
 [[package]]
@@ -2691,6 +2692,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]

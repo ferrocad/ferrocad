@@ -33,6 +33,9 @@ ferrocad_types.workspace = true
 # `extension-module` is deliberately *not* a hard feature (see ferrocad_py): it is
 # enabled only when packaging the standalone extension module.
 pyo3 = { version = "0.25", features = ["abi3-py311"] }
+# `SoEvent` timestamps events with `elapsed_secs`, which the web build dispatches too:
+# `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
+web-time = "1"
 
 [dev-dependencies]
 # `auto-initialize` lets the boot tests embed CPython.

@@ -45,6 +45,10 @@ gpui_interop = { version = "0.2.1", features = ["gpui", "wgpu"], optional = true
 gpui_wgpu = { package = "bite-gp-wgpu", version = "=1.25.203", optional = true }
 # The bundled-font registration reports to the host's logger on wasm.
 log = "0.4"
+# The stage sync times itself, and it did so on **every** sync rather than only under
+# the timing switch: `std::time::Instant::now()` panics on `wasm32-unknown-unknown`,
+# which took the web build down on its first `build_stage`.
+web-time = "1"
 serde.workspace = true
 serde_json.workspace = true
 

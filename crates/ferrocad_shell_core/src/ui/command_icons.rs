@@ -68,6 +68,41 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         "Draft_Dimension" => "dimension-line",
         "Draft_Label" => "tag",
         "Draft_Hatch" => "pattern-crosshatch",
+        // Draft edit, layers and groups. Ids validated against upstream `addCommand`.
+        // The array/mirror rows bake the note's `base + marker` composition into one
+        // asset (`mirror`, `polar-array`, ...) so the marker keeps the base's stroke
+        // weight at toolbar size.
+        // The task-panel buttons (`Draft_Wipe`, `Draft_Finish`, `Draft_Apply`,
+        // `Draft_Lock`, `Draft_Construction`) and `Draft_VisGroup`/`Draft_NewLayer`
+        // are icon names or removed commands, not registered command ids.
+        "Draft_Move" => "move",
+        "Draft_Rotate" => "rotate-object",
+        "Draft_Scale" => "resize-handle",
+        "Draft_Mirror" => "mirror",
+        "Draft_Clone" => "sheep",
+        "Draft_OrthoArray" => "grid-4x4",
+        "Draft_PolarArray" => "polar-array",
+        "Draft_PathArray" => "path-array",
+        "Draft_PointArray" => "point-array",
+        "Draft_Trimex" => "cut-line",
+        "Draft_Fillet" => "corner-radius",
+        "Draft_Join" => "merge",
+        "Draft_Split" => "split",
+        "Draft_Upgrade" => "merge",
+        "Draft_Downgrade" => "split",
+        "Draft_Stretch" => "expand-diagonal",
+        "Draft_Heal" => "wrench",
+        "Draft_Layer" => "layers",
+        "Draft_AddToLayer" => "layers-plus",
+        "Draft_AddToGroup" => "group",
+        "Draft_SelectGroup" => "group",
+        "Draft_AutoGroup" => "group",
+        "Draft_FlipDimension" => "flip-horizontal",
+        "Draft_SubelementHighlight" => "highlighter",
+        // Their `Pixmap` names (`Draft_SwitchMode`, `Draft_Construction`) are not the
+        // command ids upstream registers.
+        "Draft_ToggleDisplayMode" => "swap-horizontal",
+        "Draft_ToggleConstructionMode" => "square-dashed",
         _ => return None,
     };
     Some(key)
@@ -213,6 +248,32 @@ mod tests {
             "Draft_Dimension",
             "Draft_Label",
             "Draft_Hatch",
+            "Draft_Move",
+            "Draft_Rotate",
+            "Draft_Scale",
+            "Draft_Mirror",
+            "Draft_Clone",
+            "Draft_OrthoArray",
+            "Draft_PolarArray",
+            "Draft_PathArray",
+            "Draft_PointArray",
+            "Draft_Trimex",
+            "Draft_Fillet",
+            "Draft_Join",
+            "Draft_Split",
+            "Draft_Upgrade",
+            "Draft_Downgrade",
+            "Draft_Stretch",
+            "Draft_Heal",
+            "Draft_Layer",
+            "Draft_AddToLayer",
+            "Draft_AddToGroup",
+            "Draft_SelectGroup",
+            "Draft_AutoGroup",
+            "Draft_FlipDimension",
+            "Draft_SubelementHighlight",
+            "Draft_ToggleDisplayMode",
+            "Draft_ToggleConstructionMode",
         ] {
             let key = icon_for(id).unwrap_or_else(|| panic!("{id} is curated"));
             assert!(

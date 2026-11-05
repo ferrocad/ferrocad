@@ -423,7 +423,7 @@ Seven corrections matter:
 | Mirror | `Draft_Mirror` | `copy + flip-horizontal` | compose |
 | Offset | `Draft_Offset` | — | draw |
 | Clone | `Draft_Clone` | `sheep` | metaphor |
-| Array | `Draft_Array` | `grid-4x4` | use |
+| Array | `Draft_OrthoArray` | `grid-4x4` | use |
 | Polar array | `Draft_PolarArray` | `copy + circle-dotted` | compose |
 | Path array | `Draft_PathArray` | `copy + shape-polyline` | compose |
 | Point array | `Draft_PointArray` | `copy + bullet` | compose |
@@ -439,7 +439,7 @@ Seven corrections matter:
 | Wipe | `Draft_Wipe` | `trash` | use |
 | Finish | `Draft_Finish` | `check` | use |
 | Apply | `Draft_Apply` | `check` | use |
-| Construction | `Draft_Construction` | `square-dashed` | metaphor |
+| Construction | `Draft_ToggleConstructionMode` | `square-dashed` | metaphor |
 | Close polyline | `Draft_Lock` | `shape-polyline + lock` | compose |
 | Layer | `Draft_Layer` | `layers` | use |
 | New layer | `Draft_NewLayer` | `layers-plus` | use |
@@ -450,9 +450,17 @@ Seven corrections matter:
 | Flip dimension | `Draft_FlipDimension` | `flip-horizontal` | use |
 | Sub-element highlight | `Draft_SubelementHighlight` | `highlighter` | metaphor |
 | Slope | `Draft_Slope` | — | draw |
-| Switch mode | `Draft_SwitchMode` | `swap-horizontal` | metaphor |
+| Switch mode | `Draft_ToggleDisplayMode` | `swap-horizontal` | metaphor |
 | VisGroup | `Draft_VisGroup` | `group` | compose |
 | AutoGroup | `Draft_AutoGroup` | `group` | use |
+
+The task-panel buttons `Draft_Wipe`, `Draft_Finish`, `Draft_Apply` and `Draft_Lock`
+(close polyline) are **icon names, not commands**, and `Draft_VisGroup` /
+`Draft_NewLayer` are not registered in 1.1.4, so none reaches the command table.
+`Array` is registered as `Draft_OrthoArray`, and the two mode toggles are registered
+under their command ids with those pixmaps: `Draft_ToggleDisplayMode`
+(`Pixmap: Draft_SwitchMode`) and `Draft_ToggleConstructionMode`
+(`Pixmap: Draft_Construction`).
 
 `Draft_Lock` is not a padlock: upstream uses it for the task panel's
 close-line button (`DraftGui.py:569,806-809`, "Finishes and closes the current
@@ -795,13 +803,28 @@ Draft icons it can draw.
   `App_SaveDatumPlane` → `layers-plus`), the snap modes (`Draft_Snap_Endpoint` →
   `anchor-point`, …) and the **Draft geometry slice** (`Draft_Line` → `line-segment`,
   `Draft_Wire` → `shape-polyline`, `Draft_BezCurve` → `bezier`, `Draft_Dimension` →
-  `dimension-line`, `Draft_Hatch` → `pattern-crosshatch`, …). Every Draft id was
+  `dimension-line`, `Draft_Hatch` → `pattern-crosshatch`, …) and the **Draft
+  edit/layers/groups slice** (`Draft_Move` → `move`, `Draft_Scale` → `resize-handle`,
+  `Draft_Trimex` → `cut-line`, `Draft_Layer` → `layers`, …). Every Draft id was
   checked against upstream's `addCommand` in
   `freecad-upstream/src/Mod/Draft/draftguitools`; the note's `Draft_Dot`,
   `Draft_DimensionAngular` and `Draft_DimensionRadius` are view-provider icon names,
-  not command ids, so they have no row. Arc, Arc through 3 points and Facebinder stay
-  on the draw list and keep their label. The snap modes the note draws (midpoint,
-  origin, vertex, extension, near) keep their label alone until that glyph exists.
+  and `Draft_Wipe`/`Draft_Finish`/`Draft_Apply`/`Draft_Lock` are
+  task-panel button icons, not command ids, as are the removed `Draft_VisGroup` and
+  `Draft_NewLayer`; none has a row. The mode toggles are registered as
+  `Draft_ToggleDisplayMode` and `Draft_ToggleConstructionMode` (their `Pixmap` names
+  are `Draft_SwitchMode`/`Draft_Construction`), so those two are curated. Arc, Arc
+  through 3 points and Facebinder stay on the draw list and keep their label. The snap
+  modes the note draws (midpoint, origin, vertex, extension, near) keep their label
+  alone until that glyph exists.
+
+  **Compositions are baked.** The note's `compose` rows (`Mirror` =
+  `copy + flip-horizontal`, the three arrays, `VisGroup`, the dimension pair) ship as
+  one SVG named after the verb (`mirror`, `polar-array`, `path-array`, `point-array`),
+  with the marker's stroke widened to `1.25 / 0.5` so it keeps the base's weight. A
+  runtime overlay was tried first and rejected: gpui's SVG element has no
+  `stroke-width` override, so a half-size marker draws at ~0.55 px at toolbar size and
+  the marker nearly vanishes.
 
   The tree table is category-level: exact primitives (`Part::Cylinder` → `cylinder`,
   `Part::Torus` → `torus`, …) then `Sketcher::*` → `pencil-ruler`, `Draft::*` →

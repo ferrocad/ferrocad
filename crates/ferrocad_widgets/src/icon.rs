@@ -187,6 +187,52 @@ const ASSETS: &[(&str, &[u8])] = &[
         "pattern-crosshatch",
         include_bytes!("../assets/icons/pattern-crosshatch.svg"),
     ),
+    // Draft edit, layers and groups.
+    ("copy", include_bytes!("../assets/icons/copy.svg")),
+    (
+        "flip-horizontal",
+        include_bytes!("../assets/icons/flip-horizontal.svg"),
+    ),
+    ("sheep", include_bytes!("../assets/icons/sheep.svg")),
+    ("cut-line", include_bytes!("../assets/icons/cut-line.svg")),
+    ("merge", include_bytes!("../assets/icons/merge.svg")),
+    ("split", include_bytes!("../assets/icons/split.svg")),
+    (
+        "expand-diagonal",
+        include_bytes!("../assets/icons/expand-diagonal.svg"),
+    ),
+    ("wrench", include_bytes!("../assets/icons/wrench.svg")),
+    ("layers", include_bytes!("../assets/icons/layers.svg")),
+    (
+        "highlighter",
+        include_bytes!("../assets/icons/highlighter.svg"),
+    ),
+    (
+        "resize-handle",
+        include_bytes!("../assets/icons/resize-handle.svg"),
+    ),
+    // Baked compositions (the note's `compose` rows).
+    ("mirror", include_bytes!("../assets/icons/mirror.svg")),
+    (
+        "polar-array",
+        include_bytes!("../assets/icons/polar-array.svg"),
+    ),
+    (
+        "path-array",
+        include_bytes!("../assets/icons/path-array.svg"),
+    ),
+    (
+        "point-array",
+        include_bytes!("../assets/icons/point-array.svg"),
+    ),
+    (
+        "swap-horizontal",
+        include_bytes!("../assets/icons/swap-horizontal.svg"),
+    ),
+    (
+        "square-dashed",
+        include_bytes!("../assets/icons/square-dashed.svg"),
+    ),
 ];
 
 /// The embedded SVG for an icon key, if it is vendored.
@@ -197,11 +243,7 @@ pub fn asset(name: &str) -> Option<&'static [u8]> {
         .map(|(_, data)| *data)
 }
 
-/// Render the glyph named by an icon key at `size`, in `ink`.
-///
-/// Returns `None` for a key that is not vendored, so a caller can keep its label
-/// alone rather than reserving an empty slot. The element carries no debug selector:
-/// the caller wraps it, because the same icon may appear more than once on screen.
+/// Render an icon key at `size`, in `ink`. Returns `None` when it is not vendored.
 pub fn named(name: &str, size: f32, ink: u32) -> Option<AnyElement> {
     let data = asset(name)?;
     Some(

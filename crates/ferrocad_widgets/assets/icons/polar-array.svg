@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+<rect x="5.25" y="5.25" width="8.5" height="8.5" rx="2"/>
+    <path d="M3.5 10.75 L2.875 10.75 C2.53 10.75 2.25 10.47 2.25 10.125 L2.25 4.25 C2.25 3.145 3.145 2.25 4.25 2.25 L10.125 2.25 C10.47 2.25 10.75 2.53 10.75 2.875 L10.75 3.5"/>
+  <g transform="translate(9 9) scale(0.5)" stroke-width="2.5"><circle cx="13.75" cy="8" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="12.98" cy="10.875" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="10.875" cy="12.98" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="8" cy="13.75" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="5.125" cy="12.98" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="3.02" cy="10.875" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="2.25" cy="8" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="3.02" cy="5.125" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="5.125" cy="3.02" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="8" cy="2.25" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="10.875" cy="3.02" r="0.413" fill="currentColor" stroke="none"/>
+    <circle cx="12.98" cy="5.125" r="0.413" fill="currentColor" stroke="none"/></g>
+</svg>

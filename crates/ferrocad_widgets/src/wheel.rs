@@ -30,6 +30,8 @@ use ferrocad_theme::ui::{
     CHROME_LINE, FG, HIGHLIGHT_TINT, HOVER_RIM, MUTED, PUSH_PULL_COLOR, SUBTRACT_COLOR, WHEEL_GLASS,
 };
 
+use crate::icon;
+
 /// The inner radius of the active ring; a release inside it cancels.
 pub const INNER_RADIUS: f32 = 24.0;
 /// The outer radius of the active ring.
@@ -40,6 +42,8 @@ pub const LABEL_RADIUS: f32 = 50.0;
 pub const SIZE: f32 = 2.0 * OUTER_RADIUS + 16.0;
 /// The label half-width, in logical px.
 const LABEL_HALF_WIDTH: f32 = 44.0;
+/// The label line's height, in logical px, for centring the icon + label chip.
+const LABEL_LINE: f32 = 16.0;
 
 /// The semantic class of a slot, which selects its inner-arc ink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +73,9 @@ pub struct WheelSlot {
     /// An opaque id the caller maps back to a command; never interpreted here.
     pub id: SharedString,
     pub label: SharedString,
+    /// The command's curated icon key, or empty when it has none. Rendered above
+    /// the label as a small glyph.
+    pub icon: SharedString,
     pub tone: WheelTone,
     pub enabled: bool,
 }
@@ -168,22 +175,45 @@ pub fn wheel(key: &'static str, slots: &[WheelSlot], hovered: Option<usize>) -> 
             FG
         };
         let label_id = SharedString::from(format!("{key}-label-{}", slot.id));
-        root = root.child(
-            div()
-                .id(label_id.clone())
-                .debug_selector({
-                    let id = slot.id.clone();
-                    move || format!("{key}-label-{id}")
-                })
-                .absolute()
-                .left(px(centre.0 + offset.x.0 - LABEL_HALF_WIDTH))
-                .top(px(centre.0 + offset.y.0 - 8.0))
-                .w(px(LABEL_HALF_WIDTH * 2.0))
-                .text_xs()
-                .text_center()
-                .text_color(rgb(ink))
-                .child(slot.label.clone()),
-        );
+        let has_icon = !slot.icon.is_empty();
+        // Centre the whole icon + label chip on the slot's radius point, so a slot
+        // with a glyph reads the same weight as one without.
+        let half = if has_icon {
+            (icon::WHEEL + 1.0 + LABEL_LINE) / 2.0
+        } else {
+            LABEL_LINE / 2.0
+        };
+        let mut chip = div()
+            .id(label_id.clone())
+            .debug_selector({
+                let id = slot.id.clone();
+                move || format!("{key}-label-{id}")
+            })
+            .absolute()
+            .left(px(centre.0 + offset.x.0 - LABEL_HALF_WIDTH))
+            .top(px(centre.0 + offset.y.0 - half))
+            .w(px(LABEL_HALF_WIDTH * 2.0))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(1.0))
+            .text_xs()
+            .text_center()
+            .text_color(rgb(ink));
+        if has_icon {
+            if let Some(glyph) = icon::named(&slot.icon, icon::WHEEL, ink) {
+                chip = chip.child(
+                    div()
+                        .debug_selector({
+                            let id = slot.id.clone();
+                            move || format!("{key}-slot-icon-{id}")
+                        })
+                        .child(glyph),
+                );
+            }
+        }
+        chip = chip.child(slot.label.clone());
+        root = root.child(chip);
     }
     root
 }
@@ -625,6 +655,7 @@ mod tests {
             .map(|index| WheelSlot {
                 id: format!("slot-{index}").into(),
                 label: format!("Slot {index}").into(),
+                icon: "".into(),
                 tone: WheelTone::Structural,
                 enabled: true,
             })
@@ -700,12 +731,14 @@ mod tests {
             WheelSlot {
                 id: "move".into(),
                 label: "Move".into(),
+                icon: "move".into(),
                 tone: WheelTone::Structural,
                 enabled: true,
             },
             WheelSlot {
                 id: "delete".into(),
                 label: "Delete".into(),
+                icon: "trash".into(),
                 tone: WheelTone::Destructive,
                 enabled: true,
             },
@@ -812,6 +845,29 @@ mod tests {
             events.borrow().last(),
             Some(&WheelEvent::Selected("move".into()))
         );
+    }
+
+    #[gpui::test]
+    fn a_slot_with_an_icon_renders_it_above_the_label(cx: &mut TestAppContext) {
+        let harness = Harness {
+            slots: menu_slots(),
+            hovered: None,
+        };
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), move |_window, cx| cx.new(|_| harness))
+                .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        for selector in ["wheel-test-slot-icon-move", "wheel-test-slot-icon-delete"] {
+            assert!(
+                visual.debug_bounds(selector).is_some(),
+                "{selector} is painted"
+            );
+        }
     }
 
     #[gpui::test]

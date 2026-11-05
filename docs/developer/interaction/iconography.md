@@ -22,32 +22,37 @@ either and must be drawn.
 
 ## 0. What exists today
 
-There is no iconography decision, and no icon name reaches the shell. The word
-`icon` does not appear in the visual language, the roadmap, the command catalogue or
-`catalog.json`.
+Until 2026-11-05 there was no iconography decision and no icon name reached the
+shell. The inventory below is the starting point; the "as built" column records what
+now renders (§6.2).
 
-| Surface | Drawn today | Evidence |
-| --- | --- | --- |
-| App menu | Unicode `☰` text | `crates/ferrocad_shell_core/src/ui/chrome.rs:521` |
-| Header controls | status dot + text + `▾` | `chrome.rs`; `screenshot.png` |
-| Action dock | text labels | `chrome.rs:1355` |
-| Header popovers | `PopoverRow { label, accel, checked, … }` | `chrome.rs:66` |
-| Radial wheel | text label per wedge; tone only in the inner arc | `crates/ferrocad_widgets/src/wheel.rs` |
-| Palette | text rows | `crates/ferrocad_shell_core/src/shell/panels/palette.rs` |
-| Model tree | `▾` + label + object `type_id` as text | `crates/ferrocad_shell_core/src/shell/render.rs:1133-1150` |
-| Dev Tools | **one embedded SVG bug**, 16×16 | `crates/ferrocad_widgets/src/icon.rs` |
-| Title bar | painted minimize/maximize/close paths | `crates/ferrocad_widgets/src/window_chrome.rs:241` |
-| NaviCube | 3-D glass cube with `F/R/T` letters | `crates/ferrocad_viewport/src/navicube.rs` |
+| Surface | Drawn before | As built (2026-11-05) | Evidence |
+| --- | --- | --- | --- |
+| App menu | Unicode `☰` text | embedded `menu` glyph; rows carry the command's glyph | `crates/ferrocad_shell_core/src/ui/chrome.rs` |
+| Header controls | status dot + text + `▾` | embedded glyph + text + `▾` | `chrome.rs`; `screenshot.png` |
+| Action dock | text labels | glyph + text label | `chrome.rs` |
+| Header popovers | `PopoverRow { label, accel, checked, … }` | glyph + label + accel + status dot | `chrome.rs` |
+| Radial wheel | text label per wedge; tone only in the inner arc | glyph above the text label | `crates/ferrocad_widgets/src/wheel.rs` |
+| Palette | text rows | text rows (unchanged) | `crates/ferrocad_shell_core/src/shell/panels/palette.rs` |
+| Model tree | `▾` + label + object `type_id` as text | unchanged | `crates/ferrocad_shell_core/src/shell/render.rs:1133-1150` |
+| Dev Tools | **one embedded SVG bug**, 16×16 | unchanged | `crates/ferrocad_widgets/src/icon.rs` |
+| Title bar | painted minimize/maximize/close paths | unchanged | `crates/ferrocad_widgets/src/window_chrome.rs:241` |
+| NaviCube | 3-D glass cube with `F/R/T` letters | unchanged | `crates/ferrocad_viewport/src/navicube.rs` |
 
-Two facts matter:
+Three facts matter:
 
 - `ferrocad_widgets::icon` is the seed of a real system: embedded SVG bytes, a
   16×16 box, `text_color` ink (`MUTED` / `HOVER_RIM`), a `{key}-icon` debug selector
-  and a headless render test. The bug and the five header controls use it.
+  and a headless render test. [`icon::named`] resolves an **icon key** for any other
+  surface, so a menu row, a dock button and a wheel slot share one asset registry.
 - The control glyphs are **embedded SVGs** (`include_bytes!` + `gpui::svg().data()`),
   so there is no `AssetSource`, no filesystem lookup and no network dependency. The
   pinned `bite-gpui` fork also provides `AssetSource`/`svg().path()`, which the larger
   vendored set can use when it lands.
+- The command id is the join key. `crates/ferrocad_shell_core/src/ui/command_icons.rs`
+  is the curated **command id → icon key** table (the note's alias table in code); a
+  command with no row keeps its label and draws no glyph, and a test keeps every
+  curated key pointing at a vendored asset.
 
 The command metadata has no icon key anywhere:
 
@@ -57,6 +62,11 @@ The command metadata has no icon key anywhere:
   `MenuText`, `ToolTip`, `Accel`, `Group` and `CmdType` and **drops upstream's
   `Pixmap`**, which is the key that names an icon (`"Pixmap": "Draft_Move"`,
   `freecad-upstream/src/Mod/Draft/draftguitools/gui_move.py:57`).
+
+That gap is why the join key is the **command id**, not a resource: the ids already
+travel end to end (`Draft_Snap_Grid`, `App_Move`), and the curated table above can be
+added to without touching the JSON contract, the Python bridge or a mod. Forwarding
+`Pixmap` — so a mod could declare its own icon — is the follow-up described in §6.1.
 
 ---
 
@@ -730,6 +740,25 @@ Draft icons it can draw.
   `axes-3d + move`; `snap` composes `magnet + lock`; `workplane` is the authored
   draw-list glyph. The ink carries the state — `MUTED` off, `HOVER_RIM` on — so there
   is no separate state dot.
+
+  **Surfaces (2026-11-05).** `icon::named(key, size, ink)` is the resolver the rest of
+  the chrome uses, and `ui::command_icons::icon_for(command_id)` is the curated table
+  that supplies the key:
+
+  | Surface | Glyph | Size |
+  | --- | --- | --- |
+  | App menu button | `menu`, or `☰` only if the asset is missing | 16 px |
+  | App menu / header popover rows | the row command's key | 14 px (`icon::ROW`) |
+  | Action dock buttons | the command's key, followed by the label | 14 px |
+  | Action dock Search | `search` | 14 px |
+  | Radial wheel slots | the command's key, above the label | 12 px (`icon::WHEEL`) |
+
+  The curated rows are the built-ins (`App_Move` → `move`, `App_Delete` → `trash`,
+  `App_Open` → `folder-open`, …), the dock's creation verbs (`Toy_MakeSlab` → `cube`,
+  `Toy_Polyline` → `shape-polyline`, `Part_MakeBox` → `cube`,
+  `Part_SaveDatumPlane` → `layers-plus`) and the snap modes (`Draft_Snap_Endpoint` →
+  `anchor-point`, …). The snap modes the note draws (midpoint, origin, vertex,
+  extension, near) keep their label alone until that glyph exists.
 - **Vendored IconMCP set**: the 123 `use` icons, as outline SVGs with their MIT
   licence, rasterised by `gpui::svg()` through an `AssetSource`. Vendored, not fetched:
   the build must work offline and the same binary must render the same icons in CI.

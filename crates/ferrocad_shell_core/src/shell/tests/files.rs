@@ -317,4 +317,12 @@ fn the_app_menu_lists_the_file_verbs(cx: &mut TestAppContext) {
         bar_cx.debug_bounds("app-row-Dev_ToggleTools").is_some(),
         "Dev Tools stays in the menu"
     );
+    // The hamburger and each curated row carry a glyph, not just a text label.
+    assert!(
+        bar_cx.debug_bounds("app-menu-icon").is_some(),
+        "the hamburger is drawn as a glyph"
+    );
+    for row in ["app-row-App_Open-icon", "app-row-App_Save-icon"] {
+        assert!(bar_cx.debug_bounds(row).is_some(), "{row} is painted");
+    }
 }

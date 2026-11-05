@@ -3,6 +3,7 @@
 //! Split out of `shell.rs`; the paths and behaviour are unchanged.
 
 use crate::shell::*;
+use crate::ui::command_icons;
 use super::picking::click_target;
 use ferrocad_stage::{
     GizmoSet, ShapeItem, Stage, WorkplaneLive, WorkplaneStem, WORKPLANE_OFFSET_ID,
@@ -366,6 +367,7 @@ impl Shell {
             .map(|command| WheelSlot {
                 id: command.id.clone().into(),
                 label: command.short_label().into(),
+                icon: command_icons::icon_for(&command.id).unwrap_or("").into(),
                 tone: match command.tone.as_str() {
                     "additive" => WheelTone::Additive,
                     "destructive" => WheelTone::Destructive,
@@ -385,6 +387,7 @@ impl Shell {
                 .map(|command| WheelSlot {
                     id: command.id.clone().into(),
                     label: command.short_label().into(),
+                    icon: command_icons::icon_for(&command.id).unwrap_or("").into(),
                     tone: WheelTone::Structural,
                     enabled: command.enabled,
                 })

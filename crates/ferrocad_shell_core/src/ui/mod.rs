@@ -4,6 +4,7 @@
 //! read the shell models through [`crate::model`].
 
 pub mod chrome;
+pub(crate) mod command_icons;
 pub mod dev_tools;
 pub mod dialog;
 pub mod forms;

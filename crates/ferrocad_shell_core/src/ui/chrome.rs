@@ -40,6 +40,8 @@ use crate::commands::{self, CommandInfo, Surface};
 use crate::types::{AxisSummary, GridSummary, ProviderFeature};
 use crate::shell::{ACCENT, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell, ShellModel, Slot};
 
+use super::command_icons;
+
 /// The header controls' primary command ids.
 pub const GRID: &str = "App_ToggleGrid";
 pub const AXIS: &str = "App_ToggleAxisCross";
@@ -70,6 +72,8 @@ struct PopoverRow {
     label: String,
     enabled: bool,
     checked: bool,
+    /// The curated icon key for the row's command, or empty when it has none.
+    icon: String,
     /// The row represents a boolean state, so it carries a status dot (a provider
     /// choice and a command toggle both do; a one-shot action does not).
     toggle: bool,
@@ -82,6 +86,11 @@ struct PopoverRow {
     divider_before: bool,
 }
 
+/// The curated glyph for a command, or `None` when the note has not chosen one.
+fn command_glyph(command_id: &str, size: f32, ink: u32) -> Option<AnyElement> {
+    command_icons::icon_for(command_id).and_then(|key| icon::named(key, size, ink))
+}
+
 impl PopoverRow {
     fn of(command: &CommandInfo) -> Self {
         Self {
@@ -91,6 +100,9 @@ impl PopoverRow {
             label: command.short_label().to_string(),
             enabled: command.enabled,
             checked: command.checked,
+            icon: command_icons::icon_for(&command.id)
+                .unwrap_or("")
+                .to_string(),
             toggle: command.checkable,
             keep_open: command.checkable,
             accel: command.accel.clone(),
@@ -117,6 +129,7 @@ fn provider_rows(feature: &str, providers: &[crate::types::GridProvider]) -> Vec
             },
             enabled: true,
             checked: provider.active,
+            icon: String::new(),
             // A provider group is a radio set: the dot shows the active backend. It
             // is a **state** row like a checkbox, so the menu stays open and the dot
             // follows; `activate_provider` refreshes the summary in place.
@@ -291,6 +304,9 @@ fn gizmo_rows(feature: Option<&ProviderFeature>, commands: &[CommandInfo]) -> Ve
             label: "Reset to edition defaults".to_string(),
             enabled: command.enabled,
             checked: false,
+            icon: command_icons::icon_for(&command.id)
+                .unwrap_or("")
+                .to_string(),
             toggle: false,
             keep_open: false,
             accel: command.accel.clone(),
@@ -471,6 +487,9 @@ fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
             id: command.id.clone(),
             label: command.label().to_string(),
             enabled: command.enabled,
+            icon: command_icons::icon_for(&command.id)
+                .unwrap_or("")
+                .to_string(),
             // The registry cannot know whether a window exists; the shell can.
             checked: dev_tools_open,
             // A toggle, but the app menu is a launcher: clicking closes it so the
@@ -518,7 +537,18 @@ pub(crate) fn app_menu(
             .cursor_pointer()
             .hover(|style| style.bg(rgb(PANEL)))
             .when(open, |el| el.bg(rgb(PANEL)))
-            .child("☰")
+            .child(
+                div()
+                    .debug_selector(|| "app-menu-icon".to_string())
+                    .flex()
+                    .items_center()
+                    // The glyph is an embedded SVG; the text mark is a fallback only
+                    // for a build whose asset went missing.
+                    .child(
+                        icon::named("menu", icon::CONTROL, FG)
+                            .unwrap_or_else(|| div().child("☰").into_any_element()),
+                    ),
+            )
             // Keep the title-bar drag from swallowing the click.
             .on_mouse_down(MouseButton::Left, |_event, _window, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _event, _window, cx| this.open_popover("app", cx))),
@@ -675,6 +705,7 @@ fn select_button(
             label: candidate.label().to_string(),
             enabled: true,
             checked: candidate == filter,
+            icon: String::new(),
             // A radio set: the dot follows the active filter and the menu stays open
             // for a comparison, like a provider group.
             toggle: true,
@@ -1065,6 +1096,7 @@ fn popover_with_info(
         .map(|row| MenuRow {
             id: row.id.into(),
             label: row.label.into(),
+            icon: (!row.icon.is_empty()).then(|| row.icon.into()),
             enabled: row.enabled,
             checked: row.checked,
             toggle: row.toggle,
@@ -1401,6 +1433,24 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
             FG
         };
         let hover_ink = if checked { ACTIVE_ACCENT } else { FG };
+        // The glyph is a secondary mark beside the label, so it takes the same ink
+        // as the text: muted when disabled, accented when the command is live.
+        let glyph = command_glyph(&id, icon::ROW, ink).map(|glyph| {
+            div()
+                .debug_selector({
+                    let id = id.clone();
+                    move || format!("dock-{id}-icon")
+                })
+                .flex()
+                .items_center()
+                .child(glyph)
+        });
+        let mut content = div().flex().flex_row().items_center().gap_1();
+        if let Some(glyph) = glyph {
+            content = content.child(glyph);
+        }
+        content = content.child(command.label().to_string());
+
         let mut button = div()
             .id(SharedString::from(format!("dock-{id}")))
             .debug_selector({
@@ -1417,7 +1467,7 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
                     style.bg(rgba(ROW_HOVER)).text_color(rgb(hover_ink))
                 })
             })
-            .child(command.label().to_string());
+            .child(content);
         if enabled {
             button = button.on_click(cx.listener(move |this, _event, _window, cx| {
                 this.run_command(&id, cx);
@@ -1440,7 +1490,24 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
             .text_color(rgb(MUTED))
             .cursor_pointer()
             .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
-            .child("Search (Ctrl+K)")
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .debug_selector(|| "dock-search-icon".to_string())
+                            .flex()
+                            .items_center()
+                            .child(
+                                icon::named("search", icon::ROW, MUTED)
+                                    .unwrap_or_else(|| div().into_any_element()),
+                            ),
+                    )
+                    .child("Search (Ctrl+K)"),
+            )
             .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx))),
     );
 

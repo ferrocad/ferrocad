@@ -40,6 +40,13 @@ fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
         "object verbs left the dock for the radial menu"
     );
     assert!(cx.debug_bounds("dock-search").is_some());
+    // The dock is a command strip, so its glyphs come from the curated table; the
+    // Search entry is the one glyph this harness can prove (it links no workbench,
+    // so it registers no creation verbs).
+    assert!(
+        cx.debug_bounds("dock-search-icon").is_some(),
+        "the search entry carries a magnifier"
+    );
     assert!(
         cx.debug_bounds("dock-GizmoOverlay_Settings").is_none(),
         "the native gizmo settings are dev-only and must not be on the dock"
@@ -67,6 +74,14 @@ fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
     });
     draw(&mut cx);
     assert!(cx.debug_bounds("radial-wheel").is_some(), "the wheel opened");
+    // Each curated slot carries its command's glyph above the label.
+    for selector in [
+        "radial-slot-icon-App_Move",
+        "radial-slot-icon-App_Rotate",
+        "radial-slot-icon-App_Delete",
+    ] {
+        assert!(cx.debug_bounds(selector).is_some(), "{selector} is painted");
+    }
     let move_slot = cx
         .debug_bounds("radial-label-App_Move")
         .expect("Move is a north slot");

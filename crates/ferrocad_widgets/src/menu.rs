@@ -19,6 +19,8 @@ use ferrocad_theme::ui::{
     ACTIVE_ACCENT, CHROME_LINE, DOT_INACTIVE, FG, MUTED, POPOVER_BG, POPOVER_BORDER, ROW_HOVER,
 };
 
+use crate::icon;
+
 /// A read-only value row shown above the commands (for example the active
 /// provider or a current value). Info rows are muted and never clickable.
 #[derive(Clone, Debug)]
@@ -32,6 +34,9 @@ pub struct MenuInfoRow {
 pub struct MenuRow {
     pub id: SharedString,
     pub label: SharedString,
+    /// The command's curated icon key, if it has one. Rendered as a small glyph in
+    /// the lead column; a row without it keeps the column empty so labels align.
+    pub icon: Option<SharedString>,
     pub enabled: bool,
     pub checked: bool,
     /// Draw the status-dot slot: a solid dot for an on state and a dim one for
@@ -122,6 +127,7 @@ pub fn menu(
         let MenuRow {
             id,
             label,
+            icon,
             enabled,
             checked,
             toggle,
@@ -181,6 +187,30 @@ pub fn menu(
             );
         } else {
             el = el.child(div().w(px(6.)).h(px(6.)));
+        }
+
+        // The command glyph is secondary to the label, so it takes the row's own ink
+        // (muted when a toggle is off, full when it is on). The column is reserved
+        // even when a row has no glyph, so labels stay aligned down the menu.
+        let glyph = icon
+            .as_ref()
+            .and_then(|key| icon::named(key, icon::ROW, text_color));
+        match glyph {
+            Some(glyph) => {
+                el = el.child(
+                    div()
+                        .debug_selector({
+                            let id = id.clone();
+                            move || format!("{key}-row-{id}-icon")
+                        })
+                        .flex()
+                        .items_center()
+                        .child(glyph),
+                );
+            }
+            None => {
+                el = el.child(div().w(px(icon::ROW)).h(px(icon::ROW)));
+            }
         }
 
         el = el.child(label).child(div().flex_1());
@@ -249,6 +279,7 @@ mod tests {
         MenuRow {
             id: id.into(),
             label: format!("Row {id}").into(),
+            icon: None,
             enabled: true,
             checked: false,
             toggle,
@@ -314,6 +345,22 @@ mod tests {
                 "{selector} is rendered"
             );
         }
+    }
+
+    #[gpui::test]
+    fn a_row_icon_renders_only_when_the_row_has_one(cx: &mut TestAppContext) {
+        let mut iconic = row("iconic", false);
+        iconic.icon = Some("menu".into());
+        let (mut visual, _, _) = open(cx, Vec::new(), vec![iconic, row("plain", false)]);
+
+        assert!(
+            visual.debug_bounds("menu-test-row-iconic-icon").is_some(),
+            "the row with an icon key paints it"
+        );
+        assert!(
+            visual.debug_bounds("menu-test-row-plain-icon").is_none(),
+            "a row without a key keeps the lead column empty"
+        );
     }
 
     #[gpui::test]

@@ -595,6 +595,17 @@ interpreter a JSON snapshot whose `kind` and `value` the engine decided, and
 `bootstrap.py` only presents it. The `*_py` PyO3 modules are **not** reachable — they
 are CPython extension modules — which is the trade-off §6.3 predicted.
 
+**Both Python backends reach the engine the same way**, one native-module hop from
+the script, and the script never touches `ferrocad_core` itself:
+
+```text
+CPython:    ferrocad_shell → imports `ferrocad`      → ferrocad_py (PyO3 C-ABI)  → ferrocad_core
+RustPython: ferrocad_shell → imports `_ferrocad`     → _ferrocad (rustpython-vm) → ferrocad_core
+```
+
+Only the binding module differs; the script above it is byte-identical, which is what
+makes one `python/ferrocad_shell` serve both.
+
 **Host gaps the spike fills.** `wasm32-unknown-unknown` has no POSIX module, so
 `contextlib`, `io`, `pathlib` and `traceback` cannot be imported from the frozen
 stdlib. `ferrocad_shell` imports all four at module scope, so `bootstrap.py` supplies

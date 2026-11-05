@@ -272,17 +272,18 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
 
 ## 10. Known costs and what is deferred
 
-- **The CPython mesh hop.** `stage_meshes()` builds Python lists, serializes to JSON and
-  deserializes in Rust, so a commit on a large document pays for every vertex. It is
-  paid per edit (a drag preview repaints from the cached stage), not per frame. The
-  fix is a binary or handle-based transfer beside the JSON entry point, which stays for
-  the documented Python callers.
+- **The CPython mesh hop, half fixed.** The host no longer round-trips the scene through
+  JSON: `ferrocad_shell_python::python::stage_meshes` calls `stage_meshes_typed` and
+  reads the rows through PyO3, while `stage_meshes()` keeps returning the JSON string
+  for scripts and the docs tooling. What remains is the *producer*: `FerroCAD.display_mesh`
+  still returns Python lists of tuples, so every coordinate is still a `PyFloat` before
+  Rust sees it. Emitting the arrays as buffers (`bytes`/`memoryview`) from
+  `ferrocad_part_py` is the next step, and it is what makes the hop independent of the
+  triangle count. The cost is paid per edit — a drag preview repaints from the cached
+  stage — not per frame.
 - **CPU picking on wasm.** The fallback transforms every vertex of every packet into a
   fresh buffer, then scans every triangle, with no bounding-box pre-reject or BVH. Fine
   for the sample; the first thing to fix when a large model runs in the browser.
-- **`DisplaySync` copies.** `StageMesh::tessellation()` clones every array to satisfy
-  `ShapeItem::from_tessellation(&Tessellation)`, so both backends copy once more than
-  they need to.
 - **The `ferrocad_shell_python` split** (host and CPython backend in separate crates) is
   deferred until a pure-Rust desktop edition exists, because only that edition needs to
   link no CPython.

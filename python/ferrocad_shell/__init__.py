@@ -2,7 +2,9 @@
 
 The shell drives the document model **only** through these functions, so the
 shell is a client of the same public ``FreeCAD`` API a workbench would use.
-Each entry point returns a JSON string the Rust side deserialises.
+Most entry points return a JSON string the Rust side deserialises. The exception is
+:func:`stage_meshes_typed`, which hands the same rows over as Python objects because
+serializing a tessellation costs more than reading it.
 """
 
 from __future__ import annotations
@@ -549,6 +551,31 @@ def evaluate(code: str) -> str:
             return _json({"ok": False, "output": buf.getvalue().rstrip("\n")})
 
 
+def _stage_mesh_rows() -> list:
+    """The rows behind :func:`stage_meshes`, as Python objects.
+
+    Built once: :func:`stage_meshes` serializes them for scripts and the docs
+    tooling, and :func:`stage_meshes_typed` hands them to the Rust host as-is.
+    """
+    try:
+        doc = _active_doc()
+    except Exception:
+        return []
+
+    objects = list(doc.Objects)
+    drawable = set(doc.drawableObjects())
+
+    meshes = []
+    for index, obj in enumerate(objects, start=1):
+        if obj.Name not in drawable:
+            continue
+        mesh = FerroCAD.display_mesh(obj)
+        if mesh is None:
+            continue
+        meshes.append({"object": obj.Name, "label": obj.Label, "entity": index, **mesh})
+    return meshes
+
+
 def stage_meshes() -> str:
     """The tessellated shapes the viewport draws, as JSON.
 
@@ -562,24 +589,22 @@ def stage_meshes() -> str:
 
     Returns ``[]`` when no module is loaded, leaving the shell's `pivy.coin` sample
     scene in place.
+
+    The Rust host does **not** call this: it uses :func:`stage_meshes_typed`, which
+    skips the ``json.dumps``. This form stays for scripts and the docs tooling, which
+    parse text (``tools/workflows/04_toy_workbench.py``).
     """
-    try:
-        doc = _active_doc()
-    except Exception:
-        return "[]"
+    return _json(_stage_mesh_rows())
 
-    objects = list(doc.Objects)
-    drawable = set(doc.drawableObjects())
 
-    meshes = []
-    for index, obj in enumerate(objects, start=1):
-        if obj.Name not in drawable:
-            continue
-        mesh = FerroCAD.display_mesh(obj)
-        if mesh is None:
-            continue
-        meshes.append({"object": obj.Name, "label": obj.Label, "entity": index, **mesh})
-    return _json(meshes)
+def stage_meshes_typed() -> list:
+    """The same rows as :func:`stage_meshes`, unserialized.
+
+    ``ferrocad_shell_python`` calls this through PyO3. Going through ``json.dumps``
+    here and ``serde_json`` in Rust turned every coordinate into text and back, which
+    is the cost that grows with the triangle count; the row shape is unchanged.
+    """
+    return _stage_mesh_rows()
 
 
 def active_document() -> str:

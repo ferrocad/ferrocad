@@ -56,6 +56,9 @@ pub struct StageMesh {
 
 impl StageMesh {
     /// The mesh in the seam's vocabulary.
+    ///
+    /// Copies every array, so prefer [`into_tessellation`](Self::into_tessellation)
+    /// when the caller owns the mesh — `DisplaySync` does.
     pub fn tessellation(&self) -> Tessellation {
         Tessellation {
             positions: self.positions.clone(),
@@ -67,6 +70,37 @@ impl StageMesh {
             vertices: self.vertices.clone(),
             vertex_parts: self.vertex_parts.clone(),
             parts: self.parts.clone(),
+        }
+    }
+
+    /// The mesh in the seam's vocabulary, moving the arrays instead of copying them.
+    ///
+    /// This is the form `DisplaySync` uses: it owns the `StageMesh` it was handed, and
+    /// on a large document the copy [`tessellation`](Self::tessellation) makes is a
+    /// second pass over every vertex.
+    pub fn into_tessellation(self) -> Tessellation {
+        let Self {
+            positions,
+            normals,
+            triangles,
+            triangle_parts,
+            edges,
+            segment_parts,
+            vertices,
+            vertex_parts,
+            parts,
+            ..
+        } = self;
+        Tessellation {
+            positions,
+            normals,
+            triangles,
+            triangle_parts,
+            edges,
+            segment_parts,
+            vertices,
+            vertex_parts,
+            parts,
         }
     }
 }

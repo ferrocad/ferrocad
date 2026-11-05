@@ -356,9 +356,46 @@ impl ShapeItem {
         self
     }
 
+    /// [`set_tessellation`](Self::set_tessellation), moving the arrays.
+    ///
+    /// The borrowing form clones every array; this one takes the mesh, which is what
+    /// `DisplaySync` has once it has read the entity, label and display mode off its
+    /// `StageMesh`.
+    pub fn set_tessellation_owned(&mut self, mut mesh: Tessellation) {
+        let normals = if mesh.normals.len() == mesh.positions.len() {
+            std::mem::take(&mut mesh.normals)
+        } else {
+            Vec::new()
+        };
+        // Reads the per-primitive ids, so it must run before any of them is taken.
+        let parts = parts_from_tessellation(&mesh);
+        let part_names = std::mem::take(&mut mesh.parts);
+        let vertices = std::mem::take(&mut mesh.vertices);
+        self.set_mesh(
+            std::mem::take(&mut mesh.positions),
+            normals,
+            std::mem::take(&mut mesh.triangles),
+            std::mem::take(&mut mesh.edges),
+            parts,
+        );
+        self.part_names = part_names;
+        self.vertices = vertices;
+    }
+
+    /// The consuming builder form of [`set_tessellation_owned`](Self::set_tessellation_owned).
+    pub fn with_tessellation_owned(mut self, mesh: Tessellation) -> Self {
+        self.set_tessellation_owned(mesh);
+        self
+    }
+
     /// A new item from a kernel tessellation.
     pub fn from_tessellation(entity_id: u32, mesh: &Tessellation) -> Self {
         Self::new(entity_id).with_tessellation(mesh)
+    }
+
+    /// A new item from a kernel tessellation the caller gives up.
+    pub fn from_tessellation_owned(entity_id: u32, mesh: Tessellation) -> Self {
+        Self::new(entity_id).with_tessellation_owned(mesh)
     }
 
     /// The part id → element name table (`Face6`, `Edge3`).

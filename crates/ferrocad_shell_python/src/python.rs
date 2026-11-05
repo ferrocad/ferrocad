@@ -314,8 +314,129 @@ pub fn model_tree() -> Result<Vec<DocumentNode>, String> {
 ///
 /// Empty when no module can display the document, which the shell treats as "keep the
 /// sample scene".
+///
+/// Reads `stage_meshes_typed` through PyO3 rather than the JSON string `stage_meshes`
+/// returns: the JSON form turns every coordinate into text and parses it back, and that
+/// cost grows with the triangle count. The row shape is identical, so `stage_meshes`
+/// stays the entry point for scripts and the docs tooling, which want text.
+///
+/// The display hook still decides *what* is drawn: the rows come from
+/// `FerroCAD.display_mesh`, dispatched in Python. Only the transport changed.
 pub fn stage_meshes() -> Result<Vec<StageMesh>, String> {
-    call_json("stage_meshes", None)
+    Python::with_gil(|py| -> Result<Vec<StageMesh>, String> {
+        let module = py.import(entry_module()).map_err(|e| e.to_string())?;
+        let rows = module
+            .getattr("stage_meshes_typed")
+            .map_err(|e| e.to_string())?
+            .call0()
+            .map_err(|e| e.to_string())?;
+        let mut meshes = Vec::new();
+        for row in rows.try_iter().map_err(|e| e.to_string())? {
+            let row = row.map_err(|e| e.to_string())?;
+            let row = row.downcast::<PyDict>().map_err(|e| e.to_string())?;
+            meshes.push(stage_mesh_from_row(row)?);
+        }
+        Ok(meshes)
+    })
+}
+
+/// One `stage_meshes` row as the backend's [`StageMesh`].
+///
+/// A missing or `None` field takes the same default `#[serde(default)]` gives the JSON
+/// form, so the two paths cannot disagree about an absent array.
+fn stage_mesh_from_row(row: &Bound<'_, PyDict>) -> Result<StageMesh, String> {
+    Ok(StageMesh {
+        entity: required(row, "entity")?,
+        object: required(row, "object")?,
+        label: optional::<String>(row, "label")?.unwrap_or_default(),
+        positions: points(row, "positions")?,
+        normals: points(row, "normals")?,
+        triangles: optional(row, "triangles")?.unwrap_or_default(),
+        triangle_parts: optional(row, "triangle_parts")?.unwrap_or_default(),
+        edges: optional(row, "edges")?.unwrap_or_default(),
+        segment_parts: optional(row, "segment_parts")?.unwrap_or_default(),
+        vertices: optional(row, "vertices")?.unwrap_or_default(),
+        vertex_parts: optional(row, "vertex_parts")?.unwrap_or_default(),
+        parts: optional(row, "parts")?.unwrap_or_default(),
+        origin: fixed::<3>(row, "origin")?,
+        color: fixed::<4>(row, "color")?,
+        display: optional::<String>(row, "display")?,
+    })
+}
+
+/// A field every row must carry.
+fn required<'py, T: FromPyObject<'py>>(row: &Bound<'py, PyDict>, key: &str) -> Result<T, String> {
+    match row.get_item(key).map_err(|e| e.to_string())? {
+        Some(value) => value
+            .extract::<T>()
+            .map_err(|e| format!("stage_meshes: {key}: {e}")),
+        None => Err(format!("stage_meshes: row has no {key}")),
+    }
+}
+
+/// A field a row may omit, or set to `None`.
+fn optional<'py, T: FromPyObject<'py>>(
+    row: &Bound<'py, PyDict>,
+    key: &str,
+) -> Result<Option<T>, String> {
+    match row.get_item(key).map_err(|e| e.to_string())? {
+        Some(value) if !value.is_none() => value
+            .extract::<T>()
+            .map(Some)
+            .map_err(|e| format!("stage_meshes: {key}: {e}")),
+        _ => Ok(None),
+    }
+}
+
+/// An `[[f32; 3]]` field: a sequence of points, each a `(x, y, z)` tuple or list.
+///
+/// The Part hook emits tuples and a mod may emit lists, and PyO3's tuple extraction is
+/// strict, so each point is read as a sequence of floats.
+fn points(row: &Bound<'_, PyDict>, key: &str) -> Result<Vec<[f32; 3]>, String> {
+    let Some(value) = row.get_item(key).map_err(|e| e.to_string())? else {
+        return Ok(Vec::new());
+    };
+    if value.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut points = Vec::new();
+    for point in value.try_iter().map_err(|e| e.to_string())? {
+        let point = point.map_err(|e| e.to_string())?;
+        let xyz: Vec<f32> = point
+            .extract()
+            .map_err(|e| format!("stage_meshes: {key}: {e}"))?;
+        let [x, y, z]: [f32; 3] = xyz.as_slice().try_into().map_err(|_| {
+            format!(
+                "stage_meshes: {key}: a point needs 3 numbers, got {}",
+                xyz.len()
+            )
+        })?;
+        points.push([x, y, z]);
+    }
+    Ok(points)
+}
+
+/// A fixed-length float field (`origin` is 3, `color` is 4).
+///
+/// A list or a tuple — the display hook builds `color` with `list(...)` and `origin`
+/// with a tuple, so neither form can be assumed.
+fn fixed<const N: usize>(row: &Bound<'_, PyDict>, key: &str) -> Result<Option<[f32; N]>, String> {
+    let Some(value) = row.get_item(key).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    let values: Vec<f32> = value
+        .extract()
+        .map_err(|e| format!("stage_meshes: {key}: {e}"))?;
+    let array: [f32; N] = values.as_slice().try_into().map_err(|_| {
+        format!(
+            "stage_meshes: {key}: needs {N} numbers, got {}",
+            values.len()
+        )
+    })?;
+    Ok(Some(array))
 }
 
 /// The active document's name after a script ran, if there is one.

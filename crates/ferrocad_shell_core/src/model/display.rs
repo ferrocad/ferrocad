@@ -64,14 +64,22 @@ impl DisplaySync {
     pub fn build(&mut self, meshes: impl IntoIterator<Item = StageMesh>) -> Stage {
         let mut stage = Stage::new();
         self.objects.clear();
-        for mesh in meshes {
+        for mut mesh in meshes {
             if mesh.positions.is_empty() {
                 continue;
             }
-            let mut item = ShapeItem::from_tessellation(mesh.entity, &mesh.tessellation())
-                .with_draw_mode(display_mode(mesh.display.as_deref()))
-                .with_origin(mesh.origin);
-            if mesh.display.as_deref() == Some(GLASS_CARD) {
+            // Read the metadata off the row, then give the mesh up: the arrays move
+            // into the stage item instead of being copied a second time. `take` keeps
+            // the struct whole so `into_tessellation` can consume it.
+            let entity = mesh.entity;
+            let object = std::mem::take(&mut mesh.object);
+            let display = std::mem::take(&mut mesh.display);
+            let origin = mesh.origin;
+            let color = mesh.color;
+            let mut item = ShapeItem::from_tessellation_owned(entity, mesh.into_tessellation())
+                .with_draw_mode(display_mode(display.as_deref()))
+                .with_origin(origin);
+            if display.as_deref() == Some(GLASS_CARD) {
                 // A datum card: a low-alpha glass fill plus the front-edge rim, in
                 // the blended pass. No occluded ghost edges — the card is meant to
                 // be read through, and its rim is the whole boundary cue.
@@ -83,20 +91,20 @@ impl DisplaySync {
             } else {
                 // Document solids get the V1 occluded-edge ghost; overlays do not.
                 item = item.with_ghost_edges();
-                if mesh.color.is_none() {
+                if color.is_none() {
                     // V2b: up-facing facets use the glass-top ink, the rest the shade.
                     item = item
                         .with_surface_color(theme::GLASS_TOP)
                         .with_shade_color(theme::GLASS_SHADE);
                 }
-                if let Some(color) = mesh.color {
+                if let Some(color) = color {
                     // The edge colour follows the surface, so a wireframe shows the
                     // same colour as the shaded item. A workbench colour stays
                     // single-tone.
                     item = item.with_surface_color(color).with_edge_color(color);
                 }
             }
-            self.objects.insert(mesh.entity, mesh.object);
+            self.objects.insert(entity, object);
             stage.add_item(item);
         }
         stage

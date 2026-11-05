@@ -1,6 +1,6 @@
 # Opening a large model: where the seconds are
 
-Status: **task (2026-11-05). Stage 2 landed; stages 1, 3–5 open.**
+Status: **task (2026-11-05). Stages 1 and 2 landed; stages 3–5 open.**
 Companion: [`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md)
 §10 (the mesh hop), and [`transform-session.md`](transform-session.md) for the
 edit-time half of the same cost.
@@ -9,11 +9,12 @@ edit-time half of the same cost.
 
 Opening `~/Downloads/900a_GA3DtechProject_v1.0.FCStd` (41 MB, 42 members, 10 drawable
 shapes, **1 251 921 triangles**, largest shape 327 954 triangles) took 46.5 s from
-process start to a rendered frame. Three changes have landed since — `Shape.mesh` bakes
-the object placement in the kernel, the mesh crosses to the host as packed `bytes`, and
-the `.FCStd` payloads are restored in parallel — and it is now **~13.5 s**. The rest of
-this document records what is left, why progressive tessellation alone does not fix it,
-and the order the remaining fixes should land in.
+process start to a rendered frame. Four changes have landed since — `Shape.mesh` bakes
+the object placement in the kernel, the mesh crosses to the host as packed `bytes`, the
+`.FCStd` payloads are restored in parallel, and the display tessellation is memoised per
+shape handle — and it is now **~13 s**, with a repeat sync at **0.7 s** instead of 5.5 s.
+The rest of this document records what is left, why progressive tessellation alone does
+not fix it, and the order the remaining fixes should land in.
 
 ## 1. The measured budget
 
@@ -109,19 +110,51 @@ must not fail: the triangle set a coarse mesh has is what the ray cast sees.
 
 Each stage is independently shippable and measurable with the commands in §1.
 
-### Stage 1 — explain the per-face floor (no user-visible change)
+### Stage 1 — explain the per-face floor (no user-visible change) — **landed 2026-11-05**
 
-- [ ] Time `IncrementalMesh` on one shape: serial vs `theInParallel`, and with the
-  shape freshly restored vs already triangulated, to separate "meshing" from
-  "checking a stored triangulation".
-- [ ] Time it on one *face* to see whether the cost scales with the face's edge count
-  (candidate: `BRepMesh_FastDiscret` boundary processing on BSpline faces).
-- [ ] Decide between: bypassing `IncrementalMesh` when the shape is already
-  triangulated at a sufficient deflection (`BRepTools::Triangulation` is **not**
-  exposed by `opencascade-sys` 0.3 — check whether the fork can add it), or caching
-  the `Tessellation` on the Rust side keyed by shape epoch + deflection.
-- Acceptance: a note in this file saying where the ~100 µs per face goes, and a
-  decision recorded.
+What the instrumented runs showed (`ferrocad_occt::topology::tessellate`, debug build):
+
+- **The parallel mesher is doing its job.** Cold, `IncrementalMesh` takes 8.6 s with
+  `theInParallel` and 23.9 s without it (whole document, same run). Warm it is 5.2 s vs
+  7.0 s — barely parallel, because the second pass is per-face bookkeeping, not meshing.
+- **The floor is per face, not per triangle.** 7063 faces cost 0.93 s at a 50 mm
+  deflection and 1.59 s at 0.5 mm, while the triangle count moves 228 k → 1.25 M. A
+  720-face shape pays the same ~100 µs per face. So `BRepMesh` spends the time on face
+  setup (edge discretisation, pcurves), not on triangles.
+- **A second call is not free.** OCCT's "incremental" reuse saves only ~40 %, which is
+  why every display sync of an unchanged document cost 5.2 s.
+- **A placed `Shape` is re-wrapped on every access.** `obj.Shape` builds a new
+  `PartShape` (`shape_to_py` → `wrap_shape`), so a memo on the wrapper can never hit
+  across two syncs; it has to hang off the `ShapeProperty` that owns the handle.
+
+Decision: [x] memoise the tessellation (see the stage below) rather than chase a
+correction to `BRepMesh`; [x] do not expect fidelity coarsening to carry the first
+frame (it recovers a third, see §2).
+
+### Stage 1b — memoise the display tessellation — **landed 2026-11-05**
+
+- [x] `ferrocad_geom::TessellationCache`: one entry keyed by shape handle
+  (`Shape::is_same`) and the deflection pair. Holding the handle in the entry keeps
+  its identity alive, so a freed handle cannot alias a new one. Every kernel operation
+  returns a new handle and none mutates one in place, which is what makes identity a
+  sound invalidation signal.
+- [x] `ShapeProperty` owns the cache and `shape_to_py` shares it with the wrapper it
+  builds, so the memo survives the wrapper (and outlives one sync); a wrapper with no
+  property behind it gets its own.
+- [x] Verified invalidation on the three ways a shape changes: a repeat sync agrees
+  byte for byte, moving an object shifts its geometry by exactly the offset, and
+  assigning a new shape replaces the mesh (and resets the placement).
+- Measured (debug, whole document):
+
+| Sync | Before | After |
+| --- | --- | --- |
+| first (cold) | 7.6 s | 7.6 s |
+| unchanged | 5.5 s | **0.67 s** |
+| after moving the largest object | 5.5 s | **2.7 s** |
+
+  The 0.67 s is the copy, the placement bake and the `bytes` encode; the 2.7 s is the
+  one 328 k-triangle shape re-meshing. `open + render` also dropped ~1 s (12.4–13.1 s),
+  because that path syncs twice.
 
 ### Stage 2 — restore the `.FCStd` members in parallel — **landed 2026-11-05**
 

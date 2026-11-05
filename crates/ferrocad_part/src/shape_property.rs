@@ -43,10 +43,11 @@
 use std::any::Any;
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
 
 use ferrocad_core::property_types;
 use ferrocad_core::{ExtensionData, ExtensionValue, Placement, Property, Rotation, Vector3};
-use ferrocad_geom::{ElementKind, ElementRef, History, Lineage, MapVersion, Shape};
+use ferrocad_geom::{ElementKind, ElementRef, History, Lineage, MapVersion, Shape, TessellationCache};
 
 /// The registered property type name.
 pub const TYPE_NAME: &str = "Part::PropertyPartShape";
@@ -79,6 +80,14 @@ pub struct ShapeProperty {
     /// Python and through the native envelope.
     placement: Placement,
     lineage: Lineage,
+    /// The display tessellation memo, shared with the Python `Shape` wrapper this
+    /// property hands out.
+    ///
+    /// It lives here rather than on the wrapper because `obj.Shape` builds a fresh
+    /// wrapper on every access: a per-wrapper cache would never survive one
+    /// `stage_meshes` pass, and the mesher costs roughly per face whether or not the
+    /// shape is already triangulated.
+    tessellations: Arc<TessellationCache>,
 }
 
 impl ShapeProperty {
@@ -88,6 +97,7 @@ impl ShapeProperty {
             shape: None,
             placement: Placement::identity(),
             lineage: Lineage::default(),
+            tessellations: Arc::new(TessellationCache::new()),
         }
     }
 
@@ -110,6 +120,7 @@ impl ShapeProperty {
             shape: Some(shape),
             placement,
             lineage: Lineage::default(),
+            tessellations: Arc::new(TessellationCache::new()),
         }
     }
 
@@ -119,22 +130,37 @@ impl ShapeProperty {
             shape: Some(shape),
             placement: Placement::identity(),
             lineage,
+            tessellations: Arc::new(TessellationCache::new()),
         }
     }
 
     /// A property holding already-placed `shape`, its `placement`, and the
     /// `lineage` produced with it.
-    pub fn with_lineage_and_placement(shape: Shape, placement: Placement, lineage: Lineage) -> Self {
+    pub fn with_lineage_and_placement(
+        shape: Shape,
+        placement: Placement,
+        lineage: Lineage,
+    ) -> Self {
         ShapeProperty {
             shape: Some(shape),
             placement,
             lineage,
+            tessellations: Arc::new(TessellationCache::new()),
         }
     }
 
     /// A copy of the held shape (shape handles are cheap to clone), if any.
     pub fn shape(&self) -> Option<Shape> {
         self.shape.clone()
+    }
+
+    /// The display tessellation memo, shared with the Python `Shape` wrapper.
+    ///
+    /// The wrapper starts from a bare handle and cannot reach the property, so
+    /// [`shape_to_py`](../ferrocad_part_py) hands it this `Arc`; the property is what
+    /// outlives one `stage_meshes` pass.
+    pub fn tessellation_cache(&self) -> Arc<TessellationCache> {
+        Arc::clone(&self.tessellations)
     }
 
     /// The accumulated placement carried beside the baked geometry.
@@ -292,6 +318,8 @@ impl ExtensionData for ShapeProperty {
             shape: self.shape.clone(),
             placement: self.placement,
             lineage: self.lineage.clone(),
+            // The clone holds the same shape handle, so the memo is still valid for it.
+            tessellations: Arc::clone(&self.tessellations),
         })
     }
 
@@ -603,6 +631,7 @@ fn restore_envelope(bytes: &[u8]) -> Option<ShapeProperty> {
             &entries,
             &reverse,
         ),
+        tessellations: Arc::new(TessellationCache::new()),
     })
 }
 

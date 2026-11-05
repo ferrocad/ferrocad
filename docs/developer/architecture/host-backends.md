@@ -278,11 +278,13 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
   the rows through PyO3, and a provider may pack its arrays as `bytes` — the Part hook
   does, through `Shape.mesh(binary=True)` (`f32` triples for `positions`, `u32` for the
   index arrays). `stage_meshes()` and the docs tooling still get the JSON shape, because
-  the text path unpacks the same buffers. What remains is the *kernel* side: the
-  tessellation copy-out in `ferrocad_occt` is serial and walks OCCT's triangulation
-  node by node, and it now dominates a sync. Progressive tessellation (draw coarse,
-  refine) is the next step; the cost is paid per edit — a drag preview repaints from
-  the cached stage — not per frame.
+  the text path unpacks the same buffers. A repeated sync does not re-mesh either: the
+  `ShapeProperty` memoises its tessellation per shape handle, so an unchanged document
+  costs a copy instead of a kernel pass. What remains is the *first* pass: `BRepMesh`
+  spends ~100 µs per face whether or not the shape is already triangulated, so only
+  meshing fewer faces (progress, not a coarser deflection) can shorten it. The cost is
+  paid per edit — a drag preview repaints from the cached stage — not per frame.
+  See [`opening-a-large-model.md`](../../project/tasks/opening-a-large-model.md).
 - **CPU picking on wasm.** The fallback transforms every vertex of every packet into a
   fresh buffer, then scans every triangle, with no bounding-box pre-reject or BVH. Fine
   for the sample; the first thing to fix when a large model runs in the browser.

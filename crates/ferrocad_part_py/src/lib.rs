@@ -321,6 +321,15 @@ pub struct PartShape {
     /// captured earlier detaches instead of overwriting a newer value (the same
     /// rule the document property views use).
     epoch: Arc<AtomicU64>,
+    /// The display tessellation memo.
+    ///
+    /// A display sync asks every object for its mesh, and the kernel meshes per face
+    /// whether or not the shape is already triangulated, so re-meshing an unchanged
+    /// shape dominates an edit on a large document. `obj.Shape` builds a fresh wrapper
+    /// on every access, so the memo usually belongs to the [`ShapeProperty`] that owns
+    /// the shape and is shared in by `shape_to_py`; a wrapper with no property behind it
+    /// (an operation result, a sub-shape) gets its own.
+    tessellations: Arc<ferrocad_geom::TessellationCache>,
 }
 
 impl PartShape {
@@ -339,6 +348,7 @@ impl PartShape {
             placement: Arc::new(Mutex::new(placement)),
             lineage: Arc::new(Mutex::new(lineage)),
             epoch: Arc::new(AtomicU64::new(0)),
+            tessellations: Arc::new(ferrocad_geom::TessellationCache::new()),
         }
     }
 
@@ -378,6 +388,37 @@ impl PartShape {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// The display tessellation of `shape` at these deflections.
+    ///
+    /// Memoised per shape handle (see [`tessellations`](PartShape::tessellations)),
+    /// because the kernel meshes per face whether or not the shape is already
+    /// triangulated: a display sync of an unchanged document then costs a copy, not a
+    /// re-mesh. The value is shared; the caller clones it when it has to transform it
+    /// (the display hook bakes the object placement into it).
+    fn tessellation(
+        &self,
+        shape: &Shape,
+        deflection: f64,
+        angular: f64,
+    ) -> PyResult<Arc<ferrocad_geom::Tessellation>> {
+        self.tessellations
+            .get_or_build(shape, deflection, angular, || {
+                let options = TessellationOptions {
+                    linear_deflection: Some(deflection),
+                    angular_deflection: angular,
+                    relative: false,
+                };
+                ferrocad_part::backend().tessellate(shape, &options)
+            })
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// Share the property's memo with this wrapper (see
+    /// [`tessellations`](PartShape::tessellations)).
+    pub(crate) fn share_tessellations(&mut self, cache: Arc<ferrocad_geom::TessellationCache>) {
+        self.tessellations = cache;
     }
 
     /// Wrap an existing kernel shape with no lineage (a primitive, a sub-shape, a
@@ -1500,9 +1541,10 @@ impl PartShape {
     /// host can draw the shape **and** map a pick back to `Face6`/`Edge3`.
     ///
     /// `deflection` is the linear deflection in model units; `angular` is the angular
-    /// deflection in radians. Both decide the triangle count. OCCT stores the
-    /// triangulation on the shape and keeps it when the next request is not finer, so
-    /// compare settings on fresh shapes.
+    /// deflection in radians. Both decide the triangle count. The result is cached per
+    /// shape handle and deflection pair, because `BRepMesh` costs per face whether or
+    /// not the shape is already triangulated: a display sync of an unchanged document
+    /// is a copy, not a re-mesh.
     ///
     /// `matrix` is `FreeCAD.Placement.toMatrix().A` for an object whose
     /// `Placement` the shape does not already carry (a `Part::Feature` restored from
@@ -1527,14 +1569,9 @@ impl PartShape {
         let shape = self
             .shape()
             .ok_or_else(|| PyValueError::new_err("cannot tessellate a null shape"))?;
-        let options = TessellationOptions {
-            linear_deflection: Some(deflection),
-            angular_deflection: angular,
-            relative: false,
-        };
-        let mut mesh = ferrocad_part::backend()
-            .tessellate(&shape, &options)
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let tessellation = self.tessellation(&shape, deflection, angular)?;
+        // Only a placed object needs an owned copy: the placement bake is in place.
+        let mut mesh = (*tessellation).clone();
         if let Some(values) = matrix {
             let m: [f64; 16] = values
                 .as_slice()
@@ -4355,8 +4392,11 @@ fn shape_to_py(py: Python<'_>, data: &dyn ExtensionData) -> Option<PyObject> {
     let wrapped = wrap_shape(py, inner).ok()?;
     // The wrapper started from the bare geometry; adopt the property's own
     // accumulated placement and lineage so `Placement` and `ElementReverseMap`
-    // report what the document object stored.
+    // report what the document object stored, and share its tessellation memo so a
+    // repeated display sync does not re-mesh an unchanged shape.
     let base = wrapped.bind(py).downcast::<PartShape>().ok()?;
+    base.borrow_mut()
+        .share_tessellations(property.tessellation_cache());
     base.borrow().adopt_placement_and_lineage(property.placement(), lineage);
     Some(wrapped)
 }

@@ -47,7 +47,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ferrocad_types::{Matrix4, Placement, Vector3};
 
@@ -513,6 +513,68 @@ impl Tessellation {
             .iter()
             .position(|candidate| candidate == name)
             .map(|index| index as u32)
+    }
+}
+
+/// A one-entry memo of the last tessellation of a shape handle.
+///
+/// Tessellating costs the kernel roughly per **face**, not per triangle — the mesher
+/// walks every face whether or not it is already triangulated — and a display sync
+/// asks every object for its mesh. Without a memo, an edit to one object re-meshes the
+/// whole document.
+///
+/// An entry is reused only for the exact handle it was built from
+/// ([`Shape::is_same`]) at the same deflections. Every kernel operation returns a new
+/// handle and none mutates one in place, so handle identity is the invalidation
+/// signal; holding the handle in the entry keeps its identity alive.
+#[derive(Default)]
+pub struct TessellationCache {
+    entry: Mutex<Option<CachedTessellation>>,
+}
+
+struct CachedTessellation {
+    shape: Shape,
+    linear: f64,
+    angular: f64,
+    tessellation: Arc<Tessellation>,
+}
+
+impl TessellationCache {
+    /// An empty cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The tessellation of `shape` at these deflections.
+    ///
+    /// `build` runs only on a miss, and while the cache is locked: a cache belongs to
+    /// one shape, so a build that hits it is a caller bug rather than a contention
+    /// case. The value is shared, so a caller that must transform it (baking an object
+    /// placement into the positions) clones the [`Tessellation`].
+    pub fn get_or_build<F>(
+        &self,
+        shape: &Shape,
+        linear: f64,
+        angular: f64,
+        build: F,
+    ) -> Result<Arc<Tessellation>, GeomError>
+    where
+        F: FnOnce() -> Result<Tessellation, GeomError>,
+    {
+        let mut entry = self.entry.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(cached) = entry.as_ref() {
+            if cached.linear == linear && cached.angular == angular && cached.shape.is_same(shape) {
+                return Ok(Arc::clone(&cached.tessellation));
+            }
+        }
+        let tessellation = Arc::new(build()?);
+        *entry = Some(CachedTessellation {
+            shape: shape.clone(),
+            linear,
+            angular,
+            tessellation: Arc::clone(&tessellation),
+        });
+        Ok(tessellation)
     }
 }
 
@@ -1907,6 +1969,35 @@ mod tests {
         assert_eq!(a, b);
         assert!(!a.is_same(&c));
         assert_ne!(a, c);
+    }
+
+    /// The memo must answer for the handle it was built from, and only that one.
+    #[test]
+    fn tessellation_cache_keys_on_handle_and_deflection() {
+        let cache = TessellationCache::new();
+        let shape = Shape::new(1u32);
+        let build = || {
+            Ok(Tessellation {
+                positions: vec![[0.0, 0.0, 0.0]],
+                ..Tessellation::default()
+            })
+        };
+
+        let first = cache.get_or_build(&shape, 0.5, 0.5, build).unwrap();
+        let again = cache.get_or_build(&shape, 0.5, 0.5, || panic!("a hit must not rebuild"));
+        assert!(Arc::ptr_eq(&first, &again.unwrap()));
+
+        // A different deflection, or a different handle, rebuilds.
+        assert!(!Arc::ptr_eq(
+            &first,
+            &cache.get_or_build(&shape, 1.0, 0.5, build).unwrap()
+        ));
+        assert!(!Arc::ptr_eq(
+            &first,
+            &cache
+                .get_or_build(&Shape::new(1u32), 0.5, 0.5, build)
+                .unwrap()
+        ));
     }
 
     #[test]

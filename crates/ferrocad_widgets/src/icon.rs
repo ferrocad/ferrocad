@@ -13,10 +13,16 @@ use gpui::{
     IntoElement, PathBuilder, Pixels, Point, SharedString, Window, canvas, div, point, px, rgba,
 };
 
-use ferrocad_theme::ui::{HOVER_RIM, MUTED};
+use ferrocad_theme::ui::{AXIS_X, AXIS_Y, AXIS_Z, HOVER_RIM, MUTED};
 
 /// The bug glyph's side.
 pub const BUG: f32 = 16.0;
+
+/// A control glyph's side in the header, in logical px.
+pub const CONTROL: f32 = 14.0;
+
+/// The 16-unit design box every painted glyph uses.
+const DESIGN: f32 = 16.0;
 
 /// A literal bug: an oval body, a head, six legs and two antennae.
 ///
@@ -38,6 +44,55 @@ pub fn bug(key: impl Into<SharedString>, active: bool) -> impl IntoElement {
         .debug_selector(move || format!("{selector}-bug"))
         .w(px(BUG))
         .h(px(BUG))
+        .child(marker)
+}
+
+/// A 4 × 4 reference grid.
+pub fn grid(key: impl Into<SharedString>, active: bool) -> impl IntoElement {
+    glyph(key, active, paint_grid)
+}
+
+/// A three-axis world triad in the axis tokens.
+pub fn axes(key: impl Into<SharedString>, active: bool) -> impl IntoElement {
+    glyph(key, active, paint_axes)
+}
+
+/// A plane in perspective with a normal arrow.
+pub fn workplane(key: impl Into<SharedString>, active: bool) -> impl IntoElement {
+    glyph(key, active, paint_workplane)
+}
+
+/// The transform gizmo: an axis triad with grab handles.
+pub fn gizmo(key: impl Into<SharedString>, active: bool) -> impl IntoElement {
+    glyph(key, active, paint_gizmo)
+}
+
+/// A magnet with a small lock, the global snap switch.
+pub fn snap(key: impl Into<SharedString>, active: bool) -> impl IntoElement {
+    glyph(key, active, paint_snap)
+}
+
+/// A presentational control glyph. The host owns the click target, hover and tooltip.
+fn glyph(
+    key: impl Into<SharedString>,
+    active: bool,
+    paint: fn(gpui::Bounds<Pixels>, bool, &mut Window),
+) -> impl IntoElement {
+    let key = key.into();
+    let selector = key.clone();
+    let marker = canvas(
+        move |_bounds, _window, _cx| {},
+        move |bounds, (), window: &mut Window, _cx| {
+            paint(bounds, active, window);
+        },
+    )
+    .size_full();
+
+    div()
+        .id(key)
+        .debug_selector(move || format!("{selector}-icon"))
+        .w(px(CONTROL))
+        .h(px(CONTROL))
         .child(marker)
 }
 
@@ -105,9 +160,153 @@ fn paint_fill_alpha(window: &mut Window, builder: PathBuilder, color: u32, alpha
 }
 
 fn paint_stroke(window: &mut Window, builder: PathBuilder, color: u32) {
+    paint_stroke_alpha(window, builder, color, 0xff);
+}
+
+fn paint_stroke_alpha(window: &mut Window, builder: PathBuilder, color: u32, alpha: u32) {
     if let Ok(path) = builder.build() {
-        window.paint_path(path, rgba(color));
+        window.paint_path(path, rgba((color << 8) | alpha));
     }
+}
+
+fn ink(active: bool) -> u32 {
+    if active { HOVER_RIM } else { MUTED }
+}
+
+/// Map a 16-unit design coordinate to the glyph's box.
+fn scaler(bounds: gpui::Bounds<Pixels>) -> impl Fn(f32, f32) -> Point<Pixels> {
+    let centre = bounds.center();
+    let scale = bounds.size.width.0.min(bounds.size.height.0) / DESIGN;
+    move |x, y| {
+        point(
+            px(centre.x.0 + (x - DESIGN / 2.0) * scale),
+            px(centre.y.0 + (y - DESIGN / 2.0) * scale),
+        )
+    }
+}
+
+fn paint_grid(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
+    let at = scaler(bounds);
+    let mut path = PathBuilder::stroke(px(1.0));
+    path.add_polygon(
+        &[at(2.5, 2.5), at(13.5, 2.5), at(13.5, 13.5), at(2.5, 13.5)],
+        true,
+    );
+    for value in [5.25, 8.0, 10.75] {
+        path.add_polygon(&[at(value, 2.5), at(value, 13.5)], false);
+        path.add_polygon(&[at(2.5, value), at(13.5, value)], false);
+    }
+    paint_stroke(window, path, ink(active));
+}
+
+fn paint_axes(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
+    let at = scaler(bounds);
+    let alpha = if active { 0xff } else { 0xb3 };
+
+    let mut x = PathBuilder::stroke(px(1.25));
+    x.add_polygon(&[at(4.5, 11.5), at(13.0, 11.5)], false);
+    x.add_polygon(&[at(13.0, 11.5), at(11.4, 10.9)], false);
+    x.add_polygon(&[at(13.0, 11.5), at(11.4, 12.1)], false);
+    paint_stroke_alpha(window, x, AXIS_X, alpha);
+
+    let mut y = PathBuilder::stroke(px(1.25));
+    y.add_polygon(&[at(4.5, 11.5), at(4.5, 3.0)], false);
+    y.add_polygon(&[at(4.5, 3.0), at(3.9, 4.6)], false);
+    y.add_polygon(&[at(4.5, 3.0), at(5.1, 4.6)], false);
+    paint_stroke_alpha(window, y, AXIS_Y, alpha);
+
+    let mut z = PathBuilder::stroke(px(1.25));
+    z.add_polygon(&[at(4.5, 11.5), at(10.5, 6.5)], false);
+    z.add_polygon(&[at(10.5, 6.5), at(9.2, 7.2)], false);
+    z.add_polygon(&[at(10.5, 6.5), at(10.8, 8.1)], false);
+    paint_stroke_alpha(window, z, AXIS_Z, alpha);
+}
+
+fn paint_workplane(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
+    let at = scaler(bounds);
+    let mut path = PathBuilder::stroke(px(1.25));
+    path.add_polygon(
+        &[at(3.0, 10.5), at(8.5, 6.0), at(13.0, 8.0), at(7.5, 12.5)],
+        true,
+    );
+    path.add_polygon(&[at(8.0, 9.1), at(8.0, 5.6)], false);
+    path.add_polygon(&[at(8.0, 5.6), at(7.4, 6.7)], false);
+    path.add_polygon(&[at(8.0, 5.6), at(8.6, 6.7)], false);
+    paint_stroke(window, path, ink(active));
+}
+
+fn paint_gizmo(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
+    let at = scaler(bounds);
+    let scale = bounds.size.width.0.min(bounds.size.height.0) / DESIGN;
+    let alpha = if active { 0xff } else { 0xb3 };
+    let handle = ink(active);
+
+    for (x, y, colour) in [
+        (13.0, 11.0, AXIS_X),
+        (5.0, 3.0, AXIS_Y),
+        (10.5, 6.5, AXIS_Z),
+    ] {
+        let mut line = PathBuilder::stroke(px(1.25));
+        line.add_polygon(&[at(5.0, 11.0), at(x, y)], false);
+        paint_stroke_alpha(window, line, colour, alpha);
+
+        let mut square = PathBuilder::fill();
+        square.add_polygon(
+            &[
+                at(x - 1.1, y - 1.1),
+                at(x + 1.1, y - 1.1),
+                at(x + 1.1, y + 1.1),
+                at(x - 1.1, y + 1.1),
+            ],
+            true,
+        );
+        paint_fill(window, square, handle);
+    }
+
+    let mut ring = PathBuilder::stroke(px(1.0));
+    ring.add_polygon(&ellipse(at(5.0, 11.0), 1.6 * scale, 1.6 * scale, 16), false);
+    paint_stroke(window, ring, handle);
+}
+
+fn paint_snap(bounds: gpui::Bounds<Pixels>, active: bool, window: &mut Window) {
+    let at = scaler(bounds);
+    let scale = bounds.size.width.0.min(bounds.size.height.0) / DESIGN;
+    let colour = ink(active);
+
+    let mut magnet = PathBuilder::stroke(px(1.25));
+    magnet.add_polygon(
+        &[
+            at(5.0, 3.5),
+            at(5.0, 7.4),
+            at(5.4, 9.0),
+            at(6.3, 10.3),
+            at(8.0, 10.9),
+            at(9.7, 10.3),
+            at(10.6, 9.0),
+            at(11.0, 7.4),
+            at(11.0, 3.5),
+        ],
+        false,
+    );
+    magnet.add_polygon(&[at(5.0, 3.5), at(5.0, 5.2)], false);
+    magnet.add_polygon(&[at(11.0, 3.5), at(11.0, 5.2)], false);
+    paint_stroke(window, magnet, colour);
+
+    let mut lock = PathBuilder::stroke(px(1.0));
+    lock.add_polygon(
+        &[
+            at(10.4, 11.4),
+            at(13.4, 11.4),
+            at(13.4, 14.0),
+            at(10.4, 14.0),
+        ],
+        true,
+    );
+    lock.add_polygon(
+        &ellipse(at(11.9, 11.4), 1.1 * scale, 1.1 * scale, 12),
+        false,
+    );
+    paint_stroke(window, lock, colour);
 }
 
 #[cfg(test)]
@@ -119,7 +318,13 @@ mod tests {
 
     impl Render for Harness {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().child(bug("bug-test", false))
+            div()
+                .child(bug("bug-test", false))
+                .child(grid("grid-test", false))
+                .child(axes("axis-test", true))
+                .child(workplane("wp-test", true))
+                .child(gizmo("gizmo-test", false))
+                .child(snap("snap-test", true))
         }
     }
 
@@ -138,5 +343,30 @@ mod tests {
             .expect("the bug is painted");
         assert_eq!(bounds.size.width, px(BUG));
         assert_eq!(bounds.size.height, px(BUG));
+    }
+
+    #[gpui::test]
+    fn the_control_glyphs_render_at_their_side(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_window, cx| cx.new(|_| Harness))
+                .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        for name in [
+            "grid-test-icon",
+            "axis-test-icon",
+            "wp-test-icon",
+            "gizmo-test-icon",
+            "snap-test-icon",
+        ] {
+            let bounds = visual
+                .debug_bounds(name)
+                .unwrap_or_else(|| panic!("{name} is painted"));
+            assert_eq!(bounds.size.width, px(CONTROL), "{name} width");
+            assert_eq!(bounds.size.height, px(CONTROL), "{name} height");
+        }
     }
 }

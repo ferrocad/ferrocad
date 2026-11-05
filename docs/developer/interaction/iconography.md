@@ -717,7 +717,11 @@ Draft icons it can draw.
 - **Painted core** (`ferrocad_widgets::icon`): the 26 draw-list glyphs plus the ~20
   chrome glyphs that must never fail to load (`menu`, `check`, `close`, `grid`,
   `magnet`, `lock`, `eye`, `search`). No asset source, no filesystem, deterministic at
-  any DPR. This is the existing `bug` pattern.
+  any DPR. This is the existing `bug` pattern. **As built (2026-11-05):** the header's
+  `grid`, `axes`, `workplane`, `gizmo` and `snap` are painted from this module at
+  14 px and wired into `viewport_header`, with the state dot retained. The gizmo adds
+  grab handles and a centre ring so it reads apart from the axis cross; `snap` is a
+  magnet with a lock mark.
 - **Vendored IconMCP set**: the 123 `use` icons, as outline SVGs with their MIT
   licence, rasterised by `gpui::svg()` through an `AssetSource`. Vendored, not fetched:
   the build must work offline and the same binary must render the same icons in CI.

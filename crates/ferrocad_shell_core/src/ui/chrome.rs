@@ -596,7 +596,15 @@ fn workplane_button(
             .text_color(rgb(if custom { CHROME_ACTIVE } else { FG }))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(PANEL)))
-            .child(label)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(icon::workplane("wp", custom))
+                    .child(label),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
@@ -934,6 +942,28 @@ fn split_button_with_rows(
         .when(open, |el| el.border_1().border_color(rgba(0xffffff33)));
 
     let enabled = command.enabled;
+    let glyph: Option<AnyElement> = match key {
+        "grid" => Some(icon::grid(key, command.checked).into_any_element()),
+        "axis" => Some(icon::axes(key, command.checked).into_any_element()),
+        "gizmo" => Some(icon::gizmo(key, command.checked).into_any_element()),
+        "snap" => Some(icon::snap(key, command.checked).into_any_element()),
+        _ => None,
+    };
+    let mut row = div().flex().flex_row().items_center().gap_1();
+    if let Some(glyph) = glyph {
+        row = row.child(glyph);
+    }
+    if state_dot {
+        row = row.child(
+            div()
+                .debug_selector(move || format!("{key}-state-dot"))
+                .w(px(6.))
+                .h(px(6.))
+                .rounded_full()
+                .bg(rgb(if command.checked { ACTIVE_ACCENT } else { MUTED })),
+        );
+    }
+    row = row.child(label.clone());
     let mut label_control = div()
         .id(SharedString::from(format!("{key}-label")))
         .debug_selector(move || format!("{key}-label"))
@@ -944,24 +974,7 @@ fn split_button_with_rows(
         .when(enabled, |el| {
             el.cursor_pointer().hover(|style| style.bg(rgb(PANEL)))
         })
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_1()
-                .when(state_dot, |el| {
-                    el.child(
-                        div()
-                            .debug_selector(move || format!("{key}-state-dot"))
-                            .w(px(6.))
-                            .h(px(6.))
-                            .rounded_full()
-                            .bg(rgb(if command.checked { ACTIVE_ACCENT } else { MUTED })),
-                    )
-                })
-                .child(label.clone()),
-        )
+        .child(row)
         .on_mouse_down(MouseButton::Right, cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
             this.set_popover_anchor(event.position);
             this.open_popover(key, cx);
@@ -2076,6 +2089,12 @@ mod tests {
         draw(&mut cx);
 
         assert!(cx.debug_bounds("viewport-header").is_some());
+        for selector in ["grid-icon", "axis-icon", "wp-icon", "gizmo-icon", "snap-icon"] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is painted"
+            );
+        }
         let wp = cx.debug_bounds("wp-label").expect("the workplane control");
         let gizmo = cx.debug_bounds("gizmo-label").expect("the gizmo control");
         let select = cx.debug_bounds("select-label").expect("the select control");

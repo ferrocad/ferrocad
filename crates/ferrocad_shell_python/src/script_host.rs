@@ -156,8 +156,12 @@ impl ScriptHost for PythonScriptHost {
 
     /// The edition's display provider: the display mode, datum planes' glass, and
     /// any object whose mesh is not its OCCT `Shape`.
-    fn stage_meshes(&self) -> Option<Result<Vec<StageMesh>, String>> {
-        Some(python::stage_meshes())
+    ///
+    /// `have` is passed through to the app script, which skips the default Shape
+    /// tessellator for those objects — that is what keeps a document sync from
+    /// copying every triangle through the interpreter and back.
+    fn stage_meshes(&self, have: &[&str]) -> Option<Result<Vec<StageMesh>, String>> {
+        Some(python::stage_meshes_skipping(have))
     }
 
     /// A workbench manipulator's commit (the Part edge arc, a height grip).

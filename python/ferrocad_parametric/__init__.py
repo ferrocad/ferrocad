@@ -87,7 +87,10 @@ def _display_mesh(obj):
         # `Part::Feature` placement when the shape is assigned (and this tree re-bakes
         # it in the feature sync), so the positions are used as given. Applying the
         # object placement again would move every object a second time.
-        mesh = shape.mesh(binary=True)
+        # `Part.DISPLAY_DEFLECTION`, not `Shape.mesh`'s own default: the memo behind
+        # the mesh holds one entry per shape, and the host meshes the document at this
+        # deflection — different numbers would evict each other's entry and re-mesh.
+        mesh = shape.mesh(deflection=Part.DISPLAY_DEFLECTION, binary=True)
         placement = getattr(obj, "Placement", None)
         # The object's own origin (the placement's base point). The triad hugs it — an
         # origin indicator — and a rotate pivot turns about it.
@@ -283,7 +286,7 @@ def _interaction(obj, manipulator, action, element, values):
     return {"ok": True, "feature": feature_name}
 
 
-FerroCAD.register_display_provider(_display_mesh)
+FerroCAD.register_display_provider(_display_mesh, default=True)
 FerroCAD.register_interaction_provider(_interaction)
 
 

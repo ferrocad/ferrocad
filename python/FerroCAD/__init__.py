@@ -76,24 +76,51 @@ def __getattr__(name):
 # next provider is asked.
 
 _DISPLAY_PROVIDERS = []
+#: The providers that tessellate a Shape the way the document already could.
+_DEFAULT_DISPLAY_PROVIDERS = []
 _INTERACTION_PROVIDERS = []
 _MANIPULATOR_PROVIDERS = []
 
 
-def register_display_provider(provider):
+def register_display_provider(provider, default=False):
     """Let ``provider(obj)`` supply the display mesh of a document object.
 
     The provider returns the tessellation dict of `ferrocad.geom.Tessellation`
     (``positions``, ``triangles``, ``edges``, ``parts``, …) or ``None``. Modules
     register once, when they are imported; registration is idempotent.
+
+    ``default`` marks the provider that tessellates a **Shape-bearing** object the
+    way the document itself would — the Part workbench's. A host that can mesh the
+    document itself (``RustAppBackend``) asks the script half only for what it
+    cannot mesh, so it skips default providers for the objects it already has and
+    still asks every other provider, which is how a mod overrides one object's
+    mesh without paying for the other nine.
     """
     if provider not in _DISPLAY_PROVIDERS:
         _DISPLAY_PROVIDERS.append(provider)
+    if default and provider not in _DEFAULT_DISPLAY_PROVIDERS:
+        _DEFAULT_DISPLAY_PROVIDERS.append(provider)
 
 
 def display_mesh(obj):
     """The display mesh for `obj`, from the first module that claims it."""
     for provider in _DISPLAY_PROVIDERS:
+        mesh = provider(obj)
+        if mesh is not None:
+            return mesh
+    return None
+
+
+def display_mesh_override(obj):
+    """A module's own mesh for `obj`, ignoring the default Shape tessellator.
+
+    Called for an object the host already meshed from its `Shape`: a mod that
+    deliberately draws it differently still gets its say, while the default
+    provider (the one that would re-tessellate the same shape) is skipped.
+    """
+    for provider in _DISPLAY_PROVIDERS:
+        if provider in _DEFAULT_DISPLAY_PROVIDERS:
+            continue
         mesh = provider(obj)
         if mesh is not None:
             return mesh

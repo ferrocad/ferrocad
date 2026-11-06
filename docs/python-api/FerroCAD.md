@@ -17,7 +17,7 @@ _A mod that imports this depends on FerroCAD; it is not upstream API._
 | `interaction(obj, manipulator, action, element='', values=None)` | Apply a manipulator commit through the first module that supports it. |
 | `manipulator_specs(obj, element='')` | The declarative handles every module declares for ``obj``, in order. |
 | `parameter_file()` | The parameter file in use, or ``None`` while the store is memory-only. |
-| `register_display_provider(provider)` | Let ``provider(obj)`` supply the display mesh of a document object. |
+| `register_display_provider(provider, default=False)` | Let ``provider(obj)`` supply the display mesh of a document object. |
 | `register_interaction_provider(provider)` | Let ``provider(obj, manipulator, action, element, values)`` apply an edit. |
 | `register_manipulator_provider(provider)` | Let ``provider(obj, element)`` declare handles for a selection. |
 | `set_parameter_file(path)` | Point ``FreeCAD.ParamGet`` at ``path`` (always enabled). |

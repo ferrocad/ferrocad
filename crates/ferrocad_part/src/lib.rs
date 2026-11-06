@@ -66,6 +66,16 @@ pub use shape_property::{
 /// The registered type name of the shape-list property.
 pub const SHAPE_LIST_TYPE_NAME: &str = "Part::PropertyTopoShapeList";
 
+/// The deflection every display sync tessellates at, in model units.
+///
+/// One number, because the memo behind it holds **one** entry per shape: a display
+/// hook that meshed at a different deflection from the host would evict the other's
+/// entry and re-mesh the body on every alternation. `Shape.mesh`'s default is the
+/// upstream one (`0.5`); a host that meshes the document itself uses this instead,
+/// and `Part.DISPLAY_DEFLECTION` publishes it to the scripts so a display hook can
+/// pass it explicitly (see `python/ferrocad_parametric`).
+pub const DISPLAY_DEFLECTION: f64 = 0.2;
+
 /// A list of kernel shapes, held as a [`Property::Extension`] (upstream
 /// `Part::PropertyTopoShapeList`).
 ///

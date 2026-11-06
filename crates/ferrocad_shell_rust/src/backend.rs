@@ -59,7 +59,10 @@ const EDGE: &str = "Edge1";
 const RADIUS: f64 = 3.0;
 
 /// The tessellation tolerance, in millimetres (the probe's).
-const TOLERANCE: f64 = 0.2;
+///
+/// It is `ferrocad_part::DISPLAY_DEFLECTION` so the document half and a display hook
+/// share one memo entry per shape (see that constant).
+const TOLERANCE: f64 = ferrocad_part::DISPLAY_DEFLECTION;
 
 /// The opaque steel grey the desktop Part workbench gives document solids.
 const DEFAULT_COLOR: [f32; 4] = [0.30, 0.34, 0.40, 1.0];
@@ -400,12 +403,10 @@ impl AppBackend for RustAppBackend {
     }
 
     fn stage_meshes(&self) -> Result<Vec<StageMesh>, String> {
-        // A display hook answers more than the document can: the object's display mode,
-        // a datum plane's translucent card, an object whose mesh is not its `Shape`.
-        // It is the edition's statement of what to draw, so it answers first.
-        if let Some(meshes) = self.script.as_deref().and_then(|host| host.stage_meshes()) {
-            return meshes;
-        }
+        // The document builds every object it can. Its own tessellation is a memo hit
+        // — 35 ms on the 900a assembly — where the interpreter's copy of the same rows
+        // costs ~1.3 s, because the arrays cross the boundary twice (into Python
+        // `bytes`, then back into Rust).
         let meshes = self.with_document(|_, document| {
             let mut meshes = Vec::new();
             // The engine decides what is drawn: a feature replaces the object it
@@ -443,16 +444,39 @@ impl AppBackend for RustAppBackend {
                     parts: mesh.parts,
                     origin: placement_base(object),
                     color: Some(object_color(object)),
-                    display: None,
+                    display: Some(display_key(object).to_string()),
                 });
             }
             Ok::<_, String>(meshes)
         });
-        let meshes = match meshes {
+        let mut meshes = match meshes {
             Some(meshes) => meshes?,
             // No active document: nothing is drawn, which is not a failure.
-            None => return Ok(Vec::new()),
+            None => Vec::new(),
         };
+        // Now ask the script half, for the objects the document cannot mesh — one with
+        // no `Shape` (the toy edition's procedural meshes) — and for any object a mod
+        // deliberately draws itself. It is told which ones are already built, so it
+        // does not re-tessellate a shape the document has: on the 900a assembly that
+        // would copy 50 MB through the interpreter on every sync.
+        let have: Vec<&str> = meshes.iter().map(|mesh| mesh.object.as_str()).collect();
+        if let Some(extra) = self
+            .script
+            .as_deref()
+            .and_then(|host| host.stage_meshes(&have))
+        {
+            for mesh in extra? {
+                match meshes
+                    .iter_mut()
+                    .find(|existing| existing.object == mesh.object)
+                {
+                    // A script that answers for an object the document meshed is
+                    // overriding it on purpose.
+                    Some(slot) => *slot = mesh,
+                    None => meshes.push(mesh),
+                }
+            }
+        }
         // A diagnostics line, not the per-shape tessellation counts `log_shapes`
         // prints: this is the set the stage actually draws, so the smoke check can
         // prove that a feature is not drawn beside the object it consumed.
@@ -1338,6 +1362,29 @@ fn visibility_property(object: &ferrocad_core::DocumentObject) -> Option<bool> {
 /// transform triad hugs and a rotate pivot turns about.
 fn placement_base(object: &ferrocad_core::DocumentObject) -> Option<[f32; 3]> {
     ferrocad_core::origin(object).map(|[x, y, z]| [x as f32, y as f32, z as f32])
+}
+
+/// The `display` string a document object asks for.
+///
+/// A workbench's convention is stored as document data — `DisplayMode` (an
+/// `App::PropertyEnumeration`) and the `Part::DatumPlane` type for the translucent
+/// card — so the document half reads it instead of asking the display hook. A mod
+/// that draws an object some other way still answers through that hook and replaces
+/// this row by name.
+fn display_key(object: &ferrocad_core::DocumentObject) -> &'static str {
+    if object.type_id == "Part::DatumPlane" {
+        return "glass";
+    }
+    let mode = match object.properties.get("DisplayMode") {
+        Some(Property::Enumeration(values, index)) => values.get(*index).map(String::as_str),
+        Some(Property::String(text)) => Some(text.as_str()),
+        _ => None,
+    };
+    match mode {
+        Some("Shaded") => "shaded",
+        Some("Wireframe") => "wireframe",
+        _ => "shaded_edges",
+    }
 }
 
 /// The object's surface colour: its view state's effective colour, or the Part default.

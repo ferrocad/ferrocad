@@ -19,6 +19,7 @@ use ferrocad_shell_python::DisplaySync;
 use ferrocad_shell_python::{PythonScriptHost, python};
 use ferrocad_shell_rust::RustAppBackend;
 use ferrocad_stage::{InteractionCommit, Stage, TRANSFORM_ID};
+use ferrocad_types::Vector3;
 
 /// One interpreter and one document registry per process, shared by the tests.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -326,5 +327,104 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
     assert!(
         !objects.iter().any(|name| name == OBJECT),
         "the feature replaced its base: {objects:?}"
+    );
+}
+
+#[test]
+fn the_document_half_answers_the_display_mode() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut backend = composed();
+
+    // A workbench's convention is document data: `DisplayMode` is a property, so the
+    // document half reads it instead of paying for a display-hook round-trip.
+    let changed = backend
+        .evaluate("FreeCAD.ActiveDocument.Box.DisplayMode = 'Wireframe'")
+        .expect("the property is settable");
+    assert!(changed.ok, "{changed:?}");
+    let meshes = backend.stage_meshes().unwrap();
+    let row = meshes
+        .iter()
+        .find(|mesh| mesh.object == OBJECT)
+        .expect("the box is drawn");
+    assert_eq!(row.display.as_deref(), Some("wireframe"));
+
+    let changed = backend
+        .evaluate("FreeCAD.ActiveDocument.Box.DisplayMode = 'ShadedWithEdges'")
+        .unwrap();
+    assert!(changed.ok);
+    let meshes = backend.stage_meshes().unwrap();
+    let row = meshes.iter().find(|mesh| mesh.object == OBJECT).unwrap();
+    assert_eq!(row.display.as_deref(), Some("shaded_edges"));
+
+    // A datum plane is a bounded translucent card, not a solid face.
+    let plane = backend
+        .add_datum_plane(
+            Vector3::new(0.0, 0.0, 30.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        )
+        .expect("a datum plane is created");
+    let meshes = backend.stage_meshes().unwrap();
+    let row = meshes
+        .iter()
+        .find(|mesh| mesh.object == plane)
+        .unwrap_or_else(|| panic!("the datum plane {plane} is drawn"));
+    assert_eq!(row.display.as_deref(), Some("glass"));
+}
+
+#[test]
+fn a_sync_asks_the_hook_only_for_what_the_document_cannot_mesh() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let backend = composed();
+
+    // Watch the display hook from Python's side. `_stage_mesh_rows` looks the module
+    // attribute up at call time, so replacing it is enough.
+    let installed = backend
+        .evaluate(
+            r#"
+import FerroCAD
+calls = []
+_original = FerroCAD.display_mesh
+
+def _spy(obj):
+    calls.append(obj.Name)
+    return _original(obj)
+
+FerroCAD.display_mesh = _spy
+"#,
+        )
+        .expect("the spy installs");
+    assert!(installed.ok, "{installed:?}");
+
+    // An object with no `Shape`: only a display hook can draw it.
+    let added = backend
+        .evaluate("FreeCAD.ActiveDocument.addObject('App::FeaturePython', 'Scripted')")
+        .expect("the object is added");
+    assert!(added.ok, "{added:?}");
+
+    let meshes = backend.stage_meshes().unwrap();
+    assert!(
+        meshes.iter().any(|mesh| mesh.object == OBJECT),
+        "the document meshed the box itself"
+    );
+
+    let seen = backend.evaluate("str(sorted(calls))").expect("read back");
+    assert!(seen.ok, "{seen:?}");
+    assert!(
+        !seen.output.contains(OBJECT),
+        "the display hook was asked for {OBJECT}: {}",
+        seen.output
+    );
+    assert!(
+        seen.output.contains("Scripted"),
+        "the display hook still answers for a shape-less object: {}",
+        seen.output
+    );
+
+    assert!(
+        backend
+            .evaluate("FerroCAD.display_mesh = _original")
+            .unwrap()
+            .ok
     );
 }

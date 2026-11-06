@@ -552,7 +552,7 @@ def evaluate(code: str) -> str:
             return _json({"ok": False, "output": buf.getvalue().rstrip("\n")})
 
 
-def _stage_mesh_rows() -> list:
+def _stage_mesh_rows(have=()):
     """The rows behind :func:`stage_meshes`, as Python objects.
 
     Built once: :func:`stage_meshes` serializes them for scripts and the docs
@@ -560,6 +560,11 @@ def _stage_mesh_rows() -> list:
     provider may pack its numeric arrays as `bytes` (the Part hook does, through
     ``Shape.mesh(binary=True)``); the host reads those through the C API, and
     :func:`_expand_packed_arrays` unpacks them for the text form.
+
+    ``have`` names the objects the host already meshed from their `Shape`. For those
+    only a module's own override is asked for (``display_mesh_override``), never the
+    default tessellation of a shape the host has — which is what keeps a document
+    sync from copying the same triangles through the interpreter and back.
     """
     try:
         doc = _active_doc()
@@ -568,12 +573,17 @@ def _stage_mesh_rows() -> list:
 
     objects = list(doc.Objects)
     drawable = set(doc.drawableObjects())
+    covered = set(have)
 
     meshes = []
     for index, obj in enumerate(objects, start=1):
         if obj.Name not in drawable:
             continue
-        mesh = FerroCAD.display_mesh(obj)
+        mesh = (
+            FerroCAD.display_mesh_override(obj)
+            if obj.Name in covered
+            else FerroCAD.display_mesh(obj)
+        )
         if mesh is None:
             continue
         meshes.append({"object": obj.Name, "label": obj.Label, "entity": index, **mesh})
@@ -634,15 +644,23 @@ def _expand_packed_arrays(row: dict) -> dict:
     return row
 
 
-def stage_meshes_typed() -> list:
+def stage_meshes_typed(have_json: str = "[]") -> list:
     """The same rows as :func:`stage_meshes`, unserialized.
 
     ``ferrocad_shell_python`` calls this through PyO3. Going through ``json.dumps``
     here and ``serde_json`` in Rust turned every coordinate into text and back, which
     is the cost that grows with the triangle count; the row shape is unchanged, except
     that a provider may pack its arrays as ``bytes`` for the host to read directly.
+
+    ``have_json`` is the host's list of objects it already meshed from their `Shape`:
+    those are skipped (see :func:`_stage_mesh_rows`), so a desktop host does not copy
+    a million triangles through the interpreter twice.
     """
-    return _stage_mesh_rows()
+    try:
+        have = json.loads(have_json) if have_json else []
+    except Exception:
+        have = []
+    return _stage_mesh_rows(have)
 
 
 def active_document() -> str:

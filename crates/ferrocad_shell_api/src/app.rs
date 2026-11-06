@@ -510,7 +510,14 @@ pub trait ScriptHost {
     /// `DisplayMode` (wireframe, shaded-with-edges), a datum plane's translucent
     /// card, and any object whose mesh is not the OCCT `Shape` at all. `None` means
     /// "no display hook": the backend tessellates the document's shapes itself.
-    fn stage_meshes(&self) -> Option<Result<Vec<StageMesh>, String>> {
+    ///
+    /// `have` names the objects the backend already built from their `Shape`. The
+    /// hook should not tessellate those again — on a large document that copy through
+    /// the interpreter is the whole cost of a sync (measured at 1.3 s for 1.24 M
+    /// triangles, against 35 ms for the same rows built in Rust). It may still answer
+    /// for one it wants to draw differently; the backend replaces its own row for that
+    /// object by name.
+    fn stage_meshes(&self, _have: &[&str]) -> Option<Result<Vec<StageMesh>, String>> {
         None
     }
 

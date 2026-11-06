@@ -4573,6 +4573,10 @@ pub fn Part(m: &Bound<'_, PyModule>) -> PyResult<()> {
     );
     m.add_class::<PartShape>()?;
     m.add("_kernel_id", ferrocad_core::application_id())?;
+    // The deflection a display sync tessellates at. A display hook passes it to
+    // `Shape.mesh` explicitly so the hook and a host that meshes the document itself
+    // share one memo entry per shape (`Shape.mesh`'s own default is upstream's 0.5).
+    m.add("DISPLAY_DEFLECTION", ferrocad_part::DISPLAY_DEFLECTION)?;
     // The kernel release string (`"7.8.1"`), read from the OCCT headers at build
     // time. Upstream's Draft splits it into a tuple to decide whether hidden-line
     // removal is available (`Draft/draftfunctions/svgshapes.py:145`).

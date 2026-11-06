@@ -2769,7 +2769,8 @@ impl<V: InventorView> InventorViewport<V> {
             Projection::Matrix(_) => return false,
         }
         self.camera.fit_clip();
-        self.recompile();
+        // Fit moves the camera only; the queue is world space.
+        self.camera_moved();
         true
     }
 
@@ -3722,7 +3723,12 @@ impl<V: InventorView> InventorViewport<V> {
         // Keep the clip window around the new distance: a fixed near/far would cut the
         // scene off when zoomed in (near) or out (far).
         self.camera.fit_clip();
-        self.recompile();
+        // A wheel notch changes the camera, not the geometry: the queue is world space
+        // and the renderer takes the view as a uniform. Recompiling here re-emitted
+        // every stage item on every notch (measured at ~0.9 s on the 900a assembly,
+        // and it grows with the document) — the same cost `camera_moved` removed from
+        // orbiting.
+        self.camera_moved();
         true
     }
 
@@ -3744,7 +3750,8 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.camera.set_projection(projection) {
             return false;
         }
-        self.recompile();
+        // The projection is a uniform; nothing in the queue depends on it.
+        self.camera_moved();
         true
     }
 
@@ -3757,7 +3764,7 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.camera.toggle_projection() {
             return false;
         }
-        self.recompile();
+        self.camera_moved();
         true
     }
 
@@ -3766,7 +3773,7 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.camera.toggle_projection() {
             return false;
         }
-        self.recompile();
+        self.camera_moved();
         true
     }
 
@@ -5831,7 +5838,8 @@ impl<V: InventorView> InventorViewport<V> {
         let view = snap.view_at(snap.elapsed());
         let done = snap.is_done();
         self.camera.view = view;
-        self.recompile();
+        // A snap animates the camera; it does not touch a vertex.
+        self.camera_moved();
         if done {
             self.snap = None;
             false
@@ -8768,6 +8776,72 @@ mod tests {
         assert!(zoomed < before, "scroll up zooms in: {zoomed} < {before}");
         assert!(view.handle_scroll(-1.0));
         assert!((distance(&view.camera.view.m) - before).abs() < 1e-9);
+    }
+
+    /// The queue is world space, so no camera gesture needs to re-emit it.
+    ///
+    /// `recompile` re-emits every stage item — ~0.9 s on the 900a assembly, and it
+    /// grows with the document — and the wheel was the one camera gesture that still
+    /// paid it, on every notch. A recompile clears `hover_answer`; a camera move keeps
+    /// it, so that is the observable difference.
+    #[test]
+    fn a_camera_gesture_does_not_re_emit_the_stage() {
+        let camera = Camera {
+            view: Placement::new(Vector3::new(0.0, 0.0, -4.0), Rotation::identity()).to_matrix(),
+            projection: Projection::Perspective {
+                fov_y: 0.8,
+                near: 0.1,
+                far: 100.0,
+            },
+            viewport: Viewport::new([100, 100], 1.0),
+        };
+        let mut view =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        // Fit needs something to frame.
+        view.set_stage(Stage::new().with_item(named_slab()));
+
+        // A hover answer is cleared by a recompile and kept by a camera move.
+        view.hover_answer = Some(HoverAnswer {
+            device: [0, 0],
+            camera: view.camera.clone(),
+            hit: None,
+        });
+        assert!(view.handle_scroll(1.0), "the wheel zoomed");
+        assert!(
+            view.hover_answer.is_some(),
+            "a wheel notch re-emitted the queue instead of moving the camera"
+        );
+
+        view.hover_answer = Some(HoverAnswer {
+            device: [0, 0],
+            camera: view.camera.clone(),
+            hit: None,
+        });
+        assert!(view.frame_stage(), "the stage frames");
+        assert!(view.hover_answer.is_some(), "Fit re-emitted the queue");
+
+        view.hover_answer = Some(HoverAnswer {
+            device: [0, 0],
+            camera: view.camera.clone(),
+            hit: None,
+        });
+        assert!(view.toggle_projection(), "the projection toggled");
+        assert!(
+            view.hover_answer.is_some(),
+            "a projection switch re-emitted the queue"
+        );
+
+        // The assertion has teeth: a real scene change still recompiles.
+        view.hover_answer = Some(HoverAnswer {
+            device: [0, 0],
+            camera: view.camera.clone(),
+            hit: None,
+        });
+        assert!(view.set_grid(true), "the grid switched on");
+        assert!(
+            view.hover_answer.is_none(),
+            "a scene change must still recompile"
+        );
     }
 
     /// A view with a hardware pick path: it reports id `42` wherever there is a queue to

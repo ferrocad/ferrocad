@@ -794,6 +794,15 @@ still reports no new result for any of the 23 open requests. The nearest near-mi
 would add a borrow outside the measure policy) and `monitor-plus` (`devices`, an
 extended *display*, not an extended line). Snapshot refreshed to 6,671.
 
+**Re-check, 2026-11-06 (fourth).** The catalogue grew **6,671 → 6,777** (106 added, none
+removed). Still nothing in `symbols` or `editor`, and the checker reports no delivery for
+any of the 23 open concepts — the CAD pass has not landed yet. The nearest CAD-adjacent
+arrivals are tools and documents rather than geometry: `blueprint` (`industry`, a
+technical drawing), `dial-indicator` and `lathe-chuck` (`tools`, machinist instruments),
+and `clone-stamp` (`photo`, a retouch tool — `duplicate-object` remains the better
+Clone). None has a row to sit in, so the mapping is unchanged and the snapshot is
+refreshed to 6,777.
+
 **CAD-family request pass, 2026-11-06.** Most of the CAD verbs had never been asked
 for *as CAD*: `revolve` was standing in as `lathe` (an industrial lathe) and `chamfer`
 as `bevel-gauge` (a hand gauge), so the picture named the tool rather than the

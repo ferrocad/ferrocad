@@ -183,12 +183,18 @@ impl ShapeProperty {
         Arc::clone(&self.tessellations)
     }
 
-    /// The display tessellation of the held shape, memoised.
+    /// The display tessellation of the held shape, memoised, in **world** coordinates.
     ///
     /// A shell asks every drawable object for its mesh on each sync, and the kernel
     /// meshes per face whether or not the shape is already triangulated, so an
     /// unchanged document must not re-mesh. Both backends go through this: the Rust
     /// one directly, the Python one through the wrapper's copy of the same cache.
+    ///
+    /// The cached mesh stays in the frame it was built in and a rigid move is carried
+    /// as a delta beside it (see [`TessellationCache::record_rigid`]), so this applies
+    /// that delta — once, memoised — for callers that need world positions (`Shape.mesh`,
+    /// bounds, mass properties). A consumer that can carry a transform asks
+    /// [`tessellate_rigid`](Self::tessellate_rigid) instead and skips the copy.
     pub fn tessellate(
         &self,
         linear: f64,
@@ -204,7 +210,38 @@ impl ShapeProperty {
                 relative: false,
             };
             crate::backend().tessellate(shape, &options)
-        })
+        })?;
+        Ok(self.tessellations.placed())
+    }
+
+    /// The display tessellation in the frame it was built in, plus the rigid move that
+    /// places it.
+    ///
+    /// A rigid move does not change a triangle, only where it is, and
+    /// [`ShapeItem::emit`](https://docs.rs/ferrocad_stage) already carries a world
+    /// transform in the packet state. Handing a stage the mesh and the transform keeps
+    /// its rows **identical** across a move, so the viewport patches the matrices it
+    /// already has instead of re-emitting 1.24 M vertices and re-uploading them.
+    pub fn tessellate_rigid(
+        &self,
+        linear: f64,
+        angular: f64,
+    ) -> Result<(Arc<ferrocad_geom::Tessellation>, Placement), ferrocad_geom::GeomError> {
+        let Some(shape) = self.shape.as_ref() else {
+            return Ok((
+                Arc::new(ferrocad_geom::Tessellation::default()),
+                Placement::identity(),
+            ));
+        };
+        let mesh = self.tessellations.get_or_build(shape, linear, angular, || {
+            let options = ferrocad_geom::TessellationOptions {
+                linear_deflection: Some(linear),
+                angular_deflection: angular,
+                relative: false,
+            };
+            crate::backend().tessellate(shape, &options)
+        })?;
+        Ok((mesh, self.tessellations.delta()))
     }
 
     /// The accumulated placement carried beside the baked geometry.
@@ -817,7 +854,10 @@ mod tests {
             memo.record_rigid(
                 &shape,
                 &moved,
-                &ferrocad_types::Matrix4::translation(5.0, 0.0, 0.0)
+                &ferrocad_types::Placement::new(
+                    Vector3::new(5.0, 0.0, 0.0),
+                    ferrocad_types::Rotation::identity()
+                )
             ),
             "the memo had an entry for the shape being re-baked"
         );

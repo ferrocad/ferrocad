@@ -799,8 +799,18 @@ impl ShapeItem {
         if let Some([x, y, z]) = self.origin {
             return Some(Vector3::new(f64::from(x), f64::from(y), f64::from(z)));
         }
+        // The positions live in the frame the geometry was built in, and `placement` is how
+        // they reach world space (a host that keeps the tessellation frame sets it; a row
+        // whose positions are already world space leaves it identity). The preview
+        // transform is deliberately not applied: a drag moves the triad explicitly, and
+        // including it here would move the anchor twice.
+        let world = self.placement.to_matrix();
         self.positions.iter().fold(None, |acc, [x, y, z]| {
-            let point = Vector3::new(f64::from(*x), f64::from(*y), f64::from(*z));
+            let point = world.transform(&Vector3::new(
+                f64::from(*x),
+                f64::from(*y),
+                f64::from(*z),
+            ));
             Some(match acc {
                 None => point,
                 Some(min) => {

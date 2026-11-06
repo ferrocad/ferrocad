@@ -29,6 +29,7 @@ fn shell_with_stage(
             vertex_parts: Vec::new(),
             parts: vec!["Face1".into()],
             origin: Some(origin),
+            placement: None,
             color: None,
             display: None,
         }]);

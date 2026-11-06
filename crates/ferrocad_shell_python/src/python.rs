@@ -380,6 +380,9 @@ fn stage_mesh_from_row(row: &Bound<'_, PyDict>) -> Result<StageMesh, String> {
         vertex_parts: indices(row, "vertex_parts")?,
         parts: optional(row, "parts")?.unwrap_or_default(),
         origin: fixed::<3>(row, "origin")?,
+        // The display hook answers with world-space positions; only a host that keeps the
+        // tessellation frame reports a transform.
+        placement: None,
         color: fixed::<4>(row, "color")?,
         display: optional::<String>(row, "display")?,
     })

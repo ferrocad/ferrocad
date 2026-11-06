@@ -246,7 +246,7 @@ fn sync_shape_and_placement(
             let Ok(moved) = ferrocad_part::backend().transform(&shape, &delta.to_matrix()) else {
                 return;
             };
-            memo.record_rigid(&shape, &moved, &delta.to_matrix());
+            memo.record_rigid(&shape, &moved, &delta);
             let property = ShapeProperty::with_placement_and_memo(moved, placement, memo);
             doc.set_property_raw(id, "Shape", make_shape_property(property));
         }
@@ -658,10 +658,7 @@ fn intrinsic_lineage(shape: &Shape) -> Option<Lineage> {
 /// applies `b` first, then `a` (rotation part `a.rotation * b.rotation`, base
 /// `a.rotation * b.base + a.base`).
 fn compose_placements(a: &Placement, b: &Placement) -> Placement {
-    Placement {
-        base: a.base.add(&a.rotation.to_matrix().transform(&b.base)),
-        rotation: a.rotation.multiply(&b.rotation),
-    }
+    a.compose(b)
 }
 
 /// The global placement of a rotation by `degrees` about the axis through

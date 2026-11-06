@@ -294,6 +294,7 @@ mod tests {
             vertex_parts: Vec::new(),
             parts: Vec::new(),
             origin: None,
+            placement: None,
             color: None,
             display: None,
         }

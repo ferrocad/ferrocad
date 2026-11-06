@@ -860,6 +860,18 @@ impl Placement {
         }
     }
 
+    /// Compose two placements exactly: `other` first, then `self`.
+    ///
+    /// [`mul`](Self::mul) predates [`Rotation::multiply`] and returns the identity
+    /// rotation, so it is only safe where a rotation cannot appear. A re-bake delta
+    /// accumulates across moves and a rotation must survive, so it uses this.
+    pub fn compose(&self, o: &Placement) -> Placement {
+        Placement {
+            base: self.base.add(&self.rotation.to_matrix().transform(&o.base)),
+            rotation: self.rotation.multiply(&o.rotation),
+        }
+    }
+
     pub fn to_matrix(&self) -> Matrix4 {
         let mut m = self.rotation.to_matrix();
         // Row-major: translation occupies the 4th column (m[3], m[7], m[11]).

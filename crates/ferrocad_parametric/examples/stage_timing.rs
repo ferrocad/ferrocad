@@ -91,27 +91,31 @@ fn main() -> Result<(), String> {
 
     // What a rigid move changes in the rows a stage is built from. `set_stage` patches
     // packets instead of re-emitting only when nothing but the transform moved, so these
-    // two lines are the precondition for that path (`origin` comes from the placement
-    // base, so it moves with it; the question is whether the vertices do too).
+    // lines are the precondition for that path: the positions must be identical and the
+    // move must be on the row's placement.
     let after_move = over_python.stage_meshes()?;
     let row = |rows: &Vec<StageMesh>, object: &str| -> Option<StageMesh> {
         rows.iter().find(|row| row.object == object).cloned()
     };
     let report = |object: &str| {
-        match (
-            row(&before_move, object),
-            row(&after_move, object),
-        ) {
+        let translation = |placement: Option<ferrocad_types::Placement>| match placement {
+            Some(placement) => {
+                let matrix = placement.to_matrix();
+                [matrix.m[3], matrix.m[7], matrix.m[11]]
+            }
+            None => [0.0; 3],
+        };
+        match (row(&before_move, object), row(&after_move, object)) {
             (Some(before), Some(after)) => eprintln!(
-                "row {object:<32} positions {} ({})   origin {:?} -> {:?}",
+                "row {object:<32} positions {} ({})   placement {:?} -> {:?}",
                 if before.positions == after.positions {
                     "identical"
                 } else {
                     "CHANGED"
                 },
                 before.positions.len(),
-                before.origin,
-                after.origin
+                translation(before.placement),
+                translation(after.placement)
             ),
             _ => eprintln!("row {object:<32} missing"),
         }

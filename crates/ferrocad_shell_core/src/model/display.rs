@@ -75,9 +75,16 @@ impl DisplaySync {
             let object = std::mem::take(&mut mesh.object);
             let display = std::mem::take(&mut mesh.display);
             let origin = mesh.origin;
+            // The rigid move the rows carry, when the host kept them in the frame they
+            // were tessellated in. `positions` with it applied is world space, which is
+            // what a row with no placement already is.
+            let placement = mesh
+                .placement
+                .unwrap_or_else(ferrocad_types::Placement::identity);
             let color = mesh.color;
             let mut item = ShapeItem::from_tessellation_owned(entity, mesh.into_tessellation())
                 .with_draw_mode(display_mode(display.as_deref()))
+                .with_placement(placement)
                 .with_origin(origin);
             if display.as_deref() == Some(GLASS_CARD) {
                 // A datum card: a low-alpha glass fill plus the front-edge rim, in
@@ -171,6 +178,7 @@ mod tests {
             vertex_parts: Vec::new(),
             parts: vec!["Face1".to_string(), "Edge1".to_string()],
             origin: Some([0.0, 0.0, 0.0]),
+            placement: None,
             color: None,
             display: None,
         }

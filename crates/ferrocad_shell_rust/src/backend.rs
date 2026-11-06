@@ -423,9 +423,12 @@ impl AppBackend for RustAppBackend {
                     continue;
                 };
                 // The property memoises: a sync of an unchanged document copies, it
-                // does not re-mesh (the kernel meshes per face either way).
-                let mesh = property
-                    .tessellate(TOLERANCE, TessellationOptions::default().angular_deflection)
+                // does not re-mesh (the kernel meshes per face either way). `rigid` hands
+                // back the frame the mesh was built in plus the move that places it — the
+                // rows stay identical across a move, so the viewport patches packet
+                // transforms instead of re-emitting 1.24 M vertices.
+                let (mesh, placement) = property
+                    .tessellate_rigid(TOLERANCE, TessellationOptions::default().angular_deflection)
                     .map_err(|error| format!("{}: {error}", object.name))?;
                 let mesh = std::sync::Arc::unwrap_or_clone(mesh);
                 meshes.push(StageMesh {
@@ -443,6 +446,7 @@ impl AppBackend for RustAppBackend {
                     vertex_parts: mesh.vertex_parts,
                     parts: mesh.parts,
                     origin: placement_base(object),
+                    placement: Some(placement),
                     color: Some(object_color(object)),
                     display: Some(display_key(object).to_string()),
                 });

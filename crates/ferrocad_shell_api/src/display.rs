@@ -6,6 +6,7 @@
 //! crosses the backend seam.
 
 use ferrocad_geom::Tessellation;
+use ferrocad_types::Placement;
 use serde::Deserialize;
 
 /// One tessellated document shape, with the entity id a pick reports.
@@ -45,6 +46,16 @@ pub struct StageMesh {
     /// bounding box's base corner.
     #[serde(default)]
     pub origin: Option<[f32; 3]>,
+    /// The rigid move the stored geometry carries, when the host keeps `positions` in the
+    /// frame they were tessellated in instead of baking the object's placement into them.
+    ///
+    /// `positions` and `placement` together are what `origin` alone describes for the
+    /// gizmo: a host that reports both lets the viewport draw the body where it belongs
+    /// while its rows stay byte-identical across a move — which is what lets a commit
+    /// patch packet transforms instead of re-emitting every vertex. Absent (the display
+    /// hook's answered rows) means the positions are already world space.
+    #[serde(default)]
+    pub placement: Option<Placement>,
     /// The object's RGBA surface colour (linear, 0..1), if the provider supplies one.
     #[serde(default)]
     pub color: Option<[f32; 4]>,

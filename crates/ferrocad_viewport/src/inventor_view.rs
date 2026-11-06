@@ -2780,7 +2780,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// follows the new distance.
     pub fn frame_stage(&mut self) -> bool {
         let radius = self.stage.items().iter().fold(0.0f64, |radius, item| {
-            let matrix = item.placement().to_matrix();
+            let matrix = item.world_matrix();
             item.positions().iter().fold(radius, |radius, position| {
                 let world = matrix.transform(&Vector3::new(
                     f64::from(position[0]),

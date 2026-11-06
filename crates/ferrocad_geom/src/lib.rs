@@ -581,7 +581,21 @@ struct CachedTessellation {
     shape: Shape,
     linear: f64,
     angular: f64,
+    /// The rigid move accumulated since `tessellation` was built, applied to it to reach
+    /// world coordinates.
+    ///
+    /// Kept instead of rewriting the vertices: a placement write used to re-bake the shape
+    /// and transform every position ([`record_rigid`](TessellationCache::record_rigid)),
+    /// which made a move look like an edit to everything downstream — the stage re-emitted
+    /// 1.24 M vertices and the GPU re-uploaded them for geometry that had not changed.
+    /// Now the mesh stays in the frame it was built in and the transform travels beside
+    /// it, so a display sync that can carry a matrix
+    /// ([`placed`](ShapeProperty)) takes it instead of a copy.
+    delta: Placement,
     tessellation: Arc<Tessellation>,
+    /// `tessellation` with [`delta`](Self::delta) applied, built on first request and
+    /// dropped whenever the delta changes.
+    placed: Option<Arc<Tessellation>>,
 }
 
 impl TessellationCache {
@@ -617,20 +631,29 @@ impl TessellationCache {
             shape: shape.clone(),
             linear,
             angular,
+            delta: Placement::identity(),
             tessellation: Arc::clone(&tessellation),
+            placed: None,
         });
         Ok(tessellation)
     }
 
-    /// Re-key the cached tessellation onto `to`, which is `from` moved rigidly by `delta`.
+    /// Re-key the cached tessellation onto `to`, which is the cached frame moved rigidly
+    /// by `delta`.
     ///
     /// This is what a placement write needs. The memo is keyed on the shape **handle**, and
     /// a re-bake replaces it, so without this every `obj.Placement = …` threw the memo away
     /// and the next display sync re-meshed the body — 1.4 s on the 900a document, for a
-    /// transform the renderer could have applied itself. Re-baking rigidly does not change
-    /// the triangle set, so the cached mesh follows instead. Returns whether there was an
-    /// entry to carry over (a shape that was never tessellated needs nothing).
-    pub fn record_rigid(&self, from: &Shape, to: &Shape, delta: &Matrix4) -> bool {
+    /// transform the renderer could have applied itself.
+    ///
+    /// The vertices are **not** rewritten: the move is kept as an accumulated
+    /// [`delta`](Self::delta) beside the mesh, so this is a matrix multiply rather than a
+    /// copy of every position. A caller that wants world coordinates asks for
+    /// [`placed`](Self::placed); one that can carry a transform (a display sync) asks for
+    /// [`get_or_build`](Self::get_or_build) and [`delta`](Self::delta) instead. Returns
+    /// whether there was an entry to carry over (a shape that was never tessellated needs
+    /// nothing).
+    pub fn record_rigid(&self, from: &Shape, to: &Shape, delta: &Placement) -> bool {
         let mut entry = self.entry.lock().unwrap_or_else(|error| error.into_inner());
         let Some(cached) = entry.as_ref() else {
             return false;
@@ -638,14 +661,45 @@ impl TessellationCache {
         if !cached.shape.is_same(from) {
             return false;
         }
-        let moved = Arc::new(cached.tessellation.transformed(delta));
         *entry = Some(CachedTessellation {
             shape: to.clone(),
             linear: cached.linear,
             angular: cached.angular,
-            tessellation: moved,
+            delta: delta.compose(&cached.delta),
+            tessellation: Arc::clone(&cached.tessellation),
+            placed: None,
         });
         true
+    }
+
+    /// The rigid move accumulated since the cached mesh was built.
+    pub fn delta(&self) -> Placement {
+        let entry = self.entry.lock().unwrap_or_else(|error| error.into_inner());
+        entry
+            .as_ref()
+            .map(|cached| cached.delta)
+            .unwrap_or_else(Placement::identity)
+    }
+
+    /// The cached mesh in world coordinates, with [`delta`](Self::delta) applied.
+    ///
+    /// Built once per delta and kept, so a caller that needs world positions repeatedly
+    /// (the `Shape.mesh` view a Python hook draws with) pays the transform once; the frame
+    /// the mesh was built in stays untouched for a caller that can carry a matrix.
+    pub fn placed(&self) -> Arc<Tessellation> {
+        let mut entry = self.entry.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(cached) = entry.as_mut() else {
+            return Arc::new(Tessellation::default());
+        };
+        if cached.delta == Placement::identity() {
+            return Arc::clone(&cached.tessellation);
+        }
+        if let Some(placed) = &cached.placed {
+            return Arc::clone(placed);
+        }
+        let placed = Arc::new(cached.tessellation.transformed(&cached.delta.to_matrix()));
+        cached.placed = Some(Arc::clone(&placed));
+        placed
     }
 }
 
@@ -2007,6 +2061,7 @@ impl GeometryBackend for NullBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrocad_types::Rotation;
 
     #[test]
     fn a_rigid_move_carries_the_cached_tessellation_to_the_new_handle() {
@@ -2023,14 +2078,26 @@ mod tests {
             })
             .expect("a tessellation");
 
-        assert!(cache.record_rigid(&from, &to, &Matrix4::translation(5.0, 0.0, 0.0)));
+        assert!(cache.record_rigid(
+            &from,
+            &to,
+            &Placement::new(Vector3::new(5.0, 0.0, 0.0), Rotation::identity())
+        ));
 
         // The moved handle answers without meshing: a build closure that must not run.
-        let moved = cache
+        let base = cache
             .get_or_build(&to, 0.5, 0.5, || {
                 panic!("the memo must answer for the moved handle")
             })
             .expect("the carried tessellation");
+        assert_eq!(
+            base.positions[0],
+            [0.0, 0.0, 0.0],
+            "the carried mesh stays in the frame it was built in"
+        );
+        assert_eq!(cache.delta(), Placement::new(Vector3::new(5.0, 0.0, 0.0), Rotation::identity()));
+
+        let moved = cache.placed();
         assert_eq!(moved.positions[0], [5.0, 0.0, 0.0]);
         assert_eq!(moved.positions[1], [6.0, 0.0, 0.0]);
         assert_eq!(
@@ -2040,7 +2107,7 @@ mod tests {
         );
 
         // The entry was re-keyed, so the old handle no longer matches it.
-        assert!(!cache.record_rigid(&from, &to, &Matrix4::identity()));
+        assert!(!cache.record_rigid(&from, &to, &Placement::identity()));
     }
 
     #[test]
@@ -2059,16 +2126,13 @@ mod tests {
             .expect("a tessellation");
 
         // A quarter turn about Z.
-        let mut turn = Matrix4::identity();
-        turn.m[0] = 0.0;
-        turn.m[1] = -1.0;
-        turn.m[4] = 1.0;
-        turn.m[5] = 0.0;
+        let turn = Placement::new(
+            Vector3::zero(),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2),
+        );
         assert!(cache.record_rigid(&from, &to, &turn));
 
-        let moved = cache
-            .get_or_build(&to, 0.5, 0.5, || panic!("the memo must answer"))
-            .expect("the carried tessellation");
+        let moved = cache.placed();
         assert!(
             (moved.positions[0][1] - 1.0).abs() < 1e-6,
             "a quarter turn about Z sends +X to +Y: {:?}",

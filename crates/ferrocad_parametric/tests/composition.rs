@@ -234,12 +234,21 @@ fn a_python_edit_is_visible_to_the_rust_half() {
 
 /// The item's minimum x in world space: the corner a transform moves.
 fn min_x(stage: &Stage, entity: u32) -> f64 {
-    stage
-        .item(entity)
-        .expect("the item")
-        .positions()
+    let item = stage.item(entity).expect("the item");
+    // The drawn position, not the raw row: a host may keep the vertices in the frame
+    // they were tessellated in and carry the move as the item's placement.
+    let world = item.world_matrix();
+    item.positions()
         .iter()
-        .map(|position| f64::from(position[0]))
+        .map(|position| {
+            world
+                .transform(&Vector3::new(
+                    f64::from(position[0]),
+                    f64::from(position[1]),
+                    f64::from(position[2]),
+                ))
+                .x
+        })
         .fold(f64::INFINITY, f64::min)
 }
 
@@ -327,6 +336,55 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
     assert!(
         !objects.iter().any(|name| name == OBJECT),
         "the feature replaced its base: {objects:?}"
+    );
+}
+
+/// A commit is a move: the rows the stage is built from must not change, only the
+/// transform that places them. That is what lets `set_stage` patch the packet matrices
+/// instead of re-emitting 1.24 M vertices and re-uploading them to the GPU.
+#[test]
+fn a_commit_moves_the_placement_not_the_rows() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut backend = composed();
+
+    let before = backend.stage_meshes().expect("the stage syncs");
+    let row_before = before
+        .iter()
+        .find(|mesh| mesh.object == OBJECT)
+        .expect("the box is drawn")
+        .clone();
+
+    let mut matrix = [0.0f64; 16];
+    for index in 0..4 {
+        matrix[index * 5] = 1.0;
+    }
+    // Row-major (FreeCAD A11..A44): A14 is the x translation.
+    matrix[3] = 12.0;
+    let commit =
+        InteractionCommit::new(TRANSFORM_ID, row_before.entity, "apply").with_values(matrix);
+    let applied = backend
+        .apply_interaction(&commit, OBJECT)
+        .expect("the commit routes");
+    assert!(applied.ok, "{}", applied.error);
+
+    let after = backend.stage_meshes().expect("the stage re-syncs");
+    let row_after = after
+        .iter()
+        .find(|mesh| mesh.object == OBJECT)
+        .expect("the box is still drawn");
+
+    assert_eq!(
+        row_after.positions, row_before.positions,
+        "a rigid move does not rewrite the vertices"
+    );
+    assert_eq!(row_after.triangles, row_before.triangles);
+    let placement = row_after
+        .placement
+        .expect("the rows carry the move as a transform");
+    assert!(
+        (placement.to_matrix().m[3] - 12.0).abs() < 1e-6,
+        "the move is the row's placement: {:?}",
+        placement.to_matrix().m
     );
 }
 

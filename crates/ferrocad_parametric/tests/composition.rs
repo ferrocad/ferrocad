@@ -15,8 +15,10 @@ use std::sync::{Mutex, Once};
 
 use ferrocad_shell_api::app::{AppBackend, ScriptHost};
 use ferrocad_shell_api::catalog;
+use ferrocad_shell_python::DisplaySync;
 use ferrocad_shell_python::{PythonScriptHost, python};
 use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_stage::{InteractionCommit, Stage, TRANSFORM_ID};
 
 /// One interpreter and one document registry per process, shared by the tests.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -227,4 +229,102 @@ fn a_python_edit_is_visible_to_the_rust_half() {
             .collect::<Vec<_>>()
     );
     assert!(!backend.save_document().unwrap().is_empty());
+}
+
+/// The item's minimum x in world space: the corner a transform moves.
+fn min_x(stage: &Stage, entity: u32) -> f64 {
+    stage
+        .item(entity)
+        .expect("the item")
+        .positions()
+        .iter()
+        .map(|position| f64::from(position[0]))
+        .fold(f64::INFINITY, f64::min)
+}
+
+#[test]
+fn a_manipulator_commit_routes_by_who_owns_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut backend = composed();
+
+    let meshes = backend.stage_meshes().expect("the stage");
+    let shown = meshes
+        .iter()
+        .find(|mesh| mesh.object == OBJECT)
+        .expect("the edition's Box is drawn");
+    let entity = shown.entity;
+    assert!(
+        shown.parts.iter().any(|part| part == "Edge1"),
+        "the kernel names the box's edges"
+    );
+
+    let mut display = DisplaySync::new();
+    let stage = display.build(meshes);
+    let before = min_x(&stage, entity);
+    assert!(
+        before.abs() < 1e-6,
+        "the seeded box sits at x = 0: {before}"
+    );
+
+    // 1. The shared transform gizmo is the document's: `RustAppBackend` applies it
+    //    itself, so the script half never sees this commit.
+    let mut matrix = [0.0f64; 16];
+    for index in 0..4 {
+        matrix[index * 5] = 1.0;
+    }
+    // Row-major (FreeCAD A11..A44): A14 is the x translation.
+    matrix[3] = 12.0;
+    let commit = InteractionCommit::new(TRANSFORM_ID, entity, "apply").with_values(matrix);
+    let applied = backend
+        .apply_interaction(&commit, OBJECT)
+        .expect("the transform applied");
+    assert!(applied.ok, "{}", applied.error);
+
+    let stage = display.build(backend.stage_meshes().expect("the re-synced stage"));
+    let moved = min_x(&stage, entity);
+    assert!(
+        (moved - (before + 12.0)).abs() < 0.05,
+        "the document moved it by the commit's 12 mm: {before} → {moved}"
+    );
+
+    // Which half applied it is observable through the transaction's name: the
+    // document half records "Transform", the Part hook "Move Box".
+    let undone = backend.run_command("App_Undo").expect("undo runs");
+    assert!(
+        undone.status.starts_with("undo: Transform"),
+        "the document half applied the transform: {}",
+        undone.status
+    );
+    assert!(backend.run_command("App_Redo").expect("redo runs").ok);
+
+    // 2. A workbench manipulator is the script's: the document half does not know
+    //    `dress_up`, so this passes only if it falls through to `PythonScriptHost`
+    //    and on to the Part workbench's interaction provider.
+    let commit = InteractionCommit::new("dress_up", entity, "fillet")
+        .with_element("Edge1")
+        .with_values([2.0])
+        .with_readout("R 2.00 mm");
+    let applied = backend
+        .apply_interaction(&commit, OBJECT)
+        .expect("the commit routed");
+    assert!(
+        applied.ok,
+        "the script half applied the fillet: {}",
+        applied.error
+    );
+
+    let objects: Vec<String> = backend
+        .stage_meshes()
+        .expect("the re-synced stage")
+        .into_iter()
+        .map(|mesh| mesh.object)
+        .collect();
+    assert!(
+        objects.iter().any(|name| name == "Box_Fillet"),
+        "the fillet is drawn: {objects:?}"
+    );
+    assert!(
+        !objects.iter().any(|name| name == OBJECT),
+        "the feature replaced its base: {objects:?}"
+    );
 }

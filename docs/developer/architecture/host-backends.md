@@ -1,7 +1,9 @@
 # Hosts and backends: one shell, one contract, four runtimes
 
-Status: implemented (2026-11-05). The shell/backend split, the `ScriptHost` seam, the
-file verbs and all four runtime configurations are in the tree and covered by CI.
+Status: implemented (2026-11-06). The shell/backend split, the `ScriptHost` seam, the
+file verbs and all four runtime configurations are in the tree and covered by CI —
+including the native one, which since S9 is the *same composition* as the two browser
+ones (`RustAppBackend` + a `ScriptHost`), not a second `AppBackend`.
 Task record: [`host-backends.md`](../../project/record/tasks/host-backends.md) — the
 plan that delivered them, kept for its stage history and its `file:line` evidence.
 
@@ -42,7 +44,7 @@ Crates today:
 | Contract | `ferrocad_shell_api` | `AppBackend`, `ScriptHost`, and every view model |
 | UI shell | `ferrocad_shell_core` | platform-neutral GPUI; no engine, no interpreter |
 | Backend · no runtime | `ferrocad_shell_rust` | `RustAppBackend`; desktop *or* wasm |
-| Backend · CPython | inside `ferrocad_shell_python` | `PythonAppBackend`; that crate is host **and** backend |
+| Backend · CPython | `ferrocad_shell_python` | `RustAppBackend` + `PythonScriptHost`; the crate is host **and** script half |
 | Backend · JS modules | `ferrocad_shell_js` | `JsScriptHost`; wasm only |
 | Backend · wasm Python | `ferrocad_shell_pywasm` | `PywasmScriptHost`; RustPython |
 | Host · browser | `ferrocad_web_gpui` | `cdylib`, page bridge, a pure host |
@@ -75,6 +77,11 @@ pub trait ScriptHost {
     fn event_listener(&self) -> Box<dyn EventListener>;
     fn commands(&self) -> Vec<CommandInfo> { Vec::new() }
     fn run_command(&self, id: &str) -> Option<CommandOutcome> { None }
+    // boot and paths: bootstrap, open_startup_document, hello, open_path, save_path
+    // inside the document: stage_meshes, apply_interaction, add_datum_plane
+    // script-owned nodes: extra_tree_nodes, extra_properties, set_extra_property
+    // mirrors: on_selection_changed, take_selection_requests, on_view_state_changed
+    // providers, dialogs, the GPU preference, manipulators, the appearance preset
 }
 ```
 
@@ -86,8 +93,21 @@ Rules that keep the split honest:
 - `script_host()` is `None` for a backend with no interpreter. `RustAppBackend` returns
   `None` unless a host composed one in with `with_script_host`.
 - `commands()`/`run_command()` let a script contribute verbs to the palette: the
-  document's `commands()` appends the script's list, and `run_command` asks the script
-  only for ids it does not own.
+  document's `commands()` appends the script's list (dropping an id the catalogue
+  already provides, so a built-in is never listed twice), and `run_command` asks the
+  script only for ids it does not own.
+- The hooks that let a script **own part of a document answer** return `Option`:
+  `None` means "not mine, answer it yourself". `RustAppBackend` asks them before its
+  own answer for the five merged methods — `model_tree` (appends
+  `extra_tree_nodes`), `properties`/`set_property` (the `Settings/*` namespace, which
+  is not in the document at all), `dialog_accept`/`dialog_cancel` (tokens it did not
+  mint). That ordering is what keeps `Settings/Grid` resolvable without turning every
+  property read into an interpreter round-trip.
+- Three capabilities stayed with the script half *inside* the document: `stage_meshes`
+  (the edition's display hook — `DisplayMode`, a datum plane's glass card, the toy
+  edition's non-OCCT meshes), `apply_interaction` (a workbench manipulator that knows
+  its own feature type) and `add_datum_plane`. Each answers first; the document half
+  keeps its own behaviour as the fallback.
 - `inventor_scene` and `event_listener` live on `ScriptHost` because they are scripting
   capabilities, not rendering paths. They are the compatibility route for workbenches
   that build their own Coin scene (`ActiveView.getSceneGraph().addChild(...)`, dispatch
@@ -97,8 +117,10 @@ Rules that keep the split honest:
 
 `App_Open`/`App_Save` are the shell's on every platform. The host installs a
 `ferrocad_shell_core::files::FilePicker`; the shell prompts, then hands the result to
-the backend, and only a *path* result reaches `open_path`/`save_path`, so the CPython
-backend still reports the real file name.
+the backend, and only a *path* result reaches `open_path`/`save_path`. Those two ask
+`ScriptHost` first: the formats are the app's (`.FCStd`, the native `.ferrocad`) and
+`saveAs` is what records the name a later save returns to. A host with no filesystem
+of its own (the browser's JS half) declines, and the backend's byte path answers.
 
 - `NativeFilePicker` — GPUI's `prompt_for_paths`/`prompt_for_new_path`, which is the
   xdg desktop portal on Linux, plus plain `std::fs`.
@@ -110,9 +132,9 @@ A backend therefore carries no file hooks and no platform knowledge.
 ## 4. The four configurations
 
 ![The four runtime configurations behind one shell: RustAppBackend alone (no
-runtime), PythonAppBackend (embedded CPython, native), RustAppBackend + JsScriptHost
-(wasm modules) and RustAppBackend + PywasmScriptHost (wasm Python), all on one
-`AppBackend`/`ScriptHost` seam](../images/host-backends-columns.svg)
+runtime), RustAppBackend + PythonScriptHost (embedded CPython, native), RustAppBackend
++ JsScriptHost (wasm modules) and RustAppBackend + PywasmScriptHost (wasm Python), all
+on one `AppBackend`/`ScriptHost` seam](../images/host-backends-columns.svg)
 
 ### Rust, no runtime
 
@@ -124,15 +146,46 @@ and on a desktop edition.
 
 ### Embedded CPython (native)
 
-`ferrocad_shell_python::backend::PythonAppBackend` embeds CPython through PyO3 and
-implements both traits, so `script_host()` returns `Some(self)`. The script is
-`python/ferrocad_shell`, which reaches the engine through `ferrocad_py` (the `FreeCAD`
-facade and the `ferrocad` module) and the per-workbench extension modules.
+Since **S9** this is the same composition as the two browser ones:
 
-That path crosses a **JSON boundary**: each shell callback is a module function that
-returns a JSON string, which the host deserializes (`ferrocad_shell_python/src/python.rs`).
-It is cheap for a handful of objects and scales with the payload, which is why mesh
-transfer on large documents is the known cost — see §10.
+```text
+ferrocad_shell_rust::RustAppBackend                (document half)
+      + ferrocad_shell_python::PythonScriptHost   (script half)
+      = the desktop backend
+```
+
+Both halves point at **one document** — the one in
+`ferrocad_core::application::application()`, the registry `ferrocad_py` binds
+`FreeCAD.ActiveDocument` to. `RustAppBackend` reaches it through `DocSource::SharedRegistry`,
+which caches no handle (a script may open or close documents at run time) and always
+releases the registry lock before locking a document. A re-open of an open name
+replaces the contents *inside* the existing `Arc<Mutex<Document>>`, so a `PyDocument`
+wrapper stays valid and undo history belongs to the document rather than to a copy.
+
+Why the registry rather than a copy: the shell's `model_tree`, `properties`,
+`set_property`, `commands` and stage now read and mutate that document **in Rust**,
+while the same object is what a workbench sees as `FreeCAD.ActiveDocument`. Two copies
+would have to be kept in step; one shared handle cannot drift. The JSON bridge
+(`ferrocad_shell_python/src/python.rs`) is still there for everything the script owns —
+the `Settings/*` nodes, the provider registry, commands a workbench registered, its
+dialogs, the display hook, manipulators — which is the point of the split: a document
+question does not pay for an interpreter round-trip.
+
+**The boot belongs to the script half.** `Shell::boot_with` asks `bootstrap()` before it
+reads the model tree and before it loads a workbench, so `ScriptHost` gained
+`bootstrap`, `open_startup_document`, `hello`, `open_path` and `save_path`. The document
+half consults them first and builds its sample document only when the script declines
+*and* the registry is empty — which is why `from_shared_registry()` deliberately builds
+nothing.
+
+**The split image.** `PythonAppBackend` remains for the harnesses that do not link the
+`ferrocad` extension: they import `python/ferrocad.abi3.so`, which carries its own
+`ferrocad_core` and therefore its own registry. Answering everything through Python is
+correct there — there is no document half in that image to disagree with it. A host
+that links the modules as built-ins (every edition binary does;
+`ferrocad_combined_py::register_builtins`) gets the composition. `application_id()`
+exists to make the difference visible; the composition tests run in
+`ferrocad_parametric/tests/composition.rs` for exactly that reason.
 
 ### JS modules (wasm)
 
@@ -194,6 +247,12 @@ they live in `ferrocad_core` and both hosts call the same functions:
   and a rotate pivot turns about.
 
 The backend keeps `tessellate` (it owns the kernel) and assembles the `StageMesh`.
+
+A script half with a **display hook** answers `stage_meshes` first (see §2): the
+edition decides the `DisplayMode` (wireframe), a datum plane's translucent card, and
+the toy edition's procedural meshes — none of which the document knows. The Rust
+tessellation above is what a host with no hook gets: the browser, and a full-Rust
+desktop.
 
 ## 6. Property presentation
 

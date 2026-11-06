@@ -93,8 +93,8 @@
   <text class="t col-head" x="205" y="339" text-anchor="middle">PYTHON (CPython)</text>
   <text class="t box-sub" x="205" y="354" text-anchor="middle">ferrocad_shell_python</text>
   <rect class="box" x="104" y="370" width="202" height="40" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
-  <text class="t box-title" x="205" y="387" text-anchor="middle">PythonAppBackend</text>
-  <text class="t note-italic" x="205" y="402" text-anchor="middle">AppBackend + ScriptHost</text>
+  <text class="t box-title" x="205" y="387" text-anchor="middle">RustAppBackend</text>
+  <text class="t note-italic" x="205" y="402" text-anchor="middle">+ PythonScriptHost</text>
   <line class="wire" x1="205" y1="410" x2="205" y2="424" marker-end="url(#arrow)" />
   <rect class="box" x="104" y="424" width="202" height="34" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
   <text class="t box-title" x="205" y="439" text-anchor="middle">Embedded CPython VM</text>

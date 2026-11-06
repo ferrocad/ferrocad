@@ -637,6 +637,83 @@ Unlike `ferrocad_shell_js`, this crate is **not** `cfg(wasm)`: RustPython has no
 `window` dependency, so the same code builds natively and its test runs
 `properties()` on an ordinary `cargo test`. The wasm target is proven separately.
 
+### 5.8 Native CPython composition (S9) — **done (2026-11-06)**
+
+S9 is the second half of S5.1: the native assembly stops being a backend and becomes the
+same composition the two browser ones already are.
+
+```text
+ferrocad_shell_rust::RustAppBackend                  (document half)
+      + ferrocad_shell_python::PythonScriptHost      (script half)
+      = the desktop backend
+```
+
+**The document is the registry's, not the backend's.** `RustAppBackend` was the only
+piece still holding a private `Document`; `ferrocad_core::application` already owned the
+process-wide registry, and `ferrocad_py` already bound `FreeCAD.ActiveDocument` to it
+(its `InterpreterState.documents` caches only Python object identity — see the comment
+at `ferrocad_py/src/lib.rs:125`). `State` now carries a `DocSource`:
+
+- `Isolated { name, document }` — the browser, `RustAppBackend::new()`, and every
+  existing test. Unchanged behaviour.
+- `SharedRegistry` — `from_shared_registry()`. Captures **no** handle: the active
+  document is looked up per access, so `FreeCAD.closeDocument`/`setActiveDocument` are
+  visible on the next call rather than after a restart.
+
+**Invariants, each pinned by a test.**
+
+- *Lock order.* `active_document()` clones `(name, handle)` out of the registry and
+  drops that lock before anything locks a document — nothing holds the registry while a
+  document is locked. `install_document` takes the same care when it replaces contents.
+- *Identity across a re-open.* Opening a name that is already open replaces the
+  `Document` **inside** the existing `Arc<Mutex<Document>>`, instead of letting
+  `insert_document` allocate `Sample001`: a `PyDocument` wrapper stays valid, and undo
+  history is the document's rather than a copy's.
+- *Boot is lazy.* `from_shared_registry()` builds nothing; `bootstrap()` adopts the
+  registry and creates the sample only when a script half declined and the registry is
+  empty. Otherwise a sample would sit in front of the document the interpreter is about
+  to create.
+- *No active document* is a normal state: reads report nothing, writes are refused with
+  `no active document`.
+
+**`ScriptHost` gained the hooks that make the composition faithful.** The boot group
+(`bootstrap`, `open_startup_document`, `hello`, `open_path`, `save_path`) is what
+`Shell::boot_with` asks before it reads the tree or loads a workbench. The
+document-side group is what the document half cannot answer:
+
+| hook | why it cannot move to the document |
+| --- | --- |
+| `stage_meshes` | the display hook owns `DisplayMode` (wireframe), a datum plane's glass card, and the toy edition's procedural meshes — none of them are OCCT shapes |
+| `apply_interaction` | a workbench manipulator (`dress_up`/`fillet`, `push_pull`) knows its own feature type; only `transform`/`apply` is the shared gizmo's |
+| `add_datum_plane` | datum geometry is the workbench's to build |
+
+The merge boundary is the other half: `extra_tree_nodes` returns **only** the synthetic
+`Settings` root (the app script's `model_tree` answers for the whole application,
+documents included, so passing it through would draw every document twice),
+`extra_properties`/`set_extra_property` claim `Settings` and `Settings/*` only, and
+`commands` drops the catalogue's ids from the script's list (the app script registers a
+`FreeCADGui` class per catalogue id). `RustAppBackend::commands` also drops a duplicate
+id at the merge point, keeping the catalogue's row.
+
+**The split image, and why the tests live elsewhere.** The first composition tests sat
+in `ferrocad_shell_python`'s own binary and failed: it does not link the extension, so
+`import ferrocad` loaded `python/ferrocad.abi3.so` — a second `ferrocad_core` with its
+own registry. `bootstrap()` created `Shell` in that one, `from_shared_registry()` found
+an empty registry beside it and built the Rust sample, and the composed tree showed
+`Sample` (Box, Fillet). That is the split image `application_id()` exists to detect, and
+it is entirely silent. The tests moved to
+`ferrocad_parametric/tests/composition.rs`, where
+`ferrocad_combined_py::register_builtins()` puts the modules in the interpreter's
+built-in table — the way the edition binary runs.
+
+**What remains.** `PythonAppBackend` is still in `ferrocad_shell_python`, installed by
+nothing, kept for the harnesses that cannot link the extension (`ferrocad_shell_core`'s
+269 unit tests, `ferrocad_toy`'s end-to-end tests, the chrome header test). Answering
+everything through Python is correct in a split image — there is no document half there
+to disagree with it. Deleting it means linking `ferrocad_combined_py` into those
+harnesses, which is why `ferrocad_shell_core`'s test binary does not pay the OCCT link
+cost yet.
+
 ## 6. Platform facts the plan relies on
 
 ### 6.1 Dialogs (answer to A)

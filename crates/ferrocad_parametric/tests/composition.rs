@@ -428,3 +428,66 @@ FerroCAD.display_mesh = _spy
             .ok
     );
 }
+
+#[test]
+fn the_display_hook_tessellates_at_the_document_s_deflection() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let backend = composed();
+
+    // A sphere, not the box: a flat-faced solid is twelve triangles at any setting, so
+    // only a curved surface can answer differently.
+    let added = backend
+        .evaluate(
+            r#"
+doc = FreeCAD.ActiveDocument
+ball = doc.addObject('Part::Sphere', 'Ball')
+ball.Radius = 10.0
+doc.recompute()
+"#,
+        )
+        .expect("the sphere is added");
+    assert!(added.ok, "{added:?}");
+
+    // What the hook draws for it. `stage_meshes()` is the Python-side sync, which asks
+    // the hook for everything — the path a host that cannot mesh the document takes.
+    let hook_triangles = || -> usize {
+        python::stage_meshes()
+            .unwrap()
+            .into_iter()
+            .find(|mesh| mesh.object == "Ball")
+            .expect("the hook draws the sphere")
+            .triangles
+            .len()
+            / 3
+    };
+
+    let at_display = hook_triangles();
+
+    // The invariant is that the hook tessellates at the deflection the document path
+    // uses, and the only way to see a hook that quietly asked for something else is to
+    // move the published number: the two would otherwise differ in the *cache key* and
+    // nowhere else. Comparing the returned meshes cannot show it, because OCCT keeps a
+    // triangulation that is already finer than the one asked for.
+    let imported = backend.evaluate("import Part").expect("Part imports");
+    assert!(imported.ok, "{imported:?}");
+    let published = backend.evaluate("Part.DISPLAY_DEFLECTION").unwrap();
+    assert!(published.ok, "{published:?}");
+    let original = published.output.trim().to_string();
+
+    let rebound = backend.evaluate("Part.DISPLAY_DEFLECTION = 0.01").unwrap();
+    assert!(rebound.ok, "{rebound:?}");
+    let finer = hook_triangles();
+    assert!(
+        finer > at_display,
+        "the display hook ignored Part.DISPLAY_DEFLECTION ({at_display} triangles at \
+         {original}, {finer} at 0.01): it must pass it to `Shape.mesh` so its memo entry \
+         is the document's"
+    );
+
+    assert!(
+        backend
+            .evaluate(&format!("Part.DISPLAY_DEFLECTION = {original}"))
+            .unwrap()
+            .ok
+    );
+}

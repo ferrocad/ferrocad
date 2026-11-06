@@ -2581,11 +2581,14 @@ impl<V: InventorView> InventorViewport<V> {
     /// A commit that only moved something takes the cheap path: the queue already holds
     /// the vertices, because `ShapeItem::emit` writes the world matrix into the packet
     /// state rather than baking it into them, and the renderer already holds each mesh
-    /// under the item's `MeshId`. So when the incoming stage differs only in placements,
-    /// the new placements are adopted on the items we already have and the packets are
-    /// patched — packet count instead of vertex count, and no fresh mesh ids for the
-    /// renderer to re-upload. Anything else (a different body, a new item, a colour or a
-    /// highlight) still rebuilds.
+    /// under the item's `MeshId`. So when the incoming stage differs only in *where* its
+    /// items are, the new transform is adopted on the items we already have and the
+    /// packets are patched — packet count instead of vertex count, and no fresh mesh ids
+    /// for the renderer to re-upload. Anything else (a different body, a new item, a
+    /// colour or a highlight) still rebuilds.
+    ///
+    /// "Where" is the placement, the preview transform and the origin (the placement's
+    /// base point, which the gizmo hugs) — the trio a rigid move changes.
     pub fn set_stage(&mut self, stage: Stage) {
         if !self.stage_dirty && self.stage.same_rigid_items(&stage) {
             let mut moved = false;
@@ -2596,6 +2599,10 @@ impl<V: InventorView> InventorViewport<V> {
                 }
                 if item.temporary_transform() != next.temporary_transform() {
                     item.set_temporary_transform(next.temporary_transform());
+                    moved = true;
+                }
+                if item.origin() != next.origin() {
+                    item.set_origin(next.origin());
                     moved = true;
                 }
             }
@@ -7957,15 +7964,24 @@ mod tests {
         assert!(drawn > 0, "the stage emitted something to patch");
         assert!(!view.stage_dirty);
 
-        // The stage a commit syncs back: the same item, moved.
-        let moved = named_slab_for(7).with_placement(Placement::new(
-            Vector3::new(5.0, 0.0, 0.0),
-            Rotation::identity(),
-        ));
+        // The stage a commit syncs back: the same item, moved. The origin comes from the
+        // placement's base point, so it moves too — and it is the gizmo's anchor, so it
+        // has to be adopted rather than compared.
+        let moved = named_slab_for(7)
+            .with_placement(Placement::new(
+                Vector3::new(5.0, 0.0, 0.0),
+                Rotation::identity(),
+            ))
+            .with_origin(Some([5.0, 0.0, 0.0]));
         view.set_stage(Stage::new().with_item(moved));
 
         assert!(!view.stage_dirty, "a move must not queue a re-emit");
         assert_eq!(view.queue.len(), drawn, "the same packets are drawn");
+        assert_eq!(
+            view.stage().item(7).and_then(|item| item.origin()),
+            Some([5.0, 0.0, 0.0]),
+            "the kept item carries the committed origin"
+        );
         for packet in &view.queue.packets {
             assert_eq!(
                 packet.state.world_transform.transform(&Vector3::zero()),

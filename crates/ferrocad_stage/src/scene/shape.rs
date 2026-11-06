@@ -701,11 +701,13 @@ impl ShapeItem {
     /// unchanged, so a viewport can keep the packets it already has and patch their
     /// world matrices ([`Stage::same_rigid_items`](crate::Stage::same_rigid_items)).
     ///
-    /// Three groups are deliberately left out: the placement and preview transform (that
-    /// is the difference this ignores), the mesh identities (two items built from the
-    /// same geometry still allocate different [`MeshId`]s — it is the caller's job to keep
-    /// the item that already owns the renderer's upload), and the two generations (cache
-    /// keys carrying the item's history, not its content).
+    /// Three groups are deliberately left out: the placement, the preview transform and
+    /// the origin (the last is the placement's base point in world space, so it moves
+    /// with the item — those three are the difference this ignores, and a caller that
+    /// patches adopts them), the mesh identities (two items built from the same geometry
+    /// still allocate different [`MeshId`]s — it is the caller's job to keep the item that
+    /// already owns the renderer's upload), and the two generations (cache keys carrying
+    /// the item's history, not its content).
     pub fn same_rigid_shape(&self, other: &Self) -> bool {
         // Destructured without `..` on purpose: a field added to `ShapeItem` must be
         // classified here, or this comparison would silently stop covering it and a
@@ -732,7 +734,7 @@ impl ShapeItem {
             triangles,
             edges,
             parts,
-            origin,
+            origin: _,
             part_names,
             vertices,
             show_vertices,
@@ -765,7 +767,6 @@ impl ShapeItem {
             && *triangles == other.triangles
             && *edges == other.edges
             && *parts == other.parts
-            && *origin == other.origin
             && *part_names == other.part_names
             && *vertices == other.vertices
             && *show_vertices == other.show_vertices
@@ -813,6 +814,13 @@ impl ShapeItem {
     pub fn with_origin(mut self, origin: Option<[f32; 3]>) -> Self {
         self.origin = origin;
         self
+    }
+
+    /// Set the object's origin in place, for a caller that keeps the item across a sync
+    /// (see [`set_placement`](Self::set_placement)). The origin is the placement's base
+    /// point, so it moves with the item rather than describing its geometry.
+    pub fn set_origin(&mut self, origin: Option<[f32; 3]>) {
+        self.origin = origin;
     }
 
     /// The per-vertex normals (empty when the surface is flat-shaded per triangle).

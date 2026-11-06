@@ -12,6 +12,7 @@
 use std::time::Instant;
 
 use ferrocad_shell_api::app::AppBackend;
+use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_python::{PythonScriptHost, python};
 use ferrocad_shell_rust::RustAppBackend;
 use ferrocad_stage::InteractionCommit;
@@ -64,12 +65,8 @@ fn main() -> Result<(), String> {
 
     // The commit path: the shared transform gizmo, applied by the document half to
     // the first object the stage draws.
-    let Some(name) = over_python
-        .stage_meshes()?
-        .into_iter()
-        .map(|mesh| mesh.object)
-        .next()
-    else {
+    let before_move: Vec<StageMesh> = over_python.stage_meshes()?;
+    let Some(name) = before_move.iter().map(|mesh| mesh.object.clone()).next() else {
         return Ok(());
     };
     let mut matrix = [0.0f64; 16];
@@ -91,5 +88,42 @@ fn main() -> Result<(), String> {
     time("display hook 2 (memo)", &over_python);
     time("document 1", &over_document);
     time("document 2 (memo)", &over_document);
+
+    // What a rigid move changes in the rows a stage is built from. `set_stage` patches
+    // packets instead of re-emitting only when nothing but the transform moved, so these
+    // two lines are the precondition for that path (`origin` comes from the placement
+    // base, so it moves with it; the question is whether the vertices do too).
+    let after_move = over_python.stage_meshes()?;
+    let row = |rows: &Vec<StageMesh>, object: &str| -> Option<StageMesh> {
+        rows.iter().find(|row| row.object == object).cloned()
+    };
+    let report = |object: &str| {
+        match (
+            row(&before_move, object),
+            row(&after_move, object),
+        ) {
+            (Some(before), Some(after)) => eprintln!(
+                "row {object:<32} positions {} ({})   origin {:?} -> {:?}",
+                if before.positions == after.positions {
+                    "identical"
+                } else {
+                    "CHANGED"
+                },
+                before.positions.len(),
+                before.origin,
+                after.origin
+            ),
+            _ => eprintln!("row {object:<32} missing"),
+        }
+    };
+    eprintln!("--- what the move changed");
+    report(&name);
+    if let Some(other) = before_move
+        .iter()
+        .map(|mesh| mesh.object.clone())
+        .find(|object| *object != name)
+    {
+        report(&other);
+    }
     Ok(())
 }

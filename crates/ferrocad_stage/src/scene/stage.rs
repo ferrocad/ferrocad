@@ -189,10 +189,15 @@ mod tests {
     #[test]
     fn same_rigid_items_sees_only_a_move() {
         let resting = Stage::new().with_item(triangle(7));
-        let moved = Stage::new().with_item(triangle(7).with_placement(Placement::new(
-            ferrocad_types::Vector3::new(1.0, 2.0, 3.0),
-            Rotation::identity(),
-        )));
+        let moved = Stage::new().with_item(
+            triangle(7)
+                .with_placement(Placement::new(
+                    ferrocad_types::Vector3::new(1.0, 2.0, 3.0),
+                    Rotation::identity(),
+                ))
+                // The origin is the placement's base point, so it moves with the item.
+                .with_origin(Some([1.0, 2.0, 3.0])),
+        );
 
         assert!(resting.same_rigid_items(&moved));
         assert!(moved.same_rigid_items(&resting), "the comparison is symmetric");

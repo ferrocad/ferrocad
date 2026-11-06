@@ -19,11 +19,24 @@
 // wasm-audit: native-only — declared behind `#[cfg(not(target_family = "wasm"))]` in
 // `runtime/mod.rs`; the desktop installs it from `run_with`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
     App, FocusId, FramePipeline, PreparedRoots, StandardImmediatePipeline, Window, WindowMetrics,
 };
+
+/// Producer frames the presenter could not draw in the current second.
+///
+/// A skip is the dma-buf ring saying every slot is still in flight, which happens when
+/// the GPU or the compositor is behind. Counting it beside the gap is what tells a
+/// platform wait apart from a slow pass: skips and a gap move together, passes do not.
+static SKIPS: AtomicU64 = AtomicU64::new(0);
+
+/// Count one producer frame the presenter skipped.
+pub fn note_presenter_skip() {
+    SKIPS.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Whether the pass accounting is on.
 ///
@@ -49,6 +62,14 @@ pub struct Snapshot {
     pub deferred: u32,
     /// Mean interval between drawn frames.
     pub interval_ms: f64,
+    /// Mean time between the end of one frame and the start of the next — the wait for
+    /// the platform's present, the swap and the compositor's frame callback. Together
+    /// with [`passes_ms`](Self::passes_ms) this accounts for [`interval_ms`](Self::interval_ms).
+    pub gap_ms: f64,
+    /// The longest single gap in the second.
+    pub worst_gap_ms: f64,
+    /// Producer frames the presenter skipped (the ring had no free slot).
+    pub skips: u64,
     pub evaluate_ms: f64,
     pub layout_ms: f64,
     pub paint_ms: f64,
@@ -78,7 +99,7 @@ impl Snapshot {
         format!(
             "ferrocad: window fps {:.1}, interval {:.1} ms, passes {:.1} ms \
              (evaluate {:.1}, layout {:.1}, paint {:.1} worst {:.1}, finish {:.1}, end {:.1}), \
-             deferred {}/{} asks",
+             gap {:.1} ms worst {:.1}, {} skipped, deferred {}/{} asks",
             if self.interval_ms > 0.0 {
                 1000.0 / self.interval_ms
             } else {
@@ -92,6 +113,9 @@ impl Snapshot {
             self.worst_paint_ms,
             self.finish_ms,
             self.end_ms,
+            self.gap_ms,
+            self.worst_gap_ms,
+            self.skips,
             self.deferred,
             self.asks
         )
@@ -110,6 +134,10 @@ pub struct TimingPipeline<P = StandardImmediatePipeline> {
     asks: u32,
     deferred: u32,
     intervals: Duration,
+    gaps: Duration,
+    worst_gap: Duration,
+    /// When the previous frame's last pass returned, for the next frame's gap.
+    last_end: Option<Instant>,
     evaluate: Duration,
     layout: Duration,
     paint: Duration,
@@ -137,6 +165,9 @@ impl<P: FramePipeline> TimingPipeline<P> {
             asks: 0,
             deferred: 0,
             intervals: Duration::ZERO,
+            gaps: Duration::ZERO,
+            worst_gap: Duration::ZERO,
+            last_end: None,
             evaluate: Duration::ZERO,
             layout: Duration::ZERO,
             paint: Duration::ZERO,
@@ -165,6 +196,9 @@ impl<P: FramePipeline> TimingPipeline<P> {
             } else {
                 self.intervals.as_secs_f64() * 1000.0 / f64::from(self.frames)
             },
+            gap_ms: per_frame(self.gaps),
+            worst_gap_ms: self.worst_gap.as_secs_f64() * 1000.0,
+            skips: SKIPS.load(Ordering::Relaxed),
             evaluate_ms: per_frame(self.evaluate),
             layout_ms: per_frame(self.layout),
             paint_ms: per_frame(self.paint),
@@ -192,6 +226,9 @@ impl<P: FramePipeline> TimingPipeline<P> {
         self.asks = 0;
         self.deferred = 0;
         self.intervals = Duration::ZERO;
+        self.gaps = Duration::ZERO;
+        self.worst_gap = Duration::ZERO;
+        SKIPS.store(0, Ordering::Relaxed);
         self.evaluate = Duration::ZERO;
         self.layout = Duration::ZERO;
         self.paint = Duration::ZERO;
@@ -218,6 +255,14 @@ impl<P: FramePipeline> FramePipeline for TimingPipeline<P> {
         let now = Instant::now();
         if let Some(last) = self.last_frame {
             self.intervals += now - last;
+        }
+        // The previous frame's last pass is where the platform took over. Whatever
+        // happened between then and now — the swap, the present, the compositor's frame
+        // callback — is the part of the interval no pass owns.
+        if let Some(end) = self.last_end.take() {
+            let gap = now.saturating_duration_since(end);
+            self.gaps += gap;
+            self.worst_gap = self.worst_gap.max(gap);
         }
         self.last_frame = Some(now);
         self.frames += 1;
@@ -269,6 +314,7 @@ impl<P: FramePipeline> FramePipeline for TimingPipeline<P> {
         let started = Instant::now();
         self.inner.end_frame(window, cx, focus_before_listeners);
         self.end += started.elapsed();
+        self.last_end = Some(Instant::now());
     }
 }
 
@@ -310,6 +356,30 @@ mod tests {
         );
         assert!(line.contains("passes 9.5 ms"), "{line}");
         assert!(line.contains("deferred 3/5 asks"), "{line}");
+    }
+
+    /// The gap is what the passes cannot account for: the swap, the present and the wait
+    /// for the compositor's frame callback. `interval == passes + gap` is the whole point
+    /// of printing it — a slow frame whose passes are cheap names the platform, not the UI.
+    #[test]
+    fn the_gap_accounts_for_what_the_passes_do_not() {
+        let mut pipeline = TimingPipeline::installed();
+        let now = Instant::now();
+        pipeline.frames = 2;
+        pipeline.intervals = Duration::from_millis(80);
+        pipeline.gaps = Duration::from_millis(60);
+        pipeline.layout = Duration::from_millis(20);
+
+        let snapshot = pipeline.snapshot(now);
+        assert_eq!(snapshot.interval_ms, 40.0);
+        assert_eq!(snapshot.passes_ms(), 10.0);
+        assert_eq!(snapshot.gap_ms, 30.0);
+        assert_eq!(
+            snapshot.passes_ms() + snapshot.gap_ms,
+            snapshot.interval_ms,
+            "interval is passes plus the gap"
+        );
+        assert!(snapshot.line().contains("gap 30.0 ms"), "{}", snapshot.line());
     }
 
     #[test]

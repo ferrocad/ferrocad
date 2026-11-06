@@ -430,6 +430,7 @@ impl Presenter for GpuiInteropPresenter {
                 // — which is the first thing to rule out when frames are slow and no pass
                 // owns the time.
                 if frame_timing::enabled() {
+                    frame_timing::note_presenter_skip();
                     eprintln!("ferrocad: ring skip (no free slot of {depth})");
                 }
                 return ring.last().is_some();

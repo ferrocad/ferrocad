@@ -786,6 +786,14 @@ re-searching the 12 open requests found no new match — the nearest are `hole-p
 (`business`) and `pocket-knife` (`camping`), neither of which is a modelling verb. The
 snapshot is refreshed to 6,622 and all 128 glyph names in the table resolve.
 
+**Re-check, 2026-11-06 (third).** The catalogue grew **6,622 → 6,671** in two batches
+(2, then 47; none removed). Nothing new lands in `symbols` or `editor`, so no open CAD
+concept is closed: `check_requests.py` now also searches the six CAD-pass concepts and
+still reports no new result for any of the 23 open requests. The nearest near-misses are
+`floor-area` (`realestate`, a measured rectangle — a good Measure/Area picture, but it
+would add a borrow outside the measure policy) and `monitor-plus` (`devices`, an
+extended *display*, not an extended line). Snapshot refreshed to 6,671.
+
 **CAD-family request pass, 2026-11-06.** Most of the CAD verbs had never been asked
 for *as CAD*: `revolve` was standing in as `lathe` (an industrial lathe) and `chamfer`
 as `bevel-gauge` (a hand gauge), so the picture named the tool rather than the

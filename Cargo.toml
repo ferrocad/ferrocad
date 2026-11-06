@@ -164,6 +164,26 @@ windows = "0.62.2"
 opt-level = 3
 lto = true
 
+# Optimise the layout engine in dev builds, and only it.
+#
+# A debug build cannot hide the layout pass: with `shell/timing.rs` splitting it, the
+# 900a assembly reports `layout` 23-33 ms of which `prep` is 0.2 and `tree` is 1.5 -- so
+# almost all of it is taffy solving and GPUI's prepaint walk at `opt-level = 0`, and no
+# amount of caching in `shell/render.rs` can reach it.
+#
+# Named crates rather than `"*"`: the workspace crates stay debuggable and incremental,
+# and only the three that run inside the pass are rebuilt. `bite-gp-engine-default` is
+# where taffy is driven (`src/layout.rs`) and holds the text system; `bite-gp-authoring`
+# is the engine crate (the published `gpui`) whose draw pass walks the element tree.
+[profile.dev.package.taffy]
+opt-level = 2
+
+[profile.dev.package.bite-gp-engine-default]
+opt-level = 2
+
+[profile.dev.package.bite-gp-authoring]
+opt-level = 2
+
 # `opencascade-sys` 0.3.0 does not compile with MSVC: OCCT's `Handle_T` is a
 # derived class there, not the `Handle(T)` alias. This resolves it to FerroCAD's
 # fork, which carries upstream PR #234. The fork keeps the library name

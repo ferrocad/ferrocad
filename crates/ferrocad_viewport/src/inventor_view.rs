@@ -3172,6 +3172,7 @@ impl<V: InventorView> InventorViewport<V> {
         logical: [f32; 2],
         modifiers: GizmoModifiers,
     ) -> bool {
+        note_pointer_move();
         let device = self.camera.viewport.to_device(logical);
         // Kept even during a drag or over the chrome: the origin node's proximity bloom
         // reads it, and stale coordinates would bloom the wrong node.
@@ -6065,6 +6066,20 @@ impl<V: InventorView> InventorViewport<V> {
     }
 }
 
+/// Count a pointer move under `FERROCAD_TIMING`.
+///
+/// A drag repaints once per move, so this is the ceiling on how smooth one can be:
+/// `frames` below `moves` means the window is not keeping up with the pointer, while
+/// `moves` itself being low means the platform delivered them slowly.
+fn note_pointer_move() {
+    let Some(mut window) = timing_window() else {
+        return;
+    };
+    if let Some(state) = window.as_mut() {
+        state.moves += 1;
+    }
+}
+
 /// Report a full stage re-emit under `FERROCAD_TIMING`.
 ///
 /// `recompile` re-encodes every vertex of every stage item, so a frame that runs one is
@@ -6143,6 +6158,12 @@ struct TimingWindow {
     presents: u32,
     picked: std::time::Duration,
     picks: u32,
+    /// Pointer moves delivered in this window.
+    ///
+    /// The frame cadence alone cannot say whether a drag is choppy because the window
+    /// paints rarely or because the platform delivers moves rarely: a drag repaints once
+    /// per move, so `moves` and `frames` are the same number unless one of them is short.
+    moves: u32,
     worst: std::time::Duration,
 }
 
@@ -6159,6 +6180,7 @@ impl TimingWindow {
             presents: 0,
             picked: std::time::Duration::ZERO,
             picks: 0,
+            moves: 0,
             worst: std::time::Duration::ZERO,
         }
     }
@@ -6213,7 +6235,7 @@ fn report_frame_time(refreshed: std::time::Duration) {
     // The difference is the window's own paint and composite — not this crate's.
     eprintln!(
         "ferrocad: fps {fps:.1}, interval avg {:.1} ms (worst {:.1} ms), \
-         prepare avg {:.1} ms, present {}/avg {:.1} ms, pick avg {:.1} ms ({})",
+         prepare avg {:.1} ms, present {}/avg {:.1} ms, pick avg {:.1} ms ({}), moves {}",
         ms(state.intervals),
         state.worst_interval.as_secs_f64() * 1000.0,
         ms(state.prepared),
@@ -6224,7 +6246,8 @@ fn report_frame_time(refreshed: std::time::Duration) {
         } else {
             state.picked.as_secs_f64() * 1000.0 / state.picks as f64
         },
-        state.picks
+        state.picks,
+        state.moves
     );
     *window = Some(TimingWindow::new(now, state.last_frame));
 }

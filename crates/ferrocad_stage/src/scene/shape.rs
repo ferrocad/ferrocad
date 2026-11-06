@@ -578,6 +578,13 @@ impl ShapeItem {
         self
     }
 
+    /// Set the item's placement in place, for a caller that keeps the item (and so its
+    /// [`MeshId`]s) rather than rebuilding it. No re-upload: the world matrix goes into
+    /// the packet state at emit time.
+    pub fn set_placement(&mut self, placement: Placement) {
+        self.placement = placement;
+    }
+
     /// The temporary preview transform (see [`temporary_transform`](Self::temporary_transform)).
     pub fn with_temporary_transform(mut self, transform: Option<Matrix4>) -> Self {
         self.temporary_transform = transform;
@@ -686,6 +693,88 @@ impl ShapeItem {
     /// The current geometry generation.
     pub fn generation(&self) -> Generation {
         self.generation
+    }
+
+    /// Whether `other` draws the same packets as this item, apart from where it is.
+    ///
+    /// A commit that only moves an item leaves everything [`emit`](Self::emit) reads
+    /// unchanged, so a viewport can keep the packets it already has and patch their
+    /// world matrices ([`Stage::same_rigid_items`](crate::Stage::same_rigid_items)).
+    ///
+    /// Three groups are deliberately left out: the placement and preview transform (that
+    /// is the difference this ignores), the mesh identities (two items built from the
+    /// same geometry still allocate different [`MeshId`]s — it is the caller's job to keep
+    /// the item that already owns the renderer's upload), and the two generations (cache
+    /// keys carrying the item's history, not its content).
+    pub fn same_rigid_shape(&self, other: &Self) -> bool {
+        // Destructured without `..` on purpose: a field added to `ShapeItem` must be
+        // classified here, or this comparison would silently stop covering it and a
+        // change it cannot patch would be patched.
+        let Self {
+            entity_id,
+            placement: _,
+            temporary_transform: _,
+            draw_mode,
+            surface_color,
+            shade_color,
+            edge_color,
+            ghost_edges,
+            ghost_surface,
+            ghost_alpha,
+            surface_depth,
+            wire_depth,
+            edge_width,
+            selectable,
+            positions,
+            normals,
+            uvs,
+            ribbon_aa,
+            triangles,
+            edges,
+            parts,
+            origin,
+            part_names,
+            vertices,
+            show_vertices,
+            highlight,
+            surface_mesh: _,
+            wire_mesh: _,
+            points_mesh: _,
+            highlight_surface_mesh: _,
+            highlight_wire_mesh: _,
+            generation: _,
+            highlight_generation: _,
+            program,
+        } = self;
+        *entity_id == other.entity_id
+            && *draw_mode == other.draw_mode
+            && *surface_color == other.surface_color
+            && *shade_color == other.shade_color
+            && *edge_color == other.edge_color
+            && *ghost_edges == other.ghost_edges
+            && *ghost_surface == other.ghost_surface
+            && *ghost_alpha == other.ghost_alpha
+            && *surface_depth == other.surface_depth
+            && *wire_depth == other.wire_depth
+            && *edge_width == other.edge_width
+            && *selectable == other.selectable
+            && *positions == other.positions
+            && *normals == other.normals
+            && *uvs == other.uvs
+            && *ribbon_aa == other.ribbon_aa
+            && *triangles == other.triangles
+            && *edges == other.edges
+            && *parts == other.parts
+            && *origin == other.origin
+            && *part_names == other.part_names
+            && *vertices == other.vertices
+            && *show_vertices == other.show_vertices
+            && *highlight == other.highlight
+            && match (program, &other.program) {
+                (None, None) => true,
+                (Some(ours), Some(theirs)) => Arc::ptr_eq(ours, theirs),
+                _ => false,
+            }
     }
 
     /// The vertex positions.

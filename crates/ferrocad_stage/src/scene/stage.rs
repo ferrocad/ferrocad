@@ -50,6 +50,24 @@ impl Stage {
         &mut self.items
     }
 
+    /// Whether `other` describes the same items, differing only in where they are placed.
+    ///
+    /// A commit that only moves an item leaves every packet the viewport holds correct:
+    /// [`ShapeItem::emit`] writes the world matrix into the packet state, so the vertices
+    /// never encoded the position. A viewport that finds this true can adopt the new
+    /// placements on the items it already has and patch the packets, instead of replacing
+    /// the stage — which re-emits every vertex *and* allocates fresh mesh ids that miss
+    /// the renderer's upload cache. Order and count must match: the stage draws in order,
+    /// and a different set of items is a different scene.
+    pub fn same_rigid_items(&self, other: &Self) -> bool {
+        self.items.len() == other.items.len()
+            && self
+                .items
+                .iter()
+                .zip(&other.items)
+                .all(|(ours, theirs)| ours.same_rigid_shape(theirs))
+    }
+
     /// The number of items.
     pub fn len(&self) -> usize {
         self.items.len()
@@ -164,6 +182,37 @@ mod tests {
                 vec![0, 1, 2],
                 vec![],
             )
+    }
+
+    /// A commit syncs a rebuilt stage back to the viewport. Only a move may be patched;
+    /// anything else the packets encode has to rebuild.
+    #[test]
+    fn same_rigid_items_sees_only_a_move() {
+        let resting = Stage::new().with_item(triangle(7));
+        let moved = Stage::new().with_item(triangle(7).with_placement(Placement::new(
+            ferrocad_types::Vector3::new(1.0, 2.0, 3.0),
+            Rotation::identity(),
+        )));
+
+        assert!(resting.same_rigid_items(&moved));
+        assert!(moved.same_rigid_items(&resting), "the comparison is symmetric");
+
+        // A rebuilt item allocates fresh mesh ids every time; that is not a difference,
+        // because the viewport keeps the item that already owns the renderer's upload.
+        assert!(
+            resting.items()[0].same_rigid_shape(&triangle(7)),
+            "fresh mesh ids are not a change"
+        );
+
+        let mut recoloured = triangle(7);
+        recoloured.set_surface_color([1.0, 0.0, 0.0, 1.0]);
+        assert!(!resting.same_rigid_items(&Stage::new().with_item(recoloured)));
+
+        // A different entity is a different object, even at the same place.
+        assert!(!resting.same_rigid_items(&Stage::new().with_item(triangle(8))));
+
+        // And a different set of items is a different scene.
+        assert!(!resting.same_rigid_items(&Stage::new()));
     }
 
     #[test]

@@ -2577,7 +2577,36 @@ impl<V: InventorView> InventorViewport<V> {
     }
 
     /// Replace the stage wholesale; the queue is rebuilt before the next draw.
+    ///
+    /// A commit that only moved something takes the cheap path: the queue already holds
+    /// the vertices, because `ShapeItem::emit` writes the world matrix into the packet
+    /// state rather than baking it into them, and the renderer already holds each mesh
+    /// under the item's `MeshId`. So when the incoming stage differs only in placements,
+    /// the new placements are adopted on the items we already have and the packets are
+    /// patched — packet count instead of vertex count, and no fresh mesh ids for the
+    /// renderer to re-upload. Anything else (a different body, a new item, a colour or a
+    /// highlight) still rebuilds.
     pub fn set_stage(&mut self, stage: Stage) {
+        if !self.stage_dirty && self.stage.same_rigid_items(&stage) {
+            let mut moved = false;
+            for (item, next) in self.stage.items_mut().iter_mut().zip(stage.items()) {
+                if item.placement() != next.placement() {
+                    item.set_placement(next.placement());
+                    moved = true;
+                }
+                if item.temporary_transform() != next.temporary_transform() {
+                    item.set_temporary_transform(next.temporary_transform());
+                    moved = true;
+                }
+            }
+            // `Some` means the queue was in a state to patch, so it is now current — even
+            // when nothing actually moved (`Some(false)`): the packets already carry the
+            // matrix, which is what a drag preview patched in.
+            if !moved || self.patch_stage_transforms(None).is_some() {
+                return;
+            }
+            // The queue was never emitted (or was resized under us): rebuild it below.
+        }
         self.stage = stage;
         self.stage_dirty = true;
     }
@@ -5852,7 +5881,9 @@ impl<V: InventorView> InventorViewport<V> {
     /// refreshing the cached frame.
     fn refresh(&mut self) {
         if self.stage_dirty {
+            let started = Instant::now();
             self.recompile();
+            report_recompile_time(started.elapsed(), self.stage.len());
         }
         // The grid and axis cross follow the camera and the hovered face, none of which
         // marks the stage dirty. `sync_grid` is a key comparison when nothing changed.
@@ -6024,6 +6055,25 @@ impl<V: InventorView> InventorViewport<V> {
                 self.frame = Some(Arc::new(render_image(image)));
             }
         }
+    }
+}
+
+/// Report a full stage re-emit under `FERROCAD_TIMING`.
+///
+/// `recompile` re-encodes every vertex of every stage item, so a frame that runs one is
+/// not comparable to the frames around it — it lands in `prepare`, not in the window's
+/// passes, and 1.24 M triangles cost hundreds of milliseconds. A commit used to pay it
+/// even when only a placement had moved; `set_stage` now patches packet state instead, so
+/// seeing this line after a move means the patch path was not taken.
+fn report_recompile_time(recompiled: std::time::Duration, items: usize) {
+    if std::env::var_os("FERROCAD_TIMING").is_none() {
+        return;
+    }
+    if recompiled > std::time::Duration::from_millis(5) {
+        eprintln!(
+            "ferrocad: stage recompile {:.1} ms ({items} items)",
+            recompiled.as_secs_f64() * 1000.0
+        );
     }
 }
 
@@ -7889,6 +7939,63 @@ mod tests {
         assert!(view.preview_transform(&[7], None));
         assert!(!view.stage_dirty);
         assert_eq!(view.queue.packets[0].state.world_transform, before);
+    }
+
+    /// A commit hands the viewport a rebuilt stage. When the only difference is where an
+    /// item is, the queue must be patched rather than rebuilt: replacing the stage
+    /// re-emits every vertex *and* allocates fresh mesh ids, which miss the renderer's
+    /// `(mesh_id, generation)` upload cache — so a rigid commit paid a CPU re-emit and a
+    /// GPU re-upload for a body that had not changed.
+    #[test]
+    fn a_commit_that_only_moved_patches_instead_of_re_emitting() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab_for(7)));
+        view.refresh();
+        let drawn = view.queue.len();
+        assert!(drawn > 0, "the stage emitted something to patch");
+        assert!(!view.stage_dirty);
+
+        // The stage a commit syncs back: the same item, moved.
+        let moved = named_slab_for(7).with_placement(Placement::new(
+            Vector3::new(5.0, 0.0, 0.0),
+            Rotation::identity(),
+        ));
+        view.set_stage(Stage::new().with_item(moved));
+
+        assert!(!view.stage_dirty, "a move must not queue a re-emit");
+        assert_eq!(view.queue.len(), drawn, "the same packets are drawn");
+        for packet in &view.queue.packets {
+            assert_eq!(
+                packet.state.world_transform.transform(&Vector3::zero()),
+                Vector3::new(5.0, 0.0, 0.0),
+                "every packet carries the committed placement"
+            );
+        }
+    }
+
+    /// The patch path is only for a move: anything else the packets encode must still
+    /// rebuild, or the change would never reach the screen.
+    #[test]
+    fn a_commit_that_changed_a_body_still_re_emits() {
+        use ferrocad_stage::Stage;
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab_for(7)));
+        view.refresh();
+        assert!(!view.stage_dirty);
+
+        // A surface colour is baked into the packets, not into a world matrix.
+        let mut recoloured = named_slab_for(7);
+        recoloured.set_surface_color([1.0, 0.0, 0.0, 1.0]);
+        view.set_stage(Stage::new().with_item(recoloured));
+        assert!(view.stage_dirty, "a colour change is not a move");
+
+        // So is a different set of items.
+        view.refresh();
+        view.set_stage(Stage::new());
+        assert!(view.stage_dirty, "an empty stage is not a move");
     }
 
     /// Clearing a preview sweeps the whole stage, so a transform another path wrote

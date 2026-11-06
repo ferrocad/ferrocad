@@ -32,13 +32,24 @@ part is measured where it happens:
 | `ferrocad: open …`, `stage sync: meshes … + build …` | boot, document sync | the open cost and the display-mesh sync, split into meshing and build |
 | `ferrocad: window adapter "…" (device_type, backend)` | presenter creation | the adapter the **window's** renderer picked. It composites every presented frame, and it is *not* the adapter the viewport's own setting chooses |
 | `ferrocad: fps …, interval …, prepare …, present n/avg …, pick avg … (n)` | once a second | the viewport's share: frame cadence, `refresh`, the `gpu_canvas` present callback, and pointer picks |
-| `ferrocad: window fps …, interval …, passes …` | once a second | the engine's share, from the `FramePipeline` decorator: `evaluate`, `layout`, `paint` (which contains the canvas callback), `finish`, `end`, and the asks the pipeline deferred |
+| `ferrocad: window fps …, interval …, passes …` | once a second | the engine's share, from the `FramePipeline` decorator: `evaluate`, `layout`, `paint` (which contains the canvas callback), `finish`, `end`, the `gap` no pass owns, and the presenter frames skipped in that second |
 | `ferrocad: pick …`, `hover pick: resolve/submit …`, `pick detail: encode/submit/readback …` | per pick | a pick over 5 ms, a hover pick over 2 ms, and a blocking pick's split |
 
 `interval` is the honest frame time, and everything the two `fps` lines report is what
 was spent of it. A **window** line whose passes are cheap and whose interval is not is
 the platform's present, which no pipeline sees. A **viewport** line with `present 0` and
 a non-zero `fps` means the canvas callback did not run in that second.
+
+The window line closes that last gap: `gap` is the time between one frame's `end` pass
+and the next frame's `begin`, so `interval == passes + gap` by construction. When the gap
+is most of the interval the frame rate is set by how often the platform hands the window a
+frame, not by anything the application runs. Measured on a **one-box** document — where the
+scene cannot be the cost — an idle machine still alternates between
+
+    fps 60.1, interval 16.6 ms, passes 4.3 ms, gap 12.3 ms worst 15.0
+    fps 14.1, interval 71.0 ms, passes 8.9 ms, gap 62.2 ms worst 614.8
+
+so a workload comparison is the wrong instrument until the gap is small.
 
 The window line comes from
 [`frame_timing`](../../../crates/ferrocad_shell_core/src/runtime/frame_timing.rs), a
@@ -60,10 +71,20 @@ own adapter setting reaches the offscreen and image paths only. The `window adap
 above reports the one that was actually picked. A device with no discrete adapter ranks the
 integrated one next, so the preference is not a pin.
 
-`ferrocad: ring skip (no free slot of N)` is the other line to watch while frames are slow
-and no pass owns the time: it means the dma-buf ring ran out of slots and the producer
-skipped a frame. Slots come back early from the consumer's release signal and late from a
-250 ms timeout, so a broken handshake shows up as a frame rate of `N / 0.25 s`.
+`ferrocad: ring skip (no free slot of N)` counts a producer frame the dma-buf ring could
+not draw, and the window line reports the total as `N skipped`. It is a **pacing** signal,
+not a stall: the count is non-zero at a clean 60 fps with a single-triangle scene, so it
+does not mean the consumer is behind. The release handshake is sound — `bite-gp-wgpu`
+signals the release descriptor on `on_submitted_work_done`, and releases the frames it
+chooses not to present — so `N / 0.25 s` is a floor no healthy run approaches.
+
+### Telling the present apart from the compositor (`FERROCAD_PRESENTER=image`)
+
+`FERROCAD_PRESENTER=image` disables the dma-buf ring and falls back to the image path,
+which renders offscreen and reads the frame back instead of handing a buffer to the
+window. Compare the window line's `gap` between a normal run and one with this set: the
+application's passes are the same either way, so a gap that survives the switch belongs
+to the window's frame pacing and the compositor, not to the hand-off.
 
 ## What is logged
 

@@ -298,6 +298,22 @@ impl Presenter for GpuiInteropPresenter {
             return;
         }
 
+        // A diagnostic, not a mode: `FERROCAD_PRESENTER=image` keeps the fallback the
+        // presenter replaced, which renders and reads the frame back instead of handing a
+        // dma-buf to the window. The two paths disagree about almost nothing except *how*
+        // the frame reaches the compositor, so running both separates the dma-buf hand-off
+        // and the window's frame pacing from everything above them. Compare the `gap` in
+        // the window line between the two runs.
+        if std::env::var("FERROCAD_PRESENTER").is_ok_and(|value| value == "image") {
+            self.note = Some("FERROCAD_PRESENTER=image: the dma-buf ring is off".to_string());
+            self.status = PresenterStatus::Unsupported;
+            trace::presenter_disabled("FERROCAD_PRESENTER=image");
+            if std::env::var_os("FERROCAD_TIMING").is_some() {
+                eprintln!("ferrocad: presenting through the image path (FERROCAD_PRESENTER=image)");
+            }
+            return;
+        }
+
         // The window's renderer, and so its device, exists only during paint.
         let Ok(interop) = attach(gpu.try_device::<WindowRenderer>()) else {
             self.note = Some(

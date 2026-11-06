@@ -243,7 +243,10 @@ fn sync_shape_and_placement(
                 return;
             };
             let delta = compose_placements(&placement, &stored_placement.inverse());
-            let Ok(moved) = ferrocad_part::backend().transform(&shape, &delta.to_matrix()) else {
+            // `moved`, not `transform`: a placement write records where the body is, and
+            // copying its geometry to say so is the whole cost of a move (374 ms on the
+            // 900a assembly). This attaches the placement to the shape instead.
+            let Ok(moved) = ferrocad_part::backend().moved(&shape, &delta) else {
                 return;
             };
             memo.record_rigid(&shape, &moved, &delta);
@@ -431,7 +434,12 @@ impl PartShape {
                 };
                 ferrocad_part::backend().tessellate(shape, &options)
             })
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        // The cache holds the mesh in the frame it was built in and carries a placement
+        // write as a delta beside it (`record_rigid`). Python sees world geometry — that
+        // is the `geometry == placement · base` invariant — so the delta is applied here,
+        // once and memoised.
+        Ok(self.tessellations.placed())
     }
 
     /// Share the property's memo with this wrapper (see

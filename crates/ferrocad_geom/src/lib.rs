@@ -1785,6 +1785,21 @@ pub trait GeometryBackend: Send + Sync {
     /// Apply a placement (transform) to `shape`.
     fn place(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError>;
 
+    /// `shape` moved by `placement`, sharing the source geometry where the kernel can.
+    ///
+    /// A placement **write** uses this rather than [`place`](Self::place): it happens on
+    /// every move, and duplicating the geometry to record where it went is the whole cost
+    /// of the edit — 374 ms for the 900a assembly's larger bodies. The result is
+    /// geometrically identical; only the representation differs (OCCT attaches a
+    /// `TopLoc_Location` instead of rebuilding every face). Tessellation applies the
+    /// location and shape identity is still per-handle, so nothing downstream can tell.
+    ///
+    /// The default falls back to a placing copy, which is correct for any backend that
+    /// has no cheaper representation.
+    fn moved(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
+        self.place(shape, placement)
+    }
+
     /// Apply a 4x4 matrix to `shape` (`Shape.transformed`).
     fn transform(&self, _shape: &Shape, _matrix: &Matrix4) -> Result<Shape, GeomError> {
         Err(unsupported("transform"))

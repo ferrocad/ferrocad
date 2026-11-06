@@ -1151,6 +1151,44 @@ mod tests {
         assert!((volume - restored_volume).abs() < 1e-9, "geometry is intact");
     }
 
+    /// A *located* shape survives the envelope.
+    ///
+    /// A placement write now attaches the placement to the shape instead of copying the
+    /// geometry (`GeometryBackend::moved`), so the `.brp` payload must carry the location
+    /// or a moved body would reload at the origin.
+    #[test]
+    fn a_located_shape_round_trips() {
+        setup();
+        let shape = crate::make_box(10.0, 10.0, 10.0).unwrap();
+        let placement = Placement::new(Vector3::new(10.0, 0.0, 0.0), Rotation::identity());
+        let moved = crate::backend()
+            .moved(&shape, &placement)
+            .expect("the box moves");
+        let property = ShapeProperty::with_placement(moved, placement);
+
+        let bytes = property.save();
+        let restored = restore(&bytes).expect("the envelope restores");
+        let restored = restored
+            .as_any()
+            .downcast_ref::<ShapeProperty>()
+            .expect("a ShapeProperty");
+        let mesh = crate::backend()
+            .tessellate(
+                &restored.shape().expect("the shape survives"),
+                &ferrocad_geom::TessellationOptions::absolute(0.5),
+            )
+            .expect("the restored shape tessellates");
+        let min_x = mesh
+            .positions
+            .iter()
+            .map(|position| position[0])
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            (min_x - 10.0).abs() < 1e-3,
+            "the location survives the envelope: min x = {min_x}"
+        );
+    }
+
     /// A version-1 envelope (written before the placement field existed) still
     /// restores its geometry with the identity placement.
     #[test]

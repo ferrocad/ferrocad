@@ -3094,6 +3094,26 @@ impl GeometryBackend for OcctBackend {
         Ok(out)
     }
 
+    /// A placement write: `copy = false` attaches a `TopLoc_Location` to the shape
+    /// instead of rebuilding every face, edge and vertex. OCCT reads the location through
+    /// every query (tessellation especially - `topology.rs` applies it per face), so the
+    /// result is the same shape at a different place, and the move costs one transform
+    /// rather than a copy of the whole body.
+    fn moved(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
+        let shape_occt = downcast(shape)?;
+        let shape_guard = shape_occt.borrow();
+        let s = shape_guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let trsf = transform_from(placement);
+        let mut op = ffi::b_rep_builder_api::BRepBuilderAPI_Transform_new(s, &trsf, false);
+        let out = erase(op.pin_mut().Shape());
+        if !op.IsDone() {
+            return Err(OcctError::NotDone { operation: "moved" }.into());
+        }
+        Ok(out)
+    }
+
     fn transform(&self, shape: &Shape, matrix: &Matrix4) -> Result<Shape, GeomError> {
         let occt = downcast(shape)?;
         let guard = occt.borrow();

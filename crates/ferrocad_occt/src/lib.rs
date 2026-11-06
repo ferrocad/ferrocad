@@ -550,6 +550,46 @@ mod tests {
     }
 
     #[test]
+    fn a_moved_box_carries_its_geometry_as_a_location() {
+        use ferrocad_types::{Placement, Rotation, Vector3};
+        let backend = OcctBackend::new();
+        let cube = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let placed = Placement {
+            base: Vector3::new(10.0, 0.0, 0.0),
+            rotation: Rotation::identity(),
+        };
+        let moved = backend.moved(&cube, &placed).unwrap();
+
+        // A distinct handle, and the same body: a placement write must not turn into an
+        // edit of the geometry (the memo keys on the handle, so a new identity is what
+        // keeps them apart).
+        assert!(!cube.is_same(&moved));
+        assert_eq!(
+            backend.elements(&moved, ElementKind::Face).len(),
+            backend.elements(&cube, ElementKind::Face).len(),
+            "a move keeps the faces"
+        );
+        let volume = backend.mass_properties(&moved).expect("mass").volume;
+        let original = backend.mass_properties(&cube).expect("mass").volume;
+        assert!((volume - original).abs() < 1e-6, "a rigid move keeps the volume");
+
+        // Tessellation applies the location, so the mesh is the placed body — this is what
+        // makes the representation invisible to everything downstream.
+        let mesh = backend
+            .tessellate(&moved, &TessellationOptions::absolute(0.5))
+            .unwrap();
+        let min_x = mesh
+            .positions
+            .iter()
+            .map(|position| position[0])
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            (min_x - 10.0).abs() < 1e-3,
+            "the mesh is the placed body: min x = {min_x}"
+        );
+    }
+
+    #[test]
     fn fuse_reports_face_lineage() {
         let backend = OcctBackend::new();
         let a = backend.make_box(10.0, 10.0, 10.0).unwrap();

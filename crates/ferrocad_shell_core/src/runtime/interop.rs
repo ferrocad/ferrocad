@@ -305,7 +305,10 @@ fn note_gpu_frame(queue: &wgpu::Queue) {
     let Ok(mut window) = WINDOW.lock() else {
         return;
     };
-    let start = window.unwrap_or(submitted);
+    let Some(start) = *window else {
+        *window = Some(submitted);
+        return;
+    };
     if submitted.duration_since(start) < Duration::from_secs(1) {
         return;
     }

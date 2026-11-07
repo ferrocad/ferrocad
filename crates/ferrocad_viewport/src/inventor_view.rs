@@ -4449,6 +4449,7 @@ impl<V: InventorView> InventorViewport<V> {
     /// are also serviced here so a pointer that leaves the element still updates them
     /// through gpui's drag system.
     fn drag_move_with_modifiers(&mut self, logical: [f32; 2], modifiers: GizmoModifiers) -> bool {
+        note_drag_move();
         if self.chrome_contains(logical) {
             return false;
         }
@@ -6080,6 +6081,16 @@ fn note_pointer_move() {
     }
 }
 
+/// Count a pointer move that moved a drag, under `FERROCAD_TIMING`.
+fn note_drag_move() {
+    let Some(mut window) = timing_window() else {
+        return;
+    };
+    if let Some(state) = window.as_mut() {
+        state.drag_moves += 1;
+    }
+}
+
 /// Report a full stage re-emit under `FERROCAD_TIMING`.
 ///
 /// `recompile` re-encodes every vertex of every stage item, so a frame that runs one is
@@ -6164,6 +6175,12 @@ struct TimingWindow {
     /// paints rarely or because the platform delivers moves rarely: a drag repaints once
     /// per move, so `moves` and `frames` are the same number unless one of them is short.
     moves: u32,
+    /// Of those, the moves that moved a drag.
+    ///
+    /// A hover move only repaints when the hovered item changes, so a second of hovering
+    /// is correctly quiet — `moves` alone would read as a stall. This is the count that
+    /// has to match `frames` when the pointer is dragging something.
+    drag_moves: u32,
     worst: std::time::Duration,
 }
 
@@ -6181,6 +6198,7 @@ impl TimingWindow {
             picked: std::time::Duration::ZERO,
             picks: 0,
             moves: 0,
+            drag_moves: 0,
             worst: std::time::Duration::ZERO,
         }
     }
@@ -6235,7 +6253,7 @@ fn report_frame_time(refreshed: std::time::Duration) {
     // The difference is the window's own paint and composite — not this crate's.
     eprintln!(
         "ferrocad: fps {fps:.1}, interval avg {:.1} ms (worst {:.1} ms), \
-         prepare avg {:.1} ms, present {}/avg {:.1} ms, pick avg {:.1} ms ({}), moves {}",
+         prepare avg {:.1} ms, present {}/avg {:.1} ms, pick avg {:.1} ms ({}), moves {} ({} dragging)",
         ms(state.intervals),
         state.worst_interval.as_secs_f64() * 1000.0,
         ms(state.prepared),
@@ -6247,7 +6265,8 @@ fn report_frame_time(refreshed: std::time::Duration) {
             state.picked.as_secs_f64() * 1000.0 / state.picks as f64
         },
         state.picks,
-        state.moves
+        state.moves,
+        state.drag_moves
     );
     *window = Some(TimingWindow::new(now, state.last_frame));
 }

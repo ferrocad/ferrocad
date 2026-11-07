@@ -273,6 +273,54 @@ impl Default for GpuiInteropPresenter {
     }
 }
 
+/// Time from submitting a frame to the GPU reporting it finished.
+///
+/// The only frame cost no CPU timer can see: `Presenter::draw` returns as soon as the
+/// command buffer is submitted, so a render that takes 60 ms on the device looks instant
+/// in `prepare` and `paint` while the compositor, which samples the result, waits for it
+/// and delays the next frame. This is what separates "no pass owns the time" from "the
+/// pass is on the GPU".
+#[cfg(target_os = "linux")]
+fn note_gpu_frame(queue: &wgpu::Queue) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    static WORST_NANOS: AtomicU64 = AtomicU64::new(0);
+    static WINDOW: Mutex<Option<Instant>> = Mutex::new(None);
+
+    if !frame_timing::enabled() {
+        return;
+    }
+    let submitted = Instant::now();
+    queue.on_submitted_work_done(move || {
+        let nanos = submitted.elapsed().as_nanos() as u64;
+        TOTAL_NANOS.fetch_add(nanos, Ordering::Relaxed);
+        WORST_NANOS.fetch_max(nanos, Ordering::Relaxed);
+        COUNT.fetch_add(1, Ordering::Relaxed);
+    });
+
+    let Ok(mut window) = WINDOW.lock() else {
+        return;
+    };
+    let start = window.unwrap_or(submitted);
+    if submitted.duration_since(start) < Duration::from_secs(1) {
+        return;
+    }
+    let frames = COUNT.swap(0, Ordering::Relaxed).max(1);
+    let total = TOTAL_NANOS.swap(0, Ordering::Relaxed);
+    let worst = WORST_NANOS.swap(0, Ordering::Relaxed);
+    eprintln!(
+        "ferrocad: gpu render avg {:.1} ms (worst {:.1} ms, {} frames)",
+        total as f64 / frames as f64 / 1e6,
+        worst as f64 / 1e6,
+        frames
+    );
+    *window = Some(submitted);
+}
+
 impl Presenter for GpuiInteropPresenter {
     fn status(&self) -> PresenterStatus {
         self.status
@@ -457,6 +505,7 @@ impl Presenter for GpuiInteropPresenter {
             match renderer.encode_views(frame.view(), views) {
                 Ok(commands) => match frame.submit(queue.as_ref(), Some(commands)) {
                     Ok(()) => {
+                        note_gpu_frame(queue.as_ref());
                         self.drew = true;
                         self.pending_reason = None;
                         self.disable_after_present = None;

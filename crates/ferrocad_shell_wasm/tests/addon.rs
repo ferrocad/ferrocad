@@ -228,8 +228,8 @@ fn something_that_is_not_wasm_is_named() {
 /// A script half that is not a bundle: it stands in for CPython.
 #[derive(Default)]
 struct Primary {
-    /// What the doorway announced, in order.
-    events: Mutex<Vec<&'static str>>,
+    /// What the doorway announced, and which listeners ran, in order.
+    events: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl ScriptHost for Primary {
@@ -257,19 +257,10 @@ impl ScriptHost for Primary {
     }
 
     fn event_listener(&self) -> Box<dyn EventListener> {
-        struct Quiet;
-        impl EventListener for Quiet {
-            fn on_event(
-                &mut self,
-                _event: &Event,
-                _hit: Option<&Hit>,
-                _scene: &mut Scene,
-                _directives: &Directives,
-            ) -> bool {
-                false
-            }
-        }
-        Box::new(Quiet)
+        Box::new(Recorder {
+            log: Arc::clone(&self.events),
+            who: "primary",
+        })
     }
 
     fn commands(&self) -> Vec<CommandInfo> {
@@ -296,6 +287,90 @@ impl ScriptHost for Primary {
     }
 }
 
+/// A second script half, so a chain has something to be a chain of. It answers its own
+/// command and its own console, which is what makes the ordering assertions meaningful.
+#[derive(Default)]
+struct Secondary {
+    events: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl ScriptHost for Secondary {
+    fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
+        Ok(EvalResult {
+            ok: true,
+            output: format!("secondary: {code}"),
+        })
+    }
+
+    fn load_workbenches(&self) -> Result<ferrocad_shell_api::types::WorkbenchReport, String> {
+        Ok(Default::default())
+    }
+
+    fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+        Err(format!("no tool {name}"))
+    }
+
+    fn tool_command(&self, _name: &str, _verb: &str) -> bool {
+        false
+    }
+
+    fn inventor_scene(&self) -> Result<Scene, String> {
+        Ok(Scene::default())
+    }
+
+    fn event_listener(&self) -> Box<dyn EventListener> {
+        Box::new(Recorder {
+            log: Arc::clone(&self.events),
+            who: "secondary",
+        })
+    }
+
+    fn commands(&self) -> Vec<CommandInfo> {
+        vec![CommandInfo {
+            id: "Second_Two".to_string(),
+            menu: "Two".to_string(),
+            ..Default::default()
+        }]
+    }
+
+    fn run_command(&self, id: &str) -> Option<CommandOutcome> {
+        (id == "Second_Two").then(|| CommandOutcome {
+            ok: true,
+            status: "second ran it".to_string(),
+            ..Default::default()
+        })
+    }
+
+    fn on_document_event(&self, event: &DocumentEvent) {
+        self.events
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(event.id);
+    }
+}
+
+/// A listener that records that it was asked, and changes nothing.
+struct Recorder {
+    log: Arc<Mutex<Vec<&'static str>>>,
+    who: &'static str,
+}
+
+impl EventListener for Recorder {
+    fn on_event(
+        &mut self,
+        _event: &Event,
+        _hit: Option<&Hit>,
+        _scene: &mut Scene,
+        _directives: &Directives,
+    ) -> bool {
+        self.log
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(self.who);
+        false
+    }
+}
+
 #[test]
 fn addons_are_composed_behind_the_primary() {
     let (addon, _) = bundle();
@@ -314,6 +389,89 @@ fn addons_are_composed_behind_the_primary() {
     // The console is the primary's, which is the point of composing rather than replacing.
     let answer = host.evaluate("1 + 1").expect("the console runs");
     assert_eq!(answer.output, "primary: 1 + 1");
+}
+
+/// Two script halves and a bundle, in the order a chain sees them.
+fn chain() -> (Addons, Arc<Primary>, Arc<Secondary>, Arc<FakeDocument>) {
+    let first = Arc::new(Primary::default());
+    let second = Arc::new(Secondary::default());
+    let (addon, document) = bundle();
+    let hosts: Vec<Arc<dyn ScriptHost + Send + Sync>> = vec![first.clone(), second.clone()];
+    (Addons::chain(hosts, vec![addon]), first, second, document)
+}
+
+#[test]
+fn a_chain_merges_in_load_order() {
+    let (host, _, _, _) = chain();
+
+    // Every host's rows, in order: the halves first, then the bundle.
+    let ids: Vec<String> = host.commands().into_iter().map(|row| row.id).collect();
+    assert_eq!(ids, ["Primary_One", "Second_Two", "Toy_Wasm"]);
+
+    // The first host to answer wins, and a subordinate's id still reaches it.
+    assert_eq!(
+        host.run_command("Second_Two")
+            .expect("the second half's id")
+            .status,
+        "second ran it"
+    );
+    assert!(host.run_command("Nobody").is_none());
+
+    // The console is the primary's: one stdin and one history.
+    assert_eq!(
+        host.evaluate("1 + 1").expect("the console").output,
+        "primary: 1 + 1"
+    );
+}
+
+#[test]
+fn a_chain_fans_out_the_document_hooks() {
+    let (host, first, second, _) = chain();
+
+    host.on_document_event(&DocumentEvent::edited("Create Toy", &["Toy".to_string()]));
+
+    // Not "the primary heard it": every host does, so a subordinate can keep its own
+    // state in step with a document it did not write.
+    assert_eq!(
+        first.events.lock().unwrap().as_slice(),
+        [DocumentEvent::EDITED]
+    );
+    assert_eq!(
+        second.events.lock().unwrap().as_slice(),
+        [DocumentEvent::EDITED]
+    );
+}
+
+#[test]
+fn a_chain_runs_every_event_listener() {
+    let (host, first, second, _) = chain();
+
+    let mut listener = host.event_listener();
+    let changed = listener.on_event(
+        &Event::MouseMove { position: [0, 0] },
+        None,
+        &mut Scene::default(),
+        &Directives::default(),
+    );
+
+    assert!(!changed, "neither fixture edits the scene");
+    assert_eq!(first.events.lock().unwrap().as_slice(), ["primary"]);
+    assert_eq!(second.events.lock().unwrap().as_slice(), ["secondary"]);
+}
+
+#[test]
+fn a_chain_of_one_is_just_that_host() {
+    // The single-half case must not pay for the generalisation: one listener is handed
+    // back unwrapped, and `new` is still the same constructor the desktop calls.
+    let script = Arc::new(Primary::default());
+    let host = Addons::new(Some(script.clone()), vec![]);
+
+    assert_eq!(host.commands().len(), 1);
+    assert_eq!(
+        host.evaluate("2 + 2").expect("the console").output,
+        "primary: 2 + 2"
+    );
+    assert!(Addons::new(None, vec![]).is_empty());
 }
 
 #[test]

@@ -1,7 +1,7 @@
 # Backend parity: one Gui app, one document half
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
-built (2026-11-08); B8 recorded (2026-11-09), B8a built (2026-11-09).** The surface suite
+built (2026-11-08); B8 recorded (2026-11-09), B8a–B8b built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -746,7 +746,7 @@ event bridge), 3 shipped-bundle tests (CI, against the real `ferrocad_addon_toy.
 and without a manifest), 5–6 `ferrocad_shell_python` composition tests depending on the
 feature, and the edition builds with and without `--features addons`.
 
-### B8 — three language hosts, two platforms each (recorded 2026-11-09; B8a built)
+### B8 — three language hosts, two platforms each (recorded 2026-11-09; B8a–B8b built)
 
 B7 asked which *script half* a host installs, and `Runtime` answered with a name that
 mixed two things: the language (`Python`, `JS`) and the engine (`Cpython`, `RustPython`,
@@ -790,13 +790,13 @@ worth keeping visible: Python and JS are trusted code with document access, wasm
   shell, the viewport and the console.
 
 **What several hosts in one target costs is arbitration, not loading.** `ScriptHost` has 36
-answers. `Addons` already proves the shape — and marks the boundary, since it merges three
-and delegates the rest:
+answers. `Addons` is where the shape is proved: it merges three, fans out four, and
+answers the rest from the primary.
 
 | answers | rule |
 | --- | --- |
 | `commands`, `run_command`, `stage_meshes` | primary first, then each host in order — **built** |
-| `on_document_event`, `on_selection_changed`, `on_view_state_changed`, `event_listener` | fan out to every installed host; today only the primary hears them |
+| `on_document_event`, `on_selection_changed`, `on_view_state_changed`, `event_listener` | fan out to every installed host — **built** (B8b) |
 | `extra_properties`, `set_extra_property`, `apply_interaction`, `open_path`, `save_path` | ask in order; `Option`/`None` already means "not mine" |
 | the remaining ~24 (console, `bootstrap`, `open_startup_document`, tools and dialogs, providers, render) | one named primary; no other host can own them |
 
@@ -828,8 +828,14 @@ kernel is already a prebuilt wasm artifact the module links — Pyodide would ha
   answers `[]` on both hosts — the B7e "package, not runtime" decision, asserted rather
   than remembered. `from_name` and both switches are untouched: 7 new tests in
   `ferrocad_shell_api/tests/runtime.rs`, no behaviour change.
-- **B8b — a chain.** `Addons`' `primary: Option<..>` becomes an ordered list with a named
-  primary and the four fan-out hooks. No engine work: two fixtures prove it.
+- **B8b — a chain (built 2026-11-09).** `Addons` now holds `hosts: Vec<Arc<dyn ScriptHost +
+  Send + Sync>>` with `hosts[0]` as the primary, and `chain(hosts, addons)` composes any
+  number. The four fan-out hooks reach every host; `commands` concatenates in load order;
+  `run_command`, `claims` and `stage_meshes` keep primary-first, with the primary's answer
+  still deciding whether the composition has a display hook at all. `new(primary, addons)`
+  is unchanged, and a chain of one hands back that host's listener unwrapped, so no caller
+  or path pays for the generalisation. 4 tests: merge order, fan-out, listeners, and the
+  one-host chain.
 - **B8c — Python, two engines on one platform.** `cpython` and `pywasm` become engine
   choices for one language, with `cpython,pywasm` refused at the parser.
 - **B8d — wasm inside wasm.** What `?runtime=pywasm&addons=wasm` needs today (B7e records

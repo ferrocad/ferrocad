@@ -1,8 +1,8 @@
 # JS and wasm addons over the document doorway
 
 Status: **spike (2026-11-08).** `ferrocad_doc_api`, the JS half's `with_kernel` and the
-JS display hook (`stageMeshes`) are in the tree and tested; the browser path is wired but
-unverified in a real page (§6). The wasm-addon import ABI (§7) is designed, not built.
+JS display hook (`stageMeshes`) are in the tree and tested; the browser path is wired and
+verified in a real page (§6). The wasm-addon import ABI (§7) is designed, not built.
 
 Companions: [`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md)
 (§4 the JS half, §8 dependency rules), [`../../mods/README.md`](../../mods/README.md)
@@ -252,17 +252,20 @@ commands are listed, `Toy_Slab` creates its object through the doorway, and the 
 returns the slab's mesh. Two hosts, one artifact — see
 [`../tasks/backend-parity.md`](../tasks/backend-parity.md) B7e.
 
-Not verified: the real page. `?runtime=js&addons=1` (JS) and `?runtime=js&addons=wasm`
-load the bundle, register the commands, and the hook draws the slab; nobody has clicked
-it yet. The pieces either side of the gap are tested, which is why this is a spike and
-not a claim.
+Verified in a real page (2026-11-09, `crates/ferrocad_web_gpui/smoke.sh`, headless Chrome
+against the `www/pkg` build of 2026-11-08): `?runtime=js&addons=wasm&keys=ctrl-k;t;o;y;enter
+&probe=1` logs `ferrocad: scripting runtime js`, the bundle's `registered Toy_Slab,
+Toy_Taller`, `run Toy_Slab`, `document.edited {"transaction":"Create Toy","objects":
+["Toy"]}` and `document.recomputed {"objects":["Toy"]}`, and the document probe returns
+`Toy` as `App::FeaturePython` with `Height = 20 mm` beside the sample's `Box` and `Fillet`.
+The same run also checks the JS bundle (`?js=1`), the palette round trip and the save/open
+reopen. The pkg predates the desktop work of this session; `run.sh --check` rebuilds it and
+re-runs this check when a current artifact is wanted.
 
 ## 7. Next steps, in order
 
-1. **Run the page in a browser** and assert the capture: `?runtime=js&addons=1` and
-   `?addons=wasm` should both show `Toy_Slab`/`Toy_Taller` in the palette, one `Toy` in
-   the tree, a slab in the stage, and `Toy_Taller` making it taller. The harness already
-   drives a palette command by keyboard (`?keys=ctrl-k;…`), so this is a smoke step.
+1. ~~**Run the page in a browser** and assert the capture~~ — done (see §6): `smoke.sh`
+   covers `?js=1`, `?runtime=js&addons=wasm` and the palette round trip.
 2. **A JS `Tool`** (§7b below). The observe direction it depends on is now built:
    the two document events ship in this slice (§7a).
 3. **Capabilities.** A doorway that can write the document is a permission. Today every

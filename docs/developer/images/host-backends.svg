@@ -42,7 +42,7 @@
   <rect class="box" x="92" y="84" width="400" height="64" rx="6" fill="#e2e8f0" stroke="#94a3b8" />
   <text class="t box-title" x="292" y="105" text-anchor="middle">NATIVE DESKTOP HOST</text>
   <text class="t box-sub" x="292" y="122" text-anchor="middle">crates/ferrocad · ferrocad_parametric · ferrocad_toy (bin)</text>
-  <text class="t box-sub" x="292" y="138" text-anchor="middle">ferrocad_shell_python::run_with · NativeFilePicker (portal)</text>
+  <text class="t box-sub" x="292" y="138" text-anchor="middle">run_with(HostConfig) · --script-host= · NativeFilePicker</text>
 
   <rect class="box" x="608" y="84" width="400" height="64" rx="6" fill="#e2e8f0" stroke="#94a3b8" />
   <text class="t box-title" x="808" y="105" text-anchor="middle">BROWSER WASM HOST</text>

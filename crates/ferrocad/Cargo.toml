@@ -39,6 +39,9 @@ ferrocad_shell_python.workspace = true
 # The base contribution registry names the stage's native tools, so the app links the
 # stage directly (it used to be a test-only dependency).
 ferrocad_stage.workspace = true
+# The scripting-configuration names `--script-host=` parses, shared with the browser's
+# `?runtime=` so the two switches cannot drift.
+ferrocad_shell_api.workspace = true
 # The PyO3 bindings, linked in so `import ferrocad` resolves to a built-in module
 # (no separate platform-specific extension file to ship).
 ferrocad_py.workspace = true
@@ -59,3 +62,6 @@ default = ["embedded-payload"]
 # checkout has neither beside this manifest, so the flag is inert there; the
 # publish tarball and `cargo install` do have them.
 embedded-payload = ["dep:include_dir"]
+# `--script-host=js`: compose the browser's JS page on the desktop. Off by default
+# because it compiles QuickJS as C; see docs/project/tasks/backend-parity.md B7.
+js = ["ferrocad_shell_python/js"]

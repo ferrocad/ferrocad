@@ -18,9 +18,13 @@
 //! workbench modules and brands the window) calls. An edition registers its own
 //! built-in modules first, then delegates here; see `docs/developer/architecture/repackaging.md`.
 
+use ferrocad_shell_api::Runtime;
 use ferrocad_shell_python::HostConfig;
 
 pub mod payload;
+
+/// The scripting configurations a host can install (`--script-host=`).
+pub use ferrocad_shell_python::Runtime as ScriptHost;
 
 /// The workbench contributions an edition registers (its manipulators).
 pub use ferrocad_shell_python::Contributions;
@@ -109,10 +113,28 @@ pub fn run_edition_with_document(
     contributions: Contributions,
     open: Option<std::path::PathBuf>,
 ) {
+    run_edition_with_script(app_name, entry_module, contributions, open, None);
+}
+
+/// [`run_edition_with_document`] with the scripting configuration `--script-host=` asked
+/// for.
+///
+/// The window is the same in every configuration; what changes is the half behind it —
+/// the edition's CPython by default, the document alone, or (when the build linked them)
+/// the browser's RustPython and JS pages. A configuration this build cannot serve is
+/// reported and replaced by the document half.
+pub fn run_edition_with_script(
+    app_name: &str,
+    entry_module: &str,
+    contributions: Contributions,
+    open: Option<std::path::PathBuf>,
+    script_host: Option<Runtime>,
+) {
     register_core_module();
     let mut config = app_config(app_name, entry_module);
     config.contributions = contributions;
     config.open_document = open;
+    config.script_host = script_host;
     ferrocad_shell_python::run_with(config);
 }
 
@@ -166,6 +188,10 @@ pub struct EditionArgs {
     pub script: Option<std::path::PathBuf>,
     /// `--open <file>`: open a saved document at boot (windowed or headless).
     pub open: Option<std::path::PathBuf>,
+    /// `--script-host <name>`: which scripting half the window installs (`plain`,
+    /// `cpython`, `pywasm`, `js`). `None` leaves it to `FERROCAD_SCRIPT_HOST`, then to
+    /// CPython.
+    pub script_host: Option<Runtime>,
 }
 
 impl Default for EditionArgs {
@@ -176,6 +202,7 @@ impl Default for EditionArgs {
             size: [800, 600],
             script: None,
             open: None,
+            script_host: None,
         }
     }
 }
@@ -212,6 +239,15 @@ pub fn edition_args() -> Result<EditionArgs, String> {
                     .next()
                     .ok_or_else(|| "--open wants a path".to_string())?;
                 parsed.open = Some(std::path::PathBuf::from(path));
+            }
+            "--script-host" => {
+                let name = args.next().ok_or_else(|| {
+                    "--script-host wants plain, cpython, pywasm or js".to_string()
+                })?;
+                parsed.script_host = Some(Runtime::from_name(&name)?);
+            }
+            flag if flag.starts_with("--script-host=") => {
+                parsed.script_host = Some(Runtime::from_name(&flag["--script-host=".len()..])?);
             }
             "--size" => {
                 let value = args
@@ -253,6 +289,7 @@ fn app_config(app_name: &str, entry_module: &str) -> HostConfig {
         mods_paths: payload.mods_paths,
         contributions: Contributions::default(),
         open_document: None,
+        script_host: None,
     }
 }
 

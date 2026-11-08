@@ -43,8 +43,9 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
-pub use backend::{engine, install};
+pub use backend::{compose, engine, install, install_with};
 pub use events::PythonEventCallbacks;
+pub use ferrocad_shell_api::Runtime;
 pub use headless::{RenderReport, StlReport, render as render_headless, run as run_headless};
 pub use script_host::PythonScriptHost;
 
@@ -80,13 +81,21 @@ pub struct HostConfig {
     /// The manipulators the edition's workbenches contribute (the Part edge arc, a BIM
     /// grip, …). The base app registers none, and the shell names no workbench.
     pub contributions: Contributions,
-    /// A document to open at boot instead of showing only the sample document.
+    /// The document to open at boot instead of showing only the sample document.
     ///
     /// The shell boots the app script first (which creates its sample), then opens
     /// this file, makes it active and drops the sample. The title, model tree,
     /// properties and viewport all follow the opened document. `None` is the normal
     /// sample-document start.
     pub open_document: Option<std::path::PathBuf>,
+    /// Which script half to install (`--script-host=`, `FERROCAD_SCRIPT_HOST`).
+    ///
+    /// `None` is the edition's engine, CPython. The other configurations are the
+    /// browser's, made selectable on the desktop: the same document half with a different
+    /// script half behind it (see `docs/project/tasks/backend-parity.md` B7). A
+    /// configuration this build cannot serve is reported and replaced by
+    /// [`Runtime::Plain`].
+    pub script_host: Option<Runtime>,
 }
 
 impl Default for HostConfig {
@@ -98,6 +107,7 @@ impl Default for HostConfig {
             entry_module: "ferrocad_shell".to_string(),
             contributions: Contributions::default(),
             open_document: None,
+            script_host: None,
         }
     }
 }
@@ -151,6 +161,18 @@ fn frame_pipeline(_window: WindowId) -> Box<dyn FramePipeline> {
 /// Run the application with an edition's configuration.
 pub fn run_with(config: HostConfig) {
     configure_trace();
+    // The scripting configuration first: it decides which halves `install` composes,
+    // and a value the command line got wrong is reported now rather than after the boot.
+    let runtime = config
+        .script_host
+        .or_else(|| match Runtime::from_env() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("ferrocad: {error}");
+                None
+            }
+        })
+        .unwrap_or(Runtime::Cpython);
     // Hand the app's scripts to the interpreter bridge before it boots. The
     // interpreter belongs to the shell; the scripts belong to the app.
     python::configure(
@@ -165,7 +187,7 @@ pub fn run_with(config: HostConfig) {
         .with_gpu_preference(gpu_preference())
         .with_frame_pipeline(frame_pipeline);
     app.run(move |cx: &mut App| {
-        backend::install(cx);
+        backend::install_with(cx, runtime);
         let model = match Shell::boot(cx) {
             Ok(model) => model,
             Err(e) => {

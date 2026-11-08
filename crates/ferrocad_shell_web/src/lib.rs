@@ -14,7 +14,10 @@
 //! `?js=1` and `?pywasm=1` are the short forms; `?runtime=` wins when both are
 //! present, and `?js=1` beats `?pywasm=1` because the page installs the module for it.
 //! Every other query parameter (`?click=`, `?select=`, `?keys=`, …) is the capture
-//! harness's and is ignored.
+//! harness's and is ignored. The names themselves — and their aliases — are
+//! [`ferrocad_shell_api::runtime::Runtime`], so the desktop's `--script-host=` cannot
+//! drift from this one. `cpython` parses and is refused: `ferrocad_py` is a native
+//! PyO3 extension, so no browser can serve it.
 //!
 //! **The pywasm pairing is not arbitrary.** The Python facade reads
 //! `FreeCAD.ActiveDocument` from `ferrocad_core`'s process-wide registry, so that
@@ -31,33 +34,7 @@
 
 use ferrocad_shell_api::app::AppBackend;
 
-/// One of the browser's scripting configurations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Runtime {
-    /// The document half alone: no interpreter, no page module.
-    Plain,
-    /// RustPython in the module: `python/ferrocad_shell` over the real document.
-    Pywasm,
-    /// The page's ES module, reached through `window.__ferrocadJs`.
-    Js,
-}
-
-impl Runtime {
-    /// The name the host logs and the query uses.
-    pub fn id(self) -> &'static str {
-        match self {
-            Runtime::Plain => "plain",
-            Runtime::Pywasm => "pywasm",
-            Runtime::Js => "js",
-        }
-    }
-}
-
-impl std::fmt::Display for Runtime {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.id())
-    }
-}
+pub use ferrocad_shell_api::runtime::Runtime;
 
 /// The document half on its own.
 ///
@@ -75,6 +52,13 @@ pub fn plain() -> Box<dyn AppBackend> {
 pub fn backend(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
     Ok(match runtime {
         Runtime::Plain => plain(),
+        Runtime::Cpython => {
+            return Err(
+                "no CPython in the browser: `ferrocad_py` is a native PyO3 extension, \
+                 so the browser's Python is ?runtime=pywasm"
+                    .to_string(),
+            );
+        }
         Runtime::Pywasm => {
             let script = ferrocad_shell_pywasm::PywasmScriptHost::live()
                 .map_err(|error| format!("the wasm-Python interpreter did not boot: {error}"))?;
@@ -132,16 +116,13 @@ pub fn from_query(query: &str) -> Result<Runtime, String> {
     for (key, value) in pairs(query) {
         match key {
             "runtime" => {
-                explicit = Some(match value {
-                    "plain" | "none" | "rust" => Runtime::Plain,
-                    "pywasm" | "py" | "python" => Runtime::Pywasm,
-                    "js" | "javascript" => Runtime::Js,
-                    other => {
-                        return Err(format!(
-                            "runtime: unknown value {other:?}; expected plain, pywasm or js"
-                        ));
-                    }
-                });
+                // The browser's word for "the Python I have" is RustPython: `ferrocad_py`
+                // is a native extension, so `cpython` parses and is refused by `backend`.
+                let name = match value {
+                    "python" | "py" => "pywasm",
+                    other => other,
+                };
+                explicit = Some(Runtime::from_name(name)?);
             }
             "js" => js = true,
             "pywasm" => pywasm = true,
@@ -220,6 +201,12 @@ mod tests {
     }
 
     #[test]
+    fn python_is_the_interpreter_the_browser_has() {
+        // The shared table resolves `python` per target; in the browser that is RustPython.
+        assert_eq!(from_query("?runtime=python").unwrap(), Runtime::Pywasm);
+    }
+
+    #[test]
     fn runtime_names_the_configuration_exactly() {
         assert_eq!(from_query("?runtime=plain").unwrap(), Runtime::Plain);
         assert_eq!(from_query("?runtime=pywasm").unwrap(), Runtime::Pywasm);
@@ -241,8 +228,21 @@ mod tests {
 
     #[test]
     fn an_unknown_runtime_is_an_error() {
-        let error = from_query("?runtime=rustpython").unwrap_err();
-        assert!(error.contains("rustpython"), "{error}");
+        let error = from_query("?runtime=coffee").unwrap_err();
+        assert!(error.contains("coffee"), "{error}");
+        assert!(error.contains("pywasm"), "{error}");
+    }
+
+    #[test]
+    fn cpython_parses_and_is_refused() {
+        // The name is shared with the desktop, so the query is not a typo; the assembly
+        // simply cannot link a native extension. The refusal has to say that.
+        assert_eq!(from_query("?runtime=cpython").unwrap(), Runtime::Cpython);
+        let error = match backend(Runtime::Cpython) {
+            Ok(_) => panic!("the browser cannot link a native extension"),
+            Err(error) => error,
+        };
+        assert!(error.contains("CPython"), "{error}");
         assert!(error.contains("pywasm"), "{error}");
     }
 

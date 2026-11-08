@@ -45,3 +45,16 @@ image = "0.25"
 [dev-dependencies]
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
 bite-gpui = { version = "=1.25.203", features = ["test-support"] }
+
+# The desktop's optional scripting halves. Neither is needed for the default
+# (`--script-host=cpython`), and both are native-only, so a web build of the shell
+# never sees them.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# `--script-host=js`: the same page the browser has, over QuickJS (`rquickjs`).
+ferrocad_shell_js = { workspace = true, optional = true }
+# The document doorway that page reaches, which is core-only.
+ferrocad_doc_api = { workspace = true, optional = true }
+
+[features]
+# Compose `--script-host=js`. Off by default: it compiles QuickJS as C.
+js = ["dep:ferrocad_shell_js", "dep:ferrocad_doc_api", "ferrocad_shell_js/desktop"]

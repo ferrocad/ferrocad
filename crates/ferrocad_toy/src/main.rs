@@ -68,5 +68,11 @@ fn main() {
         return;
     }
 
-    ferrocad::run_edition_with_document("FerroCAD: Toy", "ferrocad_toy", contributions, args.open);
+    ferrocad::run_edition_with_script(
+        "FerroCAD: Toy",
+        "ferrocad_toy",
+        contributions,
+        args.open,
+        args.script_host,
+    );
 }

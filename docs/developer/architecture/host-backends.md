@@ -328,34 +328,33 @@ intersection, and that is what makes the two-VM comparison a gate for both hosts
 
 | script half | native desktop | browser | why |
 | --- | --- | --- | --- |
-| none (`plain`) | ✓ | ✓ | no engine; the Rust arms answer |
+| none (`plain`) | ✓ `--script-host=plain` | ✓ | no engine; the Rust arms answer. A script-less app on either host |
 | `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI |
-| `PywasmScriptHost` (RustPython) | ✓ builds; installed by no desktop host | ✓ | the only half both hosts can run |
-| `JsScriptHost` | ✓ page built; no host installs it yet | ✓ | the contract is `Page`: `WebPage` and the desktop `EnginePage` are the same eight calls |
+| `PywasmScriptHost` (RustPython) | refused, with the reason | ✓ | it builds natively, but its compiler needs a 16 MiB worker and a native `host_env` (B7) |
+| `JsScriptHost` | ✓ `--script-host=js` (feature `js`) | ✓ | the contract is `Page`: `WebPage` and the desktop `EnginePage` are the same eight calls |
 
-Three decisions are separate even though each host currently folds them into one: what a
-bundle **links**, what the host **installs** at boot, and the **default**. The browser
-installs any of its three from a query string; the desktop installs exactly one
-(`backend::install` → `engine()`). Giving the desktop the same choice is one target-neutral
-`Runtime` (`Cpython` off wasm, `Js` on wasm) plus `--script-host=`, with a fallback to
-`plain` per configuration and no change to the default.
+One table of names, two switches. `Runtime` lives in the seam
+(`ferrocad_shell_api::runtime`), so `?runtime=` and `--script-host=` (or
+`FERROCAD_SCRIPT_HOST`) accept the same spellings and refuse with the same sentence; the
+*composition* stays with each host, because only the host knows what it linked. The
+desktop's is `ferrocad_shell_python::compose`, and a name this build cannot serve is
+reported and replaced by `plain` — the browser's rule, so a scripting surface that cannot
+start never costs the window. The default is CPython on the desktop and `plain` in the
+browser.
 
-Two engines are missing for the two ✗s, and they are different dependencies:
+Two engines were missing, and they are different dependencies:
 
-- **a JS engine**, for the JS half — `ferrocad_shell_js` is
-  `#![cfg(target_family = "wasm")]` and binds its eight page calls to
-  `window.__ferrocadJs` at the call site, so the first step is a page trait, not an engine
-  (`boa`, `rquickjs`, `deno_core`);
+- **a JS engine**, for the JS half — built on the desktop over `rquickjs` (QuickJS), behind
+  the `desktop` feature of `ferrocad_shell_js` and the `js` feature of `ferrocad`;
 - **a wasm engine**, for wasm addons — `ferrocad_addon_toy` already speaks a wasm import
   module (`ferrocad.call`) plus `(ptr, len)` exports, so **`wasmi`** hosts it by mapping
   that import onto `ferrocad_doc_api`'s doorway, with the addon's JS glue
   (`loader.js`, `toy.js`) re-done in Rust. An interpreter rather than a JIT: smaller, fuel
-  metering for third-party mod code, and no executable memory.
+  metering for third-party mod code, and no executable memory. **Not built.**
 
-Neither is linked today, so the release binary pays for neither. The decision trail, the
-costs (unmeasured size, the 16 MiB stack, `host_env` off natively, the read-only facade)
-and the order to build them are **B7** in
-[`backend-parity.md`](../../project/tasks/backend-parity.md).
+Neither is in a default build, so the release binary pays for neither. The decision trail,
+what is left (desktop RustPython, the wasm addon engine) and the costs are **B7 / B7a–B7c**
+in [`backend-parity.md`](../../project/tasks/backend-parity.md).
 
 ## 5. One display path
 
@@ -412,6 +411,8 @@ ferrocad_shell_rust   -> ferrocad_core, ferrocad_part, ferrocad_occt,
                          must NOT -> gpui, pyo3, wasm-bindgen
 ferrocad_shell_python   -> ferrocad_shell_core, ferrocad_py, pyo3, gpui
                          may    -> ferrocad_shell_rust
+                         may (native, feature `js`) -> ferrocad_shell_js,
+                                 ferrocad_doc_api
 ferrocad_web_gpui     -> ferrocad_shell_core, ferrocad_shell_web, wasm-bindgen
                          must NOT -> pyo3, ferrocad_py, ferrocad_inventor_py
 ferrocad_shell_web    -> ferrocad_shell_rust, ferrocad_shell_pywasm,
@@ -424,7 +425,8 @@ ferrocad_doc_api      -> ferrocad_core, ferrocad_shell_api, serde_json
 ferrocad_shell_api    -> ferrocad_stage, ferrocad_geom, ferrocad_types
                          must NOT -> ferrocad_occt, gpui, pyo3
 ferrocad_shell_js     -> ferrocad_shell_api, ferrocad_inventor,
-                         ferrocad_stage, wasm-bindgen
+                         ferrocad_stage, wasm-bindgen (wasm),
+                         rquickjs (feature `desktop`)
                          must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust,
                                      ferrocad_core, ferrocad_part
 ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core, ferrocad_inventor,
@@ -440,6 +442,11 @@ reports what comes back, so the document stays `RustAppBackend`'s, and a core ed
 put a second document implementation one `use` away. `ferrocad_shell_pywasm` does name
 `ferrocad_core`, because the rows it feeds the interpreter come from `present` and its
 snapshot is a `Document`; what it must not name is the kernel.
+
+`ferrocad_shell_python` may name `ferrocad_shell_js` only on native and only behind the
+`js` feature: the desktop's page is that same crate, and the reverse edge
+(`shell_js` → `shell_python`) must never exist. `ferrocad_doc_api` comes along because
+the page's doorway needs the document, not because the host does.
 
 `ferrocad_shell_pywasm` also cannot forbid `wasm-bindgen`: `rustpython-vm`'s `wasmbind`
 feature is what gives `getrandom` a `wasm32-unknown-unknown` backend. The crate must

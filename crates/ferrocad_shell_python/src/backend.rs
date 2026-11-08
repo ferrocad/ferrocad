@@ -11,6 +11,8 @@
 
 use pyo3::prelude::{PyAnyMethods, Python};
 
+use ferrocad_shell_api::Runtime;
+use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_rust::RustAppBackend;
 use gpui::App;
 
@@ -25,7 +27,75 @@ use crate::script_host::PythonScriptHost;
 ///
 /// Call after `python::configure` and before `Shell::boot`.
 pub fn install(cx: &mut App) {
-    ferrocad_shell_core::app::install_backend(cx, Box::new(engine()));
+    install_with(cx, Runtime::Cpython);
+}
+
+/// Install the composition for one scripting configuration.
+///
+/// A configuration this build cannot serve is reported and replaced by [`Runtime::Plain`],
+/// the same way the browser falls back: a scripting surface that cannot start must not
+/// cost the window.
+pub fn install_with(cx: &mut App, runtime: Runtime) {
+    match compose(runtime) {
+        Ok(backend) => ferrocad_shell_core::app::install_backend(cx, backend),
+        Err(error) => {
+            eprintln!("ferrocad: {error}");
+            eprintln!(
+                "ferrocad: continuing without a script half; the document half answers alone"
+            );
+            let plain = compose(Runtime::Plain)
+                .expect("the plain configuration is always compilable");
+            ferrocad_shell_core::app::install_backend(cx, plain);
+        }
+    }
+}
+
+/// Compose the backend for one scripting configuration.
+///
+/// `Plain` and `Cpython` are what this crate always links. `Pywasm` and `Js` are halves a
+/// build opts into: the JS page is behind the `js` feature, and RustPython needs a
+/// big-stack worker before it can be installed here (see
+/// `docs/project/tasks/backend-parity.md` B7). `Err` is a request this build cannot
+/// serve, not a failure — [`install_with`] falls back to the document half.
+pub fn compose(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
+    Ok(match runtime {
+        Runtime::Plain => Box::new(RustAppBackend::from_shared_registry()),
+        Runtime::Cpython => Box::new(engine()),
+        Runtime::Pywasm => {
+            return Err(
+                "`--script-host=pywasm` is not wired on the desktop yet: RustPython's \
+                 compiler recurses (it needs a 16 MiB worker thread) and a native build \
+                 wants `host_env`; see docs/project/tasks/backend-parity.md B7"
+                    .to_string(),
+            );
+        }
+        Runtime::Js => js_page()?,
+    })
+}
+
+/// The desktop's JS page: the same `Page` the browser has, over an embedded QuickJS.
+#[cfg(feature = "js")]
+fn js_page() -> Result<Box<dyn AppBackend>, String> {
+    use std::sync::Arc;
+
+    let page: Arc<dyn ferrocad_shell_js::Page> = Arc::new(
+        ferrocad_shell_js::EnginePage::from_mods_dir()
+            .map_err(|error| format!("the JS page did not boot: {error}"))?,
+    );
+    let events: Arc<dyn ferrocad_shell_api::DocumentEventSink> =
+        Arc::new(ferrocad_shell_js::PageEvents::new(Arc::clone(&page)));
+    let document = Arc::new(ferrocad_doc_api::DocApi::with_events(events));
+    Ok(Box::new(
+        RustAppBackend::from_shared_registry()
+            .with_script_host(Box::new(ferrocad_shell_js::JsScriptHost::with_kernel(page, document))),
+    ))
+}
+
+#[cfg(not(feature = "js"))]
+fn js_page() -> Result<Box<dyn AppBackend>, String> {
+    Err("`--script-host=js` needs a build with the `js` feature: \
+         `cargo run -p ferrocad_parametric --features js -- --script-host=js`"
+        .to_string())
 }
 
 /// The desktop's engine, for a host that installs it itself (`--check-init`).

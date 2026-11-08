@@ -2462,6 +2462,7 @@ version = "0.1.5"
 dependencies = [
  "ferrocad_geom",
  "ferrocad_py",
+ "ferrocad_shell_api",
  "ferrocad_shell_python",
  "ferrocad_stage",
  "include_dir",
@@ -2743,10 +2744,12 @@ name = "ferrocad_shell_python"
 version = "0.1.5"
 dependencies = [
  "bite-gpui",
+ "ferrocad_doc_api",
  "ferrocad_inventor",
  "ferrocad_inventor_py",
  "ferrocad_shell_api",
  "ferrocad_shell_core",
+ "ferrocad_shell_js",
  "ferrocad_shell_rust",
  "ferrocad_stage",
  "ferrocad_stage_py",

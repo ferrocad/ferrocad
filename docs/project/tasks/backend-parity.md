@@ -1,7 +1,7 @@
 # Backend parity: one Gui app, one document half
 
-Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a and
-B7b built (2026-11-08).** The surface suite
+Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7c
+built (2026-11-08).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -599,6 +599,41 @@ default `cargo test -p ferrocad_shell_js` still compiles no C. Installing the pa
 host's script half (`--script-host=js`) is the remaining wiring, and belongs with B7's
 `Runtime` enum rather than with this page.
 
+### B7c — the switch on the desktop (built 2026-11-08)
+
+`Runtime` moved to the seam (`ferrocad_shell_api::runtime`) and the desktop gained the
+browser's switch: `--script-host=plain|cpython|pywasm|js`, or `FERROCAD_SCRIPT_HOST`, with
+CPython as the default. One table of names, aliases and error text, two switches — so
+`?runtime=` and `--script-host=` cannot drift. `ferrocad_shell_web` re-exports the type and
+keeps only its own composition.
+
+| name | desktop today | notes |
+| --- | --- | --- |
+| `plain` | ✓ | the document half alone: the script-less app the browser already had |
+| `cpython` | ✓ default | the edition's engine |
+| `js` | ✓ with `--features js` | `EnginePage` over `mods/`; without the feature the error says how to build it |
+| `pywasm` | **refused, with the reason** | RustPython builds natively, but its compiler needs a 16 MiB worker and a native build wants `host_env` |
+
+A name this build cannot serve is reported and replaced by `plain` — the browser's rule, so
+a scripting surface that cannot start never costs the window. `backend::install_with` does
+that; `backend::install` is `install_with(cx, Cpython)`, so no existing call site changed.
+
+The composition is one function, `ferrocad_shell_python::compose(runtime)`, tested per name
+in `crates/ferrocad_shell_python/tests/runtime.rs`; the naming is tested in
+`crates/ferrocad_shell_api/tests/runtime.rs`. The binaries forward the flag through
+`ferrocad::run_edition_with_script`, and `js` forwards as a cargo feature through
+`ferrocad` → `ferrocad_shell_python` → `ferrocad_shell_js/desktop`. `ferrocad_shell_python`
+names `ferrocad_shell_js` only on native and only behind that feature; the reverse edge
+must never exist.
+
+**What is left of the switch is `pywasm`.** Closing it is the JS page's shape again: a
+channel wrapper around the `ScriptHost` (a RustPython VM is not `Send`), a 16 MiB worker,
+and `host_env` on natively so a mod's `pathlib`/`open` are real. That is B7d, and the
+refusal names it today rather than pretending.
+
+**Exit: met.** 4 composition tests, 5 naming tests, `ferrocad_shell_web` 13 + 2,
+`ferrocad_shell_core` 271.
+
 ## 5. Decisions (recorded 2026-11-08)
 
 | # | decision | outcome |
@@ -608,7 +643,7 @@ host's script half (`--script-host=js`) is the remaining wiring, and belongs wit
 | D3 | multi-document tree | **In scope**: the tree lists every document and activating one (`activate_document`) switches the shell |
 | D4 | `model_tree` source | **`ferrocad_core`**: the registry already holds every document; Rust builds the whole tree, no script call needed |
 | D5 | ids for the four new verbs | Keep the existing `App_*` ids; upstream aliases (`Std_Undo`, …) only if a mod needs them. Deferred with that trigger |
-| D6 | a desktop runtime switch | **In scope as a debug flag** (B7): `--script-host=cpython\|pywasm\|plain` over one target-neutral `Runtime`. The default stays `PythonScriptHost` |
+| D6 | a desktop runtime switch | **Built in B7c**: one `Runtime` in the seam, `--script-host=cpython\|pywasm\|js\|plain` on the desktop, `?runtime=` in the browser. The default stays `PythonScriptHost` |
 | D7 | a JS or a wasm engine first | **Neither built.** Recorded as two separate gaps: a wasm engine for addons comes before a JS engine, which waits on JS mods shipping |
 | D8 | the wasm engine for addons | **`wasmi`** (interpreter, pure Rust, no JIT): the smaller dependency, fuel metering, and no executable memory from third-party code. Revisit if a wasm display hook puts interpretation on a hot path |
 | D9 | the JS engine for a desktop JS half | **`rquickjs`** (QuickJS, C): ES2020 in ~1 MB with no V8 build. `boa` is the pure-Rust escape hatch if a C dependency is unacceptable; `deno_core` rejected for size. The `Page` trait is the prerequisite for any of them |

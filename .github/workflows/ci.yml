@@ -259,6 +259,18 @@ jobs:
         # needs a check, and this job is where the behaviour lives.
         run: cargo test -p ferrocad_shell_pywasm
 
+      - name: The desktop runs the bundle the browser ships
+        # The same artifact `www/addons/toy.wasm` is copied from, instantiated by `wasmi`
+        # instead of by the browser. `shipped.rs` skips without the path, so this step is
+        # what makes "the desktop runs the bundle the browser ships, not a second build"
+        # a checked claim. The bundle is pure Rust — no OCCT, no wasm-bindgen — so the
+        # plain `wasm32` target builds it.
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build -p ferrocad_addon_toy --release --target wasm32-unknown-unknown
+          FERROCAD_ADDON_WASM="$PWD/target/wasm32-unknown-unknown/release/ferrocad_addon_toy.wasm" \
+            cargo test -p ferrocad_shell_wasm --test shipped
+
       - name: The browser's scripting runtime switch
         # The browser host composes the document half with `?runtime=plain|pywasm|js`.
         # The switch is plain Rust, so a typo in it costs a second here rather than a

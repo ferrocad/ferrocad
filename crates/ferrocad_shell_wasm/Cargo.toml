@@ -37,3 +37,6 @@ wasmi = { version = "2.0", default-features = false, features = ["std", "validat
 wasmi = { version = "2.0", default-features = false, features = ["std", "validate", "auto-dispatch", "wat"] }
 # A `mods/<Name>/addon.wasm` in a temporary directory, for the discovery test.
 tempfile = "3"
+# The real doorway behind the shipped bundle's tests, and the registry it reads.
+ferrocad_doc_api.workspace = true
+ferrocad_core.workspace = true

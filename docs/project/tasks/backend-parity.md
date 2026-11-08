@@ -437,14 +437,13 @@ a JIT. That is paid per command, not per frame — `commands`/`run`/`stage_meshe
 when the user acts — so wasmtime's codegen buys nothing a command can notice today. The
 trigger to revisit is a wasm addon that tessellates or scans on a hot path.
 
-Two things to verify when it is built rather than assume:
+Two things to verify when it is built rather than assume — both now checked in B7e:
 
 - the browser-built `toy.wasm` (250 KB, `wasm32-unknown-unknown`, no wasm-bindgen) is
   accepted by wasmi's feature set as-is: the desktop must run the bundle the browser ships,
-  not a second build of it;
+  not a second build of it. **Verified**: `ferrocad_shell_wasm/tests/shipped.rs` (CI step);
 - wasmi's MSRV against the workspace's `rust-version = "1.87"`. `resolver = "3"` prefers an
-  MSRV-compatible release; if the current one needs newer, that is a deliberate bump and
-  not a silent one.
+  MSRV-compatible release; **verified** — wasmi 2.0.0 declares 1.86 and resolves as-is.
 
 **Gap 1's engine: `rquickjs` (settled 2026-11-08).** QuickJS behind Rust bindings: a
 complete-enough ES2020 in about a megabyte, with no V8 build system to ship. The surface it
@@ -691,6 +690,15 @@ primary's with the addons' rows appended. `--script-host=plain --addons=…` is 
 core with sandboxed workbenches, which is what "ship a script-less experience" means with
 third-party commands.
 
+**The shipped bundle, not a fixture.** The addon suite's fixtures are hand-written `wat`, so
+`ferrocad_shell_wasm/tests/shipped.rs` asserts the real thing: CI builds
+`ferrocad_addon_toy` for `wasm32-unknown-unknown` (pure Rust — no OCCT, no wasm-bindgen),
+passes the path through `FERROCAD_ADDON_WASM`, and the test instantiates it with `wasmi`
+over the real `DocApi` — `Toy_Slab`/`Toy_Taller` in the list, `Toy_Slab` creating its object
+through the doorway, and the display hook returning the slab's mesh. The test skips when the
+variable is unset, so a bare `cargo test` stays fast and hermetic; the CI step is what makes
+the claim.
+
 **What is not there yet.** The doorway is a *write* capability: an addon can create and
 edit objects. The browser has the same gap and the same next step — a manifest that says
 `"document": "read"` and a host that answers differently. And an addon's own edit announces
@@ -701,8 +709,8 @@ without it the fallback path does not honour fuel metering, and the runaway test
 trap — it overflowed the **native** stack and aborted the process. The feature is enabled in
 the manifest with that reason beside it.
 
-**Exit: met.** 9 addon tests (commands, the doorway, the display hook, the fuel trap, the
-composition, discovery), 5–6 `ferrocad_shell_python` composition tests depending on the
+**Exit: met.** 9 addon tests, 2 shipped-bundle tests (CI, against the real
+`ferrocad_addon_toy.wasm`), 5–6 `ferrocad_shell_python` composition tests depending on the
 feature, and the edition builds with and without `--features addons`.
 
 ## 5. Decisions (recorded 2026-11-08)

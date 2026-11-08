@@ -246,6 +246,12 @@ against the real `ferrocad_addon_toy.wasm`:
 The doorway is faked there on purpose: that test is about the *boundary*, not the
 document.
 
+Proven on the desktop too (`ferrocad_shell_wasm/tests/shipped.rs`, in CI): the same
+`ferrocad_addon_toy.wasm` is instantiated by `wasmi` over the **real** `DocApi`, so the
+commands are listed, `Toy_Slab` creates its object through the doorway, and the hook
+returns the slab's mesh. Two hosts, one artifact — see
+[`../tasks/backend-parity.md`](../tasks/backend-parity.md) B7e.
+
 Not verified: the real page. `?runtime=js&addons=1` (JS) and `?runtime=js&addons=wasm`
 load the bundle, register the commands, and the hook draws the slab; nobody has clicked
 it yet. The pieces either side of the gap are tested, which is why this is a spike and

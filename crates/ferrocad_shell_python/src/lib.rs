@@ -29,6 +29,7 @@
 pub mod backend;
 pub mod events;
 pub mod headless;
+pub mod mods;
 pub mod python;
 pub mod script_host;
 
@@ -46,6 +47,7 @@ use gpui::{
 pub use backend::{compose, compose_all, compose_with, engine, install, install_composed, install_with};
 pub use events::PythonEventCallbacks;
 pub use ferrocad_shell_api::Runtime;
+use ferrocad_shell_api::Platform;
 pub use headless::{RenderReport, StlReport, render as render_headless, run as run_headless};
 pub use script_host::PythonScriptHost;
 
@@ -172,10 +174,10 @@ pub fn run_with(config: HostConfig) {
     let runtimes = if config.script_hosts.is_empty() {
         match Runtime::from_env_list() {
             Ok(Some(runtimes)) => runtimes,
-            Ok(None) => vec![Runtime::Cpython],
+            Ok(None) => derived_runtimes(),
             Err(error) => {
                 eprintln!("ferrocad: {error}");
-                vec![Runtime::Cpython]
+                derived_runtimes()
             }
         }
     } else {
@@ -236,6 +238,37 @@ pub fn run_with(config: HostConfig) {
         })
         .unwrap();
     });
+}
+
+/// The script hosts the mod directories ask for (B9a).
+///
+/// `mods/<Name>/` already says what it needs — `InitGui.py`, `InitGui.js` or `addon.wasm`
+/// — so the set is derived rather than typed. No mods keeps the edition's engine (CPython),
+/// because that is what a run without mods has always had; `--script-host=plain` is still
+/// how to ask for no console at all.
+fn derived_runtimes() -> Vec<Runtime> {
+    let kinds = mods::entry_kinds(&python::mods_dirs());
+    let derived = Runtime::hosts_for(&kinds, Platform::current());
+    if derived.is_empty() {
+        return vec![Runtime::Cpython];
+    }
+    // Only say it when the derivation decided something: the common case is the default.
+    if derived.len() != 1 || derived[0] != Runtime::Cpython {
+        eprintln!(
+            "ferrocad: mods declare {}; installing {}",
+            kinds
+                .iter()
+                .map(|kind| kind.id())
+                .collect::<Vec<_>>()
+                .join(", "),
+            derived
+                .iter()
+                .map(|runtime| runtime.id())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    derived
 }
 
 /// Run [`Shell::boot`] and return without opening a window.

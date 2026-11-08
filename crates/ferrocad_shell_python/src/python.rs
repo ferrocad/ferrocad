@@ -283,7 +283,7 @@ pub fn open_startup_document(boot: &mut Bootstrap) -> Result<Option<OpenedDocume
 
 /// The workbench directories to scan: explicit config, then `FERROCAD_MODS_PATH`,
 /// then a `mods/` directory beside the discovered `python/` tree.
-fn mods_dirs() -> Vec<PathBuf> {
+pub(crate) fn mods_dirs() -> Vec<PathBuf> {
     if let Some(paths) = MODS_PATHS.get() {
         if !paths.is_empty() {
             return paths.clone();

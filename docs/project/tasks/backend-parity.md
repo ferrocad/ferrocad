@@ -2,7 +2,7 @@
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
-not built.** The surface suite
+B9a built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -870,7 +870,7 @@ and a wasm bundle installed in the same target; the surface suite's capability m
 a language × platform table, and each host still answers only the verbs its capability
 allows.
 
-### B9 — the mod set names the hosts (recorded 2026-11-09; not built)
+### B9 — the mod set names the hosts (recorded 2026-11-09; B9a built)
 
 B8 made a target able to install several hosts, but the switch that does it names *engines*:
 `?runtime=pywasm,js`. That is the wrong thing to type, and it asks the user to know how the
@@ -898,6 +898,22 @@ hosts there.
 `--script-host=` / `?runtime=` survive as what they are good for: choosing the Python
 *engine* (there are two on the desktop and one in the browser), and pinning a composition
 when debugging. They stop being how a user asks for a mixed mod set.
+
+**B9a — derive from `mods/` (built 2026-11-09).** No list is needed for the common case.
+`ferrocad_shell_api` gained `EntryKind` (`Init.py`/`InitGui.py`, `InitGui.js`, `addon.wasm`)
+and `Runtime::hosts_for(entries, platform)`, which is the table above in code: Python leads
+when present, and wasm asks for the page half only in the browser. On the desktop
+`ferrocad_shell_python::mods::entry_kinds` scans `python::mods_dirs()` — the same list the
+Python loader already uses — and `run_with` derives the host set when neither
+`--script-host=` nor `FERROCAD_SCRIPT_HOST` names one. An empty set still means the
+edition's CPython, because a run with no mods has always had a console;
+`--script-host=plain` is how to ask for none. The JS page now loads its modules from those
+same directories, so the derivation and the page cannot disagree about where `mods/` is.
+6 seam tests and 6 scanner tests.
+
+**What B9a does not do.** Wasm bundles are still `--addons` (discovery is B9b), and the
+browser still lists addons explicitly, because a page has no directory to scan — that needs
+a package manifest served over HTTP, which is the open question below.
 
 **Open questions.**
 

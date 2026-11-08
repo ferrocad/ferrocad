@@ -4,7 +4,7 @@
 //! `--script-host=` cannot drift: the aliases, the canonical spellings and the error
 //! text all come from one table.
 
-use ferrocad_shell_api::{Language, Platform, Runtime};
+use ferrocad_shell_api::{EntryKind, Language, Platform, Runtime};
 
 #[test]
 fn the_canonical_names_are_the_switch_names() {
@@ -147,6 +147,71 @@ fn the_current_platform_is_the_target() {
         Platform::Desktop
     };
     assert_eq!(Platform::current(), expected);
+}
+
+#[test]
+fn a_mod_entry_is_recognised_by_its_file_name() {
+    assert_eq!(EntryKind::of_file_name("InitGui.py"), Some(EntryKind::Python));
+    assert_eq!(EntryKind::of_file_name("Init.py"), Some(EntryKind::Python));
+    assert_eq!(
+        EntryKind::of_file_name("InitGui.js"),
+        Some(EntryKind::JavaScript)
+    );
+    assert_eq!(EntryKind::of_file_name("addon.wasm"), Some(EntryKind::Wasm));
+    assert_eq!(EntryKind::of_file_name("README.md"), None);
+    assert_eq!(EntryKind::of_file_name("InitGui.ts"), None);
+}
+
+#[test]
+fn a_python_mod_asks_for_that_platforms_python() {
+    assert_eq!(
+        Runtime::hosts_for(&[EntryKind::Python], Platform::Desktop),
+        [Runtime::Cpython]
+    );
+    assert_eq!(
+        Runtime::hosts_for(&[EntryKind::Python], Platform::Browser),
+        [Runtime::Pywasm]
+    );
+}
+
+#[test]
+fn a_js_mod_asks_for_the_page_on_both_hosts() {
+    for platform in Platform::ALL {
+        assert_eq!(
+            Runtime::hosts_for(&[EntryKind::JavaScript], platform),
+            [Runtime::Js],
+            "{platform:?}"
+        );
+    }
+}
+
+#[test]
+fn a_wasm_mod_asks_for_the_page_only_in_the_browser() {
+    // On the desktop `wasmi` hosts a bundle with no script half; in the browser the page
+    // is the host, because `loader.js` is driven by it.
+    assert!(Runtime::hosts_for(&[EntryKind::Wasm], Platform::Desktop).is_empty());
+    assert_eq!(
+        Runtime::hosts_for(&[EntryKind::Wasm], Platform::Browser),
+        [Runtime::Js]
+    );
+}
+
+#[test]
+fn python_is_the_primary_when_both_languages_are_present() {
+    let hosts = Runtime::hosts_for(
+        &[EntryKind::JavaScript, EntryKind::Python],
+        Platform::Desktop,
+    );
+    // The order of the entries does not matter: Python leads.
+    assert_eq!(hosts, [Runtime::Cpython, Runtime::Js]);
+}
+
+#[test]
+fn no_mods_derives_no_hosts() {
+    // The caller decides what an empty set means; the derivation does not invent a default.
+    for platform in Platform::ALL {
+        assert!(Runtime::hosts_for(&[], platform).is_empty(), "{platform:?}");
+    }
 }
 
 #[test]

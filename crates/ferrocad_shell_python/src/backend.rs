@@ -236,10 +236,16 @@ fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, Str
 fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, String> {
     use std::sync::Arc;
 
-    let page: Arc<dyn ferrocad_shell_js::Page> = Arc::new(
+    let dirs = crate::python::mods_dirs();
+    let page = if dirs.is_empty() {
         ferrocad_shell_js::EnginePage::from_mods_dir()
-            .map_err(|error| format!("the JS page did not boot: {error}"))?,
-    );
+    } else {
+        // The directories the derivation scanned, so the page cannot end up installed but
+        // empty because it looked somewhere else (B9a).
+        ferrocad_shell_js::EnginePage::new(ferrocad_shell_js::desktop::js_modules(&dirs))
+    };
+    let page: Arc<dyn ferrocad_shell_js::Page> =
+        Arc::new(page.map_err(|error| format!("the JS page did not boot: {error}"))?);
     // The page's own doorway announces to the page, as the browser's does.
     let events: Arc<dyn ferrocad_shell_api::DocumentEventSink> =
         Arc::new(ferrocad_shell_js::PageEvents::new(Arc::clone(&page)));

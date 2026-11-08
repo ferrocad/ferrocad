@@ -136,6 +136,71 @@ impl Runtime {
     }
 }
 
+/// What a mod package declares by its entry file.
+///
+/// B9: a mod directory says what it needs — `InitGui.py`, `InitGui.js` or `addon.wasm` —
+/// so a host set can be derived instead of typed. The names are the ones each loader
+/// already looks for, not a new manifest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EntryKind {
+    /// `Init.py`/`InitGui.py`: a Python workbench.
+    Python,
+    /// `InitGui.js`: the page's module.
+    JavaScript,
+    /// `addon.wasm`: a sandboxed bundle.
+    Wasm,
+}
+
+impl EntryKind {
+    /// Every kind, in the order a host set derives them.
+    pub const ALL: [EntryKind; 3] = [EntryKind::Python, EntryKind::JavaScript, EntryKind::Wasm];
+
+    /// The kind an entry file name declares, if any.
+    pub fn of_file_name(name: &str) -> Option<Self> {
+        match name {
+            "Init.py" | "InitGui.py" => Some(EntryKind::Python),
+            "InitGui.js" => Some(EntryKind::JavaScript),
+            "addon.wasm" => Some(EntryKind::Wasm),
+            _ => None,
+        }
+    }
+
+    /// The name a host logs.
+    pub fn id(self) -> &'static str {
+        match self {
+            EntryKind::Python => "python",
+            EntryKind::JavaScript => "javascript",
+            EntryKind::Wasm => "wasm",
+        }
+    }
+}
+
+impl Runtime {
+    /// The script hosts `entries` need on `platform`, primary first.
+    ///
+    /// Python is the primary when it is present: it is the FreeCAD-shaped reference and
+    /// owns a finer surface than the page. A wasm bundle asks for the page half only in the
+    /// browser, where `loader.js` is driven by it — on the desktop `wasmi` needs no script
+    /// half at all, so a wasm-only mod set derives nothing here and the bundles ride beside
+    /// whatever else was chosen.
+    pub fn hosts_for(entries: &[EntryKind], platform: Platform) -> Vec<Self> {
+        let has = |kind: EntryKind| entries.contains(&kind);
+        let mut hosts = Vec::new();
+        if has(EntryKind::Python) {
+            hosts.push(match platform {
+                Platform::Desktop => Runtime::Cpython,
+                Platform::Browser => Runtime::Pywasm,
+            });
+        }
+        if has(EntryKind::JavaScript)
+            || (platform == Platform::Browser && has(EntryKind::Wasm))
+        {
+            hosts.push(Runtime::Js);
+        }
+        hosts
+    }
+}
+
 impl fmt::Display for Runtime {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.id())

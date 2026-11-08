@@ -1,7 +1,8 @@
 # Backend parity: one Gui app, one document half
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
-built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09).** The surface suite
+built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
+not built.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -858,18 +859,97 @@ kernel is already a prebuilt wasm artifact the module links — Pyodide would ha
   containing it works. `ferrocad_shell_wasm` now exposes `chain`/`boot`/`boot_chain` free
   functions returning the seam's type, and its bundles are just more members. 4 chain tests
   in `ferrocad_shell_api` plus the browser's query cases.
-- **B8e — wasm inside wasm (not built).** What `?runtime=pywasm&addons=wasm` needs: the
-  page's bundle host is `loader.js`, driven by the JS half, so a bundle is invisible when
-  any other half is the one installed. Compiling our `wasmi` host into the module would make
-  wasm an independent host on the web, bring fuel metering to the page, and leave one ABI
-  implementation instead of two. Costs: module size, and interpreted-inside-interpreted
-  execution. Not needed while "on the web, a bundle rides on the JS half" is acceptable;
-  the cheaper alternatives are a page-side command merge and a generated `WRITE_VERBS`.
+- **B8e — wasm inside wasm (rejected 2026-11-09).** Not needed: on the browser a wasm
+  addon is hosted by `loader.js`, which needs `window.ferrocad` — installed by
+  `index.html` only when the JS half composes. B9 derives the host set from the addons
+  instead, so listing a wasm addon installs the page host that carries it. That is a rule
+  in the composition, not a second interpreter in the module.
 
 **Exit:** one `mods/` directory boots on both hosts with a Python workbench, a JS workbench
 and a wasm bundle installed in the same target; the surface suite's capability matrix grows
 a language × platform table, and each host still answers only the verbs its capability
 allows.
+
+### B9 — the mod set names the hosts (recorded 2026-11-09; not built)
+
+B8 made a target able to install several hosts, but the switch that does it names *engines*:
+`?runtime=pywasm,js`. That is the wrong thing to type, and it asks the user to know how the
+application was built. What they have is a **mod set**: directories under `mods/`, each of
+which already says what it needs — `InitGui.py`, `InitGui.js` or `addon.wasm`. So the addons
+should name the hosts:
+
+```text
+--addons mods/Draft,mods/Toy          # desktop
+?addons=mods/Draft,mods/Toy           # browser
+```
+
+The host set is derived, per platform:
+
+| addon entry | desktop host | browser host |
+| --- | --- | --- |
+| `InitGui.py` | CPython, or RustPython behind `--script-host=pywasm` | RustPython |
+| `InitGui.js` | the QuickJS page (`ferrocad_shell_js::EnginePage`) | the page's ES module |
+| `addon.wasm` | `wasmi` (`ferrocad_shell_wasm`) | **the page host** — `loader.js` is driven by it |
+
+So a wasm addon implies the page host on the browser, which is why B8e is not needed. On
+the desktop the three are independent, which is why the same list derives three different
+hosts there.
+
+`--script-host=` / `?runtime=` survive as what they are good for: choosing the Python
+*engine* (there are two on the desktop and one in the browser), and pinning a composition
+when debugging. They stop being how a user asks for a mixed mod set.
+
+**Open questions.**
+
+- **Who owns the console when the set has more than one language?** A fixed precedence
+  (Python, then JS, then wasm-only) is predictable and matches "the Python half is the
+  FreeCAD-shaped reference"; a manifest flag would be more honest but is one more thing to
+  get wrong. Recommended: precedence now, a flag only when a mod needs it.
+- **A package with more than one entry** (`InitGui.py` *and* `addon.wasm`): allowed — it is
+  two hosts — or one entry per package? Two is more useful and costs only the ordering
+  rule; recommend allowing it.
+- **Order of the chain.** Today it is the order listed. With derived hosts it has to be
+  derived too: fixed precedence keeps it independent of the command line.
+- **The browser fetches.** `?addons=` on the web means HTTP: the page must fetch each
+  package's entry (and, for Python, the sources) before the module boots. The desktop reads
+  the filesystem. That is a packaging problem, not a host one, but it decides whether the
+  browser can list a *directory* at all.
+- **Capability per language.** The manifest already says `document: read-write` for wasm.
+  JS and Python need the same vocabulary, and the Python half cannot honour it yet (below).
+
+**How each host reaches `ferrocad_core` today** — the constraint all of the above has to
+fit. Every road ends at the same object, but the fidelity is not remotely the same:
+
+| surface | where | how it reaches the engine | fidelity | writes |
+| --- | --- | --- | --- | --- |
+| CPython (`PythonScriptHost`) | desktop | `ferrocad_py`, a PyO3 extension that links `ferrocad_core` and wraps `Arc<Mutex<CoreDocument>>` in `PyDocument`/`PyDocumentObject` | the full object model: properties, observers, extension converters, sub-element resolvers | yes |
+| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`, **one** native function: `document()` returns the active document's JSON, read from `ferrocad_core::application()` on every call (`DocumentSource::Registry`) | a read-only snapshot | no: the ABI has no write |
+| JS (`JsScriptHost` → the page) | desktop (rquickjs) + browser (ES module) | `ferrocad.call(request)` → `ferrocad_doc_api::DocApi` → registry | five verbs: `document`, `properties`, `create`, `set`, `recompute` | yes |
+| wasm bundle | desktop (`wasmi`) + browser (`loader.js`) | the same doorway as an import, optionally wrapped by `read_only` | the same five verbs | only with `{"document": "read-write"}` |
+
+Three findings:
+
+1. **There are two mechanisms, not four.** Compiled-in Rust access (CPython through PyO3's
+   object model, RustPython through one read function) and the JSON doorway (JS, wasm
+   bundles). Writing a fourth a mechanism for another language would be the mistake.
+2. **Linked is not reachable.** The browser's RustPython has `ferrocad_core` *in the same
+   wasm module* and still cannot write, because `_ferrocad` exposes one read function. What
+   a host can do is decided by its ABI, not by what it links.
+3. **Fidelity, not language, is what differs.** A Python addon on the desktop can edit
+   properties, observe them and load shapes; the same addon on the web can only read. A JS
+   addon can edit on both but has five coarse verbs. So a manifest that names only a
+   language overstates what the addon gets — `document: read-write` has to be honoured by
+   every host, or the host has to say it cannot.
+
+Two exceptions worth naming rather than discovering: `DocumentSource::Fixed(payload)` (tests
+and headless rendering) answers from a payload nobody else can see, and the browser's
+`plain` configuration builds `RustAppBackend::new()`, whose document is the backend's own —
+the only two cases that do **not** meet at the registry.
+
+**`ferrocad_part` is out of scope here, deliberately.** It is the mirror problem: CPython
+reaches geometry through `ferrocad_part_py`; RustPython has `ferrocad_part` linked but no
+shape ABI; JS and wasm have no shape verbs in the doorway at all. Reaching the *document*
+is already solved four ways; reaching *geometry* currently has one road.
 
 ## 5. Decisions (recorded 2026-11-08)
 
@@ -886,7 +966,9 @@ allows.
 | D9 | the JS engine for a desktop JS half | **`rquickjs`** (QuickJS, C): ES2020 in ~1 MB with no V8 build. `boa` is the pure-Rust escape hatch if a C dependency is unacceptable; `deno_core` rejected for size. Built in B7b; the `Page` trait was the prerequisite |
 | D10 | the identity of a script host | **The language, not the engine** (B8): `Python`/`JavaScript`/`wasm` are the hosts, and `Cpython`/`RustPython`/`Pyodide`, `QuickJS`/`WebPage`, `wasmi`/`WebAssembly` are the per-platform engines. `Runtime`'s four names stay as the switch spelling; an engine name never becomes a fifth runtime |
 | D11 | Pyodide as a browser Python engine | **Potential, not planned** (B8): still a large download with a JS-mediated binding layer and COOP/COEP, plus an Emscripten build of the `*_py` extension surface and the prebuilt OCCT kernel beside Pyodide's package set |
-| D12 | several hosts in one target | **A chain with one named primary** (built B8b–B8c), generalising `Addons` rather than widening `Runtime`: three answers merge, four fan out, five are asked in order, and the console/lifecycle/render remain single-owner |
+| D12 | several hosts in one target | **A chain with one named primary** (built B8b–B8d), generalising `Addons` rather than widening `Runtime`: three answers merge, four fan out, five are asked in order, and the console/lifecycle/render remain single-owner |
+| D13 | how a user asks for a mixed mod set | **The mod set names the hosts** (B9), not the engines: `--addons mods/Draft,mods/Toy` / `?addons=…`, with each package's entry file deriving its host per platform. `--script-host=` and `?runtime=` become the Python-engine choice and a debugging override, so `?runtime=pywasm,js` is no longer something a user writes |
+| D14 | wasm on the browser without the JS half | **Not built (B8e rejected).** `loader.js` needs `window.ferrocad`, which the page installs only for the JS half, so a wasm addon *derives* the page host rather than an engine being compiled into the module |
 
 ## 6. Acceptance
 

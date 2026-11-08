@@ -1,7 +1,7 @@
 # Backend parity: one Gui app, one document half
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
-built (2026-11-08); B8 recorded (2026-11-09), not built.** The surface suite
+built (2026-11-08); B8 recorded (2026-11-09), B8a built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -746,7 +746,7 @@ event bridge), 3 shipped-bundle tests (CI, against the real `ferrocad_addon_toy.
 and without a manifest), 5–6 `ferrocad_shell_python` composition tests depending on the
 feature, and the edition builds with and without `--features addons`.
 
-### B8 — three language hosts, two platforms each (recorded 2026-11-09; not built)
+### B8 — three language hosts, two platforms each (recorded 2026-11-09; B8a built)
 
 B7 asked which *script half* a host installs, and `Runtime` answered with a name that
 mixed two things: the language (`Python`, `JS`) and the engine (`Cpython`, `RustPython`,
@@ -821,9 +821,13 @@ kernel is already a prebuilt wasm artifact the module links — Pyodide would ha
 
 **Stages, if taken up.**
 
-- **B8a — vocabulary.** `Language` (plus the engine choice per platform) beside `Runtime`;
-  `from_name` keeps every alias; the language × platform matrix is one table test, so a
-  missing cell is a compile error rather than a doc drift.
+- **B8a — vocabulary (built 2026-11-09).** `Language` and `Platform` beside `Runtime` in
+  `ferrocad_shell_api::runtime`: `Language::of(Runtime)` names what a switch value installs
+  (`None` for `plain`), and `Language::runtimes(Platform)` is an exhaustive match over the
+  cell, so a new language or platform does not compile until it is answered there. `Wasm`
+  answers `[]` on both hosts — the B7e "package, not runtime" decision, asserted rather
+  than remembered. `from_name` and both switches are untouched: 7 new tests in
+  `ferrocad_shell_api/tests/runtime.rs`, no behaviour change.
 - **B8b — a chain.** `Addons`' `primary: Option<..>` becomes an ordered list with a named
   primary and the four fan-out hooks. No engine work: two fixtures prove it.
 - **B8c — Python, two engines on one platform.** `cpython` and `pywasm` become engine

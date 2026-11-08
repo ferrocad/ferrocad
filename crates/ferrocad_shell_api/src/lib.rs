@@ -33,7 +33,7 @@ pub use dialog::{DialogField, DialogSpec, Kind, ValueState};
 pub use display::StageMesh;
 pub use document_api::DocumentApi;
 pub use events::{DocumentEvent, DocumentEventSink};
-pub use runtime::Runtime;
+pub use runtime::{Language, Platform, Runtime};
 pub use selection::SelectionItem;
 pub use types::{
     AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,

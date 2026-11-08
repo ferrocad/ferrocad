@@ -803,6 +803,14 @@ and `clone-stamp` (`photo`, a retouch tool — `duplicate-object` remains the be
 Clone). None has a row to sit in, so the mapping is unchanged and the snapshot is
 refreshed to 6,777.
 
+**Re-check, 2026-11-06 (fifth).** The catalogue grew **6,777 → 7,262**: 485 added, none
+removed, and again nothing in `symbols` or `editor`. The batch is architecture plan
+symbols (`floor-plan-window`, `floor-plan-stairs`, `tree-plan-symbol`), trade tools
+(`brick-hammer`, `sprocket`, `reel-tape`) and dev/auto/medical material. The checker's
+two "new result" hits are false positives — `treble-hook` for arc-through-three-points
+and `coffin` for shell solid — so the 23 open requests are still undelivered and the
+mapping is unchanged. Snapshot refreshed to 7,262.
+
 **CAD-family request pass, 2026-11-06.** Most of the CAD verbs had never been asked
 for *as CAD*: `revolve` was standing in as `lathe` (an industrial lathe) and `chamfer`
 as `bevel-gauge` (a hand gauge), so the picture named the tool rather than the

@@ -28,6 +28,7 @@ use ferrocad_types::Vector3;
 
 use crate::commands::{CommandInfo, CommandOutcome};
 use crate::display::StageMesh;
+use crate::events::DocumentEvent;
 use crate::selection::SelectionItem;
 use crate::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
@@ -125,6 +126,16 @@ pub trait AppBackend {
         }
         let bytes = self.save_document()?;
         std::fs::write(path, bytes).map_err(|error| format!("{}: {error}", path.display()))
+    }
+
+    /// Make one open document active.
+    ///
+    /// The Gui app notices a switch: a provider detaches its per-document effects from
+    /// the outgoing document and attaches them to the incoming one. A backend with a
+    /// script half therefore asks it first (see [`ScriptHost::activate_document`]) and
+    /// only moves its own active marker when there is none.
+    fn activate_document(&mut self, _name: &str) -> Result<(), String> {
+        Err("switching documents is not supported by this backend".to_string())
     }
 
     /// The console's greeting line.
@@ -497,6 +508,16 @@ pub trait ScriptHost {
         None
     }
 
+    /// Make one open document active, when this surface owns the lifecycle.
+    ///
+    /// Activation is a Gui-app event upstream: the outgoing document gets
+    /// `deactivated` and the incoming one `activated`, which is what makes a provider
+    /// detach and attach its per-document effects. `None` means this surface has no
+    /// document lifecycle to run, and the backend moves its own active marker.
+    fn activate_document(&self, _name: &str) -> Option<Result<(), String>> {
+        None
+    }
+
     /// The console's greeting line, when the script surface has its own.
     fn hello(&self) -> Result<Option<String>, String> {
         Ok(None)
@@ -523,10 +544,11 @@ pub trait ScriptHost {
 
     /// Apply an interaction the script's own manipulator produced.
     ///
-    /// The shared transform gizmo is the document's; a workbench's dress-up arc (the
-    /// Part fillet, a BIM grip) knows its feature type and its own constructor, so it
-    /// answers for its own manipulator id. `None` means the commit is not the
-    /// script's.
+    /// The edit a manipulator implies belongs to the module that registered a provider
+    /// for it — a workbench's dress-up arc (the Part fillet, a BIM grip) or the generic
+    /// `transform`/`apply` gizmo, which a mod may take over so its own placement edit
+    /// and undo label are the ones the user sees. `None` means no provider owns this
+    /// commit, and the document half's own arm runs (the `runtime=plain` fallback).
     fn apply_interaction(&self, _commit: &InteractionCommit, _object: &str) -> Option<ApplyResult> {
         None
     }
@@ -602,6 +624,15 @@ pub trait ScriptHost {
     /// What a `FreeCADGui` command reads to answer `IsChecked`.
     fn on_view_state_changed(&self, _state: &ViewState) {}
 
+    /// The document changed: announce one edit, then its recompute.
+    ///
+    /// A notification, not a query — the transaction has committed (for
+    /// `document.edited`) or `recompute()` has returned (for
+    /// `document.recomputed`) before this arrives, so there is nothing to return.
+    /// The host emits once per edit, never per property write and never for a
+    /// refused write; the vocabulary is [`DocumentEvent::IDS`].
+    fn on_document_event(&self, _event: &DocumentEvent) {}
+
     /// The appearance preset the edition resolves to, when the script owns it.
     ///
     /// The boot path applies the returned outcome's `view`.
@@ -672,9 +703,14 @@ pub trait ScriptHost {
 
     /// Commands this script surface registered at run time.
     ///
-    /// The shell merges them with the built-in catalogue, so a script's command
-    /// reaches the palette, the app menu and the wheel like a built-in. A backend
-    /// that keeps its own registry (the Python one) leaves this empty.
+    /// The rows this surface's registry would show, catalogue ids included.
+    ///
+    /// The shell reconciles them with the built-in catalogue: a catalogue id keeps
+    /// the catalogue's metadata and takes this row's live `enabled`/`checked` (the
+    /// script's `IsActive`/`IsChecked` is the Gui authority), and an id the catalogue
+    /// does not list is appended, so a script's verb reaches the palette, the app menu
+    /// and the wheel like a built-in. A backend that keeps its own registry (the
+    /// Python one) leaves this empty.
     fn commands(&self) -> Vec<CommandInfo> {
         Vec::new()
     }
@@ -682,6 +718,17 @@ pub trait ScriptHost {
     /// Run a command this script registered. `None` when the id is not the script's,
     /// so the backend can answer for its own ids first.
     fn run_command(&self, _id: &str) -> Option<CommandOutcome> {
+        None
+    }
+
+    /// Take over an id the shell would otherwise execute itself.
+    ///
+    /// [`run_command`](Self::run_command) is the general hook; this is the explicit
+    /// opt-in for an id whose *executor* stays the shell (`App_Move`, `App_Undo`, …).
+    /// `None` means "run it yourself". The default delegates nothing on purpose: being
+    /// registered in the Gui is not a request to execute, or every built-in the app
+    /// script registers would route to the interpreter.
+    fn claims(&self, _id: &str) -> Option<CommandOutcome> {
         None
     }
 }

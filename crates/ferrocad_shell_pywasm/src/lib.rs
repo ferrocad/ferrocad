@@ -1,4 +1,4 @@
-//! The wasm-Python scripting surface: [`ScriptHost`] over RustPython (S8 **spike**).
+//! The wasm-Python scripting surface: [`ScriptHost`] over RustPython.
 //!
 //! The JS backend's composition ([`ferrocad_shell_js`]) is the shape here too: the
 //! document half stays `ferrocad_shell_rust`'s `RustAppBackend`, and this crate is the
@@ -7,6 +7,13 @@
 //! ```text
 //! RustAppBackend (document)  +  PywasmScriptHost (this crate)  =  the pywasm backend
 //! ```
+//!
+//! [`PywasmScriptHost::live`] is what the browser host composes: it reads the active
+//! document from `ferrocad_core`'s registry on every call, so the console sees the
+//! document the shell is showing (`FreeCAD.ActiveDocument`), including after a file is
+//! opened. [`PywasmScriptHost::new`] boots over a fixed payload instead — the
+//! geometry-free sample — which is what a host with no registry and the crate's own
+//! test use.
 //!
 //! **The runtime is RustPython**, the second option in §6.3. It is a Python VM written
 //! in Rust: no C ABI, no Pyodide download, no COOP/COEP, and — unlike Pyodide — it
@@ -19,15 +26,21 @@
 //! `ferrocad_core::present` (see [`snapshot`]). What is *not* shared is the `*_py` PyO3
 //! bindings: those are CPython extension modules and RustPython cannot load them, so
 //! the bridge re-exposes exactly the rows the shell needs. §6.3 calls this the fork's
-//! central trade-off, and the spike confirms it.
+//! central trade-off, and it still holds.
+//!
+//! **What the facade does not do.** The document is read-only from Python: `setattr`
+//! on an object raises rather than silently missing the document. Writes, recompute
+//! and the `Shape` API are the document half's (`RustAppBackend`), and the shell's own
+//! commands reach them.
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js` is `cfg(wasm)`
 //! because its only implementation is a `window` bridge. RustPython has no such
-//! dependency, so this crate is plain Rust and its test runs `properties()` on a
-//! normal `cargo test` — the wasm target is proven separately by
+//! dependency, so this crate is plain Rust and its tests run on a normal
+//! `cargo test` — the wasm target is proven separately by
 //! `cargo check --target wasm32-unknown-unknown`. Both are in the acceptance.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use ferrocad_inventor::{Event, EventListener, Hit, Scene};
 use ferrocad_shell_api::app::ScriptHost;
@@ -52,6 +65,19 @@ const CATALOG: &str = include_str!("../../../python/ferrocad_shell/catalog.json"
 /// The `FreeCAD` surface over the bridge, and the modules `wasm32-unknown-unknown`
 /// cannot import (see `bootstrap.py`).
 const BOOTSTRAP: &str = include_str!("bootstrap.py");
+
+/// Seed the console's namespace, the way `ferrocad_shell.bootstrap` does natively.
+///
+/// Here the *document* half boots, so the shell script's `bootstrap()` never runs and
+/// the prompt would have no `FreeCAD`, `App` or `doc`. The values are the facade (and
+/// the live document proxy), not snapshots, so they keep working after an open.
+const NAMESPACE: &str = "\
+import ferrocad_shell
+import FreeCAD as _fc
+ferrocad_shell.add_namespace('FreeCAD', _fc)
+ferrocad_shell.add_namespace('App', _fc)
+ferrocad_shell.add_namespace('doc', _fc.ActiveDocument)
+";
 
 /// Loads [`SHELL`] as the module `ferrocad_shell`.
 ///
@@ -94,16 +120,25 @@ def _install(name, source):
     return module
 ";
 
+/// Where the bridge reads the document from.
+#[derive(Clone)]
+enum DocumentSource {
+    /// A payload supplied at boot: a host with no registry, and the test.
+    Fixed(Rc<str>),
+    /// The process-wide registry in `ferrocad_core`, read afresh on every call.
+    Registry,
+}
+
 thread_local! {
     /// The document the bridge answers from. Set before the interpreter starts, read
     /// by the `_ferrocad` native module; thread-local because the VM is thread-bound.
-    static DOCUMENT_JSON: RefCell<String> = const { RefCell::new(String::new()) };
+    static DOCUMENT: RefCell<Option<DocumentSource>> = const { RefCell::new(None) };
 }
 
 /// The one native function the script can see.
 #[pymodule]
 mod _ferrocad {
-    /// The sample document's property rows, as JSON.
+    /// The active document's property rows, as JSON (`null` when none is open).
     #[pyfunction]
     fn document() -> rustpython_vm::PyResult<String> {
         Ok(crate::document_json())
@@ -111,8 +146,15 @@ mod _ferrocad {
 }
 
 /// The bridge's payload: the document the Rust side built, rendered by [`snapshot`].
+///
+/// `null` when the source is the registry and no document is open, which the facade
+/// turns into `FreeCAD.ActiveDocument is None` rather than a sample nobody installed.
 fn document_json() -> String {
-    DOCUMENT_JSON.with(|cell| cell.borrow().clone())
+    let source = DOCUMENT.with(|cell| cell.borrow().clone());
+    match source {
+        Some(DocumentSource::Fixed(payload)) => payload.to_string(),
+        Some(DocumentSource::Registry) | None => snapshot::active(),
+    }
 }
 
 /// The pywasm backend's script half: one interpreter, booted with
@@ -122,14 +164,41 @@ pub struct PywasmScriptHost {
 }
 
 impl PywasmScriptHost {
-    /// Boot the interpreter over the sample document.
+    /// Boot over a fixed payload: the geometry-free sample document.
     ///
-    /// The document is the sample's *content* (`Box` + `Fillet`), rendered by
-    /// [`snapshot`]; the interpreter and its stdlib are per-host, so two hosts never
-    /// share Python state.
+    /// This is the crate's own test and any host with no document registry. The
+    /// browser host uses [`live`](Self::live) instead, so its facade follows the
+    /// document the shell actually holds.
     pub fn new() -> Result<Self, String> {
-        let payload = snapshot::render(&snapshot::sample());
-        DOCUMENT_JSON.with(|cell| *cell.borrow_mut() = payload);
+        Self::over(snapshot::render(&snapshot::sample()))
+    }
+
+    /// Boot over the process-wide registry, read on every call.
+    ///
+    /// The document half must be the shared-registry one
+    /// (`RustAppBackend::from_shared_registry`) or the registry holds nothing and the
+    /// facade reports no active document. That pairing is what makes
+    /// `FreeCAD.ActiveDocument` and the model tree the same object, and what keeps the
+    /// cascade current after an open.
+    pub fn live() -> Result<Self, String> {
+        Self::boot(DocumentSource::Registry)
+    }
+
+    /// Boot over a payload rendered from a document the caller built.
+    ///
+    /// For a host that owns a document outside the registry, and for tests that want
+    /// a known shape without touching process-wide state.
+    pub fn over(payload: impl Into<String>) -> Result<Self, String> {
+        let payload: Rc<str> = Rc::from(payload.into());
+        Self::boot(DocumentSource::Fixed(payload))
+    }
+
+    /// Start one interpreter over `source`.
+    ///
+    /// The interpreter and its stdlib are per-host, so two hosts never share Python
+    /// state.
+    fn boot(source: DocumentSource) -> Result<Self, String> {
+        DOCUMENT.with(|cell| *cell.borrow_mut() = Some(source));
 
         let interpreter = Interpreter::builder(Settings::default())
             .add_native_modules(
@@ -156,7 +225,8 @@ impl PywasmScriptHost {
                     "<install>",
                     &install,
                     &[("SHELL_SOURCE", SHELL), ("SHELL_CATALOG", CATALOG)],
-                )
+                )?;
+                run_source(vm, "<namespace>", NAMESPACE, &[])
             })();
             boot
         })?;
@@ -182,7 +252,9 @@ impl PywasmScriptHost {
     /// `ferrocad_shell.properties`: the property rows for one object, as JSON.
     ///
     /// This is the S8 acceptance: the same function the native assembly calls, over
-    /// the sample document, answered by a Python interpreter.
+    /// the booted document, answered by a Python interpreter. The shell asks the
+    /// *document* half for its pane, so this is the script-visible answer — and the
+    /// test that it agrees with `ferrocad_core::present`.
     pub fn properties(&self, object: &str) -> Result<String, String> {
         self.call("properties", object)
     }
@@ -265,6 +337,13 @@ impl ScriptHost for PywasmScriptHost {
 
     fn run_command(&self, _id: &str) -> Option<CommandOutcome> {
         None
+    }
+
+    /// The console's greeting: this is an interpreter, unlike the plain Rust half.
+    fn hello(&self) -> Result<Option<String>, String> {
+        Ok(Some(
+            "FerroCAD shell · RustPython · wasm Python scripting".to_string(),
+        ))
     }
 }
 

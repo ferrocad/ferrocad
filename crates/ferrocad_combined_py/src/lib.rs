@@ -57,20 +57,23 @@ pub fn register_builtins() {
 /// A module that was imported from a *different* `.so` (for example a standalone
 /// `Part.abi3.so`) is replaced, because it cannot share this extension's core.
 ///
-/// A module registered with `PyImport_AppendInittab` (an edition binary) is not
-/// replaced. The built-ins already share the edition's core, so publishing these
-/// modules would give the interpreter a second one; `install` returns an
-/// `ImportError` instead. This is the same rule as `_part_is_builtin` in
-/// `python/FreeCAD/__init__.py`.
+/// A module registered with `PyImport_AppendInittab` (an edition binary, a linked
+/// test harness) is not replaced. The built-ins already share that binary's core,
+/// so publishing these modules would give the interpreter a second one; `install`
+/// returns an `ImportError` instead.
+///
+/// The test is `ferrocad` **or** `Part`: a kernel-free host may link only the core
+/// (`ferrocad_py`), and publishing over it would still split the registry. This is
+/// the same rule as `_builtin` in `python/FreeCAD/__init__.py`.
 pub fn install(py: Python<'_>) -> PyResult<()> {
     let modules = py.import("sys")?.getattr("modules")?;
     if installed(&modules) {
         return Ok(());
     }
-    if is_builtin_module(py, "Part") {
+    if is_builtin_module(py, "ferrocad") || is_builtin_module(py, "Part") {
         return Err(PyImportError::new_err(
-            "ferrocad_combined is not needed: this interpreter already has \
-             ferrocad/Part/Mesh/MeshPart built in",
+            "ferrocad_combined is not needed: this interpreter already has a \
+             ferrocad core built in",
         ));
     }
     publish(py, &modules, "ferrocad", ferrocad_py::ferrocad)?;

@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" width="1100" height="720" role="img" aria-labelledby="title desc">
+  <title id="title">One Gui app, one document half: who answers what</title>
+  <desc id="desc">FreeCAD's App/Gui split as ferrocad_shell_api's two traits enforce it. ferrocad_shell_core is the app (window, tree, panes, viewport) and a client of one AppBackend. The App half is RustAppBackend: documents, objects, property rows, meshes, edits, undo, visibility and the selection mirror, read from ferrocad_core. The Gui half is an optional ScriptHost: the command registry and execution, Settings nodes, providers and their claims, dialogs, tools, the scene and events, and the view state; it is PythonScriptHost (CPython), PywasmScriptHost (RustPython) or JsScriptHost, or absent. A table names the executor of every verb family, and one shared ferrocad_core registry under both halves is what makes FreeCAD.ActiveDocument and the model tree the same document.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5568" />
+    </marker>
+    <marker id="dash-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8794" />
+    </marker>
+    <style>
+      .t { font-family: Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .title { font-size: 24px; font-weight: 700; fill: #1a202c; }
+      .subtitle { font-size: 13px; fill: #4a5568; }
+      .band { stroke-width: 1.5; }
+      .band-label { font-size: 11px; font-weight: 700; letter-spacing: 0.4px; fill: #4a5568; }
+      .box-title { font-size: 13px; font-weight: 600; fill: #1a202c; }
+      .box-sub { font-size: 11px; fill: #4a5568; }
+      .col-head { font-size: 11px; font-weight: 700; fill: #4a5568; }
+      .row { font-size: 11px; fill: #1a202c; }
+      .row-note { font-size: 10.5px; fill: #4a5568; }
+      .note { font-size: 11px; fill: #4a5568; }
+      .note-italic { font-size: 11px; font-style: italic; fill: #4a5568; }
+      .wire { stroke: #4a5568; stroke-width: 1.6; fill: none; }
+      .dash { stroke: #7b8794; stroke-width: 1.4; stroke-dasharray: 6 4; fill: none; }
+      .rule { stroke: #cbd5e0; stroke-width: 1; }
+      .box { stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1100" height="720" fill="#f7f9fc" />
+
+  <text class="t title" x="550" y="32" text-anchor="middle">ONE GUI APP, ONE DOCUMENT HALF</text>
+  <text class="t subtitle" x="550" y="54" text-anchor="middle">FreeCAD's App/Gui split as the seam enforces it: Rust answers the document, the script half answers the Gui</text>
+
+  <!-- ============ layer 1: the split ============ -->
+  <rect class="band" x="76" y="74" width="1000" height="170" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
+  <text class="t band-label" transform="translate(64,159) rotate(-90)" text-anchor="middle">1. THE SPLIT</text>
+
+  <rect class="box" x="92" y="82" width="968" height="40" rx="6" fill="#c6d9ee" stroke="#7d9ec4" />
+  <text class="t box-title" x="576" y="100" text-anchor="middle">ferrocad_shell_core — the app: window · tree · panes · viewport</text>
+  <text class="t box-sub" x="576" y="114" text-anchor="middle">a client of one AppBackend; it names no workbench and no engine</text>
+
+  <line class="dash" x1="307" y1="122" x2="307" y2="132" marker-end="url(#dash-arrow)" />
+  <line class="dash" x1="804" y1="122" x2="804" y2="132" marker-end="url(#dash-arrow)" />
+
+  <rect class="box" x="92" y="132" width="430" height="100" rx="6" fill="#dcb8e2" stroke="#b184b9" />
+  <text class="t box-title" x="307" y="152" text-anchor="middle">APP HALF — RustAppBackend</text>
+  <text class="t box-sub" x="307" y="170" text-anchor="middle">documents · objects · property rows · meshes · edits</text>
+  <text class="t box-sub" x="307" y="186" text-anchor="middle">undo history · visibility · the selection mirror</text>
+  <text class="t box-sub" x="307" y="202" text-anchor="middle">lists every document, marks the active one, switches on request</text>
+
+  <line class="dash" x1="535" y1="136" x2="535" y2="228" />
+  <text class="t note-italic" x="535" y="246" text-anchor="middle">AppBackend | ScriptHost (optional)</text>
+
+  <rect class="box" x="548" y="132" width="512" height="100" rx="6" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="804" y="152" text-anchor="middle">GUI HALF — ScriptHost</text>
+  <text class="t box-sub" x="804" y="170" text-anchor="middle">the command registry and its execution · Settings/&lt;Feature&gt;</text>
+  <text class="t box-sub" x="804" y="186" text-anchor="middle">providers and their claims · dialogs · tools · the scene and events</text>
+  <text class="t box-sub" x="804" y="202" text-anchor="middle">view state (the FreeCADGui authority) · CPython, RustPython, JS, or none</text>
+
+  <!-- ============ layer 2: the executor table ============ -->
+  <rect class="band" x="76" y="250" width="1000" height="250" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
+  <text class="t band-label" transform="translate(64,375) rotate(-90)" text-anchor="middle">2. WHO RUNS WHAT</text>
+
+  <text class="t col-head" x="96" y="272">command</text>
+  <text class="t col-head" x="486" y="272">executor</text>
+  <text class="t col-head" x="700" y="272">where it runs</text>
+  <line class="rule" x1="96" y1="280" x2="1056" y2="280" />
+
+  <text class="t row" x="96" y="300">App_Move · App_Rotate</text>
+  <text class="t row" x="486" y="300">document (Rust)</text>
+  <text class="t row-note" x="700" y="300">a mod may take the id over through ScriptHost::claims</text>
+
+  <text class="t row" x="96" y="324">App_Undo · App_Redo · App_Fit · App_ToggleVisibility</text>
+  <text class="t row" x="486" y="324">document (Rust)</text>
+  <text class="t row-note" x="700" y="324">one transaction each; the history belongs to the document</text>
+
+  <text class="t row" x="96" y="348">App_ViewWorkplane · App_ToggleGrid / AxisCross / Gizmo</text>
+  <text class="t row" x="486" y="348">Gui policy (script)</text>
+  <text class="t row-note" x="700" y="348">the script flips the store and derives the provider claim</text>
+
+  <text class="t row" x="96" y="372">Dev_ToggleTools</text>
+  <text class="t row" x="486" y="372">Gui policy (script)</text>
+  <text class="t row-note" x="700" y="372">the shell intercepts it in the window; the script answers headless</text>
+
+  <text class="t row" x="96" y="396">Draft_Snap_Lock</text>
+  <text class="t row" x="486" y="396">Draft's command</text>
+  <text class="t row-note" x="700" y="396">Draft's row, label and check state; the Rust switch is the fallback</text>
+
+  <text class="t row" x="96" y="420">transform / apply (the gizmo commit)</text>
+  <text class="t row" x="486" y="420">the edition's provider</text>
+  <text class="t row-note" x="700" y="420">Rust arm is the fallback (?runtime=plain, JS, wasm-Python)</text>
+
+  <text class="t row" x="96" y="444">Toy_* · App_Delete · workbench verbs</text>
+  <text class="t row" x="486" y="444">the script's registry</text>
+  <text class="t row-note" x="700" y="444">appended to the palette; a catalogue id keeps its metadata</text>
+
+  <text class="t row" x="96" y="468">App_Open · App_Save</text>
+  <text class="t row" x="486" y="468">the host</text>
+  <text class="t row-note" x="700" y="468">the FilePicker supplies the bytes; a backend only moves them</text>
+
+  <line class="rule" x1="96" y1="482" x2="1056" y2="482" />
+
+  <!-- ============ layer 3: one core ============ -->
+  <rect class="band" x="76" y="516" width="1000" height="118" rx="10" fill="#cfdceb" stroke="#8fa9c6" />
+  <text class="t band-label" transform="translate(64,575) rotate(-90)" text-anchor="middle">3. ONE CORE</text>
+
+  <rect class="box" x="96" y="526" width="286" height="52" rx="6" fill="#dcb8e2" stroke="#b184b9" />
+  <text class="t box-title" x="239" y="546" text-anchor="middle">the document half reads it</text>
+  <text class="t box-sub" x="239" y="562" text-anchor="middle">FreeCAD.ActiveDocument == the tree's active row</text>
+
+  <path class="wire" d="M 382 552 L 410 552" marker-end="url(#arrow)" />
+
+  <rect class="box" x="410" y="526" width="280" height="52" rx="6" fill="#b9cde4" stroke="#7d9ec4" />
+  <text class="t box-title" x="550" y="546" text-anchor="middle">ferrocad_core · one registry</text>
+  <text class="t box-sub" x="550" y="562" text-anchor="middle">a Document per open name · one active document</text>
+
+  <path class="wire" d="M 690 552 L 718 552" marker-end="url(#arrow)" />
+
+  <rect class="box" x="718" y="526" width="342" height="52" rx="6" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="889" y="546" text-anchor="middle">the script half reads the same one</text>
+  <text class="t box-sub" x="889" y="562" text-anchor="middle">python/FreeCADGui over ferrocad_py (PyO3) or _ferrocad</text>
+
+  <text class="t note" x="96" y="606" text-anchor="start">A linked host registers the bindings as built-ins (<tspan class="note-italic">register_test_core</tspan>); a second <tspan class="note-italic">ferrocad_core</tspan> — a stray <tspan class="note-italic">.so</tspan> — is the one failure the surface suite refuses to tolerate.</text>
+  <text class="t note" x="96" y="624" text-anchor="start">CPython and RustPython answer the same script-visible rows over that document; <tspan class="note-italic">composition_surface.rs</tspan> compares them field for field.</text>
+
+  <!-- footnotes -->
+  <text class="t note-italic" x="76" y="658" text-anchor="start">The seam is ferrocad_shell_api: AppBackend is the document half, ScriptHost the Gui half. RustAppBackend implements the first and holds the second (with_script_host).</text>
+  <text class="t note-italic" x="76" y="676" text-anchor="start">A catalogue row keeps the catalogue's metadata and takes the script's live IsActive/IsChecked, so the palette greys exactly what the interpreter would.</text>
+  <text class="t note-italic" x="76" y="694" text-anchor="start">Gates: ferrocad_shell_core's suite boots this composition; composition_surface.rs asserts its surface, the document switch, the transform commit and the two script halves.</text>
+</svg>

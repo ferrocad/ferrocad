@@ -40,7 +40,19 @@ document. The plan and the verified baselines are in
 5. **One window, panels in-window.** The web backend rejects `Floating`/`Dialog`, so
    the inspector column (`panels_sidebar`) sits beside the canvas instead of in Dev
    Tools: Model, Properties and Console are stacked and all visible at once.
-6. **Text works.** GPUI's web platform starts with an empty font database and panics
+6. **A real interpreter, when asked.** `ferrocad_shell_web` composes the same
+   document backend with one of the browser's script halves from the query string —
+   RustPython in the module (`?pywasm=1`), the page's ES module (`?js=1`), or none.
+   The startup log names the one that booted (`ferrocad: scripting runtime pywasm`).
+   With RustPython the Console evaluates real Python against the same
+   `FreeCAD.ActiveDocument` the model tree shows. That is RustPython linked into the
+   module, so it costs size and build time; the plain runtime pays only the binary.
+   Under `?addons=1` a JS bundle calls the document through the same doorway the
+   Python facade reads (`ferrocad_doc_api`) and draws its own object through the display
+   hook: one document, no second registry, and no kernel in the bundle's graph.
+   `?addons=wasm` runs the same workbench as a wasm module whose only import is that
+   doorway — nothing but text crosses the boundary.
+7. **Text works.** GPUI's web platform starts with an empty font database and panics
    when it cannot resolve a font. The shell registers a bundled DejaVu Sans
    (`ferrocad_shell_core::fonts`), whose family is already in GPUI's fallback stack,
    before opening the window.
@@ -52,7 +64,8 @@ crates/ferrocad_web_gpui/run.sh
 ```
 
 Then open <http://localhost:8081> (the script opens it for you unless `--no-open`).
-The module is ~37 MB (GPUI + wgpu + OCCT); the first load takes a moment.
+The module is tens of MB (GPUI + wgpu + OCCT, plus RustPython for `?pywasm`); the
+first load takes a moment.
 
 The document links the prebuilt wasm OCCT kernel, so the build happens inside the
 digest-pinned `ghcr.io/lzpel/cross-wasm32-unknown-unknown` image (the C++ bindings and
@@ -97,6 +110,10 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?dblclick=1` | a drag then two quick clicks (the viewport's double-click) |
 | `?save=1` | run `App_Save` (`Ctrl+S`); the page logs the bytes it was asked to download |
 | `?reopen=1` | save, capture those bytes instead of downloading, then open them again |
+| `?probe=1` | once the synthetic input has settled, log the document the doorway returns (`ferrocad harness: document {…}`), so a capture can assert on the document rather than on the canvas |
+| `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
+| `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document doorway and draws it through the display hook |
+| `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
 
 `?type=` still depends on the field taking pointer focus, and synthetic pointer events
 race the frame GPUI takes its hit test from; treat it as best-effort in headless
@@ -134,7 +151,9 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   `Properties` / `Console` column, the loadout bar and the status line
   (`2 object(s) · Sample`, `FreeCAD 0.1.5 · rust`).
 - The console greets with `FerroCAD shell · Rust document backend · OCCT · no
-  CPython`: the Rust document really is the one answering.
+  CPython`: the Rust document really is the one answering. Under `?pywasm=1` it greets
+  with `FerroCAD shell · RustPython · wasm Python scripting` and the Console evaluates
+  Python against the same document.
 - The tree lists `Box` (`Part::Box`) and `Fillet` (`Part::Fillet`). `?click=950,131`
   selects the fillet and the pane shows its real rows: `Label`, `Base`
   (`Box: Edge1`), `Edges`, `Propagate` (a toggle), `Radius` (`3.0 mm`, editable) and
@@ -167,6 +186,37 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   the page bridge (`open requested`). The shell owns both verbs (S6) and asks this
   host's `WebFilePicker`, which delegates to the page: the `<input>`, the download and
   drag-and-drop are the page's half.
+- **The wasm workbench edits the document.** `?runtime=js&addons=wasm` installs the
+  page's script half and instantiates `www/addons/toy.wasm`, whose only import is the
+  document doorway. The console shows `ferrocad: scripting runtime js`,
+  `ferrocad toy (wasm): registered Toy_Slab, Toy_Taller`, and — after the palette run
+  (`ctrl-k;t;o;y;enter`) — `ferrocad toy (wasm): run Toy_Slab`. `?probe=1` then reads
+  the document back through `window.ferrocad.call('{"call":"document"}')` (trimmed):
+
+  ```
+  ferrocad harness: document {"ok":true,"version":1,"result":{"name":"Sample","objects":[…,
+  {"name":"Toy","label":"Toy","type_id":"App::FeaturePython","entity":3,…,
+  "properties":[…,{"name":"Height","type_id":"App::PropertyLength","kind":"quantity","value":"20 mm","choices":[]}],…}]}}
+  ```
+
+  `Toy` is in the same document as `Box` and `Fillet`, its type is
+  `App::FeaturePython` (so only the bundle's display hook can draw it), and its
+  `Height` is `20 mm`: the command reached the document through the module's one
+  import, not through a second registry. `smoke.sh` asserts the console lines and that
+  JSON.
+- **The document announces its edits to the script half.** The same capture shows the
+  host's `document.edited`/`document.recomputed` events arriving in the page, once per
+  edit and with the object it wrote:
+
+  ```
+  ferrocad toy (wasm): document.edited {"transaction":"Create Toy","objects":["Toy"]}
+  ferrocad toy (wasm): document.recomputed {"objects":["Toy"]}
+  ```
+
+  They come from the *doorway* (`DocApi::with_events`), not from the document half: an
+  addon's own `create`/`set` never passes through `RustAppBackend`. A shell-driven edit
+  (Move, undo, a property write) emits through the backend instead, so each edit is
+  announced once, by whichever half performed it. `smoke.sh` asserts both lines.
 - No panic. Startup logs two
   `Scissor Rect … is not contained in the render target` validation errors from
   `gpui_wgpu` while the DOM canvas is still being sized (and the resize poll timeout
@@ -186,8 +236,12 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   is unverified there.
 - **`WP`.** The workplane command reports that none is wired (see
   [workplanes.md](../../docs/project/tasks/workplanes.md)); `Fit` is wired.
-- **Python.** No interpreter, no workbench scripts, no `FreeCAD` facade, no `.ui`
-  task panels.
+- **Python workbenches.** `?pywasm=1` installs RustPython, so the Console evaluates
+  Python against the real `FreeCAD.ActiveDocument` and the shell script's property
+  rows are real. The facade is read-only, though (no `setattr`, no recompute, no
+  `Shape`), and there are no workbench scripts, no `.ui` task panels and no `pivy`.
+  RustPython's compiler recurses, so `build.rs` sets the module's stack to 16 MiB
+  (`wasm-ld`'s default is 1 MiB); if `?pywasm=1` traps on boot, that is the knob.
 - **Multiple windows.** The browser backend has one window.
 - **Hardware (G-buffer) picking.** It reads a texel back with a blocking `poll`, which
   cannot complete on the web, so the browser uses the viewport's CPU ray cast instead

@@ -3,7 +3,8 @@
 Status: implemented (2026-11-06). The shell/backend split, the `ScriptHost` seam, the
 file verbs and all four runtime configurations are in the tree and covered by CI —
 including the native one, which since S9 is the *same composition* as the two browser
-ones (`RustAppBackend` + a `ScriptHost`), not a second `AppBackend`.
+ones (`RustAppBackend` + a `ScriptHost`), not a second `AppBackend`. The browser
+installs all four through one switch (`ferrocad_shell_web`, `?runtime=plain|pywasm|js`).
 Task record: [`host-backends.md`](../../project/record/tasks/host-backends.md) — the
 plan that delivered them, kept for its stage history and its `file:line` evidence.
 
@@ -31,23 +32,28 @@ everywhere. That is what lets the browser and a desktop edition install the *sam
 window and FilePicker; the seam (`ferrocad_shell_core` over `AppBackend` plus an
 optional `ScriptHost`); one `RustAppBackend` composed with one `ScriptHost` per
 runtime (CPython, RustPython, JS, or none); and the shared
-`ferrocad_core`/`ferrocad_part` engine](../images/host-backends.svg)
+`ferrocad_core`/`ferrocad_part` engine, which the JS half and wasm addons reach
+through `ferrocad_doc_api`'s JSON doorway](../images/host-backends.svg)
 
 The two browser configurations differ in **who runs the user's code**, not in what the
 shell sees. Both are `RustAppBackend` plus a script half —
-`with_script_host(Box::new(JsScriptHost::new()))` and
-`…(Box::new(PywasmScriptHost::new()))` — and neither reimplements a document.
+`with_script_host(Box::new(JsScriptHost))` and
+`…(Box::new(PywasmScriptHost::live()?))` — and neither reimplements a document. The
+browser host does not choose either by hand: `ferrocad_shell_web` does, from the page's
+query string.
 
 Crates today:
 
 | Role | Crate | Notes |
 | --- | --- | --- |
 | Contract | `ferrocad_shell_api` | `AppBackend`, `ScriptHost`, and every view model |
+| Document doorway | `ferrocad_doc_api` | the JSON calls a JS/wasm addon shares; core-only |
 | UI shell | `ferrocad_shell_core` | platform-neutral GPUI; no engine, no interpreter |
 | Backend · no runtime | `ferrocad_shell_rust` | `RustAppBackend`; desktop *or* wasm |
 | Backend · CPython | `ferrocad_shell_python` | `RustAppBackend` + `PythonScriptHost`; the crate is host **and** script half |
 | Backend · JS modules | `ferrocad_shell_js` | `JsScriptHost`; wasm only |
 | Backend · wasm Python | `ferrocad_shell_pywasm` | `PywasmScriptHost`; RustPython |
+| Browser assembly | `ferrocad_shell_web` | the runtime switch: `?runtime=plain\|pywasm\|js` |
 | Host · browser | `ferrocad_web_gpui` | `cdylib`, page bridge, a pure host |
 | Host · native | `ferrocad_shell_python` | `run`/`run_with`/`check_init`; the edition binaries add `--render`/`--check-init` |
 
@@ -93,10 +99,13 @@ Rules that keep the split honest:
   this build" and every existing call site is unchanged.
 - `script_host()` is `None` for a backend with no interpreter. `RustAppBackend` returns
   `None` unless a host composed one in with `with_script_host`.
-- `commands()`/`run_command()` let a script contribute verbs to the palette: the
-  document's `commands()` appends the script's list (dropping an id the catalogue
-  already provides, so a built-in is never listed twice), and `run_command` asks the
-  script only for ids it does not own.
+- `commands()`/`run_command()` let a script contribute verbs to the palette. The
+  document's `commands()` starts from the catalogue, takes each catalogue row's live
+  `enabled`/`checked` from the script row of the same id (`IsActive`/`IsChecked`), and
+  appends the ids the catalogue does not list — the metadata stays the catalogue's.
+  `run_command` follows `catalog::executor`: the four presentation verbs are the
+  script's, the edits are the document's, and a non-catalogue id goes to the script when
+  the registry lists it.
 - The hooks that let a script **own part of a document answer** return `Option`:
   `None` means "not mine, answer it yourself". `RustAppBackend` asks them before its
   own answer for the five merged methods — `model_tree` (appends
@@ -106,13 +115,46 @@ Rules that keep the split honest:
   property read into an interpreter round-trip.
 - Three capabilities stayed with the script half *inside* the document: `stage_meshes`
   (the edition's display hook — `DisplayMode`, a datum plane's glass card, the toy
-  edition's non-OCCT meshes), `apply_interaction` (a workbench manipulator that knows
-  its own feature type) and `add_datum_plane`. Each answers first; the document half
-  keeps its own behaviour as the fallback.
+  edition's non-OCCT meshes), `apply_interaction` (every manipulator commit, the generic
+  `transform`/`apply` included: the edition's provider owns the edit and its undo
+  label) and `add_datum_plane`. Each answers first; the document half keeps its own
+  behaviour as the fallback for a commit the script disclaims — which is what makes
+  drag-to-move work in `?runtime=plain` and in an app that loads no edition mod.
 - `inventor_scene` and `event_listener` live on `ScriptHost` because they are scripting
   capabilities, not rendering paths. They are the compatibility route for workbenches
   that build their own Coin scene (`ActiveView.getSceneGraph().addChild(...)`, dispatch
   through `SoEventCallback`), and a document-only backend gets the no-op listener.
+
+### Who owns a Gui verb
+
+The split follows FreeCAD's own two applications, and this is the rule the
+[`backend-parity`](../../project/tasks/backend-parity.md) work is closing toward:
+
+| layer | seam | owns |
+| --- | --- | --- |
+| App | `AppBackend` | documents, objects, property rows, meshes, edits, undo history, visibility, the selection mirror |
+| Gui | `ScriptHost` | the command registry and execution, `Settings/*`, providers and their claims, dialogs, tools, the scene and event listener, view state |
+| chrome | `ferrocad_shell_core` | window, tree, panes, viewport |
+| fallback | the Rust arms | Gui verbs **only** when no `ScriptHost` is installed (`?runtime=plain`) |
+
+![The split drawn out: `ferrocad_shell_core` installs one `AppBackend` (the document
+half, `RustAppBackend`) and an optional `ScriptHost` (the Gui half); underneath, a
+"who runs what" table names the executor of each catalogue row; the bottom band is
+the one `ferrocad_core` registry both halves read](../images/backend-ownership.svg)
+
+The table in that figure is the same rule spelled out per command: the document owns
+the edits and the history, the script owns the Gui policy (which workplane, which grid
+state) and the workbench's own ids, and `catalog::executor` is the single place that
+says which of them answers a given id.
+
+So a backend with a script half should not *implement* a Gui verb the script also
+implements: it asks the script first and keeps its own arm for the plain runtime. B2
+made the four presentation verbs (`App_ViewWorkplane`, the grid/axis/gizmo toggles) and
+the live `enabled`/`checked` behind every catalogue row work that way, and B4 gave the
+script's interaction providers the manipulator commits (the generic transform
+included). `ScriptHost::claims` is the opt-in a mod uses to take over a document-owned
+command id; the composition's surface is asserted in
+`crates/ferrocad_parametric/tests/composition_surface.rs`.
 
 ## 3. The file verbs belong to the host
 
@@ -135,7 +177,8 @@ A backend therefore carries no file hooks and no platform knowledge.
 ![The four runtime configurations behind one shell: RustAppBackend alone (no
 runtime), RustAppBackend + PythonScriptHost (embedded CPython, native), RustAppBackend
 + JsScriptHost (wasm modules) and RustAppBackend + PywasmScriptHost (wasm Python), all
-on one `AppBackend`/`ScriptHost` seam](../images/host-backends-columns.svg)
+on one `AppBackend`/`ScriptHost` seam; the browser picks among the wasm ones, and
+none, through `?runtime=`](../images/host-backends-columns.svg)
 
 ### Rust, no runtime
 
@@ -170,32 +213,53 @@ would have to be kept in step; one shared handle cannot drift. The JSON bridge
 (`ferrocad_shell_python/src/python.rs`) is still there for everything the script owns —
 the `Settings/*` nodes, the provider registry, commands a workbench registered, its
 dialogs, the display hook, manipulators — which is the point of the split: a document
-question does not pay for an interpreter round-trip.
+question does not pay for an interpreter round-trip. The tree is the one read that spans
+both: it lists every document the registry holds (`Application::documents()`), marks the
+active one, and switches with `FreeCAD.setActiveDocument` — so the tree, the console and
+`ActiveDocument` always name the same document.
 
 **The boot belongs to the script half.** `Shell::boot_with` asks `bootstrap()` before it
 reads the model tree and before it loads a workbench, so `ScriptHost` gained
-`bootstrap`, `open_startup_document`, `hello`, `open_path` and `save_path`. The document
+`bootstrap`, `open_startup_document`, `hello`, `open_path`, `save_path` and
+`activate_document`. The document
 half consults them first and builds its sample document only when the script declines
 *and* the registry is empty — which is why `from_shared_registry()` deliberately builds
 nothing.
 
-**The split image.** `PythonAppBackend` remains for the harnesses that do not link the
-`ferrocad` extension: they import `python/ferrocad.abi3.so`, which carries its own
-`ferrocad_core` and therefore its own registry. Answering everything through Python is
-correct there — there is no document half in that image to disagree with it. A host
-that links the modules as built-ins (every edition binary does;
-`ferrocad_combined_py::register_builtins`) gets the composition. `application_id()`
-exists to make the difference visible; the composition tests run in
-`ferrocad_parametric/tests/composition.rs` for exactly that reason.
+**One core, linked.** Every harness that boots the composition registers the modules as
+built-ins (`ferrocad_combined_py::register_builtins`, or `ferrocad_py` alone where no
+kernel is needed), so the interpreter and the document half share one `ferrocad_core`
+and therefore one registry. The retired `PythonAppBackend` existed for the opposite
+case — a test binary importing `python/ferrocad.abi3.so`, which carries its own core —
+and B5 of [`backend-parity`](../../project/tasks/backend-parity.md) removed it: the
+shell suite now links `ferrocad_py` (`register_test_core`) and installs
+`ferrocad_shell_python::engine()`. A linked host must never import the combined
+extension over its built-in; the `Part`/`Mesh`/`MeshPart` shims and
+`ferrocad_combined_py::install` both refuse that image. `application_id()` exists to
+make a split visible; the composition tests run in
+`ferrocad_parametric/tests/composition.rs` and `composition_surface.rs` for exactly
+that reason.
 
 ### JS modules (wasm)
 
 `ferrocad_shell_js::JsScriptHost` implements `ScriptHost` over the page's
 `window.__ferrocadJs` — an ES module the page loads (`?js=1` imports it before the wasm
-module boots, because the command list is read once at startup). The crate calls out;
-it never sees the document, which is why it must not depend on `ferrocad_core` at all.
+module boots, because the command list is read once at startup). The crate calls out
+and never links the document.
 
-The JS backend is the composition `RustAppBackend::with_script_host(JsScriptHost)`.
+**The document doorway.** A JS workbench has to create objects and set properties, and a
+second `ferrocad_core` in the page would be a second document. So the host hands the JS
+half a `DocumentApi` (`ferrocad_doc_api`), which
+`JsScriptHost::with_kernel` turns into `window.ferrocad.call(request)` before the first
+command runs. The page sees JSON, the host's one document answers, and Part arrives
+because the host registered it — the doorway itself is core-only. See
+[`../../project/research/js-addons.md`](../../project/research/js-addons.md) for the
+protocol, the three shapes (static link, doorway, copied engine) and what is not built
+(a display hook, a wasm bundle).
+
+The JS backend is the composition
+`RustAppBackend::from_shared_registry().with_script_host(JsScriptHost::with_kernel(..))`.
+The registry source is what the doorway reads.
 
 ### wasm Python (RustPython)
 
@@ -214,20 +278,37 @@ CPython:    ferrocad_shell → imports `ferrocad`  → ferrocad_py (PyO3 C-ABI) 
 RustPython: ferrocad_shell → imports `_ferrocad` → _ferrocad (rustpython-vm)  → ferrocad_core
 ```
 
-`bootstrap.py` supplies the `FreeCAD` facade over a document snapshot and the four
-stdlib modules `wasm32-unknown-unknown` cannot import (`contextlib`, `io`, `pathlib`,
-`traceback` — the target has no POSIX module). The snapshot's `kind` and display text
+`bootstrap.py` supplies the `FreeCAD` facade over the **host's active document** and the
+four stdlib modules `wasm32-unknown-unknown` cannot import (`contextlib`, `io`,
+`pathlib`, `traceback` — the target has no POSIX module). The facade asks the bridge for
+the rows on every access (`FreeCAD.ActiveDocument` is a live view, not a snapshot taken
+at import), so the console follows an open or a close. The rows' `kind` and display text
 come from `ferrocad_core::present`, so the property pane cannot drift between the two
 Python backends.
 
+The facade is **read-only**: `setattr` on an object raises rather than silently missing
+the document, and recompute, the `Shape` API and every write live in the document half.
+That is the price of not sharing the `*_py` bindings, and the code says so where a
+script would notice.
+
 Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
 `wasm32-unknown-unknown`, and its compiler recurses, so a host raises the stack before
-`PywasmScriptHost::new` (the tests use a 16 MiB worker thread). Unlike the JS half this
-crate is not `cfg(wasm)`: RustPython has no `window` dependency, so it also builds
-natively and its `properties()` test runs in CI without a browser.
+`PywasmScriptHost::new` (the tests use a 16 MiB worker thread; the browser sets the same
+value as a link argument in `ferrocad_web_gpui/build.rs`, because `wasm-ld`'s default is
+1 MiB).
+Unlike the JS half this crate is not `cfg(wasm)`: RustPython has no `window`
+dependency, so it also builds natively and its tests run in CI without a browser.
 
-No host installs it yet — the browser bundle does not pay for an interpreter until
-something needs it.
+**Installed by the browser, chosen by the page.** `ferrocad_shell_web` is the assembly:
+it composes `RustAppBackend` with no script half, with `JsScriptHost`, or with
+`PywasmScriptHost`, from the query string (`?runtime=plain|pywasm|js`, with `?js=1`
+and `?pywasm=1` as the short forms). The wasm-Python configuration must use
+`from_shared_registry()`: the facade reads `FreeCAD.ActiveDocument` from the same
+registry the document half answers from, and that pairing is what makes the console and
+the model tree one document, including after an open. The plain and JS
+configurations build their sample directly, as they always have. A runtime that fails
+to boot is logged and the host falls back to the document alone, so a surface that
+cannot start never costs the window.
 
 ## 5. One display path
 
@@ -284,9 +365,15 @@ ferrocad_shell_rust   -> ferrocad_core, ferrocad_part, ferrocad_occt,
                          must NOT -> gpui, pyo3, wasm-bindgen
 ferrocad_shell_python   -> ferrocad_shell_core, ferrocad_py, pyo3, gpui
                          may    -> ferrocad_shell_rust
-ferrocad_web_gpui     -> ferrocad_shell_core, ferrocad_shell_rust,
-                         ferrocad_shell_js, wasm-bindgen
+ferrocad_web_gpui     -> ferrocad_shell_core, ferrocad_shell_web, wasm-bindgen
                          must NOT -> pyo3, ferrocad_py, ferrocad_inventor_py
+ferrocad_shell_web    -> ferrocad_shell_rust, ferrocad_shell_pywasm,
+                         ferrocad_shell_js (wasm), ferrocad_doc_api,
+                         wasm-bindgen, js-sys (wasm)
+                         must NOT -> gpui, pyo3, ferrocad_py, ferrocad_inventor_py
+ferrocad_doc_api      -> ferrocad_core, ferrocad_shell_api, serde_json
+                         must NOT -> ferrocad_part, ferrocad_occt, gpui, pyo3
+                         (Part arrives at run time through the object registry)
 ferrocad_shell_api    -> ferrocad_stage, ferrocad_geom, ferrocad_types
                          must NOT -> ferrocad_occt, gpui, pyo3
 ferrocad_shell_js     -> ferrocad_shell_api, ferrocad_inventor,
@@ -294,7 +381,8 @@ ferrocad_shell_js     -> ferrocad_shell_api, ferrocad_inventor,
                          must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust,
                                      ferrocad_core, ferrocad_part
 ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core, ferrocad_inventor,
-                         rustpython-vm, rustpython-stdlib, rustpython-pylib
+                         ferrocad_doc_api, rustpython-vm, rustpython-stdlib,
+                         rustpython-pylib
                          must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust,
                                      ferrocad_part, ferrocad_occt
 ```
@@ -353,5 +441,18 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
   link no CPython.
 - **`ScriptHost::overlays()`** returning stage-native scenes is the documented
   replacement for `inventor_scene`; until then the Coin compatibility path stays.
-- **`ferrocad_shell_pywasm` is not installed by any host**, and `mod-events` (the fixed
-  low-frequency event set a mod subscribes to) is still an open task.
+- **A JS workbench can draw, but not make tools or observe.** The browser's `?addons=1`
+  bundle gets the document doorway, so a command creates and edits objects, and the
+  display hook (`stageMeshes`) puts an object the document cannot mesh on screen. The
+  same workbench runs as a wasm module (`?addons=wasm`, `ferrocad_addon_toy`) whose only
+  import is that doorway. There is no JS `Tool`, no `apply_interaction` and no
+  `mod-events` subscription yet, and a bundle cannot supply the grid/provider hooks. See
+  [`js-addons.md`](../../project/research/js-addons.md) §7.
+- **`ferrocad_shell_pywasm` has no tool or `pivy` path.** It is installed (the browser's
+  `?pywasm=1`), so the console and the property rows are real, but a script cannot
+  create an interactive tool, and the Python facade is read-only. `mod-events` (the
+  fixed low-frequency event set a mod subscribes to) is still an open task.
+- **The browser pays for RustPython in binary size** even when it runs
+  `?runtime=plain`: the interpreter is compiled in, not fetched. Nothing boots it
+  unless the page asks, but the module is bigger. A cargo feature that drops the half
+  from a lean build is the obvious follow-up if the size matters.

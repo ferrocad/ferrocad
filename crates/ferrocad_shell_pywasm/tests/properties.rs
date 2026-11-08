@@ -56,8 +56,8 @@ fn the_box_reports_the_properties_the_pane_shows() {
     names.sort();
     assert_eq!(
         names,
-        ["Height", "Length", "Placement", "Width"],
-        "the sample box's rows"
+        ["Height", "Label", "Length", "Placement", "Width"],
+        "the sample box's rows (Label first, as the editor shows it)"
     );
 }
 

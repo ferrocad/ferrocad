@@ -7,10 +7,20 @@ file only makes a plain ``import Part`` reach the published ``Part``.
 
 Separate ``Part.abi3.so`` builds cannot share that registry (each extension links
 its own core), so this shim is the supported host-interpreter entry point. The app
-binaries register the same four modules as built-ins and never reach this file.
+binaries register the same four modules as built-ins and never reach this file. A
+host that linked only the core (a shell test harness) gets the ``ImportError``: it
+must not have its built-in replaced by this extension's second core.
 """
 
 import sys
+
+import _shim
+
+if _shim.core_is_builtin():
+    raise ImportError(
+        "Part is not linked in this host; the combined extension would replace its "
+        "built-in ferrocad core"
+    )
 
 try:
     import ferrocad_combined  # noqa: F401  publishes sys.modules["Part"]

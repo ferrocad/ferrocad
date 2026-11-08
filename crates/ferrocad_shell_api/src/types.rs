@@ -47,6 +47,13 @@ pub struct WorkbenchError {
 pub struct DocumentNode {
     pub name: String,
     pub label: String,
+    /// Whether this is the application's active document.
+    ///
+    /// The shell follows it for the title, the save name and the pane refresh, so a
+    /// backend that lists several documents marks exactly one. The synthetic
+    /// `Settings` root is never a document and is never active.
+    #[serde(default)]
+    pub active: bool,
     pub objects: Vec<ObjectNode>,
 }
 

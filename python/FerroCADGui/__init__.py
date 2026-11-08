@@ -421,6 +421,58 @@ def refreshProviders(feature: str) -> dict:
     return result
 
 
+def gridViewRequest() -> dict:
+    """The ``{"view": …}`` request for the current grid policy.
+
+    ``FerroCAD.Grid.apply()`` describes the native ground. A provider that draws
+    the grid itself answers :func:`refreshProviders` with the ``grid_overlay`` flag
+    it owns (the Coin overlay hides the native ground while it is bound); that
+    flag follows the master switch, so turning the grid off restores the native
+    layer instead of leaving the two grids stacked. A provider that uses the
+    native ground returns no claim, and the request keeps its default.
+
+    This is the Gui app's composition, not a command's: ``App_ToggleGrid`` and the
+    shell bridge both ask here, so neither can derive a different claim. A build
+    without the semantic grid has no policy to describe and asks for nothing.
+    """
+    request = _feature_view("grid")
+    if request is None:
+        return {"view": {}}
+    refreshed = refreshProviders("grid")
+    owned = (refreshed.get("view") or {}).get("grid_overlay")
+    if owned is not None:
+        request["view"]["grid_overlay"] = bool(request["view"].get("grid")) and bool(
+            owned
+        )
+    return request
+
+
+def axisViewRequest() -> dict:
+    """The ``{"view": …}`` request for the current axis policy.
+
+    ``FerroCAD.Axis.apply()`` describes the native triad. A provider that draws
+    the axis itself answers :func:`refreshProviders` with the ``axis.overlay``
+    flag it owns (the Coin overlay hides the native triad while it is active);
+    that flag follows the master switch, so turning the axis off restores the
+    native layer instead of leaving the two axes stacked. A provider that uses
+    the native triad returns ``overlay=False``, and the request keeps its default.
+
+    This is the Gui app's composition, not a command's: ``App_ToggleAxisCross``,
+    ``App_ReloadAxisSettings`` and the shell bridge all ask here. A build without the
+    semantic axis has no policy to describe and asks for nothing.
+    """
+    request = _feature_view("axis")
+    if request is None:
+        return {"view": {}}
+    refreshed = refreshProviders("axis")
+    owned = ((refreshed.get("view") or {}).get("axis") or {}).get("overlay")
+    if owned is not None:
+        request["view"]["axis"]["overlay"] = bool(
+            request["view"]["axis"]["enabled"]
+        ) and bool(owned)
+    return request
+
+
 def _deactivate_on_takeover(record, feature) -> None:
     """Stop a backend whose feature changed hands while a mod was registering."""
     callback = record.get("deactivate")
@@ -1680,6 +1732,8 @@ __all__ = [
     "activeProvider",
     "setActiveProvider",
     "refreshProviders",
+    "gridViewRequest",
+    "axisViewRequest",
     "settings",
     "setSetting",
     "registerAppearancePreset",

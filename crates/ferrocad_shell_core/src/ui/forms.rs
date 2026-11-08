@@ -188,7 +188,11 @@ impl WidgetKind {
     pub fn is_interactive(self) -> bool {
         matches!(
             self,
-            Self::PushButton | Self::CheckBox | Self::RadioButton | Self::ComboBox | Self::TabWidget
+            Self::PushButton
+                | Self::CheckBox
+                | Self::RadioButton
+                | Self::ComboBox
+                | Self::TabWidget
         )
     }
 
@@ -272,9 +276,7 @@ impl FormDialog {
             .enumerate()
             .map(|(_, widget)| {
                 (0..widget.tab_pages.len())
-                    .map(|index| {
-                        intern(format!("form-{name}-{}-tab-{index}", widget.name))
-                    })
+                    .map(|index| intern(format!("form-{name}-{}-tab-{index}", widget.name)))
                     .collect()
             })
             .collect();
@@ -368,7 +370,9 @@ impl FormDialog {
     /// A numeric widget's current value.
     pub fn value_of(&self, widget: &str) -> Option<f64> {
         let id = self.id_of(widget)?;
-        self.kind_of_id(id).is_numeric().then(|| self.states[id].number)
+        self.kind_of_id(id)
+            .is_numeric()
+            .then(|| self.states[id].number)
     }
 
     pub fn checked_of(&self, widget: &str) -> Option<bool> {
@@ -383,8 +387,11 @@ impl FormDialog {
     /// A combo box's current index or a tab widget's active page.
     pub fn current_index_of(&self, widget: &str) -> Option<usize> {
         let id = self.id_of(widget)?;
-        matches!(self.kind_of_id(id), WidgetKind::ComboBox | WidgetKind::TabWidget)
-            .then(|| self.states[id].index)
+        matches!(
+            self.kind_of_id(id),
+            WidgetKind::ComboBox | WidgetKind::TabWidget
+        )
+        .then(|| self.states[id].index)
     }
 
     pub fn is_enabled(&self, widget: &str) -> Option<bool> {
@@ -482,12 +489,7 @@ impl FormDialog {
     }
 
     /// Activate a tab page by widget name (the SetStyle test uses this).
-    pub fn select_tab(
-        &mut self,
-        widget: &str,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn select_tab(&mut self, widget: &str, index: usize, cx: &mut Context<Self>) -> bool {
         if self.kind_of(widget) != Some(WidgetKind::TabWidget) {
             return false;
         }
@@ -590,11 +592,7 @@ impl FormDialog {
         }
     }
 
-    fn render_child_container(
-        &self,
-        widget: &Widget,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_child_container(&self, widget: &Widget, cx: &mut Context<Self>) -> AnyElement {
         if let Some(layout) = widget.layout {
             self.render_layout(layout, cx)
         } else {
@@ -638,7 +636,11 @@ impl FormDialog {
                     .rounded_sm()
                     .border_1()
                     .border_color(rgb(0xffffff26))
-                    .bg(rgb(if checkable && checked { ACCENT } else { PANEL_ALT }))
+                    .bg(rgb(if checkable && checked {
+                        ACCENT
+                    } else {
+                        PANEL_ALT
+                    }))
                     .text_xs()
                     .text_color(rgb(FG))
                     .child(self.display_text(id));
@@ -727,9 +729,9 @@ impl FormDialog {
                     .child(self.display_text(id))
                     .child(div().text_color(rgb(MUTED)).child("▾"));
                 if enabled {
-                    combo = combo.on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.cycle_combo(id, cx)
-                    }));
+                    combo = combo.on_click(
+                        cx.listener(move |this, _event, _window, cx| this.cycle_combo(id, cx)),
+                    );
                 }
                 combo.into_any_element()
             }
@@ -907,7 +909,9 @@ impl FormDialog {
                             .col_span(item.column_span.max(1) as u16);
                     }
                     if let Some(row) = item.row {
-                        cell = cell.row_start(row as i16 + 1).row_span(item.row_span.max(1) as u16);
+                        cell = cell
+                            .row_start(row as i16 + 1)
+                            .row_span(item.row_span.max(1) as u16);
                     }
                     grid = grid.child(cell);
                 }
@@ -1038,7 +1042,13 @@ impl Render for FormDialog {
                     .overflow_y_scroll()
                     .child(body),
             )
-            .child(div().border_t_1().border_color(rgb(0xffffff14)).pt_2().child(footer));
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(rgb(0xffffff14))
+                    .pt_2()
+                    .child(footer),
+            );
 
         let backdrop = self.backdrop_selector;
         div()
@@ -1066,15 +1076,15 @@ impl WidgetState {
             .or_else(|| widget.current_text())
             .unwrap_or("")
             .to_string();
-        let number = match widget.property("quantity").or_else(|| widget.property("value")) {
+        let number = match widget
+            .property("quantity")
+            .or_else(|| widget.property("value"))
+        {
             Some(PropertyValue::Int(value)) => *value as f64,
             Some(PropertyValue::Double(value)) => *value,
             _ => 0.0,
         };
-        let checked = matches!(
-            widget.property("checked"),
-            Some(PropertyValue::Bool(true))
-        );
+        let checked = matches!(widget.property("checked"), Some(PropertyValue::Bool(true)));
         let index = match widget.property("currentIndex") {
             Some(PropertyValue::Int(index)) if *index >= 0 => *index as usize,
             _ => widget
@@ -1082,14 +1092,8 @@ impl WidgetState {
                 .and_then(|text| widget.combo_items.iter().position(|item| item.text == text))
                 .unwrap_or(0),
         };
-        let enabled = !matches!(
-            widget.property("enabled"),
-            Some(PropertyValue::Bool(false))
-        );
-        let visible = !matches!(
-            widget.property("visible"),
-            Some(PropertyValue::Bool(false))
-        );
+        let enabled = !matches!(widget.property("enabled"), Some(PropertyValue::Bool(false)));
+        let visible = !matches!(widget.property("visible"), Some(PropertyValue::Bool(false)));
         Self {
             text,
             number,
@@ -1145,9 +1149,9 @@ fn unit(widget: &Widget) -> String {
 
 fn color_of(widget: &Widget) -> Option<u32> {
     match widget.property("color") {
-        Some(PropertyValue::Color(color)) => Some(
-            ((color.red as u32) << 16) | ((color.green as u32) << 8) | color.blue as u32,
-        ),
+        Some(PropertyValue::Color(color)) => {
+            Some(((color.red as u32) << 16) | ((color.green as u32) << 8) | color.blue as u32)
+        }
         _ => None,
     }
 }
@@ -1249,10 +1253,8 @@ mod tests {
         dialog: FormDialog,
     ) -> (VisualTestContext, Entity<FormDialog>) {
         let window = cx.update(|cx| {
-            cx.open_window(Default::default(), move |_window, cx| {
-                cx.new(|_| dialog)
-            })
-            .unwrap()
+            cx.open_window(Default::default(), move |_window, cx| cx.new(|_| dialog))
+                .unwrap()
         });
         let mut visual = VisualTestContext::from_window(window.into(), cx);
         let dialog: Entity<FormDialog> = window.root(&mut visual).unwrap();
@@ -1307,9 +1309,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_radio_click_is_exclusive_and_accept_and_reject_set_the_result(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_radio_click_is_exclusive_and_accept_and_reject_set_the_result(cx: &mut TestAppContext) {
         skip_without_upstream!();
         let dialog = load("TaskPanel_OrthoArray.ui", "OrthoArray").expect("form");
         let (mut cx, dialog) = open(cx, dialog);
@@ -1349,14 +1349,20 @@ mod tests {
             "form-PolarArray-group_center",
             "form-PolarArray-input_c_x",
         ] {
-            assert!(cx.debug_bounds(selector).is_some(), "{selector} is rendered");
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
         }
         dialog.read_with(&cx, |dialog, _| {
             assert_eq!(dialog.value_of("spinbox_angle"), Some(360.0));
             assert_eq!(dialog.value_of("spinbox_number"), Some(5.0));
             assert_eq!(dialog.checked_of("checkbox_link"), Some(true));
             assert_eq!(dialog.checked_of("checkbox_fuse"), Some(false));
-            assert_eq!(dialog.text_of("group_center").as_deref(), Some("Center of Rotation"));
+            assert_eq!(
+                dialog.text_of("group_center").as_deref(),
+                Some("Center of Rotation")
+            );
         });
     }
 
@@ -1373,7 +1379,10 @@ mod tests {
             "form-CircularArray-spinbox_number",
             "form-CircularArray-spinbox_symmetry",
         ] {
-            assert!(cx.debug_bounds(selector).is_some(), "{selector} is rendered");
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
         }
         dialog.read_with(&cx, |dialog, _| {
             assert_eq!(dialog.value_of("spinbox_r_distance"), Some(200.0));
@@ -1397,7 +1406,10 @@ mod tests {
             "form-ShapeString-fcFontFile",
             "form-ShapeString-cbGlobalMode",
         ] {
-            assert!(cx.debug_bounds(selector).is_some(), "{selector} is rendered");
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
         }
         dialog.read_with(&cx, |dialog, _| {
             assert_eq!(dialog.value_of("sbHeight"), Some(10.0));
@@ -1422,7 +1434,10 @@ mod tests {
             "form-SelectPlane-fieldGridMainLine",
             "form-SelectPlane-buttonColor",
         ] {
-            assert!(cx.debug_bounds(selector).is_some(), "{selector} is rendered");
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
         }
         dialog.read_with(&cx, |dialog, _| {
             assert_eq!(dialog.text_of("buttonTop").as_deref(), Some("Top (XY)"));
@@ -1453,7 +1468,10 @@ mod tests {
             "form-SetStyle-groupBox_1",
             "form-SetStyle-ShapeColor",
         ] {
-            assert!(cx.debug_bounds(selector).is_some(), "{selector} is rendered");
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} is rendered"
+            );
         }
         // The second page is only built once its tab is active.
         assert!(cx.debug_bounds("form-SetStyle-tab_Annotation").is_none());
@@ -1465,7 +1483,10 @@ mod tests {
         assert!(cx.debug_bounds("form-SetStyle-groupBox_3").is_some());
 
         dialog.read_with(&cx, |dialog, _| {
-            assert_eq!(dialog.text_of("comboPresets").as_deref(), Some("Load preset"));
+            assert_eq!(
+                dialog.text_of("comboPresets").as_deref(),
+                Some("Load preset")
+            );
             assert_eq!(
                 dialog.text_of("groupBox_1").as_deref(),
                 Some("Shape Appearance")

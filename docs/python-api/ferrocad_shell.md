@@ -13,6 +13,7 @@ _Every entry point returns a JSON string._
 
 | Function | Summary |
 | --- | --- |
+| `activate_document(name: str) -> str` | Make one open document active: the host bridge's verb. |
 | `active_document() -> str` | The active document's name, as JSON (``""`` when none is open). |
 | `add_namespace(name: str, value) -> None` | Expose ``value`` to the console under ``name``. |
 | `appearance_view() -> str` | The appearance policy the shell should apply at boot, as JSON. |
@@ -42,6 +43,7 @@ _Every entry point returns a JSON string._
 | `set_provider(payload_json: str) -> str` | Switch one feature's active provider from the shell's popover. |
 | `set_selection(pairs_json: str) -> str` | Replace ``FreeCADGui.Selection`` with the shell's selection. |
 | `set_view_state(state_json: str) -> str` | Mirror the shell's presentation state to ``FerroCADGui.ViewState``. |
+| `set_visibility(payload_json: str) -> str` | Toggle or set one object's visibility: the host bridge's verb. |
 | `stage_meshes() -> str` | The tessellated shapes the viewport draws, as JSON. |
 | `stage_meshes_typed(have_json: str = '[]') -> list` | The same rows as :func:`stage_meshes`, unserialized. |
 | `take_selection_requests() -> str` | Drain the writes a script queued on ``FreeCADGui.Selection``. |

@@ -43,7 +43,7 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
-pub use backend::PythonAppBackend;
+pub use backend::{engine, install};
 pub use events::PythonEventCallbacks;
 pub use headless::{RenderReport, StlReport, render as render_headless, run as run_headless};
 pub use script_host::PythonScriptHost;

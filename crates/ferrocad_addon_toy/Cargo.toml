@@ -1,0 +1,33 @@
+[package]
+name = "ferrocad_addon_toy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "A wasm workbench bundle: the toy workbench reaching the document through an import"
+keywords = ["cad", "freecad", "wasm"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_addon_toy"
+publish = false
+
+[lib]
+# A wasm bundle for the page to instantiate, and an rlib so the bundle's logic is a
+# normal `cargo test` on the host.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# JSON for the verbs and the mesh. Pure Rust, so it builds for wasm with no C toolchain
+# — the point of a bundle: no kernel, no CPython, no wasm-bindgen.
+serde_json.workspace = true
+
+[dev-dependencies]
+# The test is its own host: it installs a document and answers the doorway with the
+# real `DocApi`, so the bundle is exercised against `ferrocad_core` (no kernel needed —
+# the toy object has no `Shape`).
+ferrocad_core.workspace = true
+ferrocad_doc_api.workspace = true
+# `DocApi`'s doorway is `DocumentApi::call`.
+ferrocad_shell_api.workspace = true

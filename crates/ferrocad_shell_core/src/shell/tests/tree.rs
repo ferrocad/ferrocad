@@ -125,6 +125,90 @@ fn space_in_the_tree_toggles_visibility_in_one_undo_step(cx: &mut TestAppContext
     assert!(cx.update(|_window, cx| shell.read(cx).display.entity_of(&name).is_some()));
 }
 
+/// B3: the tree lists every document, marks the active one, and a document row
+/// switches the shell — a double click, or `Enter` after one click.
+#[gpui::test]
+fn a_document_row_switches_the_shell(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, model) = palette_window(cx);
+
+    // A second document; `newDocument` makes it the active one.
+    let created = crate::python::evaluate("FreeCAD.newDocument('Second')").expect("evaluate");
+    assert!(created.ok, "{}", created.output);
+    cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.refresh(cx)));
+
+    let documents = |model: &Arc<Mutex<ShellModel>>| {
+        model
+            .lock()
+            .unwrap()
+            .tree
+            .iter()
+            // The synthetic settings root is not a document.
+            .filter(|doc| doc.name != "Settings")
+            .map(|doc| (doc.name.clone(), doc.active))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        documents(&model),
+        vec![("Second".to_string(), true), ("Shell".to_string(), false)],
+        "every document is listed and the active one is marked"
+    );
+    assert_eq!(
+        model.lock().unwrap().document,
+        "Second",
+        "the tree drives the title and the save name"
+    );
+
+    // A single click only points the tree at the row; `Enter` is the switch.
+    let mut dev_cx = open_dev_tools(&mut cx, &shell);
+    let bounds = dev_cx
+        .debug_bounds("doc-Shell")
+        .expect("the document row is drawn");
+    dev_cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    draw(&mut dev_cx);
+    assert_eq!(
+        model.lock().unwrap().document,
+        "Second",
+        "one click does not switch documents"
+    );
+
+    dev_cx.simulate_keystrokes("enter");
+    draw(&mut dev_cx);
+    assert_eq!(
+        model.lock().unwrap().document,
+        "Shell",
+        "Enter switches to the clicked document"
+    );
+    assert!(
+        documents(&model)
+            .iter()
+            .any(|(name, active)| name == "Shell" && *active),
+        "the tree follows the switch"
+    );
+
+    // A double click is the mouse twin: back to `Second`.
+    let bounds = dev_cx
+        .debug_bounds("doc-Second")
+        .expect("the other document row is drawn");
+    dev_cx.simulate_mouse_down(
+        bounds.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    dev_cx.simulate_event(gpui::MouseUpEvent {
+        position: bounds.center(),
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 2,
+    });
+    draw(&mut dev_cx);
+    assert_eq!(
+        model.lock().unwrap().document,
+        "Second",
+        "a double click switches documents"
+    );
+}
+
 /// G5/Tier 2: `Set from selection` binds a real datum plane's `Face1` frame.
 ///
 /// This runs the whole chain — the derived shape's element names, the display

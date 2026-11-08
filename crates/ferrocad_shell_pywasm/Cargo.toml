@@ -18,6 +18,9 @@ publish = false
 # (or, in this spike, the snapshot the bridge renders from `ferrocad_core`).
 ferrocad_shell_api.workspace = true
 ferrocad_core.workspace = true
+# The one document presenter every script runtime uses (the Python facade here, the
+# addon verbs in `ferrocad_doc_api`). Core-only, so it brings no kernel.
+ferrocad_doc_api.workspace = true
 # The event vocabulary an `EventListener` receives, and the `Tool` its signature uses.
 ferrocad_inventor.workspace = true
 ferrocad_stage.workspace = true

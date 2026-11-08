@@ -4,11 +4,12 @@
 //! [`ferrocad_shell_core`](https://crates.io/crates/ferrocad_shell_core) window —
 //! leading bar, viewport header, status line, model inspector, property editor and
 //! console — and supplies the engine through
-//! [`ferrocad_shell_rust`](https://crates.io/crates/ferrocad_shell_rust): a real
+//! [`ferrocad_shell_web`](https://docs.rs/ferrocad_shell_web): a real
 //! `ferrocad_core::Document` whose geometry is built by the OCCT kernel compiled to
 //! wasm, so the tree, the property rows and the viewport all come from one document.
-//! The backend is the same crate a desktop edition installs; this host adds the
-//! window, the page bridge and the file picker.
+//! The document half is the same `RustAppBackend` crate a desktop edition installs;
+//! this host adds the window, the page bridge, the file picker and the choice of
+//! scripting runtime (`?runtime=plain|pywasm|js`, see `ferrocad_shell_web`).
 //!
 //! The viewport is the shell's real `InventorViewport` element; its renderer is the
 //! zero-copy presenter, which negotiates with the window's own wgpu device on the
@@ -27,7 +28,7 @@ mod host;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_web::Runtime;
 use gpui::{
     App, TitlebarOptions, WebBackendPreference, WindowBackgroundAppearance, WindowBounds,
     WindowDecorations, WindowOptions, application_with_web_backend, bounds, point, prelude::*, px,
@@ -58,14 +59,19 @@ pub fn main() {
         ferrocad_shell_core::fonts::install(cx);
         // The engine: the real document, over the wasm OCCT kernel. Boot reads it,
         // so it must be installed first. The file verbs are the shell's, so the
-        // backend needs nothing else. `?js=1` loads a page module that installs
-        // `window.__ferrocadJs`; when present, the same document backend gets the JS
-        // script half (S7).
-        let mut backend = RustAppBackend::new();
-        if ferrocad_shell_js::available() {
-            backend = backend.with_script_host(Box::new(ferrocad_shell_js::JsScriptHost));
-        }
-        ferrocad_shell_core::app::install_backend(cx, Box::new(backend));
+        // backend needs nothing else. The scripting runtime is the page's choice;
+        // `ferrocad_shell_web` composes it and logs which one booted. A runtime that
+        // cannot boot (a `?js=1` page with no module, an interpreter that fails)
+        // costs the console, not the window.
+        let (backend, runtime) = match ferrocad_shell_web::page_backend() {
+            Ok((backend, runtime)) => (backend, runtime),
+            Err(error) => {
+                log::error!("ferrocad shell: {error}; the document runs alone");
+                (ferrocad_shell_web::plain(), Runtime::Plain)
+            }
+        };
+        log::info!("ferrocad: scripting runtime {runtime}");
+        ferrocad_shell_core::app::install_backend(cx, backend);
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {
             Ok(model) => model,

@@ -19,6 +19,8 @@ _`ViewState` is a read-only snapshot pushed by the shell._
 | `appearancePreset(feature: str)` | A copy of the declared preset for ``feature``, or ``None`` when none is. |
 | `appearancePresets() -> dict` | Every declared preset, ``{feature: {setting: value}}``, in declaration order. |
 | `appearanceView(feature=None) -> dict` | The ``{"view": …}`` request for the current appearance policy. |
+| `axisViewRequest() -> dict` | The ``{"view": …}`` request for the current axis policy. |
+| `gridViewRequest() -> dict` | The ``{"view": …}`` request for the current grid policy. |
 | `installAppearancePresets(feature=None) -> dict` | Materialise declared presets under the user's values (idempotent). |
 | `providerSkin(feature, backend=None)` | The WGSL material program of ``feature``'s backend, or ``None``. |
 | `providers(feature=None) -> list` | The provider manifests, in registration order. |

@@ -39,6 +39,12 @@ ferrocad_shell_python.workspace = true
 # that crate's `PythonScriptHost`.
 ferrocad_shell_rust.workspace = true
 ferrocad_shell_api.workspace = true
+# B6: the surface suite compares the two **script halves** over one document, so the
+# RustPython host is a test-only dependency (path-only; the crate is `publish = false`).
+ferrocad_shell_pywasm = { path = "../ferrocad_shell_pywasm" }
+# The surface suite compares the interpreter's `ferrocad._kernel_id` with this value,
+# so a split image fails loudly.
+ferrocad_core.workspace = true
 ferrocad_geom.workspace = true
 ferrocad_graphics.workspace = true
 ferrocad_stage.workspace = true
@@ -46,3 +52,5 @@ ferrocad_types.workspace = true
 ferrocad_viewport.workspace = true
 ferrocad_inventor.workspace = true
 ferrocad_wgpu.workspace = true
+# B6 parses the RustPython host's JSON answers against the CPython bridge's rows.
+serde_json.workspace = true

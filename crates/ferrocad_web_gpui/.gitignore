@@ -1,1 +1,4 @@
 www/pkg/
+# The wasm bundle `run.sh` copies here from `target/` (built from
+# `crates/ferrocad_addon_toy`). The loader and its test are the tracked half.
+www/addons/toy.wasm

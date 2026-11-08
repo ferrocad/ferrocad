@@ -1,0 +1,28 @@
+[package]
+name = "ferrocad_doc_api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The document as JSON calls: the doorway every non-Rust script runtime shares"
+keywords = ["cad", "freecad", "wasm"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_doc_api"
+publish = false
+
+[dependencies]
+# The document and its presentation rules. **No `ferrocad_part`/`ferrocad_occt`**:
+# Part arrives through the object registry the host populated, so a script half can
+# depend on this crate without dragging the kernel into its graph.
+ferrocad_core.workspace = true
+# The `DocumentApi` trait, which lives in the seam so `ferrocad_shell_js` can hold one.
+ferrocad_shell_api.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The end-to-end test is its own host: it registers Part and creates a real box.
+ferrocad_part.workspace = true
+ferrocad_occt.workspace = true

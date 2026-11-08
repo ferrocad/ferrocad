@@ -1168,20 +1168,54 @@ pub(crate) fn tree_panel(
     let mut rows = div().flex().flex_col();
 
     for doc in &model.tree {
-        rows = rows.child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(format!("▾ {} ({})", doc.label, doc.name)),
-        );
+        // A document row is the tree's switch: a double click (or `Enter` after one
+        // click) makes it active, and it never selects because a document is not an
+        // object. The active one is drawn in full ink with the disclosure mark. The
+        // synthetic `Settings` root is not a document: it lists provider settings and
+        // has no row that switches anything.
+        let synthetic = doc.name == SETTINGS_ROOT;
+        let document = doc.name.clone();
+        let selector = format!("doc-{document}");
+        let is_active = doc.active;
+        let label = if is_active || synthetic {
+            format!("▾ {} ({})", doc.label, doc.name)
+        } else {
+            format!("  {} ({})", doc.label, doc.name)
+        };
+        let row = div()
+            .id(SharedString::from(format!("doc-{document}")))
+            .debug_selector(move || selector.clone())
+            .px_2()
+            .py_1()
+            .text_xs()
+            .when(is_active, |el| el.text_color(rgb(FG)))
+            .when(!is_active, |el| el.text_color(rgb(MUTED)))
+            .child(label);
+        rows = rows.child(if synthetic {
+            row
+        } else {
+            row.on_click(cx.listener(
+                move |this: &mut Shell, event: &gpui::ClickEvent, _window, cx| {
+                    if event.click_count() >= 2 {
+                        this.activate_document(&document, cx);
+                    } else {
+                        this.focus_document_row(&document);
+                    }
+                },
+            ))
+        });
+        // A document that is neither active nor the settings root is shown for
+        // reference: its object rows are muted and inert, because a selection names
+        // objects of the *active* document and the property pane would have nothing to
+        // read. Switch to it (a double click on its header) to work in it.
+        let live = is_active || synthetic;
         for obj in &doc.objects {
             let name = obj.name.clone();
-            let selected = model
-                .selection
-                .iter()
-                .any(|item| same_node(&item.object, &name));
+            let selected = live
+                && model
+                    .selection
+                    .iter()
+                    .any(|item| same_node(&item.object, &name));
             let icon_name = name.clone();
             // The glyph carries the row's state: full ink on the selection, muted
             // off it, so a selected row reads as one block against the accent fill.
@@ -1203,7 +1237,12 @@ pub(crate) fn tree_panel(
                 .px_4()
                 .py_1()
                 .when_some(type_icon, |el, glyph| el.child(glyph))
-                .child(div().text_sm().text_color(rgb(FG)).child(obj.label.clone()))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(if live { rgb(FG) } else { rgb(MUTED) })
+                        .child(obj.label.clone()),
+                )
                 .child(
                     div()
                         .min_w_0()
@@ -1215,18 +1254,22 @@ pub(crate) fn tree_panel(
             if selected {
                 row = row.bg(rgb(ACCENT));
             }
-            rows = rows.child(row.on_click(cx.listener(
-                move |this, event: &gpui::ClickEvent, _window, cx| {
-                    // Ctrl/Cmd (the secondary modifier) or Shift extends the selection;
-                    // a plain click replaces it.
-                    let modifiers = event.modifiers();
-                    if modifiers.secondary() || modifiers.shift {
-                        this.toggle_select(&name, cx);
-                    } else {
-                        this.select(&name, cx);
-                    }
-                },
-            )));
+            rows = rows.child(if live {
+                row.on_click(cx.listener(
+                    move |this, event: &gpui::ClickEvent, _window, cx| {
+                        // Ctrl/Cmd (the secondary modifier) or Shift extends the selection;
+                        // a plain click replaces it.
+                        let modifiers = event.modifiers();
+                        if modifiers.secondary() || modifiers.shift {
+                            this.toggle_select(&name, cx);
+                        } else {
+                            this.select(&name, cx);
+                        }
+                    },
+                ))
+            } else {
+                row
+            });
         }
     }
 

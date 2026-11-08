@@ -86,6 +86,41 @@
       "tone": "structural",
       "tooltip": "Rotate the selected objects about the gizmo origin",
       "wheel": true
+    },
+    {
+      "accel": "Ctrl+Z",
+      "cmd_type": "ForEdit",
+      "group": "Edit",
+      "id": "App_Undo",
+      "menu": "Undo",
+      "surface": "dock",
+      "tooltip": "Undo the last edit"
+    },
+    {
+      "accel": "Ctrl+Shift+Z",
+      "cmd_type": "ForEdit",
+      "group": "Edit",
+      "id": "App_Redo",
+      "menu": "Redo",
+      "surface": "dock",
+      "tooltip": "Redo the last undone edit"
+    },
+    {
+      "cmd_type": "ForView",
+      "group": "View",
+      "id": "App_Fit",
+      "menu": "Fit",
+      "surface": "dock",
+      "tooltip": "Frame the document"
+    },
+    {
+      "cmd_type": "ForEdit",
+      "group": "Edit",
+      "id": "App_ToggleVisibility",
+      "menu": "Toggle visibility",
+      "surface": "radial",
+      "tooltip": "Hide or show the selected objects",
+      "wheel": true
     }
   ],
   "dialogs": {

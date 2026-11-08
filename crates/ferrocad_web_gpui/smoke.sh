@@ -8,7 +8,9 @@
 # Serves the already-built `www/pkg` and loads it in headless Chrome, asserting
 # the documented console baseline: both shapes tessellate through the wasm kernel,
 # the stage draws the fillet **instead of** the box it consumed, a save/open round
-# trip keeps both objects, and nothing panics. Without a browser or a build it prints
+# trip keeps both objects, and nothing panics. A second capture installs the wasm
+# workbench (`?runtime=js&addons=wasm`), runs its command through the palette and
+# asserts on the document the doorway returns. Without a browser or a build it prints
 # `skipped: …` and exits 0, so it never blocks a developer who has not built.
 set -eu
 
@@ -84,16 +86,17 @@ CHROME_FLAGS="--headless=new --no-sandbox --disable-dev-shm-usage
 --enable-logging=stderr --v=0"
 
 capture() {
+    log="${2:-$TMP/console.log}"
     echo "headless Chrome: $BASE$1"
-    printf '\n=== %s ===\n' "$BASE$1" >>"$TMP/console.log"
+    printf '\n=== %s ===\n' "$BASE$1" >>"$log"
     # `$CHROME_FLAGS` is word-split on purpose: it is a flag list, not one argument.
     # shellcheck disable=SC2086
     if command -v timeout >/dev/null 2>&1; then
         timeout 180 "$CHROME" $CHROME_FLAGS --screenshot="$TMP/screenshot.png" \
-            "$BASE$1" >>"$TMP/console.log" 2>&1 || true
+            "$BASE$1" >>"$log" 2>&1 || true
     else
         "$CHROME" $CHROME_FLAGS --screenshot="$TMP/screenshot.png" \
-            "$BASE$1" >>"$TMP/console.log" 2>&1 || true
+            "$BASE$1" >>"$log" 2>&1 || true
     fi
 }
 
@@ -109,9 +112,17 @@ capture_urls() {
     capture "/?js=1&keys=ctrl-k;d;e;m;o;enter"
 }
 
+# The wasm workbench leg: `?runtime=js` installs the page's script half, `?addons=wasm`
+# instantiates `www/addons/toy.wasm`, and the palette runs `Toy_Slab`. The shell draws
+# its tree into the canvas, so `?probe=1` reads the document back through the doorway;
+# the assertions are on that JSON, not on the DOM.
+capture_workbench() {
+    capture "/?runtime=js&addons=wasm&keys=ctrl-k;t;o;y;enter&probe=1" "$TMP/addon.log"
+}
+
 require_line() {
-    if grep -Fq -- "$1" "$TMP/console.log"; then
-        printf '  ok       %s\n' "$(grep -Fm1 -- "$1" "$TMP/console.log")"
+    if grep -Fq -- "$1" "$LOG"; then
+        printf '  ok       %s\n' "$(grep -Fm1 -- "$1" "$LOG")"
     else
         printf '  MISSING  %s\n' "$1" >&2
         FAILED=1
@@ -119,14 +130,15 @@ require_line() {
 }
 
 forbid_pattern() {
-    if grep -Fq -- "$1" "$TMP/console.log"; then
+    if grep -Fq -- "$1" "$LOG"; then
         printf '  FOUND    %s\n' "$1" >&2
-        grep -Fm3 -- "$1" "$TMP/console.log" | sed 's/^/           /' >&2
+        grep -Fm3 -- "$1" "$LOG" | sed 's/^/           /' >&2
         FAILED=1
     fi
 }
 
 check_console() {
+    LOG="$TMP/console.log"
     echo "required console lines:"
     while IFS= read -r line; do
         [ -n "$line" ] || continue
@@ -157,6 +169,41 @@ unreachable
 EOF
 }
 
+# The workbench must not merely register: the command has to reach the document.
+# `?probe=1` logs the doorway's `{"call":"document"}` answer, whose object row
+# carries the name and the type id, so the assertion is about the document the shell
+# is showing rather than about a `console.log` in the addon.
+check_workbench() {
+    LOG="$TMP/addon.log"
+    echo "wasm workbench console lines:"
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        require_line "$line"
+    done <<'EOF'
+ferrocad: scripting runtime js
+ferrocad toy (wasm): registered Toy_Slab, Toy_Taller
+ferrocad toy (wasm): run Toy_Slab
+ferrocad toy (wasm): document.edited
+ferrocad toy (wasm): document.recomputed
+EOF
+
+    echo "wasm workbench document probe:"
+    require_line '"name":"Toy"'
+    require_line '"type_id":"App::FeaturePython"'
+
+    echo "wasm workbench forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+no document doorway
+did not tessellate
+panicked at
+RuntimeError
+unreachable
+EOF
+}
+
 if [ ! -d "$WWW/pkg" ]; then
     echo "skipped: $WWW/pkg is missing (build it with crates/ferrocad_web_gpui/run.sh --build-only)"
     exit 0
@@ -178,9 +225,12 @@ fi
 capture_urls
 check_console
 
+capture_workbench
+check_workbench
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, no panic or JS error"

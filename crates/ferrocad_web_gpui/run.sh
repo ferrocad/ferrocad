@@ -69,11 +69,16 @@ docker run --rm \
     -e CARGO_NET_OFFLINE="$OFFLINE" \
     -e HTTP_PROXY -e HTTPS_PROXY -e ALL_PROXY \
     "$IMAGE" \
-    cargo build --release -j "${JOBS:-2}" -p ferrocad_web_gpui \
+    cargo build --release -j "${JOBS:-2}" -p ferrocad_web_gpui -p ferrocad_addon_toy \
         --target wasm32-unknown-unknown --locked
 # The container runs as root; hand the caches back to the invoking user.
 docker run --rm -v "$PWD":/work "$IMAGE" \
     chown -R "$(id -u):$(id -g)" "/work/$CARGO_TARGET" "/work/$CARGO_HOME_HOST"
+
+# The wasm bundle the page fetches (`?addons=wasm`). A plain module with no
+# wasm-bindgen glue: the loader provides its one import.
+cp "$CARGO_TARGET/wasm32-unknown-unknown/release/ferrocad_addon_toy.wasm" \
+    crates/ferrocad_web_gpui/www/addons/toy.wasm
 
 "$BINDGEN" --target web \
     --out-dir crates/ferrocad_web_gpui/www/pkg \

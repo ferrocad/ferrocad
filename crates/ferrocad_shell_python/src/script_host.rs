@@ -1,8 +1,7 @@
 //! The CPython half of the [`ScriptHost`] seam, on its own.
 //!
-//! [`PythonAppBackend`](crate::PythonAppBackend) implements both halves, which is
-//! why it cannot be composed with anything. This is the script half alone, so a
-//! **document** backend can be paired with it:
+//! [`RustAppBackend`](ferrocad_shell_rust::RustAppBackend) is the document half; this
+//! is the script half alone, so the two compose into the desktop's engine:
 //!
 //! ```text
 //! RustAppBackend::from_shared_registry()
@@ -29,8 +28,6 @@
 //! [`extra_tree_nodes`]: ScriptHost::extra_tree_nodes
 //! [`extra_properties`]: ScriptHost::extra_properties
 //! [`set_extra_property`]: ScriptHost::set_extra_property
-
-use std::collections::HashSet;
 
 use ferrocad_inventor::{EventListener, Scene};
 use ferrocad_shell_api::app::ScriptHost;
@@ -81,20 +78,14 @@ fn settings_target(object: &str) -> bool {
     object == SETTINGS_ROOT || object.starts_with("Settings/")
 }
 
-/// The commands the script registered that the shared catalogue does not provide.
+/// The rows the script's registry would show.
 ///
-/// The app script registers one `FreeCADGui` command per catalogue id, so the
-/// desktop and the browser run the same verbs; the document backend answers those
-/// from [`catalog::builtin`] itself. Handing the whole registry over would list
-/// every built-in twice — the palette, the app menu and the wheels all read this
-/// list.
-fn scripted_commands() -> Vec<CommandInfo> {
-    let builtin: HashSet<&'static str> = catalog::builtin().iter().map(|def| def.id).collect();
-    python::commands()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|command| !builtin.contains(command.id.as_str()))
-        .collect()
+/// Catalogue ids are included on purpose: the backend keeps the catalogue's metadata
+/// and takes this row's live `enabled`/`checked`, because `IsActive`/`IsChecked` are
+/// the Gui app's answers. Workbench commands (ids the catalogue does not list) are
+/// appended by the backend.
+fn command_rows() -> Vec<CommandInfo> {
+    python::commands().unwrap_or_default()
 }
 
 impl ScriptHost for PythonScriptHost {
@@ -150,6 +141,11 @@ impl ScriptHost for PythonScriptHost {
         Some(python::save_document(path))
     }
 
+    /// `FreeCAD.setActiveDocument`: the switch fires the Gui app's document listeners.
+    fn activate_document(&self, name: &str) -> Option<Result<(), String>> {
+        Some(python::activate_document(name))
+    }
+
     fn hello(&self) -> Result<Option<String>, String> {
         python::hello().map(Some)
     }
@@ -165,11 +161,16 @@ impl ScriptHost for PythonScriptHost {
     }
 
     /// A workbench manipulator's commit (the Part edge arc, a height grip).
+    ///
+    /// `None` when no provider owns the commit, which sends it back to the document
+    /// half — the generic `transform`/`apply` in a build with no edition mod. That is
+    /// the documented opt-in: registering a provider for a manipulator id is how a mod
+    /// takes it over.
     fn apply_interaction(&self, commit: &InteractionCommit, object: &str) -> Option<ApplyResult> {
-        Some(
-            python::apply_interaction(commit, object)
-                .unwrap_or_else(|error| ApplyResult { ok: false, error }),
-        )
+        match python::interaction(commit, object) {
+            Ok(result) => result,
+            Err(error) => Some(ApplyResult { ok: false, error }),
+        }
     }
 
     fn add_datum_plane(
@@ -181,19 +182,24 @@ impl ScriptHost for PythonScriptHost {
         Some(python::add_datum_plane(origin, u, v))
     }
 
-    /// A workbench's own verbs, without the catalogue's.
+    /// Every row the registry would show, catalogue ids included; the backend
+    /// reconciles them (see [`command_rows`]).
     fn commands(&self) -> Vec<CommandInfo> {
-        scripted_commands()
+        command_rows()
     }
 
-    /// Run a command this surface registered.
+    /// Run a command this surface owns.
     ///
-    /// An id the script does not list is not this host's to answer — the document
-    /// backend's own verbs (`App_Move`, `App_Undo`, …) reach here too, and they must
-    /// fall through rather than be refused by an interpreter that merely has a class
-    /// registered for the same id.
+    /// A catalogue id is this host's only when [`catalog::executor`] says so; the
+    /// document backend's own verbs (`App_Move`, `App_Undo`, …) must fall through
+    /// rather than be refused by an interpreter that merely has a class registered
+    /// for the same id. A workbench command (an id the catalogue does not list) is
+    /// this host's when the registry lists it.
     fn run_command(&self, id: &str) -> Option<CommandOutcome> {
-        if !scripted_commands().iter().any(|command| command.id == id) {
+        let mine = catalog::executor(id) == catalog::Executor::Script
+            || (catalog::find(id).is_none()
+                && command_rows().iter().any(|command| command.id == id));
+        if !mine {
             return None;
         }
         Some(

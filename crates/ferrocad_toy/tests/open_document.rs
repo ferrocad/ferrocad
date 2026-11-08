@@ -33,10 +33,11 @@ fn the_shell_opens_a_saved_document_and_lists_its_objects() {
     let saved = python::evaluate(&format!("doc.saveAs({path_text:?})")).expect("save");
     assert!(saved.ok, "saveAs failed: {}", saved.output);
 
-    // The next boot is what `ferrocad_toy --open <file>` does.
+    // The next boot is what `ferrocad_toy --open <file>` does. The composition, so
+    // the document half reads the registry the script half opened the file in.
     python::configure_startup_document(Some(&path));
-    let model = Shell::boot_with(&mut ferrocad_shell_python::PythonAppBackend::new())
-        .expect("boot with a startup document");
+    let mut backend = ferrocad_shell_python::engine();
+    let model = Shell::boot_with(&mut backend).expect("boot with a startup document");
     let tree = model.lock().unwrap().tree.clone();
 
     let opened = tree

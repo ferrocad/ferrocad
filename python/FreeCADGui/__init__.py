@@ -1353,6 +1353,13 @@ def _payload(result) -> dict:
         if result is not None:
             payload["value"] = repr(result)
         return payload
+    # A command may refuse (`{"ok": False, "error": …}`) as well as report a status.
+    # The shell's outcome already has both fields; before this a refusal was reported
+    # as success with empty text, which the parity suite caught on `App_Undo`.
+    if "ok" in result:
+        payload["ok"] = bool(result["ok"])
+    if "error" in result:
+        payload["error"] = str(result["error"])
     callback = result.get("on_accept")
     if callback is not None:
         payload["dialog"] = {

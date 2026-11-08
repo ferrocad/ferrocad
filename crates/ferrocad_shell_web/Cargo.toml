@@ -1,0 +1,48 @@
+[package]
+name = "ferrocad_shell_web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The browser host's scripting runtime switch: one RustAppBackend, no script half, RustPython or the page's JS"
+keywords = ["cad", "freecad", "wasm"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_shell_web"
+publish = false
+
+[dependencies]
+# The seam every configuration is composed from.
+ferrocad_shell_api.workspace = true
+# The document half: the same `RustAppBackend` a desktop edition installs.
+ferrocad_shell_rust.workspace = true
+# The wasm-Python script half (RustPython). Plain Rust, so this crate and its
+# switch tests build for the host as well as the browser.
+ferrocad_shell_pywasm.workspace = true
+# The document doorway the JS half hands the page. Core-only: Part arrives through
+# the registry the document half populated.
+ferrocad_doc_api.workspace = true
+# The switch logs which runtime booted (`#[cfg(wasm)]` code, so this must be a normal
+# dependency: a dev-dependency is not compiled into the wasm cdylib).
+log = "0.4"
+
+[dev-dependencies]
+# `tests/shape_b.rs` writes a script half that holds no document, so it needs the
+# vocabulary the `ScriptHost` trait names (a `Scene`, an event listener, a `Tool`) and
+# the registry to start each test from a known document.
+ferrocad_core.workspace = true
+ferrocad_inventor.workspace = true
+ferrocad_stage.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# The page's JavaScript script half: its only implementation is a `window`
+# bridge, so the crate is `cfg(wasm)`.
+ferrocad_shell_js.workspace = true
+# Reading `window.location.search` without a DOM crate: `js-sys` is the same
+# version wasm-bindgen already pulls in, and `Reflect::get` walks the two
+# properties the switch needs.
+wasm-bindgen = "0.2"
+js-sys = "0.3"

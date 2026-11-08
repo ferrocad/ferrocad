@@ -66,6 +66,26 @@ pub struct StageMesh {
 }
 
 impl StageMesh {
+    /// Parse the JSON array a script half answers `stage_meshes` with.
+    ///
+    /// A script that has nothing to add answers `[]` (or `null`); both are the empty
+    /// set, not an error. Field defaults make a minimal row legal: `{entity, object,
+    /// positions, triangles}` draws, and everything else falls back.
+    pub fn from_json_array(json: &str) -> Result<Vec<StageMesh>, String> {
+        let value: serde_json::Value =
+            serde_json::from_str(json).map_err(|error| format!("stage meshes: {error}"))?;
+        match value {
+            serde_json::Value::Null => Ok(Vec::new()),
+            serde_json::Value::Array(rows) => rows
+                .into_iter()
+                .map(|row| {
+                    serde_json::from_value(row).map_err(|error| format!("stage mesh: {error}"))
+                })
+                .collect(),
+            _ => Err("stage meshes: expected an array".to_string()),
+        }
+    }
+
     /// The mesh in the seam's vocabulary.
     ///
     /// Copies every array, so prefer [`into_tessellation`](Self::into_tessellation)
@@ -113,5 +133,40 @@ impl StageMesh {
             vertex_parts,
             parts,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A script can answer with the bare minimum: the id, the object and the arrays.
+    #[test]
+    fn a_minimal_row_parses() {
+        let json = r#"[{"entity": 3, "object": "Toy",
+                        "positions": [[0,0,0],[1,0,0],[0,1,0]],
+                        "triangles": [0,1,2]}]"#;
+        let meshes = StageMesh::from_json_array(json).expect("a row");
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes[0].entity, 3);
+        assert_eq!(meshes[0].object, "Toy");
+        assert_eq!(meshes[0].triangles, vec![0, 1, 2]);
+        // Everything omitted falls back, so a hook does not have to spell out edges,
+        // parts or a colour to draw a shape.
+        assert!(meshes[0].label.is_empty());
+        assert!(meshes[0].edges.is_empty());
+        assert_eq!(meshes[0].display, None);
+    }
+
+    #[test]
+    fn an_empty_answer_is_an_empty_set() {
+        assert!(StageMesh::from_json_array("[]").unwrap().is_empty());
+        assert!(StageMesh::from_json_array("null").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_wrong_shape_is_an_error() {
+        assert!(StageMesh::from_json_array("{}").is_err());
+        assert!(StageMesh::from_json_array("not json").is_err());
     }
 }

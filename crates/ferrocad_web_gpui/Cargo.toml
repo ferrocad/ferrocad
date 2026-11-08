@@ -32,9 +32,11 @@ ferrocad_shell_core = { workspace = true, features = ["gpu-interop"] }
 # The engine: the same Rust document backend a desktop edition installs, so the
 # browser is not a fork of it. It carries `ferrocad_core`, `ferrocad_part` and the
 # OCCT kernel (compiled to wasm here) behind the seam.
-ferrocad_shell_rust.workspace = true
-# The JS scripting surface (S7 spike): the script half over the page's ES module.
-ferrocad_shell_js.workspace = true
+#
+# The scripting runtime is the page's choice (`?runtime=plain|pywasm|js`);
+# `ferrocad_shell_web` composes the document half with the requested script half —
+# RustPython in the module, the page's ES module, or neither.
+ferrocad_shell_web.workspace = true
 # `ferrocad_wasm` supplies the link-time WASI stubs the kernel's wasi-sdk build
 # leaves behind; `main` must retain them before the first kernel call.
 ferrocad_wasm.workspace = true

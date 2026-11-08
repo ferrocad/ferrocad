@@ -264,6 +264,27 @@ def close_document(name: str) -> str:
     return _json({"ok": True})
 
 
+def activate_document(name: str) -> str:
+    """Make one open document active: the host bridge's verb.
+
+    Activation is a lifecycle the Gui app observes: ``deactivated`` on the outgoing
+    document, ``activated`` on the incoming one. ``FreeCAD.setActiveDocument`` is
+    what fires both, so a switch from the tree and a switch from the console are one
+    event, and a provider detaches and attaches its per-document effects.
+
+    Returns ``{"ok": bool, "error": str}``. An unknown name is reported, never
+    raised: the shell calls this across the interpreter boundary.
+    """
+    try:
+        FreeCAD.setActiveDocument(name)
+    except Exception as exc:  # noqa: BLE001 - a bad name is a result, not a crash
+        return _json({"ok": False, "error": str(exc)})
+    active = FreeCAD.activeDocument()
+    if active is None or active.Name != name:
+        return _json({"ok": False, "error": "no document %r" % name})
+    return _json({"ok": True, "error": ""})
+
+
 def model_tree() -> str:
     """Documents and their objects, for the inspector pane.
 
@@ -272,11 +293,17 @@ def model_tree() -> str:
     ``Settings/<Feature>`` node per feature, whose rows are the active
     provider's schema (see :func:`properties`). With nothing registered there is
     nothing to configure, so the list is exactly the documents.
+
+    Exactly one document carries ``active``: the shell follows it for the title, the
+    save name and the pane refresh, so a switch from the tree is the same event as
+    ``FreeCAD.setActiveDocument``.
     """
     docs = []
     settings = _settings_root()
     if settings["objects"]:
         docs.append(settings)
+    active = FreeCAD.activeDocument()
+    active_name = active.Name if active is not None else None
     for name in FreeCAD.listDocuments():
         doc = FreeCAD.getDocument(name)
         if doc is None:
@@ -285,7 +312,14 @@ def model_tree() -> str:
             {"name": obj.Name, "label": obj.Label, "type": obj.TypeId}
             for obj in doc.Objects
         ]
-        docs.append({"name": doc.Name, "label": doc.Label, "objects": objects})
+        docs.append(
+            {
+                "name": doc.Name,
+                "label": doc.Label,
+                "active": doc.Name == active_name,
+                "objects": objects,
+            }
+        )
     return _json(docs)
 
 
@@ -399,6 +433,10 @@ def properties(object_name: str) -> str:
     control (and the coercion in :func:`set_property`). A property set by an
     expression is read-only, because a recompute would overwrite the edit.
 
+    ``Label`` comes first even though it is not in ``PropertiesList``: FreeCAD
+    shows it as an ordinary row and the editor renames through it, so the Rust
+    half synthesizes it the same way and the two panes cannot differ.
+
     ``Settings/<Feature>`` is resolved first and needs no active document: its
     rows are the feature's provider selector followed by the active provider's
     settings schema. An unknown ``Settings/...`` path is ``[]``. Document names
@@ -412,7 +450,18 @@ def properties(object_name: str) -> str:
     if obj is None:
         return _json([])
     driven = _expression_properties(obj)
-    rows = []
+    # `Label` is a document-object field, not a property-container entry, and the
+    # editor shows it as the first row. `kind="text"` is what makes it editable.
+    rows = [
+        {
+            "name": "Label",
+            "type": "App::PropertyString",
+            "value": str(obj.Label),
+            "status": "",
+            "editable": True,
+            "kind": "text",
+        }
+    ]
     for prop in obj.PropertiesList:
         try:
             value = getattr(obj, prop)
@@ -465,6 +514,18 @@ def set_property(object_name: str, prop: str, text: str) -> str:
     obj = doc.getObject(object_name)
     if obj is None:
         return _json({"ok": False, "error": f"no object {object_name!r}"})
+    if prop == "Label":
+        # The row `properties()` synthesizes has to be settable, or the pane shows a
+        # field that refuses every edit. A rename is its own transaction and does
+        # not recompute (nothing consumes a label).
+        doc.openTransaction("Rename")
+        try:
+            obj.Label = text
+        except Exception as exc:
+            doc.abortTransaction()
+            return _json({"ok": False, "error": str(exc)})
+        doc.commitTransaction()
+        return _json({"ok": True, "error": ""})
     if prop not in obj.PropertiesList:
         return _json({"ok": False, "error": f"no property {prop!r}"})
     if prop in _expression_properties(obj):
@@ -684,7 +745,8 @@ def interaction(
     The manipulator is presentation-side (`ferrocad_stage::Manipulator`); the edit it
     implies belongs to the workbench (``FerroCAD.register_interaction_provider``). This
     function only resolves the object and marshals the request; the shell names no
-    workbench and links no kernel. Returns ``{"ok": ...}``.
+    workbench and links no kernel. Returns ``{"ok": ...}``, or ``null`` when no provider
+    owns the commit — which leaves the document half's own implementation to run.
 
     An **empty** ``object_name`` marks a *creating* commit (a tool that finished a
     shape): there is no object to resolve yet, so the provider receives ``None`` and
@@ -708,9 +770,10 @@ def interaction(
 
     result = FerroCAD.interaction(base, manipulator, action, element, values)
     if result is None:
-        return _json(
-            {"ok": False, "error": f"no module handles {manipulator} {action}"}
-        )
+        # No provider owns this `(manipulator, action)`. ``null`` says exactly that: the
+        # document half's own implementation is what should run (the generic transform
+        # gizmo in a build with no edition mod).
+        return _json(None)
     return _json(result)
 
 
@@ -1237,10 +1300,154 @@ def _move_selection(dx, dy, dz):
     return {"status": f"moved {len(objects)} object(s)"}
 
 
+def _visibility_of(obj) -> bool:
+    """Whether ``obj`` is drawn, from the document switch (or the view object).
+
+    The host's hide writes a document ``Visibility`` property on first use — that is
+    what puts it in the undo history — while an object that was never hidden only has
+    its view object's flag.
+    """
+    try:
+        if "Visibility" in obj.PropertiesList:
+            return bool(obj.Visibility)
+        return bool(obj.ViewObject.Visibility)
+    except Exception:  # noqa: BLE001 - an object without a view is still drawn
+        return True
+
+
+def _set_visibility_of(obj, visible: bool) -> None:
+    """Write the document visibility switch; the caller owns the transaction."""
+    if "Visibility" not in obj.PropertiesList:
+        obj.addProperty(
+            "App::PropertyBool", "Visibility", "Base", "Whether the object is shown"
+        )
+    obj.Visibility = bool(visible)
+
+
+def set_visibility(payload_json: str) -> str:
+    """Toggle or set one object's visibility: the host bridge's verb.
+
+    ``payload`` is ``{"object": str, "visible": bool|null}``, where ``null`` toggles.
+    One transaction named ``Toggle visibility``, like the Rust half, so the eye icon
+    and a scripted hide are the same undo step. Returns ``{ok, visible, error}``, the
+    shape ``AppBackend::set_visibility`` expects.
+    """
+    payload = json.loads(payload_json)
+    name = payload["object"]
+    want = payload.get("visible")
+    try:
+        doc = _active_doc()
+    except Exception as exc:  # noqa: BLE001 - no document is a refusal, not a crash
+        return _json({"ok": False, "visible": False, "error": str(exc)})
+    obj = doc.getObject(name)
+    if obj is None:
+        return _json({"ok": False, "visible": False, "error": f"no object {name}"})
+    doc.openTransaction("Toggle visibility")
+    try:
+        next_visible = (not _visibility_of(obj)) if want is None else bool(want)
+        _set_visibility_of(obj, next_visible)
+        doc.commitTransaction()
+        doc.recompute()
+    except Exception as exc:  # noqa: BLE001 - one transaction, then report
+        doc.abortTransaction()
+        return _json({"ok": False, "visible": False, "error": str(exc)})
+    return _json({"ok": True, "visible": next_visible})
+
+
+class _UndoCommand:
+    """``App_Undo`` — undo the document's last transaction.
+
+    The history is the document's, not the shell's: a workbench's transaction and a
+    property-pane edit land in the same stack, so one verb undoes either.
+    """
+
+    def GetResources(self):
+        return _catalog_resources("App_Undo")
+
+    def IsActive(self):
+        doc = FreeCAD.ActiveDocument
+        return doc is not None and doc.UndoCount > 0
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return {"ok": False, "error": "no active document"}
+        names = doc.UndoNames
+        if not doc.undo():
+            return {"ok": False, "error": "nothing to undo"}
+        doc.recompute()
+        return {"ok": True, "status": f"undo: {names[0]}" if names else "undo"}
+
+
+class _RedoCommand:
+    """``App_Redo`` — redo the last undone transaction."""
+
+    def GetResources(self):
+        return _catalog_resources("App_Redo")
+
+    def IsActive(self):
+        doc = FreeCAD.ActiveDocument
+        return doc is not None and doc.RedoCount > 0
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return {"ok": False, "error": "no active document"}
+        names = doc.RedoNames
+        if not doc.redo():
+            return {"ok": False, "error": "nothing to redo"}
+        doc.recompute()
+        return {"ok": True, "status": f"redo: {names[0]}" if names else "redo"}
+
+
+class _FitCommand:
+    """``App_Fit`` — frame the document: a view request, not an edit."""
+
+    def GetResources(self):
+        return _catalog_resources("App_Fit")
+
+    def Activated(self):
+        return {"view": {"fit": True}}
+
+
+class _ToggleVisibilityCommand:
+    """``App_ToggleVisibility`` — hide the selection, or show it if all is hidden.
+
+    One verb for the whole selection: if anything is still visible, hide them all;
+    otherwise show them all. One transaction, so one undo step.
+    """
+
+    def GetResources(self):
+        return _catalog_resources("App_ToggleVisibility")
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selection())
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        objects = _selection()
+        if doc is None or not objects:
+            return {"ok": False, "error": "nothing selected"}
+        target = not any(_visibility_of(obj) for obj in objects)
+        doc.openTransaction("Toggle visibility")
+        try:
+            for obj in objects:
+                _set_visibility_of(obj, target)
+            doc.recompute()
+            doc.commitTransaction()
+        except Exception as exc:  # noqa: BLE001 - one transaction, then report
+            doc.abortTransaction()
+            return {"ok": False, "error": str(exc)}
+        verb = "showed" if target else "hid"
+        return {"ok": True, "status": f"{verb} {len(objects)} object(s)"}
+
+
 FreeCADGui.addCommand("App_Delete", _DeleteCommand())
-# The two wheel verbs register here rather than with the other built-ins below:
+# The wheel verbs register here rather than with the other built-ins below:
 # the radial menu sorts by tone *stably*, so registration order is its compass
-# order, and ``Move`` has to stay north of ``Set WP``.
+# order, and ``Move`` has to stay north of ``Set WP``. ``Hide/Show`` is radial too
+# but registered with the rest: the palette lists matches in registry order, so it
+# must not land in front of the ``App_Toggle*`` header commands.
 FreeCADGui.addCommand("App_Move", _MoveCommand())
 FreeCADGui.addCommand("App_Rotate", _RotateCommand())
 
@@ -1329,21 +1536,13 @@ def grid_summary() -> str:
 def _grid_view_request():
     """The ``{"view": …}`` request for the current grid settings.
 
-    ``FerroCAD.Grid.apply()`` describes the native ground. A provider that draws
-    the grid itself answers the refresh with the ``grid_overlay`` flag it owns
-    (the Coin overlay hides the native ground while it is bound); that flag
-    follows the master switch, so turning the grid off restores the native
-    layer instead of leaving the two grids stacked. A provider that uses the
-    native ground returns no claim, and the request keeps its default.
+    The composition is Gui policy: ``FerroCAD.Grid.apply()`` describes the native
+    ground and the active provider's ``grid_overlay`` claim says whether it draws
+    the grid itself. Both live in :func:`FerroCADGui.gridViewRequest`; this
+    bridge only forwards it, so a command and the shell cannot derive different
+    claims.
     """
-    request = FerroCAD.Grid.apply()
-    refreshed = FerroCADGui.refreshProviders(_GRID_FEATURE)
-    owned = (refreshed.get("view") or {}).get("grid_overlay")
-    if owned is not None:
-        request["view"]["grid_overlay"] = bool(request["view"].get("grid")) and bool(
-            owned
-        )
-    return request
+    return FerroCADGui.gridViewRequest()
 
 
 def axis_summary() -> str:
@@ -1458,21 +1657,12 @@ def provider_skin(payload_json: str) -> str:
 def _axis_view_request():
     """The ``{"view": …}`` request for the current axis settings.
 
-    ``FerroCAD.Axis.apply()`` describes the native triad. A provider that draws
-    the axis itself answers the refresh with the ``axis.overlay`` flag it owns
-    (the Coin overlay hides the native triad while it is active); that flag
-    follows the master switch, so turning the axis off restores the native layer
-    instead of leaving the two axes stacked. A provider that uses the native
-    triad returns ``overlay=False``, and the request keeps its default.
+    The composition is Gui policy: ``FerroCAD.Axis.apply()`` describes the native
+    triad and the active provider's ``axis.overlay`` claim says whether it draws
+    the axis itself. Both live in :func:`FerroCADGui.axisViewRequest`; this bridge
+    only forwards it.
     """
-    request = FerroCAD.Axis.apply()
-    refreshed = FerroCADGui.refreshProviders(_AXIS_FEATURE)
-    owned = ((refreshed.get("view") or {}).get("axis") or {}).get("overlay")
-    if owned is not None:
-        request["view"]["axis"]["overlay"] = bool(
-            request["view"]["axis"]["enabled"]
-        ) and bool(owned)
-    return request
+    return FerroCADGui.axisViewRequest()
 
 
 def set_provider(payload_json: str) -> str:
@@ -2278,6 +2468,10 @@ _BUILTIN_COMMANDS = {
     "App_Save": _SaveCommand,
     "App_Move": _MoveCommand,
     "App_Rotate": _RotateCommand,
+    "App_Undo": _UndoCommand,
+    "App_Redo": _RedoCommand,
+    "App_Fit": _FitCommand,
+    "App_ToggleVisibility": _ToggleVisibilityCommand,
 }
 
 for _command_id, _command_class in _BUILTIN_COMMANDS.items():

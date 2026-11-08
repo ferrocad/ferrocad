@@ -306,8 +306,10 @@ assert response["ok"]
 - `stage_meshes()` needs an active document; it returns `[]` otherwise.
 - A mesh reaches the viewport only if a provider claims the object and
   `positions` is not empty.
-- `interaction()` returns `{ok: false, error: "no module handles ..."}` when no
-  provider claims the request.
+- `interaction()` returns `null` when no provider claims the request; the document
+  half's own implementation then runs (the generic `transform`/`apply`). The Python
+  backend reports `{ok: false, error: "no module handles ..."}` instead, because it
+  has no document arm to fall back to.
 
 ## Cleanup checklist
 

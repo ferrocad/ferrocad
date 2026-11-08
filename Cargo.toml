@@ -39,10 +39,13 @@ members = [
     "crates/ferrocad_viewport",
     "crates/ferrocad_widgets",
     "crates/ferrocad_shell_api",
+    "crates/ferrocad_doc_api",
     "crates/ferrocad_shell_core",
     "crates/ferrocad_shell_rust",
     "crates/ferrocad_shell_js",
+    "crates/ferrocad_shell_web",
     "crates/ferrocad_shell_pywasm",
+    "crates/ferrocad_addon_toy",
     "crates/ferrocad_shell_python",
     "crates/ferrocad_parametric",
     "crates/ferrocad_toy",
@@ -142,8 +145,16 @@ ferrocad_widgets = { path = "crates/ferrocad_widgets", version = "0.1.4" }
 # packages: the published `ferrocad_gpui` (up to 0.1.5) is retired; see
 # `docs/developer/architecture/releasing.md` for the discontinuity.
 ferrocad_shell_api = { path = "crates/ferrocad_shell_api", version = "0.1.5" }
+# The document as JSON calls: the doorway a non-Rust script runtime shares. Core-only
+# on purpose, so the wasm-Python half can depend on it without the kernel.
+ferrocad_doc_api = { path = "crates/ferrocad_doc_api", version = "0.1.5" }
 ferrocad_shell_rust = { path = "crates/ferrocad_shell_rust", version = "0.1.5" }
 ferrocad_shell_js = { path = "crates/ferrocad_shell_js", version = "0.1.5" }
+ferrocad_shell_pywasm = { path = "crates/ferrocad_shell_pywasm", version = "0.1.5" }
+# The browser host's runtime switch: it composes the document half above with one of
+# the two browser script halves, or with none. Not published with the others (it is
+# the browser's assembly, not a library a native host installs).
+ferrocad_shell_web = { path = "crates/ferrocad_shell_web", version = "0.1.5" }
 # Default features are off here so the browser host (which inherits this entry) does
 # not compile the zero-copy presenter; the native assembly turns `gpu-interop` on.
 ferrocad_shell_core = { path = "crates/ferrocad_shell_core", version = "0.1.5", default-features = false }

@@ -29,6 +29,19 @@ import tempfile
 import weakref
 
 
+def _builtin(name: str) -> bool:
+    """Whether ``name`` is a module the host linked in as a built-in.
+
+    A built-in is what an edition binary and a linked test harness register
+    (``PyImport_AppendInittab``); anything found on ``sys.path`` is not.
+    """
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ImportError, ValueError):
+        return False
+    return spec is not None and spec.loader is importlib.machinery.BuiltinImporter
+
+
 def _part_is_builtin() -> bool:
     """Whether `Part` is registered as a built-in (the app's edition build).
 
@@ -38,18 +51,17 @@ def _part_is_builtin() -> bool:
     `python/Part.py` shim (or nothing at all), and the combined extension is the
     right source for all four modules.
     """
-    try:
-        spec = importlib.util.find_spec("Part")
-    except (ImportError, ValueError):
-        return False
-    return spec is not None and spec.loader is importlib.machinery.BuiltinImporter
+    return _builtin("Part")
 
 
-# Prefer the combined extension when the host has no built-in Part. It publishes
-# `ferrocad`, `Part`, `Mesh` and `MeshPart` from one `.so`, so they share a
-# document registry; a standalone `ferrocad.abi3.so` would give this facade a
-# second core. A kernel-free build has neither, so the import is optional.
-if not _part_is_builtin():
+# Prefer the combined extension when the host has no built-in Part — but never when
+# it already has a built-in `ferrocad`. That host linked its own core (a linked test
+# harness, `ferrocad_toy --open`), and `ferrocad_combined` publishing over it would
+# create a second one. It publishes `ferrocad`, `Part`, `Mesh` and `MeshPart` from
+# one `.so`, so they share a document registry; a standalone `ferrocad.abi3.so`
+# would give this facade a second core. A kernel-free build has neither, so the
+# import is optional.
+if not _part_is_builtin() and not _builtin("ferrocad"):
     try:
         import ferrocad_combined as _ferrocad_combined  # noqa: F401
         del _ferrocad_combined

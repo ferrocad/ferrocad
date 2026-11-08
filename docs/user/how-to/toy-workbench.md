@@ -46,6 +46,7 @@ tree = json.loads(ferrocad_shell.model_tree())
 ```json
 [
   {
+    "active": true,
     "label": "Toy",
     "name": "Toy",
     "objects": [
@@ -250,6 +251,9 @@ commands = json.loads(ferrocad_shell.commands())
 | App_Move | Edit | ForEdit | false |
 | App_Rotate | Edit | ForEdit | false |
 | Mods_Settings | Edit | ForEdit | true |
+| App_Undo | Edit | ForEdit | true |
+| App_Redo | Edit | ForEdit | true |
+| App_ToggleVisibility | Edit | ForEdit | false |
 | Toy_MakeSlab | Toy | ForEdit | true |
 | Toy_Polyline | Toy | ForView | true |
 

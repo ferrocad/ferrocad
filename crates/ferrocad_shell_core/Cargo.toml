@@ -73,3 +73,9 @@ bite-gpui = { version = "=1.25.203", features = ["test-support"] }
 # purpose: a published `ferrocad_shell_core` strips it, so the crates.io publish
 # order does not need `ferrocad_shell_python` (which depends on this crate).
 ferrocad_shell_python = { path = "../ferrocad_shell_python" }
+# The linked core: the tests boot the desktop composition, so the interpreter's
+# `ferrocad` module must be *this* binary's `ferrocad_core` (`register_test_core`).
+# A separate `.so` would carry its own registry and the two halves would disagree.
+# Dev-only for the same reason as the line above.
+ferrocad_py = { path = "../ferrocad_py" }
+pyo3 = { version = "0.25", features = ["auto-initialize"] }

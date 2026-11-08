@@ -8,13 +8,18 @@ Two things happen here, both on the Python side of the bridge:
    file supplies the handful of names it touches. They are small but real: the console
    goes through ``evaluate()``, which captures stdout with ``io.StringIO``.
 2. **The document model.** ``_ferrocad.document()`` returns the property rows the Rust
-   side computed with ``ferrocad_core`` (``present::kind`` / ``present::format``).
-   This file turns them into the ``FreeCAD.ActiveDocument`` shape the script expects.
+   side computed with ``ferrocad_core`` (``present::kind`` / ``present::format``),
+   read from the host's *active* document each time it is asked. This file turns them
+   into the ``FreeCAD.ActiveDocument`` shape the script expects, so the console sees
+   the document the shell is showing — including after a file is opened — and reports
+   no active document (`None`) when there is none.
 
 The spike's honest limit: these modules are **not** the ``*_py`` PyO3 bindings. Those
 are CPython extension modules and cannot be loaded by RustPython; §6.3 records that as
 the fork's central trade-off. What is shared is the *script* and the *rules* — the
-kinds and the display text still come from ``ferrocad_core``, not from here.
+kinds and the display text still come from ``ferrocad_core``, not from here. The
+document is also **read-only** from this side: writes, recompute and the `Shape` API
+are the document half's, and a write here raises rather than silently missing it.
 """
 
 import json
@@ -22,7 +27,10 @@ import sys
 
 import _ferrocad
 
-_DOCUMENT = json.loads(_ferrocad.document())
+
+def _payload():
+    """The host's active document rows, or ``None`` when no document is open."""
+    return json.loads(_ferrocad.document())
 
 
 def _module(name, namespace):
@@ -193,7 +201,11 @@ class DocumentObject:
         raise AttributeError(prop)
 
     def getTypeOfProperty(self, prop):
-        return self._row_of(prop)["type_id"].split("::")[-1:]
+        # The flag names the payload carries (`ferrocad_core::status_names`), which is
+        # what `getTypeOfProperty` reports natively. It used to answer with the type's
+        # last segment, which made the script-visible `status` row disagree with
+        # CPython's.
+        return self._row_of(prop)["status"]
 
     def getTypeIdOfProperty(self, prop):
         return self._row_of(prop)["type_id"]
@@ -205,6 +217,19 @@ class DocumentObject:
         if prop.startswith("_"):
             raise AttributeError(prop)
         return self._row_of(prop)["value"]
+
+    def __setattr__(self, name, value):
+        """Read-only: the document half owns the write path.
+
+        Silently setting an instance attribute would look like an edit and change
+        nothing, so a script that tries says so instead.
+        """
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        raise RuntimeError(
+            "pywasm: the document is read-only from Python; edit it in the shell"
+        )
 
     def __repr__(self):
         return "<DocumentObject {}>".format(self.Name)
@@ -230,15 +255,57 @@ class Document:
         return "<Document {}>".format(self.Name)
 
 
-_ACTIVE = Document(_DOCUMENT)
+class _LiveDocument:
+    """``FreeCAD.ActiveDocument``: the host's document, as it is now.
+
+    The document half owns the document and can replace it (boot, open, close), so
+    each attribute read asks the bridge again instead of holding the rows that
+    existed at import. A read forwarded here returns an object from *that* read, so a
+    caller that follows one attribute to the next sees one consistent snapshot.
+    """
+
+    def _document(self):
+        payload = _payload()
+        if payload is None:
+            raise RuntimeError("no active document")
+        return Document(payload)
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(self._document(), name)
+
+    def __repr__(self):
+        try:
+            return repr(self._document())
+        except RuntimeError:
+            return "<no active document>"
+
+
+_ACTIVE = _LiveDocument()
+
+
+def _active_document():
+    """The live document, or ``None`` when the host has none open."""
+    try:
+        _ACTIVE.Name
+    except RuntimeError:
+        return None
+    return _ACTIVE
 
 
 def _get_document(name):
-    return _ACTIVE if name == _ACTIVE.Name else None
+    try:
+        return _ACTIVE if name == _ACTIVE.Name else None
+    except RuntimeError:
+        return None
 
 
 def _get_object(name):
-    return _ACTIVE.getObject(name)
+    try:
+        return _ACTIVE.getObject(name)
+    except RuntimeError:
+        return None
 
 
 _module(
@@ -273,7 +340,7 @@ _module(
         "removeCommand": lambda name: _REGISTERED_COMMANDS.pop(name, None),
         "listCommands": lambda: list(_REGISTERED_COMMANDS),
         "runCommand": lambda name: None,
-        "activeDocument": lambda: _ACTIVE,
+        "activeDocument": _active_document,
         "ActiveDocument": _ACTIVE,
         "SendMsgToActiveView": lambda *_args: None,
         "getMainWindow": lambda: None,

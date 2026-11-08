@@ -16,22 +16,27 @@ use gpui::{Entity, TestAppContext, VisualTestContext};
 /// The native assembly's backend is installed on the test `App` first: the shell's
 /// runtime paths resolve through it, and boot reads it.
 fn boot_shell(cx: &mut TestAppContext) -> Arc<Mutex<ShellModel>> {
+    // Before the first interpreter call: the app script must see this binary's core.
+    crate::register_test_core();
     let _ = crate::python::evaluate(
         "import FerroCAD\nFerroCAD.Grid.reset()\nFerroCAD.Axis.reset()\nFerroCAD.Gizmo.reset()\n",
     );
     cx.update(|cx| {
-        // Install the native assembly's backend through *this* crate's slot: the
-        // test build of `ferrocad_shell_core` is a separate compilation, so the
-        // host's own `backend::install` would write a different `Global`. The
-        // backend value itself is type-compatible (the trait is in
-        // `ferrocad_shell_api`).
-        crate::app::install_backend(cx, Box::new(ferrocad_shell_python::PythonAppBackend::new()));
+        // Install the desktop's engine through *this* crate's slot: the test build of
+        // `ferrocad_shell_core` is a separate compilation, so the host's own
+        // `backend::install` would write a different `Global`. The backend value itself
+        // is type-compatible (the trait is in `ferrocad_shell_api`).
+        //
+        // The composition, not the retired `PythonAppBackend`: the Rust document half
+        // answers from the same registry the script half writes to.
+        crate::app::install_backend(cx, Box::new(ferrocad_shell_python::engine()));
         Shell::boot(cx).expect("boot shell")
     })
 }
 
 /// Boot without a gpui `App` (plain `#[test]`s that only inspect the model).
 fn boot_shell_without_app() -> Arc<Mutex<ShellModel>> {
+    crate::register_test_core();
     let _ = crate::python::evaluate(
         "import FerroCAD\nFerroCAD.Grid.reset()\nFerroCAD.Axis.reset()\nFerroCAD.Gizmo.reset()\n",
     );
@@ -41,7 +46,8 @@ fn boot_shell_without_app() -> Arc<Mutex<ShellModel>> {
 /// Boot without a gpui `App` or the appearance reset, so a test can observe the
 /// state a previous boot/write left behind.
 fn boot_again_without_app() -> Arc<Mutex<ShellModel>> {
-    let mut backend = ferrocad_shell_python::PythonAppBackend::new();
+    crate::register_test_core();
+    let mut backend = ferrocad_shell_python::engine();
     Shell::boot_with(&mut backend).expect("boot shell")
 }
 

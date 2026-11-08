@@ -266,12 +266,30 @@ impl Shell {
             .as_deref()
             .map(|name| crate::app::properties(cx, name).unwrap_or_default())
             .unwrap_or_default();
+        // The tree is the one place that says which document is active, so a switch
+        // made outside the shell (`FreeCAD.setActiveDocument` at the console) keeps the
+        // title and the save name right without a second query.
+        let active = tree
+            .iter()
+            .find(|document| document.active)
+            .map(|document| document.name.clone());
+        if let Some(focused) = &self.tree_document
+            && !tree.iter().any(|document| document.name == *focused)
+        {
+            self.tree_document = None;
+        }
         {
             let mut m = self.model.lock().unwrap();
             m.tree = tree;
             m.selection = next;
             m.selected = primary;
             m.properties = properties;
+            if let Some(active) = active
+                && m.document != active
+            {
+                m.title = format!("FerroCAD — {active}");
+                m.document = active;
+            }
         }
         if let Err(error) = self.push_selection(cx) {
             self.console_line(format!("selection: {error}"), cx);

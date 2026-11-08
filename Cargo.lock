@@ -2469,6 +2469,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_addon_toy"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_core",
+ "ferrocad_doc_api",
+ "ferrocad_shell_api",
+ "serde_json",
+]
+
+[[package]]
 name = "ferrocad_combined_py"
 version = "0.1.4"
 dependencies = [
@@ -2495,6 +2505,17 @@ name = "ferrocad_curves"
 version = "0.1.4"
 dependencies = [
  "ferrocad_types",
+]
+
+[[package]]
+name = "ferrocad_doc_api"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_core",
+ "ferrocad_occt",
+ "ferrocad_part",
+ "ferrocad_shell_api",
+ "serde_json",
 ]
 
 [[package]]
@@ -2599,18 +2620,21 @@ version = "0.1.5"
 dependencies = [
  "ferrocad",
  "ferrocad_combined_py",
+ "ferrocad_core",
  "ferrocad_geom",
  "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_part_gui",
  "ferrocad_shell_api",
  "ferrocad_shell_python",
+ "ferrocad_shell_pywasm",
  "ferrocad_shell_rust",
  "ferrocad_stage",
  "ferrocad_types",
  "ferrocad_viewport",
  "ferrocad_wgpu",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]
@@ -2681,6 +2705,7 @@ dependencies = [
  "bite-gpui",
  "ferrocad_geom",
  "ferrocad_inventor",
+ "ferrocad_py",
  "ferrocad_shell_api",
  "ferrocad_shell_python",
  "ferrocad_stage",
@@ -2692,6 +2717,7 @@ dependencies = [
  "ferrocad_widgets",
  "gpui_interop",
  "log",
+ "pyo3",
  "serde",
  "serde_json",
  "web-time",
@@ -2736,6 +2762,7 @@ name = "ferrocad_shell_pywasm"
 version = "0.1.5"
 dependencies = [
  "ferrocad_core",
+ "ferrocad_doc_api",
  "ferrocad_inventor",
  "ferrocad_shell_api",
  "ferrocad_stage",
@@ -2760,6 +2787,24 @@ dependencies = [
  "ferrocad_stage",
  "log",
  "serde_json",
+]
+
+[[package]]
+name = "ferrocad_shell_web"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_core",
+ "ferrocad_doc_api",
+ "ferrocad_inventor",
+ "ferrocad_shell_api",
+ "ferrocad_shell_js",
+ "ferrocad_shell_pywasm",
+ "ferrocad_shell_rust",
+ "ferrocad_stage",
+ "js-sys",
+ "log",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2864,8 +2909,7 @@ version = "0.1.5"
 dependencies = [
  "bite-gpui",
  "ferrocad_shell_core",
- "ferrocad_shell_js",
- "ferrocad_shell_rust",
+ "ferrocad_shell_web",
  "ferrocad_wasm",
  "log",
  "wasm-bindgen",

@@ -244,6 +244,23 @@ pub fn close_document(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Make one open document active (`FreeCAD.setActiveDocument`).
+///
+/// Activation fires the Gui app's document listeners — `deactivated` on the outgoing
+/// document and `activated` on the incoming one — which is what makes a provider
+/// detach and attach its per-document effects. The facade and `ferrocad_core` share
+/// one registry, so the engine's active marker moves with it.
+pub fn activate_document(name: &str) -> Result<(), String> {
+    let reply: serde_json::Value = call_json("activate_document", Some(name))?;
+    if reply.get("ok").and_then(|ok| ok.as_bool()) == Some(false) {
+        return Err(match reply.get("error").and_then(|error| error.as_str()) {
+            Some(error) if !error.is_empty() => error.to_string(),
+            _ => format!("no document {name}"),
+        });
+    }
+    Ok(())
+}
+
 /// Apply the configured startup document, if one was set.
 ///
 /// `boot` describes the sample document `bootstrap` created. When `--open` named
@@ -573,10 +590,16 @@ pub fn manipulator_specs(
 /// the workbench that registered an interaction provider (for Part, a
 /// `Part::Fillet`/`Part::Chamfer`). `values` are the manipulator's numbers in its
 /// documented order.
-pub fn apply_interaction(
+/// The script's answer for one interaction commit, or `None` when no provider owns it.
+///
+/// The edit a manipulator implies belongs to the module that registered a provider for
+/// it (`FerroCAD.register_interaction_provider`); the app script answers `null` when no
+/// provider claims the pair. That is what lets the document half run its own
+/// implementation — the generic transform gizmo in a build with no edition mod.
+pub fn interaction(
     commit: &ferrocad_stage::InteractionCommit,
     object: &str,
-) -> Result<ApplyResult, String> {
+) -> Result<Option<ApplyResult>, String> {
     let values = serde_json::to_string(&commit.values).map_err(|e| e.to_string())?;
     let element = commit.element.clone().unwrap_or_default();
     let raw = Python::with_gil(|py| -> Result<String, String> {
@@ -596,6 +619,27 @@ pub fn apply_interaction(
             .map_err(|e| e.to_string())
     })?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// [`interaction`], with "no provider" reported as a refusal.
+///
+/// For a caller that has no document arm to fall back to — an edition's own test of
+/// its interaction hook — an unclaimed commit is a final answer rather than "not
+/// mine".
+pub fn apply_interaction(
+    commit: &ferrocad_stage::InteractionCommit,
+    object: &str,
+) -> Result<ApplyResult, String> {
+    match interaction(commit, object)? {
+        Some(result) => Ok(result),
+        None => Ok(ApplyResult {
+            ok: false,
+            error: format!(
+                "no module handles {} {}",
+                commit.manipulator, commit.action
+            ),
+        }),
+    }
 }
 
 /// Replace the facade's selection snapshot (`FreeCADGui.Selection`).
@@ -802,48 +846,10 @@ pub fn set_property(object: &str, property: &str, value: &str) -> Result<SetResu
 /// applies, so the shell's status line can say `show X` or `hide X` without a second
 /// read.
 pub fn set_visibility(object: &str, visible: Option<bool>) -> Result<VisibilityOutcome, String> {
-    let name = serde_json::to_string(object).map_err(|error| error.to_string())?;
-    // Python literals: `None`, `True`, `False`.
-    let want = match visible {
-        Some(true) => "True",
-        Some(false) => "False",
-        None => "None",
-    };
-    let code = format!(
-        r#"
-import json
-import FreeCAD
-doc = FreeCAD.ActiveDocument
-obj = doc.getObject({name}) if doc is not None else None
-if obj is None:
-    print(json.dumps({{"ok": False, "visible": False, "error": "no object"}}))
-else:
-    want = {want}
-    doc.openTransaction("Toggle visibility")
-    try:
-        if "Visibility" in obj.PropertiesList:
-            current = bool(obj.Visibility)
-        else:
-            current = bool(obj.ViewObject.Visibility)
-            obj.addProperty("App::PropertyBool", "Visibility", "Base", "Whether the object is shown")
-        obj.Visibility = (not current) if want is None else bool(want)
-        doc.commitTransaction()
-        doc.recompute()
-        print(json.dumps({{"ok": True, "visible": bool(obj.Visibility)}}))
-    except Exception as exc:
-        doc.abortTransaction()
-        print(json.dumps({{"ok": False, "visible": False, "error": str(exc)}}))
-"#
-    );
-    let result = evaluate(&code)?;
-    if !result.ok {
-        return Ok(VisibilityOutcome {
-            ok: false,
-            visible: false,
-            error: result.output,
-        });
-    }
-    serde_json::from_str(result.output.trim()).map_err(|error| error.to_string())
+    // The implementation is `ferrocad_shell.set_visibility`, so the eye icon and the
+    // `App_ToggleVisibility` command share one transaction shape and one property rule.
+    let payload = serde_json::json!({ "object": object, "visible": visible }).to_string();
+    call_json("set_visibility", Some(&payload))
 }
 
 /// The answer [`add_datum_plane`] reads back: the created object's name, or why not.

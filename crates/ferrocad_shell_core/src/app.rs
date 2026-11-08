@@ -116,6 +116,12 @@ pub fn model_tree(cx: &App) -> Result<Vec<DocumentNode>, String> {
     with_backend(cx, |backend| backend.model_tree()).unwrap_or_else(|| Ok(Vec::new()))
 }
 
+/// Make one open document active (the tree's switch).
+pub fn activate_document(cx: &mut App, name: &str) -> Result<(), String> {
+    with_backend_mut(cx, |backend| backend.activate_document(name))
+        .unwrap_or_else(|| Err(no_backend()))
+}
+
 pub fn properties(cx: &App, object: &str) -> Result<Vec<PropRow>, String> {
     with_backend(cx, |backend| backend.properties(object)).unwrap_or_else(|| Ok(Vec::new()))
 }

@@ -1,6 +1,13 @@
 # Active task specs
 
-Status: index (2026-11-05). Twelve active specs and one recorded decision:
+Status: index (2026-11-08). Thirteen active specs and one recorded decision:
+
+- [backend-parity.md](backend-parity.md) — **one Gui app, one document half, B0–B6 built**:
+  the surface suite is in (`crates/ferrocad_parametric/tests/composition_surface.rs`),
+  every shown command is in the `FreeCADGui` registry, the Gui-authority verbs run
+  script-first, the model tree lists and switches documents, a mod's interaction
+  provider owns a manipulator commit, the legacy type is retired, and the two script
+  halves (CPython / RustPython) are compared over one document. Stages **B0–B6**.
 
 - [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget**: stage 2 landed
   (the `.FCStd` payloads restore in parallel, `open` 5.9 s → 1.8 s, the 900a assembly 13.5 s

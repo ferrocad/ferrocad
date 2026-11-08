@@ -92,6 +92,16 @@ pub const OPEN: &str = "App_Open";
 pub const SAVE: &str = "App_Save";
 pub const MOVE: &str = "App_Move";
 pub const ROTATE: &str = "App_Rotate";
+pub const UNDO: &str = "App_Undo";
+pub const REDO: &str = "App_Redo";
+pub const FIT: &str = "App_Fit";
+pub const TOGGLE_VISIBILITY: &str = "App_ToggleVisibility";
+
+/// Draft's global snap switch, whose id the Rust half also toggles.
+///
+/// It is **not** in [`BUILTIN`]: the `draft` submodule registers the command, so the
+/// catalogue owns only the id the two halves agree on.
+pub const SNAP_LOCK: &str = "Draft_Snap_Lock";
 
 /// The built-in commands **both hosts** offer.
 ///
@@ -202,6 +212,45 @@ pub const BUILTIN: &[CommandDef] = &[
             "radial",
         )
     },
+    def(
+        UNDO,
+        "Undo",
+        "Undo the last edit",
+        "Ctrl+Z",
+        "Edit",
+        "ForEdit",
+        "dock",
+    ),
+    def(
+        REDO,
+        "Redo",
+        "Redo the last undone edit",
+        "Ctrl+Shift+Z",
+        "Edit",
+        "ForEdit",
+        "dock",
+    ),
+    def(
+        FIT,
+        "Fit",
+        "Frame the document",
+        "",
+        "View",
+        "ForView",
+        "dock",
+    ),
+    CommandDef {
+        wheel: true,
+        ..def(
+            TOGGLE_VISIBILITY,
+            "Toggle visibility",
+            "Hide or show the selected objects",
+            "",
+            "Edit",
+            "ForEdit",
+            "radial",
+        )
+    },
 ];
 
 /// The catalogue, for a Rust host.
@@ -212,6 +261,37 @@ pub fn builtin() -> &'static [CommandDef] {
 /// One built-in by id.
 pub fn find(id: &str) -> Option<&'static CommandDef> {
     BUILTIN.iter().find(|def| def.id == id)
+}
+
+/// Who executes a command.
+///
+/// This is Gui-app ownership, not metadata: it stays out of [`CommandDef`] and the
+/// generated JSON, so the Python registry does not have to mirror it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Executor {
+    /// The document half (`RustAppBackend`). The app script may still take it over
+    /// through `ScriptHost::claims`.
+    Shell,
+    /// The app script when one is installed; a Rust arm is the `?runtime=plain`
+    /// fallback wherever one exists (`Dev_ToggleTools` has none: the shell intercepts
+    /// it in the window).
+    Script,
+}
+
+/// The executor of one id.
+///
+/// The presentation verbs belong to the Gui app (the script flips the semantic store
+/// and derives the provider claim); the edits and their session verbs belong to the
+/// document half. `Dev_ToggleTools` is chrome the shell intercepts in the window, and
+/// the script's `Activated` is the headless/registry answer a non-window path reads.
+/// See `docs/project/tasks/backend-parity.md` §3.
+pub fn executor(id: &str) -> Executor {
+    match id {
+        VIEW_WORKPLANE | TOGGLE_GRID | TOGGLE_AXIS_CROSS | TOGGLE_GIZMO | DEV_TOOLS => {
+            Executor::Script
+        }
+        _ => Executor::Shell,
+    }
 }
 
 impl CommandDef {

@@ -1416,6 +1416,9 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
         // Only the pill owns the hitbox; the wrapper stays transparent so clicks
         // beside it still reach the canvas.
         .occlude()
+        // A flex item may grow to its parent's width; the dock is a strip whose width
+        // is its content, so the bottom-left hand column is never covered.
+        .flex_none()
         .flex()
         .flex_row()
         .flex_wrap()
@@ -1539,6 +1542,10 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
         .right(px(0.))
         .bottom(px(12.))
         .flex()
+        .flex_row()
+        // Explicitly a row: `justify_center` then centres a content-width pill, and the
+        // strip cannot stretch over the bottom-left hand column (see `flex_none` above).
+        .items_center()
         .justify_center()
         .child(panel)
 }
@@ -2160,11 +2167,10 @@ mod tests {
     #[gpui::test]
     fn the_header_builds_with_the_gizmo_control(cx: &mut TestAppContext) {
         let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Before the interpreter starts, so the app script shares this binary's core.
+        crate::register_test_core();
         let model = cx.update(|cx| {
-            crate::app::install_backend(
-                cx,
-                Box::new(ferrocad_shell_python::PythonAppBackend::new()),
-            );
+            crate::app::install_backend(cx, Box::new(ferrocad_shell_python::engine()));
             Shell::boot(cx).expect("boot shell")
         });
         let window = cx.update(|cx| {

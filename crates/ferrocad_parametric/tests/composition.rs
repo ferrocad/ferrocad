@@ -276,8 +276,11 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
         "the seeded box sits at x = 0: {before}"
     );
 
-    // 1. The shared transform gizmo is the document's: `RustAppBackend` applies it
-    //    itself, so the script half never sees this commit.
+    // 1. The shared transform gizmo is the **edition's**: the Part workbench registers a
+    //    `transform`/`apply` provider, so the composition routes the commit to the
+    //    script half and the document arm is only the fallback. The transaction's name
+    //    is what makes that observable: the provider records `Move Box`, the document
+    //    arm would record `Transform`.
     let mut matrix = [0.0f64; 16];
     for index in 0..4 {
         matrix[index * 5] = 1.0;
@@ -298,11 +301,11 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
     );
 
     // Which half applied it is observable through the transaction's name: the
-    // document half records "Transform", the Part hook "Move Box".
+    // document arm records "Transform", the Part hook "Move Box".
     let undone = backend.run_command("App_Undo").expect("undo runs");
     assert!(
-        undone.status.starts_with("undo: Transform"),
-        "the document half applied the transform: {}",
+        undone.status.starts_with("undo: Move Box"),
+        "the edition's provider applied the transform: {}",
         undone.status
     );
     assert!(backend.run_command("App_Redo").expect("redo runs").ok);

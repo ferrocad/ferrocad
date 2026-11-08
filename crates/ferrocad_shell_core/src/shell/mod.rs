@@ -101,6 +101,12 @@ const KIND_BOOL: &str = "bool";
 /// The property-row kind of an enumeration (rendered as a select box).
 const KIND_ENUM: &str = "enum";
 
+/// The synthetic namespace the app script puts above the documents.
+///
+/// Its children (`Settings/<Feature>`) are provider settings, not objects, and the
+/// root itself is not a document: the model tree never switches to it.
+const SETTINGS_ROOT: &str = "Settings";
+
 /// Whether two names address the same tree node.
 ///
 /// Document objects match exactly. The synthetic `Settings` namespace accepts a
@@ -114,7 +120,7 @@ fn same_node(left: &str, right: &str) -> bool {
         let Some((root, segment)) = candidate.split_once('/') else {
             return false;
         };
-        root == "Settings"
+        root == SETTINGS_ROOT
             && other
                 .strip_prefix("Settings/")
                 .is_some_and(|live_segment| live_segment.eq_ignore_ascii_case(segment))
@@ -335,6 +341,10 @@ pub struct Shell {
     prop_inputs: HashMap<String, PropInput>,
     /// The entity → document-object map, rebuilt from the app script's display meshes.
     display: DisplaySync,
+    /// The model-tree document row the user last clicked. A document is not a
+    /// selectable object, so `Enter` in the tree has nothing else to act on: the row
+    /// switches on a double click, and this is what a press repeats.
+    tree_document: Option<String>,
     /// The workbench manipulators the edition contributes (none in the base app).
     contributions: Contributions,
     /// The enabled global accelerators, rebuilt with the command list (A4).
@@ -818,6 +828,7 @@ impl Shell {
             viewport: None,
             prop_inputs: HashMap::new(),
             display: DisplaySync::new(),
+            tree_document: None,
             contributions: Contributions::new(),
             shortcuts,
             active_tool: None,
@@ -1095,6 +1106,17 @@ impl Shell {
             return true;
         }
         let editing = self.settings_card.is_some() || cancel_dialog || field_focused;
+        // In the tree window, Enter switches to the document row that was last
+        // clicked. A document is not a selectable object, so nothing else in this
+        // handler owns the key there; the row's double click is the mouse twin.
+        if cancel_dialog
+            && event.keystroke.key == "enter"
+            && !self.modal_open()
+            && let Some(name) = self.tree_document.clone()
+        {
+            self.activate_document(&name, cx);
+            return true;
+        }
         // The Move HUD owns two keys while a field is **not** focused: `Enter` accepts
         // it and `Tab` opens a field on the remembered drag axis. Everything else — in
         // particular `0`–`3` — belongs to the viewport and the loadout: the fields

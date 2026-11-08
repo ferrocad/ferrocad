@@ -16,9 +16,10 @@ use ferrocad_geom::TessellationOptions;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{BOX_TYPE, FILLET_TYPE, backend, shape_of};
 use ferrocad_shell_api::app::AppBackend;
-use ferrocad_shell_api::catalog::{self, CommandDef};
+use ferrocad_shell_api::catalog::{self, CommandDef, Executor};
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::display::StageMesh;
+use ferrocad_shell_api::events::DocumentEvent;
 use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::types::{
     ApplyResult, Bootstrap, DocumentNode, EvalResult, ObjectNode, OpenedDocument, PropRow,
@@ -27,15 +28,15 @@ use ferrocad_shell_api::types::{
 use ferrocad_shell_api::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
-/// The commands the Rust backend offers beyond the shared catalogue.
+/// The commands the Rust half answers, whose ids the catalogue names once.
 ///
-/// Their metadata is not in the catalogue: Fit, undo/redo and hide/show are this
-/// backend's own verbs, and Draft's snap switch is not a shell built-in.
-const SNAP: &str = "Draft_Snap_Lock";
-const FIT: &str = "App_Fit";
-const VISIBILITY: &str = "App_ToggleVisibility";
-const UNDO: &str = "App_Undo";
-const REDO: &str = "App_Redo";
+/// The four verbs are catalogue entries now (both halves offer them); `SNAP` is
+/// Draft's command, so the catalogue owns only the id that both halves toggle.
+const SNAP: &str = catalog::SNAP_LOCK;
+const FIT: &str = catalog::FIT;
+const VISIBILITY: &str = catalog::TOGGLE_VISIBILITY;
+const UNDO: &str = catalog::UNDO;
+const REDO: &str = catalog::REDO;
 
 /// The prefix of the dialog tokens this backend mints for `App_Move`.
 ///
@@ -99,6 +100,30 @@ struct State {
     /// How many Move dialogs this backend has minted, so two open forms cannot spend
     /// each other's token.
     move_dialogs: u64,
+}
+
+/// What one edit did, kept after the document borrow is released.
+///
+/// Built inside the document closure (where the object ids are known) and announced
+/// by [`RustAppBackend::announce`] once the lock is gone, so a script callback cannot
+/// re-enter a held document.
+struct EditReport {
+    /// The transaction name (`Set property`, `Move`, …).
+    transaction: String,
+    /// The objects the edit wrote.
+    touched: Vec<String>,
+    /// The objects `recompute()` executed; `None` when the path did not recompute.
+    executed: Option<Vec<String>>,
+}
+
+impl EditReport {
+    fn new(transaction: &str, touched: Vec<String>, executed: Option<Vec<String>>) -> Self {
+        Self {
+            transaction: transaction.to_string(),
+            touched,
+            executed,
+        }
+    }
 }
 
 /// The Rust `AppBackend`: a real document, no interpreter.
@@ -178,6 +203,37 @@ impl RustAppBackend {
     ) -> Self {
         self.script = Some(script);
         self
+    }
+
+    /// Run one document edit and announce it, once, when it commits.
+    ///
+    /// `run` returns the edit's outcome and a report — or `None` for a refusal,
+    /// which stays silent. The announcement happens after `with_document_mut` has
+    /// released the document, so a script callback never runs against a held lock.
+    fn edit<R>(
+        &self,
+        run: impl FnOnce(&str, &mut Document) -> Result<(R, Option<EditReport>), String>,
+    ) -> Result<R, String> {
+        let (result, report) = self.with_document_mut(run)?;
+        if let Some(report) = &report {
+            self.announce(report);
+        }
+        Ok(result)
+    }
+
+    /// Announce one committed edit to the script half.
+    ///
+    /// `document.edited` first (the transaction and what it wrote), then
+    /// `document.recomputed` when the path recomputed. A path that wrote but did not
+    /// recompute (a rename, a visibility toggle) emits only the edit.
+    fn announce(&self, report: &EditReport) {
+        let Some(script) = self.script.as_deref() else {
+            return;
+        };
+        script.on_document_event(&DocumentEvent::edited(&report.transaction, &report.touched));
+        if let Some(executed) = &report.executed {
+            script.on_document_event(&DocumentEvent::recomputed(executed));
+        }
     }
 
     /// The active document's name and shared handle.
@@ -355,28 +411,78 @@ impl AppBackend for RustAppBackend {
     }
 
     fn model_tree(&self) -> Result<Vec<DocumentNode>, String> {
-        let node = self.with_document(|name, document| DocumentNode {
-            name: name.to_string(),
-            label: name.to_string(),
-            objects: document
-                .object_ids()
-                .iter()
-                .filter_map(|id| document.object(*id))
-                .map(|object| ObjectNode {
-                    name: object.name.clone(),
-                    label: object.label.clone(),
-                    type_id: object.type_id.clone(),
-                })
-                .collect(),
-        });
-        let mut tree: Vec<DocumentNode> = node.into_iter().collect();
+        // The registry is the source (D4): every open document, in name order, with the
+        // active one marked. The registry lock is released before any document is
+        // locked, for the same reason `active_document` releases it first.
+        let isolated = {
+            let state = self.state.borrow();
+            match &state.source {
+                DocSource::Isolated { name, document } => {
+                    Some((name.clone(), Arc::clone(document)))
+                }
+                DocSource::SharedRegistry => None,
+            }
+        };
+        let mut tree: Vec<DocumentNode> = Vec::new();
+        match isolated {
+            Some((name, handle)) => tree.push(document_node(&name, &handle, true)),
+            None => {
+                let (documents, active) = {
+                    let registry = registry();
+                    (
+                        registry.documents(),
+                        registry.active().map(str::to_string),
+                    )
+                };
+                for (name, handle) in documents {
+                    let active = active.as_deref() == Some(name.as_str());
+                    tree.push(document_node(&name, &handle, active));
+                }
+            }
+        }
         // A script surface appends what it owns after the document's own nodes (the
-        // synthetic `Settings/<Feature>` roots). The borrow above is released first:
-        // the script's walk is its own code and must not see a document lock.
+        // synthetic `Settings/<Feature>` roots). No document lock is held here: the
+        // script's walk is its own code and must not see one.
         if let Some(script) = &self.script {
             tree.extend(script.extra_tree_nodes());
         }
         Ok(tree)
+    }
+
+    /// Make one open document active.
+    ///
+    /// The Gui app owns the lifecycle, so a script half answers first: activation
+    /// fires its document listeners (the outgoing document's `deactivated`, the
+    /// incoming one's `activated`), which is what makes a provider detach and attach
+    /// its per-document effects. Without one, the registry's active marker is the
+    /// whole answer.
+    fn activate_document(&mut self, name: &str) -> Result<(), String> {
+        if let Some(result) = self
+            .script_host()
+            .and_then(|host| host.activate_document(name))
+        {
+            result?;
+        } else {
+            let isolated = {
+                let state = self.state.borrow();
+                match &state.source {
+                    DocSource::Isolated { name: own, .. } => Some(own.clone()),
+                    DocSource::SharedRegistry => None,
+                }
+            };
+            match isolated {
+                Some(own) if own == name => {}
+                Some(own) => return Err(format!("no document {name} (this backend owns {own})")),
+                None => {
+                    if !registry().set_active(name) {
+                        return Err(format!("no document {name}"));
+                    }
+                }
+            }
+        }
+        // The selection named an object in the document that just went inactive.
+        self.state.borrow_mut().selection.clear();
+        Ok(())
     }
 
     fn properties(&self, object: &str) -> Result<Vec<PropRow>, String> {
@@ -497,9 +603,9 @@ impl AppBackend for RustAppBackend {
 
     /// Commands this document offers.
     ///
-    /// The catalogue's built-ins plus the verbs only this backend has. A host that
-    /// installed a scripting surface appends the commands it registered, so a
-    /// script's verb reaches the palette like a built-in.
+    /// The catalogue is the source of every built-in's metadata; this backend fills in
+    /// the live state. A host that installed a scripting surface appends the commands
+    /// it registered, so a script's verb reaches the palette like a built-in.
     fn commands(&self) -> Result<Vec<CommandInfo>, String> {
         let (view, snap, selection) = {
             let state = self.state.borrow();
@@ -507,80 +613,59 @@ impl AppBackend for RustAppBackend {
         };
         // A document is not needed to list the commands: with none open (a shared
         // registry whose documents were all closed) the edit verbs are simply disabled.
-        let (has_undo, has_redo, visible) = self
-            .with_document(|_, document| {
-                (
-                    document.has_undo(),
-                    document.has_redo(),
-                    selection_visible(document, &selection),
-                )
-            })
-            .unwrap_or((false, false, None));
-        // The shared catalogue is the source of every built-in's metadata; this
-        // backend fills in the live state and appends the verbs only it offers.
+        let (has_undo, has_redo) = self
+            .with_document(|_, document| (document.has_undo(), document.has_redo()))
+            .unwrap_or((false, false));
         let mut commands: Vec<CommandInfo> =
             catalog::builtin().iter().map(CommandDef::info).collect();
+        // A verb is enabled only while it can act: history for undo/redo, a selection
+        // for hide/show. The metadata (label, accelerator, surface) is the catalogue's.
         for command in &mut commands {
             match command.id.as_str() {
                 catalog::TOGGLE_GRID => command.checked = view.grid,
                 catalog::TOGGLE_AXIS_CROSS => command.checked = view.axis_cross,
                 catalog::TOGGLE_GIZMO => command.checked = view.gizmo.enabled,
+                catalog::UNDO => command.enabled = has_undo,
+                catalog::REDO => command.enabled = has_redo,
+                catalog::TOGGLE_VISIBILITY => command.enabled = !selection.is_empty(),
                 _ => {}
             }
         }
 
-        // Snap is Draft's, not a shell built-in: this backend's own switch, with no
-        // engine-side effect yet.
-        let mut snap_row = row(SNAP, "Snap", "snap");
-        snap_row.checkable = true;
-        snap_row.checked = snap;
-        commands.push(snap_row);
+        // The scripting half's rows, fetched once: the merge below reads them twice.
+        let scripted = self.script.as_ref().map(|script| script.commands());
 
-        // Fit frames the document; undo and redo are plain edit commands (the dock
-        // lists them and the accelerators run them, but they are not wheel verbs).
-        let mut fit = row(FIT, "Fit", "dock");
-        fit.tooltip = "Frame the document".to_string();
-        commands.push(fit);
-        let mut undo = row(UNDO, "Undo", "dock");
-        undo.cmd_type = "ForEdit".to_string();
-        undo.group = "Edit".to_string();
-        undo.tooltip = "Undo the last edit".to_string();
-        undo.accel = "Ctrl+Z".to_string();
-        undo.enabled = has_undo;
-        commands.push(undo);
-        let mut redo = row(REDO, "Redo", "dock");
-        redo.cmd_type = "ForEdit".to_string();
-        redo.group = "Edit".to_string();
-        redo.tooltip = "Redo the last undone edit".to_string();
-        redo.accel = "Ctrl+Shift+Z".to_string();
-        redo.enabled = has_redo;
-        commands.push(redo);
+        // Snap is Draft's command, not a shell built-in. When the script lists it,
+        // Draft's row is the one to show — its label, its menu and its `IsChecked`
+        // are the Gui app's answers. This local switch is only the `runtime=plain`
+        // fallback, with no engine-side effect yet.
+        if !scripted
+            .as_ref()
+            .is_some_and(|rows| rows.iter().any(|command| command.id == SNAP))
+        {
+            let mut snap_row = row(SNAP, "Snap", "snap");
+            snap_row.checkable = true;
+            snap_row.checked = snap;
+            commands.push(snap_row);
+        }
 
-        // Hide/Show is the wheel's third object verb and toggles the selection.
-        let mut visibility = row(
-            VISIBILITY,
-            if visible == Some(false) {
-                "Show"
-            } else {
-                "Hide"
-            },
-            "radial",
-        );
-        visibility.cmd_type = "ForEdit".to_string();
-        visibility.group = "Edit".to_string();
-        visibility.tooltip = "Hide or show the selected objects".to_string();
-        visibility.wheel = true;
-        commands.push(visibility);
-
-        // A scripting surface (the JS host, or the embedded interpreter) contributes
-        // its own verbs; they go through the same list, so the palette and the wheels
-        // resolve them. An id the catalogue already provides keeps the catalogue's row:
-        // its metadata and live state are what the chrome is built from, and a
-        // workbench that registers a class under a built-in id must not shadow it.
-        if let Some(script) = &self.script {
-            for command in script.commands() {
+        // A scripting surface contributes the Gui app's live state: a catalogue id
+        // keeps the catalogue's metadata and takes the script's `enabled`/`checked`
+        // (`IsActive`/`IsChecked`), so the palette greys exactly what the interpreter
+        // would. An id the catalogue does not list is appended.
+        if let Some(scripted) = &scripted {
+            for command in &mut commands {
+                if catalog::find(&command.id).is_none() {
+                    continue;
+                }
+                if let Some(scripted) = scripted.iter().find(|row| row.id == command.id) {
+                    command.enabled = scripted.enabled;
+                    command.checked = scripted.checked;
+                }
+            }
+            for command in scripted {
                 if !commands.iter().any(|existing| existing.id == command.id) {
-                    commands.push(command);
+                    commands.push(command.clone());
                 }
             }
         }
@@ -622,27 +707,40 @@ impl AppBackend for RustAppBackend {
         object: &str,
         visible: Option<bool>,
     ) -> Result<VisibilityOutcome, String> {
-        self.with_document_mut(|_, document| {
+        self.edit(|_, document| {
             let Some(id) = document.get_by_name(object) else {
-                return Ok(VisibilityOutcome {
-                    ok: false,
-                    visible: false,
-                    error: format!("no object {object}"),
-                });
+                return Ok((
+                    VisibilityOutcome {
+                        ok: false,
+                        visible: false,
+                        error: format!("no object {object}"),
+                    },
+                    None,
+                ));
             };
             match in_transaction(document, "Toggle visibility", |document| {
                 hide_object(document, id, visible).ok_or_else(|| format!("no object {object}"))
             }) {
-                Ok(next) => Ok(VisibilityOutcome {
-                    ok: true,
-                    visible: next,
-                    error: String::new(),
-                }),
-                Err(error) => Ok(VisibilityOutcome {
-                    ok: false,
-                    visible: false,
-                    error,
-                }),
+                Ok(next) => Ok((
+                    VisibilityOutcome {
+                        ok: true,
+                        visible: next,
+                        error: String::new(),
+                    },
+                    Some(EditReport::new(
+                        "Toggle visibility",
+                        vec![object.to_string()],
+                        None,
+                    )),
+                )),
+                Err(error) => Ok((
+                    VisibilityOutcome {
+                        ok: false,
+                        visible: false,
+                        error,
+                    },
+                    None,
+                )),
             }
         })
     }
@@ -684,9 +782,9 @@ impl AppBackend for RustAppBackend {
         {
             return Ok(result);
         }
-        self.with_document_mut(|_, document| {
+        self.edit(|_, document| {
             let Some(id) = document.get_by_name(object) else {
-                return Ok(refused(format!("no object {object}")));
+                return Ok((refused(format!("no object {object}")), None));
             };
 
             if property == "Label" {
@@ -694,11 +792,14 @@ impl AppBackend for RustAppBackend {
                     document.set_label(id, value);
                     Ok(())
                 })?;
-                return Ok(SetResult {
-                    ok: true,
-                    error: String::new(),
-                    view: None,
-                });
+                return Ok((
+                    SetResult {
+                        ok: true,
+                        error: String::new(),
+                        view: None,
+                    },
+                    Some(EditReport::new("Rename", vec![object.to_string()], None)),
+                ));
             }
 
             let Some(current) = document
@@ -706,55 +807,81 @@ impl AppBackend for RustAppBackend {
                 .and_then(|object| object.properties.get(property))
                 .cloned()
             else {
-                return Ok(refused(format!("no property {property}")));
+                return Ok((refused(format!("no property {property}")), None));
             };
             if document
                 .object(id)
                 .is_some_and(|object| object.expressions.contains_key(property))
             {
-                return Ok(refused(format!("{property} is set by an expression")));
+                return Ok((refused(format!("{property} is set by an expression")), None));
             }
             let next = match ferrocad_core::present::coerce(&current, value) {
                 Ok(next) => next,
-                Err(error) => return Ok(refused(error)),
+                Err(error) => return Ok((refused(error), None)),
             };
             // One named transaction per edit: the property pane, the typed Move and a
             // transform commit all land in the undo history, as they do natively.
             document.open_transaction_named("Set property");
             if let Err(error) = document.set_property(id, property, next) {
                 document.abort_transaction();
-                return Ok(refused(error));
+                return Ok((refused(error), None));
             }
             let recomputed = document.recompute();
             document.commit_transaction();
             match recomputed {
-                Ok(_) => {
+                Ok(executed) => {
+                    let executed = object_names(document, &executed);
                     // A feature that refuses its input keeps its last good shape and
                     // reports the reason. That is document state, not a failed edit:
                     // the value was stored, so the pane keeps it.
-                    if let Some(error) = document
+                    let error = document
                         .object(id)
                         .and_then(|object| object.invalid.then(|| object.error.clone()))
                         .flatten()
-                    {
-                        return Ok(SetResult {
+                        .unwrap_or_default();
+                    Ok((
+                        SetResult {
                             ok: true,
                             error,
                             view: None,
-                        });
-                    }
-                    Ok(SetResult {
-                        ok: true,
-                        error: String::new(),
-                        view: None,
-                    })
+                        },
+                        Some(EditReport::new(
+                            "Set property",
+                            vec![object.to_string()],
+                            Some(executed),
+                        )),
+                    ))
                 }
-                Err(error) => Ok(refused(error)),
+                Err(error) => Ok((refused(error), None)),
             }
         })
     }
 
     fn run_command(&mut self, id: &str) -> Result<CommandOutcome, String> {
+        // The Gui app owns the presentation verbs: the script flips the semantic store
+        // and derives the provider claim, which the Rust arms below cannot. They stay as
+        // the `?runtime=plain` fallback when no script half is installed, and for a
+        // script that answers `None`.
+        //
+        // `claims` is the other direction: an explicit opt-in for a surface to execute
+        // an id whose executor is the shell (D1's optional delegation). No host
+        // implements it yet, so every shell-owned verb still runs here.
+        match catalog::executor(id) {
+            Executor::Script => {
+                if let Some(outcome) = self
+                    .script
+                    .as_deref()
+                    .and_then(|host| host.run_command(id))
+                {
+                    return Ok(outcome);
+                }
+            }
+            Executor::Shell => {
+                if let Some(outcome) = self.script.as_deref().and_then(|host| host.claims(id)) {
+                    return Ok(outcome);
+                }
+            }
+        }
         // `App_Open`/`App_Save` never arrive here: the shell owns both ids and asks
         // the host's `FilePicker` (S6). A backend only moves bytes.
         // The two object verbs are not view toggles: they hand the shell a session
@@ -798,19 +925,22 @@ impl AppBackend for RustAppBackend {
                 .flatten();
             let hide = visible != Some(false);
             let verb = if hide { "Hide" } else { "Show" };
-            let changed = self.with_document_mut(|_, document| {
-                in_transaction(document, verb, |document| {
+            let changed = self.edit(|_, document| {
+                let (changed, touched) = in_transaction(document, verb, |document| {
                     let mut changed = 0;
+                    let mut touched = Vec::new();
                     for name in &selection {
                         let Some(id) = document.get_by_name(name) else {
                             continue;
                         };
                         if hide_object(document, id, Some(!hide)).is_some() {
                             changed += 1;
+                            touched.push(name.clone());
                         }
                     }
-                    Ok(changed)
-                })
+                    Ok((changed, touched))
+                })?;
+                Ok((changed, Some(EditReport::new(verb, touched, None))))
             })?;
             let verb = if hide { "hid" } else { "showed" };
             return Ok(CommandOutcome {
@@ -824,7 +954,7 @@ impl AppBackend for RustAppBackend {
         // next see one history.
         if id == UNDO || id == REDO {
             let undo = id == UNDO;
-            let name = self.with_document_mut(|_, document| {
+            let name = self.edit(|_, document| {
                 let names = if undo {
                     document.undo_names()
                 } else {
@@ -837,10 +967,26 @@ impl AppBackend for RustAppBackend {
                     document.redo()
                 };
                 if !moved {
-                    return Ok(None);
+                    return Ok((None, None));
                 }
-                document.recompute()?;
-                Ok(Some(name))
+                // Undo/redo apply the recorded values directly, so the objects that
+                // executed are the ones the reverted transaction touched. That is
+                // the only touched-set the history exposes (it returns only a flag).
+                let executed = document.recompute()?;
+                let executed = object_names(document, &executed);
+                let transaction = if name.is_empty() {
+                    if undo { "Undo" } else { "Redo" }.to_string()
+                } else {
+                    name.clone()
+                };
+                Ok((
+                    Some(name),
+                    Some(EditReport::new(
+                        &transaction,
+                        executed.clone(),
+                        Some(executed),
+                    )),
+                ))
             })?;
             let verb = if undo { "undo" } else { "redo" };
             return Ok(match name {
@@ -855,6 +1001,20 @@ impl AppBackend for RustAppBackend {
                     ..Default::default()
                 },
             });
+        }
+
+        // Draft owns `Draft_Snap_Lock` when its command is registered: it is the
+        // header label's switch, and its `IsChecked` reads `Snapper.isEnabled()`.
+        // Running the local fallback instead would move a check mark nothing shows.
+        // The local switch stays for a build with no scripting surface.
+        if id == SNAP {
+            if let Some(outcome) = self
+                .script
+                .as_deref()
+                .and_then(|host| host.run_command(id))
+            {
+                return Ok(outcome);
+            }
         }
 
         let mut state = self.state.borrow_mut();
@@ -977,18 +1137,32 @@ impl AppBackend for RustAppBackend {
                 ..Default::default()
             });
         }
-        match self.with_document_mut(|_, document| translate(document, &selection, delta)) {
-            Ok(moved) => Ok(CommandOutcome {
-                ok: true,
-                status: format!("moved {moved} object(s)"),
-                ..Default::default()
-            }),
-            Err(error) => Ok(CommandOutcome {
+        let outcome = match self.edit(|_, document| match translate(document, &selection, delta) {
+            Ok((moved, executed)) => Ok((
+                CommandOutcome {
+                    ok: true,
+                    status: format!("moved {} object(s)", moved.len()),
+                    ..Default::default()
+                },
+                Some(EditReport::new("Move", moved, Some(executed))),
+            )),
+            Err(error) => Ok((
+                CommandOutcome {
+                    ok: false,
+                    error,
+                    ..Default::default()
+                },
+                None,
+            )),
+        }) {
+            Ok(outcome) => outcome,
+            Err(error) => CommandOutcome {
                 ok: false,
                 error,
                 ..Default::default()
-            }),
-        }
+            },
+        };
+        Ok(outcome)
     }
 
     fn dialog_cancel(&mut self, token: &str) -> Result<CommandOutcome, String> {
@@ -1005,28 +1179,35 @@ impl AppBackend for RustAppBackend {
         Ok(CommandOutcome::default())
     }
 
-    /// A manipulator commit: the rotation rings' `transform`/`apply`, and nothing else.
+    /// A manipulator commit: the script's providers first, then the document's own.
     ///
-    /// The contract matches the native workbench's: `values` are the 16 row-major
-    /// elements of the **world-space** transform, composed on the left of the object's
-    /// placement (`delta · placement`). Dress-up manipulators (fillet/chamfer handles)
-    /// need a Part workbench behind them; the sample document has no handles to grab.
+    /// A commit arrives once, on mouse-up (a drag previews inside the viewport), so the
+    /// interpreter round-trip is per gesture and not part of the drag. The script's
+    /// providers own what a manipulator means for their objects — the generic
+    /// `transform`/`apply` included, which is why a mod's placement edit and its undo
+    /// label are the ones an edition sees. `None` from the script means no provider
+    /// claims the pair, and the Rust arm below is the fallback (a build with no script,
+    /// or one that disclaims the commit).
+    ///
+    /// The `transform` contract matches the native workbench's: `values` are the 16
+    /// row-major elements of the **world-space** transform, composed on the left of the
+    /// object's placement (`delta · placement`).
     fn apply_interaction(
         &mut self,
         commit: &InteractionCommit,
         object: &str,
     ) -> Result<ApplyResult, String> {
+        if let Some(result) = self
+            .script
+            .as_deref()
+            .and_then(|host| host.apply_interaction(commit, object))
+        {
+            return Ok(result);
+        }
         if commit.manipulator != TRANSFORM_ID || commit.action != "apply" {
-            // Not the shared transform gizmo. A workbench's dress-up arc (the Part
-            // fillet, a BIM grip) knows its own feature type, so the commit is the
-            // script's to apply; only when it disclaims the id is it unavailable.
-            if let Some(result) = self
-                .script
-                .as_deref()
-                .and_then(|host| host.apply_interaction(commit, object))
-            {
-                return Ok(result);
-            }
+            // A workbench's dress-up arc (the Part fillet, a BIM grip) knows its own
+            // feature type, so the commit is the script's to apply; only when it
+            // disclaims the id is it unavailable.
             return Ok(ApplyResult {
                 ok: false,
                 error: format!(
@@ -1041,18 +1222,24 @@ impl AppBackend for RustAppBackend {
                 error: "a transform commit needs 16 matrix values".to_string(),
             });
         };
-        self.with_document_mut(|_, document| {
+        self.edit(|_, document| {
             let Some(id) = document.get_by_name(object) else {
-                return Ok(ApplyResult {
-                    ok: false,
-                    error: format!("no object {object}"),
-                });
+                return Ok((
+                    ApplyResult {
+                        ok: false,
+                        error: format!("no object {object}"),
+                    },
+                    None,
+                ));
             };
             let Some(placement) = current_placement(document, id) else {
-                return Ok(ApplyResult {
-                    ok: false,
-                    error: format!("{object} has no Placement"),
-                });
+                return Ok((
+                    ApplyResult {
+                        ok: false,
+                        error: format!("{object} has no Placement"),
+                    },
+                    None,
+                ));
             };
             let delta = Matrix4 { m: elements };
             let composed = delta.mul(&placement.to_matrix());
@@ -1061,15 +1248,21 @@ impl AppBackend for RustAppBackend {
                 Rotation::from_matrix(&composed),
             );
             // One transaction per commit, so a rotate ring drag is one undo step.
-            in_transaction(document, "Transform", |document| {
+            let executed = in_transaction(document, "Transform", |document| {
                 document.set_property(id, "Placement", Property::Placement(next))?;
-                document.recompute()?;
-                Ok(())
+                document.recompute()
             })?;
-            Ok(ApplyResult {
-                ok: true,
-                error: String::new(),
-            })
+            Ok((
+                ApplyResult {
+                    ok: true,
+                    error: String::new(),
+                },
+                Some(EditReport::new(
+                    "Transform",
+                    vec![object.to_string()],
+                    Some(object_names(document, &executed)),
+                )),
+            ))
         })
     }
 }
@@ -1142,7 +1335,13 @@ fn property_rows(object: &ferrocad_core::DocumentObject) -> Vec<PropRow> {
 /// This is the native `App_Move` contract (`obj.Placement = delta * obj.Placement`),
 /// applied to the placement's base only: a pure translation does not change the
 /// rotation, so the rotation is kept as it is.
-fn translate(document: &mut Document, names: &[String], delta: Vector3) -> Result<usize, String> {
+///
+/// Returns the names that moved and the names the recompute executed, in order.
+fn translate(
+    document: &mut Document,
+    names: &[String],
+    delta: Vector3,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let ids: Vec<ObjectId> = names
         .iter()
         .filter_map(|name| document.get_by_name(name))
@@ -1152,18 +1351,29 @@ fn translate(document: &mut Document, names: &[String], delta: Vector3) -> Resul
     }
     // One transaction for the whole selection: a typed move is one undo step.
     in_transaction(document, "Move", |document| {
-        let mut moved = 0;
+        let mut moved = Vec::new();
         for id in ids {
             let Some(placement) = current_placement(document, id) else {
                 continue;
             };
             let next = Placement::new(placement.base.add(&delta), placement.rotation);
             document.set_property(id, "Placement", Property::Placement(next))?;
-            moved += 1;
+            if let Some(name) = document.object(id).map(|object| object.name.clone()) {
+                moved.push(name);
+            }
         }
-        document.recompute()?;
-        Ok(moved)
+        let executed = document.recompute()?;
+        let executed = object_names(document, &executed);
+        Ok((moved, executed))
     })
+}
+
+/// The names of `ids`, in order, skipping any object the recompute removed.
+fn object_names(document: &Document, ids: &[ObjectId]) -> Vec<String> {
+    ids.iter()
+        .filter_map(|id| document.object(*id))
+        .map(|object| object.name.clone())
+        .collect()
 }
 
 /// The status line for an undo or redo: the transaction's name when it has one.
@@ -1272,6 +1482,30 @@ fn registry() -> std::sync::MutexGuard<'static, ferrocad_core::Application> {
 /// make the document unreadable.
 fn lock(handle: &DocumentHandle) -> std::sync::MutexGuard<'_, Document> {
     handle.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// One document as a model-tree node.
+///
+/// `active` is the shell's subject: the tree marks it, and the shell follows it for
+/// the title and the save name. The core names documents — a *label* is a field of the
+/// Python wrapper — so `label` repeats the name here.
+fn document_node(name: &str, handle: &DocumentHandle, active: bool) -> DocumentNode {
+    let document = lock(handle);
+    DocumentNode {
+        name: name.to_string(),
+        label: name.to_string(),
+        active,
+        objects: document
+            .object_ids()
+            .iter()
+            .filter_map(|id| document.object(*id))
+            .map(|object| ObjectNode {
+                name: object.name.clone(),
+                label: object.label.clone(),
+                type_id: object.type_id.clone(),
+            })
+            .collect(),
+    }
 }
 
 /// The sample document and why it failed to build, if it did.
@@ -1445,6 +1679,7 @@ mod tests {
 
     use ferrocad_inventor::{EventListener, Scene};
     use ferrocad_shell_api::app::{NoopListener, ScriptHost};
+    use ferrocad_shell_api::events::DocumentEvent;
     use ferrocad_shell_api::types::{
         AxisSummary, GpuPreferenceOutcome, GridProvider, GridSummary, ProviderFeature,
         SelectionRequest, WorkbenchReport,
@@ -1455,12 +1690,20 @@ mod tests {
     /// The synthetic node the fake script owns: in the tree, absent from the document.
     const SETTINGS_GRID: &str = "Settings/Grid";
 
+    /// The manipulator id the fake script owns, so a test can prove the commit order.
+    const SCRIPTED: &str = "scripted_grip";
+
     /// What the fake records, kept outside the boxed host so a test can read it back.
     #[derive(Default)]
     struct Recorded {
         selected: Mutex<Vec<SelectionItem>>,
         view: Mutex<Option<ShellViewState>>,
         requests: Mutex<Vec<SelectionRequest>>,
+        events: Mutex<Vec<DocumentEvent>>,
+        /// Every dialog token the document half forwarded, in order.
+        dialogs: Mutex<Vec<String>>,
+        /// Every interaction commit a provider claimed, by object name.
+        interactions: Mutex<Vec<String>>,
     }
 
     /// The script half the tests install.
@@ -1504,6 +1747,8 @@ mod tests {
             vec![DocumentNode {
                 name: SETTINGS_GRID.to_string(),
                 label: "Grid".to_string(),
+                // A synthetic node, not a document: the shell never follows it.
+                active: false,
                 objects: Vec::new(),
             }]
         }
@@ -1550,6 +1795,10 @@ mod tests {
 
         fn on_view_state_changed(&self, state: &ShellViewState) {
             *self.log.view.lock().unwrap() = Some(state.clone());
+        }
+
+        fn on_document_event(&self, event: &DocumentEvent) {
+            self.log.events.lock().unwrap().push(event.clone());
         }
 
         fn appearance_view(&self) -> Option<CommandOutcome> {
@@ -1617,6 +1866,7 @@ mod tests {
         }
 
         fn dialog_accept(&self, token: &str, values: &serde_json::Value) -> Option<CommandOutcome> {
+            self.log.dialogs.lock().unwrap().push(token.to_string());
             (token == DIALOG).then(|| CommandOutcome {
                 ok: true,
                 status: format!("accepted {values}"),
@@ -1625,10 +1875,28 @@ mod tests {
         }
 
         fn dialog_cancel(&self, token: &str) -> Option<CommandOutcome> {
+            self.log.dialogs.lock().unwrap().push(token.to_string());
             (token == DIALOG).then(|| CommandOutcome {
                 ok: true,
                 status: "cancelled".to_string(),
                 ..Default::default()
+            })
+        }
+
+        /// One manipulator id is the script's. The shared transform is disclaimed on
+        /// purpose: that is the fall-through the document arm exists for.
+        fn apply_interaction(
+            &self,
+            commit: &InteractionCommit,
+            object: &str,
+        ) -> Option<ApplyResult> {
+            if commit.manipulator != SCRIPTED {
+                return None;
+            }
+            self.log.interactions.lock().unwrap().push(object.to_string());
+            Some(ApplyResult {
+                ok: true,
+                error: String::new(),
             })
         }
 
@@ -1654,6 +1922,11 @@ mod tests {
         let backend =
             RustAppBackend::new().with_script_host(Box::new(FakeHost { log: log.clone() }));
         (backend, log)
+    }
+
+    /// Drain the events the fake recorded, so a test asserts on one edit only.
+    fn take_events(log: &Arc<Recorded>) -> Vec<DocumentEvent> {
+        std::mem::take(&mut *log.events.lock().unwrap())
     }
 
     #[test]
@@ -1715,6 +1988,84 @@ mod tests {
         // stopped would leave these empty.
         assert_eq!(log.selected.lock().unwrap().as_slice(), items.as_slice());
         assert!(log.view.lock().unwrap().as_ref().unwrap().grid);
+    }
+
+    #[test]
+    fn an_edit_announces_one_edited_and_one_recomputed() {
+        let (mut backend, log) = backend_with_script();
+
+        let set = backend.set_property("Box", "Length", "7").unwrap();
+        assert!(set.ok, "{}", set.error);
+        let events = take_events(&log);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0].id, DocumentEvent::EDITED);
+        assert_eq!(events[0].payload["transaction"], "Set property");
+        // One property write, one touched object — and the edit names it, not the
+        // whole document.
+        assert_eq!(events[0].payload["objects"], serde_json::json!(["Box"]));
+        assert_eq!(events[1].id, DocumentEvent::RECOMPUTED);
+        // The box executes, and the fillet that depends on it follows along.
+        assert_eq!(
+            events[1].payload["objects"],
+            serde_json::json!(["Box", "Fillet"])
+        );
+    }
+
+    #[test]
+    fn a_refused_edit_announces_nothing() {
+        let (mut backend, log) = backend_with_script();
+
+        let unknown = backend.set_property("Box", "Nope", "7").unwrap();
+        assert!(!unknown.ok);
+        let bad_value = backend.set_property("Box", "Length", "banana").unwrap();
+        assert!(!bad_value.ok);
+        // A refusal never opened a transaction, so neither event fires.
+        assert!(take_events(&log).is_empty());
+    }
+
+    #[test]
+    fn an_undo_announces_one_pair_naming_what_recomputed() {
+        let (mut backend, log) = backend_with_script();
+        assert!(backend.set_property("Box", "Length", "7").unwrap().ok);
+        take_events(&log);
+
+        let undo = backend.run_command(UNDO).unwrap();
+        assert!(undo.ok, "{}", undo.error);
+        let events = take_events(&log);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0].id, DocumentEvent::EDITED);
+        assert_eq!(events[0].payload["transaction"], "Set property");
+        assert_eq!(events[1].id, DocumentEvent::RECOMPUTED);
+        let executed = events[1].payload["objects"].as_array().unwrap();
+        assert!(executed.iter().any(|name| name == "Box"), "{executed:?}");
+        // The history returns only a flag, so the executed set is the touched set.
+        assert_eq!(events[0].payload["objects"], events[1].payload["objects"]);
+    }
+
+    #[test]
+    fn a_typed_move_announces_one_pair() {
+        let (mut backend, log) = backend_with_script();
+        backend
+            .set_selection(&[SelectionItem::with_elements("Box", Vec::new())])
+            .unwrap();
+        take_events(&log);
+
+        let token = backend
+            .run_command(catalog::MOVE)
+            .unwrap()
+            .token
+            .expect("App_Move mints a token");
+        let moved = backend
+            .dialog_accept(&token, &serde_json::json!({ "dx": 1.0 }))
+            .unwrap();
+        assert!(moved.ok, "{}", moved.error);
+
+        let events = take_events(&log);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0].id, DocumentEvent::EDITED);
+        assert_eq!(events[0].payload["transaction"], "Move");
+        assert_eq!(events[0].payload["objects"], serde_json::json!(["Box"]));
+        assert_eq!(events[1].id, DocumentEvent::RECOMPUTED);
     }
 
     #[test]
@@ -1791,6 +2142,68 @@ mod tests {
             .unwrap();
         assert!(!unknown.ok);
         assert!(unknown.error.contains("not a dialog this build opened"));
+    }
+
+    #[test]
+    fn the_half_that_minted_a_token_spends_it() {
+        let (mut backend, log) = backend_with_script();
+        backend
+            .set_selection(&[SelectionItem::with_elements("Box", Vec::new())])
+            .unwrap();
+        let token = backend
+            .run_command(catalog::MOVE)
+            .unwrap()
+            .token
+            .expect("App_Move mints a token");
+        assert!(
+            backend
+                .dialog_accept(&token, &serde_json::json!({ "dx": 1.0 }))
+                .unwrap()
+                .ok
+        );
+        assert!(
+            log.dialogs.lock().unwrap().is_empty(),
+            "a move token is the document half's to spend, not the script's"
+        );
+
+        // The other direction: the script's token is never read as a move token.
+        assert!(
+            backend
+                .dialog_accept(DIALOG, &serde_json::json!({ "r": 2.0 }))
+                .unwrap()
+                .ok
+        );
+        assert_eq!(*log.dialogs.lock().unwrap(), vec![DIALOG.to_string()]);
+    }
+
+    #[test]
+    fn a_script_that_disclaims_the_transform_keeps_the_document_arm() {
+        let (mut backend, log) = backend_with_script();
+        let mut commit = InteractionCommit::new(TRANSFORM_ID, 0, "apply");
+        commit.values = vec![
+            1.0, 0.0, 0.0, 10.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let applied = backend.apply_interaction(&commit, "Box").unwrap();
+        assert!(applied.ok, "{}", applied.error);
+        assert!(
+            log.interactions.lock().unwrap().is_empty(),
+            "no provider claims the shared transform"
+        );
+        let events = take_events(&log);
+        assert_eq!(events[0].payload["transaction"], "Transform");
+    }
+
+    #[test]
+    fn a_script_provider_owns_the_manipulator_it_registers_for() {
+        let (mut backend, log) = backend_with_script();
+        let commit = InteractionCommit::new(SCRIPTED, 0, "apply");
+        let applied = backend.apply_interaction(&commit, "Box").unwrap();
+        assert!(applied.ok, "{}", applied.error);
+        assert_eq!(*log.interactions.lock().unwrap(), vec!["Box".to_string()]);
+        assert!(
+            take_events(&log).is_empty(),
+            "the document arm did not run for an id the script owns"
+        );
     }
 
     #[test]

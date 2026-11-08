@@ -1,8 +1,10 @@
 # Mod events: advertise, subscribe, and stay out of the frame
 
-Status: **design and plan (2026-10-30).** *Plan only — nothing here is built.* Stage **E1** of
+Status: **design and plan (2026-10-30); first slice built (2026-11-08).** Stage **E1** of
 the transform overhaul ([`transform-session.md`](transform-session.md) §5), written up separately
-because it is about the host/mod boundary rather than the transform itself.
+because it is about the host/mod boundary rather than the transform itself. The two
+document events are emitted for the scripting halves (§3a); `selection.changed` and
+`transform.committed` are still unbuilt.
 
 ## 0. Why this exists
 
@@ -75,6 +77,34 @@ set.
 `transform.committed` is the one this plan needs: it lets a mod see the session boundary without
 the host calling into it twice, and it is what makes D0's "mods own the commit" observable rather
 than a one-way call.
+
+### 3a. What is built (E1, first slice)
+
+The vocabulary is `ferrocad_shell_api::events::DocumentEvent`
+(`crates/ferrocad_shell_api/src/events.rs:19`), with exactly the two ids this slice can
+honestly emit: `document.edited` (`events.rs:28`) and `document.recomputed`
+(`events.rs:31`). `ScriptHost::on_document_event` has a default body
+(`crates/ferrocad_shell_api/src/app.rs:613`), so every existing host compiles unchanged.
+
+- **`document.edited`** — payload `{transaction, objects}` — after a transaction commits.
+  `RustAppBackend` emits it from `announce`
+  (`crates/ferrocad_shell_rust/src/backend.rs:229`), called once per edit through
+  `edit` (`backend.rs:213`); the document doorway emits it from `create`/`set`
+  (`crates/ferrocad_doc_api/src/lib.rs:181`, `:278`).
+- **`document.recomputed`** — payload `{objects}` — after `recompute()` returns `Ok`.
+  Same sites: `announce` (`crates/ferrocad_shell_rust/src/backend.rs:235`) and the
+  doorway (`crates/ferrocad_doc_api/src/lib.rs:182`, `:286`, `:299`).
+
+A refused write opens no transaction, so it emits nothing. A path that writes without
+recomputing (a rename, a visibility toggle) emits only `document.edited`. Undo/redo emit one
+pair, and their touched set is the executed set because the history returns only a flag.
+`JsScriptHost` forwards both to `window.__ferrocadJs.onDocumentEvent(id, payloadJson)`
+(`crates/ferrocad_shell_js/src/lib.rs:205`; the import is at `:76`), and the page bundles log
+one line per event.
+
+Still open from the table above: `selection.changed` and `transform.committed`.
+`transform.committed` is shell-owned (the shell has the session), so it would not ride this
+document seam.
 
 ## 4. Where it lands in the code
 

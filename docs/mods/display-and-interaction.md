@@ -160,9 +160,11 @@ values_json)`:
 1. resolves `object_name` in the active document;
 2. parses `values_json` as a list of numbers;
 3. calls `FerroCAD.interaction(...)`;
-4. returns the provider's dict as JSON, or
-   `{"ok": false, "error": "no module handles <manipulator> <action>"}` when no
-   provider claims it.
+4. returns the provider's dict as JSON, or `null` when no provider claims it. A
+   composition then runs the document half's own implementation (the generic
+   `transform`/`apply` gizmo), so an edition is free to leave that commit alone. The
+   Python backend, which has no such fallback, reports
+   `{"ok": false, "error": "no module handles <manipulator> <action>"}` instead.
 
 ```python
 import json

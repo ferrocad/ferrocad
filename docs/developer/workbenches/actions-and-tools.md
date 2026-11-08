@@ -21,7 +21,7 @@ workbench scripts port, and it keeps the shell naming no workbench.
 | `FreeCAD.GuiUp` | `0`, hardcoded in the facade | ✅ `1` in the app, `0` headless (§8, §16) |
 | Command registry in the shell | ▢ none; the console has three hardcoded buttons (`version()`, `objects`, `recompute()`) | ✅ header controls, popovers and dock over the registry (A1, P0.6) |
 | Multi-selection | ▢ the inspector held one name; nothing pushed it to Python | ✅ click / Ctrl·Shift-click, pushed to the facade (A2) |
-| Built-in commands | ▢ none | ✅ `App_Delete`, `App_Move`, `App_Rotate` (A2) |
+| Built-in commands | ▢ none | ✅ the catalogued built-ins, including the object verbs and the view/edit verbs (A2, B1) |
 | Menu bar / toolbar / shortcuts | ▢ none (S2) | ◐ header controls, action dock and the title-bar app menu; `Accel` bindings are A4 |
 | Workbench entry points | module hooks (`register_display_provider`, `register_interaction_provider`) and `ferrocad_shell.add_namespace` | ✅ plus `FreeCADGui.addCommand` |
 | Interactive tools | `ferrocad_stage::Tool` (polyline), `Manipulator`, `TransformGizmo`; contributed in Rust | same |
@@ -451,7 +451,8 @@ return {"tool": "toy_measure"}                         # starts a registered too
   strip. A command declares `FerroCAD_Surface: "radial"` (and optionally
   `FerroCAD_Tone: "additive" | "destructive"`), which removes it from the dock and
   makes it a wedge in the wheel. The built-ins today are `App_Move` and
-  `App_Rotate` (structural) and `App_Delete` (destructive).
+  `App_Rotate` (structural), `App_ToggleVisibility` (structural) and `App_Delete`
+  (destructive).
 
   `FerroCAD_Wheel: true` also offers a command in the wheel **without** moving it off
   its own surface. `App_SetWorkplane` uses it: the row belongs in the `WP` menu, but
@@ -528,7 +529,9 @@ registry.
 | `App_Move` ✅ | move the selection by `(dx, dy, dz)` | **floating** HUD beside the gizmo with a live translation preview; the canvas stays interactive, and `runCommand("App_Move", dx, dy, dz)` applies the same code without the dialog. Returns `"gizmo": "translate"` so the HUD and the arrows agree |
 | `App_Rotate` ✅ | switch the transform gizmo to its rotation rings | a mode-only verb (no form, no transaction): returns `"gizmo": "rotate"`; the ring drag commits the same `transform` interaction a Move drag does. `Ctrl+Shift+R` |
 | `File_New` / `File_Open` / `File_Save` / `File_SaveAs` / `File_Close` | S2 | base app, not a workbench |
-| `App_Undo` / `App_Redo` | S2 | `IsActive` from `getAvailableUndos` |
+| `App_Undo` / `App_Redo` ✅ | undo/redo the document's last transaction | `IsActive` from `UndoCount`/`RedoCount`; one recompute after the history move; `Ctrl+Z` / `Ctrl+Shift+Z` |
+| `App_Fit` ✅ | frame the document in the viewport | `ForView`; returns `{"view": {"fit": true}}` |
+| `App_ToggleVisibility` ✅ | hide the selection, or show it when all is hidden | one transaction for the whole selection; `IsActive` = selection non-empty; also in the wheel |
 | `Toy_MakeSlab` | create a slab | the toy's `makeSlab`, wrapped as a command (asks for Width/Depth/Height) |
 | `Toy_Polyline` | start the polyline tool | `ForView`; returns `{"tool": "toy_polyline"}` |
 | `App_ToggleGrid` ✅ | show or hide the reference grid | `ForView`, checkable; `IsChecked` reads the mirrored `ViewState` |
@@ -681,7 +684,7 @@ through — without the shell naming the workbench.
 | File | What it does |
 | --- | --- |
 | `python/FreeCADGui/__init__.py` | the registry (`addCommand`, `removeCommand`, `listCommands`, `runCommand`); `Command` duck-typing (`Activated` required, `GetResources`/`IsActive`/`IsChecked` optional); per-command error isolation with `_report_once`; the private bridge `_command_list()` / `_run(name)`; the **token registry** `_accept`/`_cancel`/`_cancel_all`; the read-only `Selection` snapshot |
-| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_shell_python::python::call_json` calls; `set_selection(payload)` (the snapshot push); `set_view_state(payload)` (the view mirror); `dialog_accept(payload)` / `dialog_cancel(token)`; the built-ins `App_Delete`, `App_Move`, `App_Rotate` and the checkable `App_ToggleGrid` |
+| `python/ferrocad_shell/__init__.py` | `commands()` and `run_command(name)` — the two functions `ferrocad_shell_python::python::call_json` calls; `set_selection(payload)` (the snapshot push); `set_view_state(payload)` (the view mirror); `set_visibility(payload)` (the hide/show switch, shared with the eye icon); `dialog_accept(payload)` / `dialog_cancel(token)`; the built-ins `App_Delete`, `App_Move`, `App_Rotate`, `App_ToggleVisibility`, `App_Undo`, `App_Redo`, `App_Fit` and the checkable `App_ToggleGrid` |
 | `python/ferrocad_toy/__init__.py` | `Toy_MakeSlab` (`MenuText` "Create Slab", `ToolTip`, `Accel` "Ctrl+Shift+S", `Group` "Toy", `CmdType` "ForEdit") returns a three-quantity dialog whose `_make_from_dialog` callback creates the slab; `Toy_Polyline` returns `{"tool": "toy_polyline"}` |
 
 Two shape decisions fell out of the build:

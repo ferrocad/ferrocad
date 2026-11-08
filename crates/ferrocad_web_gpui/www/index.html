@@ -17,6 +17,14 @@
     import init, { ferrocad_open } from "./pkg/ferrocad_web_gpui.js";
 
     const params = new URLSearchParams(location.search);
+
+    // The loader's half of the document doorway. `JsScriptHost::with_kernel` calls this
+    // once at boot with a function that reaches the host's one document (JSON in, JSON
+    // out). A page without this line still renders the shell; only an addon that edits
+    // the document is missing.
+    window.__ferrocadInstallKernel = (call) => {
+      window.ferrocad = { call };
+    };
     // `?reopen=1` captures the next save instead of downloading it, then opens those
     // bytes again -- the save/open round trip through the real commands.
     const captureSave = params.has("reopen");
@@ -81,9 +89,24 @@
     });
 
     // `?js=1` installs the page's JS scripting surface before the module boots, so
-    // its command list is part of the first `commands()` read.
-    if (params.has("js")) {
+    // its command list is part of the first `commands()` read. `?runtime=js` is the
+    // same request in the longer form the Rust switch also understands, so the page
+    // must install the module for it too.
+    if (params.has("js") || params.get("runtime") === "js") {
       const { install } = await import("./js-demo.js");
+      install();
+    }
+
+    // `?addons=1` loads the JS workbench bundle and `?addons=wasm` the wasm one. Both
+    // register before the module boots, so their commands are part of the first
+    // `commands()` read, and both reach the document through `window.ferrocad.call`
+    // (installed from the host's doorway).
+    const addons = params.get("addons");
+    if (addons === "wasm") {
+      const { install } = await import("./addons/toy-wasm.js");
+      await install();
+    } else if (params.has("addons")) {
+      const { install } = await import("./addons/toy.js");
       install();
     }
 
@@ -94,7 +117,7 @@
     // object, run an accelerated command, type a value into a field, commit with
     // Enter. GPUI's web backend takes keyboard input through a hidden IME mirror
     // (`body > textarea`), which is where these events go.
-    if (params.has("select") || params.has("keys") || params.has("type") || params.has("save") || params.has("reopen")) {
+    if (params.has("select") || params.has("keys") || params.has("type") || params.has("save") || params.has("reopen") || params.has("probe")) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const canvas = document.querySelector("canvas");
       const mirror = document.querySelector("body > textarea");
@@ -247,6 +270,21 @@
           }
           await new Promise((resolve) => setTimeout(resolve, 50));
           key("enter");
+        }
+
+        // `?probe=1` reads the document back through the doorway once the synthetic
+        // input has settled. The shell draws its tree into the canvas, so the DOM
+        // cannot show a new object; the doorway's own JSON is the honest probe.
+        if (params.has("probe")) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          if (window.ferrocad) {
+            console.log(
+              "ferrocad harness: document",
+              window.ferrocad.call('{"call":"document"}'),
+            );
+          } else {
+            console.log("ferrocad harness: document unavailable (no doorway)");
+          }
         }
 
         // `?save=1` runs Save through the shell's accelerator; the page logs the

@@ -20,6 +20,8 @@ pub mod catalog;
 pub mod commands;
 pub mod dialog;
 pub mod display;
+pub mod document_api;
+pub mod events;
 pub mod selection;
 pub mod types;
 pub mod view;
@@ -28,6 +30,8 @@ pub use app::{AppBackend, NoopListener, ScriptHost};
 pub use commands::{CommandInfo, CommandOutcome, Surface, SurfaceGroups, find, group_by_surface};
 pub use dialog::{DialogField, DialogSpec, Kind, ValueState};
 pub use display::StageMesh;
+pub use document_api::DocumentApi;
+pub use events::{DocumentEvent, DocumentEventSink};
 pub use selection::SelectionItem;
 pub use types::{
     AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,

@@ -102,3 +102,27 @@ pub(crate) static PYTHON_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// what the seam forwards.
 #[cfg(test)]
 pub(crate) use ferrocad_shell_python::python;
+
+/// Bind the interpreter's `ferrocad` module to **this binary's** core.
+///
+/// The shell tests run the desktop composition (`RustAppBackend` +
+/// `PythonScriptHost`), and the document half answers from `ferrocad_core`'s
+/// process-wide registry. The script half must be bound to that same registry:
+/// importing `python/ferrocad.abi3.so` would give the interpreter its own
+/// `ferrocad_core`, and the two halves would then see different documents (which is
+/// exactly what the legacy `PythonAppBackend` hid).
+///
+/// `append_to_inittab` has to run before the interpreter initialises, so every boot
+/// calls this; the registration itself happens once. `FreeCAD/__init__.py` sees the
+/// built-in and does not import the combined extension over it.
+#[cfg(test)]
+pub(crate) fn register_test_core() {
+    use std::sync::Once;
+
+    use ferrocad_py::ferrocad as ferrocad_module;
+
+    static CORE: Once = Once::new();
+    CORE.call_once(|| {
+        pyo3::append_to_inittab!(ferrocad_module);
+    });
+}

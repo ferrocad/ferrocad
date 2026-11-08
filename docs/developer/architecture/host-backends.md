@@ -350,6 +350,13 @@ reported and replaced by `plain` — the browser's rule, so a scripting surface 
 start never costs the window. The default is CPython on the desktop and `plain` in the
 browser.
 
+**wasm addons are orthogonal to the runtime, on both hosts.** `?addons=` and `--addons=`
+load a bundle beside whatever script half is running (the browser's page surfaces it; the
+desktop composes `ferrocad_shell_wasm::Addons`), so `wasm` is a package format rather than a
+fifth name. A bundle is sandboxed: its only import is the document doorway, it runs on an
+interpreter with no executable memory, and each call has a fuel budget — a workbench that
+loops forever traps instead of freezing the window.
+
 Two engines were missing, and they are different dependencies:
 
 - **a JS engine**, for the JS half — built on the desktop over `rquickjs` (QuickJS), behind

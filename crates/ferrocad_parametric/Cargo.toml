@@ -61,3 +61,5 @@ serde_json.workspace = true
 js = ["ferrocad/js"]
 # `--script-host=pywasm`: compose RustPython on the desktop (a Python VM in the app).
 pywasm = ["ferrocad/pywasm"]
+# `--addons`: sandboxed wasm workbenches beside any script half.
+addons = ["ferrocad/addons"]

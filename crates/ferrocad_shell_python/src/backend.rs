@@ -27,7 +27,7 @@ use crate::script_host::PythonScriptHost;
 ///
 /// Call after `python::configure` and before `Shell::boot`.
 pub fn install(cx: &mut App) {
-    install_with(cx, Runtime::Cpython);
+    install_composed(cx, Runtime::Cpython, &[]);
 }
 
 /// Install the composition for one scripting configuration.
@@ -36,48 +36,121 @@ pub fn install(cx: &mut App) {
 /// the same way the browser falls back: a scripting surface that cannot start must not
 /// cost the window.
 pub fn install_with(cx: &mut App, runtime: Runtime) {
-    match compose(runtime) {
+    install_composed(cx, runtime, &[]);
+}
+
+/// [`install_with`] plus the wasm bundles to load beside it.
+pub fn install_composed(cx: &mut App, runtime: Runtime, addons: &[std::path::PathBuf]) {
+    match compose_with(runtime, addons) {
         Ok(backend) => ferrocad_shell_core::app::install_backend(cx, backend),
         Err(error) => {
             eprintln!("ferrocad: {error}");
             eprintln!(
                 "ferrocad: continuing without a script half; the document half answers alone"
             );
-            let plain = compose(Runtime::Plain)
-                .expect("the plain configuration is always compilable");
-            ferrocad_shell_core::app::install_backend(cx, plain);
+            let plain = RustAppBackend::from_shared_registry();
+            ferrocad_shell_core::app::install_backend(cx, Box::new(plain));
         }
     }
 }
 
 /// Compose the backend for one scripting configuration.
+pub fn compose(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
+    compose_with(runtime, &[])
+}
+
+/// [`compose`] with sandboxed wasm workbenches loaded beside the script half.
 ///
 /// `Plain` and `Cpython` are what this crate always links. `Pywasm` and `Js` are halves a
-/// build opts into: the JS page is behind the `js` feature, and RustPython needs a
-/// big-stack worker before it can be installed here (see
-/// `docs/project/tasks/backend-parity.md` B7). `Err` is a request this build cannot
-/// serve, not a failure — [`install_with`] falls back to the document half.
-pub fn compose(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
+/// build opts into; the bundles behind `addons` are a third. `Err` is a request this build
+/// cannot serve, not a failure — [`install_composed`] falls back to the document half. An
+/// addon that will not load is logged and skipped, because one broken workbench must not
+/// cost the window.
+pub fn compose_with(
+    runtime: Runtime,
+    addons: &[std::path::PathBuf],
+) -> Result<Box<dyn AppBackend>, String> {
+    let primary = script_for(runtime)?;
+    let script = with_addons(primary, addons)?;
+
+    let mut backend = RustAppBackend::from_shared_registry();
+    if let Some(script) = script {
+        backend = backend.with_script_host(script);
+    }
+    Ok(Box::new(backend))
+}
+
+/// The primary script half, if the configuration has one.
+fn script_for(runtime: Runtime) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost>>, String> {
     Ok(match runtime {
-        Runtime::Plain => Box::new(RustAppBackend::from_shared_registry()),
-        Runtime::Cpython => Box::new(engine()),
-        Runtime::Pywasm => pywasm()?,
-        Runtime::Js => js_page()?,
+        Runtime::Plain => None,
+        Runtime::Cpython => Some(Box::new(PythonScriptHost)),
+        Runtime::Pywasm => Some(pywasm()?),
+        Runtime::Js => Some(js_page()?),
     })
+}
+
+/// Wrap `primary` in the addon composition, when there is anything to wrap.
+fn with_addons(
+    primary: Option<Box<dyn ferrocad_shell_api::ScriptHost>>,
+    addons: &[std::path::PathBuf],
+) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost>>, String> {
+    if addons.is_empty() {
+        return Ok(primary);
+    }
+    #[cfg(feature = "addons")]
+    {
+        // A path may be a directory of workbenches (`<dir>/<Name>/addon.wasm`) or one
+        // bundle file, so `--addons mods` and `--addons mods/toy/addon.wasm` both work.
+        let mut bundles = Vec::new();
+        for path in addons {
+            if path.is_dir() {
+                bundles.extend(ferrocad_shell_wasm::packs(std::slice::from_ref(path)));
+            } else {
+                bundles.push(path.clone());
+            }
+        }
+        if bundles.is_empty() {
+            eprintln!(
+                "ferrocad: no wasm addons under {}; the script half runs alone",
+                addons
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return Ok(primary);
+        }
+
+        // The bundles reach the same registry the document half answers from, so an
+        // addon's `create` lands in the tree beside a CPython edit.
+        let document: std::sync::Arc<dyn ferrocad_shell_api::DocumentApi> =
+            std::sync::Arc::new(ferrocad_doc_api::DocApi::new());
+        let (host, errors) = ferrocad_shell_wasm::Addons::boot(primary, &bundles, document);
+        for error in &errors {
+            eprintln!("ferrocad: addon skipped: {error}");
+        }
+        Ok(Some(Box::new(host)))
+    }
+    #[cfg(not(feature = "addons"))]
+    {
+        let _ = primary;
+        Err("`--addons` needs a build with the `addons` feature: \
+             `cargo run -p ferrocad_parametric --features addons -- --addons mods`"
+            .to_string())
+    }
 }
 
 /// The desktop's RustPython half: the interpreter on the worker its compiler needs.
 #[cfg(feature = "pywasm")]
-fn pywasm() -> Result<Box<dyn AppBackend>, String> {
-    let script = ferrocad_shell_pywasm::ThreadedScriptHost::live()
+fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
+    let host = ferrocad_shell_pywasm::ThreadedScriptHost::live()
         .map_err(|error| format!("the RustPython thread did not boot: {error}"))?;
-    Ok(Box::new(
-        RustAppBackend::from_shared_registry().with_script_host(Box::new(script)),
-    ))
+    Ok(Box::new(host))
 }
 
 #[cfg(not(feature = "pywasm"))]
-fn pywasm() -> Result<Box<dyn AppBackend>, String> {
+fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
     Err("`--script-host=pywasm` needs a build with the `pywasm` feature: \
          `cargo run -p ferrocad_parametric --features pywasm -- --script-host=pywasm`"
         .to_string())
@@ -85,24 +158,24 @@ fn pywasm() -> Result<Box<dyn AppBackend>, String> {
 
 /// The desktop's JS page: the same `Page` the browser has, over an embedded QuickJS.
 #[cfg(feature = "js")]
-fn js_page() -> Result<Box<dyn AppBackend>, String> {
+fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
     use std::sync::Arc;
 
     let page: Arc<dyn ferrocad_shell_js::Page> = Arc::new(
         ferrocad_shell_js::EnginePage::from_mods_dir()
             .map_err(|error| format!("the JS page did not boot: {error}"))?,
     );
+    // The page's own doorway announces to the page, as the browser's does.
     let events: Arc<dyn ferrocad_shell_api::DocumentEventSink> =
         Arc::new(ferrocad_shell_js::PageEvents::new(Arc::clone(&page)));
     let document = Arc::new(ferrocad_doc_api::DocApi::with_events(events));
-    Ok(Box::new(
-        RustAppBackend::from_shared_registry()
-            .with_script_host(Box::new(ferrocad_shell_js::JsScriptHost::with_kernel(page, document))),
-    ))
+    Ok(Box::new(ferrocad_shell_js::JsScriptHost::with_kernel(
+        page, document,
+    )))
 }
 
 #[cfg(not(feature = "js"))]
-fn js_page() -> Result<Box<dyn AppBackend>, String> {
+fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
     Err("`--script-host=js` needs a build with the `js` feature: \
          `cargo run -p ferrocad_parametric --features js -- --script-host=js`"
         .to_string())

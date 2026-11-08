@@ -25,6 +25,39 @@ fn pywasm_without_the_feature_says_how_to_get_it() {
     assert!(error.contains("--features pywasm"), "{error}");
 }
 
+#[cfg(not(feature = "addons"))]
+#[test]
+fn addons_without_the_feature_say_how_to_get_them() {
+    let error = ferrocad_shell_python::compose_with(
+        Runtime::Plain,
+        &[std::path::PathBuf::from("mods")],
+    )
+    .err()
+    .expect("the feature is off");
+    assert!(error.contains("--features addons"), "{error}");
+}
+
+#[cfg(feature = "addons")]
+#[test]
+fn an_addons_directory_with_no_bundles_leaves_the_script_half_alone() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let backend = ferrocad_shell_python::compose_with(Runtime::Cpython, &[temp.path().to_path_buf()])
+        .expect("nothing to load is not an error");
+    assert!(
+        backend.script_host().is_some(),
+        "the primary survives an empty addon directory"
+    );
+}
+
+#[cfg(feature = "addons")]
+#[test]
+fn plain_plus_addons_still_has_a_document_half() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let backend = ferrocad_shell_python::compose_with(Runtime::Plain, &[temp.path().to_path_buf()])
+        .expect("composes");
+    assert!(backend.script_host().is_none(), "no bundle, no script half");
+}
+
 #[cfg(feature = "pywasm")]
 #[test]
 fn pywasm_is_the_composition_with_rustpython_behind_it() {

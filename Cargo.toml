@@ -43,6 +43,7 @@ members = [
     "crates/ferrocad_shell_core",
     "crates/ferrocad_shell_rust",
     "crates/ferrocad_shell_js",
+    "crates/ferrocad_shell_wasm",
     "crates/ferrocad_shell_web",
     "crates/ferrocad_shell_pywasm",
     "crates/ferrocad_addon_toy",
@@ -150,6 +151,9 @@ ferrocad_shell_api = { path = "crates/ferrocad_shell_api", version = "0.1.5" }
 ferrocad_doc_api = { path = "crates/ferrocad_doc_api", version = "0.1.5" }
 ferrocad_shell_rust = { path = "crates/ferrocad_shell_rust", version = "0.1.5" }
 ferrocad_shell_js = { path = "crates/ferrocad_shell_js", version = "0.1.5" }
+# The wasm-addon script half: a bundle's doorway over the document, hosted by
+# `wasmi` on a native build.
+ferrocad_shell_wasm = { path = "crates/ferrocad_shell_wasm", version = "0.1.5" }
 ferrocad_shell_pywasm = { path = "crates/ferrocad_shell_pywasm", version = "0.1.5" }
 # The browser host's runtime switch: it composes the document half above with one of
 # the two browser script halves, or with none. Not published with the others (it is

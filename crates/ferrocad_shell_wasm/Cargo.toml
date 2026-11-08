@@ -1,0 +1,39 @@
+[package]
+name = "ferrocad_shell_wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's wasm-addon scripting surface: a workbench bundle over the doorway"
+keywords = ["cad", "wasm", "freecad"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_shell_wasm"
+publish = false
+
+[dependencies]
+# The scripting half's contract, and the types its answers are made of.
+ferrocad_shell_api.workspace = true
+# The vocabulary a `ScriptHost` hands back: the scene, the event listener, the tool.
+ferrocad_inventor.workspace = true
+ferrocad_stage.workspace = true
+# `add_datum_plane` takes the seam's `Vector3`.
+ferrocad_types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log = "0.4"
+
+# The interpreter. `wasmi` runs a bundle's code as an interpreter: no JIT, no executable
+# memory, fuel metering, and the bundle's only import is the doorway. `wat` and `memory64`
+# are not needed in production; `auto-dispatch` **is** — without it wasmi 2.0's fallback
+# path does not honour fuel metering, and a `loop`/`br` bundle overflows the native stack
+# instead of trapping (found by `a_runaway_bundle_traps_instead_of_hanging`).
+wasmi = { version = "2.0", default-features = false, features = ["std", "validate", "auto-dispatch"] }
+
+[dev-dependencies]
+# The fixture addon is written as text; the shipped bundles are binary.
+wasmi = { version = "2.0", default-features = false, features = ["std", "validate", "auto-dispatch", "wat"] }
+# A `mods/<Name>/addon.wasm` in a temporary directory, for the discovery test.
+tempfile = "3"

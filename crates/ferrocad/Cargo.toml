@@ -68,3 +68,5 @@ js = ["ferrocad_shell_python/js"]
 # `--script-host=pywasm`: compose RustPython on the desktop. Off by default because it
 # compiles a Python VM into the app.
 pywasm = ["ferrocad_shell_python/pywasm"]
+# `--addons`: sandboxed wasm workbenches beside any script half.
+addons = ["ferrocad_shell_python/addons"]

@@ -1,6 +1,6 @@
 # Backend parity: one Gui app, one document half
 
-Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7d
+Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
@@ -663,6 +663,47 @@ script does not, and matching the browser is the point of the flag.
 **Exit: met.** 4 `ThreadedScriptHost` tests, 4 composition tests in both feature
 configurations, `cargo check -p ferrocad_parametric --features pywasm` clean, and the
 edition still builds with neither feature.
+
+### B7e — wasm addons, as a package format (built 2026-11-08)
+
+Not a runtime, and deliberately not a mirror of the web. The browser build links
+`RustPython`, `ferrocad_core` and `ferrocad_part` into **one wasm module**: its wasm boundary
+is between the page and the module, not between Python and the document. Re-creating that on
+the desktop would mean putting the *shell* in the module (a native window hosting a wasm
+gpui), and putting a wasm boundary between `PywasmScriptHost` and the native core would buy
+nothing behaviourally. What wasm is good for here is a **package**: `mods/<Name>/addon.wasm`,
+the same bundle the browser loads with `?addons=wasm`.
+
+`ferrocad_shell_wasm` hosts it. `wasmi` instantiates the bundle with exactly one import
+(`ferrocad.call`) and calls `ferrocad_commands`/`ferrocad_run`/`ferrocad_stage_meshes`, so
+an addon answers the page's three functions and the document stays `RustAppBackend`'s.
+
+**The sandbox is the point.** The import list is the doorway and nothing else — no
+filesystem, no network, no clock; the interpreter is `wasmi` (no JIT, no executable memory
+from third-party code); and every entry call is given a fuel budget, so a bundle that loops
+forever traps instead of freezing the window. A bundle that will not load is reported and
+skipped, because one broken workbench must not cost the window.
+
+**Addons ride beside the script half**, as the browser loads them (`?addons=` next to
+`?runtime=`): `--addons <dir|bundle>` composes `Addons` — the primary's answers, plus the
+addons' command rows; `run_command` falls through primary→addons; `stage_meshes` is the
+primary's with the addons' rows appended. `--script-host=plain --addons=…` is a script-less
+core with sandboxed workbenches, which is what "ship a script-less experience" means with
+third-party commands.
+
+**What is not there yet.** The doorway is a *write* capability: an addon can create and
+edit objects. The browser has the same gap and the same next step — a manifest that says
+`"document": "read"` and a host that answers differently. And an addon's own edit announces
+no `document.edited` on the desktop, because the doorway is built without a sink there.
+
+**A trap worth recording.** `wasmi`'s `auto-dispatch` feature is not optional in practice:
+without it the fallback path does not honour fuel metering, and the runaway test did not
+trap — it overflowed the **native** stack and aborted the process. The feature is enabled in
+the manifest with that reason beside it.
+
+**Exit: met.** 9 addon tests (commands, the doorway, the display hook, the fuel trap, the
+composition, discovery), 5–6 `ferrocad_shell_python` composition tests depending on the
+feature, and the edition builds with and without `--features addons`.
 
 ## 5. Decisions (recorded 2026-11-08)
 

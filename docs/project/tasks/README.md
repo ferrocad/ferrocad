@@ -16,8 +16,9 @@ Status: index (2026-11-08). Thirteen active specs and one recorded decision:
   page, `rquickjs` behind `--features desktop`, loading `mods/<Name>/InitGui.js` the way
   the Python side loads `InitGui.py`), **B7c** (one `Runtime` in the seam, so
   `--script-host=plain|cpython|pywasm|js` selects on the desktop what `?runtime=` selects
-  in the browser) and **B7d** (desktop RustPython, on the 16 MiB worker its compiler
-  needs) are built.
+  in the browser), **B7d** (desktop RustPython, on the 16 MiB worker its compiler needs)
+  and **B7e** (wasm addons as a sandboxed package format, loaded with `--addons=` beside
+  any script half) are built.
 
 - [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget**: stage 2 landed
   (the `.FCStd` payloads restore in parallel, `open` 5.9 s → 1.8 s, the 900a assembly 13.5 s

@@ -74,5 +74,6 @@ fn main() {
         contributions,
         args.open,
         args.script_host,
+        args.addons,
     );
 }

@@ -45,6 +45,8 @@ image = "0.25"
 [dev-dependencies]
 # `test-support` enables TestAppContext / VisualTestContext / #[gpui::test].
 bite-gpui = { version = "=1.25.203", features = ["test-support"] }
+# A temporary `--addons` directory in the composition tests.
+tempfile = "3"
 
 # The desktop's optional scripting halves. Neither is needed for the default
 # (`--script-host=cpython`), and both are native-only, so a web build of the shell
@@ -56,9 +58,13 @@ ferrocad_shell_js = { workspace = true, optional = true }
 ferrocad_doc_api = { workspace = true, optional = true }
 # `--script-host=pywasm`: RustPython, on the 16 MiB worker its compiler needs.
 ferrocad_shell_pywasm = { workspace = true, optional = true }
+# `--addons`: sandboxed wasm workbenches beside any script half.
+ferrocad_shell_wasm = { workspace = true, optional = true }
 
 [features]
 # Compose `--script-host=js`. Off by default: it compiles QuickJS as C.
 js = ["dep:ferrocad_shell_js", "dep:ferrocad_doc_api", "ferrocad_shell_js/desktop"]
 # Compose `--script-host=pywasm`. Off by default: it compiles a Python VM into the app.
 pywasm = ["dep:ferrocad_shell_pywasm"]
+# Load `--addons=<dir>`: wasm workbenches, sandboxed by `wasmi`, beside any script half.
+addons = ["dep:ferrocad_shell_wasm", "dep:ferrocad_doc_api"]

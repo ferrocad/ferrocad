@@ -113,7 +113,7 @@ pub fn run_edition_with_document(
     contributions: Contributions,
     open: Option<std::path::PathBuf>,
 ) {
-    run_edition_with_script(app_name, entry_module, contributions, open, None);
+    run_edition_with_script(app_name, entry_module, contributions, open, None, Vec::new());
 }
 
 /// [`run_edition_with_document`] with the scripting configuration `--script-host=` asked
@@ -129,12 +129,14 @@ pub fn run_edition_with_script(
     contributions: Contributions,
     open: Option<std::path::PathBuf>,
     script_host: Option<Runtime>,
+    addons: Vec<std::path::PathBuf>,
 ) {
     register_core_module();
     let mut config = app_config(app_name, entry_module);
     config.contributions = contributions;
     config.open_document = open;
     config.script_host = script_host;
+    config.addons = addons;
     ferrocad_shell_python::run_with(config);
 }
 
@@ -192,6 +194,13 @@ pub struct EditionArgs {
     /// `cpython`, `pywasm`, `js`). `None` leaves it to `FERROCAD_SCRIPT_HOST`, then to
     /// CPython.
     pub script_host: Option<Runtime>,
+    /// `--addons <path>`: a wasm workbench bundle or a directory of them
+    /// (`<dir>/<Name>/addon.wasm`), repeatable.
+    ///
+    /// Addons ride beside the script half rather than replacing it, which is how the
+    /// browser loads them (`?addons=` next to `?runtime=`). Each bundle is sandboxed: its
+    /// only capability is the document doorway.
+    pub addons: Vec<std::path::PathBuf>,
 }
 
 impl Default for EditionArgs {
@@ -203,6 +212,7 @@ impl Default for EditionArgs {
             script: None,
             open: None,
             script_host: None,
+            addons: Vec::new(),
         }
     }
 }
@@ -249,6 +259,17 @@ pub fn edition_args() -> Result<EditionArgs, String> {
             flag if flag.starts_with("--script-host=") => {
                 parsed.script_host = Some(Runtime::from_name(&flag["--script-host=".len()..])?);
             }
+            "--addons" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| "--addons wants a bundle or a directory".to_string())?;
+                parsed.addons.push(std::path::PathBuf::from(path));
+            }
+            flag if flag.starts_with("--addons=") => {
+                parsed
+                    .addons
+                    .push(std::path::PathBuf::from(&flag["--addons=".len()..]));
+            }
             "--size" => {
                 let value = args
                     .next()
@@ -290,6 +311,7 @@ fn app_config(app_name: &str, entry_module: &str) -> HostConfig {
         contributions: Contributions::default(),
         open_document: None,
         script_host: None,
+        addons: Vec::new(),
     }
 }
 

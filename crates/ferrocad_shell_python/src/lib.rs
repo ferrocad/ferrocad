@@ -43,7 +43,7 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
-pub use backend::{compose, engine, install, install_with};
+pub use backend::{compose, compose_with, engine, install, install_composed, install_with};
 pub use events::PythonEventCallbacks;
 pub use ferrocad_shell_api::Runtime;
 pub use headless::{RenderReport, StlReport, render as render_headless, run as run_headless};
@@ -88,6 +88,11 @@ pub struct HostConfig {
     /// properties and viewport all follow the opened document. `None` is the normal
     /// sample-document start.
     pub open_document: Option<std::path::PathBuf>,
+    /// Wasm workbenches to load beside the script half (`--addons=`, repeatable).
+    ///
+    /// A bundle is sandboxed: its only capability is the document doorway. An addon that
+    /// will not load is reported and skipped. Empty means none, which is a normal start.
+    pub addons: Vec<std::path::PathBuf>,
     /// Which script half to install (`--script-host=`, `FERROCAD_SCRIPT_HOST`).
     ///
     /// `None` is the edition's engine, CPython. The other configurations are the
@@ -107,6 +112,7 @@ impl Default for HostConfig {
             entry_module: "ferrocad_shell".to_string(),
             contributions: Contributions::default(),
             open_document: None,
+            addons: Vec::new(),
             script_host: None,
         }
     }
@@ -173,6 +179,20 @@ pub fn run_with(config: HostConfig) {
             }
         })
         .unwrap_or(Runtime::Cpython);
+    // The wasm workbenches ride beside whatever script half booted, so they are read
+    // before the config moves into the window closure.
+    let addons = config.addons.clone();
+    if !addons.is_empty() {
+        eprintln!(
+            "ferrocad: {} addon path(s): {}",
+            addons.len(),
+            addons
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     // Hand the app's scripts to the interpreter bridge before it boots. The
     // interpreter belongs to the shell; the scripts belong to the app.
     python::configure(
@@ -187,7 +207,7 @@ pub fn run_with(config: HostConfig) {
         .with_gpu_preference(gpu_preference())
         .with_frame_pipeline(frame_pipeline);
     app.run(move |cx: &mut App| {
-        backend::install_with(cx, runtime);
+        backend::install_composed(cx, runtime, &addons);
         let model = match Shell::boot(cx) {
             Ok(model) => model,
             Err(e) => {

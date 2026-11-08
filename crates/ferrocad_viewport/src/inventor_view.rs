@@ -5888,6 +5888,23 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// Draw the scene (and the navigation cube, when enabled) and read it back,
     /// refreshing the cached frame.
+    /// Whether a drag owns the pointer right now.
+    ///
+    /// Every gesture that repaints per move goes through one of these, and `render` asks for
+    /// the next frame while one is live: a move only schedules a paint if the window happens
+    /// to take the notify, and a drag that waits for the next move looks like a stutter.
+    fn drag_active(&self) -> bool {
+        self.gizmos.dragging().is_some()
+            || self.gizmo_origin_drag.is_some()
+            || self.ring_drag.is_some()
+            || self.navicube_drag.is_some()
+            || self.orbit_drag.is_some()
+            || self
+                .manipulators
+                .iter()
+                .any(|manipulator| manipulator.is_dragging())
+    }
+
     fn refresh(&mut self) {
         if self.stage_dirty {
             let started = Instant::now();
@@ -6295,6 +6312,14 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
         }
         // The snap aurora's flash decays over 120 ms.
         if self.feedback_flash_pending() {
+            window.request_animation_frame();
+        }
+        // A drag repaints once per pointer move, and a move is only a *request*: when the
+        // window does not take it (a coalesced notify, a missed frame callback) the body
+        // stops following the pointer until the next one, which reads as "sticks, then
+        // jumps". Asking for the next frame while a drag is live makes the drag run at the
+        // window's rate instead of at whatever rate notifies happen to land.
+        if self.drag_active() {
             window.request_animation_frame();
         }
         // The presenter negotiates with the window's device on its first paint; ask for

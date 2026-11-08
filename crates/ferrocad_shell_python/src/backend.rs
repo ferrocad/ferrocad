@@ -61,16 +61,26 @@ pub fn compose(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
     Ok(match runtime {
         Runtime::Plain => Box::new(RustAppBackend::from_shared_registry()),
         Runtime::Cpython => Box::new(engine()),
-        Runtime::Pywasm => {
-            return Err(
-                "`--script-host=pywasm` is not wired on the desktop yet: RustPython's \
-                 compiler recurses (it needs a 16 MiB worker thread) and a native build \
-                 wants `host_env`; see docs/project/tasks/backend-parity.md B7"
-                    .to_string(),
-            );
-        }
+        Runtime::Pywasm => pywasm()?,
         Runtime::Js => js_page()?,
     })
+}
+
+/// The desktop's RustPython half: the interpreter on the worker its compiler needs.
+#[cfg(feature = "pywasm")]
+fn pywasm() -> Result<Box<dyn AppBackend>, String> {
+    let script = ferrocad_shell_pywasm::ThreadedScriptHost::live()
+        .map_err(|error| format!("the RustPython thread did not boot: {error}"))?;
+    Ok(Box::new(
+        RustAppBackend::from_shared_registry().with_script_host(Box::new(script)),
+    ))
+}
+
+#[cfg(not(feature = "pywasm"))]
+fn pywasm() -> Result<Box<dyn AppBackend>, String> {
+    Err("`--script-host=pywasm` needs a build with the `pywasm` feature: \
+         `cargo run -p ferrocad_parametric --features pywasm -- --script-host=pywasm`"
+        .to_string())
 }
 
 /// The desktop's JS page: the same `Page` the browser has, over an embedded QuickJS.

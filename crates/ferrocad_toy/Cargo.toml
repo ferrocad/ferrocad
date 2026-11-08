@@ -40,3 +40,5 @@ ferrocad_inventor_py.workspace = true
 # `--script-host=js`: the browser's JS page on the desktop. Compiles QuickJS as C, so
 # it is opt-in; see docs/project/tasks/backend-parity.md B7.
 js = ["ferrocad/js"]
+# `--script-host=pywasm`: compose RustPython on the desktop (a Python VM in the app).
+pywasm = ["ferrocad/pywasm"]

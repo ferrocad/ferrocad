@@ -310,6 +310,14 @@ No `window` dependency: RustPython is plain Rust, so this crate also builds nati
 its tests run in CI without a browser (as the JS half's host logic now does — only its
 `WebPage` is `cfg(wasm)`).
 
+**On the desktop the interpreter lives on a worker.** The VM is not `Send` and its
+compiler recurses, so a host must raise the stack before the interpreter starts; a GPUI app
+cannot raise its own (8 MiB on Linux and macOS, 1 MiB on Windows).
+`ThreadedScriptHost` is the `ScriptHost` in front of a 16 MiB worker, and only `evaluate`
+crosses the channel — the rest of this half's answers are constants. `--script-host=pywasm`
+installs it, with `host_env` still off, so it is the browser's environment in a real window
+(see B7d).
+
 **Installed by the browser, chosen by the page.** `ferrocad_shell_web` is the assembly:
 it composes `RustAppBackend` with no script half, with `JsScriptHost`, or with
 `PywasmScriptHost`, from the query string (`?runtime=plain|pywasm|js`, with `?js=1`
@@ -330,7 +338,7 @@ intersection, and that is what makes the two-VM comparison a gate for both hosts
 | --- | --- | --- | --- |
 | none (`plain`) | ✓ `--script-host=plain` | ✓ | no engine; the Rust arms answer. A script-less app on either host |
 | `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI |
-| `PywasmScriptHost` (RustPython) | refused, with the reason | ✓ | it builds natively, but its compiler needs a 16 MiB worker and a native `host_env` (B7) |
+| `PywasmScriptHost` (RustPython) | ✓ `--script-host=pywasm` (feature `pywasm`) | ✓ | the same host on the 16 MiB worker its compiler needs (`ThreadedScriptHost`) |
 | `JsScriptHost` | ✓ `--script-host=js` (feature `js`) | ✓ | the contract is `Page`: `WebPage` and the desktop `EnginePage` are the same eight calls |
 
 One table of names, two switches. `Runtime` lives in the seam

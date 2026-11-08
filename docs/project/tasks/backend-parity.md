@@ -1,6 +1,6 @@
 # Backend parity: one Gui app, one document half
 
-Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7c
+Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7d
 built (2026-11-08).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
@@ -612,7 +612,7 @@ keeps only its own composition.
 | `plain` | ✓ | the document half alone: the script-less app the browser already had |
 | `cpython` | ✓ default | the edition's engine |
 | `js` | ✓ with `--features js` | `EnginePage` over `mods/`; without the feature the error says how to build it |
-| `pywasm` | **refused, with the reason** | RustPython builds natively, but its compiler needs a 16 MiB worker and a native build wants `host_env` |
+| `pywasm` | ✓ with `--features pywasm` (B7d) | ✓ | RustPython on the 16 MiB worker its compiler needs |
 
 A name this build cannot serve is reported and replaced by `plain` — the browser's rule, so
 a scripting surface that cannot start never costs the window. `backend::install_with` does
@@ -626,13 +626,43 @@ in `crates/ferrocad_shell_python/tests/runtime.rs`; the naming is tested in
 names `ferrocad_shell_js` only on native and only behind that feature; the reverse edge
 must never exist.
 
-**What is left of the switch is `pywasm`.** Closing it is the JS page's shape again: a
-channel wrapper around the `ScriptHost` (a RustPython VM is not `Send`), a 16 MiB worker,
-and `host_env` on natively so a mod's `pathlib`/`open` are real. That is B7d, and the
-refusal names it today rather than pretending.
+**What is left of the switch is nothing; what is left of parity is `host_env`** (B7d) and
+the wasm addon engine (Gap 2). `--script-host=pywasm` composes RustPython on the worker its
+compiler needs, but with the frozen stdlib the browser has, so a mod that opens a file does
+not get the desktop's filesystem.
 
 **Exit: met.** 4 composition tests, 5 naming tests, `ferrocad_shell_web` 13 + 2,
 `ferrocad_shell_core` 271.
+
+### B7d — desktop RustPython (built 2026-11-08)
+
+`--script-host=pywasm` composes `ThreadedScriptHost`, and the name is the design: the VM
+is not `Send` and its compiler recurses, so the interpreter needs a 16 MiB stack that a
+desktop shell cannot give its own thread — GPUI owns the main thread, and the platform's
+stack is 8 MiB on Linux and macOS and 1 MiB on Windows. The VM therefore lives on a worker
+with that stack, and the type in front of it implements `ScriptHost`.
+
+The wrapper is small because the half is small: **only `evaluate` reaches the
+interpreter**. The spike's other answers — no tools, no catalogue, no scene, no event
+callbacks — are constants, so they are answered where the caller is instead of being
+marshalled. `crates/ferrocad_shell_pywasm/src/threaded.rs` shares `HELLO`, `no_tool` and
+`NoopScriptListener` with the in-thread host, so the two cannot drift.
+
+The first version of the suite proved the stack requirement the hard way: a test booted
+the unthreaded host on the *test* thread, and the process aborted with `has overflowed its
+stack` at 2 MiB. The test asserts the constants directly now, and the stack is a
+`pub const STACK` with the reason written down beside it.
+
+**`host_env` is still off**, so this is the browser's environment in a real window: the
+frozen stdlib has no `os`/`_io`, and `bootstrap.py` supplies `contextlib`, `io`, `pathlib`
+and `traceback` itself. A mod that calls `open()` or walks a directory does not get the
+desktop's filesystem. Turning `host_env` on natively — target-conditional features, plus
+the bootstrap shims made conditional — is the next step *if* a mod needs it; the shell
+script does not, and matching the browser is the point of the flag.
+
+**Exit: met.** 4 `ThreadedScriptHost` tests, 4 composition tests in both feature
+configurations, `cargo check -p ferrocad_parametric --features pywasm` clean, and the
+edition still builds with neither feature.
 
 ## 5. Decisions (recorded 2026-11-08)
 

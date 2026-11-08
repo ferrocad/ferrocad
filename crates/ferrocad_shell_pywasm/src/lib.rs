@@ -54,6 +54,23 @@ use rustpython_vm::{
 
 mod snapshot;
 
+/// The desktop's RustPython host: a `ScriptHost` in front of a worker thread. Native
+/// only — the browser boots the interpreter on its own thread and raises that stack as a
+/// link argument instead.
+#[cfg(not(target_family = "wasm"))]
+pub mod threaded;
+
+#[cfg(not(target_family = "wasm"))]
+pub use threaded::ThreadedScriptHost;
+
+/// What the console prints when RustPython is the script half.
+pub(crate) const HELLO: &str = "FerroCAD shell · RustPython · wasm Python scripting";
+
+/// The refusal a spike with no tools answers with.
+pub(crate) fn no_tool(name: &str) -> String {
+    format!("pywasm: no tool {name} in the spike")
+}
+
 /// The scripting module: `python/ferrocad_shell`, the **same source** the native
 /// assembly runs. A change there is a change here, with no port in between.
 const SHELL: &str = include_str!("../../../python/ferrocad_shell/__init__.py");
@@ -310,7 +327,7 @@ impl ScriptHost for PywasmScriptHost {
     }
 
     fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
-        Err(format!("pywasm: no tool {name} in the spike"))
+        Err(no_tool(name))
     }
 
     fn tool_command(&self, _name: &str, _verb: &str) -> bool {
@@ -341,14 +358,12 @@ impl ScriptHost for PywasmScriptHost {
 
     /// The console's greeting: this is an interpreter, unlike the plain Rust half.
     fn hello(&self) -> Result<Option<String>, String> {
-        Ok(Some(
-            "FerroCAD shell · RustPython · wasm Python scripting".to_string(),
-        ))
+        Ok(Some(HELLO.to_string()))
     }
 }
 
 /// Forwards nothing: the spike supplies no `pivy` event callbacks.
-struct NoopScriptListener;
+pub(crate) struct NoopScriptListener;
 
 impl EventListener for NoopScriptListener {
     fn on_event(

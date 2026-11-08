@@ -54,7 +54,11 @@ bite-gpui = { version = "=1.25.203", features = ["test-support"] }
 ferrocad_shell_js = { workspace = true, optional = true }
 # The document doorway that page reaches, which is core-only.
 ferrocad_doc_api = { workspace = true, optional = true }
+# `--script-host=pywasm`: RustPython, on the 16 MiB worker its compiler needs.
+ferrocad_shell_pywasm = { workspace = true, optional = true }
 
 [features]
 # Compose `--script-host=js`. Off by default: it compiles QuickJS as C.
 js = ["dep:ferrocad_shell_js", "dep:ferrocad_doc_api", "ferrocad_shell_js/desktop"]
+# Compose `--script-host=pywasm`. Off by default: it compiles a Python VM into the app.
+pywasm = ["dep:ferrocad_shell_pywasm"]

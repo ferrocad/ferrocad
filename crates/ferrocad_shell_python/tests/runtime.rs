@@ -18,13 +18,21 @@ fn cpython_is_the_default_composition() {
     assert!(backend.script_host().is_some());
 }
 
+#[cfg(not(feature = "pywasm"))]
 #[test]
-fn pywasm_says_what_is_still_missing() {
-    // Not wired on the desktop yet: a wrong answer here is better than a silent
-    // fallback that looks like it worked.
-    let error = compose(Runtime::Pywasm).err().expect("not wired yet");
-    assert!(error.contains("pywasm"), "{error}");
-    assert!(error.contains("worker"), "{error}");
+fn pywasm_without_the_feature_says_how_to_get_it() {
+    let error = compose(Runtime::Pywasm).err().expect("the feature is off");
+    assert!(error.contains("--features pywasm"), "{error}");
+}
+
+#[cfg(feature = "pywasm")]
+#[test]
+fn pywasm_is_the_composition_with_rustpython_behind_it() {
+    let backend = compose(Runtime::Pywasm).expect("the interpreter boots on its worker");
+    let script = backend.script_host().expect("the script half is installed");
+    // The greeting is the proof that this is the interpreter and not the document half.
+    let hello = script.hello().expect("a greeting").expect("one, not silence");
+    assert!(hello.contains("RustPython"), "{hello}");
 }
 
 #[cfg(not(feature = "js"))]

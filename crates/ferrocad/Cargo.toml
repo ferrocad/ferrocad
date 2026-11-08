@@ -65,3 +65,6 @@ embedded-payload = ["dep:include_dir"]
 # `--script-host=js`: compose the browser's JS page on the desktop. Off by default
 # because it compiles QuickJS as C; see docs/project/tasks/backend-parity.md B7.
 js = ["ferrocad_shell_python/js"]
+# `--script-host=pywasm`: compose RustPython on the desktop. Off by default because it
+# compiles a Python VM into the app.
+pywasm = ["ferrocad_shell_python/pywasm"]

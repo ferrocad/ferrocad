@@ -14,9 +14,10 @@ Status: index (2026-11-08). Thirteen active specs and one recorded decision:
   CPython-free host could actually host. Stages **B0–B6**, B7 recorded; **B7a** (the JS
   `Page` trait, so that half builds and tests without a browser), **B7b** (the desktop
   page, `rquickjs` behind `--features desktop`, loading `mods/<Name>/InitGui.js` the way
-  the Python side loads `InitGui.py`) and **B7c** (one `Runtime` in the seam, so
+  the Python side loads `InitGui.py`), **B7c** (one `Runtime` in the seam, so
   `--script-host=plain|cpython|pywasm|js` selects on the desktop what `?runtime=` selects
-  in the browser) are built.
+  in the browser) and **B7d** (desktop RustPython, on the 16 MiB worker its compiler
+  needs) are built.
 
 - [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget**: stage 2 landed
   (the `.FCStd` payloads restore in parallel, `open` 5.9 s → 1.8 s, the 900a assembly 13.5 s

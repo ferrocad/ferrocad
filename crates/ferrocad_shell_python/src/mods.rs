@@ -35,6 +35,22 @@ pub fn entry_kinds(dirs: &[PathBuf]) -> Vec<EntryKind> {
         .collect()
 }
 
+/// The wasm bundles under `dirs`, in name order: `<dir>/<Name>/addon.wasm`.
+///
+/// Empty without the `addons` feature, because a path the host cannot load is worse than
+/// no path at all: the run is the same as a mod set with no bundles.
+pub fn addon_packs(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    #[cfg(feature = "addons")]
+    {
+        ferrocad_shell_wasm::packs(dirs)
+    }
+    #[cfg(not(feature = "addons"))]
+    {
+        let _ = dirs;
+        Vec::new()
+    }
+}
+
 /// The kinds `package` declares, by its top-level entry files.
 fn collect(package: &Path, seen: &mut BTreeSet<EntryKind>) {
     let Ok(files) = std::fs::read_dir(package) else {
@@ -46,6 +62,67 @@ fn collect(package: &Path, seen: &mut BTreeSet<EntryKind>) {
                 seen.insert(kind);
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "addons"))]
+mod addon_tests {
+    use super::*;
+
+    fn bundle(package: &Path) {
+        std::fs::create_dir_all(package).expect("the package directory");
+        std::fs::write(package.join("addon.wasm"), b"\0asm").expect("the bundle");
+    }
+
+    fn names(packs: Vec<PathBuf>) -> Vec<String> {
+        packs
+            .iter()
+            .map(|pack| {
+                pack.parent()
+                    .and_then(Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .expect("a package directory")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_bundles_are_the_packages_with_one_in_name_order() {
+        let temp = tempfile::tempdir().expect("a temporary directory");
+        bundle(&temp.path().join("Zeta"));
+        bundle(&temp.path().join("Alpha"));
+        // A package with another language's entry is not a bundle.
+        let python = temp.path().join("PythonOnly");
+        std::fs::create_dir_all(&python).expect("the package directory");
+        std::fs::write(python.join("InitGui.py"), "").expect("the entry file");
+
+        assert_eq!(
+            names(addon_packs(std::slice::from_ref(&temp.path().to_path_buf()))),
+            ["Alpha", "Zeta"]
+        );
+    }
+
+    #[test]
+    fn a_directory_with_no_bundle_yields_none() {
+        let temp = tempfile::tempdir().expect("a temporary directory");
+        assert!(addon_packs(&[temp.path().to_path_buf()]).is_empty());
+    }
+}
+
+#[cfg(all(test, not(feature = "addons")))]
+mod no_addon_tests {
+    use super::*;
+
+    #[test]
+    fn without_the_feature_nothing_is_discovered() {
+        // The bundle would only be skipped by the composition later; not naming it keeps
+        // the run identical to a mod set that has none.
+        let temp = tempfile::tempdir().expect("a temporary directory");
+        let package = temp.path().join("Toy");
+        std::fs::create_dir_all(&package).expect("the package directory");
+        std::fs::write(package.join("addon.wasm"), b"\0asm").expect("the bundle");
+
+        assert!(addon_packs(&[temp.path().to_path_buf()]).is_empty());
     }
 }
 

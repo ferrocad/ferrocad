@@ -196,11 +196,13 @@ pub struct EditionArgs {
     /// `FERROCAD_SCRIPT_HOST`, then to CPython. The first name is the primary.
     pub script_hosts: Vec<Runtime>,
     /// `--addons <path>`: a wasm workbench bundle or a directory of them
-    /// (`<dir>/<Name>/addon.wasm`), repeatable.
+    /// (`<dir>/<Name>/addon.wasm`), repeatable. When empty, the bundles under the mods
+    /// directories are loaded instead (B9b), so the flag is only needed to point at a
+    /// bundle somewhere else.
     ///
     /// Addons ride beside the script half rather than replacing it, which is how the
-    /// browser loads them (`?addons=` next to `?runtime=`). Each bundle is sandboxed: its
-    /// only capability is the document doorway.
+    /// browser loads them (`?addons=`). Each bundle is sandboxed: its only capability is
+    /// the document doorway.
     pub addons: Vec<std::path::PathBuf>,
 }
 

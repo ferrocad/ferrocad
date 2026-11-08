@@ -183,9 +183,14 @@ pub fn run_with(config: HostConfig) {
     } else {
         config.script_hosts.clone()
     };
-    // The wasm workbenches ride beside whatever script half booted, so they are read
-    // before the config moves into the window closure.
-    let addons = config.addons.clone();
+    // The wasm workbenches ride beside whatever script half booted, and B9b reads them
+    // from the mods directories when `--addons` names none — the same directory a mod's
+    // entry file already names. Explicit paths always win.
+    let addons = if config.addons.is_empty() {
+        mods::addon_packs(&python::mods_dirs())
+    } else {
+        config.addons.clone()
+    };
     if !addons.is_empty() {
         eprintln!(
             "ferrocad: {} addon path(s): {}",
@@ -248,19 +253,27 @@ pub fn run_with(config: HostConfig) {
 /// how to ask for no console at all.
 fn derived_runtimes() -> Vec<Runtime> {
     let kinds = mods::entry_kinds(&python::mods_dirs());
-    let derived = Runtime::hosts_for(&kinds, Platform::current());
-    if derived.is_empty() {
+    if kinds.is_empty() {
+        // No mod at all: the edition's engine, as it has always been.
         return vec![Runtime::Cpython];
+    }
+
+    let derived = Runtime::hosts_for(&kinds, Platform::current());
+    let declared = kinds
+        .iter()
+        .map(|kind| kind.id())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if derived.is_empty() {
+        // The set decided, and what it asked for needs no script half (a wasm-only mod set
+        // on the desktop). Installing a console nobody asked for would hide that.
+        eprintln!("ferrocad: mods declare {declared}; no script host needed");
+        return Vec::new();
     }
     // Only say it when the derivation decided something: the common case is the default.
     if derived.len() != 1 || derived[0] != Runtime::Cpython {
         eprintln!(
-            "ferrocad: mods declare {}; installing {}",
-            kinds
-                .iter()
-                .map(|kind| kind.id())
-                .collect::<Vec<_>>()
-                .join(", "),
+            "ferrocad: mods declare {declared}; installing {}",
             derived
                 .iter()
                 .map(|runtime| runtime.id())

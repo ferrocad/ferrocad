@@ -2,7 +2,7 @@
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
-B9a built (2026-11-09).** The surface suite
+B9a–B9b built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -870,7 +870,7 @@ and a wasm bundle installed in the same target; the surface suite's capability m
 a language × platform table, and each host still answers only the verbs its capability
 allows.
 
-### B9 — the mod set names the hosts (recorded 2026-11-09; B9a built)
+### B9 — the mod set names the hosts (recorded 2026-11-09; B9a–B9b built)
 
 B8 made a target able to install several hosts, but the switch that does it names *engines*:
 `?runtime=pywasm,js`. That is the wrong thing to type, and it asks the user to know how the
@@ -911,9 +911,21 @@ edition's CPython, because a run with no mods has always had a console;
 same directories, so the derivation and the page cannot disagree about where `mods/` is.
 6 seam tests and 6 scanner tests.
 
-**What B9a does not do.** Wasm bundles are still `--addons` (discovery is B9b), and the
-browser still lists addons explicitly, because a page has no directory to scan — that needs
-a package manifest served over HTTP, which is the open question below.
+**What B9a does not do.** Wasm bundles were still `--addons`, and the browser still lists
+addons explicitly, because a page has no directory to scan — that needs a package manifest
+served over HTTP, which is the open question below.
+
+**B9b — discover the bundles (built 2026-11-09).** With the `addons` feature on, `run_with`
+loads `<dir>/<Name>/addon.wasm` from the same `mods_dirs()` when `--addons` names none;
+explicit paths still win. `mods::addon_packs` is empty without the feature, so a build that
+cannot host a bundle never names one. A **wasm-only** mod set now installs no script half on
+the desktop — the set decided, and a console nobody asked for would hide that — while a run
+with *no* mods keeps CPython; the two cases are told apart by whether any mod exists at all.
+2 discovery tests under the feature and one without it.
+
+**Still explicit.** The browser lists addons (`?addons=`, `?runtime=`) because a page has no
+directory to scan; deriving there needs a package manifest served over HTTP, which is the
+open question below.
 
 **Open questions.**
 

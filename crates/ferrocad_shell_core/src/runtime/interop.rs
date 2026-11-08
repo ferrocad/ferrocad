@@ -284,7 +284,9 @@ impl Default for GpuiInteropPresenter {
 fn note_gpu_frame(queue: &wgpu::Queue) {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
+    // `web_time`, not `std::time`: this file is compiled into the browser build too, and
+    // the audit that guards it reads whole files rather than `cfg` branches.
+    use web_time::{Duration, Instant};
 
     static TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
     static COUNT: AtomicU64 = AtomicU64::new(0);

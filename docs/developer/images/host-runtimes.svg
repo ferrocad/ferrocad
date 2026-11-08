@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 760" width="1100" height="760" role="img" aria-labelledby="title desc">
+  <title id="title">FerroCAD packaging: one document half, four script halves, two hosts, one addon format</title>
+  <desc id="desc">Four bands. One document half: ferrocad_core and ferrocad_part over one registry, native OCCT or the wasm kernel. Four script halves against two hosts: plain, CPython (desktop only), RustPython and JS on both, with each host's switch and what a build must link. How each host is delivered: one native binary whose cargo features pick what is linked and whose flag picks what is installed, versus one wasm module that links everything and takes two query parameters. And the addon format: mods/&lt;Name&gt;/addon.wasm and www/addons/toy.wasm are the same artifact, one import, no JIT, a fuel budget, and read-only unless its manifest grants writes.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5568" />
+    </marker>
+    <style>
+      .t { font-family: Inter, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .title { font-size: 24px; font-weight: 700; fill: #1a202c; }
+      .subtitle { font-size: 13px; fill: #4a5568; }
+      .band { stroke-width: 1.5; }
+      .band-label { font-size: 11px; font-weight: 700; letter-spacing: 0.4px; fill: #4a5568; }
+      .col-head { font-size: 12px; font-weight: 700; fill: #1a202c; }
+      .box-title { font-size: 12.5px; font-weight: 600; fill: #1a202c; }
+      .box-sub { font-size: 11px; fill: #4a5568; }
+      .cell { font-size: 11.5px; fill: #1a202c; }
+      .cell-ok { font-size: 11.5px; font-weight: 600; fill: #1a202c; }
+      .note { font-size: 11px; fill: #4a5568; }
+      .note-italic { font-size: 11px; font-style: italic; fill: #4a5568; }
+      .wire { stroke: #4a5568; stroke-width: 1.6; fill: none; }
+      .box { stroke-width: 1.5; }
+      .chip { stroke-width: 1.2; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1100" height="760" fill="#f7f9fc" />
+
+  <text class="t title" x="550" y="32" text-anchor="middle">FERROCAD PACKAGING</text>
+  <text class="t subtitle" x="550" y="54" text-anchor="middle">One document half · four script halves · two hosts · one addon format</text>
+
+  <!-- ============ 1. the document half ============ -->
+  <rect class="band" x="76" y="72" width="1000" height="76" rx="10" fill="#cfdceb" stroke="#8fa9c6" />
+  <text class="t band-label" transform="translate(64,110) rotate(-90)" text-anchor="middle">1. ONE DOCUMENT</text>
+
+  <rect class="box" x="300" y="82" width="500" height="56" rx="6" fill="#b9cde4" stroke="#7d9ec4" />
+  <text class="t box-title" x="550" y="103" text-anchor="middle">ferrocad_core · ferrocad_part</text>
+  <text class="t box-sub" x="550" y="120" text-anchor="middle">one document registry · OCCT natively, the prebuilt wasm kernel in the browser</text>
+
+  <line class="wire" x1="380" y1="148" x2="380" y2="176" marker-end="url(#arrow)" />
+  <line class="wire" x1="720" y1="148" x2="720" y2="176" marker-end="url(#arrow)" />
+  <text class="t note-italic" x="550" y="168" text-anchor="middle">through the doorway — never by linking a second core</text>
+
+  <!-- ============ 2. four halves, two hosts ============ -->
+  <rect class="band" x="76" y="178" width="1000" height="330" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
+  <text class="t band-label" transform="translate(64,343) rotate(-90)" text-anchor="middle">2. FOUR HALVES, TWO HOSTS</text>
+
+  <text class="t col-head" x="540" y="202" text-anchor="middle">NATIVE DESKTOP</text>
+  <text class="t col-head" x="860" y="202" text-anchor="middle">BROWSER WASM</text>
+  <text class="t note-italic" x="120" y="202" text-anchor="start">script half</text>
+
+  <!-- row 1: plain -->
+  <rect class="box" x="110" y="214" width="270" height="38" rx="5" fill="#f0f2f5" stroke="#94a3b8" />
+  <text class="t box-title" x="122" y="231" text-anchor="start">plain</text>
+  <text class="t box-sub" x="122" y="245" text-anchor="start">no interpreter, no page — the Rust arms answer</text>
+  <rect class="box" x="400" y="214" width="280" height="38" rx="5" fill="#e2e8f0" stroke="#94a3b8" />
+  <text class="t cell" x="540" y="238" text-anchor="middle">--script-host=plain</text>
+  <rect class="box" x="720" y="214" width="280" height="38" rx="5" fill="#e2e8f0" stroke="#94a3b8" />
+  <text class="t cell" x="860" y="238" text-anchor="middle">?runtime=plain · the default</text>
+
+  <!-- row 2: cpython -->
+  <rect class="box" x="110" y="260" width="270" height="38" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="122" y="277" text-anchor="start">PythonScriptHost</text>
+  <text class="t box-sub" x="122" y="291" text-anchor="start">embedded CPython · the edition's engine</text>
+  <rect class="box" x="400" y="260" width="280" height="38" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t cell-ok" x="540" y="284" text-anchor="middle">default</text>
+  <rect class="box" x="720" y="260" width="280" height="38" rx="5" fill="#f0f2f5" stroke="#b6c2d2" stroke-dasharray="5 3" />
+  <text class="t cell" x="860" y="278" text-anchor="middle">impossible</text>
+  <text class="t note" x="860" y="291" text-anchor="middle">ferrocad_py is a native C-ABI extension</text>
+
+  <!-- row 3: rustpython -->
+  <rect class="box" x="110" y="306" width="270" height="38" rx="5" fill="#b9dcc2" stroke="#7fb391" />
+  <text class="t box-title" x="122" y="323" text-anchor="start">PywasmScriptHost</text>
+  <text class="t box-sub" x="122" y="337" text-anchor="start">RustPython · the only half both hosts can run</text>
+  <rect class="box" x="400" y="306" width="280" height="38" rx="5" fill="#b9dcc2" stroke="#7fb391" />
+  <text class="t cell-ok" x="540" y="323" text-anchor="middle">--script-host=pywasm</text>
+  <text class="t note" x="540" y="337" text-anchor="middle">build --features pywasm · 16 MiB worker</text>
+  <rect class="box" x="720" y="306" width="280" height="38" rx="5" fill="#b9dcc2" stroke="#7fb391" />
+  <text class="t cell-ok" x="860" y="330" text-anchor="middle">?runtime=pywasm</text>
+
+  <!-- row 4: js -->
+  <rect class="box" x="110" y="352" width="270" height="38" rx="5" fill="#c9d5e3" stroke="#94a9c2" />
+  <text class="t box-title" x="122" y="369" text-anchor="start">JsScriptHost</text>
+  <text class="t box-sub" x="122" y="383" text-anchor="start">over a Page: window.__ferrocadJs or QuickJS</text>
+  <rect class="box" x="400" y="352" width="280" height="38" rx="5" fill="#c9d5e3" stroke="#94a9c2" />
+  <text class="t cell-ok" x="540" y="369" text-anchor="middle">--script-host=js</text>
+  <text class="t note" x="540" y="383" text-anchor="middle">build --features js · QuickJS on its own thread</text>
+  <rect class="box" x="720" y="352" width="280" height="38" rx="5" fill="#c9d5e3" stroke="#94a9c2" />
+  <text class="t cell-ok" x="860" y="376" text-anchor="middle">?runtime=js</text>
+
+  <text class="t note-italic" x="110" y="410" text-anchor="start">A half a build did not link says so, and the host falls back to plain — the browser's rule, applied on both sides.</text>
+
+  <!-- how each host is delivered -->
+  <rect class="box" x="110" y="424" width="425" height="70" rx="6" fill="#dbe9f6" stroke="#8fb8d8" />
+  <text class="t box-title" x="322" y="443" text-anchor="middle">one native binary</text>
+  <text class="t box-sub" x="322" y="459" text-anchor="middle">cargo features pick what is <tspan font-style="italic">linked</tspan></text>
+  <text class="t box-sub" x="322" y="474" text-anchor="middle">--script-host / FERROCAD_SCRIPT_HOST picks what is <tspan font-style="italic">installed</tspan></text>
+  <text class="t box-sub" x="322" y="489" text-anchor="middle">--addons loads bundles beside it</text>
+
+  <rect class="box" x="565" y="424" width="435" height="70" rx="6" fill="#dbe9f6" stroke="#8fb8d8" />
+  <text class="t box-title" x="782" y="443" text-anchor="middle">one wasm module</text>
+  <text class="t box-sub" x="782" y="459" text-anchor="middle">everything is linked: RustPython, the JS page, the core</text>
+  <text class="t box-sub" x="782" y="474" text-anchor="middle">?runtime= picks the installed half</text>
+  <text class="t box-sub" x="782" y="489" text-anchor="middle">?addons= fetches a bundle beside it</text>
+
+  <!-- ============ 3. the addon format ============ -->
+  <rect class="band" x="76" y="524" width="1000" height="128" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
+  <text class="t band-label" transform="translate(64,594) rotate(-90)" text-anchor="middle">3. ONE ADDON FORMAT</text>
+
+  <rect class="box" x="110" y="536" width="240" height="44" rx="5" fill="#e4c6e7" stroke="#b184b9" />
+  <text class="t box-title" x="230" y="554" text-anchor="middle">mods/Toy/addon.wasm</text>
+  <text class="t box-sub" x="230" y="569" text-anchor="middle">--addons mods</text>
+
+  <line class="wire" x1="352" y1="558" x2="392" y2="558" />
+
+  <rect class="box" x="396" y="536" width="310" height="44" rx="5" fill="#e4c6e7" stroke="#b184b9" />
+  <text class="t box-title" x="551" y="554" text-anchor="middle">the bundle: one import, ferrocad.call</text>
+  <text class="t box-sub" x="551" y="569" text-anchor="middle">commands · run · stageMeshes over the doorway</text>
+
+  <line class="wire" x1="710" y1="558" x2="750" y2="558" />
+
+  <rect class="box" x="754" y="536" width="240" height="44" rx="5" fill="#e4c6e7" stroke="#b184b9" />
+  <text class="t box-title" x="874" y="554" text-anchor="middle">www/addons/toy.wasm</text>
+  <text class="t box-sub" x="874" y="569" text-anchor="middle">?addons=wasm</text>
+
+  <text class="t note" x="110" y="600" text-anchor="start">An addon is orthogonal to the script half: it rides beside whatever <tspan font-style="italic">--script-host</tspan> / <tspan font-style="italic">?runtime=</tspan> selected, including <tspan font-style="italic">plain</tspan>.</text>
+  <text class="t note" x="110" y="616" text-anchor="start">The toy bundle is one source: <tspan font-family="monospace">ferrocad_addon_toy</tspan> builds for wasm32 with no OCCT and no wasm-bindgen, and both hosts run the bytes it produces.</text>
+  <text class="t note" x="110" y="634" text-anchor="start">Disk: <tspan font-family="monospace">mods/&lt;Name&gt;/addon.wasm</tspan> + <tspan font-family="monospace">addon.json</tspan> · page: <tspan font-family="monospace">www/addons/toy.wasm</tspan> + <tspan font-family="monospace">toy.json</tspan> — the manifest is <tspan font-family="monospace">&lt;stem&gt;.json</tspan> beside the bundle.</text>
+
+  <!-- ============ 4. what a bundle may do ============ -->
+  <rect class="band" x="76" y="664" width="1000" height="62" rx="10" fill="#f3e8dd" stroke="#cf9a55" />
+  <text class="t band-label" transform="translate(64,695) rotate(-90)" text-anchor="middle">4. SANDBOX</text>
+
+  <rect class="chip" x="110" y="674" width="200" height="42" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="210" y="691" text-anchor="middle">one import</text>
+  <text class="t box-sub" x="210" y="706" text-anchor="middle">the doorway; no filesystem, no network</text>
+
+  <rect class="chip" x="322" y="674" width="200" height="42" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="422" y="691" text-anchor="middle">no executable memory</text>
+  <text class="t box-sub" x="422" y="706" text-anchor="middle">wasmi interprets; third-party code is data</text>
+
+  <rect class="chip" x="534" y="674" width="200" height="42" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="634" y="691" text-anchor="middle">a fuel budget</text>
+  <text class="t box-sub" x="634" y="706" text-anchor="middle">a runaway loop traps, it does not freeze</text>
+
+  <rect class="chip" x="746" y="674" width="248" height="42" rx="5" fill="#f6cfa6" stroke="#cf9a55" />
+  <text class="t box-title" x="870" y="691" text-anchor="middle">read-only until it asks</text>
+  <text class="t box-sub" x="870" y="706" text-anchor="middle">writes only if &lt;stem&gt;.json says "read-write"</text>
+
+  <text class="t note-italic" x="76" y="744" text-anchor="start">The capability is enforced at each host's door — document_api::is_write natively, loader.js in the page — so a refused write never reaches the document.</text>
+</svg>

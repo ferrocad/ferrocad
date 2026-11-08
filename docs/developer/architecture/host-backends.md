@@ -360,6 +360,12 @@ forever traps instead of freezing the window — and it is **read-only** unless 
 `{"ok": false}` before the request reaches the document. Both hosts enforce that: the
 desktop with `document_api::is_write`, the page inside `loader.js`'s doorway.
 
+![The packaging: one document half; four script halves against two hosts, with each host's
+switch and what a build has to link; how each host is delivered — one native binary whose
+features pick what is *linked* versus one wasm module that links everything; and the addon
+format (one artifact, one import, no executable memory, a fuel budget, read-only until its
+manifest grants writes)](../images/host-runtimes.svg)
+
 Two engines were missing, and they are different dependencies:
 
 - **a JS engine**, for the JS half — built on the desktop over `rquickjs` (QuickJS), behind

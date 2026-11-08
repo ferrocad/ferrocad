@@ -464,3 +464,10 @@ mod web {
 
 #[cfg(target_family = "wasm")]
 pub use web::WebPage;
+
+/// The desktop page: the same contract, over an embedded QuickJS.
+#[cfg(feature = "desktop")]
+pub mod desktop;
+
+#[cfg(feature = "desktop")]
+pub use desktop::EnginePage;

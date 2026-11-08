@@ -265,6 +265,14 @@ jobs:
         # wasm build plus a browser.
         run: cargo test -p ferrocad_shell_web
 
+      - name: The desktop JS page (QuickJS, no browser)
+        # `EnginePage` is the same `Page` the browser's page is, over an embedded
+        # QuickJS: a `mods/<Name>/InitGui.js` module is loaded the way `InitGui.py` is
+        # on the Python side, and the commands it registers, the doorway it calls and
+        # the events it receives are asserted here. Feature-gated, so neither the
+        # default build nor the browser's compiles QuickJS.
+        run: cargo test -p ferrocad_shell_js --features desktop
+
       - name: The document doorway a script runtime shares
         # `ferrocad_doc_api` is what a JS or wasm addon calls: JSON requests over the
         # process-wide document. The test registers Part itself, so a `Part::Box`

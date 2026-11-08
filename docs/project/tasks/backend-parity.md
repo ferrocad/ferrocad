@@ -1,7 +1,7 @@
 # Backend parity: one Gui app, one document half
 
-Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a built
-(2026-11-08).** The surface suite
+Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a and
+B7b built (2026-11-08).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -392,7 +392,7 @@ what makes the portability claim testable.
 | none (`plain`) | ✓ | ✓ | no engine; the Rust arms answer |
 | `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI; the wasm answer would be Pyodide, rejected in the design (`host-backends.md` §4) |
 | `PywasmScriptHost` (RustPython) | ✓ **builds and runs natively** | ✓ `?runtime=pywasm` | `ferrocad_shell_pywasm` is not `cfg(wasm)`; `ferrocad_shell_web`'s `the_pywasm_configuration_boots_one_document` composes it on a native 16 MiB thread |
-| `JsScriptHost` | ✗ | ✓ `?runtime=js` | the half *is* `window.__ferrocadJs`; `backend(Runtime::Js)` returns `Err` natively by design |
+| `JsScriptHost` | ✓ page built (B7b); no host installs it yet | ✓ `?runtime=js` | the page contract is `Page`; `WebPage` and `EnginePage` are the same eight calls, so `backend(Runtime::Js)` is `Err` natively only until the switch installs the desktop page |
 
 `plain + pywasm` is the intersection, which is why B6's capability matrix is the right
 gate for both hosts at once.
@@ -410,7 +410,7 @@ wasm, `Js` on wasm), a host-supplied way to ask (`?runtime=` there, `--script-ho
 `FERROCAD_SCRIPT_HOST` here) and a fallback to `plain` per configuration — which the
 browser already implements in `ferrocad_shell_web::backend`.
 
-**Two engines are missing, and they are not the same dependency.**
+**Two engines were missing, and they are not the same dependency.** One is now built (B7b).
 
 1. **A JS engine** — only for the JS half, and nothing about it is wasm. The page
    contract was eight `#[wasm_bindgen(js_namespace = ["window", "__ferrocadJs"])]` calls
@@ -474,16 +474,14 @@ what is left is the engine behind it.
   *preview of the browser environment*, never a substitute for CPython, and must not
   become the default.
 
-**Decision: record, build neither engine yet.**
+**Decision: record, then build one gap at a time.**
 
-- **Gap 2 before Gap 1** if desktop-local addon development is wanted: it is the smaller
-  change, the ABI was designed for it, and running one addon format on both hosts is a
-  parity win rather than a new surface.
-- **Gap 1 waits** on "is a JS module a shipping way to write a mod?" Both JS halves are
-  still labelled *spike* by their own manifests — but its engine is settled and its page
-  trait is built (B7a), so the only work left when the answer is yes is the engine and a
-  desktop `Page`.
-- **The default never changes:** `PywasmScriptHost` is a debug flag, as B6 says.
+- **Gap 1 is built** (B7b: `rquickjs` behind `--features desktop`), so what remains there
+  is wiring it as a host's script half (`--script-host=js`), which is B7's `Runtime`
+  enum. **Gap 2** (wasm addons on the desktop) is still a plan with its engine settled
+  (`wasmi`) and no slice.
+- **The default never changes:** a second script half is a debug flag, as B6 says of
+  `PywasmScriptHost`, and so is the JS page.
 
 **The CPython-free host has to host something (open).** `ferrocad_shell_python` is
 currently the desktop host *and* the CPython backend, so splitting it is only worth doing
@@ -555,6 +553,51 @@ session, and dropping the handle would have freed the function under it.
 `cargo check -p ferrocad_shell_js --target wasm32-unknown-unknown` clean, and
 `ferrocad_shell_web` 11/11 + 2/2 unchanged. What remains for Gap 1 is an engine and a
 desktop `Page`: no shell, no host and no doorway change.
+
+### B7b — the desktop page (built 2026-11-08)
+
+Gap 1's engine, behind a feature so no browser build and no default build pays for it:
+`ferrocad_shell_js::desktop::EnginePage`, QuickJS through `rquickjs` 0.14
+(`--features desktop`).
+
+**Discovery mirrors the Python side.** A JS workbench is `mods/<Name>/InitGui.js` — the
+mirror of `InitGui.py` — found by `desktop::js_modules(dirs)` in name order, with
+`desktop::discover()` applying the same rule the Python side applies:
+`FERROCAD_MODS_PATH`, then `mods/` beside the executable, then up from the working
+directory. A host can pass its own directories instead; the finding rule lives with the
+half, the *decision* stays the host's. The web's modules ship in `www/` and its page
+imports them (`?js=1`) — the same contract with a different loader.
+
+**The same module runs on both.** A module exports `install()`, which defines
+`window.__ferrocadJs` and may call `window.ferrocad.call(request)` — exactly
+`www/js-demo.js`. The engine aliases `window` to the global object and installs
+`ferrocad.call` over the host's `DocumentApi`, so neither the module nor the shell knows
+which host it is on.
+
+**One thread owns the engine.** QuickJS values are not `Send`, so the runtime lives on a
+worker thread and each call is a channel job. Viewport and document events are *queued*
+rather than answered: a document event can be emitted from inside a doorway call (an
+addon's own `create`), and answering it there would re-enter the runtime mid-call. The
+event is delivered after the current job, which is also what makes the ordering testable.
+
+Two defects found by writing the tests, both worth recording:
+
+- **Drop order deadlocked every page.** `Drop for Engine` joined the worker while still
+  holding the channel sender, so `recv` never returned and the suite hung. The sender is
+  closed *before* the join now.
+- **`Module::evaluate` returns a promise.** rquickjs 0.14 evaluates an ES module
+  asynchronously, so `install` was read before the job queue ran and came back
+  `undefined`; every boot failed. The module is declared, evaluated, and the queue driven
+  to settlement first.
+
+**Costs.** `rquickjs-sys` compiles vendored QuickJS as C, so the feature's first build is
+slow (then `kache` serves it) and the desktop gains a C dependency; ES2020 is the ceiling;
+and a module cannot `import` another file yet (the browser's page has no imports either).
+
+**Exit: met.** 8 engine tests and 10 page tests green, in under a second once built; the
+default `cargo test -p ferrocad_shell_js` still compiles no C. Installing the page as a
+host's script half (`--script-host=js`) is the remaining wiring, and belongs with B7's
+`Runtime` enum rather than with this page.
 
 ## 5. Decisions (recorded 2026-11-08)
 

@@ -250,8 +250,12 @@ never links the document.
 **The page is a trait, not a browser.** [`Page`] is the eight-call contract; `WebPage`
 implements it over `window` and is the only `cfg(wasm)` piece, so the crate builds
 natively and its tests drive a fake page (the command merge, the display hook, the
-doorway and the event mapping are all covered without a browser). A desktop host supplies
-the same trait over an embedded engine — `rquickjs`, decided in B7.
+doorway and the event mapping are all covered without a browser). The desktop's page is
+`EnginePage` (behind `desktop`, B7): an embedded QuickJS that loads `mods/<Name>/InitGui.js`
+the way the Python side loads `InitGui.py`, aliases `window` to the global object and
+installs `ferrocad.call` over the host's `DocumentApi`, so the module — `www/js-demo.js`
+itself — does not know which host it is on. The browser's modules ship in `www/` and its
+page imports them; only the loader differs.
 
 **The document doorway.** A JS workbench has to create objects and set properties, and a
 second `ferrocad_core` in the page would be a second document. So the host hands the JS
@@ -327,7 +331,7 @@ intersection, and that is what makes the two-VM comparison a gate for both hosts
 | none (`plain`) | ✓ | ✓ | no engine; the Rust arms answer |
 | `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI |
 | `PywasmScriptHost` (RustPython) | ✓ builds; installed by no desktop host | ✓ | the only half both hosts can run |
-| `JsScriptHost` | ✗ | ✓ | the half *is* `window.__ferrocadJs` |
+| `JsScriptHost` | ✓ page built; no host installs it yet | ✓ | the contract is `Page`: `WebPage` and the desktop `EnginePage` are the same eight calls |
 
 Three decisions are separate even though each host currently folds them into one: what a
 bundle **links**, what the host **installs** at boot, and the **default**. The browser
@@ -486,8 +490,9 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
   `ferrocad_geom::GeometryBackend`, with its own document format to match (B7).
 - **A desktop JS engine and a desktop wasm engine both wait** (B7). The addon engine is
   settled — `wasmi`, an interpreter with fuel metering and no executable memory — and the
-  JS half needs a page trait before any engine can be plugged in. Neither is linked today,
-  so the desktop binary carries neither.
+  JS page is built (`rquickjs`, behind `ferrocad_shell_js/desktop`), which brings its own
+  cost: `rquickjs-sys` compiles vendored QuickJS as C, so only a host that turns the
+  feature on pays it. Neither is in a default build today.
 - **`ScriptHost::overlays()`** returning stage-native scenes is the documented
   replacement for `inventor_scene`; until then the Coin compatibility path stays.
 - **A JS workbench can draw, but not make tools or observe.** The browser's `?addons=1`

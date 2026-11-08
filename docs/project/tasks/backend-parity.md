@@ -1,7 +1,7 @@
 # Backend parity: one Gui app, one document half
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
-built (2026-11-08).** The surface suite
+built (2026-11-08); B8 recorded (2026-11-09), not built.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -390,9 +390,9 @@ what makes the portability claim testable.
 | script half | native desktop | browser wasm | why |
 | --- | --- | --- | --- |
 | none (`plain`) | ✓ | ✓ | no engine; the Rust arms answer |
-| `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI; the wasm answer would be Pyodide, rejected in the design (`host-backends.md` §4) |
+| `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI; the wasm answer would be Pyodide, rejected in the design (`host-backends.md` §9) |
 | `PywasmScriptHost` (RustPython) | ✓ **builds and runs natively** | ✓ `?runtime=pywasm` | `ferrocad_shell_pywasm` is not `cfg(wasm)`; `ferrocad_shell_web`'s `the_pywasm_configuration_boots_one_document` composes it on a native 16 MiB thread |
-| `JsScriptHost` | ✓ page built (B7b); no host installs it yet | ✓ `?runtime=js` | the page contract is `Page`; `WebPage` and `EnginePage` are the same eight calls, so `backend(Runtime::Js)` is `Err` natively only until the switch installs the desktop page |
+| `JsScriptHost` | ✓ `--script-host=js` (B7b page, B7c switch) | ✓ `?runtime=js` | the page contract is `Page`; `WebPage` and `EnginePage` implement the same eight calls, so the same half is installed on both hosts |
 
 `plain + pywasm` is the intersection, which is why B6's capability matrix is the right
 gate for both hosts at once.
@@ -746,6 +746,96 @@ event bridge), 3 shipped-bundle tests (CI, against the real `ferrocad_addon_toy.
 and without a manifest), 5–6 `ferrocad_shell_python` composition tests depending on the
 feature, and the edition builds with and without `--features addons`.
 
+### B8 — three language hosts, two platforms each (recorded 2026-11-09; not built)
+
+B7 asked which *script half* a host installs, and `Runtime` answered with a name that
+mixed two things: the language (`Python`, `JS`) and the engine (`Cpython`, `RustPython`,
+`QuickJS`). This stage separates them. A **language is the host**; the engine behind it is
+that platform's business. Both platforms then offer the same three hosts, each implemented
+by whatever it actually has:
+
+| host | desktop engine | browser engine |
+| --- | --- | --- |
+| **Python** | CPython, `ferrocad_shell_python` (PyO3) **or** RustPython, `ferrocad_shell_pywasm` on its 16 MiB worker | RustPython, linked into the wasm module; **Pyodide** is the potential second engine |
+| **JavaScript** | QuickJS, `ferrocad_shell_js::EnginePage` (`rquickjs`, B7b) | the page's own ES module (`WebPage`, `window.__ferrocadJs`) — nothing to embed |
+| **wasm** | `wasmi` in `ferrocad_shell_wasm` (B7e) | `crates/ferrocad_web_gpui/www/addons/loader.js` over the platform's `WebAssembly` |
+
+**The durable vocabulary is the language, not the engine.** Pyodide is the test case: it
+is a second *engine* for the Python host on the web, not a fifth runtime, so it must not
+become `Runtime::Pyodide`. `Language { Python, JavaScript, Wasm }` is what a workbench
+author targets, and `plain` stays "no language host installed". The four switch values of
+B7c remain the spelling, because one host per target is still the common case; a value that
+names an engine (`cpython` vs `pywasm`) is a *choice within* one language, not a distinct
+host. `--script-host=` and `?runtime=` therefore keep parsing exactly as they do now.
+
+**Why both platforms want all three.** A workbench author picks a language once and the
+same directory ships to either host: `mods/<Name>/InitGui.py`, `InitGui.js` and `addon.wasm`
+are already siblings under one name (B7e), so a mod set is a mix of languages and a host
+that installs one silently hides the rest. The three also sandbox differently, and that is
+worth keeping visible: Python and JS are trusted code with document access, wasm runs behind
+`wasmi`/`WebAssembly` with only the JSON doorway and a capability manifest.
+
+**What is already in place.** The expensive parts of this stage are done:
+
+- **one document** — CPython reaches `ferrocad_core` through PyO3, RustPython through
+  `_ferrocad` reading the process-wide registry on every call
+  (`ferrocad_shell_pywasm/src/lib.rs`), and the JS half through `DocApi`, which is the same
+  registry (`ferrocad_shell_python/src/backend.rs::js_page`). No host grows a second
+  document, so a mixed mod set has one `ActiveDocument`;
+- **per-kind discovery** — each host looks for its own entry file, and both suites assert a
+  `PythonOnly` directory is ignored by the JS loader and by `packs()`
+  (`shell_js/tests/desktop.rs`, `shell_wasm/tests/addon.rs`);
+- **the shell does not care** — `AppBackend::script_host()` returns one
+  `Option<&dyn ScriptHost>`, so a composition of hosts is still one `ScriptHost` to the
+  shell, the viewport and the console.
+
+**What several hosts in one target costs is arbitration, not loading.** `ScriptHost` has 36
+answers. `Addons` already proves the shape — and marks the boundary, since it merges three
+and delegates the rest:
+
+| answers | rule |
+| --- | --- |
+| `commands`, `run_command`, `stage_meshes` | primary first, then each host in order — **built** |
+| `on_document_event`, `on_selection_changed`, `on_view_state_changed`, `event_listener` | fan out to every installed host; today only the primary hears them |
+| `extra_properties`, `set_extra_property`, `apply_interaction`, `open_path`, `save_path` | ask in order; `Option`/`None` already means "not mine" |
+| the remaining ~24 (console, `bootstrap`, `open_startup_document`, tools and dialogs, providers, render) | one named primary; no other host can own them |
+
+The last row holds two blockers that are decisions, not plumbing:
+
+- **the console** — one `evaluate` is one stdin and one history, so a subordinate host has
+  no REPL until the console panel grows a selector;
+- **`PywasmScriptHost` is read-only from Python** (writes and recompute are
+  `RustAppBackend`'s), so RustPython is always a subordinate and never a primary — and
+  `cpython` + `pywasm` together is the same workbench files behind two interpreters, which a
+  switch should refuse rather than compose.
+
+**Pyodide, if it is taken up.** The design rejected it once for three costs, recorded in
+[`host-backends.md` §9](../../developer/architecture/host-backends.md) — a large download,
+a JS-mediated binding layer, and COOP/COEP for shared memory. None of the three has
+changed,
+and two more follow from this codebase: `ferrocad_py`/`ferrocad_part_py` are PyO3 C-ABI
+extension modules that would need an Emscripten build of the same surface, and the OCCT
+kernel is already a prebuilt wasm artifact the module links — Pyodide would have to load
+*that* kernel rather than its own package set, or the browser would carry two. Recorded as
+**potential, not planned**.
+
+**Stages, if taken up.**
+
+- **B8a — vocabulary.** `Language` (plus the engine choice per platform) beside `Runtime`;
+  `from_name` keeps every alias; the language × platform matrix is one table test, so a
+  missing cell is a compile error rather than a doc drift.
+- **B8b — a chain.** `Addons`' `primary: Option<..>` becomes an ordered list with a named
+  primary and the four fan-out hooks. No engine work: two fixtures prove it.
+- **B8c — Python, two engines on one platform.** `cpython` and `pywasm` become engine
+  choices for one language, with `cpython,pywasm` refused at the parser.
+- **B8d — wasm inside wasm.** What `?runtime=pywasm&addons=wasm` needs today (B7e records
+  it as a no-op): our `wasmi` host compiled to wasm, or a second loader on WASI.
+
+**Exit:** one `mods/` directory boots on both hosts with a Python workbench, a JS workbench
+and a wasm bundle installed in the same target; the surface suite's capability matrix grows
+a language × platform table, and each host still answers only the verbs its capability
+allows.
+
 ## 5. Decisions (recorded 2026-11-08)
 
 | # | decision | outcome |
@@ -756,9 +846,12 @@ feature, and the edition builds with and without `--features addons`.
 | D4 | `model_tree` source | **`ferrocad_core`**: the registry already holds every document; Rust builds the whole tree, no script call needed |
 | D5 | ids for the four new verbs | Keep the existing `App_*` ids; upstream aliases (`Std_Undo`, …) only if a mod needs them. Deferred with that trigger |
 | D6 | a desktop runtime switch | **Built in B7c**: one `Runtime` in the seam, `--script-host=cpython\|pywasm\|js\|plain` on the desktop, `?runtime=` in the browser. The default stays `PythonScriptHost` |
-| D7 | a JS or a wasm engine first | **Neither built.** Recorded as two separate gaps: a wasm engine for addons comes before a JS engine, which waits on JS mods shipping |
+| D7 | a JS or a wasm engine first | **Both built** (B8 records the reversal): `wasmi` for addons in B7e and `rquickjs` for the desktop page in B7b. The wasm engine came first, as planned |
 | D8 | the wasm engine for addons | **`wasmi`** (interpreter, pure Rust, no JIT): the smaller dependency, fuel metering, and no executable memory from third-party code. Revisit if a wasm display hook puts interpretation on a hot path |
-| D9 | the JS engine for a desktop JS half | **`rquickjs`** (QuickJS, C): ES2020 in ~1 MB with no V8 build. `boa` is the pure-Rust escape hatch if a C dependency is unacceptable; `deno_core` rejected for size. The `Page` trait is the prerequisite for any of them |
+| D9 | the JS engine for a desktop JS half | **`rquickjs`** (QuickJS, C): ES2020 in ~1 MB with no V8 build. `boa` is the pure-Rust escape hatch if a C dependency is unacceptable; `deno_core` rejected for size. Built in B7b; the `Page` trait was the prerequisite |
+| D10 | the identity of a script host | **The language, not the engine** (B8): `Python`/`JavaScript`/`wasm` are the hosts, and `Cpython`/`RustPython`/`Pyodide`, `QuickJS`/`WebPage`, `wasmi`/`WebAssembly` are the per-platform engines. `Runtime`'s four names stay as the switch spelling; an engine name never becomes a fifth runtime |
+| D11 | Pyodide as a browser Python engine | **Potential, not planned** (B8): still a large download with a JS-mediated binding layer and COOP/COEP, plus an Emscripten build of the `*_py` extension surface and the prebuilt OCCT kernel beside Pyodide's package set |
+| D12 | several hosts in one target | **A chain with one named primary** (B8), generalising `Addons` rather than widening `Runtime`: three answers merge, four fan out, five are asked in order, and the console/lifecycle/render remain single-owner |
 
 ## 6. Acceptance
 
@@ -782,11 +875,15 @@ feature, and the edition builds with and without `--features addons`.
   `FreeCADGui.runCommand("Std_…")`.
 - **`PythonAppBackend` is deleted** — done in B5. Its remaining value was a test binary
   that had not linked the extension; the fix was a dev-dependency, not a type.
-- **No CPython on the web.** The wasm host runs RustPython instead; Pyodide is rejected
-  in the design, not deferred (`host-backends.md` §4).
-- **No JS engine on the desktop, and no wasm engine in the desktop bundle.** Both are
-  recorded as separate gaps in B7 with their own triggers; neither is linked today, so the
-  release binary pays for neither.
+- **No CPython on the web.** The wasm host runs RustPython instead. Pyodide was rejected
+  in the design (`host-backends.md` §9); B8 records it as *potential, not planned* (D11),
+  with the two extra costs this codebase adds.
+- **No JS or wasm engine in the default edition.** Both exist behind opt-in features —
+  `rquickjs` in B7b, `wasmi` in B7e — so the release binary pays for neither until a
+  package turns them on.
+- **No multi-language host in one target yet** (B8). A target installs one language host
+  plus wasm bundles; the trigger to generalise is a mod set that ships more than one
+  language, and the cost is B8's arbitration table, not the loading.
 
 ## 8. Evidence
 

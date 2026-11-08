@@ -1,7 +1,7 @@
 # Backend parity: one Gui app, one document half
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
-built (2026-11-08); B8 recorded (2026-11-09), B8a–B8b built (2026-11-09).** The surface suite
+built (2026-11-08); B8 recorded (2026-11-09), B8a–B8c built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -746,7 +746,7 @@ event bridge), 3 shipped-bundle tests (CI, against the real `ferrocad_addon_toy.
 and without a manifest), 5–6 `ferrocad_shell_python` composition tests depending on the
 feature, and the edition builds with and without `--features addons`.
 
-### B8 — three language hosts, two platforms each (recorded 2026-11-09; B8a–B8b built)
+### B8 — three language hosts, two platforms each (recorded 2026-11-09; B8a–B8c built)
 
 B7 asked which *script half* a host installs, and `Runtime` answered with a name that
 mixed two things: the language (`Python`, `JS`) and the engine (`Cpython`, `RustPython`,
@@ -766,7 +766,8 @@ become `Runtime::Pyodide`. `Language { Python, JavaScript, Wasm }` is what a wor
 author targets, and `plain` stays "no language host installed". The four switch values of
 B7c remain the spelling, because one host per target is still the common case; a value that
 names an engine (`cpython` vs `pywasm`) is a *choice within* one language, not a distinct
-host. `--script-host=` and `?runtime=` therefore keep parsing exactly as they do now.
+host. `--script-host=` therefore keeps its names and now accepts a comma-separated list
+(B8c); the browser's `?runtime=` still names one host.
 
 **Why both platforms want all three.** A workbench author picks a language once and the
 same directory ships to either host: `mods/<Name>/InitGui.py`, `InitGui.js` and `addon.wasm`
@@ -836,8 +837,17 @@ kernel is already a prebuilt wasm artifact the module links — Pyodide would ha
   is unchanged, and a chain of one hands back that host's listener unwrapped, so no caller
   or path pays for the generalisation. 4 tests: merge order, fan-out, listeners, and the
   one-host chain.
-- **B8c — Python, two engines on one platform.** `cpython` and `pywasm` become engine
-  choices for one language, with `cpython,pywasm` refused at the parser.
+- **B8c — one host per language (built 2026-11-09).** The switch takes a list:
+  `--script-host=cpython,js` (or the flag twice, or `FERROCAD_SCRIPT_HOST`), parsed by
+  `Runtime::parse_list` in the seam so both hosts share the rule. It names at most one host
+  per `Language`, so `cpython,pywasm` is refused — that is one host with two interpreters,
+  not a chain — and `plain` cannot be combined, because it is the absence of a host.
+  `compose_all(&[Runtime])` composes the chain with the first entry as the primary;
+  `compose_with` is unchanged and delegates. The chain itself still lives in
+  `ferrocad_shell_wasm`, so a build without `--features addons` **says so** rather than
+  installing only the first half — the follow-up is to move the composite into the seam (or
+  `ferrocad_shell_rust`) so two hosts need no wasm feature. 5 parser tests in
+  `ferrocad_shell_api` and 3 composition tests across the feature configurations.
 - **B8d — wasm inside wasm.** What `?runtime=pywasm&addons=wasm` needs today (B7e records
   it as a no-op): our `wasmi` host compiled to wasm, or a second loader on WASI.
 
@@ -861,7 +871,7 @@ allows.
 | D9 | the JS engine for a desktop JS half | **`rquickjs`** (QuickJS, C): ES2020 in ~1 MB with no V8 build. `boa` is the pure-Rust escape hatch if a C dependency is unacceptable; `deno_core` rejected for size. Built in B7b; the `Page` trait was the prerequisite |
 | D10 | the identity of a script host | **The language, not the engine** (B8): `Python`/`JavaScript`/`wasm` are the hosts, and `Cpython`/`RustPython`/`Pyodide`, `QuickJS`/`WebPage`, `wasmi`/`WebAssembly` are the per-platform engines. `Runtime`'s four names stay as the switch spelling; an engine name never becomes a fifth runtime |
 | D11 | Pyodide as a browser Python engine | **Potential, not planned** (B8): still a large download with a JS-mediated binding layer and COOP/COEP, plus an Emscripten build of the `*_py` extension surface and the prebuilt OCCT kernel beside Pyodide's package set |
-| D12 | several hosts in one target | **A chain with one named primary** (B8), generalising `Addons` rather than widening `Runtime`: three answers merge, four fan out, five are asked in order, and the console/lifecycle/render remain single-owner |
+| D12 | several hosts in one target | **A chain with one named primary** (built B8b–B8c), generalising `Addons` rather than widening `Runtime`: three answers merge, four fan out, five are asked in order, and the console/lifecycle/render remain single-owner |
 
 ## 6. Acceptance
 

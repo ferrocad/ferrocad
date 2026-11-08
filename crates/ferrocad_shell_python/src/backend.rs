@@ -27,7 +27,7 @@ use crate::script_host::PythonScriptHost;
 ///
 /// Call after `python::configure` and before `Shell::boot`.
 pub fn install(cx: &mut App) {
-    install_composed(cx, Runtime::Cpython, &[]);
+    install_composed(cx, &[Runtime::Cpython], &[]);
 }
 
 /// Install the composition for one scripting configuration.
@@ -36,12 +36,12 @@ pub fn install(cx: &mut App) {
 /// the same way the browser falls back: a scripting surface that cannot start must not
 /// cost the window.
 pub fn install_with(cx: &mut App, runtime: Runtime) {
-    install_composed(cx, runtime, &[]);
+    install_composed(cx, &[runtime], &[]);
 }
 
 /// [`install_with`] plus the wasm bundles to load beside it.
-pub fn install_composed(cx: &mut App, runtime: Runtime, addons: &[std::path::PathBuf]) {
-    match compose_with(runtime, addons) {
+pub fn install_composed(cx: &mut App, runtimes: &[Runtime], addons: &[std::path::PathBuf]) {
+    match compose_all(runtimes, addons) {
         Ok(backend) => ferrocad_shell_core::app::install_backend(cx, backend),
         Err(error) => {
             eprintln!("ferrocad: {error}");
@@ -70,8 +70,22 @@ pub fn compose_with(
     runtime: Runtime,
     addons: &[std::path::PathBuf],
 ) -> Result<Box<dyn AppBackend>, String> {
-    let primary = script_for(runtime)?;
-    let script = with_addons(primary, addons)?;
+    compose_all(&[runtime], addons)
+}
+
+/// Compose a **chain** of script halves, the first of which is the primary (B8c).
+///
+/// The list has to name one host per language: `cpython,pywasm` is refused here as well as
+/// at the parser, so a caller that builds the list by hand cannot bypass the rule.
+/// `plain` in a list with anything else is refused for the same reason — it is the absence
+/// of a host. `Err` is a request this build cannot serve, not a failure.
+pub fn compose_all(
+    runtimes: &[Runtime],
+    addons: &[std::path::PathBuf],
+) -> Result<Box<dyn AppBackend>, String> {
+    Runtime::validate_list(runtimes)?;
+    let hosts = script_for_all(runtimes)?;
+    let script = with_addons(hosts, addons)?;
 
     let mut backend = RustAppBackend::from_shared_registry();
     if let Some(script) = script {
@@ -80,7 +94,20 @@ pub fn compose_with(
     Ok(Box::new(backend))
 }
 
-/// The primary script half, if the configuration has one.
+/// The script halves `runtimes` names, in the order it named them; `Plain` adds none.
+fn script_for_all(
+    runtimes: &[Runtime],
+) -> Result<Vec<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>, String> {
+    let mut hosts = Vec::new();
+    for runtime in runtimes {
+        if let Some(host) = script_for(*runtime)? {
+            hosts.push(host);
+        }
+    }
+    Ok(hosts)
+}
+
+/// The script half one configuration names, if it names one.
 fn script_for(
     runtime: Runtime,
 ) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>, String> {
@@ -92,14 +119,14 @@ fn script_for(
     })
 }
 
-/// Wrap `primary` in the addon composition, when there is anything to wrap.
+/// Wrap the halves in the addon composition, when there is anything to compose.
+///
+/// One half and no bundles is installed directly, so the common configuration does not pay
+/// for the chain; anything else becomes an `Addons` chain, whose first half is the primary.
 fn with_addons(
-    primary: Option<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>,
+    hosts: Vec<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>,
     addons: &[std::path::PathBuf],
 ) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost>>, String> {
-    if addons.is_empty() {
-        return Ok(primary.map(|primary| primary as Box<dyn ferrocad_shell_api::ScriptHost>));
-    }
     #[cfg(feature = "addons")]
     {
         // A path may be a directory of workbenches (`<dir>/<Name>/addon.wasm`) or one
@@ -112,7 +139,7 @@ fn with_addons(
                 bundles.push(path.clone());
             }
         }
-        if bundles.is_empty() {
+        if !addons.is_empty() && bundles.is_empty() {
             eprintln!(
                 "ferrocad: no wasm addons under {}; the script half runs alone",
                 addons
@@ -121,24 +148,29 @@ fn with_addons(
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            return Ok(primary.map(|primary| primary as Box<dyn ferrocad_shell_api::ScriptHost>));
+        }
+        if bundles.is_empty() && hosts.len() <= 1 {
+            return Ok(hosts
+                .into_iter()
+                .next()
+                .map(|host| host as Box<dyn ferrocad_shell_api::ScriptHost>));
         }
 
         // The bundles reach the same registry the document half answers from, so an
         // addon's `create` lands in the tree beside a CPython edit — and the doorway is
-        // given a sink, so the script half hears about that edit exactly as it hears
+        // given a sink, so the **primary** hears about that edit exactly as it hears
         // about the shell's own.
         use std::sync::Arc;
 
-        let primary: Option<Arc<dyn ferrocad_shell_api::ScriptHost + Send + Sync>> =
-            primary.map(Arc::from);
-        let document: Arc<dyn ferrocad_shell_api::DocumentApi> = match &primary {
+        let hosts: Vec<Arc<dyn ferrocad_shell_api::ScriptHost + Send + Sync>> =
+            hosts.into_iter().map(Arc::from).collect();
+        let document: Arc<dyn ferrocad_shell_api::DocumentApi> = match hosts.first() {
             Some(script) => Arc::new(ferrocad_doc_api::DocApi::with_events(
                 ferrocad_shell_wasm::announce_to(Arc::clone(script)),
             )),
             None => Arc::new(ferrocad_doc_api::DocApi::new()),
         };
-        let (host, errors) = ferrocad_shell_wasm::Addons::boot(primary, &bundles, document);
+        let (host, errors) = ferrocad_shell_wasm::Addons::boot_chain(hosts, &bundles, document);
         for error in &errors {
             eprintln!("ferrocad: addon skipped: {error}");
         }
@@ -146,10 +178,21 @@ fn with_addons(
     }
     #[cfg(not(feature = "addons"))]
     {
-        let _ = primary;
-        Err("`--addons` needs a build with the `addons` feature: \
-             `cargo run -p ferrocad_parametric --features addons -- --addons mods`"
-            .to_string())
+        if !addons.is_empty() {
+            return Err("`--addons` needs a build with the `addons` feature: \
+                 `cargo run -p ferrocad_parametric --features addons -- --addons mods`"
+                .to_string());
+        }
+        if hosts.len() > 1 {
+            return Err("combining script hosts needs a build with the `addons` feature, \
+                        which is where the chain lives: `cargo run -p ferrocad_parametric \
+                        --features addons,js -- --script-host=cpython,js`"
+                .to_string());
+        }
+        Ok(hosts
+            .into_iter()
+            .next()
+            .map(|host| host as Box<dyn ferrocad_shell_api::ScriptHost>))
     }
 }
 

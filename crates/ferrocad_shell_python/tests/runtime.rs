@@ -3,8 +3,7 @@
 //! The switch is only worth having if each name composes what it says, so these test the
 //! composition rather than the parser (that lives in `ferrocad_shell_api`).
 
-use ferrocad_shell_api::AppBackend;
-use ferrocad_shell_python::{Runtime, compose};
+use ferrocad_shell_python::{Runtime, compose, compose_all};
 
 #[test]
 fn plain_is_the_document_half_alone() {
@@ -82,4 +81,44 @@ fn js_is_the_composition_with_the_page_behind_it() {
     // composes, and the page's own suite proves the module loading.
     let backend = compose(Runtime::Js).expect("the page composes");
     assert!(backend.script_host().is_some());
+}
+
+#[test]
+fn two_python_engines_are_refused_before_any_host_boots() {
+    // B8c: the rule is applied at composition as well as at the parser, so a caller that
+    // builds the list by hand cannot install two interpreters for one language.
+    let error = compose_all(&[Runtime::Cpython, Runtime::Pywasm], &[])
+        .err()
+        .expect("two Python engines are one host too many");
+    assert!(error.contains("both python"), "{error}");
+}
+
+#[test]
+fn plain_cannot_be_combined_with_a_host() {
+    let error = compose_all(&[Runtime::Plain, Runtime::Cpython], &[])
+        .err()
+        .expect("plain is the absence of a host");
+    assert!(error.contains("plain"), "{error}");
+}
+
+#[cfg(all(feature = "addons", feature = "js"))]
+#[test]
+fn two_hosts_compose_into_one_script_host() {
+    // CPython as the primary, the JS page behind it. What this can prove without a
+    // configured interpreter is that the chain composes and reaches the backend as one
+    // `ScriptHost`; the merge order and the fan-out are `ferrocad_shell_wasm`'s tests,
+    // which drive fixtures instead of an interpreter.
+    let backend = compose_all(&[Runtime::Cpython, Runtime::Js], &[]).expect("a chain composes");
+    assert!(backend.script_host().is_some());
+}
+
+#[cfg(all(not(feature = "addons"), feature = "js"))]
+#[test]
+fn two_hosts_need_the_addons_feature_today() {
+    // The chain lives in `ferrocad_shell_wasm`, which is the `addons` feature; the error
+    // says so rather than silently installing only the first half.
+    let error = compose_all(&[Runtime::Cpython, Runtime::Js], &[])
+        .err()
+        .expect("no chain without the feature");
+    assert!(error.contains("addons"), "{error}");
 }

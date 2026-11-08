@@ -81,17 +81,58 @@ impl Runtime {
         Ok(runtime)
     }
 
-    /// The runtime named by `FERROCAD_SCRIPT_HOST`, if it is set.
+    /// The list named by `FERROCAD_SCRIPT_HOST`, if it is set.
     ///
     /// The desktop's switch is a flag (`--script-host=`), but an environment variable is
     /// what a test harness or a wrapper script can set without rewriting a command line.
-    pub fn from_env() -> Result<Option<Self>, String> {
+    pub fn from_env_list() -> Result<Option<Vec<Self>>, String> {
         match std::env::var("FERROCAD_SCRIPT_HOST") {
-            Ok(name) if !name.trim().is_empty() => {
-                Self::from_name(name.trim()).map(Some)
-            }
+            Ok(names) if !names.trim().is_empty() => Self::parse_list(&names).map(Some),
             _ => Ok(None),
         }
+    }
+
+    /// Parse a switch value that may name **several** hosts: `cpython,js`.
+    ///
+    /// The first name is the primary: it owns the console, the document lifecycle and the
+    /// tools, and the rest answer commands, the display hook and the document's events.
+    /// A list names at most one host per [`Language`] — `cpython,pywasm` is two engines for
+    /// one language, not two hosts — and `plain` cannot be combined, because it is the
+    /// absence of a host rather than one.
+    pub fn parse_list(names: &str) -> Result<Vec<Self>, String> {
+        let names = names.trim();
+        if names.is_empty() {
+            return Err("no runtime named; expected plain, cpython, pywasm or js".to_string());
+        }
+        let mut runtimes = Vec::new();
+        for name in names.split(',') {
+            runtimes.push(Self::from_name(name.trim())?);
+        }
+        Self::validate_list(&runtimes)?;
+        Ok(runtimes)
+    }
+
+    /// The rule [`parse_list`](Self::parse_list) applies, for a list assembled elsewhere.
+    pub fn validate_list(runtimes: &[Self]) -> Result<(), String> {
+        if runtimes.len() > 1 && runtimes.contains(&Runtime::Plain) {
+            return Err(
+                "plain is the document half alone; it cannot be combined with a host".to_string(),
+            );
+        }
+        let mut seen: Vec<(Language, Self)> = Vec::new();
+        for runtime in runtimes {
+            let Some(language) = Language::of(*runtime) else {
+                continue;
+            };
+            if let Some((_, first)) = seen.iter().find(|(seen, _)| *seen == language) {
+                return Err(format!(
+                    "{first} and {runtime} are both {}; install one host per language",
+                    language.id()
+                ));
+            }
+            seen.push((language, *runtime));
+        }
+        Ok(())
     }
 }
 

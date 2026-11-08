@@ -43,7 +43,7 @@ use gpui::{
     application, bounds, point, prelude::*, px, size,
 };
 
-pub use backend::{compose, compose_with, engine, install, install_composed, install_with};
+pub use backend::{compose, compose_all, compose_with, engine, install, install_composed, install_with};
 pub use events::PythonEventCallbacks;
 pub use ferrocad_shell_api::Runtime;
 pub use headless::{RenderReport, StlReport, render as render_headless, run as run_headless};
@@ -93,14 +93,14 @@ pub struct HostConfig {
     /// A bundle is sandboxed: its only capability is the document doorway. An addon that
     /// will not load is reported and skipped. Empty means none, which is a normal start.
     pub addons: Vec<std::path::PathBuf>,
-    /// Which script half to install (`--script-host=`, `FERROCAD_SCRIPT_HOST`).
+    /// Which script halves to install (`--script-host=`, `FERROCAD_SCRIPT_HOST`).
     ///
-    /// `None` is the edition's engine, CPython. The other configurations are the
-    /// browser's, made selectable on the desktop: the same document half with a different
-    /// script half behind it (see `docs/project/tasks/backend-parity.md` B7). A
-    /// configuration this build cannot serve is reported and replaced by
+    /// Empty is the edition's engine, CPython. One entry is the common case; more than one
+    /// installs a chain whose **first** entry is the primary (B8c), and each entry has to
+    /// name a different language — `cpython,pywasm` is one host with two interpreters and is
+    /// refused. A configuration this build cannot serve is reported and replaced by
     /// [`Runtime::Plain`].
-    pub script_host: Option<Runtime>,
+    pub script_hosts: Vec<Runtime>,
 }
 
 impl Default for HostConfig {
@@ -113,7 +113,7 @@ impl Default for HostConfig {
             contributions: Contributions::default(),
             open_document: None,
             addons: Vec::new(),
-            script_host: None,
+            script_hosts: Vec::new(),
         }
     }
 }
@@ -169,16 +169,18 @@ pub fn run_with(config: HostConfig) {
     configure_trace();
     // The scripting configuration first: it decides which halves `install` composes,
     // and a value the command line got wrong is reported now rather than after the boot.
-    let runtime = config
-        .script_host
-        .or_else(|| match Runtime::from_env() {
-            Ok(runtime) => runtime,
+    let runtimes = if config.script_hosts.is_empty() {
+        match Runtime::from_env_list() {
+            Ok(Some(runtimes)) => runtimes,
+            Ok(None) => vec![Runtime::Cpython],
             Err(error) => {
                 eprintln!("ferrocad: {error}");
-                None
+                vec![Runtime::Cpython]
             }
-        })
-        .unwrap_or(Runtime::Cpython);
+        }
+    } else {
+        config.script_hosts.clone()
+    };
     // The wasm workbenches ride beside whatever script half booted, so they are read
     // before the config moves into the window closure.
     let addons = config.addons.clone();
@@ -207,7 +209,7 @@ pub fn run_with(config: HostConfig) {
         .with_gpu_preference(gpu_preference())
         .with_frame_pipeline(frame_pipeline);
     app.run(move |cx: &mut App| {
-        backend::install_composed(cx, runtime, &addons);
+        backend::install_composed(cx, &runtimes, &addons);
         let model = match Shell::boot(cx) {
             Ok(model) => model,
             Err(e) => {

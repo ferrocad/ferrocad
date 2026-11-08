@@ -113,7 +113,7 @@ pub fn run_edition_with_document(
     contributions: Contributions,
     open: Option<std::path::PathBuf>,
 ) {
-    run_edition_with_script(app_name, entry_module, contributions, open, None, Vec::new());
+    run_edition_with_script(app_name, entry_module, contributions, open, Vec::new(), Vec::new());
 }
 
 /// [`run_edition_with_document`] with the scripting configuration `--script-host=` asked
@@ -121,21 +121,22 @@ pub fn run_edition_with_document(
 ///
 /// The window is the same in every configuration; what changes is the half behind it —
 /// the edition's CPython by default, the document alone, or (when the build linked them)
-/// the browser's RustPython and JS pages. A configuration this build cannot serve is
-/// reported and replaced by the document half.
+/// the browser's RustPython and JS pages. More than one entry installs a chain whose first
+/// half is the primary (B8c). A configuration this build cannot serve is reported and
+/// replaced by the document half.
 pub fn run_edition_with_script(
     app_name: &str,
     entry_module: &str,
     contributions: Contributions,
     open: Option<std::path::PathBuf>,
-    script_host: Option<Runtime>,
+    script_hosts: Vec<Runtime>,
     addons: Vec<std::path::PathBuf>,
 ) {
     register_core_module();
     let mut config = app_config(app_name, entry_module);
     config.contributions = contributions;
     config.open_document = open;
-    config.script_host = script_host;
+    config.script_hosts = script_hosts;
     config.addons = addons;
     ferrocad_shell_python::run_with(config);
 }
@@ -190,10 +191,10 @@ pub struct EditionArgs {
     pub script: Option<std::path::PathBuf>,
     /// `--open <file>`: open a saved document at boot (windowed or headless).
     pub open: Option<std::path::PathBuf>,
-    /// `--script-host <name>`: which scripting half the window installs (`plain`,
-    /// `cpython`, `pywasm`, `js`). `None` leaves it to `FERROCAD_SCRIPT_HOST`, then to
-    /// CPython.
-    pub script_host: Option<Runtime>,
+    /// `--script-host <names>`: which scripting halves the window installs (`plain`,
+    /// `cpython`, `pywasm`, `js`), comma-separated for more than one. Empty leaves it to
+    /// `FERROCAD_SCRIPT_HOST`, then to CPython. The first name is the primary.
+    pub script_hosts: Vec<Runtime>,
     /// `--addons <path>`: a wasm workbench bundle or a directory of them
     /// (`<dir>/<Name>/addon.wasm`), repeatable.
     ///
@@ -211,7 +212,7 @@ impl Default for EditionArgs {
             size: [800, 600],
             script: None,
             open: None,
-            script_host: None,
+            script_hosts: Vec::new(),
             addons: Vec::new(),
         }
     }
@@ -251,13 +252,15 @@ pub fn edition_args() -> Result<EditionArgs, String> {
                 parsed.open = Some(std::path::PathBuf::from(path));
             }
             "--script-host" => {
-                let name = args.next().ok_or_else(|| {
+                let names = args.next().ok_or_else(|| {
                     "--script-host wants plain, cpython, pywasm or js".to_string()
                 })?;
-                parsed.script_host = Some(Runtime::from_name(&name)?);
+                parsed.script_hosts.extend(Runtime::parse_list(&names)?);
             }
             flag if flag.starts_with("--script-host=") => {
-                parsed.script_host = Some(Runtime::from_name(&flag["--script-host=".len()..])?);
+                parsed
+                    .script_hosts
+                    .extend(Runtime::parse_list(&flag["--script-host=".len()..])?);
             }
             "--addons" => {
                 let path = args
@@ -279,6 +282,9 @@ pub fn edition_args() -> Result<EditionArgs, String> {
             _ => {}
         }
     }
+    // The flag is repeatable, so the one-host-per-language rule is checked once the whole
+    // command line has been read rather than per occurrence.
+    Runtime::validate_list(&parsed.script_hosts)?;
     Ok(parsed)
 }
 
@@ -310,7 +316,7 @@ fn app_config(app_name: &str, entry_module: &str) -> HostConfig {
         mods_paths: payload.mods_paths,
         contributions: Contributions::default(),
         open_document: None,
-        script_host: None,
+        script_hosts: Vec::new(),
         addons: Vec::new(),
     }
 }

@@ -148,3 +148,59 @@ fn the_current_platform_is_the_target() {
     };
     assert_eq!(Platform::current(), expected);
 }
+
+#[test]
+fn a_list_names_hosts_in_order() {
+    assert_eq!(Runtime::parse_list("js"), Ok(vec![Runtime::Js]));
+    assert_eq!(
+        Runtime::parse_list("cpython,js"),
+        Ok(vec![Runtime::Cpython, Runtime::Js])
+    );
+    // Whitespace around the names is the page's `?runtime=js, cpython` and a hand-typed
+    // command line, so both have to work.
+    assert_eq!(
+        Runtime::parse_list(" pywasm , js "),
+        Ok(vec![Runtime::Pywasm, Runtime::Js])
+    );
+}
+
+#[test]
+fn two_engines_for_one_language_are_refused() {
+    // B8c: `cpython,pywasm` is one host with two interpreters — the same workbench files
+    // behind two consoles — not a chain.
+    let error = Runtime::parse_list("cpython,pywasm").unwrap_err();
+    assert!(error.contains("both python"), "{error}");
+    assert!(error.contains("cpython"), "{error}");
+    assert!(error.contains("pywasm"), "{error}");
+
+    let repeated = Runtime::parse_list("js,js").unwrap_err();
+    assert!(repeated.contains("both javascript"), "{repeated}");
+}
+
+#[test]
+fn plain_is_the_absence_of_a_host_and_cannot_be_combined() {
+    assert_eq!(Runtime::parse_list("plain"), Ok(vec![Runtime::Plain]));
+    let error = Runtime::parse_list("plain,js").unwrap_err();
+    assert!(error.contains("plain"), "{error}");
+    assert!(error.contains("alone"), "{error}");
+}
+
+#[test]
+fn an_empty_or_unknown_list_says_what_the_names_are() {
+    let empty = Runtime::parse_list("  ").unwrap_err();
+    assert!(empty.contains("no runtime named"), "{empty}");
+
+    let unknown = Runtime::parse_list("js,coffee").unwrap_err();
+    assert!(unknown.contains("coffee"), "{unknown}");
+}
+
+#[test]
+fn the_validation_rule_is_usable_on_a_list_built_by_hand() {
+    assert_eq!(Runtime::validate_list(&[]), Ok(()));
+    assert_eq!(Runtime::validate_list(&[Runtime::Plain]), Ok(()));
+    assert_eq!(
+        Runtime::validate_list(&[Runtime::Cpython, Runtime::Js]),
+        Ok(())
+    );
+    assert!(Runtime::validate_list(&[Runtime::Js, Runtime::Js]).is_err());
+}

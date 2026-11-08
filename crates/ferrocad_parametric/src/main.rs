@@ -22,7 +22,9 @@
 //! installs the browser's JS page on the desktop instead of CPython: the same document,
 //! a different script half. `--script-host=pywasm` (`--features pywasm`) does the same
 //! for RustPython, on the 16 MiB worker its compiler needs, and `--script-host=plain`
-//! drops the interpreter entirely; see `docs/project/tasks/backend-parity.md` B7.
+//! drops the interpreter entirely. A comma-separated list installs a chain —
+//! `--script-host=cpython,js` puts the page beside CPython, which stays the primary —
+//! with one host per language; see `docs/project/tasks/backend-parity.md` B7–B8.
 //!
 //! `cargo run -p ferrocad_parametric -- --check-init` boots the interpreter, the
 //! linked `Part` module and the payload, then exits without a window (no display,
@@ -146,7 +148,7 @@ fn main() {
         "ferrocad_parametric",
         contributions,
         args.open,
-        args.script_host,
+        args.script_hosts,
         args.addons,
     );
 }

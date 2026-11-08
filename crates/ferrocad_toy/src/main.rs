@@ -73,7 +73,7 @@ fn main() {
         "ferrocad_toy",
         contributions,
         args.open,
-        args.script_host,
+        args.script_hosts,
         args.addons,
     );
 }

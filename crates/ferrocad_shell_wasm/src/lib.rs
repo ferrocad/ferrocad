@@ -733,8 +733,17 @@ impl Addons {
         paths: &[PathBuf],
         document: Arc<dyn DocumentApi>,
     ) -> (Self, Vec<String>) {
+        Self::boot_chain(primary.into_iter().collect(), paths, document)
+    }
+
+    /// [`boot`](Self::boot) for a chain: the first host is the primary.
+    pub fn boot_chain(
+        hosts: Vec<Arc<dyn ScriptHost + Send + Sync>>,
+        paths: &[PathBuf],
+        document: Arc<dyn DocumentApi>,
+    ) -> (Self, Vec<String>) {
         let (addons, errors) = WasmAddonHost::open_all(paths, document);
-        (Self::new(primary, addons), errors)
+        (Self::chain(hosts, addons), errors)
     }
 
     /// Whether this composition answers anything at all.

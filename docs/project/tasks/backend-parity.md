@@ -1,7 +1,7 @@
 # Backend parity: one Gui app, one document half
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
-built (2026-11-08); B8 recorded (2026-11-09), B8a–B8c built (2026-11-09).** The surface suite
+built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -746,7 +746,7 @@ event bridge), 3 shipped-bundle tests (CI, against the real `ferrocad_addon_toy.
 and without a manifest), 5–6 `ferrocad_shell_python` composition tests depending on the
 feature, and the edition builds with and without `--features addons`.
 
-### B8 — three language hosts, two platforms each (recorded 2026-11-09; B8a–B8c built)
+### B8 — three language hosts, two platforms each (recorded 2026-11-09; B8a–B8d built)
 
 B7 asked which *script half* a host installs, and `Runtime` answered with a name that
 mixed two things: the language (`Python`, `JS`) and the engine (`Cpython`, `RustPython`,
@@ -767,7 +767,8 @@ author targets, and `plain` stays "no language host installed". The four switch 
 B7c remain the spelling, because one host per target is still the common case; a value that
 names an engine (`cpython` vs `pywasm`) is a *choice within* one language, not a distinct
 host. `--script-host=` therefore keeps its names and now accepts a comma-separated list
-(B8c); the browser's `?runtime=` still names one host.
+(B8c), and so does the browser's `?runtime=` (B8d): `?runtime=pywasm,js` installs both,
+RustPython first.
 
 **Why both platforms want all three.** A workbench author picks a language once and the
 same directory ships to either host: `mods/<Name>/InitGui.py`, `InitGui.js` and `addon.wasm`
@@ -843,13 +844,27 @@ kernel is already a prebuilt wasm artifact the module links — Pyodide would ha
   per `Language`, so `cpython,pywasm` is refused — that is one host with two interpreters,
   not a chain — and `plain` cannot be combined, because it is the absence of a host.
   `compose_all(&[Runtime])` composes the chain with the first entry as the primary;
-  `compose_with` is unchanged and delegates. The chain itself still lives in
-  `ferrocad_shell_wasm`, so a build without `--features addons` **says so** rather than
-  installing only the first half — the follow-up is to move the composite into the seam (or
-  `ferrocad_shell_rust`) so two hosts need no wasm feature. 5 parser tests in
+  `compose_with` is unchanged and delegates. The chain first lived in
+  `ferrocad_shell_wasm`, which made two hosts need the `addons` feature; B8d moved it into
+  the seam, so a build with any two halves chains them. 5 parser tests in
   `ferrocad_shell_api` and 3 composition tests across the feature configurations.
-- **B8d — wasm inside wasm.** What `?runtime=pywasm&addons=wasm` needs today (B7e records
-  it as a no-op): our `wasmi` host compiled to wasm, or a second loader on WASI.
+- **B8d — the chain belongs to the seam (built 2026-11-09).** `HostChain` moved from
+  `ferrocad_shell_wasm` to `ferrocad_shell_api`, so **both** hosts compose with it and no
+  build needs a wasm feature to run two halves: the browser's `?runtime=pywasm,js` and the
+  desktop's `--script-host=cpython,js` are the same rule. The chain holds
+  `Arc<dyn ScriptHost>` (no `Send + Sync`), because the browser's RustPython host keeps its
+  payload in an `Rc`; the desktop shares only the primary with its event sink. The page's
+  `index.html` installs the JS module when `js` appears anywhere in `?runtime=`, so a chain
+  containing it works. `ferrocad_shell_wasm` now exposes `chain`/`boot`/`boot_chain` free
+  functions returning the seam's type, and its bundles are just more members. 4 chain tests
+  in `ferrocad_shell_api` plus the browser's query cases.
+- **B8e — wasm inside wasm (not built).** What `?runtime=pywasm&addons=wasm` needs: the
+  page's bundle host is `loader.js`, driven by the JS half, so a bundle is invisible when
+  any other half is the one installed. Compiling our `wasmi` host into the module would make
+  wasm an independent host on the web, bring fuel metering to the page, and leave one ABI
+  implementation instead of two. Costs: module size, and interpreted-inside-interpreted
+  execution. Not needed while "on the web, a bundle rides on the JS half" is acceptable;
+  the cheaper alternatives are a page-side command merge and a generated `WRITE_VERBS`.
 
 **Exit:** one `mods/` directory boots on both hosts with a Python workbench, a JS workbench
 and a wasm bundle installed in the same target; the surface suite's capability matrix grows

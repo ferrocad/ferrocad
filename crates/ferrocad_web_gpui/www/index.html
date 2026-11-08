@@ -90,9 +90,9 @@
 
     // `?js=1` installs the page's JS scripting surface before the module boots, so
     // its command list is part of the first `commands()` read. `?runtime=js` is the
-    // same request in the longer form the Rust switch also understands, so the page
-    // must install the module for it too.
-    if (params.has("js") || params.get("runtime") === "js") {
+    // same request in the longer form the Rust switch also understands, and a chain
+    // (`?runtime=pywasm,js`) names it as one element, so both spellings install it.
+    if (params.has("js") || (params.get("runtime") ?? "").split(",").some((name) => name.trim() === "js")) {
       const { install } = await import("./js-demo.js");
       install();
     }

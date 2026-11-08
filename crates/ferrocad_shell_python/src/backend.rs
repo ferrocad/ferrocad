@@ -122,11 +122,16 @@ fn script_for(
 /// Wrap the halves in the addon composition, when there is anything to compose.
 ///
 /// One half and no bundles is installed directly, so the common configuration does not pay
-/// for the chain; anything else becomes an `Addons` chain, whose first half is the primary.
+/// for the chain; anything else becomes a [`HostChain`](ferrocad_shell_api::HostChain),
+/// whose first half is the primary.
 fn with_addons(
     hosts: Vec<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>,
     addons: &[std::path::PathBuf],
 ) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost>>, String> {
+    if addons.is_empty() {
+        return Ok(install_directly(hosts));
+    }
+
     #[cfg(feature = "addons")]
     {
         // A path may be a directory of workbenches (`<dir>/<Name>/addon.wasm`) or one
@@ -139,7 +144,7 @@ fn with_addons(
                 bundles.push(path.clone());
             }
         }
-        if !addons.is_empty() && bundles.is_empty() {
+        if bundles.is_empty() {
             eprintln!(
                 "ferrocad: no wasm addons under {}; the script half runs alone",
                 addons
@@ -148,12 +153,7 @@ fn with_addons(
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-        }
-        if bundles.is_empty() && hosts.len() <= 1 {
-            return Ok(hosts
-                .into_iter()
-                .next()
-                .map(|host| host as Box<dyn ferrocad_shell_api::ScriptHost>));
+            return Ok(install_directly(hosts));
         }
 
         // The bundles reach the same registry the document half answers from, so an
@@ -170,7 +170,7 @@ fn with_addons(
             )),
             None => Arc::new(ferrocad_doc_api::DocApi::new()),
         };
-        let (host, errors) = ferrocad_shell_wasm::Addons::boot_chain(hosts, &bundles, document);
+        let (host, errors) = ferrocad_shell_wasm::boot_chain(hosts, &bundles, document);
         for error in &errors {
             eprintln!("ferrocad: addon skipped: {error}");
         }
@@ -178,22 +178,42 @@ fn with_addons(
     }
     #[cfg(not(feature = "addons"))]
     {
-        if !addons.is_empty() {
-            return Err("`--addons` needs a build with the `addons` feature: \
-                 `cargo run -p ferrocad_parametric --features addons -- --addons mods`"
-                .to_string());
-        }
-        if hosts.len() > 1 {
-            return Err("combining script hosts needs a build with the `addons` feature, \
-                        which is where the chain lives: `cargo run -p ferrocad_parametric \
-                        --features addons,js -- --script-host=cpython,js`"
-                .to_string());
-        }
-        Ok(hosts
+        Err("`--addons` needs a build with the `addons` feature: \
+             `cargo run -p ferrocad_parametric --features addons -- --addons mods`"
+            .to_string())
+    }
+}
+
+/// One half is installed directly; several are a chain whose first is the primary.
+///
+/// No host is no script half: the document half answers alone, which is what
+/// `--script-host=plain` means.
+fn install_directly(
+    hosts: Vec<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>,
+) -> Option<Box<dyn ferrocad_shell_api::ScriptHost>> {
+    if hosts.len() <= 1 {
+        return hosts
             .into_iter()
             .next()
-            .map(|host| host as Box<dyn ferrocad_shell_api::ScriptHost>))
+            .map(|host| host as Box<dyn ferrocad_shell_api::ScriptHost>);
     }
+    Some(Box::new(host_chain(hosts)))
+}
+
+/// Two or more halves, as one `ScriptHost`.
+fn host_chain(
+    hosts: Vec<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>,
+) -> ferrocad_shell_api::HostChain {
+    use std::sync::Arc;
+
+    let members: Vec<Arc<dyn ferrocad_shell_api::ScriptHost>> = hosts
+        .into_iter()
+        .map(|host| {
+            let shared: Arc<dyn ferrocad_shell_api::ScriptHost + Send + Sync> = Arc::from(host);
+            shared as Arc<dyn ferrocad_shell_api::ScriptHost>
+        })
+        .collect();
+    ferrocad_shell_api::HostChain::new(members)
 }
 
 /// The desktop's RustPython half: the interpreter on the worker its compiler needs.

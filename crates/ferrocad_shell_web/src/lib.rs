@@ -6,13 +6,18 @@
 //! file picker":
 //!
 //! ```text
-//! ?runtime=plain    RustAppBackend                          (document only)
-//! ?runtime=pywasm   RustAppBackend + PywasmScriptHost       (RustPython, in the module)
-//! ?runtime=js       RustAppBackend + JsScriptHost           (the page's ES module)
+//! ?runtime=plain       RustAppBackend                     (document only)
+//! ?runtime=pywasm      RustAppBackend + PywasmScriptHost  (RustPython, in the module)
+//! ?runtime=js          RustAppBackend + JsScriptHost      (the page's ES module)
+//! ?runtime=pywasm,js   both, RustPython first            (a chain, B8)
 //! ```
 //!
 //! `?js=1` and `?pywasm=1` are the short forms; `?runtime=` wins when both are
 //! present, and `?js=1` beats `?pywasm=1` because the page installs the module for it.
+//! A comma-separated `?runtime=` names a chain, and the first name is the primary — it
+//! owns the console, the document lifecycle and the render pipeline. One host per language:
+//! `?runtime=cpython,pywasm` is refused, because `ferrocad_py` and RustPython are two
+//! engines for the same language.
 //! Every other query parameter (`?click=`, `?select=`, `?keys=`, …) is the capture
 //! harness's and is ignored. The names themselves — and their aliases — are
 //! [`ferrocad_shell_api::runtime::Runtime`], so the desktop's `--script-host=` cannot
@@ -44,31 +49,61 @@ pub fn plain() -> Box<dyn AppBackend> {
     Box::new(ferrocad_shell_rust::RustAppBackend::new())
 }
 
-/// Compose the backend for one runtime.
+/// Compose the backend for a chain of runtimes; the first is the primary.
 ///
-/// `Err` is a request that cannot be served here — a JS half with no page module, or
-/// an interpreter that did not boot — and the caller decides whether to fall back to
-/// [`plain`], which the host does so a broken surface never costs the window.
-pub fn backend(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
-    Ok(match runtime {
-        Runtime::Plain => plain(),
-        Runtime::Cpython => {
-            return Err(
-                "no CPython in the browser: `ferrocad_py` is a native PyO3 extension, \
-                 so the browser's Python is ?runtime=pywasm"
-                    .to_string(),
-            );
+/// `Err` is a request that cannot be served here — a JS half with no page module, an
+/// interpreter that did not boot, or two engines for one language — and the caller decides
+/// whether to fall back to [`plain`], which the host does so a broken surface never costs
+/// the window.
+pub fn backend(runtimes: &[Runtime]) -> Result<Box<dyn AppBackend>, String> {
+    Runtime::validate_list(runtimes)?;
+
+    let mut hosts: Vec<Box<dyn ferrocad_shell_api::ScriptHost>> = Vec::new();
+    for runtime in runtimes {
+        match runtime {
+            Runtime::Plain => {}
+            Runtime::Cpython => {
+                return Err(
+                    "no CPython in the browser: `ferrocad_py` is a native PyO3 extension, \
+                     so the browser's Python is ?runtime=pywasm"
+                        .to_string(),
+                );
+            }
+            Runtime::Pywasm => {
+                let script = ferrocad_shell_pywasm::PywasmScriptHost::live().map_err(|error| {
+                    format!("the wasm-Python interpreter did not boot: {error}")
+                })?;
+                hosts.push(Box::new(script));
+            }
+            Runtime::Js => hosts.push(js_host()?),
         }
-        Runtime::Pywasm => {
-            let script = ferrocad_shell_pywasm::PywasmScriptHost::live()
-                .map_err(|error| format!("the wasm-Python interpreter did not boot: {error}"))?;
-            Box::new(
-                ferrocad_shell_rust::RustAppBackend::from_shared_registry()
-                    .with_script_host(Box::new(script)),
-            )
+    }
+
+    // A chain of one is installed directly, so the common configuration does not pay for
+    // the composite. The document half is the shared-registry one whenever a script is
+    // installed: every browser half reaches the document through the registry.
+    let script: Option<Box<dyn ferrocad_shell_api::ScriptHost>> = match hosts.len() {
+        0 => None,
+        1 => hosts
+            .into_iter()
+            .next()
+            .map(|host| host as Box<dyn ferrocad_shell_api::ScriptHost>),
+        _ => {
+            let members = hosts
+                .into_iter()
+                .map(std::sync::Arc::from)
+                .collect::<Vec<std::sync::Arc<dyn ferrocad_shell_api::ScriptHost>>>();
+            Some(Box::new(ferrocad_shell_api::HostChain::new(members)))
         }
-        Runtime::Js => js_backend()?,
-    })
+    };
+
+    let backend = match script {
+        Some(script) => {
+            ferrocad_shell_rust::RustAppBackend::from_shared_registry().with_script_host(script)
+        }
+        None => ferrocad_shell_rust::RustAppBackend::new(),
+    };
+    Ok(Box::new(backend))
 }
 
 /// The JS half over the page's module, when the page installed one.
@@ -77,7 +112,7 @@ pub fn backend(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
 /// so the backend must be the shared-registry one: an isolated document lives in the
 /// backend's own handle, where no script can reach it.
 #[cfg(target_family = "wasm")]
-fn js_backend() -> Result<Box<dyn AppBackend>, String> {
+fn js_host() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
     let page: std::sync::Arc<dyn ferrocad_shell_js::Page> =
         std::sync::Arc::new(ferrocad_shell_js::WebPage);
     if !ferrocad_shell_js::available(&*page) {
@@ -87,29 +122,26 @@ fn js_backend() -> Result<Box<dyn AppBackend>, String> {
                 .to_string(),
         );
     }
-    let events: std::sync::Arc<dyn ferrocad_shell_api::DocumentEventSink> = std::sync::Arc::new(
-        ferrocad_shell_js::PageEvents::new(std::sync::Arc::clone(&page)),
-    );
+    let events: std::sync::Arc<dyn ferrocad_shell_api::DocumentEventSink> =
+        std::sync::Arc::new(ferrocad_shell_js::PageEvents::new(std::sync::Arc::clone(&page)));
     let document = std::sync::Arc::new(ferrocad_doc_api::DocApi::with_events(events));
-    Ok(Box::new(
-        ferrocad_shell_rust::RustAppBackend::from_shared_registry().with_script_host(Box::new(
-            ferrocad_shell_js::JsScriptHost::with_kernel(page, document),
-        )),
-    ))
+    Ok(Box::new(ferrocad_shell_js::JsScriptHost::with_kernel(
+        page, document,
+    )))
 }
 
 /// A page's ES module only exists in a browser.
 #[cfg(not(target_family = "wasm"))]
-fn js_backend() -> Result<Box<dyn AppBackend>, String> {
+fn js_host() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
     Err("the JS script half is a browser module and has no native build".to_string())
 }
 
-/// Read the runtime out of a query string (`?a=1&b=2`, or `a=1`).
+/// Read the runtimes out of a query string (`?a=1&b=2`, or `a=1`).
 ///
-/// Unknown keys are ignored: the page's capture harness puts its own parameters in
-/// the same string. An unknown `runtime=` value is an error rather than a silent
-/// fallback, because that is a typo the user should see.
-pub fn from_query(query: &str) -> Result<Runtime, String> {
+/// Unknown keys are ignored: the page's capture harness puts its own parameters in the
+/// same string. An unknown `runtime=` value is an error rather than a silent fallback,
+/// because that is a typo the user should see.
+pub fn from_query(query: &str) -> Result<Vec<Runtime>, String> {
     let mut explicit = None;
     let mut js = false;
     let mut pywasm = false;
@@ -118,11 +150,16 @@ pub fn from_query(query: &str) -> Result<Runtime, String> {
             "runtime" => {
                 // The browser's word for "the Python I have" is RustPython: `ferrocad_py`
                 // is a native extension, so `cpython` parses and is refused by `backend`.
-                let name = match value {
-                    "python" | "py" => "pywasm",
-                    other => other,
-                };
-                explicit = Some(Runtime::from_name(name)?);
+                // Folded per name, so `?runtime=python,js` means the same as
+                // `?runtime=pywasm,js`.
+                let folded: Vec<&str> = value
+                    .split(',')
+                    .map(|name| match name.trim() {
+                        "python" | "py" => "pywasm",
+                        other => other,
+                    })
+                    .collect();
+                explicit = Some(Runtime::parse_list(&folded.join(","))?);
             }
             "js" => js = true,
             "pywasm" => pywasm = true,
@@ -130,10 +167,10 @@ pub fn from_query(query: &str) -> Result<Runtime, String> {
         }
     }
     Ok(match (explicit, js, pywasm) {
-        (Some(runtime), _, _) => runtime,
-        (None, true, _) => Runtime::Js,
-        (None, false, true) => Runtime::Pywasm,
-        (None, false, false) => Runtime::Plain,
+        (Some(runtimes), _, _) => runtimes,
+        (None, true, _) => vec![Runtime::Js],
+        (None, false, true) => vec![Runtime::Pywasm],
+        (None, false, false) => vec![Runtime::Plain],
     })
 }
 
@@ -152,12 +189,12 @@ fn pairs(query: &str) -> impl Iterator<Item = (&str, &str)> {
         })
 }
 
-/// Compose the backend the page asked for, and say which runtime it is.
+/// Compose the backend the page asked for, and say which runtimes it is.
 #[cfg(target_family = "wasm")]
-pub fn page_backend() -> Result<(Box<dyn AppBackend>, Runtime), String> {
-    let runtime = from_query(&page_search())?;
-    let backend = backend(runtime)?;
-    Ok((backend, runtime))
+pub fn page_backend() -> Result<(Box<dyn AppBackend>, Vec<Runtime>), String> {
+    let runtimes = from_query(&page_search())?;
+    let backend = backend(&runtimes)?;
+    Ok((backend, runtimes))
 }
 
 /// `window.location.search`.
@@ -184,46 +221,78 @@ mod tests {
 
     #[test]
     fn no_query_is_the_document_alone() {
-        assert_eq!(from_query("").unwrap(), Runtime::Plain);
-        assert_eq!(from_query("?").unwrap(), Runtime::Plain);
+        assert_eq!(from_query("").unwrap(), vec![Runtime::Plain]);
+        assert_eq!(from_query("?").unwrap(), vec![Runtime::Plain]);
     }
 
     #[test]
     fn the_shipped_flag_still_selects_the_page_module() {
-        assert_eq!(from_query("?js=1").unwrap(), Runtime::Js);
+        assert_eq!(from_query("?js=1").unwrap(), vec![Runtime::Js]);
         // `index.html` keys on `params.has("js")`, so a bare flag is the same request.
-        assert_eq!(from_query("?js").unwrap(), Runtime::Js);
+        assert_eq!(from_query("?js").unwrap(), vec![Runtime::Js]);
     }
 
     #[test]
     fn pywasm_has_its_own_flag() {
-        assert_eq!(from_query("?pywasm=1").unwrap(), Runtime::Pywasm);
+        assert_eq!(from_query("?pywasm=1").unwrap(), vec![Runtime::Pywasm]);
     }
 
     #[test]
     fn python_is_the_interpreter_the_browser_has() {
         // The shared table resolves `python` per target; in the browser that is RustPython.
-        assert_eq!(from_query("?runtime=python").unwrap(), Runtime::Pywasm);
+        assert_eq!(from_query("?runtime=python").unwrap(), vec![Runtime::Pywasm]);
     }
 
     #[test]
     fn runtime_names_the_configuration_exactly() {
-        assert_eq!(from_query("?runtime=plain").unwrap(), Runtime::Plain);
-        assert_eq!(from_query("?runtime=pywasm").unwrap(), Runtime::Pywasm);
-        assert_eq!(from_query("?runtime=js").unwrap(), Runtime::Js);
+        assert_eq!(from_query("?runtime=plain").unwrap(), vec![Runtime::Plain]);
+        assert_eq!(from_query("?runtime=pywasm").unwrap(), vec![Runtime::Pywasm]);
+        assert_eq!(from_query("?runtime=js").unwrap(), vec![Runtime::Js]);
+    }
+
+    #[test]
+    fn a_list_names_a_chain_in_order() {
+        assert_eq!(
+            from_query("?runtime=pywasm,js").unwrap(),
+            vec![Runtime::Pywasm, Runtime::Js]
+        );
+        // The browser's word for its Python folds per name, so a list works too.
+        assert_eq!(
+            from_query("?runtime=python,js").unwrap(),
+            vec![Runtime::Pywasm, Runtime::Js]
+        );
+        // Order is the primary: whichever name comes first owns the console.
+        assert_eq!(
+            from_query("?runtime=js,pywasm").unwrap(),
+            vec![Runtime::Js, Runtime::Pywasm]
+        );
+    }
+
+    #[test]
+    fn two_engines_for_one_language_are_refused_in_the_query() {
+        // `cpython` and `pywasm` are one language with two engines; the seam's rule applies to
+        // the page's switch exactly as it does to `--script-host=`.
+        let error = from_query("?runtime=cpython,pywasm").unwrap_err();
+        assert!(error.contains("both python"), "{error}");
+    }
+
+    #[test]
+    fn plain_cannot_be_combined_in_the_query() {
+        let error = from_query("?runtime=plain,js").unwrap_err();
+        assert!(error.contains("alone"), "{error}");
     }
 
     #[test]
     fn an_explicit_runtime_wins_over_a_flag() {
-        assert_eq!(from_query("?js=1&runtime=plain").unwrap(), Runtime::Plain);
-        assert_eq!(from_query("?pywasm=1&runtime=js").unwrap(), Runtime::Js);
+        assert_eq!(from_query("?js=1&runtime=plain").unwrap(), vec![Runtime::Plain]);
+        assert_eq!(from_query("?pywasm=1&runtime=js").unwrap(), vec![Runtime::Js]);
     }
 
     #[test]
     fn js_wins_when_both_flags_are_present() {
         // `?js=1` is the flag the page itself acts on (it installs the module), so
         // that is the surface the user asked for; `runtime=` is how to be explicit.
-        assert_eq!(from_query("?pywasm=1&js=1").unwrap(), Runtime::Js);
+        assert_eq!(from_query("?pywasm=1&js=1").unwrap(), vec![Runtime::Js]);
     }
 
     #[test]
@@ -237,8 +306,8 @@ mod tests {
     fn cpython_parses_and_is_refused() {
         // The name is shared with the desktop, so the query is not a typo; the assembly
         // simply cannot link a native extension. The refusal has to say that.
-        assert_eq!(from_query("?runtime=cpython").unwrap(), Runtime::Cpython);
-        let error = match backend(Runtime::Cpython) {
+        assert_eq!(from_query("?runtime=cpython").unwrap(), vec![Runtime::Cpython]);
+        let error = match backend(&[Runtime::Cpython]) {
             Ok(_) => panic!("the browser cannot link a native extension"),
             Err(error) => error,
         };
@@ -251,7 +320,7 @@ mod tests {
         // `?click=`, `?select=` and `?keys=` drive `index.html`; they must not change
         // which runtime boots.
         let query = "?click=430,380&select=1004,100&keys=ctrl-k;f;i;t;enter&drag=1";
-        assert_eq!(from_query(query).unwrap(), Runtime::Plain);
+        assert_eq!(from_query(query).unwrap(), vec![Runtime::Plain]);
     }
 
     #[test]
@@ -264,7 +333,7 @@ mod tests {
 
     #[test]
     fn a_page_module_cannot_be_composed_natively() {
-        assert!(backend(Runtime::Js).is_err());
+        assert!(backend(&[Runtime::Js]).is_err());
     }
 
     /// The configuration the browser runs with `?pywasm=1`, composed for real: one
@@ -276,7 +345,7 @@ mod tests {
             // size. The browser gets it from `ferrocad_web_gpui`'s link argument.
             .stack_size(16 << 20)
             .spawn(|| {
-                let mut composed = backend(Runtime::Pywasm).expect("the interpreter boots");
+                let mut composed = backend(&[Runtime::Pywasm]).expect("the interpreter boots");
                 let boot = composed.bootstrap().expect("the sample boots");
                 assert_eq!(boot.document, "Sample");
 

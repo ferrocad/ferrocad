@@ -17,6 +17,7 @@
 
 pub mod app;
 pub mod catalog;
+pub mod chain;
 pub mod commands;
 pub mod dialog;
 pub mod display;
@@ -28,6 +29,7 @@ pub mod types;
 pub mod view;
 
 pub use app::{AppBackend, NoopListener, ScriptHost};
+pub use chain::HostChain;
 pub use commands::{CommandInfo, CommandOutcome, Surface, SurfaceGroups, find, group_by_surface};
 pub use dialog::{DialogField, DialogSpec, Kind, ValueState};
 pub use display::StageMesh;

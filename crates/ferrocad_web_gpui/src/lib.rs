@@ -63,14 +63,22 @@ pub fn main() {
         // `ferrocad_shell_web` composes it and logs which one booted. A runtime that
         // cannot boot (a `?js=1` page with no module, an interpreter that fails)
         // costs the console, not the window.
-        let (backend, runtime) = match ferrocad_shell_web::page_backend() {
-            Ok((backend, runtime)) => (backend, runtime),
+        let (backend, runtimes) = match ferrocad_shell_web::page_backend() {
+            Ok((backend, runtimes)) => (backend, runtimes),
             Err(error) => {
                 log::error!("ferrocad shell: {error}; the document runs alone");
-                (ferrocad_shell_web::plain(), Runtime::Plain)
+                (ferrocad_shell_web::plain(), vec![Runtime::Plain])
             }
         };
-        log::info!("ferrocad: scripting runtime {runtime}");
+        // A chain logs in order; the first name is the primary.
+        log::info!(
+            "ferrocad: scripting runtime {}",
+            runtimes
+                .iter()
+                .map(|runtime| runtime.id())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         ferrocad_shell_core::app::install_backend(cx, backend);
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {

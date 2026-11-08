@@ -101,24 +101,13 @@ fn plain_cannot_be_combined_with_a_host() {
     assert!(error.contains("plain"), "{error}");
 }
 
-#[cfg(all(feature = "addons", feature = "js"))]
+#[cfg(feature = "js")]
 #[test]
 fn two_hosts_compose_into_one_script_host() {
     // CPython as the primary, the JS page behind it. What this can prove without a
     // configured interpreter is that the chain composes and reaches the backend as one
-    // `ScriptHost`; the merge order and the fan-out are `ferrocad_shell_wasm`'s tests,
-    // which drive fixtures instead of an interpreter.
+    // `ScriptHost`; the merge order and the fan-out are `ferrocad_shell_api`'s chain tests
+    // and `ferrocad_shell_wasm`'s, which drive fixtures instead of an interpreter.
     let backend = compose_all(&[Runtime::Cpython, Runtime::Js], &[]).expect("a chain composes");
     assert!(backend.script_host().is_some());
-}
-
-#[cfg(all(not(feature = "addons"), feature = "js"))]
-#[test]
-fn two_hosts_need_the_addons_feature_today() {
-    // The chain lives in `ferrocad_shell_wasm`, which is the `addons` feature; the error
-    // says so rather than silently installing only the first half.
-    let error = compose_all(&[Runtime::Cpython, Runtime::Js], &[])
-        .err()
-        .expect("no chain without the feature");
-    assert!(error.contains("addons"), "{error}");
 }

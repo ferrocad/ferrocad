@@ -26,27 +26,20 @@
 //! fuel budget — a bundle that loops forever traps with `OutOfFuel` instead of freezing
 //! the window.
 //!
-//! [`Addons`] is how a host installs one: the primary script half (CPython, RustPython,
-//! the JS page, or none) plus every bundle, with the three addon-facing answers merged.
+//! [`boot`] is how a host installs one: the script halves (CPython, RustPython, the JS
+//! page, or none) plus every bundle, composed as one
+//! [`HostChain`](ferrocad_shell_api::HostChain) — the same chain the browser builds.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ferrocad_inventor::{Directives, Event, EventListener, Hit, Scene};
+use ferrocad_inventor::{EventListener, Scene};
 use ferrocad_shell_api::DocumentApi;
 use ferrocad_shell_api::app::{NoopListener, ScriptHost};
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::events::DocumentEvent;
-use ferrocad_shell_api::selection::SelectionItem;
-use ferrocad_shell_api::types::{
-    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
-    GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult,
-    WorkbenchReport,
-};
-use ferrocad_shell_api::view::ViewState;
-use ferrocad_stage::InteractionCommit;
-use ferrocad_types::Vector3;
+use ferrocad_shell_api::types::{EvalResult, WorkbenchReport};
 use serde::Deserialize;
 use wasmi::{Caller, Config, Engine, Linker, Memory, Module, Store, TypedFunc};
 
@@ -678,101 +671,6 @@ impl ScriptHost for WasmAddonHost {
     }
 }
 
-/// One or more script halves plus every wasm addon, as one `ScriptHost`.
-///
-/// The **first** half is the primary: it owns the console, the workbenches, the tools, the
-/// document lifecycle and every other hook. Everything after it is a subordinate — it may
-/// answer commands, contribute display rows and hear the document's events, and cannot own
-/// what the primary owns. An addon answers commands and the display hook, which is exactly
-/// what a bundle can do.
-///
-/// The three merged answers run in order — the halves in switch order, then the addons in
-/// load order:
-///
-/// * `commands` is each host's list, concatenated;
-/// * `run_command` and `claims` take the first host that answers;
-/// * `stage_meshes` is the composition's rows, with the primary's answer deciding whether
-///   it has a hook at all.
-///
-/// On the browser the same merge happens in the page (`?addons=`); on the desktop it is
-/// here, so an addon works next to CPython rather than instead of it.
-pub struct Addons {
-    /// The script halves, in the order the switch named them; the first is the primary.
-    /// Shared rather than owned: the doorway's sink announces an addon's own edits to the
-    /// same half, so both need it (`announce_to`).
-    hosts: Vec<Arc<dyn ScriptHost + Send + Sync>>,
-    /// The sandboxed bundles. They are hosts too, stored concretely because a
-    /// `WasmAddonHost` owns the sandbox's fuel and capability.
-    addons: Vec<WasmAddonHost>,
-}
-
-impl Addons {
-    /// Compose `primary` (which may be `None`) with already-instantiated addons.
-    pub fn new(
-        primary: Option<Arc<dyn ScriptHost + Send + Sync>>,
-        addons: Vec<WasmAddonHost>,
-    ) -> Self {
-        Self::chain(primary.into_iter().collect(), addons)
-    }
-
-    /// Compose `hosts` — the first is the primary — with already-instantiated addons.
-    pub fn chain(
-        hosts: Vec<Arc<dyn ScriptHost + Send + Sync>>,
-        addons: Vec<WasmAddonHost>,
-    ) -> Self {
-        Self { hosts, addons }
-    }
-
-    /// Load every bundle in `paths` under `document`, and compose them behind `primary`.
-    ///
-    /// `Err` is a report, not a failure: it names the packs that could not load and the
-    /// composed host is still installed, because one broken workbench must not cost the
-    /// window.
-    pub fn boot(
-        primary: Option<Arc<dyn ScriptHost + Send + Sync>>,
-        paths: &[PathBuf],
-        document: Arc<dyn DocumentApi>,
-    ) -> (Self, Vec<String>) {
-        Self::boot_chain(primary.into_iter().collect(), paths, document)
-    }
-
-    /// [`boot`](Self::boot) for a chain: the first host is the primary.
-    pub fn boot_chain(
-        hosts: Vec<Arc<dyn ScriptHost + Send + Sync>>,
-        paths: &[PathBuf],
-        document: Arc<dyn DocumentApi>,
-    ) -> (Self, Vec<String>) {
-        let (addons, errors) = WasmAddonHost::open_all(paths, document);
-        (Self::chain(hosts, addons), errors)
-    }
-
-    /// Whether this composition answers anything at all.
-    pub fn is_empty(&self) -> bool {
-        self.hosts.is_empty() && self.addons.is_empty()
-    }
-
-    /// The primary: the first script half, if any.
-    fn primary(&self) -> Option<&Arc<dyn ScriptHost + Send + Sync>> {
-        self.hosts.first()
-    }
-
-    /// Every host, the bundles last: the order a merged answer or a fan-out uses.
-    fn every(&self) -> impl Iterator<Item = &dyn ScriptHost> {
-        self.hosts
-            .iter()
-            .map(|host| host.as_ref() as &dyn ScriptHost)
-            .chain(self.addons.iter().map(|addon| addon as &dyn ScriptHost))
-    }
-
-    /// The addons' command rows, in load order.
-    fn addon_commands(&self) -> Vec<CommandInfo> {
-        self.addons
-            .iter()
-            .flat_map(WasmAddonHost::read_commands)
-            .collect()
-    }
-}
-
 /// The doorway's sink: an addon's own `create`/`set` is an edit of the document.
 ///
 /// The host gives the bundles a `DocApi` (that is what `ferrocad.call` reaches); this
@@ -792,284 +690,46 @@ impl ferrocad_shell_api::DocumentEventSink for ToScript {
     }
 }
 
-/// Every installed host's listener, run in order.
-struct FanOut(Vec<Box<dyn EventListener>>);
-
-impl EventListener for FanOut {
-    fn on_event(
-        &mut self,
-        event: &Event,
-        hit: Option<&Hit>,
-        scene: &mut Scene,
-        directives: &Directives,
-    ) -> bool {
-        // All of them, not until the first `true`: the flag says "the scene changed", and
-        // one host changing it must not hide another host's edit from the same event.
-        let mut changed = false;
-        for listener in &mut self.0 {
-            changed |= listener.on_event(event, hit, scene, directives);
-        }
-        changed
-    }
+/// Compose `hosts` — the first is the primary — with already-instantiated bundles.
+///
+/// The chain itself is [`ferrocad_shell_api::HostChain`], which both hosts share; this
+/// crate contributes the bundles, which only it can read.
+pub fn chain(
+    hosts: Vec<Arc<dyn ScriptHost>>,
+    addons: Vec<WasmAddonHost>,
+) -> ferrocad_shell_api::HostChain {
+    let mut members = hosts;
+    members.extend(
+        addons
+            .into_iter()
+            .map(|addon| Arc::new(addon) as Arc<dyn ScriptHost>),
+    );
+    ferrocad_shell_api::HostChain::new(members)
 }
 
-impl ScriptHost for Addons {
-    fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
-        match self.primary() {
-            Some(primary) => primary.evaluate(code),
-            None => Ok(EvalResult {
-                ok: false,
-                output: "this build has no console: only wasm addons are installed".to_string(),
-            }),
-        }
-    }
+/// Load every bundle in `paths` under `document`, and compose them behind `primary`.
+///
+/// `Err` is a report, not a failure: it names the packs that could not load and the
+/// composed host is still installed, because one broken workbench must not cost the
+/// window.
+pub fn boot(
+    primary: Option<Arc<dyn ScriptHost + Send + Sync>>,
+    paths: &[PathBuf],
+    document: Arc<dyn DocumentApi>,
+) -> (ferrocad_shell_api::HostChain, Vec<String>) {
+    boot_chain(primary.into_iter().collect(), paths, document)
+}
 
-    fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
-        match self.primary() {
-            Some(primary) => primary.load_workbenches(),
-            None => Ok(WorkbenchReport::default()),
-        }
-    }
-
-    fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
-        match self.primary() {
-            Some(primary) => primary.tool(name),
-            None => Err(format!("no tool {name}: a wasm addon supplies none")),
-        }
-    }
-
-    fn tool_command(&self, name: &str, verb: &str) -> bool {
-        self.primary()
-            .is_some_and(|primary| primary.tool_command(name, verb))
-    }
-
-    fn inventor_scene(&self) -> Result<Scene, String> {
-        match self.primary() {
-            Some(primary) => primary.inventor_scene(),
-            None => Ok(Scene::default()),
-        }
-    }
-
-    fn event_listener(&self) -> Box<dyn EventListener> {
-        // Every host hears the event; each one asked for its own listener.
-        let listeners: Vec<Box<dyn EventListener>> =
-            self.every().map(|host| host.event_listener()).collect();
-        match listeners.len() {
-            0 => Box::new(NoopListener),
-            1 => listeners.into_iter().next().expect("one listener"),
-            _ => Box::new(FanOut(listeners)),
-        }
-    }
-
-    fn bootstrap(&self) -> Result<Option<Bootstrap>, String> {
-        match self.primary() {
-            Some(primary) => primary.bootstrap(),
-            None => Ok(None),
-        }
-    }
-
-    fn open_startup_document(
-        &self,
-        boot: &mut Bootstrap,
-    ) -> Result<Option<OpenedDocument>, String> {
-        match self.primary() {
-            Some(primary) => primary.open_startup_document(boot),
-            None => Ok(None),
-        }
-    }
-
-    fn open_path(&self, path: &Path) -> Option<Result<OpenedDocument, String>> {
-        self.primary().and_then(|primary| primary.open_path(path))
-    }
-
-    fn save_path(&self, path: &Path) -> Option<Result<(), String>> {
-        self.primary().and_then(|primary| primary.save_path(path))
-    }
-
-    fn activate_document(&self, name: &str) -> Option<Result<(), String>> {
-        self.primary()
-            .and_then(|primary| primary.activate_document(name))
-    }
-
-    fn hello(&self) -> Result<Option<String>, String> {
-        match self.primary() {
-            Some(primary) => primary.hello(),
-            None => Ok(Some(format!(
-                "FerroCAD shell · {} wasm addon(s)",
-                self.addons.len()
-            ))),
-        }
-    }
-
-    fn stage_meshes(&self, have: &[&str]) -> Option<Result<Vec<StageMesh>, String>> {
-        // Answers in order: the script halves, then the bundles. The primary's answer is
-        // what decides whether the composition has a display hook at all — a `None` there
-        // leaves the backend's own rows in place until some host actually contributes one.
-        let mut answers: Vec<Option<Result<Vec<StageMesh>, String>>> = Vec::new();
-        if let Some(primary) = self.primary() {
-            answers.push(primary.stage_meshes(have));
-        }
-        answers.extend(self.addons.iter().map(|addon| addon.stage_meshes(have)));
-
-        let has_primary = self.primary().is_some();
-        let mut rows = Vec::new();
-        let mut failed = None;
-        let mut primary_answered = false;
-        for (index, answer) in answers.into_iter().enumerate() {
-            match answer {
-                Some(Ok(mut meshes)) => {
-                    primary_answered |= has_primary && index == 0;
-                    rows.append(&mut meshes);
-                }
-                Some(Err(error)) => {
-                    failed.get_or_insert(error);
-                }
-                None => {}
-            }
-        }
-
-        match failed {
-            // One failing host speaks for the composition: no host can vouch for the row
-            // set when a sibling could not produce its own.
-            Some(error) => Some(Err(error)),
-            None if primary_answered || !rows.is_empty() => Some(Ok(rows)),
-            None => None,
-        }
-    }
-
-    fn apply_interaction(&self, commit: &InteractionCommit, object: &str) -> Option<ApplyResult> {
-        self.primary()
-            .and_then(|primary| primary.apply_interaction(commit, object))
-    }
-
-    fn add_datum_plane(
-        &self,
-        origin: Vector3,
-        u: Vector3,
-        v: Vector3,
-    ) -> Option<Result<String, String>> {
-        self.primary()
-            .and_then(|primary| primary.add_datum_plane(origin, u, v))
-    }
-
-    fn extra_tree_nodes(&self) -> Vec<DocumentNode> {
-        match self.primary() {
-            Some(primary) => primary.extra_tree_nodes(),
-            None => Vec::new(),
-        }
-    }
-
-    fn extra_properties(&self, object: &str) -> Option<Vec<PropRow>> {
-        self.primary()
-            .and_then(|primary| primary.extra_properties(object))
-    }
-
-    fn set_extra_property(&self, object: &str, property: &str, value: &str) -> Option<SetResult> {
-        self.primary()
-            .and_then(|primary| primary.set_extra_property(object, property, value))
-    }
-
-    fn on_selection_changed(&self, items: &[SelectionItem]) {
-        for host in self.every() {
-            host.on_selection_changed(items);
-        }
-    }
-
-    fn take_selection_requests(&self) -> Vec<SelectionRequest> {
-        match self.primary() {
-            Some(primary) => primary.take_selection_requests(),
-            None => Vec::new(),
-        }
-    }
-
-    fn on_view_state_changed(&self, state: &ViewState) {
-        for host in self.every() {
-            host.on_view_state_changed(state);
-        }
-    }
-
-    fn on_document_event(&self, event: &DocumentEvent) {
-        for host in self.every() {
-            host.on_document_event(event);
-        }
-    }
-
-    fn appearance_view(&self) -> Option<CommandOutcome> {
-        self.primary().and_then(|primary| primary.appearance_view())
-    }
-
-    fn grid_summary(&self) -> Option<GridSummary> {
-        self.primary().and_then(|primary| primary.grid_summary())
-    }
-
-    fn axis_summary(&self) -> Option<AxisSummary> {
-        self.primary().and_then(|primary| primary.axis_summary())
-    }
-
-    fn provider_features(&self) -> Vec<ProviderFeature> {
-        match self.primary() {
-            Some(primary) => primary.provider_features(),
-            None => Vec::new(),
-        }
-    }
-
-    fn set_provider(&self, feature: &str, backend: &str) -> Option<CommandOutcome> {
-        self.primary()
-            .and_then(|primary| primary.set_provider(feature, backend))
-    }
-
-    fn refresh_providers(&self, feature: &str) -> Option<CommandOutcome> {
-        self.primary()
-            .and_then(|primary| primary.refresh_providers(feature))
-    }
-
-    fn provider_skin(&self, feature: &str) -> Option<String> {
-        self.primary()
-            .and_then(|primary| primary.provider_skin(feature))
-    }
-
-    fn manipulator_specs(
-        &self,
-        object: &str,
-        element: Option<&str>,
-    ) -> Option<Vec<serde_json::Value>> {
-        self.primary()
-            .and_then(|primary| primary.manipulator_specs(object, element))
-    }
-
-    fn dialog_accept(&self, token: &str, values: &serde_json::Value) -> Option<CommandOutcome> {
-        self.primary()
-            .and_then(|primary| primary.dialog_accept(token, values))
-    }
-
-    fn dialog_cancel(&self, token: &str) -> Option<CommandOutcome> {
-        self.primary()
-            .and_then(|primary| primary.dialog_cancel(token))
-    }
-
-    fn gpu_adapter(&self) -> Option<String> {
-        self.primary().and_then(|primary| primary.gpu_adapter())
-    }
-
-    fn set_gpu_adapter(&self, value: &str) -> Option<GpuPreferenceOutcome> {
-        self.primary()
-            .and_then(|primary| primary.set_gpu_adapter(value))
-    }
-
-    fn commands(&self) -> Vec<CommandInfo> {
-        let mut rows: Vec<CommandInfo> =
-            self.hosts.iter().flat_map(|host| host.commands()).collect();
-        rows.extend(self.addon_commands());
-        rows
-    }
-
-    fn run_command(&self, id: &str) -> Option<CommandOutcome> {
-        // First host to answer wins, in load order: the primary, then the subordinates,
-        // then the bundles.
-        self.every().find_map(|host| host.run_command(id))
-    }
-
-    fn claims(&self, id: &str) -> Option<CommandOutcome> {
-        self.every().find_map(|host| host.claims(id))
-    }
+/// [`boot`] for a chain: the first host is the primary.
+pub fn boot_chain(
+    hosts: Vec<Arc<dyn ScriptHost + Send + Sync>>,
+    paths: &[PathBuf],
+    document: Arc<dyn DocumentApi>,
+) -> (ferrocad_shell_api::HostChain, Vec<String>) {
+    let (addons, errors) = WasmAddonHost::open_all(paths, document);
+    let narrowed: Vec<Arc<dyn ScriptHost>> = hosts
+        .into_iter()
+        .map(|host| host as Arc<dyn ScriptHost>)
+        .collect();
+    (chain(narrowed, addons), errors)
 }

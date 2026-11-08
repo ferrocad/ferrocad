@@ -12,7 +12,8 @@ use ferrocad_shell_api::DocumentEvent;
 use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::types::EvalResult;
-use ferrocad_shell_wasm::{Addons, Capability, WasmAddonHost, announce_to, packs, read_only};
+use ferrocad_shell_api::HostChain;
+use ferrocad_shell_wasm::{Capability, WasmAddonHost, announce_to, chain, packs, read_only};
 
 /// The command list must be exactly 64 bytes: the bundle answers with a static buffer.
 const COMMANDS: &str =
@@ -374,7 +375,7 @@ impl EventListener for Recorder {
 #[test]
 fn addons_are_composed_behind_the_primary() {
     let (addon, _) = bundle();
-    let host = Addons::new(Some(Arc::new(Primary::default())), vec![addon]);
+    let host = chain(vec![Arc::new(Primary::default())], vec![addon]);
 
     // The palette is the primary's rows, then the bundle's.
     let rows = host.commands();
@@ -392,17 +393,17 @@ fn addons_are_composed_behind_the_primary() {
 }
 
 /// Two script halves and a bundle, in the order a chain sees them.
-fn chain() -> (Addons, Arc<Primary>, Arc<Secondary>, Arc<FakeDocument>) {
+fn composed() -> (HostChain, Arc<Primary>, Arc<Secondary>, Arc<FakeDocument>) {
     let first = Arc::new(Primary::default());
     let second = Arc::new(Secondary::default());
     let (addon, document) = bundle();
-    let hosts: Vec<Arc<dyn ScriptHost + Send + Sync>> = vec![first.clone(), second.clone()];
-    (Addons::chain(hosts, vec![addon]), first, second, document)
+    let hosts: Vec<Arc<dyn ScriptHost>> = vec![first.clone(), second.clone()];
+    (chain(hosts, vec![addon]), first, second, document)
 }
 
 #[test]
 fn a_chain_merges_in_load_order() {
-    let (host, _, _, _) = chain();
+    let (host, _, _, _) = composed();
 
     // Every host's rows, in order: the halves first, then the bundle.
     let ids: Vec<String> = host.commands().into_iter().map(|row| row.id).collect();
@@ -426,7 +427,7 @@ fn a_chain_merges_in_load_order() {
 
 #[test]
 fn a_chain_fans_out_the_document_hooks() {
-    let (host, first, second, _) = chain();
+    let (host, first, second, _) = composed();
 
     host.on_document_event(&DocumentEvent::edited("Create Toy", &["Toy".to_string()]));
 
@@ -444,7 +445,7 @@ fn a_chain_fans_out_the_document_hooks() {
 
 #[test]
 fn a_chain_runs_every_event_listener() {
-    let (host, first, second, _) = chain();
+    let (host, first, second, _) = composed();
 
     let mut listener = host.event_listener();
     let changed = listener.on_event(
@@ -464,14 +465,14 @@ fn a_chain_of_one_is_just_that_host() {
     // The single-half case must not pay for the generalisation: one listener is handed
     // back unwrapped, and `new` is still the same constructor the desktop calls.
     let script = Arc::new(Primary::default());
-    let host = Addons::new(Some(script.clone()), vec![]);
+    let host = chain(vec![script.clone()], vec![]);
 
     assert_eq!(host.commands().len(), 1);
     assert_eq!(
         host.evaluate("2 + 2").expect("the console").output,
         "primary: 2 + 2"
     );
-    assert!(Addons::new(None, vec![]).is_empty());
+    assert!(chain(vec![], vec![]).is_empty());
 }
 
 #[test]
@@ -512,7 +513,7 @@ fn an_addons_own_edit_is_announced_to_the_primary() {
     .expect("the manifest");
     let addon = WasmAddonHost::open(&path, Arc::clone(&document)).expect("the bundle instantiates");
 
-    let host = Addons::new(Some(primary), vec![addon]);
+    let host = chain(vec![primary], vec![addon]);
     let ran = host.run_command("Toy_Wasm").expect("the bundle's own id");
     assert!(ran.ok, "{:?}", ran.error);
 
@@ -527,7 +528,7 @@ fn an_addons_own_edit_is_announced_to_the_primary() {
 
 #[test]
 fn an_addon_only_composition_has_no_console() {
-    let host = Addons::new(None, vec![]);
+    let host = chain(vec![], vec![]);
 
     let answer = host.evaluate("1 + 1").expect("evaluate reports, it does not fail");
     assert!(!answer.ok);

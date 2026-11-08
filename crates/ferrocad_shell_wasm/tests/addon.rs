@@ -207,6 +207,12 @@ fn a_bundle_is_read_only_unless_it_asks_for_more() {
     // is the safe default: no manifest, no writes.
     let (host, _) = bundle();
     assert_eq!(host.capability(), Capability::Read);
+    // The grant is the same fact in the seam's vocabulary, which is what a manifest is
+    // checked against.
+    assert_eq!(
+        host.document_grant(),
+        ferrocad_shell_api::DocumentGrant::Read
+    );
     assert!(host.hello().unwrap().unwrap().contains("read-only"));
 
     assert_eq!(Capability::parse("read"), Ok(Capability::Read));

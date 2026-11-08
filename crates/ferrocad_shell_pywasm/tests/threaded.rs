@@ -37,6 +37,9 @@ fn the_constants_are_answered_without_the_interpreter() {
 
     let hello = host.hello().expect("a greeting").expect("one, not silence");
     assert!(hello.contains("RustPython"), "{hello}");
+    // The greeting tells the truth about the grant: this half cannot write.
+    assert!(hello.contains("read-only"), "{hello}");
+    assert_eq!(host.document_grant(), ferrocad_shell_api::DocumentGrant::Read);
     assert!(host.commands().is_empty());
     assert!(host.run_command("App_Delete").is_none());
     assert!(!host.tool_command("anything", "start"));

@@ -26,6 +26,7 @@ use ferrocad_inventor::{EventListener, Scene};
 use ferrocad_stage::{InteractionCommit, Tool};
 use ferrocad_types::Vector3;
 
+use crate::capability::DocumentGrant;
 use crate::commands::{CommandInfo, CommandOutcome};
 use crate::display::StageMesh;
 use crate::events::DocumentEvent;
@@ -521,6 +522,17 @@ pub trait ScriptHost {
     /// The console's greeting line, when the script surface has its own.
     fn hello(&self) -> Result<Option<String>, String> {
         Ok(None)
+    }
+
+    /// What this half may do to the document.
+    ///
+    /// [`DocumentGrant::ReadWrite`] by default: a half compiled into the host shares the
+    /// document it was linked with, which is true of the embedded CPython and of the page.
+    /// A half that reaches the document through a narrower path than the engine overrides
+    /// this — the browser's RustPython can only read — and that value is what a mod
+    /// manifest's request is checked against.
+    fn document_grant(&self) -> DocumentGrant {
+        DocumentGrant::ReadWrite
     }
 
     // --- what a script owns inside the document -------------------------------

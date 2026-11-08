@@ -618,6 +618,14 @@ impl ScriptHost for WasmAddonHost {
         )))
     }
 
+    /// The grant the manifest gave this bundle, not a default.
+    fn document_grant(&self) -> ferrocad_shell_api::DocumentGrant {
+        match self.capability {
+            Capability::Read => ferrocad_shell_api::DocumentGrant::Read,
+            Capability::Write => ferrocad_shell_api::DocumentGrant::ReadWrite,
+        }
+    }
+
     fn stage_meshes(&self, have: &[&str]) -> Option<Result<Vec<StageMesh>, String>> {
         let have = serde_json::to_string(have).ok()?;
         let mut bundle = self.bundle.lock().ok()?;

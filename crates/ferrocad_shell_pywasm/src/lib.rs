@@ -64,7 +64,8 @@ pub mod threaded;
 pub use threaded::ThreadedScriptHost;
 
 /// What the console prints when RustPython is the script half.
-pub(crate) const HELLO: &str = "FerroCAD shell · RustPython · wasm Python scripting";
+pub(crate) const HELLO: &str =
+    "FerroCAD shell · RustPython · wasm Python scripting (document read-only)";
 
 /// The refusal a spike with no tools answers with.
 pub(crate) fn no_tool(name: &str) -> String {
@@ -309,6 +310,11 @@ fn exception_text(vm: &VirtualMachine, error: &PyRef<PyBaseException>) -> String
 }
 
 impl ScriptHost for PywasmScriptHost {
+    /// Read-only: `_ferrocad` exposes one function, and it reads the document.
+    fn document_grant(&self) -> ferrocad_shell_api::DocumentGrant {
+        ferrocad_shell_api::DocumentGrant::Read
+    }
+
     /// `ferrocad_shell.evaluate`: the console line, in the shell's own namespace.
     fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
         let answer = self.call("evaluate", code)?;

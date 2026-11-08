@@ -20,6 +20,7 @@ use ferrocad_stage::InteractionCommit;
 use ferrocad_types::Vector3;
 
 use crate::app::{NoopListener, ScriptHost};
+use crate::capability::DocumentGrant;
 use crate::commands::{CommandInfo, CommandOutcome};
 use crate::display::StageMesh;
 use crate::events::DocumentEvent;
@@ -157,6 +158,15 @@ impl ScriptHost for HostChain {
                 "FerroCAD shell · {} script host(s)",
                 self.hosts.len()
             ))),
+        }
+    }
+
+    /// The primary's grant: the console is its, so a console command gets its answer. A
+    /// chain with no primary has nothing to answer with, and `Read` is the honest floor.
+    fn document_grant(&self) -> DocumentGrant {
+        match self.primary() {
+            Some(primary) => primary.document_grant(),
+            None => DocumentGrant::Read,
         }
     }
 

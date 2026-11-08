@@ -103,6 +103,10 @@ fn the_shipped_bundle_creates_and_draws_through_the_doorway() {
     let bundle = with_manifest(&source, "read-write");
     let host = host(&bundle.path().join("addon.wasm"));
     assert_eq!(host.capability(), Capability::Write);
+    assert_eq!(
+        host.document_grant(),
+        ferrocad_shell_api::DocumentGrant::ReadWrite
+    );
 
     // The command creates its object through `ferrocad.call`; the document half is the
     // one that answers, so a failure here is the doorway, not the ABI.

@@ -108,6 +108,11 @@ fn run(inbox: Receiver<Job>, ready: Sender<Result<(), String>>) {
 }
 
 impl ScriptHost for ThreadedScriptHost {
+    /// Read-only: the bridge behind it exposes one function, and it reads.
+    fn document_grant(&self) -> ferrocad_shell_api::DocumentGrant {
+        ferrocad_shell_api::DocumentGrant::Read
+    }
+
     fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
         let worker = self
             .inner

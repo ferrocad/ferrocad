@@ -11,7 +11,7 @@ use ferrocad_inventor::{Directives, Event, EventListener, Hit, Scene};
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::types::EvalResult;
-use ferrocad_shell_api::{DocumentEvent, HostChain, ScriptHost};
+use ferrocad_shell_api::{DocumentEvent, DocumentGrant, HostChain, ScriptHost};
 
 /// A host that answers its own console line and command, and can offer a display hook.
 struct Stub {
@@ -19,6 +19,8 @@ struct Stub {
     /// Whether `stage_meshes` has a hook. It always returns no rows: the point is whether
     /// the *composition* counts an empty answer as having one.
     hook: bool,
+    /// What this host can do to the document.
+    grant: DocumentGrant,
     seen: Arc<Mutex<Vec<String>>>,
 }
 
@@ -27,8 +29,14 @@ impl Stub {
         Self {
             name,
             hook,
+            grant: DocumentGrant::ReadWrite,
             seen: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn granting(mut self, grant: DocumentGrant) -> Self {
+        self.grant = grant;
+        self
     }
 }
 
@@ -54,6 +62,10 @@ impl ScriptHost for Stub {
 
     fn inventor_scene(&self) -> Result<Scene, String> {
         Ok(Scene::default())
+    }
+
+    fn document_grant(&self) -> DocumentGrant {
+        self.grant
     }
 
     fn event_listener(&self) -> Box<dyn EventListener> {
@@ -165,4 +177,29 @@ fn every_host_hears_the_document() {
     // A subordinate keeps its own state in step with a document it did not write.
     assert_eq!(first.seen.lock().unwrap().as_slice(), ["document.edited"]);
     assert_eq!(second.seen.lock().unwrap().as_slice(), ["document.edited"]);
+}
+
+#[test]
+fn the_chain_reports_the_primarys_grant() {
+    let writer = Arc::new(Stub::new("writer", true));
+    let reader = Arc::new(Stub::new("reader", true).granting(DocumentGrant::Read));
+
+    // The console is the primary's, so its grant is the one a console command gets.
+    assert_eq!(
+        chain(&[&writer, &reader]).document_grant(),
+        DocumentGrant::ReadWrite
+    );
+    assert_eq!(
+        chain(&[&reader, &writer]).document_grant(),
+        DocumentGrant::Read
+    );
+}
+
+#[test]
+fn an_empty_chain_cannot_write() {
+    // No host, no console: `Read` is the honest floor rather than the trait's default.
+    assert_eq!(
+        HostChain::new(Vec::new()).document_grant(),
+        DocumentGrant::Read
+    );
 }

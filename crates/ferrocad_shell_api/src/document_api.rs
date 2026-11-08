@@ -28,3 +28,47 @@ pub trait DocumentApi: Send + Sync {
     /// must not return an empty string.
     fn call(&self, request: &str) -> String;
 }
+
+/// The verbs that **change** the document.
+///
+/// The one list a sandbox consults: a bundle granted read-only access is refused exactly
+/// these, and `ferrocad_doc_api` implements them and nothing else that mutates. Keeping
+/// it here rather than in the implementation is what lets a host refuse a write *before*
+/// the request reaches the document — on either host, without knowing the payloads.
+pub fn is_write(call: &str) -> bool {
+    matches!(call, "create" | "set" | "recompute")
+}
+
+/// The verbs that only read the document.
+///
+/// `recompute` is a write on purpose: it executes the dependency graph, and an expression
+/// can change a value.
+pub fn is_read(call: &str) -> bool {
+    matches!(call, "document" | "properties")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_write_verbs_are_the_mutating_ones() {
+        // Keep in step with `ferrocad_doc_api`'s dispatch: a new mutating arm belongs
+        // here, and a read-only door that missed it would not be read-only.
+        for call in ["create", "set", "recompute"] {
+            assert!(is_write(call), "{call} writes");
+            assert!(!is_read(call), "{call} is not a read");
+        }
+        for call in ["document", "properties"] {
+            assert!(is_read(call), "{call} reads");
+            assert!(!is_write(call), "{call} does not write");
+        }
+    }
+
+    #[test]
+    fn an_unknown_verb_is_neither() {
+        // It reaches the door and the door answers "unknown call"; it cannot mutate.
+        assert!(!is_write("teleport"));
+        assert!(!is_read("teleport"));
+    }
+}

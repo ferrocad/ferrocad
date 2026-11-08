@@ -11,7 +11,7 @@ use ferrocad_shell_api::DocumentApi;
 use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::types::EvalResult;
-use ferrocad_shell_wasm::{Addons, WasmAddonHost, packs};
+use ferrocad_shell_wasm::{Addons, Capability, WasmAddonHost, packs, read_only};
 
 /// The command list must be exactly 64 bytes: the bundle answers with a static buffer.
 const COMMANDS: &str =
@@ -159,6 +159,52 @@ fn a_runaway_bundle_traps_instead_of_hanging() {
         .expect("the id is in the bundle's list");
     assert!(!answer.ok, "an infinite loop is not a success");
     assert!(!answer.error.is_empty(), "the trap has to be reported");
+}
+
+#[test]
+fn a_read_only_door_refuses_writes_and_passes_reads() {
+    let document = Arc::new(FakeDocument::default());
+    let typed: Arc<FakeDocument> = Arc::clone(&document);
+    let erased: Arc<dyn DocumentApi> = typed;
+    let door = read_only(erased);
+
+    // Reads go through.
+    let read = door.call(r#"{"call":"document"}"#);
+    assert!(read.contains("\"ok\":true"), "{read}");
+    let rows = door.call(r#"{"call":"properties","object":"Toy"}"#);
+    assert!(rows.contains("\"ok\":true"), "{rows}");
+
+    // Writes are refused before the document sees them.
+    for request in [
+        r#"{"call":"create","name":"Toy","type":"App::FeaturePython"}"#,
+        r#"{"call":"set","object":"Toy","property":"Height","value":"30 mm"}"#,
+        r#"{"call":"recompute"}"#,
+    ] {
+        let refused = door.call(request);
+        assert!(refused.contains("read-only"), "{request} → {refused}");
+        assert!(refused.contains("\"ok\":false"), "{refused}");
+    }
+
+    assert_eq!(
+        document.requests.lock().unwrap().len(),
+        2,
+        "only the two reads reached the document"
+    );
+}
+
+#[test]
+fn a_bundle_is_read_only_unless_it_asks_for_more() {
+    // The fixture never calls the manifest path (it is instantiated from bytes), which
+    // is the safe default: no manifest, no writes.
+    let (host, _) = bundle();
+    assert_eq!(host.capability(), Capability::Read);
+    assert!(host.hello().unwrap().unwrap().contains("read-only"));
+
+    assert_eq!(Capability::parse("read"), Ok(Capability::Read));
+    assert_eq!(Capability::parse("read-only"), Ok(Capability::Read));
+    assert_eq!(Capability::parse("read-write"), Ok(Capability::Write));
+    assert_eq!(Capability::parse("write"), Ok(Capability::Write));
+    assert!(Capability::parse("admin").is_err());
 }
 
 #[test]

@@ -268,9 +268,11 @@ re-runs this check when a current artifact is wanted.
    covers `?js=1`, `?runtime=js&addons=wasm` and the palette round trip.
 2. **A JS `Tool`** (§7b below). The observe direction it depends on is now built:
    the two document events ship in this slice (§7a).
-3. **Capabilities.** A doorway that can write the document is a permission. Today every
-   bundle gets it; the manifest should be able to say `"document": "read"` and have the
-   host answer differently.
+3. **Capabilities.** A doorway that can write the document is a permission. The desktop
+   half is built: a bundle is read-only unless its `addon.json` says
+   `{"document": "read-write"}`, and the refusal happens before the request reaches the
+   document (`backend-parity.md` B7e). The web half is `loader.js` reading the same file —
+   its `ferrocad.call` is the page's JS, and the verb list is shared.
 
 Neither half running on the desktop is deliberate, not a gap in this list: **B7** in
 [`../tasks/backend-parity.md`](../tasks/backend-parity.md) treats a desktop JS engine and a

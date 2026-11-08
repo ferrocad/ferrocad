@@ -381,3 +381,23 @@ fn wanted(name: &str, value: &Value) -> Result<(String, Wanted), String> {
         },
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use ferrocad_shell_api::document_api::{is_read, is_write};
+
+    /// Keep the seam's capability list in step with the dispatch above.
+    ///
+    /// A new *mutating* arm that is not in `is_write` would make a read-only doorway
+    /// writable, which is exactly what the sandbox must not do.
+    #[test]
+    fn the_doorway_s_verbs_are_classified() {
+        for call in ["create", "set", "recompute"] {
+            assert!(is_write(call), "`{call}` mutates the document");
+        }
+        for call in ["document", "properties"] {
+            assert!(is_read(call), "`{call}` only reads");
+            assert!(!is_write(call), "`{call}` must not count as a write");
+        }
+    }
+}

@@ -8,11 +8,30 @@
 //! artifact, with the real `DocApi` behind the doorway.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ferrocad_shell_api::DocumentApi;
 use ferrocad_shell_api::app::ScriptHost;
-use ferrocad_shell_wasm::WasmAddonHost;
+use ferrocad_shell_wasm::{Capability, WasmAddonHost};
+
+/// One test at a time: the registry and the doorway's document are process-wide.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// A copy of the bundle with `addon.json` beside it.
+fn with_manifest(source: &PathBuf, document: &str) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    std::fs::copy(source, temp.path().join("addon.wasm")).expect("the bundle copy");
+    std::fs::write(
+        temp.path().join("addon.json"),
+        format!(r#"{{"document": "{document}"}}"#),
+    )
+    .expect("the manifest");
+    temp
+}
 
 /// The shipped bundle, when the environment names one.
 fn bundle() -> Option<PathBuf> {
@@ -46,6 +65,7 @@ fn the_shipped_toy_bundle_registers_its_commands() {
     let Some(path) = bundle() else {
         return;
     };
+    let _serial = serial();
     let ids: Vec<String> = host(&path).commands().into_iter().map(|row| row.id).collect();
 
     assert!(ids.iter().any(|id| id == "Toy_Slab"), "{ids:?}");
@@ -53,11 +73,36 @@ fn the_shipped_toy_bundle_registers_its_commands() {
 }
 
 #[test]
-fn the_shipped_bundle_creates_and_draws_through_the_doorway() {
+fn the_shipped_bundle_cannot_write_without_a_manifest() {
     let Some(path) = bundle() else {
         return;
     };
+    let _serial = serial();
     let host = host(&path);
+    assert_eq!(host.capability(), Capability::Read);
+
+    let refused = host.run_command("Toy_Slab").expect("the bundle's own command");
+    assert!(!refused.ok, "a read-only bundle cannot create its object");
+    assert!(refused.error.contains("read-only"), "{}", refused.error);
+
+    // And nothing was drawn: the hook lists the document's toy objects, and there is none.
+    match host.stage_meshes(&[]) {
+        Some(Ok(meshes)) => assert!(meshes.is_empty(), "no object was created"),
+        _ => panic!("the fixture has a display hook"),
+    }
+}
+
+#[test]
+fn the_shipped_bundle_creates_and_draws_through_the_doorway() {
+    let Some(source) = bundle() else {
+        return;
+    };
+    let _serial = serial();
+    // The toy workbench creates and edits, so it asks for writes — and the manifest is
+    // what grants them.
+    let bundle = with_manifest(&source, "read-write");
+    let host = host(&bundle.path().join("addon.wasm"));
+    assert_eq!(host.capability(), Capability::Write);
 
     // The command creates its object through `ferrocad.call`; the document half is the
     // one that answers, so a failure here is the doorway, not the ABI.

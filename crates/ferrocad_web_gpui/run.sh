@@ -76,9 +76,12 @@ docker run --rm -v "$PWD":/work "$IMAGE" \
     chown -R "$(id -u):$(id -g)" "/work/$CARGO_TARGET" "/work/$CARGO_HOME_HOST"
 
 # The wasm bundle the page fetches (`?addons=wasm`). A plain module with no
-# wasm-bindgen glue: the loader provides its one import.
+# wasm-bindgen glue: the loader provides its one import. Its manifest travels beside it:
+# the desktop refuses writes without one, and a bundle copied from `www/addons/` must
+# carry the capability it was written with.
 cp "$CARGO_TARGET/wasm32-unknown-unknown/release/ferrocad_addon_toy.wasm" \
     crates/ferrocad_web_gpui/www/addons/toy.wasm
+cp crates/ferrocad_addon_toy/addon.json crates/ferrocad_web_gpui/www/addons/addon.json
 
 "$BINDGEN" --target web \
     --out-dir crates/ferrocad_web_gpui/www/pkg \

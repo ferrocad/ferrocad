@@ -61,6 +61,93 @@ pub const ENTRY: &str = "addon.wasm";
 /// than a frozen window.
 pub const FUEL: u64 = 50_000_000;
 
+/// What a bundle may do to the document.
+///
+/// The default is [`Capability::Read`]: a bundle has to *ask* to write, in an
+/// `addon.json` beside it. A sandbox whose default was write would not be a sandbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Capability {
+    /// Read the document; every mutating call is refused at the doorway.
+    Read,
+    /// Read and write it.
+    Write,
+}
+
+impl Capability {
+    /// The name the manifest and the greeting use.
+    pub fn id(self) -> &'static str {
+        match self {
+            Capability::Read => "read-only",
+            Capability::Write => "read-write",
+        }
+    }
+
+    /// `"read"` / `"read-write"` (and `"write"` as the short form).
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "read" | "read-only" => Ok(Capability::Read),
+            "read-write" | "write" => Ok(Capability::Write),
+            other => Err(format!(
+                "unknown `document` capability {other:?}; expected read or read-write"
+            )),
+        }
+    }
+}
+
+/// A bundle's manifest, `addon.json` beside the `.wasm`.
+///
+/// Absent, or absent field, means read-only: the safe answer is the one that has to be
+/// given explicitly.
+#[derive(Deserialize, Default)]
+struct Manifest {
+    #[serde(default)]
+    document: Option<String>,
+}
+
+/// The capability `bundle`'s manifest grants.
+fn manifest_capability(bundle: &Path) -> Result<Capability, String> {
+    let path = bundle.with_file_name("addon.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Capability::Read),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let manifest: Manifest =
+        serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
+    match manifest.document {
+        Some(value) => Capability::parse(&value).map_err(|error| format!("{}: {error}", path.display())),
+        None => Ok(Capability::Read),
+    }
+}
+
+/// A doorway that refuses the verbs which change the document.
+///
+/// The check is on the request's `call` name, so the payloads never reach the document —
+/// which is also why the same door can be handed to a JS bundle later.
+pub fn read_only(document: Arc<dyn DocumentApi>) -> Arc<dyn DocumentApi> {
+    Arc::new(ReadOnly(document))
+}
+
+struct ReadOnly(Arc<dyn DocumentApi>);
+
+impl DocumentApi for ReadOnly {
+    fn call(&self, request: &str) -> String {
+        let writes = serde_json::from_str::<serde_json::Value>(request)
+            .ok()
+            .and_then(|request| request.get("call")?.as_str().map(str::to_owned))
+            .is_some_and(|call| ferrocad_shell_api::document_api::is_write(&call));
+        if writes {
+            return serde_json::json!({
+                "ok": false,
+                "error": "read-only: this bundle was not granted document writes \
+                          (an addon.json beside it says {\"document\": \"read-write\"})",
+            })
+            .to_string();
+        }
+        self.0.call(request)
+    }
+}
+
 /// The wasm workbenches under `dirs`: `<dir>/<Name>/addon.wasm`, in name order.
 ///
 /// A directory without the entry file is not a wasm workbench and is skipped — the same
@@ -119,6 +206,8 @@ pub fn discover() -> Vec<PathBuf> {
 pub struct WasmAddonHost {
     /// The interpreter is single-threaded state: one call at a time.
     bundle: Mutex<Bundle>,
+    /// What the bundle was granted, for the greeting and for a host that logs it.
+    capability: Capability,
 }
 
 /// The store's data: the doorway, and the handles the doorway needs while executing.
@@ -147,12 +236,21 @@ struct Bundle {
 }
 
 impl WasmAddonHost {
-    /// Instantiate `bytes` with `document` as the doorway, at [`FUEL`] per call.
+    /// Instantiate `bytes` read-only: no manifest, no writes.
     pub fn new(bytes: &[u8], document: Arc<dyn DocumentApi>) -> Result<Self, String> {
-        Self::with_fuel(bytes, document, FUEL)
+        Self::build(bytes, document, Capability::Read, FUEL)
     }
 
-    /// [`new`](Self::new) with an explicit budget.
+    /// [`new`](Self::new) with an explicit capability.
+    pub fn with_capability(
+        bytes: &[u8],
+        document: Arc<dyn DocumentApi>,
+        capability: Capability,
+    ) -> Result<Self, String> {
+        Self::build(bytes, document, capability, FUEL)
+    }
+
+    /// [`new`](Self::new) with an explicit fuel budget.
     ///
     /// The budget is per entry call, so it bounds one bad command rather than the
     /// session. A host with a heavier workbench raises it deliberately.
@@ -161,6 +259,26 @@ impl WasmAddonHost {
         document: Arc<dyn DocumentApi>,
         fuel: u64,
     ) -> Result<Self, String> {
+        Self::build(bytes, document, Capability::Read, fuel)
+    }
+
+    /// What this bundle may do to the document.
+    pub fn capability(&self) -> Capability {
+        self.capability
+    }
+
+    fn build(
+        bytes: &[u8],
+        document: Arc<dyn DocumentApi>,
+        capability: Capability,
+        fuel: u64,
+    ) -> Result<Self, String> {
+        // A read-only bundle is refused *at the door*, so no payload reaches the
+        // document and the bundle cannot learn anything it was not granted.
+        let document = match capability {
+            Capability::Read => read_only(document),
+            Capability::Write => document,
+        };
         // Fuel metering has to be enabled on the engine, not the store.
         let mut config = Config::default();
         config.consume_fuel(true);
@@ -217,13 +335,19 @@ impl WasmAddonHost {
                 handles,
                 fuel,
             }),
+            capability,
         })
     }
 
-    /// Open a bundle from disk.
+    /// Open a bundle from disk, with the capability its `addon.json` grants.
+    ///
+    /// No manifest means [`Capability::Read`]: writes are refused at the doorway until
+    /// the bundle asks for them.
     pub fn open(path: &Path, document: Arc<dyn DocumentApi>) -> Result<Self, String> {
+        let capability = manifest_capability(path)?;
         let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        Self::new(&bytes, document).map_err(|error| format!("{}: {error}", path.display()))
+        Self::build(&bytes, document, capability, FUEL)
+            .map_err(|error| format!("{}: {error}", path.display()))
     }
 
     /// Open every pack in `paths`, skipping (and reporting) one that will not load.
@@ -494,7 +618,10 @@ impl ScriptHost for WasmAddonHost {
     }
 
     fn hello(&self) -> Result<Option<String>, String> {
-        Ok(Some("FerroCAD shell · wasm addon".to_string()))
+        Ok(Some(format!(
+            "FerroCAD shell · wasm addon ({})",
+            self.capability.id()
+        )))
     }
 
     fn stage_meshes(&self, have: &[&str]) -> Option<Result<Vec<StageMesh>, String>> {
@@ -530,7 +657,15 @@ impl ScriptHost for WasmAddonHost {
             },
             Ok(false) => CommandOutcome {
                 ok: false,
-                error: format!("wasm addon: {id} refused"),
+                // A refusal is the bundle's own answer, but when it holds *only*
+                // read access the likeliest reason is the door: say so.
+                error: match self.capability {
+                    Capability::Read => format!(
+                        "wasm addon: {id} refused (this bundle is read-only: its addon.json \
+                         does not grant document writes)"
+                    ),
+                    Capability::Write => format!("wasm addon: {id} refused"),
+                },
                 ..Default::default()
             },
             Err(error) => CommandOutcome {

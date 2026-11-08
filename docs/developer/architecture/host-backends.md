@@ -354,8 +354,10 @@ browser.
 load a bundle beside whatever script half is running (the browser's page surfaces it; the
 desktop composes `ferrocad_shell_wasm::Addons`), so `wasm` is a package format rather than a
 fifth name. A bundle is sandboxed: its only import is the document doorway, it runs on an
-interpreter with no executable memory, and each call has a fuel budget — a workbench that
-loops forever traps instead of freezing the window.
+interpreter with no executable memory, each call has a fuel budget — a workbench that loops
+forever traps instead of freezing the window — and it is **read-only** unless its
+`addon.json` grants `"document": "read-write"`, refused into an ordinary `{"ok": false}`
+before the request reaches the document.
 
 Two engines were missing, and they are different dependencies:
 

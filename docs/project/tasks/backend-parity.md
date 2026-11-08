@@ -699,19 +699,39 @@ through the doorway, and the display hook returning the slab's mesh. The test sk
 variable is unset, so a bare `cargo test` stays fast and hermetic; the CI step is what makes
 the claim.
 
-**What is not there yet.** The doorway is a *write* capability: an addon can create and
-edit objects. The browser has the same gap and the same next step — a manifest that says
-`"document": "read"` and a host that answers differently. And an addon's own edit announces
-no `document.edited` on the desktop, because the doorway is built without a sink there.
+**Capability: read-only unless asked.** A bundle's `addon.json` says what it may do:
+
+```json
+{ "document": "read-write" }
+```
+
+Absent manifest, or absent field, means `read`. The refusal happens *at the door*:
+`ferrocad_shell_api::document_api::is_write` is the one list of mutating verbs
+(`create`/`set`/`recompute`), `read_only` wraps the `DocumentApi`, and a refused request
+never reaches the document — so a bundle that was not granted writes cannot learn anything
+it was not granted, and sees an ordinary `{"ok": false}`. The greeting names the capability
+(`wasm addon (read-only)`), so a host log answers "why did that command do nothing";
+`ferrocad_addon_toy` ships its manifest beside its source.
+
+The default being read is the point: a sandbox whose default was write would not be one.
+The shipped-bundle tests assert both sides — the raw artifact cannot create its object, and
+the same bytes with `{"document": "read-write"}` beside them can.
+
+**What is not there yet.** The web's loader still grants writes to every bundle: its
+`ferrocad.call` is the page's JS and the page has no manifest step. The door and the verb
+list are shared, so that half is `loader.js` reading the same `addon.json`. And an addon's
+own edit announces no `document.edited` on the desktop, because the doorway is built
+without a sink there.
 
 **A trap worth recording.** `wasmi`'s `auto-dispatch` feature is not optional in practice:
 without it the fallback path does not honour fuel metering, and the runaway test did not
 trap — it overflowed the **native** stack and aborted the process. The feature is enabled in
 the manifest with that reason beside it.
 
-**Exit: met.** 9 addon tests, 2 shipped-bundle tests (CI, against the real
-`ferrocad_addon_toy.wasm`), 5–6 `ferrocad_shell_python` composition tests depending on the
-feature, and the edition builds with and without `--features addons`.
+**Exit: met.** 11 addon tests (including the read-only door and the capability parser), 3
+shipped-bundle tests (CI, against the real `ferrocad_addon_toy.wasm`, with and without a
+manifest), 5–6 `ferrocad_shell_python` composition tests depending on the feature, and the
+edition builds with and without `--features addons`.
 
 ## 5. Decisions (recorded 2026-11-08)
 

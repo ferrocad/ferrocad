@@ -726,18 +726,25 @@ check — so a new mutating verb is a two-file change, which its own Node test r
 browser smoke asserts the capability line (`ferrocad toy (wasm): document read-write`)
 beside the command that needs it.
 
-**What is not there yet.** An addon's own edit announces no `document.edited` on the
-desktop, because the doorway is built without a sink there; the page has the channel already.
+**Events cross too, from both sides.** An addon's own edit used to be invisible to the
+desktop's script half: the doorway was built with no sink, so the page was the only host
+where a bundle's `create` announced anything. `Addons` now shares its primary as an
+`Arc<dyn ScriptHost + Send + Sync>` and `announce_to` adapts it to a `DocumentEventSink`;
+`with_addons` hands the doorway `DocApi::with_events(announce_to(primary))`. A bundle's
+write therefore reaches `on_document_event` in the primary exactly as the shell's own edits
+do — `PageEvents` is the browser's spelling of the same rule.
+`an_addons_own_edit_is_announced_to_the_primary` asserts it over a real `DocApi` and a real
+document (the fixture's `create` arrives as `document.edited` then `document.recomputed`).
 
 **A trap worth recording.** `wasmi`'s `auto-dispatch` feature is not optional in practice:
 without it the fallback path does not honour fuel metering, and the runaway test did not
 trap — it overflowed the **native** stack and aborted the process. The feature is enabled in
 the manifest with that reason beside it.
 
-**Exit: met.** 11 addon tests (including the read-only door and the capability parser), 3
-shipped-bundle tests (CI, against the real `ferrocad_addon_toy.wasm`, with and without a
-manifest), 5–6 `ferrocad_shell_python` composition tests depending on the feature, and the
-edition builds with and without `--features addons`.
+**Exit: met.** 12 addon tests (including the read-only door, the capability parser and the
+event bridge), 3 shipped-bundle tests (CI, against the real `ferrocad_addon_toy.wasm`, with
+and without a manifest), 5–6 `ferrocad_shell_python` composition tests depending on the
+feature, and the edition builds with and without `--features addons`.
 
 ## 5. Decisions (recorded 2026-11-08)
 

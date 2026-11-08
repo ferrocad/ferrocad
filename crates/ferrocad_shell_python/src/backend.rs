@@ -81,7 +81,9 @@ pub fn compose_with(
 }
 
 /// The primary script half, if the configuration has one.
-fn script_for(runtime: Runtime) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost>>, String> {
+fn script_for(
+    runtime: Runtime,
+) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>, String> {
     Ok(match runtime {
         Runtime::Plain => None,
         Runtime::Cpython => Some(Box::new(PythonScriptHost)),
@@ -92,11 +94,11 @@ fn script_for(runtime: Runtime) -> Result<Option<Box<dyn ferrocad_shell_api::Scr
 
 /// Wrap `primary` in the addon composition, when there is anything to wrap.
 fn with_addons(
-    primary: Option<Box<dyn ferrocad_shell_api::ScriptHost>>,
+    primary: Option<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>,
     addons: &[std::path::PathBuf],
 ) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost>>, String> {
     if addons.is_empty() {
-        return Ok(primary);
+        return Ok(primary.map(|primary| primary as Box<dyn ferrocad_shell_api::ScriptHost>));
     }
     #[cfg(feature = "addons")]
     {
@@ -119,13 +121,23 @@ fn with_addons(
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            return Ok(primary);
+            return Ok(primary.map(|primary| primary as Box<dyn ferrocad_shell_api::ScriptHost>));
         }
 
         // The bundles reach the same registry the document half answers from, so an
-        // addon's `create` lands in the tree beside a CPython edit.
-        let document: std::sync::Arc<dyn ferrocad_shell_api::DocumentApi> =
-            std::sync::Arc::new(ferrocad_doc_api::DocApi::new());
+        // addon's `create` lands in the tree beside a CPython edit — and the doorway is
+        // given a sink, so the script half hears about that edit exactly as it hears
+        // about the shell's own.
+        use std::sync::Arc;
+
+        let primary: Option<Arc<dyn ferrocad_shell_api::ScriptHost + Send + Sync>> =
+            primary.map(Arc::from);
+        let document: Arc<dyn ferrocad_shell_api::DocumentApi> = match &primary {
+            Some(script) => Arc::new(ferrocad_doc_api::DocApi::with_events(
+                ferrocad_shell_wasm::announce_to(Arc::clone(script)),
+            )),
+            None => Arc::new(ferrocad_doc_api::DocApi::new()),
+        };
         let (host, errors) = ferrocad_shell_wasm::Addons::boot(primary, &bundles, document);
         for error in &errors {
             eprintln!("ferrocad: addon skipped: {error}");
@@ -143,14 +155,14 @@ fn with_addons(
 
 /// The desktop's RustPython half: the interpreter on the worker its compiler needs.
 #[cfg(feature = "pywasm")]
-fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
+fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, String> {
     let host = ferrocad_shell_pywasm::ThreadedScriptHost::live()
         .map_err(|error| format!("the RustPython thread did not boot: {error}"))?;
     Ok(Box::new(host))
 }
 
 #[cfg(not(feature = "pywasm"))]
-fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
+fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, String> {
     Err("`--script-host=pywasm` needs a build with the `pywasm` feature: \
          `cargo run -p ferrocad_parametric --features pywasm -- --script-host=pywasm`"
         .to_string())
@@ -158,7 +170,7 @@ fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
 
 /// The desktop's JS page: the same `Page` the browser has, over an embedded QuickJS.
 #[cfg(feature = "js")]
-fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
+fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, String> {
     use std::sync::Arc;
 
     let page: Arc<dyn ferrocad_shell_js::Page> = Arc::new(
@@ -175,7 +187,7 @@ fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
 }
 
 #[cfg(not(feature = "js"))]
-fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
+fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, String> {
     Err("`--script-host=js` needs a build with the `js` feature: \
          `cargo run -p ferrocad_parametric --features js -- --script-host=js`"
         .to_string())

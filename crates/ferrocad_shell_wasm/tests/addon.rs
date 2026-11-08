@@ -8,16 +8,22 @@ use std::sync::{Arc, Mutex};
 
 use ferrocad_inventor::{Directives, Event, EventListener, Hit, Scene};
 use ferrocad_shell_api::DocumentApi;
+use ferrocad_shell_api::DocumentEvent;
 use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::types::EvalResult;
-use ferrocad_shell_wasm::{Addons, Capability, WasmAddonHost, packs, read_only};
+use ferrocad_shell_wasm::{Addons, Capability, WasmAddonHost, announce_to, packs, read_only};
 
 /// The command list must be exactly 64 bytes: the bundle answers with a static buffer.
 const COMMANDS: &str =
     r#"[{"id":"Toy_Wasm","label":"Create Slab","tooltip":"Add a slab"}]"#;
 
 fn fixture() -> String {
+    fixture_sending(r#"{"op":"ping"}"#)
+}
+
+/// The same module, sending `request` to the doorway whenever a command runs.
+fn fixture_sending(request: &str) -> String {
     assert_eq!(COMMANDS.len(), 64, "the fixture's length constant");
     format!(
         r#"
@@ -26,7 +32,7 @@ fn fixture() -> String {
   (memory (export "memory") 1)
   (data (i32.const 1024) "{commands}")
   (data (i32.const 1200) "[]")
-  (data (i32.const 1300) "{{\"op\":\"ping\"}}")
+  (data (i32.const 1300) "{request}")
   (global $bump (mut i32) (i32.const 4096))
 
   (func (export "ferrocad_alloc") (param $len i32) (result i32)
@@ -47,7 +53,7 @@ fn fixture() -> String {
 
   (func (export "ferrocad_run") (param $ptr i32) (param $len i32) (result i32)
     ;; Exercise the doorway once per run: the host must have granted it.
-    (drop (call $call (i32.const 1300) (i32.const 13)))
+    (drop (call $call (i32.const 1300) (i32.const {request_len})))
     (i32.const 1))
 
   (func (export "ferrocad_stage_meshes") (param $ptr i32) (param $len i32) (result i64)
@@ -55,6 +61,8 @@ fn fixture() -> String {
 )
 "#,
         commands = COMMANDS.replace('"', "\\\""),
+        request = request.replace('"', "\\\""),
+        request_len = request.len(),
     )
 }
 
@@ -218,7 +226,11 @@ fn something_that_is_not_wasm_is_named() {
 }
 
 /// A script half that is not a bundle: it stands in for CPython.
-struct Primary;
+#[derive(Default)]
+struct Primary {
+    /// What the doorway announced, in order.
+    events: Mutex<Vec<&'static str>>,
+}
 
 impl ScriptHost for Primary {
     fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
@@ -275,12 +287,19 @@ impl ScriptHost for Primary {
             ..Default::default()
         })
     }
+
+    fn on_document_event(&self, event: &DocumentEvent) {
+        self.events
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(event.id);
+    }
 }
 
 #[test]
 fn addons_are_composed_behind_the_primary() {
     let (addon, _) = bundle();
-    let host = Addons::new(Some(Box::new(Primary)), vec![addon]);
+    let host = Addons::new(Some(Arc::new(Primary::default())), vec![addon]);
 
     // The palette is the primary's rows, then the bundle's.
     let rows = host.commands();
@@ -295,6 +314,57 @@ fn addons_are_composed_behind_the_primary() {
     // The console is the primary's, which is the point of composing rather than replacing.
     let answer = host.evaluate("1 + 1").expect("the console runs");
     assert_eq!(answer.output, "primary: 1 + 1");
+}
+
+#[test]
+fn an_addons_own_edit_is_announced_to_the_primary() {
+    // The desktop's composition: the primary, the bundles, and a doorway whose sink is
+    // that primary. `with_addons` builds exactly this, so what is asserted here is the
+    // rule — an addon's `create` is a document edit like the shell's own.
+    {
+        // A bundle cannot create with no document open, and that refusal reads exactly
+        // like a broken ABI.
+        let mut registry = ferrocad_core::application()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for name in registry.names() {
+            registry.close_document(&name);
+        }
+        registry.new_document(Some("Announced"));
+    }
+
+    let script = Arc::new(Primary::default());
+    let primary: Arc<dyn ScriptHost + Send + Sync> = script.clone();
+    let document: Arc<dyn DocumentApi> = Arc::new(ferrocad_doc_api::DocApi::with_events(
+        announce_to(Arc::clone(&primary)),
+    ));
+
+    // A read-write manifest, because the bundle is asking to create.
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let path = temp.path().join("toy.wasm");
+    std::fs::write(
+        &path,
+        fixture_sending(r#"{"call":"create","name":"Toy","type":"App::FeaturePython"}"#),
+    )
+    .expect("the bundle");
+    std::fs::write(
+        temp.path().join("toy.json"),
+        r#"{"document": "read-write"}"#,
+    )
+    .expect("the manifest");
+    let addon = WasmAddonHost::open(&path, Arc::clone(&document)).expect("the bundle instantiates");
+
+    let host = Addons::new(Some(primary), vec![addon]);
+    let ran = host.run_command("Toy_Wasm").expect("the bundle's own id");
+    assert!(ran.ok, "{:?}", ran.error);
+
+    // The write was the bundle's own, and the primary heard about it through the same
+    // sink the shell's edits use.
+    let events = script
+        .events
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    assert_eq!(events.as_slice(), [DocumentEvent::EDITED, DocumentEvent::RECOMPUTED]);
 }
 
 #[test]

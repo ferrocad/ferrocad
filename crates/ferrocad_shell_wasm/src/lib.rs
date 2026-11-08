@@ -692,13 +692,18 @@ impl ScriptHost for WasmAddonHost {
 /// On the browser the same merge happens in the page (`?addons=`); on the desktop it is
 /// here, so an addon works next to CPython rather than instead of it.
 pub struct Addons {
-    primary: Option<Box<dyn ScriptHost>>,
+    /// Shared rather than owned: the doorway's sink announces an addon's own edits to the
+    /// same half, so both need it (`announce_to`).
+    primary: Option<Arc<dyn ScriptHost + Send + Sync>>,
     addons: Vec<WasmAddonHost>,
 }
 
 impl Addons {
     /// Compose `primary` (which may be `None`) with already-instantiated addons.
-    pub fn new(primary: Option<Box<dyn ScriptHost>>, addons: Vec<WasmAddonHost>) -> Self {
+    pub fn new(
+        primary: Option<Arc<dyn ScriptHost + Send + Sync>>,
+        addons: Vec<WasmAddonHost>,
+    ) -> Self {
         Self { primary, addons }
     }
 
@@ -708,7 +713,7 @@ impl Addons {
     /// composed host is still installed, because one broken workbench must not cost the
     /// window.
     pub fn boot(
-        primary: Option<Box<dyn ScriptHost>>,
+        primary: Option<Arc<dyn ScriptHost + Send + Sync>>,
         paths: &[PathBuf],
         document: Arc<dyn DocumentApi>,
     ) -> (Self, Vec<String>) {
@@ -727,6 +732,25 @@ impl Addons {
             .iter()
             .flat_map(WasmAddonHost::read_commands)
             .collect()
+    }
+}
+
+/// The doorway's sink: an addon's own `create`/`set` is an edit of the document.
+///
+/// The host gives the bundles a `DocApi` (that is what `ferrocad.call` reaches); this
+/// adapter is the sink that watches it, so an addon's edit is announced to the script half
+/// the same way the shell's own edits are — the browser's `PageEvents` in the other host.
+pub fn announce_to(
+    script: Arc<dyn ScriptHost + Send + Sync>,
+) -> Arc<dyn ferrocad_shell_api::DocumentEventSink> {
+    Arc::new(ToScript(script))
+}
+
+struct ToScript(Arc<dyn ScriptHost + Send + Sync>);
+
+impl ferrocad_shell_api::DocumentEventSink for ToScript {
+    fn document_event(&self, event: &DocumentEvent) {
+        self.0.on_document_event(event);
     }
 }
 

@@ -827,9 +827,9 @@ geometry/editor idiom instead of being borrowed from `industry`, `tools`, `trave
   `shell solid`, `make face`, `make solid`.
 - **Already open from the first pass:** `pocket cavity`, `hole`.
 
-That makes **33 requests filed, 23 open, 10 withdrawn** (the three snap draws, the spline,
-`workplane`, the four view orientations, all of which the repository draws itself, and
-`extend line`, which `arrow-right-from-line` now stands in for).
+That made **33 requests filed, 23 open, 10 withdrawn** at the time (the three snap
+draws, the spline, `workplane`, the four view orientations, all of which the repository
+draws itself, and `extend line`, which `arrow-right-from-line` stands in for).
 The authored glyphs stay wired meanwhile: a delivered icon replaces one only if it reads
 better at 16 px, since the six are drawn to the same grid. `revolve` already moved to
 `rotate-3d` in the swap pass below; `chamfer` keeps `bevel-gauge`, the weakest metaphor
@@ -853,6 +853,22 @@ Rejected after the same review: `table-cells` for Spreadsheet (no better than `t
 `drill-bit` for Hole and `margin`/`border-inner` for Offset (a drill and table borders,
 not a bore or an offset), and `artboard` for Select plane (the authored `workplane`
 wins).
+
+**Request resubmission, 2026-11-06.** The library's request queue looked empty from the
+client even though every `request_icon` call had answered "Requested.", so the 21
+still-open concepts were filed again in one pass instead of guessing which call was
+lost. All were accepted, and `wedge solid` answered **"Already requested today."** —
+proof that the first pass did reach the queue; the client simply cannot read it back.
+The resubmission keeps the same names, so a duplicate is a no-op rather than a second
+concept. `transform gizmo` and `closed polyline` are no longer requested at all:
+`bounding-box` and `polygon` cover them. The ledger is now **33 filed, 21 open, 12
+withdrawn**, and the 21 are:
+
+`arc`, `arc through three points`, `facebinder`, `offset outline`, `slope angle`,
+`extrude solid`, `pocket cavity`, `loft profiles`, `sweep along path`, `shell solid`,
+`hole`, `make face`, `make solid`, `dimension angle`, `dimension radius`,
+`revolve profile`, `fillet edge`, `chamfer edge`, `section plane`, `tube solid`,
+`wedge solid`.
 
 ### Contact sheets
 

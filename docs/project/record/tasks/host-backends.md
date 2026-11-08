@@ -18,6 +18,13 @@ version.
 | --- | --- | --- | --- |
 | **D1** | `AppBackend` stays the **only** shell↔engine contract. Backends are not shell forks. | The shell already installs one `Box<dyn AppBackend>` and needs no other knowledge of the engine. | — |
 | **D2** | Backends are named by the **runtime they embed**, not by platform: `RustAppBackend` (none), `PythonAppBackend` (CPython), `JsScriptHost` (JS/WASM mods) and `PywasmScriptHost` (wasm Python), the last two composed into `RustAppBackend`. | Platform is a property of the *host*; the document API is identical. | S5 ✓ |
+
+> **D2, as built (S9).** The split collapsed further than the table above reads: there
+> is one `AppBackend` (`RustAppBackend`) and four `ScriptHost` implementations, composed
+> with `with_script_host`. Desktop installs `PythonScriptHost` over the native CPython
+> VM; the browser installs `JsScriptHost` (`?js=1`); `PywasmScriptHost` is built but not
+> installed by any host. `PythonAppBackend` survives only for the test harnesses that
+> cannot link the extension module, and it implements both halves itself.
 | **D3** | The Rust backend becomes its own crate, `ferrocad_shell_rust`, used by **both** the browser host and a desktop edition. | Today the only Rust backend lives inside the web host (`document.rs`), so "Rust document" reads as "browser-only". It is not. | S5 ✓ |
 | **D4** | Property **presentation** (editor kind, formatting, text→value) moves into `ferrocad_core` and is exposed to Python by `ferrocad_py`. | It is a property of the `Property` enum, not of a GUI. `ferrocad_py` stays a pure core binding. | S3 ✓ |
 | **D5** | Part primitives store lengths as `Property::Quantity` (mm), not `Property::Float`. | That is what a FreeCAD `Part::Box.Length` is on disk, and the current mismatch loses data (§3.3). | S3 ✓ |
@@ -105,9 +112,9 @@ Worth stating, because the plan below must not break it:
 ## 2. The model
 
 ![The four layers: the platform hosts (native desktop, browser wasm), the seam
-(`ferrocad_shell_core` over `AppBackend` + optional `ScriptHost`), the pluggable
-backends named by runtime (CPython, no-runtime Rust, planned JS and wasm Python), and
-the shared engine](../../../developer/images/host-backends.svg)
+(`ferrocad_shell_core` over `AppBackend` + optional `ScriptHost`), one
+`RustAppBackend` composed with one `ScriptHost` per runtime (CPython, RustPython, JS,
+or none), and the shared engine](../../../developer/images/host-backends.svg)
 
 ### 2.1 Runtimes, not platforms
 
@@ -121,12 +128,14 @@ optionally, an interpreter. The shell knows only the backend.
              │   + optional ScriptHost (script_host())       │
              └───────────────┬──────────────────────────────┘
                              │ AppBackend
-        ┌────────────────────┼────────────────────┬───────────────┐
-        ▼                    ▼                    ▼               ▼
-  RustAppBackend      PythonAppBackend      RustAppBackend  RustAppBackend
-  (no runtime)        (CPython, native)     + JsScriptHost  + PywasmScriptHost
-  native + wasm       native                wasm + JS       wasm + Python
-  ScriptHost: none    ScriptHost: yes       ScriptHost: yes ScriptHost: yes
+                             ▼
+                 RustAppBackend — one type, ferrocad_shell_rust
+                 document half + catalog · with_script_host(…)
+                             │ ScriptHost
+     ┌───────────────┬───────┴─────────┬──────────────────┐
+     ▼               ▼                 ▼                  ▼
+ PythonScriptHost  PywasmScriptHost  JsScriptHost       (none)
+ CPython, native   RustPython, wasm  ES module, wasm    pure Rust
 ```
 
 The two browser backends differ in **who runs the user's code**, not in what the

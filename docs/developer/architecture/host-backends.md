@@ -29,7 +29,8 @@ everywhere. That is what lets the browser and a desktop edition install the *sam
 
 ![The four layers: the hosts (native desktop, browser wasm) that own the entry point,
 window and FilePicker; the seam (`ferrocad_shell_core` over `AppBackend` plus an
-optional `ScriptHost`); the backends named by runtime; and the shared
+optional `ScriptHost`); one `RustAppBackend` composed with one `ScriptHost` per
+runtime (CPython, RustPython, JS, or none); and the shared
 `ferrocad_core`/`ferrocad_part` engine](../images/host-backends.svg)
 
 The two browser configurations differ in **who runs the user's code**, not in what the

@@ -94,7 +94,8 @@ impl Capability {
     }
 }
 
-/// A bundle's manifest, `addon.json` beside the `.wasm`.
+/// A bundle's manifest: `<stem>.json` beside the `.wasm` (`addon.json` for
+/// `addon.wasm`, `toy.json` for `toy.wasm`, which is how the page's copy is named).
 ///
 /// Absent, or absent field, means read-only: the safe answer is the one that has to be
 /// given explicitly.
@@ -106,7 +107,7 @@ struct Manifest {
 
 /// The capability `bundle`'s manifest grants.
 fn manifest_capability(bundle: &Path) -> Result<Capability, String> {
-    let path = bundle.with_file_name("addon.json");
+    let path = bundle.with_extension("json");
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Capability::Read),
@@ -140,7 +141,7 @@ impl DocumentApi for ReadOnly {
             return serde_json::json!({
                 "ok": false,
                 "error": "read-only: this bundle was not granted document writes \
-                          (an addon.json beside it says {\"document\": \"read-write\"})",
+                          (its manifest does not say {\"document\": \"read-write\"})",
             })
             .to_string();
         }
@@ -339,7 +340,7 @@ impl WasmAddonHost {
         })
     }
 
-    /// Open a bundle from disk, with the capability its `addon.json` grants.
+    /// Open a bundle from disk, with the capability its manifest grants.
     ///
     /// No manifest means [`Capability::Read`]: writes are refused at the doorway until
     /// the bundle asks for them.

@@ -356,8 +356,9 @@ desktop composes `ferrocad_shell_wasm::Addons`), so `wasm` is a package format r
 fifth name. A bundle is sandboxed: its only import is the document doorway, it runs on an
 interpreter with no executable memory, each call has a fuel budget — a workbench that loops
 forever traps instead of freezing the window — and it is **read-only** unless its
-`addon.json` grants `"document": "read-write"`, refused into an ordinary `{"ok": false}`
-before the request reaches the document.
+`<stem>.json` manifest grants `"document": "read-write"`, refused into an ordinary
+`{"ok": false}` before the request reaches the document. Both hosts enforce that: the
+desktop with `document_api::is_write`, the page inside `loader.js`'s doorway.
 
 Two engines were missing, and they are different dependencies:
 

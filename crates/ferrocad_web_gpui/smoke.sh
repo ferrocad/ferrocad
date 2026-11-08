@@ -182,6 +182,7 @@ check_workbench() {
     done <<'EOF'
 ferrocad: scripting runtime js
 ferrocad toy (wasm): registered Toy_Slab, Toy_Taller
+ferrocad toy (wasm): document read-write
 ferrocad toy (wasm): run Toy_Slab
 ferrocad toy (wasm): document.edited
 ferrocad toy (wasm): document.recomputed

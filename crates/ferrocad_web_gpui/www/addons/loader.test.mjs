@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { instantiate } from "./loader.js";
+import { WRITE_VERBS, instantiate, isWrite } from "./loader.js";
 
 const WASM =
   process.env.FERROCAD_ADDON ??
@@ -75,11 +75,39 @@ function host() {
   };
 }
 
-async function bundle() {
-  return instantiate(await readFile(WASM), host());
+// The toy workbench creates and edits, so the fixtures that run it grant writes; the
+// default is read-only and is tested below.
+async function bundle(capability = "read-write") {
+  return instantiate(await readFile(WASM), host(), { document: capability });
 }
 
 const height = (mesh) => Math.max(...mesh.positions.map((point) => point[2]));
+
+test("a read-only bundle cannot write the document", async () => {
+  const doorway = host();
+  // No capability passed: the loader's default, which is the safe one.
+  const addon = await instantiate(await readFile(WASM), doorway);
+
+  assert.equal(addon.run("Toy_Slab"), false, "the command cannot create its object");
+  assert.deepEqual(
+    JSON.parse(doorway('{"call":"document"}')).result.objects,
+    [],
+    "the refused write never reached the host",
+  );
+
+  // Reads still work, so a read-only bundle is useful rather than inert.
+  assert.equal(addon.stageMeshes("[]"), "[]");
+});
+
+test("the write verbs are the sandbox's list", async () => {
+  // Mirrors `ferrocad_shell_api::document_api::is_write`; keep them in step.
+  assert.deepEqual(WRITE_VERBS, ["create", "set", "recompute"]);
+  assert.equal(isWrite('{"call":"create"}'), true);
+  assert.equal(isWrite('{"call":"set","object":"Toy"}'), true);
+  assert.equal(isWrite('{"call":"recompute"}'), true);
+  assert.equal(isWrite('{"call":"document"}'), false);
+  assert.equal(isWrite("not json"), false);
+});
 
 test("the bundle registers its commands", async () => {
   const addon = await bundle();
@@ -91,7 +119,7 @@ test("the bundle registers its commands", async () => {
 
 test("a command crosses the import and writes the document", async () => {
   const doorway = host();
-  const addon = await instantiate(await readFile(WASM), doorway);
+  const addon = await instantiate(await readFile(WASM), doorway, { document: "read-write" });
 
   // An id that is not this bundle's is refused without touching the document.
   assert.equal(addon.run("Someone_Else"), false);

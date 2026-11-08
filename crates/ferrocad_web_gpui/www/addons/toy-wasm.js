@@ -9,11 +9,28 @@
 import { instantiate } from "./loader.js";
 
 const WASM = new URL("./toy.wasm", import.meta.url);
+// The capability the bundle ships with (`run.sh` copies the crate's manifest here).
+const MANIFEST = new URL("./toy.json", import.meta.url);
 
 let bundle = null;
 
+/** `read` unless the manifest grants writes; a missing manifest is read-only. */
+async function capability() {
+  try {
+    const response = await fetch(MANIFEST);
+    if (!response.ok) return "read";
+    const manifest = await response.json();
+    return manifest.document === "read-write" || manifest.document === "write"
+      ? "read-write"
+      : "read";
+  } catch {
+    return "read";
+  }
+}
+
 export async function install() {
   const bytes = await (await fetch(WASM)).arrayBuffer();
+  const document = await capability();
   bundle = await instantiate(bytes, (request) => {
     // The host installs `window.ferrocad` when it boots; a command cannot run before
     // that, so this is only ever called once the doorway exists.
@@ -21,7 +38,7 @@ export async function install() {
     return doorway
       ? doorway.call(request)
       : JSON.stringify({ ok: false, error: "no document doorway" });
-  });
+  }, { document });
 
   const page = window.__ferrocadJs ?? {};
   const commands = JSON.parse(bundle.commands());
@@ -47,6 +64,8 @@ export async function install() {
     },
   };
   console.log("ferrocad toy (wasm): registered", commands.map((command) => command.id).join(", "));
+  // Observable in a headless capture: which capability the manifest granted.
+  console.log(`ferrocad toy (wasm): document ${document}`);
 }
 
 // Merge with a page surface that was already installed (`?js=1`).

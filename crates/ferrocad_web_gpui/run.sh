@@ -81,7 +81,7 @@ docker run --rm -v "$PWD":/work "$IMAGE" \
 # carry the capability it was written with.
 cp "$CARGO_TARGET/wasm32-unknown-unknown/release/ferrocad_addon_toy.wasm" \
     crates/ferrocad_web_gpui/www/addons/toy.wasm
-cp crates/ferrocad_addon_toy/addon.json crates/ferrocad_web_gpui/www/addons/addon.json
+cp crates/ferrocad_addon_toy/addon.json crates/ferrocad_web_gpui/www/addons/toy.json
 
 "$BINDGEN" --target web \
     --out-dir crates/ferrocad_web_gpui/www/pkg \

@@ -717,11 +717,17 @@ The default being read is the point: a sandbox whose default was write would not
 The shipped-bundle tests assert both sides — the raw artifact cannot create its object, and
 the same bytes with `{"document": "read-write"}` beside them can.
 
-**What is not there yet.** The web's loader still grants writes to every bundle: its
-`ferrocad.call` is the page's JS and the page has no manifest step. The door and the verb
-list are shared, so that half is `loader.js` reading the same `addon.json`. And an addon's
-own edit announces no `document.edited` on the desktop, because the doorway is built
-without a sink there.
+**Both hosts enforce it.** The manifest is `<stem>.json` beside the bundle (`addon.json`
+for `addon.wasm`, `toy.json` for the page's `toy.wasm`). The desktop consults
+`ferrocad_shell_api::document_api::is_write`; the page's `loader.js` refuses the same three
+verbs *inside* the doorway, so a refused request never reaches `window.ferrocad.call`
+either. `WRITE_VERBS` there mirrors the Rust list — three verbs, with no cross-language
+check — so a new mutating verb is a two-file change, which its own Node test records. The
+browser smoke asserts the capability line (`ferrocad toy (wasm): document read-write`)
+beside the command that needs it.
+
+**What is not there yet.** An addon's own edit announces no `document.edited` on the
+desktop, because the doorway is built without a sink there; the page has the channel already.
 
 **A trap worth recording.** `wasmi`'s `auto-dispatch` feature is not optional in practice:
 without it the fallback path does not honour fuel metering, and the runaway test did not

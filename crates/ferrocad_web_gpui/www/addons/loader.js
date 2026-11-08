@@ -11,9 +11,34 @@
 // Only text crosses a memory boundary, in either direction, and the document stays the
 // host's: a bundle holds no `Document`, so it cannot grow a second registry. Nothing
 // here touches the DOM, which is why `loader.test.mjs` can run it under Node.
+//
+// **The capability.** A bundle is read-only unless its manifest (`<stem>.json`, which
+// `run.sh` copies beside it) says `{"document": "read-write"}`. The refusal happens in
+// the doorway below, so a refused request never reaches the host — the same rule the
+// desktop applies with `ferrocad_shell_api::document_api::is_write`, and `WRITE_VERBS`
+// mirrors that list (it is three verbs; there is no cross-language check).
+
+export const WRITE_VERBS = ["create", "set", "recompute"];
+
+const REFUSAL = JSON.stringify({
+  ok: false,
+  error:
+    "read-only: this bundle was not granted document writes " +
+    '(its manifest does not say {"document": "read-write"})',
+});
+
+/** Whether a doorway request changes the document. */
+export function isWrite(request) {
+  try {
+    return WRITE_VERBS.includes(JSON.parse(request)?.call);
+  } catch {
+    return false;
+  }
+}
 
 /** Instantiate `bytes` with `call` as the doorway, and return the bundle. */
-export async function instantiate(bytes, call) {
+export async function instantiate(bytes, call, options = {}) {
+  const writes = options.document === "read-write";
   const encoder = new TextEncoder();
   let instance;
 
@@ -23,7 +48,9 @@ export async function instantiate(bytes, call) {
       // buffer **the addon** allocated, packed as `len << 32 | ptr`.
       call(ptr, len) {
         const request = decode(instance, ptr, len);
-        const answer = encoder.encode(call(request));
+        // A read-only bundle's writes are answered here, not forwarded: it sees the
+        // ordinary failure envelope and cannot learn anything it was not granted.
+        const answer = encoder.encode(writes || !isWrite(request) ? call(request) : REFUSAL);
         const out = instance.exports.ferrocad_alloc(answer.length);
         new Uint8Array(instance.exports.memory.buffer, out, answer.length).set(answer);
         return (BigInt(answer.length) << 32n) | BigInt(out >>> 0);

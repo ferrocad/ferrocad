@@ -191,6 +191,12 @@ node --test crates/ferrocad_web_gpui/www/addons/loader.test.mjs
 three page functions (`commands`, `runCommand`, `stageMeshes`), so the host does not know
 which it got.
 
+The ABI is host-neutral by construction, not only in principle: `loader.js` is the
+*browser's* implementation of the host side, and a native host implements the same
+`ferrocad.call` import over `ferrocad_doc_api` — which is what a desktop addon engine
+(`wasmi`, B7 in [`../tasks/backend-parity.md`](../tasks/backend-parity.md)) would be. The
+bundle does not know which one it got either.
+
 ## 5. `catalog.json` is not the addon table
 
 `python/ferrocad_shell/catalog.json` is **generated** from
@@ -256,6 +262,11 @@ not a claim.
 3. **Capabilities.** A doorway that can write the document is a permission. Today every
    bundle gets it; the manifest should be able to say `"document": "read"` and have the
    host answer differently.
+
+Neither half running on the desktop is deliberate, not a gap in this list: **B7** in
+[`../tasks/backend-parity.md`](../tasks/backend-parity.md) treats a desktop JS engine and a
+desktop wasm engine as two *separate* missing dependencies, with the addon one first,
+because the browser is the shipping surface for both.
 
 ### 7a. Events: done, this slice
 

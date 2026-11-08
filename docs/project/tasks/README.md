@@ -2,12 +2,17 @@
 
 Status: index (2026-11-08). Thirteen active specs and one recorded decision:
 
-- [backend-parity.md](backend-parity.md) — **one Gui app, one document half, B0–B6 built**:
-  the surface suite is in (`crates/ferrocad_parametric/tests/composition_surface.rs`),
-  every shown command is in the `FreeCADGui` registry, the Gui-authority verbs run
-  script-first, the model tree lists and switches documents, a mod's interaction
-  provider owns a manipulator commit, the legacy type is retired, and the two script
-  halves (CPython / RustPython) are compared over one document. Stages **B0–B6**.
+- [backend-parity.md](backend-parity.md) — **one Gui app, one document half, B0–B6 built,
+  B7 recorded**: the surface suite is in
+  (`crates/ferrocad_parametric/tests/composition_surface.rs`), every shown command is in
+  the `FreeCADGui` registry, the Gui-authority verbs run script-first, the model tree
+  lists and switches documents, a mod's interaction provider owns a manipulator commit,
+  the legacy type is retired, and the two script halves (CPython / RustPython) are
+  compared over one document. **B7** records the packaging matrix — which host can serve
+  which script half, the three decisions that are currently folded into one, the two
+  missing engines (settled: `rquickjs` for JS, `wasmi` for addons), and what a
+  CPython-free host could actually host. Stages **B0–B6**, B7 recorded; **B7a** (the JS
+  `Page` trait, so that half builds and tests without a browser) is built.
 
 - [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget**: stage 2 landed
   (the `.FCStd` payloads restore in parallel, `open` 5.9 s → 1.8 s, the 900a assembly 13.5 s

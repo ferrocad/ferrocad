@@ -94,19 +94,22 @@ pub fn backend(runtime: Runtime) -> Result<Box<dyn AppBackend>, String> {
 /// backend's own handle, where no script can reach it.
 #[cfg(target_family = "wasm")]
 fn js_backend() -> Result<Box<dyn AppBackend>, String> {
-    if !ferrocad_shell_js::available() {
+    let page: std::sync::Arc<dyn ferrocad_shell_js::Page> =
+        std::sync::Arc::new(ferrocad_shell_js::WebPage);
+    if !ferrocad_shell_js::available(&*page) {
         return Err(
             "no JS script half: the page did not install window.__ferrocadJs \
              (?js=1 loads js-demo.js, which does)"
                 .to_string(),
         );
     }
-    let events: std::sync::Arc<dyn ferrocad_shell_api::DocumentEventSink> =
-        std::sync::Arc::new(ferrocad_shell_js::PageEvents);
+    let events: std::sync::Arc<dyn ferrocad_shell_api::DocumentEventSink> = std::sync::Arc::new(
+        ferrocad_shell_js::PageEvents::new(std::sync::Arc::clone(&page)),
+    );
     let document = std::sync::Arc::new(ferrocad_doc_api::DocApi::with_events(events));
     Ok(Box::new(
         ferrocad_shell_rust::RustAppBackend::from_shared_registry().with_script_host(Box::new(
-            ferrocad_shell_js::JsScriptHost::with_kernel(document),
+            ferrocad_shell_js::JsScriptHost::with_kernel(page, document),
         )),
     ))
 }

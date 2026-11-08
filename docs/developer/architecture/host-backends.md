@@ -242,17 +242,23 @@ that reason.
 
 ### JS modules (wasm)
 
-`ferrocad_shell_js::JsScriptHost` implements `ScriptHost` over the page's
-`window.__ferrocadJs` — an ES module the page loads (`?js=1` imports it before the wasm
-module boots, because the command list is read once at startup). The crate calls out
-and never links the document.
+`ferrocad_shell_js::JsScriptHost` implements `ScriptHost` over a page — the browser's
+`window.__ferrocadJs` is an ES module the page loads (`?js=1` imports it before the wasm
+module boots, because the command list is read once at startup). The crate calls out and
+never links the document.
+
+**The page is a trait, not a browser.** [`Page`] is the eight-call contract; `WebPage`
+implements it over `window` and is the only `cfg(wasm)` piece, so the crate builds
+natively and its tests drive a fake page (the command merge, the display hook, the
+doorway and the event mapping are all covered without a browser). A desktop host supplies
+the same trait over an embedded engine — `rquickjs`, decided in B7.
 
 **The document doorway.** A JS workbench has to create objects and set properties, and a
 second `ferrocad_core` in the page would be a second document. So the host hands the JS
-half a `DocumentApi` (`ferrocad_doc_api`), which
-`JsScriptHost::with_kernel` turns into `window.ferrocad.call(request)` before the first
-command runs. The page sees JSON, the host's one document answers, and Part arrives
-because the host registered it — the doorway itself is core-only. See
+half a `DocumentApi` (`ferrocad_doc_api`), which `Page::install_kernel` turns into
+`window.ferrocad.call(request)` before the first command runs. The page sees JSON, the
+host's one document answers, and Part arrives because the host registered it — the
+doorway itself is core-only. See
 [`../../project/research/js-addons.md`](../../project/research/js-addons.md) for the
 protocol, the three shapes (static link, doorway, copied engine) and what is not built
 (a display hook, a wasm bundle).
@@ -296,8 +302,9 @@ Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
 `PywasmScriptHost::new` (the tests use a 16 MiB worker thread; the browser sets the same
 value as a link argument in `ferrocad_web_gpui/build.rs`, because `wasm-ld`'s default is
 1 MiB).
-Unlike the JS half this crate is not `cfg(wasm)`: RustPython has no `window`
-dependency, so it also builds natively and its tests run in CI without a browser.
+No `window` dependency: RustPython is plain Rust, so this crate also builds natively and
+its tests run in CI without a browser (as the JS half's host logic now does — only its
+`WebPage` is `cfg(wasm)`).
 
 **Installed by the browser, chosen by the page.** `ferrocad_shell_web` is the assembly:
 it composes `RustAppBackend` with no script half, with `JsScriptHost`, or with
@@ -309,6 +316,42 @@ the model tree one document, including after an open. The plain and JS
 configurations build their sample directly, as they always have. A runtime that fails
 to boot is logged and the host falls back to the document alone, so a surface that
 cannot start never costs the window.
+
+### Which host ships which half
+
+The seam has four scripting halves; each host serves three. `plain + pywasm` is the
+intersection, and that is what makes the two-VM comparison a gate for both hosts at once:
+
+| script half | native desktop | browser | why |
+| --- | --- | --- | --- |
+| none (`plain`) | ✓ | ✓ | no engine; the Rust arms answer |
+| `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI |
+| `PywasmScriptHost` (RustPython) | ✓ builds; installed by no desktop host | ✓ | the only half both hosts can run |
+| `JsScriptHost` | ✗ | ✓ | the half *is* `window.__ferrocadJs` |
+
+Three decisions are separate even though each host currently folds them into one: what a
+bundle **links**, what the host **installs** at boot, and the **default**. The browser
+installs any of its three from a query string; the desktop installs exactly one
+(`backend::install` → `engine()`). Giving the desktop the same choice is one target-neutral
+`Runtime` (`Cpython` off wasm, `Js` on wasm) plus `--script-host=`, with a fallback to
+`plain` per configuration and no change to the default.
+
+Two engines are missing for the two ✗s, and they are different dependencies:
+
+- **a JS engine**, for the JS half — `ferrocad_shell_js` is
+  `#![cfg(target_family = "wasm")]` and binds its eight page calls to
+  `window.__ferrocadJs` at the call site, so the first step is a page trait, not an engine
+  (`boa`, `rquickjs`, `deno_core`);
+- **a wasm engine**, for wasm addons — `ferrocad_addon_toy` already speaks a wasm import
+  module (`ferrocad.call`) plus `(ptr, len)` exports, so **`wasmi`** hosts it by mapping
+  that import onto `ferrocad_doc_api`'s doorway, with the addon's JS glue
+  (`loader.js`, `toy.js`) re-done in Rust. An interpreter rather than a JIT: smaller, fuel
+  metering for third-party mod code, and no executable memory.
+
+Neither is linked today, so the release binary pays for neither. The decision trail, the
+costs (unmeasured size, the 16 MiB stack, `host_env` off natively, the read-only facade)
+and the order to build them are **B7** in
+[`backend-parity.md`](../../project/tasks/backend-parity.md).
 
 ## 5. One display path
 
@@ -436,9 +479,15 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
 - **CPU picking on wasm.** The fallback transforms every vertex of every packet into a
   fresh buffer, then scans every triangle, with no bounding-box pre-reject or BVH. Fine
   for the sample; the first thing to fix when a large model runs in the browser.
-- **The `ferrocad_shell_python` split** (host and CPython backend in separate crates) is
-  deferred until a pure-Rust desktop edition exists, because only that edition needs to
-  link no CPython.
+- **The `ferrocad_shell_python` split** (host and CPython backend in separate crates) waits
+  for a second *product*, not a second edition of this one — the CPython-free host has to
+  host something. An FCStd viewer is interpreter-free but not kernel-free (`.brp` is OCCT's
+  payload, so scripted documents are the lossy case); a different kernel is a crate behind
+  `ferrocad_geom::GeometryBackend`, with its own document format to match (B7).
+- **A desktop JS engine and a desktop wasm engine both wait** (B7). The addon engine is
+  settled — `wasmi`, an interpreter with fuel metering and no executable memory — and the
+  JS half needs a page trait before any engine can be plugged in. Neither is linked today,
+  so the desktop binary carries neither.
 - **`ScriptHost::overlays()`** returning stage-native scenes is the documented
   replacement for `inventor_scene`; until then the Coin compatibility path stays.
 - **A JS workbench can draw, but not make tools or observe.** The browser's `?addons=1`

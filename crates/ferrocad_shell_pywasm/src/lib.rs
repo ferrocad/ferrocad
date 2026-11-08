@@ -33,9 +33,9 @@
 //! and the `Shape` API are the document half's (`RustAppBackend`), and the shell's own
 //! commands reach them.
 //!
-//! **Why this crate also builds natively.** `ferrocad_shell_js` is `cfg(wasm)`
-//! because its only implementation is a `window` bridge. RustPython has no such
-//! dependency, so this crate is plain Rust and its tests run on a normal
+//! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
+//! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
+//! RustPython. This crate is plain Rust and its tests run on a normal
 //! `cargo test` — the wasm target is proven separately by
 //! `cargo check --target wasm32-unknown-unknown`. Both are in the acceptance.
 

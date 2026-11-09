@@ -4,7 +4,7 @@
 //! `--script-host=` cannot drift: the aliases, the canonical spellings and the error
 //! text all come from one table.
 
-use ferrocad_shell_api::{EntryKind, Language, Platform, Runtime};
+use ferrocad_shell_api::{DocumentGrant, EntryKind, Language, Platform, Runtime};
 
 #[test]
 fn the_canonical_names_are_the_switch_names() {
@@ -212,6 +212,24 @@ fn no_mods_derives_no_hosts() {
     for platform in Platform::ALL {
         assert!(Runtime::hosts_for(&[], platform).is_empty(), "{platform:?}");
     }
+}
+
+#[test]
+fn a_runtime_names_the_grant_its_host_implements() {
+    assert_eq!(Runtime::Plain.document_grant(), DocumentGrant::Read);
+    assert_eq!(Runtime::Cpython.document_grant(), DocumentGrant::ReadWrite);
+    assert_eq!(Runtime::Pywasm.document_grant(), DocumentGrant::Read);
+    assert_eq!(Runtime::Js.document_grant(), DocumentGrant::ReadWrite);
+}
+
+#[test]
+fn an_entry_kind_has_one_language() {
+    assert_eq!(Language::of_kind(EntryKind::Python), Language::Python);
+    assert_eq!(
+        Language::of_kind(EntryKind::JavaScript),
+        Language::JavaScript
+    );
+    assert_eq!(Language::of_kind(EntryKind::Wasm), Language::Wasm);
 }
 
 #[test]

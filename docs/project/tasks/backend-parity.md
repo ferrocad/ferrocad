@@ -2,7 +2,7 @@
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
-B9a–B9b built (2026-11-09); B10 recorded, B10a built (2026-11-09).** The surface suite
+B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -927,7 +927,7 @@ with *no* mods keeps CPython; the two cases are told apart by whether any mod ex
 directory to scan; deriving there needs a package manifest served over HTTP, which is the
 open question below.
 
-### B10 — the grant belongs to the host (recorded 2026-11-09; B10a built)
+### B10 — the grant belongs to the host (recorded 2026-11-09; B10a–B10b built)
 
 The manifest a mod ships says what it *wants*; the host that booted it decides what it can
 *give*. B7e introduced that vocabulary for wasm only (`addon.json` →
@@ -955,22 +955,36 @@ default it cannot honour. The greeting now tells the truth, the way a bundle's a
 or announce a mismatch, and a surface test can assert the table above instead of trusting
 it. It enforces nothing by itself.
 
-**B10b — requested vs granted (not built).** For an addon to stop losing writes silently,
-the composition has to read a manifest for every kind, not just wasm:
+**B10b — requested vs granted (built 2026-11-09; granting is the policy).** A package names
+its request in `mods/<Name>/addon.json` — the same key a bundle uses — and the composition
+reads it for every kind. **For now the request is granted**: nothing is refused and nothing
+is downgraded. What the mismatch buys is a line at boot, because an author who tested on the
+desktop otherwise finds out in the browser at the first refused write:
 
-- `mods/<Name>/addon.json` with the same key, parsed by the host that installs the package;
-- a mismatch is **reported at load**, not at the first refused write: refused (`read-write`
-  asked, `Read` granted, no fallback) or installed with a named downgrade. That is the
-  policy decision this stage leaves open;
+```text
+ferrocad: Draft asks for read-write; pywasm grants read
+```
+
+The check follows the host that would actually run the package, so `--script-host=pywasm`
+reports it while the same mod on CPython stays quiet, and a chain asks the half that owns
+that language. A bundle's manifest is left to its doorway, which already enforces it; an
+unknown word is no request at all rather than a default the author did not ask for. A
+bundle's own default stays **read**, because that default is the sandbox — the permissive
+half of this decision is about the script hosts, not about widening what a third-party
+bundle may do.
+
+Two limits that granting does not remove:
+
 - **CPython cannot be sandboxed this way**: an addon runs in the same interpreter as the
   shell's own scripts, with `ferrocad_py`'s object model in `sys.modules`. Read-only there
-  is a contract, not an enforcement — a boundary that actually holds has to be a process or
-  a wasm bundle;
+  is a contract, not an enforcement — a boundary that holds has to be a process or a wasm
+  bundle;
 - the page's modules share one doorway (`window.ferrocad.call`), so a per-module grant needs
   a per-module wrapper; today the page is one principal.
 
-**Exit for B10a: met.** 3 capability tests, 2 chain tests, the wasm mapping on both sides of
-the manifest, and the RustPython greeting.
+**Exit: met.** 3 capability tests, 2 chain tests, 5 manifest tests (parsing, per-entry
+application, unknown words, the advisory, bundles excluded), the wasm mapping on both sides
+of the manifest, and the RustPython greeting.
 
 ## 5. Decisions (recorded 2026-11-08)
 **Open questions.**
@@ -1043,7 +1057,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D12 | several hosts in one target | **A chain with one named primary** (built B8b–B8d), generalising `Addons` rather than widening `Runtime`: three answers merge, four fan out, five are asked in order, and the console/lifecycle/render remain single-owner |
 | D13 | how a user asks for a mixed mod set | **The mod set names the hosts** (B9), not the engines: `--addons mods/Draft,mods/Toy` / `?addons=…`, with each package's entry file deriving its host per platform. `--script-host=` and `?runtime=` become the Python-engine choice and a debugging override, so `?runtime=pywasm,js` is no longer something a user writes |
 | D14 | wasm on the browser without the JS half | **Not built (B8e rejected).** `loader.js` needs `window.ferrocad`, which the page installs only for the JS half, so a wasm addon *derives* the page host rather than an engine being compiled into the module |
-| D15 | who decides what an addon may do | **The host grants, the manifest requests** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced rather than silently enforced — CPython's read-only would be a contract, not a boundary |
+| D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
 
 ## 6. Acceptance
 

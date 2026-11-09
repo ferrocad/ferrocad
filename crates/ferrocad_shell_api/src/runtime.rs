@@ -19,6 +19,8 @@
 
 use std::fmt;
 
+use crate::capability::DocumentGrant;
+
 /// One scripting half a host can install.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Runtime {
@@ -176,6 +178,20 @@ impl EntryKind {
 }
 
 impl Runtime {
+    /// The document grant this configuration *expects* to have.
+    ///
+    /// The authoritative value is the installed host's own
+    /// [`document_grant`](crate::ScriptHost::document_grant); this is the same table in the
+    /// configuration's terms, for a check that runs before any host exists — a manifest that
+    /// asks for more than the configuration can give is worth saying at boot.
+    pub fn document_grant(self) -> DocumentGrant {
+        match self {
+            Runtime::Plain => DocumentGrant::Read,
+            Runtime::Cpython | Runtime::Js => DocumentGrant::ReadWrite,
+            Runtime::Pywasm => DocumentGrant::Read,
+        }
+    }
+
     /// The script hosts `entries` need on `platform`, primary first.
     ///
     /// Python is the primary when it is present: it is the FreeCAD-shaped reference and
@@ -241,6 +257,15 @@ impl Language {
             Runtime::Plain => None,
             Runtime::Cpython | Runtime::Pywasm => Some(Language::Python),
             Runtime::Js => Some(Language::JavaScript),
+        }
+    }
+
+    /// The language a mod entry is written in.
+    pub fn of_kind(kind: EntryKind) -> Self {
+        match kind {
+            EntryKind::Python => Language::Python,
+            EntryKind::JavaScript => Language::JavaScript,
+            EntryKind::Wasm => Language::Wasm,
         }
     }
 

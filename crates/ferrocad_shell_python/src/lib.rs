@@ -171,18 +171,24 @@ pub fn run_with(config: HostConfig) {
     configure_trace();
     // The scripting configuration first: it decides which halves `install` composes,
     // and a value the command line got wrong is reported now rather than after the boot.
+    let mods_dirs = python::mods_dirs();
     let runtimes = if config.script_hosts.is_empty() {
         match Runtime::from_env_list() {
             Ok(Some(runtimes)) => runtimes,
-            Ok(None) => derived_runtimes(),
+            Ok(None) => derived_runtimes(&mods_dirs),
             Err(error) => {
                 eprintln!("ferrocad: {error}");
-                derived_runtimes()
+                derived_runtimes(&mods_dirs)
             }
         }
     } else {
         config.script_hosts.clone()
     };
+    // B10b: a manifest that asks for more than the installed engine can give is said once
+    // and then granted as far as it goes. Refusing is not the policy yet.
+    for warning in mods::under_granted(&mods::requests(&mods_dirs), &runtimes) {
+        eprintln!("ferrocad: {warning}");
+    }
     // The wasm workbenches ride beside whatever script half booted, and B9b reads them
     // from the mods directories when `--addons` names none — the same directory a mod's
     // entry file already names. Explicit paths always win.
@@ -251,8 +257,8 @@ pub fn run_with(config: HostConfig) {
 /// — so the set is derived rather than typed. No mods keeps the edition's engine (CPython),
 /// because that is what a run without mods has always had; `--script-host=plain` is still
 /// how to ask for no console at all.
-fn derived_runtimes() -> Vec<Runtime> {
-    let kinds = mods::entry_kinds(&python::mods_dirs());
+fn derived_runtimes(mods_dirs: &[std::path::PathBuf]) -> Vec<Runtime> {
+    let kinds = mods::entry_kinds(mods_dirs);
     if kinds.is_empty() {
         // No mod at all: the edition's engine, as it has always been.
         return vec![Runtime::Cpython];

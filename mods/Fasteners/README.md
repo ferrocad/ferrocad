@@ -2,13 +2,22 @@
 
 A **JS** workbench: ISO 4762 socket-head cap screws.
 
-Each command creates a real `Part::Cylinder` with the shank's radius and length, named
-`ISO4762_M6x20` and so on, in one transaction. Nothing is drawn by the package: the shape
-is the kernel's, which is what makes this a ten-line glue package rather than an engine.
+Each command creates **two** real `Part::Cylinder`s: the shank (`ISO4762_M6x20`) and its
+head (`ISO4762_M6x20_head`), the head placed on the shank's tip. Nothing is drawn by the
+package: the shapes are the kernel's, which is what makes this a glue package rather than
+an engine.
+
+The hex socket is the one part of the specification that is *not* there. A socket is a cut
+into the head, and the document API has no boolean verbs — an addon declares what it
+creates and what it writes, not a description of how to combine shapes
+(`docs/project/tasks/backend-parity.md`, D16). Two primitives give the silhouette; a real
+one would need a `cut` verb.
 
 | command | what it does |
 | --- | --- |
-| `Insert M3 × 10` … `Insert M8 × 30` | create the screw |
+| `Insert M3 × 10` … `Insert M8 × 30` | create the screw (shank and head) |
+
+Head sizes are ISO 4762's: M3 5.5 × 3, M4 7 × 4, M5 8.5 × 5, M6 10 × 6, M8 13 × 8 mm.
 
 ## How it runs
 
@@ -22,4 +31,5 @@ The page is installed automatically when a mod set declares it (B9a):
 
 Every write goes through `window.ferrocad.call`, the JSON API over the document. A host
 that refuses writes answers `{"ok": false, …}` and the command returns `false`; nothing is
-faked.
+faked. A refusal on the head leaves the shank in the document — two primitives are two
+writes, and there is no transaction verb to wrap them in.

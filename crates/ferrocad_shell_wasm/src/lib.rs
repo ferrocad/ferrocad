@@ -49,10 +49,20 @@ pub const ENTRY: &str = "addon.wasm";
 /// The fuel one entry call may burn before the bundle traps.
 ///
 /// The bundles are command handlers, not simulations: a few million instructions is
-/// generous for `commands`/`run`/`stage_meshes` on a real document (the toy bundle
-/// spends thousands), and small enough that a runaway loop is felt as an error rather
-/// than a frozen window.
+/// generous for `commands`/`run` on a real document (the toy bundle spends thousands), and
+/// small enough that a runaway loop is felt as an error rather than a frozen window.
+///
+/// A display hook is a different kind of call — its cost is proportional to the mesh it
+/// emits, which is the whole point of it — so [`MESH_FUEL`] applies there instead.
 pub const FUEL: u64 = 50_000_000;
+
+/// The fuel one `stage_meshes` call may burn.
+///
+/// Measured, not guessed: the shipped spring's tube is ~4 600 triangles and spends about
+/// 61 million fuel (nearly all of it formatting the JSON), so the old 50 million budget
+/// refused a legitimate mesh. This is the same bound expressed in triangles — roughly
+/// 15 000, or a few seconds at interpreter speed if a bundle really does loop.
+pub const MESH_FUEL: u64 = 200_000_000;
 
 /// What a bundle may do to the document.
 ///
@@ -390,8 +400,13 @@ impl WasmAddonHost {
 impl Bundle {
     /// Every entry call starts from the same budget, so one bundle cannot starve the next.
     fn arm(&mut self) -> Result<(), String> {
+        self.arm_with(self.fuel)
+    }
+
+    /// [`arm`](Self::arm) with an explicit budget.
+    fn arm_with(&mut self, fuel: u64) -> Result<(), String> {
         self.store
-            .set_fuel(self.fuel)
+            .set_fuel(fuel)
             .map_err(|error| format!("wasm fuel: {error}"))
     }
 
@@ -418,7 +433,9 @@ impl Bundle {
     }
 
     fn stage_meshes(&mut self, have: &str) -> Result<String, String> {
-        self.arm()?;
+        // The display hook is where a bundle does real work, so it gets the larger
+        // budget; a bundle given a bigger one explicitly keeps it.
+        self.arm_with(self.fuel.max(MESH_FUEL))?;
         let (ptr, len) = self.give(have.as_bytes())?;
         let packed = self.handles.stage_meshes.call(&mut self.store, (ptr, len as i32));
         let freed = self.handles.dealloc.call(&mut self.store, (ptr, len as i32));

@@ -56,13 +56,24 @@ fn the_fastener_package_registers_and_writes_through_the_document_api() {
         .requests
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    assert_eq!(requests.len(), 1, "{requests:?}");
-    let request: serde_json::Value = serde_json::from_str(&requests[0]).expect("JSON");
-    assert_eq!(request["call"], "create");
-    assert_eq!(request["type"], "Part::Cylinder");
-    assert_eq!(request["name"], "ISO4762_M6x20");
-    assert_eq!(request["properties"]["Radius"], "3 mm");
-    assert_eq!(request["properties"]["Height"], "20 mm");
+    assert_eq!(requests.len(), 2, "a shank and a head: {requests:?}");
+
+    let shank: serde_json::Value = serde_json::from_str(&requests[0]).expect("JSON");
+    assert_eq!(shank["call"], "create");
+    assert_eq!(shank["type"], "Part::Cylinder");
+    assert_eq!(shank["name"], "ISO4762_M6x20");
+    assert_eq!(shank["properties"]["Radius"], "3 mm");
+    assert_eq!(shank["properties"]["Height"], "20 mm");
+    assert!(shank["properties"]["Placement"].is_null(), "the shank starts at 0");
+
+    // The head sits on the shank's tip: same radius the specifications give, and a
+    // placement, because `Part::Cylinder` always starts at its placement's origin.
+    let head: serde_json::Value = serde_json::from_str(&requests[1]).expect("JSON");
+    assert_eq!(head["name"], "ISO4762_M6x20_head");
+    assert_eq!(head["type"], "Part::Cylinder");
+    assert_eq!(head["properties"]["Radius"], "5 mm");
+    assert_eq!(head["properties"]["Height"], "6 mm");
+    assert_eq!(head["properties"]["Placement"], "(0, 0, 20)");
 }
 
 #[test]

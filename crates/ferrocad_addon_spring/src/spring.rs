@@ -1,9 +1,13 @@
 //! The spring workbench: parameters in the document, geometry in the bundle.
 //!
-//! The document object is an `App::FeaturePython` with three declared properties and no
+//! The document object is an `App::FeaturePython` with four declared properties and no
 //! `Shape` at all. That is deliberate: the bundle cannot read geometry, so it derives it
 //! from numbers it *can* read, and the property pane edits those numbers in the usual way.
 //! The display hook is where the derived mesh goes.
+//!
+//! The mesh is a **tube**, not a wire: a circle swept along the helix. The bundle has no
+//! kernel, but a sweep is arithmetic — a ring of points per station, a quad per pair of
+//! stations, a normal per point — so "no kernel" is not a reason to draw a line.
 //!
 //! Pure: the api is a closure, so this module is tested on the host against the real
 //! [`ferrocad_doc_api`]. `abi.rs` supplies the same closure over an import in wasm.
@@ -22,12 +26,19 @@ pub const PITCH: f64 = 4.0;
 /// The number of active turns.
 pub const TURNS: f64 = 8.0;
 
+/// The diameter of the wire the helix is drawn with, in millimetres.
+pub const WIRE: f64 = 1.0;
+
 /// The tightest pitch `Spring_Tighten` will produce, in millimetres.
 pub const MIN_PITCH: f64 = 1.0;
 
-/// Points per turn in the drawn helix. Coarse on purpose: it is a preview of the
-/// parameters, not the wire the kernel would sweep.
+/// Stations along the drawn helix. A preview of the parameters rather than the mesh a
+/// kernel would export, so this is coarse on purpose.
 const STEPS_PER_TURN: f64 = 24.0;
+
+/// Points around the drawn tube. Smooth enough at any zoom a preview is read at, and
+/// cheap: the whole default spring is under 5 000 triangles.
+const RING: usize = 12;
 
 /// One entry of the bundle's command list.
 pub struct Command {
@@ -41,7 +52,7 @@ pub const COMMANDS: [Command; 2] = [
     Command {
         id: "Spring_Insert",
         label: "Insert Spring",
-        tooltip: "Create a parametric spring: three numbers the bundle draws a helix from",
+        tooltip: "Create a parametric spring: four numbers the bundle sweeps a tube from",
     },
     Command {
         id: "Spring_Tighten",
@@ -86,7 +97,8 @@ pub fn stage_meshes(have: &[String], api: &dyn Fn(&str) -> String) -> Result<Str
     let radius = number_of(object, "Radius").unwrap_or(RADIUS);
     let pitch = number_of(object, "Pitch").unwrap_or(PITCH);
     let turns = number_of(object, "Turns").unwrap_or(TURNS);
-    serde_json::to_string(&[helix_mesh(object, radius, pitch, turns)])
+    let wire = number_of(object, "Wire").unwrap_or(WIRE);
+    serde_json::to_string(&[tube_mesh(object, radius, pitch, turns, wire)])
         .map_err(|error| format!("the mesh is not JSON: {error}"))
 }
 
@@ -122,6 +134,12 @@ fn insert(api: &dyn Fn(&str) -> String) -> Result<(), String> {
                     "value": format!("{TURNS}"),
                     "group": "Spring",
                     "doc": "Number of active turns",
+                },
+                "Wire": {
+                    "type": "App::PropertyLength",
+                    "value": format!("{WIRE} mm"),
+                    "group": "Spring",
+                    "doc": "Diameter of the wire the helix is drawn with",
                 },
             }
         }),
@@ -192,30 +210,86 @@ fn number_in(rows: &Value, name: &str) -> Option<f64> {
         .ok()
 }
 
-/// The helix the document cannot hold: a wire along the three parameters.
+/// The solid the document cannot hold: a circle swept along the helix.
 ///
-/// A wireframe, not a swept solid: the point is to show what the numbers mean without
-/// pretending the bundle can sweep a kernel it does not have.
-fn helix_mesh(object: &Value, radius: f64, pitch: f64, turns: f64) -> Value {
+/// A ring of points at every station, a quad between neighbouring stations, and a fan at
+/// each end. The frame is the helix's own: the outward radial direction and `tangent ×
+/// normal` turn with the curve, so the tube does not twist as it climbs.
+fn tube_mesh(object: &Value, radius: f64, pitch: f64, turns: f64, wire: f64) -> Value {
     let radius = radius.max(0.1);
     let pitch = pitch.max(0.1);
     let turns = turns.clamp(0.5, 200.0);
+    // Coils that interpenetrate are not a spring. Keep the tube inside the pitch, however
+    // thick `Wire` asks for, so tightening cannot fold the surface through itself.
+    let wire = (wire / 2.0).clamp(0.05, pitch * 0.3);
     let segments = ((turns * STEPS_PER_TURN).round() as usize).clamp(8, 4_800);
     let tau = std::f64::consts::TAU;
 
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(segments + 1);
-    let mut edges: Vec<u32> = Vec::with_capacity(segments * 2);
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity((segments + 1) * RING + 2);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity((segments + 1) * RING + 2);
+    // The centre and the frame at each station, kept for the caps.
+    let mut stations: Vec<([f64; 3], [f64; 3], [f64; 3], [f64; 3])> =
+        Vec::with_capacity(segments + 1);
+
     for step in 0..=segments {
         let turn = turns * step as f64 / segments as f64;
         let angle = tau * turn;
-        positions.push([
-            (radius * angle.cos()) as f32,
-            (radius * angle.sin()) as f32,
-            (pitch * turn) as f32,
-        ]);
-        if step > 0 {
-            edges.extend_from_slice(&[(step - 1) as u32, step as u32]);
+        let centre = [radius * angle.cos(), radius * angle.sin(), pitch * turn];
+        // `d/dturn`: never parallel to Z, so the cross below is well defined.
+        let tangent = unit([-radius * angle.sin(), radius * angle.cos(), pitch / tau]);
+        let normal = unit(cross(tangent, [0.0, 0.0, 1.0]));
+        let binormal = cross(tangent, normal);
+        stations.push((centre, normal, binormal, tangent));
+        for point in 0..RING {
+            let theta = tau * point as f64 / RING as f64;
+            let (sin, cos) = theta.sin_cos();
+            // Outward from the helix's centreline, and exactly the vertex normal.
+            let offset = [
+                cos * normal[0] + sin * binormal[0],
+                cos * normal[1] + sin * binormal[1],
+                cos * normal[2] + sin * binormal[2],
+            ];
+            positions.push([
+                (centre[0] + wire * offset[0]) as f32,
+                (centre[1] + wire * offset[1]) as f32,
+                (centre[2] + wire * offset[2]) as f32,
+            ]);
+            normals.push([offset[0] as f32, offset[1] as f32, offset[2] as f32]);
         }
+    }
+
+    // Two triangles per quad, wound so the outward side faces out: around the ring is
+    // `∂θ`, along the helix is `∂s`, and `∂θ × ∂s` is the normal above.
+    let at = |station: usize, point: usize| (station * RING + point) as u32;
+    let mut triangles: Vec<u32> = Vec::with_capacity(segments * RING * 6 + RING * 6);
+    for station in 0..segments {
+        for point in 0..RING {
+            let next = (point + 1) % RING;
+            let (a, b) = (at(station, point), at(station, next));
+            let (c, d) = (at(station + 1, next), at(station + 1, point));
+            triangles.extend_from_slice(&[a, b, c, a, c, d]);
+        }
+    }
+
+    // The ends, as fans: the start faces back down the helix, the end forward.
+    let (centre, _, _, tangent) = stations[0];
+    let start = positions.len() as u32;
+    positions.push([centre[0] as f32, centre[1] as f32, centre[2] as f32]);
+    normals.push([-tangent[0] as f32, -tangent[1] as f32, -tangent[2] as f32]);
+    for point in 0..RING {
+        triangles.extend_from_slice(&[at(0, point), start, at(0, (point + 1) % RING)]);
+    }
+
+    let (centre, _, _, tangent) = stations[segments];
+    let end = positions.len() as u32;
+    positions.push([centre[0] as f32, centre[1] as f32, centre[2] as f32]);
+    normals.push([tangent[0] as f32, tangent[1] as f32, tangent[2] as f32]);
+    for point in 0..RING {
+        triangles.extend_from_slice(&[
+            at(segments, point),
+            at(segments, (point + 1) % RING),
+            end,
+        ]);
     }
 
     json!({
@@ -223,13 +297,29 @@ fn helix_mesh(object: &Value, radius: f64, pitch: f64, turns: f64) -> Value {
         "object": SPRING,
         "label": object["label"],
         "positions": positions,
-        // One segment per step, all in one part: the pane names it "Helix".
-        "edges": edges,
-        "segment_parts": vec![0u32; segments],
-        "parts": ["Helix"],
+        "normals": normals,
+        "triangles": triangles,
         "color": [0.35, 0.55, 0.85, 1.0],
-        "display": "wireframe",
+        "display": "shaded",
     })
+}
+
+/// `a × b`.
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// `v`, scaled to unit length (or left at zero).
+fn unit(v: [f64; 3]) -> [f64; 3] {
+    let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if length == 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    [v[0] / length, v[1] / length, v[2] / length]
 }
 
 #[cfg(test)]
@@ -298,9 +388,10 @@ mod tests {
             .iter()
             .filter_map(|row| row["name"].as_str())
             .collect();
-        assert_eq!(names, ["Pitch", "Radius", "Turns"], "{names:?}");
+        assert_eq!(names, ["Pitch", "Radius", "Turns", "Wire"], "{names:?}");
         assert_eq!(number_of(object, "Radius"), Some(RADIUS));
         assert_eq!(number_of(object, "Turns"), Some(TURNS));
+        assert_eq!(number_of(object, "Wire"), Some(WIRE));
 
         // Inserting again is not an error and does not duplicate the object.
         assert_eq!(run("Spring_Insert", &document_api), Ok(true));
@@ -312,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hook_draws_the_helix_from_the_parameters() {
+    fn the_hook_draws_a_tube_from_the_parameters() {
         let _serial = serial();
         let api = boot();
         let document_api = document_api(&api);
@@ -325,30 +416,70 @@ mod tests {
         assert_eq!(drawn.len(), 1);
         let mesh = &drawn[0];
         assert_eq!(mesh["object"], SPRING);
-        assert_eq!(mesh["display"], "wireframe");
-        // 8 turns × 24 steps, plus the closing point.
+        assert_eq!(
+            mesh["display"], "shaded",
+            "a swept tube is drawn as a surface, not a wire"
+        );
+
+        // 8 turns × 24 stations, a dozen points around each, and one centre per cap.
         let positions = mesh["positions"].as_array().expect("positions");
-        assert_eq!(positions.len(), 193);
-        assert_eq!(mesh["edges"].as_array().map(Vec::len), Some(384));
-        assert_eq!(mesh["segment_parts"].as_array().map(Vec::len), Some(192));
-        // The standing height is the pitch times the turns.
+        assert_eq!(positions.len(), (8 * 24 + 1) * 12 + 2);
+        assert_eq!(mesh["normals"].as_array().map(Vec::len), Some(positions.len()));
+        // A quad per station and ring point, plus a fan at each end.
+        let triangles = mesh["triangles"].as_array().expect("triangles");
+        assert_eq!(triangles.len(), 8 * 24 * 12 * 6 + 2 * 12 * 3);
+        assert!(triangles.iter().all(|index| {
+            index.as_u64().is_some_and(|index| index < positions.len() as u64)
+        }));
+
+        // The standing height is the pitch times the turns, give or take the wire.
         let top = positions
             .iter()
             .filter_map(|point| point[2].as_f64())
             .fold(f64::MIN, f64::max);
-        assert!((top - PITCH * TURNS).abs() < 1e-6, "{top}");
-        // The widest point is the radius.
+        assert!((top - (PITCH * TURNS + WIRE / 2.0)).abs() < 0.5, "{top}");
+        // The widest point is the mean radius plus half the wire.
         let widest = positions
             .iter()
             .filter_map(|point| point[0].as_f64())
             .fold(f64::MIN, f64::max);
-        assert!((widest - RADIUS).abs() < 0.5, "{widest}");
+        assert!((widest - (RADIUS + WIRE / 2.0)).abs() < 0.5, "{widest}");
 
         // A host that already meshed the spring is not drawn again.
         assert_eq!(
             stage_meshes(&[SPRING.to_string()], &document_api),
             Ok("[]".to_string())
         );
+    }
+
+    #[test]
+    fn a_thicker_wire_is_drawn_thicker_but_never_through_itself() {
+        let _serial = serial();
+        let api = boot();
+        let document_api = document_api(&api);
+        assert_eq!(run("Spring_Insert", &document_api), Ok(true));
+
+        let widest = |stage: &str| {
+            rows(stage)[0]["positions"]
+                .as_array()
+                .expect("positions")
+                .iter()
+                .filter_map(|point| point[0].as_f64())
+                .fold(f64::MIN, f64::max)
+        };
+
+        let thin = widest(&stage_meshes(&[], &document_api).expect("a hook answer"));
+        let answer = call(
+            &document_api,
+            json!({ "call": "set", "object": SPRING, "property": "Wire", "value": "3 mm" }),
+        )
+        .expect("the set answers");
+        assert_eq!(answer["ok"], true, "{answer}");
+        let thick = widest(&stage_meshes(&[], &document_api).expect("a hook answer"));
+        assert!(thick > thin, "{thick} vs {thin}");
+        // `Wire` is 3 mm here but the pitch is 4 mm, so the drawn radius stops at
+        // 0.3 × pitch: coils that overlap are not a spring.
+        assert!(thick <= RADIUS + PITCH * 0.3 + 0.01, "{thick}");
     }
 
     #[test]

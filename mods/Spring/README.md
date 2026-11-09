@@ -2,14 +2,19 @@
 
 A sandboxed **wasm** workbench: a parametric helical spring.
 
-The document holds three numbers on an `App::FeaturePython` object — `Radius`, `Pitch` and
-`Turns` — and **no shape at all**. The bundle reads them through the document API, computes the
-helix itself, and answers the display hook with the mesh. Editing a value in the property
-pane and recomputing redraws it, because the hook rereads the document.
+The document holds four numbers on an `App::FeaturePython` object — `Radius`, `Pitch`,
+`Turns` and `Wire` — and **no shape at all**. The bundle reads them through the document
+API, sweeps a tube itself, and answers the display hook with the mesh. Editing a value in
+the property pane and recomputing redraws it, because the hook rereads the document.
+
+The tube is a circle swept along the helix: positions, a normal per point and triangles.
+That is arithmetic, not a kernel, which is why a bundle with no geometry can still show a
+solid rather than a line. `Wire` is the tube's diameter, and it is clamped to 0.3 × the
+pitch when drawn, so tightening cannot fold the coils through each other.
 
 | command | what it does |
 | --- | --- |
-| `Spring_Insert` | create `Spring` with its three declared parameters |
+| `Spring_Insert` | create `Spring` with its four declared parameters |
 | `Spring_Tighten` | halve `Pitch`, down to 1 mm |
 
 ## The bundle is built, not committed
@@ -28,6 +33,8 @@ booted.
 
 ## Why this is a wasm addon
 
-It computes geometry without linking an engine — the document API is its only import, and the
-sandbox's fuel budget bounds a runaway. `crates/ferrocad_addon_spring` is the source; its
-unit tests drive the same logic over a real `DocApi`.
+It computes geometry without linking an engine — the document API is its only import, and
+the sandbox's fuel budget bounds a runaway. The display hook gets the larger budget
+(`MESH_FUEL`), because its cost is the mesh it emits; the commands get the small one.
+`crates/ferrocad_addon_spring` is the source; its unit tests drive the same logic over a
+real `DocApi`.

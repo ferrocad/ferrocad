@@ -91,9 +91,14 @@ fn the_spring_bundle_creates_its_parameters_and_draws_the_helix() {
             assert_eq!(meshes.len(), 1, "one spring");
             let mesh = &meshes[0];
             assert_eq!(mesh.object, "Spring");
-            assert!(!mesh.positions.is_empty(), "the helix has points");
-            assert!(!mesh.edges.is_empty(), "the helix has segments");
-            assert_eq!(mesh.display.as_deref(), Some("wireframe"));
+            assert!(!mesh.positions.is_empty(), "the tube has points");
+            assert_eq!(
+                mesh.normals.len(),
+                mesh.positions.len(),
+                "a normal per point"
+            );
+            assert!(!mesh.triangles.is_empty(), "the tube is a surface");
+            assert_eq!(mesh.display.as_deref(), Some("shaded"));
         }
         Some(Err(error)) => panic!("the hook failed: {error}"),
         None => panic!("the bundle has a display hook"),

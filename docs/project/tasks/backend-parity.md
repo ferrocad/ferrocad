@@ -1023,13 +1023,15 @@ Two facts shaped both packages:
 
 **B11a — the packages (built 2026-11-09).**
 
-- `mods/Fasteners/InitGui.js` — **JS**: five ISO 4762 sizes, each one `create` of a
-  `Part::Cylinder` with the shank's radius and length. Ten lines of glue, because the kernel
-  owns the shape. The host derives the JS page from the mod set (B9a), so no switch is
-  needed.
+- `mods/Fasteners/InitGui.js` — **JS**: five ISO 4762 sizes, each one **two** `create`s:
+  the shank, and a head placed on its tip (`(0, 0, L)`). Ten lines of glue, because the
+  kernel owns the shape. The host derives the JS page from the mod set (B9a), so no switch
+  is needed. The hex socket is absent and stays absent: a socket is a cut, and the API has
+  no boolean verb — two primitives, not a description of how to combine them.
 - `crates/ferrocad_addon_spring` + `mods/Spring/` — **wasm**: the document holds
-  `Radius`/`Pitch`/`Turns` on an `App::FeaturePython` with **no shape**, and the bundle
-  computes the helix and answers the display hook with it. `Spring_Insert` creates,
+  `Radius`/`Pitch`/`Turns`/`Wire` on an `App::FeaturePython` with **no shape**, and the
+  bundle sweeps the tube itself — a ring of points per station, triangles, a normal per
+  point — and answers the display hook with it. `Spring_Insert` creates,
   `Spring_Tighten` halves the pitch down to 1 mm. `addon.wasm` is a build artifact
   (`mods/Spring/README.md`), as `www/addons/toy.wasm` is.
 
@@ -1060,7 +1062,7 @@ measurement overlays (read a placement, draw a dimension) without adding a verb.
 **Deferred deliberately.** Geometry verbs (`bbox`, `shape`) would be `ferrocad_part` behind a
 string boundary and would dwarf these addons; nothing here needs view or camera verbs.
 
-**Exit: met.** 6 spring tests against the real `DocApi`, 1 under `wasmi` against the built
+**Exit: met.** 7 spring tests against the real `DocApi`, 1 under `wasmi` against the built
 bundle (CI), 2 for the Fasteners package through the real QuickJS page, 3 for Explode over
 a scripted document API (rotation survives an explode, collapse restores the original, no
 movable object is a no-op), 3 for the placement text itself, and both bundles build for

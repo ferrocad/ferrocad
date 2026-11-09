@@ -267,9 +267,11 @@ jobs:
         # plain `wasm32` target builds it.
         run: |
           rustup target add wasm32-unknown-unknown
-          cargo build -p ferrocad_addon_toy --release --target wasm32-unknown-unknown
+          cargo build -p ferrocad_addon_toy -p ferrocad_addon_spring --release --target wasm32-unknown-unknown
           FERROCAD_ADDON_WASM="$PWD/target/wasm32-unknown-unknown/release/ferrocad_addon_toy.wasm" \
             cargo test -p ferrocad_shell_wasm --test shipped
+          FERROCAD_SPRING_WASM="$PWD/target/wasm32-unknown-unknown/release/ferrocad_addon_spring.wasm" \
+            cargo test -p ferrocad_shell_wasm --test spring
 
       - name: The browser's scripting runtime switch
         # The browser host composes the document half with `?runtime=plain|pywasm|js`.
@@ -298,10 +300,11 @@ jobs:
         run: cargo test -p ferrocad_doc_api
 
       - name: The wasm bundle's logic (shape B, no browser)
-        # `ferrocad_addon_toy` is a workbench compiled to wasm; its logic is plain Rust
-        # with the doorway as a closure, so the commands and the display hook are tested
-        # here against the real `DocApi`. The ABI half runs under Node (wasm job).
-        run: cargo test -p ferrocad_addon_toy
+        # `ferrocad_addon_toy` and `ferrocad_addon_spring` are workbenches compiled to
+        # wasm; their logic is plain Rust with the doorway as a closure, so the commands
+        # and the display hook are tested here against the real `DocApi`. The ABI half
+        # runs under Node (wasm job) and in `shell_wasm`'s `spring` test.
+        run: cargo test -p ferrocad_addon_toy -p ferrocad_addon_spring
 
       - name: Build the combined Python extension module and import it from a host interpreter
         # `ferrocad_combined.abi3.so` is the one extension that links App + Part +
@@ -464,7 +467,7 @@ jobs:
       - name: Link the browser host (document + kernel)
         env:
           OCCT_WASM_ROOT: ${{ github.workspace }}/.occt-wasm/occt-8_0_1_rev3-wasm32_unknown_unknown
-        run: cargo build -p ferrocad_web_gpui -p ferrocad_addon_toy --release --target wasm32-unknown-unknown --locked
+        run: cargo build -p ferrocad_web_gpui -p ferrocad_addon_toy -p ferrocad_addon_spring --release --target wasm32-unknown-unknown --locked
 
       # The bundle ABI: a wasm addon reaching the document through an import, with the
       # same loader the page uses. Node instantiates the real module and provides a fake

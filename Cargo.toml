@@ -46,7 +46,9 @@ members = [
     "crates/ferrocad_shell_wasm",
     "crates/ferrocad_shell_web",
     "crates/ferrocad_shell_pywasm",
+    "crates/ferrocad_addon",
     "crates/ferrocad_addon_toy",
+    "crates/ferrocad_addon_spring",
     "crates/ferrocad_shell_python",
     "crates/ferrocad_parametric",
     "crates/ferrocad_toy",
@@ -91,6 +93,8 @@ homepage = "https://github.com/ferrocad/ferrocad"
 rust-version = "1.87"
 
 [workspace.dependencies]
+ferrocad_addon = { path = "crates/ferrocad_addon" }
+ferrocad_addon_spring = { path = "crates/ferrocad_addon_spring" }
 include_dir = "0.7"
 petgraph = "0.6"
 # Q2a's `ferrocad_ui_py` consumes the workspace PyO3 pin; other extension

@@ -1,0 +1,19 @@
+[package]
+name = "ferrocad_addon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The ABI a wasm addon bundle shares: the memory contract, the packed strings, and the doorway import"
+keywords = ["cad", "freecad", "wasm"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_addon"
+publish = false
+
+[dependencies]
+# The display hook's `have` argument is a JSON array. Pure Rust, so a bundle builds for
+# wasm with no C toolchain.
+serde_json.workspace = true

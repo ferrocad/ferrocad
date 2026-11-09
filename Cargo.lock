@@ -2470,9 +2470,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_addon"
+version = "0.1.5"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "ferrocad_addon_spring"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_addon",
+ "ferrocad_core",
+ "ferrocad_doc_api",
+ "ferrocad_shell_api",
+ "serde_json",
+]
+
+[[package]]
 name = "ferrocad_addon_toy"
 version = "0.1.5"
 dependencies = [
+ "ferrocad_addon",
  "ferrocad_core",
  "ferrocad_doc_api",
  "ferrocad_shell_api",

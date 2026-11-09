@@ -19,6 +19,8 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# The shared bundle ABI: the memory contract, the packed strings and the doorway import.
+ferrocad_addon.workspace = true
 # JSON for the verbs and the mesh. Pure Rust, so it builds for wasm with no C toolchain
 # — the point of a bundle: no kernel, no CPython, no wasm-bindgen.
 serde_json.workspace = true

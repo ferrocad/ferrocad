@@ -32,6 +32,11 @@ __pycache__/
 !/mods/AxisOverlayCoin/
 !/mods/GizmoOverlay/
 !/mods/GizmoOverlayShader/
+!/mods/Fasteners/
+!/mods/Spring/
+# …except a built bundle, which is an artifact like `www/addons/toy.wasm`. Its package's
+# README says how to build it.
+/mods/*/addon.wasm
 
 # Publish staging: transient copies of the workspace payload beside the app crate
 # so `cargo publish` (with the crate's `include` allowlist) carries them. Removed

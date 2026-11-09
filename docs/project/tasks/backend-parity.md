@@ -2,7 +2,8 @@
 
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
-B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09).** The surface suite
+B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
+B11a built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -986,6 +987,59 @@ Two limits that granting does not remove:
 application, unknown words, the advisory, bundles excluded), the wasm mapping on both sides
 of the manifest, and the RustPython greeting.
 
+### B11 — practical addons, and what the doorway gives them (recorded 2026-11-09; B11a built)
+
+B9 made a mod set derive the hosts; B10 said what a host may do. This stage is about what an
+addon can actually **do**, and it ships two packages that prove it.
+
+**The reach.** Both addon kinds get the same five-verb JSON doorway and nothing else:
+
+| verb | answer |
+| --- | --- |
+| `document` | the whole active document: its name, and per object `name`, `label`, `type_id`, `entity`, every property row and `driven` |
+| `properties` | one object's rows |
+| `create` | a typed object **with declared properties**, one transaction, one recompute, and the events |
+| `set` | one property from editor text, then recompute |
+| `recompute` | run the graph |
+
+Host-side rather than doorway-side: command registration, the display hook, picks (`entity`)
+and document events. **Not** available: geometry, placement writes, selection, view, files.
+
+Two facts shaped both packages:
+
+- **`set` cannot move anything.** `present::coerce` has no `Placement` arm, and `format`
+  prints a placement as translation only. Explode view is blocked on that, not on the
+  doorway's topology.
+- **An addon can draw what it computes.** `stage_meshes` rows are appended to the backend's,
+  so a bundle with no kernel can still show geometry.
+
+**B11a — the packages (built 2026-11-09).**
+
+- `mods/Fasteners/InitGui.js` — **JS**: five ISO 4762 sizes, each one `create` of a
+  `Part::Cylinder` with the shank's radius and length. Ten lines of glue, because the kernel
+  owns the shape. The host derives the JS page from the mod set (B9a), so no switch is
+  needed.
+- `crates/ferrocad_addon_spring` + `mods/Spring/` — **wasm**: the document holds
+  `Radius`/`Pitch`/`Turns` on an `App::FeaturePython` with **no shape**, and the bundle
+  computes the helix and answers the display hook with it. `Spring_Insert` creates,
+  `Spring_Tighten` halves the pitch down to 1 mm. `addon.wasm` is a build artifact
+  (`mods/Spring/README.md`), as `www/addons/toy.wasm` is.
+
+The bundle ABI moved to `ferrocad_addon`, so the two bundles share one implementation of
+the memory contract and the import instead of copying `unsafe` code.
+
+**B11b — explode view (not built).** Read each child's placement, scale the offset, write
+it back, toggle to collapse. It needs the smallest doorway change on the list: a `Placement`
+arm in `present::coerce` (parse `(x, y, z)` and `(x, y, z; rx, ry, rz)`) and a `format` that
+round-trips the rotation. One file — and it unlocks measurement overlays with it.
+
+**Deferred deliberately.** Geometry verbs (`bbox`, `shape`) would be `ferrocad_part` behind a
+string boundary and would dwarf these addons; nothing here needs view or camera verbs.
+
+**Exit: met.** 6 spring tests against the real `DocApi`, 1 under `wasmi` against the built
+bundle (CI), 2 for the Fasteners package through the real QuickJS page, and both bundles
+build for `wasm32-unknown-unknown` with no C toolchain.
+
 ## 5. Decisions (recorded 2026-11-08)
 **Open questions.**
 
@@ -1058,6 +1112,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D13 | how a user asks for a mixed mod set | **The mod set names the hosts** (B9), not the engines: `--addons mods/Draft,mods/Toy` / `?addons=…`, with each package's entry file deriving its host per platform. `--script-host=` and `?runtime=` become the Python-engine choice and a debugging override, so `?runtime=pywasm,js` is no longer something a user writes |
 | D14 | wasm on the browser without the JS half | **Not built (B8e rejected).** `loader.js` needs `window.ferrocad`, which the page installs only for the JS half, so a wasm addon *derives* the page host rather than an engine being compiled into the module |
 | D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
+| D16 | what a wasm/JS addon can reach | **The five-verb doorway plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that; explode view needs a `Placement` coercion, not a new verb |
 
 ## 6. Acceptance
 

@@ -1,0 +1,32 @@
+[package]
+name = "ferrocad_addon_spring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "A wasm workbench bundle: a parametric spring whose geometry the bundle computes and the document only parameterises"
+keywords = ["cad", "freecad", "wasm"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_addon_spring"
+publish = false
+
+[lib]
+# A wasm bundle for the host to instantiate, and an rlib so the spring logic is a normal
+# `cargo test` on the host.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The shared bundle ABI: the memory contract, the packed strings and the doorway import.
+ferrocad_addon.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The test is its own host: it installs a document and answers the doorway with the real
+# `DocApi`, so the bundle is exercised against `ferrocad_core` (no kernel needed — the
+# spring has no `Shape`, which is the point).
+ferrocad_core.workspace = true
+ferrocad_doc_api.workspace = true
+ferrocad_shell_api.workspace = true

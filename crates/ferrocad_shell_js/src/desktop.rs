@@ -14,7 +14,8 @@
 //! document events. A document event can be emitted from inside a document API call (an
 //! addon's own `create`), i.e. while the engine is running, and answering it there
 //! would re-enter the runtime; queueing it delivers the event after the current job
-//! instead.
+//! instead. Queueing therefore must not wait for the call in flight — see
+//! [`EnginePage::jobs`].
 //!
 //! **No imports yet.** A module is evaluated on its own, so it cannot `import` another
 //! file. The browser page's module has no imports either; a resolver is the next step
@@ -25,7 +26,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use rquickjs::function::IntoArgs;
@@ -100,15 +101,25 @@ pub fn discover() -> Vec<PathBuf> {
 
 /// The desktop's page: a QuickJS runtime on its own thread.
 pub struct EnginePage {
-    inner: Mutex<Engine>,
+    /// The queue every call uses, deliberately **outside** the worker field.
+    ///
+    /// A document event is emitted from inside a document API call, which is to say
+    /// while the worker is running a job for some caller. If queueing the event needed
+    /// a lock that the waiting caller held, the event would wait for the answer the
+    /// caller is waiting for: each side holding what the other needs. `send` takes
+    /// `&self` and is thread-safe, so the queue needs no lock at all.
+    jobs: Sender<Job>,
+    /// The worker, joined when the page is dropped: held for its `Drop`, not read.
+    _engine: Engine,
     /// The workbenches this page loaded, in load order.
     modules: Vec<PathBuf>,
 }
 
 /// The channel to the engine thread, which is joined when the page is dropped.
 struct Engine {
-    /// `Some` until the page is dropped: closing it is what ends the worker's `recv`.
-    jobs: Option<Sender<Job>>,
+    /// Kept only to close the channel: this is the last sender, so dropping it is what
+    /// ends the worker's `recv`.
+    keepalive: Option<Sender<Job>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -154,10 +165,11 @@ impl EnginePage {
             .map_err(|_| "the JS engine stopped before it booted".to_string())??;
 
         Ok(Self {
-            inner: Mutex::new(Engine {
-                jobs: Some(jobs),
+            jobs: jobs.clone(),
+            _engine: Engine {
+                keepalive: Some(jobs),
                 thread: Some(thread),
-            }),
+            },
             modules,
         })
     }
@@ -182,15 +194,8 @@ impl EnginePage {
         &self,
         make: impl FnOnce(Sender<Result<T, String>>) -> Job,
     ) -> Result<T, String> {
-        let engine = self
-            .inner
-            .lock()
-            .map_err(|_| "the JS engine is poisoned".to_string())?;
         let (reply, answer) = mpsc::channel();
-        engine
-            .jobs
-            .as_ref()
-            .ok_or_else(|| "the JS engine is gone".to_string())?
+        self.jobs
             .send(make(reply))
             .map_err(|_| "the JS engine is gone".to_string())?;
         answer
@@ -199,20 +204,18 @@ impl EnginePage {
     }
 
     /// A call with no answer: queued in order behind whatever the engine is doing.
+    ///
+    /// A closed channel is a page being dropped: the event has nobody left to reach.
     fn fire(&self, make: impl FnOnce() -> Job) {
-        if let Ok(engine) = self.inner.lock() {
-            if let Some(jobs) = engine.jobs.as_ref() {
-                let _ = jobs.send(make());
-            }
-        }
+        let _ = self.jobs.send(make());
     }
 }
 
 impl Drop for Engine {
     fn drop(&mut self) {
         // Close the channel *before* joining: the worker leaves `recv` only when the
-        // last sender is gone, and this struct is that sender.
-        drop(self.jobs.take());
+        // last sender is gone, and this field is that sender.
+        drop(self.keepalive.take());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -262,14 +265,8 @@ impl Page for EnginePage {
         &self,
         call: Arc<dyn Fn(String) -> String + Send + Sync>,
     ) -> Result<(), String> {
-        let engine = self
-            .inner
-            .lock()
-            .map_err(|_| "the JS engine is poisoned".to_string())?;
-        engine
-            .jobs
-            .as_ref()
-            .ok_or_else(|| "the JS engine is gone".to_string())?
+        // No reply to wait for: the job is queued like an event.
+        self.jobs
             .send(Job::InstallKernel(call))
             .map_err(|_| "the JS engine is gone".to_string())
     }

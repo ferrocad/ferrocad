@@ -591,6 +591,13 @@ Two defects found by writing the tests, both worth recording:
   `undefined`; every boot failed. The module is declared, evaluated, and the queue driven
   to settlement first.
 
+A third was found by *running* the packages (B11b): **a queued event could not be queued.**
+`round_trip` held the engine lock until its answer arrived, and `fire` — what queues a
+document event — needed the same lock. So an event emitted from inside a package's own
+`create`/`set` waited for the call that was waiting for it, and every Fasteners or Explode
+command hung the window. The queue is no longer behind the lock at all: `send` takes
+`&self`, so there is nothing to hold across a wait.
+
 **Costs.** `rquickjs-sys` compiles vendored QuickJS as C, so the feature's first build is
 slow (then `kache` serves it) and the desktop gains a C dependency; ES2020 is the ceiling;
 and a module cannot `import` another file yet (the browser's page has no imports either).

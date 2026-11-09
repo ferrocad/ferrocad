@@ -10,6 +10,7 @@
 //! call the same functions.
 
 use crate::document::Color;
+use crate::geometry::{Placement, Rotation, Vector3};
 use crate::property::Property;
 use crate::quantity::Quantity;
 
@@ -101,12 +102,7 @@ pub fn format(value: &Property) -> String {
         Property::Quantity(value) => value.to_string(),
         Property::FloatConstraint { value, .. } => number(*value),
         Property::IntegerConstraint { value, .. } => value.to_string(),
-        Property::Placement(placement) => format!(
-            "({}, {}, {})",
-            number(placement.base.x),
-            number(placement.base.y),
-            number(placement.base.z)
-        ),
+        Property::Placement(placement) => format_placement(placement),
         Property::Vector(vector) => format!(
             "({}, {}, {})",
             number(vector.x),
@@ -239,6 +235,12 @@ pub fn coerce(current: &Property, text: &str) -> Result<Property, String> {
             };
             Property::ColorList(vec![color])
         }
+        // A base-only string keeps the rotation the object already has, the way a colour
+        // without an alpha keeps the current one. The long form replaces both.
+        Property::Placement(current) => {
+            let (base, rotation) = parse_placement(text)?;
+            Property::Placement(Placement::new(base, rotation.unwrap_or(current.rotation)))
+        }
         other => return Err(format!("{} is not editable", other.type_name())),
     })
 }
@@ -262,6 +264,81 @@ fn parse_number(text: &str) -> Result<f64, String> {
         .trim();
     text.parse::<f64>()
         .map_err(|_| format!("{text:?} is not a number"))
+}
+
+/// `(x, y, z)`, or `(x, y, z; ax, ay, az; angle°)` when the rotation is not the identity.
+///
+/// The short form stays for an unrotated object: it is what the pane has always shown and
+/// what an addon that only translates can read and write back unchanged. The angle is in
+/// degrees because that is what FreeCAD's placement string means.
+fn format_placement(placement: &Placement) -> String {
+    if is_identity(&placement.rotation) {
+        return format!(
+            "({}, {}, {})",
+            number(placement.base.x),
+            number(placement.base.y),
+            number(placement.base.z)
+        );
+    }
+    let axis = placement.rotation.axis();
+    format!(
+        "({}, {}, {}; {}, {}, {}; {})",
+        number(placement.base.x),
+        number(placement.base.y),
+        number(placement.base.z),
+        number(axis.x),
+        number(axis.y),
+        number(axis.z),
+        number(placement.rotation.angle().to_degrees())
+    )
+}
+
+/// Whether `rotation` is the identity quaternion, either sign.
+fn is_identity(rotation: &Rotation) -> bool {
+    let [w, x, y, z] = rotation.q;
+    (w.abs() - 1.0).abs() < 1e-12 && x.abs() < 1e-12 && y.abs() < 1e-12 && z.abs() < 1e-12
+}
+
+/// Parse the pane's placement form.
+///
+/// The rotation is axis-angle in degrees. Anything else is an error rather than a silent
+/// translation-only placement, because dropping a rotation would move an object the user
+/// did not ask to move.
+fn parse_placement(text: &str) -> Result<(Vector3, Option<Rotation>), String> {
+    let inner = text
+        .trim()
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+        .ok_or_else(|| not_a_placement(text))?;
+    let mut parts = inner.split(';');
+    let base = parse_triple(parts.next().unwrap_or_default(), text)?;
+    let rotation = match (parts.next(), parts.next(), parts.next()) {
+        (None, ..) => None,
+        (Some(axis), Some(angle), None) => {
+            let axis = parse_triple(axis, text)?;
+            let degrees = parse_number(angle).map_err(|_| not_a_placement(text))?;
+            Some(Rotation::from_axis_angle(&axis, degrees.to_radians()))
+        }
+        _ => return Err(not_a_placement(text)),
+    };
+    Ok((base, rotation))
+}
+
+/// Three comma-separated numbers, or an error naming the whole input.
+fn parse_triple(part: &str, whole: &str) -> Result<Vector3, String> {
+    let values: Vec<&str> = part.split(',').collect();
+    if values.len() != 3 {
+        return Err(not_a_placement(whole));
+    }
+    let mut numbers = [0.0; 3];
+    for (slot, value) in numbers.iter_mut().zip(&values) {
+        *slot = parse_number(value).map_err(|_| not_a_placement(whole))?;
+    }
+    Ok(Vector3::new(numbers[0], numbers[1], numbers[2]))
+}
+
+fn not_a_placement(text: &str) -> String {
+    format!("{text:?} is not a placement: expected (x, y, z) or (x, y, z; ax, ay, az; angle)")
 }
 
 /// `#rrggbb` for a 0..1 RGBA colour (alpha is ignored, as in the pane).
@@ -306,7 +383,7 @@ pub fn parse_color(text: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Placement, Vector3};
+    use crate::geometry::{Placement, Rotation, Vector3};
     use crate::unit::Unit;
 
     fn mm(value: f64) -> Property {
@@ -406,6 +483,67 @@ mod tests {
                 .unwrap_err()
                 .contains("not a single colour")
         );
+    }
+
+    #[test]
+    fn a_placement_reads_back_what_it_was_given() {
+        // The identity keeps the short form: the pane's usual row, and what an addon that
+        // only translates reads and writes back unchanged.
+        let flat = Property::Placement(Placement::new(
+            Vector3::new(1.0, 2.0, 3.0),
+            Rotation::identity(),
+        ));
+        assert_eq!(format(&flat), "(1.0, 2.0, 3.0)");
+
+        // A rotation makes the long form, and the long form parses back.
+        let turned = Placement::new(
+            Vector3::new(1.0, 2.0, 3.0),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2),
+        );
+        let property = Property::Placement(turned);
+        assert_eq!(format(&property), "(1.0, 2.0, 3.0; 0.0, 0.0, 1.0; 90.0)");
+
+        let Property::Placement(back) =
+            coerce(&property, &format(&property)).expect("the formatted placement parses")
+        else {
+            panic!("a placement stays a placement");
+        };
+        assert!(back.is_same(&turned, 1e-9), "{back:?} vs {turned:?}");
+    }
+
+    #[test]
+    fn a_base_only_placement_keeps_the_rotation() {
+        // Like a colour without an alpha: the text the pane shows for a rotated object is
+        // the long form, so a short one means "translate only", not "clear the rotation".
+        let turned = Placement::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Rotation::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), 0.5),
+        );
+        let Property::Placement(moved) = coerce(&Property::Placement(turned), "(5, 6, 7)")
+            .expect("a placement")
+        else {
+            panic!("a placement stays a placement");
+        };
+        assert_eq!(moved.base, Vector3::new(5.0, 6.0, 7.0));
+        assert_eq!(moved.rotation, turned.rotation);
+    }
+
+    #[test]
+    fn a_malformed_placement_is_an_error() {
+        let current = Property::Placement(Placement::identity());
+        for text in [
+            "",
+            "1, 2, 3",
+            "(1, 2)",
+            "(1, 2, 3; 0, 0, 1)",
+            "(1, 2, 3; 0, 0, 1; 90; 4)",
+            "(a, b, c)",
+        ] {
+            assert!(coerce(&current, text).is_err(), "{text}");
+        }
+        // The message says which forms are accepted.
+        let error = coerce(&current, "nope").unwrap_err();
+        assert!(error.contains("(x, y, z)"), "{error}");
     }
 
     #[test]

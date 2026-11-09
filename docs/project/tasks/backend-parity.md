@@ -3,7 +3,7 @@
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
-B11a built (2026-11-09).** The surface suite
+B11a–B11b built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -384,7 +384,7 @@ rather than the app script's document and would drop mods, tools, settings and d
 The most this should become is a feature-gated `--script-host=rustpython` debug flag that
 runs the browser's script environment in a real window.
 
-### B7 — packaging: which host ships which half (recorded 2026-11-08; not built)
+### B7 — packaging: which host ships which half (recorded 2026-11-08; B7a–B7e built)
 
 The seam carries four scripting halves; each host serves three, and the intersection is
 what makes the portability claim testable.
@@ -987,7 +987,7 @@ Two limits that granting does not remove:
 application, unknown words, the advisory, bundles excluded), the wasm mapping on both sides
 of the manifest, and the RustPython greeting.
 
-### B11 — practical addons, and what the document API gives them (recorded 2026-11-09; B11a built)
+### B11 — practical addons, and what the document API gives them (recorded 2026-11-09; B11a–B11b built)
 
 B9 made a mod set derive the hosts; B10 said what a host may do. This stage is about what an
 addon can actually **do**, and it ships two packages that prove it.
@@ -1003,13 +1003,14 @@ addon can actually **do**, and it ships two packages that prove it.
 | `recompute` | run the graph |
 
 Host-side rather than document API-side: command registration, the display hook, picks (`entity`)
-and document events. **Not** available: geometry, placement writes, selection, view, files.
+and document events. **Not** available: geometry, selection, view, files.
 
 Two facts shaped both packages:
 
-- **`set` cannot move anything.** `present::coerce` has no `Placement` arm, and `format`
-  prints a placement as translation only. Explode view is blocked on that, not on the
-  document API's topology.
+- **`set` moves anything with a `Placement` row.** B11b gave `present::coerce` a `Placement`
+  arm and made `format` round-trip the rotation, so placement is one more coerceable
+  property rather than a new verb. Nothing else needed to change: explode view is a
+  sequence of `set` calls.
 - **An addon can draw what it computes.** `stage_meshes` rows are appended to the backend's,
   so a bundle with no kernel can still show geometry.
 
@@ -1028,19 +1029,37 @@ Two facts shaped both packages:
 The bundle ABI moved to `ferrocad_addon`, so the two bundles share one implementation of
 the memory contract and the import instead of copying `unsafe` code.
 
-**B11b — explode view (not built).** Read each child's placement, scale the offset, write
-it back, toggle to collapse. It needs the smallest document API change on the list: a `Placement`
-arm in `present::coerce` (parse `(x, y, z)` and `(x, y, z; rx, ry, rz)`) and a `format` that
-round-trips the rotation. One file — and it unlocks measurement overlays with it.
+**B11b — explode view (built 2026-11-09).**
+
+- `crates/ferrocad_core/src/present.rs` — a placement now **reads back what it was given**.
+  `format` keeps the short `(x, y, z)` for an unrotated object (what the pane has always
+  shown, and what a translating addon can write back unchanged) and prints
+  `(x, y, z; ax, ay, az; angle°)` when there is a rotation, axis-angle in **degrees**
+  because that is what FreeCAD's placement text means. Before this, a rotated object's
+  rotation was simply not presented — unreadable by any addon — and `coerce` had no
+  `Placement` arm at all. `coerce` now parses both forms; a **base-only string keeps the
+  current rotation**, the way a colour without an alpha keeps the current alpha, and
+  malformed text is an error naming both accepted forms rather than a silent
+  translation-only placement (which would drop a rotation the user never asked to lose).
+- `mods/Explode/` — **JS**: `Explode_Out` reads every object with a `Placement` row via the
+  `document` verb and writes new bases on rings (40 mm × ring, 8 per ring), carrying the
+  rotation tail through as text; it remembers the **exact** string it replaced, and a second
+  `Explode` keeps the first original, so `Explode_In` restores the document rather than
+  dividing by a factor and drifting. `addon.json` requests `read-write`.
+
+The placement change is the one the whole stage was designed around: it unlocks
+measurement overlays (read a placement, draw a dimension) without adding a verb.
 
 **Deferred deliberately.** Geometry verbs (`bbox`, `shape`) would be `ferrocad_part` behind a
 string boundary and would dwarf these addons; nothing here needs view or camera verbs.
 
 **Exit: met.** 6 spring tests against the real `DocApi`, 1 under `wasmi` against the built
-bundle (CI), 2 for the Fasteners package through the real QuickJS page, and both bundles
-build for `wasm32-unknown-unknown` with no C toolchain.
+bundle (CI), 2 for the Fasteners package through the real QuickJS page, 3 for Explode over
+a scripted document API (rotation survives an explode, collapse restores the original, no
+movable object is a no-op), 3 for the placement text itself, and both bundles build for
+`wasm32-unknown-unknown` with no C toolchain.
 
-## 5. Decisions (recorded 2026-11-08)
+## 5. Open questions, and how each host reaches the engine
 **Open questions.**
 
 - **Who owns the console when the set has more than one language?** A fixed precedence
@@ -1112,7 +1131,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D13 | how a user asks for a mixed mod set | **The mod set names the hosts** (B9), not the engines: `--addons mods/Draft,mods/Toy` / `?addons=…`, with each package's entry file deriving its host per platform. `--script-host=` and `?runtime=` become the Python-engine choice and a debugging override, so `?runtime=pywasm,js` is no longer something a user writes |
 | D14 | wasm on the browser without the JS half | **Not built (B8e rejected).** `loader.js` needs `window.ferrocad`, which the page installs only for the JS half, so a wasm addon *derives* the page host rather than an engine being compiled into the module |
 | D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
-| D16 | what a wasm/JS addon can reach | **The five-verb document API plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that; explode view needs a `Placement` coercion, not a new verb |
+| D16 | what a wasm/JS addon can reach | **The five-verb document API plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that, and explode view needed a `Placement` coercion (B11b), not a new verb |
 
 ## 6. Acceptance
 
@@ -1142,9 +1161,11 @@ is already solved four ways; reaching *geometry* currently has one road.
 - **No JS or wasm engine in the default edition.** Both exist behind opt-in features —
   `rquickjs` in B7b, `wasmi` in B7e — so the release binary pays for neither until a
   package turns them on.
-- **No multi-language host in one target yet** (B8). A target installs one language host
-  plus wasm bundles; the trigger to generalise is a mod set that ships more than one
-  language, and the cost is B8's arbitration table, not the loading.
+- **Multi-language hosts compose; nothing arbitrates between them** (B8). A target installs
+  the host for every language its mod set declares — `compose_all`, first runtime primary —
+  and the browser takes a list in `?runtime=`. What is still deferred is the part with no
+  consumer: precedence for *who owns the console* when two languages register one, and
+  `ScriptHost::claims`.
 
 ## 8. Evidence
 

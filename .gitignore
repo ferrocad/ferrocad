@@ -34,6 +34,7 @@ __pycache__/
 !/mods/GizmoOverlayShader/
 !/mods/Fasteners/
 !/mods/Spring/
+!/mods/Explode/
 # …except a built bundle, which is an artifact like `www/addons/toy.wasm`. Its package's
 # README says how to build it.
 /mods/*/addon.wasm

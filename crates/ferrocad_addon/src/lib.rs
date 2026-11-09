@@ -8,7 +8,7 @@
 //! * an outgoing string is a packed `len << 32 | ptr` buffer, also in the bundle's memory;
 //!   the loader copies it out and calls [`dealloc`].
 //!
-//! The doorway is the same convention in reverse: the bundle passes the request as
+//! The document API is the same convention in reverse: the bundle passes the request as
 //! `(ptr, len)`, the loader calls the host with it, allocates the response with [`alloc`]
 //! in the bundle's memory, writes it, and returns the packed buffer, which the bundle
 //! frees. Nothing but text crosses, in either direction, and the document stays the
@@ -23,7 +23,7 @@ use std::alloc::{self, Layout};
 #[cfg(target_family = "wasm")]
 #[link(wasm_import_module = "ferrocad")]
 unsafe extern "C" {
-    /// The host's document doorway: `(ptr, len)` into the bundle's memory; packed
+    /// The host's document API: `(ptr, len)` into the bundle's memory; packed
     /// `(len << 32 | ptr)` back, allocated with [`alloc`].
     fn call(ptr: *const u8, len: usize) -> u64;
 }
@@ -80,12 +80,12 @@ pub unsafe fn read(ptr: *const u8, len: usize) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// The doorway, over the import.
+/// The document API, over the import.
 ///
 /// wasm only: on the host a bundle's logic is handed a closure instead, which is what
 /// makes it a normal `cargo test`.
 #[cfg(target_family = "wasm")]
-pub fn doorway(request: &str) -> String {
+pub fn document_api(request: &str) -> String {
     // SAFETY: the request outlives the call.
     let packed = unsafe { call(request.as_ptr(), request.len()) };
     let ptr = packed as u32 as *mut u8;

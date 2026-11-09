@@ -89,11 +89,11 @@ honestly emit: `document.edited` (`events.rs:28`) and `document.recomputed`
 - **`document.edited`** — payload `{transaction, objects}` — after a transaction commits.
   `RustAppBackend` emits it from `announce`
   (`crates/ferrocad_shell_rust/src/backend.rs:229`), called once per edit through
-  `edit` (`backend.rs:213`); the document doorway emits it from `create`/`set`
+  `edit` (`backend.rs:213`); the document API emits it from `create`/`set`
   (`crates/ferrocad_doc_api/src/lib.rs:181`, `:278`).
 - **`document.recomputed`** — payload `{objects}` — after `recompute()` returns `Ok`.
   Same sites: `announce` (`crates/ferrocad_shell_rust/src/backend.rs:235`) and the
-  doorway (`crates/ferrocad_doc_api/src/lib.rs:182`, `:286`, `:299`).
+  document API (`crates/ferrocad_doc_api/src/lib.rs:182`, `:286`, `:299`).
 
 A refused write opens no transaction, so it emits nothing. A path that writes without
 recomputing (a rename, a visibility toggle) emits only `document.edited`. Undo/redo emit one

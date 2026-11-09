@@ -26,7 +26,7 @@ struct FakePage {
     ran: Mutex<Vec<String>>,
     /// The `(id, payload)` of each document event.
     events: Mutex<Vec<(String, String)>>,
-    /// The doorway the page was handed, if it was.
+    /// The document API the page was handed, if it was.
     kernel: Mutex<Option<Arc<dyn Fn(String) -> String + Send + Sync>>>,
 }
 
@@ -88,7 +88,7 @@ impl Page for FakePage {
     }
 }
 
-/// The host's document, as the doorway sees it.
+/// The host's document, as the document API sees it.
 #[derive(Default)]
 struct FakeDocument {
     requests: Mutex<Vec<String>>,
@@ -241,7 +241,7 @@ fn the_display_hook_is_silent_until_it_works() {
 }
 
 #[test]
-fn the_doorway_reaches_the_hosts_document() {
+fn the_document_api_reaches_the_hosts_document() {
     let page = Arc::new(FakePage::default());
     let document = Arc::new(FakeDocument::default());
     let _host = JsScriptHost::with_kernel(erased(&page), erased_document(&document));
@@ -262,7 +262,7 @@ fn the_doorway_reaches_the_hosts_document() {
 }
 
 #[test]
-fn a_page_that_refuses_the_doorway_still_works() {
+fn a_page_that_refuses_the_document_api_still_works() {
     /// A page that registers commands and takes no document.
     struct CommandsOnly;
 

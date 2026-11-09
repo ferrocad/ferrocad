@@ -5,7 +5,7 @@
 //! from numbers it *can* read, and the property pane edits those numbers in the usual way.
 //! The display hook is where the derived mesh goes.
 //!
-//! Pure: the doorway is a closure, so this module is tested on the host against the real
+//! Pure: the api is a closure, so this module is tested on the host against the real
 //! [`ferrocad_doc_api`]. `abi.rs` supplies the same closure over an import in wasm.
 
 use serde_json::{Value, json};
@@ -66,20 +66,20 @@ pub fn commands_json() -> String {
 }
 
 /// Run one command. `Ok(false)` means "not this bundle's id", not a failure.
-pub fn run(id: &str, doorway: &dyn Fn(&str) -> String) -> Result<bool, String> {
+pub fn run(id: &str, api: &dyn Fn(&str) -> String) -> Result<bool, String> {
     match id {
-        "Spring_Insert" => insert(doorway).map(|()| true),
-        "Spring_Tighten" => tighten(doorway).map(|()| true),
+        "Spring_Insert" => insert(api).map(|()| true),
+        "Spring_Tighten" => tighten(api).map(|()| true),
         _ => Ok(false),
     }
 }
 
 /// The display hook's answer: a JSON array of meshes (`[]` when there is nothing).
-pub fn stage_meshes(have: &[String], doorway: &dyn Fn(&str) -> String) -> Result<String, String> {
+pub fn stage_meshes(have: &[String], api: &dyn Fn(&str) -> String) -> Result<String, String> {
     if have.iter().any(|name| name == SPRING) {
         return Ok("[]".to_string());
     }
-    let document = call(doorway, json!({ "call": "document" }))?;
+    let document = call(api, json!({ "call": "document" }))?;
     let Some(object) = object_named(&document, SPRING) else {
         return Ok("[]".to_string());
     };
@@ -91,15 +91,15 @@ pub fn stage_meshes(have: &[String], doorway: &dyn Fn(&str) -> String) -> Result
 }
 
 /// Create `Spring` with its declared parameters, unless it is already there.
-fn insert(doorway: &dyn Fn(&str) -> String) -> Result<(), String> {
-    let existing = call(doorway, json!({ "call": "properties", "object": SPRING }))?;
+fn insert(api: &dyn Fn(&str) -> String) -> Result<(), String> {
+    let existing = call(api, json!({ "call": "properties", "object": SPRING }))?;
     if existing["ok"] == true {
         return Ok(());
     }
     // A declaration, the way `obj.addProperty(...)` works in Python: the type has no
     // such properties, and the workbench defines them.
     let answer = call(
-        doorway,
+        api,
         json!({
             "call": "create",
             "name": SPRING,
@@ -130,15 +130,15 @@ fn insert(doorway: &dyn Fn(&str) -> String) -> Result<(), String> {
 }
 
 /// Halve the pitch, down to [`MIN_PITCH`].
-fn tighten(doorway: &dyn Fn(&str) -> String) -> Result<(), String> {
-    let rows = call(doorway, json!({ "call": "properties", "object": SPRING }))?;
+fn tighten(api: &dyn Fn(&str) -> String) -> Result<(), String> {
+    let rows = call(api, json!({ "call": "properties", "object": SPRING }))?;
     if rows["ok"] != true {
         return Err("no spring to tighten: run Spring_Insert first".to_string());
     }
     let pitch = number_in(&rows["result"], "Pitch").unwrap_or(PITCH);
     let next = (pitch / 2.0).max(MIN_PITCH);
     let answer = call(
-        doorway,
+        api,
         json!({
             "call": "set",
             "object": SPRING,
@@ -149,10 +149,10 @@ fn tighten(doorway: &dyn Fn(&str) -> String) -> Result<(), String> {
     ok_or_refusal(&answer)
 }
 
-fn call(doorway: &dyn Fn(&str) -> String, request: Value) -> Result<Value, String> {
-    let answer = doorway(&request.to_string());
+fn call(api: &dyn Fn(&str) -> String, request: Value) -> Result<Value, String> {
+    let answer = api(&request.to_string());
     serde_json::from_str(&answer)
-        .map_err(|error| format!("the doorway answered invalid JSON: {error}"))
+        .map_err(|error| format!("the api answered invalid JSON: {error}"))
 }
 
 fn ok_or_refusal(answer: &Value) -> Result<(), String> {
@@ -161,7 +161,7 @@ fn ok_or_refusal(answer: &Value) -> Result<(), String> {
     } else {
         Err(answer["error"]
             .as_str()
-            .unwrap_or("the doorway refused")
+            .unwrap_or("the api refused")
             .to_string())
     }
 }
@@ -256,7 +256,7 @@ mod tests {
         ferrocad_doc_api::DocApi::new()
     }
 
-    fn doorway(api: &ferrocad_doc_api::DocApi) -> impl Fn(&str) -> String + '_ {
+    fn document_api(api: &ferrocad_doc_api::DocApi) -> impl Fn(&str) -> String + '_ {
         move |request| api.call(request)
     }
 
@@ -275,19 +275,19 @@ mod tests {
     fn an_id_that_is_not_ours_is_not_a_failure() {
         let _serial = serial();
         let temp = boot();
-        let doorway = doorway(&temp);
-        assert_eq!(run("Somebody_Else", &doorway), Ok(false));
+        let document_api = document_api(&temp);
+        assert_eq!(run("Somebody_Else", &document_api), Ok(false));
     }
 
     #[test]
     fn inserting_declares_the_parameters() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
+        let document_api = document_api(&api);
 
-        assert_eq!(run("Spring_Insert", &doorway), Ok(true));
+        assert_eq!(run("Spring_Insert", &document_api), Ok(true));
 
-        let document = call(&doorway, json!({ "call": "document" })).expect("a document");
+        let document = call(&document_api, json!({ "call": "document" })).expect("a document");
         let object = object_named(&document, SPRING).expect("the spring is in the document");
         assert_eq!(object["type_id"], "App::FeaturePython");
         // No shape: the bundle draws it, the document stores only what it was told.
@@ -303,8 +303,8 @@ mod tests {
         assert_eq!(number_of(object, "Turns"), Some(TURNS));
 
         // Inserting again is not an error and does not duplicate the object.
-        assert_eq!(run("Spring_Insert", &doorway), Ok(true));
-        let document = call(&doorway, json!({ "call": "document" })).expect("a document");
+        assert_eq!(run("Spring_Insert", &document_api), Ok(true));
+        let document = call(&document_api, json!({ "call": "document" })).expect("a document");
         assert_eq!(
             document["result"]["objects"].as_array().map(Vec::len),
             Some(1)
@@ -315,13 +315,13 @@ mod tests {
     fn the_hook_draws_the_helix_from_the_parameters() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
+        let document_api = document_api(&api);
 
         // Before the object exists, the hook adds nothing.
-        assert!(rows(&stage_meshes(&[], &doorway).expect("a hook answer")).is_empty());
+        assert!(rows(&stage_meshes(&[], &document_api).expect("a hook answer")).is_empty());
 
-        assert_eq!(run("Spring_Insert", &doorway), Ok(true));
-        let drawn = rows(&stage_meshes(&[], &doorway).expect("a hook answer"));
+        assert_eq!(run("Spring_Insert", &document_api), Ok(true));
+        let drawn = rows(&stage_meshes(&[], &document_api).expect("a hook answer"));
         assert_eq!(drawn.len(), 1);
         let mesh = &drawn[0];
         assert_eq!(mesh["object"], SPRING);
@@ -346,7 +346,7 @@ mod tests {
 
         // A host that already meshed the spring is not drawn again.
         assert_eq!(
-            stage_meshes(&[SPRING.to_string()], &doorway),
+            stage_meshes(&[SPRING.to_string()], &document_api),
             Ok("[]".to_string())
         );
     }
@@ -355,19 +355,19 @@ mod tests {
     fn tightening_halves_the_pitch_and_the_hook_follows() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
-        assert_eq!(run("Spring_Insert", &doorway), Ok(true));
+        let document_api = document_api(&api);
+        assert_eq!(run("Spring_Insert", &document_api), Ok(true));
 
-        assert_eq!(run("Spring_Tighten", &doorway), Ok(true));
-        let document = call(&doorway, json!({ "call": "document" })).expect("a document");
+        assert_eq!(run("Spring_Tighten", &document_api), Ok(true));
+        let document = call(&document_api, json!({ "call": "document" })).expect("a document");
         let object = object_named(&document, SPRING).expect("the spring");
         assert_eq!(number_of(object, "Pitch"), Some(PITCH / 2.0));
 
         // Down to the floor, and no further.
         for _ in 0..8 {
-            assert_eq!(run("Spring_Tighten", &doorway), Ok(true));
+            assert_eq!(run("Spring_Tighten", &document_api), Ok(true));
         }
-        let document = call(&doorway, json!({ "call": "document" })).expect("a document");
+        let document = call(&document_api, json!({ "call": "document" })).expect("a document");
         let object = object_named(&document, SPRING).expect("the spring");
         assert_eq!(number_of(object, "Pitch"), Some(MIN_PITCH));
     }
@@ -376,8 +376,8 @@ mod tests {
     fn tightening_without_a_spring_says_what_to_run() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
-        let error = run("Spring_Tighten", &doorway).unwrap_err();
+        let document_api = document_api(&api);
+        let error = run("Spring_Tighten", &document_api).unwrap_err();
         assert!(error.contains("Spring_Insert"), "{error}");
     }
 }

@@ -3,7 +3,7 @@
 //! `ferrocad_part` is a **dev**-dependency: the crate is core-only so the wasm-Python
 //! half can share it, and Part arrives at run time through the object registry. Here
 //! the test is the host — it registers Part, so a `Part::Box` created over the JSON
-//! doorway gets a real shape.
+//! document API gets a real shape.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -55,7 +55,7 @@ fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{name} is a row; got {rows:?}"))
 }
 
-/// The events a doorway announced, in order.
+/// The events a document API announced, in order.
 #[derive(Default)]
 struct RecordedEvents(Mutex<Vec<ferrocad_shell_api::DocumentEvent>>);
 
@@ -118,7 +118,7 @@ fn an_addon_creates_and_edits_a_box() {
 }
 
 #[test]
-fn a_doorway_edit_announces_one_pair_and_a_refusal_none() {
+fn a_document_api_edit_announces_one_pair_and_a_refusal_none() {
     let _serial = serial();
     boot_registry();
     let seen = Arc::new(RecordedEvents::default());

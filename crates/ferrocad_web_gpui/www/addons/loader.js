@@ -2,7 +2,7 @@
 //
 // A wasm bundle is an ordinary `WebAssembly` module with two conventions:
 //
-//   * it imports `ferrocad.call(ptr, len) -> i64`: the document doorway. The loader
+//   * it imports `ferrocad.call(ptr, len) -> i64`: the document API. The loader
 //     implements it — read the request out of the addon's memory, call the host, and
 //     write the answer back into a buffer the addon's own `ferrocad_alloc` returned;
 //   * it exports `memory`, `ferrocad_alloc`/`ferrocad_dealloc`, and the entry points
@@ -14,7 +14,7 @@
 //
 // **The capability.** A bundle is read-only unless its manifest (`<stem>.json`, which
 // `run.sh` copies beside it) says `{"document": "read-write"}`. The refusal happens in
-// the doorway below, so a refused request never reaches the host — the same rule the
+// the document API below, so a refused request never reaches the host — the same rule the
 // desktop applies with `ferrocad_shell_api::document_api::is_write`, and `WRITE_VERBS`
 // mirrors that list (it is three verbs; there is no cross-language check).
 
@@ -27,7 +27,7 @@ const REFUSAL = JSON.stringify({
     '(its manifest does not say {"document": "read-write"})',
 });
 
-/** Whether a doorway request changes the document. */
+/** Whether a document API request changes the document. */
 export function isWrite(request) {
   try {
     return WRITE_VERBS.includes(JSON.parse(request)?.call);
@@ -36,7 +36,7 @@ export function isWrite(request) {
   }
 }
 
-/** Instantiate `bytes` with `call` as the doorway, and return the bundle. */
+/** Instantiate `bytes` with `call` as the document API, and return the bundle. */
 export async function instantiate(bytes, call, options = {}) {
   const writes = options.document === "read-write";
   const encoder = new TextEncoder();

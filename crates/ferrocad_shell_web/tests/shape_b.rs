@@ -67,7 +67,7 @@ fn slab(entity: u32, height: f32) -> StageMesh {
     }
 }
 
-/// The script half: no document, one doorway, one object it draws.
+/// The script half: no document, one document API, one object it draws.
 struct DoorwayHost {
     api: Arc<dyn DocumentApi>,
     /// Every `have` list the backend passed, so the test cannot assert a guess.
@@ -147,7 +147,7 @@ fn compose(seen: Arc<Mutex<Vec<Vec<String>>>>) -> (Arc<dyn DocumentApi>, Box<dyn
 }
 
 /// The bundle's own object: `App::FeaturePython` with a declared height, created
-/// through the doorway exactly as the page does.
+/// through the document API exactly as the page does.
 fn create_toy(api: &Arc<dyn DocumentApi>) {
     let answer: Value = serde_json::from_str(
         &api.call(
@@ -194,10 +194,10 @@ fn a_script_half_draws_what_the_document_cannot() {
     assert_eq!(
         toy(&stage).positions[3][2],
         20.0,
-        "the height the doorway reported"
+        "the height the document API reported"
     );
 
-    // Editing through the doorway changes what the hook draws on the next sync.
+    // Editing through the document API changes what the hook draws on the next sync.
     let set: Value = serde_json::from_str(
         &api.call(
             &json!({ "call": "set", "object": "Toy", "property": "Height", "value": "40 mm" })

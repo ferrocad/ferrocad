@@ -5,7 +5,7 @@
 //! CI builds `ferrocad_addon_toy` for `wasm32-unknown-unknown` and sets it, which is what
 //! turns "the desktop runs the bundle the browser ships, not a second build of it" into a
 //! checked claim. The other suite uses hand-written `wat` fixtures; this one uses the real
-//! artifact, with the real `DocApi` behind the doorway.
+//! artifact, with the real `DocApi` behind the document API.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -14,7 +14,7 @@ use ferrocad_shell_api::DocumentApi;
 use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_wasm::{Capability, WasmAddonHost};
 
-/// One test at a time: the registry and the doorway's document are process-wide.
+/// One test at a time: the registry, and the document the API serves, are process-wide.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -45,7 +45,7 @@ fn bundle() -> Option<PathBuf> {
 }
 
 fn host(path: &PathBuf) -> WasmAddonHost {
-    // The real doorway, over a clean registry with one empty document: a bundle cannot
+    // The real document API, over a clean registry with one empty document: a bundle cannot
     // create an object with no document open, and that failure would read as a broken ABI.
     {
         let mut registry = ferrocad_core::application()
@@ -93,7 +93,7 @@ fn the_shipped_bundle_cannot_write_without_a_manifest() {
 }
 
 #[test]
-fn the_shipped_bundle_creates_and_draws_through_the_doorway() {
+fn the_shipped_bundle_creates_and_draws_through_the_document_api() {
     let Some(source) = bundle() else {
         return;
     };
@@ -109,7 +109,7 @@ fn the_shipped_bundle_creates_and_draws_through_the_doorway() {
     );
 
     // The command creates its object through `ferrocad.call`; the document half is the
-    // one that answers, so a failure here is the doorway, not the ABI.
+    // one that answers, so a failure here is the document API, not the ABI.
     let ran = host.run_command("Toy_Slab").expect("the bundle's own command");
     assert!(ran.ok, "{:?}", ran.error);
 

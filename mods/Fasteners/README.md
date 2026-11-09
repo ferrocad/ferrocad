@@ -20,6 +20,6 @@ than replacing them.
 The page is installed automatically when a mod set declares it (B9a):
 `--script-host=js` is not needed, and the desktop needs a build with `--features js`.
 
-Every write goes through `window.ferrocad.call`, the JSON doorway over the document. A host
+Every write goes through `window.ferrocad.call`, the JSON API over the document. A host
 that refuses writes answers `{"ok": false, …}` and the command returns `false`; nothing is
 faked.

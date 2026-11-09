@@ -368,7 +368,7 @@ a `bootstrap.py` change, not a VM limitation.
 with the property *type's* last segment, so the script-visible `status` row read
 `"PropertyLength"` where CPython reads the flag names. `ferrocad_doc_api::payload` now
 carries `status` (`ferrocad_core::status_names`) and the shim forwards it, so the rows
-agree field for field; the payload is the addons' doorway too, so they gain the field.
+agree field for field; the payload is the addons' document API too, so they gain the field.
 
 **A pre-existing B2 regression it surfaced.** `ferrocad_shell_pywasm/tests/properties.rs`
 still expected the rows without the bridge's `Label` row. Nothing had run that crate's
@@ -424,7 +424,7 @@ browser already implements in `ferrocad_shell_web::backend`.
 2. **A wasm engine** — only for wasm addons (`toy.wasm`). The ABI is already shaped for
    one: `ferrocad_addon_toy/src/abi.rs` imports a module (`ferrocad.call`) and exports
    `ferrocad_alloc`/`ferrocad_dealloc`/`ferrocad_commands`/`ferrocad_run`/…, so a wasm
-   engine hosts it by mapping that import onto `ferrocad_doc_api`'s doorway. The addon's JS
+   engine hosts it by mapping that import onto `ferrocad_doc_api`'s document API. The addon's JS
    glue (`loader.js`, `toy.js`) would be Rust on the desktop — or Gap 1 as well.
 
 **Gap 2's engine: `wasmi` (settled 2026-11-08).** An interpreter, not a JIT: pure Rust, no
@@ -532,12 +532,12 @@ It now declares the contract instead:
 | --- | --- | --- |
 | the page | eight global imports | `Page`: one trait, eight methods, defaults for the optional hooks |
 | the browser | the whole crate | `WebPage`, the only `cfg(target_family = "wasm")` piece |
-| the doorway | a `Closure` the host kept alive | `Page::install_kernel(Arc<dyn Fn(String) -> String>)`, handed to the page |
+| the document API | a `Closure` the host kept alive | `Page::install_kernel(Arc<dyn Fn(String) -> String>)`, handed to the page |
 | tests | none without a browser | `tests/page.rs`, ten of them, over a fake page |
 | `wasm-bindgen` | a dependency everywhere | a `cfg(wasm)` dependency |
 
 `JsScriptHost` is now `JsScriptHost::new(page)` / `with_kernel(page, api)`, and
-`PageEvents::new(page)` follows the same page, so the doorway's own `create`/`set` is
+`PageEvents::new(page)` follows the same page, so the document API's own `create`/`set` is
 announced to the same place as an edit the shell made.
 
 **A defect the tests found.** The display hook's "has it ever answered" flag was a
@@ -553,7 +553,7 @@ session, and dropping the handle would have freed the function under it.
 **Exit: met.** `cargo test -p ferrocad_shell_js` 10/10 on the host,
 `cargo check -p ferrocad_shell_js --target wasm32-unknown-unknown` clean, and
 `ferrocad_shell_web` 11/11 + 2/2 unchanged. What remains for Gap 1 is an engine and a
-desktop `Page`: no shell, no host and no doorway change.
+desktop `Page`: no shell, no host and no document API change.
 
 ### B7b — the desktop page (built 2026-11-08)
 
@@ -577,7 +577,7 @@ which host it is on.
 
 **One thread owns the engine.** QuickJS values are not `Send`, so the runtime lives on a
 worker thread and each call is a channel job. Viewport and document events are *queued*
-rather than answered: a document event can be emitted from inside a doorway call (an
+rather than answered: a document event can be emitted from inside a document API call (an
 addon's own `create`), and answering it there would re-enter the runtime mid-call. The
 event is delivered after the current job, which is also what makes the ordering testable.
 
@@ -679,7 +679,7 @@ the same bundle the browser loads with `?addons=wasm`.
 (`ferrocad.call`) and calls `ferrocad_commands`/`ferrocad_run`/`ferrocad_stage_meshes`, so
 an addon answers the page's three functions and the document stays `RustAppBackend`'s.
 
-**The sandbox is the point.** The import list is the doorway and nothing else — no
+**The sandbox is the point.** The import list is the document API and nothing else — no
 filesystem, no network, no clock; the interpreter is `wasmi` (no JIT, no executable memory
 from third-party code); and every entry call is given a fuel budget, so a bundle that loops
 forever traps instead of freezing the window. A bundle that will not load is reported and
@@ -697,7 +697,7 @@ third-party commands.
 `ferrocad_addon_toy` for `wasm32-unknown-unknown` (pure Rust — no OCCT, no wasm-bindgen),
 passes the path through `FERROCAD_ADDON_WASM`, and the test instantiates it with `wasmi`
 over the real `DocApi` — `Toy_Slab`/`Toy_Taller` in the list, `Toy_Slab` creating its object
-through the doorway, and the display hook returning the slab's mesh. The test skips when the
+through the document API, and the display hook returning the slab's mesh. The test skips when the
 variable is unset, so a bare `cargo test` stays fast and hermetic; the CI step is what makes
 the claim.
 
@@ -722,17 +722,17 @@ the same bytes with `{"document": "read-write"}` beside them can.
 **Both hosts enforce it.** The manifest is `<stem>.json` beside the bundle (`addon.json`
 for `addon.wasm`, `toy.json` for the page's `toy.wasm`). The desktop consults
 `ferrocad_shell_api::document_api::is_write`; the page's `loader.js` refuses the same three
-verbs *inside* the doorway, so a refused request never reaches `window.ferrocad.call`
+verbs *inside* the document API, so a refused request never reaches `window.ferrocad.call`
 either. `WRITE_VERBS` there mirrors the Rust list — three verbs, with no cross-language
 check — so a new mutating verb is a two-file change, which its own Node test records. The
 browser smoke asserts the capability line (`ferrocad toy (wasm): document read-write`)
 beside the command that needs it.
 
 **Events cross too, from both sides.** An addon's own edit used to be invisible to the
-desktop's script half: the doorway was built with no sink, so the page was the only host
+desktop's script half: the document API was built with no sink, so the page was the only host
 where a bundle's `create` announced anything. `Addons` now shares its primary as an
 `Arc<dyn ScriptHost + Send + Sync>` and `announce_to` adapts it to a `DocumentEventSink`;
-`with_addons` hands the doorway `DocApi::with_events(announce_to(primary))`. A bundle's
+`with_addons` hands the document API `DocApi::with_events(announce_to(primary))`. A bundle's
 write therefore reaches `on_document_event` in the primary exactly as the shell's own edits
 do — `PageEvents` is the browser's spelling of the same rule.
 `an_addons_own_edit_is_announced_to_the_primary` asserts it over a real `DocApi` and a real
@@ -777,7 +777,7 @@ same directory ships to either host: `mods/<Name>/InitGui.py`, `InitGui.js` and 
 are already siblings under one name (B7e), so a mod set is a mix of languages and a host
 that installs one silently hides the rest. The three also sandbox differently, and that is
 worth keeping visible: Python and JS are trusted code with document access, wasm runs behind
-`wasmi`/`WebAssembly` with only the JSON doorway and a capability manifest.
+`wasmi`/`WebAssembly` with only the JSON API and a capability manifest.
 
 **What is already in place.** The expensive parts of this stage are done:
 
@@ -932,7 +932,7 @@ open question below.
 
 The manifest a mod ships says what it *wants*; the host that booted it decides what it can
 *give*. B7e introduced that vocabulary for wasm only (`addon.json` →
-`{"document": "read-write"}`, default read, enforced in the doorway). B9 made the host set
+`{"document": "read-write"}`, default read, enforced in the document API). B9 made the host set
 derived, which exposed the gap it was hiding: **the same `mods/<Name>/` can edit on the
 desktop and only read in the browser**, and nothing said so.
 
@@ -940,7 +940,7 @@ desktop and only read in the browser**, and nothing said so.
 | --- | --- | --- |
 | CPython (`ferrocad_shell_python`) | read-write | `ferrocad_py` is the full object model, compiled in |
 | RustPython (`ferrocad_shell_pywasm`) | **read** | `_ferrocad` exposes one function, and it reads |
-| JS page (`ferrocad_shell_js`) | read-write | the doorway has the five verbs |
+| JS page (`ferrocad_shell_js`) | read-write | the document API has the five verbs |
 | wasm bundle | its manifest | read unless `{"document": "read-write"}` is beside it |
 
 **B10a — the grant is part of the seam (built 2026-11-09).** `DocumentGrant { Read,
@@ -968,7 +968,7 @@ ferrocad: Draft asks for read-write; pywasm grants read
 
 The check follows the host that would actually run the package, so `--script-host=pywasm`
 reports it while the same mod on CPython stays quiet, and a chain asks the half that owns
-that language. A bundle's manifest is left to its doorway, which already enforces it; an
+that language. A bundle's manifest is left to its document API, which already enforces it; an
 unknown word is no request at all rather than a default the author did not ask for. A
 bundle's own default stays **read**, because that default is the sandbox — the permissive
 half of this decision is about the script hosts, not about widening what a third-party
@@ -980,19 +980,19 @@ Two limits that granting does not remove:
   shell's own scripts, with `ferrocad_py`'s object model in `sys.modules`. Read-only there
   is a contract, not an enforcement — a boundary that holds has to be a process or a wasm
   bundle;
-- the page's modules share one doorway (`window.ferrocad.call`), so a per-module grant needs
+- the page's modules share one document API (`window.ferrocad.call`), so a per-module grant needs
   a per-module wrapper; today the page is one principal.
 
 **Exit: met.** 3 capability tests, 2 chain tests, 5 manifest tests (parsing, per-entry
 application, unknown words, the advisory, bundles excluded), the wasm mapping on both sides
 of the manifest, and the RustPython greeting.
 
-### B11 — practical addons, and what the doorway gives them (recorded 2026-11-09; B11a built)
+### B11 — practical addons, and what the document API gives them (recorded 2026-11-09; B11a built)
 
 B9 made a mod set derive the hosts; B10 said what a host may do. This stage is about what an
 addon can actually **do**, and it ships two packages that prove it.
 
-**The reach.** Both addon kinds get the same five-verb JSON doorway and nothing else:
+**The reach.** Both addon kinds get the same five-verb JSON API and nothing else:
 
 | verb | answer |
 | --- | --- |
@@ -1002,14 +1002,14 @@ addon can actually **do**, and it ships two packages that prove it.
 | `set` | one property from editor text, then recompute |
 | `recompute` | run the graph |
 
-Host-side rather than doorway-side: command registration, the display hook, picks (`entity`)
+Host-side rather than document API-side: command registration, the display hook, picks (`entity`)
 and document events. **Not** available: geometry, placement writes, selection, view, files.
 
 Two facts shaped both packages:
 
 - **`set` cannot move anything.** `present::coerce` has no `Placement` arm, and `format`
   prints a placement as translation only. Explode view is blocked on that, not on the
-  doorway's topology.
+  document API's topology.
 - **An addon can draw what it computes.** `stage_meshes` rows are appended to the backend's,
   so a bundle with no kernel can still show geometry.
 
@@ -1029,7 +1029,7 @@ The bundle ABI moved to `ferrocad_addon`, so the two bundles share one implement
 the memory contract and the import instead of copying `unsafe` code.
 
 **B11b — explode view (not built).** Read each child's placement, scale the offset, write
-it back, toggle to collapse. It needs the smallest doorway change on the list: a `Placement`
+it back, toggle to collapse. It needs the smallest document API change on the list: a `Placement`
 arm in `present::coerce` (parse `(x, y, z)` and `(x, y, z; rx, ry, rz)`) and a `format` that
 round-trips the rotation. One file — and it unlocks measurement overlays with it.
 
@@ -1067,12 +1067,12 @@ fit. Every road ends at the same object, but the fidelity is not remotely the sa
 | CPython (`PythonScriptHost`) | desktop | `ferrocad_py`, a PyO3 extension that links `ferrocad_core` and wraps `Arc<Mutex<CoreDocument>>` in `PyDocument`/`PyDocumentObject` | the full object model: properties, observers, extension converters, sub-element resolvers | yes |
 | RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`, **one** native function: `document()` returns the active document's JSON, read from `ferrocad_core::application()` on every call (`DocumentSource::Registry`) | a read-only snapshot | no: the ABI has no write |
 | JS (`JsScriptHost` → the page) | desktop (rquickjs) + browser (ES module) | `ferrocad.call(request)` → `ferrocad_doc_api::DocApi` → registry | five verbs: `document`, `properties`, `create`, `set`, `recompute` | yes |
-| wasm bundle | desktop (`wasmi`) + browser (`loader.js`) | the same doorway as an import, optionally wrapped by `read_only` | the same five verbs | only with `{"document": "read-write"}` |
+| wasm bundle | desktop (`wasmi`) + browser (`loader.js`) | the same document API as an import, optionally wrapped by `read_only` | the same five verbs | only with `{"document": "read-write"}` |
 
 Three findings:
 
 1. **There are two mechanisms, not four.** Compiled-in Rust access (CPython through PyO3's
-   object model, RustPython through one read function) and the JSON doorway (JS, wasm
+   object model, RustPython through one read function) and the JSON API (JS, wasm
    bundles). Writing a fourth a mechanism for another language would be the mistake.
 2. **Linked is not reachable.** The browser's RustPython has `ferrocad_core` *in the same
    wasm module* and still cannot write, because `_ferrocad` exposes one read function. What
@@ -1090,7 +1090,7 @@ the only two cases that do **not** meet at the registry.
 
 **`ferrocad_part` is out of scope here, deliberately.** It is the mirror problem: CPython
 reaches geometry through `ferrocad_part_py`; RustPython has `ferrocad_part` linked but no
-shape ABI; JS and wasm have no shape verbs in the doorway at all. Reaching the *document*
+shape ABI; JS and wasm have no shape verbs in the document API at all. Reaching the *document*
 is already solved four ways; reaching *geometry* currently has one road.
 
 ## 5. Decisions (recorded 2026-11-08)
@@ -1112,7 +1112,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D13 | how a user asks for a mixed mod set | **The mod set names the hosts** (B9), not the engines: `--addons mods/Draft,mods/Toy` / `?addons=…`, with each package's entry file deriving its host per platform. `--script-host=` and `?runtime=` become the Python-engine choice and a debugging override, so `?runtime=pywasm,js` is no longer something a user writes |
 | D14 | wasm on the browser without the JS half | **Not built (B8e rejected).** `loader.js` needs `window.ferrocad`, which the page installs only for the JS half, so a wasm addon *derives* the page host rather than an engine being compiled into the module |
 | D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
-| D16 | what a wasm/JS addon can reach | **The five-verb doorway plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that; explode view needs a `Placement` coercion, not a new verb |
+| D16 | what a wasm/JS addon can reach | **The five-verb document API plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that; explode view needs a `Placement` coercion, not a new verb |
 
 ## 6. Acceptance
 

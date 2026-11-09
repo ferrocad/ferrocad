@@ -213,7 +213,7 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/research/grid-overlay-bringup.md](project/research/grid-overlay-bringup.md) — a third-party Coin/GLSL addon as a shader/extraction fixture.
 - [project/research/simplecad-bringup.md](project/research/simplecad-bringup.md) — SimpleCAD as the canvas-first proving ground: the measured tree and S0–S5.
 - [project/research/web-wasm-host.md](project/research/web-wasm-host.md) — a minimal wgpu/WebGL2 host for the wasm kernel: the verified repro, the browser's limits (no readback, one window) and the implementation it produced.
-- [project/research/js-addons.md](project/research/js-addons.md) — JS and wasm workbench addons over the document doorway: why a second wasm module cannot share the document, the JSON protocol, the loader, and the wasm import ABI.
+- [project/research/js-addons.md](project/research/js-addons.md) — JS and wasm workbench addons over the document API: why a second wasm module cannot share the document, the JSON protocol, the loader, and the wasm import ABI.
 - [project/research/occt-8-upgrade.md](project/research/occt-8-upgrade.md) — what the OCCT 7.8 → 8.0.1 upgrade costs and buys, the first build on 8.0.1, and what stays unverified.
 - [project/research/occt-8-api-audit.md](project/research/occt-8-api-audit.md) — the symbol-level audit of everything the binding crate reaches in OCCT 8.0.1, diffed against 7.8.1.
 

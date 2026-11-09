@@ -33,11 +33,11 @@ export async function install() {
   const document = await capability();
   bundle = await instantiate(bytes, (request) => {
     // The host installs `window.ferrocad` when it boots; a command cannot run before
-    // that, so this is only ever called once the doorway exists.
-    const doorway = window.ferrocad;
-    return doorway
-      ? doorway.call(request)
-      : JSON.stringify({ ok: false, error: "no document doorway" });
+    // that, so this is only ever called once the document API exists.
+    const api = window.ferrocad;
+    return api
+      ? api.call(request)
+      : JSON.stringify({ ok: false, error: "no document API" });
   }, { document });
 
   const page = window.__ferrocadJs ?? {};

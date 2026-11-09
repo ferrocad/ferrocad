@@ -15,7 +15,7 @@
 //! Two layers, deliberately:
 //!
 //! - [`toy`] is the workbench: commands, the object it owns, its mesh. Pure, with the
-//!   doorway as a closure, so it is a normal `cargo test` on the host against the real
+//!   document API as a closure, so it is a normal `cargo test` on the host against the real
 //!   `ferrocad_doc_api`.
 //! - `abi` (wasm only) is the wiring: the exports the loader calls and the `ferrocad.call`
 //!   import, with the `(ptr, len)` / packed-`u64` memory contract.

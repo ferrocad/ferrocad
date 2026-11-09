@@ -1,7 +1,7 @@
 //! The bridge payload: the document, as `python/ferrocad_shell` reads it.
 //!
 //! The presenter is [`ferrocad_doc_api::payload`] — the same one a JS addon gets over
-//! the JSON doorway — so the console, the property pane and an addon cannot drift.
+//! the JSON API — so the console, the property pane and an addon cannot drift.
 //! This module adds only what is specific to the wasm-Python half: the geometry-free
 //! sample a host with no document registry boots with.
 //!

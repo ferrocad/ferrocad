@@ -2,7 +2,7 @@
 //
 // This is the browser's answer to `mods/Toy`: it declares commands, owns an object the
 // document has no kernel for, and **draws it** through the display hook. Everything it
-// touches goes through `window.ferrocad.call(request)` — the JSON doorway the host
+// touches goes through `window.ferrocad.call(request)` — the JSON API the host
 // installed from `ferrocad_doc_api::DocApi`. It never links `ferrocad_core`: a second
 // copy of the engine in the page would be a second document (and a second kernel).
 //
@@ -85,16 +85,16 @@ function parseJson(text, fallback) {
   }
 }
 
-// --- the doorway ----------------------------------------------------------
+// --- the document API ----------------------------------------------------------
 
 function call(request) {
-  const doorway = window.ferrocad;
-  if (!doorway) {
-    return { ok: false, error: "no document doorway" };
+  const api = window.ferrocad;
+  if (!api) {
+    return { ok: false, error: "no document API" };
   }
-  return parseJson(doorway.call(JSON.stringify(request)), {
+  return parseJson(api.call(JSON.stringify(request)), {
     ok: false,
-    error: "the doorway answered something that is not JSON",
+    error: "the document API answered something that is not JSON",
   });
 }
 
@@ -149,7 +149,7 @@ function heightOf(object) {
 // A flat-shaded box standing on the origin plane, `height` millimetres tall.
 ///
 /// Six quads with their own vertices and one normal each, so the shading is flat
-/// without needing a normal-average pass. `entity` is the pick id the doorway reported
+/// without needing a normal-average pass. `entity` is the pick id the document API reported
 /// for the object, which is what makes a click resolve to `Toy`.
 function slabMesh(object, height) {
   const half = FOOTPRINT / 2;

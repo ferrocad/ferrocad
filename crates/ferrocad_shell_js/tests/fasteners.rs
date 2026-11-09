@@ -2,7 +2,7 @@
 //!
 //! The point is not the five sizes: it is that a package in the repository is a *real*
 //! workbench — the host evaluates `InitGui.js`, reads its commands, and a command writes
-//! through the doorway. A regression in the module contract fails here.
+//! through the document API. A regression in the module contract fails here.
 
 #![cfg(feature = "desktop")]
 
@@ -14,13 +14,13 @@ use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_js::JsScriptHost;
 use ferrocad_shell_js::desktop::EnginePage;
 
-/// A doorway that records what the package asked for and grants it.
+/// A document API that records what the package asked for and grants it.
 #[derive(Default)]
-struct Doorway {
+struct Recorder {
     requests: Mutex<Vec<String>>,
 }
 
-impl DocumentApi for Doorway {
+impl DocumentApi for Recorder {
     fn call(&self, request: &str) -> String {
         self.requests
             .lock()
@@ -36,10 +36,10 @@ fn package() -> std::path::PathBuf {
 }
 
 #[test]
-fn the_fastener_package_registers_and_writes_through_the_doorway() {
+fn the_fastener_package_registers_and_writes_through_the_document_api() {
     let page = Arc::new(EnginePage::new(vec![package()]).expect("the package boots"));
-    let doorway = Arc::new(Doorway::default());
-    let api: Arc<dyn DocumentApi> = doorway.clone();
+    let recorder = Arc::new(Recorder::default());
+    let api: Arc<dyn DocumentApi> = recorder.clone();
     let host = JsScriptHost::with_kernel(page, api);
 
     let ids: Vec<String> = host.commands().into_iter().map(|row| row.id).collect();
@@ -52,7 +52,7 @@ fn the_fastener_package_registers_and_writes_through_the_doorway() {
         "the command ran"
     );
 
-    let requests = doorway
+    let requests = recorder
         .requests
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -68,13 +68,13 @@ fn the_fastener_package_registers_and_writes_through_the_doorway() {
 #[test]
 fn an_id_the_package_does_not_own_is_not_its() {
     let page = Arc::new(EnginePage::new(vec![package()]).expect("the package boots"));
-    let doorway = Arc::new(Doorway::default());
-    let api: Arc<dyn DocumentApi> = doorway.clone();
+    let recorder = Arc::new(Recorder::default());
+    let api: Arc<dyn DocumentApi> = recorder.clone();
     let host = JsScriptHost::with_kernel(page, api);
 
     assert!(host.run_command("Somebody_Else").is_none());
     assert!(
-        doorway
+        recorder
             .requests
             .lock()
             .unwrap_or_else(|error| error.into_inner())

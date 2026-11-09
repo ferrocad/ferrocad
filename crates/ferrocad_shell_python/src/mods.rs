@@ -137,7 +137,7 @@ fn requested_grant(package: &Path) -> Option<DocumentGrant> {
 /// **Granting is the policy for now**: nothing here refuses a package or downgrades it. A
 /// mismatch is only said out loud, because an author who tested on the desktop otherwise
 /// finds out in the browser at the first refused write. A bundle's own manifest is not
-/// checked here — its doorway already enforces it.
+/// checked here — its document API already enforces it.
 pub fn under_granted(requests: &[Request], runtimes: &[Runtime]) -> Vec<String> {
     let mut lines = Vec::new();
     for request in requests {
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn a_bundles_request_is_left_to_the_bundle() {
-        // The doorway already enforces a bundle's manifest; the advisory must not repeat it.
+        // The document API already enforces a bundle's manifest; the advisory must not repeat it.
         let temp = tempfile::tempdir().expect("a temporary directory");
         with_manifest(
             &temp,

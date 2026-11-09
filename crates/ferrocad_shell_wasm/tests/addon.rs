@@ -1,6 +1,6 @@
 //! A wasm workbench, hosted and sandboxed, without a browser.
 //!
-//! The fixture is written as `wat` so the ABI is visible: the bundle imports the doorway,
+//! The fixture is written as `wat` so the ABI is visible: the bundle imports the document API,
 //! exports the five entry points the loader calls, and packs every answer as
 //! `len << 32 | ptr` in its own memory.
 
@@ -23,7 +23,7 @@ fn fixture() -> String {
     fixture_sending(r#"{"op":"ping"}"#)
 }
 
-/// The same module, sending `request` to the doorway whenever a command runs.
+/// The same module, sending `request` to the document API whenever a command runs.
 fn fixture_sending(request: &str) -> String {
     assert_eq!(COMMANDS.len(), 64, "the fixture's length constant");
     format!(
@@ -53,7 +53,7 @@ fn fixture_sending(request: &str) -> String {
     (call $pack (i32.const 1024) (i32.const 64)))
 
   (func (export "ferrocad_run") (param $ptr i32) (param $len i32) (result i32)
-    ;; Exercise the doorway once per run: the host must have granted it.
+    ;; Exercise the document API once per run: the host must have granted it.
     (drop (call $call (i32.const 1300) (i32.const {request_len})))
     (i32.const 1))
 
@@ -89,7 +89,7 @@ fn runaway() -> String {
     )
 }
 
-/// The host's document, as the doorway sees it.
+/// The host's document, as the document API sees it.
 #[derive(Default)]
 struct FakeDocument {
     requests: Mutex<Vec<String>>,
@@ -122,13 +122,13 @@ fn a_bundle_registers_its_commands() {
 }
 
 #[test]
-fn a_listed_command_runs_through_the_doorway() {
+fn a_listed_command_runs_through_the_document_api() {
     let (host, document) = bundle();
 
     let answer = host.run_command("Toy_Wasm").expect("the bundle's own id");
     assert!(answer.ok, "{:?}", answer.error);
 
-    // The bundle called the doorway once, and only text crossed.
+    // The bundle called the document API once, and only text crossed.
     assert_eq!(
         document.requests.lock().unwrap().as_slice(),
         [r#"{"op":"ping"}"#]
@@ -235,7 +235,7 @@ fn something_that_is_not_wasm_is_named() {
 /// A script half that is not a bundle: it stands in for CPython.
 #[derive(Default)]
 struct Primary {
-    /// What the doorway announced, and which listeners ran, in order.
+    /// What the document API announced, and which listeners ran, in order.
     events: Arc<Mutex<Vec<&'static str>>>,
 }
 
@@ -483,7 +483,7 @@ fn a_chain_of_one_is_just_that_host() {
 
 #[test]
 fn an_addons_own_edit_is_announced_to_the_primary() {
-    // The desktop's composition: the primary, the bundles, and a doorway whose sink is
+    // The desktop's composition: the primary, the bundles, and a document API whose sink is
     // that primary. `with_addons` builds exactly this, so what is asserted here is the
     // rule — an addon's `create` is a document edit like the shell's own.
     {

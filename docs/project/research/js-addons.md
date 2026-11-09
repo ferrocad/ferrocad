@@ -1,4 +1,4 @@
-# JS and wasm addons over the document doorway
+# JS and wasm addons over the document API
 
 Status: **spike (2026-11-08).** `ferrocad_doc_api`, the JS half's `with_kernel` and the
 JS display hook (`stageMeshes`) are in the tree and tested; the browser path is wired and
@@ -14,13 +14,13 @@ Companions: [`../../developer/architecture/host-backends.md`](../../developer/ar
 `JsScriptHost` could call *out* to the page — `evaluate`, `commands`, `runCommand`,
 `onEvent` — but a JS workbench could not touch the **document**: the document is
 `RustAppBackend`'s, and a JS page cannot link `ferrocad_core`. It now can, through one
-JSON doorway:
+JSON API:
 
 ```text
 JS addon ──▶ window.ferrocad.call(request) ──▶ DocApi ──▶ the host's one document
 ```
 
-The doorway is `ferrocad_doc_api`, which depends on `ferrocad_core` and **not** on
+The document API is `ferrocad_doc_api`, which depends on `ferrocad_core` and **not** on
 `ferrocad_part`: Part arrives at run time because the host called
 `ferrocad_part::register`, so a created `Part::Box` recomputes to a real `Shape` with no
 kernel in the script half's graph.
@@ -51,7 +51,7 @@ Four things it explicitly does **not** get, by design:
 | Shape | What it is | One document? | Runtime-loaded? |
 | --- | --- | --- | --- |
 | **A · static link** | the workbench crate (e.g. `ferrocad_toy`) is a dependency of the host | yes — same module, same memory | no |
-| **B · doorway** | the addon calls functions the host exports/imports; it holds no document | yes — one instance answers | yes |
+| **B · document API** | the addon calls functions the host exports/imports; it holds no document | yes — one instance answers | yes |
 | **C · copied engine** | the addon bundle carries its own core (+part) wasm | **no** — two registries, two kernels | yes |
 
 C is the shape the "bundle a wrapper over core/part" idea suggests, and it is the one
@@ -67,7 +67,7 @@ the "Toy as a wasm workbench" experiment, not an addon system.
 B is what the spike builds, because it is the only shape that is both dynamic and
 single-document.
 
-## 3. The doorway
+## 3. The document API
 
 `ferrocad_shell_api::DocumentApi` is the trait (`call(request: &str) -> String`), so a
 script half can hold one without depending on the engine. `ferrocad_doc_api::DocApi`
@@ -122,7 +122,7 @@ The spike's loader is the page, which is honest about how little a loader needs:
 </script>
 ```
 
-`JsScriptHost::with_kernel(Arc<dyn DocumentApi>)` turns the doorway into a wasm-bindgen
+`JsScriptHost::with_kernel(Arc<dyn DocumentApi>)` turns the document API into a wasm-bindgen
 closure and calls `window.__ferrocadInstallKernel` once, when the backend is composed.
 The closure is owned by the `JsScriptHost`, so it lives as long as the host.
 
@@ -145,7 +145,7 @@ meshed by the document half. `www/addons/toy.js` therefore supplies both channel
 
 - `runCommand("Toy_Slab")` creates (`App::FeaturePython`, declared `Height`) or edits it;
 - `stageMeshes(have)` returns mesh JSON for it — six flat-shaded quads built from
-  `Height`, with the `entity` the doorway reported and `display: "shaded_edges"`.
+  `Height`, with the `entity` the document API reported and `display: "shaded_edges"`.
 
 `JsScriptHost::stage_meshes` passes `have` (the object names the backend already meshed)
 and parses the answer with `StageMesh::from_json_array`, so a hook never has to
@@ -158,7 +158,7 @@ page that only registers commands is quiet.
 
 `crates/ferrocad_addon_toy` is the same workbench compiled to `wasm32-unknown-unknown`
 (a 250 KB cdylib, no C toolchain, no wasm-bindgen). Shape B holds: the module imports the
-doorway and holds no document.
+document API and holds no document.
 
 ```wat
 (import "ferrocad" "call" (func $call (param i32 i32) (result i64)))
@@ -170,14 +170,14 @@ The memory contract, and it is the whole ABI:
 | --- | --- |
 | host → bundle | `(ptr, len)` into the bundle's memory, written with the bundle's `ferrocad_alloc` |
 | bundle → host | packed `len << 32 \| ptr`, freed by the host with `ferrocad_dealloc` |
-| bundle → host (the doorway) | the same `(ptr, len)`, and the *loader* allocates the response **in the bundle's memory** with `ferrocad_alloc` |
+| bundle → host (the document API) | the same `(ptr, len)`, and the *loader* allocates the response **in the bundle's memory** with `ferrocad_alloc` |
 
 One allocator serves both directions (`Layout::from_size_align(len, 1)`), so `dealloc`
 needs only the length. `www/addons/loader.js` implements the host side and knows nothing
 about the DOM, which is why it runs under Node.
 
 The split inside the crate is the useful part: `toy.rs` is the workbench (commands, the
-object, the mesh) with the doorway as a closure and five native tests against the real
+object, the mesh) with the document API as a closure and five native tests against the real
 `DocApi`; `abi.rs` is only the exports and the import. A bundle's *behaviour* is
 therefore testable without a wasm runtime, and its *boundary* is testable without a
 browser:
@@ -212,7 +212,7 @@ source of truth. Making `catalog.json` writable would be a second table to drift
 
 Proven natively (`cargo test -p ferrocad_doc_api`):
 
-- a `Part::Box` created over the doorway recomputes to a `Shape` (core + part wiring);
+- a `Part::Box` created over the document API recomputes to a `Shape` (core + part wiring);
 - a `set` through editor text round-trips and shows in the rows;
 - a failed create rolls back and leaves no half-built object;
 - with no document open, `document` is `null` and `properties` is a clear error;
@@ -224,10 +224,10 @@ the page's hook:
 
 - a script half that holds **no document** composes with
   `RustAppBackend::from_shared_registry()` and reports the sample it booted;
-- an `App::FeaturePython` created through the doorway appears in
+- an `App::FeaturePython` created through the document API appears in
   `RustAppBackend::stage_meshes()` **from the hook**, beside the document's own `Fillet`;
 - the hook is told `have = ["Fillet"]` and not its own object;
-- `set Toy.Height = 40 mm` through the doorway changes the mesh the next sync returns.
+- `set Toy.Height = 40 mm` through the document API changes the mesh the next sync returns.
 
 Type-checked for `wasm32` (no browser): `ferrocad_doc_api`, `ferrocad_shell_api` and
 `ferrocad_shell_js`, including the closure that installs the kernel and the
@@ -237,18 +237,18 @@ Proven under Node (`node --test crates/ferrocad_web_gpui/www/addons/loader.test.
 against the real `ferrocad_addon_toy.wasm`:
 
 - the bundle registers `Toy_Slab`/`Toy_Taller` (`ferrocad_commands`, a packed string);
-- a command crosses the import and creates the object (the fake doorway records the
+- a command crosses the import and creates the object (the fake document API records the
   `create` the bundle sent — the real protocol, checked by `ferrocad_doc_api`'s tests);
 - the hook's mesh crosses back intact (24 positions, 36 indices, parts per triangle);
 - a second command edits the same object and the hook's height follows;
 - `have = ["Toy"]` answers `[]`.
 
-The doorway is faked there on purpose: that test is about the *boundary*, not the
+The document API is faked there on purpose: that test is about the *boundary*, not the
 document.
 
 Proven on the desktop too (`ferrocad_shell_wasm/tests/shipped.rs`, in CI): the same
 `ferrocad_addon_toy.wasm` is instantiated by `wasmi` over the **real** `DocApi`, so the
-commands are listed, `Toy_Slab` creates its object through the doorway, and the hook
+commands are listed, `Toy_Slab` creates its object through the document API, and the hook
 returns the slab's mesh. Two hosts, one artifact — see
 [`../tasks/backend-parity.md`](../tasks/backend-parity.md) B7e.
 
@@ -271,7 +271,7 @@ re-runs this check when a current artifact is wanted.
 3. ~~**Capabilities.**~~ Done on both hosts (`backend-parity.md` B7e): a bundle is
    read-only unless its `<stem>.json` manifest says `{"document": "read-write"}`, and the
    refusal happens before the request reaches the document — in Rust on the desktop and
-   inside `loader.js`'s doorway on the page. `loader.js`'s `WRITE_VERBS` mirrors
+   inside `loader.js`'s document API on the page. `loader.js`'s `WRITE_VERBS` mirrors
    `ferrocad_shell_api::document_api::is_write`, which is the drift to watch.
 
 Neither half running on the desktop is deliberate, not a gap in this list: **B7** in
@@ -287,10 +287,10 @@ The fixed vocabulary is `ferrocad_shell_api::events::DocumentEvent`
 `ScriptHost::on_document_event` has a default body
 (`crates/ferrocad_shell_api/src/app.rs:613`), so no existing host changed.
 
-`RustAppBackend` emits one pair per committed edit (`create`/`set` through the doorway
+`RustAppBackend` emits one pair per committed edit (`create`/`set` through the document API
 are the other emitter): `announce`
 (`crates/ferrocad_shell_rust/src/backend.rs:229`) is called once by `edit`
-(`backend.rs:213`), and the doorway emits from `create`/`set`/`recompute`
+(`backend.rs:213`), and the document API emits from `create`/`set`/`recompute`
 (`crates/ferrocad_doc_api/src/lib.rs:181`, `:278`, `:299`). A refused write emits
 nothing. `JsScriptHost::on_document_event` (`crates/ferrocad_shell_js/src/lib.rs:205`)
 forwards to `window.__ferrocadJs.onDocumentEvent(id, payloadJson)` (the import is

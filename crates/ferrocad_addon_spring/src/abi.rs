@@ -29,7 +29,7 @@ pub extern "C" fn ferrocad_commands() -> u64 {
 pub unsafe extern "C" fn ferrocad_run(ptr: *const u8, len: usize) -> u32 {
     // SAFETY: the loader wrote `len` bytes at `ptr` for this call.
     let id = unsafe { ferrocad_addon::read(ptr, len) };
-    match crate::spring::run(&id, &ferrocad_addon::doorway) {
+    match crate::spring::run(&id, &ferrocad_addon::document_api) {
         Ok(true) => 1,
         _ => 0,
     }
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn ferrocad_stage_meshes(ptr: *const u8, len: usize) -> u6
     // A hook that cannot draw adds nothing: a failure is the empty answer, not a broken
     // sync.
     ferrocad_addon::respond(
-        crate::spring::stage_meshes(&have, &ferrocad_addon::doorway)
+        crate::spring::stage_meshes(&have, &ferrocad_addon::document_api)
             .unwrap_or_else(|_| "[]".to_string()),
     )
 }

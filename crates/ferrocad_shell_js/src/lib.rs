@@ -20,11 +20,11 @@
 //! **The page is a trait, not a browser.** [`WebPage`] is the page a browser host
 //! has (`cfg(target_family = "wasm")`, `window.__ferrocadJs`), so this crate builds
 //! natively too and its tests drive a fake page — the command merge, the display
-//! hook, the doorway and the event mapping are all testable without a browser. A
+//! hook, the document API and the event mapping are all testable without a browser. A
 //! desktop host supplies a page over an embedded engine (`rquickjs`, decided in
 //! `docs/project/tasks/backend-parity.md` B7) and gets the same behaviour.
 //!
-//! **The document doorway.** A JS workbench that edits the document cannot link
+//! **The document API.** A JS workbench that edits the document cannot link
 //! `ferrocad_core` — a second registry in the same page is a second document. Instead
 //! the host hands this half a [`DocumentApi`], which
 //! [`Page::install_kernel`] turns into a page function
@@ -33,7 +33,7 @@
 //!
 //! **Spike scope.** The command list is read once, at boot, from the page; dynamic
 //! registration and a JS tool session are the next step. `evaluate`, the event
-//! listener, the document doorway, the display hook and the two document events
+//! listener, the document API, the display hook and the two document events
 //! (`document.edited`, `document.recomputed`) are real.
 
 use std::sync::{Arc, OnceLock};
@@ -119,7 +119,7 @@ pub struct JsScriptHost {
 
 impl JsScriptHost {
     /// A JS half over `page`, with no document access: `evaluate` still runs, a
-    /// doorway command fails at the page.
+    /// document API command fails at the page.
     pub fn new(page: Arc<dyn Page>) -> Self {
         Self {
             page,
@@ -167,7 +167,7 @@ pub fn available(page: &dyn Page) -> bool {
 
 /// The page's event target.
 ///
-/// The document doorway holds one too (`DocApi::with_events`), so an addon's own
+/// The document API holds one too (`DocApi::with_events`), so an addon's own
 /// `create`/`set` is announced exactly like an edit the shell made.
 pub struct PageEvents {
     page: Arc<dyn Page>,

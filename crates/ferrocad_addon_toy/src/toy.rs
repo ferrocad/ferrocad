@@ -1,6 +1,6 @@
 //! The toy workbench: one object, two commands, one display hook.
 //!
-//! Pure. The document is a closure — the doorway — so this module is tested on the host
+//! Pure. The document is a closure — the api — so this module is tested on the host
 //! against the real [`ferrocad_doc_api`] rather than only in a browser. The wasm shell
 //! in `abi.rs` supplies the same closure over an import.
 
@@ -55,10 +55,10 @@ pub fn commands_json() -> String {
 }
 
 /// Run one command. `Ok(false)` means "not this bundle's id", not a failure.
-pub fn run(id: &str, doorway: &dyn Fn(&str) -> String) -> Result<bool, String> {
+pub fn run(id: &str, api: &dyn Fn(&str) -> String) -> Result<bool, String> {
     match id {
-        "Toy_Slab" => set_height(HEIGHT, doorway).map(|()| true),
-        "Toy_Taller" => set_height(TALLER, doorway).map(|()| true),
+        "Toy_Slab" => set_height(HEIGHT, api).map(|()| true),
+        "Toy_Taller" => set_height(TALLER, api).map(|()| true),
         _ => Ok(false),
     }
 }
@@ -67,11 +67,11 @@ pub fn run(id: &str, doorway: &dyn Fn(&str) -> String) -> Result<bool, String> {
 ///
 /// `have` names the objects the document already meshed, so the hook does not
 /// re-tessellate a shape the host has.
-pub fn stage_meshes(have: &[String], doorway: &dyn Fn(&str) -> String) -> Result<String, String> {
+pub fn stage_meshes(have: &[String], api: &dyn Fn(&str) -> String) -> Result<String, String> {
     if have.iter().any(|name| name == TOY) {
         return Ok("[]".to_string());
     }
-    let document = call(doorway, json!({ "call": "document" }))?;
+    let document = call(api, json!({ "call": "document" }))?;
     let Some(object) = object_named(&document, TOY) else {
         return Ok("[]".to_string());
     };
@@ -81,19 +81,19 @@ pub fn stage_meshes(have: &[String], doorway: &dyn Fn(&str) -> String) -> Result
 }
 
 /// Create `Toy` at `height`, or edit the existing one.
-fn set_height(height: f64, doorway: &dyn Fn(&str) -> String) -> Result<(), String> {
+fn set_height(height: f64, api: &dyn Fn(&str) -> String) -> Result<(), String> {
     let value = format!("{height} mm");
-    let existing = call(doorway, json!({ "call": "properties", "object": TOY }))?;
+    let existing = call(api, json!({ "call": "properties", "object": TOY }))?;
     let answer = if existing["ok"] == true {
         call(
-            doorway,
+            api,
             json!({ "call": "set", "object": TOY, "property": "Height", "value": value }),
         )?
     } else {
         // A declaration, the way `obj.addProperty(...)` works in Python: the type has
         // no `Height` of its own, and the workbench defines it.
         call(
-            doorway,
+            api,
             json!({
                 "call": "create",
                 "name": TOY,
@@ -114,15 +114,15 @@ fn set_height(height: f64, doorway: &dyn Fn(&str) -> String) -> Result<(), Strin
     } else {
         Err(answer["error"]
             .as_str()
-            .unwrap_or("the doorway refused")
+            .unwrap_or("the api refused")
             .to_string())
     }
 }
 
-fn call(doorway: &dyn Fn(&str) -> String, request: Value) -> Result<Value, String> {
-    let answer = doorway(&request.to_string());
+fn call(api: &dyn Fn(&str) -> String, request: Value) -> Result<Value, String> {
+    let answer = api(&request.to_string());
     serde_json::from_str(&answer)
-        .map_err(|error| format!("the doorway answered invalid JSON: {error}"))
+        .map_err(|error| format!("the api answered invalid JSON: {error}"))
 }
 
 fn object_named<'a>(document: &'a Value, name: &str) -> Option<&'a Value> {
@@ -149,7 +149,7 @@ fn height_of(object: &Value) -> Option<f64> {
 /// A flat-shaded box on the origin plane, `height` millimetres tall.
 ///
 /// Six quads with their own vertices and one normal each, so the shading is flat
-/// without a normal-average pass. `entity` is the pick id the doorway reported, which
+/// without a normal-average pass. `entity` is the pick id the api reported, which
 /// is what makes a click resolve to `Toy`.
 fn slab_mesh(object: &Value, height: f64) -> Value {
     let half = FOOTPRINT / 2.0;
@@ -227,7 +227,7 @@ mod tests {
         SERIAL.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    /// A clean registry with one empty document, and the real doorway over it.
+    /// A clean registry with one empty document, and the real api over it.
     fn boot() -> ferrocad_doc_api::DocApi {
         let mut registry = ferrocad_core::application()
             .lock()
@@ -239,7 +239,7 @@ mod tests {
         ferrocad_doc_api::DocApi::new()
     }
 
-    fn doorway(api: &ferrocad_doc_api::DocApi) -> impl Fn(&str) -> String + '_ {
+    fn document_api(api: &ferrocad_doc_api::DocApi) -> impl Fn(&str) -> String + '_ {
         move |request| api.call(request)
     }
 
@@ -264,18 +264,18 @@ mod tests {
     }
 
     #[test]
-    fn a_command_creates_its_own_object_through_the_doorway() {
+    fn a_command_creates_its_own_object_through_the_document_api() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
+        let document_api = document_api(&api);
 
-        assert_eq!(run("Toy_Slab", &doorway), Ok(true));
+        assert_eq!(run("Toy_Slab", &document_api), Ok(true));
 
-        let document = call(&doorway, json!({ "call": "document" })).expect("a document");
+        let document = call(&document_api, json!({ "call": "document" })).expect("a document");
         let object = object_named(&document, TOY).expect("the toy is in the document");
         assert_eq!(object["type_id"], "App::FeaturePython");
         assert_eq!(height_of(object), Some(HEIGHT));
-        // The doorway's pick identity, and only the property the bundle declared.
+        // The document API's pick identity, and only the property the bundle declared.
         assert_eq!(object["entity"], 1);
         let properties = object["properties"].as_array().expect("rows");
         assert_eq!(properties.len(), 1, "{properties:?}");
@@ -287,13 +287,13 @@ mod tests {
     fn the_hook_draws_the_slab_the_document_cannot() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
+        let document_api = document_api(&api);
 
         // Before the object exists, the hook adds nothing.
-        assert!(meshes(&stage_meshes(&[], &doorway).expect("a hook answer")).is_empty());
+        assert!(meshes(&stage_meshes(&[], &document_api).expect("a hook answer")).is_empty());
 
-        assert_eq!(run("Toy_Slab", &doorway), Ok(true));
-        let stage = stage_meshes(&[], &doorway).expect("a hook answer");
+        assert_eq!(run("Toy_Slab", &document_api), Ok(true));
+        let stage = stage_meshes(&[], &document_api).expect("a hook answer");
         let rows = meshes(&stage);
         assert_eq!(rows.len(), 1);
         let mesh = &rows[0];
@@ -308,11 +308,11 @@ mod tests {
         assert_eq!(tallest(mesh), HEIGHT);
 
         // The taller command edits the same object; the hook reads the new height.
-        assert_eq!(run("Toy_Taller", &doorway), Ok(true));
-        let rows = meshes(&stage_meshes(&[], &doorway).expect("a hook answer"));
+        assert_eq!(run("Toy_Taller", &document_api), Ok(true));
+        let rows = meshes(&stage_meshes(&[], &document_api).expect("a hook answer"));
         assert_eq!(tallest(&rows[0]), TALLER);
         // The object was edited, not duplicated.
-        let document = call(&doorway, json!({ "call": "document" })).expect("a document");
+        let document = call(&document_api, json!({ "call": "document" })).expect("a document");
         assert_eq!(
             document["result"]["objects"].as_array().map(Vec::len),
             Some(1)
@@ -323,11 +323,11 @@ mod tests {
     fn the_hook_skips_what_the_document_already_meshed() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
-        assert_eq!(run("Toy_Slab", &doorway), Ok(true));
+        let document_api = document_api(&api);
+        assert_eq!(run("Toy_Slab", &document_api), Ok(true));
 
         assert_eq!(
-            stage_meshes(&[TOY.to_string()], &doorway),
+            stage_meshes(&[TOY.to_string()], &document_api),
             Ok("[]".to_string())
         );
     }
@@ -336,7 +336,7 @@ mod tests {
     fn someone_elses_command_is_refused_as_absent() {
         let _serial = serial();
         let api = boot();
-        let doorway = doorway(&api);
-        assert_eq!(run("Someone_Else", &doorway), Ok(false));
+        let document_api = document_api(&api);
+        assert_eq!(run("Someone_Else", &document_api), Ok(false));
     }
 }

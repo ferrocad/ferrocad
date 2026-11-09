@@ -92,7 +92,7 @@ pub struct HostConfig {
     pub open_document: Option<std::path::PathBuf>,
     /// Wasm workbenches to load beside the script half (`--addons=`, repeatable).
     ///
-    /// A bundle is sandboxed: its only capability is the document doorway. An addon that
+    /// A bundle is sandboxed: its only capability is the document API. An addon that
     /// will not load is reported and skipped. Empty means none, which is a normal start.
     pub addons: Vec<std::path::PathBuf>,
     /// Which script halves to install (`--script-host=`, `FERROCAD_SCRIPT_HOST`).

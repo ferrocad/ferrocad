@@ -14,7 +14,7 @@ use ferrocad_shell_api::DocumentApi;
 use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_wasm::{Capability, WasmAddonHost};
 
-/// One test at a time: the registry and the doorway's document are process-wide.
+/// One test at a time: the registry, and the document the API serves, are process-wide.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serial() -> MutexGuard<'static, ()> {
@@ -44,7 +44,7 @@ fn with_manifest(source: &PathBuf) -> tempfile::TempDir {
     temp
 }
 
-/// The real doorway over a clean registry with one empty document: a bundle cannot create
+/// The real document API over a clean registry with one empty document: a bundle cannot create
 /// an object with no document open, and that failure would read as a broken ABI.
 fn host(path: &PathBuf) -> WasmAddonHost {
     {
@@ -100,7 +100,7 @@ fn the_spring_bundle_creates_its_parameters_and_draws_the_helix() {
     }
 
     // Tightening reads the `Pitch` the insert declared, so it also proves the object and
-    // its parameters crossed the doorway, not just the ABI.
+    // its parameters crossed the document API, not just the ABI.
     let tightened = host
         .run_command("Spring_Tighten")
         .expect("the bundle's own command");

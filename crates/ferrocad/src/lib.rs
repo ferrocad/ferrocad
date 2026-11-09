@@ -202,7 +202,7 @@ pub struct EditionArgs {
     ///
     /// Addons ride beside the script half rather than replacing it, which is how the
     /// browser loads them (`?addons=`). Each bundle is sandboxed: its only capability is
-    /// the document doorway.
+    /// the document API.
     pub addons: Vec<std::path::PathBuf>,
 }
 

@@ -47,11 +47,11 @@ document. The plan and the verified baselines are in
    With RustPython the Console evaluates real Python against the same
    `FreeCAD.ActiveDocument` the model tree shows. That is RustPython linked into the
    module, so it costs size and build time; the plain runtime pays only the binary.
-   Under `?addons=1` a JS bundle calls the document through the same doorway the
+   Under `?addons=1` a JS bundle calls the document through the same document API the
    Python facade reads (`ferrocad_doc_api`) and draws its own object through the display
    hook: one document, no second registry, and no kernel in the bundle's graph.
    `?addons=wasm` runs the same workbench as a wasm module whose only import is that
-   doorway — nothing but text crosses the boundary.
+   document API — nothing but text crosses the boundary.
 7. **Text works.** GPUI's web platform starts with an empty font database and panics
    when it cannot resolve a font. The shell registers a bundled DejaVu Sans
    (`ferrocad_shell_core::fonts`), whose family is already in GPUI's fallback stack,
@@ -110,9 +110,9 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?dblclick=1` | a drag then two quick clicks (the viewport's double-click) |
 | `?save=1` | run `App_Save` (`Ctrl+S`); the page logs the bytes it was asked to download |
 | `?reopen=1` | save, capture those bytes instead of downloading, then open them again |
-| `?probe=1` | once the synthetic input has settled, log the document the doorway returns (`ferrocad harness: document {…}`), so a capture can assert on the document rather than on the canvas |
+| `?probe=1` | once the synthetic input has settled, log the document the document API returns (`ferrocad harness: document {…}`), so a capture can assert on the document rather than on the canvas |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
-| `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document doorway and draws it through the display hook |
+| `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
 
 `?type=` still depends on the field taking pointer focus, and synthetic pointer events
@@ -188,7 +188,7 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   drag-and-drop are the page's half.
 - **The wasm workbench edits the document.** `?runtime=js&addons=wasm` installs the
   page's script half and instantiates `www/addons/toy.wasm`, whose only import is the
-  document doorway. The console shows `ferrocad: scripting runtime js`,
+  document API. The console shows `ferrocad: scripting runtime js`,
   `ferrocad toy (wasm): registered Toy_Slab, Toy_Taller`, and — after the palette run
   (`ctrl-k;t;o;y;enter`) — `ferrocad toy (wasm): run Toy_Slab`. `?probe=1` then reads
   the document back through `window.ferrocad.call('{"call":"document"}')` (trimmed):
@@ -213,7 +213,7 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   ferrocad toy (wasm): document.recomputed {"objects":["Toy"]}
   ```
 
-  They come from the *doorway* (`DocApi::with_events`), not from the document half: an
+  They come from the *document API* (`DocApi::with_events`), not from the document half: an
   addon's own `create`/`set` never passes through `RustAppBackend`. A shell-driven edit
   (Move, undo, a property write) emits through the backend instead, so each edit is
   announced once, by whichever half performed it. `smoke.sh` asserts both lines.

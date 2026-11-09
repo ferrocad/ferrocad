@@ -3,7 +3,7 @@
 A sandboxed **wasm** workbench: a parametric helical spring.
 
 The document holds three numbers on an `App::FeaturePython` object — `Radius`, `Pitch` and
-`Turns` — and **no shape at all**. The bundle reads them through the doorway, computes the
+`Turns` — and **no shape at all**. The bundle reads them through the document API, computes the
 helix itself, and answers the display hook with the mesh. Editing a value in the property
 pane and recomputing redraws it, because the hook rereads the document.
 
@@ -28,6 +28,6 @@ booted.
 
 ## Why this is a wasm addon
 
-It computes geometry without linking an engine — the doorway is its only import, and the
+It computes geometry without linking an engine — the document API is its only import, and the
 sandbox's fuel budget bounds a runaway. `crates/ferrocad_addon_spring` is the source; its
 unit tests drive the same logic over a real `DocApi`.

@@ -1,4 +1,4 @@
-//! The document, as JSON calls: the one doorway a script runtime shares.
+//! The document, as JSON calls: the one document API a script runtime shares.
 //!
 //! `ferrocad_core` owns the document and `ferrocad_part` gives its shapes geometry.
 //! Neither can be linked into a script runtime: a second copy is a second document
@@ -67,19 +67,19 @@ pub mod payload;
 /// The protocol version a loader may check.
 pub const VERSION: u32 = 1;
 
-/// The JSON doorway over the process-wide document registry.
+/// The JSON API over the process-wide document registry.
 pub struct DocApi {
     /// Where committed edits are announced, when the host installed a sink.
     events: Option<std::sync::Arc<dyn DocumentEventSink>>,
 }
 
 impl DocApi {
-    /// A doorway that announces nothing: reads work, writes are not observed.
+    /// A document API that announces nothing: reads work, writes are not observed.
     pub fn new() -> Self {
         Self { events: None }
     }
 
-    /// A doorway that announces every committed edit and successful recompute.
+    /// A document API that announces every committed edit and successful recompute.
     ///
     /// The browser host gives it the page's sink, so an addon's own `create`/`set`
     /// reaches `onDocumentEvent` exactly like an edit the shell performed.
@@ -388,10 +388,10 @@ mod tests {
 
     /// Keep the seam's capability list in step with the dispatch above.
     ///
-    /// A new *mutating* arm that is not in `is_write` would make a read-only doorway
+    /// A new *mutating* arm that is not in `is_write` would make a read-only document API
     /// writable, which is exactly what the sandbox must not do.
     #[test]
-    fn the_doorway_s_verbs_are_classified() {
+    fn the_document_api_verbs_are_classified() {
         for call in ["create", "set", "recompute"] {
             assert!(is_write(call), "`{call}` mutates the document");
         }

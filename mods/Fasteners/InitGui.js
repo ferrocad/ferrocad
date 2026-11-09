@@ -4,7 +4,7 @@
 // window boots and reads `window.__ferrocadJs` once, so this merges into whatever another
 // package installed instead of replacing it.
 //
-// Every write goes through `window.ferrocad.call` — the JSON doorway — which is the same
+// Every write goes through `window.ferrocad.call` — the JSON API — which is the same
 // document CPython and the viewport reach. A host that refuses the write answers
 // `{"ok": false, …}`, and the command reports that instead of pretending it ran.
 
@@ -20,14 +20,14 @@ const byId = new Map(SIZES.map((size) => [size.id, size]));
 
 /** One screw: a cylinder with the shank's radius and length. */
 function insert(size) {
-  const doorway = window.ferrocad;
-  if (!doorway) {
-    console.error("fastener: no document doorway on this host");
+  const api = window.ferrocad;
+  if (!api) {
+    console.error("fastener: no document API on this host");
     return false;
   }
   const part = size.id.slice("Fastener_".length);
   const answer = JSON.parse(
-    doorway.call(
+    api.call(
       JSON.stringify({
         call: "create",
         name: `ISO4762_${part}`,

@@ -157,7 +157,7 @@ fn with_addons(
         }
 
         // The bundles reach the same registry the document half answers from, so an
-        // addon's `create` lands in the tree beside a CPython edit — and the doorway is
+        // addon's `create` lands in the tree beside a CPython edit — and the document API is
         // given a sink, so the **primary** hears about that edit exactly as it hears
         // about the shell's own.
         use std::sync::Arc;
@@ -246,7 +246,7 @@ fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, St
     };
     let page: Arc<dyn ferrocad_shell_js::Page> =
         Arc::new(page.map_err(|error| format!("the JS page did not boot: {error}"))?);
-    // The page's own doorway announces to the page, as the browser's does.
+    // The page's own document API announces to the page, as the browser's does.
     let events: Arc<dyn ferrocad_shell_api::DocumentEventSink> =
         Arc::new(ferrocad_shell_js::PageEvents::new(Arc::clone(&page)));
     let document = Arc::new(ferrocad_doc_api::DocApi::with_events(events));

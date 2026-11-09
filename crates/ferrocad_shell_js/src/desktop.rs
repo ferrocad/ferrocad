@@ -11,7 +11,7 @@
 //! **One thread owns the engine.** QuickJS values are tied to their runtime and are
 //! not `Send`, so the runtime lives on a worker thread and every [`Page`] call is a
 //! job on a channel. Two calls are *queued* rather than answered — viewport events and
-//! document events. A document event can be emitted from inside a doorway call (an
+//! document events. A document event can be emitted from inside a document API call (an
 //! addon's own `create`), i.e. while the engine is running, and answering it there
 //! would re-enter the runtime; queueing it delivers the event after the current job
 //! instead.
@@ -120,7 +120,7 @@ enum Job {
     Evaluate(String, Sender<Result<String, String>>),
     RunCommand(String, Sender<Result<bool, String>>),
     StageMeshes(String, Sender<Result<String, String>>),
-    /// Hand the page the doorway. No reply: the function is set up and the call
+    /// Hand the page the document API. No reply: the function is set up and the call
     /// returns, which is all the caller needs to know.
     InstallKernel(Arc<dyn Fn(String) -> String + Send + Sync>),
     /// A viewport event. Queued: the shell is drawing, and JS is not allowed to
@@ -131,7 +131,7 @@ enum Job {
         y: i32,
         entity: u32,
     },
-    /// A document event. Queued, because it can arrive from inside a doorway call.
+    /// A document event. Queued, because it can arrive from inside a document API call.
     DocumentEvent { id: String, payload: String },
 }
 
@@ -338,17 +338,17 @@ fn run(modules: Vec<PathBuf>, inbox: Receiver<Job>, ready: Sender<Result<(), Str
             Job::InstallKernel(call) => {
                 let installed = context.with(|ctx| -> Result<(), String> {
                     let kernel = Object::new(ctx.clone())
-                        .map_err(|error| describe(&ctx, "the doorway", error))?;
-                    let doorway = Function::new(ctx.clone(), move |request: String| -> String {
+                        .map_err(|error| describe(&ctx, "the document API", error))?;
+                    let api = Function::new(ctx.clone(), move |request: String| -> String {
                         call(request)
                     })
-                    .map_err(|error| describe(&ctx, "the doorway", error))?;
+                    .map_err(|error| describe(&ctx, "the document API", error))?;
                     kernel
-                        .set("call", doorway)
-                        .map_err(|error| describe(&ctx, "the doorway", error))?;
+                        .set("call", api)
+                        .map_err(|error| describe(&ctx, "the document API", error))?;
                     ctx.globals()
                         .set("ferrocad", kernel)
-                        .map_err(|error| describe(&ctx, "the doorway", error))
+                        .map_err(|error| describe(&ctx, "the document API", error))
                 });
                 if let Err(error) = installed {
                     log::error!("ferrocad js: {error}");

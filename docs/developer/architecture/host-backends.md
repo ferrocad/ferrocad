@@ -33,7 +33,7 @@ window and FilePicker; the seam (`ferrocad_shell_core` over `AppBackend` plus an
 optional `ScriptHost`); one `RustAppBackend` composed with one `ScriptHost` per
 runtime (CPython, RustPython, JS, or none); and the shared
 `ferrocad_core`/`ferrocad_part` engine, which the JS half and wasm addons reach
-through `ferrocad_doc_api`'s JSON doorway](../images/host-backends.svg)
+through `ferrocad_doc_api`'s JSON API](../images/host-backends.svg)
 
 The two browser configurations differ in **who runs the user's code**, not in what the
 shell sees. Both are `RustAppBackend` plus a script half —
@@ -47,7 +47,7 @@ Crates today:
 | Role | Crate | Notes |
 | --- | --- | --- |
 | Contract | `ferrocad_shell_api` | `AppBackend`, `ScriptHost`, and every view model |
-| Document doorway | `ferrocad_doc_api` | the JSON calls a JS/wasm addon shares; core-only |
+| Document document API | `ferrocad_doc_api` | the JSON calls a JS/wasm addon shares; core-only |
 | UI shell | `ferrocad_shell_core` | platform-neutral GPUI; no engine, no interpreter |
 | Backend · no runtime | `ferrocad_shell_rust` | `RustAppBackend`; desktop *or* wasm |
 | Backend · CPython | `ferrocad_shell_python` | `RustAppBackend` + `PythonScriptHost`; the crate is host **and** script half |
@@ -250,26 +250,26 @@ never links the document.
 **The page is a trait, not a browser.** [`Page`] is the eight-call contract; `WebPage`
 implements it over `window` and is the only `cfg(wasm)` piece, so the crate builds
 natively and its tests drive a fake page (the command merge, the display hook, the
-doorway and the event mapping are all covered without a browser). The desktop's page is
+document API and the event mapping are all covered without a browser). The desktop's page is
 `EnginePage` (behind `desktop`, B7): an embedded QuickJS that loads `mods/<Name>/InitGui.js`
 the way the Python side loads `InitGui.py`, aliases `window` to the global object and
 installs `ferrocad.call` over the host's `DocumentApi`, so the module — `www/js-demo.js`
 itself — does not know which host it is on. The browser's modules ship in `www/` and its
 page imports them; only the loader differs.
 
-**The document doorway.** A JS workbench has to create objects and set properties, and a
+**The document API.** A JS workbench has to create objects and set properties, and a
 second `ferrocad_core` in the page would be a second document. So the host hands the JS
 half a `DocumentApi` (`ferrocad_doc_api`), which `Page::install_kernel` turns into
 `window.ferrocad.call(request)` before the first command runs. The page sees JSON, the
 host's one document answers, and Part arrives because the host registered it — the
-doorway itself is core-only. See
+document API itself is core-only. See
 [`../../project/research/js-addons.md`](../../project/research/js-addons.md) for the
-protocol, the three shapes (static link, doorway, copied engine) and what is not built
+protocol, the three shapes (static link, document API, copied engine) and what is not built
 (a display hook, a wasm bundle).
 
 The JS backend is the composition
 `RustAppBackend::from_shared_registry().with_script_host(JsScriptHost::with_kernel(..))`.
-The registry source is what the doorway reads.
+The registry source is what the document API reads.
 
 ### wasm Python (RustPython)
 
@@ -353,12 +353,12 @@ browser.
 **wasm addons are orthogonal to the runtime, on both hosts.** `?addons=` and `--addons=`
 load a bundle beside whatever script half is running (the browser's page surfaces it; the
 desktop composes `ferrocad_shell_wasm::Addons`), so `wasm` is a package format rather than a
-fifth name. A bundle is sandboxed: its only import is the document doorway, it runs on an
+fifth name. A bundle is sandboxed: its only import is the document API, it runs on an
 interpreter with no executable memory, each call has a fuel budget — a workbench that loops
 forever traps instead of freezing the window — and it is **read-only** unless its
 `<stem>.json` manifest grants `"document": "read-write"`, refused into an ordinary
 `{"ok": false}` before the request reaches the document. Both hosts enforce that: the
-desktop with `document_api::is_write`, the page inside `loader.js`'s doorway.
+desktop with `document_api::is_write`, the page inside `loader.js`'s document API.
 
 ![The packaging: one document half; four script halves against two hosts, with each host's
 switch and what a build has to link; how each host is delivered — one native binary whose
@@ -372,7 +372,7 @@ Two engines were missing, and they are different dependencies:
   the `desktop` feature of `ferrocad_shell_js` and the `js` feature of `ferrocad`;
 - **a wasm engine**, for wasm addons — `ferrocad_addon_toy` already speaks a wasm import
   module (`ferrocad.call`) plus `(ptr, len)` exports, so **`wasmi`** hosts it by mapping
-  that import onto `ferrocad_doc_api`'s doorway, with the addon's JS glue
+  that import onto `ferrocad_doc_api`'s document API, with the addon's JS glue
   (`loader.js`, `toy.js`) re-done in Rust. An interpreter rather than a JIT: smaller, fuel
   metering for third-party mod code, and no executable memory. **Not built.**
 
@@ -470,7 +470,7 @@ snapshot is a `Document`; what it must not name is the kernel.
 `ferrocad_shell_python` may name `ferrocad_shell_js` only on native and only behind the
 `js` feature: the desktop's page is that same crate, and the reverse edge
 (`shell_js` → `shell_python`) must never exist. `ferrocad_doc_api` comes along because
-the page's doorway needs the document, not because the host does.
+the page's document API needs the document, not because the host does.
 
 `ferrocad_shell_pywasm` also cannot forbid `wasm-bindgen`: `rustpython-vm`'s `wasmbind`
 feature is what gives `getrandom` a `wasm32-unknown-unknown` backend. The crate must
@@ -527,10 +527,10 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
 - **`ScriptHost::overlays()`** returning stage-native scenes is the documented
   replacement for `inventor_scene`; until then the Coin compatibility path stays.
 - **A JS workbench can draw, but not make tools or observe.** The browser's `?addons=1`
-  bundle gets the document doorway, so a command creates and edits objects, and the
+  bundle gets the document API, so a command creates and edits objects, and the
   display hook (`stageMeshes`) puts an object the document cannot mesh on screen. The
   same workbench runs as a wasm module (`?addons=wasm`, `ferrocad_addon_toy`) whose only
-  import is that doorway. There is no JS `Tool`, no `apply_interaction` and no
+  import is that document API. There is no JS `Tool`, no `apply_interaction` and no
   `mod-events` subscription yet, and a bundle cannot supply the grid/provider hooks. See
   [`js-addons.md`](../../project/research/js-addons.md) §7.
 - **`ferrocad_shell_pywasm` has no tool or `pivy` path.** It is installed (the browser's

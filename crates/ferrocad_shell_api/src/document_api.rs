@@ -11,7 +11,7 @@
 //! ```
 //!
 //! The verbs, their arguments and the response envelope belong to the
-//! implementation (`ferrocad_doc_api`); this trait is only the doorway. That keeps
+//! implementation (`ferrocad_doc_api`); this trait is only the document API. That keeps
 //! `ferrocad_shell_js` free of the engine while still letting it hold a document.
 //!
 //! **Implementations must be callable re-entrantly.** A script reaches the document
@@ -19,7 +19,7 @@
 //! not hold a lock across the call and must not assume it is only ever entered from
 //! the top of the stack.
 
-/// A script runtime's doorway into the document.
+/// A script runtime's document API into the document.
 pub trait DocumentApi: Send + Sync {
     /// Run one request and return its JSON response.
     ///

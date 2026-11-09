@@ -6,12 +6,12 @@
 //! cost with no behaviour behind it. What wasm buys is a *package* that is isolated from
 //! the host: the bundle cannot read the filesystem, cannot reach the network, cannot
 //! allocate outside its linear memory, and cannot hold a document — its only capability is
-//! the doorway the host installs.
+//! the document API the host installs.
 //!
 //! The bundle contract is the browser's (`www/addons/loader.js`, `ferrocad_addon_toy`):
 //!
 //! ```text
-//! import  ferrocad.call(ptr, len) -> i64     the document doorway
+//! import  ferrocad.call(ptr, len) -> i64     the document API
 //! export  memory, ferrocad_alloc/ferrocad_dealloc,
 //!         ferrocad_commands() -> i64, ferrocad_run(ptr, len) -> i32,
 //!         ferrocad_stage_meshes(ptr, len) -> i64
@@ -21,7 +21,7 @@
 //! bundle's own memory, packed as `len << 32 | ptr` on the way out.
 //!
 //! **The sandbox.** Three properties are enforced rather than promised: the import list
-//! is exactly the doorway ([`Linker`] gets nothing else), the interpreter is `wasmi`
+//! is exactly the document API ([`Linker`] gets nothing else), the interpreter is `wasmi`
 //! (no JIT, no executable memory from third-party code), and every entry call is given a
 //! fuel budget — a bundle that loops forever traps with `OutOfFuel` instead of freezing
 //! the window.
@@ -60,7 +60,7 @@ pub const FUEL: u64 = 50_000_000;
 /// `addon.json` beside it. A sandbox whose default was write would not be a sandbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
-    /// Read the document; every mutating call is refused at the doorway.
+    /// Read the document; every mutating call is refused at the document API.
     Read,
     /// Read and write it.
     Write,
@@ -114,7 +114,7 @@ fn manifest_capability(bundle: &Path) -> Result<Capability, String> {
     }
 }
 
-/// A doorway that refuses the verbs which change the document.
+/// A document API that refuses the verbs which change the document.
 ///
 /// The check is on the request's `call` name, so the payloads never reach the document —
 /// which is also why the same door can be handed to a JS bundle later.
@@ -204,10 +204,10 @@ pub struct WasmAddonHost {
     capability: Capability,
 }
 
-/// The store's data: the doorway, and the handles the doorway needs while executing.
+/// The store's data: the document API, and the handles the document API needs while executing.
 struct HostState {
     document: Arc<dyn DocumentApi>,
-    /// Filled in after instantiation, because the doorway allocates through the bundle.
+    /// Filled in after instantiation, because the document API allocates through the bundle.
     handles: Option<Handles>,
 }
 
@@ -294,8 +294,8 @@ impl WasmAddonHost {
         let mut linker: Linker<HostState> = Linker::new(&engine);
         // The one import the sandbox grants.
         linker
-            .func_wrap("ferrocad", "call", doorway)
-            .map_err(|error| format!("the doorway: {error}"))?;
+            .func_wrap("ferrocad", "call", document_api)
+            .map_err(|error| format!("the document API: {error}"))?;
 
         let instance = linker
             .instantiate_and_start(&mut store, &module)
@@ -335,7 +335,7 @@ impl WasmAddonHost {
 
     /// Open a bundle from disk, with the capability its manifest grants.
     ///
-    /// No manifest means [`Capability::Read`]: writes are refused at the doorway until
+    /// No manifest means [`Capability::Read`]: writes are refused at the document API until
     /// the bundle asks for them.
     pub fn open(path: &Path, document: Arc<dyn DocumentApi>) -> Result<Self, String> {
         let capability = manifest_capability(path)?;
@@ -480,7 +480,7 @@ impl Bundle {
 }
 
 /// The `ferrocad.call` import: the sandbox's only capability.
-fn doorway(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> i64 {
+fn document_api(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> i64 {
     let (document, handles) = {
         let state = caller.data();
         match state.handles {
@@ -492,7 +492,7 @@ fn doorway(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> i64 {
     let request = match read(&caller, &handles, ptr, len) {
         Ok(request) => request,
         Err(error) => {
-            log::error!("wasm addon: the doorway cannot read the request: {error}");
+            log::error!("wasm addon: the document API cannot read the request: {error}");
             return 0;
         }
     };
@@ -501,7 +501,7 @@ fn doorway(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> i64 {
     match write(&mut caller, &handles, answer.as_bytes()) {
         Ok(packed) => packed,
         Err(error) => {
-            log::error!("wasm addon: the doorway cannot write the answer: {error}");
+            log::error!("wasm addon: the document API cannot write the answer: {error}");
             0
         }
     }
@@ -679,7 +679,7 @@ impl ScriptHost for WasmAddonHost {
     }
 }
 
-/// The doorway's sink: an addon's own `create`/`set` is an edit of the document.
+/// The document API's sink: an addon's own `create`/`set` is an edit of the document.
 ///
 /// The host gives the bundles a `DocApi` (that is what `ferrocad.call` reaches); this
 /// adapter is the sink that watches it, so an addon's edit is announced to the script half

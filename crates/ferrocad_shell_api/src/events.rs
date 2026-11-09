@@ -52,9 +52,9 @@ impl DocumentEvent {
 
 /// Where a component with no [`ScriptHost`](crate::app::ScriptHost) announces events.
 ///
-/// The document doorway (`ferrocad_doc_api`) is not a `ScriptHost`, but an addon's
+/// The document API (`ferrocad_doc_api`) is not a `ScriptHost`, but an addon's
 /// own `create`/`set` is still a document edit. A host that wants those observes
-/// them by giving the doorway a sink; it is `Send + Sync` because the doorway is.
+/// them by giving the document API a sink; it is `Send + Sync` because the document API is.
 pub trait DocumentEventSink: Send + Sync {
     /// Announce one event. Must not block or re-enter the document.
     fn document_event(&self, event: &DocumentEvent);

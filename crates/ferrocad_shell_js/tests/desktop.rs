@@ -2,7 +2,7 @@
 //!
 //! The module here is written the way `www/js-demo.js` is — it defines
 //! `window.__ferrocadJs` from `install()` — so what these tests prove is that the
-//! *same* script runs on the desktop, over the same doorway, through the same
+//! *same* script runs on the desktop, over the same document API, through the same
 //! `JsScriptHost`.
 
 #![cfg(feature = "desktop")]
@@ -32,7 +32,7 @@ export function install() {
     active: () => true,
     commands: () => JSON.stringify(commands),
     evaluate(code) {
-      if (code === "doorway") {
+      if (code === "api") {
         return window.ferrocad.call('{"op":"ping"}');
       }
       // The ordering proof for a queued event: this answer is produced after it.
@@ -60,7 +60,7 @@ fn workbench(dir: &str, source: &str) -> (tempfile::TempDir, PathBuf) {
     (temp, entry)
 }
 
-/// The host's document, as the doorway sees it.
+/// The host's document, as the document API sees it.
 #[derive(Default)]
 struct FakeDocument {
     requests: Mutex<Vec<String>>,
@@ -105,12 +105,12 @@ fn the_console_runs_in_the_module() {
 }
 
 #[test]
-fn the_doorway_is_ferrocad_call() {
+fn the_document_api_is_ferrocad_call() {
     let (_temp, entry) = workbench("Toy", WORKBENCH);
     let document = Arc::new(FakeDocument::default());
     let host = JsScriptHost::with_kernel(page(entry), Arc::clone(&document) as Arc<dyn DocumentApi>);
 
-    let answer = host.evaluate("doorway").expect("the console runs");
+    let answer = host.evaluate("api").expect("the console runs");
     assert!(answer.ok, "{}", answer.output);
     assert!(answer.output.contains("\"op\":\"ping\""), "{}", answer.output);
     assert_eq!(

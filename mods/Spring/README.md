@@ -12,9 +12,15 @@ That is arithmetic, not a kernel, which is why a bundle with no geometry can sti
 solid rather than a line. `Wire` is the tube's diameter, and it is clamped to 0.3 × the
 pitch when drawn, so tightening cannot fold the coils through each other.
 
+`Placement` is a real row, and the hook applies it: `App_Move`, the gizmo and Explode all
+move an object by writing that property, and one that has no such row is skipped. The mesh
+is cached against the values it was built from, because the host asks a display hook again
+on every sync — a shapeless object is never in the `have` list — and re-sweeping the tube
+each frame would cost about 61 million sandbox fuel.
+
 | command | what it does |
 | --- | --- |
-| `Spring_Insert` | create `Spring` with its four declared parameters |
+| `Spring_Insert` | create `Spring` with its five declared properties |
 | `Spring_Tighten` | halve `Pitch`, down to 1 mm |
 
 ## The bundle is built, not committed

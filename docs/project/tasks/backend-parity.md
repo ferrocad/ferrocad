@@ -1029,11 +1029,33 @@ Two facts shaped both packages:
   is needed. The hex socket is absent and stays absent: a socket is a cut, and the API has
   no boolean verb — two primitives, not a description of how to combine them.
 - `crates/ferrocad_addon_spring` + `mods/Spring/` — **wasm**: the document holds
-  `Radius`/`Pitch`/`Turns`/`Wire` on an `App::FeaturePython` with **no shape**, and the
-  bundle sweeps the tube itself — a ring of points per station, triangles, a normal per
-  point — and answers the display hook with it. `Spring_Insert` creates,
-  `Spring_Tighten` halves the pitch down to 1 mm. `addon.wasm` is a build artifact
+  `Radius`/`Pitch`/`Turns`/`Wire`/`Placement` on an `App::FeaturePython` with **no
+  shape**, and the bundle sweeps the tube itself — a ring of points per station,
+  triangles, a normal per point — and answers the display hook with it. `Spring_Insert`
+  creates, `Spring_Tighten` halves the pitch down to 1 mm. `addon.wasm` is a build artifact
   (`mods/Spring/README.md`), as `www/addons/toy.wasm` is.
+
+Two things that hook needs and did not have. The `Placement` row is not decoration:
+`translate` skips an object without one, so `App_Move`, the gizmo and Explode could not
+move the spring at all, and the hook had nothing to apply. And the host re-asks a display
+hook on every sync because `have` lists only what the document meshed — which a shapeless
+object is never in — so the bundle caches its tube against the five values it read; without
+that, 61 million fuel of wasm and a megabyte of JSON were spent per frame.
+
+**Found by running them.** Three gaps, all in the platform rather than the packages:
+
+- **A socket is a cut.** Two primitives give the shank and the head; the hex recess needs a
+  boolean, and the API has none (D16).
+- **Two primitives are two bodies.** There is no link verb, so the shank and its head move
+  separately. Creating a `Part::Compound` over both does not fix it yet either — measured
+  through `--script`: a container's own `Placement` is **not applied** by `recompute` (its
+  bounding box does not move), and `drawable` consumes only `Base`, so a compound is drawn
+  *beside* its children (four objects for two cylinders, a compound and a fuse). A body
+  capability is therefore three changes, not one: `links` in `create`, container placement
+  applied on execute, and a container's links consumed when drawing.
+- **Threads are geometry.** No thread object type and no geometry verbs; a helical thread is
+  a swept solid only the kernel can make, so a `ferrocad_part` thread feature has to exist
+  before an addon can ask for one.
 
 The bundle ABI moved to `ferrocad_addon`, so the two bundles share one implementation of
 the memory contract and the import instead of copying `unsafe` code.

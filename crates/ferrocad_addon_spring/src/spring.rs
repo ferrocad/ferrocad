@@ -12,6 +12,8 @@
 //! Pure: the api is a closure, so this module is tested on the host against the real
 //! [`ferrocad_doc_api`]. `abi.rs` supplies the same closure over an import in wasm.
 
+use std::sync::Mutex;
+
 use serde_json::{Value, json};
 
 /// The object this bundle owns.
@@ -39,6 +41,13 @@ const STEPS_PER_TURN: f64 = 24.0;
 /// Points around the drawn tube. Smooth enough at any zoom a preview is read at, and
 /// cheap: the whole default spring is under 5 000 triangles.
 const RING: usize = 12;
+
+/// The last mesh, keyed by everything it was built from.
+///
+/// The host asks a display hook again on every sync, and passes the objects the
+/// document already meshed as `have` — which a shapeless object is never in. Without
+/// this cache the tube would be rebuilt and re-serialised on every frame.
+static LAST: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 /// One entry of the bundle's command list.
 pub struct Command {
@@ -98,8 +107,20 @@ pub fn stage_meshes(have: &[String], api: &dyn Fn(&str) -> String) -> Result<Str
     let pitch = number_of(object, "Pitch").unwrap_or(PITCH);
     let turns = number_of(object, "Turns").unwrap_or(TURNS);
     let wire = number_of(object, "Wire").unwrap_or(WIRE);
-    serde_json::to_string(&[tube_mesh(object, radius, pitch, turns, wire)])
-        .map_err(|error| format!("the mesh is not JSON: {error}"))
+    let placement = text_of(object, "Placement").unwrap_or_default().to_string();
+
+    let key = format!(
+        "{}|{}|{radius}|{pitch}|{turns}|{wire}|{placement}",
+        object["entity"], object["label"]
+    );
+    if let Some(json) = cached(&key) {
+        return Ok(json);
+    }
+
+    let json = serde_json::to_string(&[tube_mesh(object, radius, pitch, turns, wire, &placement)])
+        .map_err(|error| format!("the mesh is not JSON: {error}"))?;
+    remember(key, json.clone());
+    Ok(json)
 }
 
 /// Create `Spring` with its declared parameters, unless it is already there.
@@ -140,6 +161,13 @@ fn insert(api: &dyn Fn(&str) -> String) -> Result<(), String> {
                     "value": format!("{WIRE} mm"),
                     "group": "Spring",
                     "doc": "Diameter of the wire the helix is drawn with",
+                },
+                // Without this row the shell's Move and the gizmo have nothing to write:
+                // `translate` skips an object that has no `Placement`.
+                "Placement": {
+                    "type": "App::PropertyPlacement",
+                    "group": "Spring",
+                    "doc": "Where the spring sits",
                 },
             }
         }),
@@ -210,12 +238,30 @@ fn number_in(rows: &Value, name: &str) -> Option<f64> {
         .ok()
 }
 
+/// A row's text, as the pane shows it.
+fn text_of<'a>(object: &'a Value, name: &str) -> Option<&'a str> {
+    object["properties"]
+        .as_array()?
+        .iter()
+        .find(|row| row["name"] == name)?["value"]
+        .as_str()
+}
+
 /// The solid the document cannot hold: a circle swept along the helix.
 ///
 /// A ring of points at every station, a quad between neighbouring stations, and a fan at
 /// each end. The frame is the helix's own: the outward radial direction and `tangent ×
-/// normal` turn with the curve, so the tube does not twist as it climbs.
-fn tube_mesh(object: &Value, radius: f64, pitch: f64, turns: f64, wire: f64) -> Value {
+/// normal` turn with the curve, so the tube does not twist as it climbs. The object's
+/// `Placement` is applied last, because the shell moves an object by writing that row and
+/// draws whatever the hook answers.
+fn tube_mesh(
+    object: &Value,
+    radius: f64,
+    pitch: f64,
+    turns: f64,
+    wire: f64,
+    placement: &str,
+) -> Value {
     let radius = radius.max(0.1);
     let pitch = pitch.max(0.1);
     let turns = turns.clamp(0.5, 200.0);
@@ -292,6 +338,18 @@ fn tube_mesh(object: &Value, radius: f64, pitch: f64, turns: f64, wire: f64) -> 
         ]);
     }
 
+    // The object's placement, as the pane spells it. A translation moves the points and
+    // leaves the normals alone; a rotation turns both.
+    let pose = parse_pose(placement);
+    for point in &mut positions {
+        let moved = pose.point([point[0] as f64, point[1] as f64, point[2] as f64]);
+        *point = [moved[0] as f32, moved[1] as f32, moved[2] as f32];
+    }
+    for normal in &mut normals {
+        let turned = pose.direction([normal[0] as f64, normal[1] as f64, normal[2] as f64]);
+        *normal = [turned[0] as f32, turned[1] as f32, turned[2] as f32];
+    }
+
     json!({
         "entity": object["entity"],
         "object": SPRING,
@@ -302,6 +360,109 @@ fn tube_mesh(object: &Value, radius: f64, pitch: f64, turns: f64, wire: f64) -> 
         "color": [0.35, 0.55, 0.85, 1.0],
         "display": "shaded",
     })
+}
+
+/// The last mesh, if it was built from `key`.
+fn cached(key: &str) -> Option<String> {
+    let last = LAST.lock().ok()?;
+    let (cached, json) = last.as_ref()?;
+    (cached.as_str() == key).then(|| json.clone())
+}
+
+fn remember(key: String, json: String) {
+    if let Ok(mut last) = LAST.lock() {
+        *last = Some((key, json));
+    }
+}
+
+/// A placement's text: the base point, and an axis-angle rotation in degrees.
+struct Pose {
+    base: [f64; 3],
+    axis: [f64; 3],
+    angle: f64,
+}
+
+impl Pose {
+    /// The origin, with no rotation.
+    fn identity() -> Self {
+        Self {
+            base: [0.0; 3],
+            axis: [0.0, 0.0, 1.0],
+            angle: 0.0,
+        }
+    }
+
+    /// A point of the object's frame, in world space.
+    fn point(&self, point: [f64; 3]) -> [f64; 3] {
+        let turned = self.direction(point);
+        [
+            turned[0] + self.base[0],
+            turned[1] + self.base[1],
+            turned[2] + self.base[2],
+        ]
+    }
+
+    /// A direction of the object's frame, in world space: rotated, not translated.
+    fn direction(&self, vector: [f64; 3]) -> [f64; 3] {
+        if self.angle == 0.0 {
+            return vector;
+        }
+        // Rodrigues: `v cosθ + (k × v) sinθ + k (k · v)(1 − cosθ)`.
+        let (sin, cos) = self.angle.sin_cos();
+        let axis = self.axis;
+        let cross = cross(axis, vector);
+        let along =
+            axis[0] * vector[0] + axis[1] * vector[1] + axis[2] * vector[2];
+        let k = along * (1.0 - cos);
+        [
+            vector[0] * cos + cross[0] * sin + axis[0] * k,
+            vector[1] * cos + cross[1] * sin + axis[1] * k,
+            vector[2] * cos + cross[2] * sin + axis[2] * k,
+        ]
+    }
+}
+
+/// `(x, y, z)`, or `(x, y, z; ax, ay, az; angle°)` — the row's own text, so the bundle
+/// reads exactly what the pane shows.
+fn parse_pose(text: &str) -> Pose {
+    let identity = Pose::identity();
+    let Some(inner) = text
+        .trim()
+        .strip_prefix('(')
+        .and_then(|text| text.strip_suffix(')'))
+    else {
+        return identity;
+    };
+    let mut parts = inner.split(';');
+    let Some(base) = parts.next().and_then(triple) else {
+        return identity;
+    };
+    let axis = parts.next().and_then(triple);
+    let degrees = parts.next().and_then(|angle| angle.trim().parse::<f64>().ok());
+    let (Some(axis), Some(degrees)) = (axis, degrees) else {
+        return Pose { base, ..identity };
+    };
+    let axis = unit(axis);
+    if axis == [0.0, 0.0, 0.0] {
+        return Pose { base, ..identity };
+    }
+    Pose {
+        base,
+        axis,
+        angle: degrees.to_radians(),
+    }
+}
+
+/// Three comma-separated numbers.
+fn triple(part: &str) -> Option<[f64; 3]> {
+    let values: Vec<f64> = part
+        .split(',')
+        .map(|value| value.trim().parse().ok())
+        .collect::<Option<Vec<f64>>>()?;
+    match values.as_slice() {
+        [x, y, z] => Some([*x, *y, *z]),
+        _ => None,
+    }
 }
 
 /// `a × b`.
@@ -354,6 +515,22 @@ mod tests {
         serde_json::from_str(stage).expect("the hook answers with a JSON array")
     }
 
+    /// Every point of the one mesh, as numbers.
+    fn points(stage: &str) -> Vec<[f64; 3]> {
+        rows(stage)[0]["positions"]
+            .as_array()
+            .expect("positions")
+            .iter()
+            .map(|point| {
+                [
+                    point[0].as_f64().expect("x"),
+                    point[1].as_f64().expect("y"),
+                    point[2].as_f64().expect("z"),
+                ]
+            })
+            .collect()
+    }
+
     #[test]
     fn the_catalogue_is_json() {
         let commands: Value = serde_json::from_str(&commands_json()).expect("valid JSON");
@@ -388,7 +565,11 @@ mod tests {
             .iter()
             .filter_map(|row| row["name"].as_str())
             .collect();
-        assert_eq!(names, ["Pitch", "Radius", "Turns", "Wire"], "{names:?}");
+        assert_eq!(
+            names,
+            ["Pitch", "Placement", "Radius", "Turns", "Wire"],
+            "{names:?}"
+        );
         assert_eq!(number_of(object, "Radius"), Some(RADIUS));
         assert_eq!(number_of(object, "Turns"), Some(TURNS));
         assert_eq!(number_of(object, "Wire"), Some(WIRE));
@@ -449,6 +630,79 @@ mod tests {
         assert_eq!(
             stage_meshes(&[SPRING.to_string()], &document_api),
             Ok("[]".to_string())
+        );
+    }
+
+    #[test]
+    fn the_tube_moves_with_the_placement() {
+        let _serial = serial();
+        let api = boot();
+        let document_api = document_api(&api);
+        assert_eq!(run("Spring_Insert", &document_api), Ok(true));
+
+        let before = points(&stage_meshes(&[], &document_api).expect("a hook answer"));
+        // The row `Move` and the gizmo write. Without it the shell skips the object.
+        let answer = call(
+            &document_api,
+            json!({
+                "call": "set",
+                "object": SPRING,
+                "property": "Placement",
+                "value": "(10, 20, 30)",
+            }),
+        )
+        .expect("the set answers");
+        assert_eq!(answer["ok"], true, "{answer}");
+        let after = points(&stage_meshes(&[], &document_api).expect("a hook answer"));
+
+        assert_eq!(before.len(), after.len());
+        for (before, after) in before.iter().zip(&after) {
+            for (axis, delta) in [10.0, 20.0, 30.0].into_iter().enumerate() {
+                assert!(
+                    (after[axis] - before[axis] - delta).abs() < 1e-3,
+                    "{before:?} -> {after:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_rotated_placement_turns_the_tube() {
+        let _serial = serial();
+        let api = boot();
+        let document_api = document_api(&api);
+        assert_eq!(run("Spring_Insert", &document_api), Ok(true));
+
+        // 90° about X: the helix climbs along -Y, and the radius plane is X/Z.
+        let answer = call(
+            &document_api,
+            json!({
+                "call": "set",
+                "object": SPRING,
+                "property": "Placement",
+                "value": "(0, 0, 0; 1, 0, 0; 90)",
+            }),
+        )
+        .expect("the set answers");
+        assert_eq!(answer["ok"], true, "{answer}");
+
+        let points = points(&stage_meshes(&[], &document_api).expect("a hook answer"));
+        let extreme = |axis: usize| {
+            points
+                .iter()
+                .map(|point| point[axis].abs())
+                .fold(f64::MIN, f64::max)
+        };
+        // The height went to Y; Z now holds the radius, not the climb.
+        assert!(
+            (extreme(1) - (PITCH * TURNS + WIRE / 2.0)).abs() < 1.0,
+            "y extent {}",
+            extreme(1)
+        );
+        assert!(
+            extreme(2) <= RADIUS + WIRE / 2.0 + 0.5,
+            "z extent {}",
+            extreme(2)
         );
     }
 

@@ -234,6 +234,14 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   Fit are wired; a pointer drag on the transform gizmo reaches the same
   `apply_interaction` hook but the headless capture drives it with zero deltas, so it
   is unverified there.
+- **Interactive Push/Pull and edge dress-up.** The shell arms Slots 2 and 3 and sets the
+  `Face`/`Edge` filter, but this host contributes no Part manipulator handles: no face
+  stem or edge scrubber appears, and the backend declines the `push_pull`/`dress_up`
+  commits as "not available in this build". The sample `Part::Fillet` is a feature, not
+  an editable handle. Closing the gap needs the `ferrocad_part_gui` factories added to
+  the web shell's contributions **and** a Rust commit path that creates the
+  `Part::Fillet`/`Part::Chamfer` feature or the extrusion and boolean. The Parametric
+  edition owns both halves today.
 - **`WP`.** The workplane command reports that none is wired (see
   [workplanes.md](../../docs/project/tasks/workplanes.md)); `Fit` is wired.
 - **Python workbenches.** `?pywasm=1` installs RustPython, so the Console evaluates

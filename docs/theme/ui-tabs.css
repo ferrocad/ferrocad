@@ -1,0 +1,90 @@
+/*
+ * Tabbed figure widget for the UI-control pages.
+ *
+ * mdBook has no built-in tab directive. The pages are plain HTML that mdBook
+ * passes through; `tools/build_book.py` adds this stylesheet and `ui-tabs.js`
+ * through `[output.html] additional-css` / `additional-js`.
+ */
+
+.fc-tabs {
+  margin: 1.25rem 0 1.75rem;
+  border: 1px solid var(--table-border-color, #2b3444);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg, #161923);
+}
+
+.fc-tabs__bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.4rem;
+  background: var(--table-alternate-bg, #1b2430);
+  border-bottom: 1px solid var(--table-border-color, #2b3444);
+}
+
+.fc-tabs__tab {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.35rem 0.8rem;
+  background: transparent;
+  color: var(--fg, #d8dbe0);
+  font: inherit;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+.fc-tabs__tab:hover {
+  background: var(--theme-hover, #263244);
+}
+
+.fc-tabs__tab.is-active {
+  background: var(--theme-hover, #263244);
+  color: var(--links, #48e5ff);
+  box-shadow: inset 0 -2px 0 var(--links, #48e5ff);
+}
+
+.fc-tabs__panel {
+  margin: 0;
+  padding: 0.75rem;
+}
+
+.fc-tabs__panel[hidden] {
+  display: none;
+}
+
+.fc-tabs img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.fc-tabs img.fc-tabs__closeup {
+  width: auto;
+  max-width: 720px;
+  margin: 0.85rem auto 0;
+}
+
+.fc-tabs figcaption {
+  margin-top: 0.65rem;
+  color: var(--fg, #d8dbe0);
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+
+.fc-tabs figcaption strong {
+  color: var(--links, #48e5ff);
+}
+
+@media (max-width: 700px) {
+  .fc-tabs__panel {
+    padding: 0.5rem;
+  }
+
+  .fc-tabs__tab {
+    flex: 1 1 auto;
+  }
+}

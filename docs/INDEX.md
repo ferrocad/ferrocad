@@ -24,7 +24,7 @@ folders are what `tools/build_book.py` publishes at
 | I want to… | Start here |
 | --- | --- |
 | understand 3D CAD concepts | [general/README.md](general/README.md) |
-| use the app's window (UI) | [user/README.md](user/README.md) and the [repository README](../README.md) |
+| use the app's window (UI) | [user/README.md](user/README.md), [UI controls](user/explanation/ui-controls.md) and the [repository README](../README.md) |
 | use the Python console, a macro, or a script (API) | [UI users and API users](user/explanation/ui-and-api.md), then [user/README.md](user/README.md) and [python-api/index.md](python-api/index.md) |
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
 | drive `FreeCAD` from another program | [mods/README.md#the-json-boundary-for-automated-clients](mods/README.md#the-json-boundary-for-automated-clients) and [python-api/ferrocad_shell.md](python-api/ferrocad_shell.md) |
@@ -47,10 +47,11 @@ where the mapping needs them.
 
 ## User documentation
 
-The pages a user reads. They are **generated** by `tools/userdocs.py` from the
-executable workflows in `tools/workflows/`, so a code block is the code that ran and a
-table is what it read back. Never hand-edit them; edit the workflow. The mdBook edition
-is assembled from these pages and the addon pages below.
+The pages a user reads. The tutorial and most how-to pages are **generated** by
+`tools/userdocs.py` from the executable workflows in `tools/workflows/`, so a code block
+is the code that ran and a table is what it read back. The explanation pages and the
+loadout how-to are authored. Never hand-edit the generated pages; edit the workflow. The
+mdBook edition is assembled from these pages and the addon pages below.
 
 - [user/README.md](user/README.md) — the generated index and progress list; the workflows implemented today.
 - [user/tutorials/first-model.md](user/tutorials/first-model.md) — build your first model, one pass end to end.
@@ -66,6 +67,16 @@ is assembled from these pages and the addon pages below.
 - [user/how-to/undo-and-persistence.md](user/how-to/undo-and-persistence.md) — undo an edit and reload the document.
 - [user/explanation/how-the-shell-talks-to-the-document.md](user/explanation/how-the-shell-talks-to-the-document.md) — why the shell is a client of the facade, and why dialogs are data.
 - [user/explanation/ui-and-api.md](user/explanation/ui-and-api.md) — a gentle introduction to UI users, API users (console, macros, scripts), and the FreeCAD/Ondsel history behind the split.
+- [user/explanation/ui-controls.md](user/explanation/ui-controls.md) — the window's controls at a glance, and where each control surface lives.
+- [user/explanation/ui-chrome.md](user/explanation/ui-chrome.md) — the title bar, application menu, status line and Dev Tools window.
+- [user/explanation/ui-toolbars.md](user/explanation/ui-toolbars.md) — the floating viewport toolbar: Grid, Axes, WP, Gizmo, Select and Snap.
+- [user/explanation/ui-action-bar.md](user/explanation/ui-action-bar.md) — the bottom-centre action bar, the active tool strip and the Search palette.
+- [user/explanation/ui-wheel-menu.md](user/explanation/ui-wheel-menu.md) — the radial object-verb menu: armed/latched gestures and the context target.
+- [user/explanation/ui-tool-loadout.md](user/explanation/ui-tool-loadout.md) — the bottom-left loadout, the slots and the `Select` topology filter.
+- [user/explanation/ui-move.md](user/explanation/ui-move.md) — the Move hand: the coordinate row, offsets vs coordinates and hover-to-arm.
+- [user/explanation/ui-rotate.md](user/explanation/ui-rotate.md) — the Rotate rings: the angle row, the one-ring lock and `Reset 0°`.
+- [user/explanation/ui-extrude.md](user/explanation/ui-extrude.md) — the Push/Pull stem: extrude and pocket, and the browser gap.
+- [user/explanation/ui-fillet.md](user/explanation/ui-fillet.md) — the Fillet edge scrubber, radius/chamfer and the browser gap.
 
 ## Mods documentation
 
@@ -164,7 +175,7 @@ here.
 - [developer/workbenches/mod-providers.md](developer/workbenches/mod-providers.md) — how a mod declares its providers and how the active backend is chosen.
 - [developer/workbenches/part-api-audit.md](developer/workbenches/part-api-audit.md) — the repeatable Part/OCCT surface audit and its `--check` contract.
 - [developer/workbenches/qt-strategy.md](developer/workbenches/qt-strategy.md) — running upstream workbench GUIs without Qt: the measured surface and Q0–Q5.
-- [developer/workbenches/screenshot-tool.md](developer/workbenches/screenshot-tool.md) — the three screenshot scopes, the snapshot spec and the GPU-free image manifest gate.
+- [developer/workbenches/screenshot-tool.md](developer/workbenches/screenshot-tool.md) — the three `tools/screenshot.py` scopes, the `tools/ui_shots.py` highlighted UI figures, the `tools/ui_gifs.py` interaction animations (Xephyr and headless Chrome), the snapshot spec and the GPU-free image manifest gate.
 - [developer/workbenches/toy-workbench.md](developer/workbenches/toy-workbench.md) — the kernel-free reference edition and the template for a new workbench.
 
 ## Project documentation

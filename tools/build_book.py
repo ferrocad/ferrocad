@@ -41,6 +41,7 @@ USER = DOCS / "user"
 API = DOCS / "python-api"
 MODS = DOCS / "mods"
 GENERAL = DOCS / "general"
+THEME = DOCS / "theme"
 DEFAULT_OUT = REPO / "target" / "user-book"
 GITHUB = "https://github.com/ferrocad/ferrocad/blob/main"
 BOOK_TITLE = "FerroCAD User Guide"
@@ -79,6 +80,8 @@ def book_toml(site_url: str = "") -> str:
         "",
         "[output.html]",
         'default-theme = "navy"',
+        'additional-css = ["src/theme/ui-tabs.css"]',
+        'additional-js = ["src/theme/ui-tabs.js"]',
     ]
     if site_url:
         lines.append(f'site-url = "{site_url}"')
@@ -117,6 +120,9 @@ def book_sources() -> list[tuple[Path, Path]]:
         pairs.append((path, _book_path(path)))
     for path in sorted(MODS.glob("*.md")):
         pairs.append((path, _book_path(path)))
+    for path in sorted(THEME.rglob("*")):
+        if path.is_file():
+            pairs.append((path, Path("theme") / path.relative_to(THEME)))
     return pairs
 
 

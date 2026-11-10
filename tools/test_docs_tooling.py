@@ -517,6 +517,27 @@ class TestBook(unittest.TestCase):
             build_book.book_toml("https://ferrocad.github.io/docs/"),
         )
 
+    def test_the_tab_widget_is_injected_into_the_book(self):
+        toml = build_book.book_toml("")
+        self.assertIn('additional-css = ["src/theme/ui-tabs.css"]', toml)
+        self.assertIn('additional-js = ["src/theme/ui-tabs.js"]', toml)
+        copied = {rel.as_posix(): source for source, rel in build_book.book_sources()}
+        self.assertIn("theme/ui-tabs.css", copied)
+        self.assertIn("theme/ui-tabs.js", copied)
+        self.assertTrue(copied["theme/ui-tabs.css"].is_file())
+        self.assertTrue(copied["theme/ui-tabs.js"].is_file())
+
+    def test_ui_control_figure_sources_exist(self):
+        pages = sorted((build_book.USER / "explanation").glob("ui-*.md"))
+        self.assertTrue(pages)
+        for page in pages:
+            text = page.read_text()
+            sources = re.findall(r'<img[^>]+src="([^"]+)"', text)
+            sources += re.findall(r'!\[[^\]]*\]\(([^)]+)\)', text)
+            for src in sources:
+                target = (page.parent / src).resolve()
+                self.assertTrue(target.is_file(), f"{page.name}: missing {src}")
+
     def test_images_are_copied_but_not_listed_as_chapters(self):
         import tempfile
 

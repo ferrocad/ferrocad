@@ -43,7 +43,8 @@ a workbench command call the same functions.
 - **New to 3D CAD?** — [A gentle introduction to 3D CAD architecture](general/README.md):
   NURBS/B-Rep vs meshes, the tessellation and GPU pipeline, topological naming, and
   how FerroCAD's crates map onto them.
-- **Using the app (UI)** — [user/README.md](user/README.md) and the
+- **Using the app (UI)** — [user/README.md](user/README.md), the
+  [UI controls](user/explanation/ui-controls.md) tour, and the
   [repository README](../README.md) for the window.
 - **Using the API (console, macros, scripts)** —
   [UI users and API users](user/explanation/ui-and-api.md), the generated

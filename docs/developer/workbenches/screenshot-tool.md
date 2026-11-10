@@ -1,6 +1,6 @@
 # Screenshots: generated viewport snapshots and manual app captures
 
-Status: reference (2026-10-27). Companion to
+Status: reference (2026-10-27; browser capture path 2026-11-10). Companion to
 [`../../user/README.md`](../../user/README.md) (the generated workflow pages),
 [`../../README.md`](../../README.md) (the docs index) and
 [`../viewport/render-diagnostics.md`](../viewport/render-diagnostics.md) (the render
@@ -19,6 +19,11 @@ spec, it renders through the same `Stage` → `WgpuRenderer` path as the window,
 the image gate is GPU-free. Use `chrome` when the *shell* is the point (the README
 hero, a release note about the window). Use `desktop` only when the surrounding
 session is genuinely part of the picture; it captures other windows too.
+
+A fourth route, independent of `tools/screenshot.py`, is the **browser build in
+headless Chrome**: the wasm host runs the same `ferrocad_shell_core` UI and its page
+harness can drive the controls through the URL. See
+[Browser build + headless Chrome](#browser-build--headless-chrome).
 
 ## The renderer
 
@@ -71,7 +76,7 @@ tessellates first.
   out-of-range index or a camera with no view direction is a spec error, not a
   blank frame.
 
-## The two CLIs
+## The tools
 
 ### `tools/screenshot.py`
 
@@ -174,6 +179,86 @@ neither is available, the tool reports that and suggests `--mode chrome` instead
 producing a misleading image. Remember that a desktop capture includes every other
 window.
 
+### `tools/ui_shots.py` — highlighted control figures
+
+Every UI-control page under `user/explanation/` pairs a full-window snapshot (with a cyan
+box around the control) with a tight close-up, in a **Desktop / Web** tab pair. The tool
+captures each figure from the source that can show it:
+
+- **Move and Rotate** are captured twice: from the wasm browser host in headless Chrome
+  (no display) and from the Parametric app in Xephyr. The browser tab shows the docked
+  transform row; the desktop tab is the one where the triad and rings are visible.
+- **Extrude and Fillet** are captured twice as well. The desktop tab shows the Part
+  manipulator; the browser tab is the documented gap — the slot is armed but no stem or
+  scrubber is contributed.
+- **Chrome, toolbar, action bar and tool loadout** are captured from both hosts. The
+  chrome figure opens the application menu; the wheel figure needs a pointer press, so
+  both hosts use their input harnesses.
+- The **Xephyr** source runs the Parametric app inside a private X server. On a Wayland
+  host, synthetic input sent through Xwayland does not reliably reach the app's X11
+  window while the compositor owns focus; inside Xephyr the input is local to that X
+  server and the app runs unchanged.
+
+```sh
+python3 tools/ui_shots.py                    # every section
+python3 tools/ui_shots.py --section move-desktop
+python3 tools/ui_shots.py --section move-web rotate-web
+python3 tools/ui_shots.py --section wheel-menu --out-dir docs/user/images
+```
+
+It writes `ui-<section>-window.png` and `ui-<section>.png` (the close-up is scaled 2×).
+The sections live in the tool's `SECTIONS` table: `chrome-{web,desktop}`,
+`wheel-menu` (the desktop wheel) and `wheel-menu-web`, `toolbar-{web,desktop}`,
+`action-bar-{web,desktop}`, `loadout-{web,desktop}`, and
+`{move,rotate,extrude,fillet}-{web,desktop}`. The Xephyr-backed sections need a built
+`target/debug/ferrocad_parametric` (or `--app-bin`), `Xephyr`, `xwininfo`, `xwd` and
+Pillow; the web-backed sections need a built `www/pkg` and Chrome/Chromium. Like the
+other chrome captures, these are manual artefacts: `--check` does not inspect them and
+`--capture` never writes them.
+
+The pages place the two sources in one tabbed figure (the widget is `theme/ui-tabs.css`
+and `theme/ui-tabs.js`, injected by `tools/build_book.py`). Desktop is the first tab
+because it is where the gizmo and the Part manipulators are drawn; the Web tab keeps the
+browser layout and its gaps visible instead of hiding them.
+
+### `tools/ui_gifs.py` — interaction GIFs
+
+The still figures cannot show a drag. `tools/ui_gifs.py` records short animations of the
+desktop gestures and writes `ui-<section>.gif`:
+
+| Section | Gesture |
+| --- | --- |
+| `tools` | click a body, then `1` (Move/Rotate), `2`, `3`, `0`; each hand re-picks its target |
+| `pick` | Inspect with the `Body \| Face \| Edge` filter, clicking each scope |
+| `pushpull` | select a face, drag the amber stem, release |
+| `fillet` | select an edge, drag the radius arc, release |
+| `wheel` | right-press, flick to Rotate, release, re-pick the rings |
+
+The source is the same Xephyr session as the `*-desktop` stills. The tool synthesises
+XTEST input, captures the window with `xwd` between events, crops and scales each frame,
+draws a synthetic cursor (red while a button is down) and a carried caption, then writes
+an optimised GIF with a shared 128-colour palette. `--keep-frames` also writes the
+processed frames under `target/gif-frames/<section>/` for inspection.
+
+```sh
+python3 tools/ui_gifs.py                       # all five GIFs
+python3 tools/ui_gifs.py --section pushpull fillet
+python3 tools/ui_gifs.py --section pick --keep-frames
+```
+
+Like the stills, these are manual artefacts: they depend on the app, the X server and
+the font stack, so `--check` does not pin them. `xwd` can move the X input focus back to
+the root, so the tool restores focus after every capture; without that the next
+synthetic key never reaches the app.
+
+The browser host cannot supply these gestures yet: it has no Part Push/Pull or Fillet
+manipulator, and its query harness produces one final screenshot rather than a frame
+sequence. A browser GIF would need a scripting driver (CDP/Puppeteer) **and** the missing
+manipulators; the desktop route is the one that shows the real gizmo. The `wheel` section
+ends with a re-pick because the wheel's Rotate verb equips the hand but leaves the
+existing triad until the next selection change; the GIF shows that follow-up click rather
+than pretending the rings appear immediately.
+
 ### `tools/userdocs.py --capture`
 
 Use it when the image belongs to a generated page. A workflow records the spec in
@@ -198,11 +283,88 @@ kernel shape with `tessellate()`. See
 [`../../user/how-to/toy-workbench.md`](../../user/how-to/toy-workbench.md) for the two
 working examples.
 
+## Browser build + headless Chrome
+
+The still Web tabs use this route. Animated GIFs are **desktop-only** today; see
+[`tools/ui_gifs.py`](#toolsui_gifspy--interaction-gifs).
+
+The wasm host `ferrocad_web_gpui` is the same `ferrocad_shell_core` window on
+WebGL2. Its page (`www/index.html`) exposes a query-string harness that synthesises
+input, and Chrome's `--screenshot` writes the resulting frame. Unlike the X11 chrome
+path, it needs no display server and no X11/Wayland toolkit, so it works on a
+Wayland-only session and in CI.
+
+Build and serve it:
+
+```sh
+crates/ferrocad_web_gpui/run.sh              # build, serve on :8081, open a browser
+crates/ferrocad_web_gpui/run.sh --no-open    # build and serve without opening one
+crates/ferrocad_web_gpui/run.sh --build-only # build www/pkg only
+crates/ferrocad_web_gpui/run.sh --check      # build, run the baseline headless smoke
+```
+
+The build needs Docker and the wasm OCCT kernel; `run.sh` prepares both. The
+capture itself needs only `www/pkg`, a static server and Chrome/Chromium.
+`smoke.sh` is the automated form: it runs the same Chrome flags, asserts the console
+baseline and discards its screenshots. `run.sh --check` skips cleanly when Chrome or
+`www/pkg` is missing.
+
+A verified wheel capture (1280×800):
+
+```sh
+python3 -m http.server 8099 --bind 127.0.0.1 \
+  --directory crates/ferrocad_web_gpui/www &
+
+google-chrome --headless=new --no-sandbox --disable-dev-shm-usage \
+  --use-angle=swiftshader --enable-unsafe-swiftshader \
+  --window-size=1280,800 --virtual-time-budget=20000 \
+  --screenshot=target/shots/web-wheel.png \
+  'http://127.0.0.1:8099/?keys=move:600,384;space'
+```
+
+`?keys=move:600,384;space` positions the pointer and opens the wheel **latched**, so
+the screenshot taken when the 20 s virtual-time budget expires is the stable open
+state. The Move/Rotate control figures use 1600×1000: at 1280×800 the loadout bar and the
+centred action bar overlap in the browser layout. `?click=`, `?select=`, `?drag=`,
+`?wheel=`, `?type=`, `?probe=`, `?runtime=` and `?addons=` cover the other states; the
+full step grammar and the verified baselines are in
+[`crates/ferrocad_web_gpui/README.md`](../../../crates/ferrocad_web_gpui/README.md#run-it)
+and [`smoke.sh`](../../../crates/ferrocad_web_gpui/smoke.sh).
+
+The Web tab of every UI-control figure uses this route: chrome, wheel, toolbar, action
+bar, loadout, Move, Rotate, Extrude and Fillet. The Desktop tabs use the Parametric
+edition and the Xephyr source in `tools/ui_shots.py`. For Extrude and Fillet the browser
+tab deliberately records the gap: the browser host does not yet contribute the Part face
+and edge manipulators; see [the browser gaps](../../../crates/ferrocad_web_gpui/README.md#what-it-does-not-have-yet).
+
+**What it is good for**
+
+- Control figures — toolbar, loadout, action bar, wheel, palette — with no display.
+- The browser layout: one window, the in-window inspector/property/console column,
+  and no Dev Tools window.
+- Reproducible `?keys`/`?click` states in a fixed viewport (the UI-control figures use
+  1600×1000).
+- CI, where no X server is available.
+
+**What it is not**
+
+- The browser host has **no desktop title bar and no Dev Tools window**. Use the X11
+  capture (or `tools/ui_shots.py`) when the chrome is the subject.
+- It runs the Rust document backend on the wasm OCCT kernel by default, not the
+  CPython Part edition. The same command ids can have different enablement and
+  different verbs: the browser wheel offers `Hide`, where the desktop Part wheel
+  offers `Toggle visibility` and `Save WP`.
+- The page's synthetic pointer input races the frame's hit test. `?type=` is
+  best-effort and the bottom action dock is unreliable, as the web README notes.
+  Prefer `?keys`, the palette (`ctrl-k;…;enter`) and the wheel, which latch.
+- The module is tens of MB and the first load is slow; give
+  `--virtual-time-budget` enough headroom for the wasm OCCT boot.
+
 ## Why `--check` is safe without a GPU
 
-The manifest covers the **viewport** images produced by workflows. Chrome and
-desktop captures are one-off artefacts: they are not reproducible enough to pin
-(they depend on the window manager and the live desktop), so `--check` does not
+The manifest covers the **viewport** images produced by workflows. `--mode chrome` and
+`--mode desktop` captures are one-off artefacts: they are not reproducible enough to
+pin (they depend on the window manager and the live desktop), so `--check` does not
 inspect them and `--capture` never writes them.
 
 
@@ -230,13 +392,25 @@ committed PNGs and the manifest untouched.
 - The viewport renderer draws the **stage** vocabulary only. It does not draw the
   shell, Dev Tools, the navigation cube, the grid overlay or selection
   highlighting; use `--mode chrome` for those.
-- Chrome capture is X11-only (X11, Xwayland, Xvfb, CI). It can start Xvfb on a
-  headless Linux machine, but the resulting frame has no window-manager title bar
-  (the app's own client-side frame is still there).
+- `--mode chrome` capture is X11-only (X11, Xwayland, Xvfb, CI). It can start Xvfb
+  on a headless Linux machine, but the resulting frame has no window-manager title
+  bar (the app's own client-side frame is still there).
 - Desktop capture uses X11 root capture, then `grim`, then the portal. The portal
   may prompt and needs PyGObject; `grim` needs a wlroots-compatible compositor.
 - Chrome/desktop capture is implemented for Linux today. The viewport renderer is
-  cross-platform; a native Windows/macOS window capture is not wired yet.
+  cross-platform; a native Windows/macOS window capture is not wired yet. The
+  browser route is the exception: headless Chrome works wherever Chrome runs.
+- UI-control figures (`tools/ui_shots.py`): the `*-web` sections need a built `www/pkg`
+  and Chrome/Chromium; the `*-desktop` and `wheel-menu` sections need Xephyr, an X11
+  parent (X11 or Xwayland), the Parametric binary and a GPU adapter. All are manual, so
+  their pixels are not pinned in CI.
+- Interaction GIFs (`tools/ui_gifs.py`) need the same Xephyr/X11/Parametric stack as
+  the `*-desktop` stills, plus Pillow for the GIF encoder. They are manual and their
+  pixels are not pinned.
+- Browser capture (`ferrocad_web_gpui` + headless Chrome) needs a built `www/pkg`
+  (Docker for the build) and Chrome/Chromium, but no display server. It has no
+  desktop title bar or Dev Tools and runs the Rust document backend; `?type=` and the
+  bottom action dock are best-effort under synthetic pointer input.
 - A mesh must already be tessellated by the producer; the renderer has no kernel and
   no BREP reader.
 - The output is deterministic for a given spec and renderer build, not a promise

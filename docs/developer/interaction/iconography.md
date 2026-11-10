@@ -881,6 +881,47 @@ withdrawn**, and the 21 were:
 `revolve profile`, `fillet edge`, `chamfer edge`, `section plane`, `tube solid`,
 `wedge solid`.
 
+**Request clarification, 2026-11-06.** Only `extrude solid` was ever drawn, so each open
+concept was re-queried with several wordings. The catalogue has **no CAD vocabulary**:
+every query comes back `weak`, and the nearest hits are homonyms — `shell` → a seashell
+(`weather`), `plane` → an aircraft (`travel`), `loft` → an attic bedroom (`hotel`), `edge`
+→ a network edge, `profile` → a user profile, `hole` → a paper punch. A drawing agent
+reading "shell solid" pictures a seashell; the request was clear to a CAD engineer and
+ambiguous to everyone else.
+
+The 20 open concepts were therefore re-filed as **pictures plus a sibling**, in the naming
+style that worked (`extrude solid` → `extrude-shape`). Each `why` says what the glyph must
+show, which family it belongs to, and which existing icon it should sit beside; two rule
+out the homonym outright.
+
+| Was | Now | Picture |
+| --- | --- | --- |
+| arc | `arc line` | one curved stroke between two endpoints, no chord |
+| arc through three points | *(unchanged)* | a curve through three marked dots |
+| facebinder | `surface patch` | a flat surface inside an irregular outline |
+| offset outline | *(unchanged)* | a shape with a second parallel outline inside it |
+| slope angle | `draft angle` | a face slanted away from vertical, angle marked |
+| loft profiles | `loft solid` | two profiles joined by side lines |
+| sweep along path | `sweep solid` | a square profile sliding along a curved path |
+| shell solid | `hollow solid` | a block hollowed out with an even wall |
+| pocket cavity | `cavity cut` | a rectangular recess in the top of a block |
+| hole | `through hole` | a hole bored through a block, shown in section |
+| make face | `filled outline` | a closed wire with its interior shaded |
+| make solid | `solid from outline` | a dashed wire becoming a shaded volume |
+| fillet edge | `rounded solid edge` | a 3-D edge rounded; not the 2-D `corner-radius` |
+| chamfer edge | `chamfered solid edge` | a 3-D edge cut at 45°; not a hand bevel gauge |
+| section plane | `cutting plane` | a translucent plane slicing a block; not an aircraft |
+| tube solid | `hollow cylinder` | a pipe with a bore on its axis |
+| wedge solid | *(unchanged)* | a right triangular prism with a sloped face |
+| revolve profile | `revolved solid` | a profile spun about an axis, a turned vase |
+| dimension angle | `angular dimension` | one glyph: an arc between extension lines |
+| dimension radius | `radius dimension` | one glyph: a leader from the circle centre |
+
+All 20 were accepted. The concept ledger is **33 concepts: 1 delivered, 12 withdrawn, 20
+open** — the renames change the words, not the set. Any concept that still does not land
+stays authored here (loft, sweep, hollow solid, filled outline and solid from outline
+already ship as drawings), so a refused request costs nothing but a line in this log.
+
 ### Contact sheets
 
 The rendered comparison is checked in beside the design notes. Every card labels the

@@ -71,7 +71,10 @@ const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("../assets/icons/view-right.svg"),
     ),
     ("view-rear", include_bytes!("../assets/icons/view-rear.svg")),
-    ("extrude", include_bytes!("../assets/icons/extrude.svg")),
+    (
+        "extrude-shape",
+        include_bytes!("../assets/icons/extrude-shape.svg"),
+    ),
     ("loft", include_bytes!("../assets/icons/loft.svg")),
     ("sweep", include_bytes!("../assets/icons/sweep.svg")),
     ("thickness", include_bytes!("../assets/icons/thickness.svg")),

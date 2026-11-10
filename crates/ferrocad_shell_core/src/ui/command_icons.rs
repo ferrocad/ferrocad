@@ -156,7 +156,7 @@ pub(crate) fn icon_for(command_id: &str) -> Option<&'static str> {
         "Std_ViewRight" => "view-right",
         "Std_ViewRear" => "view-rear",
         // Solid verbs that were on the note's draw list.
-        "Part_Extrude" => "extrude",
+        "Part_Extrude" => "extrude-shape",
         "Part_Loft" => "loft",
         "Part_Sweep" => "sweep",
         "Part_Thickness" => "thickness",

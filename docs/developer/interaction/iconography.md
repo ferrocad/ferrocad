@@ -522,7 +522,7 @@ it leaves the draw list.
 
 | Need | Upstream icon (1.1.4) | IconMCP | Verdict |
 | --- | --- | --- | --- |
-| Extrude | `Part_Extrude` | `extrude` | authored |
+| Extrude | `Part_Extrude` | `extrude-shape` | use |
 | Revolve | `Part_Revolve` | `rotate-3d` | metaphor |
 | Loft | `Part_Loft` | `loft` | authored |
 | Sweep | `Part_Sweep` | `sweep` | authored |
@@ -589,7 +589,7 @@ measurement types (`Measure/Gui/Resources/icons`), not command ids. This table i
 therefore the measurement **mode** vocabulary, kept for a future measure panel; only
 `Std_Measure` is wired today (`measure-tool`).
 
-**Totals: 179 needs — 127 `use`, 19 `metaphor`, 9 `compose`, 16 `authored`, 8 `draw`.**
+**Totals: 179 needs — 128 `use`, 19 `metaphor`, 9 `compose`, 15 `authored`, 8 `draw`.**
 
 ### Second semantic review (2026-11-05)
 
@@ -646,10 +646,10 @@ name match is a hypothesis; the picture is the evidence.
 
 These are the drawings FerroCAD owns. Each is a 16-unit embedded SVG in
 `ferrocad_widgets::icon`, a 1.25 px stroke, round caps, one ink token — the same
-recipe as `bug`. Fourteen are shipped: `workplane.svg`, the three snap glyphs
+recipe as `bug`. Thirteen are shipped: `workplane.svg`, the three snap glyphs
 (`midpoint.svg`, a half-tick on the segment; `extension.svg`, a dashed continuation
 from a known endpoint; `near.svg`, a proximity asterisk), the four view orientations
-(`view-front/top/right/rear.svg`, one cube with the named face filled) and the six
+(`view-front/top/right/rear.svg`, one cube with the named face filled) and the five
 solid verbs.
 
 | Group | Shipped | Still open |
@@ -659,14 +659,14 @@ solid verbs.
 | Geometry | — | arc, arc through 3 points, facebinder |
 | Edit | extend (`arrow-right-from-line`, the Extend mode of Trimex) | offset (concentric outline), slope (raised wedge) |
 | Snap | midpoint (half-tick), extension (dashed continuation), near (proximity asterisk) | — |
-| Solid verbs | extrude, loft, sweep, thickness, make face, make solid | pocket, hole |
+| Solid verbs | loft, sweep, thickness, make face, make solid | pocket, hole |
 
 Two **compose** pairs rather than new drawings:
 
 - Polar array = `matrix` + a drawn radial marker.
 - VisGroup = `group` + `eye`.
 
-That is 14 authored glyphs and 9 compositions; eight needs remain open.
+That is 13 authored glyphs and 9 compositions; eight needs remain open.
 
 ### The composition rule for solid verbs
 
@@ -811,6 +811,17 @@ two "new result" hits are false positives — `treble-hook` for arc-through-thre
 and `coffin` for shell solid — so the 23 open requests are still undelivered and the
 mapping is unchanged. Snapshot refreshed to 7,262.
 
+**Re-check, 2026-11-06 (sixth).** The catalogue grew **7,262 → 7,866** (604 added, none
+removed) and the first request finally landed: **`extrude-shape`** (`editor`), tagged
+*extrude, extrude solid, push pull, 3d from 2d*. It is adopted for `Part_Extrude`, which
+retires the authored `extrude.svg` — the delivered slab reads better at 16 px and moves
+the row from `authored` to `use`. The other "hits" are false positives from the fuzzy
+search (`break-even` for arc through three points, `candy-corn`/`spider-web` for shell
+solid, `tooth-cavity`/`deductible` for pocket). `building-section` (`architecture`, a
+house cut through) is the closest to `section plane` but is a building drawing, not a
+cutting plane, so it is rejected. `symbols` still gained nothing. Snapshot refreshed to
+7,866; the ledger is **33 filed, 20 open, 13 withdrawn**.
+
 **CAD-family request pass, 2026-11-06.** Most of the CAD verbs had never been asked
 for *as CAD*: `revolve` was standing in as `lathe` (an industrial lathe) and `chamfer`
 as `bevel-gauge` (a hand gauge), so the picture named the tool rather than the
@@ -861,8 +872,8 @@ lost. All were accepted, and `wedge solid` answered **"Already requested today."
 proof that the first pass did reach the queue; the client simply cannot read it back.
 The resubmission keeps the same names, so a duplicate is a no-op rather than a second
 concept. `transform gizmo` and `closed polyline` are no longer requested at all:
-`bounding-box` and `polygon` cover them. The ledger is now **33 filed, 21 open, 12
-withdrawn**, and the 21 are:
+`bounding-box` and `polygon` cover them. The ledger was then **33 filed, 21 open, 12
+withdrawn**, and the 21 were:
 
 `arc`, `arc through three points`, `facebinder`, `offset outline`, `slope angle`,
 `extrude solid`, `pocket cavity`, `loft profiles`, `sweep along path`, `shell solid`,
@@ -967,7 +978,7 @@ Draft icons it can draw.
   `Draft_Snap_Near` → `near`; `Draft_Snap_WorkingPlane` reuses `workplane`), the
   **view orientations** (`Std_ViewFront` → `view-front`, `Std_ViewTop` → `view-top`,
   `Std_ViewRight` → `view-right`, `Std_ViewRear` → `view-rear`), the **solid
-  verbs** (`Part_Extrude` → `extrude`, `Part_Loft` → `loft`, `Part_Sweep` → `sweep`,
+  verbs** (`Part_Extrude` → `extrude-shape`, `Part_Loft` → `loft`, `Part_Sweep` → `sweep`,
   `Part_Thickness` → `thickness`, `Part_MakeFace` → `make-face`, `Part_MakeSolid` →
   `make-solid`) and the **family-cleanup swaps** (`Draft_Clone` → `duplicate-object`
   instead of the `sheep` metaphor, `Part_Revolve` → `rotate-3d` instead of `lathe`,

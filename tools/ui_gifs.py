@@ -2,8 +2,9 @@
 """Capture short animated GIFs of the desktop shell's pointer interactions.
 
 The still figures in :mod:`ui_shots` show a control at rest. These GIFs show the
-gesture: a tool switch, a Body/Face/Edge pick, a Push/Pull drag, a Fillet scrub
-and a wheel flick. They run the Parametric app in a private Xephyr server,
+gesture: a tool switch, a Body/Face/Edge pick, an action-bar Create Box, a pending
+Move and rollback, a Push/Pull drag, a Fillet scrub and a wheel flick. They run the
+Parametric app in a private Xephyr server,
 synthesise the pointer with XTEST, capture the window with ``xwd`` between
 events, and draw a synthetic cursor and a caption on each frame.
 
@@ -82,6 +83,28 @@ GIFS = {
         ],
     },
 
+    "create": {
+        "crop": (0, 840, 1100, 160),
+        "scale": 0.7,
+        "fps": 4,
+        "steps": [
+            {"caption": "Create Box adds a box", "click": (810, 943), "wait": 1.0, "duration": 1.2},
+            {"caption": "Box001 is in the document", "wait": 1.0, "duration": 1.5},
+        ],
+    },
+    "pending": {
+        "crop": (0, 300, 1200, 700),
+        "scale": 0.6,
+        "fps": 5,
+        "steps": [
+            {"caption": "Move · drag an arrow", "click": (900, 450), "wait": 0.7, "duration": 0.9},
+            {"caption": "Grab the X arrow", "move": (830, 515), "wait": 0.3, "duration": 0.5},
+            {"press": (830, 515), "duration": 0.4},
+            {"drag": [(845, 524), (860, 533), (875, 542)]},
+            {"caption": "Pending: ✓ commits, Esc rolls back", "release": (875, 542), "wait": 0.7, "duration": 1.2},
+            {"caption": "Esc rolls back", "key": "Escape", "wait": 0.7, "duration": 1.4},
+        ],
+    },
     "pushpull": {
         "crop": (700, 160, 620, 500),
         "fps": 6,

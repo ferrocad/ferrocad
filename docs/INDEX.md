@@ -24,7 +24,7 @@ folders are what `tools/build_book.py` publishes at
 | I want to… | Start here |
 | --- | --- |
 | understand 3D CAD concepts | [general/README.md](general/README.md) |
-| use the app's window (UI) | [user/README.md](user/README.md), [UI controls](user/explanation/ui-controls.md) and the [repository README](../README.md) |
+| use the app's window (UI) | the [UI quickstart](user/explanation/ui-quickstart.md), [user/README.md](user/README.md), [UI controls](user/explanation/ui-controls.md) and the [repository README](../README.md) |
 | use the Python console, a macro, or a script (API) | [UI users and API users](user/explanation/ui-and-api.md), then [user/README.md](user/README.md) and [python-api/index.md](python-api/index.md) |
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
 | drive `FreeCAD` from another program | [mods/README.md#the-json-boundary-for-automated-clients](mods/README.md#the-json-boundary-for-automated-clients) and [python-api/ferrocad_shell.md](python-api/ferrocad_shell.md) |
@@ -67,6 +67,7 @@ mdBook edition is assembled from these pages and the addon pages below.
 - [user/how-to/undo-and-persistence.md](user/how-to/undo-and-persistence.md) — undo an edit and reload the document.
 - [user/explanation/how-the-shell-talks-to-the-document.md](user/explanation/how-the-shell-talks-to-the-document.md) — why the shell is a client of the facade, and why dialogs are data.
 - [user/explanation/ui-and-api.md](user/explanation/ui-and-api.md) — a gentle introduction to UI users, API users (console, macros, scripts), and the FreeCAD/Ondsel history behind the split.
+- [user/explanation/ui-quickstart.md](user/explanation/ui-quickstart.md) — the one-screen map of the controls, the wheel/action-bar split and the add-vs-modify sorting rule.
 - [user/explanation/ui-controls.md](user/explanation/ui-controls.md) — the window's controls at a glance, and where each control surface lives.
 - [user/explanation/ui-chrome.md](user/explanation/ui-chrome.md) — the title bar, application menu, status line and Dev Tools window.
 - [user/explanation/ui-toolbars.md](user/explanation/ui-toolbars.md) — the floating viewport toolbar: Grid, Axes, WP, Gizmo, Select and Snap.

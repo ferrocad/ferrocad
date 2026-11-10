@@ -16,7 +16,7 @@ the contract, and the window is one client of it.
 
 | You are… | You use… | Start with |
 | --- | --- | --- |
-| A UI user | the app window | the [UI controls](ui-controls.md) section and [the repository README](../../../README.md) |
+| A UI user | the app window | the [UI quickstart](ui-quickstart.md) and [the repository README](../../../README.md) |
 | An API user | the Python console, a macro, or a script | this page, then the [Python API reference](../../python-api/index.md) |
 | An addon author | the API, packaged for other people | the [mod contract](../../mods/README.md) |
 | A developer | the engine and the shell | [developer/](../../developer/README.md) |

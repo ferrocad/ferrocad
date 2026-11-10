@@ -3,9 +3,12 @@
 FerroCAD's main window is deliberately spare: the 3-D viewport fills the canvas, and
 the controls that act on it float over the scene instead of reserving rows at the top
 and bottom. This section describes the controls you meet there, where each one lives,
-and what it changes. Each control page pairs a highlighted window snapshot with a
+and what it changes. Each surface and tool page pairs a highlighted window snapshot with a
 close-up, in a **Desktop / Web** tab pair: the desktop tab shows the full application
 chrome and the manipulators, and the web tab shows the same shell in the browser.
+
+**New to the window?** The [UI quickstart](ui-quickstart.md) is the one-screen map; the
+rest of this page is the longer tour.
 
 ## The five surfaces
 

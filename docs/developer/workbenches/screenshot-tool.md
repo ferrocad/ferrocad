@@ -230,6 +230,8 @@ desktop gestures and writes `ui-<section>.gif`:
 | --- | --- |
 | `tools` | click a body, then `1` (Move/Rotate), `2`, `3`, `0`; each hand re-picks its target |
 | `pick` | Inspect with the `Body \| Face \| Edge` filter, clicking each scope |
+| `create` | click `Create Box` in the action bar; the status line reports `created Box001` |
+| `pending` | drag the Move X arrow, hold the pending row and ✓/✗, then `Esc` rolls back |
 | `pushpull` | select a face, drag the amber stem, release |
 | `fillet` | select an edge, drag the radius arc, release |
 | `wheel` | right-press, flick to Rotate, release, re-pick the rings |
@@ -241,7 +243,7 @@ an optimised GIF with a shared 128-colour palette. `--keep-frames` also writes t
 processed frames under `target/gif-frames/<section>/` for inspection.
 
 ```sh
-python3 tools/ui_gifs.py                       # all five GIFs
+python3 tools/ui_gifs.py                       # all seven GIFs
 python3 tools/ui_gifs.py --section pushpull fillet
 python3 tools/ui_gifs.py --section pick --keep-frames
 ```

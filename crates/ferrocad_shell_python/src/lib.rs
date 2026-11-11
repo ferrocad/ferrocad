@@ -90,10 +90,13 @@ pub struct HostConfig {
     /// properties and viewport all follow the opened document. `None` is the normal
     /// sample-document start.
     pub open_document: Option<std::path::PathBuf>,
-    /// Wasm workbenches to load beside the script half (`--addons=`, repeatable).
+    /// The mod set this boot loads (`--addons=`, repeatable). Empty loads every mod the
+    /// payload or the checkout makes visible; naming any narrows the boot to exactly those
+    /// (B16). One list feeds the `--script-host` derivation, the Python loader, the wasm
+    /// bundles and the provider registry.
     ///
     /// A bundle is sandboxed: its only capability is the document API. An addon that
-    /// will not load is reported and skipped. Empty means none, which is a normal start.
+    /// will not load is reported and skipped.
     pub addons: Vec<std::path::PathBuf>,
     /// Which script halves to install (`--script-host=`, `FERROCAD_SCRIPT_HOST`).
     ///
@@ -169,16 +172,19 @@ fn frame_pipeline(_window: WindowId) -> Box<dyn FramePipeline> {
 /// Run the application with an edition's configuration.
 pub fn run_with(config: HostConfig) {
     configure_trace();
-    // The scripting configuration first: it decides which halves `install` composes,
-    // and a value the command line got wrong is reported now rather than after the boot.
-    let mods_dirs = python::mods_dirs();
+    // The mod set first: `--addons` selects it (every mod when unnamed), and one list
+    // feeds the host derivation, the grants, the Python loader and the bundles — so the
+    // flag cannot select a host without also selecting the mod that asked for it.
+    let roots = mod_roots(&config);
+    // The scripting configuration: it decides which halves `install` composes, and a value
+    // the command line got wrong is reported now rather than after the boot.
     let runtimes = if config.script_hosts.is_empty() {
         match Runtime::from_env_list() {
             Ok(Some(runtimes)) => runtimes,
-            Ok(None) => derived_runtimes(&mods_dirs),
+            Ok(None) => derived_runtimes(&roots),
             Err(error) => {
                 eprintln!("ferrocad: {error}");
-                derived_runtimes(&mods_dirs)
+                derived_runtimes(&roots)
             }
         }
     } else {
@@ -186,17 +192,11 @@ pub fn run_with(config: HostConfig) {
     };
     // B10b: a manifest that asks for more than the installed engine can give is said once
     // and then granted as far as it goes. Refusing is not the policy yet.
-    for warning in mods::under_granted(&mods::requests(&mods_dirs), &runtimes) {
+    for warning in mods::under_granted(&mods::requests(&roots), &runtimes) {
         eprintln!("ferrocad: {warning}");
     }
-    // The wasm workbenches ride beside whatever script half booted, and B9b reads them
-    // from the mods directories when `--addons` names none — the same directory a mod's
-    // entry file already names. Explicit paths always win.
-    let addons = if config.addons.is_empty() {
-        mods::addon_packs(&python::mods_dirs())
-    } else {
-        config.addons.clone()
-    };
+    // The wasm workbenches ride beside whatever script half booted, from the same set.
+    let addons = mods::addon_packs(&roots);
     if !addons.is_empty() {
         eprintln!(
             "ferrocad: {} addon path(s): {}",
@@ -209,11 +209,12 @@ pub fn run_with(config: HostConfig) {
         );
     }
     // Hand the app's scripts to the interpreter bridge before it boots. The
-    // interpreter belongs to the shell; the scripts belong to the app.
+    // interpreter belongs to the shell; the scripts belong to the app — and the *set* is
+    // the one resolved above, so the loader scans exactly the selected mods.
     python::configure(
         &config.entry_module,
         &config.python_paths,
-        &config.mods_paths,
+        &roots,
         true,
     );
     python::configure_startup_document(config.open_document.as_deref());
@@ -249,6 +250,24 @@ pub fn run_with(config: HostConfig) {
         })
         .unwrap();
     });
+}
+
+/// The mod set a boot loads, as the roots every scanner takes.
+///
+/// `--addons` names the set when it is given — that is what makes it a *selection*:
+/// every mod when it names none, exactly those otherwise. Without the flag the payload's
+/// directories win over discovery, because a packaged app's `python/` sits nowhere near
+/// the working directory and the loader would otherwise scan an empty list. Both
+/// `--check-init` and the window resolve this the same way, so the diagnostic covers the
+/// boot it is checking.
+fn mod_roots(config: &HostConfig) -> Vec<std::path::PathBuf> {
+    if !config.addons.is_empty() {
+        return config.addons.clone();
+    }
+    if !config.mods_paths.is_empty() {
+        return config.mods_paths.clone();
+    }
+    python::mods_dirs()
 }
 
 /// The script hosts the mod directories ask for (B9a).
@@ -300,32 +319,30 @@ fn derived_runtimes(mods_dirs: &[std::path::PathBuf]) -> Vec<Runtime> {
 /// on a user's machine.
 pub fn check_init(config: HostConfig) -> Result<(), String> {
     configure_trace();
-    python::configure(
-        &config.entry_module,
-        &config.python_paths,
-        &config.mods_paths,
-        false,
-    );
+    // The mod set before the interpreter, exactly as `run_with` does it: the loader must
+    // scan the set this boot derived the hosts from, or `--check-init --addons X` would
+    // report a composition the interpreter then does not match.
+    let roots = mod_roots(&config);
+    python::configure(&config.entry_module, &config.python_paths, &roots, false);
     python::configure_startup_document(config.open_document.as_deref());
-    // The **same composition** `run_with` installs, derived the same way. `--check-init`
-    // is what CI and a packager run, so "the payload booted" has to include "the script
-    // halves the mod set declares were composed": composing a bare `engine()` here is
-    // how a derivation that asked for a half the build lacks went unnoticed while it
-    // took the working interpreter down with it (fixed in `compose_all`).
-    let mods_dirs = python::mods_dirs();
+    // The **same composition** `run_with` installs, from the same mod set and derived the
+    // same way. `--check-init` is what CI and a packager run, so "the payload booted" has
+    // to include "the script halves the mod set declares were composed": composing a bare
+    // `engine()` here is how a derivation that asked for a half the build lacks went
+    // unnoticed while it took the working interpreter down with it (fixed in `compose_all`).
     let runtimes = if config.script_hosts.is_empty() {
         match Runtime::from_env_list() {
             Ok(Some(runtimes)) => runtimes,
-            Ok(None) => derived_runtimes(&mods_dirs),
+            Ok(None) => derived_runtimes(&roots),
             Err(error) => {
                 eprintln!("ferrocad: {error}");
-                derived_runtimes(&mods_dirs)
+                derived_runtimes(&roots)
             }
         }
     } else {
         config.script_hosts.clone()
     };
-    let addons = mods::addon_packs(&mods_dirs);
+    let addons = mods::addon_packs(&roots);
     let mut backend = backend::compose_all(&runtimes, &addons)?;
     let model = Shell::boot_with(&mut *backend)?;
     // `--check-init` is the one boot a person can read from a terminal (the window's

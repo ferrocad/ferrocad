@@ -147,8 +147,22 @@ pub fn run_edition_with_script(
 /// GPU, so the release workflow runs it on an unpacked artifact to catch a broken
 /// layout before shipping (see `docs/developer/architecture/distribution.md`).
 pub fn check_init() -> Result<(), String> {
+    check_init_args(&EditionArgs::default())
+}
+
+/// [`check_init`] with the flags the command line carried.
+///
+/// The diagnostic has to parse the same flags as the windowed path — `--addons` selects
+/// the mod set and `--script-host` the halves — because it is the boot a packager runs:
+/// checking the default composition when the user asked for another one reports a
+/// layout that was never going to start. Both binaries therefore parse before they
+/// branch on `--check-init`.
+pub fn check_init_args(args: &EditionArgs) -> Result<(), String> {
     register_core_module();
-    ferrocad_shell_python::check_init(base_config("FerroCAD"))
+    let mut config = base_config("FerroCAD");
+    config.script_hosts = args.script_hosts.clone();
+    config.addons = args.addons.clone();
+    ferrocad_shell_python::check_init(config)
 }
 
 pub use ferrocad_shell_python::RenderReport;
@@ -164,16 +178,19 @@ pub use ferrocad_shell_python::RenderReport;
 pub fn render_edition_headless(
     app_name: &str,
     entry_module: &str,
-    render: Option<&std::path::Path>,
-    stl: Option<&std::path::Path>,
-    size: [u32; 2],
-    script: Option<&std::path::Path>,
-    open: Option<&std::path::Path>,
+    args: &EditionArgs,
 ) -> Result<RenderReport, String> {
     register_core_module();
     let mut config = app_config(app_name, entry_module);
-    config.open_document = open.map(std::path::Path::to_path_buf);
-    ferrocad_shell_python::headless::run(&config, render, stl, size, script)
+    config.open_document = args.open.clone();
+    config.addons = args.addons.clone();
+    ferrocad_shell_python::headless::run(
+        &config,
+        args.render.as_deref(),
+        args.stl.as_deref(),
+        args.size,
+        args.script.as_deref(),
+    )
 }
 
 /// The flags an edition accepts in both its windowed and headless modes.
@@ -193,14 +210,15 @@ pub struct EditionArgs {
     /// `cpython`, `pywasm`, `js`), comma-separated for more than one. Empty leaves it to
     /// `FERROCAD_SCRIPT_HOST`, then to CPython. The first name is the primary.
     pub script_hosts: Vec<Runtime>,
-    /// `--addons <path>`: a wasm workbench bundle or a directory of them
-    /// (`<dir>/<Name>/addon.wasm`), repeatable. When empty, the bundles under the mods
-    /// directories are loaded instead (B9b), so the flag is only needed to point at a
-    /// bundle somewhere else.
+    /// `--addons <path>`: *the mod set*, repeatable — a workbench package
+    /// (`<dir>/<Name>`), a directory of them, or one bundle file. When empty every mod
+    /// the payload or the checkout makes visible is loaded (B16), so the flag is only
+    /// needed to narrow the run to particular mods.
     ///
-    /// Addons ride beside the script half rather than replacing it, which is how the
-    /// browser loads them (`?addons=`). Each bundle is sandboxed: its only capability is
-    /// the document API.
+    /// One list feeds every consumer: the `--script-host` derivation, the Python loader,
+    /// the wasm bundles and the provider registry. Addons ride beside the script half
+    /// rather than replacing it, which is how the browser loads them (`?addons=`). Each
+    /// bundle is sandboxed: its only capability is the document API.
     pub addons: Vec<std::path::PathBuf>,
 }
 
@@ -263,9 +281,9 @@ pub fn edition_args() -> Result<EditionArgs, String> {
                     .extend(Runtime::parse_list(&flag["--script-host=".len()..])?);
             }
             "--addons" => {
-                let path = args
-                    .next()
-                    .ok_or_else(|| "--addons wants a bundle or a directory".to_string())?;
+                let path = args.next().ok_or_else(|| {
+                    "--addons wants a mod, a package directory or a bundle".to_string()
+                })?;
                 parsed.addons.push(std::path::PathBuf::from(path));
             }
             flag if flag.starts_with("--addons=") => {

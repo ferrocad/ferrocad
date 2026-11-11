@@ -188,3 +188,22 @@ fn the_workbenches_are_the_ones_with_an_entry_file_in_name_order() {
     let page = EnginePage::new(found.clone()).expect("both boot");
     assert_eq!(page.modules().len(), 2);
 }
+
+/// `--addons mods/Alpha` names one workbench, and every scanner has to read it that way.
+#[test]
+fn a_workbench_directory_is_the_selection() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let mods = temp.path().join("mods");
+    for name in ["Zeta", "Alpha"] {
+        let entry = mods.join(name).join("InitGui.js");
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, WORKBENCH).unwrap();
+    }
+
+    // The package directory itself, not the directory of packages: one module, and the
+    // page boots it alone.
+    let selected = js_modules(&[mods.join("Alpha")]);
+    assert_eq!(selected, [mods.join("Alpha").join("InitGui.js")]);
+    let page = EnginePage::new(selected).expect("the selected module boots");
+    assert_eq!(page.modules().len(), 1);
+}

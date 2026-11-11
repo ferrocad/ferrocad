@@ -28,15 +28,7 @@ fn main() {
         });
 
     if args.render.is_some() || args.stl.is_some() {
-        match ferrocad::render_edition_headless(
-            "FerroCAD: Toy",
-            "ferrocad_toy",
-            args.render.as_deref(),
-            args.stl.as_deref(),
-            args.size,
-            args.script.as_deref(),
-            args.open.as_deref(),
-        ) {
+        match ferrocad::render_edition_headless("FerroCAD: Toy", "ferrocad_toy", &args) {
             Ok(report) => {
                 println!(
                     "ferrocad: {} object(s) [{}] from {}",

@@ -10,29 +10,63 @@ use std::path::{Path, PathBuf};
 
 use ferrocad_shell_api::{DocumentGrant, EntryKind, Language, Runtime};
 
-/// The entry kinds present under `dirs`, in [`EntryKind::ALL`] order.
+/// The entry kinds present under `roots`, in [`EntryKind::ALL`] order.
 ///
-/// `<dir>/<Name>/` is one package and its files decide the kind; a package may declare
-/// more than one. A directory that does not exist is skipped, because a payload may name
-/// one that ships on only some targets, and the result is ordered so the derivation never
-/// depends on how the filesystem enumerates.
-pub fn entry_kinds(dirs: &[PathBuf]) -> Vec<EntryKind> {
+/// A root is a package, a directory of packages, or one bundle file (see [`packages`]);
+/// the selection is what `--addons` names, and the whole mods directory when it names
+/// nothing. The result is ordered so the derivation never depends on how the filesystem
+/// enumerates.
+pub fn entry_kinds(roots: &[PathBuf]) -> Vec<EntryKind> {
     let mut seen = BTreeSet::new();
-    for dir in dirs {
-        let Ok(packages) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for package in packages.flatten() {
-            if !package.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            collect(&package.path(), &mut seen);
+    for root in roots {
+        for package in packages(root) {
+            seen.extend(package_kinds(&package));
         }
     }
     EntryKind::ALL
         .into_iter()
         .filter(|kind| seen.contains(kind))
         .collect()
+}
+
+/// The packages one mod-set root names.
+///
+/// A root is one of three things, and every host's scanner applies the same rule — so
+/// `--addons mods/GridOverlay` selects one mod for the derivation, the Python loader and
+/// the bundles alike:
+///
+/// - a **package** directory (it declares an entry file): the root itself;
+/// - a **directory of packages** (`mods/`): its subdirectories, sorted;
+/// - one **bundle file** (`mods/Toy/addon.wasm`): the file's directory, which is its
+///   package — the same selection as naming the directory.
+pub fn packages(root: &Path) -> Vec<PathBuf> {
+    if root.is_file() {
+        return root
+            .parent()
+            .map(|dir| vec![dir.to_path_buf()])
+            .unwrap_or_default();
+    }
+    if is_package(root) {
+        return vec![root.to_path_buf()];
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut packages: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect();
+    packages.sort();
+    packages
+}
+
+/// Whether `dir` is itself a package: it holds at least one entry file.
+///
+/// `mods/` holds none (only package directories), so it stays "a directory of packages";
+/// a root that does hold one is a selection of exactly that mod.
+pub fn is_package(dir: &Path) -> bool {
+    !package_kinds(dir).is_empty()
 }
 
 /// The wasm bundles under `dirs`, in name order: `<dir>/<Name>/addon.wasm`.
@@ -52,14 +86,6 @@ pub fn addon_packs(dirs: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// The kinds `package` declares, by its top-level entry files.
-fn collect(package: &Path, seen: &mut BTreeSet<EntryKind>) {
-    for kind in package_kinds(package) {
-        seen.insert(kind);
-    }
-}
-
-/// One package's manifest request.
-/// The kinds one package declares.
 fn package_kinds(package: &Path) -> BTreeSet<EntryKind> {
     let mut kinds = BTreeSet::new();
     let Ok(files) = std::fs::read_dir(package) else {
@@ -92,22 +118,18 @@ pub struct Request {
 /// key a bundle already uses. A package with no manifest asks for nothing, and an unknown
 /// word is likewise no request: the policy is to grant by default, so silence is the safe
 /// reading rather than a refusal.
-pub fn requests(dirs: &[PathBuf]) -> Vec<Request> {
+pub fn requests(roots: &[PathBuf]) -> Vec<Request> {
     let mut requests = Vec::new();
-    for dir in dirs {
-        let Ok(packages) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for package in packages.flatten() {
-            let path = package.path();
-            if !package.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
+    for root in roots {
+        for path in packages(root) {
             let kinds = package_kinds(&path);
             let Some(grant) = requested_grant(&path) else {
                 continue;
             };
-            let name = package.file_name().to_string_lossy().into_owned();
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
             for kind in kinds {
                 requests.push(Request {
                     name: name.clone(),
@@ -247,6 +269,47 @@ mod tests {
 
     fn kinds(temp: &tempfile::TempDir) -> Vec<EntryKind> {
         entry_kinds(&[temp.path().to_path_buf()])
+    }
+
+    #[test]
+    fn a_package_root_selects_one_mod() {
+        // `--addons mods/Draft`: the root *is* the package, so the set is that mod alone
+        // — not the whole directory it sits in. This is what makes the flag a selection
+        // for the derivation, the loader and the bundles at once.
+        let temp = mods(&[
+            ("Draft", &["InitGui.py"]),
+            ("Toy", &["InitGui.js"]),
+            ("Sand", &["addon.wasm"]),
+        ]);
+        let draft = temp.path().join("Draft");
+        assert_eq!(entry_kinds(&[draft.clone()]), [EntryKind::Python]);
+        assert_eq!(packages(&draft), [draft.clone()], "the package itself");
+        assert!(is_package(&draft));
+        assert!(!is_package(temp.path()), "mods/ holds packages, it is not one");
+        assert_eq!(packages(temp.path()).len(), 3, "a directory of packages");
+    }
+
+    #[test]
+    fn a_bundle_file_names_its_package() {
+        // `--addons mods/Sand/addon.wasm` is the same selection as `--addons mods/Sand`,
+        // which is also where its manifest lives.
+        let temp = mods(&[("Sand", &["addon.wasm"])]);
+        let bundle = temp.path().join("Sand").join("addon.wasm");
+        assert_eq!(packages(&bundle), [temp.path().join("Sand")]);
+        assert_eq!(entry_kinds(&[bundle]), [EntryKind::Wasm]);
+    }
+
+    #[test]
+    fn a_selection_keeps_the_order_it_was_named_in() {
+        let temp = mods(&[("Draft", &["InitGui.py"]), ("Toy", &["InitGui.js"])]);
+        let draft = temp.path().join("Draft");
+        let toy = temp.path().join("Toy");
+        assert_eq!(
+            entry_kinds(&[toy.clone(), draft.clone()]),
+            [EntryKind::Python, EntryKind::JavaScript],
+            "ordered by kind, whatever the selection order"
+        );
+        assert_eq!(packages(&toy), [toy]);
     }
 
     #[test]

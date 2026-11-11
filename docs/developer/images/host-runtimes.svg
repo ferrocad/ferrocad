@@ -96,7 +96,7 @@
   <text class="t box-title" x="322" y="443" text-anchor="middle">one native binary</text>
   <text class="t box-sub" x="322" y="459" text-anchor="middle">cargo features pick what is <tspan font-style="italic">linked</tspan></text>
   <text class="t box-sub" x="322" y="474" text-anchor="middle">--script-host / FERROCAD_SCRIPT_HOST picks what is <tspan font-style="italic">installed</tspan></text>
-  <text class="t box-sub" x="322" y="489" text-anchor="middle">--addons loads bundles beside it</text>
+  <text class="t box-sub" x="322" y="489" text-anchor="middle">--addons selects the mod set (all when unnamed)</text>
 
   <rect class="box" x="565" y="424" width="435" height="70" rx="6" fill="#dbe9f6" stroke="#8fb8d8" />
   <text class="t box-title" x="782" y="443" text-anchor="middle">one wasm module</text>

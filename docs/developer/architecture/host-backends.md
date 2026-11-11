@@ -369,15 +369,25 @@ the interpreter, prints the feature hint and carries on. Only a list with nothin
 installable is replaced by `plain`, and then it is the member's own message (`--features
 js`) that is reported, because that one is actionable.
 
-**wasm addons are orthogonal to the runtime, on both hosts.** `?addons=` and `--addons=`
-load a bundle beside whatever script half is running (the browser's page surfaces it; the
-desktop composes `ferrocad_shell_wasm::Addons`), so `wasm` is a package format rather than a
-fifth name. A bundle is sandboxed: its only import is the document API, it runs on an
-interpreter with no executable memory, each call has a fuel budget — a workbench that loops
-forever traps instead of freezing the window — and it is **read-only** unless its
-`<stem>.json` manifest grants `"document": "read-write"`, refused into an ordinary
-`{"ok": false}` before the request reaches the document. Both hosts enforce that: the
-desktop with `document_api::is_write`, the page inside `loader.js`'s document API.
+**wasm addons are orthogonal to the runtime, on both hosts.** A bundle loads beside whatever
+script half is running (the browser's page surfaces it; the desktop composes
+`ferrocad_shell_wasm::Addons`), so `wasm` is a package format rather than a fifth name. A
+bundle is sandboxed: its only import is the document API, it runs on an interpreter with no
+executable memory, each call has a fuel budget — a workbench that loops forever traps
+instead of freezing the window — and it is **read-only** unless its `<stem>.json` manifest
+grants `"document": "read-write"`, refused into an ordinary `{"ok": false}` before the
+request reaches the document. Both hosts enforce that: the desktop with
+`document_api::is_write`, the page inside `loader.js`'s document API.
+
+**On the desktop `--addons` is the mod *selection*, not a bundle list** (B16). Every mod the
+payload or the checkout makes visible loads by default; naming any narrows the boot to
+exactly those — a workbench package (`mods/GridOverlay`), a directory of packages (`mods/`)
+or one bundle file. The one list (`ferrocad_shell_python::mod_roots`) feeds all four
+consumers: the `--script-host` derivation, the Python loader, the wasm bundles and the
+provider registry, so the flag cannot select a host without also selecting the mod that
+asked for it. `--check-init` and `--render` parse it like the window does, so a diagnostic
+reports the set that will actually boot. In the browser `?addons=` remains the bundle list:
+the page ships no `mods/` tree and has no filesystem for the loader (D22).
 
 ![The packaging: one document half; four script halves against two hosts, with each host's
 switch and what a build has to link; how each host is delivered — one native binary whose

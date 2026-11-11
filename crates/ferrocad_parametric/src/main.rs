@@ -26,6 +26,12 @@
 //! `--script-host=cpython,js` puts the page beside CPython, which stays the primary —
 //! with one host per language; see `docs/project/tasks/backend-parity.md` B7–B8.
 //!
+//! `cargo run -p ferrocad_parametric -- --addons mods/GridOverlay` narrows the boot to
+//! that mod: every mod the checkout or payload makes visible loads when the flag is absent,
+//! and the named ones are the set when it is given. The same list decides the script halves,
+//! what `load_workbenches` scans and which wasm bundles ride along; `--check-init` and
+//! `--render` honour it too (see `docs/project/tasks/backend-parity.md` B16).
+//!
 //! `cargo run -p ferrocad_parametric -- --check-init` boots the interpreter, the
 //! linked `Part` module and the payload, then exits without a window (no display,
 //! no GPU). Packaging runs it on an unpacked artifact; see
@@ -64,12 +70,23 @@ fn main() {
     ferrocad_combined_py::register_builtins();
 
     // Editions parse their own flags, so the base app's `--check-init` branch does
-    // not reach them. Run the same boot here, then import the edition's app script:
-    // it is the module that imports `Part` and registers the display hooks, so this
-    // is what proves the kernel and the payload work together. `GuiUp` is 0 (the
-    // same stub the base check uses), so no window or GPU is involved.
+    // not reach them. Parse them here first: the check has to see the same selection
+    // (`--addons`) and script halves the window would, or it reports a boot nobody
+    // asked for.
+    let args = match ferrocad::edition_args() {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("ferrocad: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    // Run the same boot here, then import the edition's app script: it is the module
+    // that imports `Part` and registers the display hooks, so this is what proves the
+    // kernel and the payload work together. `GuiUp` is 0 (the same stub the base check
+    // uses), so no window or GPU is involved.
     if std::env::args().skip(1).any(|arg| arg == "--check-init") {
-        let result = ferrocad::check_init().and_then(|()| {
+        let result = ferrocad::check_init_args(&args).and_then(|()| {
             pyo3::Python::with_gil(|py| -> pyo3::PyResult<()> {
                 py.import("ferrocad_parametric")?;
                 let script = std::ffi::CString::new(CHECK_INIT_SCRIPT)
@@ -90,14 +107,6 @@ fn main() {
         return;
     }
 
-    let args = match ferrocad::edition_args() {
-        Ok(args) => args,
-        Err(error) => {
-            eprintln!("ferrocad: {error}");
-            std::process::exit(2);
-        }
-    };
-
     let contributions = ferrocad::base_contributions()
         .with_manipulator(ferrocad_part_gui::fillet_manipulator)
         .with_manipulator(ferrocad_part_gui::push_pull_manipulator);
@@ -106,11 +115,7 @@ fn main() {
         match ferrocad::render_edition_headless(
             "FerroCAD: Parametric",
             "ferrocad_parametric",
-            args.render.as_deref(),
-            args.stl.as_deref(),
-            args.size,
-            args.script.as_deref(),
-            args.open.as_deref(),
+            &args,
         ) {
             Ok(report) => {
                 println!(

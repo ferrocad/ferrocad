@@ -152,14 +152,29 @@ impl DocumentApi for ReadOnly {
     }
 }
 
-/// The wasm workbenches under `dirs`: `<dir>/<Name>/addon.wasm`, in name order.
+/// The wasm bundles under `roots`, in name order: `<root>/<Name>/addon.wasm`.
 ///
-/// A directory without the entry file is not a wasm workbench and is skipped — the same
-/// rule `InitGui.py`/`InitGui.js` follow for the other two kinds.
-pub fn packs(dirs: &[PathBuf]) -> Vec<PathBuf> {
+/// A root may name one package (`mods/Toy`) or one bundle file (`mods/Toy/addon.wasm`),
+/// so a mod set selected with `--addons` means the same thing to the derivation, the
+/// Python loader and the bundles. A directory without the entry file is not a wasm
+/// workbench and is skipped — the same rule `InitGui.py`/`InitGui.js` follow for the
+/// other two kinds.
+///
+/// Empty without the `addons` feature, because a path the host cannot load is worse than
+/// no path at all: the run is the same as a mod set with no bundles.
+pub fn packs(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut packs = Vec::new();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+    for root in roots {
+        if root.is_file() {
+            packs.push(root.clone());
+            continue;
+        }
+        let single = root.join(ENTRY);
+        if single.is_file() {
+            packs.push(single);
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(root) else {
             continue;
         };
         let mut found: Vec<PathBuf> = entries

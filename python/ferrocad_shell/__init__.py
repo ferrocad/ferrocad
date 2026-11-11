@@ -130,11 +130,19 @@ def load_workbenches(dirs_json: str = "[]") -> str:
     """Best-effort workbench loading.
 
     For every ``<dir>/<Workbench>/Init.py`` and ``InitGui.py`` the script is
-    executed. A failure is **recorded, not raised**: one broken workbench must not
-    take down the app (FreeCAD isolates them the same way). Returns JSON with the
-    scripts that loaded and the tracebacks that did not.
+    executed — and likewise for a ``<dir>`` that is itself a workbench, which is what
+    ``--addons mods/GridOverlay`` passes. A failure is **recorded, not raised**: one
+    broken workbench must not take down the app (FreeCAD isolates them the same way).
+    Returns JSON with the scripts that loaded and the tracebacks that did not.
     """
     import os
+
+    def is_workbench(directory: str) -> bool:
+        """Whether ``directory`` is itself a workbench, not one holding them."""
+        return any(
+            os.path.isfile(os.path.join(directory, script))
+            for script in ("Init.py", "InitGui.py")
+        )
 
     try:
         dirs = json.loads(dirs_json)
@@ -146,10 +154,18 @@ def load_workbenches(dirs_json: str = "[]") -> str:
     for root in dirs:
         if not os.path.isdir(root):
             continue
-        for name in sorted(os.listdir(root)):
-            workbench_dir = os.path.join(root, name)
-            if not os.path.isdir(workbench_dir):
-                continue
+        # A root may be one workbench (`--addons mods/GridOverlay`) or a directory of
+        # them (`mods/`). The Rust scanners apply the same rule, so a selected mod set
+        # means the same thing to the host derivation, this loader and the bundles.
+        if is_workbench(root):
+            packages = [(os.path.basename(os.path.normpath(root)), root)]
+        else:
+            packages = [
+                (name, os.path.join(root, name))
+                for name in sorted(os.listdir(root))
+                if os.path.isdir(os.path.join(root, name))
+            ]
+        for name, workbench_dir in packages:
             for script in ("Init.py", "InitGui.py"):
                 path = os.path.join(workbench_dir, script)
                 if not os.path.isfile(path):

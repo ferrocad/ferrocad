@@ -53,6 +53,9 @@ pub struct RenderReport {
 /// document, before the display meshes are read, so it can build the model. The
 /// size is device pixels. A PNG needs a wgpu adapter; a software Vulkan ICD is
 /// enough. STL export needs no GPU. `out` parents are created when needed.
+///
+/// The mod set comes from the same resolver the window uses, so `--addons` narrows a
+/// headless boot exactly as it narrows the shell's.
 pub fn run(
     config: &HostConfig,
     render: Option<&Path>,
@@ -65,12 +68,8 @@ pub fn run(
     }
 
     // No GUI: `FreeCAD.GuiUp` stays false, and no window is created.
-    python::configure(
-        &config.entry_module,
-        &config.python_paths,
-        &config.mods_paths,
-        false,
-    );
+    let roots = crate::mod_roots(config);
+    python::configure(&config.entry_module, &config.python_paths, &roots, false);
     python::configure_startup_document(config.open_document.as_deref());
 
     let mut boot = python::bootstrap()?;

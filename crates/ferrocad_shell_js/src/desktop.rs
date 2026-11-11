@@ -43,14 +43,20 @@ const BOOTSTRAP: &str = "globalThis.window = globalThis;";
 /// The entry file of a JS workbench, the mirror of the Python side's `InitGui.py`.
 pub const ENTRY: &str = "InitGui.js";
 
-/// The JS workbenches under `dirs`: `<dir>/<Name>/InitGui.js`, in name order.
+/// The JS workbenches under `roots`: `<root>/<Name>/InitGui.js`, in name order.
 ///
 /// A workbench without the entry file is not a JS workbench and is skipped — the same
-/// way `InitGui.py` decides it on the Python side.
-pub fn js_modules(dirs: &[PathBuf]) -> Vec<PathBuf> {
+/// way `InitGui.py` decides it on the Python side. A root may also **be** one workbench
+/// (its `InitGui.js` sits directly in it): `--addons mods/Toy` selects that mod alone, and
+/// every scanner applies the same rule so the selection cannot mean two things.
+pub fn js_modules(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut modules = Vec::new();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+    for root in roots {
+        if root.join(ENTRY).is_file() {
+            modules.push(root.join(ENTRY));
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(root) else {
             continue;
         };
         let mut found: Vec<PathBuf> = entries

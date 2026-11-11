@@ -4,7 +4,7 @@ Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded,
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11); B14, B15 and B15b built (2026-11-11).** The surface suite
+(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1461,7 +1461,47 @@ Embedding the mods would also make it worse: `mods/GridOverlayCoin` would regist
 for a shader that never arrives — an invisible grid. The routes above stay the real answer
 for *addon* providers, and they are packaging work with their own design pass.
 
+### B16 — `--addons` is the mod *selection* (built 2026-11-11)
+
+`--addons` was a bundle flag wearing a mod name. It narrowed only the wasm bundles; the
+runtime derivation and `load_workbenches` scanned every `mods/<Name>/` regardless, so
+`--addons mods/GridOverlay` still loaded twelve workbenches **and** installed the `js`
+half that `mods/Explode` asked for. It also only accepted a *directory* of packages, which
+is why pointing it at one package produced "no wasm addons under …".
+
+One rule now: **all mods by default, exactly the named ones when the flag is given.**
+
+- `ferrocad_shell_python::mod_roots` is the one resolver — explicit `--addons`, else the
+  payload's `mods_paths`, else discovery — and `run_with`, `check_init` and
+  `headless::run` all take their list from it. A boot therefore cannot derive its hosts
+  from one set, load workbenches from another and read bundles from a third.
+- Every scanner accepts the same spellings: a workbench package (`mods/GridOverlay`), a
+  directory of packages (`mods/`), or one bundle file. `mods::packages`, `js::js_modules`
+  and `wasm::packs` share that rule, and `load_workbenches` mirrors it in Python (nested
+  `is_workbench`, because that function imports `os` for RustPython's sake).
+- The two flags finish before the boot branches. Both binaries now parse the edition flags
+  first: `--check-init` used to return before `edition_args()` ran, so the diagnostic
+  reported the default set — the one place a packager looks to see what an artifact
+  loads. `--render`/`--stl` take the same `EditionArgs`, so `--addons` narrows a headless
+  boot too.
+
+**Exit: met.** `a_package_directory_selects_that_mod_alone`
+(`crates/ferrocad_parametric/tests/mods_selection.rs`) pins the derivation, the loader and
+the provider registry against one package; `check_init_selects_the_mod_set`
+(`crates/ferrocad_parametric/tests/check_init_selection.rs`) runs the real binary with and
+without the flag and asserts `loaded 2 script(s)` versus the full set. Manually:
+
+```
+$ ferrocad_parametric --check-init --addons mods/GridOverlay
+ferrocad: workbenches: loaded 2 script(s)
+ferrocad: provider grid: ferrocad
+$ ferrocad_parametric --check-init
+ferrocad: mods declare python, javascript, wasm; installing cpython, js
+ferrocad: workbenches: loaded 12 script(s)
+```
+
 ## 5. Open questions, and how each host reaches the engine
+
 **Open questions.**
 
 - **Who owns the console when the set has more than one language?** A fixed precedence
@@ -1541,6 +1581,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D21 | a declared runtime this build cannot serve | **Skip it, install the rest** (B14). The mod set derives the hosts it wants and the edition grants what it can, so one missing engine must not take the interpreters that do exist with it. Nothing installable is still a refusal, and the message is that member's own (`--features js`) rather than a generic one |
 | D22 | which providers the browser has | **One per feature, the document half's** (B15), and that is correct rather than broken: the page ships no `mods/`, has no filesystem for the loader, and its Python facade is a stub. `?providers=1` states it. Parity needs the mods to be shippable (embedded tree + synthetic `os`, or a provider hook in the bundle ABI), which is packaging, not a host |
 | D23 | does the registry list the document half's providers | **Yes, per feature** (B15b). A build that draws the grid and the axis cross has a provider for each, so `provider_features()` names it with the id and label the mods use (`ferrocad` / `FerroCAD (native)`); the popover's *switch* list stays empty, because a one-item radio set is a dead control. Embedding the mods instead would switch the grid to a shader backend the wasm-Python host cannot supply a skin for |
+| D24 | is `--addons` a bundle list or a mod selection | **The selection** (B16). All mods load by default; naming any narrows the boot to exactly those, and the same list feeds the host derivation, the Python loader, the bundles and the provider registry. A bundle flag that left the loader scanning everything made "the mods I asked for" mean two different sets. `?addons=` in the browser keeps its bundle meaning — there is no mod tree in the page |
 
 ## 6. Acceptance
 

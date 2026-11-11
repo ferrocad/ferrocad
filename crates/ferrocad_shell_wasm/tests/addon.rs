@@ -569,3 +569,21 @@ fn the_packs_are_the_directories_with_an_addon_in_name_order() {
         .collect();
     assert_eq!(names, ["Alpha", "Zeta"]);
 }
+
+/// `--addons` names one bundle or one package, and both mean that mod alone.
+#[test]
+fn a_bundle_or_its_package_is_the_selection() {
+    let temp = tempfile::tempdir().expect("a temporary directory");
+    let mods = temp.path().join("mods");
+    for name in ["Zeta", "Alpha"] {
+        let entry = mods.join(name).join("addon.wasm");
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, fixture()).unwrap();
+    }
+
+    let package = mods.join("Alpha");
+    let by_package = packs(std::slice::from_ref(&package));
+    assert_eq!(by_package, [package.join("addon.wasm")]);
+    // The file form is the same selection, which is why both spellings work.
+    assert_eq!(packs(&by_package[0..1]), by_package);
+}

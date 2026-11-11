@@ -7,7 +7,7 @@ B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
 (2026-11-11), B17a recorded; B18 built (2026-11-11), B18a steps 1–4 built (2026-11-11),
 B18a steps 5–7 and B18b recorded; B19a built (2026-11-11), B19b built (2026-11-11),
-B19c's Rust seam built (2026-11-11), B19c's host half and B19d recorded.** The surface suite
+B19c built (2026-11-11), B19d recorded.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1451,6 +1451,21 @@ The browser therefore reads
 ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
 ```
 
+> **Updated by B18a steps 1–2 (2026-11-11).** That line is the `plain`/`js` answer. With
+> the Python half installed the wasm facade now answers `view`, and therefore
+> `grid_summary`/`axis_summary`, from its own provider registry — empty until step 5 — so
+> the header label reads `none` while the document half still draws the grid and the
+> `registry` line is unchanged:
+>
+> ```
+> ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1
+> ```
+>
+> `smoke.sh` asserts that pair for `?runtime=pywasm` and `?runtime=pywasm,js`. Step 5
+> (the registry answers) closes it, as would a merge rule that lets a script's *empty*
+> summary defer to the document half; the second is a policy change and has not been
+> decided.
+
 **Exit: met.** `without_a_script_the_registry_names_the_document_halfs_providers`, plus
 `the_provider_and_gpu_hooks_ask_the_script_first` extended to pin the per-feature merge
 (a script's `grid` beside a native `axis`); the two `?providers=1` captures re-asserted
@@ -1463,6 +1478,11 @@ Embedding the mods would also make it worse: `mods/GridOverlayCoin` would regist
 `provider_skin` has no wasm-Python implementation, so the native ground would step aside
 for a shader that never arrives — an invisible grid. The routes above stay the real answer
 for *addon* providers, and they are packaging work with their own design pass.
+
+B19 later made delivery possible without embedding (`www/mods/` is fetched at boot), and
+the packs do reach the interpreter — but the shipped provider mods still stop at
+`import os` (B18b) and at the empty provider registry (step 5), so the paragraph above is
+unchanged about *capability*.
 
 ### B16 — `--addons` is the mod *selection* (built 2026-11-11)
 
@@ -1752,8 +1772,7 @@ sibling modules needs an import hook into the interpreter (a later slice), and a
 bundle is not a Python mod — `mods/Explode`, `mods/Fasteners` and `mods/Spring` are
 skipped by the entry-file rule, which is the same rule every host applies.
 
-**B19c — fetch, progress, isolation (Rust seam built; host half recorded).** The seam
-that a fetching host needs is in place:
+**B19c — fetch, progress, isolation (built 2026-11-11).** Two halves, both landed:
 
 - `ScriptHost::load_workbench_pack(&str)` and `AppBackend::load_workbench_pack(&str)` take
   one pack document; both default to an empty report, which is the honest answer from a
@@ -1775,15 +1794,29 @@ Tests: `crates/ferrocad_python_host` (4, the flattening rules),
 `crates/ferrocad_shell_web/tests/packs.rs` (3, a real RustPython host: both scripts run
 `Init.py` first and the command reaches `commands()`; a raising `InitGui.py` is recorded
 while `Init.py` loaded and the console still answers; a malformed pack is an `Err`),
+`crates/ferrocad_shell_web`'s `mods` unit tests (5, the index shape, the duplicate/empty
+refusals, the `?mods=` switch and the status lines), and
 `crates/ferrocad_shell_api/tests/chain.rs` (the primary answers a pack; an empty chain
 loads none).
 
-The **host half** is still to do: `ferrocad_web_gpui` fetches `www/mods/index.json` and
-each pack **after the first frame** (code splitting must not delay the window), calls
-`load_workbench_pack` per pack in index order, shows progress in the existing banner slot
-(`Loading mods 3/7 · Fasteners`), isolates failures, then calls `refresh_after_mods` and
-`cx.notify()`. `?mods=` (a probe like `?providers=1`) logs the report for the capture
-harness.
+**The host half.** `ferrocad_web_gpui` fetches `www/mods/index.json` (and each pack) from
+an async task started **after the window exists**, so the first frame paints before the
+first pack runs; `?mods=<url>` names another index and `?mods=0` turns the fetch off. The
+fetch runs only when a Python half is installed — a `plain`/`js` page has nothing that
+could run an `Init.py` pack. Between packs the status line reads
+`Loading mods 3/7 · Fasteners`; each pack's report goes through
+`Shell::note_mod_report` (About card rows, console lines, the traceback to stderr and the
+`log` sink the browser has), and the batch ends with `Shell::refresh_after_mods` and a
+summary (`mods: 6 loaded, 6 failed`). A failed fetch or parser error is logged and the
+batch continues. `smoke.sh` regenerates `www/mods/` and adds a `?mods=1` capture asserting
+the index, one named pack's report and the summary, and forbidding an index parse error or
+a 404.
+
+What the shipped packs do today is the capability gap, stated where it shows: every
+`Init.py` loads and every `InitGui.py` records `ImportError: no os specific module found`
+(RustPython runs with `host_env` off, B18b), so the About card reads `6 script(s) loaded`
+with six failures and the status line says `6 loaded, 6 failed`. That is the parity signal
+this slice was for; steps 5–7 and B18b move those numbers.
 
 **B19d — choosing the set (recorded).** The About card's B17a `Prefs` selects which packs
 load, so "disable this mod" is one list rather than a flag per host.

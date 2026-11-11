@@ -688,8 +688,14 @@ def evaluate(code: str) -> str:
             except SyntaxError:
                 exec(code, _NAMESPACE)
             return _json({"ok": True, "output": buf.getvalue().rstrip("\n")})
-        except Exception:
-            buf.write(traceback.format_exc())
+        except Exception as exc:
+            # The console is where a user reads a failure, so an engine that cannot format a
+            # traceback (RustPython's frozen pylib answers "") still has to name the
+            # exception instead of printing an empty line.
+            detail = traceback.format_exc()
+            if not detail.strip():
+                detail = "%s: %s\n" % (type(exc).__name__, exc)
+            buf.write(detail)
             return _json({"ok": False, "output": buf.getvalue().rstrip("\n")})
 
 

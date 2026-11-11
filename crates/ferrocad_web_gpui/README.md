@@ -111,6 +111,7 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?save=1` | run `App_Save` (`Ctrl+S`); the page logs the bytes it was asked to download |
 | `?reopen=1` | save, capture those bytes instead of downloading, then open them again |
 | `?probe=1` | once the synthetic input has settled, log the document the document API returns (`ferrocad harness: document {…}`), so a capture can assert on the document rather than on the canvas |
+| `?manipulator=id:action:object:element:values` | send one workbench commit before the first frame, through the same call a released handle uses (`apply_interaction`): `?manipulator=dress_up:fillet:Box:Edge1:2`, `?manipulator=push_pull:extrude:Box:Face1:3`. The element may be empty and the values are comma-separated |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
@@ -204,6 +205,20 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   `Height` is `20 mm`: the command reached the document through the module's one
   import, not through a second registry. `smoke.sh` asserts the console lines and that
   JSON.
+- **Both Part manipulators build their feature.** A capture cannot scrub the dress-up
+  arc or drag the push/pull stem, so `?manipulator=` sends the commit such a gesture
+  releases, through the same `apply_interaction` the viewport bridge calls. The
+  backend's own stage line is the assertion:
+
+  ```
+  ferrocad probe: dress_up fillet Box -> ok=true
+  ferrocad: stage draws Fillet, Box_Fillet
+  ferrocad probe: push_pull extrude Box -> ok=true
+  ferrocad: stage draws Fillet, Box_Fuse
+  ```
+
+  Each feature replaced the body it consumed, the hidden extrusion is not drawn, and no
+  interpreter was installed: the commits are the document half's own arms.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:
@@ -236,13 +251,15 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   is unverified there.
 - **Interactive Push/Pull and edge dress-up.** Wired. The web host links
   `ferrocad_part_gui` and installs its two factories beside
-  `ferrocad_shell_core::base_contributions()` — the same handles the Parametric
-  edition contributes — and the document half applies the commits itself:
-  `RustAppBackend::apply_interaction` creates `<object>_Fillet`/`_Chamfer`, and for
-  push/pull `<object>_Extrusion` (hidden) plus `<object>_Fuse`/`_Cut`. No interpreter is
-  involved on either side. What is still unverified *in the browser* is the pointer
-  gesture: the headless capture drives `apply_interaction` with zero deltas, so the
-  handles and the commit path are tested but a real drag is not.
+  `ferrocad_shell_core::base_contributions()` — the same handles the Parametric edition
+  contributes — and the document half applies the commits itself
+  (`RustAppBackend::apply_interaction`), so no interpreter is involved on either side.
+  The commit half is checked in this host: `smoke.sh` sends one real commit per
+  manipulator with `?manipulator=` (`dress_up` builds `Box_Fillet` at the radius it was
+  given; `push_pull` builds `Box_Extrusion` plus `Box_Fuse`, with the sweep hidden) and
+  asserts on both the stage line and the document the page reads back. What a headless
+  capture still cannot do is the **pointer gesture** — scrubbing the arc, dragging the
+  stem — so the pick and the scrub are the untested part, not the edit.
 - **`WP`.** The workplane command reports that none is wired (see
   [workplanes.md](../../docs/project/tasks/workplanes.md)); `Fit` is wired.
 - **Python workbenches.** `?pywasm=1` installs RustPython, so the Console evaluates

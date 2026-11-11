@@ -91,6 +91,11 @@ pub fn main() {
             }
         };
 
+        // The headless capture cannot scrub the dress-up arc or drag the push/pull
+        // stem; `?manipulator=` sends the commit such a gesture would, before the
+        // first frame, so the capture asserts on the document instead of on pixels.
+        probe_manipulator(cx);
+
         // The page needs the shell back after a file picker or a drop; GPUI has no
         // global app handle outside a callback, so keep both here.
         let async_app = cx.to_async();
@@ -146,6 +151,55 @@ fn contributions() -> ferrocad_shell_core::Contributions {
     ferrocad_shell_core::base_contributions()
         .with_manipulator(ferrocad_part_gui::fillet_manipulator)
         .with_manipulator(ferrocad_part_gui::push_pull_manipulator)
+}
+
+/// `?manipulator=<id>:<action>:<object>:<element>:<values>` — one workbench commit,
+/// through the function a released handle calls.
+///
+/// The viewport's bridge resolves the pick, asks the manipulator registry, and sends
+/// what the scrub produced to [`ferrocad_shell_core::app::apply_interaction`]. A
+/// headless capture can do neither of the first two, so this supplies the third: the
+/// commit is the real one, and everything after it — the document edit, the feature
+/// object, the stage — is the arm under test. `<element>` may be empty, and `<values>`
+/// is a comma-separated list (`2` for a fillet, `3` or `-2` for a push/pull).
+fn probe_manipulator(cx: &mut gpui::App) {
+    let query = ferrocad_shell_web::page_query();
+    let Some(spec) = ferrocad_shell_web::parameter(&query, "manipulator") else {
+        return;
+    };
+    let fields: Vec<&str> = spec.split(':').collect();
+    let [manipulator, action, object, element, values] = fields.as_slice() else {
+        log::error!(
+            "ferrocad probe: ?manipulator wants <id>:<action>:<object>:<element>:<values>, got {spec:?}"
+        );
+        return;
+    };
+    let values: Vec<f64> = values
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| value.parse().ok())
+        .collect();
+
+    let mut commit = ferrocad_stage::InteractionCommit::new(*manipulator, 0, *action);
+    if !element.is_empty() {
+        commit = commit.with_element(*element);
+    }
+    if !values.is_empty() {
+        commit = commit.with_values(values);
+    }
+
+    match ferrocad_shell_core::app::apply_interaction(cx, &commit, object) {
+        Ok(result) => log::info!(
+            "ferrocad probe: {manipulator} {action} {object} -> ok={} {}",
+            result.ok, result.error
+        ),
+        Err(error) => log::error!("ferrocad probe: {manipulator} {action} {object} -> {error}"),
+    }
+    // The stage is the answer a capture asserts on: `stage_meshes` logs
+    // `ferrocad: stage draws …`, which shows the feature replacing its base.
+    if let Err(error) = ferrocad_shell_core::app::stage_meshes(cx) {
+        log::error!("ferrocad probe: stage: {error}");
+    }
 }
 
 /// The browser window's options.

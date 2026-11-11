@@ -1139,8 +1139,16 @@ The browser side was built and booted locally, not left to CI: the pinned cross 
 tessellate, the stage draws the fillet instead of its box, the JS and wasm workbenches
 run, and nothing panics. A bare `cargo check --target wasm32` outside that image still
 fails in `cxx`; the image is what supplies the sysroot, which is the wrong lesson to draw
-about the crate. What the smoke does **not** cover is a pointer **drag** on a manipulator:
-it drives the palette and a click, not a stage gesture.
+about the crate.
+
+The commit arm is covered too, because a capture cannot scrub a handle: `?manipulator=`
+(`ferrocad_web_gpui`) builds the `InteractionCommit` a released handle emits and sends it
+through `ferrocad_shell_core::app::apply_interaction` — the viewport bridge's own call —
+before the first frame. `smoke.sh` runs both, then asserts on the backend's stage line
+and on the document the page reads back: `dress_up` gives `Box_Fillet` the 2 mm radius it
+was sent, and `push_pull` gives `Box_Fuse` a `Box_Extrusion` tool with `LengthFwd 3.0`,
+`Solid True` and `Visibility False`. What is still uncovered is the **pick and the
+scrub**: the pointer gesture, not the edit.
 
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**

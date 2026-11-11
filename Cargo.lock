@@ -2955,6 +2955,7 @@ dependencies = [
  "ferrocad_part_gui",
  "ferrocad_shell_core",
  "ferrocad_shell_web",
+ "ferrocad_stage",
  "ferrocad_wasm",
  "log",
  "wasm-bindgen",

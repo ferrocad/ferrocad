@@ -42,6 +42,8 @@ ferrocad_shell_web.workspace = true
 # parametric edition contributes — and the commits they emit are applied by the
 # document half (see `ferrocad_shell_rust::RustAppBackend::apply_interaction`).
 ferrocad_part_gui.workspace = true
+# The commit the `?manipulator=` probe builds: the same value a handle emits.
+ferrocad_stage.workspace = true
 # `ferrocad_wasm` supplies the link-time WASI stubs the kernel's wasi-sdk build
 # leaves behind; `main` must retain them before the first kernel call.
 ferrocad_wasm.workspace = true

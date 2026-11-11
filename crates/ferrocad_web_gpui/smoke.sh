@@ -10,8 +10,11 @@
 # the stage draws the fillet **instead of** the box it consumed, a save/open round
 # trip keeps both objects, and nothing panics. A second capture installs the wasm
 # workbench (`?runtime=js&addons=wasm`), runs its command through the palette and
-# asserts on the document the doorway returns. Without a browser or a build it prints
-# `skipped: …` and exits 0, so it never blocks a developer who has not built.
+# asserts on the document the doorway returns. A third pair sends Part's two
+# manipulator commits (`?manipulator=`), which no pointer gesture in a capture can
+# reach, and asserts that each feature replaced the body it consumed. Without a
+# browser or a build it prints `skipped: …` and exits 0, so it never blocks a
+# developer who has not built.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -120,6 +123,17 @@ capture_workbench() {
     capture "/?runtime=js&addons=wasm&keys=ctrl-k;t;o;y;enter&probe=1" "$TMP/addon.log"
 }
 
+# The workbench manipulation leg: `?manipulator=` sends the commit a released handle
+# sends, which a headless capture cannot produce (no scrub, no drag). One capture per
+# manipulator, because they build different features.
+capture_manipulator() {
+    # `?js=1` installs the page's document API so `?probe=1` can read the result back;
+    # the commit still lands on the document half (`JsScriptHost` does not claim
+    # `apply_interaction`).
+    capture "/?js=1&manipulator=dress_up:fillet:Box:Edge1:2&probe=1" "$TMP/fillet.log"
+    capture "/?js=1&manipulator=push_pull:extrude:Box:Face1:3&probe=1" "$TMP/push_pull.log"
+}
+
 require_line() {
     if grep -Fq -- "$1" "$LOG"; then
         printf '  ok       %s\n' "$(grep -Fm1 -- "$1" "$LOG")"
@@ -205,6 +219,48 @@ unreachable
 EOF
 }
 
+# The manipulation leg. `ferrocad probe:` is the host echoing the commit's verdict;
+# `ferrocad: stage draws …` is the backend's own line for the document after it, which
+# is the interesting half: the feature exists and replaces the body it consumed.
+check_manipulator() {
+    LOG="$TMP/fillet.log"
+    echo "dress-up console lines:"
+    require_line 'ferrocad probe: dress_up fillet Box -> ok=true'
+    require_line 'ferrocad: stage draws Fillet, Box_Fillet'
+    # The document, not just the stage: the feature exists with the radius the commit
+    # sent. `?probe=1` reads it through the page's document API.
+    require_line '"name":"Box_Fillet"'
+    require_line '"type_id":"Part::Fillet"'
+    require_line '"value":"2 mm"'
+
+    LOG="$TMP/push_pull.log"
+    echo "push/pull console lines:"
+    require_line 'ferrocad probe: push_pull extrude Box -> ok=true'
+    require_line 'ferrocad: stage draws Fillet, Box_Fuse'
+    # The sweep is a document object too; it is hidden, so the stage draws the boolean
+    # only, and the boolean is what carries the shape.
+    require_line '"name":"Box_Extrusion"'
+    require_line '"type_id":"Part::Extrusion"'
+    require_line '"name":"Box_Fuse"'
+    require_line '"type_id":"Part::Fuse"'
+
+    for log in fillet push_pull; do
+        LOG="$TMP/$log.log"
+        echo "$log forbidden console patterns:"
+        while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            forbid_pattern "$pattern"
+        done <<'EOF'
+panicked at
+RuntimeError
+unreachable
+is not available in this build
+no sub-shape
+not a planar face
+EOF
+    done
+}
+
 if [ ! -d "$WWW/pkg" ]; then
     echo "skipped: $WWW/pkg is missing (build it with crates/ferrocad_web_gpui/run.sh --build-only)"
     exit 0
@@ -229,9 +285,12 @@ check_console
 capture_workbench
 check_workbench
 
+capture_manipulator
+check_manipulator
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulators build their feature, no panic or JS error"

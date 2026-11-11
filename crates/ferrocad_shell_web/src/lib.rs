@@ -197,6 +197,17 @@ pub fn page_backend() -> Result<(Box<dyn AppBackend>, Vec<Runtime>), String> {
     Ok((backend, runtimes))
 }
 
+/// One query parameter's value, or `None` when the page did not pass it.
+///
+/// The harness drives a host through the query string (`?manipulator=…`, `?click=…`),
+/// so the parsing belongs beside [`from_query`] — and it is a plain function over the
+/// string, which keeps it testable without a browser.
+pub fn parameter(query: &str, name: &str) -> Option<String> {
+    pairs(query)
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value.to_string())
+}
+
 /// `window.location.search`.
 #[cfg(target_family = "wasm")]
 fn page_search() -> String {
@@ -215,6 +226,20 @@ fn page_search() -> String {
     }
 }
 
+/// The page's query string, for a host that has parameters of its own.
+///
+/// Empty off the browser: a native caller has no page, and a probe that reads nothing
+/// is the right answer there.
+#[cfg(target_family = "wasm")]
+pub fn page_query() -> String {
+    page_search()
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn page_query() -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +248,22 @@ mod tests {
     fn no_query_is_the_document_alone() {
         assert_eq!(from_query("").unwrap(), vec![Runtime::Plain]);
         assert_eq!(from_query("?").unwrap(), vec![Runtime::Plain]);
+    }
+
+    #[test]
+    fn a_parameter_is_read_and_its_absence_is_none() {
+        assert_eq!(
+            parameter("?manipulator=dress_up:fillet:Box:Edge1:2", "manipulator").as_deref(),
+            Some("dress_up:fillet:Box:Edge1:2")
+        );
+        // Not the first pair, and not the last.
+        assert_eq!(
+            parameter("?js=1&manipulator=push_pull:extrude:Box:Face1:3&probe=1", "manipulator")
+                .as_deref(),
+            Some("push_pull:extrude:Box:Face1:3")
+        );
+        assert_eq!(parameter("?js=1", "manipulator"), None);
+        assert_eq!(parameter("", "manipulator"), None);
     }
 
     #[test]

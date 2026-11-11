@@ -126,6 +126,27 @@ def set_gpu_adapter(payload_json: str) -> str:
     return _json({"ok": True, "value": value, "error": ""})
 
 
+def _run_workbench_script(name, script, source, path, loaded, errors):
+    """Execute one workbench script and record it: loaded, or its traceback.
+
+    Shared by the filesystem loader and the pack loader, so a ``mods/`` tree and a
+    fetched pack report the same thing for the same script — the isolation rule (one
+    broken workbench does not take down the app) lives in one place.
+    """
+    namespace = {"__file__": path, "__name__": f"{name}.{script[:-3]}"}
+    try:
+        exec(compile(source, path, "exec"), namespace)
+        loaded.append(f"{name}/{script}")
+    except Exception:
+        errors.append(
+            {
+                "workbench": name,
+                "script": script,
+                "traceback": traceback.format_exc(),
+            }
+        )
+
+
 def load_workbenches(dirs_json: str = "[]") -> str:
     """Best-effort workbench loading.
 
@@ -170,12 +191,9 @@ def load_workbenches(dirs_json: str = "[]") -> str:
                 path = os.path.join(workbench_dir, script)
                 if not os.path.isfile(path):
                     continue
-                namespace = {"__file__": path, "__name__": f"{name}.{script[:-3]}"}
                 try:
                     with open(path, encoding="utf-8") as handle:
                         source = handle.read()
-                    exec(compile(source, path, "exec"), namespace)
-                    loaded.append(f"{name}/{script}")
                 except Exception:
                     errors.append(
                         {
@@ -184,6 +202,46 @@ def load_workbenches(dirs_json: str = "[]") -> str:
                             "traceback": traceback.format_exc(),
                         }
                     )
+                    continue
+                _run_workbench_script(name, script, source, path, loaded, errors)
+    return _json({"loaded": loaded, "errors": errors})
+
+
+def load_workbench_sources(payload_json: str = "[]") -> str:
+    """Load workbench scripts **from data**: a fetched mod pack, with no filesystem.
+
+    Each entry is ``{"name": "Fasteners", "script": "InitGui.py", "source": "…",
+    "path": "…"}``; ``path`` is optional and only labels a traceback, defaulting to
+    ``<name>/<script>``. The exec, isolation and error rules are
+    :func:`load_workbenches`' own (see :func:`_run_workbench_script`), so a host that
+    reads a ``mods/`` tree and one that fetches a pack report the same thing for the
+    same script.
+
+    This is the browser's loader. ``wasm32`` has no ``os`` and the page has no tree to
+    scan, but it can ``fetch``: the host decodes the pack and hands these entries here,
+    in the order the pack lists them (``Init.py`` then ``InitGui.py`` per workbench). A
+    malformed entry is skipped and a raising script is recorded — the pack half of "one
+    broken workbench must not cost the window". See
+    ``docs/project/tasks/backend-parity.md`` B19.
+    """
+    try:
+        entries = json.loads(payload_json)
+    except Exception:
+        entries = []
+
+    loaded = []
+    errors = []
+    for entry in entries:
+        try:
+            name = str(entry.get("name") or "")
+            script = str(entry.get("script") or "")
+            source = str(entry.get("source") or "")
+            path = str(entry.get("path") or f"{name}/{script}")
+        except Exception:
+            continue
+        if not name or not script:
+            continue
+        _run_workbench_script(name, script, source, path, loaded, errors)
     return _json({"loaded": loaded, "errors": errors})
 
 

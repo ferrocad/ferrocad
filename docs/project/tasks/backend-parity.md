@@ -5,7 +5,8 @@ built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 r
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
-(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a–B18b recorded.** The surface suite
+(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a–B18b recorded; B19a built
+(2026-11-11), B19b–B19d recorded.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1609,12 +1610,16 @@ six doc gates.
 ### B18a — grow the RustPython contract (recorded 2026-11-11)
 
 Each step flips one `Contract` flag in `RustPythonRuntime::contract` and implements the
-facade it names in `bootstrap.py`. Order by cost ÷ value:
+facade it names in `bootstrap.py`. Order by cost ÷ value — and **not** commands-first: the
+shared shell module registers `App_ToggleGrid` and its siblings at import, and their
+`Activated` reads `FerroCAD.Grid` / `FerroCADGui.gridViewRequest`. Flipping `commands`
+before those exist would route those ids to a script that raises, and the document half's
+fallback would be skipped (the grid would stop toggling in the browser).
 
 | step | flag | facade work | exit |
 | --- | --- | --- | --- |
-| 1 | `commands` | `FreeCADGui._command_list`/`_run`/`_resources` over the `_REGISTERED_COMMANDS` the facade already keeps | B6's two Gaps close: `commands()` lists what a mod registered, `run_command("App_Delete")` answers |
-| 2 | `view`, `view_state` | grid/axis summaries and `appearance_view` over the provider stubs; `FerroCADGui.ViewState` | the grid popover shows the script's provider in `?runtime=pywasm` |
+| 1 | `view`, `view_state` | `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`, `gridViewRequest`/`axisViewRequest` over the (empty) provider registry | the shell's view commands answer from Python; a `set_view_state` push is visible to `IsChecked` |
+| 2 | `commands` | `FreeCADGui._command_list`/`_run`/`_resources` over the `_REGISTERED_COMMANDS` the facade already keeps | B6's two Gaps close: `commands()` lists what a mod registered, `run_command("App_Delete")` answers |
 | 3 | `settings` | `Settings/<Feature>` rows via the registry | the settings card works for a provider mod |
 | 4 | `selection` | `FreeCADGui.Selection` mirror + queue | a mod's `IsActive` sees the shell's selection |
 | 5 | `providers` | `FerroCADGui.providers`/`providerSkin` over registered providers | the About/Dev Tools list names the mod's providers |
@@ -1643,6 +1648,48 @@ substitute facade. In order:
 
 Until then B18's `Contract` is the honest list of what the wasm facade cannot do, and it
 is the same list the About card could show.
+
+### B19 — mods as a fetched pack (recorded 2026-11-11; B19a built)
+
+The browser has no filesystem, so `load_workbenches` cannot run there — and the page is
+the one host where "ship a workbench" should not mean "rebuild the module". It can
+`fetch`. This is code splitting for `mods/`: the same workbench tree the desktop scans,
+delivered as data and loaded at runtime.
+
+**B19a — the no-filesystem loader (built).** `ferrocad_shell.load_workbench_sources(payload_json)`
+takes `[{name, script, source, path?}]` and runs the entries with the **same** exec,
+isolation and recording rules as `load_workbenches` — both now call one helper
+(`_run_workbench_script`), so a tree and a pack cannot report different things about the
+same script. A pack can register a command (the test's `FreeCADGui.addCommand`), a raising
+script is recorded, and a malformed entry is skipped. Tests:
+`crates/ferrocad_shell_pywasm/tests/mods.rs`. This is the *delivery* half only; see the
+dependency note below.
+
+**B19b — the pack format and its build (recorded).** One JSON file per mod,
+`mods/<Name>/` → `www/mods/<Name>.json` (`{"name", "version", "files": {"Init.py": "…",
+"InitGui.py": "…"}}`), plus `www/mods/index.json`. JSON because `fetch` + `JSON.parse`
+need no unzip crate in the wasm module, and because the pack is a build artifact *of the
+directory the desktop reads*, so the two cannot drift. Binary assets (icons are the only
+ones today) ship as separate URLs named by the pack rather than base64. `tools/mods_pack.py`
+writes them; a check gate (the shape of `wasm_audit`) fails on drift, so a mod edited in
+`mods/` and not re-packed is caught.
+
+**B19c — fetch, progress, isolation (recorded).** `ferrocad_web_gpui` fetches the index
+and the packs **after the first frame** (code splitting must not delay the window),
+decodes them, and hands each pack's sources to `load_workbench_sources`, `Init.py` then
+`InitGui.py` per mod in index order. Progress is a shell notice in the existing banner
+slot (`Loading mods 3/7 · Fasteners`), cleared on completion; a failed fetch or a raising
+pack is reported and skipped — the loader already records the second. `?mods=` (a probe
+like `?providers=1`) logs the report for the capture harness.
+
+**B19d — choosing the set (recorded).** The About card's B17a `Prefs` selects which packs
+load, so "disable this mod" is one list rather than a flag per host.
+
+**The dependency that decides the order.** A pack that registers a command and uses the
+document API works today. A pack that calls `FerroCAD.Grid`, `FerroCADGui.registerProvider`
+or `Part` needs the facade: B18a's `view`/`view_state`/`providers`, and B18b for geometry.
+Delivery (B19) and capability (B18) are independent, and shipping both orders is fine —
+but the first *useful* mods are command-only ones, and the real ones wait on B18b.
 
 ## 5. Open questions, and how each host reaches the engine
 

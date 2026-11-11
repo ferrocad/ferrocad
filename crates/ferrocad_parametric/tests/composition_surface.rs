@@ -279,14 +279,46 @@ fn tree_rows(backend: &RustAppBackend) -> Tree {
         .collect()
 }
 
+/// The tree's document rows: everything but the synthetic `Settings` namespace.
+///
+/// The namespace is not a document — the shell never follows it and it is never active —
+/// and since B13 the document half offers it even in a build with no provider registered
+/// (`Settings/grid` is answered from the shell's view state), so a test about documents
+/// has to ask for the documents. `the_settings_root_is_not_a_document` pins the other half.
+fn documents(backend: &RustAppBackend) -> Tree {
+    tree_rows(backend)
+        .into_iter()
+        .filter(|(name, _, _)| name != "Settings")
+        .collect()
+}
+
 #[test]
-fn the_tree_lists_the_sample_document() {
+fn the_settings_root_is_not_a_document() {
     let _guard = PYTHON.lock().unwrap_or_else(|error| error.into_inner());
     let backend = fresh();
     let tree = tree_rows(&backend);
 
-    // The base app registers no provider feature, so there is no synthetic root: the
-    // tree is exactly the documents.
+    let settings: Vec<&(String, bool, Vec<(String, String)>)> =
+        tree.iter().filter(|(name, _, _)| name == "Settings").collect();
+    assert_eq!(settings.len(), 1, "one synthetic root: {tree:?}");
+    let (_, active, objects) = settings[0];
+    assert!(!*active, "the synthetic root is never a document");
+    assert_eq!(
+        objects,
+        &vec![(
+            "Settings/grid".to_string(),
+            "FerroCAD::Settings".to_string()
+        )],
+        "the document half's grid card is the one feature it owns"
+    );
+}
+
+#[test]
+fn the_tree_lists_the_sample_document() {
+    let _guard = PYTHON.lock().unwrap_or_else(|error| error.into_inner());
+    let backend = fresh();
+    let tree = documents(&backend);
+
     assert_eq!(tree.len(), 1, "{tree:?}");
     let (name, active, objects) = &tree[0];
     assert_eq!(name, DOCUMENT);
@@ -310,7 +342,7 @@ fn the_tree_lists_every_document_and_switches() {
     let created = python::evaluate("FreeCAD.newDocument('Second')").expect("evaluate");
     assert!(created.ok, "{}", created.output);
 
-    let tree = tree_rows(&backend);
+    let tree = documents(&backend);
     assert_eq!(
         tree.iter()
             .map(|(name, active, _)| (name.as_str(), *active))
@@ -324,7 +356,7 @@ fn the_tree_lists_every_document_and_switches() {
         .activate_document(DOCUMENT)
         .expect("activate_document answers");
     assert_eq!(
-        tree_rows(&backend)
+        documents(&backend)
             .iter()
             .map(|(name, active, _)| (name.as_str(), *active))
             .collect::<Vec<_>>(),

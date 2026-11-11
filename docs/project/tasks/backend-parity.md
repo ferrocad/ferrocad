@@ -1214,13 +1214,24 @@ absent rather than inert: the script's schema persists them and nothing draws th
 a native card has no store to persist into.
 
 **Exit: met.** `ferrocad_shell_rust` grew a `grid_settings` suite (rows over the state,
-the root's shape, the two healing rules, a typed unit, a refusal that asks for no
-repaint, the one-owner rule) and its 38 tests pass; `ferrocad_shell_core` 271 over the
-composition, `ferrocad_parametric`'s `composition` suite (which still sees one `Settings`
-root), `ferrocad_shell_web` 19. In the browser, `?settings=` (`ferrocad_web_gpui`) logs the
-rows the card would render and the request a write returns — the tree and the card are
-painted into the canvas, so that is the only readable surface — and `smoke.sh` asserts
-both under `?runtime=plain`.
+the root's shape, the per-feature merge, the two healing rules, a typed unit, a refusal
+that asks for no repaint, the one-owner rule) and its 41 tests pass; `ferrocad_shell_core`
+271 over the composition, `ferrocad_parametric`'s `composition` suite (which still sees one
+`Settings` root), `ferrocad_shell_web` 19. In the browser, `?settings=`
+(`ferrocad_web_gpui`) logs the rows the card would render and the request a write returns
+— the tree and the card are painted into the canvas, so that is the only readable surface
+— and `smoke.sh` asserts it under **all three** runtimes: `?runtime=plain`, `?runtime=js`
+and `?runtime=pywasm`.
+
+Why all three, and not just the interpreter: the card is in `RustAppBackend`, so it is
+the same answer in every configuration, and that is the point. `plain` is the build with
+no interpreter at all **and** the fallback a host installs when one fails to boot, so
+making the card depend on a script half would leave exactly that build without one.
+`PywasmScriptHost` happens to implement none of the `Settings` hooks (`extra_tree_nodes`,
+`extra_properties`, `grid_summary`), so the wasm-Python runtime never answered the
+namespace in the first place — it gets the document half's card, asserted by the same
+lines. The browser has no `mods/`, hence no provider registry, hence nothing for a Python
+half to own there.
 
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**

@@ -244,8 +244,10 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   A write returns the `ViewRequest` the shell applies and mirrors back, so the rows and
   what the viewport draws cannot disagree, and the healing the script's card applies (a
   minor step at or above the major one raises the major; equal steps lower the minor)
-  happens in the same place. `?runtime=js` gets the same card: the page's script half
-  does not implement `Settings/*`, so the backend fills it in.
+  happens in the same place. All three browser runtimes get the same card — `?runtime=js`
+  because the page's script half does not implement `Settings/*`, and `?runtime=pywasm`
+  because `PywasmScriptHost` does not either; the card lives in the document half, so no
+  configuration depends on an interpreter to configure the grid.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

@@ -150,9 +150,11 @@ capture_gesture() {
 capture_settings() {
     capture "/?runtime=plain&settings=Settings/Grid" "$TMP/settings.log"
     capture "/?runtime=plain&settings=Settings/Grid.minor=20" "$TMP/settings_write.log"
-    # The page's script half does not implement `Settings/*`, so the document half fills
-    # the card in here too — the runtime the grid used to have no card under.
+    # The page's script half does not implement `Settings/*`, and the wasm-Python half
+    # does not either, so the document half fills the card in on both — the runtimes the
+    # grid used to have no card under.
     capture "/?runtime=js&settings=Settings/Grid" "$TMP/settings_js.log"
+    capture "/?runtime=pywasm&settings=Settings/Grid" "$TMP/settings_pywasm.log"
 }
 
 require_line() {
@@ -303,7 +305,15 @@ check_settings() {
     require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s): enabled, color, opacity, adaptive, minor_style, major_width, minor_width, minor, major, radius'
     require_line 'ferrocad probe: tree Sample, Settings'
 
-    for log in settings settings_write settings_js; do
+    # The interpreter that owns `Settings/*` natively (CPython) is not in the browser, so
+    # the wasm-Python half gets the same document-half card as the other two.
+    LOG="$TMP/settings_pywasm.log"
+    echo "settings card console lines (pywasm runtime):"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s): enabled, color, opacity, adaptive, minor_style, major_width, minor_width, minor, major, radius'
+    require_line 'ferrocad probe: tree Sample, Settings'
+
+    for log in settings settings_write settings_js settings_pywasm; do
         LOG="$TMP/$log.log"
         echo "$log forbidden console patterns:"
         while IFS= read -r pattern; do

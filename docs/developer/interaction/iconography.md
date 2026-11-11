@@ -922,6 +922,15 @@ open** — the renames change the words, not the set. Any concept that still doe
 stays authored here (loft, sweep, hollow solid, filled outline and solid from outline
 already ship as drawings), so a refused request costs nothing but a line in this log.
 
+**Re-check, 2026-11-06 (seventh).** The catalogue grew **7,866 → 7,988** (122 added,
+none removed). None of the additions is in `symbols`, `editor`, `architecture`, `industry`
+or `tools` — the batch is lifestyle material (`fitness`, `home`, `animals`, `gaming`,
+`food`, `transport`) — so none of the 20 clarified requests has landed yet. The checker
+now searches the clarified names rather than the CAD ones. One caveat for the ledger: a
+second `loft solid` call answered "Requested." rather than "Already requested today", so
+the server's day-level dedupe is not reliable across passes; a duplicate queue entry is
+harmless, since the glyph either arrives once or not at all.
+
 ### Contact sheets
 
 The rendered comparison is checked in beside the design notes. Every card labels the

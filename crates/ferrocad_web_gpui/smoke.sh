@@ -155,6 +155,10 @@ capture_settings() {
     # grid used to have no card under.
     capture "/?runtime=js&settings=Settings/Grid" "$TMP/settings_js.log"
     capture "/?runtime=pywasm&settings=Settings/Grid" "$TMP/settings_pywasm.log"
+    # The header row is a catalogue built-in, so the runtimes with no script half list
+    # it and its verb names the same node the tree does.
+    capture "/?runtime=plain&command=View_GridSettings" "$TMP/settings_command.log"
+    capture "/?runtime=js&command=View_GridSettings" "$TMP/settings_command_js.log"
 }
 
 require_line() {
@@ -313,7 +317,15 @@ check_settings() {
     require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s): enabled, color, opacity, adaptive, minor_style, major_width, minor_width, minor, major, radius'
     require_line 'ferrocad probe: tree Sample, Settings'
 
-    for log in settings settings_write settings_js settings_pywasm; do
+    LOG="$TMP/settings_command.log"
+    echo "grid settings command console lines (plain runtime):"
+    require_line 'ferrocad probe: command View_GridSettings -> ok=true status="grid settings" select=Some("Settings/grid")'
+
+    LOG="$TMP/settings_command_js.log"
+    echo "grid settings command console lines (js runtime):"
+    require_line 'ferrocad probe: command View_GridSettings -> ok=true status="grid settings" select=Some("Settings/grid")'
+
+    for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js; do
         LOG="$TMP/$log.log"
         echo "$log forbidden console patterns:"
         while IFS= read -r pattern; do

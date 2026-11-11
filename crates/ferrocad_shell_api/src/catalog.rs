@@ -84,6 +84,7 @@ const fn def(
 /// The table below spells each id through these constants, and a Rust host can match
 /// on the same names instead of repeating the strings.
 pub const TOGGLE_GRID: &str = "App_ToggleGrid";
+pub const VIEW_GRID_SETTINGS: &str = "View_GridSettings";
 pub const TOGGLE_AXIS_CROSS: &str = "App_ToggleAxisCross";
 pub const VIEW_WORKPLANE: &str = "App_ViewWorkplane";
 pub const TOGGLE_GIZMO: &str = "App_ToggleGizmo";
@@ -115,6 +116,23 @@ pub const BUILTIN: &[CommandDef] = &[
             TOGGLE_GRID,
             "Grid",
             "Show the reference grid",
+            "",
+            "View",
+            "ForView",
+            "grid",
+        )
+    },
+    // The grid's settings are a node in the tree, not a dialog, so this is a
+    // `select` directive. It is a built-in rather than a mod command because the
+    // node exists in every build (the document half answers it when no script
+    // half does), and a header row that appears only where a mod registered a
+    // provider would be a second place to find the same card.
+    CommandDef {
+        parent: TOGGLE_GRID,
+        ..def(
+            VIEW_GRID_SETTINGS,
+            "Grid settings",
+            "Change the reference grid's appearance",
             "",
             "View",
             "ForView",
@@ -287,9 +305,8 @@ pub enum Executor {
 /// See `docs/project/tasks/backend-parity.md` §3.
 pub fn executor(id: &str) -> Executor {
     match id {
-        VIEW_WORKPLANE | TOGGLE_GRID | TOGGLE_AXIS_CROSS | TOGGLE_GIZMO | DEV_TOOLS => {
-            Executor::Script
-        }
+        VIEW_WORKPLANE | TOGGLE_GRID | TOGGLE_AXIS_CROSS | TOGGLE_GIZMO | DEV_TOOLS
+        | VIEW_GRID_SETTINGS => Executor::Script,
         _ => Executor::Shell,
     }
 }
@@ -496,6 +513,22 @@ mod tests {
         assert!(row.wheel);
         assert!(row.enabled, "metadata only: the host fills live state");
         assert!(!row.checked);
+    }
+
+    #[test]
+    fn the_grid_settings_row_belongs_to_the_grid_surface() {
+        // The header's grid control owns this row (`FerroCAD_Parent`), and the row is
+        // not checkable: it opens the settings card rather than toggling anything.
+        let def = find(VIEW_GRID_SETTINGS).expect("the grid's settings are a built-in");
+        let row = def.info();
+        assert_eq!(row.label(), "Grid settings");
+        assert_eq!(row.parent, TOGGLE_GRID);
+        assert_eq!(row.surface(), Surface::Grid);
+        assert!(!row.checkable);
+        assert!(!row.wheel, "the radial menu has no settings slot");
+        // The Gui app executes it (it decides card vs headless modal, B13b); the Rust
+        // arm is the no-interpreter fallback.
+        assert_eq!(executor(VIEW_GRID_SETTINGS), Executor::Script);
     }
 
     /// The generated text does not depend on a feature another crate enabled.

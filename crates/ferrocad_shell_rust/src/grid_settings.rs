@@ -305,7 +305,13 @@ fn request_for(property: &str, text: &str, view: &ViewState) -> Result<ViewReque
     })
 }
 
-fn node_name() -> String {
+/// The node's name, for a command that selects it.
+///
+/// The shell matches `Settings/…` case-insensitively (`same_node`), because the app
+/// script spells the feature's display name (`Settings/Grid`) and the tree spells the
+/// registered id; this returns the tree's spelling, so the directive names exactly the
+/// row the user can see.
+pub fn node_name() -> String {
     format!("{SETTINGS_ROOT}/{GRID}")
 }
 

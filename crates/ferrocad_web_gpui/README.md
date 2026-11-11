@@ -115,6 +115,7 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?gesture=slot:object:element:pixels` | drive a manipulator for real, with no pointer: equip the hand (`2` push/pull, `3` dress-up), select the sub-element as a click would, press on the point the manipulator drew and pull it `pixels` outward: `?gesture=3:Fillet:Edge1:60`. The value comes from the manipulator's own scrub |
 | `?settings=<node>` | log the rows the settings card would render for that node (`?settings=Settings/Grid`), through the same `app::properties` call the pane makes. The tree and the card are painted into the canvas, so this is the only way a capture can read them |
 | `?settings=<node>.<property>=<value>` | commit one settings row, as the pane does (`app::set_property`), and log the presentation request it returns: `?settings=Settings/Grid.minor=20` |
+| `?command=<id>` | run one command through the backend before the first frame and log its outcome, including a `select` directive: `?command=View_GridSettings`. The palette needs synthetic keystrokes, so this is how a row a runtime only lists is exercised |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
@@ -248,6 +249,18 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   because the page's script half does not implement `Settings/*`, and `?runtime=pywasm`
   because `PywasmScriptHost` does not either; the card lives in the document half, so no
   configuration depends on an interpreter to configure the grid.
+- **The header row is a catalogue built-in.** `View_GridSettings` used to be registered
+  by the app script, so `plain` and `js` had no way to reach the card from the header.
+  It is in `catalog.rs` now (surface `grid`, parent `App_ToggleGrid`), so every runtime
+  lists it, and a host with no interpreter answers it by naming the node:
+
+  ```
+  ferrocad probe: command View_GridSettings -> ok=true status="grid settings"
+    select=Some("Settings/grid")
+  ```
+
+  With a script half the id stays the Gui app's (`Executor::Script`), which is what
+  keeps the desktop's headless-modal decision in `_GridSettingsCommand.Activated`.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

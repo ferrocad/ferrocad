@@ -10,6 +10,15 @@
       "tooltip": "Show the reference grid"
     },
     {
+      "cmd_type": "ForView",
+      "group": "View",
+      "id": "View_GridSettings",
+      "menu": "Grid settings",
+      "parent": "App_ToggleGrid",
+      "surface": "grid",
+      "tooltip": "Change the reference grid's appearance"
+    },
+    {
       "checkable": true,
       "cmd_type": "ForView",
       "group": "View",

@@ -1943,17 +1943,16 @@ class _GridSettingsCommand:
     state and the modal writes the parameter group, and they can drift. A validation
     error stays in the modal (the callback raises ``ValueError`` and the facade
     reports it as the dialog's error).
+
+    The row itself is a catalogue built-in (``catalog.rs``), so a host with no script
+    half lists it too and answers it by naming the same node — the alternative was a
+    header row that existed only where a Python half ran.
     """
 
     def GetResources(self):
-        return {
-            "MenuText": "Grid settings",
-            "ToolTip": "Change the reference grid's appearance",
-            "Group": "View",
-            "CmdType": "ForView",
-            "FerroCAD_Surface": "grid",
-            "FerroCAD_Parent": "App_ToggleGrid",
-        }
+        # A built-in: the label, tooltip, group, surface and parent are the generated
+        # catalogue's, so the header row reads the same in every host (B13c).
+        return _catalog_resources("View_GridSettings")
 
     def Activated(self):
         if (
@@ -2475,6 +2474,7 @@ class _DevToggleToolsCommand:
 #: above; the loop below skips whatever is already in the registry.
 _BUILTIN_COMMANDS = {
     "App_ToggleGrid": _GridCommand,
+    "View_GridSettings": _GridSettingsCommand,
     "App_ToggleAxisCross": _AxisCrossCommand,
     "App_ViewWorkplane": _ViewWorkplaneCommand,
     "App_ToggleGizmo": _GizmoCommand,

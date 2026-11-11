@@ -3,7 +3,8 @@
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
-B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13 and B13b built (2026-11-11).** The surface suite
+B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
+(2026-11-11).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -72,7 +73,7 @@ that are Gui policy. The table lives in `catalog.rs` as private policy, **not** 
 
 | executor | ids | rule |
 | --- | --- | --- |
-| `Executor::Script` | `App_ViewWorkplane`, `App_ToggleGrid`, `App_ToggleAxisCross`, `App_ToggleGizmo`, `Dev_ToggleTools` | the script answers when present; the Rust arm is the `runtime=plain` fallback (none for `Dev_ToggleTools`, which the shell intercepts in the window) |
+| `Executor::Script` | `App_ViewWorkplane`, `App_ToggleGrid`, `App_ToggleAxisCross`, `App_ToggleGizmo`, `View_GridSettings`, `Dev_ToggleTools` | the script answers when present; the Rust arm is the `runtime=plain` fallback (none for `Dev_ToggleTools`, which the shell intercepts in the window). `View_GridSettings` names a tree node, so its arm is a `select` directive |
 | `Executor::Shell` | `App_Move`, `App_Rotate`, `App_Undo`, `App_Redo`, `App_Fit`, `App_ToggleVisibility` | Rust answers; **optional delegation** through `ScriptHost::claims(id)`, which defaults to `None` |
 
 `Draft_Snap_Lock` is not a catalogue entry: Draft registers the command, so the
@@ -1270,10 +1271,40 @@ modal (unchanged) and `GuiUp == 1` with no provider giving `{"select": "Settings
 and keeps the modal. `test_commands.py`, `test_namespace_separation.py` and
 `test_draft_snapper.py` are green.
 
-Still open, and unchanged by this: `?runtime=plain` and `?runtime=js` have no
-`View_GridSettings` row at all (there is no script to register one), so the card is
-reached from the model tree. Adding it means a catalogue id with a Rust arm returning
-`{"select": "Settings/Grid"}`, reconciled with the app script's registration.
+Still open at the time, closed by B13c: `?runtime=plain` and `?runtime=js` had no
+`View_GridSettings` row at all (there was no script to register one), so the card was
+reached from the model tree only.
+
+### B13c — the header row is a built-in (built 2026-11-11)
+
+`View_GridSettings` was registered by the app script (`FreeCADGui.addCommand` in
+`python/ferrocad_shell`), so the header's grid popover had a settings row only where a
+Python half ran — and pywasm registers no commands at all, so even the interpreter build
+in the browser had none. The card existed in every runtime since B13; the *entry point*
+did not.
+
+It is a catalogue row now (`catalog.rs`, `parent: App_ToggleGrid`, surface `grid`), so
+`commands()` lists it everywhere and the metadata has one spelling. `Executor::Script`
+keeps the id the Gui app's when one is installed — that is what lets B13b's
+card-vs-headless-modal decision run on the desktop — and the document half answers when
+none is: `RustAppBackend::run_command` returns `select: Some("Settings/grid")`, the
+tree's own spelling (`same_node` accepts the script's `Settings/Grid` too). Nothing is
+opened from Rust: the shell already treats a `Settings/` select as "open the card",
+which `shell/tests/toolbar.rs` has pinned since T5.
+
+Reconciling with the app script took three lines: its `GetResources` now reads the
+generated catalogue (`_catalog_resources("View_GridSettings")`) and the class is listed
+in `_BUILTIN_COMMANDS`, which is what `tests/test_commands.py` compares against
+`catalog.json` in both directions. Its `Activated` is unchanged from B13b.
+
+**Exit: met.** `catalog.json` regenerated (the crate's own staleness test), a
+`ferrocad_shell_api` test for the row's surface/parent/executor, two
+`ferrocad_shell_rust` tests (no interpreter → `select`; a script that implements the id
+answers first), and the browser: `?command=` (`ferrocad_web_gpui`) runs one id through
+`app::run_command`, and `smoke.sh` asserts `ok=true status="grid settings"
+select=Some("Settings/grid")` under `?runtime=plain` and `?runtime=js`. `ferrocad_shell_core`
+271, `ferrocad_shell_python` 25, `ferrocad_shell_web` 19, the parametric `composition`
+suite and `tests/test_commands.py` green.
 
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**
@@ -1351,6 +1382,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D17 | who applies a workbench manipulator commit | **The script half if it claims one, else the document half** (B12). Part's dress-up and push/pull are document edits: `apply_interaction` builds the feature itself, so the browser and `--script-host=plain` get them, and both paths create the same object names |
 | D18 | who owns `Settings/*` | **Whichever half has rows for the node** (B13). A script half that lists a `Settings` root owns the namespace; otherwise the document half answers with the grid card, whose store is the presentation state the shell mirrors into the backend. The test is the same on both sides — "do I have rows?" — so a rendered row and its write cannot land in different places |
 | D19 | which grid-settings surface a build offers | **Exactly one** (B13b). With a shell attached (`FreeCAD.GuiUp == 1`) the command selects `Settings/Grid`, whoever owns the card; the modal over `FerroCAD.Grid` stays headless-only, where there is no card to open. Two surfaces for one feature meant two stores (view state and the parameter group) that could drift, and the parameter group already has a command that applies it (`App_ReloadGridSettings`) |
+| D20 | is `View_GridSettings` script-owned or built-in | **Built-in** (B13c). The node exists in every build, so a header row that only appeared where a mod or a script registered it was a capability gated on packaging. `Executor::Script` keeps the Gui app's decision first; the document half's arm is the `select` directive |
 
 ## 6. Acceptance
 

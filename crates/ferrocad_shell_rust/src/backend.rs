@@ -1109,6 +1109,18 @@ impl AppBackend for RustAppBackend {
         }
         // `App_Open`/`App_Save` never arrive here: the shell owns both ids and asks
         // the host's `FilePicker` (S6). A backend only moves bytes.
+        // The grid's settings are a node in the tree, so this verb only names it. The
+        // script half owns the id (`Executor::Script`, B13b decides card vs modal);
+        // this arm is what a build with no script half runs — the browser's `plain`
+        // and `js`, and a wasm-Python host that registers no commands at all.
+        if id == catalog::VIEW_GRID_SETTINGS {
+            return Ok(CommandOutcome {
+                ok: true,
+                status: "grid settings".to_string(),
+                select: Some(grid_settings::node_name()),
+                ..Default::default()
+            });
+        }
         // The two object verbs are not view toggles: they hand the shell a session
         // (a gizmo mode, and for Move a token its form spends).
         if id == catalog::MOVE {
@@ -2481,6 +2493,88 @@ mod tests {
         // answer — otherwise `?js=1` would regress to "no Python interpreter".
         let (backend, _) = backend_with_script();
         assert_eq!(backend.evaluate("1 + 1").unwrap().output, "ran 1 + 1");
+    }
+
+    /// A build with no script half still offers the grid's settings row: the verb names
+    /// the node, and the card it opens is the document half's (B13).
+    #[test]
+    fn the_grid_settings_command_selects_the_card_with_no_interpreter() {
+        let mut backend = RustAppBackend::new();
+        let commands = backend.commands().unwrap();
+        let row = commands
+            .iter()
+            .find(|command| command.id == catalog::VIEW_GRID_SETTINGS)
+            .expect("the catalogue lists the grid's settings");
+        assert_eq!(row.surface(), ferrocad_shell_api::commands::Surface::Grid);
+        assert!(row.enabled, "the card is reachable in every build");
+        assert!(!row.checked, "it opens a card, it does not toggle");
+
+        let outcome = backend
+            .run_command(catalog::VIEW_GRID_SETTINGS)
+            .expect("the verb answers");
+        assert!(outcome.ok, "{outcome:?}");
+        assert_eq!(
+            outcome.select.as_deref(),
+            Some(grid_settings::node_name().as_str()),
+            "the directive names the tree's own node"
+        );
+        // What the shell does with it: the node resolves to this half's rows.
+        assert!(
+            !backend
+                .properties(&grid_settings::node_name())
+                .unwrap()
+                .is_empty(),
+            "selecting it opens a card with rows"
+        );
+    }
+
+    /// A script half that implements the id answers first: the desktop's app script
+    /// decides between the card and its headless modal (B13b).
+    #[test]
+    fn a_script_that_implements_the_grid_settings_verb_answers_first() {
+        let mut backend = RustAppBackend::new().with_script_host(Box::new(GridSettingsHost));
+        let outcome = backend
+            .run_command(catalog::VIEW_GRID_SETTINGS)
+            .expect("the verb answers");
+        assert_eq!(outcome.status, "from the script", "the script ran");
+        assert_eq!(outcome.select, None, "not the document half's directive");
+    }
+
+    /// Answers only the grid's settings verb, like a Gui app whose own command owns it.
+    struct GridSettingsHost;
+
+    impl ScriptHost for GridSettingsHost {
+        fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
+            Err("no console".to_string())
+        }
+
+        fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
+            Ok(WorkbenchReport::default())
+        }
+
+        fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+            Err(format!("no tool {name}"))
+        }
+
+        fn tool_command(&self, _name: &str, _verb: &str) -> bool {
+            false
+        }
+
+        fn inventor_scene(&self) -> Result<Scene, String> {
+            Ok(Scene::default())
+        }
+
+        fn event_listener(&self) -> Box<dyn EventListener> {
+            Box::new(NoopListener)
+        }
+
+        fn run_command(&self, id: &str) -> Option<CommandOutcome> {
+            (id == catalog::VIEW_GRID_SETTINGS).then(|| CommandOutcome {
+                ok: true,
+                status: "from the script".to_string(),
+                ..Default::default()
+            })
+        }
     }
 
     #[test]

@@ -100,6 +100,10 @@ pub fn main() {
         // read it back out of the DOM; `?settings=` logs the rows the pane would show.
         probe_settings(cx);
 
+        // The palette needs synthetic keystrokes and a capture has none; `?command=`
+        // runs one id through the backend so a row a runtime only lists can be checked.
+        probe_command(cx);
+
         // The page needs the shell back after a file picker or a drop; GPUI has no
         // global app handle outside a callback, so keep both here.
         let async_app = cx.to_async();
@@ -276,6 +280,27 @@ fn probe_settings(cx: &mut gpui::App) {
             "ferrocad probe: settings {key}={} -> {error}",
             value.trim()
         ),
+    }
+}
+
+/// `?command=<id>` — run one command through the backend, before the first frame.
+///
+/// A palette row is reached with synthetic keystrokes and a capture has none, so this
+/// is how a verb a runtime only lists is exercised. The outcome is the shell's to apply
+/// (a `select` opens the settings card); the directive is logged, because that is the
+/// part a capture can assert on — the card itself is painted into the canvas.
+fn probe_command(cx: &mut gpui::App) {
+    let query = ferrocad_shell_web::page_query();
+    let Some(id) = ferrocad_shell_web::parameter(&query, "command") else {
+        return;
+    };
+    let id = id.trim();
+    match ferrocad_shell_core::app::run_command(cx, id) {
+        Ok(outcome) => log::info!(
+            "ferrocad probe: command {id} -> ok={} status={:?} select={:?}",
+            outcome.ok, outcome.status, outcome.select
+        ),
+        Err(error) => log::error!("ferrocad probe: command {id} -> {error}"),
     }
 }
 

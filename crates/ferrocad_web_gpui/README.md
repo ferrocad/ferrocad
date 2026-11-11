@@ -80,7 +80,8 @@ the kernel must agree on the wasm-EH encoding). On the first run the script:
 3. builds `ferrocad_web_gpui` in the cross image, with the build output and Cargo's
    home kept on the host (`target/wasm-cargo/`, `target/wasm-cargo-home/`) so later
    runs are incremental;
-4. generates `www/pkg/` and serves `www/` with `python3 -m http.server`.
+4. generates `www/pkg/` with wasm-bindgen, packs `mods/` into `www/mods/`, and serves
+   `www/` with `python3 -m http.server`.
 
 Options:
 
@@ -123,6 +124,22 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
+| `?mods=<url>` | the mod-pack index to fetch, resolved against the page (default `mods/index.json`); `?mods=0` disables the fetch. Packs load **after the first frame**, and only when the composition has a Python half |
+
+## Mods
+
+The desktop scans `mods/`; the browser has no filesystem, so it fetches. `tools/mods_pack.py`
+turns each workbench into `www/mods/<Name>.json` plus `www/mods/index.json` (both
+generated and ignored — `run.sh` and `smoke.sh` run the packer). After the window's
+first frame `ferrocad_web_gpui` fetches the index, then each pack in index order, and
+hands the pack document to `load_workbench_pack` on the script half — the same loader
+rule a scanned tree uses (`Init.py` then `InitGui.py`; a script that raises is recorded,
+not fatal). The status line shows `Loading mods 3/7 · Fasteners` and then a summary;
+the About card (`Settings/About`) lists what loaded and what did not.
+
+Delivery and capability are separate. A pack the current facade cannot run (today, the
+shipped provider mods need `os` and the provider registry: B18a step 5 / B18b) is
+reported and skipped, and the window is unaffected; `?mods=0` turns the fetch off.
 
 ## Settings
 
@@ -285,21 +302,24 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   With a script half the id stays the Gui app's (`Executor::Script`), which is what
   keeps the desktop's headless-modal decision in `_GridSettingsCommand.Activated`.
 - **The browser has one provider per feature, and it is the document half's.** The page
-  ships no `mods/` and has no filesystem for `load_workbenches` to scan, so the Python
-  grid/axis mods cannot load here: `PywasmScriptHost` implements neither the `Settings`
-  hooks nor `provider_features`, and the RustPython bootstrap's `FreeCADGui.providers()`
-  returns `[]`. `?providers=1` is the measurement:
+  fetches the mod packs (see [Mods](#mods)), but the shipped provider mods need `os`
+  and the provider registry, which the wasm facade does not install yet (B18a step 5 /
+  B18b): their `InitGui.py` is recorded as failed and skipped, and `PywasmScriptHost`
+  implements neither the `Settings` hooks nor `provider_features`, while
+  `FreeCADGui.providers()` returns `[]`. Since B18a steps 1–2 the facade also answers
+  `grid_summary`/`axis_summary` (the `view` flag), so the header reads its empty
+  registry — `none` — while the document half still draws the native grid. `?providers=1`
+  is the measurement:
 
   ```
-  ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
+  ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1
   ```
 
-  `switch=0` is the popover's list — nothing to switch *to* — while `registry` is what Dev
-  Tools lists, one provider per feature, and it is the provider that actually draws the
-  grid and the axis cross. The two numbers differ on purpose: a one-item radio set is a
-  dead control, but the provider still exists and has to be named, or a build that draws
-  both looks like a build with none. `?runtime=pywasm,js` composes the chain, with both
-  halves installed.
+  The label is the script's registry (empty until step 5 registers a backend); `registry`
+  is `provider_features`, which the document half answers, and it is the provider that
+  actually draws the grid and the axis cross. The disagreement is the step-5 gap, recorded
+  rather than papered over. `?runtime=pywasm,js` composes the chain, with both halves
+  installed.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:
@@ -313,6 +333,19 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   addon's own `create`/`set` never passes through `RustAppBackend`. A shell-driven edit
   (Move, undo, a property write) emits through the backend instead, so each edit is
   announced once, by whichever half performed it. `smoke.sh` asserts both lines.
+- **The fetched mod packs reach the interpreter.** `?mods=1` walks `www/mods/index.json`
+  after the first frame. The index is the packer's; each pack is handed to the script
+  half; and the status line ends with a summary. Which scripts *succeed* depends on the
+  facade's contract, so the smoke check asserts delivery (the index parsed, a named pack
+  loaded, a per-pack report line), not a pass count:
+
+  ```
+  [INFO] ferrocad_web_gpui::mods: ferrocad: mods: 6 pack(s) from http://127.0.0.1:8099/mods/index.json
+  [INFO] ferrocad_web_gpui::mods: ferrocad: mod GridOverlay: 1 script(s) loaded, 1 failed
+  [WARN] ferrocad_shell_core::shell: ferrocad: workbench GridOverlay InitGui.py failed:
+  ImportError: no os specific module found
+  [INFO] ferrocad_web_gpui::mods: ferrocad: mods: 6 loaded, 6 failed
+  ```
 - No panic. Startup logs two
   `Scissor Rect … is not contained in the render target` validation errors from
   `gpui_wgpu` while the DOM canvas is still being sized (and the resize poll timeout
@@ -344,8 +377,11 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   [workplanes.md](../../docs/project/tasks/workplanes.md)); `Fit` is wired.
 - **Python workbenches.** `?pywasm=1` installs RustPython, so the Console evaluates
   Python against the real `FreeCAD.ActiveDocument` and the shell script's property
-  rows are real. The facade is read-only, though (no `setattr`, no recompute, no
-  `Shape`), and there are no workbench scripts, no `.ui` task panels and no `pivy`.
+  rows are real. The shipped packs are fetched and run (`?mods=1`, the default): each
+  `Init.py` loads, and each `InitGui.py` currently stops at `import os`, which the
+  wasm facade does not install (B18b) — recorded, shown in `Settings/About` and the
+  status line, and never fatal. The facade is read-only, though (no `setattr`, no
+  recompute, no `Shape`), and there are no `.ui` task panels and no `pivy`.
   RustPython's compiler recurses, so `build.rs` sets the module's stack to 16 MiB
   (`wasm-ld`'s default is 1 MiB); if `?pywasm=1` traps on boot, that is the knob.
 - **Multiple windows.** The browser backend has one window.

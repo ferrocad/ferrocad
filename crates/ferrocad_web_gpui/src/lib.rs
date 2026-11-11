@@ -24,6 +24,7 @@
 #![cfg(target_family = "wasm")]
 
 mod host;
+mod mods;
 mod settings;
 
 use std::cell::RefCell;
@@ -174,8 +175,27 @@ pub fn main() {
         });
         match window {
             Ok(_) => {
-                if let Some(shell) = shell_slot.borrow().as_ref() {
-                    host::install(async_app, shell.downgrade());
+                if let Some(shell) = shell_slot.borrow().as_ref().cloned() {
+                    host::install(async_app.clone(), shell.downgrade());
+                    // B19c: the page has no filesystem, so the packs are fetched after
+                    // the window is up and handed to the script half one at a time.
+                    // Only a Python half can run `Init.py`/`InitGui.py`, and a page
+                    // that wants no fetch says `?mods=0`.
+                    let runs_python = runtimes.iter().any(|runtime| {
+                        ferrocad_shell_api::Language::of(*runtime)
+                            == Some(ferrocad_shell_api::Language::Python)
+                    });
+                    if runs_python {
+                        let value = ferrocad_shell_web::parameter(
+                            &ferrocad_shell_web::page_query(),
+                            "mods",
+                        )
+                        .unwrap_or_else(|| "1".to_string());
+                        if !ferrocad_shell_web::mods::is_off(&value) {
+                            let index = ferrocad_shell_web::mods::index_url(&value).to_string();
+                            mods::start(async_app, shell.downgrade(), index);
+                        }
+                    }
                 }
                 cx.activate(true)
             }
@@ -248,12 +268,13 @@ fn probe_manipulator(cx: &mut gpui::App) {
 
 /// `?providers=1` — the provider registry, as the header's popovers and Dev Tools read it.
 ///
-/// The browser has no `mods/` and no filesystem for `load_workbenches` to scan, so a
-/// Python provider mod cannot load here: `PywasmScriptHost` implements neither the
-/// `Settings` hooks nor `provider_features`, `FreeCADGui.providers` is the bootstrap
-/// stub's `[]`, and the grid card is the document half's. That means one provider label
-/// per feature and an empty registry — which is a *correct* answer here, not a broken
-/// mod set, and the distinction is invisible without a line like this one.
+/// The browser fetches the packs, but the shipped provider mods need `os` and the provider
+/// registry, so none registers here (B18a step 5 / B18b). Since B18a steps 1–2 the wasm
+/// facade also *answers* `grid_summary`/`axis_summary` (the `view` flag), so the header
+/// label is its registry's truth (`none`) while the document half still draws the native
+/// grid — `registry` is `provider_features`, which the document half answers. Reporting
+/// both is the point: the disagreement is the step-5 gap, and without a line like this one
+/// it looks like a missing build.
 fn probe_providers(cx: &mut gpui::App) {
     let query = ferrocad_shell_web::page_query();
     if ferrocad_shell_web::parameter(&query, "providers").is_none() {

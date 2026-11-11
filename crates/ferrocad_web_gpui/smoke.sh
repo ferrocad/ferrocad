@@ -175,6 +175,34 @@ capture_settings() {
     capture "/?runtime=plain&settings_file=capture-settings-smoke.json&settings=Settings/Grid" "$TMP/settings_file.log"
 }
 
+# The fetched mod packs (B19c): the page has no filesystem, so it walks
+# `www/mods/index.json` after the first frame. Which scripts *succeed* depends on the
+# facade's contract (B18a/B18b), so the assertion is that delivery works — the index
+# parsed and a named pack reached the interpreter — not on a specific pass count.
+capture_mods() {
+    capture "/?mods=1" "$TMP/mods.log"
+}
+
+check_mods() {
+    LOG="$TMP/mods.log"
+    echo "fetched mod pack console lines:"
+    require_line 'ferrocad: mods: '
+    require_line 'pack(s) from'
+    require_line 'ferrocad: mod GridOverlay:'
+
+    echo "fetched mod pack forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+mods index:
+HTTP 404
+DoesNotExist
+panicked at
+unreachable
+EOF
+}
+
 require_line() {
     if grep -Fq -- "$1" "$LOG"; then
         printf '  ok       %s\n' "$(grep -Fm1 -- "$1" "$LOG")"
@@ -344,18 +372,20 @@ check_settings() {
     require_line 'ferrocad harness: settings capture-settings-smoke.json 1 group(s)'
     require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s)'
 
-    # No provider mod can load in the browser (no `mods/`, no filesystem), so one label per
-    # feature and an empty registry is the correct answer. The chain leg also proves the two
-    # halves compose when the page did install its module.
+    # The header label is the *script's* registry (B18a steps 1–2 gave the wasm facade
+    # `view`), and the page registers no provider: so the label is `none` even though the
+    # document half still draws the native grid. The registry line is the document half's
+    # (it answers `provider_features`), which is why the two disagree — a B18a step 5 gap,
+    # not a missing pack. The chain leg also proves the two halves compose.
     LOG="$TMP/providers_pywasm.log"
     echo "provider console lines (pywasm runtime):"
     require_line 'ferrocad: scripting runtime pywasm'
-    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
+    require_line 'ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1'
 
     LOG="$TMP/providers_chain.log"
     echo "provider console lines (pywasm,js chain):"
     require_line 'ferrocad: scripting runtime pywasm,js'
-    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
+    require_line 'ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1'
 
     for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js settings_file providers_pywasm providers_chain; do
         LOG="$TMP/$log.log"
@@ -418,6 +448,11 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/ferrocad-smoke.XXXXXX")"
 
+# The packs the page fetches are generated from `mods/` (the directory is ignored, so a
+# fresh checkout has none). Regenerate them, so the mods leg asserts on the tree rather
+# than on a stale artifact.
+python3 tools/mods_pack.py >/dev/null
+
 if ! start_server; then
     echo "failed: the static server did not start on port $PORT (see $TMP/server.log)" >&2
     FAILED=1
@@ -439,9 +474,12 @@ check_gesture
 capture_settings
 check_settings
 
+capture_mods
+check_mods
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, no panic or JS error"

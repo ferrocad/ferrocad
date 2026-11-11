@@ -819,11 +819,68 @@ impl Shell {
     /// [`boot_with`](Self::boot_with) snapshots the command registry once, before a
     /// browser has fetched anything: a pack loaded after the first frame (B19) brings
     /// commands the palette, toolbar and global shortcuts have not seen. A host calls this
-    /// after [`crate::app::load_workbench_pack`](crate::app::load_workbench_pack); it is
-    /// also why the call repaints, so the new rows appear without waiting for the next
-    /// unrelated event.
+    /// once per batch, after [`note_mod_report`](Self::note_mod_report); it is also why
+    /// the call repaints, so the new rows appear without waiting for the next unrelated
+    /// event.
     pub fn refresh_after_mods(&mut self, cx: &mut Context<Self>) {
         self.refresh_commands(cx);
+        cx.notify();
+    }
+
+    /// Show `text` in the status bar, outside a command's own status.
+    ///
+    /// A host doing work the shell did not start — the browser fetching mods after the
+    /// first frame (B19) — says so here rather than waiting for the next command.
+    pub fn set_status(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.model.lock().unwrap().status = text.into();
+        cx.notify();
+    }
+
+    /// Fold one fetched pack's report into the window (B19).
+    ///
+    /// `ShellModel.workbenches` is what the About card reads, so a pack loaded after
+    /// boot has to land there or the card would keep saying "none loaded"; a failed
+    /// script gets the same console line the boot path gives it. The commands are *not*
+    /// re-listed here: a host fetches a batch and calls
+    /// [`refresh_after_mods`](Self::refresh_after_mods) once at the end.
+    pub fn note_mod_report(&mut self, report: &WorkbenchReport, cx: &mut Context<Self>) {
+        {
+            let mut model = self.model.lock().unwrap();
+            model.workbenches.loaded.extend(report.loaded.iter().cloned());
+            model
+                .workbenches
+                .errors
+                .extend(report.errors.iter().cloned());
+        }
+        if !report.loaded.is_empty() {
+            self.console_line(
+                format!("mods: loaded {} script(s)", report.loaded.len()),
+                cx,
+            );
+        }
+        for error in &report.errors {
+            self.console_line(
+                format!(
+                    "workbench {} / {} failed (see stderr)",
+                    error.workbench, error.script
+                ),
+                cx,
+            );
+            // Two sinks on purpose: the desktop edition installs no `log` logger, so
+            // `eprintln!` is where it sees the traceback; the browser's `eprintln!` goes
+            // nowhere (no stderr on wasm) while `gpui::web_init` installs a `log` logger,
+            // so `log::warn!` is where the page sees it.
+            eprintln!(
+                "ferrocad: workbench {} {} failed:\n{}",
+                error.workbench, error.script, error.traceback
+            );
+            log::warn!(
+                "ferrocad: workbench {} {} failed:\n{}",
+                error.workbench,
+                error.script,
+                error.traceback
+            );
+        }
         cx.notify();
     }
 

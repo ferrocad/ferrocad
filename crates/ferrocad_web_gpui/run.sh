@@ -87,6 +87,11 @@ cp crates/ferrocad_addon_toy/addon.json crates/ferrocad_web_gpui/www/addons/toy.
     --out-dir crates/ferrocad_web_gpui/www/pkg \
     "$CARGO_TARGET/wasm32-unknown-unknown/release/ferrocad_web_gpui.wasm"
 
+# The mods the page fetches (B19). `www/mods/` is generated and ignored, and the page
+# walks its index after the first frame, so a served tree without it is a page with no
+# mods.
+python3 tools/mods_pack.py
+
 if [ "$BUILD_ONLY" = 1 ]; then
     echo "built crates/ferrocad_web_gpui/www/pkg"
     exit 0

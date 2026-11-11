@@ -49,6 +49,8 @@
 use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_api::settings::SettingsBackend;
 
+pub mod mods;
+
 pub use ferrocad_shell_api::runtime::Runtime;
 
 /// The document half on its own.

@@ -27,6 +27,9 @@ ferrocad_doc_api.workspace = true
 # The switch logs which runtime booted (`#[cfg(wasm)]` code, so this must be a normal
 # dependency: a dev-dependency is not compiled into the wasm cdylib).
 log = "0.4"
+# The fetched mod-pack index (`mods`): a small, stable JSON contract with the packer.
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 # `tests/shape_b.rs` writes a script half that holds no document, so it needs the
@@ -35,7 +38,6 @@ log = "0.4"
 ferrocad_core.workspace = true
 ferrocad_inventor.workspace = true
 ferrocad_stage.workspace = true
-serde_json.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 # The page's JavaScript script half: its only implementation is a `window`

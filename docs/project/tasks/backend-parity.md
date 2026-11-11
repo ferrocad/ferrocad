@@ -4,7 +4,7 @@ Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded,
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11); B14 built (2026-11-11).** The surface suite
+(2026-11-11); B14 and B15 built (2026-11-11).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1369,6 +1369,62 @@ not in the batch B13 ran, and its two model-tree tests encoded the pre-B13 rule 
 provider registered, so no synthetic root". They now ask for `documents()` explicitly, and
 `the_settings_root_is_not_a_document` pins the other half of that rule.
 
+### B15 — the browser's provider story, measured (built 2026-11-11)
+
+B14 asked the same question of the web composition: `ferrocad_shell_web::backend` had the
+identical shape (`for runtime { match runtime { … Js => hosts.push(js_host()?), Pywasm =>
+…? } }`), so `?runtime=pywasm,js` with no page module discarded RustPython and ran the
+document half alone — indistinguishable, from the window, from "the interpreter failed".
+It now follows B14's rule: build the halves this build can stand up, `log::warn!` the ones
+it cannot, and `log::info!` the surviving set (the page's console is where a browser
+session's diagnostics go). Nothing installable is still a refusal, and the message is the
+member's own.
+
+**Are the grid/axis Python mods loaded in the browser? No — and they cannot be.** That is
+now a measured fact rather than an inference from an empty popover:
+
+| why | where |
+| --- | --- |
+| no `mods/` in `www/` | the page serves `pkg/`, `js-demo.js` and `addons/*` |
+| no filesystem for the loader to scan | `PywasmScriptHost::load_workbenches` returns an empty report (`wasm32-unknown-unknown` has no `os`) |
+| the facade is a stub | `ferrocad_shell_pywasm`'s bootstrap installs `FerroCADGui.providers = _no_providers` and an empty `FerroCAD` |
+| the host owns no hook | `PywasmScriptHost` implements neither `Settings/*` nor `provider_features`/`grid_summary` |
+
+So one provider per feature, and an empty switch list:
+
+```
+ferrocad probe: providers grid=FerroCAD (native) registered=0 axis=FerroCAD (native) registered=0 registry=none
+```
+
+`?providers=<anything>` (`ferrocad_web_gpui`) logs exactly that: the label each summary
+names, its `registered` switch list, and the Dev Tools registry. `smoke.sh` asserts it for
+`?runtime=pywasm` and for the `?runtime=pywasm,js` chain — which is also the first
+browser capture of a chain, so "two halves compose" is now proven in the page rather than
+only in `ferrocad_shell_api`'s fixtures.
+
+One consistency fix fell out of it: `axis_summary` now has the grid's fallback. Without
+it the browser's Axes popover said "No axis provider" beside a visible axis cross — the
+same lie B13 removed for the grid, on the other header control. It reports
+`FerroCAD (native)` with the style's stem size (`80 px` × `1.5 px`) when no script owns the
+registry, which is also what a desktop `--script-host=plain` shows.
+
+**What provider parity in the browser would actually take**, recorded so this is not
+rediscovered: the mods have to become *shippable*. Two routes — ship `python/FerroCAD` +
+`mods/*/InitGui.py` inside the module with a synthetic `os`/`pathlib` (the RustPython
+bootstrap already stubs four modules, so this is more of that work, and then
+`load_workbenches` can list the embedded tree), or give the wasm bundle ABI a provider hook
+so a bundle can register one (today it has the five document verbs and the display hooks,
+so a bundle can *draw* a grid but not become a provider). Neither is a host change; both
+are packaging.
+
+**Exit: met.** `a_half_this_build_lacks_does_not_discard_the_ones_it_has` and
+`a_page_module_cannot_be_composed_natively` (rewritten to assert the message) in
+`ferrocad_shell_web`; `without_a_script_the_axis_summary_names_the_native_provider` in
+`ferrocad_shell_rust`; the two `?providers=1` captures in `smoke.sh`, rebuilt through the
+pinned cross image and run in headless Chrome. `ferrocad_shell_core` 271,
+`ferrocad_shell_web` 20, `ferrocad_shell_rust` 44, `ferrocad_parametric` 24, the base
+Python suite 692, six doc gates.
+
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**
 
@@ -1447,6 +1503,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D19 | which grid-settings surface a build offers | **Exactly one** (B13b). With a shell attached (`FreeCAD.GuiUp == 1`) the command selects `Settings/Grid`, whoever owns the card; the modal over `FerroCAD.Grid` stays headless-only, where there is no card to open. Two surfaces for one feature meant two stores (view state and the parameter group) that could drift, and the parameter group already has a command that applies it (`App_ReloadGridSettings`) |
 | D20 | is `View_GridSettings` script-owned or built-in | **Built-in** (B13c). The node exists in every build, so a header row that only appeared where a mod or a script registered it was a capability gated on packaging. `Executor::Script` keeps the Gui app's decision first; the document half's arm is the `select` directive |
 | D21 | a declared runtime this build cannot serve | **Skip it, install the rest** (B14). The mod set derives the hosts it wants and the edition grants what it can, so one missing engine must not take the interpreters that do exist with it. Nothing installable is still a refusal, and the message is that member's own (`--features js`) rather than a generic one |
+| D22 | which providers the browser has | **One per feature, the document half's** (B15), and that is correct rather than broken: the page ships no `mods/`, has no filesystem for the loader, and its Python facade is a stub. `?providers=1` states it. Parity needs the mods to be shippable (embedded tree + synthetic `os`, or a provider hook in the bundle ABI), which is packaging, not a host |
 
 ## 6. Acceptance
 

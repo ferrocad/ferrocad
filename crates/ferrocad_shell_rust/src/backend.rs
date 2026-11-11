@@ -25,8 +25,8 @@ use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::events::DocumentEvent;
 use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::types::{
-    ApplyResult, Bootstrap, DocumentNode, EvalResult, GridSummary, ObjectNode, OpenedDocument,
-    PropRow, SetResult, VisibilityOutcome,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GridSummary, ObjectNode,
+    OpenedDocument, PropRow, SetResult, VisibilityOutcome,
 };
 use ferrocad_shell_api::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
@@ -904,6 +904,33 @@ impl AppBackend for RustAppBackend {
             spacing: Some(Quantity::new(view.grid_minor, Unit::Millimeter).user_string()),
             // Nothing switches: there is one provider in this build, and the registry
             // that would list a second is the script half's.
+            providers: Vec::new(),
+        })
+    }
+
+    /// The axis cross's provider and stem size, for the header popover.
+    ///
+    /// The same rule as [`grid_summary`](Self::grid_summary), and the same lie without it:
+    /// a script half owns the registry and answers first, but without one the viewport
+    /// still draws the native triad, so "No axis provider" would sit beside a visible
+    /// axis cross. The stem rows are the popover's, in the pixels the style declares.
+    fn axis_summary(&self) -> Result<AxisSummary, String> {
+        if let Some(summary) = self.script.as_deref().and_then(|host| host.axis_summary()) {
+            return Ok(summary);
+        }
+        let view = self.state.borrow().view.clone();
+        let px = |value: f64| {
+            let text = format!("{value:.2}");
+            format!("{} px", text.trim_end_matches('0').trim_end_matches('.'))
+        };
+        Ok(AxisSummary {
+            feature: "axis".to_string(),
+            // The id and label `mods/AxisOverlay` registers for the same provider.
+            backend: Some("ferrocad".to_string()),
+            label: Some("FerroCAD (native)".to_string()),
+            length: Some(px(view.axis.length)),
+            width: Some(px(view.axis.width)),
+            // Nothing switches: one provider, and the registry is the script half's.
             providers: Vec::new(),
         })
     }
@@ -2495,8 +2522,23 @@ mod tests {
         assert_eq!(backend.evaluate("1 + 1").unwrap().output, "ran 1 + 1");
     }
 
-    /// A build with no script half still offers the grid's settings row: the verb names
-    /// the node, and the card it opens is the document half's (B13).
+    /// The axis popover's fallback: no script half still means the viewport draws the
+    /// native triad, so the summary names it instead of answering "none" beside a visible
+    /// axis cross. Same rule as the grid card's provider.
+    #[test]
+    fn without_a_script_the_axis_summary_names_the_native_provider() {
+        let backend = RustAppBackend::new();
+        let summary = backend.axis_summary().unwrap();
+        assert_eq!(summary.feature, "axis");
+        assert_eq!(summary.backend.as_deref(), Some("ferrocad"));
+        assert_eq!(summary.label.as_deref(), Some("FerroCAD (native)"));
+        assert_eq!(summary.length.as_deref(), Some("80 px"));
+        assert_eq!(summary.width.as_deref(), Some("1.5 px"));
+        assert!(summary.providers.is_empty(), "one provider, nothing to switch");
+    }
+
+    /// The grid settings command a build with no script half answers by naming the node,
+    /// and the card it opens is the document half's (B13).
     #[test]
     fn the_grid_settings_command_selects_the_card_with_no_interpreter() {
         let mut backend = RustAppBackend::new();

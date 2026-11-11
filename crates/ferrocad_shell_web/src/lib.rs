@@ -64,24 +64,33 @@ pub fn backend(runtimes: &[Runtime]) -> Result<Box<dyn AppBackend>, String> {
     Runtime::validate_list(runtimes)?;
 
     let mut hosts: Vec<Box<dyn ferrocad_shell_api::ScriptHost>> = Vec::new();
+    let mut installed: Vec<&'static str> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     for runtime in runtimes {
-        match runtime {
-            Runtime::Plain => {}
-            Runtime::Cpython => {
-                return Err(
-                    "no CPython in the browser: `ferrocad_py` is a native PyO3 extension, \
-                     so the browser's Python is ?runtime=pywasm"
-                        .to_string(),
-                );
+        match browser_host(*runtime) {
+            Ok(Some(host)) => {
+                hosts.push(host);
+                installed.push(runtime.id());
             }
-            Runtime::Pywasm => {
-                let script = ferrocad_shell_pywasm::PywasmScriptHost::live().map_err(|error| {
-                    format!("the wasm-Python interpreter did not boot: {error}")
-                })?;
-                hosts.push(Box::new(script));
-            }
-            Runtime::Js => hosts.push(js_host()?),
+            Ok(None) => {}
+            Err(error) => skipped.push(error),
         }
+    }
+    // The same rule as the desktop (B14): `?runtime=` is a request, and one half this
+    // build cannot stand up must not cost the halves it can. `?runtime=pywasm,js` without
+    // a page module used to leave the interpreter uninstalled too, and the page then ran
+    // the document half alone — which looks exactly like "RustPython failed".
+    if hosts.is_empty() && !skipped.is_empty() {
+        return Err(skipped.into_iter().next().unwrap_or_default());
+    }
+    for error in &skipped {
+        log::warn!("ferrocad: {error}");
+    }
+    if !skipped.is_empty() {
+        log::info!(
+            "ferrocad: continuing with the script halves this build has: {}",
+            installed.join(", ")
+        );
     }
 
     // A chain of one is installed directly, so the common configuration does not pay for
@@ -109,6 +118,31 @@ pub fn backend(runtimes: &[Runtime]) -> Result<Box<dyn AppBackend>, String> {
         None => ferrocad_shell_rust::RustAppBackend::new(),
     };
     Ok(Box::new(backend))
+}
+
+/// The script half one runtime names, if it names one.
+///
+/// `Err` is this build not being able to stand that half up (no CPython in a browser, no
+/// page module, an interpreter that did not boot). The caller reports it and keeps the
+/// other halves, so a chain degrades rather than disappearing.
+fn browser_host(
+    runtime: Runtime,
+) -> Result<Option<Box<dyn ferrocad_shell_api::ScriptHost>>, String> {
+    Ok(match runtime {
+        Runtime::Plain => None,
+        Runtime::Cpython => {
+            return Err(
+                "no CPython in the browser: `ferrocad_py` is a native PyO3 extension, \
+                 so the browser's Python is ?runtime=pywasm"
+                    .to_string(),
+            );
+        }
+        Runtime::Pywasm => Some(Box::new(
+            ferrocad_shell_pywasm::PywasmScriptHost::live()
+                .map_err(|error| format!("the wasm-Python interpreter did not boot: {error}"))?,
+        )),
+        Runtime::Js => Some(js_host()?),
+    })
 }
 
 /// The JS half over the page's module, when the page installed one.
@@ -379,7 +413,33 @@ mod tests {
 
     #[test]
     fn a_page_module_cannot_be_composed_natively() {
-        assert!(backend(&[Runtime::Js]).is_err());
+        // Nothing installable is still a refusal, and the message is the member's own:
+        // that is the one that names the remedy.
+        let error = backend(&[Runtime::Js]).err().expect("no page module here");
+        assert!(error.contains("JS script half"), "{error}");
+    }
+
+    /// A half this build cannot stand up does not discard the ones it can (B14, browser).
+    ///
+    /// `?runtime=pywasm,js` is a chain the page documents, and `js` needs the page's ES
+    /// module. Before this, the missing page returned `Err` for the whole list, so the
+    /// interpreter was never installed and the page ran the document half alone — which
+    /// reads as "RustPython failed to boot".
+    #[test]
+    fn a_half_this_build_lacks_does_not_discard_the_ones_it_has() {
+        std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(|| {
+                let composed = backend(&[Runtime::Pywasm, Runtime::Js])
+                    .expect("the interpreter is installed even though the page is not");
+                assert!(
+                    composed.script_host().is_some(),
+                    "RustPython survives the missing JS half"
+                );
+            })
+            .expect("a worker thread")
+            .join()
+            .expect("the thread did not panic");
     }
 
     /// The configuration the browser runs with `?pywasm=1`, composed for real: one

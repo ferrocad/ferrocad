@@ -159,6 +159,11 @@ capture_settings() {
     # it and its verb names the same node the tree does.
     capture "/?runtime=plain&command=View_GridSettings" "$TMP/settings_command.log"
     capture "/?runtime=js&command=View_GridSettings" "$TMP/settings_command_js.log"
+    # Which providers each runtime has. The browser ships no `mods/` and has no filesystem
+    # for `load_workbenches` to scan, so a Python provider mod cannot load here and the
+    # registry is empty by construction — the grid card is the document half's.
+    capture "/?runtime=pywasm&providers=1" "$TMP/providers_pywasm.log"
+    capture "/?runtime=pywasm,js&providers=1" "$TMP/providers_chain.log"
 }
 
 require_line() {
@@ -325,7 +330,20 @@ check_settings() {
     echo "grid settings command console lines (js runtime):"
     require_line 'ferrocad probe: command View_GridSettings -> ok=true status="grid settings" select=Some("Settings/grid")'
 
-    for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js; do
+    # No provider mod can load in the browser (no `mods/`, no filesystem), so one label per
+    # feature and an empty registry is the correct answer. The chain leg also proves the two
+    # halves compose when the page did install its module.
+    LOG="$TMP/providers_pywasm.log"
+    echo "provider console lines (pywasm runtime):"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: providers grid=FerroCAD (native) registered=0 axis=FerroCAD (native) registered=0 registry=none'
+
+    LOG="$TMP/providers_chain.log"
+    echo "provider console lines (pywasm,js chain):"
+    require_line 'ferrocad: scripting runtime pywasm,js'
+    require_line 'ferrocad probe: providers grid=FerroCAD (native) registered=0 axis=FerroCAD (native) registered=0 registry=none'
+
+    for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js providers_pywasm providers_chain; do
         LOG="$TMP/$log.log"
         echo "$log forbidden console patterns:"
         while IFS= read -r pattern; do

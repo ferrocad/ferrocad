@@ -104,6 +104,9 @@ pub fn main() {
         // runs one id through the backend so a row a runtime only lists can be checked.
         probe_command(cx);
 
+        // Which providers this page has is a configuration fact, not a pixel: log it.
+        probe_providers(cx);
+
         // The page needs the shell back after a file picker or a drop; GPUI has no
         // global app handle outside a callback, so keep both here.
         let async_app = cx.to_async();
@@ -213,6 +216,45 @@ fn probe_manipulator(cx: &mut gpui::App) {
     if let Err(error) = ferrocad_shell_core::app::stage_meshes(cx) {
         log::error!("ferrocad probe: stage: {error}");
     }
+}
+
+/// `?providers=1` — the provider registry, as the header's popovers and Dev Tools read it.
+///
+/// The browser has no `mods/` and no filesystem for `load_workbenches` to scan, so a
+/// Python provider mod cannot load here: `PywasmScriptHost` implements neither the
+/// `Settings` hooks nor `provider_features`, `FreeCADGui.providers` is the bootstrap
+/// stub's `[]`, and the grid card is the document half's. That means one provider label
+/// per feature and an empty registry — which is a *correct* answer here, not a broken
+/// mod set, and the distinction is invisible without a line like this one.
+fn probe_providers(cx: &mut gpui::App) {
+    let query = ferrocad_shell_web::page_query();
+    if ferrocad_shell_web::parameter(&query, "providers").is_none() {
+        return;
+    }
+    let grid = ferrocad_shell_core::app::grid_summary(cx).unwrap_or_default();
+    let axis = ferrocad_shell_core::app::axis_summary(cx).unwrap_or_default();
+    let features = ferrocad_shell_core::app::provider_features(cx).unwrap_or_default();
+    // Each summary names its provider through `label` (the display name the popover
+    // prints) or `backend` (the id); `registered` is the switch list's length.
+    let name = |label: Option<&str>, backend: Option<&str>| {
+        label.or(backend).unwrap_or("none").to_string()
+    };
+    let registry: Vec<String> = features
+        .iter()
+        .map(|feature| format!("{}={}", feature.feature, feature.providers.len()))
+        .collect();
+    log::info!(
+        "ferrocad probe: providers grid={} registered={} axis={} registered={} registry={}",
+        name(grid.label.as_deref(), grid.backend.as_deref()),
+        grid.providers.len(),
+        name(axis.label.as_deref(), axis.backend.as_deref()),
+        axis.providers.len(),
+        if registry.is_empty() {
+            "none".to_string()
+        } else {
+            registry.join(",")
+        }
+    );
 }
 
 /// `?settings=<node>` or `?settings=<node>.<property>=<value>` — the settings card.

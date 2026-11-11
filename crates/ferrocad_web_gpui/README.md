@@ -116,6 +116,7 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?settings=<node>` | log the rows the settings card would render for that node (`?settings=Settings/Grid`), through the same `app::properties` call the pane makes. The tree and the card are painted into the canvas, so this is the only way a capture can read them |
 | `?settings=<node>.<property>=<value>` | commit one settings row, as the pane does (`app::set_property`), and log the presentation request it returns: `?settings=Settings/Grid.minor=20` |
 | `?command=<id>` | run one command through the backend before the first frame and log its outcome, including a `select` directive: `?command=View_GridSettings`. The palette needs synthetic keystrokes, so this is how a row a runtime only lists is exercised |
+| `?providers=1` | log which provider each feature has and how many are registered (`grid=… registered=N axis=… registered=M registry=…`), i.e. what the header's popovers and Dev Tools read. The page ships no `mods/` and has no filesystem to scan, so one label per feature and an empty registry is the correct answer here |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
@@ -261,6 +262,20 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 
   With a script half the id stays the Gui app's (`Executor::Script`), which is what
   keeps the desktop's headless-modal decision in `_GridSettingsCommand.Activated`.
+- **The browser has one provider per feature, and it is the document half's.** The page
+  ships no `mods/` and has no filesystem for `load_workbenches` to scan, so the Python
+  grid/axis mods cannot load here: `PywasmScriptHost` implements neither the `Settings`
+  hooks nor `provider_features`, and the RustPython bootstrap's `FreeCADGui.providers()`
+  returns `[]`. `?providers=1` is the measurement:
+
+  ```
+  ferrocad probe: providers grid=FerroCAD (native) registered=0 axis=FerroCAD (native) registered=0 registry=none
+  ```
+
+  `registered=0` is the switch list — nothing to switch *to*, because the registry is the
+  script half's and there is no script half here that owns one. The grid card is still
+  there (`?settings=Settings/Grid` → ten rows), and `?runtime=pywasm,js` composes the
+  chain, with both halves installed.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

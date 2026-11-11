@@ -18,7 +18,7 @@ verb also equips the Rotate hand, and the next pick arms the rings.
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-rotate-web-window.png" alt="The Rotate angle row highlighted in the browser build">
 <img class="fc-tabs__closeup" src="../images/ui-rotate-web.png" alt="Close-up of the Rotate angle row">
-<figcaption><strong>Web</strong> — the browser build. The sample body's origin is inside the solid, so the rings are occluded; the docked angle row is the visible control. Close-up: only the active axis holds an input; <code>ΔθX</code> is live, the other two are muted, and the row ends with the degree unit and <code>Reset 0°</code>.</figcaption>
+<figcaption><strong>Web</strong> — the browser build. The rings sit at the body's visible corner; the cyan box marks the docked angle row above the loadout. Close-up: only the active axis holds an input; <code>ΔθX</code> is live, the other two are muted, and the row ends with the degree unit and <code>Reset 0°</code>.</figcaption>
 </figure>
 </div>
 
@@ -52,11 +52,11 @@ triad sits on; drag the centre disc first to re-pivot onto a vertex or an edge m
 
 ## Where it runs
 
-Rotate is part of the shared shell and is available in both hosts. The **desktop** tab
-shows the rings at a body corner, where they are visible; the **web** tab shows the same
-row and keys on the browser build, with the rings hidden inside the sample solid. The
-rings are always drawn at the body origin, so whether you see the geometry or only the
-numeric row depends on where that origin falls.
+Rotate is part of the shared shell and is available in both hosts. Both the **desktop**
+and **web** tabs show the rings at the body's visible corner and the same angle row; only
+the surrounding window and the sample geometry differ. The rings are always drawn at the
+body origin, so whether you see the geometry or only the numeric row depends on where
+that origin falls.
 
 The full key list and the pending-rotation rules are in
 [Switch tools with the loadout](../how-to/tool-loadout.md). The state machine and the

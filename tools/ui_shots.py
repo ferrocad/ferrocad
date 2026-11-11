@@ -143,10 +143,12 @@ SECTIONS = {
         "box": (16, 928, 358, 38),
         "crop": (12, 924, 366, 46),
     },
+    # The browser sample is centred on the origin; translate it to the desktop's
+    # corner origin and toggle the grid so the Move figure matches the desktop.
     "move-web": {
         "source": "web",
         "label": "Move (Web)",
-        "query": "?select=600,400",
+        "query": "?manipulator=transform:apply:Box::1,0,0,5,0,1,0,5,0,0,1,5,0,0,0,1&select=745,410&keys=press:40,58",
         "window": (1600, 1000),
         "box": (10, 884, 492, 38),
         "crop": (8, 880, 496, 46),

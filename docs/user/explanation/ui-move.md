@@ -16,7 +16,7 @@ shared transform triad. It is also the hand the wheel's `Move` verb equips.
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-move-web-window.png" alt="The Move coordinate row highlighted in the browser build">
 <img class="fc-tabs__closeup" src="../images/ui-move-web.png" alt="Close-up of the Move coordinate row">
-<figcaption><strong>Web</strong> — the browser build, with the inspector column beside the canvas. The sample body's origin is inside the solid, so the triad is occluded; the docked coordinate row is the visible control. Close-up: <code>WLD</code>, the <code>Δ</code> switch, the three fields and their unit.</figcaption>
+<figcaption><strong>Web</strong> — the browser build, with the inspector column beside the canvas. The triad sits at the body's visible corner; the cyan box marks the docked coordinate row above the loadout. Close-up: <code>WLD</code>, the <code>Δ</code> switch, the three fields and their unit.</figcaption>
 </figure>
 </div>
 
@@ -47,11 +47,10 @@ selection keeps its triad.
 ## Where it runs
 
 Move is part of the shared shell, so it is available in both hosts. The two tabs are the
-same `ferrocad_shell_core` UI: the **desktop** tab is the Parametric edition, where the
-triad is in front of the body, and the **web** tab is the WebGL2 build, where the sample
-body's origin is inside the solid and the coordinate row is the visible part. Both hosts
-have the same row, the same keys and the same commit rules; only the surrounding window
-and the sample geometry differ.
+same `ferrocad_shell_core` UI: the **desktop** tab is the Parametric edition and the
+**web** tab is the WebGL2 build, with the triad at the body's visible corner in both.
+Both hosts have the same row, the same keys and the same commit rules; only the
+surrounding window and the sample geometry differ.
 
 The task-by-task guide, including the pending-move keys and the `WLD`/`LOC`/`WP` frame,
 is [Switch tools with the loadout](../how-to/tool-loadout.md). The slot itself is

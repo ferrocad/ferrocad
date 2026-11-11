@@ -16,7 +16,7 @@ shared transform triad. It is also the hand the wheel's `Move` verb equips.
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-move-web-window.png" alt="The Move coordinate row highlighted in the browser build">
 <img class="fc-tabs__closeup" src="../images/ui-move-web.png" alt="Close-up of the Move coordinate row">
-<figcaption><strong>Web</strong> — the browser build, with the inspector column beside the canvas. The triad sits at the body's visible corner; the cyan box marks the docked coordinate row above the loadout. Close-up: <code>WLD</code>, the <code>Δ</code> switch, the three fields and their unit.</figcaption>
+<figcaption><strong>Web</strong> — the browser build with both script halves; the inspector column sits beside the canvas. The triad sits at the body's visible corner; the cyan box marks the docked coordinate row above the loadout. Close-up: <code>WLD</code>, the <code>Δ</code> switch, the three fields and their unit.</figcaption>
 </figure>
 </div>
 

@@ -26,11 +26,17 @@ Usage::
     python3 tools/ui_shots.py --section wheel-menu
     python3 tools/ui_shots.py --section move-web rotate-web
     python3 tools/ui_shots.py --out-dir docs/user/images
+    python3 tools/ui_shots.py --settings ~/.config/ferrocad/parameters.json
+
+Both sources receive the same whole settings file (the desktop's `parameters.json`
+by default), so the Web and Desktop tabs cannot disagree on the grid, axis or gizmo
+values.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import socket
@@ -49,6 +55,16 @@ DEFAULT_WINDOW = (1600, 1000)
 DEFAULT_SCREEN = (1800, 1200)
 
 #: One entry per figure.
+#:
+#: The two sources boot the same provider set. The browser page ships no `mods/`
+#: (there is no filesystem to scan), so the document half answers `grid` and
+#: `axis` with its native provider. The Desktop captures therefore run with an
+#: empty mod set (see `desktop_capture_config`): loading every package would let a
+#: saved `Providers/<feature>` preference, or the `*Coin`/`*Shader` backends'
+#: defaults, pick a different provider than the Web tab. Both sources also receive
+#: the same whole settings file: the Desktop reads it as its parameter store and
+#: every Web section passes it as `settings_file=<url>`, so the grid, axis and
+#: gizmo values cannot drift between the tabs.
 #:
 #: * `source` is `web` or `xephyr`.
 #: * `query` is the page harness URL (web only).
@@ -144,11 +160,12 @@ SECTIONS = {
         "crop": (12, 924, 366, 46),
     },
     # The browser sample is centred on the origin; translate it to the desktop's
-    # corner origin and toggle the grid so the Move figure matches the desktop.
+    # corner origin, install both script halves, and import the shared settings
+    # file so the Move figure matches the desktop and shows the Grid settings.
     "move-web": {
         "source": "web",
         "label": "Move (Web)",
-        "query": "?manipulator=transform:apply:Box::1,0,0,5,0,1,0,5,0,0,1,5,0,0,0,1&select=745,410&keys=press:40,58",
+        "query": "?manipulator=transform:apply:Box::1,0,0,5,0,1,0,5,0,0,1,5,0,0,0,1&select=745,410&runtime=pywasm,js",
         "window": (1600, 1000),
         "box": (10, 884, 492, 38),
         "crop": (8, 880, 496, 46),
@@ -276,6 +293,90 @@ def _app_binary(path: Path) -> Path:
     )
 
 
+#: The desktop's own parameter store. `FreeCAD.ParamGet` writes this file in a GUI
+#: session, and it is the source both capture sources use unless `--settings` names
+#: another file.
+DESKTOP_SETTINGS = Path.home() / ".config" / "ferrocad" / "parameters.json"
+
+
+def _seed_settings() -> dict:
+    """A minimal whole settings file for a machine with no desktop store yet."""
+    return {
+        "version": 1,
+        "groups": [],
+        "values": [
+            {
+                "root": "User parameter",
+                "group": "BaseApp/Preferences/Mods/grid/ferrocad",
+                "name": "enabled",
+                "kind": "bool",
+                "value": True,
+            }
+        ],
+    }
+
+
+def resolve_capture_settings(
+    explicit: str | None,
+) -> tuple[Path, tempfile.TemporaryDirectory]:
+    """A snapshot of the whole settings file both capture sources apply.
+
+    ``--settings`` wins; otherwise the desktop's own `parameters.json` is used, so
+    the Web tab is captured with the values the Desktop tab already has. When that
+    file does not exist (a fresh machine), the seed turns the native grid on. The
+    snapshot is taken once per run, so a live write from another process cannot
+    make one section use different values than the next. Every app launch gets its
+    own copy of the snapshot, so the app's shutdown write never touches it or the
+    user's store.
+    """
+    if explicit:
+        source = Path(explicit).expanduser()
+        if not source.is_file():
+            raise RuntimeError(f"{source} is not a settings file")
+    elif DESKTOP_SETTINGS.is_file():
+        source = DESKTOP_SETTINGS
+    else:
+        source = None
+
+    workspace = tempfile.TemporaryDirectory(prefix="ferrocad-settings-")
+    path = Path(workspace.name) / "parameters.json"
+    if source is None:
+        path.write_text(json.dumps(_seed_settings()), encoding="utf-8")
+    else:
+        shutil.copyfile(source, path)
+    return path, workspace
+
+
+def desktop_capture_config(
+    app: Path,
+    settings: Path,
+) -> tuple[tempfile.TemporaryDirectory, list[str], dict[str, str]]:
+    """A throwaway desktop configuration shared by the still and GIF tools.
+
+    The browser page ships no `mods/` (there is no filesystem to scan), so the
+    document half answers `grid`/`axis`/`gizmo` with its native provider. An
+    empty `--addons` directory gives the desktop the same provider set: loading
+    every package would let a saved `Providers/<feature>` choice, or the
+    `*Coin`/`*Shader` backends' defaults, select a different provider than the
+    Web tab. The edition's own app script and commands still load; only the
+    `mods/` packages are dropped.
+
+    The settings file is copied into the workspace and becomes the app's
+    parameter file. The desktop and the browser therefore read exactly the same
+    values, and the copy means the app's shutdown write cannot modify the source.
+    """
+    workspace = tempfile.TemporaryDirectory(prefix="ferrocad-capture-")
+    addons = Path(workspace.name) / "addons"
+    addons.mkdir()
+    parameters = Path(workspace.name) / "parameters.json"
+    shutil.copyfile(settings, parameters)
+    return (
+        workspace,
+        [str(app), f"--addons={addons}"],
+        {"FERROCAD_PARAM_FILE": str(parameters)},
+    )
+
+
 def _find_chrome(explicit: str) -> str:
     if explicit:
         if Path(explicit).is_file() or shutil.which(explicit):
@@ -346,20 +447,23 @@ def _send_key(display, name: str) -> None:
     time.sleep(0.4)
 
 
-def _capture_xephyr(spec: dict, args, raw: Path) -> None:
+def _capture_xephyr(spec: dict, args, raw: Path, settings: Path) -> None:
     app = _app_binary(Path(args.app_bin))
     parent = args.parent_display or os.environ.get("DISPLAY")
     if not parent:
         raise RuntimeError("no parent X display; set DISPLAY or pass --parent-display")
     display, xephyr = _start_xephyr(parent, args.screen, args.xephyr)
+    workspace = None
     app_proc = None
     try:
+        workspace, app_args, capture_env = desktop_capture_config(app, settings)
         env = dict(os.environ)
         env["DISPLAY"] = display
         env["WAYLAND_DISPLAY"] = ""
         env["XDG_SESSION_TYPE"] = "x11"
+        env.update(capture_env)
         app_proc = subprocess.Popen(
-            [str(app)],
+            app_args,
             cwd=REPO,
             env=env,
             stdout=subprocess.DEVNULL,
@@ -417,9 +521,12 @@ def _capture_xephyr(spec: dict, args, raw: Path) -> None:
             xephyr.wait(timeout=5)
         except subprocess.TimeoutExpired:
             xephyr.kill()
+        # After the app has stopped: it writes the parameter file on exit.
+        if workspace is not None:
+            workspace.cleanup()
 
 
-def _capture_web(spec: dict, args, raw: Path) -> None:
+def _capture_web(spec: dict, args, raw: Path, settings: Path) -> None:
     chrome = _find_chrome(args.chrome)
     web_dir = Path(args.web_dir)
     if not (web_dir / "pkg").is_dir():
@@ -428,6 +535,9 @@ def _capture_web(spec: dict, args, raw: Path) -> None:
             "`crates/ferrocad_web_gpui/run.sh --build-only`"
         )
     port = args.port or _free_port()
+    settings_name = f"capture-settings-{port}.json"
+    served_settings = web_dir / settings_name
+    shutil.copyfile(settings, served_settings)
     server = subprocess.Popen(
         [
             sys.executable,
@@ -447,6 +557,7 @@ def _capture_web(spec: dict, args, raw: Path) -> None:
         _wait_for_port(port)
         width, height = spec.get("window", args.window)
         query = spec["query"]
+        query += ("&" if query != "?" else "") + f"settings_file={settings_name}"
         url = f"http://127.0.0.1:{port}/{query}"
         with tempfile.TemporaryDirectory(prefix="ferrocad-chrome-") as profile:
             command = [
@@ -483,6 +594,7 @@ def _capture_web(spec: dict, args, raw: Path) -> None:
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
+        served_settings.unlink(missing_ok=True)
 
 
 def _write_figures(raw: Path, full_out: Path, close_out: Path, spec: dict) -> None:
@@ -520,7 +632,7 @@ def _write_figures(raw: Path, full_out: Path, close_out: Path, spec: dict) -> No
     image.save(full_out)
 
 
-def capture(section: str, args) -> tuple[Path, Path]:
+def capture(section: str, args, settings: Path) -> tuple[Path, Path]:
     spec = SECTIONS[section]
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -529,9 +641,9 @@ def capture(section: str, args) -> tuple[Path, Path]:
     with tempfile.TemporaryDirectory(prefix="ferrocad-ui-shots-") as tmp:
         raw = Path(tmp) / "raw.png"
         if spec["source"] == "web":
-            _capture_web(spec, args, raw)
+            _capture_web(spec, args, raw, settings)
         else:
-            _capture_xephyr(spec, args, raw)
+            _capture_xephyr(spec, args, raw, settings)
         _write_figures(raw, full_out, close_out, spec)
     return full_out, close_out
 
@@ -577,6 +689,14 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--port", type=int, default=0, help="web server port (default: pick one)")
     parser.add_argument("--wait", type=float, default=30.0, help="seconds to wait for the app window")
+    parser.add_argument(
+        "--settings",
+        default="",
+        help=(
+            "whole settings file applied to both sources (default: the desktop's "
+            "~/.config/ferrocad/parameters.json, or a temporary seed)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     sections = list(SECTIONS) if "all" in args.section else args.section
@@ -593,13 +713,22 @@ def main(argv: list[str]) -> int:
             return 1
 
     try:
+        settings, settings_workspace = resolve_capture_settings(args.settings or None)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
         for section in sections:
-            full, close = capture(section, args)
+            full, close = capture(section, args, settings)
             print(f"wrote {full}")
             print(f"wrote {close}")
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if settings_workspace is not None:
+            settings_workspace.cleanup()
     return 0
 
 

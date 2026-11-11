@@ -145,35 +145,56 @@ GIFS = {
 }
 
 
-def _launch(display: str, args) -> tuple[subprocess.Popen, str, int, int]:
-    """Start the app on ``display`` and return its process, window and origin."""
+def _launch(
+    display: str, args, settings: Path
+) -> tuple[subprocess.Popen, str, int, int, tempfile.TemporaryDirectory]:
+    """Start the app on ``display`` and return its process, window and origin.
+
+    The returned workspace holds the throwaway parameter file (a copy of
+    ``settings``) and empty mod set from
+    :func:`ui_shots.desktop_capture_config`; the caller cleans it up after the
+    app exits.
+    """
     app = stills._app_binary(Path(args.app_bin))
-    env = dict(os.environ)
-    env["DISPLAY"] = display
-    env["WAYLAND_DISPLAY"] = ""
-    env["XDG_SESSION_TYPE"] = "x11"
-    proc = subprocess.Popen(
-        [str(app)],
-        cwd=REPO,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    window = shot._wait_for_window(
-        display, "FerroCAD", args.wait, proc, Path("/tmp/ui-gifs.log")
-    )
-    wid, name, *_ = window
-    time.sleep(1.0)
-    shot._resize_window(display, wid, list(args.window))
-    time.sleep(2.0)
-    window = shot._find_window(display, name) or window
-    wid, name, width, height, x, y = window
-    if (width, height) != tuple(args.window):
-        raise RuntimeError(
-            f"the app window is {width}x{height}, expected "
-            f"{args.window[0]}x{args.window[1]}; increase --screen"
+    workspace, app_args, capture_env = stills.desktop_capture_config(app, settings)
+    proc = None
+    try:
+        env = dict(os.environ)
+        env["DISPLAY"] = display
+        env["WAYLAND_DISPLAY"] = ""
+        env["XDG_SESSION_TYPE"] = "x11"
+        env.update(capture_env)
+        proc = subprocess.Popen(
+            app_args,
+            cwd=REPO,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-    return proc, wid, x, y
+        window = shot._wait_for_window(
+            display, "FerroCAD", args.wait, proc, Path("/tmp/ui-gifs.log")
+        )
+        wid, name, *_ = window
+        time.sleep(1.0)
+        shot._resize_window(display, wid, list(args.window))
+        time.sleep(2.0)
+        window = shot._find_window(display, name) or window
+        wid, name, width, height, x, y = window
+        if (width, height) != tuple(args.window):
+            raise RuntimeError(
+                f"the app window is {width}x{height}, expected "
+                f"{args.window[0]}x{args.window[1]}; increase --screen"
+            )
+        return proc, wid, x, y, workspace
+    except Exception:
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        workspace.cleanup()
+        raise
 
 
 def _focus(display: str, wid: str):
@@ -271,10 +292,10 @@ def _save(frames: list, durations: list[int], out: Path) -> None:
     )
 
 
-def capture(section: str, spec: dict, args, display: str) -> Path:
+def capture(section: str, spec: dict, args, display: str, settings: Path) -> Path:
     from Xlib import X
 
-    proc, wid, x, y = _launch(display, args)
+    proc, wid, x, y, workspace = _launch(display, args, settings)
     xd, win = _focus(display, wid)
     root = xd.screen().root
     frames: list = []
@@ -382,6 +403,8 @@ def capture(section: str, spec: dict, args, display: str) -> Path:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+            # After the app has stopped: it writes the parameter file on exit.
+            workspace.cleanup()
 
     out = Path(args.out_dir) / f"ui-{section}.gif"
     _save(frames, durations, out)
@@ -404,6 +427,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--xephyr", default="Xephyr")
     parser.add_argument("--parent-display", default=os.environ.get("DISPLAY"))
     parser.add_argument("--wait", type=float, default=20.0)
+    parser.add_argument(
+        "--settings",
+        default="",
+        help=(
+            "whole settings file applied to the app (default: the desktop's "
+            "~/.config/ferrocad/parameters.json, or a temporary seed)"
+        ),
+    )
     parser.add_argument(
         "--frames-dir",
         default="target/gif-frames",
@@ -431,10 +462,17 @@ def main(argv: list[str]) -> int:
         return 1
 
     sections = list(GIFS) if "all" in args.section else args.section
+    try:
+        settings, settings_workspace = stills.resolve_capture_settings(
+            args.settings or None
+        )
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     display, xephyr = stills._start_xephyr(args.parent_display, args.screen, args.xephyr)
     try:
         for section in sections:
-            out = capture(section, GIFS[section], args, display)
+            out = capture(section, GIFS[section], args, display, settings)
             print(f"wrote {out}")
     finally:
         xephyr.terminate()
@@ -442,6 +480,8 @@ def main(argv: list[str]) -> int:
             xephyr.wait(timeout=5)
         except subprocess.TimeoutExpired:
             xephyr.kill()
+        if settings_workspace is not None:
+            settings_workspace.cleanup()
     return 0
 
 

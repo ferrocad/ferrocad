@@ -65,9 +65,10 @@ pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
 pub use shortcuts::Accelerator;
 pub use types::{
-    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
-    GridProvider, GridSummary, ObjectNode, OpenedDocument, PropRow, ProviderFeature, ProviderSkin,
-    SelectionRequest, SetResult, VisibilityOutcome, WorkbenchError, WorkbenchReport,
+    ApplyResult, AxisSummary, Bootstrap, Composition, DocumentNode, EvalResult,
+    GpuPreferenceOutcome, GridProvider, GridSummary, ObjectNode, OpenedDocument, PropRow,
+    ProviderFeature, ProviderSkin, SelectionRequest, SetResult, VisibilityOutcome, WorkbenchError,
+    WorkbenchReport,
 };
 pub use view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 

@@ -42,6 +42,25 @@ pub struct WorkbenchError {
     pub traceback: String,
 }
 
+/// What the host composed for this run: the About card's inventory.
+///
+/// The shell cannot derive this from the backend — the halves and bundles are chosen by
+/// the host before the backend exists — so the host installs it beside the backend (see
+/// `ferrocad_shell_core::app::install_composition`). It answers "what am I running"
+/// without the window having to re-scan anything.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Composition {
+    /// The edition's name (`FerroCAD: Parametric`).
+    pub app: String,
+    /// Where it runs: `desktop` or `browser`.
+    pub platform: String,
+    /// The script halves that installed, by runtime id (`cpython`, `js`, …). Empty is
+    /// the document half alone, which is what `plain` and a wasm-only mod set mean.
+    pub runtimes: Vec<String>,
+    /// The sandboxed bundles loaded beside them, by file name.
+    pub addons: Vec<String>,
+}
+
 /// A document in the model tree.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DocumentNode {

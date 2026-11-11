@@ -77,7 +77,22 @@ impl Shell {
     /// keeps its selection and its gizmo. The card is dismissed only by its own
     /// `✕` or `Esc`.
     pub(in crate::shell) fn open_settings_card(&mut self, node: &str, cx: &mut Context<Self>) {
+        // The About card is the one card the shell fills itself: it reports boot state, so
+        // there is no `Settings/About` property namespace on any backend. Refreshing the
+        // provider cache here is what makes its switch rows current — the Dev Tools pane
+        // is usually closed when someone opens About.
+        if node == super::about::ABOUT {
+            self.provider_features = crate::app::provider_features(cx).ok();
+            let rows = super::about::rows(self, cx);
+            self.show_settings_card(node, rows, cx);
+            return;
+        }
         let rows = crate::app::properties(cx, node).unwrap_or_default();
+        self.show_settings_card(node, rows, cx);
+    }
+
+    /// Give the card `node`'s `rows`, opening it or retargeting the open one.
+    fn show_settings_card(&mut self, node: &str, rows: Vec<PropRow>, cx: &mut Context<Self>) {
         match self.settings_card.as_mut() {
             Some(card) => {
                 card.node = node.to_string();
@@ -97,10 +112,18 @@ impl Shell {
 
     /// Re-read the card's rows (after an edit, a reset or a provider switch).
     pub(in crate::shell) fn refresh_settings_card(&mut self, cx: &App) {
-        let Some(card) = self.settings_card.as_mut() else {
+        let Some(node) = self.settings_card.as_ref().map(|card| card.node.clone()) else {
             return;
         };
-        if let Ok(rows) = crate::app::properties(cx, &card.node) {
+        let rows = if node == super::about::ABOUT {
+            super::about::rows(self, cx)
+        } else {
+            match crate::app::properties(cx, &node) {
+                Ok(rows) => rows,
+                Err(_) => return,
+            }
+        };
+        if let Some(card) = self.settings_card.as_mut() {
             card.rows = rows;
         }
     }

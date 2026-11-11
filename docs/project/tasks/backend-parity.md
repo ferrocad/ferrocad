@@ -4,7 +4,8 @@ Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded,
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11).** The surface suite
+(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
+(2026-11-11), B17a recorded.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1500,6 +1501,62 @@ ferrocad: mods declare python, javascript, wasm; installing cpython, js
 ferrocad: workbenches: loaded 12 script(s)
 ```
 
+### B17 — the About card: what this build is running (built 2026-11-11)
+
+B16 made the mod set one selection; nothing in the window said what that selection
+**was**. The only place the composition appeared was the console's first lines and the
+stderr log, which a user never sees and a packager cannot screenshot. The ask was a
+surface that names the build, the mods/addons, the halves and the providers — and, next
+stage, turns parts of it off.
+
+**What it is.** `Settings/About` in the settings card: the same overlay the grid card
+uses, so it gets scrolling, dragging and `Esc` without a new surface. The rows are
+**synthesised by the shell** (`shell/panels/about.rs`), not answered by a backend: the
+composition is a fact about boot, so no mod, half or Python registry entry has to learn a
+new property namespace. It is opened from the app menu’s `About FerroCAD` row, whose id
+(`ferrocad-about`) is synthetic and intercepted like `select:` or `ferrocad-provider:` —
+no `catalog.json` row, no per-host registration.
+
+**Where the numbers come from.** `bootstrap()` gives the version and the document half;
+`hello()` names the interpreter that answered; the boot's `load_workbenches` report (now
+kept on `ShellModel.workbenches` instead of only summarised into the console) lists the
+workbench scripts and the ones that raised; `provider_features()` is the provider
+registry, and its inactive rows are **command rows** (`ferrocad-provider:<feature>:<backend>`),
+so clicking one runs the same switch the header popover runs. The halves and bundles are
+not the shell's to derive, so the host installs a `Composition` beside the backend
+(`app::install_composition`) and boot copies it into the model: the desktop reports the
+halves this build can actually install (`backend::installable`, the same feature switches
+`compose_all` skips on) and the bundle file names; the page reports `?addons=` and its
+runtimes.
+
+**Exit: met.** `the_boot_reports_the_composition` and `the_app_menu_opens_the_about_card`
+in `ferrocad_shell_core` (the card's node, application, halves, addons, version, engine and
+mod rows), plus the whole shell suite (273) and the parametric suites.
+
+### B17a — turn parts of the set off from the About card (recorded 2026-11-11)
+
+The card shows the set; this stage changes it. The split is forced by when the decision
+can be applied:
+
+- **Providers** are live: switching is already a runtime operation (`set_provider`), so an
+  *enabled* flag can hide a backend from the popovers, the Dev Tools list and the About
+  rows in the same run, refusing activation of the disabled one. Session state first; the
+  store below makes it survive.
+- **Mods and bundles** are read **before the backend exists** — `mod_roots` selects them
+  and `load_workbenches` runs at boot — so their list cannot live behind the backend's
+  settings seam (`PythonSettings` needs the interpreter, which boots inside `Shell::boot`).
+  It needs a host-readable store the host can read first: a small `Prefs` (JSON file next
+to the user's parameters natively, `localStorage` in the page), installed beside the
+  composition. A disabled mod is then a root the host skips, and a disabled bundle drops
+  out of `addon_packs`; the card says “restart to apply” because nothing else can.
+- **The restart is the honest first stage.** Writing state that the next launch reads is
+  the same gesture as `--addons` on the command line, and it keeps the boot path one code
+  path instead of a reloadable composition that no host actually has.
+
+Open question for that stage: whether the *provider* list shares the same `Prefs` file or
+stays in the parameter store. Recommended: one `Prefs` file, because a provider can be
+registered by a mod that a parameter-store read cannot reach before boot.
+
 ## 5. Open questions, and how each host reaches the engine
 
 **Open questions.**
@@ -1582,6 +1639,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D22 | which providers the browser has | **One per feature, the document half's** (B15), and that is correct rather than broken: the page ships no `mods/`, has no filesystem for the loader, and its Python facade is a stub. `?providers=1` states it. Parity needs the mods to be shippable (embedded tree + synthetic `os`, or a provider hook in the bundle ABI), which is packaging, not a host |
 | D23 | does the registry list the document half's providers | **Yes, per feature** (B15b). A build that draws the grid and the axis cross has a provider for each, so `provider_features()` names it with the id and label the mods use (`ferrocad` / `FerroCAD (native)`); the popover's *switch* list stays empty, because a one-item radio set is a dead control. Embedding the mods instead would switch the grid to a shader backend the wasm-Python host cannot supply a skin for |
 | D24 | is `--addons` a bundle list or a mod selection | **The selection** (B16). All mods load by default; naming any narrows the boot to exactly those, and the same list feeds the host derivation, the Python loader, the bundles and the provider registry. A bundle flag that left the loader scanning everything made "the mods I asked for" mean two different sets. `?addons=` in the browser keeps its bundle meaning — there is no mod tree in the page |
+| D25 | where "what is this build running" lives | **One card, `Settings/About`, filled by the shell** (B17), opened from the app menu's synthetic `ferrocad-about` row. The composition is installed by the host (it chose the halves and bundles) and copied into the model at boot; workbench rows come from the boot's `load_workbenches` report and provider rows from the registry, whose inactive backends are command rows that run the normal switch. No backend property namespace and no `catalog.json` row are invented for it. Turning parts of the set off is B17a: providers can be live, mods and bundles need a host-readable store read before the backend exists |
 
 ## 6. Acceptance
 

@@ -145,9 +145,10 @@ impl Shell {
         // follows the new provider.
         self.grid_summary = crate::app::grid_summary(cx).ok();
         self.axis_summary = crate::app::axis_summary(cx).ok();
-        // A provider switch can change the settings schema the card shows.
-        self.refresh_settings_card(cx);
+        // The About card's provider rows follow the registry, so read it before the
+        // card refreshes; a switch can also change the settings schema the card shows.
         self.provider_features = crate::app::provider_features(cx).ok();
+        self.refresh_settings_card(cx);
         self.refresh(cx);
 
         // A switch can change *which* provider supplies the skin even when the backend
@@ -227,6 +228,13 @@ impl Shell {
         // persisted value (`auto` or `adapter:<name>`) the row represents.
         if let Some(value) = id.strip_prefix("ferrocad-gpu:") {
             self.select_gpu_setting(value, cx);
+            return;
+        }
+        // The About card is shell chrome like Dev Tools: it reports what the host
+        // composed, and the app menu's row runs this id. There is no registry command
+        // behind it, so nothing mod- or Python-side has to learn about it.
+        if id == crate::shell::panels::about::OPEN_ID {
+            self.open_settings_card(crate::shell::panels::about::ABOUT, cx);
             return;
         }
         // The Dev Tools toggle is shell chrome, not a workbench action: the window can

@@ -478,6 +478,20 @@ fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
     for command in model.commands.iter().filter(|command| command.group == "File") {
         rows.push(PopoverRow::of(command));
     }
+    // About is app-level like the Dev Tools toggle: no viewport surface, and its id is
+    // synthetic (`ferrocad-about`) because it is shell chrome rather than a registry
+    // command — so it adds no `catalog.json` row and no per-host registry entry.
+    rows.push(PopoverRow {
+        id: crate::shell::panels::about::OPEN_ID.to_string(),
+        label: "About FerroCAD".to_string(),
+        enabled: true,
+        icon: String::new(),
+        checked: false,
+        toggle: false,
+        keep_open: false,
+        accel: String::new(),
+        divider_before: !rows.is_empty(),
+    });
     if let Some(command) = commands::find(&model.commands, DEV_TOOLS) {
         rows.push(PopoverRow {
             id: command.id.clone(),

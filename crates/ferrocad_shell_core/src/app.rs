@@ -22,9 +22,9 @@ use crate::model::display::StageMesh;
 use crate::model::selection::SelectionItem;
 use crate::model::view::ViewState;
 use crate::types::{
-    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
-    GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult,
-    VisibilityOutcome, WorkbenchReport,
+    ApplyResult, AxisSummary, Bootstrap, Composition, DocumentNode, EvalResult,
+    GpuPreferenceOutcome, GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest,
+    SetResult, VisibilityOutcome, WorkbenchReport,
 };
 use crate::workbench::commands::{CommandInfo, CommandOutcome};
 
@@ -64,6 +64,28 @@ pub fn with_backend_mut<T>(cx: &mut App, f: impl FnOnce(&mut dyn AppBackend) -> 
 /// The error a helper reports when the host forgot [`install_backend`].
 fn no_backend() -> String {
     "no app backend installed (the host must call install_backend before boot)".to_string()
+}
+
+/// What the host composed for this run (the About card's inventory).
+///
+/// It is a GPUI global rather than a shell field because the host chooses the halves and
+/// bundles before the backend exists: it installs both here, and boot copies this into
+/// the model. Absent — tests, `--check-init`, a headless run — means "not reported", and
+/// the card says so rather than inventing a composition.
+struct CompositionSlot(Composition);
+
+impl Global for CompositionSlot {}
+
+/// Install what this host composed, beside [`install_backend`].
+pub fn install_composition(cx: &mut App, composition: Composition) {
+    cx.set_global(CompositionSlot(composition));
+}
+
+/// The composition the host installed, or an empty one when it installed none.
+pub fn composition(cx: &App) -> Composition {
+    cx.try_global::<CompositionSlot>()
+        .map(|slot| slot.0.clone())
+        .unwrap_or_default()
 }
 
 // --- the shell-facing helpers -------------------------------------------------

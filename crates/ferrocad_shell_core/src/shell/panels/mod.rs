@@ -4,6 +4,7 @@
 //! Every surface here is drawn by the shell and closes with `Esc` unless it owns a
 //! pending value (see [`crate::shell::context`]).
 
+pub mod about;
 pub mod devtools;
 pub mod dialogs;
 pub mod forms;

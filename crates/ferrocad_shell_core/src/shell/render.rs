@@ -2032,6 +2032,11 @@ pub(super) fn fill_thumb(bounds: Bounds<Pixels>) -> gpui::PaintQuad {
 /// The title the settings card uses for a synthetic node (`Settings/Grid` ->
 /// `Grid settings`).
 pub(super) fn settings_title(name: &str) -> String {
+    // The About card is not a feature's settings: it is the build's inventory, and the
+    // title says whose it is rather than "About settings".
+    if name == crate::shell::panels::about::ABOUT {
+        return "About FerroCAD".to_string();
+    }
     let feature = name.strip_prefix("Settings/").unwrap_or(name);
     let mut chars = feature.chars();
     let title = match chars.next() {

@@ -57,7 +57,9 @@ use crate::manipulators;
 use crate::runtime::render_view::ShellView;
 use crate::selection::{self, SelectionItem};
 use crate::shortcuts::Accelerator;
-use crate::types::{AxisSummary, Bootstrap, DocumentNode, GridSummary, PropRow};
+use crate::types::{
+    AxisSummary, Bootstrap, Composition, DocumentNode, GridSummary, PropRow, WorkbenchReport,
+};
 use crate::view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 
 pub mod bridge;
@@ -315,6 +317,12 @@ pub struct ShellModel {
     pub gizmo_armed: bool,
     pub console: Vec<String>,
     pub status: String,
+    /// What the host composed for this run (the About card's inventory). Empty when the
+    /// host installed none — a test, `--check-init`, a headless run.
+    pub composition: Composition,
+    /// The workbench scripts the boot loaded, and the ones that raised. The console keeps
+    /// the one-line summary; the About card lists them by name.
+    pub workbenches: WorkbenchReport,
 }
 
 impl ShellModel {
@@ -701,13 +709,22 @@ impl Shell {
     /// entities (the console input) need an `App` context. The host installs its
     /// [`AppBackend`](crate::app::AppBackend) before calling this.
     pub fn boot(cx: &mut App) -> Result<Arc<Mutex<ShellModel>>, String> {
-        match crate::app::with_backend_mut(cx, |backend| Self::boot_with(backend)) {
-            Some(result) => result,
-            None => Err(
-                "no app backend installed (the host must call install_backend before boot)"
-                    .to_string(),
-            ),
+        // The host installs its composition beside the backend (it chose the halves and
+        // bundles before the backend existed), so read it here and hand it to the model.
+        let composition = crate::app::composition(cx);
+        let model = match crate::app::with_backend_mut(cx, |backend| Self::boot_with(backend)) {
+            Some(result) => result?,
+            None => {
+                return Err(
+                    "no app backend installed (the host must call install_backend before boot)"
+                        .to_string(),
+                );
+            }
+        };
+        if let Ok(mut model) = model.lock() {
+            model.composition = composition;
         }
+        Ok(model)
     }
 
     /// Boot against `backend` directly, with no `App`.
@@ -731,6 +748,7 @@ impl Shell {
             Err(e) => console.push(format!("engine: {e}")),
         }
         // Load workbenches best-effort: a broken one is reported, never fatal.
+        let mut workbenches = WorkbenchReport::default();
         match backend.load_workbenches() {
             Ok(report) => {
                 if !report.loaded.is_empty() {
@@ -749,6 +767,7 @@ impl Shell {
                         error.workbench, error.script, error.traceback
                     );
                 }
+                workbenches = report;
             }
             Err(e) => console.push(format!("workbench loader: {e}")),
         }
@@ -790,6 +809,8 @@ impl Shell {
             gizmo_armed: false,
             console,
             status,
+            composition: Composition::default(),
+            workbenches,
         })))
     }
 

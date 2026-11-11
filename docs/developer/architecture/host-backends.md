@@ -409,6 +409,21 @@ Neither is in a default build, so the release binary pays for neither. The decis
 what is left (desktop RustPython, the wasm addon engine) and the costs are **B7 / B7a–B7c**
 in [`backend-parity.md`](../../project/tasks/backend-parity.md).
 
+### What the window reports (About)
+
+The composition is visible in the window, not only in the console. `Settings/About` is a
+settings card — the same overlay and row list the grid card uses — whose rows the **shell**
+synthesises (`ferrocad_shell_core::shell::panels::about`) from three facts: the
+host-installed `Composition` (the app, the platform, the script halves this build could
+actually install and the bundle file names), the boot's `load_workbenches` report now kept
+on `ShellModel.workbenches`, and `provider_features()`. An inactive provider row is a real
+switch (`ferrocad-provider:<feature>:<backend>`), so the card doubles as a runtime control.
+It is opened from the app menu's synthetic `ferrocad-about` row: no backend answers a
+`Settings/About` property question, and no `catalog.json` row is invented for chrome only a
+window can show. Turning parts of the set *off* is B17a in
+[`backend-parity.md`](../../project/tasks/backend-parity.md) — providers can be live, while
+mods and bundles are read before the backend exists and need a host-readable store.
+
 ## 5. One display path
 
 ```text

@@ -219,10 +219,30 @@ pub fn run_with(config: HostConfig) {
     );
     python::configure_startup_document(config.open_document.as_deref());
 
+    // What this boot composed, for the About card. The shell cannot derive it — the
+    // halves and bundles are chosen here — so it is installed beside the backend and
+    // boot copies it into the model.
+    let composition = Composition {
+        app: config.app_name.clone(),
+        platform: Platform::current().id().to_string(),
+        runtimes: runtimes
+            .iter()
+            .copied()
+            .filter(|runtime| *runtime != Runtime::Plain && installable(*runtime))
+            .map(|runtime| runtime.id().to_string())
+            .collect(),
+        addons: addons
+            .iter()
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect(),
+    };
+
     let app = application()
         .with_gpu_preference(gpu_preference())
         .with_frame_pipeline(frame_pipeline);
     app.run(move |cx: &mut App| {
+        ferrocad_shell_core::app::install_composition(cx, composition);
         backend::install_composed(cx, &runtimes, &addons);
         let model = match Shell::boot(cx) {
             Ok(model) => model,
@@ -250,6 +270,20 @@ pub fn run_with(config: HostConfig) {
         })
         .unwrap();
     });
+}
+
+/// Whether this build can install `runtime`.
+///
+/// The same feature switches `backend::compose_all` skips a half on, so the About card
+/// reports the halves that installed rather than the set a mod tree asked for (B14: a
+/// `mods/` tree declaring JavaScript on an edition built without the `js` feature derives
+/// `js`, and the composer skips it). `Plain` needs no engine.
+fn installable(runtime: Runtime) -> bool {
+    match runtime {
+        Runtime::Plain | Runtime::Cpython => true,
+        Runtime::Pywasm => cfg!(feature = "pywasm"),
+        Runtime::Js => cfg!(feature = "js"),
+    }
 }
 
 /// The mod set a boot loads, as the roots every scanner takes.

@@ -79,6 +79,27 @@ pub fn main() {
                 .collect::<Vec<_>>()
                 .join(",")
         );
+        ferrocad_shell_core::app::install_composition(
+            cx,
+            ferrocad_shell_core::Composition {
+                // The page is not an edition, so it has no edition name to show.
+                app: "FerroCAD".to_string(),
+                platform: "browser".to_string(),
+                runtimes: runtimes
+                    .iter()
+                    .filter(|runtime| **runtime != Runtime::Plain)
+                    .map(|runtime| runtime.id().to_string())
+                    .collect(),
+                // `?addons=` is the page's bundle request; the loader fetches them, so the
+                // card reports the request the page is running.
+                addons: ferrocad_shell_web::parameter(
+                    &ferrocad_shell_web::page_query(),
+                    "addons",
+                )
+                .into_iter()
+                .collect(),
+            },
+        );
         ferrocad_shell_core::app::install_backend(cx, backend);
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {

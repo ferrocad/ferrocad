@@ -398,6 +398,7 @@ fn command_checked(id: &str) -> bool {
         .unwrap_or(false)
 }
 
+mod about;
 mod boot;
 mod tree;
 mod interaction;

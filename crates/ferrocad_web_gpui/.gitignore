@@ -4,3 +4,6 @@ www/pkg/
 www/addons/toy.wasm
 # `run.sh` copies the bundle's manifest beside it (`<stem>.json`).
 www/addons/toy.json
+# `tools/mods_pack.py` builds one pack per `mods/` workbench and an index here.
+# Generated from the tree the desktop reads, so it must not be hand-edited.
+www/mods/

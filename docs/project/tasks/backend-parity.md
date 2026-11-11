@@ -5,9 +5,9 @@ built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 r
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
-(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a steps 1–2 built (2026-11-11),
-B18a steps 3–7 and B18b recorded; B19a built (2026-11-11), B19b built (2026-11-11),
-B19c–B19d recorded.** The surface suite
+(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a steps 1–4 built (2026-11-11),
+B18a steps 5–7 and B18b recorded; B19a built (2026-11-11), B19b built (2026-11-11),
+B19c's Rust seam built (2026-11-11), B19c's host half and B19d recorded.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1608,7 +1608,7 @@ six doc gates.
 [`call`]: https://docs.rs/ferrocad_python_host/latest/ferrocad_python_host/trait.PythonRuntime.html#tymethod.call
 [`Contract`]: https://docs.rs/ferrocad_python_host/latest/ferrocad_python_host/struct.Contract.html
 
-### B18a — grow the RustPython contract (steps 1–2 built 2026-11-11)
+### B18a — grow the RustPython contract (steps 1–4 built 2026-11-11)
 
 **Built: steps 1–2.** `bootstrap.py` now answers the Gui app's presentation half, and
 `RustPythonRuntime::contract()` is `{view, view_state, commands}` (everything else still
@@ -1631,21 +1631,43 @@ off):
   `View_GridSettings` takes the **card** branch (`select: Settings/Grid`, B13b) rather
   than the headless modal.
 
-Two deliberate divergences, both about state this half does not have yet:
+**Built: step 4.** The contract is now `{view, view_state, commands, selection}`.
+`bootstrap.py` carries a port of `python/FreeCADGui/__init__.py`'s `Selection`
+(`SelectionObject`, `_Selection`: `getSelection`/`getSelectionEx`/`isSelected`, the
+queued `addSelection`/`removeSelection`/`clearSelection`/`setPreselection`, and the
+shell-facing `_set`/`_take_requests`), so the shell's push is what a predicate reads and
+a script's write is applied locally *and* queued for the viewport. The document payload
+grew additive `undo_count`/`redo_count` keys (`ferrocad_doc_api::payload`, read from
+`ferrocad_core`'s transaction stacks, an in-flight transaction counting), so
+`Document.UndoCount`/`RedoCount` are the engine's answer and `App_Undo`/`App_Redo` are
+judged rather than optimistic. Two consequences of having the state are recorded by the
+port, not invented by it:
 
-1. **`_enabled` answers enabled when `IsActive` raises.** `App_Undo`/`App_Redo` read
-   `Document.UndoCount`, `App_ToggleVisibility`/`App_Move`/`App_Delete` read
-   `FreeCADGui.Selection`; this facade has neither (step 4). Disabling those rows would
-   override the document half's own `enabled` — the shell merges the script's row over the
-   catalogue's — and take away verbs the window can still run. An absent capability is not
-   a dead command.
+- `_enabled` now **disables** a row whose `IsActive` raises, as the real facade does.
+  The exception is a name this build does not install: every substitute module raises
+  `_Absent` (an `AttributeError` that reports itself) from a PEP-562 `__getattr__`, so
+  "capability absent" and "predicate broken" are distinguishable. Absent still answers
+  enabled — an absent capability is not a dead command, and the shell merges the script's
+  row over the catalogue's.
+- `Document.UndoNames`/`RedoNames` stay absent on purpose: undoing is a document write,
+  so `App_Undo` refuses at the first name it asks for, naming the missing write path
+  rather than `FreeCADGui.Selection` (which now answers).
+
+Two deliberate divergences:
+
+1. **`_enabled` answers enabled when the capability is absent** (see step 4 above).
+   `App_Undo`/`App_Redo` now read `Document.UndoCount` and the selection commands read
+   `FreeCADGui.Selection`, so nothing built-in takes this branch today; it exists for the
+   names still absent (`FreeCAD.ParamGet` and the rest of B18b so far), where disabling
+   the row would override the document half's own `enabled` — the shell merges the
+   script's row over the catalogue's — and take away verbs the window can still run.
 2. **`gpu_adapter`/`set_gpu_adapter` over-claim.** They ride `view`, but
    `ferrocad_shell` reads them through `FreeCAD.ParamGet`, which the facade does not
    install (B18b); the call raises and `PythonHost` maps it to `None`, so the document
    half's answer stands. No behaviour change, but `view` is two methods wider than the
    facade.
 
-**Cost, stated plainly.** `bootstrap.py` is now ~1 100 lines and the largest duplication
+**Cost, stated plainly.** `bootstrap.py` is now ~1 400 lines and the largest duplication
 in the tree; every line is facade policy written twice. That is the documented price of
 the substitute facade (B18b removes it), and the reason the port stayed mechanical: it is
 a port of `python/FreeCADGui/__init__.py`'s helpers, not a redesign. `ThreadedRuntime`
@@ -1655,11 +1677,16 @@ same one line plus its test, and it has no mods to answer for anyway.
 **Exit: met.** `crates/ferrocad_shell_pywasm/tests/view.rs` (6): the grid/axis toggles
 return the composed view request and flip back; a pushed `ViewState` is what the next
 toggle acts on; the appearance hook's request goes through `ViewState::apply`; every
-catalogue `Executor::Script` id is registered; an unevaluable predicate leaves a command
-enabled and `View_GridSettings` selects the card. `the_two_script_halves_agree` now
-asserts the wasm half lists the registry and records `App_Delete`'s refusal as the
-read-only-document difference (D15). pywasm 1 + 3 + 5 + 4 + 6, parametric composition
-surface 11.
+catalogue `Executor::Script` id is registered; a broken predicate disables its row while
+an absent capability does not, and `View_GridSettings` selects the card.
+`tests/selection.rs` (4): a pushed selection makes the selection-backed rows enabled and
+a pushed-empty one disables them; a script's writes are queued in order with their
+sub-elements and points and a second drain is empty; `App_Delete` gives the script's
+"nothing selected" with no selection and the read-only `openTransaction` refusal with
+one; `UndoCount`/`RedoCount` follow the document's stacks and the undo/redo rows with
+them. `the_two_script_halves_agree` now asserts the wasm half answers `App_Delete`'s
+early-out (the CPython answer) and records the write-path refusal as the D15 difference.
+pywasm 1 + 3 + 5 + 4 + 4 + 6, parametric composition surface 11.
 
 **Remaining steps.** Each flips one `Contract` flag and implements the facade it names.
 Order by cost ÷ value:
@@ -1667,13 +1694,13 @@ Order by cost ÷ value:
 | step | flag | facade work | exit |
 | --- | --- | --- | --- |
 | 3 | `settings` | `Settings/<Feature>` rows via the registry | the settings card works for a provider mod |
-| 4 | `selection` | `FreeCADGui.Selection` mirror + queue; `Document.UndoCount` | a mod's `IsActive` sees the shell's selection; undo/redo rows are judged |
 | 5 | `providers` | `FerroCADGui.providers`/`providerSkin` over registered providers | the About/Dev Tools list names the mod's providers |
 | 6 | `interaction` | `FerroCAD.interaction`/`manipulators` + the `Part` hook | a manipulator commit resolves through the script |
 | 7 | `tree` | `Settings` root from the registry | the tree's settings nodes are the script's |
 
 Each step extends `the_two_script_halves_agree` with one observable per group, so a flip
-turns a red row green.
+turns a red row green. Step 4's rows are the `selection` half of that test plus
+`tests/selection.rs`.
 
 ### B18b — run the real facade under RustPython (recorded 2026-11-11)
 
@@ -1695,7 +1722,7 @@ substitute facade. In order:
 Until then B18's `Contract` is the honest list of what the wasm facade cannot do, and it
 is the same list the About card could show.
 
-### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19b built)
+### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19b built, B19c's Rust seam built)
 
 The browser has no filesystem, so `load_workbenches` cannot run there — and the page is
 the one host where "ship a workbench" should not mean "rebuild the module". It can
@@ -1725,13 +1752,38 @@ sibling modules needs an import hook into the interpreter (a later slice), and a
 bundle is not a Python mod — `mods/Explode`, `mods/Fasteners` and `mods/Spring` are
 skipped by the entry-file rule, which is the same rule every host applies.
 
-**B19c — fetch, progress, isolation (recorded).** `ferrocad_web_gpui` fetches the index
-and the packs **after the first frame** (code splitting must not delay the window),
-decodes them, and hands each pack's sources to `load_workbench_sources`, `Init.py` then
-`InitGui.py` per mod in index order. Progress is a shell notice in the existing banner
-slot (`Loading mods 3/7 · Fasteners`), cleared on completion; a failed fetch or a raising
-pack is reported and skipped — the loader already records the second. `?mods=` (a probe
-like `?providers=1`) logs the report for the capture harness.
+**B19c — fetch, progress, isolation (Rust seam built; host half recorded).** The seam
+that a fetching host needs is in place:
+
+- `ScriptHost::load_workbench_pack(&str)` and `AppBackend::load_workbench_pack(&str)` take
+  one pack document; both default to an empty report, which is the honest answer from a
+  half with no data loader (a JS surface, the document only). `RustAppBackend` forwards to
+  its script half. `HostChain` forwards to the **primary**, exactly as `load_workbenches`
+  does — without that the browser's two-host chain would answer every pack with the
+  default and load none.
+- `ferrocad_python_host` flattens the pack: `files` → the loader's entry list in a stable
+  order (`Init.py` then `InitGui.py`, other keys skipped, a missing entry simply absent),
+  serialised without a `path` so the loader's own `<name>/<script>` default names the
+  traceback exactly as it does for a scanned tree. A malformed pack is the only `Err`; a
+  script that raises is recorded (the shared loader's rule).
+- `ferrocad_shell_core::app::load_workbench_pack(cx, pack)` is the call-site seam, and
+  `Shell::refresh_after_mods(cx)` is the re-read a host makes after a batch: boot
+  snapshots `ShellModel.commands` and `Shell::shortcuts`, so a pack loaded after the
+  first frame would otherwise register commands the palette never sees.
+
+Tests: `crates/ferrocad_python_host` (4, the flattening rules),
+`crates/ferrocad_shell_web/tests/packs.rs` (3, a real RustPython host: both scripts run
+`Init.py` first and the command reaches `commands()`; a raising `InitGui.py` is recorded
+while `Init.py` loaded and the console still answers; a malformed pack is an `Err`),
+`crates/ferrocad_shell_api/tests/chain.rs` (the primary answers a pack; an empty chain
+loads none).
+
+The **host half** is still to do: `ferrocad_web_gpui` fetches `www/mods/index.json` and
+each pack **after the first frame** (code splitting must not delay the window), calls
+`load_workbench_pack` per pack in index order, shows progress in the existing banner slot
+(`Loading mods 3/7 · Fasteners`), isolates failures, then calls `refresh_after_mods` and
+`cx.notify()`. `?mods=` (a probe like `?providers=1`) logs the report for the capture
+harness.
 
 **B19d — choosing the set (recorded).** The About card's B17a `Prefs` selects which packs
 load, so "disable this mod" is one list rather than a flag per host.

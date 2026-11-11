@@ -78,6 +78,7 @@ pub trait AppBackend {
 pub trait ScriptHost {
     fn evaluate(&self, code: &str) -> Result<EvalResult, String>;
     fn load_workbenches(&self) -> Result<WorkbenchReport, String>;
+    fn load_workbench_pack(&self, pack: &str) -> Result<WorkbenchReport, String> { … }
     fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String>;
     fn tool_command(&self, name: &str, verb: &str) -> bool;
     fn inventor_scene(&self) -> Result<Scene, String>;
@@ -97,6 +98,13 @@ Rules that keep the split honest:
 - The scripting methods stay on `AppBackend` **defaulted and forwarding** through
   `script_host()`, so a document-only backend reports "scripting is not available in
   this build" and every existing call site is unchanged.
+- Workbenches arrive by one of two paths, both behind the same trait. `load_workbenches`
+  **scans a filesystem**; `load_workbench_pack` takes **one fetched pack document**
+  (`{name, version, files}` as `tools/mods_pack.py` writes it) and the script half
+  flattens `files` to the same entries, so a pack and a tree cannot run different scripts
+  or report differently about the same one. The default loads nothing — the honest answer
+  from a half with no data loader (a JS surface) — and `HostChain` forwards both to the
+  primary. This is what the browser uses: it has no `mods/` tree but it can `fetch`.
 - `script_host()` is `None` for a backend with no interpreter. `RustAppBackend` returns
   `None` unless a host composed one in with `with_script_host`.
 - `commands()`/`run_command()` let a script contribute verbs to the palette. The
@@ -413,6 +421,14 @@ provider registry, so the flag cannot select a host without also selecting the m
 asked for it. `--check-init` and `--render` parse it like the window does, so a diagnostic
 reports the set that will actually boot. In the browser `?addons=` remains the bundle list:
 the page ships no `mods/` tree and has no filesystem for the loader (D22).
+
+The browser's answer to "no filesystem" is a fetched **pack** (B19): `tools/mods_pack.py`
+turns each `mods/<Name>/` into `www/mods/<Name>.json` plus `index.json`, and the page
+fetches one pack at a time after the first frame and hands it to
+`AppBackend::load_workbench_pack`. The pack is the same two entry scripts the tree would
+yield, loaded through the same Python helper, so the two delivery paths converge at the
+loader; a batch is followed by `Shell::refresh_after_mods`, because the command list and
+shortcuts are boot snapshots.
 
 ![The packaging: one document half; four script halves against two hosts, with each host's
 switch and what a build has to link; how each host is delivered — one native binary whose

@@ -89,6 +89,14 @@ fn a_broken_pack_is_recorded_and_does_not_cost_the_others() {
         assert_eq!(errors.len(), 1, "{report}");
         assert_eq!(errors[0]["workbench"], "Bad");
         assert_eq!(errors[0]["script"], "InitGui.py");
+        // The report has to name the cause even when the engine cannot format a
+        // traceback: RustPython's frozen pylib answers "" from `format_exc()`, and an
+        // empty report makes every failure look the same.
+        let traceback = errors[0]["traceback"].as_str().expect("traceback is text");
+        assert!(
+            traceback.contains("RuntimeError") && traceback.contains("nope"),
+            "the failure names the exception: {traceback:?}"
+        );
 
         // The interpreter is still usable: a recorded failure is not a crashed host.
         assert!(evaluate(host, "1 + 1").contains('2'));

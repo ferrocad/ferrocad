@@ -137,12 +137,18 @@ def _run_workbench_script(name, script, source, path, loaded, errors):
     try:
         exec(compile(source, path, "exec"), namespace)
         loaded.append(f"{name}/{script}")
-    except Exception:
+    except Exception as exc:
+        # A report with no text hides the cause and makes every failure read the same.
+        # RustPython's frozen pylib answers "" from `format_exc()`, so fall back to the
+        # exception's own line — the one thing every engine can always give.
+        detail = traceback.format_exc()
+        if not detail.strip():
+            detail = "%s: %s" % (type(exc).__name__, exc)
         errors.append(
             {
                 "workbench": name,
                 "script": script,
-                "traceback": traceback.format_exc(),
+                "traceback": detail,
             }
         )
 

@@ -3,7 +3,7 @@
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
-B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13 built (2026-11-11).** The surface suite
+B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13 and B13b built (2026-11-11).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1233,6 +1233,48 @@ namespace in the first place — it gets the document half's card, asserted by t
 lines. The browser has no `mods/`, hence no provider registry, hence nothing for a Python
 half to own there.
 
+### B13b — one grid settings surface per build (built 2026-11-11)
+
+B13 gave the document half a card. That left exactly one build with **two** entry points
+to **two** stores: CPython with no grid provider mod. The tree showed the document half's
+card (the shell's view state), while `View_GridSettings` — registered by the app script —
+took its "nothing is registered" branch and opened a modal that reads and writes
+`FerroCAD.Grid`'s parameter group. Set a step in one and open the other and they
+disagree.
+
+The command now selects the node whenever a **shell is attached**, not only when a
+provider is registered: `FreeCAD.GuiUp` is the existing "a Gui is here" flag (1 on the
+desktop, 0 in the headless harness), and a card always exists when a shell does — the
+script's when a provider registered the feature, the document half's otherwise. The modal
+is now exactly what its docstring claimed, a headless fallback: `GuiUp == 0` is a
+console/test/script-only run. A build with no `FerroCAD` facade at all also selects the
+card rather than raising, because there is no store to put in a modal —
+`ferrocad_shell_pywasm`'s bootstrap installs `_module("FerroCAD", {})`, an empty module.
+
+No new channel and no new store. `App_ReloadGridSettings` is still the bridge between the
+parameter group and the drawn state (`_grid.py`'s documented "write the policy, then
+apply it"), and a script that writes `FerroCAD.Grid` keeps that contract. What changed is
+that the header no longer offers a UI writing the store the card does not read.
+
+Two corrections to B13's own reasoning, worth recording because the first version of this
+entry got them wrong. `PywasmScriptHost` registers **no** commands — `commands()` returns
+`Vec::new()` and `run_command()` returns `None` — so `?runtime=pywasm` never had the
+popover row, and the two-surface case was a CPython-desktop one, not a browser one. And
+the `getattr(FerroCAD, "Grid", None)` guard is not defensive noise: under RustPython that
+`FerroCAD` module really is empty, so the modal path would have raised `AttributeError`
+the moment a wasm-Python host started listing commands.
+
+**Exit: met.** `tests/test_grid_provider_facade.py` pins both branches — the headless
+modal (unchanged) and `GuiUp == 1` with no provider giving `{"select": "Settings/Grid"}`
+— and `test_grid_api.py`'s command suite still passes unchanged, because it is headless
+and keeps the modal. `test_commands.py`, `test_namespace_separation.py` and
+`test_draft_snapper.py` are green.
+
+Still open, and unchanged by this: `?runtime=plain` and `?runtime=js` have no
+`View_GridSettings` row at all (there is no script to register one), so the card is
+reached from the model tree. Adding it means a catalogue id with a Rust arm returning
+`{"select": "Settings/Grid"}`, reconciled with the app script's registration.
+
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**
 
@@ -1308,6 +1350,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D16 | what a wasm/JS addon can reach | **The five-verb document API plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that, and explode view needed a `Placement` coercion (B11b), not a new verb |
 | D17 | who applies a workbench manipulator commit | **The script half if it claims one, else the document half** (B12). Part's dress-up and push/pull are document edits: `apply_interaction` builds the feature itself, so the browser and `--script-host=plain` get them, and both paths create the same object names |
 | D18 | who owns `Settings/*` | **Whichever half has rows for the node** (B13). A script half that lists a `Settings` root owns the namespace; otherwise the document half answers with the grid card, whose store is the presentation state the shell mirrors into the backend. The test is the same on both sides — "do I have rows?" — so a rendered row and its write cannot land in different places |
+| D19 | which grid-settings surface a build offers | **Exactly one** (B13b). With a shell attached (`FreeCAD.GuiUp == 1`) the command selects `Settings/Grid`, whoever owns the card; the modal over `FerroCAD.Grid` stays headless-only, where there is no card to open. Two surfaces for one feature meant two stores (view state and the parameter group) that could drift, and the parameter group already has a command that applies it (`App_ReloadGridSettings`) |
 
 ## 6. Acceptance
 

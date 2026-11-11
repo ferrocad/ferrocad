@@ -311,6 +311,25 @@ class GridProviderFacadeTests(unittest.TestCase):
             FreeCADGui.runCommand("View_GridSettings"), {"select": "Settings/Grid"}
         )
 
+    def test_a_running_gui_selects_the_card_even_with_no_provider(self):
+        """One feature, one store: with a shell attached the card is the surface.
+
+        With no provider registered the document half answers ``Settings/grid`` from
+        the shell's view state, so the command must open that node rather than a modal
+        writing the parameter group beside it — two stores for one grid is exactly the
+        drift this avoids. The modal stays reachable only headless (``GuiUp == 0``),
+        which the test above pins.
+        """
+        previous = FreeCAD.GuiUp
+        FreeCAD.GuiUp = 1
+        try:
+            self.assertEqual(
+                FreeCADGui.runCommand("View_GridSettings"),
+                {"select": "Settings/Grid"},
+            )
+        finally:
+            FreeCAD.GuiUp = previous
+
     def test_set_provider_switches_the_active_backend(self):
         self.register_native()
         self.register_coin()

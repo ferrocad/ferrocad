@@ -1929,12 +1929,20 @@ FreeCADGui.addCommand("App_ResetGridAppearance", _ResetGridAppearanceCommand())
 class _GridSettingsCommand:
     """``View_GridSettings`` — select the ``Settings/Grid`` node.
 
-    Since S4 the provider-advertised settings are the one grid-settings surface:
-    with a grid provider registered this command returns the ``select``
-    directive so the shell shows that node. The modal dialog (a thin client of
-    :data:`FerroCAD.Grid`) stays as the headless/upstream fallback when nothing
-    is registered. A validation error stays in the modal (the callback raises
-    ``ValueError`` and the facade reports it as the dialog's error).
+    The settings card is the one grid-settings surface, and which half owns it does
+    not change where the user lands: a registered provider's rows are the script's,
+    and with none registered the document half answers the same node from the
+    shell's view state, so both cases return the ``select`` directive.
+
+    Opening a card requires a shell to open it in. The modal dialog (a thin client of
+    :data:`FerroCAD.Grid`) is therefore the **headless** fallback — ``FreeCAD.GuiUp``
+    is 0 in a console-only run, which is where a test or a script uses this command —
+    and the only surface left when the ``FerroCAD`` facade is absent (the RustPython
+    host installs a stub, so ``FerroCAD.Grid`` does not exist there). A modal beside a
+    card would be a second store for one feature: the card writes the presentation
+    state and the modal writes the parameter group, and they can drift. A validation
+    error stays in the modal (the callback raises ``ValueError`` and the facade
+    reports it as the dialog's error).
     """
 
     def GetResources(self):
@@ -1948,7 +1956,14 @@ class _GridSettingsCommand:
         }
 
     def Activated(self):
-        if FerroCADGui.providers(_GRID_FEATURE):
+        if (
+            FerroCADGui.providers(_GRID_FEATURE)
+            # `GuiUp` is the host's "a Gui is here" flag (1 on the desktop, 0 in the
+            # headless harness). Read defensively: the RustPython bootstrap installs a
+            # minimal `FreeCAD` with no `GuiUp` at all.
+            or getattr(FreeCAD, "GuiUp", 0)
+            or getattr(FerroCAD, "Grid", None) is None
+        ):
             return {"select": _GRID_SETTINGS_NODE}
         grid = FerroCAD.Grid
         return {

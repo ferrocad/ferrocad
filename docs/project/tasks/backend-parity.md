@@ -1748,10 +1748,11 @@ Two deliberate divergences:
    half's answer stands. No behaviour change, but `view` is two methods wider than the
    facade.
 
-**Cost, stated plainly.** `bootstrap.py` is now ~1 700 lines and the largest duplication
-in the tree; every line is facade policy written twice. That is the documented price of
-the substitute facade (B18b removes it), and the reason the port stayed mechanical: it is
-a port of `python/FreeCADGui/__init__.py`'s helpers, not a redesign. `ThreadedRuntime`
+**Cost, stated plainly.** `bootstrap.py` is now ~630 lines — the host gaps, the document
+model and four bricks — because the facade above them is the shared `python/` source
+(B18b). That is down from ~2 050 lines of duplicate policy: commands, selection, the
+provider registry, settings and the semantic stores all run the same code on both hosts
+now, so a change to any of them is one source. `ThreadedRuntime`
 (the desktop `--script-host=pywasm`) still reports `Contract::NONE`: flipping it is the
 same one line plus its test, and it has no mods to answer for anyway.
 
@@ -1783,27 +1784,49 @@ turns a red row green. Step 4's rows are the `selection` half of that test plus
 `tests/selection.rs`; step 5's are `tests/providers.rs` plus the shared manifest row;
 step 3's are `tests/settings.rs` plus the shared card-row row.
 
-### B18b — run the real facade under RustPython (recorded 2026-11-11)
+### B18b — run the real facade under RustPython (shared-source install built 2026-11-11)
 
-The structural half of the parity gap, and untouched by B18: `bootstrap.py` is still a
-substitute facade. In order:
+The structural half of the parity gap. **Built: the facade above the bricks is now the
+shared source.** `bootstrap.py` went from 2 050 to 630 lines because the desktop's modules
+are installed, not ported:
+
+- `python/FreeCADGui/__init__.py` (command registry, selection mirror, dialogs, document
+  observers) and `python/FerroCADGui/__init__.py` (provider registry, settings,
+  `ViewState`, appearance presets) are loaded with `_install`; `python/FerroCAD/` (the
+  semantic stores and `_params`) with a package-aware `_install_package`, because its
+  modules use relative imports.
+- `bootstrap.py` supplies only what a `host_env`-off RustPython cannot: the host gaps
+  (`io`, `contextlib`, `pathlib`, `traceback`, an `importlib` stub, `os`), the document
+  model over `_ferrocad`, and four bricks — `FreeCAD.ParamGet` over a dict,
+  `FreeCAD.Units.Quantity`, `_configure_parameter_file`/`_parameter_file_path`, and
+  `_kernel_id`.
+- One shared rule changed: an **unset** parameter-group value in `FerroCAD._grid`/`_axis`
+  falls back to the shell's mirrored `FreeCADGui.ViewState` before the schema default.
+  That is what makes a pushed `grid: true` the value the next toggle reads on every
+  runtime, and a settings-file import that never touched the parameter group still
+  reaches the store. A stored value still wins. The browser's port had this rule
+  locally; the desktop had the latent divergence.
+- `RustPythonRuntime`'s `Contract` is unchanged, but it now names the shared facade's
+  answers. The four ported groups are gone, so the desktop's Python and the browser's
+  cannot drift apart again — a change to a command, a provider rule or a store is one
+  source.
+
+What remains of B18b is the *native binding* half, and none of it is needed for the facade
+above it:
 
 1. a RustPython `ferrocad` module over `ferrocad_core` — the ~27 names `python/FreeCAD`
-   imports plus the value classes (hand-written `#[pyclass]`s, or one `call(name, args_json)`
-   dispatch like the addon ABI);
+   imports plus the value classes, so `python/FreeCAD/__init__.py` itself runs (today the
+   document model is the substitute);
 2. `ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh` (needs `ferrocad_part`,
    `ferrocad_mesh` and OCCT in the RustPython build);
 3. `host_env` on for the **native** RustPython build only (target-specific dependency), so
-   the desktop runs `python/**` from disk; the browser needs an embedded file map plus a
-   synthetic `os`;
-4. `bootstrap()` → run the entry module; `mods_roots` → the embedded `mods` tree (browser)
-   or the directory (desktop);
+   the desktop runs `python/**` from disk; the browser keeps the embedded file map, which
+   this step built;
+4. a file-backed `ParamGet` (`FerroCAD._params` already has the controls; the store is a
+   dict now), so a written value survives a reload;
 5. document writes, then `document_grant` → `ReadWrite` (D15 becomes host policy).
 
-Until then B18's `Contract` is the honest list of what the wasm facade cannot do, and it
-is the same list the About card could show.
-
-### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19b built, B19c's Rust seam built)
+### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19c built)
 
 The browser has no filesystem, so `load_workbenches` cannot run there — and the page is
 the one host where "ship a workbench" should not mean "rebuild the module". It can

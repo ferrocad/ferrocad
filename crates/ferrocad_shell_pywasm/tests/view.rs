@@ -199,13 +199,13 @@ fn the_registry_lists_the_shells_own_commands() {
     });
 }
 
-/// A predicate is judged when this half has its state; it keeps the document half's
-/// answer only when it asks for a capability this half has not grown; and a predicate
-/// that is simply broken disables its row, exactly as the real facade's does.
+/// A predicate is judged now that the shared facade answers it: one that raises disables
+/// its row (the real `_enabled` rule), one that answers is enabled, and the built-in rows
+/// read the state they name.
 ///
 /// A Gui host must also get the settings *card* rather than the headless modal.
 #[test]
-fn a_broken_predicate_disables_a_command_but_an_absent_capability_does_not() {
+fn a_broken_predicate_disables_a_command() {
     with_host(|host| {
         let setup = host
             .evaluate(
@@ -217,15 +217,21 @@ class Broken:
     def IsActive(self):
         raise ValueError("the predicate itself is wrong")
 
-class Absent:
+    def Activated(self):
+        return None
+
+class Param:
     def GetResources(self):
-        return {"MenuText": "Absent"}
+        return {"MenuText": "Param"}
 
     def IsActive(self):
         return FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Test") is not None
 
+    def Activated(self):
+        return None
+
 FreeCADGui.addCommand("Test_Broken", Broken())
-FreeCADGui.addCommand("Test_Absent", Absent())
+FreeCADGui.addCommand("Test_Param", Param())
 "#,
             )
             .expect("evaluate runs");
@@ -244,17 +250,17 @@ FreeCADGui.addCommand("Test_Absent", Absent())
                 })
         };
 
-        // The real facade disables a command whose `IsActive` raises: the predicate is
+        // The facade disables a command whose `IsActive` raises: the predicate is
         // broken, and running it would fail too.
         assert!(
             !find("Test_Broken").enabled,
             "a predicate that raises for its own reasons disables its row"
         );
-        // `FreeCAD.ParamGet` is B18b: the raise means the capability is absent, not that
-        // the command is dead, so the document half's `enabled` stands.
+        // A predicate that can answer is judged: `FreeCAD.ParamGet` exists in this build
+        // (it is the dict store the shared facade reads), so the row is enabled.
         assert!(
-            find("Test_Absent").enabled,
-            "an absent capability is not a dead command"
+            find("Test_Param").enabled,
+            "a predicate that answers is enabled"
         );
 
         // The built-in rows are judged now, not optimistic: the sample has no history

@@ -257,14 +257,54 @@ def _migrate(spec: dict, group) -> None:
     if not _present(legacy, legacy_key, spec["kind"]):
         return
     _store(group, spec, _read_group(legacy, legacy_key, spec["kind"]))
+_SPECS = {entry["name"]: entry for entry in SETTINGS_SCHEMA}
+
+#: Schema name -> the field ``FerroCADGui.ViewState`` mirrors for it.
+#:
+#: The shell pushes the state it is actually drawing before any command runs, and a
+#: settings-file import can change it without touching this parameter group. So an
+#: **unset** store falls back to the mirror; a value this group holds still wins (the
+#: user's explicit choice). `color`/`opacity` are not mirrored and keep the store.
+_MIRROR_FIELDS = {
+    "enabled": "grid",
+    "minor": "grid_minor",
+    "major": "grid_major",
+    "adaptive": "grid_adaptive",
+    "minor_style": "grid_minor_style",
+    "major_width": "grid_major_width",
+    "minor_width": "grid_minor_width",
+    "radius": "grid_radius",
+}
+
+_MISSING = object()
+
+
+def _mirrored(spec: dict):
+    """The shell's pushed value for ``spec``, or ``_MISSING`` when there is none."""
+    field = _MIRROR_FIELDS.get(spec["name"])
+    if field is None or not FreeCAD.GuiUp:
+        return _MISSING
+    try:
+        import FerroCADGui
+    except Exception:  # noqa: BLE001 - no GUI module means no mirror
+        return _MISSING
+    view = getattr(FerroCADGui, "ViewState", None)
+    if view is None:
+        return _MISSING
+    value = getattr(view, field, None)
+    return _MISSING if value is None else value
 
 
 def _read(spec: dict):
-    """One schema value, migrating a legacy value first when necessary."""
+    """One schema value: the store's, else the shell's mirror, else the default."""
     group = _prefs()
     _migrate(spec, group)
     name = spec["name"]
     kind = spec["kind"]
+    if not _present(group, name, kind):
+        mirrored = _mirrored(spec)
+        if mirrored is not _MISSING:
+            return mirrored
     default = spec["default"]
     if kind == "bool":
         return group.GetBool(name, bool(default))

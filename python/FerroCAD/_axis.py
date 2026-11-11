@@ -134,6 +134,30 @@ AXIS_SETTINGS_SCHEMA = SETTINGS_SCHEMA
 
 _SPECS = {entry["name"]: entry for entry in SETTINGS_SCHEMA}
 
+#: Schema name -> the field ``FerroCADGui.ViewState`` mirrors for it.
+#:
+#: Only the visibility switch is mirrored (the shell pushes ``axis_cross``); the colours,
+#: size and width are this store's alone. An **unset** store falls back to the mirror, so
+#: a pushed switch is what the next toggle acts on.
+_MIRROR_FIELDS = {"enabled": "axis_cross"}
+_MISSING = object()
+
+
+def _mirrored(spec: dict):
+    """The shell's pushed value for ``spec``, or ``_MISSING`` when there is none."""
+    field = _MIRROR_FIELDS.get(spec["name"])
+    if field is None or not FreeCAD.GuiUp:
+        return _MISSING
+    try:
+        import FerroCADGui
+    except Exception:  # noqa: BLE001 - no GUI module means no mirror
+        return _MISSING
+    view = getattr(FerroCADGui, "ViewState", None)
+    if view is None:
+        return _MISSING
+    value = getattr(view, field, None)
+    return _MISSING if value is None else value
+
 _HEX_DIGITS = "0123456789abcdefABCDEF"
 
 
@@ -197,12 +221,16 @@ def _migrate_enabled(group) -> None:
 
 
 def _read(spec: dict):
-    """One schema value, migrating the legacy axis flag first when necessary."""
+    """One schema value: the store's, else the shell's mirror, else the default."""
     group = _prefs()
     if spec["name"] == "enabled":
         _migrate_enabled(group)
     name = spec["name"]
     kind = spec["kind"]
+    if not _present(group, name, kind):
+        mirrored = _mirrored(spec)
+        if mirrored is not _MISSING:
+            return mirrored
     default = spec["default"]
     if kind == "bool":
         return group.GetBool(name, bool(default))

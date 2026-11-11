@@ -199,31 +199,31 @@ FerroCADGui.registerProvider('gizmo', 'demo', 'Demo Gizmo', settings=[
     });
 }
 
-/// The reset row the card appends for an appearance feature drops the written values, so
-/// the rows read their declared defaults again. The row exists because the shell module
-/// registers `App_ResetGridAppearance`; `resetAppearance` is the facade the shell calls.
+/// The reset row the card appends for an appearance feature resets the **edition's**
+/// store, not a provider's own rows: that is what `resetAppearance` means natively
+/// (`App_ResetGridAppearance`), and the shared facade owns it now. The row exists because
+/// the shell module registers that command.
 #[test]
-fn the_reset_row_restores_the_declared_defaults() {
+fn the_reset_row_restores_the_edition_store() {
     with_host(|host| {
         evaluate(
             host,
             r#"import FerroCADGui
 FerroCADGui.registerProvider('grid', 'demo', 'Demo Grid', settings=[
     {'name': 'minor', 'kind': 'int', 'default': 10},
-    {'name': 'ink', 'kind': 'color', 'default': '#94a3b8'},
 ])
 "#,
         );
+        // The provider's row and the edition's own `FerroCAD.Grid` store are separate;
+        // the card's reset action is about the latter.
         assert!(
             host.set_extra_property("Settings/grid", "minor", "40")
                 .expect("the card")
                 .ok
         );
-        assert!(
-            host.set_extra_property("Settings/grid", "ink", "#ff0000")
-                .expect("the card")
-                .ok
-        );
+        evaluate(host, "import FerroCAD\nFerroCAD.Grid.minor = 33");
+        assert_eq!(evaluate(host, "FerroCAD.Grid.minor"), "33.0");
+
         let rows = host.extra_properties("Settings/grid").expect("the card");
         assert!(
             rows.iter()
@@ -236,9 +236,17 @@ FerroCADGui.registerProvider('grid', 'demo', 'Demo Grid', settings=[
             .set_extra_property("Settings/grid", "reset", "")
             .expect("the card");
         assert!(reset.ok, "{reset:?}");
+        assert_eq!(
+            evaluate(host, "FerroCAD.Grid.minor"),
+            "10.0",
+            "the edition store is back to its default"
+        );
         let rows = host.extra_properties("Settings/grid").expect("the card");
-        assert_eq!(row(&rows, "minor").value, "10", "back to the default");
-        assert_eq!(row(&rows, "ink").value, "#94a3b8");
+        assert_eq!(
+            row(&rows, "minor").value,
+            "40",
+            "a provider's own row is not the edition's store"
+        );
     });
 }
 

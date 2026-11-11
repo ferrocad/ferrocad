@@ -21,23 +21,21 @@
 //! have needed a JS-mediated binding layer plus a ~10 MB runtime; MicroPython would
 //! have been the least compatible with `python/`.
 //!
-//! **What is shared.** The script is literally
-//! `python/ferrocad_shell/__init__.py`, included as source, and the property rules are
+//! **What is shared.** The scripts are literally `python/ferrocad_shell/__init__.py`,
+//! `python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py` and the
+//! `python/FerroCAD` package, included as source; the property rules are
 //! `ferrocad_core::present` (see [`snapshot`]). What is *not* shared is the `*_py` PyO3
-//! bindings: those are CPython extension modules and RustPython cannot load them, so
-//! the bridge re-exposes exactly the rows the shell needs. §6.3 calls this the fork's
+//! bindings: those are CPython extension modules and RustPython cannot load them, so the
+//! bridge re-exposes exactly the rows the shell needs. §6.3 calls this the fork's
 //! central trade-off, and it still holds.
 //!
 //! **What the facade does not do.** The document is read-only from Python: `setattr`
 //! on an object raises rather than silently missing the document. Writes, recompute
 //! and the `Shape` API are the document half's (`RustAppBackend`), and the shell's own
-//! commands reach them. What the facade *does* answer is the Gui app's presentation and
-//! selection state (B18a steps 1–4): `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`
-//! and the `{"view": …}` requests the shell's own commands return, the command registry
-//! they are reached through, `FreeCADGui.Selection` (the shell's selection, mirrored
-//! down; writes queued back), the mod provider registry and its settings cards (B18a
-//! steps 1–5). Everything else — interaction and the model tree — is left to the
-//! document half.
+//! commands reach them. Everything else — interaction and the model tree — is left to
+//! the document half. `bootstrap.py` supplies only what the shared modules cannot get
+//! here: the host gaps, the document model, and four bricks (`ParamGet`, `Units.Quantity`,
+//! `os`, the parameter-file controls).
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
 //! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
@@ -92,6 +90,31 @@ const CATALOG: &str = include_str!("../../../python/ferrocad_shell/catalog.json"
 /// cannot import (see `bootstrap.py`).
 const BOOTSTRAP: &str = include_str!("bootstrap.py");
 
+/// The **shared** `FerroCADGui`: the same source the desktop's CPython half loads.
+///
+/// Installed over the bootstrap stub once the three bricks it needs (`ParamGet`,
+/// `Units.Quantity`, `os`) exist, so the provider registry, settings and view state
+/// cannot drift from the desktop's (B18b).
+const FERROCADGUI: &str = include_str!("../../../python/FerroCADGui/__init__.py");
+
+/// The **shared** `FreeCADGui`: the command registry, selection mirror, dialogs and
+/// document observers the desktop's CPython half loads.
+///
+/// It imports `os`, which is why bootstrap installs a synthetic one; with that it is the
+/// same source on both hosts (B18b).
+const FREECADGUI: &str = include_str!("../../../python/FreeCADGui/__init__.py");
+
+/// The **shared** `FerroCAD` package: the semantic stores the desktop runs.
+///
+/// A package, not one source: `FerroCAD/__init__.py` lazily imports `._grid`, `._axis`
+/// and `._gizmo`, and `._params` is the parameter-file control. All four are installed
+/// so the store policy (schema-validated setters, the view mirror, reset) is one copy.
+const FERROCAD_INIT: &str = include_str!("../../../python/FerroCAD/__init__.py");
+const FERROCAD_PARAMS: &str = include_str!("../../../python/FerroCAD/_params.py");
+const FERROCAD_GRID: &str = include_str!("../../../python/FerroCAD/_grid.py");
+const FERROCAD_AXIS: &str = include_str!("../../../python/FerroCAD/_axis.py");
+const FERROCAD_GIZMO: &str = include_str!("../../../python/FerroCAD/_gizmo.py");
+
 /// Seed the console's namespace, the way `ferrocad_shell.bootstrap` does natively.
 ///
 /// Here the *document* half boots, so the shell script's `bootstrap()` never runs and
@@ -140,9 +163,26 @@ def _install(name, source):
     module = type(sys)(name)
     module.__dict__['__name__'] = name
     module.__dict__['__file__'] = name + '.py'
+    module.__dict__['__package__'] = name.rpartition('.')[0]
     module.__dict__['open'] = _open
     sys.modules[name] = module
     exec(compile(source, name + '.py', 'exec'), module.__dict__)
+
+
+def _install_package(name, sources):
+    # Install a package: submodules first, then `sources['__init__']`. The shared
+    # modules use relative imports (`from ._params import ...`), which resolve through
+    # sys.modules when `__path__` exists, so the package module is created first.
+    module = type(sys)(name)
+    module.__dict__['__name__'] = name
+    module.__dict__['__file__'] = name + '/__init__.py'
+    module.__dict__['__package__'] = name
+    module.__dict__['__path__'] = []
+    sys.modules[name] = module
+    for key, source in sources.items():
+        if key != '__init__':
+            _install(name + '.' + key, source)
+    exec(compile(sources['__init__'], name + '/__init__.py', 'exec'), module.__dict__)
     return module
 ";
 
@@ -218,35 +258,28 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 
 /// RustPython as a [`PythonRuntime`]: the interpreter, and what its facade answers.
 ///
-/// The facade is `bootstrap.py` (the `FreeCAD`/`FreeCADGui` surface `wasm32` needs). Its
-/// [`Contract`] answers the console and the property rows, the Gui app's presentation
-/// half — `view`, `view_state` and `commands` (B18a steps 1–2) — its selection mirror
-/// (step 4), the mod provider registry (step 5) and its settings cards (step 3), so the
-/// shell's own Gui commands run *in Python* here instead of being handed to the document
-/// half:
+/// The facade is **the desktop's own Python**, installed from source: `FreeCADGui`,
+/// `FerroCADGui` and the `FerroCAD` package. `bootstrap.py` supplies only the host gaps,
+/// the document model and the four bricks they need, so there is one implementation of
+/// the Gui app on both runtimes. The [`Contract`] names what that facade answers:
 ///
-/// - `view` — `appearance_view`, `grid_summary`, `axis_summary` over
-///   `FerroCAD.Grid`/`Axis`/`Gizmo`. `bootstrap.py` has no parameter store, so those are
-///   the real facades' shape over defaults, the shell's mirrored `ViewState`, and the
-///   active backend of any provider a mod registered (step 5).
+/// - `view` — `appearance_view`, `grid_summary`, `axis_summary` over the shared
+///   `FerroCAD.Grid`/`Axis`/`Gizmo` stores. An unset parameter-group value falls back to
+///   the shell's mirrored `ViewState`, which is what is drawn.
 /// - `view_state` — `set_view_state`, the push a checkable command's `IsChecked` reads.
-/// - `commands` — `commands`, `run_command` and the two dialog verbs over the
-///   `_COMMANDS` registry the shell module fills at import (`App_ToggleGrid`,
+/// - `commands` — `commands`, `run_command` and the two dialog verbs over the shared
+///   `FreeCADGui._COMMANDS` registry the shell module fills at import (`App_ToggleGrid`,
 ///   `App_ToggleAxisCross`, `App_ToggleGizmo`, `App_ViewWorkplane`, `View_GridSettings`,
 ///   `Dev_ToggleTools`, and every workbench command a mod registers).
-/// - `selection` — `set_selection`/`take_selection_requests` over
-///   `FreeCADGui.Selection`, a port of `python/FreeCADGui/__init__.py`'s mirror: the
-///   shell pushes what it has selected, a script's `addSelection`/`removeSelection`/
-///   `clearSelection` updates that snapshot and queues the write for the shell to drain.
-///   `Document.UndoCount`/`RedoCount` answer from the payload's counts, so `App_Undo`,
-///   `App_Redo`, `App_Delete`, `App_Move`, `App_Rotate` and `App_ToggleVisibility` are
-///   judged by their real predicates instead of being optimistically enabled.
+/// - `selection` — `set_selection`/`take_selection_requests` over the shared
+///   `FreeCADGui.Selection`: the shell pushes what it has selected, a script's
+///   `addSelection`/`removeSelection`/`clearSelection` updates that snapshot and queues
+///   the write for the shell to drain. `Document.UndoCount`/`RedoCount` answer from the
+///   payload's counts, so `App_Undo`, `App_Redo`, `App_Delete`, `App_Move`,
+///   `App_Rotate` and `App_ToggleVisibility` are judged by their real predicates.
 /// - `providers` — `provider_features`, `set_provider`, `refresh_providers` and
-///   `provider_skin` over `FreeCADGui.registerProvider`/`providers`/`activeProvider`/
-///   `providerSkin`/`setActiveProvider`/`refreshProviders`, a port of
-///   `python/FerroCADGui/__init__.py`'s registry. The selected backend is kept in
-///   memory (no parameter store: B18b), a declared `settings` schema is answered by the
-///   `settings` group below, and there is no document observer (one live document).
+///   `provider_skin` over the shared registry. The selected backend persists in the
+///   dict-backed `ParamGet` (the process, not a file), so a reload starts from priority.
 /// - `settings` — `extra_properties`/`set_extra_property` over the
 ///   `Settings/<Feature>` namespace: the provider selector row and the active
 ///   provider's schema. A written value lives in a session store (no parameter store:
@@ -301,13 +334,29 @@ impl RustPythonRuntime {
                 // The loader defines `_open`/`_install`; they have to run in the same
                 // scope as the call, because `run_source` gives each source a fresh one.
                 let install = format!(
-                    "{LOADER}\nSHELL_FILES = {{'catalog.json': SHELL_CATALOG}}\n_install('ferrocad_shell', SHELL_SOURCE)"
+                    "{LOADER}\nSHELL_FILES = {{'catalog.json': SHELL_CATALOG}}\n\
+                     _install('FreeCADGui', FREECADGUI_SOURCE)\n\
+                     _install_package('FerroCAD', eval(FERROCAD_FILES_SOURCE))\n\
+                     _install('FerroCADGui', FERROCADGUI_SOURCE)\n\
+                     _install('ferrocad_shell', SHELL_SOURCE)"
+                );
+                // A Python dict of the package's sources. `{:?}` renders a Rust string
+                // as a quoted literal (newlines and quotes escaped), which is also a
+                // Python one.
+                let ferro_files = format!(
+                    "{{'__init__': {FERROCAD_INIT:?}, '_params': {FERROCAD_PARAMS:?}, '_grid': {FERROCAD_GRID:?}, '_axis': {FERROCAD_AXIS:?}, '_gizmo': {FERROCAD_GIZMO:?}}}"
                 );
                 run_source(
                     vm,
                     "<install>",
                     &install,
-                    &[("SHELL_SOURCE", SHELL), ("SHELL_CATALOG", CATALOG)],
+                    &[
+                        ("SHELL_SOURCE", SHELL),
+                        ("SHELL_CATALOG", CATALOG),
+                        ("FREECADGUI_SOURCE", FREECADGUI),
+                        ("FERROCADGUI_SOURCE", FERROCADGUI),
+                        ("FERROCAD_FILES_SOURCE", ferro_files.as_str()),
+                    ],
                 )?;
                 run_source(vm, "<namespace>", NAMESPACE, &[])
             })();

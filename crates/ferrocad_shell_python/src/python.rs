@@ -166,6 +166,20 @@ pub(crate) fn call_raw(function: &str, args: &[&str]) -> Result<String, String> 
     })
 }
 
+/// Whether the app's entry module defines `function`.
+///
+/// The interaction group has one hook the edition owns: the parametric app script
+/// exports `add_datum_plane`, while the geometry-free base script does not. Asking
+/// first is what lets a build without it fall through to the document half's answer
+/// instead of surfacing an `AttributeError`.
+pub(crate) fn has_function(function: &str) -> bool {
+    Python::with_gil(|py| {
+        py.import(entry_module())
+            .and_then(|module| module.hasattr(function))
+            .unwrap_or(false)
+    })
+}
+
 /// Call a function on the app's entry module that returns JSON, and decode it.
 fn call_json<T: for<'de> Deserialize<'de>>(func: &str, arg: Option<&str>) -> Result<T, String> {
     let raw = match arg {
@@ -651,10 +665,7 @@ pub fn apply_interaction(
         Some(result) => Ok(result),
         None => Ok(ApplyResult {
             ok: false,
-            error: format!(
-                "no module handles {} {}",
-                commit.manipulator, commit.action
-            ),
+            error: format!("no module handles {} {}", commit.manipulator, commit.action),
         }),
     }
 }

@@ -37,8 +37,8 @@ use ferrocad_stage::Tool;
 ///
 /// One flag per group rather than per function: a facade that has `model_tree` has the
 /// selection mirror too, because both come from the same app script. [`Self::FULL`] is
-/// the embedded CPython facade; RustPython starts at [`Self::NONE`] and grows a flag as
-/// `bootstrap.py` grows the surface (B18a).
+/// the embedded CPython facade; RustPython grows a flag as its facade gains the group
+/// (B18a), and it now answers every one of them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Contract {
     /// `model_tree` — the synthetic `Settings` root and its children.
@@ -96,6 +96,19 @@ pub trait PythonRuntime {
     /// the raw form is for the two helpers that return a bare string (`hello`,
     /// `gpu_adapter`) and for tests.
     fn call(&self, function: &str, args: &[&str]) -> Result<String, String>;
+
+    /// Whether the entry module defines `function`.
+    ///
+    /// [`Contract`] is per group, but one function in the `interaction` group belongs
+    /// to the *edition's* app script rather than to `ferrocad_shell`:
+    /// `add_datum_plane` is implemented by `python/ferrocad_parametric`, so a facade
+    /// that has the interaction hooks (a mod's manipulators) can still have no datum
+    /// hook. Answering yes by default keeps a runtime that cannot introspect its
+    /// module from silently dropping a capability.
+    fn has_function(&self, function: &str) -> bool {
+        let _ = function;
+        true
+    }
 
     /// Which contract groups this facade implements. Defaults to none.
     fn contract(&self) -> Contract {

@@ -314,8 +314,8 @@ and the error policies are written once, and an engine supplies `PythonRuntime` 
 call primitive (`CpythonRuntime` enters the GIL, `RustPythonRuntime` calls into its VM),
 the boot/file hooks, and the typed hooks (display rows, tools, the `pivy` scene, the event
 listener). What a facade *can* answer is a value (`Contract`): CPython is `FULL`,
-RustPython is `{view, view_state, commands, selection, providers}` today (and `NONE` on
-the desktop's `ThreadedRuntime`), so the document half answers what the script cannot
+RustPython answers every group too (it grew them one at a time; B18a), and the desktop's
+`ThreadedRuntime` is still `NONE`, so the document half answers what the script cannot
 instead of the host calling a function that would raise — and a capability that grows is
 one flag plus the facade code.
 The seam is `crates/ferrocad_python_host`; the trail is
@@ -347,8 +347,9 @@ script would notice.
 **It answers the Gui app's presentation half.** The installed facade carries
 `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`, the two view requests, and the
 `FreeCADGui` command registry (`_COMMANDS`, `_command_list`, `_resources`, `_enabled`,
-`_checked`, `_run`, dialog tokens). The runtime's `Contract` is therefore `{view, view_state,
-commands}` (B18a steps 1–2): the shell's own Gui commands (`App_ToggleGrid`,
+`_checked`, `_run`, dialog tokens). The runtime's `Contract` answers the whole surface
+now (`view`, `view_state`, `commands`, `selection`, `providers`, `settings`, `tree`,
+`interaction`; B18a steps 1–7), so the shell's own Gui commands (`App_ToggleGrid`,
 `App_ToggleAxisCross`, `App_ToggleGizmo`, `App_ViewWorkplane`, `View_GridSettings`,
 `Dev_ToggleTools`) and every command a loaded workbench registers run *in Python* here
 instead of falling back to the document half. `FreeCAD.GuiUp` is 1, so
@@ -362,13 +363,18 @@ writes queued back, `Document.UndoCount`/`RedoCount` from the payload) and holds
 selected backend and the values a script writes persist in the dict-backed
 `FreeCAD.ParamGet` — the process, not a file — so an edit lasts for the session and a
 reload starts from the declared defaults. A predicate that raises disables its row (the
-shared `_enabled` rule); `interaction` and `tree` stay off until their facade lands.
+shared `_enabled` rule). The **model tree** appends the synthetic `Settings` root from that
+same registry — the documents themselves stay the document half's, so nothing is listed
+twice — and the **interaction hooks** resolve a mod's manipulator commits through
+`FerroCAD.register_interaction_provider`/`register_manipulator_provider`. `add_datum_plane`
+is the edition's, so a facade with no app script reports the hook absent and the document
+half answers.
 
 Because the facade is the real one, **real mods load**: `mods/GridOverlay`,
 `mods/AxisOverlay` and `mods/GizmoOverlay` run here and declare their `grid`/`axis`/
 `gizmo` providers, which `tests/mods.rs::the_shipped_settings_clients_load` pins. The
-Coin/shader skins need an overlay scene and the Fasteners/Spring/Explode workbenches need
-`Part`, so those still record an error in the browser.
+Coin/shader skins read a resource file and need the overlay bridge, so those still record
+an error in the browser.
 
 Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
 `wasm32-unknown-unknown`, and its compiler recurses, so a host raises the stack before

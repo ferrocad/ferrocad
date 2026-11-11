@@ -419,6 +419,18 @@ def _get_object(name):
         return None
 
 
+def _list_documents():
+    """`FreeCAD.listDocuments()`: the host's one document, keyed by name.
+
+    Upstream returns a dict, and `ferrocad_shell.model_tree` iterates its keys. The
+    host owns exactly one document, so the answer is either that one or nothing.
+    """
+    try:
+        return {_ACTIVE.Name: _ACTIVE}
+    except RuntimeError:
+        return {}
+
+
 # --- the bricks under the *shared* facade ---------------------------------
 #
 # `python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py` and the
@@ -589,6 +601,7 @@ _module(
         "GuiUp": 1,
         "getDocument": _get_document,
         "getObject": _get_object,
+        "listDocuments": _list_documents,
         # Upstream's lower-case accessor: the shared facade reads it (a provider switch
         # records the document it attached to). `None` when nothing is open.
         "activeDocument": _active_document,

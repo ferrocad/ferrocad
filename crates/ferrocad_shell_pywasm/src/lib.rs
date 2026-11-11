@@ -286,9 +286,15 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 ///   dict-backed store, so it is session-only — B18b), coercion and range/choice
 ///   checks are the native ones, `resetAppearance` drops the written values, and a
 ///   write returns the provider's `refresh` view claim.
-///
-/// `interaction` and `tree` stay off: the facade has no `Part` hook and no app-script
-/// model tree, so the document half answers both.
+/// - `tree` — `model_tree`, filtered to the synthetic `Settings` root the shared
+///   provider registry lists. The documents themselves stay the document half's, so
+///   nothing is shown twice.
+/// - `interaction` — `interaction` and `manipulator_specs` over the shared
+///   `FerroCAD.register_interaction_provider`/`register_manipulator_provider`
+///   registries, so a Python mod that takes over a commit is answered here on both
+///   hosts. `add_datum_plane` is **not** this half's: the edition's app script exports
+///   it and this runtime installs none, so [`PythonRuntime::has_function`] reports it
+///   absent and the document half answers.
 pub struct RustPythonRuntime {
     interpreter: Interpreter,
 }
@@ -389,19 +395,32 @@ impl PythonRuntime for RustPythonRuntime {
         })
     }
 
-    /// The presentation, selection, provider and settings half of the Gui app: the
-    /// shell's own view commands run here, a script's selection writes reach it, a
-    /// mod's providers are listed and switched, and a provider's settings card is
-    /// answered (see the type docs). The two groups the facade has no answer for stay
-    /// off.
+    /// There is no app script here: `ferrocad_shell` is the only Python module this
+    /// runtime installs, so the edition's `add_datum_plane` is absent by construction.
+    fn has_function(&self, function: &str) -> bool {
+        self.interpreter.enter(|vm| {
+            let name = vm.ctx.intern_str(function);
+            vm.import("ferrocad_shell", 0)
+                .and_then(|module| module.get_attr(name, vm))
+                .is_ok()
+        })
+    }
+
+    /// The presentation, selection, provider and settings half of the Gui app, the
+    /// model tree's `Settings` root, and a mod's interaction hooks: the shell's own view
+    /// commands run here, a script's selection writes reach it, a mod's providers are
+    /// listed and switched, a provider's settings card is answered, and a manipulator a
+    /// mod declared commits through the shared registry (see the type docs).
     fn contract(&self) -> Contract {
         Contract {
+            tree: true,
             view: true,
             view_state: true,
             commands: true,
             selection: true,
             providers: true,
             settings: true,
+            interaction: true,
             ..Contract::NONE
         }
     }

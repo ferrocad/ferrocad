@@ -324,7 +324,12 @@ impl<R: PythonRuntime> ScriptHost for PythonHost<R> {
         u: Vector3,
         v: Vector3,
     ) -> Option<Result<String, String>> {
-        if !self.runtime.contract().interaction {
+        // The same flag, two different owners: a manipulator provider is the shell
+        // module's, but datum geometry is the edition's (`ferrocad_parametric`). A
+        // half with no app script (the browser's) has the former and not the latter,
+        // and must leave the answer to the document half instead of reporting a
+        // missing attribute.
+        if !self.runtime.contract().interaction || !self.runtime.has_function("add_datum_plane") {
             return None;
         }
         Some(self.datum_plane(origin, u, v))

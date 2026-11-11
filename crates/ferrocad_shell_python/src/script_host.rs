@@ -63,6 +63,12 @@ impl PythonRuntime for CpythonRuntime {
         python::call_raw(function, args)
     }
 
+    /// The app script decides: `ferrocad_parametric` exports `add_datum_plane`, the
+    /// geometry-free base script does not.
+    fn has_function(&self, function: &str) -> bool {
+        python::has_function(function)
+    }
+
     /// The real `FreeCAD`/`FreeCADGui` facade: every group of the shell contract answers.
     fn contract(&self) -> Contract {
         Contract::FULL

@@ -5,7 +5,7 @@ built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 r
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
-(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a steps 1–5 built (2026-11-11),
+(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a built (2026-11-11),
 B18a steps 6–7 and B18b recorded; B19a built (2026-11-11), B19b built (2026-11-11),
 B19c built (2026-11-11), B19d recorded.** The surface suite
 (born as the parity ledger, now
@@ -1630,7 +1630,7 @@ six doc gates.
 [`call`]: https://docs.rs/ferrocad_python_host/latest/ferrocad_python_host/trait.PythonRuntime.html#tymethod.call
 [`Contract`]: https://docs.rs/ferrocad_python_host/latest/ferrocad_python_host/struct.Contract.html
 
-### B18a — grow the RustPython contract (steps 1–5 built 2026-11-11)
+### B18a — grow the RustPython contract (built 2026-11-11; steps 6–7 2026-11-12)
 
 **Built: steps 1–2.** `bootstrap.py` now answers the Gui app's presentation half, and
 `RustPythonRuntime::contract()` is `{view, view_state, commands}` (everything else still
@@ -1772,18 +1772,31 @@ early-out (the CPython answer) and records the write-path refusal as the D15 dif
 it also registers one provider on both halves and compares the manifest (step 5).
 pywasm 1 + 3 + 5 + 4 + 4 + 5 + 4 + 6, parametric composition surface 11.
 
-**Remaining steps.** Each flips one `Contract` flag and implements the facade it names.
-Order by cost ÷ value:
+**Built: steps 6–7 (2026-11-12).** Both were nearly free once the shared source was
+installed, which is the point: the facade code already existed.
 
-| step | flag | facade work | exit |
-| --- | --- | --- | --- |
-| 6 | `interaction` | `FerroCAD.interaction`/`manipulators` + the `Part` hook | a manipulator commit resolves through the script |
-| 7 | `tree` | `Settings` root from the registry | the tree's settings nodes are the script's |
+- **`tree`** — `ferrocad_shell.model_tree` builds the synthetic `Settings` root from
+  `FerroCADGui.providers()`, and `PythonHost::extra_tree_nodes` filters the answer to
+  that root so the documents stay the document half's. The one host gap was
+  `FreeCAD.listDocuments()`: `bootstrap.py` answers it with the host's one document,
+  keyed by name like the PyO3 module.
+- **`interaction`** — `ferrocad_shell.interaction`/`manipulator_specs` resolve through
+  `FerroCAD`'s provider registries, which the shared package installs. `add_datum_plane`
+  is the one function the group flag cannot express: the edition's app script exports
+  it and this runtime installs none, so `PythonRuntime::has_function` was added and
+  `PythonHost::add_datum_plane` falls through to the document half (`None`) when the
+  entry module does not define it. That is also the right answer for the desktop's
+  geometry-free base edition, which used to surface the raw `AttributeError`.
 
-Each step extends `the_two_script_halves_agree` with one observable per group, so a flip
-turns a red row green. Step 4's rows are the `selection` half of that test plus
-`tests/selection.rs`; step 5's are `tests/providers.rs` plus the shared manifest row;
-step 3's are `tests/settings.rs` plus the shared card-row row.
+The runtime's `Contract` is `FULL` now; the desktop's `ThreadedRuntime` still reports
+`NONE` (flipping it is one line plus its test, and it has no mods to answer for).
+
+**Exit: met.** `tests/interaction.rs` (5): a registered provider owns the commit and
+receives the resolved object, action and values; with no provider the commit and the
+handles stay the document half's; a declared handle comes back from
+`manipulator_specs`; the tree grows `Settings/grid` only after a provider registers; and
+the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
+full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
 ### B18b — run the real facade under RustPython (shared-source install built 2026-11-11)
 

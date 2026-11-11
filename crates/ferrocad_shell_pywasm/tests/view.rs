@@ -183,43 +183,84 @@ fn the_registry_lists_the_shells_own_commands() {
         assert!(grid.checkable, "`IsChecked` exists, so the row is a toggle");
 
         // `App_Delete` is not in the catalogue, so `run_command` routes it to the
-        // registry — and the script answers. On CPython it reports "nothing selected";
-        // here it refuses, because this half has no `FreeCADGui.Selection` mirror
-        // (B18a step 4) and no write path to the document (D15, the wasm document is
-        // read-only). The difference is the step that is still off, not a missing
-        // command registry.
+        // registry — and the script answers what CPython answers with nothing
+        // selected. Since B18a step 4 grew `FreeCADGui.Selection`, both the predicate
+        // and the command have the state they read; the read-only document is
+        // `tests/selection.rs`'s row, because reaching it needs a selection.
         let delete = host
             .run_command("App_Delete")
             .expect("the registry lists it, so the script half answers it");
-        assert!(!delete.ok, "{delete:?}");
+        assert!(delete.ok, "{delete:?}");
         assert!(
-            delete.error.contains("Selection"),
-            "the refusal names the missing mirror: {}",
-            delete.error
+            delete.status.contains("nothing selected"),
+            "the script's own early-out, not a missing mirror: {}",
+            delete.status
         );
     });
 }
 
-/// A predicate this half cannot evaluate must not take a verb away, and a Gui host must
-/// get the settings *card* rather than the headless modal.
+/// A predicate is judged when this half has its state; it keeps the document half's
+/// answer only when it asks for a capability this half has not grown; and a predicate
+/// that is simply broken disables its row, exactly as the real facade's does.
+///
+/// A Gui host must also get the settings *card* rather than the headless modal.
 #[test]
-fn an_unevaluable_predicate_does_not_disable_a_command() {
+fn a_broken_predicate_disables_a_command_but_an_absent_capability_does_not() {
     with_host(|host| {
+        let setup = host
+            .evaluate(
+                r#"import FreeCADGui
+class Broken:
+    def GetResources(self):
+        return {"MenuText": "Broken"}
+
+    def IsActive(self):
+        raise ValueError("the predicate itself is wrong")
+
+class Absent:
+    def GetResources(self):
+        return {"MenuText": "Absent"}
+
+    def IsActive(self):
+        return FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Test") is not None
+
+FreeCADGui.addCommand("Test_Broken", Broken())
+FreeCADGui.addCommand("Test_Absent", Absent())
+"#,
+            )
+            .expect("evaluate runs");
+        assert!(setup.ok, "{}", setup.output);
+
         let commands = host.commands();
-        // `App_Undo`/`App_Redo` read `Document.UndoCount`; `App_ToggleVisibility` reads
-        // `FreeCADGui.Selection`. The facade has neither yet (B18a step 4), so their
-        // `IsActive` raises. Answering `enabled: false` would override the document
-        // half's own state — the shell merges the script's row over the catalogue's —
-        // and take away verbs the window can still run.
-        for id in [catalog::UNDO, catalog::REDO, catalog::TOGGLE_VISIBILITY] {
-            let row = commands
+        let find = |id: &str| {
+            commands
                 .iter()
                 .find(|command| command.id == id)
-                .unwrap_or_else(|| panic!("{id} is a registry row: {:?}", commands.len()));
-            assert!(
-                row.enabled,
-                "{id} is not disabled by a predicate this half cannot evaluate"
-            );
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{id} is a registry row: {:?}",
+                        commands.iter().map(|c| &c.id).collect::<Vec<_>>()
+                    )
+                })
+        };
+
+        // The real facade disables a command whose `IsActive` raises: the predicate is
+        // broken, and running it would fail too.
+        assert!(
+            !find("Test_Broken").enabled,
+            "a predicate that raises for its own reasons disables its row"
+        );
+        // `FreeCAD.ParamGet` is B18b: the raise means the capability is absent, not that
+        // the command is dead, so the document half's `enabled` stands.
+        assert!(
+            find("Test_Absent").enabled,
+            "an absent capability is not a dead command"
+        );
+
+        // The built-in rows are judged now, not optimistic: the sample has no history
+        // and nothing is selected, so all three are genuinely disabled.
+        for id in [catalog::UNDO, catalog::REDO, catalog::TOGGLE_VISIBILITY] {
+            assert!(!find(id).enabled, "{id} is judged by the state it reads");
         }
 
         // A window is attached (`FreeCAD.GuiUp == 1`), so this selects the tree card,

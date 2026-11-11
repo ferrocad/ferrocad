@@ -33,6 +33,7 @@ use std::sync::{Mutex, Once};
 use ferrocad_shell_api::app::{AppBackend, ScriptHost};
 use ferrocad_shell_api::catalog;
 use ferrocad_shell_api::commands::CommandOutcome;
+use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::types::PropRow;
 use ferrocad_shell_api::view::ViewState;
 use ferrocad_shell_python::{PythonScriptHost, python};
@@ -645,9 +646,9 @@ fn wasm_script_rows(json: &str) -> Vec<ScriptRow> {
 /// B6: CPython and RustPython run the same `python/ferrocad_shell`, over one document.
 ///
 /// A **capability matrix**, not equality: the wasm facade answers the console, the
-/// property rows and (B18a steps 1–2) the Gui app's presentation half, and nothing
-/// else — no tools, no providers, no filesystem, no document writes. Each row below
-/// says which of those it is.
+/// property rows, the Gui app's presentation half and its selection mirror (B18a
+/// steps 1–4), and nothing else — no tools, no providers, no filesystem, no document
+/// writes. Each row below says which of those it is.
 #[test]
 fn the_two_script_halves_agree() {
     let _guard = PYTHON.lock().unwrap_or_else(|error| error.into_inner());
@@ -685,6 +686,13 @@ fn the_two_script_halves_agree() {
                 host.commands(),
                 host.run_command("App_Delete"),
                 host.hello().expect("hello answers").expect("RustPython greets"),
+                {
+                    // B18a step 4: with the shell's selection pushed down, the
+                    // predicate is judged and the command reaches the document — which
+                    // is where the read-only half refuses it.
+                    host.on_selection_changed(&[SelectionItem::new(OBJECT)]);
+                    host.run_command("App_Delete")
+                },
             )
         })
         .expect("a worker thread")
@@ -722,17 +730,28 @@ fn the_two_script_halves_agree() {
         wasm.2.iter().map(|command| &command.id).collect::<Vec<_>>()
     );
 
-    // D15: the wasm document is read-only and the facade has no selection mirror, so
-    // the script's `App_Delete` is a refusal where CPython reports "nothing selected".
-    // It is still an answer from the same registry, not a gap in the registry.
+    // The selection mirror is real (B18a step 4), so an empty selection is judged the
+    // same on both halves: `App_Delete` reports its own early-out, where it used to
+    // fail on a missing `FreeCADGui.Selection`.
     assert!(cpython_delete.ok, "the script owns App_Delete");
-    let wasm_delete = wasm
+    let wasm_idle = wasm
         .3
         .expect("the registry lists App_Delete, so the script answers it");
-    assert!(!wasm_delete.ok, "{wasm_delete:?}");
+    assert!(wasm_idle.ok, "{wasm_idle:?}");
     assert!(
-        wasm_delete.error.contains("Selection"),
-        "the refusal names the mirror this half has not grown: {}",
-        wasm_delete.error
+        wasm_idle.status.contains("nothing selected"),
+        "{}",
+        wasm_idle.status
+    );
+
+    // With a selection the difference is D15 and only D15: the wasm document is
+    // read-only, so the delete reaches `openTransaction` and refuses there. The mirror
+    // answered, which is what B18a step 4 added.
+    let wasm_selected = wasm.5.expect("the registry still lists App_Delete");
+    assert!(!wasm_selected.ok, "{wasm_selected:?}");
+    assert!(
+        wasm_selected.error.contains("openTransaction"),
+        "the refusal names the missing write path: {}",
+        wasm_selected.error
     );
 }

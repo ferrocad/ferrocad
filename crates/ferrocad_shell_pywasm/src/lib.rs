@@ -31,11 +31,12 @@
 //! **What the facade does not do.** The document is read-only from Python: `setattr`
 //! on an object raises rather than silently missing the document. Writes, recompute
 //! and the `Shape` API are the document half's (`RustAppBackend`), and the shell's own
-//! commands reach them. What the facade *does* answer is the Gui app's presentation
-//! half (B18a steps 1–2): `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState` and
-//! the `{"view": …}` requests the shell's own commands return, plus the command
-//! registry they are reached through. Everything else — settings rows, the selection
-//! mirror, providers, interaction and the model tree — is left to the document half.
+//! commands reach them. What the facade *does* answer is the Gui app's presentation and
+//! selection state (B18a steps 1–4): `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`
+//! and the `{"view": …}` requests the shell's own commands return, the command registry
+//! they are reached through, and `FreeCADGui.Selection` (the shell's selection, mirrored
+//! down; writes queued back). Everything else — settings rows, providers, interaction
+//! and the model tree — is left to the document half.
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
 //! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
@@ -217,9 +218,10 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 /// RustPython as a [`PythonRuntime`]: the interpreter, and what its facade answers.
 ///
 /// The facade is `bootstrap.py` (the `FreeCAD`/`FreeCADGui` surface `wasm32` needs). Its
-/// [`Contract`] answers the console and the property rows, and (B18a steps 1–2) the Gui
-/// app's presentation half — `view`, `view_state` and `commands` — so the shell's own
-/// Gui commands run *in Python* here instead of being handed to the document half:
+/// [`Contract`] answers the console and the property rows, the Gui app's presentation
+/// half — `view`, `view_state` and `commands` (B18a steps 1–2) — and its selection
+/// mirror (step 4), so the shell's own Gui commands run *in Python* here instead of
+/// being handed to the document half:
 ///
 /// - `view` — `appearance_view`, `grid_summary`, `axis_summary` over
 ///   `FerroCAD.Grid`/`Axis`/`Gizmo`. `bootstrap.py` has no parameter store and
@@ -230,10 +232,17 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 ///   `_COMMANDS` registry the shell module fills at import (`App_ToggleGrid`,
 ///   `App_ToggleAxisCross`, `App_ToggleGizmo`, `App_ViewWorkplane`, `View_GridSettings`,
 ///   `Dev_ToggleTools`, and every workbench command a mod registers).
+/// - `selection` — `set_selection`/`take_selection_requests` over
+///   `FreeCADGui.Selection`, a port of `python/FreeCADGui/__init__.py`'s mirror: the
+///   shell pushes what it has selected, a script's `addSelection`/`removeSelection`/
+///   `clearSelection` updates that snapshot and queues the write for the shell to drain.
+///   `Document.UndoCount`/`RedoCount` answer from the payload's counts, so `App_Undo`,
+///   `App_Redo`, `App_Delete`, `App_Move`, `App_Rotate` and `App_ToggleVisibility` are
+///   judged by their real predicates instead of being optimistically enabled.
 ///
-/// `settings`, `selection`, `providers`, `interaction` and `tree` stay off: the facade
-/// has no `Settings/<Feature>` rows, no selection mirror, no provider registry, no
-/// `Part` hook and no app-script model tree, so the document half answers all five.
+/// `settings`, `providers`, `interaction` and `tree` stay off: the facade has no
+/// `Settings/<Feature>` rows, no provider registry, no `Part` hook and no app-script
+/// model tree, so the document half answers all four.
 pub struct RustPythonRuntime {
     interpreter: Interpreter,
 }
@@ -318,13 +327,15 @@ impl PythonRuntime for RustPythonRuntime {
         })
     }
 
-    /// The presentation half of the Gui app: the shell's own view commands run here
-    /// (see the type docs). The five groups the facade has no answer for stay off.
+    /// The presentation and selection half of the Gui app: the shell's own view
+    /// commands run here, and a script's selection writes reach it (see the type docs).
+    /// The four groups the facade has no answer for stay off.
     fn contract(&self) -> Contract {
         Contract {
             view: true,
             view_state: true,
             commands: true,
+            selection: true,
             ..Contract::NONE
         }
     }

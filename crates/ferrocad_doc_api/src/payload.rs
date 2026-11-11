@@ -9,6 +9,7 @@
 //!
 //! ```json
 //! { "name": "Sample",
+//!   "undo_count": 0, "redo_count": 0,
 //!   "objects": [ { "name": "Box", "label": "Box", "type_id": "Part::Box",
 //!                  "entity": 1,
 //!                  "additional_type_ids": ["Part", "Box"],
@@ -26,6 +27,12 @@
 //! `getTypeOfProperty` reports it. A facade has to answer that call, and without the
 //! names in the payload it would have to invent something (the wasm Python half used
 //! to answer with the type's last segment).
+//!
+//! `undo_count`/`redo_count` are FreeCAD's `UndoCount`/`RedoCount`
+//! (`getAvailableUndos`/`getAvailableRedos`), read from the document's transaction
+//! stacks. They are additive — a reader that does not know them ignores them — and the
+//! wasm Python facade's `Document` is the one that reads them today, because a
+//! command's `IsActive` otherwise has no way to tell whether an undo is available.
 
 use std::sync::MutexGuard;
 
@@ -75,7 +82,14 @@ pub fn value(name: &str, document: &Document) -> Value {
         .filter_map(|id| document.object(id))
         .map(object_value)
         .collect();
-    json!({ "name": name, "objects": objects })
+    json!({
+        "name": name,
+        // An active (uncommitted) transaction counts, which is what
+        // `PyDocument::UndoCount` (`undo_names().len()`) already reports to CPython.
+        "undo_count": document.available_undos(0),
+        "redo_count": document.available_redos(0),
+        "objects": objects,
+    })
 }
 
 /// [`value`] as text.

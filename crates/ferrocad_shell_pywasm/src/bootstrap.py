@@ -1,6 +1,6 @@
 """The FreeCAD surface ``python/ferrocad_shell`` runs against, for the pywasm spike.
 
-Four things happen here, all on the Python side of the bridge:
+Five things happen here, all on the Python side of the bridge:
 
 1. **The host gaps.** ``wasm32-unknown-unknown`` has no POSIX module, so RustPython's
    frozen ``os``/``_io`` layer is unavailable and ``contextlib``, ``io``, ``pathlib``
@@ -20,6 +20,12 @@ Four things happen here, all on the Python side of the bridge:
    ``ferrocad_shell.commands()``/``run_command()`` read back. They are ports of the
    native facades' *shape* over this build's state: the semantic stores have no
    parameter backend here, and no provider is ever registered.
+4. **The selection mirror** (B18a step 4). ``FreeCADGui.Selection`` is a port of
+   ``python/FreeCADGui/__init__.py``'s: the shell pushes its snapshot down
+   (``ferrocad_shell.set_selection``) and every write a script makes is applied here
+   *and* queued for the shell (``ferrocad_shell.take_selection_requests``), because
+   Python cannot command the viewport synchronously. There is no viewport under this
+   half, so nothing here ever preselects on its own — see the note by the class.
 
 The spike's honest limit: these modules are **not** the ``*_py`` PyO3 bindings. Those
 are CPython extension modules and cannot be loaded by RustPython; §6.3 records that as
@@ -45,8 +51,36 @@ def _module(name, namespace):
     module = type(sys)(name)
     module.__dict__.update(namespace)
     module.__dict__["__name__"] = name
+    # Every module built here is a substitute for a native one, so a missing
+    # attribute is a capability this half has not grown — never a typo in the
+    # substitute, which would be a bug in this file. `_Absent` is what lets a
+    # command predicate tell the two apart (`_enabled`).
+    module.__dict__["__getattr__"] = _absent_attribute(name)
     sys.modules[name] = module
     return module
+
+
+class _Absent(AttributeError):
+    """A facade name this build does not install (B18b).
+
+    An ``AttributeError``, so ``hasattr``/``except AttributeError`` behave exactly as
+    they would for a module that simply has no such attribute, and reported as one
+    (``_reported_name``) because that is what a script sees.
+    """
+
+    _reported_name = "AttributeError"
+
+
+def _absent_attribute(module_name):
+    """The ``__getattr__`` a facade module raises ``_Absent`` from."""
+
+    def __getattr__(attribute):
+        raise _Absent(
+            "module %r has no attribute %r: this build does not install it"
+            % (module_name, attribute)
+        )
+
+    return __getattr__
 
 
 # --- the modules wasm32 cannot import -------------------------------------
@@ -247,6 +281,14 @@ class Document:
         self._payload = payload
         self.Name = payload["name"]
         self.Label = payload["name"]
+        # FreeCAD's `UndoCount`/`RedoCount`, from the payload's counts (which
+        # `ferrocad_doc_api::payload` reads from `ferrocad_core`'s transaction
+        # stacks). A payload rendered before those keys existed reports no history.
+        # `UndoNames`/`RedoNames` are deliberately absent: undoing is a document
+        # write, and this half has no write path, so `App_Undo` refuses at the first
+        # name it asks for (`UndoNames`) with an AttributeError naming it.
+        self.UndoCount = int(payload.get("undo_count", 0))
+        self.RedoCount = int(payload.get("redo_count", 0))
         self.Objects = [DocumentObject(row) for row in payload["objects"]]
 
     def getObject(self, name):
@@ -374,7 +416,9 @@ def _error_text(exc):
     """``TypeError: message`` — the one line a report or a refusal carries."""
     lines = str(exc).strip().splitlines()
     detail = lines[0] if lines else ""
-    return ("%s: %s" % (type(exc).__name__, detail)).strip()
+    # A private exception reports the builtin it is (see `_Absent`).
+    name = getattr(type(exc), "_reported_name", None) or type(exc).__name__
+    return ("%s: %s" % (name, detail)).strip()
 
 
 def _report_once(name, method, exc):
@@ -410,22 +454,34 @@ def _resources(command):
 def _enabled(name, command):
     """Whether a command's `IsActive` says it can act.
 
-    A predicate this facade cannot evaluate — `App_ToggleVisibility` reads
-    `FreeCADGui.Selection`, `App_Undo` reads `Document.UndoCount`, and this half has
-    neither yet (B18a step 4) — answers **enabled**. The real facade disables a command
-    whose predicate raises, because there the predicate has everything it needs; here a
-    raise means the state is absent, not that the command is dead. Disabling it would
-    override the document half's own `enabled` (the shell merges the script's row over
-    the catalogue's) and take a verb away that still works.
+    The real facade disables a command whose predicate raises, and so does this one
+    now that the state the built-in predicates read exists: the selection mirror
+    (`FreeCADGui.Selection`, pushed by `set_selection`) and the document's history
+    (`Document.UndoCount`/`RedoCount`, from the payload). `App_Delete`, `App_Move`,
+    `App_Rotate` and `App_ToggleVisibility` are judged by the same snapshot a click
+    fills; `App_Undo`/`App_Redo` by the document's stacks, and a document that is not
+    open raises instead of answering — which the real facade's `is not None` guard
+    turns into the same `false`.
+
+    The one exception is a *capability* this half has not grown (B18b): a predicate
+    that asks a facade module for a name it does not install raises `_Absent`, and
+    that answers **enabled**. Disabling the row would override the document half's
+    own `enabled` (the shell merges the script's row over the catalogue's) and take
+    away a verb the window can still run: an absent capability is not a dead
+    command, while a predicate that is merely broken is.
     """
     is_active = getattr(command, "IsActive", None)
     if is_active is None:
         return True
     try:
         return bool(is_active())
-    except Exception as exc:  # noqa: BLE001 - an absent capability is not a dead command
+    except _Absent as exc:
+        # An absent capability, not a dead command: leave the row to the document half.
         _report_once(name, "IsActive", exc)
         return True
+    except Exception as exc:  # noqa: BLE001 - a broken predicate disables one command
+        _report_once(name, "IsActive", exc)
+        return False
 
 
 def _checked(name, command):
@@ -514,8 +570,8 @@ def _request_tool(tool_id):
 def _run(name):
     """Invoke a command for the shell; never raises.
 
-    A command that needs a part of the contract this build has not grown yet (the
-    ``FreeCADGui.Selection`` mirror, a document write) refuses with
+    A command that needs a part of the contract this build has not grown yet (a
+    document write, a manifest-declared provider) refuses with
     ``{"ok": False, "error": …}`` naming it, instead of taking the command list
     down: the shell's list and palette keep working, and the refusal is what B6's
     matrix records.
@@ -573,6 +629,265 @@ def runCommand(name, *args):
     return command.Activated(*args)
 
 
+# --- the selection mirror -------------------------------------------------
+#
+# **A port of `python/FreeCADGui/__init__.py`'s `Selection`** (B18a step 4), not a
+# design of its own. The shell owns the selection: it pushes its snapshot down
+# through `ferrocad_shell.set_selection` (`_set`) after every viewport change, and
+# each write a script makes here is applied to that snapshot **and** queued for the
+# shell (`_take_requests`), which `ferrocad_shell.take_selection_requests` drains.
+# Python cannot command the viewport synchronously, and pretending the viewport had
+# changed would be a lie.
+#
+# The one place a script notices the missing view: an entry's ``Object`` is the plain
+# document object, with no ``ViewObject`` (this facade installs no per-object view
+# objects), and **nothing here ever preselects on its own** — ``getPreselection()``
+# only answers what a script set, because the pointer hover that would set it lives
+# in a viewport this half does not have.
+
+
+class SelectionObject:
+    """One selected object, shaped like upstream's ``Gui.SelectionObject``.
+
+    ``Object`` is the document object itself, ``SubElementNames`` the picked
+    sub-elements (``["Face6"]``; empty for the whole object), ``PickedPoints`` the
+    world points the picks landed on (as far as the source knew them), and
+    ``ObjectName`` the object's internal name. It unpacks as
+    ``(Object, SubElementNames)``, so code written against the older tuple snapshot
+    keeps working.
+    """
+
+    Object = None
+    SubElementNames = None
+    PickedPoints = None
+    ObjectName = None
+
+    def __init__(self, object, subelement_names=None, picked_points=None):
+        self.Object = object
+        self.SubElementNames = [str(name) for name in (subelement_names or [])]
+        self.PickedPoints = list(picked_points or [])
+        name = object if isinstance(object, str) else getattr(object, "Name", "")
+        self.ObjectName = name if isinstance(name, str) else ""
+
+    @property
+    def HasSubObjects(self):
+        """Whether the selection names sub-elements (upstream's alias)."""
+        return bool(self.SubElementNames)
+
+    def __iter__(self):
+        return iter((self.Object, self.SubElementNames))
+
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, index):
+        return (self.Object, self.SubElementNames)[index]
+
+    def __eq__(self, other):
+        if isinstance(other, SelectionObject):
+            return (
+                self.Object == other.Object
+                and self.SubElementNames == other.SubElementNames
+                and self.PickedPoints == other.PickedPoints
+            )
+        return NotImplemented
+
+    def __repr__(self):
+        return "SelectionObject(%r, %r)" % (self.ObjectName, self.SubElementNames)
+
+
+class _Selection:
+    """What the shell has selected, in upstream's shape.
+
+    An entry is ``(name, [sub-elements], [picked points])``; the pushed snapshot
+    carries no picked points, so a shell-made selection reports an empty
+    ``PickedPoints`` unless the writer supplied one.
+    """
+
+    def __init__(self):
+        self._entries = []
+        self._preselection = None
+        self._requests = []
+
+    # -- reads --------------------------------------------------------------
+
+    def _document(self, doc=None):
+        # `FreeCAD.ActiveDocument` is the live proxy here and is never `None`, so the
+        # question the native facade asks with it is `_active_document()`'s.
+        if doc is None:
+            return _active_document()
+        if isinstance(doc, str):
+            return _get_document(doc)
+        return doc
+
+    def _objects(self, doc=None, object_name=None):
+        document = self._document(doc)
+        if document is None:
+            return []
+        resolved = []
+        for name, elements, points in self._entries:
+            if object_name is not None and name != object_name:
+                continue
+            obj = document.getObject(name)
+            if obj is not None:
+                resolved.append(SelectionObject(obj, elements, points))
+        return resolved
+
+    def getSelection(self, doc=None):
+        """The selected document objects (upstream ``Gui.Selection``)."""
+        return [item.Object for item in self._objects(doc)]
+
+    def getSelectionEx(self, object_name=None, doc=None):
+        """The selection as :class:`SelectionObject` items, unpackable as pairs."""
+        return self._objects(doc, object_name)
+
+    def isSelected(self, obj, subname=None):
+        """Whether ``obj`` (or an object name) is in the selection."""
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        for candidate, elements, _ in self._entries:
+            if candidate != name:
+                continue
+            if subname is None or not elements or subname in elements:
+                return True
+        return False
+
+    # -- writes (applied here, queued for the shell) ------------------------
+
+    def addSelection(self, obj, subname=None, point=None, doc=None):
+        """Add ``obj`` (with optional sub-elements) to the selection.
+
+        An object the document does not have is ignored and reported as ``False``:
+        the facade never invents an object.
+        """
+        document = self._document(doc)
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        if document is None or not name or document.getObject(name) is None:
+            return False
+        elements = _names(subname)
+        points = _points(point)
+        for index, entry in enumerate(self._entries):
+            if entry[0] != name:
+                continue
+            merged = list(entry[1])
+            merged.extend(element for element in elements if element not in merged)
+            if not elements:
+                merged = []  # a whole-object add wins over a stale sub-element list
+            self._entries[index] = (name, merged, list(entry[2]) + points)
+            break
+        else:
+            self._entries.append((name, elements, points))
+        self._requests.append(
+            {"op": "add", "object": name, "elements": elements, "points": points}
+        )
+        return True
+
+    def removeSelection(self, obj, subname=None, doc=None):
+        """Remove ``obj`` (or just ``subname``) from the selection."""
+        del doc
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        elements = _names(subname)
+        changed = False
+        for index, (candidate, current, points) in enumerate(list(self._entries)):
+            if candidate != name:
+                continue
+            if not elements:
+                self._entries.pop(index)
+                changed = True
+            else:
+                remaining = [element for element in current if element not in elements]
+                if remaining != current:
+                    self._entries[index] = (candidate, remaining, points)
+                    changed = True
+            break
+        if changed:
+            self._requests.append(
+                {"op": "remove", "object": name, "elements": elements, "points": []}
+            )
+        return changed
+
+    def clearSelection(self, doc=None):
+        """Clear the selection (``doc`` limits it to one document's objects)."""
+        if doc is None:
+            self._entries = []
+        else:
+            document = self._document(doc)
+            names = {obj.Name for obj in (getattr(document, "Objects", None) or [])}
+            self._entries = [entry for entry in self._entries if entry[0] not in names]
+        self._requests.append({"op": "clear", "object": "", "elements": [], "points": []})
+
+    def setPreselection(self, obj, subname=None, point=None):
+        """Set the preselection (the object the pointer is over)."""
+        name = obj if isinstance(obj, str) else getattr(obj, "Name", None)
+        self._preselection = (name, _names(subname), _points(point))
+        self._requests.append(
+            {
+                "op": "preselect",
+                "object": name or "",
+                "elements": self._preselection[1],
+                "points": self._preselection[2],
+            }
+        )
+
+    def getPreselection(self):
+        """The preselection as a :class:`SelectionObject`, or ``None``."""
+        if self._preselection is None:
+            return None
+        name, elements, points = self._preselection
+        document = _active_document()
+        obj = document.getObject(name) if document is not None and name else None
+        if obj is None:
+            return None
+        return SelectionObject(obj, elements, points)
+
+    # -- the shell bridge ---------------------------------------------------
+
+    def _set(self, pairs):
+        """Replace the snapshot (called by `ferrocad_shell.set_selection`).
+
+        Accepts ``(name, elements)`` pairs or ``(name, elements, points)`` triples.
+        Writes made here are **not** queued: the snapshot is the shell's answer, not a
+        request back to it.
+        """
+        entries = []
+        for entry in pairs:
+            name, elements = entry[0], entry[1]
+            points = entry[2] if len(entry) > 2 else None
+            entries.append((str(name), _names(elements), _points(points)))
+        self._entries = entries
+        self._preselection = None
+
+    def _take_requests(self):
+        """Consume the queued writes for the shell to apply to the viewport."""
+        requests, self._requests = self._requests, []
+        return requests
+
+
+def _names(subname):
+    """A sub-element selection as a list of names (``None`` → the whole object)."""
+    if subname is None:
+        return []
+    if isinstance(subname, str):
+        return [subname] if subname else []
+    return [str(name) for name in subname if str(name)]
+
+
+def _points(point):
+    """A picked point (or a list of them) in the caller's own vector type."""
+    if point is None:
+        return []
+    if isinstance(point, (str, bytes)):
+        raise TypeError("a picked point must be a world point, not a string")
+    if hasattr(point, "x") and hasattr(point, "y") and hasattr(point, "z"):
+        return [point]
+    try:
+        return [candidate for candidate in point]
+    except TypeError:
+        return [point]
+
+
+Selection = _Selection()
+
+
 _module(
     "FreeCADGui",
     {
@@ -583,6 +898,9 @@ _module(
         "removeCommand": lambda name: _COMMANDS.pop(name, None),
         "listCommands": lambda: list(_COMMANDS),
         "runCommand": runCommand,
+        # The shell's selection, pushed down and written back (see the mirror above).
+        "Selection": Selection,
+        "SelectionObject": SelectionObject,
         "_command_list": _command_list,
         "_resources": _resources,
         "_enabled": _enabled,

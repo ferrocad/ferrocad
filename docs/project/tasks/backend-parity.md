@@ -1751,9 +1751,12 @@ Two divergences this section recorded, both closed by B18b:
 model and four bricks — because the facade above them is the shared `python/` source
 (B18b). That is down from ~2 050 lines of duplicate policy: commands, selection, the
 provider registry, settings and the semantic stores all run the same code on both hosts
-now, so a change to any of them is one source. `ThreadedRuntime`
-(the desktop `--script-host=pywasm`) still reports `Contract::NONE`: flipping it is the
-same one line plus its test, and it has no mods to answer for anyway.
+now, so a change to any of them is one source. `ThreadedRuntime` (the desktop
+`--script-host=pywasm`) still reports `Contract::NONE`, and that is not laziness: its
+`ParamGet` is the worker's in-memory dict, not the desktop's file-backed store, so
+claiming `view` would make the shell draw the preview's defaults instead of the user's
+saved appearance. Flipping the flags is one line; giving the preview the real store is
+the work, and that is B18b item 4.
 
 **Exit: met.** `crates/ferrocad_shell_pywasm/tests/view.rs` (6): the grid/axis toggles
 return the composed view request and flip back; a pushed `ViewState` is what the next
@@ -1789,7 +1792,7 @@ installed, which is the point: the facade code already existed.
   geometry-free base edition, which used to surface the raw `AttributeError`.
 
 The runtime's `Contract` is `FULL` now; the desktop's `ThreadedRuntime` still reports
-`NONE` (flipping it is one line plus its test, and it has no mods to answer for).
+`NONE`, for the store reason B18b records above.
 
 **Exit: met.** `tests/interaction.rs` (5): a registered provider owns the commit and
 receives the resolved object, action and values; with no provider the commit and the

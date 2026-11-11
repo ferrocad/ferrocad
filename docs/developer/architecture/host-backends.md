@@ -315,9 +315,10 @@ call primitive (`CpythonRuntime` enters the GIL, `RustPythonRuntime` calls into 
 the boot/file hooks, and the typed hooks (display rows, tools, the `pivy` scene, the event
 listener). What a facade *can* answer is a value (`Contract`): CPython is `FULL`,
 RustPython answers every group too (it grew them one at a time; B18a), and the desktop's
-`ThreadedRuntime` is still `NONE`, so the document half answers what the script cannot
-instead of the host calling a function that would raise — and a capability that grows is
-one flag plus the facade code.
+`ThreadedRuntime` is still `NONE` — its parameter store is the worker's dict, not the
+user's file, so it must not claim `view` — and the document half answers what the script
+cannot instead of the host calling a function that would raise, so a capability that
+grows is one flag plus the facade code.
 The seam is `crates/ferrocad_python_host`; the trail is
 [`backend-parity.md`](../../project/tasks/backend-parity.md) B18.
 

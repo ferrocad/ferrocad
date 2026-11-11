@@ -103,6 +103,67 @@ fn a_broken_pack_is_recorded_and_does_not_cost_the_others() {
     });
 }
 
+/// The **shipped** settings clients load here (B18b).
+///
+/// `mods/GridOverlay`, `AxisOverlay` and `GizmoOverlay` are pure-Python provider mods:
+/// each imports `os`, `FreeCADGui`, `FerroCAD` and `FerroCADGui` at module scope, reads
+/// its semantic store to fill the card, and declares a provider. Before B18b they all
+/// stopped at `import os` here; now every name they need is installed, so the browser's
+/// facade is exercised by real mods rather than synthetic ones. (The Coin/shader skins
+/// read a resource file and need the overlay bridge, so they are separate.)
+#[test]
+fn the_shipped_settings_clients_load() {
+    with_host(|host| {
+        let report = load(
+            host,
+            &serde_json::json!([
+                {"name": "GridOverlay", "script": "InitGui.py",
+                 "source": include_str!("../../../mods/GridOverlay/InitGui.py")},
+                {"name": "AxisOverlay", "script": "InitGui.py",
+                 "source": include_str!("../../../mods/AxisOverlay/InitGui.py")},
+                {"name": "GizmoOverlay", "script": "InitGui.py",
+                 "source": include_str!("../../../mods/GizmoOverlay/InitGui.py")}
+            ])
+            .to_string(),
+        );
+        assert_eq!(
+            report["loaded"],
+            serde_json::json!([
+                "GridOverlay/InitGui.py",
+                "AxisOverlay/InitGui.py",
+                "GizmoOverlay/InitGui.py"
+            ]),
+            "all three shipped settings clients ran: {report}"
+        );
+
+        // Each one registered its own command and claimed its feature.
+        let commands = evaluate(
+            host,
+            "import FreeCADGui\nprint(sorted(FreeCADGui.listCommands()))",
+        );
+        for command in [
+            "GridOverlay_Settings",
+            "AxisOverlay_Settings",
+            "GizmoOverlay_Settings",
+        ] {
+            assert!(
+                commands.contains(command),
+                "{command} registered: {commands}"
+            );
+        }
+        let providers = evaluate(
+            host,
+            "import FerroCADGui\nprint([(m['feature'], m['backend']) for m in FerroCADGui.providers()])",
+        );
+        for feature in ["grid", "axis", "gizmo"] {
+            assert!(
+                providers.contains(&format!("('{feature}', 'ferrocad')")),
+                "the {feature} feature has the native backend: {providers}"
+            );
+        }
+    });
+}
+
 #[test]
 fn a_malformed_entry_is_skipped() {
     with_host(|host| {

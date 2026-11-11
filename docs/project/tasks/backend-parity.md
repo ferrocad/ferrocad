@@ -4,7 +4,7 @@ Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded,
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11); B14 and B15 built (2026-11-11).** The surface suite
+(2026-11-11); B14, B15 and B15b built (2026-11-11).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1425,6 +1425,42 @@ pinned cross image and run in headless Chrome. `ferrocad_shell_core` 271,
 `ferrocad_shell_web` 20, `ferrocad_shell_rust` 44, `ferrocad_parametric` 24, the base
 Python suite 692, six doc gates.
 
+### B15b — the registry names the document half's providers (built 2026-11-11)
+
+B15 measured `registry=none`, and that number was the defect rather than the finding: the
+browser *draws* a grid and an axis cross, named `FerroCAD (native)` in both header popovers
+since B13/B15, while `provider_features()` — the list Dev Tools renders and the gizmo menu
+reads — returned nothing. `RustAppBackend` answered only `grid_summary`/`axis_summary`
+natively; the registry itself was still the script half's with no fallback.
+
+So the registry gets the same rule as `Settings/*`: start from the script's features, then
+add this half's entry for each feature the script did not register. `grid` comes with
+`command: View_GridSettings` (the built-in settings row it owns); `axis` has no built-in
+settings command yet, so `command: None`. The gizmo is deliberately absent — no card, no
+summary, so no provider to name (already deferred in §7).
+
+One distinction stays, and the probe now prints both because they mean different things:
+`grid_summary().providers` is the popover's **switch list** (empty: a one-item radio set is
+a dead control) while `provider_features()` is the **registry** (one entry per feature).
+The browser therefore reads
+
+```
+ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
+```
+
+**Exit: met.** `without_a_script_the_registry_names_the_document_halfs_providers`, plus
+`the_provider_and_gpu_hooks_ask_the_script_first` extended to pin the per-feature merge
+(a script's `grid` beside a native `axis`); the two `?providers=1` captures re-asserted
+after a rebuild.
+
+**Was this the right reading of "provider parity"?** No — and the record says so on
+purpose. The grid is *native* in the browser; there is no mod to load, so the parity gap
+was never "the mods do not load" but "the build does not name the provider it has".
+Embedding the mods would also make it worse: `mods/GridOverlayCoin` would register `coin`,
+`provider_skin` has no wasm-Python implementation, so the native ground would step aside
+for a shader that never arrives — an invisible grid. The routes above stay the real answer
+for *addon* providers, and they are packaging work with their own design pass.
+
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**
 
@@ -1504,6 +1540,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D20 | is `View_GridSettings` script-owned or built-in | **Built-in** (B13c). The node exists in every build, so a header row that only appeared where a mod or a script registered it was a capability gated on packaging. `Executor::Script` keeps the Gui app's decision first; the document half's arm is the `select` directive |
 | D21 | a declared runtime this build cannot serve | **Skip it, install the rest** (B14). The mod set derives the hosts it wants and the edition grants what it can, so one missing engine must not take the interpreters that do exist with it. Nothing installable is still a refusal, and the message is that member's own (`--features js`) rather than a generic one |
 | D22 | which providers the browser has | **One per feature, the document half's** (B15), and that is correct rather than broken: the page ships no `mods/`, has no filesystem for the loader, and its Python facade is a stub. `?providers=1` states it. Parity needs the mods to be shippable (embedded tree + synthetic `os`, or a provider hook in the bundle ABI), which is packaging, not a host |
+| D23 | does the registry list the document half's providers | **Yes, per feature** (B15b). A build that draws the grid and the axis cross has a provider for each, so `provider_features()` names it with the id and label the mods use (`ferrocad` / `FerroCAD (native)`); the popover's *switch* list stays empty, because a one-item radio set is a dead control. Embedding the mods instead would switch the grid to a shader backend the wasm-Python host cannot supply a skin for |
 
 ## 6. Acceptance
 

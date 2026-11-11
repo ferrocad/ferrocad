@@ -116,7 +116,7 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?settings=<node>` | log the rows the settings card would render for that node (`?settings=Settings/Grid`), through the same `app::properties` call the pane makes. The tree and the card are painted into the canvas, so this is the only way a capture can read them |
 | `?settings=<node>.<property>=<value>` | commit one settings row, as the pane does (`app::set_property`), and log the presentation request it returns: `?settings=Settings/Grid.minor=20` |
 | `?command=<id>` | run one command through the backend before the first frame and log its outcome, including a `select` directive: `?command=View_GridSettings`. The palette needs synthetic keystrokes, so this is how a row a runtime only lists is exercised |
-| `?providers=1` | log which provider each feature has and how many are registered (`grid=… registered=N axis=… registered=M registry=…`), i.e. what the header's popovers and Dev Tools read. The page ships no `mods/` and has no filesystem to scan, so one label per feature and an empty registry is the correct answer here |
+| `?providers=1` | log which provider each feature has, its popover switch list (`switch=N`) and the Dev Tools registry (`registry=grid=1,…`). The page ships no `mods/` and has no filesystem to scan, so one native provider per feature and an empty switch list is the correct answer here |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
@@ -269,13 +269,15 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   returns `[]`. `?providers=1` is the measurement:
 
   ```
-  ferrocad probe: providers grid=FerroCAD (native) registered=0 axis=FerroCAD (native) registered=0 registry=none
+  ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
   ```
 
-  `registered=0` is the switch list — nothing to switch *to*, because the registry is the
-  script half's and there is no script half here that owns one. The grid card is still
-  there (`?settings=Settings/Grid` → ten rows), and `?runtime=pywasm,js` composes the
-  chain, with both halves installed.
+  `switch=0` is the popover's list — nothing to switch *to* — while `registry` is what Dev
+  Tools lists, one provider per feature, and it is the provider that actually draws the
+  grid and the axis cross. The two numbers differ on purpose: a one-item radio set is a
+  dead control, but the provider still exists and has to be named, or a build that draws
+  both looks like a build with none. `?runtime=pywasm,js` composes the chain, with both
+  halves installed.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

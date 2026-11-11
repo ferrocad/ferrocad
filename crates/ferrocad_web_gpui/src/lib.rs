@@ -235,7 +235,9 @@ fn probe_providers(cx: &mut gpui::App) {
     let axis = ferrocad_shell_core::app::axis_summary(cx).unwrap_or_default();
     let features = ferrocad_shell_core::app::provider_features(cx).unwrap_or_default();
     // Each summary names its provider through `label` (the display name the popover
-    // prints) or `backend` (the id); `registered` is the switch list's length.
+    // prints) or `backend` (the id); `switch` is that popover's switch list, and
+    // `registry` is what Dev Tools lists. They differ on purpose: one provider means
+    // nothing to switch to, but it is still a registered provider.
     let name = |label: Option<&str>, backend: Option<&str>| {
         label.or(backend).unwrap_or("none").to_string()
     };
@@ -244,7 +246,7 @@ fn probe_providers(cx: &mut gpui::App) {
         .map(|feature| format!("{}={}", feature.feature, feature.providers.len()))
         .collect();
     log::info!(
-        "ferrocad probe: providers grid={} registered={} axis={} registered={} registry={}",
+        "ferrocad probe: providers grid={} switch={} axis={} switch={} registry={}",
         name(grid.label.as_deref(), grid.backend.as_deref()),
         grid.providers.len(),
         name(axis.label.as_deref(), axis.backend.as_deref()),

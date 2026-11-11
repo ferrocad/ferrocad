@@ -336,12 +336,12 @@ check_settings() {
     LOG="$TMP/providers_pywasm.log"
     echo "provider console lines (pywasm runtime):"
     require_line 'ferrocad: scripting runtime pywasm'
-    require_line 'ferrocad probe: providers grid=FerroCAD (native) registered=0 axis=FerroCAD (native) registered=0 registry=none'
+    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
 
     LOG="$TMP/providers_chain.log"
     echo "provider console lines (pywasm,js chain):"
     require_line 'ferrocad: scripting runtime pywasm,js'
-    require_line 'ferrocad probe: providers grid=FerroCAD (native) registered=0 axis=FerroCAD (native) registered=0 registry=none'
+    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
 
     for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js providers_pywasm providers_chain; do
         LOG="$TMP/$log.log"

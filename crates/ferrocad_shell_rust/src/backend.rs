@@ -25,8 +25,8 @@ use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::events::DocumentEvent;
 use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::types::{
-    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GridSummary, ObjectNode,
-    OpenedDocument, PropRow, SetResult, VisibilityOutcome,
+    ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GridProvider, GridSummary,
+    ObjectNode, OpenedDocument, PropRow, ProviderFeature, SetResult, VisibilityOutcome,
 };
 use ferrocad_shell_api::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
@@ -935,6 +935,33 @@ impl AppBackend for RustAppBackend {
         })
     }
 
+    /// The provider registry, as Dev Tools and the header's menus read it.
+    ///
+    /// A script half owns the registry and answers first, but a build without one still
+    /// **has** providers: this half draws the grid and the axis cross from the presentation
+    /// state, and B13/B15b made it answer their summaries. An empty list made that look
+    /// like a build with no providers at all — the browser's Dev Tools listed nothing while
+    /// its header named `FerroCAD (native)`.
+    ///
+    /// The merge is per feature, like `Settings/*`: a feature the script registered keeps
+    /// the script's providers (its commands, its priorities), and a feature it did not
+    /// register gets this half's single entry. The gizmo is deliberately absent — there is
+    /// no `Settings/gizmo` card and no summary fallback for it yet (§7 defers both).
+    fn provider_features(&self) -> Result<Vec<ProviderFeature>, String> {
+        let mut features = self
+            .script
+            .as_deref()
+            .map(|host| host.provider_features())
+            .unwrap_or_default();
+        for (feature, command) in [("grid", Some(catalog::VIEW_GRID_SETTINGS)), ("axis", None)] {
+            if features.iter().any(|existing| existing.feature == feature) {
+                continue;
+            }
+            features.push(native_provider(feature, command));
+        }
+        Ok(features)
+    }
+
     fn set_selection(&self, items: &[SelectionItem]) -> Result<(), String> {
         // The shell owns the selection; the document needs it for `App_Move`, whose
         // delta applies to whatever is selected rather than to a named target.
@@ -1554,6 +1581,24 @@ fn apply_transform(
 /// `Label` is a document-object field, not a property-container entry; FreeCAD
 /// presents it as an ordinary row and so does the native backend, so it always
 /// comes first.
+/// This half's provider for one feature.
+///
+/// The id and label `mods/GridOverlay` and `mods/AxisOverlay` register, because it is the
+/// same provider: `ferrocad` names the native implementation, and only the registry that
+/// lists it differs by build. `command` is the settings row the provider owns (the built-in
+/// `View_GridSettings` for the grid; the axis has no built-in yet, so `None`).
+fn native_provider(feature: &str, command: Option<&str>) -> ProviderFeature {
+    ProviderFeature {
+        feature: feature.to_string(),
+        providers: vec![GridProvider {
+            backend: "ferrocad".to_string(),
+            label: "FerroCAD (native)".to_string(),
+            active: true,
+            command: command.map(str::to_string),
+        }],
+    }
+}
+
 fn property_rows(object: &ferrocad_core::DocumentObject) -> Vec<PropRow> {
     let mut rows = Vec::with_capacity(object.properties.len() + 1);
     // `Label` is a document-object field, not a property-container entry; FreeCAD
@@ -2397,7 +2442,19 @@ mod tests {
         let (mut backend, _) = backend_with_script();
         assert_eq!(backend.grid_summary().unwrap().feature, "grid");
         assert_eq!(backend.axis_summary().unwrap().feature, "axis");
-        assert_eq!(backend.provider_features().unwrap().len(), 1);
+        // The script's grid feature stays the script's, and the axis — which it did not
+        // register — is the document half's. Per feature, like `Settings/*`.
+        let features = backend.provider_features().unwrap();
+        let names: Vec<(&str, &str)> = features
+            .iter()
+            .map(|feature| {
+                (
+                    feature.feature.as_str(),
+                    feature.providers[0].backend.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(names, [("grid", "scripted"), ("axis", "ferrocad")]);
         assert_eq!(
             backend.provider_skin("grid").unwrap().as_deref(),
             Some("// scripted wgsl")
@@ -2520,6 +2577,31 @@ mod tests {
         // answer — otherwise `?js=1` would regress to "no Python interpreter".
         let (backend, _) = backend_with_script();
         assert_eq!(backend.evaluate("1 + 1").unwrap().output, "ran 1 + 1");
+    }
+
+    /// The registry a build with no script half reports: the two providers that exist.
+    ///
+    /// The document half draws both from the presentation state, so it is the provider —
+    /// listing nothing here is what made the browser's Dev Tools say there were none.
+    #[test]
+    fn without_a_script_the_registry_names_the_document_halfs_providers() {
+        let backend = RustAppBackend::new();
+        let features = backend.provider_features().unwrap();
+        let names: Vec<&str> = features.iter().map(|feature| feature.feature.as_str()).collect();
+        assert_eq!(names, ["grid", "axis"], "no gizmo: no card, no summary");
+        for feature in &features {
+            assert_eq!(feature.providers.len(), 1, "nothing else to switch to: {feature:?}");
+            let provider = &feature.providers[0];
+            assert_eq!(provider.backend, "ferrocad");
+            assert_eq!(provider.label, "FerroCAD (native)");
+            assert!(provider.active, "one provider, and it is the drawn one");
+        }
+        // The grid's row is the built-in that opens its card; the axis has no built-in.
+        assert_eq!(
+            features[0].providers[0].command.as_deref(),
+            Some(catalog::VIEW_GRID_SETTINGS)
+        );
+        assert_eq!(features[1].providers[0].command.as_deref(), None);
     }
 
     /// The axis popover's fallback: no script half still means the viewport draws the

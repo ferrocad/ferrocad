@@ -144,6 +144,17 @@ capture_gesture() {
     capture "/?js=1&gesture=2:Fillet:Face1:40&probe=1" "$TMP/gesture_push_pull.log"
 }
 
+# The settings leg: `?runtime=plain` installs no script half, so the grid card comes
+# from the document half. The tree and the card are painted into the canvas, so
+# `?settings=` logs the rows the pane would show and the request an edit returns.
+capture_settings() {
+    capture "/?runtime=plain&settings=Settings/Grid" "$TMP/settings.log"
+    capture "/?runtime=plain&settings=Settings/Grid.minor=20" "$TMP/settings_write.log"
+    # The page's script half does not implement `Settings/*`, so the document half fills
+    # the card in here too — the runtime the grid used to have no card under.
+    capture "/?runtime=js&settings=Settings/Grid" "$TMP/settings_js.log"
+}
+
 require_line() {
     if grep -Fq -- "$1" "$LOG"; then
         printf '  ok       %s\n' "$(grep -Fm1 -- "$1" "$LOG")"
@@ -271,6 +282,43 @@ EOF
     done
 }
 
+# The settings card, on the runtime that has no interpreter. The rows are the
+# document half's answer from the shell's own presentation state; the write is the
+# request the shell applies, which is what makes a row edit visible.
+check_settings() {
+    LOG="$TMP/settings.log"
+    echo "settings card console lines (plain runtime):"
+    require_line 'ferrocad: scripting runtime plain'
+    require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s): enabled, color, opacity, adaptive, minor_style, major_width, minor_width, minor, major, radius'
+    require_line 'ferrocad probe: tree Sample, Settings'
+
+    LOG="$TMP/settings_write.log"
+    echo "settings write console lines (plain runtime):"
+    require_line 'ferrocad probe: settings Settings/Grid.minor=20 -> ok=true'
+    require_line 'grid_minor: Some(20.0)'
+
+    LOG="$TMP/settings_js.log"
+    echo "settings card console lines (js runtime):"
+    require_line 'ferrocad: scripting runtime js'
+    require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s): enabled, color, opacity, adaptive, minor_style, major_width, minor_width, minor, major, radius'
+    require_line 'ferrocad probe: tree Sample, Settings'
+
+    for log in settings settings_write settings_js; do
+        LOG="$TMP/$log.log"
+        echo "$log forbidden console patterns:"
+        while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            forbid_pattern "$pattern"
+        done <<'EOF'
+panicked at
+RuntimeError
+unreachable
+property error
+is not available in this build
+EOF
+    done
+}
+
 check_gesture() {
     LOG="$TMP/gesture_fillet.log"
     echo "dress-up gesture console lines:"
@@ -334,9 +382,12 @@ check_manipulator
 capture_gesture
 check_gesture
 
+capture_settings
+check_settings
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, no panic or JS error"

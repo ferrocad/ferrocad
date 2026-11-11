@@ -3,7 +3,7 @@
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
-B11a–B11b built (2026-11-09); B12 built (2026-11-09).** The surface suite
+B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13 built (2026-11-11).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1160,6 +1160,68 @@ came out of the scrub, not ones it supplied: `Fillet_Fillet` at 3.888 mm (from 3
 `Fillet_Fuse` with `LengthFwd 3.621` on `Fillet_Extrusion`. Only the device events are
 synthetic; a real mouse is the one thing a headless capture has none of.
 
+### B13 — the grid's settings card without an interpreter (built 2026-11-11)
+
+The grid was the one capability every host had and only one host could *configure*. The
+header control toggles it (`App_ToggleGrid` is a `runtime=plain` fallback arm since B2)
+and the viewport draws it, but the `Settings/Grid` card — spacing, colour, opacity,
+adaptive, minor style, extents — came from the Gui app: `mods/GridOverlay` registers the
+`grid` provider, `python/ferrocad_shell` builds `Settings/<feature>` from the registry,
+and `PythonScriptHost` answers `extra_tree_nodes`/`extra_properties` for it. A build
+without that script half (`?runtime=plain`, `?runtime=js`, `--script-host=plain`) showed
+no `Settings` node at all, so the grid was an untunable feature.
+
+**The store was already there.** `AppBackend::set_view_state` is called by
+`Shell::boot_with` and by `Shell::apply_view` after every applied request, so
+`RustAppBackend` holds the shell's current `ViewState` — every grid knob the card edits.
+B13 answers the card from that mirror (`ferrocad_shell_rust::grid_settings`) instead of
+giving it a second store:
+
+- `model_tree` adds a `Settings/grid` node unless the script half listed one — to the
+  root the script already returned when it listed another feature, or as a root of its
+  own when it listed none. Ownership is per feature: a `--addons` set with the axis mod
+  and not the grid mod still gets the grid card.
+- `properties("Settings/grid")` renders the rows from the mirrored state, with the
+  schema's labels, kinds, bounds, unit and the `adaptive`/`provider` chip on the spacing
+  rows, in the script card's order.
+- `set_property` returns the `ViewRequest` the edit implies as `SetResult::view`, so
+  `commit_property` applies it, the shell repaints and mirrors the new state back. The
+  document half therefore never mutates the state it does not own, and a row's value and
+  what the viewport draws cannot disagree.
+- Validation is `ViewState::apply`'s, not a copy: the write builds the request, runs it
+  against a clone of the mirrored state, and reports `ok` only when that succeeds. The
+  pair healing is the script card's — a minor step at or above the major one raises the
+  major, equal steps lower the minor — so typing one row can leave neither a pair `apply`
+  refuses nor a minor level with no rows.
+- `grid_summary` answers `FerroCAD (native)` and the configured step when no script
+  owns the registry, because "No grid provider" beside a grid a user can see is a lie.
+  `provider_features` stays empty: there is one provider and nothing to switch.
+
+**One owner per feature.** `PythonScriptHost` claimed the whole `Settings` namespace and
+answered `[]` for a feature no mod registered. That was fine while nothing else could
+answer, and wrong once the document half could: a script that listed `Settings/axis`
+would hide the grid card, and one that claimed an unregistered feature would render a
+card whose writes it refused. Its `extra_properties`/`set_extra_property` now claim a
+node only when the registry has rows for it — the same question the pane asks — so a
+feature with no registered provider is the document half's, and `composition.rs`'s
+"one `Settings` root" assertion still holds.
+
+Two things are deliberately **not** in the card. The axis cross and the gizmo keep
+their script halves: their schemas live in `mods/AxisOverlay` and `mods/GizmoOverlay`,
+their stores are parameter groups rather than view state, and a natively-owned node with
+no rows would be a dead card (the deferral is in §7). And `shadows`/`shadow_opacity` are
+absent rather than inert: the script's schema persists them and nothing draws them, and
+a native card has no store to persist into.
+
+**Exit: met.** `ferrocad_shell_rust` grew a `grid_settings` suite (rows over the state,
+the root's shape, the two healing rules, a typed unit, a refusal that asks for no
+repaint, the one-owner rule) and its 38 tests pass; `ferrocad_shell_core` 271 over the
+composition, `ferrocad_parametric`'s `composition` suite (which still sees one `Settings`
+root), `ferrocad_shell_web` 19. In the browser, `?settings=` (`ferrocad_web_gpui`) logs the
+rows the card would render and the request a write returns — the tree and the card are
+painted into the canvas, so that is the only readable surface — and `smoke.sh` asserts
+both under `?runtime=plain`.
+
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**
 
@@ -1234,6 +1296,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
 | D16 | what a wasm/JS addon can reach | **The five-verb document API plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that, and explode view needed a `Placement` coercion (B11b), not a new verb |
 | D17 | who applies a workbench manipulator commit | **The script half if it claims one, else the document half** (B12). Part's dress-up and push/pull are document edits: `apply_interaction` builds the feature itself, so the browser and `--script-host=plain` get them, and both paths create the same object names |
+| D18 | who owns `Settings/*` | **Whichever half has rows for the node** (B13). A script half that lists a `Settings` root owns the namespace; otherwise the document half answers with the grid card, whose store is the presentation state the shell mirrors into the backend. The test is the same on both sides — "do I have rows?" — so a rendered row and its write cannot land in different places |
 
 ## 6. Acceptance
 
@@ -1243,7 +1306,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 - `FreeCADGui.listCommands()` ⊇ `catalog::builtin()`; `runCommand` covers every palette row;
   the conformance `App`/`Draft` groups stay at or above baseline.
 - `?runtime=plain` has an explicit, tested feature matrix: no interpreter, no registered
-  commands, no `Settings`, no workplane view.
+  commands, no workplane view, and the grid card the document half owns (B13).
 - `PythonAppBackend` is deleted.
 
 ## 7. Non-goals and deferrals
@@ -1268,6 +1331,15 @@ is already solved four ways; reaching *geometry* currently has one road.
   and the browser takes a list in `?runtime=`. What is still deferred is the part with no
   consumer: precedence for *who owns the console* when two languages register one, and
   `ScriptHost::claims`.
+- **The axis and gizmo cards stay with the script half** (B13). Their schemas are the
+  provider registry's (`mods/AxisOverlay`, `mods/GizmoOverlay`) and their stores are
+  parameter groups, not view state, so a native card would need a store the document
+  half has nowhere to put. The trigger is a build that wants them with no script half —
+  the same argument that produced the grid card, and the same shape of fix.
+- **The grid card does not persist** (B13). Its store is the presentation state, which
+  lives for the session. The script card persists in a parameter group
+  (`Mods/grid/ferrocad`), and a native one would need the document half to own a
+  parameter file — a settings-model decision, not a parity one.
 
 ## 8. Evidence
 

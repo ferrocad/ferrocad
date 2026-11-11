@@ -67,6 +67,16 @@ impl PythonScriptHost {
     pub fn new() -> Self {
         Self
     }
+
+    /// Whether the registry has rows for `object`.
+    ///
+    /// A `Settings/<Feature>` node exists only once a provider registered that
+    /// feature, and the registry is what `properties` reads, so the rows are the
+    /// ownership test rather than a second query into the registry. It costs one
+    /// round-trip on a settings *edit* (user-paced), never on a frame.
+    fn owns_settings_node(&self, object: &str) -> bool {
+        !python::properties(object).unwrap_or_default().is_empty()
+    }
 }
 
 /// Whether `object` names something the script owns rather than the document.
@@ -224,17 +234,32 @@ impl ScriptHost for PythonScriptHost {
             .collect()
     }
 
-    /// The rows of a `Settings` node, and nothing else.
+    /// The rows of a `Settings` node this surface actually has, and nothing else.
     ///
-    /// `None` is what sends a real document object to the document half, which
-    /// answers without a Python round-trip and without a second formatter that
-    /// could disagree with `ferrocad_core::present`.
+    /// `None` is what sends the node to the document half, which answers without a
+    /// Python round-trip and without a second formatter that could disagree with
+    /// `ferrocad_core::present`. A real document object is therefore never this
+    /// host's, and neither is a `Settings/<Feature>` node with no rows: the registry
+    /// only lists a feature a mod registered, so an empty answer means "nothing is
+    /// registered here" — not "this surface owns an empty card". The document half
+    /// fills in its grid card for exactly those builds (`--script-host=cpython` with
+    /// no grid provider mod), so the two halves never both claim one node.
     fn extra_properties(&self, object: &str) -> Option<Vec<PropRow>> {
-        settings_target(object).then(|| python::properties(object).unwrap_or_default())
+        if !settings_target(object) {
+            return None;
+        }
+        let rows = python::properties(object).unwrap_or_default();
+        (!rows.is_empty()).then_some(rows)
     }
 
+    /// Write a row of a card this surface has.
+    ///
+    /// The same test as [`extra_properties`](Self::extra_properties), so a node the
+    /// card pane renders is one whose edits land here: a feature with no registered
+    /// provider is the document half's, not a refusal from an interpreter that has
+    /// never heard of it.
     fn set_extra_property(&self, object: &str, property: &str, value: &str) -> Option<SetResult> {
-        if !settings_target(object) {
+        if !settings_target(object) || !self.owns_settings_node(object) {
             return None;
         }
         Some(

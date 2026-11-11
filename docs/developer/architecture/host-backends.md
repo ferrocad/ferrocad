@@ -113,6 +113,16 @@ Rules that keep the split honest:
   is not in the document at all), `dialog_accept`/`dialog_cancel` (tokens it did not
   mint). That ordering is what keeps `Settings/Grid` resolvable without turning every
   property read into an interpreter round-trip.
+- The `Settings` namespace is merged **per feature**, and a feature's owner is whoever
+  has rows for it. A script half that lists `Settings/<feature>` owns that feature; the
+  document half adds the grid card (`ferrocad_shell_rust::grid_settings`) to whatever
+  root exists when no one listed it, and builds the root when there is none. Both halves
+  use the same test — "do I have rows for this node?" — so a node the pane renders is a
+  node whose edits land in the same place. That is why `?runtime=plain` and
+  `?runtime=js` have a grid card at all: neither host implements `Settings/*`. A
+  `Settings/<Feature>` node with no registered provider (a desktop `--addons` set
+  without that mod) is nobody's script answer, not an empty one, so the grid card fills
+  in there too.
 - Three capabilities stayed with the script half *inside* the document: `stage_meshes`
   (the edition's display hook — `DisplayMode`, a datum plane's glass card, the toy
   edition's non-OCCT meshes), `apply_interaction` (a manipulator commit: the edition's

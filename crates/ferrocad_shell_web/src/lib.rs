@@ -12,6 +12,11 @@
 //! ?runtime=pywasm,js   both, RustPython first            (a chain, B8)
 //! ```
 //!
+//! `plain` and `js` have no `Settings` namespace of their own, so the document half
+//! answers it: the grid card (`ferrocad_shell_rust::grid_settings`) reads and writes
+//! the presentation state the shell mirrors into the backend, and exists precisely
+//! when no script half claimed that namespace.
+//!
 //! `?js=1` and `?pywasm=1` are the short forms; `?runtime=` wins when both are
 //! present, and `?js=1` beats `?pywasm=1` because the page installs the module for it.
 //! A comma-separated `?runtime=` names a chain, and the first name is the primary — it

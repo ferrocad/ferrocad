@@ -96,6 +96,10 @@ pub fn main() {
         // first frame, so the capture asserts on the document instead of on pixels.
         probe_manipulator(cx);
 
+        // A settings card is drawn into the canvas like the tree, so a capture cannot
+        // read it back out of the DOM; `?settings=` logs the rows the pane would show.
+        probe_settings(cx);
+
         // The page needs the shell back after a file picker or a drop; GPUI has no
         // global app handle outside a callback, so keep both here.
         let async_app = cx.to_async();
@@ -204,6 +208,74 @@ fn probe_manipulator(cx: &mut gpui::App) {
     // `ferrocad: stage draws …`, which shows the feature replacing its base.
     if let Err(error) = ferrocad_shell_core::app::stage_meshes(cx) {
         log::error!("ferrocad probe: stage: {error}");
+    }
+}
+
+/// `?settings=<node>` or `?settings=<node>.<property>=<value>` — the settings card.
+///
+/// The two calls the property pane makes for a card, and nothing else: a read is
+/// `app::properties`, a write is `app::set_property` followed by the request the
+/// shell applies. The shell paints the tree and the card into the canvas, so a
+/// headless capture cannot read either from the DOM; this logs what the card would
+/// render, which is the surface `?runtime=plain` and `?runtime=js` did not have
+/// before the grid card moved into the document half.
+fn probe_settings(cx: &mut gpui::App) {
+    let query = ferrocad_shell_web::page_query();
+    let Some(spec) = ferrocad_shell_web::parameter(&query, "settings") else {
+        return;
+    };
+    let Some((key, value)) = spec.split_once('=') else {
+        let node = spec.trim();
+        match ferrocad_shell_core::app::properties(cx, node) {
+            Ok(rows) => log::info!(
+                "ferrocad probe: settings {node} -> {} row(s): {}",
+                rows.len(),
+                rows.iter()
+                    .map(|row| row.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Err(error) => log::error!("ferrocad probe: settings {node} -> {error}"),
+        }
+        // Rows without a tree node are unreachable: the card opens from the model
+        // tree (or a `Settings/…` command), so the node has to be listed.
+        match ferrocad_shell_core::app::model_tree(cx) {
+            Ok(tree) => log::info!(
+                "ferrocad probe: tree {}",
+                tree.iter()
+                    .map(|document| document.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Err(error) => log::error!("ferrocad probe: tree -> {error}"),
+        }
+        return;
+    };
+    // The pane's key format: `commit_property` splits `<object>.<property>`.
+    let Some((object, property)) = key.trim().rsplit_once('.') else {
+        log::error!(
+            "ferrocad probe: ?settings wants <node> or <node>.<property>=<value>, got {spec:?}"
+        );
+        return;
+    };
+    match ferrocad_shell_core::app::set_property(cx, object, property, value.trim()) {
+        Ok(result) => {
+            log::info!(
+                "ferrocad probe: settings {key}={} -> ok={} {}",
+                value.trim(),
+                result.ok,
+                result.error
+            );
+            // The request is the half a capture can check: the shell applies it and the
+            // viewport follows, so a row that returns no request would be a dead edit.
+            if let Some(view) = result.view {
+                log::info!("ferrocad probe: settings view {view:?}");
+            }
+        }
+        Err(error) => log::error!(
+            "ferrocad probe: settings {key}={} -> {error}",
+            value.trim()
+        ),
     }
 }
 

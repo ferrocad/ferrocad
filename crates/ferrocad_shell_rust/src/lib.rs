@@ -29,5 +29,6 @@
 //! only moves bytes (`open_document`/`save_document`).
 
 pub mod backend;
+pub mod grid_settings;
 
 pub use backend::RustAppBackend;

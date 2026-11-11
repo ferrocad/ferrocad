@@ -113,6 +113,8 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?probe=1` | once the synthetic input has settled, log the document the document API returns (`ferrocad harness: document {…}`), so a capture can assert on the document rather than on the canvas |
 | `?manipulator=id:action:object:element:values` | send one workbench commit before the first frame, through the same call a released handle uses (`apply_interaction`): `?manipulator=dress_up:fillet:Box:Edge1:2`, `?manipulator=push_pull:extrude:Box:Face1:3`. The element may be empty and the values are comma-separated |
 | `?gesture=slot:object:element:pixels` | drive a manipulator for real, with no pointer: equip the hand (`2` push/pull, `3` dress-up), select the sub-element as a click would, press on the point the manipulator drew and pull it `pixels` outward: `?gesture=3:Fillet:Edge1:60`. The value comes from the manipulator's own scrub |
+| `?settings=<node>` | log the rows the settings card would render for that node (`?settings=Settings/Grid`), through the same `app::properties` call the pane makes. The tree and the card are painted into the canvas, so this is the only way a capture can read them |
+| `?settings=<node>.<property>=<value>` | commit one settings row, as the pane does (`app::set_property`), and log the presentation request it returns: `?settings=Settings/Grid.minor=20` |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
@@ -225,6 +227,25 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   Each feature replaced the body it consumed, the hidden extrusion is not drawn, and no
   interpreter was installed: the commits are the document half's own arms. What no
   capture can supply is the *device* — a real mouse delivering those events.
+- **The grid has a settings card without an interpreter.** `?runtime=plain` installs no
+  script half, so the `Settings` namespace used to be absent — the grid could be toggled
+  and never configured. The document half answers it now, from the presentation state it
+  is already mirrored (`AppBackend::set_view_state` at boot and after every applied
+  request):
+
+  ```
+  ferrocad probe: settings Settings/Grid -> 10 row(s): enabled, color, opacity, adaptive,
+    minor_style, major_width, minor_width, minor, major, radius
+  ferrocad probe: settings Settings/Grid.minor=20 -> ok=true
+  ferrocad probe: settings view ViewRequest { grid: None, …, grid_minor: Some(20.0),
+    grid_major: Some(100.0), … }
+  ```
+
+  A write returns the `ViewRequest` the shell applies and mirrors back, so the rows and
+  what the viewport draws cannot disagree, and the healing the script's card applies (a
+  minor step at or above the major one raises the major; equal steps lower the minor)
+  happens in the same place. `?runtime=js` gets the same card: the page's script half
+  does not implement `Settings/*`, so the backend fills it in.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

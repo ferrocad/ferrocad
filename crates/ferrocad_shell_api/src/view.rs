@@ -572,7 +572,7 @@ impl ViewState {
                 if let Some(color) = color {
                     // Compare in the 8-bit sRGB space, as the grid ink does: the default
                     // tokens are authored at three decimals.
-                    if ink_hex(self.axis.colors[index]) != ink_hex(color) {
+                    if srgb_hex(self.axis.colors[index]) != srgb_hex(color) {
                         self.axis.colors[index] = color;
                         styled = true;
                     }
@@ -662,20 +662,20 @@ impl ViewState {
                 // Compare in the 8-bit sRGB space, as the axis colours do: the default
                 // tokens are authored at three decimals. The hex carries no alpha, so the
                 // token's existing alpha is kept.
-                if ink_hex(self.gizmo.active) != ink_hex(color) {
+                if srgb_hex(self.gizmo.active) != srgb_hex(color) {
                     self.gizmo.active = [color[0], color[1], color[2], self.gizmo.active[3]];
                     styled = true;
                 }
             }
             if let Some(color) = inactive {
-                if ink_hex(self.gizmo.inactive) != ink_hex(color) {
+                if srgb_hex(self.gizmo.inactive) != srgb_hex(color) {
                     self.gizmo.inactive =
                         [color[0], color[1], color[2], self.gizmo.inactive[3]];
                     styled = true;
                 }
             }
             if let Some(color) = outline {
-                if ink_hex(self.gizmo.outline) != ink_hex(color) {
+                if srgb_hex(self.gizmo.outline) != srgb_hex(color) {
                     self.gizmo.outline = [color[0], color[1], color[2], self.gizmo.outline[3]];
                     styled = true;
                 }
@@ -820,8 +820,8 @@ impl ViewState {
         if let Some(color) = grid_color {
             // Compare in the user's (8-bit sRGB) space: the ink constants are authored at
             // three decimals, so linear equality would report `#94a3b8` as a change.
-            let hex = ink_hex(color);
-            if ink_hex(self.grid_color) != hex {
+            let hex = srgb_hex(color);
+            if srgb_hex(self.grid_color) != hex {
                 self.grid_color = color;
                 changes.push(format!("grid colour {hex}"));
             }
@@ -884,11 +884,14 @@ fn trim(value: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// A colour as the canonical lowercase `#rrggbb` a settings row shows.
+///
 /// The ink tokens are authored at three decimals, so spelling a token in hex can land
 /// in the last digit away from its constant (`#94a3b8` parses to `0.4794…`, the token
 /// is `0.480`). Comparisons therefore happen in the canonical `#rrggbb` space, where
-/// the token round-trips exactly and every 8-bit step stays distinct.
-fn ink_hex(color: [f32; 4]) -> String {
+/// the token round-trips exactly and every 8-bit step stays distinct — and a row that
+/// offers the ink for editing writes the same spelling back.
+pub fn srgb_hex(color: [f32; 4]) -> String {
     let channel = |value: f32| {
         let value = value.clamp(0.0, 1.0);
         let srgb = if value <= 0.003_130_8 {

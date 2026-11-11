@@ -25,11 +25,13 @@ use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::events::DocumentEvent;
 use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::types::{
-    ApplyResult, Bootstrap, DocumentNode, EvalResult, ObjectNode, OpenedDocument, PropRow,
-    SetResult, VisibilityOutcome,
+    ApplyResult, Bootstrap, DocumentNode, EvalResult, GridSummary, ObjectNode, OpenedDocument,
+    PropRow, SetResult, VisibilityOutcome,
 };
 use ferrocad_shell_api::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
+
+use crate::grid_settings;
 
 /// The commands the Rust half answers, whose ids the catalogue names once.
 ///
@@ -622,9 +624,18 @@ impl AppBackend for RustAppBackend {
         // A script surface appends what it owns after the document's own nodes (the
         // synthetic `Settings/<Feature>` roots). No document lock is held here: the
         // script's walk is its own code and must not see one.
+        //
+        // The grid's node is the document half's when the script did not list it: the
+        // namespace is per feature, so a script that lists only the axis leaves the
+        // grid card to this half (see `grid_settings::merge`). That is what gives
+        // `?runtime=plain` and `?runtime=js` the card at all, and it keeps a desktop
+        // running `--addons mods/AxisOverlay` as complete as the browser.
+        let mut settings_nodes = Vec::new();
         if let Some(script) = &self.script {
-            tree.extend(script.extra_tree_nodes());
+            settings_nodes = script.extra_tree_nodes();
         }
+        grid_settings::merge(&mut settings_nodes);
+        tree.extend(settings_nodes);
         Ok(tree)
     }
 
@@ -672,6 +683,12 @@ impl AppBackend for RustAppBackend {
             .as_deref()
             .and_then(|host| host.extra_properties(object))
         {
+            return Ok(rows);
+        }
+        // Then this half's own synthetic nodes (the grid card), which exist precisely
+        // when no script claimed the namespace.
+        let view = self.state.borrow().view.clone();
+        if let Some(rows) = grid_settings::rows(object, &view) {
             return Ok(rows);
         }
         Ok(self
@@ -867,6 +884,30 @@ impl AppBackend for RustAppBackend {
         Ok(())
     }
 
+    /// The grid's provider and spacing, for the header popover.
+    ///
+    /// A script half owns the provider registry and answers first. Without one there
+    /// is no registry at all, yet the viewport still draws the native grid — so the
+    /// popover would say "No grid provider" beside a grid the user can see, and would
+    /// omit the step the card edits.
+    fn grid_summary(&self) -> Result<GridSummary, String> {
+        if let Some(summary) = self.script.as_deref().and_then(|host| host.grid_summary()) {
+            return Ok(summary);
+        }
+        let view = self.state.borrow().view.clone();
+        Ok(GridSummary {
+            feature: "grid".to_string(),
+            backend: Some("ferrocad".to_string()),
+            // The id and label `mods/GridOverlay` registers for the same provider, so
+            // the popover reads the same in both builds.
+            label: Some("FerroCAD (native)".to_string()),
+            spacing: Some(Quantity::new(view.grid_minor, Unit::Millimeter).user_string()),
+            // Nothing switches: there is one provider in this build, and the registry
+            // that would list a second is the script half's.
+            providers: Vec::new(),
+        })
+    }
+
     fn set_selection(&self, items: &[SelectionItem]) -> Result<(), String> {
         // The shell owns the selection; the document needs it for `App_Move`, whose
         // delta applies to whatever is selected rather than to a named target.
@@ -959,6 +1000,11 @@ impl AppBackend for RustAppBackend {
             .as_deref()
             .and_then(|host| host.set_extra_property(object, property, value))
         {
+            return Ok(result);
+        }
+        // Then this half's grid card, whose store is the mirrored presentation state.
+        let view = self.state.borrow().view.clone();
+        if let Some(result) = grid_settings::write(object, property, value, &view) {
             return Ok(result);
         }
         self.edit(|_, document| {
@@ -2127,6 +2173,19 @@ mod tests {
     /// document backend's, everything else is the script's to answer.
     const DIALOG: &str = "py-dialog-1";
 
+    /// The tree's document nodes: everything but the synthetic settings card.
+    ///
+    /// The card is not a document — the shell never follows it, and it exists in a
+    /// build with no documents at all — so a test about documents asks for these.
+    fn documents(backend: &RustAppBackend) -> Vec<DocumentNode> {
+        backend
+            .model_tree()
+            .unwrap()
+            .into_iter()
+            .filter(|node| !grid_settings::owns(&node.name))
+            .collect()
+    }
+
     fn backend_with_script() -> (RustAppBackend, Arc<Recorded>) {
         let log = Arc::new(Recorded::default());
         let backend =
@@ -2427,8 +2486,26 @@ mod tests {
     #[test]
     fn without_a_script_the_document_answers_alone() {
         let mut backend = RustAppBackend::new();
-        assert_eq!(backend.model_tree().unwrap().len(), 1);
-        assert!(backend.properties(SETTINGS_GRID).unwrap().is_empty());
+        let tree = backend.model_tree().unwrap();
+        // The document, plus the grid card: the shell's presentation state needs no
+        // interpreter to be configured, and `?runtime=plain` has no other source.
+        assert_eq!(tree.len(), 2, "{tree:?}");
+        let settings = tree
+            .iter()
+            .find(|node| node.name == grid_settings::SETTINGS_ROOT)
+            .expect("the grid card's root");
+        assert!(
+            settings
+                .objects
+                .iter()
+                .any(|object| grid_settings::is_grid_node(&object.name)),
+            "one grid child: {settings:?}"
+        );
+        let rows = backend.properties(SETTINGS_GRID).unwrap();
+        assert!(
+            rows.iter().any(|row| row.name == "minor"),
+            "the rows are the mirrored view state: {rows:?}"
+        );
         assert_eq!(backend.gpu_adapter().unwrap(), "auto");
         assert!(backend.take_selection_requests().unwrap().is_empty());
         let unknown = backend
@@ -2436,6 +2513,70 @@ mod tests {
             .unwrap();
         assert!(!unknown.ok);
         assert!(!backend.evaluate("1 + 1").unwrap().ok);
+    }
+
+    /// The grid card's writes are presentation requests: the document half does not
+    /// mutate the state itself, because the shell owns it and pushes it back.
+    #[test]
+    fn a_grid_row_write_asks_the_shell_for_the_change() {
+        let mut backend = RustAppBackend::new();
+        let before = backend.properties(SETTINGS_GRID).unwrap();
+        assert_eq!(
+            before
+                .iter()
+                .find(|row| row.name == "enabled")
+                .map(|row| row.value.as_str()),
+            Some("False"),
+            "the default state has the grid off"
+        );
+
+        let result = backend
+            .set_property(SETTINGS_GRID, "enabled", "true")
+            .unwrap();
+        assert!(result.ok, "{result:?}");
+        let request = result.view.expect("the edit asks for a repaint");
+        assert_eq!(request.grid, Some(true));
+
+        // Unapplied, because the shell has not mirrored the new state back yet.
+        let after = backend.properties(SETTINGS_GRID).unwrap();
+        assert_eq!(
+            after
+                .iter()
+                .find(|row| row.name == "enabled")
+                .map(|row| row.value.as_str()),
+            Some("False")
+        );
+
+        // What the shell's `apply_view` does next.
+        let mut view = ShellViewState::default();
+        view.apply(&request).unwrap();
+        backend.set_view_state(&view).unwrap();
+        let applied = backend.properties(SETTINGS_GRID).unwrap();
+        assert_eq!(
+            applied
+                .iter()
+                .find(|row| row.name == "enabled")
+                .map(|row| row.value.as_str()),
+            Some("True")
+        );
+    }
+
+    /// A settings feature the script lists is the script's: the document half must not
+    /// add a second node for it, and its rows are the script's.
+    #[test]
+    fn a_script_listed_settings_feature_is_not_duplicated() {
+        let backend = backend_with_script().0;
+        let tree = backend.model_tree().unwrap();
+        let roots = tree
+            .iter()
+            .filter(|node| grid_settings::owns(&node.name))
+            .count();
+        assert_eq!(roots, 1, "one settings namespace: {tree:?}");
+        let rows = backend.properties(SETTINGS_GRID).unwrap();
+        assert!(
+            rows.iter().any(|row| row.name == "Spacing"),
+            "the script answers for the node it listed: {rows:?}"
+        );
     }
 
     /// The registry is process-wide, so the shared tests take turns and start empty.
@@ -2470,11 +2611,11 @@ mod tests {
         // constructor runs, and a sample document sitting in front of the one it
         // creates is exactly the drift the merge exists to end.
         assert!(registry().is_empty(), "the constructor builds nothing");
-        assert!(backend.model_tree().unwrap().is_empty());
+        assert!(documents(&backend).is_empty(), "no document yet");
 
         assert_eq!(backend.bootstrap().unwrap().document, DOCUMENT);
         assert_eq!(registry().active(), Some(DOCUMENT));
-        let tree = backend.model_tree().unwrap();
+        let tree = documents(&backend);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, DOCUMENT);
         assert!(tree[0].objects.iter().any(|object| object.name == "Box"));
@@ -2527,7 +2668,7 @@ mod tests {
         // The sample never appeared: the registry holds exactly the script's document,
         // because the fallback is built only after the host declines.
         assert_eq!(registry().names(), vec!["FromHost".to_string()]);
-        let tree = backend.model_tree().unwrap();
+        let tree = documents(&backend);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, "FromHost");
     }
@@ -2544,7 +2685,7 @@ mod tests {
         }
         let mut backend = RustAppBackend::from_shared_registry();
         assert_eq!(backend.bootstrap().unwrap().document, "FromPython");
-        let tree = backend.model_tree().unwrap();
+        let tree = documents(&backend);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, "FromPython");
         assert!(
@@ -2628,8 +2769,8 @@ mod tests {
             let name = application.active().unwrap().to_string();
             application.close_document(&name);
         }
-        // A shell with every document closed shows an empty tree, not an error.
-        assert!(backend.model_tree().unwrap().is_empty());
+        // A shell with every document closed shows no documents, not an error.
+        assert!(documents(&backend).is_empty());
         assert!(backend.stage_meshes().unwrap().is_empty());
         assert!(backend.properties("Box").unwrap().is_empty());
         // An edit with nothing to edit is a failure, and says so.

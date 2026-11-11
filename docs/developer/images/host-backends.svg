@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 848" width="1100" height="848" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 866" width="1100" height="866" role="img" aria-labelledby="title desc">
   <title id="title">FerroCAD system architecture: hosts, the seam, one document half, four runtimes and the engine</title>
-  <desc id="desc">Four layers: the platform hosts that own the entry point, window and FilePicker (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); one RustAppBackend document half that every runtime instantiates, holding one of four scripting configurations (CPython's PythonScriptHost, RustPython's PywasmScriptHost, the JS JsScriptHost, or none), chosen in the browser by ferrocad_shell_web from the page's query string; and the shared ferrocad_core plus ferrocad_part engine over OCCT, which the JS half and wasm addons reach through ferrocad_doc_api's JSON doorway rather than by linking the engine.</desc>
+  <desc id="desc">Four layers: the platform hosts that own the entry point, window and FilePicker (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); one RustAppBackend document half that every runtime instantiates, holding one of four scripting configurations (CPython's PythonScriptHost, RustPython's PywasmScriptHost, the JS JsScriptHost, or none), chosen in the browser by ferrocad_shell_web from the page's query string; and the shared ferrocad_core plus ferrocad_part engine over OCCT, which the JS half and wasm addons reach through ferrocad_doc_api's JSON doorway rather than by linking the engine. The synthetic Settings namespace is merged per feature: whichever half has rows for a node owns it, so the document half answers Settings/Grid from the shell's mirrored view state when no script half lists it.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -30,7 +30,7 @@
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1100" height="848" fill="#f7f9fc" />
+  <rect x="0" y="0" width="1100" height="866" fill="#f7f9fc" />
 
   <text class="t title" x="550" y="32" text-anchor="middle">FERROCAD SYSTEM ARCHITECTURE</text>
   <text class="t subtitle" x="550" y="54" text-anchor="middle">Hosts own the window &amp; FilePicker · one document half · the runtime names the script half · one engine</text>
@@ -193,4 +193,5 @@
   <text class="t note-italic" x="76" y="788" text-anchor="start">The browser host installs one of the three wasm configurations through ferrocad_shell_web: ?runtime=plain|pywasm|js (?js=1 and ?pywasm=1 are the short forms).</text>
   <text class="t note-italic" x="76" y="806" text-anchor="start">A wasm addon (ferrocad_addon_toy → www/addons/toy.wasm) shares that doorway: a second ferrocad_core would be a second document, so it calls the host's one.</text>
   <text class="t note-italic" x="76" y="824" text-anchor="start">Which half runs which verb is backend-ownership.svg: the catalogue is one metadata source and catalog::executor names the executor of each id.</text>
+  <text class="t note-italic" x="76" y="842" text-anchor="start">Settings/* is merged per feature: whichever half has rows for a node owns it, so RustAppBackend answers Settings/Grid from the mirrored view state when no script half lists it.</text>
 </svg>

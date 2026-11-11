@@ -20,7 +20,7 @@ fn with_host<R: Send + 'static>(f: impl FnOnce(&PywasmScriptHost) -> R + Send + 
     std::thread::Builder::new()
         .stack_size(16 << 20)
         .spawn(move || {
-            let host = PywasmScriptHost::new().expect("the interpreter boots");
+            let host = ferrocad_shell_pywasm::new().expect("the interpreter boots");
             f(&host)
         })
         .expect("a worker thread")
@@ -31,7 +31,9 @@ fn with_host<R: Send + 'static>(f: impl FnOnce(&PywasmScriptHost) -> R + Send + 
 fn property_rows(object: &str) -> Vec<Value> {
     let object = object.to_string();
     with_host(move |host| {
-        let json = host.properties(&object).expect("properties() runs");
+        let json = host
+            .call("properties", &[&object])
+            .expect("properties() runs");
         serde_json::from_str::<Vec<Value>>(&json).expect("properties() returns a JSON array")
     })
 }
@@ -100,7 +102,7 @@ fn an_unknown_object_has_no_rows() {
 fn the_console_evaluates_in_the_shells_namespace() {
     // `bootstrap()` has not run, so the namespace is empty: the point is that the
     // interpreter, its frozen `json` and the `io`/`contextlib` capture all work.
-    let answer = with_host(|host| host.call("evaluate", "1 + 1").expect("evaluate runs"));
+    let answer = with_host(|host| host.call("evaluate", &["1 + 1"]).expect("evaluate runs"));
     let value: Value = serde_json::from_str(&answer).expect("evaluate returns JSON");
     assert_eq!(value["ok"], true);
     assert_eq!(value["output"], "2");

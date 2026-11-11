@@ -143,18 +143,35 @@ fn is_facade(dir: &std::path::Path) -> bool {
     dir.join("FreeCAD").join("__init__.py").is_file()
 }
 
-/// Call a function on the app's entry module that returns JSON, and decode it.
-fn call_json<T: for<'de> Deserialize<'de>>(func: &str, arg: Option<&str>) -> Result<T, String> {
-    let raw = Python::with_gil(|py| -> Result<String, String> {
+/// Call a function on the app's entry module with positional string arguments, and
+/// return its raw answer.
+///
+/// This is the one interpreter primitive the script half needs: everything the shell asks
+/// for is text in, text out. [`crate::script_host::CpythonRuntime`] is the wrapper that
+/// hands it to the shared host.
+pub(crate) fn call_raw(function: &str, args: &[&str]) -> Result<String, String> {
+    Python::with_gil(|py| -> Result<String, String> {
         let module = py.import(entry_module()).map_err(|e| e.to_string())?;
-        let f = module.getattr(func).map_err(|e| e.to_string())?;
-        let value = match arg {
-            Some(a) => f.call1((a,)),
-            None => f.call0(),
+        let f = module.getattr(function).map_err(|e| e.to_string())?;
+        let value = match args {
+            [] => f.call0(),
+            [one] => f.call1((*one,)),
+            many => {
+                let tuple = pyo3::types::PyTuple::new(py, many).map_err(|e| e.to_string())?;
+                f.call(tuple, None)
+            }
         }
         .map_err(|e| e.to_string())?;
         value.extract::<String>().map_err(|e| e.to_string())
-    })?;
+    })
+}
+
+/// Call a function on the app's entry module that returns JSON, and decode it.
+fn call_json<T: for<'de> Deserialize<'de>>(func: &str, arg: Option<&str>) -> Result<T, String> {
+    let raw = match arg {
+        Some(arg) => call_raw(func, &[arg]),
+        None => call_raw(func, &[]),
+    }?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 

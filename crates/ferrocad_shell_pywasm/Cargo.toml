@@ -17,6 +17,9 @@ publish = false
 # The scripting half of the seam; the document half stays `ferrocad_shell_rust`'s
 # (or, in this spike, the snapshot the bridge renders from `ferrocad_core`).
 ferrocad_shell_api.workspace = true
+# The seam written once: this crate supplies the RustPython `PythonRuntime`, not a
+# second copy of the 35 `ScriptHost` methods (B18).
+ferrocad_python_host.workspace = true
 ferrocad_core.workspace = true
 # The one document presenter every script runtime uses (the Python facade here, the
 # addon verbs in `ferrocad_doc_api`). Core-only, so it brings no kernel.

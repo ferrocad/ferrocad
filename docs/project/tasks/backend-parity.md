@@ -5,7 +5,7 @@ built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 r
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
-(2026-11-11), B17a recorded.** The surface suite
+(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a–B18b recorded.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1557,6 +1557,93 @@ Open question for that stage: whether the *provider* list shares the same `Prefs
 stays in the parameter store. Recommended: one `Prefs` file, because a provider can be
 registered by a mod that a parameter-store read cannot reach before boot.
 
+### B18 — one Python script half, two interpreters (built 2026-11-11)
+
+The two halves described the same 35 [`ScriptHost`] methods **twice**. `PythonScriptHost`
+answered all of them; `PywasmScriptHost` answered eleven and inherited the trait defaults
+for the rest, so two thirds of the wasm half returned nothing and nothing said so. A
+capability gap was invisible until a document happened to look wrong (B6's matrix found
+two; there were twenty-four).
+
+**One seam, one engine hook.** `crates/ferrocad_python_host`:
+
+- `PythonHost<R>` — the whole `ScriptHost` implementation, the JSON marshalling and the
+  error policies, written once.
+- `PythonRuntime` — what an interpreter supplies: [`call`] (the one primitive), the
+  boot/file hooks (`bootstrap`, `open_startup_document`, `open_path`/`save_path`,
+  `activate_document`, `mods_roots`), the typed hooks (`stage_meshes`, `tool`,
+  `tool_command`, `inventor_scene`, `event_listener`, `document_grant`, `hello`), and
+  [`Contract`] — which groups of the shell module the facade implements.
+- `Contract` is a value, not a set of overrides: `tree`, `selection`, `view`,
+  `view_state`, `settings`, `providers`, `commands`, `interaction`. `CpythonRuntime` is
+  `FULL`; `RustPythonRuntime` is `NONE`. A disabled group is *asked nothing*, so the
+  document half answers and no exception is raised on a hot path (the model tree and the
+  selection mirror are refreshed constantly); growing a capability is one flag plus the
+  facade code.
+
+The engines are unchanged in behaviour: `CpythonRuntime` makes exactly the calls
+`PythonScriptHost` made (same arguments, same `unwrap_or_default`/`ok()` policies), and
+`RustPythonRuntime` still reports no commands, no interaction and no settings nodes — now
+stated in one value rather than implied by twenty-four omissions. `threaded.rs` became a
+`PythonRuntime` that sends every call over its 16 MiB worker (it used to marshal only
+`evaluate` and answer the rest with constants). The CPython bridge keeps its process-wide
+`ENTRY_MODULE`/`APP_PATHS`/`MODS_PATHS` statics: the runtime type encapsulates them, so
+the shared host never sees them.
+
+Why one crate rather than `cpython`/`pywasm` features on one: Cargo unifies features across
+a workspace build, so a `--target wasm32` workspace build that also builds the desktop
+assembly would pull `pyo3` into the wasm graph. Keeping the shared crate free of both
+engines makes that structural. `PyO3`/RustPython stay in their own crates, and the public
+names are preserved (`PythonScriptHost` is `PythonHost<CpythonRuntime>`, with a value of the
+same name so `Box::new(PythonScriptHost)` still reads the same).
+
+**Exit: met.** shell core 273, parametric 26 (including `the_two_script_halves_agree`,
+which now drives RustPython through the shared host), `ferrocad_shell_python` 22 + 9,
+`ferrocad_shell_pywasm` 10 (`live`/`properties`/`threaded`), `ferrocad_shell_web` 18 + 2,
+six doc gates.
+
+[`ScriptHost`]: https://docs.rs/ferrocad_shell_api/latest/ferrocad_shell_api/app/trait.ScriptHost.html
+[`call`]: https://docs.rs/ferrocad_python_host/latest/ferrocad_python_host/trait.PythonRuntime.html#tymethod.call
+[`Contract`]: https://docs.rs/ferrocad_python_host/latest/ferrocad_python_host/struct.Contract.html
+
+### B18a — grow the RustPython contract (recorded 2026-11-11)
+
+Each step flips one `Contract` flag in `RustPythonRuntime::contract` and implements the
+facade it names in `bootstrap.py`. Order by cost ÷ value:
+
+| step | flag | facade work | exit |
+| --- | --- | --- | --- |
+| 1 | `commands` | `FreeCADGui._command_list`/`_run`/`_resources` over the `_REGISTERED_COMMANDS` the facade already keeps | B6's two Gaps close: `commands()` lists what a mod registered, `run_command("App_Delete")` answers |
+| 2 | `view`, `view_state` | grid/axis summaries and `appearance_view` over the provider stubs; `FerroCADGui.ViewState` | the grid popover shows the script's provider in `?runtime=pywasm` |
+| 3 | `settings` | `Settings/<Feature>` rows via the registry | the settings card works for a provider mod |
+| 4 | `selection` | `FreeCADGui.Selection` mirror + queue | a mod's `IsActive` sees the shell's selection |
+| 5 | `providers` | `FerroCADGui.providers`/`providerSkin` over registered providers | the About/Dev Tools list names the mod's providers |
+| 6 | `interaction` | `FerroCAD.interaction`/`manipulators` + the `Part` hook | a manipulator commit resolves through the script |
+| 7 | `tree` | `Settings` root from the registry | the tree's settings nodes are the script's |
+
+The instrument is the same matrix: extend `the_two_script_halves_agree` to one observable
+per group, so each flip turns a red row green.
+
+### B18b — run the real facade under RustPython (recorded 2026-11-11)
+
+The structural half of the parity gap, and untouched by B18: `bootstrap.py` is still a
+substitute facade. In order:
+
+1. a RustPython `ferrocad` module over `ferrocad_core` — the ~27 names `python/FreeCAD`
+   imports plus the value classes (hand-written `#[pyclass]`s, or one `call(name, args_json)`
+   dispatch like the addon ABI);
+2. `ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh` (needs `ferrocad_part`,
+   `ferrocad_mesh` and OCCT in the RustPython build);
+3. `host_env` on for the **native** RustPython build only (target-specific dependency), so
+   the desktop runs `python/**` from disk; the browser needs an embedded file map plus a
+   synthetic `os`;
+4. `bootstrap()` → run the entry module; `mods_roots` → the embedded `mods` tree (browser)
+   or the directory (desktop);
+5. document writes, then `document_grant` → `ReadWrite` (D15 becomes host policy).
+
+Until then B18's `Contract` is the honest list of what the wasm facade cannot do, and it
+is the same list the About card could show.
+
 ## 5. Open questions, and how each host reaches the engine
 
 **Open questions.**
@@ -1640,6 +1727,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D23 | does the registry list the document half's providers | **Yes, per feature** (B15b). A build that draws the grid and the axis cross has a provider for each, so `provider_features()` names it with the id and label the mods use (`ferrocad` / `FerroCAD (native)`); the popover's *switch* list stays empty, because a one-item radio set is a dead control. Embedding the mods instead would switch the grid to a shader backend the wasm-Python host cannot supply a skin for |
 | D24 | is `--addons` a bundle list or a mod selection | **The selection** (B16). All mods load by default; naming any narrows the boot to exactly those, and the same list feeds the host derivation, the Python loader, the bundles and the provider registry. A bundle flag that left the loader scanning everything made "the mods I asked for" mean two different sets. `?addons=` in the browser keeps its bundle meaning — there is no mod tree in the page |
 | D25 | where "what is this build running" lives | **One card, `Settings/About`, filled by the shell** (B17), opened from the app menu's synthetic `ferrocad-about` row. The composition is installed by the host (it chose the halves and bundles) and copied into the model at boot; workbench rows come from the boot's `load_workbenches` report and provider rows from the registry, whose inactive backends are command rows that run the normal switch. No backend property namespace and no `catalog.json` row are invented for it. Turning parts of the set off is B17a: providers can be live, mods and bundles need a host-readable store read before the backend exists |
+| D26 | one script half per interpreter, or one over both | **One** (B18). `ferrocad_python_host::PythonHost<R>` implements the 35 `ScriptHost` methods once; an engine supplies `PythonRuntime` (the call primitive, the boot/file hooks, the typed hooks) and a `Contract` value naming which groups of the shell module its facade implements. `CpythonRuntime` is `FULL`, `RustPythonRuntime` is `NONE`, so a missing capability is a recorded flag the host does not call — not an inherited trait default that silently returns nothing. The shared crate depends on neither engine, because features unify: one crate with `cpython`/`pywasm` features could pull `pyo3` into a wasm workspace build |
 
 ## 6. Acceptance
 

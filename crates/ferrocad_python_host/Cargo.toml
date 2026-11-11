@@ -1,0 +1,24 @@
+[package]
+name = "ferrocad_python_host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "The Python script half of the FerroCAD shell, written once over whichever interpreter the host linked"
+keywords = ["cad", "python", "shell"]
+categories = ["api-bindings"]
+documentation = "https://docs.rs/ferrocad_python_host"
+publish = false
+
+[dependencies]
+# The seam this implements, and the value types it answers with.
+ferrocad_shell_api.workspace = true
+ferrocad_stage.workspace = true
+ferrocad_types.workspace = true
+# `Scene`, `EventListener` and the no-op listener the default hook installs.
+ferrocad_inventor.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -6,11 +6,10 @@
 //! GPUI owns the main thread, and the platform gives that thread 8 MiB on Linux and macOS
 //! and 1 MiB on Windows.
 //!
-//! So the interpreter lives on a worker with a 16 MiB stack, and this type is the
-//! `ScriptHost` in front of it. Only
-//! [`evaluate`](ferrocad_shell_api::app::ScriptHost::evaluate) crosses the channel: the
-//! rest of this spike's answers are constants — no tools, no catalogue, no scene, no event
-//! callbacks — so they are answered where the caller is rather than marshalled.
+//! So the interpreter lives on a worker with a 16 MiB stack, and [`ThreadedRuntime`] is the
+//! `PythonRuntime` in front of it: the one call primitive crosses the channel, and the
+//! answers that do not need the interpreter (the greeting, the grant, the tool refusal)
+//! stay local. The shared host above it is the same [`PythonHost`] the browser installs.
 
 // wasm-audit: native-only — declared behind `#[cfg(not(target_family = "wasm"))]` in
 // `lib.rs`; the browser boots the interpreter on its own thread and raises that stack as
@@ -20,18 +19,30 @@ use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
-use ferrocad_inventor::{EventListener, Scene};
-use ferrocad_shell_api::app::ScriptHost;
-use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
-use ferrocad_shell_api::types::{EvalResult, WorkbenchReport};
+use ferrocad_inventor::Scene;
+use ferrocad_python_host::{PythonHost, PythonRuntime};
+use ferrocad_shell_api::DocumentGrant;
+use ferrocad_stage::Tool;
 
-use crate::{HELLO, NoopScriptListener, PywasmScriptHost, no_tool};
+use crate::{HELLO, no_tool};
 
 /// The stack the interpreter's compiler needs (see the module docs).
 pub const STACK: usize = 16 << 20;
 
-/// RustPython behind a channel, for a host whose own thread is not the interpreter's.
-pub struct ThreadedScriptHost {
+/// The pywasm backend's script half on a worker thread.
+pub type ThreadedScriptHost = PythonHost<ThreadedRuntime>;
+
+/// Boot RustPython on its own thread, over the process-wide document registry.
+///
+/// The interpreter has to be bound to the same registry the document half answers from
+/// (`RustAppBackend::from_shared_registry`), which is what makes `FreeCAD.ActiveDocument`
+/// and the model tree one document.
+pub fn live() -> Result<ThreadedScriptHost, String> {
+    ThreadedRuntime::live().map(PythonHost::new)
+}
+
+/// The channel side of the runtime: every call is a job for the interpreter thread.
+pub struct ThreadedRuntime {
     inner: Mutex<Worker>,
 }
 
@@ -43,17 +54,17 @@ struct Worker {
 }
 
 /// One call into the interpreter.
-enum Job {
-    /// A console line, and where its answer goes.
-    Evaluate(String, Sender<Result<EvalResult, String>>),
+struct Job {
+    function: String,
+    args: Vec<String>,
+    reply: Sender<Result<String, String>>,
 }
 
-impl ThreadedScriptHost {
-    /// Boot RustPython on its own thread, over the process-wide document registry.
+impl ThreadedRuntime {
+    /// Start the worker and wait for it to boot.
     ///
-    /// The interpreter has to be bound to the same registry the document half answers
-    /// from (`RustAppBackend::from_shared_registry`), which is what makes
-    /// `FreeCAD.ActiveDocument` and the model tree one document.
+    /// A boot failure is reported here, not on the first call: a host that cannot start
+    /// must fail where the composition can fall back to the document half.
     pub fn live() -> Result<Self, String> {
         let (jobs, inbox) = mpsc::channel();
         let (ready, booted) = mpsc::channel();
@@ -74,6 +85,28 @@ impl ThreadedScriptHost {
             }),
         })
     }
+
+    /// Send one call to the interpreter thread and wait for its answer.
+    fn call_blocking(&self, function: &str, args: &[&str]) -> Result<String, String> {
+        let worker = self
+            .inner
+            .lock()
+            .map_err(|_| "the RustPython thread is poisoned".to_string())?;
+        let (reply, answer) = mpsc::channel();
+        worker
+            .jobs
+            .as_ref()
+            .ok_or_else(|| "the RustPython thread is gone".to_string())?
+            .send(Job {
+                function: function.to_string(),
+                args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                reply,
+            })
+            .map_err(|_| "the RustPython thread is gone".to_string())?;
+        answer
+            .recv()
+            .map_err(|_| "the RustPython thread is gone".to_string())?
+    }
 }
 
 impl Drop for Worker {
@@ -87,9 +120,39 @@ impl Drop for Worker {
     }
 }
 
-/// The worker thread: boot once, then answer console lines until the host is dropped.
+impl PythonRuntime for ThreadedRuntime {
+    fn call(&self, function: &str, args: &[&str]) -> Result<String, String> {
+        self.call_blocking(function, args)
+    }
+
+    /// Read-only: the bridge behind it exposes one function, and it reads.
+    fn document_grant(&self) -> DocumentGrant {
+        DocumentGrant::Read
+    }
+
+    /// The console's greeting: this is an interpreter, unlike the plain Rust half.
+    fn hello(&self) -> Result<Option<String>, String> {
+        Ok(Some(HELLO.to_string()))
+    }
+
+    fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {
+        Err(no_tool(name))
+    }
+
+    fn tool_command(&self, _name: &str, _verb: &str) -> bool {
+        false
+    }
+
+    fn inventor_scene(&self) -> Result<Scene, String> {
+        // `ferrocad_shell` builds its fallback scene through `pivy.coin`, which the facade
+        // does not supply; the document's own meshes are the path here.
+        Ok(Scene::default())
+    }
+}
+
+/// The worker thread: boot once, then answer calls until the host is dropped.
 fn run(inbox: Receiver<Job>, ready: Sender<Result<(), String>>) {
-    let host = match PywasmScriptHost::live() {
+    let host = match crate::live() {
         Ok(host) => host,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -99,66 +162,7 @@ fn run(inbox: Receiver<Job>, ready: Sender<Result<(), String>>) {
     let _ = ready.send(Ok(()));
 
     while let Ok(job) = inbox.recv() {
-        match job {
-            Job::Evaluate(code, reply) => {
-                let _ = reply.send(host.evaluate(&code));
-            }
-        }
-    }
-}
-
-impl ScriptHost for ThreadedScriptHost {
-    /// Read-only: the bridge behind it exposes one function, and it reads.
-    fn document_grant(&self) -> ferrocad_shell_api::DocumentGrant {
-        ferrocad_shell_api::DocumentGrant::Read
-    }
-
-    fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
-        let worker = self
-            .inner
-            .lock()
-            .map_err(|_| "the RustPython thread is poisoned".to_string())?;
-        let (reply, answer) = mpsc::channel();
-        worker
-            .jobs
-            .as_ref()
-            .ok_or_else(|| "the RustPython thread is gone".to_string())?
-            .send(Job::Evaluate(code.to_string(), reply))
-            .map_err(|_| "the RustPython thread is gone".to_string())?;
-        answer
-            .recv()
-            .map_err(|_| "the RustPython thread is gone".to_string())?
-    }
-
-    fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
-        Ok(WorkbenchReport::default())
-    }
-
-    fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
-        Err(no_tool(name))
-    }
-
-    fn tool_command(&self, _name: &str, _verb: &str) -> bool {
-        false
-    }
-
-    fn inventor_scene(&self) -> Result<Scene, String> {
-        Ok(Scene::default())
-    }
-
-    fn event_listener(&self) -> Box<dyn EventListener> {
-        Box::new(NoopScriptListener)
-    }
-
-    fn commands(&self) -> Vec<CommandInfo> {
-        Vec::new()
-    }
-
-    fn run_command(&self, _id: &str) -> Option<CommandOutcome> {
-        None
-    }
-
-    fn hello(&self) -> Result<Option<String>, String> {
-        Ok(Some(HELLO.to_string()))
+        let args: Vec<&str> = job.args.iter().map(String::as_str).collect();
+        let _ = job.reply.send(host.call(&job.function, &args));
     }
 }

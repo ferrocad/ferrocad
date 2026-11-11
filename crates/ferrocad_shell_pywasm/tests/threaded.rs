@@ -9,11 +9,11 @@
 #![cfg(not(target_family = "wasm"))]
 
 use ferrocad_shell_api::app::ScriptHost;
-use ferrocad_shell_pywasm::{ThreadedScriptHost, threaded};
+use ferrocad_shell_pywasm::threaded;
 
 #[test]
 fn the_worker_boots_and_answers_the_console() {
-    let host = ThreadedScriptHost::live().expect("the interpreter boots");
+    let host = threaded::live().expect("the interpreter boots");
 
     let answer = host.evaluate("6 * 7").expect("the console runs");
     assert!(answer.ok, "{}", answer.output);
@@ -22,10 +22,16 @@ fn the_worker_boots_and_answers_the_console() {
 
 #[test]
 fn a_broken_line_is_a_result_not_a_panic() {
-    let host = ThreadedScriptHost::live().expect("the interpreter boots");
+    let host = threaded::live().expect("the interpreter boots");
 
-    let answer = host.evaluate("this is not python").expect("the console runs");
-    assert!(!answer.ok, "a syntax error is not a success: {}", answer.output);
+    let answer = host
+        .evaluate("this is not python")
+        .expect("the console runs");
+    assert!(
+        !answer.ok,
+        "a syntax error is not a success: {}",
+        answer.output
+    );
 }
 
 #[test]
@@ -33,17 +39,23 @@ fn the_constants_are_answered_without_the_interpreter() {
     // Nothing but `evaluate` crosses the channel. Booting a second interpreter here to
     // compare would need a 16 MiB thread of its own — which is the reason this type
     // exists — so the answers are asserted directly instead.
-    let host = ThreadedScriptHost::live().expect("the interpreter boots");
+    let host = threaded::live().expect("the interpreter boots");
 
     let hello = host.hello().expect("a greeting").expect("one, not silence");
     assert!(hello.contains("RustPython"), "{hello}");
     // The greeting tells the truth about the grant: this half cannot write.
     assert!(hello.contains("read-only"), "{hello}");
-    assert_eq!(host.document_grant(), ferrocad_shell_api::DocumentGrant::Read);
+    assert_eq!(
+        host.document_grant(),
+        ferrocad_shell_api::DocumentGrant::Read
+    );
     assert!(host.commands().is_empty());
     assert!(host.run_command("App_Delete").is_none());
     assert!(!host.tool_command("anything", "start"));
-    let no_tool = host.tool("toy_polyline").err().expect("the spike has no tools");
+    let no_tool = host
+        .tool("toy_polyline")
+        .err()
+        .expect("the spike has no tools");
     assert!(no_tool.contains("toy_polyline"), "{no_tool}");
 }
 

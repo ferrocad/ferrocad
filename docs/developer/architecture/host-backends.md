@@ -300,6 +300,17 @@ CPython:    ferrocad_shell → imports `ferrocad`  → ferrocad_py (PyO3 C-ABI) 
 RustPython: ferrocad_shell → imports `_ferrocad` → _ferrocad (rustpython-vm)  → ferrocad_core
 ```
 
+**One `ScriptHost`, two runtimes.** The script half is
+`ferrocad_python_host::PythonHost<R>`: the 35 `ScriptHost` methods, the JSON marshalling
+and the error policies are written once, and an engine supplies `PythonRuntime` — the
+call primitive (`CpythonRuntime` enters the GIL, `RustPythonRuntime` calls into its VM),
+the boot/file hooks, and the typed hooks (display rows, tools, the `pivy` scene, the event
+listener). What a facade *can* answer is a value (`Contract`): CPython is `FULL`,
+RustPython is `NONE` today, so the document half answers instead of the host calling a
+function that would raise — and a capability that grows is one flag plus the facade code.
+The seam is `crates/ferrocad_python_host`; the trail is
+[`backend-parity.md`](../../project/tasks/backend-parity.md) B18.
+
 `bootstrap.py` supplies the `FreeCAD` facade over the **host's active document** and the
 four stdlib modules `wasm32-unknown-unknown` cannot import (`contextlib`, `io`,
 `pathlib`, `traceback` — the target has no POSIX module). The facade asks the bridge for
@@ -325,8 +336,9 @@ its tests run in CI without a browser (as the JS half's host logic now does — 
 **On the desktop the interpreter lives on a worker.** The VM is not `Send` and its
 compiler recurses, so a host must raise the stack before the interpreter starts; a GPUI app
 cannot raise its own (8 MiB on Linux and macOS, 1 MiB on Windows).
-`ThreadedScriptHost` is the `ScriptHost` in front of a 16 MiB worker, and only `evaluate`
-crosses the channel — the rest of this half's answers are constants. `--script-host=pywasm`
+`threaded::ThreadedScriptHost` is the `ScriptHost` in front of a 16 MiB worker:
+`ThreadedRuntime` sends every call over the channel, and the answers that need no
+interpreter (the greeting, the grant, the tool refusal) stay local. `--script-host=pywasm`
 installs it, with `host_env` still off, so it is the browser's environment in a real window
 (see B7d).
 

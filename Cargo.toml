@@ -39,6 +39,7 @@ members = [
     "crates/ferrocad_viewport",
     "crates/ferrocad_widgets",
     "crates/ferrocad_shell_api",
+    "crates/ferrocad_python_host",
     "crates/ferrocad_doc_api",
     "crates/ferrocad_shell_core",
     "crates/ferrocad_shell_rust",
@@ -159,6 +160,9 @@ ferrocad_shell_js = { path = "crates/ferrocad_shell_js", version = "0.1.5" }
 # `wasmi` on a native build.
 ferrocad_shell_wasm = { path = "crates/ferrocad_shell_wasm", version = "0.1.5" }
 ferrocad_shell_pywasm = { path = "crates/ferrocad_shell_pywasm", version = "0.1.5" }
+# The Python script half written once: `PythonHost<R>` over whichever interpreter a
+# host linked (PyO3 natively, RustPython in the browser and behind `--script-host`).
+ferrocad_python_host = { path = "crates/ferrocad_python_host", version = "0.1.5" }
 # The browser host's runtime switch: it composes the document half above with one of
 # the two browser script halves, or with none. Not published with the others (it is
 # the browser's assembly, not a library a native host installs).

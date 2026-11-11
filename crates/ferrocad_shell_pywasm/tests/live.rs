@@ -32,7 +32,9 @@ fn widget(length: &str) -> Document {
 }
 
 fn rows(host: &PywasmScriptHost, object: &str) -> Vec<Value> {
-    let json = host.properties(object).expect("properties() runs");
+    let json = host
+        .call("properties", &[object])
+        .expect("properties() runs");
     serde_json::from_str(&json).expect("properties() returns a JSON array")
 }
 
@@ -49,11 +51,11 @@ fn the_facade_follows_the_registry() {
         // RustPython's compiler recurses; see `properties.rs` for the same requirement.
         .stack_size(16 << 20)
         .spawn(|| {
-            let host = PywasmScriptHost::live().expect("the interpreter boots");
+            let host = ferrocad_shell_pywasm::live().expect("the interpreter boots");
 
             // Nothing is open: an error, not a fabricated sample.
             assert!(
-                host.properties("Widget").is_err(),
+                host.call("properties", &["Widget"]).is_err(),
                 "an empty registry has no active document"
             );
 
@@ -85,7 +87,7 @@ fn the_facade_follows_the_registry() {
             // the console namespace is seeded (`FreeCAD`, `App`, `doc`) even though the
             // shell script's own `bootstrap()` never ran here.
             let answer = host
-                .call("evaluate", "FreeCAD.ActiveDocument.Name")
+                .call("evaluate", &["FreeCAD.ActiveDocument.Name"])
                 .expect("evaluate runs");
             let value: Value = serde_json::from_str(&answer).expect("evaluate returns JSON");
             assert_eq!(value["ok"], true);

@@ -2706,6 +2706,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_python_host"
+version = "0.1.5"
+dependencies = [
+ "ferrocad_inventor",
+ "ferrocad_shell_api",
+ "ferrocad_stage",
+ "ferrocad_types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ferrocad_shell_api"
 version = "0.1.5"
 dependencies = [
@@ -2766,6 +2778,7 @@ dependencies = [
  "ferrocad_doc_api",
  "ferrocad_inventor",
  "ferrocad_inventor_py",
+ "ferrocad_python_host",
  "ferrocad_shell_api",
  "ferrocad_shell_core",
  "ferrocad_shell_js",
@@ -2791,6 +2804,7 @@ dependencies = [
  "ferrocad_core",
  "ferrocad_doc_api",
  "ferrocad_inventor",
+ "ferrocad_python_host",
  "ferrocad_shell_api",
  "ferrocad_stage",
  "log",

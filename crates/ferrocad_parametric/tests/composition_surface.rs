@@ -36,7 +36,6 @@ use ferrocad_shell_api::commands::CommandOutcome;
 use ferrocad_shell_api::types::PropRow;
 use ferrocad_shell_api::view::ViewState;
 use ferrocad_shell_python::{PythonScriptHost, python};
-use ferrocad_shell_pywasm::PywasmScriptHost;
 use ferrocad_shell_rust::RustAppBackend;
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
@@ -677,10 +676,10 @@ fn the_two_script_halves_agree() {
     let wasm = std::thread::Builder::new()
         .stack_size(16 << 20)
         .spawn(|| {
-            let host = PywasmScriptHost::live().expect("RustPython boots over the registry");
+            let host = ferrocad_shell_pywasm::live().expect("RustPython boots over the registry");
             (
-                host.properties(OBJECT).expect("the shell script runs"),
-                host.call("evaluate", "FreeCAD.ActiveDocument.Name")
+                host.call("properties", &[OBJECT]).expect("the shell script runs"),
+                host.call("evaluate", &["FreeCAD.ActiveDocument.Name"])
                     .expect("evaluate runs"),
                 host.commands(),
                 host.run_command("App_Delete"),

@@ -13,7 +13,6 @@
 use std::sync::Once;
 
 use ferrocad_shell_api::EntryKind;
-use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_api::runtime::Runtime;
 use ferrocad_shell_python::{mods, python};
 

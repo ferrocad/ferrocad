@@ -257,7 +257,7 @@ fn host_chain(
 /// The desktop's RustPython half: the interpreter on the worker its compiler needs.
 #[cfg(feature = "pywasm")]
 fn pywasm() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, String> {
-    let host = ferrocad_shell_pywasm::ThreadedScriptHost::live()
+    let host = ferrocad_shell_pywasm::threaded::live()
         .map_err(|error| format!("the RustPython thread did not boot: {error}"))?;
     Ok(Box::new(host))
 }

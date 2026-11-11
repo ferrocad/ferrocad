@@ -138,7 +138,7 @@ fn browser_host(
             );
         }
         Runtime::Pywasm => Some(Box::new(
-            ferrocad_shell_pywasm::PywasmScriptHost::live()
+            ferrocad_shell_pywasm::live()
                 .map_err(|error| format!("the wasm-Python interpreter did not boot: {error}"))?,
         )),
         Runtime::Js => Some(js_host()?),

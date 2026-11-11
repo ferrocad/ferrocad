@@ -1302,9 +1302,22 @@ in `_BUILTIN_COMMANDS`, which is what `tests/test_commands.py` compares against
 `ferrocad_shell_rust` tests (no interpreter → `select`; a script that implements the id
 answers first), and the browser: `?command=` (`ferrocad_web_gpui`) runs one id through
 `app::run_command`, and `smoke.sh` asserts `ok=true status="grid settings"
-select=Some("Settings/grid")` under `?runtime=plain` and `?runtime=js`. `ferrocad_shell_core`
+`select=Some("Settings/grid")` under `?runtime=plain` and `?runtime=js`. `ferrocad_shell_core`
 271, `ferrocad_shell_python` 25, `ferrocad_shell_web` 19, the parametric `composition`
 suite and `tests/test_commands.py` green.
+
+One thing the work turned up that is not a change: a report that the edition had stopped
+loading the Python mods. It had not — the loader and the window's command list were
+intact on inspection — but nothing gated the **composed** boot, because "load workbenches
+best-effort" makes a silent "no mods" possible and the only full-boot test
+(`ferrocad_toy`'s) calls `python::` directly rather than the edition's backend. That is
+`crates/ferrocad_parametric/tests/mods_load.rs` now: it boots
+`RustAppBackend + PythonScriptHost` with `gui = true` and no explicit paths, so discovery
+is what is under test, then asserts the mods' `InitGui.py` files loaded, their commands
+are in `commands()`, and their registered grid providers reach `grid_summary` (both are
+listed, exactly one active — the Coin backend outranks the native one by priority, so
+asserting "the native one is active" would pin the wrong thing). Its own test binary, so
+loading providers cannot perturb `composition.rs`.
 
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**

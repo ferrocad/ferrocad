@@ -302,23 +302,23 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   With a script half the id stays the Gui app's (`Executor::Script`), which is what
   keeps the desktop's headless-modal decision in `_GridSettingsCommand.Activated`.
 - **The browser has one provider per feature, and it is the document half's.** The page
-  fetches the mod packs (see [Mods](#mods)), but the shipped provider mods need `os`
-  and the provider registry, which the wasm facade does not install yet (B18a step 5 /
-  B18b): their `InitGui.py` is recorded as failed and skipped, and `PywasmScriptHost`
-  implements neither the `Settings` hooks nor `provider_features`, while
-  `FreeCADGui.providers()` returns `[]`. Since B18a steps 1–2 the facade also answers
-  `grid_summary`/`axis_summary`; with no provider registered those are the closed empty
-  summaries, which the document half treats as "not mine", so the header keeps naming the
-  native provider it draws. `?providers=1` is the measurement:
+  fetches the mod packs (see [Mods](#mods)), but the shipped provider mods stop at
+  `import os` (B18b), so none registers one here. The wasm facade *has* the registry since
+  B18a step 5 (`FerroCADGui.registerProvider`/`providers`/`providerSkin`/
+  `setActiveProvider`/`refreshProviders`/`settings`), so a pack that does register reaches
+  the About card and Dev Tools; with none registered the facade's
+  `grid_summary`/`axis_summary` are the closed empty summaries, which the document half
+  treats as "not mine", so the header keeps naming the native provider it draws.
+  `?providers=1` is the measurement:
 
   ```
   ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
   ```
 
-  `switch=0` is the popover's list — nothing to switch *to* until step 5 registers a
-  backend — while `registry` is what Dev Tools lists, one provider per feature, and it is
-  the provider that actually draws the grid and the axis cross. `?runtime=pywasm,js`
-  composes the chain, with both halves installed.
+  `switch=0` is the popover's list — nothing to switch *to* with no provider mod loaded —
+  while `registry` is what Dev Tools lists, one provider per feature, and it is the
+  provider that actually draws the grid and the axis cross. `?runtime=pywasm,js` composes
+  the chain, with both halves installed.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

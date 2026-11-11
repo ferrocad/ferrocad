@@ -314,8 +314,10 @@ and the error policies are written once, and an engine supplies `PythonRuntime` 
 call primitive (`CpythonRuntime` enters the GIL, `RustPythonRuntime` calls into its VM),
 the boot/file hooks, and the typed hooks (display rows, tools, the `pivy` scene, the event
 listener). What a facade *can* answer is a value (`Contract`): CPython is `FULL`,
-RustPython is `NONE` today, so the document half answers instead of the host calling a
-function that would raise — and a capability that grows is one flag plus the facade code.
+RustPython is `{view, view_state, commands, selection, providers}` today (and `NONE` on
+the desktop's `ThreadedRuntime`), so the document half answers what the script cannot
+instead of the host calling a function that would raise — and a capability that grows is
+one flag plus the facade code.
 The seam is `crates/ferrocad_python_host`; the trail is
 [`backend-parity.md`](../../project/tasks/backend-parity.md) B18.
 
@@ -340,10 +342,16 @@ commands}` (B18a steps 1–2): the shell's own Gui commands (`App_ToggleGrid`,
 `App_ToggleAxisCross`, `App_ToggleGizmo`, `App_ViewWorkplane`, `View_GridSettings`,
 `Dev_ToggleTools`) and every command a loaded workbench registers run *in Python* here
 instead of falling back to the document half. `FreeCAD.GuiUp` is 1, so
-`View_GridSettings` selects the tree card (B13b) rather than the headless modal. A
-predicate the facade cannot evaluate — undo history, the selection mirror — answers
-*enabled*, so a merge cannot disable a verb the document half can still run; `settings`,
-`selection`, `providers`, `interaction` and `tree` stay off until their facade lands.
+`View_GridSettings` selects the tree card (B13b) rather than the headless modal.
+
+It also mirrors the shell's **selection** (step 4: `FreeCADGui.Selection`, pushed down,
+writes queued back, `Document.UndoCount`/`RedoCount` from the payload) and holds the
+**mod provider registry** (step 5: `FerroCADGui.registerProvider`/`providers`/
+`activeProvider`/`providerSkin`/`setActiveProvider`/`refreshProviders`/`settings`). The
+selected backend is in memory and a schema's rows are read for their declared defaults —
+the parameter store is B18b — so nothing there is editable yet. A predicate the facade
+cannot evaluate answers *enabled*, so a merge cannot disable a verb the document half can
+still run; `settings`, `interaction` and `tree` stay off until their facade lands.
 
 Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
 `wasm32-unknown-unknown`, and its compiler recurses, so a host raises the stack before

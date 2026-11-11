@@ -646,9 +646,9 @@ fn wasm_script_rows(json: &str) -> Vec<ScriptRow> {
 /// B6: CPython and RustPython run the same `python/ferrocad_shell`, over one document.
 ///
 /// A **capability matrix**, not equality: the wasm facade answers the console, the
-/// property rows, the Gui app's presentation half and its selection mirror (B18a
-/// steps 1–4), and nothing else — no tools, no providers, no filesystem, no document
-/// writes. Each row below says which of those it is.
+/// property rows, the Gui app's presentation half, its selection mirror and the mod
+/// provider registry (B18a steps 1–5), and nothing else — no tools, no filesystem, no
+/// document writes. Each row below says which of those it is.
 #[test]
 fn the_two_script_halves_agree() {
     let _guard = PYTHON.lock().unwrap_or_else(|error| error.into_inner());
@@ -670,6 +670,26 @@ fn the_two_script_halves_agree() {
         .hello()
         .expect("hello answers")
         .expect("CPython greets");
+    // B18a step 5: the provider registry is shared policy, so the same registration is
+    // listed by both halves. Register, read and drop it again, leaving the process-wide
+    // CPython facade as it was found.
+    let cpython_provider = {
+        let setup = python::evaluate(
+            "import FerroCADGui\nFerroCADGui.registerProvider('B18aStep5', 'half', 'Step 5')",
+        )
+        .expect("the facade registers a provider");
+        assert!(setup.ok, "{}", setup.output);
+        let found = PythonScriptHost
+            .provider_features()
+            .into_iter()
+            .find(|feature| feature.feature == "B18aStep5");
+        let cleanup = python::evaluate(
+            "FerroCADGui.unregisterProvider('B18aStep5', 'half')",
+        )
+        .expect("the facade drops a provider");
+        assert!(cleanup.ok, "{}", cleanup.output);
+        found
+    };
 
     // RustPython over the same registry. It compiles recursively, so it gets its own
     // big-stack thread (as `ferrocad_shell_pywasm/tests/live.rs` does); the document
@@ -692,6 +712,25 @@ fn the_two_script_halves_agree() {
                     // is where the read-only half refuses it.
                     host.on_selection_changed(&[SelectionItem::new(OBJECT)]);
                     host.run_command("App_Delete")
+                },
+                {
+                    // B18a step 5: the same registration as CPython's, through the
+                    // ported registry; drop it so the interpreter is left clean.
+                    let setup = host
+                        .evaluate(
+                            "import FerroCADGui\nFerroCADGui.registerProvider('B18aStep5', 'half', 'Step 5')",
+                        )
+                        .expect("register runs");
+                    assert!(setup.ok, "{}", setup.output);
+                    let found = host
+                        .provider_features()
+                        .into_iter()
+                        .find(|feature| feature.feature == "B18aStep5");
+                    let cleanup = host
+                        .evaluate("FerroCADGui.unregisterProvider('B18aStep5', 'half')")
+                        .expect("unregister runs");
+                    assert!(cleanup.ok, "{}", cleanup.output);
+                    found
                 },
             )
         })
@@ -754,4 +793,24 @@ fn the_two_script_halves_agree() {
         "the refusal names the missing write path: {}",
         wasm_selected.error
     );
+
+    // Same: a registered provider is listed with the same manifest by both halves
+    // (B18a step 5), which is what lets the About card and Dev Tools name a mod's
+    // providers on either runtime.
+    let cpython_provider = cpython_provider.expect("CPython lists the provider it registered");
+    let wasm_provider = wasm
+        .6
+        .expect("the wasm half lists the provider it registered");
+    assert_eq!(cpython_provider.providers.len(), 1, "{cpython_provider:?}");
+    assert_eq!(wasm_provider.providers.len(), 1, "{wasm_provider:?}");
+    assert_eq!(
+        wasm_provider.providers[0].backend, cpython_provider.providers[0].backend,
+        "the same backend id"
+    );
+    assert_eq!(
+        wasm_provider.providers[0].label, cpython_provider.providers[0].label,
+        "the same label"
+    );
+    assert!(wasm_provider.providers[0].active);
+    assert!(cpython_provider.providers[0].active);
 }

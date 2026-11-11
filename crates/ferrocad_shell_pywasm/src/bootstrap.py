@@ -1,6 +1,6 @@
 """The FreeCAD surface ``python/ferrocad_shell`` runs against, for the pywasm spike.
 
-Five things happen here, all on the Python side of the bridge:
+Six things happen here, all on the Python side of the bridge:
 
 1. **The host gaps.** ``wasm32-unknown-unknown`` has no POSIX module, so RustPython's
    frozen ``os``/``_io`` layer is unavailable and ``contextlib``, ``io``, ``pathlib``
@@ -19,13 +19,19 @@ Five things happen here, all on the Python side of the bridge:
    ``View_GridSettings``, …) read, and ``FreeCADGui._command_list``/``_run`` is what
    ``ferrocad_shell.commands()``/``run_command()`` read back. They are ports of the
    native facades' *shape* over this build's state: the semantic stores have no
-   parameter backend here, and no provider is ever registered.
+   parameter backend here.
 4. **The selection mirror** (B18a step 4). ``FreeCADGui.Selection`` is a port of
    ``python/FreeCADGui/__init__.py``'s: the shell pushes its snapshot down
    (``ferrocad_shell.set_selection``) and every write a script makes is applied here
    *and* queued for the shell (``ferrocad_shell.take_selection_requests``), because
    Python cannot command the viewport synchronously. There is no viewport under this
    half, so nothing here ever preselects on its own — see the note by the class.
+5. **The mod provider registry** (B18a step 5). ``FerroCADGui.registerProvider`` and the
+   rest of ``python/FerroCADGui/__init__.py``'s provider section, so a mod's providers
+   are listed by ``ferrocad_shell.provider_features`` (About, Dev Tools) and switched
+   through the header popover. The selected backend is in memory (no parameter store:
+   B18b), a schema's rows are read for their declared defaults (writes are step 3), and
+   the native document observer has no counterpart (one live document).
 
 The spike's honest limit: these modules are **not** the ``*_py`` PyO3 bindings. Those
 are CPython extension modules and cannot be loaded by RustPython; §6.3 records that as
@@ -372,16 +378,6 @@ _module(
         "getObject": _get_object,
     },
 )
-
-
-def _no_providers(*_args, **_kwargs):
-    """The provider registry, with nothing in it.
-
-    ``python/FerroCADGui/__init__.py`` keeps one record per registered backend; a
-    browser build registers none (there is no mod provider yet), so every question
-    gets the same closed empty answer the native facade gives in that state.
-    """
-    return []
 
 
 # --- the command registry -------------------------------------------------
@@ -888,6 +884,458 @@ def _points(point):
 Selection = _Selection()
 
 
+# --- the mod provider registry ---------------------------------------------
+#
+# **A port of `python/FerroCADGui/__init__.py`'s provider section** (B18a step 5):
+# registration, the active backend per feature, the switch list the header popover and
+# the `Mods_Settings` dialog read, the skin channel, and the activate/deactivate/refresh
+# callbacks. `ferrocad_shell.provider_features` is what the About card and Dev Tools
+# render, so with this in place a mod's providers are named by the shell.
+#
+# Only what this build has no store for differs (B18b):
+#
+# * **The selected backend is in memory.** The native registry persists one id per
+#   feature in `FreeCAD.ParamGet`; here the choice lasts for the process, so a page
+#   reload starts from priority again.
+# * **A declared settings schema is kept and read for its declared defaults.** The rows
+#   are B18a step 3: `FerroCADGui.settings` exists so a provider-backed
+#   `grid_summary`/`axis_summary` can find its spacing row, but there is no store to
+#   write to, so a row shows its default and editing is step 3.
+# * **No document observer.** The native half attaches applied providers to document
+#   activation/close; this half has one live document and receives no such callbacks.
+
+_PROVIDERS = {}
+_PROVIDER_SELECTED = {}
+_PROVIDER_APPLIED = {}
+_PROVIDER_SERIAL = 0
+_PROVIDER_REPORTED = set()
+
+
+def _report_provider(feature, backend, hook, exc):
+    """Report a failing provider callback once per hook, like `_report_once`."""
+    key = (feature, backend, hook)
+    if key in _PROVIDER_REPORTED:
+        return
+    _PROVIDER_REPORTED.add(key)
+    print(
+        "FerroCADGui: provider %r for %r %s raised: %s"
+        % (backend, feature, hook, _error_text(exc)),
+        file=sys.stderr,
+    )
+
+
+def _manifest(record, feature, active=None):
+    """One provider as JSON-safe data (the callbacks never leave this module)."""
+    if active is None:
+        active = _selected(feature)
+    return {
+        "feature": feature,
+        "backend": record["backend"],
+        "label": record["label"],
+        "command": record["command"],
+        "priority": record["priority"],
+        "active": record["backend"] == active,
+    }
+
+
+def _selected(feature):
+    """The backend that *is* the provider: the in-memory choice, else priority.
+
+    A choice that names no registered backend is ignored (a mod was removed or
+    renamed); the highest priority wins, and an equal priority is broken by
+    registration order, earliest first, so the answer is deterministic.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return None
+    saved = _PROVIDER_SELECTED.get(feature)
+    if saved in records:
+        return saved
+    return max(
+        records.values(),
+        key=lambda record: (record["priority"], -record["order"]),
+    )["backend"]
+
+
+def registerProvider(
+    feature,
+    backend,
+    label,
+    command=None,
+    priority=0,
+    activate=None,
+    deactivate=None,
+    refresh=None,
+    settings=None,
+    skin=None,
+):
+    """Declare that ``backend`` provides ``feature`` (called from ``InitGui.py``).
+
+    The ported contract, in short: ``label`` is the name the dialog shows, ``command``
+    the id the backend owns, ``priority`` decides the default, and the three callbacks
+    run only when asked. Registering the same ``(feature, backend)`` replaces the record
+    without moving it in the order.
+
+    ``settings`` is accepted and stored, and :func:`settings` reads its rows with the
+    declared defaults (no parameter store: B18b); writing a value is step 3. ``skin`` is
+    the optional WGSL source the host asks for through :func:`providerSkin`; supplying
+    none means the native material.
+    """
+    global _PROVIDER_SERIAL
+
+    if not isinstance(feature, str) or not feature:
+        raise ValueError("a provider feature must be a non-empty string")
+    if not isinstance(backend, str) or not backend:
+        raise ValueError("a provider backend must be a non-empty string")
+    if command is not None and not isinstance(command, str):
+        raise TypeError("a provider command must be a command id string or None")
+    for hook, callback in (
+        ("activate", activate),
+        ("deactivate", deactivate),
+        ("refresh", refresh),
+    ):
+        if callback is not None and not callable(callback):
+            raise TypeError("provider %r/%r %s is not callable" % (feature, backend, hook))
+    if skin is not None and not isinstance(skin, str):
+        raise TypeError(
+            "provider %r/%r skin must be WGSL source text" % (feature, backend)
+        )
+    source = None if skin is None else skin.strip()
+    if source == "":
+        raise ValueError("provider %r/%r skin is empty" % (feature, backend))
+
+    text = str(label if label is not None else backend).strip()
+    records = _PROVIDERS.get(feature)
+    if records is None:
+        records = _PROVIDERS.setdefault(feature, {})
+    before = _selected(feature)
+    existing = records.get(backend)
+    order = existing["order"] if existing is not None else _PROVIDER_SERIAL
+    if existing is None:
+        _PROVIDER_SERIAL += 1
+    records[backend] = {
+        "feature": feature,
+        "backend": backend,
+        "label": text or backend,
+        "command": command,
+        "priority": int(priority),
+        "order": order,
+        "activate": activate,
+        "deactivate": deactivate,
+        "refresh": refresh,
+        # Kept for step 3; nothing here reads a row yet.
+        "settings": list(settings) if settings is not None else [],
+        "skin": source,
+    }
+    _PROVIDER_REPORTED.difference_update(
+        {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
+    )
+
+    # A takeover is a selection change caused by registration. Stop the outgoing
+    # backend, but leave the incoming one for the first explicit switch (which keeps
+    # `activate` out of import time).
+    selected = _selected(feature)
+    if selected == backend and before is not None and before != backend:
+        outgoing = records.get(before)
+        if outgoing is not None:
+            _deactivate_on_takeover(outgoing, feature)
+            if _PROVIDER_APPLIED.get(feature) == before:
+                _PROVIDER_APPLIED.pop(feature, None)
+    return _manifest(records[backend], feature)
+
+
+def unregisterProvider(feature, backend):
+    """Drop a provider record; returns whether it existed.
+
+    A reload/teardown helper: it does **not** run ``deactivate``, and the in-memory
+    choice is left alone so a re-registered backend keeps it.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records or backend not in records:
+        return False
+    del records[backend]
+    if not records:
+        _PROVIDERS.pop(feature, None)
+    if _PROVIDER_APPLIED.get(feature) == backend:
+        _PROVIDER_APPLIED.pop(feature, None)
+    _PROVIDER_REPORTED.difference_update(
+        {key for key in _PROVIDER_REPORTED if key[0] == feature and key[1] == backend}
+    )
+    return True
+
+
+def providers(feature=None):
+    """The provider manifests, in registration order.
+
+    With a ``feature``, only that feature's backends (``[]`` when none are
+    registered); without one, every feature in first-registration order. Each entry
+    carries ``feature``, ``backend``, ``label``, ``command``, ``priority`` and
+    ``active``; the callbacks stay private so the list stays JSON-safe.
+    """
+    if feature is not None:
+        records = _PROVIDERS.get(feature)
+        if not records:
+            return []
+        active = _selected(feature)
+        return [_manifest(record, feature, active) for record in records.values()]
+    entries = []
+    for name in _PROVIDERS:
+        active = _selected(name)
+        entries.extend(_manifest(record, name, active) for record in _PROVIDERS[name].values())
+    return entries
+
+
+def activeProvider(feature):
+    """The active backend for ``feature``, or ``None`` when none is registered."""
+    return _selected(feature)
+
+
+def providerSkin(feature, backend=None):
+    """The WGSL material program of ``feature``'s backend, or ``None``.
+
+    ``backend=None`` — the form the shell uses — means the **active** backend, so a
+    switch makes the host ask again. ``None`` also means "draw the native material":
+    an unknown feature or backend, or a backend that supplied no skin.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return None
+    if backend is None:
+        backend = _selected(feature)
+    record = records.get(backend)
+    if record is None:
+        return None
+    return record.get("skin")
+
+
+def setActiveProvider(feature, backend):
+    """Make ``backend`` the active provider for ``feature`` and apply it.
+
+    The choice is kept in memory (no parameter store here), then the outgoing backend
+    is deactivated and the incoming one activated, each at most once per change.
+    Callback errors are caught and reported; an unknown feature or backend raises
+    ``ValueError``.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        raise ValueError("no provider is registered for feature %r" % (feature,))
+    if backend not in records:
+        raise ValueError("%r does not provide feature %r" % (backend, feature))
+
+    declared = _selected(feature)
+    applied = _PROVIDER_APPLIED.get(feature)
+    outgoing_backend = applied if applied is not None else declared
+    _PROVIDER_SELECTED[feature] = backend
+
+    result = {
+        "ok": True,
+        "feature": feature,
+        "backend": backend,
+        "previous": declared,
+        "view": {},
+        "status": "",
+        "errors": [],
+    }
+    statuses = []
+    if outgoing_backend != backend:
+        outgoing = records.get(outgoing_backend) if outgoing_backend is not None else None
+        if outgoing is not None:
+            _invoke_provider(outgoing, feature, "deactivate", result, statuses)
+        _invoke_provider(records[backend], feature, "activate", result, statuses)
+    elif applied is None:
+        _invoke_provider(records[backend], feature, "activate", result, statuses)
+    _PROVIDER_APPLIED[feature] = backend
+
+    message = "%s: %s is the active provider" % (feature, backend)
+    if statuses:
+        message = "; ".join(statuses) + "; " + message
+    if result["errors"]:
+        message += " (reported: " + "; ".join(result["errors"]) + ")"
+    result["status"] = message
+    return result
+
+
+def refreshProviders(feature):
+    """Ask the active backend of ``feature`` to re-read the shared state.
+
+    Only the active backend runs; an absent callback (or no provider) is a no-op. A
+    callback may return the same dict a command may return, so ``view`` carries a
+    request the caller can merge. Never raises for a backend problem.
+    """
+    result = {
+        "ok": True,
+        "feature": feature,
+        "backend": None,
+        "view": {},
+        "status": "",
+        "errors": [],
+    }
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return result
+    backend = _selected(feature)
+    result["backend"] = backend
+    statuses = []
+    _invoke_provider(records[backend], feature, "refresh", result, statuses)
+    if statuses:
+        result["status"] = "; ".join(statuses)
+    return result
+
+
+def _deactivate_on_takeover(record, feature):
+    """Stop a backend whose feature changed hands while a mod was registering."""
+    callback = record.get("deactivate")
+    if callback is None:
+        return
+    try:
+        callback()
+    except Exception as exc:  # noqa: BLE001 - a broken backend is not fatal
+        _report_provider(feature, record["backend"], "deactivate", exc)
+
+
+def _invoke_provider(record, feature, hook, result, statuses):
+    """Run one provider callback, isolating and collecting its result."""
+    callback = record.get(hook)
+    if callback is None:
+        return
+    try:
+        value = callback()
+    except Exception as exc:  # noqa: BLE001 - one broken backend is not fatal
+        _report_provider(feature, record["backend"], hook, exc)
+        result["errors"].append("%s: %s" % (hook, _error_text(exc)))
+        return
+    if not isinstance(value, dict):
+        return
+    view = value.get("view")
+    if isinstance(view, dict):
+        result["view"].update(view)
+    status = value.get("status")
+    if status:
+        statuses.append(str(status))
+
+
+# The row kinds a schema may declare, and the type id each renders as. An unknown kind
+# is allowed and read-only, exactly as in the native registry.
+_SETTING_KINDS = ("text", "bool", "int", "float", "quantity", "enum", "color")
+_SETTING_TYPES = {
+    "text": "App::PropertyString",
+    "bool": "App::PropertyBool",
+    "int": "App::PropertyInteger",
+    "float": "App::PropertyFloat",
+    "quantity": "App::PropertyQuantity",
+    "enum": "App::PropertyEnumeration",
+    "color": "App::PropertyString",
+}
+_SETTING_DEFAULTS = {
+    "text": "",
+    "bool": False,
+    "int": 0,
+    "float": 0.0,
+    "quantity": 0.0,
+    "color": "#000000",
+}
+_SETTING_REPORTED = set()
+
+
+def _report_setting(feature, backend, name, exc):
+    """Report a broken schema row once per setting."""
+    key = (feature, backend, name)
+    if key in _SETTING_REPORTED:
+        return
+    _SETTING_REPORTED.add(key)
+    print(
+        "FerroCADGui: setting %r of provider %r for %r raised: %s"
+        % (name, backend, feature, _error_text(exc)),
+        file=sys.stderr,
+    )
+
+
+def _display_setting(spec, value):
+    """The row's display string (``"10 mm"`` for a quantity).
+
+    The native facade formats through ``FreeCAD.Units.Quantity``; this build has no
+    `Units` module, so a quantity's default is shown as ``<value> <unit>``. That is the
+    same text for every value a schema declares plainly, which is what a store-less
+    build is showing anyway.
+    """
+    if spec.get("kind") != "quantity":
+        return str(value)
+    unit = spec.get("unit")
+    if not unit:
+        return str(value)
+    try:
+        return "%g %s" % (float(value), unit)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def settings(feature, backend=None):
+    """The declared settings rows of ``feature``'s active provider (or ``backend``).
+
+    The rows use the property pane's contract — ``name``, ``label``, ``type``,
+    ``value``, ``status``, ``editable``, ``kind``, plus ``unit``/``min``/``max`` and
+    ``choices`` where the schema declares them. **There is no parameter store here**
+    (B18b), so a row without a ``get`` hook shows its declared default and nothing is
+    written; storing a value (``setSetting``) is B18a step 3. The summary builders call
+    this for a provider-declared spacing row, which is why it exists at step 5.
+
+    ``[]`` means "nothing to show": an unknown feature or backend, no provider at all,
+    a provider that advertises no schema, or a row this build cannot read.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return []
+    if backend is None:
+        backend = _selected(feature)
+    record = records.get(backend)
+    if record is None:
+        return []
+    schema = record.get("settings") or []
+    rows = []
+    for spec in schema:
+        if not isinstance(spec, dict):
+            continue
+        name = spec.get("name")
+        kind = spec.get("kind")
+        if not isinstance(name, str) or not name or not isinstance(kind, str) or not kind:
+            continue
+        default = spec.get("default", _SETTING_DEFAULTS.get(kind, ""))
+        status = "unsupported kind" if kind not in _SETTING_KINDS else "provider"
+        raw = default
+        getter = spec.get("get")
+        if callable(getter):
+            try:
+                raw = getter()
+                status = "computed"
+            except Exception as exc:  # noqa: BLE001 - one broken knob is not fatal
+                _report_setting(feature, backend, name, exc)
+                raw = default
+                status = "error"
+        row = {
+            "name": name,
+            "label": str(spec.get("label") or name),
+            "type": _SETTING_TYPES.get(kind, ""),
+            "value": _display_setting(spec, raw),
+            "status": status,
+            # The native rule is `kind in _SETTING_KINDS and (has_set or not has_get)`,
+            # which is true for a row that writes to the parameter store. There is no
+            # store here, so no row is editable until step 3 installs one; claiming
+            # otherwise would offer an edit that cannot persist.
+            "editable": False,
+            "kind": kind,
+        }
+        if "unit" in spec:
+            row["unit"] = spec["unit"]
+        if "min" in spec:
+            row["min"] = spec["min"]
+        if "max" in spec:
+            row["max"] = spec["max"]
+        if "choices" in spec:
+            row["choices"] = list(spec["choices"])
+        rows.append(row)
+    return rows
+
+
 _module(
     "FreeCADGui",
     {
@@ -1275,24 +1723,6 @@ def _feature_view(feature):
     return getattr(FerroCAD, attribute).apply()
 
 
-def refreshProviders(feature):
-    """Ask ``feature``'s active backend to re-read the shared state.
-
-    The native facade runs the active provider's ``refresh`` callback here and
-    collects its ``view`` claim. No provider is ever registered in this build
-    (`providers()` is empty), so the answer is the closed empty one — no backend,
-    no claim, no error — in the same shape the two request builders read.
-    """
-    return {
-        "ok": True,
-        "feature": feature,
-        "backend": None,
-        "view": {},
-        "status": "",
-        "errors": [],
-    }
-
-
 def gridViewRequest():
     """The ``{"view": …}`` request for the current grid policy.
 
@@ -1363,18 +1793,22 @@ _module(
     "FerroCADGui",
     {
         "ViewState": ViewState,
-        "providers": _no_providers,
-        "activeProvider": lambda feature: None,
+        # The mod provider registry (B18a step 5): the ported
+        # `python/FerroCADGui/__init__.py` section. `setSetting` is step 3 — there is
+        # no store to write to yet.
+        "registerProvider": registerProvider,
+        "unregisterProvider": unregisterProvider,
+        "providers": providers,
+        "activeProvider": activeProvider,
+        "providerSkin": providerSkin,
+        "setActiveProvider": setActiveProvider,
         "refreshProviders": refreshProviders,
+        "settings": settings,
         "gridViewRequest": gridViewRequest,
         "axisViewRequest": axisViewRequest,
         "appearanceView": appearanceView,
         "_feature_view": _feature_view,
         "_cancel_all": _cancel_all,
-        # `setActiveProvider`, `providerSkin`, `settings` and `setSetting` are
-        # omitted: each needs a registered provider, and the host's `providers`
-        # and `settings` contract groups are off (B18a steps 3 and 5), so no code
-        # path above reaches them.
     },
 )
 

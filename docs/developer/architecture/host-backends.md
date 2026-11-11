@@ -324,6 +324,19 @@ the document, and recompute, the `Shape` API and every write live in the documen
 That is the price of not sharing the `*_py` bindings, and the code says so where a
 script would notice.
 
+**It answers the Gui app's presentation half.** `bootstrap.py` carries
+`FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`, the two view requests, and the
+command registry (`_COMMANDS`, `_command_list`, `_resources`, `_enabled`, `_checked`,
+`_run`, dialog tokens). The runtime's `Contract` is therefore `{view, view_state,
+commands}` (B18a steps 1–2): the shell's own Gui commands (`App_ToggleGrid`,
+`App_ToggleAxisCross`, `App_ToggleGizmo`, `App_ViewWorkplane`, `View_GridSettings`,
+`Dev_ToggleTools`) and every command a loaded workbench registers run *in Python* here
+instead of falling back to the document half. `FreeCAD.GuiUp` is 1, so
+`View_GridSettings` selects the tree card (B13b) rather than the headless modal. A
+predicate the facade cannot evaluate — undo history, the selection mirror — answers
+*enabled*, so a merge cannot disable a verb the document half can still run; `settings`,
+`selection`, `providers`, `interaction` and `tree` stay off until their facade lands.
+
 Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
 `wasm32-unknown-unknown`, and its compiler recurses, so a host raises the stack before
 `PywasmScriptHost::new` (the tests use a 16 MiB worker thread; the browser sets the same

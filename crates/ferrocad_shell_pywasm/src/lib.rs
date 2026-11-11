@@ -31,7 +31,11 @@
 //! **What the facade does not do.** The document is read-only from Python: `setattr`
 //! on an object raises rather than silently missing the document. Writes, recompute
 //! and the `Shape` API are the document half's (`RustAppBackend`), and the shell's own
-//! commands reach them.
+//! commands reach them. What the facade *does* answer is the Gui app's presentation
+//! half (B18a steps 1–2): `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState` and
+//! the `{"view": …}` requests the shell's own commands return, plus the command
+//! registry they are reached through. Everything else — settings rows, the selection
+//! mirror, providers, interaction and the model tree — is left to the document half.
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
 //! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
@@ -212,10 +216,24 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 
 /// RustPython as a [`PythonRuntime`]: the interpreter, and what its facade answers.
 ///
-/// The facade is `bootstrap.py` (the `FreeCAD`/`FreeCADGui` surface `wasm32` needs), and
-/// it currently answers the console and `properties` only — so its [`Contract`] is
-/// [`Contract::NONE`] and the document half answers everything else, exactly as a build
-/// with no script half does. Growing that contract is B18a.
+/// The facade is `bootstrap.py` (the `FreeCAD`/`FreeCADGui` surface `wasm32` needs). Its
+/// [`Contract`] answers the console and the property rows, and (B18a steps 1–2) the Gui
+/// app's presentation half — `view`, `view_state` and `commands` — so the shell's own
+/// Gui commands run *in Python* here instead of being handed to the document half:
+///
+/// - `view` — `appearance_view`, `grid_summary`, `axis_summary` over
+///   `FerroCAD.Grid`/`Axis`/`Gizmo`. `bootstrap.py` has no parameter store and
+///   registers no provider, so those are the real facades' shape over defaults and the
+///   shell's mirrored `ViewState`.
+/// - `view_state` — `set_view_state`, the push a checkable command's `IsChecked` reads.
+/// - `commands` — `commands`, `run_command` and the two dialog verbs over the
+///   `_COMMANDS` registry the shell module fills at import (`App_ToggleGrid`,
+///   `App_ToggleAxisCross`, `App_ToggleGizmo`, `App_ViewWorkplane`, `View_GridSettings`,
+///   `Dev_ToggleTools`, and every workbench command a mod registers).
+///
+/// `settings`, `selection`, `providers`, `interaction` and `tree` stay off: the facade
+/// has no `Settings/<Feature>` rows, no selection mirror, no provider registry, no
+/// `Part` hook and no app-script model tree, so the document half answers all five.
 pub struct RustPythonRuntime {
     interpreter: Interpreter,
 }
@@ -300,9 +318,15 @@ impl PythonRuntime for RustPythonRuntime {
         })
     }
 
-    /// `bootstrap.py` answers the console and the property rows; nothing else yet.
+    /// The presentation half of the Gui app: the shell's own view commands run here
+    /// (see the type docs). The five groups the facade has no answer for stay off.
     fn contract(&self) -> Contract {
-        Contract::NONE
+        Contract {
+            view: true,
+            view_state: true,
+            commands: true,
+            ..Contract::NONE
+        }
     }
 
     /// Read-only: `_ferrocad` exposes one function, and it reads.

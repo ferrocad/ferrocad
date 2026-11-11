@@ -2011,8 +2011,8 @@ class _GridSettingsCommand:
     Opening a card requires a shell to open it in. The modal dialog (a thin client of
     :data:`FerroCAD.Grid`) is therefore the **headless** fallback — ``FreeCAD.GuiUp``
     is 0 in a console-only run, which is where a test or a script uses this command —
-    and the only surface left when the ``FerroCAD`` facade is absent (the RustPython
-    host installs a stub, so ``FerroCAD.Grid`` does not exist there). A modal beside a
+    and the only surface left when the ``FerroCAD`` facade is absent (a host that
+    installs no semantics at all). A modal beside a
     card would be a second store for one feature: the card writes the presentation
     state and the modal writes the parameter group, and they can drift. A validation
     error stays in the modal (the callback raises ``ValueError`` and the facade

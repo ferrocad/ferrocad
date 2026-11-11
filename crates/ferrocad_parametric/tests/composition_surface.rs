@@ -644,9 +644,10 @@ fn wasm_script_rows(json: &str) -> Vec<ScriptRow> {
 
 /// B6: CPython and RustPython run the same `python/ferrocad_shell`, over one document.
 ///
-/// A **capability matrix**, not equality: the wasm facade deliberately has no command
-/// registry, no tools, no dialogs, no providers and no filesystem. Each row below says
-/// which of those it is.
+/// A **capability matrix**, not equality: the wasm facade answers the console, the
+/// property rows and (B18a steps 1–2) the Gui app's presentation half, and nothing
+/// else — no tools, no providers, no filesystem, no document writes. Each row below
+/// says which of those it is.
 #[test]
 fn the_two_script_halves_agree() {
     let _guard = PYTHON.lock().unwrap_or_else(|error| error.into_inner());
@@ -709,16 +710,29 @@ fn the_two_script_halves_agree() {
     assert!(cpython_hello.contains("Python"), "{cpython_hello}");
     assert!(wasm.4.contains("RustPython"), "{}", wasm.4);
 
-    // Gap: the wasm facade stubs `FreeCADGui` without `_command_list`/`_run`, so the
-    // script's verbs never reach its palette. Trigger: `bootstrap.py` grows both.
+    // Same registry, different reach: `bootstrap.py` ports `FreeCADGui._command_list`
+    // (B18a step 2), so the shell module's own registrations are listed by both halves.
     assert!(
         cpython_commands.len() >= catalog::builtin().len(),
         "CPython lists the catalogue"
     );
-    assert!(wasm.2.is_empty(), "the wasm facade lists no script commands");
-    assert!(cpython_delete.ok, "the script owns App_Delete");
     assert!(
-        wasm.3.is_none(),
-        "the wasm facade cannot run a registered command"
+        wasm.2.iter().any(|command| command.id == "App_ToggleGrid"),
+        "the wasm half lists the ids the shell registered: {:?}",
+        wasm.2.iter().map(|command| &command.id).collect::<Vec<_>>()
+    );
+
+    // D15: the wasm document is read-only and the facade has no selection mirror, so
+    // the script's `App_Delete` is a refusal where CPython reports "nothing selected".
+    // It is still an answer from the same registry, not a gap in the registry.
+    assert!(cpython_delete.ok, "the script owns App_Delete");
+    let wasm_delete = wasm
+        .3
+        .expect("the registry lists App_Delete, so the script answers it");
+    assert!(!wasm_delete.ok, "{wasm_delete:?}");
+    assert!(
+        wasm_delete.error.contains("Selection"),
+        "the refusal names the mirror this half has not grown: {}",
+        wasm_delete.error
     );
 }

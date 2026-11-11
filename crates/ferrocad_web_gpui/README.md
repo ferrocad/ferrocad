@@ -141,8 +141,8 @@ Delivery and capability are separate. A pack the current facade cannot run (the
 Coin/shader skins read a resource file and need the overlay bridge; a task panel needs
 `.ui`) is reported and skipped, and the window is unaffected; `?mods=0` turns the fetch
 off. The provider settings clients (`GridOverlay`, `AxisOverlay`, `GizmoOverlay`) run:
-since B18b the facade is the shared `python/` source and `bootstrap.py` supplies the `os`
-and `FreeCAD.ParamGet` they need, so each registers its `grid`/`axis`/`gizmo` provider.
+since B18b the App and Gui facades are the shared `python/` source (with `bootstrap.py`
+supplying only the host gaps), so each registers its `grid`/`axis`/`gizmo` provider.
 
 ## Settings
 
@@ -307,11 +307,11 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 - **The provider registry is the loaded packs'.** The page fetches the mod packs (see
   [Mods](#mods)), and the shipped settings clients (`GridOverlay`, `AxisOverlay`,
   `GizmoOverlay`) register their `grid`/`axis`/`gizmo` providers once the pack lands: the
-  wasm facade is the shared `python/` source since B18b, with `os` and `FreeCAD.ParamGet`
-  supplied by `bootstrap.py`. A registered pack reaches the About card, Dev Tools, the
-  header popovers and its own `Settings/<Feature>` card; written values live in the
-  dict-backed `ParamGet`, so they last for the session and a reload starts from the
-  declared defaults. Before the fetch — and with no pack loaded — the facade's
+  wasm facade is the shared `python/` source since B18b (`python/FreeCAD` included, so
+  `ParamGet` is the facade's own), with `bootstrap.py` supplying only the host gaps. A
+  registered pack reaches the About card, Dev Tools, the header popovers and its own
+  `Settings/<Feature>` card; written values live in the in-memory `ParamGet`, so they
+  last for the session and a reload starts from the declared defaults. Before the fetch — and with no pack loaded — the facade's
   `grid_summary`/`axis_summary` are the closed empty summaries, which the document half
   treats as "not mine", so the header names the native provider it draws. `?providers=1`
   is the measurement, and it runs at boot, before the fetch:

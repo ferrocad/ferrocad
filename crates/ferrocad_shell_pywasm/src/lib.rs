@@ -22,19 +22,20 @@
 //! have been the least compatible with `python/`.
 //!
 //! **What is shared.** The scripts are literally `python/ferrocad_shell/__init__.py`,
-//! `python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py` and the
-//! `python/FerroCAD` package, included as source; the property rules are
-//! `ferrocad_core::present` (see [`snapshot`]). What is *not* shared is the `*_py` PyO3
-//! bindings: those are CPython extension modules and RustPython cannot load them, so the
-//! bridge re-exposes exactly the rows the shell needs. §6.3 calls this the fork's
-//! central trade-off, and it still holds.
+//! `python/FreeCAD/` (the App facade), `python/FreeCADGui/__init__.py`,
+//! `python/FerroCADGui/__init__.py` and the `python/FerroCAD` package, included as
+//! source; the property rules are `ferrocad_core::present` (see [`snapshot`]). What is
+//! *not* shared is the `*_py` PyO3 bindings: those are CPython extension modules and
+//! RustPython cannot load them, so [`native`] binds the same engine types with the
+//! `rustpython-vm` grammar. §6.3 calls this the fork's central trade-off, and it still
+//! holds.
 //!
-//! **What the facade does not do.** The document is read-only from Python: `setattr`
-//! on an object raises rather than silently missing the document. Writes, recompute
-//! and the `Shape` API are the document half's (`RustAppBackend`), and the shell's own
-//! commands reach them. `bootstrap.py` supplies only what the shared modules cannot get
-//! here: the host gaps, the document model, and the bricks they sit on (`ParamGet`, the
-//! engine's `Quantity`, the `ferrocad` property rules, the parameter-file controls).
+//! **What the facade does not do.** The document is read-only from Python: creating or
+//! opening one and `setattr` on an object raise rather than silently missing the
+//! document. Writes, recompute and the `Shape` API are the document half's
+//! (`RustAppBackend`), and the shell's own commands reach them. `bootstrap.py` supplies
+//! only the host gaps (`io`, `contextlib`, `pathlib`, `traceback`, `importlib`, `os`,
+//! `tempfile`) and the wiring.
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
 //! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
@@ -54,10 +55,12 @@ use rustpython_vm::compiler::Mode;
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::{
     Context, Interpreter, PyRef, PyResult, Settings, VirtualMachine, builtins::PyBaseException,
-    pymodule,
 };
 
 mod snapshot;
+
+/// The `ferrocad` native module `python/FreeCAD` binds to `ferrocad_core`.
+mod native;
 
 /// The desktop's RustPython host: a `ScriptHost` in front of a worker thread. Native
 /// only — the browser boots the interpreter on its own thread and raises that stack as a
@@ -88,6 +91,16 @@ const CATALOG: &str = include_str!("../../../python/ferrocad_shell/catalog.json"
 /// The `FreeCAD` surface over the bridge, and the modules `wasm32-unknown-unknown`
 /// cannot import (see `bootstrap.py`).
 const BOOTSTRAP: &str = include_str!("bootstrap.py");
+
+/// The **shared** `FreeCAD` package: documents, parameters, units and Base values.
+///
+/// The desktop's App facade, installed rather than re-implemented; its `ferrocad`
+/// dependency is the native module in `native.rs` (B18b).
+const FREECAD_INIT: &str = include_str!("../../../python/FreeCAD/__init__.py");
+const FREECAD_BASE: &str = include_str!("../../../python/FreeCAD/Base.py");
+const FREECAD_UNITS: &str = include_str!("../../../python/FreeCAD/Units.py");
+const FREECAD_CONSOLE: &str = include_str!("../../../python/FreeCAD/Console.py");
+const FREECAD_VIEW_STYLE: &str = include_str!("../../../python/FreeCAD/_view_style.py");
 
 /// The **shared** `FerroCADGui`: the same source the desktop's CPython half loads.
 ///
@@ -196,104 +209,8 @@ enum DocumentSource {
 
 thread_local! {
     /// The document the bridge answers from. Set before the interpreter starts, read
-    /// by the `_ferrocad` native module; thread-local because the VM is thread-bound.
+    /// by the `ferrocad` native module; thread-local because the VM is thread-bound.
     static DOCUMENT: RefCell<Option<DocumentSource>> = const { RefCell::new(None) };
-}
-
-/// The native module the script can see: the document rows, and the one value class the
-/// shared Gui modules need from the engine.
-#[pymodule]
-mod _ferrocad {
-    use ferrocad_core::quantity::Quantity;
-    use ferrocad_core::unit::Unit;
-    use rustpython_vm::builtins::{PyStrRef, PyType};
-    use rustpython_vm::types::Constructor;
-    use rustpython_vm::{Py, PyPayload, PyResult, VirtualMachine, pyclass};
-
-    /// The active document's property rows, as JSON (`null` when none is open).
-    #[pyfunction]
-    fn document() -> rustpython_vm::PyResult<String> {
-        Ok(crate::document_json())
-    }
-
-    /// `FreeCAD.Units.Quantity`, over `ferrocad_core`'s parser, normalisation and unit
-    /// table.
-    ///
-    /// The shared `FerroCADGui` settings coercion uses exactly this much: construction
-    /// from a number or a text expression, `Value`, `getValueAs` and `str`. Binding the
-    /// engine type (rather than writing a second unit model in `bootstrap.py`) is what
-    /// makes "5 cm" mean the same thing on both runtimes: a conversion it cannot make
-    /// is refused here for the same reason and with the same words as on the desktop.
-    #[pyattr]
-    #[pyclass(name = "Quantity", module = "ferrocad")]
-    #[derive(Debug, PyPayload)]
-    struct PyQuantity {
-        inner: Quantity,
-    }
-
-    impl Constructor for PyQuantity {
-        type Args = rustpython_vm::function::FuncArgs;
-
-        fn py_new(_cls: &Py<PyType>, args: Self::Args, vm: &VirtualMachine) -> PyResult<Self> {
-            let mut positional = args.args;
-            match positional.len() {
-                0 => Ok(Self {
-                    inner: Quantity::dimensionless(0.0),
-                }),
-                1 => {
-                    let value = positional.remove(0);
-                    let inner = if let Some(copy) = value.downcast_ref::<Self>() {
-                        copy.inner
-                    } else if let Ok(text) = value.try_to_value::<String>(vm) {
-                        Quantity::parse(&text).map_err(|error| vm.new_value_error(error))?
-                    } else {
-                        Quantity::dimensionless(value.try_into_value::<f64>(vm)?)
-                    };
-                    Ok(Self { inner })
-                }
-                2 => {
-                    let number = positional[0].clone().try_into_value::<f64>(vm)?;
-                    let symbol = positional[1].try_to_value::<String>(vm)?;
-                    let unit = Unit::parse(&symbol)
-                        .ok_or_else(|| vm.new_value_error(format!("unknown unit '{symbol}'")))?;
-                    Ok(Self {
-                        inner: Quantity::new(number, unit),
-                    })
-                }
-                _ => Err(vm.new_type_error("Quantity() takes 0, 1 or 2 arguments")),
-            }
-        }
-    }
-
-    #[pyclass(with(Constructor))]
-    #[allow(non_snake_case)]
-    impl PyQuantity {
-        /// FreeCAD's `.Value`: the number in this quantity's own unit.
-        #[pygetset]
-        fn Value(&self) -> f64 {
-            self.inner.value()
-        }
-
-        /// The value expressed in `unit`; a different signature is an error, as it is
-        /// natively.
-        #[pymethod]
-        fn getValueAs(&self, unit: String, vm: &VirtualMachine) -> PyResult<Self> {
-            let unit = Unit::parse(&unit)
-                .ok_or_else(|| vm.new_value_error(format!("unknown unit '{unit}'")))?;
-            if unit.sig != self.inner.sig() {
-                return Err(vm.new_value_error("incompatible unit for getValueAs"));
-            }
-            Ok(Self {
-                inner: self.inner.in_unit(unit),
-            })
-        }
-
-        /// The display string (`"10 mm"`), from the engine's canonical formatting.
-        #[pymethod]
-        fn __str__(&self, vm: &VirtualMachine) -> PyStrRef {
-            vm.ctx.new_str(self.inner.user_string())
-        }
-    }
 }
 
 /// The bridge's payload: the document the Rust side built, rendered by [`snapshot`].
@@ -343,10 +260,11 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 
 /// RustPython as a [`PythonRuntime`]: the interpreter, and what its facade answers.
 ///
-/// The facade is **the desktop's own Python**, installed from source: `FreeCADGui`,
-/// `FerroCADGui` and the `FerroCAD` package. `bootstrap.py` supplies only the host gaps,
-/// the document model and the four bricks they need, so there is one implementation of
-/// the Gui app on both runtimes. The [`Contract`] names what that facade answers:
+/// The facade is **the desktop's own Python**, installed from source: `FreeCAD`,
+/// `FreeCADGui`, `FerroCADGui` and the `FerroCAD` package, over the native module in
+/// [`native`]. `bootstrap.py` supplies only the host gaps, so there is one implementation
+/// of the App and Gui facades on both runtimes. The [`Contract`] names what that facade
+/// answers:
 ///
 /// - `view` — `appearance_view`, `grid_summary`, `axis_summary` over the shared
 ///   `FerroCAD.Grid`/`Axis`/`Gizmo` stores. An unset parameter-group value falls back to
@@ -415,7 +333,7 @@ impl RustPythonRuntime {
                 // module for.
                 &rustpython_stdlib::stdlib_module_defs(Context::genesis()),
             )
-            .add_native_module(_ferrocad::module_def(Context::genesis()))
+            .add_native_module(native::module_def(Context::genesis()))
             // The frozen Python half of the standard library (`types`, `json`, …).
             .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
             .build();
@@ -427,16 +345,26 @@ impl RustPythonRuntime {
                 // scope as the call, because `run_source` gives each source a fresh one.
                 let install = format!(
                     "{LOADER}\nSHELL_FILES = {{'catalog.json': SHELL_CATALOG}}\n\
+                     _install_package('FreeCAD', eval(FREECAD_FILES_SOURCE))\n\
+                     FREECAD = sys.modules['FreeCAD']\n\
+                     # This host has a window (the browser module and --script-host=pywasm),\n\
+                     # and no filesystem behind the parameter store: GuiUp answers the Gui\n\
+                     # branches as natively, and the store stays in memory.\n\
+                     FREECAD.GuiUp = 1\n\
+                     FREECAD._parameter_file_path = lambda: None\n\
                      _install('FreeCADGui', FREECADGUI_SOURCE)\n\
                      _install_package('FerroCAD', eval(FERROCAD_FILES_SOURCE))\n\
                      _install('FerroCADGui', FERROCADGUI_SOURCE)\n\
                      _install('ferrocad_shell', SHELL_SOURCE)"
                 );
-                // A Python dict of the package's sources. `{:?}` renders a Rust string
+                // A Python dict of each package's sources. `{:?}` renders a Rust string
                 // as a quoted literal (newlines and quotes escaped), which is also a
                 // Python one.
                 let ferro_files = format!(
                     "{{'__init__': {FERROCAD_INIT:?}, '_params': {FERROCAD_PARAMS:?}, '_grid': {FERROCAD_GRID:?}, '_axis': {FERROCAD_AXIS:?}, '_gizmo': {FERROCAD_GIZMO:?}}}"
+                );
+                let freecad_files = format!(
+                    "{{'__init__': {FREECAD_INIT:?}, 'Base': {FREECAD_BASE:?}, 'Units': {FREECAD_UNITS:?}, 'Console': {FREECAD_CONSOLE:?}, '_view_style': {FREECAD_VIEW_STYLE:?}}}"
                 );
                 run_source(
                     vm,
@@ -448,6 +376,7 @@ impl RustPythonRuntime {
                         ("FREECADGUI_SOURCE", FREECADGUI),
                         ("FERROCADGUI_SOURCE", FERROCADGUI),
                         ("FERROCAD_FILES_SOURCE", ferro_files.as_str()),
+                        ("FREECAD_FILES_SOURCE", freecad_files.as_str()),
                     ],
                 )?;
                 run_source(vm, "<namespace>", NAMESPACE, &[])
@@ -510,7 +439,8 @@ impl PythonRuntime for RustPythonRuntime {
         }
     }
 
-    /// Read-only: `_ferrocad` exposes one function, and it reads.
+    /// Read-only: the native module's document functions read the host's document and
+    /// refuse the write path.
     fn document_grant(&self) -> DocumentGrant {
         DocumentGrant::Read
     }

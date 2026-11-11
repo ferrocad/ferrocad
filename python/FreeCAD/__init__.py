@@ -72,19 +72,30 @@ import ferrocad as _fc
 
 backend = "ferrocad"
 
-Document = _fc.Document
-DocumentObject = _fc.DocumentObject
-Quantity = _fc.Quantity
-StringHasher = _fc.StringHasher
-StringID = _fc.StringID
-Vector = _fc.Vector
-Matrix = _fc.Matrix
-Placement = _fc.Placement
-Rotation = _fc.Rotation
-TypeId = _fc.TypeId
-BoundBox = _fc.BoundBox
-Material = _fc.Material
-Vector2d = _fc.Vector2d
+# The value types are the native bindings of the engine (`ferrocad_py` natively, the
+# `ferrocad` module the wasm half installs). A binding may not expose every constructor
+# — the read-only wasm half binds the ones the App surface uses — and a name it does not
+# bind is simply absent, exactly as an unlinked optional module's names are (compare
+# `_part_is_builtin`). `tools/api_docs.py` documents the complete CPython surface.
+for _value_type in (
+    "Document",
+    "DocumentObject",
+    "Quantity",
+    "StringHasher",
+    "StringID",
+    "Vector",
+    "Matrix",
+    "Placement",
+    "Rotation",
+    "TypeId",
+    "BoundBox",
+    "Material",
+    "Vector2d",
+):
+    if hasattr(_fc, _value_type):
+        globals()[_value_type] = getattr(_fc, _value_type)
+del _value_type
+
 GuiUp = 0
 __version__ = _fc.__version__
 _kernel_id = _fc._kernel_id

@@ -300,12 +300,12 @@ the interpreter runs is the one the native assembly imports.
 
 The bindings are the one thing that does not carry over. Both Python backends reach the
 engine through a native module registered in their interpreter — `ferrocad` (PyO3) under
-CPython, `_ferrocad` (a `rustpython-vm` module) here — and only that module touches
-`ferrocad_core`. The script above it is byte-identical:
+CPython, `ferrocad` (a `rustpython-vm` module in `native.rs`) here — and only that module
+touches `ferrocad_core`. The script and the App facade above it are byte-identical:
 
 ```text
-CPython:    ferrocad_shell → imports `ferrocad`  → ferrocad_py (PyO3 C-ABI)   → ferrocad_core
-RustPython: ferrocad_shell → imports `_ferrocad` → _ferrocad (rustpython-vm)  → ferrocad_core
+CPython:    ferrocad_shell → imports `ferrocad` → ferrocad_py (PyO3 C-ABI)      → ferrocad_core
+RustPython: ferrocad_shell → imports `ferrocad` → native.rs (rustpython-vm)     → ferrocad_core
 ```
 
 **One `ScriptHost`, two runtimes.** The script half is
@@ -323,27 +323,30 @@ The seam is `crates/ferrocad_python_host`; the trail is
 [`backend-parity.md`](../../project/tasks/backend-parity.md) B18.
 
 **The facade is the desktop's own Python.** B18b installs, from source, the same
-`python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py` and `python/FerroCAD/`
-package the CPython half imports: the command registry, selection mirror, dialogs and
-observers; the provider registry, settings and `ViewState`; and the semantic
-grid/axis/gizmo stores. `bootstrap.py` therefore keeps only what a `host_env`-off
-RustPython cannot provide — the host gaps (`io`, `contextlib`, `pathlib`, `traceback`,
-an `importlib` stub, `os`), the document model over `_ferrocad`, and the bricks they sit
-on: `FreeCAD.ParamGet` over a dict, the engine's `Quantity` bound into the VM as
-`_ferrocad.Quantity`, the `ferrocad` property rules and the parameter-file controls. It
-was ~2 050 lines of duplicate policy; it is ~570 lines of host shims, so a change to a
+`python/FreeCAD` package, `python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py`
+and `python/FerroCAD/` package the CPython half imports: documents, the parameter store
+and units; the command registry, selection mirror, dialogs and observers; the provider
+registry, settings and `ViewState`; and the semantic grid/axis/gizmo stores. The native
+module supplies what those expect from the engine: `Document`/`DocumentObject` over the
+host's payload, `Quantity`/`Unit`/`Vector`/`Matrix`/`Rotation`/`Placement`/`TypeId`, and
+the three property rules. `bootstrap.py` therefore keeps only the host gaps a
+`host_env`-off RustPython cannot fill — `io`, `contextlib`, `pathlib`, `traceback`,
+`importlib`, `os`, `tempfile` — plus the wiring (`GuiUp`, no parameter file). It was
+~2 050 lines of duplicate policy; it is ~250 lines of host shims, so a change to a
 command, a provider rule or a store is one source for both runtimes.
 
-The document model answers over the **host's active document** and asks the bridge for
-the rows on every access (`FreeCAD.ActiveDocument` is a live view, not a snapshot taken
-at import), so the console follows an open or a close. The rows' `kind` and display text
-come from `ferrocad_core::present`, so the property pane cannot drift between the two
-Python backends.
+The document answers over the **host's active document** and reads the payload fresh on
+every access (`FreeCAD.ActiveDocument` is a live view, not a snapshot taken at import),
+so the console follows an open or a close. The rows' `kind` and display text come from
+`ferrocad_core::present`, so the property pane cannot drift between the two Python
+backends.
 
-The document model is **read-only**: `setattr` on an object raises rather than silently missing
-the document, and recompute, the `Shape` API and every write live in the document half.
-That is the price of not sharing the `*_py` bindings, and the code says so where a
-script would notice.
+The document is **read-only**: creating or opening a document and `setattr` on an object
+raise rather than silently missing the document, and recompute, the `Shape` API and every
+write live in the document half. That is the price of not sharing the `*_py` bindings,
+and the code says so where a script would notice. Four value classes `python/FreeCAD`
+re-exports (`BoundBox`, `Material`, `StringID`, `StringHasher`) are not bound yet; the
+shared module leaves an unbound name absent rather than inventing one.
 
 **It answers the Gui app's presentation half.** The installed facade carries
 `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`, the two view requests, and the

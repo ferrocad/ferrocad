@@ -1748,9 +1748,9 @@ Two divergences this section recorded, both closed by B18b:
    are inside `view` rather than mapped to `None`. The value is session-only until the
    store has a file behind it (B18b item 4).
 
-**Cost, stated plainly.** `bootstrap.py` is now ~570 lines — the host gaps, the document
-model and the bricks — because the facade above them is the shared `python/` source
-(B18b). That is down from ~2 050 lines of duplicate policy: commands, selection, the
+**Cost, stated plainly.** `bootstrap.py` is now ~250 lines of host gaps and wiring, and
+`native.rs` is the binding the CPython half gets from PyO3; the facade above both is the
+shared `python/` source (B18b). That is down from ~2 050 lines of duplicate policy: commands, selection, the
 provider registry, settings and the semantic stores all run the same code on both hosts
 now, so a change to any of them is one source. `ThreadedRuntime` (the desktop
 `--script-host=pywasm`) still reports `Contract::NONE`, and that is not laziness: its
@@ -1802,29 +1802,48 @@ handles stay the document half's; a declared handle comes back from
 the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
 full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
-### B18b — run the real facade under RustPython (shared-source install built 2026-11-11)
+### B18b — run the real facade under RustPython (built 2026-11-11; native module 2026-11-12)
 
-The structural half of the parity gap. **Built: the facade above the bricks is now the
-shared source.** `bootstrap.py` went from 2 050 to 630 lines because the desktop's modules
-are installed, not ported:
+The structural half of the parity gap. **Built: the whole facade is now the shared source.**
+`bootstrap.py` went from 2 050 to ~250 lines because the desktop's modules are installed,
+not ported — the App facade (`python/FreeCAD`, with its documents, parameter store and
+units) as well as the Gui ones:
 
 - `python/FreeCADGui/__init__.py` (command registry, selection mirror, dialogs, document
   observers) and `python/FerroCADGui/__init__.py` (provider registry, settings,
   `ViewState`, appearance presets) are loaded with `_install`; `python/FerroCAD/` (the
   semantic stores and `_params`) with a package-aware `_install_package`, because its
   modules use relative imports.
-- `bootstrap.py` supplies only what a `host_env`-off RustPython cannot: the host gaps
-  (`io`, `contextlib`, `pathlib`, `traceback`, an `importlib` stub, `os`), the document
-  model over `_ferrocad`, and the bricks they sit on — a dict-backed `FreeCAD.ParamGet`,
-  the `ferrocad` property rules, `_configure_parameter_file`/`_parameter_file_path`, and
-  `_kernel_id`.
-- **Quantity is the engine's, not a second unit model.** `_ferrocad` binds
-  `ferrocad_core::quantity::Quantity` into the VM (`Value`, `getValueAs`, `str`, and the
-  0/1/2-argument constructor), so the settings coercion parses and converts exactly as
-  the desktop does. The retired ~35-line Python stand-in refused `20 cm` on a `mm` setting;
+- `python/FreeCAD/__init__.py`, `Base.py`, `Units.py`, `Console.py` and `_view_style.py`
+  are installed as the `FreeCAD` package (`_install_package`), so the App surface —
+  documents, `ParamGet` and its parameter-file controls, `Units`, the Base values — is
+  one source too. The loader then sets `GuiUp = 1` and clears the parameter file path:
+  this host has a window and no filesystem, so the store is memory-only and no path is
+  ever resolved.
+- The native module (`crates/ferrocad_shell_pywasm/src/native.rs`, registered as
+  `ferrocad`) supplies what the installed Python expects from the engine:
+  `Document`/`DocumentObject` over `ferrocad_doc_api`'s payload, the three property
+  rules `ferrocad_shell` reads, `Quantity`/`Unit`/`Vector`/`Vector2d`/`Matrix`/
+  `Rotation`/`Placement`/`TypeId`, and the document registry functions.
+  `activeDocument`/`getDocument`/`listDocuments` read the payload fresh; `newDocument`/
+  `openDocument`/`closeDocument`/`setActiveDocument` refuse, because the document half
+  owns them.
+- `bootstrap.py` supplies only what a `host_env`-off RustPython cannot: `io`,
+  `contextlib`, `pathlib`, `traceback`, `importlib` (with `util.find_spec`), `os` and
+  `tempfile`. Nothing above it is policy.
+- **Quantity is the engine's, not a second unit model.** The native class binds
+  `ferrocad_core::quantity::Quantity` (`Value`, `getValueAs`, `str`, and the 0/1/2-
+  argument constructor), so the settings coercion parses and converts exactly as the
+  desktop does. The retired ~35-line Python stand-in refused `20 cm` on a `mm` setting;
   the bound class converts it to `200 mm`, and `tests/settings.rs` pins that (the old row
-  expected a refusal). A unit of the wrong signature is still refused, with the engine's
-  words.
+  expected a refusal).
+- **Two RustPython facts shaped the document class.** (1) A native payload's attribute
+  lookup does not fall back to a Python `__getattr__`, so property values are seeded into
+  the object's instance dict (`HAS_DICT`) instead; (2) a `#[pymethod] __setattr__` is not
+  consulted either, so the read-only refusal is the `SetAttr` protocol
+  (`impl SetAttr for PyDocumentObject`). Without the second, `obj.Length = 5` would
+  silently write the instance dict — the exact "looks like an edit, changes nothing"
+  failure the facade refuses. `tests/freecad_package.rs` pins both.
 - One shared rule changed: an **unset** parameter-group value in `FerroCAD._grid`/`_axis`
   falls back to the shell's mirrored `FreeCADGui.ViewState` before the schema default.
   That is what makes a pushed `grid: true` the value the next toggle reads on every
@@ -1844,11 +1863,10 @@ are installed, not ported:
 What remains of B18b is the *native binding* half, and none of it is needed for the facade
 above it:
 
-1. a RustPython `ferrocad` module over `ferrocad_core` — the ~27 names `python/FreeCAD`
-   imports plus the value classes, so `python/FreeCAD/__init__.py` itself runs (today the
-   document model is the substitute). **Started:** `Quantity` is bound already (see
-   above), which is the only value type the shared Gui modules use; the document classes
-   and the rest of the values are what remain;
+1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
+   property rules and the value classes above, so `python/FreeCAD` itself runs. What is
+   still unbound is `BoundBox`, `Material`, `StringID` and `StringHasher`; the shared
+   modules leave those names absent rather than inventing classes for them;
 2. `ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh` (needs `ferrocad_part`,
    `ferrocad_mesh` and OCCT in the RustPython build);
 3. `host_env` on for the **native** RustPython build only (target-specific dependency), so

@@ -137,9 +137,12 @@ rule a scanned tree uses (`Init.py` then `InitGui.py`; a script that raises is r
 not fatal). The status line shows `Loading mods 3/7 · Fasteners` and then a summary;
 the About card (`Settings/About`) lists what loaded and what did not.
 
-Delivery and capability are separate. A pack the current facade cannot run (today, the
-shipped provider mods need `os` and the provider registry: B18a step 5 / B18b) is
-reported and skipped, and the window is unaffected; `?mods=0` turns the fetch off.
+Delivery and capability are separate. A pack the current facade cannot run (the
+Coin/shader skins read a resource file and need the overlay bridge; a task panel needs
+`.ui`) is reported and skipped, and the window is unaffected; `?mods=0` turns the fetch
+off. The provider settings clients (`GridOverlay`, `AxisOverlay`, `GizmoOverlay`) run:
+since B18b the facade is the shared `python/` source and `bootstrap.py` supplies the `os`
+and `FreeCAD.ParamGet` they need, so each registers its `grid`/`axis`/`gizmo` provider.
 
 ## Settings
 
@@ -301,16 +304,17 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 
   With a script half the id stays the Gui app's (`Executor::Script`), which is what
   keeps the desktop's headless-modal decision in `_GridSettingsCommand.Activated`.
-- **The browser has one provider per feature, and it is the document half's.** The page
-  fetches the mod packs (see [Mods](#mods)), but the shipped provider mods stop at
-  `import os` (B18b), so none registers one here. The wasm facade *has* the registry since
-  B18a step 5 (`FerroCADGui.registerProvider`/`providers`/`providerSkin`/
-  `setActiveProvider`/`refreshProviders`/`settings`), so a pack that does register reaches
-  the About card, Dev Tools and its own `Settings/<Feature>` card (step 3; the written
-  values last for the session — there is no parameter store until B18b); with none
-  registered the facade's `grid_summary`/`axis_summary` are the closed empty summaries,
-  which the document half treats as "not mine", so the header keeps naming the native
-  provider it draws. `?providers=1` is the measurement:
+- **The provider registry is the loaded packs'.** The page fetches the mod packs (see
+  [Mods](#mods)), and the shipped settings clients (`GridOverlay`, `AxisOverlay`,
+  `GizmoOverlay`) register their `grid`/`axis`/`gizmo` providers once the pack lands: the
+  wasm facade is the shared `python/` source since B18b, with `os` and `FreeCAD.ParamGet`
+  supplied by `bootstrap.py`. A registered pack reaches the About card, Dev Tools, the
+  header popovers and its own `Settings/<Feature>` card; written values live in the
+  dict-backed `ParamGet`, so they last for the session and a reload starts from the
+  declared defaults. Before the fetch — and with no pack loaded — the facade's
+  `grid_summary`/`axis_summary` are the closed empty summaries, which the document half
+  treats as "not mine", so the header names the native provider it draws. `?providers=1`
+  is the measurement, and it runs at boot, before the fetch:
 
   ```
   ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
@@ -378,10 +382,12 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
 - **Python workbenches.** `?pywasm=1` installs RustPython, so the Console evaluates
   Python against the real `FreeCAD.ActiveDocument` and the shell script's property
   rows are real. The shipped packs are fetched and run (`?mods=1`, the default): each
-  `Init.py` loads, and each `InitGui.py` currently stops at `import os`, which the
-  wasm facade does not install (B18b) — recorded, shown in `Settings/About` and the
-  status line, and never fatal. The facade is read-only, though (no `setattr`, no
-  recompute, no `Shape`), and there are no `.ui` task panels and no `pivy`.
+  `Init.py` loads, and the provider settings clients' `InitGui.py` runs — they are the
+  mods the facade is complete enough for, and `tests/mods.rs` pins them natively. The
+  Coin/shader skins read a resource file and need the overlay bridge, so those still
+  record an error, shown in `Settings/About` and the status line and never fatal. The
+  facade is read-only, though (no `setattr`, no recompute, no `Shape`), and there are no
+  `.ui` task panels and no `pivy`.
   RustPython's compiler recurses, so `build.rs` sets the module's stack to 16 MiB
   (`wasm-ld`'s default is 1 MiB); if `?pywasm=1` traps on boot, that is the knob.
 - **Multiple windows.** The browser backend has one window.

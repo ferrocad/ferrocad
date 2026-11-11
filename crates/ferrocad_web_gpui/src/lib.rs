@@ -268,12 +268,13 @@ fn probe_manipulator(cx: &mut gpui::App) {
 
 /// `?providers=1` — the provider registry, as the header's popovers and Dev Tools read it.
 ///
-/// The wasm half has the mod provider registry since B18a step 5, but the shipped mods
-/// stop at `import os` (B18b), so none registers here. With an empty registry the
-/// facade's summaries are the closed empty case, which `RustAppBackend` treats as "not
-/// mine": the header names the native provider that draws the ground, and `registry`
-/// (the document half's `provider_features`) agrees. A pack that does register would show
-/// up in both.
+/// The wasm half has the mod provider registry (B18a step 5), and the shipped settings
+/// clients (`mods/GridOverlay`, `AxisOverlay`, `GizmoOverlay`) do register there since
+/// B18b. This probe runs at boot, though, before the page fetches a pack, so it reports
+/// the native provider alone. With an empty registry at that instant the facade's
+/// summaries are the closed empty case, which `RustAppBackend` treats as "not mine": the
+/// header names the native provider that draws the ground, and `registry` (the document
+/// half's `provider_features`) agrees. After the fetch both halves list the mods.
 fn probe_providers(cx: &mut gpui::App) {
     let query = ferrocad_shell_web::page_query();
     if ferrocad_shell_web::parameter(&query, "providers").is_none() {

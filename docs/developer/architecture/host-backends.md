@@ -321,23 +321,33 @@ one flag plus the facade code.
 The seam is `crates/ferrocad_python_host`; the trail is
 [`backend-parity.md`](../../project/tasks/backend-parity.md) B18.
 
-`bootstrap.py` supplies the `FreeCAD` facade over the **host's active document** and the
-four stdlib modules `wasm32-unknown-unknown` cannot import (`contextlib`, `io`,
-`pathlib`, `traceback` — the target has no POSIX module). The facade asks the bridge for
+**The facade is the desktop's own Python.** B18b installs, from source, the same
+`python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py` and `python/FerroCAD/`
+package the CPython half imports: the command registry, selection mirror, dialogs and
+observers; the provider registry, settings and `ViewState`; and the semantic
+grid/axis/gizmo stores. `bootstrap.py` therefore keeps only what a `host_env`-off
+RustPython cannot provide — the host gaps (`io`, `contextlib`, `pathlib`, `traceback`,
+an `importlib` stub, `os`), the document model over `_ferrocad`, and four bricks:
+`FreeCAD.ParamGet` over a dict, `FreeCAD.Units.Quantity`, the parameter-file controls
+and `_kernel_id`. It was ~2 050 lines of duplicate policy; it is ~630 lines of host
+shims, so a change to a command, a provider rule or a store is one source for both
+runtimes.
+
+The document model answers over the **host's active document** and asks the bridge for
 the rows on every access (`FreeCAD.ActiveDocument` is a live view, not a snapshot taken
 at import), so the console follows an open or a close. The rows' `kind` and display text
 come from `ferrocad_core::present`, so the property pane cannot drift between the two
 Python backends.
 
-The facade is **read-only**: `setattr` on an object raises rather than silently missing
+The document model is **read-only**: `setattr` on an object raises rather than silently missing
 the document, and recompute, the `Shape` API and every write live in the document half.
 That is the price of not sharing the `*_py` bindings, and the code says so where a
 script would notice.
 
-**It answers the Gui app's presentation half.** `bootstrap.py` carries
+**It answers the Gui app's presentation half.** The installed facade carries
 `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`, the two view requests, and the
-command registry (`_COMMANDS`, `_command_list`, `_resources`, `_enabled`, `_checked`,
-`_run`, dialog tokens). The runtime's `Contract` is therefore `{view, view_state,
+`FreeCADGui` command registry (`_COMMANDS`, `_command_list`, `_resources`, `_enabled`,
+`_checked`, `_run`, dialog tokens). The runtime's `Contract` is therefore `{view, view_state,
 commands}` (B18a steps 1–2): the shell's own Gui commands (`App_ToggleGrid`,
 `App_ToggleAxisCross`, `App_ToggleGizmo`, `App_ViewWorkplane`, `View_GridSettings`,
 `Dev_ToggleTools`) and every command a loaded workbench registers run *in Python* here
@@ -349,11 +359,16 @@ writes queued back, `Document.UndoCount`/`RedoCount` from the payload) and holds
 **mod provider registry and its settings cards** (steps 5 and 3:
 `FerroCADGui.registerProvider`/`providers`/`activeProvider`/`providerSkin`/
 `setActiveProvider`/`refreshProviders`/`settings`/`setSetting`/`resetAppearance`). The
-selected backend and the values a script writes live in memory — the parameter store is
-B18b — so an edit lasts for the session and the next load starts from the declared
-defaults. A predicate the facade cannot evaluate answers *enabled*, so a merge cannot
-disable a verb the document half can still run; `interaction` and `tree` stay off until
-their facade lands.
+selected backend and the values a script writes persist in the dict-backed
+`FreeCAD.ParamGet` — the process, not a file — so an edit lasts for the session and a
+reload starts from the declared defaults. A predicate that raises disables its row (the
+shared `_enabled` rule); `interaction` and `tree` stay off until their facade lands.
+
+Because the facade is the real one, **real mods load**: `mods/GridOverlay`,
+`mods/AxisOverlay` and `mods/GizmoOverlay` run here and declare their `grid`/`axis`/
+`gizmo` providers, which `tests/mods.rs::the_shipped_settings_clients_load` pins. The
+Coin/shader skins need an overlay scene and the Fasteners/Spring/Explode workbenches need
+`Part`, so those still record an error in the browser.
 
 Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
 `wasm32-unknown-unknown`, and its compiler recurses, so a host raises the stack before

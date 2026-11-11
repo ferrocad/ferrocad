@@ -282,9 +282,10 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 ///   dict-backed `ParamGet` (the process, not a file), so a reload starts from priority.
 /// - `settings` — `extra_properties`/`set_extra_property` over the
 ///   `Settings/<Feature>` namespace: the provider selector row and the active
-///   provider's schema. A written value lives in a session store (no parameter store:
-///   B18b), coercion and range/choice checks are the native ones, `resetAppearance`
-///   drops the written values, and a write returns the provider's `refresh` view claim.
+///   provider's schema. A written value goes through `FreeCAD.ParamGet` (the
+///   dict-backed store, so it is session-only — B18b), coercion and range/choice
+///   checks are the native ones, `resetAppearance` drops the written values, and a
+///   write returns the provider's `refresh` view claim.
 ///
 /// `interaction` and `tree` stay off: the facade has no `Part` hook and no app-script
 /// model tree, so the document half answers both.

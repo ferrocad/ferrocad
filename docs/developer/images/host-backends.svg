@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 866" width="1100" height="866" role="img" aria-labelledby="title desc">
   <title id="title">FerroCAD system architecture: hosts, the seam, one document half, four runtimes and the engine</title>
-  <desc id="desc">Four layers: the platform hosts that own the entry point, window and FilePicker (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); one RustAppBackend document half that every runtime instantiates, holding one of four scripting configurations (CPython's PythonScriptHost, RustPython's PywasmScriptHost, the JS JsScriptHost, or none), chosen in the browser by ferrocad_shell_web from the page's query string; and the shared ferrocad_core plus ferrocad_part engine over OCCT, which the JS half and wasm addons reach through ferrocad_doc_api's JSON doorway rather than by linking the engine. The synthetic Settings namespace is merged per feature: whichever half has rows for a node owns it, so the document half answers Settings/Grid from the shell's mirrored view state when no script half lists it.</desc>
+  <desc id="desc">Four layers: the platform hosts that own the entry point, window and FilePicker (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); one RustAppBackend document half that every runtime instantiates, holding one of four scripting configurations (CPython's PythonScriptHost, RustPython's PywasmScriptHost, the JS JsScriptHost, or none), chosen in the browser by ferrocad_shell_web from the page's query string; both Python halves run the same python/ facade (FreeCADGui, FerroCADGui and FerroCAD installed from source), with bootstrap.py supplying only the host gaps, the document model and four bricks; and the shared ferrocad_core plus ferrocad_part engine over OCCT, which the JS half and wasm addons reach through ferrocad_doc_api's JSON doorway rather than by linking the engine. The synthetic Settings namespace is merged per feature: whichever half has rows for a node owns it, so the document half answers Settings/Grid from the shell's mirrored view state when no script half lists it.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -116,7 +116,7 @@
 
   <rect class="box" x="336" y="446" width="226" height="44" rx="5" fill="#b9dcc2" stroke="#7fb391" />
   <text class="t box-title" x="449" y="464" text-anchor="middle">RustPython VM</text>
-  <text class="t box-sub" x="449" y="480" text-anchor="middle">bootstrap.py (FreeCAD + stdlib)</text>
+  <text class="t box-sub" x="449" y="480" text-anchor="middle">bootstrap.py: gaps + document + bricks</text>
   <line class="wire" x1="449" y1="490" x2="449" y2="498" marker-end="url(#arrow)" />
 
   <!-- column 3: no runtime, no scripting half -->
@@ -143,8 +143,8 @@
 
   <!-- the one Python script both VMs run -->
   <rect class="box" x="92" y="498" width="470" height="36" rx="6" fill="url(#shared-scripts)" stroke="#8a9bb0" />
-  <text class="t box-title" x="327" y="515" text-anchor="middle">python/ferrocad_shell + catalog.json (shared Python script)</text>
-  <text class="t box-sub" x="327" y="529" text-anchor="middle">runs unchanged in both VMs; calls the VM's native module below</text>
+  <text class="t box-title" x="327" y="515" text-anchor="middle">python/ installed from source (both VMs)</text>
+  <text class="t box-sub" x="327" y="529" text-anchor="middle">ferrocad_shell · FreeCADGui · FerroCADGui · FerroCAD</text>
 
   <!-- native bridges: one per VM, and they are not the same module -->
   <line class="wire" x1="205" y1="534" x2="205" y2="542" marker-end="url(#arrow)" />

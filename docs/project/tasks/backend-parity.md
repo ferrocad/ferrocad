@@ -1671,7 +1671,8 @@ port, not invented by it:
   `_Absent` (an `AttributeError` that reports itself) from a PEP-562 `__getattr__`, so
   "capability absent" and "predicate broken" are distinguishable. Absent still answers
   enabled — an absent capability is not a dead command, and the shell merges the script's
-  row over the catalogue's.
+  row over the catalogue's. **B18b removed the substitute modules**, so no capability is
+  absent on this half any more: the shared `_enabled` disables on any raise.
 - `Document.UndoNames`/`RedoNames` stay absent on purpose: undoing is a document write,
   so `App_Undo` refuses at the first name it asks for, naming the missing write path
   rather than `FreeCADGui.Selection` (which now answers).
@@ -1734,19 +1735,17 @@ each backend's own value; and the reset row restoring the declared defaults.
 rows field for field, and compares the read-only refusal — with a computed row, so the
 CPython comparison writes nothing to the developer's parameter store.
 
-Two deliberate divergences:
+Two divergences this section recorded, both closed by B18b:
 
-1. **`_enabled` answers enabled when the capability is absent** (see step 4 above).
-   `App_Undo`/`App_Redo` now read `Document.UndoCount` and the selection commands read
-   `FreeCADGui.Selection`, so nothing built-in takes this branch today; it exists for the
-   names still absent (`FreeCAD.ParamGet` and the rest of B18b so far), where disabling
-   the row would override the document half's own `enabled` — the shell merges the
-   script's row over the catalogue's — and take away verbs the window can still run.
-2. **`gpu_adapter`/`set_gpu_adapter` over-claim.** They ride `view`, but
-   `ferrocad_shell` reads them through `FreeCAD.ParamGet`, which the facade does not
-   install (B18b); the call raises and `PythonHost` maps it to `None`, so the document
-   half's answer stands. No behaviour change, but `view` is two methods wider than the
-   facade.
+1. **`_enabled` answered enabled when the capability was absent.** The port had its own
+   lenient rule for a predicate that raised because a name was missing; the shared
+   `FreeCADGui._enabled` disables the row instead. With `FreeCAD.ParamGet` installed no
+   capability is absent, and `tests/view.rs::a_broken_predicate_disables_a_command` pins
+   the shared rule.
+2. **`gpu_adapter`/`set_gpu_adapter` over-claimed.** They ride `view` but read through
+   `FreeCAD.ParamGet`; with B18b's dict-backed store the calls answer, so the two methods
+   are inside `view` rather than mapped to `None`. The value is session-only until the
+   store has a file behind it (B18b item 4).
 
 **Cost, stated plainly.** `bootstrap.py` is now ~630 lines — the host gaps, the document
 model and four bricks — because the facade above them is the shared `python/` source
@@ -1759,8 +1758,10 @@ same one line plus its test, and it has no mods to answer for anyway.
 **Exit: met.** `crates/ferrocad_shell_pywasm/tests/view.rs` (6): the grid/axis toggles
 return the composed view request and flip back; a pushed `ViewState` is what the next
 toggle acts on; the appearance hook's request goes through `ViewState::apply`; every
-catalogue `Executor::Script` id is registered; a broken predicate disables its row while
-an absent capability does not, and `View_GridSettings` selects the card.
+catalogue `Executor::Script` id is registered; a broken predicate disables its row, and
+`View_GridSettings` selects the card. (B18b re-pointed the second case: `Test_Broken`
+still disables, and the old absent-capability row became `Test_Param`, which is judged
+now that `FreeCAD.ParamGet` exists.)
 `tests/selection.rs` (4): a pushed selection makes the selection-backed rows enabled and
 a pushed-empty one disables them; a script's writes are queued in order with their
 sub-elements and points and a second drain is empty; `App_Delete` gives the script's
@@ -1810,6 +1811,11 @@ are installed, not ported:
   answers. The four ported groups are gone, so the desktop's Python and the browser's
   cannot drift apart again — a change to a command, a provider rule or a store is one
   source.
+- With the facade complete, **real mods run**: `tests/mods.rs::the_shipped_settings_clients_load`
+  loads `mods/GridOverlay`, `AxisOverlay` and `GizmoOverlay` from source and asserts
+  their commands and their `grid`/`axis`/`gizmo` providers. The browser's pack path is
+  now exercised by shipped mods instead of synthetic ones; the Coin/shader skins and a
+  task panel still need a surface this half does not install.
 
 What remains of B18b is the *native binding* half, and none of it is needed for the facade
 above it:

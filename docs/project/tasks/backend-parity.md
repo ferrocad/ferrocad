@@ -1451,20 +1451,22 @@ The browser therefore reads
 ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
 ```
 
-> **Updated by B18a steps 1–2 (2026-11-11).** That line is the `plain`/`js` answer. With
-> the Python half installed the wasm facade now answers `view`, and therefore
-> `grid_summary`/`axis_summary`, from its own provider registry — empty until step 5 — so
-> the header label reads `none` while the document half still draws the grid and the
-> `registry` line is unchanged:
+> **Found and fixed after B18a steps 1–2 (2026-11-11).** Enabling `view` made the wasm
+> facade answer `grid_summary`/`axis_summary` too, and with its registry empty it answered
+> the closed empty summaries — no backend, no label. `RustAppBackend` took that as the
+> answer, so the browser header read `none` beside a native grid and axis the viewport was
+> still drawing. The rule is now the same as `provider_features`: **a summary that names no
+> provider is not a claim**, and the document half answers. `names_a_provider` in
+> `ferrocad_shell_rust` is that test, `an_empty_script_summary_defers_to_the_document_halfs_provider`
+> pins it, and `smoke.sh` is back to asserting
 >
 > ```
-> ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1
+> ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
 > ```
 >
-> `smoke.sh` asserts that pair for `?runtime=pywasm` and `?runtime=pywasm,js`. Step 5
-> (the registry answers) closes it, as would a merge rule that lets a script's *empty*
-> summary defer to the document half; the second is a policy change and has not been
-> decided.
+> on both `?runtime=pywasm` and `?runtime=pywasm,js`. This also covers CPython without a
+> provider mod, which answers the same empty summary. Step 5's registry makes the script's
+> own answer non-empty, and it then answers first as before.
 
 **Exit: met.** `without_a_script_the_registry_names_the_document_halfs_providers`, plus
 `the_provider_and_gpu_hooks_ask_the_script_first` extended to pin the per-feature merge

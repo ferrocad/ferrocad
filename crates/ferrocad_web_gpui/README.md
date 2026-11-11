@@ -307,19 +307,18 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   B18b): their `InitGui.py` is recorded as failed and skipped, and `PywasmScriptHost`
   implements neither the `Settings` hooks nor `provider_features`, while
   `FreeCADGui.providers()` returns `[]`. Since B18a steps 1–2 the facade also answers
-  `grid_summary`/`axis_summary` (the `view` flag), so the header reads its empty
-  registry — `none` — while the document half still draws the native grid. `?providers=1`
-  is the measurement:
+  `grid_summary`/`axis_summary`; with no provider registered those are the closed empty
+  summaries, which the document half treats as "not mine", so the header keeps naming the
+  native provider it draws. `?providers=1` is the measurement:
 
   ```
-  ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1
+  ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
   ```
 
-  The label is the script's registry (empty until step 5 registers a backend); `registry`
-  is `provider_features`, which the document half answers, and it is the provider that
-  actually draws the grid and the axis cross. The disagreement is the step-5 gap, recorded
-  rather than papered over. `?runtime=pywasm,js` composes the chain, with both halves
-  installed.
+  `switch=0` is the popover's list — nothing to switch *to* until step 5 registers a
+  backend — while `registry` is what Dev Tools lists, one provider per feature, and it is
+  the provider that actually draws the grid and the axis cross. `?runtime=pywasm,js`
+  composes the chain, with both halves installed.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

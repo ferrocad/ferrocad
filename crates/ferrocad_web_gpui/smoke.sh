@@ -372,20 +372,19 @@ check_settings() {
     require_line 'ferrocad harness: settings capture-settings-smoke.json 1 group(s)'
     require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s)'
 
-    # The header label is the *script's* registry (B18a steps 1–2 gave the wasm facade
-    # `view`), and the page registers no provider: so the label is `none` even though the
-    # document half still draws the native grid. The registry line is the document half's
-    # (it answers `provider_features`), which is why the two disagree — a B18a step 5 gap,
-    # not a missing pack. The chain leg also proves the two halves compose.
+    # The wasm facade answers `view`, and with no provider registered its summary is the
+    # closed empty case — so the document half names the native provider that actually
+    # draws the ground (B18a step 5 adds the registry). The chain leg also proves the two
+    # halves compose.
     LOG="$TMP/providers_pywasm.log"
     echo "provider console lines (pywasm runtime):"
     require_line 'ferrocad: scripting runtime pywasm'
-    require_line 'ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1'
+    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
 
     LOG="$TMP/providers_chain.log"
     echo "provider console lines (pywasm,js chain):"
     require_line 'ferrocad: scripting runtime pywasm,js'
-    require_line 'ferrocad probe: providers grid=none switch=0 axis=none switch=0 registry=grid=1,axis=1'
+    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
 
     for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js settings_file providers_pywasm providers_chain; do
         LOG="$TMP/$log.log"

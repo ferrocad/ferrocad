@@ -955,7 +955,18 @@ impl AppBackend for RustAppBackend {
     /// omit the step the card edits.
     fn grid_summary(&self) -> Result<GridSummary, String> {
         if let Some(summary) = self.script.as_deref().and_then(|host| host.grid_summary()) {
-            return Ok(summary);
+            // An empty summary is the closed "no provider" case, not a claim: the real
+            // facade answers it whenever no provider mod is loaded, and the wasm facade
+            // does while the provider registry is off (B18a step 5). This half still
+            // draws the native ground in that case, so deferring is what keeps the
+            // header from reading "none" beside a visible grid.
+            if names_a_provider(
+                summary.backend.as_deref(),
+                summary.label.as_deref(),
+                &summary.providers,
+            ) {
+                return Ok(summary);
+            }
         }
         let view = self.state.borrow().view.clone();
         Ok(GridSummary {
@@ -979,7 +990,15 @@ impl AppBackend for RustAppBackend {
     /// axis cross. The stem rows are the popover's, in the pixels the style declares.
     fn axis_summary(&self) -> Result<AxisSummary, String> {
         if let Some(summary) = self.script.as_deref().and_then(|host| host.axis_summary()) {
-            return Ok(summary);
+            // Same rule as `grid_summary`: the closed empty summary defers, because the
+            // native triad is what the viewport is drawing.
+            if names_a_provider(
+                summary.backend.as_deref(),
+                summary.label.as_deref(),
+                &summary.providers,
+            ) {
+                return Ok(summary);
+            }
         }
         let view = self.state.borrow().view.clone();
         let px = |value: f64| {
@@ -1655,6 +1674,22 @@ fn native_provider(feature: &str, command: Option<&str>) -> ProviderFeature {
     }
 }
 
+/// Whether a script's grid/axis summary names a provider it owns.
+///
+/// The facades answer a **closed empty** summary when their registry has no backend for
+/// the feature: `backend: null`, `label: null`, `providers: []`. That is the answer on a
+/// desktop with no provider mod, and on the browser's RustPython half until the registry
+/// lands (B18a step 5). It is not a claim: this half still draws the native ground, so
+/// taking it as the answer is what made the header read "none" beside a visible grid.
+/// A summary that names a backend, a label, or a provider is a claim and answers first.
+fn names_a_provider(
+    backend: Option<&str>,
+    label: Option<&str>,
+    providers: &[GridProvider],
+) -> bool {
+    backend.is_some() || label.is_some() || !providers.is_empty()
+}
+
 fn property_rows(object: &ferrocad_core::DocumentObject) -> Vec<PropRow> {
     let mut rows = Vec::with_capacity(object.properties.len() + 1);
     // `Label` is a document-object field, not a property-container entry; FreeCAD
@@ -2217,6 +2252,7 @@ mod tests {
         fn axis_summary(&self) -> Option<AxisSummary> {
             Some(AxisSummary {
                 feature: "axis".to_string(),
+                backend: Some("scripted".to_string()),
                 length: Some("80 px".to_string()),
                 ..Default::default()
             })
@@ -2569,7 +2605,15 @@ mod tests {
     fn the_provider_and_gpu_hooks_ask_the_script_first() {
         let (mut backend, _) = backend_with_script();
         assert_eq!(backend.grid_summary().unwrap().feature, "grid");
-        assert_eq!(backend.axis_summary().unwrap().feature, "axis");
+        assert_eq!(
+            backend.grid_summary().unwrap().backend.as_deref(),
+            Some("scripted"),
+            "a summary that names a provider answers first"
+        );
+        assert_eq!(
+            backend.axis_summary().unwrap().backend.as_deref(),
+            Some("scripted")
+        );
         // The script's grid feature stays the script's, and the axis — which it did not
         // register — is the document half's. Per feature, like `Settings/*`.
         let features = backend.provider_features().unwrap();
@@ -2755,6 +2799,67 @@ mod tests {
             summary.providers.is_empty(),
             "one provider, nothing to switch"
         );
+    }
+
+    /// A script half whose registry is empty must not take the native provider's name
+    /// away: CPython without a provider mod and the wasm Python half both answer the
+    /// closed empty summary, while the document half is what draws the ground.
+    #[test]
+    fn an_empty_script_summary_defers_to_the_document_halfs_provider() {
+        /// A script half with no registered provider: the closed empty summaries.
+        struct EmptyProviders;
+
+        impl ScriptHost for EmptyProviders {
+            fn evaluate(&self, code: &str) -> Result<EvalResult, String> {
+                Ok(EvalResult {
+                    ok: true,
+                    output: format!("ran {code}"),
+                })
+            }
+
+            fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
+                Ok(WorkbenchReport::default())
+            }
+
+            fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+                Err(format!("no tool {name}"))
+            }
+
+            fn tool_command(&self, _name: &str, _verb: &str) -> bool {
+                false
+            }
+
+            fn inventor_scene(&self) -> Result<Scene, String> {
+                Ok(Scene::default())
+            }
+
+            fn event_listener(&self) -> Box<dyn EventListener> {
+                Box::new(NoopListener)
+            }
+
+            fn grid_summary(&self) -> Option<GridSummary> {
+                Some(GridSummary {
+                    feature: "grid".to_string(),
+                    ..Default::default()
+                })
+            }
+
+            fn axis_summary(&self) -> Option<AxisSummary> {
+                Some(AxisSummary {
+                    feature: "axis".to_string(),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let backend = RustAppBackend::new().with_script_host(Box::new(EmptyProviders));
+        let grid = backend.grid_summary().unwrap();
+        assert_eq!(grid.backend.as_deref(), Some("ferrocad"));
+        assert_eq!(grid.label.as_deref(), Some("FerroCAD (native)"));
+        assert_eq!(grid.spacing.as_deref(), Some("10 mm"));
+        let axis = backend.axis_summary().unwrap();
+        assert_eq!(axis.backend.as_deref(), Some("ferrocad"));
+        assert_eq!(axis.length.as_deref(), Some("80 px"));
     }
 
     /// The grid settings command a build with no script half answers by naming the node,

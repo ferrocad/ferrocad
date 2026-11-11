@@ -816,6 +816,13 @@ impl Manipulator for DressUpScrubber {
         self.update(camera)
     }
 
+    fn anchor_device(&self, camera: &Camera) -> Option<[f64; 2]> {
+        // The arc turns about its anchor, and the scrub measures the pointer's distance
+        // from it: this is the direction a probe has to pull along.
+        self.anchor()
+            .and_then(|anchor| ferrocad_stage::screen::project_device(camera, anchor))
+    }
+
     fn readout(&self) -> Option<String> {
         Some(DressUpScrubber::readout(self))
     }

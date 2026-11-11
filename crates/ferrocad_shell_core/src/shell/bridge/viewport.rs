@@ -861,6 +861,59 @@ impl Shell {
         cx.notify();
     }
 
+    /// Run one synthetic manipulator gesture for `object`'s `element`, and report the
+    /// device point the press used.
+    ///
+    /// A capture has no pointer. Everything else is the real path: the selection goes
+    /// through [`Self::on_selection`] (what a click calls) so the manipulator is armed by
+    /// the same code, the press lands on the point the manipulator actually drew, its own
+    /// `drag_begin`/`drag_update`/`drag_end` decide the hit and the value, and the commit
+    /// goes through [`Self::on_interaction`] (what a released handle calls).
+    ///
+    /// `pixels` is how far the pointer is pulled outward from the handle, and `slot` is
+    /// the loadout digit an arrow key would equip (`2` push/pull, `3` dress-up): the
+    /// default hand hosts the triad, not a manipulator. `Err` says why it could not run —
+    /// an object the stage does not draw, no viewport, or a manipulator that took no
+    /// press — because a probe that silently does nothing is worse than one that does not
+    /// exist.
+    pub fn probe_manipulator(
+        &mut self,
+        slot: &str,
+        object: &str,
+        element: Option<&str>,
+        pixels: f64,
+        cx: &mut Context<Self>,
+    ) -> Result<[i32; 2], String> {
+        let slot = crate::shell::panels::loadout::Slot::from_key(slot)
+            .ok_or_else(|| format!("no loadout slot called {slot:?} (0–3)"))?;
+        self.activate_loadout_slot(slot, cx);
+        let entity = self.display.entity_of(object).ok_or_else(|| {
+            format!("{object} is not in the stage (consumed by a feature, or not drawn?)")
+        })?;
+        let reference = match element {
+            Some(element) => SelectionRef::element(entity, element),
+            None => SelectionRef::whole(entity),
+        };
+        self.on_selection(
+            &SelectionEvent::Picked {
+                reference,
+                anchor: None,
+                click_count: 1,
+            },
+            cx,
+        );
+        let viewport = self.viewport.clone().ok_or_else(|| "no viewport".to_string())?;
+        let handle = viewport
+            .update(cx, |viewport, _| viewport.probe_manipulator_drag(pixels))
+            .ok_or_else(|| {
+                format!("nothing took the press on {object} {} — no manipulator armed?", element.unwrap_or(""))
+            })?;
+        if let Some(commit) = viewport.update(cx, |viewport, _| viewport.take_interaction_commit()) {
+            self.on_interaction(&commit, cx);
+        }
+        Ok(handle)
+    }
+
     /// Refresh the model panes and the stage after the document changed.
     pub(in crate::shell) fn after_document_edit(&mut self, cx: &mut Context<Self>) {
         if self.viewport.is_some() {

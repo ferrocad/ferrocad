@@ -1147,8 +1147,18 @@ through `ferrocad_shell_core::app::apply_interaction` — the viewport bridge's 
 before the first frame. `smoke.sh` runs both, then asserts on the backend's stage line
 and on the document the page reads back: `dress_up` gives `Box_Fillet` the 2 mm radius it
 was sent, and `push_pull` gives `Box_Fuse` a `Box_Extrusion` tool with `LengthFwd 3.0`,
-`Solid True` and `Visibility False`. What is still uncovered is the **pick and the
-scrub**: the pointer gesture, not the edit.
+`Solid True` and `Visibility False`.
+
+And the gesture itself is driven, not simulated at the commit boundary. `?gesture=`
+equips the loadout hand (`2`/`3` — the default hand hosts the triad, not a manipulator),
+selects the sub-element through `on_selection` (what a click calls), presses on the point
+the manipulator drew — the stroke's far end, found by projecting its overlay and taking
+the vertex farthest from the manipulator's own `anchor_device` — and pulls outward in
+steps. `drag_begin`/`drag_update`/`drag_end` then decide the value, and the commit goes
+through `on_interaction` like any released handle. The smoke asserts the numbers that
+came out of the scrub, not ones it supplied: `Fillet_Fillet` at 3.888 mm (from 3), and
+`Fillet_Fuse` with `LengthFwd 3.621` on `Fillet_Extrusion`. Only the device events are
+synthetic; a real mouse is the one thing a headless capture has none of.
 
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**

@@ -134,6 +134,16 @@ capture_manipulator() {
     capture "/?js=1&manipulator=push_pull:extrude:Box:Face1:3&probe=1" "$TMP/push_pull.log"
 }
 
+# The gesture leg: `?gesture=` arms the manipulator through the click handler, presses
+# on the stroke the manipulator drew and pulls it outward, so the pointer path the
+# commit probe skips is exercised too.
+capture_gesture() {
+    # The sample's `Fillet` is what the stage draws (it consumed `Box`), so it is the
+    # object with an entity to select a sub-element on.
+    capture "/?js=1&gesture=3:Fillet:Edge1:60&probe=1" "$TMP/gesture_fillet.log"
+    capture "/?js=1&gesture=2:Fillet:Face1:40&probe=1" "$TMP/gesture_push_pull.log"
+}
+
 require_line() {
     if grep -Fq -- "$1" "$LOG"; then
         printf '  ok       %s\n' "$(grep -Fm1 -- "$1" "$LOG")"
@@ -261,6 +271,39 @@ EOF
     done
 }
 
+check_gesture() {
+    LOG="$TMP/gesture_fillet.log"
+    echo "dress-up gesture console lines:"
+    require_line 'ferrocad probe: gesture slot 3 Fillet Edge1 pulled 60 from'
+    # A feature replaces the object it consumed, so the stage draws the new feature
+    # alone — the sample's `Fillet` is gone from the stage, exactly as `Box` went when
+    # the sample fillet consumed it.
+    require_line 'ferrocad: stage draws Fillet_Fillet'
+    require_line '"name":"Fillet_Fillet"'
+
+    LOG="$TMP/gesture_push_pull.log"
+    echo "push/pull gesture console lines:"
+    require_line 'ferrocad probe: gesture slot 2 Fillet Face1 pulled 40 from'
+    require_line 'ferrocad: stage draws Fillet_Fuse'
+    require_line '"name":"Fillet_Fuse"'
+
+    for log in gesture_fillet gesture_push_pull; do
+        LOG="$TMP/$log.log"
+        echo "$log forbidden console patterns:"
+        while IFS= read -r pattern; do
+            [ -n "$pattern" ] || continue
+            forbid_pattern "$pattern"
+        done <<'EOF'
+not in the stage
+nothing took the press
+interaction error
+panicked at
+RuntimeError
+unreachable
+EOF
+    done
+}
+
 if [ ! -d "$WWW/pkg" ]; then
     echo "skipped: $WWW/pkg is missing (build it with crates/ferrocad_web_gpui/run.sh --build-only)"
     exit 0
@@ -288,9 +331,12 @@ check_workbench
 capture_manipulator
 check_manipulator
 
+capture_gesture
+check_gesture
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulators build their feature, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, no panic or JS error"

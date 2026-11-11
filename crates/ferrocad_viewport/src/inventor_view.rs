@@ -2515,6 +2515,84 @@ impl<V: InventorView> InventorViewport<V> {
         None
     }
 
+    /// Drive one armed manipulator's gesture with no pointer: press on the stroke, pull
+    /// `pixels` outward, release, and leave the commit for [`take_interaction_commit`].
+    ///
+    /// The manipulator's own `drag_begin`/`drag_update`/`drag_end` decide the hit and the
+    /// value; only the device events are synthesised, so this exercises the same arm a
+    /// pointer does. The press lands on the point of the stroke **farthest from the
+    /// gesture's anchor** — the far end is on the stroke and gives the pull a usable
+    /// direction, where a point near the base would not. Returns the device point the
+    /// press used, or `None` when no manipulator took it.
+    pub fn probe_manipulator_drag(&mut self, pixels: f64) -> Option<[i32; 2]> {
+        if !self.gizmo_style.enabled || pixels.abs() < 1.0 {
+            return None;
+        }
+        let camera = &self.camera;
+        let (handle, anchor) = {
+            let mut aim = None;
+            for manipulator in self.manipulators.iter().rev() {
+                let anchor = manipulator.anchor_device(camera);
+                let mut chosen: Option<[f64; 2]> = None;
+                for item in manipulator.items() {
+                    for [x, y, z] in item.positions() {
+                        let point = Vector3::new(f64::from(*x), f64::from(*y), f64::from(*z));
+                        let Some(device) = project_device(camera, point) else {
+                            continue;
+                        };
+                        let distance = |at: [f64; 2]| match anchor {
+                            Some(anchor) => (at[0] - anchor[0]).hypot(at[1] - anchor[1]),
+                            None => 0.0,
+                        };
+                        if chosen.is_none_or(|current| distance(device) > distance(current)) {
+                            chosen = Some(device);
+                        }
+                    }
+                }
+                if let Some(point) = chosen {
+                    aim = Some((point, anchor));
+                    break;
+                }
+            }
+            aim?
+        };
+        let from = [handle[0].round() as i32, handle[1].round() as i32];
+        // The gesture's maths measures distance from `anchor` (an arc's centre, a stem's
+        // base), so the pull is outward along that line.
+        let (dx, dy) = match anchor {
+            Some(anchor) if (handle[0] - anchor[0]).hypot(handle[1] - anchor[1]) > 2.0 => {
+                (handle[0] - anchor[0], handle[1] - anchor[1])
+            }
+            _ => (1.0, 0.0),
+        };
+        let length = dx.hypot(dy).max(1e-9);
+        let to = [
+            from[0] + (dx / length * pixels).round() as i32,
+            from[1] + (dy / length * pixels).round() as i32,
+        ];
+
+        let mut pressed = None;
+        for manipulator in self.manipulators.iter_mut().rev() {
+            if manipulator.drag_begin(camera, from) {
+                pressed = Some(manipulator);
+                break;
+            }
+        }
+        let manipulator = pressed?;
+        // A scrub is a sequence of moves; the manipulator keeps the last value.
+        for step in 1..=4i32 {
+            let part = f64::from(step) / 4.0;
+            let device = [
+                from[0] + (f64::from(to[0] - from[0]) * part).round() as i32,
+                from[1] + (f64::from(to[1] - from[1]) * part).round() as i32,
+            ];
+            manipulator.drag_update(camera, device);
+        }
+        self.interaction_commit = manipulator.drag_end();
+        self.rebuild_manipulator_queue();
+        Some(from)
+    }
+
     /// The manipulators, in registration order.
     pub fn manipulators(&self) -> &[Box<dyn Manipulator>] {
         &self.manipulators

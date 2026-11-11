@@ -112,6 +112,7 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?reopen=1` | save, capture those bytes instead of downloading, then open them again |
 | `?probe=1` | once the synthetic input has settled, log the document the document API returns (`ferrocad harness: document {…}`), so a capture can assert on the document rather than on the canvas |
 | `?manipulator=id:action:object:element:values` | send one workbench commit before the first frame, through the same call a released handle uses (`apply_interaction`): `?manipulator=dress_up:fillet:Box:Edge1:2`, `?manipulator=push_pull:extrude:Box:Face1:3`. The element may be empty and the values are comma-separated |
+| `?gesture=slot:object:element:pixels` | drive a manipulator for real, with no pointer: equip the hand (`2` push/pull, `3` dress-up), select the sub-element as a click would, press on the point the manipulator drew and pull it `pixels` outward: `?gesture=3:Fillet:Edge1:60`. The value comes from the manipulator's own scrub |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
@@ -205,20 +206,25 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   `Height` is `20 mm`: the command reached the document through the module's one
   import, not through a second registry. `smoke.sh` asserts the console lines and that
   JSON.
-- **Both Part manipulators build their feature.** A capture cannot scrub the dress-up
-  arc or drag the push/pull stem, so `?manipulator=` sends the commit such a gesture
-  releases, through the same `apply_interaction` the viewport bridge calls. The
-  backend's own stage line is the assertion:
+- **Both Part manipulators build their feature.** A capture cannot move a mouse, so two
+  probes stand in for it. `?manipulator=` sends the commit a handle *would* release;
+  `?gesture=` goes further and drives the handle: it equips the hand, selects the
+  sub-element through the click handler, presses on the point the manipulator drew and
+  pulls it 60 px outward, so the value is the scrub's own. The backend's stage line is
+  the assertion:
 
   ```
   ferrocad probe: dress_up fillet Box -> ok=true
   ferrocad: stage draws Fillet, Box_Fillet
-  ferrocad probe: push_pull extrude Box -> ok=true
-  ferrocad: stage draws Fillet, Box_Fuse
+  ferrocad probe: gesture slot 3 Fillet Edge1 pulled 60 from 265,362
+  ferrocad: stage draws Fillet_Fillet          Radius 3.888 mm   (scrubbed from 3)
+  ferrocad probe: gesture slot 2 Fillet Face1 pulled 40 from 205,326
+  ferrocad: stage draws Fillet_Fuse            LengthFwd 3.621 mm
   ```
 
   Each feature replaced the body it consumed, the hidden extrusion is not drawn, and no
-  interpreter was installed: the commits are the document half's own arms.
+  interpreter was installed: the commits are the document half's own arms. What no
+  capture can supply is the *device* — a real mouse delivering those events.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:
@@ -254,12 +260,11 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   `ferrocad_shell_core::base_contributions()` — the same handles the Parametric edition
   contributes — and the document half applies the commits itself
   (`RustAppBackend::apply_interaction`), so no interpreter is involved on either side.
-  The commit half is checked in this host: `smoke.sh` sends one real commit per
-  manipulator with `?manipulator=` (`dress_up` builds `Box_Fillet` at the radius it was
-  given; `push_pull` builds `Box_Extrusion` plus `Box_Fuse`, with the sweep hidden) and
-  asserts on both the stage line and the document the page reads back. What a headless
-  capture still cannot do is the **pointer gesture** — scrubbing the arc, dragging the
-  stem — so the pick and the scrub are the untested part, not the edit.
+  Both halves of the interaction are checked in this host: `?manipulator=` sends the
+  commit a handle would release, and `?gesture=` drives the handle itself — equip the
+  hand, select the edge or face, press where the manipulator drew and scrub — through
+  the same `on_selection`/`drag_begin`/`drag_update`/`drag_end`/`on_interaction` path a
+  pointer takes. Only the device events are synthetic.
 - **`WP`.** The workplane command reports that none is wired (see
   [workplanes.md](../../docs/project/tasks/workplanes.md)); `Fit` is wired.
 - **Python workbenches.** `?pywasm=1` installs RustPython, so the Console evaluates

@@ -120,7 +120,12 @@ pub fn main() {
             });
             // The viewport: the element itself is the shell's, and on the web its
             // renderer is the presenter's (see `Shell::enable_viewport`).
-            shell.update(cx, |shell, cx| shell.enable_viewport(cx));
+            shell.update(cx, |shell, cx| {
+                shell.enable_viewport(cx);
+                // After the viewport: `?gesture=` arms a manipulator and needs one to
+                // arm it on.
+                probe_gesture(shell, cx);
+            });
             // The console lives in the side panel, so the main window focuses its
             // root: `Esc` and the command shortcuts bubble from there.
             let root = shell.read(cx).root_focus_handle();
@@ -199,6 +204,49 @@ fn probe_manipulator(cx: &mut gpui::App) {
     // `ferrocad: stage draws …`, which shows the feature replacing its base.
     if let Err(error) = ferrocad_shell_core::app::stage_meshes(cx) {
         log::error!("ferrocad probe: stage: {error}");
+    }
+}
+
+/// `?gesture=<slot>:<object>:<element>:<pixels>` — one manipulator gesture, aimed where
+/// the manipulator drew its handle.
+///
+/// `?manipulator=` sends the commit a handle *would* emit; this drives the handle. The
+/// slot is the hand an arrow key equips (`2` push/pull, `3` dress-up), because the default
+/// hand hosts the triad rather than a manipulator. Then the selection arms the handle
+/// through the shell's click handler, the press lands on the stroke's far end, the
+/// manipulator's own `drag_begin`/`drag_update`/`drag_end` produce the value, and the
+/// commit goes through the shell's interaction path. Only the pointer device is missing —
+/// which is the one thing a headless capture cannot have. `pixels` is how far the pointer
+/// is pulled outward.
+fn probe_gesture(
+    shell: &mut ferrocad_shell_core::Shell,
+    cx: &mut gpui::Context<ferrocad_shell_core::Shell>,
+) {
+    let query = ferrocad_shell_web::page_query();
+    let Some(spec) = ferrocad_shell_web::parameter(&query, "gesture") else {
+        return;
+    };
+    let fields: Vec<&str> = spec.split(':').collect();
+    let [slot, object, element, pixels] = fields.as_slice() else {
+        log::error!(
+            "ferrocad probe: ?gesture wants <slot>:<object>:<element>:<pixels>, got {spec:?}"
+        );
+        return;
+    };
+    let Ok(pixels) = pixels.parse::<f64>() else {
+        log::error!("ferrocad probe: ?gesture pixels are not a number, got {spec:?}");
+        return;
+    };
+    let element = (!element.is_empty()).then_some(*element);
+    match shell.probe_manipulator(slot, object, element, pixels, cx) {
+        Ok([x, y]) => log::info!(
+            "ferrocad probe: gesture slot {slot} {object} {} pulled {pixels} from {x},{y}",
+            element.unwrap_or("-")
+        ),
+        Err(error) => log::error!(
+            "ferrocad probe: gesture slot {slot} {object} {} failed: {error}",
+            element.unwrap_or("-")
+        ),
     }
 }
 

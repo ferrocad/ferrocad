@@ -174,6 +174,16 @@ pub trait Manipulator {
         false
     }
 
+    /// The device point the gesture radiates from: an arc's centre, a stem's base.
+    ///
+    /// A probe has to pull *outward* — the manipulators' own maths measures the distance
+    /// from here, not the pointer's travel — so the point is part of the contract the
+    /// same way the commit is. The default is `None`: a handle whose value is not a
+    /// radius or an axis has no such point, and a caller falls back to its own direction.
+    fn anchor_device(&self, _camera: &Camera) -> Option<[f64; 2]> {
+        None
+    }
+
     /// The readout to display beside the overlay (`R 3.50 mm`), if any.
     fn readout(&self) -> Option<String> {
         None

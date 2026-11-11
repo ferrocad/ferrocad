@@ -612,6 +612,13 @@ impl Manipulator for PushPullStem {
         self.update(camera)
     }
 
+    fn anchor_device(&self, camera: &Camera) -> Option<[f64; 2]> {
+        // The stem grows out of the face centroid, and the axis solver measures travel
+        // along that line: the direction a probe has to pull along.
+        self.anchor()
+            .and_then(|anchor| ferrocad_stage::screen::project_device(camera, anchor))
+    }
+
     fn readout(&self) -> Option<String> {
         Some(PushPullStem::readout(self))
     }

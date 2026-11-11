@@ -17,12 +17,12 @@ and the index is::
 
     {"version": 1, "mods": [{"name": "<Name>", "pack": "<Name>.json"}, ...]}
 
-The browser host hands each pack's sources to
-``ferrocad_shell.load_workbench_sources`` as ``[{name, script, source}]``,
-``Init.py`` then ``InitGui.py`` per mod in index order — the same order and the
-same exec rules the filesystem loader uses, so a tree and a pack cannot report
-different things about the same script (``docs/project/tasks/backend-parity.md``
-B19).
+The browser host hands each fetched pack to
+``ferrocad_shell_core::app::load_workbench_pack``, whose Python half flattens it to the
+``[{name, script, source}]`` entries ``ferrocad_shell.load_workbench_sources`` runs,
+``Init.py`` then ``InitGui.py`` per mod in index order — the same order and the same
+exec rules the filesystem loader uses, so a tree and a pack cannot report different
+things about the same script (``docs/project/tasks/backend-parity.md`` B19).
 
 **Only the entry scripts are packed.** A workbench that imports a sibling module
 itself is a later slice: the pack carries the two files the loader can execute,

@@ -35,8 +35,9 @@
 //! selection state (B18a steps 1–4): `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`
 //! and the `{"view": …}` requests the shell's own commands return, the command registry
 //! they are reached through, `FreeCADGui.Selection` (the shell's selection, mirrored
-//! down; writes queued back), and the mod provider registry (B18a step 5). Everything
-//! else — settings rows, interaction and the model tree — is left to the document half.
+//! down; writes queued back), the mod provider registry and its settings cards (B18a
+//! steps 1–5). Everything else — interaction and the model tree — is left to the
+//! document half.
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
 //! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
@@ -220,8 +221,9 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 /// The facade is `bootstrap.py` (the `FreeCAD`/`FreeCADGui` surface `wasm32` needs). Its
 /// [`Contract`] answers the console and the property rows, the Gui app's presentation
 /// half — `view`, `view_state` and `commands` (B18a steps 1–2) — its selection mirror
-/// (step 4), and the mod provider registry (step 5), so the shell's own Gui commands run
-/// *in Python* here instead of being handed to the document half:
+/// (step 4), the mod provider registry (step 5) and its settings cards (step 3), so the
+/// shell's own Gui commands run *in Python* here instead of being handed to the document
+/// half:
 ///
 /// - `view` — `appearance_view`, `grid_summary`, `axis_summary` over
 ///   `FerroCAD.Grid`/`Axis`/`Gizmo`. `bootstrap.py` has no parameter store, so those are
@@ -243,12 +245,16 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 ///   `provider_skin` over `FreeCADGui.registerProvider`/`providers`/`activeProvider`/
 ///   `providerSkin`/`setActiveProvider`/`refreshProviders`, a port of
 ///   `python/FerroCADGui/__init__.py`'s registry. The selected backend is kept in
-///   memory (no parameter store: B18b), a declared `settings` schema is stored but not
-///   read (step 3), and there is no document observer (one live document).
+///   memory (no parameter store: B18b), a declared `settings` schema is answered by the
+///   `settings` group below, and there is no document observer (one live document).
+/// - `settings` — `extra_properties`/`set_extra_property` over the
+///   `Settings/<Feature>` namespace: the provider selector row and the active
+///   provider's schema. A written value lives in a session store (no parameter store:
+///   B18b), coercion and range/choice checks are the native ones, `resetAppearance`
+///   drops the written values, and a write returns the provider's `refresh` view claim.
 ///
-/// `settings`, `interaction` and `tree` stay off: the facade has no `Settings/<Feature>`
-/// rows, no `Part` hook and no app-script model tree, so the document half answers all
-/// three.
+/// `interaction` and `tree` stay off: the facade has no `Part` hook and no app-script
+/// model tree, so the document half answers both.
 pub struct RustPythonRuntime {
     interpreter: Interpreter,
 }
@@ -333,10 +339,11 @@ impl PythonRuntime for RustPythonRuntime {
         })
     }
 
-    /// The presentation, selection and provider half of the Gui app: the shell's own
-    /// view commands run here, a script's selection writes reach it, and a mod's
-    /// registered providers are listed and switched (see the type docs). The three
-    /// groups the facade has no answer for stay off.
+    /// The presentation, selection, provider and settings half of the Gui app: the
+    /// shell's own view commands run here, a script's selection writes reach it, a
+    /// mod's providers are listed and switched, and a provider's settings card is
+    /// answered (see the type docs). The two groups the facade has no answer for stay
+    /// off.
     fn contract(&self) -> Contract {
         Contract {
             view: true,
@@ -344,6 +351,7 @@ impl PythonRuntime for RustPythonRuntime {
             commands: true,
             selection: true,
             providers: true,
+            settings: true,
             ..Contract::NONE
         }
     }

@@ -6,7 +6,7 @@ B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
 (2026-11-11), B17a recorded; B18 built (2026-11-11), B18a steps 1–5 built (2026-11-11),
-B18a steps 3 and 6–7 and B18b recorded; B19a built (2026-11-11), B19b built (2026-11-11),
+B18a steps 6–7 and B18b recorded; B19a built (2026-11-11), B19b built (2026-11-11),
 B19c built (2026-11-11), B19d recorded.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
@@ -1677,7 +1677,8 @@ port, not invented by it:
   rather than `FreeCADGui.Selection` (which now answers).
 
 **Built: step 5.** The contract is now
-`{view, view_state, commands, selection, providers}`. `bootstrap.py` carries a port of
+`{view, view_state, commands, selection, providers}` at that point (step 3 adds
+`settings`). `bootstrap.py` carries a port of
 `python/FerroCADGui/__init__.py`'s provider section — `registerProvider`,
 `unregisterProvider`, `providers`, `activeProvider`, `providerSkin`, `setActiveProvider`,
 `refreshProviders`, `settings` — so the wasm half answers `provider_features`,
@@ -1691,11 +1692,7 @@ Three divergences, all from the missing parameter store (B18b):
 - **The selected backend is in memory.** The native registry persists one id per feature
   in `FreeCAD.ParamGet`; here the choice lasts for the process, so a reload starts from
   priority again.
-- **A declared schema is read, not written.** `FerroCADGui.settings` returns the
-  provider's rows with their declared defaults (and any `get` hook), and every row is
-  `editable: False`: there is no store to write to, so an edit would not persist. Step 3
-  adds `setSetting` and the writable rows; step 5 needs `settings` at all because
-  `ferrocad_shell.grid_summary`/`axis_summary` read a provider-declared spacing row.
+- **A declared schema is read by step 5 and written by step 3 below.**
 - **No document observer.** The native half attaches applied providers to document
   activation/close; this half has one live document and receives no such callbacks.
 
@@ -1708,6 +1705,34 @@ claiming nothing (the closed empty summary the document half defers on).
 manifest, and drops it again. A registered provider also makes the `about`/Dev Tools
 path list it through `provider_features`, which merges the native entry only for features
 the script did not register.
+
+**Built: step 3.** The contract is now
+`{view, view_state, commands, selection, providers, settings}`, so the property pane's
+`Settings/<Feature>` namespace is the script's: the provider selector row and the active
+provider's schema come from `extra_properties`, an edit goes through
+`set_extra_property`, and a feature with no registered provider returns `None` so the
+document half's card stands. `bootstrap.py` ports `FerroCADGui.setSetting`,
+`resetAppearance` and the native coercion (`text`/`bool`/`int`/`float`/`quantity`/`enum`/
+`color`, the `min`/`max` bounds, the enum choices and the `#rrggbb` rule); a write runs a
+declared `set` hook or keeps the value in the session store, then returns the provider's
+`refresh` view claim. A `get` hook is computed and a `get` without a `set` is read-only.
+
+One divergence remains, and it is B18b's: values live in `_SETTINGS_VALUES` rather than a
+parameter group, so an edit lasts for the process. Quantities also show and accept
+`<value> <unit>` instead of formatting through `FreeCAD.Units`, and a value typed in a
+different unit is refused rather than mis-scaled — the honest answer without the unit
+module.
+
+**Exit: met.** `tests/settings.rs` (5): the card's selector plus schema rows with their
+declared defaults and `min`/`max`/`unit`, a write that comes back on the next read, a
+quantity in unit text and as a bare number; every rejected value (`at least`/`at most`,
+`expects an integer`, a bad enum choice, a bad colour, a different unit, an unknown row)
+as a refusal that leaves the store alone; a `get`/`set` pair owning the value and a
+getter-only row refused; a write carrying the refresh claim and the selector switching
+each backend's own value; and the reset row restoring the declared defaults.
+`the_two_script_halves_agree` now registers the schema on both halves, compares the card
+rows field for field, and compares the read-only refusal — with a computed row, so the
+CPython comparison writes nothing to the developer's parameter store.
 
 Two deliberate divergences:
 
@@ -1743,20 +1768,20 @@ one; `UndoCount`/`RedoCount` follow the document's stacks and the undo/redo rows
 them. `the_two_script_halves_agree` now asserts the wasm half answers `App_Delete`'s
 early-out (the CPython answer) and records the write-path refusal as the D15 difference;
 it also registers one provider on both halves and compares the manifest (step 5).
-pywasm 1 + 3 + 5 + 4 + 4 + 4 + 6, parametric composition surface 11.
+pywasm 1 + 3 + 5 + 4 + 4 + 5 + 4 + 6, parametric composition surface 11.
 
 **Remaining steps.** Each flips one `Contract` flag and implements the facade it names.
 Order by cost ÷ value:
 
 | step | flag | facade work | exit |
 | --- | --- | --- | --- |
-| 3 | `settings` | `Settings/<Feature>` rows via the registry, `setSetting` and the writable rows | the settings card works for a provider mod |
 | 6 | `interaction` | `FerroCAD.interaction`/`manipulators` + the `Part` hook | a manipulator commit resolves through the script |
 | 7 | `tree` | `Settings` root from the registry | the tree's settings nodes are the script's |
 
 Each step extends `the_two_script_halves_agree` with one observable per group, so a flip
 turns a red row green. Step 4's rows are the `selection` half of that test plus
-`tests/selection.rs`; step 5's are `tests/providers.rs` plus the shared manifest row.
+`tests/selection.rs`; step 5's are `tests/providers.rs` plus the shared manifest row;
+step 3's are `tests/settings.rs` plus the shared card-row row.
 
 ### B18b — run the real facade under RustPython (recorded 2026-11-11)
 

@@ -306,10 +306,11 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   `import os` (B18b), so none registers one here. The wasm facade *has* the registry since
   B18a step 5 (`FerroCADGui.registerProvider`/`providers`/`providerSkin`/
   `setActiveProvider`/`refreshProviders`/`settings`), so a pack that does register reaches
-  the About card and Dev Tools; with none registered the facade's
-  `grid_summary`/`axis_summary` are the closed empty summaries, which the document half
-  treats as "not mine", so the header keeps naming the native provider it draws.
-  `?providers=1` is the measurement:
+  the About card, Dev Tools and its own `Settings/<Feature>` card (step 3; the written
+  values last for the session — there is no parameter store until B18b); with none
+  registered the facade's `grid_summary`/`axis_summary` are the closed empty summaries,
+  which the document half treats as "not mine", so the header keeps naming the native
+  provider it draws. `?providers=1` is the measurement:
 
   ```
   ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1

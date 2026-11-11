@@ -218,13 +218,14 @@ FerroCADGui.registerProvider('grid', 'demo', 'Demo Grid', settings=[{'name': 'sp
         assert_eq!(summary.providers[0].backend, "demo");
         assert!(summary.providers[0].active);
 
-        // The rows are the schema's, with the declared default and no write path.
+        // The rows are the schema's, with the declared default, and since step 3 the
+        // session store makes them editable.
         let rows = evaluate(host, "FerroCADGui.settings('grid')");
         assert!(rows.contains("'name': 'spacing'"), "{rows}");
         assert!(rows.contains("'value': '25 mm'"), "{rows}");
         assert!(
-            rows.contains("'editable': False"),
-            "there is no store to write to: {rows}"
+            rows.contains("'editable': True"),
+            "a declared row writes to the session store: {rows}"
         );
     });
 }

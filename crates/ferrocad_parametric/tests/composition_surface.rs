@@ -670,25 +670,28 @@ fn the_two_script_halves_agree() {
         .hello()
         .expect("hello answers")
         .expect("CPython greets");
-    // B18a step 5: the provider registry is shared policy, so the same registration is
-    // listed by both halves. Register, read and drop it again, leaving the process-wide
-    // CPython facade as it was found.
-    let cpython_provider = {
+    // B18a steps 5 and 3: the provider registry and the settings card it feeds are shared
+    // policy, so the same registration renders the same rows. Register, read and drop it
+    // again, leaving the process-wide CPython facade as it was found. The schema uses a
+    // `get` hook and no setter on purpose: a computed row reads no parameter store, so
+    // the comparison writes nothing to the developer's own FreeCAD parameters.
+    let cpython_card = {
         let setup = python::evaluate(
-            "import FerroCADGui\nFerroCADGui.registerProvider('B18aStep5', 'half', 'Step 5')",
+            "import FerroCADGui\nFerroCADGui.registerProvider('B18aStep5', 'half', 'Step 5', settings=[{'name': 'half', 'kind': 'text', 'default': '', 'get': lambda: 'step 5'}])",
         )
         .expect("the facade registers a provider");
         assert!(setup.ok, "{}", setup.output);
-        let found = PythonScriptHost
+        let feature = PythonScriptHost
             .provider_features()
             .into_iter()
             .find(|feature| feature.feature == "B18aStep5");
-        let cleanup = python::evaluate(
-            "FerroCADGui.unregisterProvider('B18aStep5', 'half')",
-        )
-        .expect("the facade drops a provider");
+        let rows = PythonScriptHost.extra_properties("Settings/B18aStep5");
+        // A computed row with no setter is read-only; the refusal touches no store.
+        let refused = PythonScriptHost.set_extra_property("Settings/B18aStep5", "half", "x");
+        let cleanup = python::evaluate("FerroCADGui.unregisterProvider('B18aStep5', 'half')")
+            .expect("the facade drops a provider");
         assert!(cleanup.ok, "{}", cleanup.output);
-        found
+        (feature, rows, refused)
     };
 
     // RustPython over the same registry. It compiles recursively, so it gets its own
@@ -714,23 +717,25 @@ fn the_two_script_halves_agree() {
                     host.run_command("App_Delete")
                 },
                 {
-                    // B18a step 5: the same registration as CPython's, through the
-                    // ported registry; drop it so the interpreter is left clean.
+                    // B18a steps 5 and 3: the same registration as CPython's, through
+                    // the ported registry; drop it so the interpreter is left clean.
                     let setup = host
                         .evaluate(
-                            "import FerroCADGui\nFerroCADGui.registerProvider('B18aStep5', 'half', 'Step 5')",
+                            "import FerroCADGui\nFerroCADGui.registerProvider('B18aStep5', 'half', 'Step 5', settings=[{'name': 'half', 'kind': 'text', 'default': '', 'get': lambda: 'step 5'}])",
                         )
                         .expect("register runs");
                     assert!(setup.ok, "{}", setup.output);
-                    let found = host
+                    let feature = host
                         .provider_features()
                         .into_iter()
                         .find(|feature| feature.feature == "B18aStep5");
+                    let rows = host.extra_properties("Settings/B18aStep5");
+                    let refused = host.set_extra_property("Settings/B18aStep5", "half", "x");
                     let cleanup = host
                         .evaluate("FerroCADGui.unregisterProvider('B18aStep5', 'half')")
                         .expect("unregister runs");
                     assert!(cleanup.ok, "{}", cleanup.output);
-                    found
+                    (feature, rows, refused)
                 },
             )
         })
@@ -797,10 +802,10 @@ fn the_two_script_halves_agree() {
     // Same: a registered provider is listed with the same manifest by both halves
     // (B18a step 5), which is what lets the About card and Dev Tools name a mod's
     // providers on either runtime.
+    let (cpython_provider, cpython_rows, cpython_refusal) = cpython_card;
+    let (wasm_provider, wasm_rows, wasm_refusal) = wasm.6;
     let cpython_provider = cpython_provider.expect("CPython lists the provider it registered");
-    let wasm_provider = wasm
-        .6
-        .expect("the wasm half lists the provider it registered");
+    let wasm_provider = wasm_provider.expect("the wasm half lists the provider it registered");
     assert_eq!(cpython_provider.providers.len(), 1, "{cpython_provider:?}");
     assert_eq!(wasm_provider.providers.len(), 1, "{wasm_provider:?}");
     assert_eq!(
@@ -813,4 +818,37 @@ fn the_two_script_halves_agree() {
     );
     assert!(wasm_provider.providers[0].active);
     assert!(cpython_provider.providers[0].active);
+
+    // Same: the settings card the registration produces (B18a step 3). The selector row
+    // and the schema row agree field for field, so a card cannot render differently on
+    // the two runtimes, and a computed row with no setter is refused by both.
+    let cpython_rows = cpython_rows.expect("CPython renders the card");
+    let wasm_rows = wasm_rows.expect("the wasm half renders the card");
+    let shape = |rows: &[PropRow]| {
+        rows.iter()
+            .map(|row| {
+                (
+                    row.name.clone(),
+                    row.value.clone(),
+                    row.kind.clone(),
+                    row.editable,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        shape(&wasm_rows),
+        shape(&cpython_rows),
+        "the settings card agrees"
+    );
+    let cpython_refusal = cpython_refusal.expect("CPython answers the write");
+    let wasm_refusal = wasm_refusal.expect("the wasm half answers the write");
+    assert!(!cpython_refusal.ok, "{cpython_refusal:?}");
+    assert!(!wasm_refusal.ok, "{wasm_refusal:?}");
+    assert!(
+        cpython_refusal.error.contains("read-only"),
+        "{}",
+        cpython_refusal.error
+    );
+    assert_eq!(wasm_refusal.error, cpython_refusal.error);
 }

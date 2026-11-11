@@ -26,12 +26,14 @@ Six things happen here, all on the Python side of the bridge:
    *and* queued for the shell (``ferrocad_shell.take_selection_requests``), because
    Python cannot command the viewport synchronously. There is no viewport under this
    half, so nothing here ever preselects on its own — see the note by the class.
-5. **The mod provider registry** (B18a step 5). ``FerroCADGui.registerProvider`` and the
-   rest of ``python/FerroCADGui/__init__.py``'s provider section, so a mod's providers
-   are listed by ``ferrocad_shell.provider_features`` (About, Dev Tools) and switched
-   through the header popover. The selected backend is in memory (no parameter store:
-   B18b), a schema's rows are read for their declared defaults (writes are step 3), and
-   the native document observer has no counterpart (one live document).
+5. **The mod provider registry and its settings** (B18a steps 5 and 3).
+   ``FerroCADGui.registerProvider`` and the rest of ``python/FerroCADGui/__init__.py``'s
+   provider section, so a mod's providers are listed by
+   ``ferrocad_shell.provider_features`` (About, Dev Tools), switched through the header
+   popover, and edited through ``Settings/<Feature>``. The selected backend and the
+   values a script writes live in memory (no parameter store: B18b), the coercion,
+   ranges and choices are the native ones, and the native document observer has no
+   counterpart (one live document).
 
 The spike's honest limit: these modules are **not** the ``*_py`` PyO3 bindings. Those
 are CPython extension modules and cannot be loaded by RustPython; §6.3 records that as
@@ -897,10 +899,11 @@ Selection = _Selection()
 # * **The selected backend is in memory.** The native registry persists one id per
 #   feature in `FreeCAD.ParamGet`; here the choice lasts for the process, so a page
 #   reload starts from priority again.
-# * **A declared settings schema is kept and read for its declared defaults.** The rows
-#   are B18a step 3: `FerroCADGui.settings` exists so a provider-backed
-#   `grid_summary`/`axis_summary` can find its spacing row, but there is no store to
-#   write to, so a row shows its default and editing is step 3.
+# * **A declared settings schema is read and written to a session store.** The rows are
+#   B18a step 3: `FerroCADGui.settings`/`setSetting`/`resetAppearance` over the schema,
+#   with the native coercion and checks. The native half persists values in
+#   `FreeCAD.ParamGet`; here `_SETTINGS_VALUES` stands in, so a written value lasts for
+#   the process and a reload starts from the declared defaults.
 # * **No document observer.** The native half attaches applied providers to document
 #   activation/close; this half has one live document and receives no such callbacks.
 
@@ -1236,6 +1239,13 @@ _SETTING_DEFAULTS = {
 }
 _SETTING_REPORTED = set()
 
+# The values a script wrote, per ``(feature, backend)``. This is the stand-in for the
+# provider's parameter group: the native registry persists under
+# ``User parameter:BaseApp/Preferences/Mods/<feature>/<backend>``, which this build does
+# not install (B18b), so a written value lasts for the process and a page reload starts
+# from the declared defaults again.
+_SETTINGS_VALUES = {}
+
 
 def _report_setting(feature, backend, name, exc):
     """Report a broken schema row once per setting."""
@@ -1254,9 +1264,8 @@ def _display_setting(spec, value):
     """The row's display string (``"10 mm"`` for a quantity).
 
     The native facade formats through ``FreeCAD.Units.Quantity``; this build has no
-    `Units` module, so a quantity's default is shown as ``<value> <unit>``. That is the
-    same text for every value a schema declares plainly, which is what a store-less
-    build is showing anyway.
+    `Units` module, so a quantity is shown as ``<value> <unit>``. That is the same text
+    for every value a schema declares plainly.
     """
     if spec.get("kind") != "quantity":
         return str(value)
@@ -1269,15 +1278,130 @@ def _display_setting(spec, value):
         return str(value)
 
 
+def _is_color(text):
+    """``#rrggbb``, the colour format a schema's ``color`` row accepts."""
+    return (
+        isinstance(text, str)
+        and len(text) == 7
+        and text[0] == "#"
+        and all(character in "0123456789abcdefABCDEF" for character in text[1:])
+    )
+
+
+def _quantity_value(spec, value):
+    """A quantity as a number in the schema's ``unit``.
+
+    A bare number (or numeric string) means "that many of the declared unit"; a string
+    may carry the unit itself, which has to be the declared one — converting between
+    units needs ``FreeCAD.Units``, which this build does not install, so a different
+    unit is refused rather than silently mis-scaled.
+    """
+    name = spec["name"]
+    unit = str(spec.get("unit") or "").strip()
+    if isinstance(value, bool):
+        raise ValueError("setting %r expects a quantity" % (name,))
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if unit and text.lower().endswith(unit.lower()):
+        text = text[: -len(unit)].strip()
+    try:
+        return float(text)
+    except ValueError:
+        raise ValueError("setting %r expects a quantity" % (name,)) from None
+
+
+def _coerce_setting(spec, value):
+    """Coerce one value to the setting's kind, enforcing range and choices.
+
+    Raises ``ValueError`` with the setting named when the value does not fit; the
+    caller turns that into ``{"ok": False, "error": ...}`` and leaves the store alone.
+    Ported from ``python/FerroCADGui/__init__.py``; the only difference is the unit
+    handling above, because this build has no ``FreeCAD.Units``.
+    """
+    kind = spec.get("kind")
+    name = spec["name"]
+    if kind == "text":
+        result = value if isinstance(value, str) else str(value)
+    elif kind == "bool":
+        if isinstance(value, bool):
+            result = value
+        elif isinstance(value, (int, float)):
+            result = bool(value)
+        elif isinstance(value, str):
+            text = value.strip().lower()
+            if text in ("1", "true", "yes", "on"):
+                result = True
+            elif text in ("0", "false", "no", "off", ""):
+                result = False
+            else:
+                raise ValueError("setting %r expects true or false" % (name,))
+        else:
+            raise ValueError("setting %r expects true or false" % (name,))
+    elif kind == "int":
+        if isinstance(value, bool):
+            raise ValueError("setting %r expects an integer" % (name,))
+        try:
+            number = float(value) if isinstance(value, str) else value
+        except (TypeError, ValueError):
+            raise ValueError("setting %r expects an integer" % (name,)) from None
+        if isinstance(number, float) and not number.is_integer():
+            raise ValueError("setting %r expects an integer" % (name,))
+        try:
+            result = int(number)
+        except (TypeError, ValueError):
+            raise ValueError("setting %r expects an integer" % (name,)) from None
+    elif kind == "float":
+        if isinstance(value, bool):
+            raise ValueError("setting %r expects a number" % (name,))
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("setting %r expects a number" % (name,)) from None
+    elif kind == "quantity":
+        result = _quantity_value(spec, value)
+    elif kind == "enum":
+        text = value if isinstance(value, str) else str(value)
+        choices = [str(choice) for choice in (spec.get("choices") or ())]
+        if text not in choices:
+            raise ValueError(
+                "setting %r must be one of %s; got %r"
+                % (name, ", ".join(repr(choice) for choice in choices), text)
+            )
+        result = text
+    elif kind == "color":
+        text = str(value).strip()
+        if not _is_color(text):
+            raise ValueError(
+                "setting %r expects a colour as #rrggbb; got %r" % (name, text)
+            )
+        result = text.lower()
+    else:
+        raise ValueError("setting %r has unsupported kind %r" % (name, kind))
+
+    if kind in ("int", "float", "quantity"):
+        minimum = spec.get("min")
+        maximum = spec.get("max")
+        if minimum is not None and result < minimum:
+            raise ValueError(
+                "setting %r must be at least %g; got %g" % (name, minimum, result)
+            )
+        if maximum is not None and result > maximum:
+            raise ValueError(
+                "setting %r must be at most %g; got %g" % (name, maximum, result)
+            )
+    return result
+
+
 def settings(feature, backend=None):
-    """The declared settings rows of ``feature``'s active provider (or ``backend``).
+    """The settings rows of ``feature``'s active provider (or ``backend``).
 
     The rows use the property pane's contract — ``name``, ``label``, ``type``,
     ``value``, ``status``, ``editable``, ``kind``, plus ``unit``/``min``/``max`` and
-    ``choices`` where the schema declares them. **There is no parameter store here**
-    (B18b), so a row without a ``get`` hook shows its declared default and nothing is
-    written; storing a value (``setSetting``) is B18a step 3. The summary builders call
-    this for a provider-declared spacing row, which is why it exists at step 5.
+    ``choices`` where the schema declares them. A row with a ``get`` hook is computed;
+    otherwise the value is what :func:`setSetting` stored, or the declared default. The
+    store is **in memory** (no parameter store: B18b), so a reload starts from the
+    defaults.
 
     ``[]`` means "nothing to show": an unknown feature or backend, no provider at all,
     a provider that advertises no schema, or a row this build cannot read.
@@ -1291,6 +1415,7 @@ def settings(feature, backend=None):
     if record is None:
         return []
     schema = record.get("settings") or []
+    stored = _SETTINGS_VALUES.get((feature, backend), {})
     rows = []
     for spec in schema:
         if not isinstance(spec, dict):
@@ -1301,7 +1426,7 @@ def settings(feature, backend=None):
             continue
         default = spec.get("default", _SETTING_DEFAULTS.get(kind, ""))
         status = "unsupported kind" if kind not in _SETTING_KINDS else "provider"
-        raw = default
+        raw = stored.get(name, default)
         getter = spec.get("get")
         if callable(getter):
             try:
@@ -1311,17 +1436,17 @@ def settings(feature, backend=None):
                 _report_setting(feature, backend, name, exc)
                 raw = default
                 status = "error"
+        has_get = callable(getter)
+        has_set = callable(spec.get("set"))
         row = {
             "name": name,
             "label": str(spec.get("label") or name),
             "type": _SETTING_TYPES.get(kind, ""),
             "value": _display_setting(spec, raw),
             "status": status,
-            # The native rule is `kind in _SETTING_KINDS and (has_set or not has_get)`,
-            # which is true for a row that writes to the parameter store. There is no
-            # store here, so no row is editable until step 3 installs one; claiming
-            # otherwise would offer an edit that cannot persist.
-            "editable": False,
+            # The native rule: a computed row with no setter is read-only, and a kind
+            # the editor does not know is read-only too.
+            "editable": kind in _SETTING_KINDS and (has_set or not has_get),
             "kind": kind,
         }
         if "unit" in spec:
@@ -1334,6 +1459,98 @@ def settings(feature, backend=None):
             row["choices"] = list(spec["choices"])
         rows.append(row)
     return rows
+
+
+def setSetting(feature, name, value):
+    """Coerce, validate and store one setting, then refresh the provider.
+
+    The value may be the editor's string (``"5 mm"``, ``"true"``, ``"#94a3b8"``) or a
+    Python value of the right kind. On success the hook's ``set`` runs (when declared) or
+    the value is kept in the session store, then the active backend's ``refresh`` runs
+    through :func:`refreshProviders` and the result carries its ``view`` claim. On a
+    validation failure nothing changes and the result is ``{"ok": False, "error": ...}``.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        return {
+            "ok": False,
+            "error": "no provider is registered for feature %r" % (feature,),
+        }
+    backend = _selected(feature)
+    schema = records[backend].get("settings") or []
+    spec = next(
+        (
+            entry
+            for entry in schema
+            if isinstance(entry, dict) and entry.get("name") == name
+        ),
+        None,
+    )
+    if spec is None:
+        return {"ok": False, "error": "no setting %r for feature %r" % (name, feature)}
+    kind = spec.get("kind")
+    if kind not in _SETTING_KINDS:
+        return {
+            "ok": False,
+            "error": "setting %r has unsupported kind %r" % (name, kind),
+        }
+    setter = spec.get("set")
+    if callable(spec.get("get")) and not callable(setter):
+        return {"ok": False, "error": "setting %r is read-only" % (name,)}
+    try:
+        coerced = _coerce_setting(spec, value)
+    except Exception as exc:  # noqa: BLE001 - a bad value is a result, not a crash
+        return {"ok": False, "error": str(exc)}
+    try:
+        if callable(setter):
+            setter(coerced)
+        else:
+            _SETTINGS_VALUES.setdefault((feature, backend), {})[name] = coerced
+    except Exception as exc:  # noqa: BLE001 - a setter that raises is a result
+        return {"ok": False, "error": _error_text(exc)}
+    refreshed = refreshProviders(feature)
+    return {
+        "ok": True,
+        "feature": feature,
+        "name": name,
+        "value": _display_setting(spec, coerced),
+        "status": refreshed.get("status") or "",
+        "view": refreshed.get("view") or {},
+        "errors": list(refreshed.get("errors") or []),
+    }
+
+
+def resetAppearance(feature=None):
+    """Drop the values written for ``feature`` and ask its provider to re-read.
+
+    The native facade clears the parameter group and reinstalls the **edition preset**
+    (``registerAppearancePreset``, which this build does not install); the equivalent
+    here is dropping the session values, so every row reads its declared default again,
+    then :func:`refreshProviders` for the active backend's ``view`` claim. With no
+    ``feature`` the three appearance capabilities are reset together.
+    """
+    features = [feature] if feature else ["grid", "axis", "gizmo"]
+    view = {}
+    statuses = []
+    errors = []
+    for name in features:
+        for key in [key for key in _SETTINGS_VALUES if key[0] == name]:
+            _SETTINGS_VALUES.pop(key, None)
+        try:
+            refreshed = refreshProviders(name)
+        except Exception as exc:  # noqa: BLE001 - one feature is not fatal
+            errors.append("%s: %s" % (name, _error_text(exc)))
+            continue
+        view.update(refreshed.get("view") or {})
+        statuses.append("%s reset to defaults" % name)
+    return {
+        "ok": not errors,
+        "feature": feature,
+        "features": features,
+        "view": view,
+        "status": "; ".join(statuses),
+        "errors": errors,
+    }
 
 
 _module(
@@ -1804,6 +2021,8 @@ _module(
         "setActiveProvider": setActiveProvider,
         "refreshProviders": refreshProviders,
         "settings": settings,
+        "setSetting": setSetting,
+        "resetAppearance": resetAppearance,
         "gridViewRequest": gridViewRequest,
         "axisViewRequest": axisViewRequest,
         "appearanceView": appearanceView,

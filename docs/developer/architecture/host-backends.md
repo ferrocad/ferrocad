@@ -346,12 +346,14 @@ instead of falling back to the document half. `FreeCAD.GuiUp` is 1, so
 
 It also mirrors the shell's **selection** (step 4: `FreeCADGui.Selection`, pushed down,
 writes queued back, `Document.UndoCount`/`RedoCount` from the payload) and holds the
-**mod provider registry** (step 5: `FerroCADGui.registerProvider`/`providers`/
-`activeProvider`/`providerSkin`/`setActiveProvider`/`refreshProviders`/`settings`). The
-selected backend is in memory and a schema's rows are read for their declared defaults —
-the parameter store is B18b — so nothing there is editable yet. A predicate the facade
-cannot evaluate answers *enabled*, so a merge cannot disable a verb the document half can
-still run; `settings`, `interaction` and `tree` stay off until their facade lands.
+**mod provider registry and its settings cards** (steps 5 and 3:
+`FerroCADGui.registerProvider`/`providers`/`activeProvider`/`providerSkin`/
+`setActiveProvider`/`refreshProviders`/`settings`/`setSetting`/`resetAppearance`). The
+selected backend and the values a script writes live in memory — the parameter store is
+B18b — so an edit lasts for the session and the next load starts from the declared
+defaults. A predicate the facade cannot evaluate answers *enabled*, so a merge cannot
+disable a verb the document half can still run; `interaction` and `tree` stay off until
+their facade lands.
 
 Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
 `wasm32-unknown-unknown`, and its compiler recurses, so a host raises the stack before

@@ -42,8 +42,9 @@ document. The plan and the verified baselines are in
    Tools: Model, Properties and Console are stacked and all visible at once.
 6. **A real interpreter, when asked.** `ferrocad_shell_web` composes the same
    document backend with one of the browser's script halves from the query string —
-   RustPython in the module (`?pywasm=1`), the page's ES module (`?js=1`), or none.
-   The startup log names the one that booted (`ferrocad: scripting runtime pywasm`).
+   RustPython in the module (`?pywasm=1`), the page's ES module (`?js=1`), or both
+   by default; `?runtime=plain` is the document-only session. The startup log names
+   the chain that booted (`ferrocad: scripting runtime pywasm,js` by default).
    With RustPython the Console evaluates real Python against the same
    `FreeCAD.ActiveDocument` the model tree shows. That is RustPython linked into the
    module, so it costs size and build time; the plain runtime pays only the binary.
@@ -115,11 +116,32 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?gesture=slot:object:element:pixels` | drive a manipulator for real, with no pointer: equip the hand (`2` push/pull, `3` dress-up), select the sub-element as a click would, press on the point the manipulator drew and pull it `pixels` outward: `?gesture=3:Fillet:Edge1:60`. The value comes from the manipulator's own scrub |
 | `?settings=<node>` | log the rows the settings card would render for that node (`?settings=Settings/Grid`), through the same `app::properties` call the pane makes. The tree and the card are painted into the canvas, so this is the only way a capture can read them |
 | `?settings=<node>.<property>=<value>` | commit one settings row, as the pane does (`app::set_property`), and log the presentation request it returns: `?settings=Settings/Grid.minor=20` |
+| `?settings_file=<url>` | load a whole settings file before the module boots. The desktop parameter format (`{version, values:[{root, group, name, kind, value}]}`) and the browser group map (`{group: {name: {Kind: value}}}`) are both accepted; existing `ferrocad.settings.*` keys are cleared first. The capture tools pass the desktop's `parameters.json` here |
 | `?command=<id>` | run one command through the backend before the first frame and log its outcome, including a `select` directive: `?command=View_GridSettings`. The palette needs synthetic keystrokes, so this is how a row a runtime only lists is exercised |
 | `?providers=1` | log which provider each feature has, its popover switch list (`switch=N`) and the Dev Tools registry (`registry=grid=1,…`). The page ships no `mods/` and has no filesystem to scan, so one native provider per feature and an empty switch list is the correct answer here |
+| (no query) | boots the `pywasm,js` chain: RustPython plus the page's JS module |
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
+
+## Settings
+
+User settings go through `ferrocad_shell_api::settings::SettingsBackend`, so the grid
+schema and the card are shared while the storage stays host-specific:
+
+| Host | Backend |
+| --- | --- |
+| browser | `WebSettings`: one JSON object per group under `localStorage` key `ferrocad.settings.<group>`, with an in-memory fallback when storage is unavailable |
+| desktop | `PythonSettings`: `FreeCAD.ParamGet` under `User parameter:BaseApp/Preferences/<group>` |
+| headless / tests | `MemorySettings` |
+
+The native appearance groups are `Mods/grid/ferrocad`, `Mods/axis/ferrocad` and
+`Mods/gizmo/ferrocad`; their keys are the settings cards' rows (`enabled`, `color`,
+`minor`, `major`, `length`, `size`, …). An empty store means the built-in `ViewState`
+defaults — the grid is off, the axis cross is on, spacing is 10/100 mm, and the grid
+ink is `#94a3b8`. `RustAppBackend::appearance_view` applies stored values at boot and
+`set_view_state` writes every applied change back to the host store. `?settings_file=`
+imports the same groups into a fresh browser profile.
 
 `?type=` still depends on the field taking pointer focus, and synthetic pointer events
 race the frame GPUI takes its hit test from; treat it as best-effort in headless

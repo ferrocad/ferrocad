@@ -27,8 +27,10 @@ BASE="http://127.0.0.1:$PORT"
 FAILED=0
 SERVER_PID=
 TMP=
+SMOKE_SETTINGS="$WWW/capture-settings-smoke.json"
 
 cleanup() {
+    rm -f "$SMOKE_SETTINGS"
     if [ -n "$SERVER_PID" ]; then
         kill "$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
@@ -164,6 +166,13 @@ capture_settings() {
     # registry is empty by construction — the grid card is the document half's.
     capture "/?runtime=pywasm&providers=1" "$TMP/providers_pywasm.log"
     capture "/?runtime=pywasm,js&providers=1" "$TMP/providers_chain.log"
+    # A whole settings file: the page fetches and installs it before the module
+    # boots, then the card is read from the hydrated store. The file is served
+    # from the page's own directory, as a capture passes the desktop's store.
+    printf '%s\n' \
+        '{"version":1,"values":[{"root":"User parameter","group":"BaseApp/Preferences/Mods/grid/ferrocad","name":"enabled","kind":"bool","value":true}]}' \
+        >"$SMOKE_SETTINGS"
+    capture "/?runtime=plain&settings_file=capture-settings-smoke.json&settings=Settings/Grid" "$TMP/settings_file.log"
 }
 
 require_line() {
@@ -330,6 +339,11 @@ check_settings() {
     echo "grid settings command console lines (js runtime):"
     require_line 'ferrocad probe: command View_GridSettings -> ok=true status="grid settings" select=Some("Settings/grid")'
 
+    LOG="$TMP/settings_file.log"
+    echo "whole settings file console lines:"
+    require_line 'ferrocad harness: settings capture-settings-smoke.json 1 group(s)'
+    require_line 'ferrocad probe: settings Settings/Grid -> 10 row(s)'
+
     # No provider mod can load in the browser (no `mods/`, no filesystem), so one label per
     # feature and an empty registry is the correct answer. The chain leg also proves the two
     # halves compose when the page did install its module.
@@ -343,7 +357,7 @@ check_settings() {
     require_line 'ferrocad: scripting runtime pywasm,js'
     require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
 
-    for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js providers_pywasm providers_chain; do
+    for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js settings_file providers_pywasm providers_chain; do
         LOG="$TMP/$log.log"
         echo "$log forbidden console patterns:"
         while IFS= read -r pattern; do

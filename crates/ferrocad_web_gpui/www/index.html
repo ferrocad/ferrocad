@@ -88,11 +88,15 @@
       if (file) await openFile(file);
     });
 
-    // `?js=1` installs the page's JS scripting surface before the module boots, so
-    // its command list is part of the first `commands()` read. `?runtime=js` is the
-    // same request in the longer form the Rust switch also understands, and a chain
-    // (`?runtime=pywasm,js`) names it as one element, so both spellings install it.
-    if (params.has("js") || (params.get("runtime") ?? "").split(",").some((name) => name.trim() === "js")) {
+    // The default chain is `pywasm,js`, so the page installs its JS module unless
+    // the URL names a runtime that does not include it. An explicit `runtime=` wins
+    // (matching the host's `from_query`); otherwise `?js=1` selects it and a bare
+    // `?pywasm=1` stays Python-only.
+    const runtime = params.get("runtime");
+    const runsJs = runtime !== null
+      ? runtime.split(",").some((name) => name.trim() === "js")
+      : (params.has("js") || !params.has("pywasm"));
+    if (runsJs) {
       const { install } = await import("./js-demo.js");
       install();
     }
@@ -108,6 +112,55 @@
     } else if (params.has("addons")) {
       const { install } = await import("./addons/toy.js");
       install();
+    }
+
+    // `?settings_file=<url>` applies a whole settings file before the module boots.
+    // The capture tools pass the desktop's own `parameters.json`, so the browser and
+    // the desktop read the same values. Both shapes are accepted:
+    //
+    // * the desktop parameter file (`{version, values: [{root, group, name, kind,
+    //   value}]}`), which `FreeCAD.ParamGet` writes; and
+    // * the browser store's group map (`{"Mods/grid/ferrocad": {"enabled":
+    //   {"Bool": true}}}`).
+    //
+    // Existing `ferrocad.settings.*` keys are cleared first: this is a whole-settings
+    // import, not a merge.
+    const settingsUrl = params.get("settings_file");
+    if (settingsUrl) {
+      try {
+        const response = await fetch(new URL(settingsUrl, location.href));
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        const data = await response.json();
+        const kinds = { bool: "Bool", int: "Int", float: "Float", string: "String" };
+        const groups = {};
+        if (Array.isArray(data.values)) {
+          for (const entry of data.values) {
+            if (!entry || entry.root !== "User parameter") continue;
+            const group = String(entry.group ?? "").replace(/^BaseApp\/Preferences\//, "");
+            const kind = kinds[entry.kind];
+            if (!group || !kind || typeof entry.name !== "string") continue;
+            (groups[group] ??= {})[entry.name] = { [kind]: entry.value };
+          }
+        } else {
+          for (const [group, values] of Object.entries(data)) {
+            if (values && typeof values === "object") groups[group] = values;
+          }
+        }
+        for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+          const key = localStorage.key(index);
+          if (key && key.startsWith("ferrocad.settings.")) localStorage.removeItem(key);
+        }
+        for (const [group, values] of Object.entries(groups)) {
+          localStorage.setItem(`ferrocad.settings.${group}`, JSON.stringify(values));
+        }
+        console.log(
+          "ferrocad harness: settings",
+          settingsUrl,
+          `${Object.keys(groups).length} group(s)`,
+        );
+      } catch (error) {
+        console.log("ferrocad harness: settings failed:", String(error));
+      }
     }
 
     await init();

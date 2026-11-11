@@ -24,6 +24,7 @@ use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::events::DocumentEvent;
 use ferrocad_shell_api::selection::SelectionItem;
+use ferrocad_shell_api::settings::{MemorySettings, SettingsBackend};
 use ferrocad_shell_api::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GridProvider, GridSummary,
     ObjectNode, OpenedDocument, PropRow, ProviderFeature, SetResult, VisibilityOutcome,
@@ -31,6 +32,7 @@ use ferrocad_shell_api::types::{
 use ferrocad_shell_api::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
+use crate::appearance_settings;
 use crate::grid_settings;
 
 /// The commands the Rust half answers, whose ids the catalogue names once.
@@ -108,6 +110,11 @@ enum DocSource {
 struct State {
     source: DocSource,
     view: ShellViewState,
+    /// The host's user-settings store. The native appearance groups (grid, axis
+    /// cross, gizmo) hydrate the presentation state from here, and `set_view_state`
+    /// writes every applied change back, so a native parameter store and a browser
+    /// store share one schema.
+    settings: Box<dyn SettingsBackend>,
     snap: bool,
     /// The shell's selection, mirrored for `App_Move`: the typed move applies to the
     /// selection, not to a named target.
@@ -179,6 +186,7 @@ impl RustAppBackend {
             state: RefCell::new(State {
                 source: DocSource::SharedRegistry,
                 view: ShellViewState::default(),
+                settings: Box::new(MemorySettings::default()),
                 snap: false,
                 selection: Vec::new(),
                 move_dialogs: 0,
@@ -197,6 +205,7 @@ impl RustAppBackend {
                     document: Arc::new(Mutex::new(document)),
                 },
                 view: ShellViewState::default(),
+                settings: Box::new(MemorySettings::default()),
                 snap: false,
                 selection: Vec::new(),
                 move_dialogs: 0,
@@ -204,6 +213,23 @@ impl RustAppBackend {
             boot_error,
             script: None,
         }
+    }
+
+    /// Replace the host's settings store and hydrate the appearance from it.
+    ///
+    /// The shell asks the backend for its presentation state at boot, so the stored
+    /// values have to be in `State.view` before that read. Values the store does not
+    /// hold keep the built-in defaults; an invalid stored value is ignored by
+    /// `ViewState::apply` without discarding the rest. All three native groups (grid,
+    /// axis cross, gizmo) come from the same store, so a browser file and a desktop
+    /// parameter file describe one appearance policy.
+    pub fn with_settings_backend(self, settings: Box<dyn SettingsBackend>) -> Self {
+        {
+            let mut state = self.state.borrow_mut();
+            state.view = appearance_settings::load(settings.as_ref(), &state.view);
+            state.settings = settings;
+        }
+        self
     }
 
     /// Add a scripting surface to this document backend.
@@ -356,10 +382,7 @@ impl RustAppBackend {
             {
                 Some(shape) => shape,
                 None => {
-                    return Ok((
-                        apply_refused(format!("{object} has no shape")),
-                        None,
-                    ));
+                    return Ok((apply_refused(format!("{object} has no shape")), None));
                 }
             };
             let Some(face_shape) = backend().resolve(&shape, &face) else {
@@ -369,10 +392,7 @@ impl RustAppBackend {
                 ));
             };
             let Some(normal) = backend().planar_normal(&face_shape) else {
-                return Ok((
-                    apply_refused(format!("{face} is not a planar face")),
-                    None,
-                ));
+                return Ok((apply_refused(format!("{face} is not a planar face")), None));
             };
             let executed = in_transaction(document, &transaction, |document| {
                 let extrusion = match document.get_by_name(&extrusion_name) {
@@ -610,10 +630,7 @@ impl AppBackend for RustAppBackend {
             None => {
                 let (documents, active) = {
                     let registry = registry();
-                    (
-                        registry.documents(),
-                        registry.active().map(str::to_string),
-                    )
+                    (registry.documents(), registry.active().map(str::to_string))
                 };
                 for (name, handle) in documents {
                     let active = active.as_deref() == Some(name.as_str());
@@ -873,8 +890,40 @@ impl AppBackend for RustAppBackend {
         self.script.as_deref()
     }
 
+    /// The stored appearance request the shell applies at boot.
+    ///
+    /// A script half owns its appearance policy and answers first. Without one — the
+    /// browser's pywasm/JS chains and a plain session — the host settings store is the
+    /// policy: the shell starts from its defaults, applies this request, and only then
+    /// mirrors the result back through `set_view_state`. The request covers the grid,
+    /// the axis cross and the gizmo, so one imported settings file drives every native
+    /// appearance feature.
+    fn appearance_view(&self) -> Result<CommandOutcome, String> {
+        if let Some(outcome) = self
+            .script
+            .as_deref()
+            .and_then(|host| host.appearance_view())
+        {
+            return Ok(outcome);
+        }
+        let request = {
+            let state = self.state.borrow();
+            appearance_settings::request(state.settings.as_ref())
+        };
+        Ok(CommandOutcome {
+            ok: true,
+            status: "stored settings".to_string(),
+            view: Some(request),
+            ..Default::default()
+        })
+    }
+
     fn set_view_state(&self, state: &ShellViewState) -> Result<(), String> {
-        self.state.borrow_mut().view = state.clone();
+        let mut inner = self.state.borrow_mut();
+        inner.view = state.clone();
+        let persisted = appearance_settings::store(inner.settings.as_ref(), &inner.view);
+        drop(inner);
+        persisted?;
         // Mirrored, not queried: a `FreeCADGui` command answers `IsChecked` from this,
         // so it has to be current before the next command can run. The local borrow is
         // released first — the script's copy is its own.
@@ -1147,10 +1196,7 @@ impl AppBackend for RustAppBackend {
         // implements it yet, so every shell-owned verb still runs here.
         match catalog::executor(id) {
             Executor::Script => {
-                if let Some(outcome) = self
-                    .script
-                    .as_deref()
-                    .and_then(|host| host.run_command(id))
+                if let Some(outcome) = self.script.as_deref().and_then(|host| host.run_command(id))
                 {
                     return Ok(outcome);
                 }
@@ -1299,11 +1345,7 @@ impl AppBackend for RustAppBackend {
         // Running the local fallback instead would move a check mark nothing shows.
         // The local switch stays for a build with no scripting surface.
         if id == SNAP {
-            if let Some(outcome) = self
-                .script
-                .as_deref()
-                .and_then(|host| host.run_command(id))
-            {
+            if let Some(outcome) = self.script.as_deref().and_then(|host| host.run_command(id)) {
                 return Ok(outcome);
             }
         }
@@ -1514,67 +1556,67 @@ fn apply_transform(
     commit: &InteractionCommit,
     object: &str,
 ) -> Result<ApplyResult, String> {
-        if commit.manipulator != TRANSFORM_ID || commit.action != "apply" {
-            // A workbench's own commit (a BIM grip) knows its own feature type, so the
-            // commit is the script's to apply; only when it disclaims the id is it
-            // unavailable.
-            return Ok(ApplyResult {
-                ok: false,
-                error: format!(
-                    "{} {} is not available in this build",
-                    commit.manipulator, commit.action
-                ),
-            });
-        }
-        let Ok(elements) = <[f64; 16]>::try_from(commit.values.as_slice()) else {
-            return Ok(ApplyResult {
-                ok: false,
-                error: "a transform commit needs 16 matrix values".to_string(),
-            });
-        };
-        backend.edit(|_, document| {
-            let Some(id) = document.get_by_name(object) else {
-                return Ok((
-                    ApplyResult {
-                        ok: false,
-                        error: format!("no object {object}"),
-                    },
-                    None,
-                ));
-            };
-            let Some(placement) = current_placement(document, id) else {
-                return Ok((
-                    ApplyResult {
-                        ok: false,
-                        error: format!("{object} has no Placement"),
-                    },
-                    None,
-                ));
-            };
-            let delta = Matrix4 { m: elements };
-            let composed = delta.mul(&placement.to_matrix());
-            let next = Placement::new(
-                Vector3::new(composed.m[3], composed.m[7], composed.m[11]),
-                Rotation::from_matrix(&composed),
-            );
-            // One transaction per commit, so a rotate ring drag is one undo step.
-            let executed = in_transaction(document, "Transform", |document| {
-                document.set_property(id, "Placement", Property::Placement(next))?;
-                document.recompute()
-            })?;
-            Ok((
-                ApplyResult {
-                    ok: true,
-                    error: String::new(),
-                },
-                Some(EditReport::new(
-                    "Transform",
-                    vec![object.to_string()],
-                    Some(object_names(document, &executed)),
-                )),
-            ))
-        })
+    if commit.manipulator != TRANSFORM_ID || commit.action != "apply" {
+        // A workbench's own commit (a BIM grip) knows its own feature type, so the
+        // commit is the script's to apply; only when it disclaims the id is it
+        // unavailable.
+        return Ok(ApplyResult {
+            ok: false,
+            error: format!(
+                "{} {} is not available in this build",
+                commit.manipulator, commit.action
+            ),
+        });
     }
+    let Ok(elements) = <[f64; 16]>::try_from(commit.values.as_slice()) else {
+        return Ok(ApplyResult {
+            ok: false,
+            error: "a transform commit needs 16 matrix values".to_string(),
+        });
+    };
+    backend.edit(|_, document| {
+        let Some(id) = document.get_by_name(object) else {
+            return Ok((
+                ApplyResult {
+                    ok: false,
+                    error: format!("no object {object}"),
+                },
+                None,
+            ));
+        };
+        let Some(placement) = current_placement(document, id) else {
+            return Ok((
+                ApplyResult {
+                    ok: false,
+                    error: format!("{object} has no Placement"),
+                },
+                None,
+            ));
+        };
+        let delta = Matrix4 { m: elements };
+        let composed = delta.mul(&placement.to_matrix());
+        let next = Placement::new(
+            Vector3::new(composed.m[3], composed.m[7], composed.m[11]),
+            Rotation::from_matrix(&composed),
+        );
+        // One transaction per commit, so a rotate ring drag is one undo step.
+        let executed = in_transaction(document, "Transform", |document| {
+            document.set_property(id, "Placement", Property::Placement(next))?;
+            document.recompute()
+        })?;
+        Ok((
+            ApplyResult {
+                ok: true,
+                error: String::new(),
+            },
+            Some(EditReport::new(
+                "Transform",
+                vec![object.to_string()],
+                Some(object_names(document, &executed)),
+            )),
+        ))
+    })
+}
 
 /// The property editor's rows for one document object.
 ///
@@ -2020,6 +2062,7 @@ mod tests {
     use ferrocad_inventor::{EventListener, Scene};
     use ferrocad_shell_api::app::{NoopListener, ScriptHost};
     use ferrocad_shell_api::events::DocumentEvent;
+    use ferrocad_shell_api::settings::{SettingKind, SettingValue};
     use ferrocad_shell_api::types::{
         AxisSummary, GpuPreferenceOutcome, GridProvider, GridSummary, ProviderFeature,
         SelectionRequest, WorkbenchReport,
@@ -2233,7 +2276,11 @@ mod tests {
             if commit.manipulator != SCRIPTED {
                 return None;
             }
-            self.log.interactions.lock().unwrap().push(object.to_string());
+            self.log
+                .interactions
+                .lock()
+                .unwrap()
+                .push(object.to_string());
             Some(ApplyResult {
                 ok: true,
                 error: String::new(),
@@ -2341,6 +2388,73 @@ mod tests {
         // stopped would leave these empty.
         assert_eq!(log.selected.lock().unwrap().as_slice(), items.as_slice());
         assert!(log.view.lock().unwrap().as_ref().unwrap().grid);
+    }
+
+    #[test]
+    fn stored_settings_are_applied_at_boot_and_written_back() {
+        let settings = MemorySettings::default();
+        settings
+            .set(grid_settings::GROUP, "enabled", true.into())
+            .unwrap();
+        settings
+            .set(grid_settings::GROUP, "minor", 20.0.into())
+            .unwrap();
+        settings
+            .set(grid_settings::GROUP, "color", "#f87171".into())
+            .unwrap();
+        settings
+            .set(appearance_settings::AXIS_GROUP, "length", 400.0.into())
+            .unwrap();
+        settings
+            .set(appearance_settings::AXIS_GROUP, "color_x", "#f08080".into())
+            .unwrap();
+        settings
+            .set(appearance_settings::GIZMO_GROUP, "size", 120.0.into())
+            .unwrap();
+
+        // The shell reads the presentation state before it mirrors anything back, so
+        // the stored values have to be in `State.view` at install — a request answered
+        // by `appearance_view` alone would arrive too late and be overwritten.
+        let mut expected = ShellViewState::default();
+        expected
+            .apply(&appearance_settings::request(&settings))
+            .unwrap();
+
+        let backend = RustAppBackend::new().with_settings_backend(Box::new(settings));
+        let view = backend.state.borrow().view.clone();
+        assert!(view.grid, "the stored toggle hydrated at install");
+        assert_eq!(view.grid_minor, 20.0);
+        assert_eq!(view.grid_color, expected.grid_color);
+        assert_eq!(view.axis.length, 400.0);
+        assert_eq!(view.gizmo.size, 120.0);
+
+        let mut next = ShellViewState::default();
+        next.grid = false;
+        next.axis.length = 300.0;
+        next.gizmo.size = 130.0;
+        backend.set_view_state(&next).unwrap();
+        let stored = backend.state.borrow();
+        assert_eq!(
+            stored
+                .settings
+                .get(grid_settings::GROUP, "enabled", SettingKind::Bool),
+            Some(SettingValue::Bool(false)),
+            "the applied grid is written back under the card's key"
+        );
+        assert_eq!(
+            stored.settings.get(
+                appearance_settings::AXIS_GROUP,
+                "length",
+                SettingKind::Float
+            ),
+            Some(SettingValue::Float(300.0))
+        );
+        assert_eq!(
+            stored
+                .settings
+                .get(appearance_settings::GIZMO_GROUP, "size", SettingKind::Float),
+            Some(SettingValue::Float(130.0))
+        );
     }
 
     #[test]
@@ -2587,10 +2701,17 @@ mod tests {
     fn without_a_script_the_registry_names_the_document_halfs_providers() {
         let backend = RustAppBackend::new();
         let features = backend.provider_features().unwrap();
-        let names: Vec<&str> = features.iter().map(|feature| feature.feature.as_str()).collect();
+        let names: Vec<&str> = features
+            .iter()
+            .map(|feature| feature.feature.as_str())
+            .collect();
         assert_eq!(names, ["grid", "axis"], "no gizmo: no card, no summary");
         for feature in &features {
-            assert_eq!(feature.providers.len(), 1, "nothing else to switch to: {feature:?}");
+            assert_eq!(
+                feature.providers.len(),
+                1,
+                "nothing else to switch to: {feature:?}"
+            );
             let provider = &feature.providers[0];
             assert_eq!(provider.backend, "ferrocad");
             assert_eq!(provider.label, "FerroCAD (native)");
@@ -2616,7 +2737,10 @@ mod tests {
         assert_eq!(summary.label.as_deref(), Some("FerroCAD (native)"));
         assert_eq!(summary.length.as_deref(), Some("80 px"));
         assert_eq!(summary.width.as_deref(), Some("1.5 px"));
-        assert!(summary.providers.is_empty(), "one provider, nothing to switch");
+        assert!(
+            summary.providers.is_empty(),
+            "one provider, nothing to switch"
+        );
     }
 
     /// The grid settings command a build with no script half answers by naming the node,
@@ -3099,7 +3223,14 @@ mod tests {
             assert_eq!(document.object(id).unwrap().type_id, FUSE_TYPE);
             assert!(has_shape(&document, "Box_Fuse"));
             // The boolean consumes the body and links its tool.
-            assert!(document.object(id).unwrap().properties.get("Tool").is_some());
+            assert!(
+                document
+                    .object(id)
+                    .unwrap()
+                    .properties
+                    .get("Tool")
+                    .is_some()
+            );
         }
 
         // Inward is a cut, with its own feature name (guard scoped: the commit locks).

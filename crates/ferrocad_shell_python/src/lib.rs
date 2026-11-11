@@ -32,6 +32,7 @@ pub mod headless;
 pub mod mods;
 pub mod python;
 pub mod script_host;
+pub mod settings;
 
 pub use ferrocad_shell_core::*;
 

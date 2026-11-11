@@ -20,6 +20,7 @@
 //! not a second copy of it: a request this module accepts is one the shell accepts.
 
 use ferrocad_core::{Property, Quantity, Unit, present};
+use ferrocad_shell_api::settings::{SettingKind, SettingValue, SettingsBackend};
 use ferrocad_shell_api::types::{DocumentNode, ObjectNode, PropRow, SetResult};
 use ferrocad_shell_api::view::{ViewRequest, ViewState, srgb_hex};
 
@@ -32,6 +33,14 @@ pub const SETTINGS_ROOT: &str = "Settings";
 
 /// The one feature this half implements.
 const GRID: &str = "grid";
+
+/// The FreeCAD parameter group the grid settings live in, without the
+/// `User parameter:BaseApp/Preferences/` prefix.
+///
+/// The desktop adapter prepends that prefix; the browser store uses the same string
+/// as its localStorage namespace. `FerroCAD.Grid`'s own PREFERENCES path is exactly
+/// this group, so a native card edit and a `GridOverlay_Settings` edit touch one store.
+pub const GROUP: &str = "Mods/grid/ferrocad";
 
 /// The node's type id: the synthetic type the app script's root uses, so the tree
 /// row and the property pane treat both halves identically.
@@ -182,6 +191,87 @@ pub fn rows(object: &str, view: &ViewState) -> Option<Vec<PropRow>> {
             "",
         ),
     ])
+}
+
+/// The grid presentation request the host's store describes.
+///
+/// This is what `appearance_view` hands the shell at boot: the shell starts from
+/// [`ViewState::default`] and applies the request, so stored values reach the window
+/// instead of being overwritten by the shell's initial state.
+pub fn request(settings: &dyn SettingsBackend) -> ViewRequest {
+    let boolean = |name: &str| {
+        settings
+            .get(GROUP, name, SettingKind::Bool)
+            .and_then(|value| value.as_bool())
+    };
+    let number = |name: &str| {
+        settings
+            .get(GROUP, name, SettingKind::Float)
+            .and_then(|value| value.as_f64())
+    };
+    let text = |name: &str| {
+        settings
+            .get(GROUP, name, SettingKind::String)
+            .and_then(|value| value.as_str().map(str::to_string))
+    };
+
+    ViewRequest {
+        grid: boolean("enabled"),
+        grid_color: text("color"),
+        grid_alpha: number("opacity").map(|value| value as f32),
+        grid_adaptive: boolean("adaptive"),
+        grid_minor_style: text("minor_style"),
+        grid_major_width: number("major_width"),
+        grid_minor_width: number("minor_width"),
+        grid_minor: number("minor"),
+        grid_major: number("major"),
+        // The card spells "camera-derived" as `0`; the presentation state spells it
+        // as `None`, so a stored zero keeps the fallback rather than pinning an
+        // empty disc.
+        grid_radius: number("radius").filter(|radius| *radius > 0.0),
+        ..ViewRequest::default()
+    }
+}
+
+/// Hydrate a presentation state from the host's persisted grid settings.
+///
+/// Only values the store actually holds are requested; everything else keeps the
+/// caller's defaults. Invalid stored values are ignored by [`ViewState::apply`], which
+/// validates the whole request before mutating anything.
+pub fn load(settings: &dyn SettingsBackend, view: &ViewState) -> ViewState {
+    let request = request(settings);
+    let mut hydrated = view.clone();
+    let _ = hydrated.apply(&request);
+    hydrated
+}
+
+/// Persist the grid settings the shell just applied.
+///
+/// The values and keys are exactly the card's rows and `FerroCAD.Grid`'s schema, so a
+/// native edit, a `GridOverlay_Settings` edit and a Python `FerroCAD.Grid` write all
+/// land in one place.
+pub fn store(settings: &dyn SettingsBackend, view: &ViewState) -> Result<(), String> {
+    for (name, value) in [
+        ("enabled", SettingValue::Bool(view.grid)),
+        ("color", SettingValue::String(srgb_hex(view.grid_color))),
+        ("opacity", SettingValue::Float(f64::from(view.grid_alpha))),
+        ("adaptive", SettingValue::Bool(view.grid_adaptive)),
+        (
+            "minor_style",
+            SettingValue::String(view.grid_minor_style.as_str().to_string()),
+        ),
+        ("major_width", SettingValue::Float(view.grid_major_width)),
+        ("minor_width", SettingValue::Float(view.grid_minor_width)),
+        ("minor", SettingValue::Float(view.grid_minor)),
+        ("major", SettingValue::Float(view.grid_major)),
+        (
+            "radius",
+            SettingValue::Float(view.grid_radius.unwrap_or(0.0)),
+        ),
+    ] {
+        settings.set(GROUP, name, value)?;
+    }
+    Ok(())
 }
 
 /// Write one row, or `None` when `object` is not this half's.
@@ -519,7 +609,10 @@ mod tests {
         assert_eq!(nodes.len(), 1, "one root: {nodes:?}");
         assert_eq!(listed_grid(&nodes), 1, "the grid joined it: {nodes:?}");
         assert!(
-            nodes[0].objects.iter().any(|object| object.name == "Settings/axis"),
+            nodes[0]
+                .objects
+                .iter()
+                .any(|object| object.name == "Settings/axis"),
             "the script's own feature is untouched"
         );
     }
@@ -693,5 +786,86 @@ mod tests {
         assert_eq!(request.grid_color.as_deref(), Some("#aabbcc"));
         let bad = write("Settings/grid", "color", "sage", &view).unwrap();
         assert!(!bad.ok, "a name is not a colour");
+    }
+
+    #[test]
+    fn stored_settings_hydrate_the_presentation_state() {
+        let settings = ferrocad_shell_api::settings::MemorySettings::default();
+        for (name, value) in [
+            ("enabled", SettingValue::Bool(true)),
+            ("color", SettingValue::String("#f87171".to_string())),
+            ("opacity", SettingValue::Float(0.4)),
+            ("adaptive", SettingValue::Bool(false)),
+            ("minor_style", SettingValue::String("lines".to_string())),
+            ("major_width", SettingValue::Float(2.0)),
+            ("minor_width", SettingValue::Float(3.0)),
+            ("minor", SettingValue::Float(5.0)),
+            ("major", SettingValue::Float(50.0)),
+            ("radius", SettingValue::Float(20.0)),
+        ] {
+            settings.set(GROUP, name, value).unwrap();
+        }
+
+        let view = load(&settings, &ViewState::default());
+        assert!(view.grid);
+        assert_eq!(srgb_hex(view.grid_color), "#f87171");
+        assert!((view.grid_alpha - 0.4).abs() < 1e-6);
+        assert!(!view.grid_adaptive);
+        assert_eq!(view.grid_minor_style.as_str(), "lines");
+        assert_eq!(view.grid_major_width, 2.0);
+        assert_eq!(view.grid_minor_width, 3.0);
+        assert_eq!(view.grid_minor, 5.0);
+        assert_eq!(view.grid_major, 50.0);
+        assert_eq!(view.grid_radius, Some(20.0));
+    }
+
+    #[test]
+    fn an_empty_store_keeps_the_defaults_and_zero_radius_is_auto() {
+        let settings = ferrocad_shell_api::settings::MemorySettings::default();
+        let defaults = ViewState::default();
+        let empty = load(&settings, &defaults);
+        assert_eq!(empty, defaults);
+
+        settings
+            .set(GROUP, "radius", SettingValue::Float(0.0))
+            .unwrap();
+        let zero = load(&settings, &defaults);
+        assert_eq!(zero.grid_radius, None, "zero means camera-derived");
+    }
+
+    #[test]
+    fn the_presentation_state_is_stored_under_the_card_keys() {
+        let settings = ferrocad_shell_api::settings::MemorySettings::default();
+        let mut view = ViewState::default();
+        view.grid = true;
+        view.grid_minor = 20.0;
+        view.grid_major = 200.0;
+        view.grid_alpha = 0.5;
+        store(&settings, &view).unwrap();
+
+        assert_eq!(
+            settings.get(GROUP, "enabled", SettingKind::Bool),
+            Some(SettingValue::Bool(true))
+        );
+        assert_eq!(
+            settings.get(GROUP, "minor", SettingKind::Float),
+            Some(SettingValue::Float(20.0))
+        );
+        assert_eq!(
+            settings.get(GROUP, "major", SettingKind::Float),
+            Some(SettingValue::Float(200.0))
+        );
+        assert_eq!(
+            settings.get(GROUP, "opacity", SettingKind::Float),
+            Some(SettingValue::Float(0.5))
+        );
+        assert_eq!(
+            settings.get(GROUP, "radius", SettingKind::Float),
+            Some(SettingValue::Float(0.0))
+        );
+        assert_eq!(
+            settings.get(GROUP, "color", SettingKind::String),
+            Some(SettingValue::String(srgb_hex(view.grid_color)))
+        );
     }
 }

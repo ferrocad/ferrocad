@@ -24,11 +24,13 @@
 #![cfg(target_family = "wasm")]
 
 mod host;
+mod settings;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use ferrocad_shell_web::Runtime;
+use settings::WebSettings;
 use gpui::{
     App, TitlebarOptions, WebBackendPreference, WindowBackgroundAppearance, WindowBounds,
     WindowDecorations, WindowOptions, application_with_web_backend, bounds, point, prelude::*, px,
@@ -63,11 +65,16 @@ pub fn main() {
         // `ferrocad_shell_web` composes it and logs which one booted. A runtime that
         // cannot boot (a `?js=1` page with no module, an interpreter that fails)
         // costs the console, not the window.
-        let (backend, runtimes) = match ferrocad_shell_web::page_backend() {
+        let (backend, runtimes) = match ferrocad_shell_web::page_backend_with_settings(Some(
+            Box::new(WebSettings::default()),
+        )) {
             Ok((backend, runtimes)) => (backend, runtimes),
             Err(error) => {
                 log::error!("ferrocad shell: {error}; the document runs alone");
-                (ferrocad_shell_web::plain(), vec![Runtime::Plain])
+                (
+                    ferrocad_shell_web::plain_with_settings(Some(Box::new(WebSettings::default()))),
+                    vec![Runtime::Plain],
+                )
             }
         };
         // A chain logs in order; the first name is the primary.

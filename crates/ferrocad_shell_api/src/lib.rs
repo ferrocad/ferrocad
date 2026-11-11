@@ -26,6 +26,7 @@ pub mod document_api;
 pub mod events;
 pub mod runtime;
 pub mod selection;
+pub mod settings;
 pub mod types;
 pub mod view;
 
@@ -39,6 +40,7 @@ pub use document_api::DocumentApi;
 pub use events::{DocumentEvent, DocumentEventSink};
 pub use runtime::{EntryKind, Language, Platform, Runtime};
 pub use selection::SelectionItem;
+pub use settings::{MemorySettings, SettingKind, SettingValue, SettingsBackend};
 pub use types::{
     AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
     GridProvider, GridSummary, ObjectNode, OpenedDocument, PropRow, ProviderFeature, ProviderSkin,

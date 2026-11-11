@@ -17,6 +17,7 @@ use ferrocad_shell_rust::RustAppBackend;
 use gpui::App;
 
 use crate::script_host::PythonScriptHost;
+use crate::settings::PythonSettings;
 
 /// Install the composed backend as this app's engine.
 ///
@@ -48,7 +49,8 @@ pub fn install_composed(cx: &mut App, runtimes: &[Runtime], addons: &[std::path:
             eprintln!(
                 "ferrocad: continuing without a script half; the document half answers alone"
             );
-            let plain = RustAppBackend::from_shared_registry();
+            let plain = RustAppBackend::from_shared_registry()
+                .with_settings_backend(Box::new(PythonSettings));
             ferrocad_shell_core::app::install_backend(cx, Box::new(plain));
         }
     }
@@ -110,7 +112,8 @@ pub fn compose_all(
     }
     let script = with_addons(hosts, addons)?;
 
-    let mut backend = RustAppBackend::from_shared_registry();
+    let mut backend = RustAppBackend::from_shared_registry()
+        .with_settings_backend(Box::new(PythonSettings));
     if let Some(script) = script {
         backend = backend.with_script_host(script);
     }

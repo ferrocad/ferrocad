@@ -6,11 +6,15 @@
 //! file picker":
 //!
 //! ```text
+//! (no query)           RustAppBackend + pywasm,js        (the default chain)
 //! ?runtime=plain       RustAppBackend                     (document only)
 //! ?runtime=pywasm      RustAppBackend + PywasmScriptHost  (RustPython, in the module)
 //! ?runtime=js          RustAppBackend + JsScriptHost      (the page's ES module)
 //! ?runtime=pywasm,js   both, RustPython first            (a chain, B8)
 //! ```
+//!
+//! With no `runtime`, the browser boots both script halves. `?runtime=plain` is the
+//! lightweight document-only session; naming any runtime selects exactly that chain.
 //!
 //! `plain` and `js` have no `Settings` namespace of their own, so the document half
 //! answers it: the grid card (`ferrocad_shell_rust::grid_settings`) reads and writes
@@ -43,6 +47,7 @@
 //! [`ferrocad_web_gpui`]: https://docs.rs/ferrocad_web_gpui
 
 use ferrocad_shell_api::app::AppBackend;
+use ferrocad_shell_api::settings::SettingsBackend;
 
 pub use ferrocad_shell_api::runtime::Runtime;
 
@@ -51,7 +56,16 @@ pub use ferrocad_shell_api::runtime::Runtime;
 /// The fallback the host installs when the page asked for a runtime that could not
 /// boot, so a browser with no interpreter still shows the shell.
 pub fn plain() -> Box<dyn AppBackend> {
-    Box::new(ferrocad_shell_rust::RustAppBackend::new())
+    plain_with_settings(None)
+}
+
+/// [`plain`] with the host's settings store installed.
+pub fn plain_with_settings(settings: Option<Box<dyn SettingsBackend>>) -> Box<dyn AppBackend> {
+    let mut backend = ferrocad_shell_rust::RustAppBackend::new();
+    if let Some(settings) = settings {
+        backend = backend.with_settings_backend(settings);
+    }
+    Box::new(backend)
 }
 
 /// Compose the backend for a chain of runtimes; the first is the primary.
@@ -61,6 +75,17 @@ pub fn plain() -> Box<dyn AppBackend> {
 /// whether to fall back to [`plain`], which the host does so a broken surface never costs
 /// the window.
 pub fn backend(runtimes: &[Runtime]) -> Result<Box<dyn AppBackend>, String> {
+    backend_with_settings(runtimes, None)
+}
+
+/// [`backend`] with the host's settings store installed before the shell boots.
+///
+/// The browser passes its `localStorage` store here; the default `backend` keeps the
+/// in-memory store, which is what a headless session and the switch tests want.
+pub fn backend_with_settings(
+    runtimes: &[Runtime],
+    settings: Option<Box<dyn SettingsBackend>>,
+) -> Result<Box<dyn AppBackend>, String> {
     Runtime::validate_list(runtimes)?;
 
     let mut hosts: Vec<Box<dyn ferrocad_shell_api::ScriptHost>> = Vec::new();
@@ -111,12 +136,15 @@ pub fn backend(runtimes: &[Runtime]) -> Result<Box<dyn AppBackend>, String> {
         }
     };
 
-    let backend = match script {
+    let mut backend = match script {
         Some(script) => {
             ferrocad_shell_rust::RustAppBackend::from_shared_registry().with_script_host(script)
         }
         None => ferrocad_shell_rust::RustAppBackend::new(),
     };
+    if let Some(settings) = settings {
+        backend = backend.with_settings_backend(settings);
+    }
     Ok(Box::new(backend))
 }
 
@@ -161,8 +189,9 @@ fn js_host() -> Result<Box<dyn ferrocad_shell_api::ScriptHost>, String> {
                 .to_string(),
         );
     }
-    let events: std::sync::Arc<dyn ferrocad_shell_api::DocumentEventSink> =
-        std::sync::Arc::new(ferrocad_shell_js::PageEvents::new(std::sync::Arc::clone(&page)));
+    let events: std::sync::Arc<dyn ferrocad_shell_api::DocumentEventSink> = std::sync::Arc::new(
+        ferrocad_shell_js::PageEvents::new(std::sync::Arc::clone(&page)),
+    );
     let document = std::sync::Arc::new(ferrocad_doc_api::DocApi::with_events(events));
     Ok(Box::new(ferrocad_shell_js::JsScriptHost::with_kernel(
         page, document,
@@ -209,7 +238,8 @@ pub fn from_query(query: &str) -> Result<Vec<Runtime>, String> {
         (Some(runtimes), _, _) => runtimes,
         (None, true, _) => vec![Runtime::Js],
         (None, false, true) => vec![Runtime::Pywasm],
-        (None, false, false) => vec![Runtime::Plain],
+        // No query and no flag: both script halves, RustPython first.
+        (None, false, false) => vec![Runtime::Pywasm, Runtime::Js],
     })
 }
 
@@ -231,8 +261,16 @@ fn pairs(query: &str) -> impl Iterator<Item = (&str, &str)> {
 /// Compose the backend the page asked for, and say which runtimes it is.
 #[cfg(target_family = "wasm")]
 pub fn page_backend() -> Result<(Box<dyn AppBackend>, Vec<Runtime>), String> {
+    page_backend_with_settings(None)
+}
+
+/// [`page_backend`] with the page's settings store installed.
+#[cfg(target_family = "wasm")]
+pub fn page_backend_with_settings(
+    settings: Option<Box<dyn SettingsBackend>>,
+) -> Result<(Box<dyn AppBackend>, Vec<Runtime>), String> {
     let runtimes = from_query(&page_search())?;
-    let backend = backend(&runtimes)?;
+    let backend = backend_with_settings(&runtimes, settings)?;
     Ok((backend, runtimes))
 }
 
@@ -284,9 +322,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_query_is_the_document_alone() {
-        assert_eq!(from_query("").unwrap(), vec![Runtime::Plain]);
-        assert_eq!(from_query("?").unwrap(), vec![Runtime::Plain]);
+    fn no_query_boots_both_script_halves() {
+        assert_eq!(from_query("").unwrap(), vec![Runtime::Pywasm, Runtime::Js]);
+        assert_eq!(from_query("?").unwrap(), vec![Runtime::Pywasm, Runtime::Js]);
     }
 
     #[test]
@@ -297,8 +335,11 @@ mod tests {
         );
         // Not the first pair, and not the last.
         assert_eq!(
-            parameter("?js=1&manipulator=push_pull:extrude:Box:Face1:3&probe=1", "manipulator")
-                .as_deref(),
+            parameter(
+                "?js=1&manipulator=push_pull:extrude:Box:Face1:3&probe=1",
+                "manipulator"
+            )
+            .as_deref(),
             Some("push_pull:extrude:Box:Face1:3")
         );
         assert_eq!(parameter("?js=1", "manipulator"), None);
@@ -320,13 +361,19 @@ mod tests {
     #[test]
     fn python_is_the_interpreter_the_browser_has() {
         // The shared table resolves `python` per target; in the browser that is RustPython.
-        assert_eq!(from_query("?runtime=python").unwrap(), vec![Runtime::Pywasm]);
+        assert_eq!(
+            from_query("?runtime=python").unwrap(),
+            vec![Runtime::Pywasm]
+        );
     }
 
     #[test]
     fn runtime_names_the_configuration_exactly() {
         assert_eq!(from_query("?runtime=plain").unwrap(), vec![Runtime::Plain]);
-        assert_eq!(from_query("?runtime=pywasm").unwrap(), vec![Runtime::Pywasm]);
+        assert_eq!(
+            from_query("?runtime=pywasm").unwrap(),
+            vec![Runtime::Pywasm]
+        );
         assert_eq!(from_query("?runtime=js").unwrap(), vec![Runtime::Js]);
     }
 
@@ -364,8 +411,14 @@ mod tests {
 
     #[test]
     fn an_explicit_runtime_wins_over_a_flag() {
-        assert_eq!(from_query("?js=1&runtime=plain").unwrap(), vec![Runtime::Plain]);
-        assert_eq!(from_query("?pywasm=1&runtime=js").unwrap(), vec![Runtime::Js]);
+        assert_eq!(
+            from_query("?js=1&runtime=plain").unwrap(),
+            vec![Runtime::Plain]
+        );
+        assert_eq!(
+            from_query("?pywasm=1&runtime=js").unwrap(),
+            vec![Runtime::Js]
+        );
     }
 
     #[test]
@@ -386,7 +439,10 @@ mod tests {
     fn cpython_parses_and_is_refused() {
         // The name is shared with the desktop, so the query is not a typo; the assembly
         // simply cannot link a native extension. The refusal has to say that.
-        assert_eq!(from_query("?runtime=cpython").unwrap(), vec![Runtime::Cpython]);
+        assert_eq!(
+            from_query("?runtime=cpython").unwrap(),
+            vec![Runtime::Cpython]
+        );
         let error = match backend(&[Runtime::Cpython]) {
             Ok(_) => panic!("the browser cannot link a native extension"),
             Err(error) => error,
@@ -400,7 +456,10 @@ mod tests {
         // `?click=`, `?select=` and `?keys=` drive `index.html`; they must not change
         // which runtime boots.
         let query = "?click=430,380&select=1004,100&keys=ctrl-k;f;i;t;enter&drag=1";
-        assert_eq!(from_query(query).unwrap(), vec![Runtime::Plain]);
+        assert_eq!(
+            from_query(query).unwrap(),
+            vec![Runtime::Pywasm, Runtime::Js]
+        );
     }
 
     #[test]

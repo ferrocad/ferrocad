@@ -28,6 +28,7 @@
 //! file verbs are the **shell's**: a host installs a `FilePicker`, and this backend
 //! only moves bytes (`open_document`/`save_document`).
 
+pub mod appearance_settings;
 pub mod backend;
 pub mod grid_settings;
 

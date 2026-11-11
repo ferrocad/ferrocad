@@ -2967,11 +2967,14 @@ version = "0.1.5"
 dependencies = [
  "bite-gpui",
  "ferrocad_part_gui",
+ "ferrocad_shell_api",
  "ferrocad_shell_core",
  "ferrocad_shell_web",
  "ferrocad_stage",
  "ferrocad_wasm",
+ "js-sys",
  "log",
+ "serde_json",
  "wasm-bindgen",
 ]
 

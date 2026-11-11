@@ -362,6 +362,13 @@ reported and replaced by `plain` — the browser's rule, so a scripting surface 
 start never costs the window. The default is CPython on the desktop and `plain` in the
 browser.
 
+One nuance the derivation made necessary (B14): **a member** a build cannot serve is
+skipped, not fatal. `mods/` declares the hosts it wants (an `InitGui.js` asks for the JS
+half), and a default edition has no `js` feature — so `compose_all("cpython,js")` installs
+the interpreter, prints the feature hint and carries on. Only a list with nothing
+installable is replaced by `plain`, and then it is the member's own message (`--features
+js`) that is reported, because that one is actionable.
+
 **wasm addons are orthogonal to the runtime, on both hosts.** `?addons=` and `--addons=`
 load a bundle beside whatever script half is running (the browser's page surfaces it; the
 desktop composes `ferrocad_shell_wasm::Addons`), so `wasm` is a package format rather than a

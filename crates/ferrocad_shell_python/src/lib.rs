@@ -307,8 +307,55 @@ pub fn check_init(config: HostConfig) -> Result<(), String> {
         false,
     );
     python::configure_startup_document(config.open_document.as_deref());
-    let mut backend = backend::engine();
-    Shell::boot_with(&mut backend).map(|_| ())
+    // The **same composition** `run_with` installs, derived the same way. `--check-init`
+    // is what CI and a packager run, so "the payload booted" has to include "the script
+    // halves the mod set declares were composed": composing a bare `engine()` here is
+    // how a derivation that asked for a half the build lacks went unnoticed while it
+    // took the working interpreter down with it (fixed in `compose_all`).
+    let mods_dirs = python::mods_dirs();
+    let runtimes = if config.script_hosts.is_empty() {
+        match Runtime::from_env_list() {
+            Ok(Some(runtimes)) => runtimes,
+            Ok(None) => derived_runtimes(&mods_dirs),
+            Err(error) => {
+                eprintln!("ferrocad: {error}");
+                derived_runtimes(&mods_dirs)
+            }
+        }
+    } else {
+        config.script_hosts.clone()
+    };
+    let addons = mods::addon_packs(&mods_dirs);
+    let mut backend = backend::compose_all(&runtimes, &addons)?;
+    let model = Shell::boot_with(&mut *backend)?;
+    // `--check-init` is the one boot a person can read from a terminal (the window's
+    // console lives inside the app), so print the two lines that answer "did the mods
+    // load": the workbench count the shell put in its console, and the provider registry
+    // the header's popovers list. "Nothing loaded" and "only the native provider" are
+    // otherwise indistinguishable from a clean boot here.
+    let workbenches: Vec<String> = model
+        .lock()
+        .map(|model| {
+            model
+                .console
+                .iter()
+                .filter(|line| line.starts_with("workbenches:") || line.starts_with("workbench "))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    for line in workbenches {
+        println!("ferrocad: {line}");
+    }
+    for feature in backend.provider_features().unwrap_or_default() {
+        let backends: Vec<&str> = feature
+            .providers
+            .iter()
+            .map(|provider| provider.backend.as_str())
+            .collect();
+        println!("ferrocad: provider {}: {}", feature.feature, backends.join(", "));
+    }
+    Ok(())
 }
 
 /// Switch on the renderer's opt-in diagnostics.

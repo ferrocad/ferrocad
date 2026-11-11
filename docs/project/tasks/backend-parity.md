@@ -4,7 +4,7 @@ Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded,
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11).** The surface suite
+(2026-11-11); B14 built (2026-11-11).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1319,6 +1319,56 @@ listed, exactly one active — the Coin backend outranks the native one by prior
 asserting "the native one is active" would pin the wrong thing). Its own test binary, so
 loading providers cannot perturb `composition.rs`.
 
+### B14 — a script half the build lacks is skipped, not fatal (built 2026-11-11)
+
+Found by running the edition, not by a test. `cargo run -p ferrocad_parametric` printed
+
+```
+ferrocad: mods declare python, javascript, wasm; installing cpython, js
+ferrocad: `--script-host=js` needs a build with the `js` feature: …
+ferrocad: continuing without a script half; the document half answers alone
+```
+
+and the header's grid and axis popovers listed one provider each, native. The third line
+is the defect: `script_for_all` propagated each member's error with `?`, so the `js` half
+(which the **mod set** derived, because `mods/Explode` and `mods/Fasteners` ship an
+`InitGui.js`) failing in a build without the `js` feature took the *whole* composition
+down, CPython included. No script half meant no `load_workbenches`, so no `InitGui.py`, so
+no `registerProvider` — the mods were on disk and never ran. B13 only changed the symptom:
+the header used to say "No grid provider", and its fallback now says `FerroCAD (native)`.
+
+This is B9a's derivation meeting B10b's "granted as far as it goes" and losing. The fix
+is per member: `compose_all` builds the halves the build has, reports the ones it cannot
+(`ferrocad: continuing with the script halves this build has: cpython`) and composes the
+rest. A list with **nothing** installable is still a refusal, and the error returned is the
+member's own (`--features js`), because that one names the remedy — so `compose(Js)` and
+`compose(Pywasm)` keep telling a user how to get the feature.
+
+`--check-init` was composing `backend::engine()` — the bare CPython pair — rather than the
+derived set, which is why CI and a packager could not have caught this. It now composes
+what the window composes (env override, else derived, else the edition's engine) and
+prints the two lines that answer "did the mods load":
+
+```
+ferrocad: workbenches: loaded 12 script(s)
+ferrocad: provider axis: ferrocad, coin
+ferrocad: provider gizmo: ferrocad, ferrocad-shader
+ferrocad: provider grid: ferrocad, coin
+```
+
+**Exit: met.** `a_half_this_build_lacks_does_not_discard_the_ones_it_has` and
+`a_list_of_uninstallable_halves_is_still_a_refusal` pin both halves of the rule;
+`mods_load.rs` now composes `[Cpython, Js]` (the list this workspace derives) instead of
+hand-building the pair, so it fails the way the app failed. `ferrocad_parametric` 24 across
+five binaries, `ferrocad_shell_python` 27, `ferrocad_shell_core` 271, `ferrocad_toy`'s
+mods test; `--check-init` on both editions prints the workbench and provider lines;
+`tools/run_tests.py --extension base` 692; six doc gates.
+
+One miss of my own, recorded because it is the same lesson: `composition_surface.rs` was
+not in the batch B13 ran, and its two model-tree tests encoded the pre-B13 rule "no
+provider registered, so no synthetic root". They now ask for `documents()` explicitly, and
+`the_settings_root_is_not_a_document` pins the other half of that rule.
+
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**
 
@@ -1396,6 +1446,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D18 | who owns `Settings/*` | **Whichever half has rows for the node** (B13). A script half that lists a `Settings` root owns the namespace; otherwise the document half answers with the grid card, whose store is the presentation state the shell mirrors into the backend. The test is the same on both sides — "do I have rows?" — so a rendered row and its write cannot land in different places |
 | D19 | which grid-settings surface a build offers | **Exactly one** (B13b). With a shell attached (`FreeCAD.GuiUp == 1`) the command selects `Settings/Grid`, whoever owns the card; the modal over `FerroCAD.Grid` stays headless-only, where there is no card to open. Two surfaces for one feature meant two stores (view state and the parameter group) that could drift, and the parameter group already has a command that applies it (`App_ReloadGridSettings`) |
 | D20 | is `View_GridSettings` script-owned or built-in | **Built-in** (B13c). The node exists in every build, so a header row that only appeared where a mod or a script registered it was a capability gated on packaging. `Executor::Script` keeps the Gui app's decision first; the document half's arm is the `select` directive |
+| D21 | a declared runtime this build cannot serve | **Skip it, install the rest** (B14). The mod set derives the hosts it wants and the edition grants what it can, so one missing engine must not take the interpreters that do exist with it. Nothing installable is still a refusal, and the message is that member's own (`--features js`) rather than a generic one |
 
 ## 6. Acceptance
 

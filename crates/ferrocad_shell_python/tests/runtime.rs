@@ -83,6 +83,35 @@ fn js_is_the_composition_with_the_page_behind_it() {
     assert!(backend.script_host().is_some());
 }
 
+/// A half this build cannot install does not take the ones it can with it.
+///
+/// The regression: `mods/` declares javascript (one package ships an `InitGui.js`), the
+/// default edition has no `js` feature, and composing `cpython,js` returned `Err` — so
+/// `cargo run -p ferrocad_parametric` installed the document half alone. No workbench
+/// loaded, and the header's grid popover listed only the document half's provider.
+#[cfg(not(feature = "js"))]
+#[test]
+fn a_half_this_build_lacks_does_not_discard_the_ones_it_has() {
+    let backend = compose_all(&[Runtime::Cpython, Runtime::Js], &[])
+        .expect("the composition keeps what it can install");
+    assert!(
+        backend.script_host().is_some(),
+        "the interpreter is installed even though the page is not"
+    );
+}
+
+/// When nothing in the list can be installed the composition is still a refusal, so the
+/// host's `plain` fallback (and its message) stays reachable — and the message is the
+/// actionable one (`--features js`), not a generic "nothing worked".
+#[cfg(not(feature = "js"))]
+#[test]
+fn a_list_of_uninstallable_halves_is_still_a_refusal() {
+    let error = compose_all(&[Runtime::Js], &[])
+        .err()
+        .expect("there is no script half to install");
+    assert!(error.contains("--features js"), "{error}");
+}
+
 #[test]
 fn two_python_engines_are_refused_before_any_host_boots() {
     // B8c: the rule is applied at composition as well as at the parser, so a caller that

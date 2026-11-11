@@ -19,8 +19,8 @@
 use std::sync::Once;
 
 use ferrocad_shell_api::app::AppBackend;
-use ferrocad_shell_python::{PythonScriptHost, python};
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_api::runtime::Runtime;
+use ferrocad_shell_python::python;
 
 static BOOT: Once = Once::new();
 
@@ -38,13 +38,19 @@ fn mods_dir() -> std::path::PathBuf {
 /// be found from the working directory or nothing here means anything. The interpreter
 /// is started with `gui = true` because a mod's `InitGui.py` is what registers its
 /// commands and providers, and that is the half a window sees.
-fn composed() -> RustAppBackend {
+///
+/// The runtime list is what the derivation produces for this workspace: `mods/Explode`
+/// and `mods/Fasteners` ship an `InitGui.js`, so the mod set declares javascript, while
+/// the default edition has no `js` feature. The composition has to install the
+/// interpreter anyway — the regression this guards installed no script half at all, so
+/// no workbench loaded and the header listed only the document half's provider.
+fn composed() -> Box<dyn AppBackend> {
     BOOT.call_once(|| {
         ferrocad_combined_py::register_builtins();
         python::configure("ferrocad_parametric", &[], &[], true);
     });
-    let mut backend =
-        RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost));
+    let mut backend = ferrocad_shell_python::compose_all(&[Runtime::Cpython, Runtime::Js], &[])
+        .expect("the composition keeps the halves this build has");
     backend.bootstrap().expect("the composed backend boots");
     backend
 }
@@ -52,6 +58,12 @@ fn composed() -> RustAppBackend {
 #[test]
 fn the_desktop_boot_loads_the_workspace_mods() {
     let backend = composed();
+    // The bug's signature: no script half means no `InitGui.py`, hence only the document
+    // half's provider in the header.
+    assert!(
+        backend.script_host().is_some(),
+        "the interpreter is installed even when the declared js half cannot be"
+    );
 
     // 1. The scripts. Empty `loaded` is the "no mods" the user sees, so assert on the
     //    Python workbenches by name rather than on a count that a new package shifts.

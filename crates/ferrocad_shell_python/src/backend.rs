@@ -84,7 +84,30 @@ pub fn compose_all(
     addons: &[std::path::PathBuf],
 ) -> Result<Box<dyn AppBackend>, String> {
     Runtime::validate_list(runtimes)?;
-    let hosts = script_for_all(runtimes)?;
+    let (hosts, installed, skipped) = script_for_all(runtimes);
+    // A language the mod set declares and this build has no engine for is a packaging
+    // gap, not a contradiction: the mods name the hosts they want (B9a) and the edition
+    // grants what it can (B10b). Dropping the whole composition here took the halves
+    // that *do* exist with it — the default edition has no `js` feature, and `mods/`
+    // ships an `InitGui.js`, so `cargo run -p ferrocad_parametric` installed no script
+    // half at all: no workbench loaded, and the header listed only the providers the
+    // document half knows.
+    //
+    // With nothing installable the composition is still a refusal, and it is the first
+    // member's error that is returned: that is the actionable one (`--features js`), and
+    // `install_composed` reports it before falling back to the document half.
+    if hosts.is_empty() && !skipped.is_empty() {
+        return Err(skipped.into_iter().next().unwrap_or_default());
+    }
+    for error in &skipped {
+        eprintln!("ferrocad: {error}");
+    }
+    if !skipped.is_empty() {
+        eprintln!(
+            "ferrocad: continuing with the script halves this build has: {}",
+            installed.join(", ")
+        );
+    }
     let script = with_addons(hosts, addons)?;
 
     let mut backend = RustAppBackend::from_shared_registry();
@@ -95,16 +118,31 @@ pub fn compose_all(
 }
 
 /// The script halves `runtimes` names, in the order it named them; `Plain` adds none.
+///
+/// The second value names the halves that were built, for the line that says what to
+/// expect; the third is the runtimes this build cannot serve (an engine behind a feature
+/// that is off), which the caller reports and skips.
 fn script_for_all(
     runtimes: &[Runtime],
-) -> Result<Vec<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>, String> {
+) -> (
+    Vec<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>>,
+    Vec<&'static str>,
+    Vec<String>,
+) {
     let mut hosts = Vec::new();
+    let mut installed = Vec::new();
+    let mut skipped = Vec::new();
     for runtime in runtimes {
-        if let Some(host) = script_for(*runtime)? {
-            hosts.push(host);
+        match script_for(*runtime) {
+            Ok(Some(host)) => {
+                hosts.push(host);
+                installed.push(runtime.id());
+            }
+            Ok(None) => {}
+            Err(error) => skipped.push(error),
         }
     }
-    Ok(hosts)
+    (hosts, installed, skipped)
 }
 
 /// The script half one configuration names, if it names one.
@@ -262,11 +300,13 @@ fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, St
         .to_string())
 }
 
-/// The desktop's engine, for a host that installs it itself (`--check-init`).
+/// The minimal composed engine: the document half with the interpreter behind it and
+/// no derived or addon composition.
 ///
 /// Nothing is built here: `bootstrap()` starts the interpreter and adopts the
 /// document it creates, so composing the two halves cannot put a sample document in
-/// front of the real one.
+/// front of the real one. `--check-init` deliberately does **not** use this — it
+/// composes the derived set, so a packaging gap in a mod set is caught there.
 pub fn engine() -> RustAppBackend {
     RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost))
 }

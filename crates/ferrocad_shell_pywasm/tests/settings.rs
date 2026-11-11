@@ -113,7 +113,9 @@ FerroCADGui.registerProvider('grid', 'demo', 'Demo Grid', settings=[
 }
 
 /// A value the schema rejects is a result naming the row, and the store keeps the old
-/// value. This is the same rule the native facade applies, so a card cannot diverge.
+/// value. This is the same rule the native facade applies, so a card cannot diverge —
+/// including the unit rule: a value in another length unit is **converted** (the engine's
+/// `Quantity` does it here since B18b), and only a unit of the wrong signature is refused.
 #[test]
 fn a_rejected_value_changes_nothing_and_names_the_row() {
     with_host(|host| {
@@ -135,7 +137,7 @@ FerroCADGui.registerProvider('grid', 'demo', 'Demo Grid', settings=[
             ("minor", "2.5", "expects an integer"),
             ("style", "zigzag", "must be one of"),
             ("ink", "red", "#rrggbb"),
-            ("spacing", "20 cm", "expects a quantity"),
+            ("spacing", "20 s", "expects a quantity in 'mm'"),
             ("nobody", "1", "no setting 'nobody'"),
         ] {
             let refused = host
@@ -153,6 +155,16 @@ FerroCADGui.registerProvider('grid', 'demo', 'Demo Grid', settings=[
         assert_eq!(row(&rows, "style").value, "dots");
         assert_eq!(row(&rows, "ink").value, "#94a3b8");
         assert_eq!(row(&rows, "spacing").value, "10 mm");
+
+        // A length in another unit is the engine's to convert, and it does (B18b): the
+        // desktop's rule, not the retired stand-in's refusal.
+        assert!(
+            host.set_extra_property("Settings/grid", "spacing", "20 cm")
+                .expect("the card")
+                .ok
+        );
+        let rows = host.extra_properties("Settings/grid").expect("the card");
+        assert_eq!(row(&rows, "spacing").value, "200 mm");
     });
 }
 

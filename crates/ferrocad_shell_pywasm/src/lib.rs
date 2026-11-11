@@ -32,10 +32,9 @@
 //! **What the facade does not do.** The document is read-only from Python: `setattr`
 //! on an object raises rather than silently missing the document. Writes, recompute
 //! and the `Shape` API are the document half's (`RustAppBackend`), and the shell's own
-//! commands reach them. Everything else — interaction and the model tree — is left to
-//! the document half. `bootstrap.py` supplies only what the shared modules cannot get
-//! here: the host gaps, the document model, and four bricks (`ParamGet`, `Units.Quantity`,
-//! `os`, the parameter-file controls).
+//! commands reach them. `bootstrap.py` supplies only what the shared modules cannot get
+//! here: the host gaps, the document model, and the bricks they sit on (`ParamGet`, the
+//! engine's `Quantity`, the `ferrocad` property rules, the parameter-file controls).
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
 //! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
@@ -73,9 +72,9 @@ pub use threaded::ThreadedScriptHost;
 pub(crate) const HELLO: &str =
     "FerroCAD shell · RustPython · wasm Python scripting (document read-only)";
 
-/// The refusal a spike with no tools answers with.
+/// The refusal a half with no tools answers with.
 pub(crate) fn no_tool(name: &str) -> String {
-    format!("pywasm: no tool {name} in the spike")
+    format!("pywasm: no tool {name} in this build")
 }
 
 /// The scripting module: `python/ferrocad_shell`, the **same source** the native
@@ -92,9 +91,9 @@ const BOOTSTRAP: &str = include_str!("bootstrap.py");
 
 /// The **shared** `FerroCADGui`: the same source the desktop's CPython half loads.
 ///
-/// Installed over the bootstrap stub once the three bricks it needs (`ParamGet`,
-/// `Units.Quantity`, `os`) exist, so the provider registry, settings and view state
-/// cannot drift from the desktop's (B18b).
+/// Installed over the bootstrap stubs once the bricks it needs (`ParamGet`, the engine's
+/// `Quantity`, `os`) exist, so the provider registry, settings and view state cannot
+/// drift from the desktop's (B18b).
 const FERROCADGUI: &str = include_str!("../../../python/FerroCADGui/__init__.py");
 
 /// The **shared** `FreeCADGui`: the command registry, selection mirror, dialogs and
@@ -201,13 +200,99 @@ thread_local! {
     static DOCUMENT: RefCell<Option<DocumentSource>> = const { RefCell::new(None) };
 }
 
-/// The one native function the script can see.
+/// The native module the script can see: the document rows, and the one value class the
+/// shared Gui modules need from the engine.
 #[pymodule]
 mod _ferrocad {
+    use ferrocad_core::quantity::Quantity;
+    use ferrocad_core::unit::Unit;
+    use rustpython_vm::builtins::{PyStrRef, PyType};
+    use rustpython_vm::types::Constructor;
+    use rustpython_vm::{Py, PyPayload, PyResult, VirtualMachine, pyclass};
+
     /// The active document's property rows, as JSON (`null` when none is open).
     #[pyfunction]
     fn document() -> rustpython_vm::PyResult<String> {
         Ok(crate::document_json())
+    }
+
+    /// `FreeCAD.Units.Quantity`, over `ferrocad_core`'s parser, normalisation and unit
+    /// table.
+    ///
+    /// The shared `FerroCADGui` settings coercion uses exactly this much: construction
+    /// from a number or a text expression, `Value`, `getValueAs` and `str`. Binding the
+    /// engine type (rather than writing a second unit model in `bootstrap.py`) is what
+    /// makes "5 cm" mean the same thing on both runtimes: a conversion it cannot make
+    /// is refused here for the same reason and with the same words as on the desktop.
+    #[pyattr]
+    #[pyclass(name = "Quantity", module = "ferrocad")]
+    #[derive(Debug, PyPayload)]
+    struct PyQuantity {
+        inner: Quantity,
+    }
+
+    impl Constructor for PyQuantity {
+        type Args = rustpython_vm::function::FuncArgs;
+
+        fn py_new(_cls: &Py<PyType>, args: Self::Args, vm: &VirtualMachine) -> PyResult<Self> {
+            let mut positional = args.args;
+            match positional.len() {
+                0 => Ok(Self {
+                    inner: Quantity::dimensionless(0.0),
+                }),
+                1 => {
+                    let value = positional.remove(0);
+                    let inner = if let Some(copy) = value.downcast_ref::<Self>() {
+                        copy.inner
+                    } else if let Ok(text) = value.try_to_value::<String>(vm) {
+                        Quantity::parse(&text).map_err(|error| vm.new_value_error(error))?
+                    } else {
+                        Quantity::dimensionless(value.try_into_value::<f64>(vm)?)
+                    };
+                    Ok(Self { inner })
+                }
+                2 => {
+                    let number = positional[0].clone().try_into_value::<f64>(vm)?;
+                    let symbol = positional[1].try_to_value::<String>(vm)?;
+                    let unit = Unit::parse(&symbol)
+                        .ok_or_else(|| vm.new_value_error(format!("unknown unit '{symbol}'")))?;
+                    Ok(Self {
+                        inner: Quantity::new(number, unit),
+                    })
+                }
+                _ => Err(vm.new_type_error("Quantity() takes 0, 1 or 2 arguments")),
+            }
+        }
+    }
+
+    #[pyclass(with(Constructor))]
+    #[allow(non_snake_case)]
+    impl PyQuantity {
+        /// FreeCAD's `.Value`: the number in this quantity's own unit.
+        #[pygetset]
+        fn Value(&self) -> f64 {
+            self.inner.value()
+        }
+
+        /// The value expressed in `unit`; a different signature is an error, as it is
+        /// natively.
+        #[pymethod]
+        fn getValueAs(&self, unit: String, vm: &VirtualMachine) -> PyResult<Self> {
+            let unit = Unit::parse(&unit)
+                .ok_or_else(|| vm.new_value_error(format!("unknown unit '{unit}'")))?;
+            if unit.sig != self.inner.sig() {
+                return Err(vm.new_value_error("incompatible unit for getValueAs"));
+            }
+            Ok(Self {
+                inner: self.inner.in_unit(unit),
+            })
+        }
+
+        /// The display string (`"10 mm"`), from the engine's canonical formatting.
+        #[pymethod]
+        fn __str__(&self, vm: &VirtualMachine) -> PyStrRef {
+            vm.ctx.new_str(self.inner.user_string())
+        }
     }
 }
 

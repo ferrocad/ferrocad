@@ -328,11 +328,11 @@ package the CPython half imports: the command registry, selection mirror, dialog
 observers; the provider registry, settings and `ViewState`; and the semantic
 grid/axis/gizmo stores. `bootstrap.py` therefore keeps only what a `host_env`-off
 RustPython cannot provide — the host gaps (`io`, `contextlib`, `pathlib`, `traceback`,
-an `importlib` stub, `os`), the document model over `_ferrocad`, and four bricks:
-`FreeCAD.ParamGet` over a dict, `FreeCAD.Units.Quantity`, the parameter-file controls
-and `_kernel_id`. It was ~2 050 lines of duplicate policy; it is ~630 lines of host
-shims, so a change to a command, a provider rule or a store is one source for both
-runtimes.
+an `importlib` stub, `os`), the document model over `_ferrocad`, and the bricks they sit
+on: `FreeCAD.ParamGet` over a dict, the engine's `Quantity` bound into the VM as
+`_ferrocad.Quantity`, the `ferrocad` property rules and the parameter-file controls. It
+was ~2 050 lines of duplicate policy; it is ~570 lines of host shims, so a change to a
+command, a provider rule or a store is one source for both runtimes.
 
 The document model answers over the **host's active document** and asks the bridge for
 the rows on every access (`FreeCAD.ActiveDocument` is a live view, not a snapshot taken

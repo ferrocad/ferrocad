@@ -1722,15 +1722,16 @@ One divergence remains, and it is B18b's: values live in `_SETTINGS_VALUES` rath
 parameter group, so an edit lasts for the process. Quantities also show and accept
 `<value> <unit>` instead of formatting through `FreeCAD.Units`, and a value typed in a
 different unit is refused rather than mis-scaled — the honest answer without the unit
-module.
+module. *(Both closed by B18b: the store is a dict-backed `ParamGet`, and `Quantity` is
+`ferrocad_core`'s bound into the VM, so `20 cm` converts.)*
 
 **Exit: met.** `tests/settings.rs` (5): the card's selector plus schema rows with their
 declared defaults and `min`/`max`/`unit`, a write that comes back on the next read, a
 quantity in unit text and as a bare number; every rejected value (`at least`/`at most`,
-`expects an integer`, a bad enum choice, a bad colour, a different unit, an unknown row)
-as a refusal that leaves the store alone; a `get`/`set` pair owning the value and a
-getter-only row refused; a write carrying the refresh claim and the selector switching
-each backend's own value; and the reset row restoring the declared defaults.
+`expects an integer`, a bad enum choice, a bad colour, a unit of the wrong signature, an
+unknown row) as a refusal that leaves the store alone; a `get`/`set` pair owning the
+value and a getter-only row refused; a write carrying the refresh claim and the selector
+switching each backend's own value; and the reset row restoring the declared defaults.
 `the_two_script_halves_agree` now registers the schema on both halves, compares the card
 rows field for field, and compares the read-only refusal — with a computed row, so the
 CPython comparison writes nothing to the developer's parameter store.
@@ -1747,8 +1748,8 @@ Two divergences this section recorded, both closed by B18b:
    are inside `view` rather than mapped to `None`. The value is session-only until the
    store has a file behind it (B18b item 4).
 
-**Cost, stated plainly.** `bootstrap.py` is now ~630 lines — the host gaps, the document
-model and four bricks — because the facade above them is the shared `python/` source
+**Cost, stated plainly.** `bootstrap.py` is now ~570 lines — the host gaps, the document
+model and the bricks — because the facade above them is the shared `python/` source
 (B18b). That is down from ~2 050 lines of duplicate policy: commands, selection, the
 provider registry, settings and the semantic stores all run the same code on both hosts
 now, so a change to any of them is one source. `ThreadedRuntime` (the desktop
@@ -1814,9 +1815,16 @@ are installed, not ported:
   modules use relative imports.
 - `bootstrap.py` supplies only what a `host_env`-off RustPython cannot: the host gaps
   (`io`, `contextlib`, `pathlib`, `traceback`, an `importlib` stub, `os`), the document
-  model over `_ferrocad`, and four bricks — `FreeCAD.ParamGet` over a dict,
-  `FreeCAD.Units.Quantity`, `_configure_parameter_file`/`_parameter_file_path`, and
+  model over `_ferrocad`, and the bricks they sit on — a dict-backed `FreeCAD.ParamGet`,
+  the `ferrocad` property rules, `_configure_parameter_file`/`_parameter_file_path`, and
   `_kernel_id`.
+- **Quantity is the engine's, not a second unit model.** `_ferrocad` binds
+  `ferrocad_core::quantity::Quantity` into the VM (`Value`, `getValueAs`, `str`, and the
+  0/1/2-argument constructor), so the settings coercion parses and converts exactly as
+  the desktop does. The retired ~35-line Python stand-in refused `20 cm` on a `mm` setting;
+  the bound class converts it to `200 mm`, and `tests/settings.rs` pins that (the old row
+  expected a refusal). A unit of the wrong signature is still refused, with the engine's
+  words.
 - One shared rule changed: an **unset** parameter-group value in `FerroCAD._grid`/`_axis`
   falls back to the shell's mirrored `FreeCADGui.ViewState` before the schema default.
   That is what makes a pushed `grid: true` the value the next toggle reads on every
@@ -1838,7 +1846,9 @@ above it:
 
 1. a RustPython `ferrocad` module over `ferrocad_core` — the ~27 names `python/FreeCAD`
    imports plus the value classes, so `python/FreeCAD/__init__.py` itself runs (today the
-   document model is the substitute);
+   document model is the substitute). **Started:** `Quantity` is bound already (see
+   above), which is the only value type the shared Gui modules use; the document classes
+   and the rest of the values are what remain;
 2. `ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh` (needs `ferrocad_part`,
    `ferrocad_mesh` and OCCT in the RustPython build);
 3. `host_env` on for the **native** RustPython build only (target-specific dependency), so

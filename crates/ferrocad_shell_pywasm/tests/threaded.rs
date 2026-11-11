@@ -55,7 +55,7 @@ fn the_constants_are_answered_without_the_interpreter() {
     let no_tool = host
         .tool("toy_polyline")
         .err()
-        .expect("the spike has no tools");
+        .expect("this half has no tools");
     assert!(no_tool.contains("toy_polyline"), "{no_tool}");
 }
 

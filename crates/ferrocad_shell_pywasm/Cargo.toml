@@ -7,7 +7,7 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "FerroCAD's wasm-Python scripting surface: ScriptHost over RustPython (spike)"
+description = "FerroCAD's wasm-Python scripting surface: ScriptHost over RustPython"
 keywords = ["cad", "freecad", "wasm"]
 categories = ["graphics"]
 documentation = "https://docs.rs/ferrocad_shell_pywasm"
@@ -15,7 +15,8 @@ publish = false
 
 [dependencies]
 # The scripting half of the seam; the document half stays `ferrocad_shell_rust`'s
-# (or, in this spike, the snapshot the bridge renders from `ferrocad_core`).
+# (or, for a host with no document of its own, the snapshot the bridge renders from
+# `ferrocad_core`).
 ferrocad_shell_api.workspace = true
 # The seam written once: this crate supplies the RustPython `PythonRuntime`, not a
 # second copy of the 35 `ScriptHost` methods (B18).
@@ -31,7 +32,7 @@ serde.workspace = true
 serde_json.workspace = true
 log = "0.4"
 
-# RustPython, the §6.3 runtime this spike picks: a Python VM written in Rust, so it
+# RustPython, the §6.3 runtime this crate picks: a Python VM written in Rust, so it
 # needs no C ABI and no Pyodide download.
 #
 # Pinned to 0.5: 0.6 requires Rust 1.97 and this workspace builds on 1.95.

@@ -1,33 +1,34 @@
-"""The free-standing bottom of the facade `python/` runs against, for the pywasm spike.
+"""The host gaps and bricks the shared `python/` facade needs under RustPython.
 
 **The facade itself is shared.** ``FreeCADGui``, ``FerroCADGui`` and the ``FerroCAD``
-package are installed from ``python/`` unchanged (see `lib.rs`); this file only supplies
-what a `wasm32-unknown-unknown` RustPython cannot: the host gaps, the document model,
-and four small bricks those shared modules sit on. Three things happen here:
+package are installed from ``python/`` unchanged (see `lib.rs`). What is left here is the
+bottom a `wasm32-unknown-unknown` RustPython cannot supply on its own:
 
-1. **The host gaps.** ``wasm32-unknown-unknown`` has no POSIX module, so RustPython's
-   frozen ``os``/``_io`` layer is unavailable and ``contextlib``, ``io``, ``pathlib``,
-   ``traceback``, ``importlib`` and ``os`` cannot be imported. The shared scripts import
-   all six, so this file supplies the handful of names they touch. The console goes
-   through ``evaluate()``, which captures stdout with ``io.StringIO``.
+1. **The host gaps.** The target has no POSIX module, so RustPython's frozen
+   ``os``/``_io`` layer is off and ``contextlib``, ``io``, ``pathlib``, ``traceback``,
+   ``importlib`` and ``os`` cannot be imported. The shared scripts import all six, and
+   this file supplies the handful of names they touch. The console also captures stdout
+   with ``io.StringIO``, through ``evaluate()``.
 2. **The document model.** ``_ferrocad.document()`` returns the property rows the Rust
-   side computed with ``ferrocad_core`` (``present::kind`` / ``present::format``),
-   read from the host's *active* document each time it is asked. This file turns them
-   into the ``FreeCAD.ActiveDocument`` shape the script expects, so the console sees
-   the document the shell is showing — including after a file is opened — and reports
-   no active document (`None`) when there is none.
-3. **The bricks under the shared facade** (B18b): ``FreeCAD.ParamGet`` over a dict,
-   ``FreeCAD.Units.Quantity``, and the ``FerroCAD._params`` file controls. The shared
-   modules use three parameter groups, seven quantity expressions and nothing else, so
-   these are what stand between them and RustPython — not a re-implementation of the
-   facade above them.
+   side computed with ``ferrocad_core`` (``present::kind`` / ``present::format``), read
+   from the host's *active* document each time it is asked. This file turns them into
+   the ``FreeCAD.ActiveDocument`` shape the script expects, so the console sees the
+   document the shell is showing — including after a file is opened — and reports no
+   active document (``None``) when there is none.
+3. **The bricks under the shared facade.** ``FreeCAD.ParamGet`` over a dict, the
+   engine's ``Quantity`` bound into the VM as ``_ferrocad.Quantity``, the three
+   ``ferrocad`` property rules and the ``FerroCAD._params`` file controls. The shared
+   modules use three parameter groups, seven quantity expressions and three property
+   calls, so these are what stand between them and RustPython — not a re-implementation
+   of the facade above them.
 
-The spike's honest limit: these modules are **not** the ``*_py`` PyO3 bindings. Those
-are CPython extension modules and cannot be loaded by RustPython; §6.3 records that as
-the fork's central trade-off. What is shared is the *script* and the *rules* — the
-kinds and the display text still come from ``ferrocad_core``, not from here. The
-document is also **read-only** from this side: writes, recompute and the `Shape` API
-are the document half's, and a write here raises rather than silently missing it.
+The interpreter is not a CPython ABI, so the ``*_py`` PyO3 modules cannot be loaded here;
+what this file imports is ``_ferrocad``, a ``rustpython-vm`` module over `ferrocad_core`.
+The kinds and the display text still come from the engine, not from here. The document is
+**read-only** from this side: writes, recompute and the ``Shape`` API are the document
+half's, and a write here raises rather than silently missing it. See B18b in
+`docs/project/tasks/backend-parity.md` for what of this is still a substitute and what
+would replace it (a RustPython ``ferrocad`` module lets `python/FreeCAD` itself run).
 """
 
 import json
@@ -42,46 +43,12 @@ def _payload():
 
 
 def _module(name, namespace):
-    """A module named ``name`` whose attributes are ``namespace``.
-
-    A missing attribute raises :class:`_Absent`, an ``AttributeError``, so
-    ``hasattr``/``getattr(..., None)`` probes in the shared code behave as they do for a
-    module that simply has no such name, and the message says this build does not
-    install it (rather than a typo in this file, which would be a bug here).
-    """
+    """A module named ``name`` whose attributes are ``namespace``."""
     module = type(sys)(name)
     module.__dict__.update(namespace)
     module.__dict__["__name__"] = name
-    # Every module built here is a substitute for a native one, so a missing
-    # attribute is a capability this half has not grown — never a typo in the
-    # substitute, which would be a bug in this file. `_Absent` is what lets a
-    # command predicate tell the two apart (`_enabled`).
-    module.__dict__["__getattr__"] = _absent_attribute(name)
     sys.modules[name] = module
     return module
-
-
-class _Absent(AttributeError):
-    """A facade name this build does not install.
-
-    An ``AttributeError``, so ``hasattr``/``except AttributeError`` behave exactly as
-    they would for a module that simply has no such attribute, and reported as one
-    (``_reported_name``) because that is what a script sees.
-    """
-
-    _reported_name = "AttributeError"
-
-
-def _absent_attribute(module_name):
-    """The ``__getattr__`` a facade module raises ``_Absent`` from."""
-
-    def __getattr__(attribute):
-        raise _Absent(
-            "module %r has no attribute %r: this build does not install it"
-            % (module_name, attribute)
-        )
-
-    return __getattr__
 
 
 # --- the modules wasm32 cannot import -------------------------------------
@@ -293,7 +260,7 @@ class DocumentObject:
 
     @property
     def ExpressionEngine(self):
-        # Pairs of (property, expression). The spike stores no expressions, but the
+        # Pairs of (property, expression). No expressions are stored here, but the
         # shell asks for the list on every row, so the shape matters.
         return [(name, "") for name in self._row["driven"]]
 
@@ -358,9 +325,6 @@ class Document:
             if object_row.Name == name:
                 return object_row
         return None
-
-    def getObjectsByLabel(self, label):
-        return [row for row in self.Objects if row.Label == label]
 
     def __repr__(self):
         return "<Document {}>".format(self.Name)
@@ -537,40 +501,10 @@ class _ParameterGrp:
         self._values().clear()
 
 
-class _Quantity:
-    """`FreeCAD.Units.Quantity` for the provider settings' numbers.
-
-    Only what that code uses: a value, its declared unit, `Value`, `getValueAs` and
-    the display string. There is no unit table here, so a conversion to a different
-    unit is refused rather than mis-scaled.
-    """
-
-    def __init__(self, value, unit=None):
-        self.Unit = "" if unit is None else str(unit)
-        if isinstance(value, str):
-            text = value.strip()
-            number, _, suffix = text.partition(" ")
-            if suffix:
-                if self.Unit and suffix.strip() != self.Unit:
-                    raise ValueError("cannot convert %r to %r" % (text, self.Unit))
-                self.Unit = suffix.strip()
-            value = number
-        self.Value = float(value)
-
-    def getValueAs(self, unit):
-        if unit and self.Unit and str(unit) != self.Unit:
-            raise ValueError("cannot convert %s to %s" % (self, unit))
-        return _Quantity(self.Value, unit or self.Unit)
-
-    def __float__(self):
-        return self.Value
-
-    def __str__(self):
-        text = "%g" % self.Value
-        return ("%s %s" % (text, self.Unit)).strip()
-
-    def __repr__(self):
-        return "Quantity(%r, %r)" % (self.Value, self.Unit)
+# `FreeCAD.Units.Quantity` is the engine's own: `_ferrocad` binds
+# `ferrocad_core::quantity::Quantity` into the VM, so the settings coercion cannot scale
+# or reject a unit differently from the desktop.
+_UNITS = _module("FreeCAD.Units", {"Quantity": _ferrocad.Quantity})
 
 
 def _configure_parameter_file(path):
@@ -582,9 +516,6 @@ def _configure_parameter_file(path):
 def _parameter_file_path():
     """`FerroCAD._params.parameter_file`: always `None` in this build."""
     return _PARAMETER_FILE
-
-
-_UNITS = _module("FreeCAD.Units", {"Quantity": _Quantity})
 
 
 _module(
@@ -628,8 +559,8 @@ def _format_property(obj, prop):
 
 
 def _coerce_property_text(obj, prop, text):
-    """The spike accepts the text verbatim: coercion is the engine's, and the
-    engine is not reachable from RustPython (see the module docstring)."""
+    """The text is accepted verbatim: coercion is the engine's, and the engine is
+    not reachable from this half (see the module docstring)."""
     return str(text)
 
 

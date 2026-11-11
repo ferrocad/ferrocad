@@ -134,6 +134,16 @@ pub fn load_workbenches(cx: &App) -> Result<WorkbenchReport, String> {
     with_backend(cx, |backend| backend.load_workbenches()).unwrap_or_else(|| Err(no_backend()))
 }
 
+/// Load one workbench pack the host fetched (B19).
+///
+/// `pack` is the pack document (`{"name", "version", "files": {…}}`), not the entry
+/// list: the same seam [`load_workbenches`] uses for a scanned tree. This is the call a
+/// host makes when it has bytes instead of a `mods/` directory.
+pub fn load_workbench_pack(cx: &App, pack: &str) -> Result<WorkbenchReport, String> {
+    with_backend(cx, |backend| backend.load_workbench_pack(pack))
+        .unwrap_or_else(|| Err(no_backend()))
+}
+
 pub fn model_tree(cx: &App) -> Result<Vec<DocumentNode>, String> {
     with_backend(cx, |backend| backend.model_tree()).unwrap_or_else(|| Ok(Vec::new()))
 }

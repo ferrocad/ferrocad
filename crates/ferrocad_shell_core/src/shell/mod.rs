@@ -814,6 +814,19 @@ impl Shell {
         })))
     }
 
+    /// Re-list the workbench commands after the host loaded mods.
+    ///
+    /// [`boot_with`](Self::boot_with) snapshots the command registry once, before a
+    /// browser has fetched anything: a pack loaded after the first frame (B19) brings
+    /// commands the palette, toolbar and global shortcuts have not seen. A host calls this
+    /// after [`crate::app::load_workbench_pack`](crate::app::load_workbench_pack); it is
+    /// also why the call repaints, so the new rows appear without waiting for the next
+    /// unrelated event.
+    pub fn refresh_after_mods(&mut self, cx: &mut Context<Self>) {
+        self.refresh_commands(cx);
+        cx.notify();
+    }
+
     /// Build a shell around an existing model (the window and tests use this).
     pub fn from_model(model: Arc<Mutex<ShellModel>>, cx: &mut Context<Self>) -> Self {
         let transcript = transcript_of(&model);

@@ -89,6 +89,19 @@ impl ScriptHost for HostChain {
         }
     }
 
+    /// A fetched pack runs in the primary's interpreter, like the scanned tree.
+    ///
+    /// A subordinate has no loader of its own to give a pack to, and the primary is the
+    /// half that owns the console, so the chain asks it exactly as `load_workbenches`
+    /// does. Without this forwarding the browser's two-host chain would answer every
+    /// pack with the trait default's empty report and never load one (B19).
+    fn load_workbench_pack(&self, pack: &str) -> Result<WorkbenchReport, String> {
+        match self.primary() {
+            Some(primary) => primary.load_workbench_pack(pack),
+            None => Ok(WorkbenchReport::default()),
+        }
+    }
+
     fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
         match self.primary() {
             Some(primary) => primary.tool(name),

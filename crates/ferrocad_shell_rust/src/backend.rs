@@ -28,6 +28,7 @@ use ferrocad_shell_api::settings::{MemorySettings, SettingsBackend};
 use ferrocad_shell_api::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GridProvider, GridSummary,
     ObjectNode, OpenedDocument, PropRow, ProviderFeature, SetResult, VisibilityOutcome,
+    WorkbenchReport,
 };
 use ferrocad_shell_api::view::{GizmoRequest, ViewRequest, ViewState as ShellViewState};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
@@ -888,6 +889,19 @@ impl AppBackend for RustAppBackend {
     /// The scripting half, when the host installed one with `with_script_host`.
     fn script_host(&self) -> Option<&dyn ferrocad_shell_api::app::ScriptHost> {
         self.script.as_deref()
+    }
+
+    /// A pack the host fetched runs in the script half (B19).
+    ///
+    /// `load_workbenches` cannot reach here: it needs a filesystem, and the browser — the
+    /// half that fetches packs — has none. The document half owns no interpreter, so with
+    /// no script installed there is nothing to run a pack with; the empty report is the
+    /// same answer a host gets when it fetched nothing.
+    fn load_workbench_pack(&self, pack: &str) -> Result<WorkbenchReport, String> {
+        match self.script.as_deref() {
+            Some(script) => script.load_workbench_pack(pack),
+            None => Ok(WorkbenchReport::default()),
+        }
     }
 
     /// The stored appearance request the shell applies at boot.

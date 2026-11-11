@@ -159,6 +159,22 @@ pub trait AppBackend {
         }
     }
 
+    /// Load one workbench **pack** the host fetched, rather than scanned.
+    ///
+    /// `pack` is one pack document exactly as `tools/mods_pack.py` writes it —
+    /// `{"name", "version", "files": {…}}` — **not** the entry list the script side
+    /// runs. Flattening the two entry scripts out of `files` is the script half's job
+    /// (`ferrocad_python_host`), so a host decodes nothing itself.
+    ///
+    /// This is the no-filesystem path (B19): the browser has no `mods/` tree to scan,
+    /// but it can `fetch`, so [`load_workbenches`](Self::load_workbenches) cannot run
+    /// there. The default loads nothing, which is the honest answer for a half with no
+    /// data loader. A malformed pack is an `Err`; a *script* that raises is recorded in
+    /// the report, never an `Err` — one broken mod must not cost the others.
+    fn load_workbench_pack(&self, _pack: &str) -> Result<WorkbenchReport, String> {
+        Ok(WorkbenchReport::default())
+    }
+
     // --- view models ----------------------------------------------------------
 
     fn model_tree(&self) -> Result<Vec<DocumentNode>, String> {
@@ -447,6 +463,22 @@ pub trait ScriptHost {
 
     /// Load workbench (`Init.py`/`InitGui.py`) scripts. Best-effort.
     fn load_workbenches(&self) -> Result<WorkbenchReport, String>;
+
+    /// Load one workbench **pack** from data: the no-filesystem path (B19).
+    ///
+    /// `pack` is one **pack document** as `tools/mods_pack.py` writes it —
+    /// `{"name": "Fasteners", "version": 1, "files": {"Init.py": …, "InitGui.py": …}}`
+    /// — and not the entry list the loader runs. The half that has a data loader
+    /// flattens `files` to its entries (`Init.py` then `InitGui.py`, every other key
+    /// skipped) and executes them with the same rules as
+    /// [`load_workbenches`](Self::load_workbenches).
+    ///
+    /// A malformed pack is an `Err` naming the problem; a *script* inside it that raises
+    /// is recorded in the report, never an `Err`. The default loads nothing, which is
+    /// what a half with no data loader (a JS surface, the document half alone) answers.
+    fn load_workbench_pack(&self, _pack: &str) -> Result<WorkbenchReport, String> {
+        Ok(WorkbenchReport::default())
+    }
 
     /// Resolve a scripted interactive tool (`python:<name>`) to its native handle.
     fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String>;
@@ -831,6 +863,15 @@ mod tests {
             Some("scripted scene")
         );
         let _listener = backend.event_listener();
+        // A half with no data loader loads no pack — the default, not a silent success: it
+        // answers an empty report so a host can ask a JS surface too (B19).
+        assert!(
+            SCRIPTED
+                .load_workbench_pack(r#"{"name": "Toy", "version": 1, "files": {}}"#)
+                .unwrap()
+                .loaded
+                .is_empty()
+        );
     }
 
     /// A document-only backend says so rather than pretending to script.
@@ -848,6 +889,14 @@ mod tests {
         );
         assert!(!backend.tool_command("draft", "cancel"));
         assert!(backend.load_workbenches().unwrap().loaded.is_empty());
+        assert!(
+            backend
+                .load_workbench_pack(r#"{"name": "Toy", "version": 1, "files": {}}"#)
+                .unwrap()
+                .loaded
+                .is_empty(),
+            "a document-only backend fetches no packs either"
+        );
         assert_eq!(backend.inventor_scene().unwrap().root.children.len(), 0);
         let _ = backend.event_listener();
     }

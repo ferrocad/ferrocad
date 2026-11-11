@@ -52,6 +52,18 @@ impl ScriptHost for Stub {
         Ok(Default::default())
     }
 
+    /// Echo the pack back under this host's name, so a test can tell *which* host
+    /// answered it. The subject is otherwise the same shape the real halves answer.
+    fn load_workbench_pack(
+        &self,
+        pack: &str,
+    ) -> Result<ferrocad_shell_api::types::WorkbenchReport, String> {
+        Ok(ferrocad_shell_api::types::WorkbenchReport {
+            loaded: vec![format!("{}/{pack}", self.name)],
+            errors: Vec::new(),
+        })
+    }
+
     fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
         Err(format!("no tool {name}"))
     }
@@ -164,6 +176,31 @@ fn the_primary_decides_whether_the_chain_has_a_display_hook() {
 
     // Nothing installed at all is still no hook.
     assert!(HostChain::new(Vec::new()).stage_meshes(&[]).is_none());
+}
+
+#[test]
+fn a_fetched_pack_runs_in_the_primary() {
+    // `load_workbenches` scans a tree the browser does not have; a fetched pack is the
+    // no-filesystem path, and it must reach the same half — the first host. Without the
+    // forwarding the trait default would answer an empty report and a browser chain
+    // would never load a pack (B19).
+    let first = Arc::new(Stub::new("first", true));
+    let second = Arc::new(Stub::new("second", true));
+    assert_eq!(
+        chain(&[&first, &second])
+            .load_workbench_pack("demo")
+            .expect("the primary answers")
+            .loaded,
+        ["first/demo"]
+    );
+    assert!(
+        HostChain::new(Vec::new())
+            .load_workbench_pack("demo")
+            .expect("an empty chain is not an error")
+            .loaded
+            .is_empty(),
+        "no host loads nothing, the same answer as a fetched-nothing page"
+    );
 }
 
 #[test]

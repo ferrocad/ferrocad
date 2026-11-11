@@ -14,6 +14,8 @@
 //! [`extra_properties`](ScriptHost::extra_properties) and
 //! [`set_extra_property`](ScriptHost::set_extra_property).
 
+use std::collections::BTreeMap;
+
 use ferrocad_inventor::{EventListener, Scene};
 use ferrocad_shell_api::DocumentGrant;
 use ferrocad_shell_api::app::ScriptHost;
@@ -29,7 +31,7 @@ use ferrocad_shell_api::types::{
 use ferrocad_shell_api::view::ViewState;
 use ferrocad_stage::{InteractionCommit, Tool};
 use ferrocad_types::Vector3;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime::PythonRuntime;
 
@@ -104,6 +106,66 @@ impl<R: PythonRuntime> PythonHost<R> {
     }
 }
 
+/// The entry scripts a workbench may carry, in the order the loader runs them.
+///
+/// The same rule the filesystem loader applies (`load_workbenches` in
+/// `python/ferrocad_shell`) and the packer's: a directory, or a pack's `files`, that
+/// holds either of these is a workbench. Any other key is not an entry point and does
+/// not run.
+const PACK_SCRIPTS: [&str; 2] = ["Init.py", "InitGui.py"];
+
+/// One workbench pack, as `tools/mods_pack.py` writes it.
+///
+/// `version` is deliberately not declared: the packer's format version is a
+/// compatibility marker between the packer and a reader that has to evolve, and the
+/// entries below are the whole contract a loader needs. A pack from a newer packer with
+/// the same two keys loads here exactly as an older one does.
+#[derive(Debug, Deserialize)]
+struct Pack {
+    name: String,
+    files: BTreeMap<String, String>,
+}
+
+/// One entry of `load_workbench_sources`' payload.
+///
+/// No `path`: the loader defaults it to `<name>/<script>`, which is the only label a
+/// fetched pack can honestly offer (it has no directory), and leaving it there keeps a
+/// `mods/` tree and a pack naming the same traceback for the same script.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PackEntry {
+    name: String,
+    script: String,
+    source: String,
+}
+
+/// Flatten a pack document into the loader's entry list, in a stable order.
+///
+/// `Init.py` then `InitGui.py`, whatever order the pack's `files` lists them in, and
+/// every other key skipped — the packer does not write one, but a hand-written pack may
+/// and a sibling module is not an entry point. An entry whose script the pack does not
+/// carry is simply absent, so a one-script pack runs one script.
+///
+/// This is the only `Err` in the pack path: a pack that is not JSON, or that has no
+/// `files` map, is malformed and named as such. The scripts inside it are executed by
+/// `load_workbench_sources`, which *records* a raising one — a mod that raises must not
+/// cost the mods around it.
+fn pack_entries(pack: &str) -> Result<Vec<PackEntry>, String> {
+    let pack: Pack = serde_json::from_str(pack).map_err(|error| format!("mod pack: {error}"))?;
+    if pack.name.is_empty() {
+        return Err("mod pack: `name` is empty".to_string());
+    }
+    Ok(PACK_SCRIPTS
+        .iter()
+        .filter_map(|script| {
+            pack.files.get(*script).map(|source| PackEntry {
+                name: pack.name.clone(),
+                script: (*script).to_string(),
+                source: source.clone(),
+            })
+        })
+        .collect())
+}
+
 /// Whether `object` names something the script owns rather than the document.
 ///
 /// The synthetic namespace is `Settings` and its `/`-separated children. A document
@@ -140,6 +202,18 @@ impl<R: PythonRuntime> ScriptHost for PythonHost<R> {
             .collect();
         let arg = serde_json::to_string(&dirs).map_err(|error| error.to_string())?;
         self.json("load_workbenches", &[&arg])
+    }
+
+    /// A fetched pack, flattened to the entries `load_workbench_sources` runs.
+    ///
+    /// The runtime check `load_workbenches` makes has no counterpart here: a pack is
+    /// data, so the interpreter needs no filesystem to run it — that is the whole point
+    /// of B19. Which interpreter answers is the runtime's business; both share the same
+    /// shell module, so the report is the tree's report.
+    fn load_workbench_pack(&self, pack: &str) -> Result<WorkbenchReport, String> {
+        let entries = pack_entries(pack)?;
+        let payload = serde_json::to_string(&entries).map_err(|error| error.to_string())?;
+        self.json("load_workbench_sources", &[&payload])
     }
 
     fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {
@@ -530,5 +604,96 @@ impl<R: PythonRuntime> PythonHost<R> {
             });
         }
         Ok(outcome.object)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The entries a pack document flattens to, or the reason it is malformed.
+    fn flatten(pack: &str) -> Vec<PackEntry> {
+        pack_entries(pack).expect("a well-formed pack")
+    }
+
+    /// The scripts of `entries`, in order: the whole of what a pack decides about run
+    /// order.
+    fn scripts(entries: &[PackEntry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.script.as_str()).collect()
+    }
+
+    /// The order is the loader's, not the pack's, and every entry names the pack.
+    #[test]
+    fn a_pack_runs_init_then_init_gui_whatever_order_it_lists_them() {
+        let pack = r#"{
+            "name": "Fasteners",
+            "version": 1,
+            "files": {
+                "InitGui.py": "import FreeCADGui\n",
+                "Init.py": "import FreeCAD\n"
+            }
+        }"#;
+        let entries = flatten(pack);
+        assert_eq!(scripts(&entries), ["Init.py", "InitGui.py"]);
+        assert!(
+            entries.iter().all(|entry| entry.name == "Fasteners"),
+            "{entries:?}"
+        );
+        assert_eq!(entries[1].source, "import FreeCADGui\n");
+    }
+
+    /// A sibling module or a wasm bundle never travels, and a pack missing one entry
+    /// script runs the other without inventing an empty one.
+    #[test]
+    fn only_the_two_entry_scripts_travel() {
+        let pack = r#"{
+            "name": "Odd",
+            "version": 1,
+            "files": {
+                "Helper.py": "pass\n",
+                "addon.wasm": "not python",
+                "InitGui.py": "pass\n"
+            }
+        }"#;
+        let entries = flatten(pack);
+        assert_eq!(scripts(&entries), ["InitGui.py"]);
+        assert_eq!(entries[0].name, "Odd");
+
+        let empty = flatten(r#"{"name": "Nothing", "version": 1, "files": {}}"#);
+        assert!(
+            empty.is_empty(),
+            "a pack with no entry runs nothing: {empty:?}"
+        );
+    }
+
+    /// What the interpreter receives is the loader's entry list — no `path`, so the
+    /// loader's own `<name>/<script>` default names the traceback, as it does for a tree.
+    #[test]
+    fn the_payload_is_the_loader_entry_list() {
+        let pack = r#"{"name": "Demo", "version": 1, "files": {"Init.py": "pass\n"}}"#;
+        let payload = serde_json::to_string(&flatten(pack)).expect("entries serialise");
+        let value: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON");
+        assert_eq!(
+            value,
+            serde_json::json!([{"name": "Demo", "script": "Init.py", "source": "pass\n"}])
+        );
+    }
+
+    /// A pack is malformed or it is not: the message names the problem, and the scripts
+    /// inside a well-formed pack are the Python loader's to record (this module never
+    /// sees them run).
+    #[test]
+    fn a_malformed_pack_is_an_error_naming_the_problem() {
+        let error = pack_entries("not json").unwrap_err();
+        assert!(error.starts_with("mod pack: "), "{error}");
+
+        let error = pack_entries(r#"{"name": "Empty", "version": 1}"#).unwrap_err();
+        assert!(error.contains("files"), "the missing map is named: {error}");
+
+        let error = pack_entries(r#"{"version": 1, "files": {}}"#).unwrap_err();
+        assert!(error.contains("name"), "the missing name is named: {error}");
+
+        let error = pack_entries(r#"{"name": "", "version": 1, "files": {}}"#).unwrap_err();
+        assert!(error.contains("name"), "an empty name is named: {error}");
     }
 }

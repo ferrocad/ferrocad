@@ -29,6 +29,7 @@
 mod containers;
 mod datum;
 mod dress_up;
+mod extrusion;
 mod shape_property;
 
 use std::any::Any;
@@ -46,6 +47,7 @@ use ferrocad_types::{Placement, Vector3};
 
 pub use datum::DATUM_PLANE_TYPE;
 pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
+pub use extrusion::EXTRUSION_TYPE;
 
 /// A millimetre length as the property a Part feature stores.
 ///
@@ -313,6 +315,9 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     object_registry::register(COMPOUND_TYPE, Arc::new(containers::Compound));
     object_registry::register(FILLET_TYPE, Arc::new(dress_up::Fillet));
     object_registry::register(CHAMFER_TYPE, Arc::new(dress_up::Chamfer));
+    // What push/pull creates. Kernel-neutral, so the browser and a
+    // `--script-host=plain` desktop can build one too.
+    extrusion::register();
 }
 
 /// A convenience box from the injected backend (what a script's `Part.makeBox` calls).

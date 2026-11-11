@@ -54,7 +54,9 @@ pub use workbench::{commands, contributions, manipulators};
 
 pub use app::{AppBackend, ScriptHost, install_backend, with_backend, with_backend_mut};
 pub use commands::{CommandInfo, CommandOutcome, Surface};
-pub use contributions::{Contributions, GizmoFactory, ManipulatorFactory, translate_gizmo};
+pub use contributions::{
+    Contributions, GizmoFactory, ManipulatorFactory, base_contributions, translate_gizmo,
+};
 pub use dev_tools::DevTools;
 pub use dialog::{DialogField, DialogSpec};
 pub use display::{DisplaySync, StageMesh};

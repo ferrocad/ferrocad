@@ -2952,6 +2952,7 @@ name = "ferrocad_web_gpui"
 version = "0.1.5"
 dependencies = [
  "bite-gpui",
+ "ferrocad_part_gui",
  "ferrocad_shell_core",
  "ferrocad_shell_web",
  "ferrocad_wasm",

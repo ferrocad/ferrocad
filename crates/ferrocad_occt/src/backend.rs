@@ -38,6 +38,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use ffi::top_abs::TopAbs_Orientation;
+
+use crate::surface_ops;
 use ffi::top_abs::TopAbs_ShapeEnum;
 use ffi::top_tools::TopTools_IndexedMapOfShape;
 use ffi::top_tools::TopTools_ListOfShape;
@@ -2028,6 +2030,14 @@ impl GeometryBackend for OcctBackend {
             .into());
         }
         Ok(erase(make.pin_mut().Shape()))
+    }
+
+    fn line_direction(&self, edge: &Shape) -> Option<Vector3> {
+        surface_ops::edge_line_direction(edge).ok()
+    }
+
+    fn planar_normal(&self, shape: &Shape) -> Option<Vector3> {
+        surface_ops::shape_plane_normal(shape).ok()
     }
 
     fn revolve(

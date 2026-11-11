@@ -10,11 +10,14 @@ use std::sync::{Arc, Mutex};
 
 use ferrocad_core::DocumentHandle;
 use ferrocad_core::{
-    Document, Matrix4, ObjectId, Placement, Property, Rotation, Vector3, status_names,
+    Document, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, Unit, Vector3,
+    status_names,
 };
 use ferrocad_geom::TessellationOptions;
 use ferrocad_occt::OcctBackend;
-use ferrocad_part::{BOX_TYPE, FILLET_TYPE, backend, shape_of};
+use ferrocad_part::{
+    BOX_TYPE, CHAMFER_TYPE, CUT_TYPE, EXTRUSION_TYPE, FILLET_TYPE, FUSE_TYPE, backend, shape_of,
+};
 use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_api::catalog::{self, CommandDef, Executor};
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
@@ -48,6 +51,16 @@ const MOVE_TOKEN: &str = "rust-move";
 /// The document property a hide adds on first use. The Python backend writes the same
 /// switch, and keeping it on the document is what makes a hide undoable.
 const VISIBILITY_PROPERTY: &str = "Visibility";
+
+/// The Part workbench's edge dress-up manipulator.
+///
+/// A literal, not a dependency: the id is part of the manipulator contract, and this is
+/// the document half — it must not link a presentation crate (`ferrocad_part_gui` owns
+/// the constant and the arc that emits it).
+const DRESS_UP: &str = "dress_up";
+
+/// The Part workbench's face push/pull stem (same contract as [`DRESS_UP`]).
+const PUSH_PULL: &str = "push_pull";
 
 /// The sample document's name (the window title and the status line use it).
 const DOCUMENT: &str = "Sample";
@@ -234,6 +247,172 @@ impl RustAppBackend {
         if let Some(executed) = &report.executed {
             script.on_document_event(&DocumentEvent::recomputed(executed));
         }
+    }
+
+    /// The edge dress-up commit: a `Part::Fillet`/`Part::Chamfer` over the body.
+    ///
+    /// The feature is named `<object>_<mode>` and reused by the next scrub, so one drag
+    /// does not leave a feature per frame — the same rule the edition's Python provider
+    /// follows, which is what keeps the two paths interchangeable.
+    fn dress_up(
+        &mut self,
+        commit: &InteractionCommit,
+        object: &str,
+        fillet: bool,
+    ) -> Result<ApplyResult, String> {
+        let Some(edge) = commit.element.as_deref().filter(|edge| !edge.is_empty()) else {
+            return Ok(apply_refused("a dress-up needs an edge"));
+        };
+        let first = commit.values.first().copied().unwrap_or(1.0);
+        let second = commit.values.get(1).copied().unwrap_or(0.0);
+        if !(first > 0.0) {
+            return Ok(apply_refused("the dress-up size must be positive"));
+        }
+        let mode = if fillet { "Fillet" } else { "Chamfer" };
+        let feature = format!("{object}_{mode}");
+        let transaction = format!("{mode} {object}");
+        let edge = edge.to_string();
+        let type_id = if fillet { FILLET_TYPE } else { CHAMFER_TYPE };
+        self.edit(|_, document| {
+            if document.get_by_name(object).is_none() {
+                return Ok((apply_refused(format!("no object {object}")), None));
+            }
+            let executed = in_transaction(document, &transaction, |document| {
+                let id = match document.get_by_name(&feature) {
+                    Some(id) => id,
+                    None => document.add_object(&feature, type_id),
+                };
+                document.set_property(
+                    id,
+                    "Base",
+                    Property::LinkSub(object.to_string(), vec![edge.clone()]),
+                )?;
+                if fillet {
+                    document.set_property(id, "Radius", length(first))?;
+                } else {
+                    document.set_property(id, "Distance", length(first))?;
+                    document.set_property(id, "Distance2", length(second))?;
+                }
+                document.recompute()
+            })?;
+            Ok((
+                ApplyResult {
+                    ok: true,
+                    ..Default::default()
+                },
+                Some(EditReport::new(
+                    &transaction,
+                    vec![object.to_string(), feature.clone()],
+                    Some(object_names(document, &executed)),
+                )),
+            ))
+        })
+    }
+
+    /// The face push/pull commit: extrude the named face and fuse or cut it into the
+    /// body — the same three objects the edition's Python provider builds.
+    ///
+    /// The sign of the distance decides, as it does there: outward is a fuse, inward a
+    /// cut. The extrusion is hidden and the boolean consumes its `Base`, so the body is
+    /// replaced rather than drawn beside its own result.
+    ///
+    /// No placement is copied onto the boolean: this path's display reads the stored
+    /// shape, and `Base`'s shape already carries the body's placement, so the operands
+    /// are in world space. (The Python provider re-applies placements itself, which is
+    /// why it copies one.)
+    fn push_pull(
+        &mut self,
+        commit: &InteractionCommit,
+        object: &str,
+    ) -> Result<ApplyResult, String> {
+        let Some(face) = commit.element.as_deref().filter(|face| !face.is_empty()) else {
+            return Ok(apply_refused("push/pull needs a face element"));
+        };
+        let distance = commit.values.first().copied().unwrap_or(0.0);
+        if distance.abs() < 1e-9 {
+            return Ok(ApplyResult {
+                ok: true,
+                ..Default::default()
+            });
+        }
+        let outward = distance > 0.0;
+        let face = face.to_string();
+        let transaction = format!("{} {object}", if outward { "Extrude" } else { "Pocket" });
+        let extrusion_name = format!("{object}_Extrusion");
+        let feature_name = format!("{object}_{}", if outward { "Fuse" } else { "Cut" });
+        let feature_type = if outward { FUSE_TYPE } else { CUT_TYPE };
+        self.edit(|_, document| {
+            let Some(base) = document.get_by_name(object) else {
+                return Ok((apply_refused(format!("no object {object}")), None));
+            };
+            // The face's outward normal, in the frame its shape is stored in.
+            let shape = match document
+                .object(base)
+                .and_then(|object| object.properties.get("Shape"))
+                .and_then(shape_of)
+                .and_then(|property| property.shape())
+            {
+                Some(shape) => shape,
+                None => {
+                    return Ok((
+                        apply_refused(format!("{object} has no shape")),
+                        None,
+                    ));
+                }
+            };
+            let Some(face_shape) = backend().resolve(&shape, &face) else {
+                return Ok((
+                    apply_refused(format!("{object} has no sub-shape {face}")),
+                    None,
+                ));
+            };
+            let Some(normal) = backend().planar_normal(&face_shape) else {
+                return Ok((
+                    apply_refused(format!("{face} is not a planar face")),
+                    None,
+                ));
+            };
+            let executed = in_transaction(document, &transaction, |document| {
+                let extrusion = match document.get_by_name(&extrusion_name) {
+                    Some(id) => id,
+                    None => document.add_object(&extrusion_name, EXTRUSION_TYPE),
+                };
+                document.set_property(
+                    extrusion,
+                    "Base",
+                    Property::LinkSub(object.to_string(), vec![face.clone()]),
+                )?;
+                document.set_property(extrusion, "Dir", Property::Vector(normal))?;
+                document.set_property(extrusion, "Solid", Property::Bool(true))?;
+                document.set_property(extrusion, "LengthFwd", Property::Float(distance.abs()))?;
+                document.set_property(extrusion, "Reversed", Property::Bool(!outward))?;
+                // The boolean is what is drawn; the sweep is scaffolding.
+                hide_object(document, extrusion, Some(false));
+
+                let feature = match document.get_by_name(&feature_name) {
+                    Some(id) => id,
+                    None => document.add_object(&feature_name, feature_type),
+                };
+                document.set_property(feature, "Base", Property::Link(object.to_string()))?;
+                document.set_property(feature, "Tool", Property::Link(extrusion_name.clone()))?;
+                document.recompute()
+            })?;
+            Ok((
+                ApplyResult {
+                    ok: true,
+                    ..Default::default()
+                },
+                Some(EditReport::new(
+                    &transaction,
+                    vec![
+                        object.to_string(),
+                        extrusion_name.clone(),
+                        feature_name.clone(),
+                    ],
+                    Some(object_names(document, &executed)),
+                )),
+            ))
+        })
     }
 
     /// The active document's name and shared handle.
@@ -1204,10 +1383,29 @@ impl AppBackend for RustAppBackend {
         {
             return Ok(result);
         }
+        // No script claimed it. Part's two manipulators are document edits this half can
+        // make for itself — which is what a host with no interpreter (the browser, a
+        // `--script-host=plain` desktop) has.
+        match (commit.manipulator.as_str(), commit.action.as_str()) {
+            (DRESS_UP, "fillet") => self.dress_up(commit, object, true),
+            (DRESS_UP, "chamfer") => self.dress_up(commit, object, false),
+            (PUSH_PULL, "extrude") | (PUSH_PULL, "pocket") => self.push_pull(commit, object),
+            _ => apply_transform(self, commit, object),
+        }
+    }
+}
+
+/// The generic gizmo commit: `values` are the 16 row-major elements of the
+/// world-space transform, composed on the left of the object's placement.
+fn apply_transform(
+    backend: &mut RustAppBackend,
+    commit: &InteractionCommit,
+    object: &str,
+) -> Result<ApplyResult, String> {
         if commit.manipulator != TRANSFORM_ID || commit.action != "apply" {
-            // A workbench's dress-up arc (the Part fillet, a BIM grip) knows its own
-            // feature type, so the commit is the script's to apply; only when it
-            // disclaims the id is it unavailable.
+            // A workbench's own commit (a BIM grip) knows its own feature type, so the
+            // commit is the script's to apply; only when it disclaims the id is it
+            // unavailable.
             return Ok(ApplyResult {
                 ok: false,
                 error: format!(
@@ -1222,7 +1420,7 @@ impl AppBackend for RustAppBackend {
                 error: "a transform commit needs 16 matrix values".to_string(),
             });
         };
-        self.edit(|_, document| {
+        backend.edit(|_, document| {
             let Some(id) = document.get_by_name(object) else {
                 return Ok((
                     ApplyResult {
@@ -1265,7 +1463,6 @@ impl AppBackend for RustAppBackend {
             ))
         })
     }
-}
 
 /// The property editor's rows for one document object.
 ///
@@ -1644,6 +1841,19 @@ fn refused(error: String) -> SetResult {
         ok: false,
         error,
         view: None,
+    }
+}
+
+/// A millimetre length as the property a Part feature stores (`App::PropertyLength`).
+fn length(value: f64) -> Property {
+    Property::Quantity(Quantity::new(value, Unit::Millimeter))
+}
+
+/// A commit this half cannot apply, in the verdict shape the seam uses.
+fn apply_refused(error: impl Into<String>) -> ApplyResult {
+    ApplyResult {
+        ok: false,
+        error: error.into(),
     }
 }
 
@@ -2426,5 +2636,121 @@ mod tests {
         assert!(backend.save_document().is_err());
         assert!(backend.set_property("Box", "Length", "7").is_err());
         assert!(backend.set_visibility("Box", None).is_err());
+    }
+
+    /// Whether `name` holds a shape, in the document the registry serves.
+    fn has_shape(document: &Document, name: &str) -> bool {
+        document
+            .get_by_name(name)
+            .and_then(|id| document.object(id))
+            .and_then(|object| object.properties.get("Shape"))
+            .and_then(shape_of)
+            .and_then(|property| property.shape())
+            .is_some()
+    }
+
+    #[test]
+    fn a_dress_up_commit_builds_the_feature_with_no_interpreter() {
+        let _serial = clear_registry();
+        let mut backend = shared();
+
+        let commit = InteractionCommit::new(DRESS_UP, 1, "fillet")
+            .with_element("Edge1")
+            .with_values([2.0]);
+        let result = backend.apply_interaction(&commit, "Box").unwrap();
+        assert!(result.ok, "{}", result.error);
+
+        let handle = registry().get(DOCUMENT).unwrap();
+        {
+            let document = lock(&handle);
+            let id = document.get_by_name("Box_Fillet").expect("the feature");
+            assert_eq!(document.object(id).unwrap().type_id, FILLET_TYPE);
+            assert!(has_shape(&document, "Box_Fillet"), "the fillet built");
+            // The scrub's radius is the row the pane would show.
+            match document.object(id).unwrap().properties.get("Radius") {
+                Some(Property::Quantity(value)) => {
+                    assert!((value.value_mm() - 2.0).abs() < 1e-9)
+                }
+                other => panic!("a length radius, got {other:?}"),
+            }
+        }
+
+        // The same commit again reuses the feature: a drag must not leave one per frame.
+        // The guard is scoped: `apply_interaction` takes the same document lock.
+        let commit = commit.with_values([3.0]);
+        assert!(backend.apply_interaction(&commit, "Box").unwrap().ok);
+        let document = lock(&handle);
+        let fillets = document
+            .object_ids()
+            .iter()
+            .filter(|id| {
+                document
+                    .object(**id)
+                    .is_some_and(|object| object.type_id == FILLET_TYPE)
+            })
+            .count();
+        // The sample's own `Fillet` plus `Box_Fillet`.
+        assert_eq!(fillets, 2);
+    }
+
+    #[test]
+    fn a_chamfer_commit_writes_both_distances() {
+        let _serial = clear_registry();
+        let mut backend = shared();
+        let commit = InteractionCommit::new(DRESS_UP, 1, "chamfer")
+            .with_element("Edge1")
+            .with_values([1.5, 0.5]);
+        assert!(backend.apply_interaction(&commit, "Box").unwrap().ok);
+
+        let handle = registry().get(DOCUMENT).unwrap();
+        let document = lock(&handle);
+        let id = document.get_by_name("Box_Chamfer").expect("the feature");
+        assert_eq!(document.object(id).unwrap().type_id, CHAMFER_TYPE);
+        for (name, expected) in [("Distance", 1.5), ("Distance2", 0.5)] {
+            match document.object(id).unwrap().properties.get(name) {
+                Some(Property::Quantity(value)) => {
+                    assert!((value.value_mm() - expected).abs() < 1e-9, "{name}")
+                }
+                other => panic!("{name} is a length, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_push_pull_commit_extrudes_a_face_and_fuses_it_with_no_interpreter() {
+        let _serial = clear_registry();
+        let mut backend = shared();
+
+        let commit = InteractionCommit::new(PUSH_PULL, 1, "extrude")
+            .with_element("Face1")
+            .with_values([3.0]);
+        let result = backend.apply_interaction(&commit, "Box").unwrap();
+        assert!(result.ok, "{}", result.error);
+
+        let handle = registry().get(DOCUMENT).unwrap();
+        {
+            let document = lock(&handle);
+            let sweep = document.get_by_name("Box_Extrusion").expect("the sweep");
+            assert_eq!(document.object(sweep).unwrap().type_id, EXTRUSION_TYPE);
+            // The boolean is what is drawn; the sweep is scaffolding, so it is hidden.
+            assert!(!ferrocad_core::is_visible(document.object(sweep).unwrap()));
+            assert!(has_shape(&document, "Box_Extrusion"));
+
+            let id = document.get_by_name("Box_Fuse").expect("the boolean");
+            assert_eq!(document.object(id).unwrap().type_id, FUSE_TYPE);
+            assert!(has_shape(&document, "Box_Fuse"));
+            // The boolean consumes the body and links its tool.
+            assert!(document.object(id).unwrap().properties.get("Tool").is_some());
+        }
+
+        // Inward is a cut, with its own feature name (guard scoped: the commit locks).
+        let commit = InteractionCommit::new(PUSH_PULL, 1, "pocket")
+            .with_element("Face1")
+            .with_values([-2.0]);
+        assert!(backend.apply_interaction(&commit, "Box").unwrap().ok);
+        let document = lock(&handle);
+        let id = document.get_by_name("Box_Cut").expect("the cut");
+        assert_eq!(document.object(id).unwrap().type_id, CUT_TYPE);
+        assert!(has_shape(&document, "Box_Cut"));
     }
 }

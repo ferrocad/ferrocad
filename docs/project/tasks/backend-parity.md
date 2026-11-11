@@ -3,7 +3,7 @@
 Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
-B11a–B11b built (2026-11-09).** The surface suite
+B11a–B11b built (2026-11-09); B12 built (2026-11-09).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1090,6 +1090,58 @@ a scripted document API (rotation survives an explode, collapse restores the ori
 movable object is a no-op), 3 for the placement text itself, and both bundles build for
 `wasm32-unknown-unknown` with no C toolchain.
 
+### B12 — Part's manipulators without an interpreter (built 2026-11-09)
+
+`ferrocad_part` is in the browser graph (the boot document is a `Part::Box` and a
+`Part::Fillet`), yet push/pull and edge dress-up were absent there. Both halves of them
+lived off the browser's path, and neither reason was the kernel.
+
+**1. The document type.** `Part::Extrusion` was registered by `ferrocad_part_py`, so a
+host without PyO3 had no such object at all — push/pull had nothing to create. It moved
+into `ferrocad_part` (`src/extrusion.rs`), which is where it belongs: it reads link and
+number properties, asks the `GeometryBackend`, and writes a `Shape`. The two queries it
+needs that the trait did not expose are trait methods now — `line_direction`
+(`DirMode = Edge`) and `planar_normal` (`DirMode = Normal`) — implemented in
+`ferrocad_occt` over `surface_ops`, with the same error messages the Python-side type
+used, so `part_geometry_ops`'s `DirMode` test is the regression that the move was
+faithful.
+
+**2. The commits.** `RustAppBackend::apply_interaction` answered "not available in this
+build" for anything but `transform/apply`. It now applies Part's two manipulators
+itself: `<object>_Fillet`/`_Chamfer` with `Base` as a `LinkSub` on the edge and the
+radius/distance as lengths, and for push/pull `<object>_Extrusion` (hidden) plus
+`<object>_Fuse`/`_Cut` over it — the same object names the edition's Python provider
+uses, so one drag leaves one feature and the two paths are interchangeable. That also
+makes the *desktop* work under `--script-host=plain`.
+
+**3. The handles.** `Shell::boot` defaults to `Contributions::new()`, and the browser host
+installed none — no manipulators, and therefore no translate gizmo or workplane tool
+either. `ferrocad_web_gpui` now links `ferrocad_part_gui` and installs the two factories
+beside `base_contributions()`, which moved from `ferrocad` (an edition crate that links
+CPython) into `ferrocad_shell_core`, where both hosts can reach it.
+
+Two details worth keeping. The native push/pull writes **no placement** onto the
+boolean: `Base`'s shape already carries the body's placement, so the operands are in
+world space, whereas the Python provider re-applies placements itself and copies one.
+And the sweep is hidden through the document's `Visibility` switch, because `drawable`
+consumes only `Base` — a `Tool` is still drawn beside the boolean that uses it.
+
+**Exit: met.** 3 new `ferrocad_shell_rust` tests (a fillet and its reuse, a chamfer's two
+distances, a fuse and a cut with the sweep hidden) over the real document and kernel;
+`ferrocad_part` 54, `ferrocad_part_py`'s geometry (24) and surface (7) suites including
+the `DirMode` case, `ferrocad_shell_core` 271, and the parametric edition's composition,
+surface and `manipulator_round_trip` suites.
+
+The browser side was built and booted locally, not left to CI: the pinned cross image
+(`crates/ferrocad_web_gpui/run.sh`) produced `ferrocad_web_gpui.wasm` with
+`ferrocad_part_gui` in the graph, `wasm-bindgen` at the lock's 0.2.129 generated
+`www/pkg`, and `smoke.sh` passed under headless Chrome — the module boots, both shapes
+tessellate, the stage draws the fillet instead of its box, the JS and wasm workbenches
+run, and nothing panics. A bare `cargo check --target wasm32` outside that image still
+fails in `cxx`; the image is what supplies the sysroot, which is the wrong lesson to draw
+about the crate. What the smoke does **not** cover is a pointer **drag** on a manipulator:
+it drives the palette and a click, not a stage gesture.
+
 ## 5. Open questions, and how each host reaches the engine
 **Open questions.**
 
@@ -1163,6 +1215,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D14 | wasm on the browser without the JS half | **Not built (B8e rejected).** `loader.js` needs `window.ferrocad`, which the page installs only for the JS half, so a wasm addon *derives* the page host rather than an engine being compiled into the module |
 | D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
 | D16 | what a wasm/JS addon can reach | **The five-verb document API plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that, and explode view needed a `Placement` coercion (B11b), not a new verb |
+| D17 | who applies a workbench manipulator commit | **The script half if it claims one, else the document half** (B12). Part's dress-up and push/pull are document edits: `apply_interaction` builds the feature itself, so the browser and `--script-host=plain` get them, and both paths create the same object names |
 
 ## 6. Acceptance
 

@@ -47,6 +47,25 @@ pub fn translate_gizmo(selection: &SelectionRef, stage: &Stage) -> Option<Transf
     Some(TransformGizmo::translate(selection.object, anchor))
 }
 
+/// The base app's contributions: the translate gizmo and the workplane pick tool.
+///
+/// Every host wants these, so they live with the shell rather than in one edition —
+/// the browser host has no edition crate to take them from. A workbench adds its own
+/// manipulators on top:
+///
+/// ```ignore
+/// base_contributions()
+///     .with_manipulator(part_gui::fillet_manipulator)
+///     .with_manipulator(part_gui::push_pull_manipulator);
+/// ```
+pub fn base_contributions() -> Contributions {
+    Contributions::new()
+        .with_gizmo(translate_gizmo)
+        .with_tool("workplane_points", || {
+            Box::new(ferrocad_stage::PlanePointsTool::new()) as Box<dyn Tool>
+        })
+}
+
 /// The world-aligned base corner (minimum X/Y/Z) of a body's bounding box.
 ///
 /// `None` for an entity the stage does not carry, or one with no positions. This is

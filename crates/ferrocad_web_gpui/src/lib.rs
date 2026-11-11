@@ -98,7 +98,16 @@ pub fn main() {
             Rc::new(RefCell::new(None));
         let slot = shell_slot.clone();
         let window = cx.open_window(window_options(), move |window, cx| {
-            let shell = cx.new(|cx| ferrocad_shell_core::Shell::from_model(model, cx));
+            let shell = cx.new(|cx| {
+                let mut shell = ferrocad_shell_core::Shell::from_model(model, cx);
+                // The workbench surface a browser session gets: the same handles a
+                // desktop edition contributes (the parametric edition adds these two
+                // manipulators to `ferrocad::base_contributions`), and no interpreter
+                // is involved on either side — `RustAppBackend::apply_interaction`
+                // applies the commits itself.
+                shell.set_contributions(contributions());
+                shell
+            });
             // The page owns the `<input type=file>` and the download; install its
             // picker before the first Open/Save can run.
             shell.update(cx, |shell, _cx| {
@@ -124,6 +133,19 @@ pub fn main() {
             Err(error) => log::error!("ferrocad shell: no window: {error}"),
         }
     });
+}
+
+/// The manipulation a browser session gets.
+///
+/// The base contributions plus Part's two manipulators — the same composition
+/// `ferrocad_parametric`'s `main` installs, built here because the web host has no
+/// edition crate and no app script. Every factory is plain Rust over `ferrocad_stage`,
+/// so nothing here needs an interpreter; the commits they emit are applied by
+/// `ferrocad_shell_rust`'s document half.
+fn contributions() -> ferrocad_shell_core::Contributions {
+    ferrocad_shell_core::base_contributions()
+        .with_manipulator(ferrocad_part_gui::fillet_manipulator)
+        .with_manipulator(ferrocad_part_gui::push_pull_manipulator)
 }
 
 /// The browser window's options.

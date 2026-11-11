@@ -1227,6 +1227,20 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("extrude"))
     }
 
+    /// The direction of a straight edge (`Part::Extrusion`'s `DirMode = Edge`).
+    ///
+    /// `None` when the edge is not a line, or the backend cannot ask.
+    fn line_direction(&self, _edge: &Shape) -> Option<Vector3> {
+        None
+    }
+
+    /// The normal of the plane `shape` lies in (`Part::Extrusion`'s `DirMode = Normal`).
+    ///
+    /// `None` when the shape is not planar, or the backend cannot ask.
+    fn planar_normal(&self, _shape: &Shape) -> Option<Vector3> {
+        None
+    }
+
     /// Revolve `shape` about the axis through `center` along `axis` by `angle`
     /// **radians** (`Shape.revolve`).
     fn revolve(

@@ -115,11 +115,13 @@ Rules that keep the split honest:
   property read into an interpreter round-trip.
 - Three capabilities stayed with the script half *inside* the document: `stage_meshes`
   (the edition's display hook — `DisplayMode`, a datum plane's glass card, the toy
-  edition's non-OCCT meshes), `apply_interaction` (every manipulator commit, the generic
-  `transform`/`apply` included: the edition's provider owns the edit and its undo
-  label) and `add_datum_plane`. Each answers first; the document half keeps its own
-  behaviour as the fallback for a commit the script disclaims — which is what makes
-  drag-to-move work in `?runtime=plain` and in an app that loads no edition mod.
+  edition's non-OCCT meshes), `apply_interaction` (a manipulator commit: the edition's
+  provider owns the edit and its undo label) and `add_datum_plane`. Each answers first;
+  the document half keeps its own arms as the fallback — the generic
+  `transform`/`apply`, and since B12 Part's `dress_up`/`push_pull`, which create the
+  `Part::Fillet`/`Chamfer` or the extrusion and boolean itself. That is what makes both
+  drag-to-move and push/pull work in `?runtime=plain`, in the browser, and in an app
+  that loads no edition mod.
 - `inventor_scene` and `event_listener` live on `ScriptHost` because they are scripting
   capabilities, not rendering paths. They are the compatibility route for workbenches
   that build their own Coin scene (`ActiveView.getSceneGraph().addChild(...)`, dispatch

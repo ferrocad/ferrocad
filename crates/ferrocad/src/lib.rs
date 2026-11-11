@@ -82,11 +82,9 @@ pub fn run_edition(app_name: &str, entry_module: &str) {
 ///     .with_manipulator(ferrocad_part_gui::fillet_manipulator);
 /// ```
 pub fn base_contributions() -> Contributions {
-    Contributions::new()
-        .with_gizmo(ferrocad_shell_python::translate_gizmo)
-        .with_tool("workplane_points", || {
-            Box::new(ferrocad_stage::PlanePointsTool::new()) as Box<dyn ferrocad_stage::Tool>
-        })
+    // The composition lives with the shell so the browser host, which has no edition
+    // crate, installs the same gizmo and workplane tool this edition does.
+    ferrocad_shell_python::base_contributions()
 }
 
 /// [`run_edition`] with the workbench contributions the edition registers.

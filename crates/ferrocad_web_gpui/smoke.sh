@@ -507,9 +507,38 @@ check_mods
 capture_write
 check_write
 
+# The kernel leg (B18b item 2): the browser's Python builds a real solid with the OCCT
+# kernel and puts it in the document, then reads it back through the facade. The model
+# tree is painted into the canvas, so the assertion is the script's own output.
+capture_kernel() {
+    capture "/?runtime=pywasm&script=import%20Part%0Ab%20%3D%20Part.makeBox%2810%2C%2020%2C%2030%29%0APart.show%28b%2C%20%27Kernel%27%29%0Aprint%28round%28App.ActiveDocument.getObject%28%27Kernel%27%29.Shape.Volume%2C%201%29%2C%20App.ActiveDocument.getObject%28%27Kernel%27%29.Shape.ShapeType%29" "$TMP/kernel.log"
+}
+
+check_kernel() {
+    LOG="$TMP/kernel.log"
+    echo "pywasm kernel console lines:"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: script -> ok=true output="6000.0 Solid"'
+
+    echo "pywasm kernel forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+NameError
+TypeError
+read-only
+panicked at
+unreachable
+EOF
+}
+
+capture_kernel
+check_kernel
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, no panic or JS error"

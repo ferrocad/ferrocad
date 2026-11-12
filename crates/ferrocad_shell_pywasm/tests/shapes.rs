@@ -1,0 +1,190 @@
+//! B18b item 2: scripts build and measure real solids under RustPython.
+//!
+//! The kernel is OCCT, the same one `ferrocad_shell_rust` hands the document half, so a
+//! box built here is the shape the viewport draws. Two paths are covered: standalone
+//! `Part`/`Mesh` objects (no document), and the document path — `Part.show`, the typed
+//! `obj.Shape = …` write, and a parametric `Part::Box` whose `Shape` recomputes.
+
+use ferrocad_core::Document;
+use ferrocad_shell_pywasm::PywasmScriptHost;
+use serde_json::Value;
+
+/// Run `f` with RustPython's 16 MiB stack (its compiler recurses; see `properties.rs`).
+fn with_host<R: Send + 'static>(f: impl FnOnce(&PywasmScriptHost) -> R + Send + 'static) -> R {
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(move || {
+            let host = ferrocad_shell_pywasm::new().expect("the interpreter boots");
+            f(&host)
+        })
+        .expect("a worker thread")
+        .join()
+        .expect("no panic")
+}
+
+fn evaluate(host: &PywasmScriptHost, code: &str) -> Value {
+    let answer = host.call("evaluate", &[code]).expect("evaluate runs");
+    serde_json::from_str(&answer).expect("evaluate returns JSON")
+}
+
+/// Run `code`, assert it succeeded, and answer what it printed.
+fn output(host: &PywasmScriptHost, code: &str) -> String {
+    let answer = evaluate(host, code);
+    assert_eq!(answer["ok"], true, "{code}: {answer}");
+    answer["output"].as_str().unwrap_or_default().to_string()
+}
+
+fn clear_registry() {
+    let mut registry = ferrocad_core::application()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for name in registry.names() {
+        registry.close_document(&name);
+    }
+}
+
+#[test]
+fn a_script_builds_measures_and_reshapes_solids() {
+    with_host(|host| {
+        // Primitives, mass properties and topology.
+        let text = output(
+            host,
+            "b = Part.makeBox(10, 20, 30)\n\
+             print(b.Volume, b.Area, b.ShapeType, len(b.Faces), len(b.Edges), len(b.Vertexes))\n",
+        );
+        assert_eq!(text, "6000.0 2200.0 Solid 6 12 8", "{text}");
+
+        // Bounds and the centre of mass come from the kernel, not from the arguments.
+        let text = output(
+            host,
+            "print(b.BoundBox.XMax, b.BoundBox.ZMax, b.CenterOfMass.x, b.CenterOfMass.z)\n",
+        );
+        assert_eq!(text, "10.0 30.0 5.0 15.0", "{text}");
+
+        // A boolean result is a real solid, and it is smaller than the operand.
+        let text = output(
+            host,
+            "c = Part.makeCylinder(5, 40)\n\
+             cut = b.cut(c)\n\
+             print(cut.isValid(), cut.Volume < b.Volume, cut.Volume > 0)\n",
+        );
+        assert_eq!(text, "True True True", "{text}");
+
+        // Translation and rotation bake into the geometry.
+        let text = output(
+            host,
+            "moved = b.translate(FreeCAD.Vector(100, 0, 0))\n\
+             print(moved.BoundBox.XMin, moved.BoundBox.XMax)\n",
+        );
+        assert_eq!(text, "100.0 110.0", "{text}");
+        let text = output(
+            host,
+            "turned = b.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1), 90)\n\
+             print(round(turned.BoundBox.XMin), round(turned.BoundBox.YMax))\n",
+        );
+        assert_eq!(text, "-20 10", "{text}");
+
+        // Tessellation: 12 triangles for a box, shared with the display path.
+        let text = output(
+            host,
+            "vertices, facets = b.tessellate(0.1)\n\
+             print(len(vertices) >= 8, len(facets))\n",
+        );
+        assert_eq!(text, "True 12", "{text}");
+
+        // A compound of the two primitives.
+        let text = output(
+            host,
+            "both = Part.makeCompound([b, Part.makeSphere(3)])\n\
+             print(both.ShapeType, len(both.Solids))\n",
+        );
+        assert_eq!(text, "Compound 2", "{text}");
+    });
+}
+
+#[test]
+fn a_script_meshes_a_solid() {
+    with_host(|host| {
+        let text = output(
+            host,
+            "b = Part.makeBox(10, 20, 30)\n\
+             m = MeshPart.meshFromShape(Shape=b, LinearDeflection=0.5)\n\
+             print(m.countFacets(), m.countPoints() >= 8, m.isSolid(), round(m.Area, 1), round(m.Volume, 1))\n",
+        );
+        assert_eq!(text, "12 True True 2200.0 6000.0", "{text}");
+
+        // The `Mesh(shape)` form is the same mesh.
+        let text = output(
+            host,
+            "direct = Mesh.Mesh(b)\n\
+             print(direct.countFacets(), len(direct.Facets) == direct.countFacets())\n",
+        );
+        assert_eq!(text, "12 True", "{text}");
+    });
+}
+
+#[test]
+fn a_shape_becomes_a_document_object_and_back() {
+    clear_registry();
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| {
+            let host = ferrocad_shell_pywasm::live().expect("the interpreter boots");
+            ferrocad_core::application()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert_document("Bridge", Document::new());
+
+            // `Part.show` adds a `Part::Feature`; reading it back is the same kernel
+            // handle, not a placeholder string.
+            let text = output(
+                &host,
+                "body = Part.show(Part.makeBox(10, 20, 30), 'Body')\n\
+                 print(body.Name, body.Shape.ShapeType, body.Shape.Volume)\n",
+            );
+            assert_eq!(text, "Body Solid 6000.0", "{text}");
+
+            // The typed write the doorway cannot carry: `obj.Shape = shape`.
+            let text = output(
+                &host,
+                "body.Shape = Part.makeSphere(5)\n\
+                 print(body.Shape.ShapeType, round(body.Shape.Volume, 1))\n",
+            );
+            assert_eq!(text, "Solid 523.6", "{text}");
+
+            // A fresh read from the facade sees the document, not a cached instance.
+            let text = output(
+                &host,
+                "print(round(FreeCAD.ActiveDocument.getObject('Body').Shape.Volume, 1))\n",
+            );
+            assert_eq!(text, "523.6", "{text}");
+
+            // The parametric path: create the object, set its dimensions, recompute.
+            let text = output(
+                &host,
+                "doc = FreeCAD.ActiveDocument\n\
+                 param = doc.addObject('Part::Box', 'Param')\n\
+                 param.Length = 20\n\
+                 doc.recompute()\n\
+                 print(param.Shape.ShapeType, round(param.Shape.Volume, 6))\n",
+            );
+            assert_eq!(text, "Solid 2000.0", "{text}");
+
+            // And the model tree lists both.
+            let tree = host.call("model_tree", &[]).expect("model_tree runs");
+            let tree: Value = serde_json::from_str(&tree).expect("model_tree is JSON");
+            let names: Vec<&str> = tree
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|document| document["objects"].as_array())
+                .flatten()
+                .filter_map(|object| object["name"].as_str())
+                .collect();
+            assert!(names.contains(&"Body"), "{names:?}");
+            assert!(names.contains(&"Param"), "{names:?}");
+        })
+        .expect("a worker thread")
+        .join()
+        .expect("no panic");
+}

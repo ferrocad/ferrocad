@@ -27,7 +27,7 @@
 //! **Document observers** are stored, not pumped: this half has no document-event loop,
 //! and the shell delivers document events to `FerroCADGui` instead.
 
-pub(crate) use ferrocad::module_def;
+pub(crate) use ferrocad::{bound_box_py, module_def, object_named_py, vector_of, vector_py};
 
 use std::cell::RefCell;
 
@@ -291,6 +291,16 @@ mod ferrocad {
             if !crate::document_writes() {
                 return Err(read_only("editing a property", vm));
             }
+            // A B-Rep is not editor text: `Part.Shape` values are written as the
+            // typed property, the way the CPython binding writes them (B18b item 2).
+            if property == "Shape" {
+                if let Some(shape) = crate::native_shapes::shape_of(&value) {
+                    let object = zelf.row.name.clone();
+                    crate::native_shapes::set_object_shape(&object, shape)
+                        .map_err(|error| vm.new_value_error(error))?;
+                    return reseed(zelf, vm);
+                }
+            }
             let text = value.str(vm)?.to_str().unwrap_or_default().to_string();
             let object = zelf.row.name.clone();
             doorway(serde_json::json!({
@@ -439,6 +449,7 @@ mod ferrocad {
     /// lookup finds them. `Label` is seeded beside them because it has no getter — the
     /// dict is where a rename lands.
     fn object_py(row: ObjectRow, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let name = row.name.clone();
         let label = row.label.clone();
         let values: Vec<(String, String)> = row
             .properties
@@ -451,8 +462,41 @@ mod ferrocad {
             for (name, value) in values {
                 dict.set_item(&*name, vm.new_pyobj(value), vm)?;
             }
+            // A `Shape` is a B-Rep, not text: hand the script the kernel handle the
+            // document holds (B18b item 2), not the payload's placeholder string.
+            if let Some(shape) = crate::native_shapes::shape_py_of(&name, vm) {
+                dict.set_item("Shape", shape, vm)?;
+            }
         }
         Ok(object)
+    }
+
+    /// An `App.Vector` for a Rust vector (the value type `Part` returns).
+    pub(crate) fn vector_py(value: Vector3, vm: &VirtualMachine) -> PyObjectRef {
+        PyVector { inner: value }.into_ref(&vm.ctx).into()
+    }
+
+    /// The vector a Python value is, when it is an `App.Vector`.
+    pub(crate) fn vector_of(value: &PyObjectRef) -> Option<Vector3> {
+        value.downcast_ref::<PyVector>().map(|vector| vector.inner)
+    }
+
+    /// An `App.BoundBox` from a min/max pair (a `Part.Shape`'s bounds).
+    pub(crate) fn bound_box_py(min: Vector3, max: Vector3, vm: &VirtualMachine) -> PyObjectRef {
+        PyBoundBox {
+            inner: RefCell::new(Box3 {
+                min: [min.x, min.y, min.z],
+                max: [max.x, max.y, max.z],
+                valid: true,
+            }),
+        }
+        .into_ref(&vm.ctx)
+        .into()
+    }
+
+    /// A document object by name, from the fresh payload.
+    pub(crate) fn object_named_py(name: &str, vm: &VirtualMachine) -> Option<PyObjectRef> {
+        object_named(name, vm)
     }
 
     /// The object the fresh payload names, as a Python instance, or `None`.
@@ -481,6 +525,9 @@ mod ferrocad {
             dict.set_item("Label", vm.new_pyobj(fresh.label), vm)?;
             for property in fresh.properties {
                 dict.set_item(&*property.name, vm.new_pyobj(property.value), vm)?;
+            }
+            if let Some(shape) = crate::native_shapes::shape_py_of(&fresh.name, vm) {
+                dict.set_item("Shape", shape, vm)?;
             }
         }
         Ok(())

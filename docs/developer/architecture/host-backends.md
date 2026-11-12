@@ -306,6 +306,7 @@ touches `ferrocad_core`. The script and the App facade above it are byte-identic
 ```text
 CPython:    ferrocad_shell → imports `ferrocad` → ferrocad_py (PyO3 C-ABI)      → ferrocad_core
 RustPython: ferrocad_shell → imports `ferrocad` → native.rs (rustpython-vm)     → ferrocad_core
+            a script       → imports `Part`   → native_shapes.rs               → ferrocad_part → OCCT
 ```
 
 **One `ScriptHost`, two runtimes.** The script half is
@@ -382,6 +383,16 @@ twice — and the **interaction hooks** resolve a mod's manipulator commits thro
 `FerroCAD.register_interaction_provider`/`register_manipulator_provider`. `add_datum_plane`
 is the edition's, so a facade with no app script reports the hook absent and the document
 half answers.
+
+**Geometry is the kernel, bound not duplicated (B18b item 2).** `Part`, `Mesh` and
+`MeshPart` are `ferrocad_shell_pywasm/src/native_shapes.rs`: `Part.Shape` wraps the same
+`ferrocad_geom::Shape` the document half draws, every constructor, boolean, query and
+tessellation calls `ferrocad_part::backend()` (OCCT, registered once per process), and
+`MeshPart.meshFromShape` welds the kernel's per-face triangles into a
+`ferrocad_mesh::Mesh`. `obj.Shape` reads the typed `ShapeProperty` from the registry and
+`obj.Shape = …` writes it there, because a B-Rep is not editor text — the one write the
+doorway cannot carry. This is the place the script half names the kernel; the doorway
+stays kernel-free.
 
 Because the facade is the real one, **real mods load**: `mods/GridOverlay`,
 `mods/AxisOverlay` and `mods/GizmoOverlay` run here and declare their `grid`/`axis`/
@@ -587,10 +598,10 @@ ferrocad_shell_js     -> ferrocad_shell_api, ferrocad_inventor,
                          must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust,
                                      ferrocad_core, ferrocad_part
 ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core, ferrocad_inventor,
-                         ferrocad_doc_api, rustpython-vm, rustpython-stdlib,
-                         rustpython-pylib
-                         must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust,
-                                     ferrocad_part, ferrocad_occt
+                         ferrocad_doc_api, ferrocad_geom, ferrocad_part,
+                         ferrocad_mesh, ferrocad_occt, rustpython-vm,
+                         rustpython-stdlib, rustpython-pylib
+                         must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust
 ```
 
 The asymmetry between the two script halves is the shape of each backend.
@@ -598,7 +609,10 @@ The asymmetry between the two script halves is the shape of each backend.
 reports what comes back, so the document stays `RustAppBackend`'s, and a core edge would
 put a second document implementation one `use` away. `ferrocad_shell_pywasm` does name
 `ferrocad_core`, because the rows it feeds the interpreter come from `present` and its
-snapshot is a `Document`; what it must not name is the kernel.
+snapshot is a `Document`; it also names the kernel, because B18b item 2 binds `Part` and
+`Mesh` for RustPython (the PyO3 `Part` cannot be loaded without a C ABI). That makes the
+script half a **second user** of the one `ferrocad_part`/`ferrocad_occt` pair, not a
+second copy: the shape type and the registered backend are the document half's.
 
 `ferrocad_shell_python` may name `ferrocad_shell_js` only on native and only behind the
 `js` feature: the desktop's page is that same crate, and the reverse edge
@@ -667,9 +681,9 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
   `mod-events` subscription yet, and a bundle cannot supply the grid/provider hooks. See
   [`js-addons.md`](../../project/research/js-addons.md) §7.
 - **`ferrocad_shell_pywasm` has no tool or `pivy` path.** It is installed (the browser's
-  `?pywasm=1`), so the console, the property rows and document writes are real, but a
-  script cannot create an interactive tool. `mod-events` (the fixed low-frequency event
-  set a mod subscribes to) is still an open task.
+  `?pywasm=1`), so the console, the property rows, document writes and the `Part`/`Mesh`
+  kernel are real, but a script cannot create an interactive tool. `mod-events` (the fixed
+  low-frequency event set a mod subscribes to) is still an open task.
 - **The browser pays for RustPython in binary size** even when it runs
   `?runtime=plain`: the interpreter is compiled in, not fetched. Nothing boots it
   unless the page asks, but the module is bigger. A cargo feature that drops the half

@@ -2804,7 +2804,11 @@ version = "0.1.5"
 dependencies = [
  "ferrocad_core",
  "ferrocad_doc_api",
+ "ferrocad_geom",
  "ferrocad_inventor",
+ "ferrocad_mesh",
+ "ferrocad_occt",
+ "ferrocad_part",
  "ferrocad_python_host",
  "ferrocad_shell_api",
  "ferrocad_stage",

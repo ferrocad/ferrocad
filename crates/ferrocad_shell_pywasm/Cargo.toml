@@ -22,6 +22,14 @@ ferrocad_shell_api.workspace = true
 # second copy of the 35 `ScriptHost` methods (B18).
 ferrocad_python_host.workspace = true
 ferrocad_core.workspace = true
+# B18b item 2: the 3D kernel a Python script builds with. The same `ferrocad_part`,
+# `ferrocad_mesh` and OCCT the document half links, so a script's shape and a
+# document's `Part::Box` are one shape type (and the browser already carries this
+# kernel for `RustAppBackend`).
+ferrocad_part.workspace = true
+ferrocad_mesh.workspace = true
+ferrocad_geom.workspace = true
+ferrocad_occt.workspace = true
 # The one document presenter every script runtime uses (the Python facade here, the
 # addon verbs in `ferrocad_doc_api`). Core-only, so it brings no kernel.
 ferrocad_doc_api.workspace = true

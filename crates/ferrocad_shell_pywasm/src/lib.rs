@@ -62,6 +62,9 @@ mod snapshot;
 /// The `ferrocad` native module `python/FreeCAD` binds to `ferrocad_core`.
 mod native;
 
+/// `Part`, `Mesh` and `MeshPart` over the OCCT kernel (B18b item 2).
+mod native_shapes;
+
 /// The desktop's RustPython host: a `ScriptHost` in front of a worker thread. Native
 /// only — the browser boots the interpreter on its own thread and raises that stack as a
 /// link argument instead.
@@ -150,9 +153,15 @@ const FERROCAD_GIZMO: &str = include_str!("../../../python/FerroCAD/_gizmo.py");
 const NAMESPACE: &str = "\
 import ferrocad_shell
 import FreeCAD as _fc
+import Part as _part
+import Mesh as _mesh
+import MeshPart as _meshpart
 ferrocad_shell.add_namespace('FreeCAD', _fc)
 ferrocad_shell.add_namespace('App', _fc)
 ferrocad_shell.add_namespace('doc', _fc.ActiveDocument)
+ferrocad_shell.add_namespace('Part', _part)
+ferrocad_shell.add_namespace('Mesh', _mesh)
+ferrocad_shell.add_namespace('MeshPart', _meshpart)
 ";
 
 /// Loads [`SHELL`] as the module `ferrocad_shell`.
@@ -442,6 +451,11 @@ impl RustPythonRuntime {
                 &rustpython_stdlib::stdlib_module_defs(Context::genesis()),
             )
             .add_native_module(native::module_def(Context::genesis()))
+            // The 3D kernel a Python script builds with: one `ferrocad_geom::Shape`,
+            // the same OCCT backend the document half registered.
+            .add_native_module(native_shapes::part_module_def(Context::genesis()))
+            .add_native_module(native_shapes::mesh_module_def(Context::genesis()))
+            .add_native_module(native_shapes::mesh_part_module_def(Context::genesis()))
             // The frozen Python half of the standard library (`types`, `json`, …).
             .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
             .build();

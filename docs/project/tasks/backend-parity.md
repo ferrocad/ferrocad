@@ -6,8 +6,8 @@ B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 and B17a built
 (2026-11-11/12); B18 and
-B18a built (steps 1–7, 2026-11-12), B18b built except its Part/Mesh and
-`host_env` items (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
+B18a built (steps 1–7, 2026-11-12), B18b built except its
+`host_env` item (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1885,15 +1885,39 @@ units) as well as the Gui ones:
   now exercised by shipped mods instead of synthetic ones; the Coin/shader skins and a
   task panel still need a surface this half does not install.
 
-What remains of B18b is the geometry binding, plus one host gap. None of it
+What remains of B18b is one host gap. None of it
 is needed for the facade above it:
 
 1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
    property rules and every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
    `Vector`, `Vector2d`, `Matrix`, `Rotation`, `Placement`, `TypeId`, `BoundBox`,
    `Material`, `StringID`, `StringHasher`);
-2. `ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh` (needs `ferrocad_part`,
-   `ferrocad_mesh` and OCCT in the RustPython build);
+2. ~~`ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh`~~ — **`Part`/`Mesh` built;** the
+   interactive `ferrocad_stage`/`ferrocad_ui_py` surface is still open. Geometry is
+   `ferrocad_shell_pywasm/src/native_shapes.rs`, three native modules over the one kernel:
+   - `Part` — `makeBox`/`makeCylinder`/`makeSphere`/`makeCone`/`makeCompound`, and a
+     `Shape` with `Volume`/`Area`/`CenterOfMass`/`BoundBox`/`ShapeType`, the topology
+     getters (`Faces`/`Edges`/`Vertexes`/`Solids`/`Shells`/`Wires`), `cut`/`fuse`/`common`,
+     `translate`/`rotate` and `tessellate`. It wraps the same `ferrocad_geom::Shape` the
+     document half draws and calls `ferrocad_part::backend()` (OCCT), which the module
+     registers itself when no host did (idempotent; the browser's document half has).
+   - `Mesh`/`MeshPart` — `Mesh()`, `Mesh(shape)` and
+     `MeshPart.meshFromShape(Shape=…, LinearDeflection=…, AngularDeflection=…)` over
+     `ferrocad_mesh`; the kernel's per-face triangles are welded, so a box is a closed
+     mesh, not a triangle soup.
+   - **The document path is typed where it has to be.** `Part.show` adds a `Part::Feature`,
+     `obj.Shape` reads the `ShapeProperty` from the registry (the payload only has display
+     text), and `obj.Shape = shape` writes it — the one write the doorway cannot carry.
+     A parametric `Part::Box` + `obj.Length` still goes through the doorway, so both roads
+     end in the same shape the viewport draws.
+
+   Tests: `tests/shapes.rs` (measurements, booleans, transforms, tessellation, mesh
+   welding, `Part.show`, `obj.Shape = …`, and a parametric `Part::Box`), plus the browser
+   capture `/?runtime=pywasm&script=import Part…` in `smoke.sh`, which builds a box with
+   the wasm OCCT kernel and reads `6000.0 Solid` back from the document. What is *not*
+   there: the B-Rep explorer (`Face.Surface`, `Edge.Curve`), `Part.Wire`/`Face`
+   construction, a `Shape.Placement` wrapper (transforms are baked), and the interactive
+   stage;
 3. `host_env` on for the **native** RustPython build only (target-specific dependency), so
    the desktop runs `python/**` from disk; the browser keeps the embedded file map, which
    this step built. **Blocked upstream:** rustpython-vm 0.5's posix layer wants
@@ -2007,7 +2031,8 @@ each pack is `Init.py` + `InitGui.py`, two scripts, zero failures — and declar
 providers; `tests/mods.rs` pins that natively. The Coin/shader skins still record a
 failure, because this half has no Coin scene and the packs read addon resource files, so
 the About card is a mix rather than a failed batch. That is still the parity signal this
-slice was for; the remaining binding work (B18b items 2 and 5) moves the rest.
+slice was for; the binding work that was open here — B18b items 2 and 5 — is built, so a
+pack that creates geometry and writes the document now runs on the browser's Python too.
 
 **B19d — choosing the set (built 2026-11-12).** The About card's B17a `Prefs` selects which
 packs load: the browser filters the fetched index (`mods::selected`) before fetching, and the
@@ -2048,7 +2073,7 @@ fit. Every road ends at the same object, but the fidelity is not remotely the sa
 | surface | where | how it reaches the engine | fidelity | writes |
 | --- | --- | --- | --- | --- |
 | CPython (`PythonScriptHost`) | desktop | `ferrocad_py`, a PyO3 extension that links `ferrocad_core` and wraps `Arc<Mutex<CoreDocument>>` in `PyDocument`/`PyDocumentObject` | the full object model: properties, observers, extension converters, sub-element resolvers | yes |
-| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`, **one** native module: the payload read plus `ferrocad_doc_api`'s doorway (`create`/`set`/`recompute`) over `ferrocad_core::application()` | the property rows and the doorway's verbs | yes on a host that owns the registry, through the doorway (B18b item 5); a fixed-payload host stays read-only |
+| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`: the payload read, `ferrocad_doc_api`'s doorway (`create`/`set`/`recompute`) over `ferrocad_core::application()`, and `native_shapes` — `Part`/`Mesh` over `ferrocad_part`/`ferrocad_mesh`/`ferrocad_occt` | the property rows, the doorway's verbs, and real B-Rep/mesh objects | yes on a host that owns the registry (doorway text, typed `Shape`); a fixed-payload host stays read-only |
 | JS (`JsScriptHost` → the page) | desktop (rquickjs) + browser (ES module) | `ferrocad.call(request)` → `ferrocad_doc_api::DocApi` → registry | five verbs: `document`, `properties`, `create`, `set`, `recompute` | yes |
 | wasm bundle | desktop (`wasmi`) + browser (`loader.js`) | the same document API as an import, optionally wrapped by `read_only` | the same five verbs | only with `{"document": "read-write"}` |
 
@@ -2072,10 +2097,12 @@ and headless rendering) answers from a payload nobody else can see, and the brow
 `plain` configuration builds `RustAppBackend::new()`, whose document is the backend's own —
 the only two cases that do **not** meet at the registry.
 
-**`ferrocad_part` is out of scope here, deliberately.** It is the mirror problem: CPython
-reaches geometry through `ferrocad_part_py`; RustPython has `ferrocad_part` linked but no
-shape ABI; JS and wasm have no shape verbs in the document API at all. Reaching the *document*
-is already solved four ways; reaching *geometry* currently has one road.
+**`ferrocad_part` reaches RustPython too (B18b item 2).** CPython reaches geometry
+through `ferrocad_part_py`; RustPython now has a native `Part`/`Mesh` binding over the same
+`ferrocad_part` and OCCT, so the browser's Python builds and measures real solids. What is
+still one road only is the *document API's* geometry: JS and wasm bundles have no shape
+verbs (`create` takes a type id and property text, which the host recomputes), which is a
+deliberate limit of the doorway, not a runtime gap.
 
 ## 5. Decisions (recorded 2026-11-08)
 

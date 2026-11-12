@@ -536,9 +536,39 @@ EOF
 capture_kernel
 check_kernel
 
+# The stage leg (B18b item 2): the browser's Python builds a `ShapeItem`, snaps through
+# `SnapContext`, and asks the shell for the Draft tool bridge — the three facts that say
+# `ferrocad_stage` and `python/FreeCADGui/draft.py` are installed on this host.
+capture_stage() {
+    capture "/?runtime=pywasm&script=import%20ferrocad_stage%20as%20s%0Aimport%20ferrocad_shell%0Aitem%20%3D%20s.ShapeItem%287%29%0Aitem.set_shape%28%5B%280%2C%200%2C%200%29%2C%20%281%2C%200%2C%200%29%2C%20%280%2C%201%2C%200%29%5D%2C%20%5B%5D%2C%20%5B0%2C%201%2C%202%5D%2C%20%5B%5D%29%0Actx%20%3D%20s.SnapContext%28s.Workplane.world%28%29%2C%201.0%2C%2010.0%29%0Aprint%28item.entity_id%2C%20len%28item.triangles%29%2C%20ctx.snap_point%28%280.4%2C%200.6%2C%200.0%29%2C%20%5B%5D%2C%200.0%29.point%2C%20type%28ferrocad_shell.tool_bridge%28%27draft%27%29%29.__name__%29%0A" "$TMP/stage.log"
+}
+
+check_stage() {
+    LOG="$TMP/stage.log"
+    echo "pywasm stage console lines:"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: script -> ok=true output="7 3 (0.0, 1.0, 0.0) DraftTool"'
+
+    echo "pywasm stage forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+NameError
+ModuleNotFoundError
+ImportError
+TypeError
+panicked at
+unreachable
+EOF
+}
+
+capture_stage
+check_stage
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, the pywasm stage binds and the Draft bridge loads, no panic or JS error"

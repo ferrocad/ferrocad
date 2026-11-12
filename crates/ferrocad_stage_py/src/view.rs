@@ -30,12 +30,10 @@
 //! one addition: an **untagged** item (`PickId(0)`, what a non-selectable
 //! `ShapeItem` emits) is never reported, because a click cannot select it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use ferrocad_graphics as gfx;
-use ferrocad_graphics::pick::LINE_PICK_PIXELS;
 use ferrocad_stage as fs;
-use ferrocad_types::{Matrix4, Vector3};
 use pyo3::prelude::*;
 
 use crate::camera::Camera;
@@ -44,9 +42,13 @@ use crate::stage::Stage;
 /// The published camera and stage live in the pure stage crate so a platform-neutral
 /// host can publish them without linking CPython; these are the same functions.
 pub use fs::view::{
-    PublishedStage, clear_previews, clear_view, has_stage, preview_generation, preview_items,
-    publish_camera, publish_stage, published_camera, published_stage, set_preview_items,
+    clear_previews, clear_view, has_stage, preview_generation, preview_items, publish_camera,
+    publish_stage, published_camera, set_preview_items,
 };
+// The ranked picker's unit tests build a stage by hand; the binding itself no longer
+// names the published type (the picker lives in the pure crate now).
+#[cfg(test)]
+pub use fs::view::{PublishedStage, published_stage};
 
 /// One pick result: what the pointer is over and where.
 ///
@@ -95,136 +97,24 @@ impl PickHit {
     }
 }
 
-/// A raw hit before the name tables are applied.
-struct RawHit {
-    entity: u32,
-    part: u32,
-    element: u32,
-    point: [f32; 3],
-    normal: [f32; 3],
-    distance: f64,
-    topology: &'static str,
-}
-
-/// Every distinct `(entity, sub-element)` under `device`, nearest first.
-///
-/// A dense mesh reports one hit per triangle; only the nearest triangle of each
-/// sub-element is kept, so the list is a **ranked occlusion stack of sub-elements**
-/// rather than hundreds of coplanar fragments of the same face.
-fn pick_all(
-    view: &PublishedStage,
-    camera: &gfx::Camera,
-    device: [i32; 2],
-    max_hits: usize,
-) -> Vec<RawHit> {
-    let Some(ray) = camera.ray_through(device) else {
-        return Vec::new();
-    };
-    let mut found = Vec::new();
-    for packet in &view.queue().packets {
-        // Same rule as `ferrocad_graphics`' pick: an authored program draws a
-        // placeholder quad, and an unpickable packet opts out outright.
-        if packet.state.program.is_some() || !packet.state.pickable {
-            continue;
+impl PickHit {
+    /// The Python view of one shared [`fs::view::RankedHit`].
+    fn from_ranked(hit: fs::view::RankedHit) -> Self {
+        Self {
+            entity_id: hit.entity_id,
+            part_idx: hit.part_idx,
+            part: hit.part,
+            object: hit.object,
+            point: (hit.point[0], hit.point[1], hit.point[2]),
+            normal: (hit.normal[0], hit.normal[1], hit.normal[2]),
+            distance: hit.distance,
+            topology: match hit.topology {
+                gfx::Topology::Triangles => "Triangles",
+                gfx::Topology::Lines => "Lines",
+                gfx::Topology::Points => "Points",
+            },
+            element: hit.element,
         }
-        // An untagged item is not selectable, so a click could not select it either;
-        // reporting it would name no object.
-        if packet.state.id.0 == 0 {
-            continue;
-        }
-        let Some(geometry) = &packet.geometry else {
-            continue;
-        };
-        let chunk = match packet.topology {
-            gfx::Topology::Triangles => 3,
-            gfx::Topology::Lines => 2,
-            gfx::Topology::Points => continue,
-        };
-        let world: Vec<[f64; 3]> = geometry
-            .vertices
-            .iter()
-            .map(|vertex| transform(&packet.state.world_transform, vertex.position))
-            .collect();
-        for (element, indices) in geometry.indices.chunks_exact(chunk).enumerate() {
-            let (Some(&a), Some(&b)) = (
-                world.get(indices[0] as usize),
-                world.get(indices[1] as usize),
-            ) else {
-                continue;
-            };
-            let (distance, normal) = if chunk == 3 {
-                let Some(&c) = world.get(indices[2] as usize) else {
-                    continue;
-                };
-                let Some(distance) = ray.triangle_distance(a, b, c) else {
-                    continue;
-                };
-                (distance, normal_of(a, b, c))
-            } else {
-                // The screen-space tolerance the CPU pick uses for a line.
-                let middle = Vector3::new(
-                    (a[0] + b[0]) * 0.5,
-                    (a[1] + b[1]) * 0.5,
-                    (a[2] + b[2]) * 0.5,
-                );
-                let tolerance = fs::screen::scale_for(camera, middle, LINE_PICK_PIXELS);
-                let Some(distance) = ray.segment_distance(a, b, tolerance) else {
-                    continue;
-                };
-                (distance, [0.0, 0.0, 1.0])
-            };
-            let point = [
-                ray.origin[0] + ray.direction[0] * distance,
-                ray.origin[1] + ray.direction[1] * distance,
-                ray.origin[2] + ray.direction[2] * distance,
-            ];
-            found.push(RawHit {
-                entity: packet.state.id.0,
-                part: geometry
-                    .vertices
-                    .get(indices[0] as usize)
-                    .map_or(0, |vertex| vertex.part_idx),
-                element: element as u32,
-                point: [
-                    point[0] as f32,
-                    point[1] as f32,
-                    point[2] as f32,
-                ],
-                normal: [normal[0] as f32, normal[1] as f32, normal[2] as f32],
-                distance,
-                topology: match packet.topology {
-                    gfx::Topology::Triangles => "Triangles",
-                    _ => "Lines",
-                },
-            });
-        }
-    }
-    found.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-    let mut seen = HashSet::new();
-    found.retain(|hit| seen.insert((hit.entity, hit.part)));
-    if max_hits > 0 {
-        found.truncate(max_hits);
-    }
-    found
-}
-
-/// One `(entity, part)` hit with its published names.
-fn resolve(view: &PublishedStage, raw: RawHit) -> PickHit {
-    PickHit {
-        entity_id: raw.entity,
-        part_idx: raw.part,
-        part: view
-            .parts()
-            .get(&raw.entity)
-            .and_then(|names| names.get(raw.part as usize))
-            .filter(|name| !name.is_empty())
-            .cloned(),
-        object: view.objects().get(&raw.entity).cloned(),
-        point: (raw.point[0], raw.point[1], raw.point[2]),
-        normal: (raw.normal[0], raw.normal[1], raw.normal[2]),
-        distance: raw.distance,
-        topology: raw.topology,
-        element: raw.element,
     }
 }
 
@@ -235,12 +125,9 @@ fn resolve(view: &PublishedStage, raw: RawHit) -> PickHit {
 #[pyfunction]
 #[pyo3(signature = (x, y, max_hits=0))]
 fn pick_at(x: i32, y: i32, max_hits: usize) -> Vec<PickHit> {
-    let (Some(camera), Some(stage)) = (published_camera(), published_stage()) else {
-        return Vec::new();
-    };
-    pick_all(&stage, &camera, [x, y], max_hits)
+    fs::view::ranked_pick([x, y], max_hits)
         .into_iter()
-        .map(|raw| resolve(&stage, raw))
+        .map(PickHit::from_ranked)
         .collect()
 }
 
@@ -329,34 +216,11 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-// --- small vector helpers (f64, row-major) --------------------------------------
-
-fn transform(m: &Matrix4, p: [f32; 3]) -> [f64; 3] {
-    let v = Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
-    let out = m.transform(&v);
-    [out.x, out.y, out.z]
-}
-
-fn normal_of(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
-    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let n = [
-        u[1] * v[2] - u[2] * v[1],
-        u[2] * v[0] - u[0] * v[2],
-        u[0] * v[1] - u[1] * v[0],
-    ];
-    let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-    if length > 1e-12 {
-        [n[0] / length, n[1] / length, n[2] / length]
-    } else {
-        n
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ferrocad_stage::ShapeItem;
+    use ferrocad_types::Vector3;
     use std::sync::Mutex;
 
     /// The published view is process-global, so the tests that write it must not
@@ -426,15 +290,15 @@ mod tests {
         publish_stage(&stage, objects, None);
 
         let camera = camera([100, 100], 50.0);
-        let hits = pick_all(
+        let hits = fs::view::ranked_pick_in(
             &published_stage().expect("the stage was published"),
             &camera,
             [50, 50],
             0,
         );
         assert_eq!(hits.len(), 2, "one hit per sub-element, not per triangle");
-        assert_eq!(hits[0].entity, 1, "the nearer quad wins");
-        assert_eq!(hits[1].entity, 2);
+        assert_eq!(hits[0].entity_id, 1, "the nearer quad wins");
+        assert_eq!(hits[1].entity_id, 2);
     }
 
     #[test]
@@ -443,7 +307,7 @@ mod tests {
         stage.add_item(quad(1, 0.0, "Face1"));
         stage.add_item(quad(2, -5.0, "Face2"));
         let camera = camera([100, 100], 50.0);
-        let ranked = pick_all(
+        let ranked = fs::view::ranked_pick_in(
             &PublishedStage::new(stage.to_queue(), HashMap::new(), HashMap::new()),
             &camera,
             [50, 50],
@@ -451,8 +315,8 @@ mod tests {
         );
         let single = gfx::pick::pick_at_hit(&stage.to_queue(), &camera, [50, 50])
             .expect("the CPU picker finds the quads");
-        assert_eq!(ranked[0].entity, single.id.0);
-        assert_eq!(ranked[0].part, single.part);
+        assert_eq!(ranked[0].entity_id, single.id.0);
+        assert_eq!(ranked[0].part_idx, single.part);
         assert!((ranked[0].distance - single.distance).abs() < 1e-9);
     }
 
@@ -461,7 +325,7 @@ mod tests {
         let mut stage = fs::Stage::new();
         stage.add_item(quad(1, 0.0, "Face1"));
         let camera = camera([100, 100], 50.0);
-        let hits = pick_all(
+        let hits = fs::view::ranked_pick_in(
             &PublishedStage::new(stage.to_queue(), HashMap::new(), HashMap::new()),
             &camera,
             [0, 0],
@@ -484,7 +348,10 @@ mod tests {
         let preview = quad(9, 1.0, "Face1");
         assert!(preview.selectable());
         let generation = set_preview_items(vec![preview]);
-        assert_ne!(generation, before, "publishing a preview bumps the generation");
+        assert_ne!(
+            generation, before,
+            "publishing a preview bumps the generation"
+        );
 
         let items = preview_items();
         assert_eq!(items.len(), 1);

@@ -26,10 +26,12 @@
 //! browser) must be able to publish the same queue without linking CPython. The
 //! `ferrocad_stage_py` functions are thin wrappers over this module.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_graphics as gfx;
+use ferrocad_graphics::pick::LINE_PICK_PIXELS;
+use ferrocad_types::{Matrix4, Vector3};
 
 use crate::ShapeItem;
 
@@ -201,4 +203,197 @@ pub fn published_stage() -> Option<Arc<PublishedStage>> {
 /// every frame.
 pub fn has_stage() -> bool {
     stage_cell().lock().unwrap().is_some()
+}
+
+// ---------------------------------------------------------------------------
+// Ranked picking
+// ---------------------------------------------------------------------------
+
+/// One `(entity, sub-element)` under the pointer, with its published names.
+///
+/// This is the **ranked** pick: [`ferrocad_graphics`]' picker returns the nearest hit
+/// only, while this reports every distinct sub-element under the device position,
+/// nearest first — the occlusion stack a tool sorts its own candidates from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RankedHit {
+    /// The object that was hit (the packet's pick id).
+    pub entity_id: u32,
+    /// The sub-element id (`Face6` is `part_idx` 6 on the item's name table).
+    pub part_idx: u32,
+    /// The sub-element name (`"Face6"`), when the stage published a name table.
+    pub part: Option<String>,
+    /// The document object name (`"Body"`), when the stage published one.
+    pub object: Option<String>,
+    /// The world-space intersection point (the GPU G-buffer's pick precision).
+    pub point: [f32; 3],
+    /// The world-space surface normal (`+Z` for a line hit).
+    pub normal: [f32; 3],
+    /// The distance along the ray from its origin.
+    pub distance: f64,
+    /// The topology of the hit.
+    pub topology: gfx::Topology,
+    /// The primitive ordinal within its mesh (a triangle or segment index).
+    pub element: u32,
+}
+
+/// Every distinct `(entity, sub-element)` under device position `(x, y)`, nearest
+/// first, using the camera and stage a host last published.
+///
+/// Empty when no host has published a view, or when the pointer is over nothing.
+/// `max_hits` caps the list; `0` means every hit.
+pub fn ranked_pick(device: [i32; 2], max_hits: usize) -> Vec<RankedHit> {
+    let (Some(camera), Some(stage)) = (published_camera(), published_stage()) else {
+        return Vec::new();
+    };
+    ranked_pick_in(&stage, &camera, device, max_hits)
+}
+
+/// [`ranked_pick`] against an explicit camera and stage.
+///
+/// A dense mesh reports one hit per triangle; only the nearest triangle of each
+/// sub-element is kept, so the list is a rank-ordered stack of sub-elements rather
+/// than hundreds of coplanar fragments of the same face. An **untagged** item
+/// (`PickId(0)`, what a non-selectable [`ShapeItem`] emits) is never reported,
+/// because a click could not select it.
+pub fn ranked_pick_in(
+    view: &PublishedStage,
+    camera: &gfx::Camera,
+    device: [i32; 2],
+    max_hits: usize,
+) -> Vec<RankedHit> {
+    let Some(ray) = camera.ray_through(device) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for packet in &view.queue().packets {
+        // Same rule as `ferrocad_graphics`' pick: an authored program draws a
+        // placeholder quad, and an unpickable packet opts out outright.
+        if packet.state.program.is_some() || !packet.state.pickable {
+            continue;
+        }
+        // An untagged item is not selectable, so a click could not select it either;
+        // reporting it would name no object.
+        if packet.state.id.0 == 0 {
+            continue;
+        }
+        let Some(geometry) = &packet.geometry else {
+            continue;
+        };
+        let chunk = match packet.topology {
+            gfx::Topology::Triangles => 3,
+            gfx::Topology::Lines => 2,
+            gfx::Topology::Points => continue,
+        };
+        let world: Vec<[f64; 3]> = geometry
+            .vertices
+            .iter()
+            .map(|vertex| transform(&packet.state.world_transform, vertex.position))
+            .collect();
+        for (element, indices) in geometry.indices.chunks_exact(chunk).enumerate() {
+            let (Some(&a), Some(&b)) = (
+                world.get(indices[0] as usize),
+                world.get(indices[1] as usize),
+            ) else {
+                continue;
+            };
+            let (distance, normal) = if chunk == 3 {
+                let Some(&c) = world.get(indices[2] as usize) else {
+                    continue;
+                };
+                let Some(distance) = ray.triangle_distance(a, b, c) else {
+                    continue;
+                };
+                (distance, normal_of(a, b, c))
+            } else {
+                // The screen-space tolerance the CPU pick uses for a line.
+                let middle = Vector3::new(
+                    (a[0] + b[0]) * 0.5,
+                    (a[1] + b[1]) * 0.5,
+                    (a[2] + b[2]) * 0.5,
+                );
+                let tolerance = crate::screen::scale_for(camera, middle, LINE_PICK_PIXELS);
+                let Some(distance) = ray.segment_distance(a, b, tolerance) else {
+                    continue;
+                };
+                (distance, [0.0, 0.0, 1.0])
+            };
+            let point = [
+                ray.origin[0] + ray.direction[0] * distance,
+                ray.origin[1] + ray.direction[1] * distance,
+                ray.origin[2] + ray.direction[2] * distance,
+            ];
+            found.push(RawRankedHit {
+                entity: packet.state.id.0,
+                part: geometry
+                    .vertices
+                    .get(indices[0] as usize)
+                    .map_or(0, |vertex| vertex.part_idx),
+                element: element as u32,
+                point: [point[0] as f32, point[1] as f32, point[2] as f32],
+                normal: [normal[0] as f32, normal[1] as f32, normal[2] as f32],
+                distance,
+                topology: packet.topology,
+            });
+        }
+    }
+    found.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    let mut seen = HashSet::new();
+    found.retain(|hit| seen.insert((hit.entity, hit.part)));
+    if max_hits > 0 {
+        found.truncate(max_hits);
+    }
+    found.into_iter().map(|raw| resolve(view, raw)).collect()
+}
+
+/// A raw hit before the name tables are applied.
+struct RawRankedHit {
+    entity: u32,
+    part: u32,
+    element: u32,
+    point: [f32; 3],
+    normal: [f32; 3],
+    distance: f64,
+    topology: gfx::Topology,
+}
+
+/// One `(entity, part)` hit with its published names.
+fn resolve(view: &PublishedStage, raw: RawRankedHit) -> RankedHit {
+    RankedHit {
+        entity_id: raw.entity,
+        part_idx: raw.part,
+        part: view
+            .parts()
+            .get(&raw.entity)
+            .and_then(|names| names.get(raw.part as usize))
+            .filter(|name| !name.is_empty())
+            .cloned(),
+        object: view.objects().get(&raw.entity).cloned(),
+        point: raw.point,
+        normal: raw.normal,
+        distance: raw.distance,
+        topology: raw.topology,
+        element: raw.element,
+    }
+}
+
+fn transform(m: &Matrix4, p: [f32; 3]) -> [f64; 3] {
+    let v = Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
+    let out = m.transform(&v);
+    [out.x, out.y, out.z]
+}
+
+fn normal_of(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
+    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let n = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    if length > 1e-12 {
+        [n[0] / length, n[1] / length, n[2] / length]
+    } else {
+        n
+    }
 }

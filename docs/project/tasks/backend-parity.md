@@ -7,7 +7,7 @@ B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 and B17a built
 (2026-11-11/12); B18 and
 B18a built (steps 1–7, 2026-11-12), B18b built except its
-`host_env` item (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
+`host_env` item and `ferrocad_ui_py` (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1892,8 +1892,8 @@ is needed for the facade above it:
    property rules and every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
    `Vector`, `Vector2d`, `Matrix`, `Rotation`, `Placement`, `TypeId`, `BoundBox`,
    `Material`, `StringID`, `StringHasher`);
-2. ~~`ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh`~~ — **`Part`/`Mesh` built;** the
-   interactive `ferrocad_stage`/`ferrocad_ui_py` surface is still open. Geometry is
+2. ~~`ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh`~~ — **`Part`/`Mesh` and the
+   interactive `ferrocad_stage` built;** `ferrocad_ui_py` is still open. Geometry is
    `ferrocad_shell_pywasm/src/native_shapes.rs`, three native modules over the one kernel:
    - `Part` — `makeBox`/`makeCylinder`/`makeSphere`/`makeCone`/`makeCompound`, and a
      `Shape` with `Volume`/`Area`/`CenterOfMass`/`BoundBox`/`ShapeType`, the topology
@@ -1916,8 +1916,45 @@ is needed for the facade above it:
    capture `/?runtime=pywasm&script=import Part…` in `smoke.sh`, which builds a box with
    the wasm OCCT kernel and reads `6000.0 Solid` back from the document. What is *not*
    there: the B-Rep explorer (`Face.Surface`, `Edge.Curve`), `Part.Wire`/`Face`
-   construction, a `Shape.Placement` wrapper (transforms are baked), and the interactive
-   stage;
+   construction and a `Shape.Placement` wrapper (transforms are baked);
+
+   **The stage is the second half, and it is built too.**
+   `crates/ferrocad_shell_pywasm/src/native_stage.rs` is a binding over the same
+   `ferrocad_stage` crate `ferrocad_stage_py` wraps, not a port:
+
+   - `Tool` is subclassable (`BASETYPE`/`HAS_DICT`) and `PyToolAdapter` drives the
+     instance through `ferrocad_stage::Tool`; a raising `on_event` is reported with
+     `vm.print_exception`, never propagated into the frame loop. `Tool.status()` reads
+     the Python dict the strip needs and `cancel()` forwards.
+   - `ShapeItem`/`Stage`, `PointerEvent`/`Hit`, `PointerKind`/`MouseButton`/`DrawMode`,
+     `Snap`/`SnapKind`/`SnapCandidate`/`SnapContext`, `Workplane`/`WorkplaneKind`,
+     `Camera` (`position`, `project`, `ray`, `size`, …), `TransformGizmo` with its drag
+     and commit events, and the published view (`view_camera`, `set_view_camera`,
+     `set_view_stage`, `set_preview_items`, `preview_items`, `clear_previews`,
+     `preview_generation`, `pick_at`).
+   - The enum variants are class attributes installed with `#[extend_class]`; a
+     RustPython 0.5 `#[pyattr]` runs during type creation, where an instance of that
+     same type would meet an uninitialised static type. `==`/`!=` compare the wrapped
+     value (`Comparable`).
+   - **One ranked picker.** `pick_all`/`resolve` moved from `ferrocad_stage_py::view`
+     into `ferrocad_stage::view::ranked_pick`/`ranked_pick_in`, so `pick_at` returns the
+     same occlusion stack to a CPython script and a RustPython one.
+   - **The Draft bridge is the desktop's code.** `ferrocad_shell_pywasm` now installs
+     `python/FreeCADGui/draft.py` at boot, so `FreeCADGui.Snapper` (and its
+     `SnapContext`/`Workplane` work) exists under RustPython; before this the module's
+     `from . import draft` failed on a module with no `__path__`. `RustPythonRuntime`
+     answers `ScriptHost::tool` by wrapping `ferrocad_shell.tool_bridge(name)` in
+     `PyToolAdapter`; on the desktop `threaded.rs` keeps that live object on the worker
+     and returns a `RemoteTool` proxy (items/status cached, events and cancel over the
+     channel), so `--script-host=pywasm` has interactive tools too.
+
+   Tests: `tests/stage.rs` (both import paths, enum equality, `ShapeItem`/`Stage`
+   round-trip, workplane snapping, published previews and `pick_at`, a Python tool
+   driven through `fs::Tool`, a raising tool, and the Draft bridge) and
+   `tests/threaded.rs::a_python_tool_crosses_the_worker_channel` (the desktop path).
+   What is *not* there: `ferrocad_ui_py` (Qt-shaped dialogs, still open), and the
+   `ferrocad_stage_py` `PickHit` class is replaced by the shared `RankedHit` mapping
+   (same fields, so the facade is unaffected);
 3. `host_env` on for the **native** RustPython build only (target-specific dependency), so
    the desktop runs `python/**` from disk; the browser keeps the embedded file map, which
    this step built. **Blocked upstream:** rustpython-vm 0.5's posix layer wants
@@ -2073,7 +2110,7 @@ fit. Every road ends at the same object, but the fidelity is not remotely the sa
 | surface | where | how it reaches the engine | fidelity | writes |
 | --- | --- | --- | --- | --- |
 | CPython (`PythonScriptHost`) | desktop | `ferrocad_py`, a PyO3 extension that links `ferrocad_core` and wraps `Arc<Mutex<CoreDocument>>` in `PyDocument`/`PyDocumentObject` | the full object model: properties, observers, extension converters, sub-element resolvers | yes |
-| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`: the payload read, `ferrocad_doc_api`'s doorway (`create`/`set`/`recompute`) over `ferrocad_core::application()`, and `native_shapes` — `Part`/`Mesh` over `ferrocad_part`/`ferrocad_mesh`/`ferrocad_occt` | the property rows, the doorway's verbs, and real B-Rep/mesh objects | yes on a host that owns the registry (doorway text, typed `Shape`); a fixed-payload host stays read-only |
+| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`: the payload read, `ferrocad_doc_api`'s doorway (`create`/`set`/`recompute`) over `ferrocad_core::application()`, `native_shapes` — `Part`/`Mesh` over `ferrocad_part`/`ferrocad_mesh`/`ferrocad_occt` — and `native_stage` (`ferrocad_stage` over the same crate, plus the installed `FreeCADGui/draft.py`) | the property rows, the doorway's verbs, real B-Rep/mesh objects, and interactive tools/previews | yes on a host that owns the registry (doorway text, typed `Shape`); a fixed-payload host stays read-only |
 | JS (`JsScriptHost` → the page) | desktop (rquickjs) + browser (ES module) | `ferrocad.call(request)` → `ferrocad_doc_api::DocApi` → registry | five verbs: `document`, `properties`, `create`, `set`, `recompute` | yes |
 | wasm bundle | desktop (`wasmi`) + browser (`loader.js`) | the same document API as an import, optionally wrapped by `read_only` | the same five verbs | only with `{"document": "read-write"}` |
 

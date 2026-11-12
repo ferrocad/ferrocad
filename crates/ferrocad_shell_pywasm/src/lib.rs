@@ -65,6 +65,9 @@ mod native;
 /// `Part`, `Mesh` and `MeshPart` over the OCCT kernel (B18b item 2).
 mod native_shapes;
 
+/// `ferrocad_stage` for RustPython: tools, shapes, snapping and the gizmo (B18b item 2).
+mod native_stage;
+
 /// The desktop's RustPython host: a `ScriptHost` in front of a worker thread. Native
 /// only — the browser boots the interpreter on its own thread and raises that stack as a
 /// link argument instead.
@@ -94,6 +97,10 @@ pub(crate) fn hello() -> String {
 }
 
 /// The refusal a half with no tools answers with.
+///
+/// Native-only: the browser's `RustPythonRuntime::tool` now answers through the stage
+/// binding, and only the desktop worker still has a "no such tool" reply.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn no_tool(name: &str) -> String {
     format!("pywasm: no tool {name} in this build")
 }
@@ -134,6 +141,14 @@ const FERROCADGUI: &str = include_str!("../../../python/FerroCADGui/__init__.py"
 /// same source on both hosts (B18b).
 const FREECADGUI: &str = include_str!("../../../python/FreeCADGui/__init__.py");
 
+/// The **shared** Draft control surface: the snap bar, `Snapper` and the snap commands.
+///
+/// `FreeCADGui` imports it lazily (`from . import draft`) and names `draft.py` as the
+/// reason the Draft tool works; installing it here is what makes
+/// `ferrocad_shell.tool_bridge('draft')` and `FreeCADGui.Snapper` real on this host too
+/// (the stage extension it needs is `native_stage`).
+const FREECADGUI_DRAFT: &str = include_str!("../../../python/FreeCADGui/draft.py");
+
 /// The **shared** `FerroCAD` package: the semantic stores the desktop runs.
 ///
 /// A package, not one source: `FerroCAD/__init__.py` lazily imports `._grid`, `._axis`
@@ -156,6 +171,11 @@ import FreeCAD as _fc
 import Part as _part
 import Mesh as _mesh
 import MeshPart as _meshpart
+import ferrocad as _ferrocad
+import ferrocad_stage as _stage
+# `ferrocad_stage.install()` attaches this on CPython; mirror it here so
+# `from ferrocad import stage` resolves on both runtimes.
+_ferrocad.stage = _stage
 ferrocad_shell.add_namespace('FreeCAD', _fc)
 ferrocad_shell.add_namespace('App', _fc)
 ferrocad_shell.add_namespace('doc', _fc.ActiveDocument)
@@ -383,7 +403,7 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 ///   it and this runtime installs none, so [`PythonRuntime::has_function`] reports it
 ///   absent and the document half answers.
 pub struct RustPythonRuntime {
-    interpreter: Interpreter,
+    interpreter: Rc<Interpreter>,
 }
 
 impl RustPythonRuntime {
@@ -456,6 +476,9 @@ impl RustPythonRuntime {
             .add_native_module(native_shapes::part_module_def(Context::genesis()))
             .add_native_module(native_shapes::mesh_module_def(Context::genesis()))
             .add_native_module(native_shapes::mesh_part_module_def(Context::genesis()))
+            // The interactive stage: tools, `ShapeItem`, snapping and the gizmo, so a
+            // mod's tool and a script's preview are the ones the viewport draws.
+            .add_native_module(native_stage::stage_module_def(Context::genesis()))
             // The frozen Python half of the standard library (`types`, `json`, …).
             .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
             .build();
@@ -470,6 +493,7 @@ impl RustPythonRuntime {
                      _install_package('FreeCAD', eval(FREECAD_FILES_SOURCE))\n\
                      sys.modules['_ferrocad_bootstrap'].configure(sys.modules['FreeCAD'], PARAMETER_STORE, PARAMETER_FILE)\n\
                      _install('FreeCADGui', FREECADGUI_SOURCE)\n\
+                     _install('FreeCADGui.draft', FREECADGUI_DRAFT_SOURCE)\n\
                      _install_package('FerroCAD', eval(FERROCAD_FILES_SOURCE))\n\
                      _install('FerroCADGui', FERROCADGUI_SOURCE)\n\
                      _install('ferrocad_shell', SHELL_SOURCE)"
@@ -495,6 +519,7 @@ impl RustPythonRuntime {
                         ("SHELL_SOURCE", SHELL),
                         ("SHELL_CATALOG", CATALOG),
                         ("FREECADGUI_SOURCE", FREECADGUI),
+                        ("FREECADGUI_DRAFT_SOURCE", FREECADGUI_DRAFT),
                         ("FERROCADGUI_SOURCE", FERROCADGUI),
                         ("FERROCAD_FILES_SOURCE", ferro_files.as_str()),
                         ("FREECAD_FILES_SOURCE", freecad_files.as_str()),
@@ -507,7 +532,9 @@ impl RustPythonRuntime {
             boot
         })?;
 
-        Ok(Self { interpreter })
+        Ok(Self {
+            interpreter: Rc::new(interpreter),
+        })
     }
 }
 
@@ -586,11 +613,34 @@ impl PythonRuntime for RustPythonRuntime {
     }
 
     fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {
-        Err(no_tool(name))
+        self.interpreter.enter(|vm| {
+            let bridge = (|| -> PyResult<PyObjectRef> {
+                let module = vm.import("ferrocad_shell", 0)?;
+                let function = module.get_attr(vm.ctx.intern_str("tool_bridge"), vm)?;
+                function.call((vm.new_pyobj(name),), vm)
+            })();
+            match bridge {
+                Ok(object) => native_stage::extract_tool(self.interpreter.clone(), object)
+                    .map_err(|error| exception_text(vm, &error)),
+                Err(error) => Err(exception_text(vm, &error)),
+            }
+        })
     }
 
-    fn tool_command(&self, _name: &str, _verb: &str) -> bool {
-        false
+    fn tool_command(&self, name: &str, verb: &str) -> bool {
+        self.interpreter.enter(|vm| {
+            let answer = vm
+                .import("ferrocad_shell", 0)
+                .and_then(|module| module.get_attr(vm.ctx.intern_str("tool_command"), vm))
+                .and_then(|function| function.call((vm.new_pyobj(name), vm.new_pyobj(verb)), vm));
+            match answer {
+                Ok(value) => value.is_true(vm).unwrap_or(false),
+                Err(error) => {
+                    vm.print_exception(error);
+                    false
+                }
+            }
+        })
     }
 
     fn inventor_scene(&self) -> Result<Scene, String> {

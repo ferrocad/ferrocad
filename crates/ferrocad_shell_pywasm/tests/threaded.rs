@@ -71,6 +71,45 @@ fn the_constants_are_answered_without_the_interpreter() {
 }
 
 #[test]
+fn a_python_tool_crosses_the_worker_channel() {
+    let host = threaded::live().expect("the interpreter boots");
+    let script = "\
+import ferrocad_shell, ferrocad_stage
+class Probe(ferrocad_stage.Tool):
+    def __init__(self):
+        self.seen = 0
+        self.add_item(ferrocad_stage.ShapeItem(7))
+    def on_event(self, event):
+        self.seen += 1
+        return True
+    def status(self):
+        return {'id': 'probe', 'label': 'Probe', 'active': True, 'points': self.seen, 'hint': 'h'}
+    def cancel(self):
+        return True
+_probe = Probe()
+ferrocad_shell.tool_bridge = lambda name: _probe
+print('ready')
+";
+    let answer = host.evaluate(script).expect("the console runs");
+    assert!(answer.ok, "{}", answer.output);
+
+    let mut tool = host.tool("probe").expect("the worker builds the tool");
+    assert_eq!(tool.items().len(), 1);
+    assert_eq!(tool.status().points, 0);
+
+    let event = ferrocad_stage::PointerEvent {
+        kind: ferrocad_stage::PointerKind::Down,
+        position: [4, 5],
+        button: Some(ferrocad_stage::MouseButton::Left),
+        hit: None,
+        projection: None,
+    };
+    tool.on_event(&event, None);
+    assert_eq!(tool.status().points, 1, "the event reached the worker's VM");
+    assert!(tool.cancel());
+}
+
+#[test]
 fn the_stack_the_worker_asks_for_is_the_documented_one() {
     // The value the interpreter's compiler needs; a smaller one aborts inside rustpython
     // rather than failing here, which is why it is a constant and not a parameter.

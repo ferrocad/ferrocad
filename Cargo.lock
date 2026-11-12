@@ -2805,6 +2805,7 @@ dependencies = [
  "ferrocad_core",
  "ferrocad_doc_api",
  "ferrocad_geom",
+ "ferrocad_graphics",
  "ferrocad_inventor",
  "ferrocad_mesh",
  "ferrocad_occt",

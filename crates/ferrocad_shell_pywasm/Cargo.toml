@@ -36,6 +36,9 @@ ferrocad_doc_api.workspace = true
 # The event vocabulary an `EventListener` receives, and the `Tool` its signature uses.
 ferrocad_inventor.workspace = true
 ferrocad_stage.workspace = true
+# `ferrocad_stage::view` publishes a `ferrocad_graphics::Camera` the `Camera` binding
+# wraps, and a pick returns its `Hit`. Same graphics crate the document half links.
+ferrocad_graphics.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log = "0.4"

@@ -394,6 +394,19 @@ tessellation calls `ferrocad_part::backend()` (OCCT, registered once per process
 doorway cannot carry. This is the place the script half names the kernel; the doorway
 stays kernel-free.
 
+**The stage is bound the same way (B18b item 2).** `ferrocad_shell_pywasm/src/native_stage.rs`
+is the RustPython face of `ferrocad_stage_py`: `Tool` (a subclassable base driven through
+`ferrocad_stage::Tool` by an adapter), `ShapeItem`/`Stage`, `PointerEvent`/`Hit` and the
+enums, `Snap`/`SnapContext`/`Workplane`, `Camera`, `TransformGizmo`, and the published
+view (`view_camera`, `set_view_preview_items`, `pick_at`). It also installs
+`python/FreeCADGui/draft.py`, so `FreeCADGui.Snapper` and
+`ferrocad_shell.tool_bridge('draft')` are the desktop's code on this host. A Python tool
+is therefore the viewport's tool on both runtimes: `RustPythonRuntime::tool` wraps the
+bridge in the native `Tool` interface, and on the desktop the worker keeps the live
+object while `threaded::RemoteTool` forwards events and cancel over the channel. The
+ranked picker both bindings use is `ferrocad_stage::view::ranked_pick`, so a pick cannot
+mean one thing to `FreeCADGui.getObjectsInfo` and another to a CPython tool.
+
 Because the facade is the real one, **real mods load**: `mods/GridOverlay`,
 `mods/AxisOverlay` and `mods/GizmoOverlay` run here and declare their `grid`/`axis`/
 `gizmo` providers, which `tests/mods.rs::the_shipped_settings_clients_load` pins. The
@@ -414,7 +427,7 @@ compiler recurses, so a host must raise the stack before the interpreter starts;
 cannot raise its own (8 MiB on Linux and macOS, 1 MiB on Windows).
 `threaded::ThreadedScriptHost` is the `ScriptHost` in front of a 16 MiB worker:
 `ThreadedRuntime` sends every call over the channel, and the answers that need no
-interpreter (the greeting, the grant, the tool refusal) stay local. `--script-host=pywasm`
+interpreter (the greeting, the grant) stay local. `--script-host=pywasm`
 installs it over `live_persistent`, so the preview reads the app's parameter file and
 answers the whole contract; `host_env` is still off, so what it does *not* have is an
 ordinary POSIX layer — the parameter store's two file operations come from the host
@@ -599,7 +612,8 @@ ferrocad_shell_js     -> ferrocad_shell_api, ferrocad_inventor,
                                      ferrocad_core, ferrocad_part
 ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core, ferrocad_inventor,
                          ferrocad_doc_api, ferrocad_geom, ferrocad_part,
-                         ferrocad_mesh, ferrocad_occt, rustpython-vm,
+                         ferrocad_mesh, ferrocad_stage, ferrocad_graphics,
+                         ferrocad_occt, rustpython-vm,
                          rustpython-stdlib, rustpython-pylib
                          must NOT -> gpui, pyo3, ferrocad_py, ferrocad_shell_rust
 ```
@@ -610,7 +624,10 @@ reports what comes back, so the document stays `RustAppBackend`'s, and a core ed
 put a second document implementation one `use` away. `ferrocad_shell_pywasm` does name
 `ferrocad_core`, because the rows it feeds the interpreter come from `present` and its
 snapshot is a `Document`; it also names the kernel, because B18b item 2 binds `Part` and
-`Mesh` for RustPython (the PyO3 `Part` cannot be loaded without a C ABI). That makes the
+`Mesh` for RustPython (the PyO3 `Part` cannot be loaded without a C ABI). `ferrocad_stage`
+and `ferrocad_graphics` come along for the same reason: the browser's `ferrocad_stage` is
+a binding over the crate and the published camera/hit types are the graphics crate's.
+That makes the
 script half a **second user** of the one `ferrocad_part`/`ferrocad_occt` pair, not a
 second copy: the shape type and the registered backend are the document half's.
 
@@ -680,10 +697,15 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
   import is that document API. There is no JS `Tool`, no `apply_interaction` and no
   `mod-events` subscription yet, and a bundle cannot supply the grid/provider hooks. See
   [`js-addons.md`](../../project/research/js-addons.md) §7.
-- **`ferrocad_shell_pywasm` has no tool or `pivy` path.** It is installed (the browser's
-  `?pywasm=1`), so the console, the property rows, document writes and the `Part`/`Mesh`
-  kernel are real, but a script cannot create an interactive tool. `mod-events` (the fixed
-  low-frequency event set a mod subscribes to) is still an open task.
+- **`ferrocad_shell_pywasm` has tools but no `pivy` path.** It is installed (the browser's
+  `?pywasm=1` and the desktop's `--script-host=pywasm`), so the console, the property
+  rows, document writes, the `Part`/`Mesh` kernel and the interactive stage are real:
+  `ferrocad_stage.Tool` subclasses run in the viewport (the `python:` tool id), snap
+  contexts and the Draft bridge work, and a script publishes preview items and reads the
+  published camera. What it does not supply is the Coin scene: `inventor_scene` is empty
+  and `pivy` is absent, so a mod that assembles an `SoSeparator` tree needs CPython.
+  `mod-events` (the fixed low-frequency event set a mod subscribes to) is still an open
+  task.
 - **The browser pays for RustPython in binary size** even when it runs
   `?runtime=plain`: the interpreter is compiled in, not fetched. Nothing boots it
   unless the page asks, but the module is bigger. A cargo feature that drops the half

@@ -15,14 +15,15 @@
 // `lib.rs`; the browser boots the interpreter on its own thread and raises that stack as
 // a link argument.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
 use ferrocad_inventor::Scene;
 use ferrocad_python_host::{Contract, PythonHost, PythonRuntime};
-use ferrocad_shell_api::DocumentGrant;
-use ferrocad_stage::Tool;
+use ferrocad_shell_api::{DocumentGrant, ScriptHost};
+use ferrocad_stage as fs;
 
 use crate::{HELLO_READ_WRITE, no_tool};
 
@@ -67,6 +68,108 @@ enum Job {
         function: String,
         reply: Sender<bool>,
     },
+    /// Open a Python-backed tool and keep it on the interpreter thread.
+    ToolOpen {
+        name: String,
+        reply: Sender<Result<ToolReply, String>>,
+    },
+    /// Forward a pointer event to the live tool.
+    ToolEvent {
+        name: String,
+        event: fs::PointerEvent,
+        snap: Option<fs::Snap>,
+        reply: Sender<Result<ToolReply, String>>,
+    },
+    /// Forward a session verb (cancel/finish) to the Python bridge.
+    ToolCommand {
+        name: String,
+        verb: String,
+        reply: Sender<bool>,
+    },
+}
+
+/// What a tool answered after one call: its transient visuals and its status.
+struct ToolReply {
+    items: Vec<fs::ShapeItem>,
+    status: fs::ToolStatus,
+}
+
+impl ToolReply {
+    fn of(tool: &dyn fs::Tool) -> Self {
+        Self {
+            items: tool.items().to_vec(),
+            status: tool.status(),
+        }
+    }
+}
+
+/// A Python-backed tool that lives on the interpreter thread.
+///
+/// A tool is not `Send` (it owns Python objects, which the VM is not), so the caller
+/// holds this proxy instead: every event crosses the channel and the worker keeps the
+/// live adapter. The items and status are cached here, refreshed after each call, so
+/// the viewport's per-frame `items()` is a slice and never a round trip.
+pub struct RemoteTool {
+    name: String,
+    jobs: Sender<Job>,
+    items: Vec<fs::ShapeItem>,
+    status: fs::ToolStatus,
+}
+
+impl RemoteTool {
+    fn accept(&mut self, reply: ToolReply) {
+        self.items = reply.items;
+        self.status = reply.status;
+    }
+
+    fn send_event(&mut self, event: fs::PointerEvent, snap: Option<fs::Snap>) {
+        let (reply, answer) = mpsc::channel();
+        if self
+            .jobs
+            .send(Job::ToolEvent {
+                name: self.name.clone(),
+                event,
+                snap,
+                reply,
+            })
+            .is_err()
+        {
+            return;
+        }
+        if let Ok(Ok(step)) = answer.recv() {
+            self.accept(step);
+        }
+    }
+}
+
+impl fs::Tool for RemoteTool {
+    fn on_event(&mut self, event: &fs::PointerEvent, snap: Option<fs::Snap>) {
+        self.send_event(*event, snap);
+    }
+
+    fn items(&self) -> &[fs::ShapeItem] {
+        &self.items
+    }
+
+    fn status(&self) -> fs::ToolStatus {
+        self.status.clone()
+    }
+
+    fn cancel(&mut self) -> bool {
+        let (reply, answer) = mpsc::channel();
+        if self
+            .jobs
+            .send(Job::ToolCommand {
+                name: self.name.clone(),
+                verb: "cancel".to_string(),
+                reply,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        answer.recv().unwrap_or(false)
+    }
 }
 
 impl ThreadedRuntime {
@@ -184,12 +287,54 @@ impl PythonRuntime for ThreadedRuntime {
         Ok(Some(HELLO_READ_WRITE.to_string()))
     }
 
-    fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {
-        Err(no_tool(name))
+    fn tool(&self, name: &str) -> Result<Box<dyn fs::Tool>, String> {
+        let worker = self
+            .inner
+            .lock()
+            .map_err(|_| "the RustPython thread is poisoned".to_string())?;
+        let jobs = worker
+            .jobs
+            .as_ref()
+            .ok_or_else(|| "the RustPython thread is gone".to_string())?
+            .clone();
+        let (reply, answer) = mpsc::channel();
+        jobs.send(Job::ToolOpen {
+            name: name.to_string(),
+            reply,
+        })
+        .map_err(|_| "the RustPython thread is gone".to_string())?;
+        // Release the runtime lock while the worker builds the tool.
+        drop(worker);
+        let step = answer
+            .recv()
+            .map_err(|_| "the RustPython thread is gone".to_string())??;
+        Ok(Box::new(RemoteTool {
+            name: name.to_string(),
+            jobs,
+            items: step.items,
+            status: step.status,
+        }))
     }
 
-    fn tool_command(&self, _name: &str, _verb: &str) -> bool {
-        false
+    fn tool_command(&self, name: &str, verb: &str) -> bool {
+        let Ok(worker) = self.inner.lock() else {
+            return false;
+        };
+        let Some(jobs) = worker.jobs.as_ref() else {
+            return false;
+        };
+        let (reply, answer) = mpsc::channel();
+        if jobs
+            .send(Job::ToolCommand {
+                name: name.to_string(),
+                verb: verb.to_string(),
+                reply,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        answer.recv().unwrap_or(false)
     }
 
     fn inventor_scene(&self) -> Result<Scene, String> {
@@ -209,6 +354,8 @@ fn run(inbox: Receiver<Job>, ready: Sender<Result<(), String>>) {
         }
     };
     let _ = ready.send(Ok(()));
+    // The live tools stay here, where their Python objects may live.
+    let mut tools: HashMap<String, Box<dyn fs::Tool>> = HashMap::new();
 
     while let Ok(job) = inbox.recv() {
         match job {
@@ -222,6 +369,44 @@ fn run(inbox: Receiver<Job>, ready: Sender<Result<(), String>>) {
             }
             Job::HasFunction { function, reply } => {
                 let _ = reply.send(host.runtime().has_function(&function));
+            }
+            Job::ToolOpen { name, reply } => {
+                let answer = match host.tool(&name) {
+                    Ok(tool) => {
+                        let step = ToolReply::of(tool.as_ref());
+                        tools.insert(name, tool);
+                        Ok(step)
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(answer);
+            }
+            Job::ToolEvent {
+                name,
+                event,
+                snap,
+                reply,
+            } => {
+                let answer = match tools.get_mut(&name) {
+                    Some(tool) => {
+                        tool.on_event(&event, snap);
+                        Ok(ToolReply::of(tool.as_ref()))
+                    }
+                    None => Err(no_tool(&name)),
+                };
+                let _ = reply.send(answer);
+            }
+            Job::ToolCommand { name, verb, reply } => {
+                let mut handled = host.tool_command(&name, &verb);
+                // `cancel` also has to clear the tool's own transient visuals; the
+                // Python bridge action is idempotent, so both paths are safe. Either
+                // one reporting a cancelled session is the honest answer.
+                if verb == "cancel" {
+                    if let Some(tool) = tools.get_mut(&name) {
+                        handled |= tool.cancel();
+                    }
+                }
+                let _ = reply.send(handled);
             }
         }
     }

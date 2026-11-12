@@ -2255,12 +2255,46 @@ triangle, removal is by identity, the shader/depth/material fields round-trip, a
 unchanged, and `tests/mods.rs::the_shipped_coin_skins_load`, which now loads
 `GridOverlayCoin`, `AxisOverlayCoin` and `GizmoOverlayShader` from source and sees their
 `('grid', 'coin')`, `('axis', 'coin')` and `('gizmo', 'ferrocad-shader')` backends
-registered. What still fails for those three is narrower than before: the shader tree is
-built on activation and reads its WGSL from the addon's `Resources/` directory, and a
-pack carries only its entry scripts — a resource-delivery gap, not a missing Coin scene. Cuts, stated: `SoType.fromName`/`createInstance`, the camera and event classes,
+registered. The shader tree those three build on activation reads its WGSL from the
+addon's `Resources/` directory; B21 makes that file travel with the pack, so the tree
+builds on a host with no filesystem too. Cuts, stated: `SoType.fromName`/`createInstance`, the camera and event classes,
 and a field's sequence protocol (`len()`/`obj[i]`) are not bound on RustPython; its
 `SoShaderParameter1f.value` is a float, so the typed `value` on a parameter is the ABI's,
 not Coin's `SoMFFloat`.
+
+### B21 — a pack carries the resources its scripts read (built 2026-11-12)
+
+B20 gave the RustPython host a Coin scene, and the Coin skins still could not draw: their
+activation reads `Resources/grid_overlay.wgsl` through
+`open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Resources", …))`, and a
+pack carried only `Init.py`/`InitGui.py`. That is a delivery gap, and it closed in three
+places rather than one:
+
+- **The packer** (`tools/mods_pack.py`) writes every regular file below `Resources/`
+  under its relative path, in name order, so the pack stays bytes-stable. `--check` covers
+  them like the scripts (a shader edited in `mods/` and not re-packed is drift).
+- **The loader** (`ferrocad_python_host`) splits the pack into entries and *files*: the
+  entries still run through `load_workbench_sources`, and the files go to
+  `PythonRuntime::install_pack_files(name, files)` first — resources before scripts,
+  because a mod may read one at import. The trait default is a no-op: a runtime with a
+  real filesystem (the desktop's scanned `mods/` tree) already has the file.
+- **The RustPython host** keeps the text in a process table keyed the way the loader names
+  the entry (`<name>/Resources/…`), and `bootstrap.py`'s `open` serves it: the resource
+  first, the interpreter's own file second (a desktop host with `host_env` still reads
+  real files, so one `open` serves both). `os.path.exists`/`isfile` answer from the same
+  table where there is no `os`. An absolute path is accepted by stripping the process
+  directory, because `os.path.abspath` is identity on wasm but not natively.
+
+Tests: `ferrocad_shell_web/tests/packs.rs::a_pack_installs_its_resources_where_the_mod_reads_them`
+(a pack's `Resources/shader.wgsl` is read through `open()` from the mod's own `__file__`
+directory; an absent path is still `FileNotFoundError`) and
+`ferrocad_shell_pywasm/tests/mods.rs::the_coin_grid_skin_builds_its_tree_from_the_pack`
+(the **real** `mods/GridOverlayCoin` pack, with its WGSL: switching the grid to the Coin
+backend builds the shader tree and registers an overlay that compiles to a packet). The
+browser's `?mods=1` leg asserts a Coin pack reports `2 script(s) loaded, 0 failed`.
+
+What this does not do: import a *sibling module* (a pack still carries files, not
+`sys.path`), and binary assets (icons) are still a path rather than bytes.
 
 ## 5. Open questions, and how each host reaches the engine
 

@@ -11,7 +11,8 @@ The page has no filesystem, so ``ferrocad_shell.load_workbenches`` cannot scan a
 A pack is::
 
     {"name": "<Name>", "version": 1,
-     "files": {"Init.py": "<source>", "InitGui.py": "<source>"}}
+     "files": {"Init.py": "<source>", "InitGui.py": "<source>",
+               "Resources/<file>": "<text>"}}
 
 and the index is::
 
@@ -24,11 +25,14 @@ The browser host hands each fetched pack to
 exec rules the filesystem loader uses, so a tree and a pack cannot report different
 things about the same script (``docs/project/tasks/backend-parity.md`` B19).
 
-**Only the entry scripts are packed.** A workbench that imports a sibling module
-itself is a later slice: the pack carries the two files the loader can execute,
-and nothing else (no ``Resources/``, no ``__init__.py``, no ``README.md``). Binary
-assets such as icons ship later as separate URLs named by the pack rather than
-base64, so this format does not change when they arrive.
+**The entry scripts and ``Resources/`` travel; nothing else does.** A mod that
+ships a shader or a template reads it with ``open(os.path.join(os.path.dirname(
+os.path.abspath(__file__)), "Resources", ...))`` — the path a ``mods/`` tree gives it
+— so the pack carries every regular file below ``Resources/`` under that same relative
+key, and the host installs it where the loader's ``__file__`` points. A workbench that
+imports a sibling module is still a later slice (it needs an import hook, not a file),
+and binary assets such as icons ship later as separate URLs named by the pack rather
+than base64.
 
 JSON, not a zip, because ``fetch`` + ``JSON.parse`` need no unzip crate in the
 wasm module. The pack is a build artifact *of the directory the desktop reads*,
@@ -68,6 +72,9 @@ OUT = REPO / "crates" / "ferrocad_web_gpui" / "www" / "mods"
 #: A workbench's entry scripts, in the order the loader runs them.
 SCRIPTS = ("Init.py", "InitGui.py")
 
+#: The directory whose contents a mod reads with `open(...)` at run time.
+RESOURCES = "Resources"
+
 #: The pack format's version, carried by every pack and by the index.
 VERSION = 1
 
@@ -104,6 +111,22 @@ def _encode(data: dict) -> str:
     return json.dumps(data, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
 
 
+def resource_files(directory: Path) -> list[str]:
+    """The workbench's ``Resources/`` files, as ``/``-separated relative paths.
+
+    Name order, so the pack is bytes-stable. Only regular files: a directory is not
+    a resource, and a link is not followed (nothing in ``mods/`` uses one).
+    """
+    root = directory / RESOURCES
+    if not root.is_dir():
+        return []
+    return sorted(
+        path.relative_to(directory).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+
+
 def render_pack(name: str, directory: Path) -> str:
     """One workbench as its pack text.
 
@@ -113,6 +136,8 @@ def render_pack(name: str, directory: Path) -> str:
     files = {}
     for script in entry_scripts(directory):
         files[script] = (directory / script).read_text(encoding="utf-8")
+    for resource in resource_files(directory):
+        files[resource] = (directory / resource).read_text(encoding="utf-8")
     return _encode({"name": name, "version": VERSION, "files": files})
 
 
@@ -137,7 +162,7 @@ def build(root: Path = MODS) -> tuple[dict[Path, str], list[tuple[str, list[str]
     names = []
     for name, directory in workbenches(root):
         names.append(name)
-        summary.append((name, entry_scripts(directory)))
+        summary.append((name, entry_scripts(directory) + resource_files(directory)))
         outputs[OUT / f"{name}.json"] = render_pack(name, directory)
     outputs[OUT / "index.json"] = render_index(names)
     return outputs, summary

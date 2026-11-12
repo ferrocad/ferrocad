@@ -229,6 +229,115 @@ def _os_fsdecode(value):
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
+class _TextReader:
+    """A tiny text file over one fetched mod resource."""
+
+    def __init__(self, text, name=""):
+        self._text = text
+        self._offset = 0
+        self.name = name
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            chunk = self._text[self._offset:]
+            self._offset = len(self._text)
+            return chunk
+        chunk = self._text[self._offset:self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+    def readline(self, size=-1):
+        newline = self._text.find("\n", self._offset)
+        end = len(self._text) if newline < 0 else newline + 1
+        return self.read(end - self._offset)
+
+    def readlines(self):
+        lines = []
+        while True:
+            line = self.readline()
+            if not line:
+                return lines
+            lines.append(line)
+
+    def __iter__(self):
+        return iter(self.readlines())
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+try:  # the interpreter's own `open`; absent on wasm, where there is no filesystem
+    _real_open = open
+except NameError:  # pragma: no cover - the wasm build
+    _real_open = None
+
+
+def _pack_key(path):
+    """The installed resource `path` names, or ``None``.
+
+    The loader names a mod's entry ``<name>/<script>``, and the host installs resources
+    under that same ``<name>/`` root. A native host's ``os.path.abspath`` then prepends
+    the process directory, so the absolute form is accepted too: the table is rooted
+    where the loader put it, not where the desktop's current directory happens to be.
+    """
+    try:
+        import ferrocad as _native
+
+        if _native.file_exists(path):
+            return path
+        import os
+
+        prefix = os.getcwd().rstrip("/") + "/"
+        if path.startswith(prefix):
+            relative = path[len(prefix):]
+            if _native.file_exists(relative):
+                return relative
+    except Exception:  # noqa: BLE001 - no table, no cwd: nothing to serve
+        pass
+    return None
+
+
+def _pack_open(file, mode="r", *args, **kwargs):
+    """`open` that serves a fetched mod's ``Resources/`` first.
+
+    A pack carries its resources beside its entry scripts, and the host installs each at
+    the path the mod computes from ``__file__`` (``<name>/Resources/...``). Anything not
+    in that table is the interpreter's own file, which is what a desktop host with
+    ``host_env`` has; on wasm there is none, so an absent path is ``FileNotFoundError``
+    exactly as it was before.
+    """
+    path = file.decode("utf-8") if isinstance(file, bytes) else str(file)
+    if not any(flag in mode for flag in "wax+"):
+        key = _pack_key(path)
+        if key is not None:
+            if "b" in mode:
+                raise OSError("pywasm: mod resources are text; binary reads are not available")
+            import ferrocad as _native
+
+            return _TextReader(_native.read_text(key), path)
+    if _real_open is None:
+        raise FileNotFoundError(path)
+    return _real_open(file, mode, *args, **kwargs)
+
+
+def _pack_exists(path):
+    """Whether a fetched mod resource is installed (``os.path.exists``/``isfile``)."""
+    return _pack_key(str(path)) is not None
+
+
+# One `open` for both hosts: a pack's resources first, the interpreter's files after.
+import builtins as _builtins
+
+_builtins.open = _pack_open
+
+
 # `os` is only importable with `host_env`, which the wasm build does not have (a native
 # host gets the real module and this block is skipped). The shared modules use these
 # names for path-like arguments and for the parameter store's environment lookup; there
@@ -253,8 +362,8 @@ if _missing("os", "environ", "fdopen", "fspath"):
                     "basename": lambda path: str(path).rpartition("/")[2],
                     "abspath": lambda path: str(path),
                     "expanduser": lambda path: str(path),
-                    "exists": lambda path: False,
-                    "isfile": lambda path: False,
+                    "exists": _pack_exists,
+                    "isfile": _pack_exists,
                     "isdir": lambda path: False,
                 },
             ),

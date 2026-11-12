@@ -217,6 +217,10 @@ check_mods() {
     require_line 'ferrocad: mods: '
     require_line 'pack(s) from'
     require_line 'ferrocad: mod GridOverlay:'
+    # A Coin skin loads with its pack, resources included (B21). The summary line needs
+    # all six fetches inside the capture's budget; this one is early in index order and
+    # is the same evidence — the pack ran, and nothing in it raised.
+    require_line 'ferrocad: mod AxisOverlayCoin: 2 script(s) loaded, 0 failed'
 
     echo "fetched mod pack forbidden console patterns:"
     while IFS= read -r pattern; do

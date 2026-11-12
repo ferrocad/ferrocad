@@ -560,7 +560,11 @@ fetches one pack at a time after the first frame and hands it to
 `AppBackend::load_workbench_pack`. The pack is the same two entry scripts the tree would
 yield, loaded through the same Python helper, so the two delivery paths converge at the
 loader; a batch is followed by `Shell::refresh_after_mods`, because the command list and
-shortcuts are boot snapshots.
+shortcuts are boot snapshots. The pack also carries the mod's `Resources/` (B21), because
+activation reads a shader or a template from `os.path.dirname(__file__)`; the loader
+installs those files before it runs the scripts, and the host with no filesystem serves
+its `open` from them — which is what lets the Coin skins build their WGSL tree in the
+browser.
 
 ![The packaging: one document half; four script halves against two hosts, with each host's
 switch and what a build has to link; how each host is delivered — one native binary whose

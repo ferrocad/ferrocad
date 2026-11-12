@@ -36,6 +36,33 @@ pub(crate) use ferrocad::{
     bound_box_py, module_def, object_named_py, placement_of, placement_py, vector_of, vector_py,
 };
 
+/// The fetched mod files this host can serve, keyed by the path a mod computes.
+///
+/// A pack carries its `Resources/` beside its entry scripts, and the loader names an entry
+/// `<name>/<script>` — so a resource is installed at `<name>/Resources/...`, exactly what
+/// `os.path.join(os.path.dirname(os.path.abspath(__file__)), ...)` produces inside the mod.
+/// Process state, filled by [`install_pack_files`]; the `open` substitute in
+/// `bootstrap.py` reads it.
+pub(crate) fn pack_files() -> &'static std::sync::Mutex<std::collections::BTreeMap<String, String>>
+{
+    static FILES: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+    > = std::sync::OnceLock::new();
+    FILES.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+}
+
+/// Install a fetched pack's resources under `name/`, where the loader's `__file__` points.
+///
+/// Called by the runtime when it loads a pack; `bootstrap.py`'s `open` serves them.
+pub(crate) fn install_pack_files(name: &str, files: &[(String, String)]) {
+    let mut table = pack_files()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for (path, text) in files {
+        table.insert(format!("{name}/{path}"), text.clone());
+    }
+}
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -1447,6 +1474,37 @@ mod ferrocad {
             slot.borrow_mut()
                 .retain(|item| !std::ptr::eq(&**item, &*observer))
         });
+    }
+
+    // --- fetched mod files ---------------------------------------------------
+    //
+    // A pack carries a mod's `Resources/` beside its entry scripts; the loader names the
+    // entry `<name>/<script>`, so a resource lands at `<name>/Resources/...` — the path
+    // the mod computes from `__file__`. `bootstrap.py`'s `open` serves these where the
+    // interpreter has no filesystem (wasm).
+
+    /// `ferrocad.read_text(path)` — a fetched mod file, or `FileNotFoundError`.
+    #[pyfunction]
+    pub fn read_text(path: String, vm: &VirtualMachine) -> PyResult<String> {
+        let files = super::pack_files()
+            .lock()
+            .map_err(|_| vm.new_runtime_error("ferrocad: the file table is poisoned"))?;
+        match files.get(&path) {
+            Some(text) => Ok(text.clone()),
+            None => Err(vm.new_exception_msg(
+                vm.ctx.exceptions.file_not_found_error.to_owned(),
+                format!("[Errno 2] No such file or directory: {path:?}").into(),
+            )),
+        }
+    }
+
+    /// `ferrocad.file_exists(path)` — whether a fetched mod file is there.
+    #[pyfunction]
+    pub fn file_exists(path: String) -> bool {
+        super::pack_files()
+            .lock()
+            .map(|files| files.contains_key(&path))
+            .unwrap_or(false)
     }
 
     // --- the parameter file -------------------------------------------------

@@ -61,6 +61,57 @@ const PACK: &str = r#"{
   }
 }"#;
 
+/// A pack that ships a `Resources/` file and reads it at import, as the Coin skins do.
+///
+/// The mod computes the path from its own `__file__`, which the loader names
+/// `<name>/<script>` — so the pack's `Resources/shader.wgsl` has to arrive at
+/// `Shaded/Resources/shader.wgsl` for the same script to work on a host with no
+/// filesystem.
+const RESOURCE_PACK: &str = r#"{
+  "name": "Shaded",
+  "version": 1,
+  "files": {
+    "Init.py": "import FreeCAD\nFreeCAD.shaded_init = True\n",
+    "InitGui.py": "import os\nimport FreeCAD\nimport FreeCADGui\nhere = os.path.dirname(os.path.abspath(__file__))\nwith open(os.path.join(here, 'Resources', 'shader.wgsl')) as handle:\n    FreeCAD.shaded_shader = handle.read()\nclass _Run:\n    def Activated(self):\n        return {'status': 'shaded ran'}\n    def GetResources(self):\n        return {'MenuText': 'Shaded', 'Pixmap': 'shaded'}\nFreeCADGui.addCommand('Shaded_Run', _Run())\n",
+    "Resources/shader.wgsl": "@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }\n"
+  }
+}"#;
+
+/// The pack's resource is installed where the mod's `__file__` points, so its `open`
+/// finds it — and an absent one is still `FileNotFoundError`.
+#[test]
+fn a_pack_installs_its_resources_where_the_mod_reads_them() {
+    let _guard = serial();
+    with_backend(|backend| {
+        let report = backend
+            .load_workbench_pack(RESOURCE_PACK)
+            .expect("a pack with a resource loads");
+        assert!(report.errors.is_empty(), "{report:?}");
+
+        let script = [
+            "import FreeCAD",
+            "print(FreeCAD.shaded_shader.strip())",
+            "try:",
+            "    open('Shaded/Resources/absent.wgsl')",
+            "except FileNotFoundError:",
+            "    print('absent')",
+        ]
+        .join("\n");
+        let answer = backend.evaluate(&script).expect("evaluate");
+        assert!(answer.ok, "{}", answer.output);
+        assert!(
+            answer.output.contains("@fragment fn fs()"),
+            "the mod read its shader through open(): {}",
+            answer.output
+        );
+        assert!(
+            answer.output.contains("absent"),
+            "an uninstalled path is still FileNotFoundError: {}",
+            answer.output
+        );
+    });
+}
+
 /// A pack with one good script and one that raises.
 const BROKEN_PACK: &str = r#"{
   "name": "Mixed",

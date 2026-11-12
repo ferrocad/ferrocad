@@ -7,7 +7,15 @@
 //! to do with the network — a pack can register a command, and a broken script is
 //! recorded instead of taking the others with it.
 
+use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_pywasm::PywasmScriptHost;
+
+/// The overlay registry is process state; one test at a time.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+}
 use serde_json::Value;
 
 /// Run `f` against a freshly booted interpreter on a large stack (RustPython's compiler
@@ -207,6 +215,50 @@ fn the_shipped_coin_skins_load() {
                 "the Coin backend registered ({backend}): {providers}"
             );
         }
+    });
+}
+
+/// The Coin grid skin, from its pack, all the way to a registered overlay (B20).
+///
+/// This is the payoff of shipping `Resources/` in a pack: the mod's `ShaderGrid` reads
+/// `grid_overlay.wgsl` from its own `__file__` directory, builds the shader tree, and
+/// hands it to the pull bridge — on a host with no filesystem.
+#[test]
+fn the_coin_grid_skin_builds_its_tree_from_the_pack() {
+    let _guard = serial();
+    ferrocad_inventor::overlays::clear();
+    with_host(|host| {
+        let pack = serde_json::json!({
+            "name": "GridOverlayCoin",
+            "version": 1,
+            "files": {
+                "Init.py": include_str!("../../../mods/GridOverlayCoin/Init.py"),
+                "InitGui.py": include_str!("../../../mods/GridOverlayCoin/InitGui.py"),
+                "Resources/grid_overlay.wgsl":
+                    include_str!("../../../mods/GridOverlayCoin/Resources/grid_overlay.wgsl"),
+            }
+        })
+        .to_string();
+        let report = host.load_workbench_pack(&pack).expect("the pack loads");
+        assert!(report.errors.is_empty(), "{report:?}");
+
+        // The grid switch is the feature's, not the backend's: turn it on, then hand
+        // the feature to the Coin backend, whose `activate` builds the shader tree —
+        // including the WGSL it reads from the pack.
+        let switched = evaluate(
+            host,
+            "import FerroCAD\nFerroCAD.Grid.enabled = True\nprint(App.ActiveDocument.Name)",
+        );
+        let outcome = host
+            .set_provider("grid", "coin")
+            .expect("the coin backend answers");
+        assert!(outcome.ok, "{outcome:?} ({switched})");
+
+        assert!(ferrocad_inventor::overlays::dirty(), "the tree was registered");
+        let scenes = ferrocad_inventor::overlays::take_scenes();
+        assert_eq!(scenes.len(), 1, "one overlay from the grid backend");
+        let (queue, _directives) = ferrocad_inventor::compile(&scenes[0]);
+        assert!(!queue.is_empty(), "the shader quad produced a packet");
     });
 }
 

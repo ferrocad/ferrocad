@@ -166,6 +166,24 @@ fn pack_entries(pack: &str) -> Result<Vec<PackEntry>, String> {
         .collect())
 }
 
+/// The pack's non-entry files, as `(name, [(relative path, text)])`.
+///
+/// `Init.py`/`InitGui.py` are the entries the loader runs; everything else the pack
+/// carries is a file a mod may read, keyed the way `mods/<Name>/` keys it. Sorted, so a
+/// host that installs them reports the same order every boot.
+fn pack_files(pack: &str) -> Result<(String, Vec<(String, String)>), String> {
+    let pack: Pack = serde_json::from_str(pack).map_err(|error| format!("mod pack: {error}"))?;
+    if pack.name.is_empty() {
+        return Err("mod pack: `name` is empty".to_string());
+    }
+    let files = pack
+        .files
+        .into_iter()
+        .filter(|(key, _)| !PACK_SCRIPTS.contains(&key.as_str()))
+        .collect();
+    Ok((pack.name, files))
+}
+
 /// Whether `object` names something the script owns rather than the document.
 ///
 /// The synthetic namespace is `Settings` and its `/`-separated children. A document
@@ -212,6 +230,13 @@ impl<R: PythonRuntime> ScriptHost for PythonHost<R> {
     /// shell module, so the report is the tree's report.
     fn load_workbench_pack(&self, pack: &str) -> Result<WorkbenchReport, String> {
         let entries = pack_entries(pack)?;
+        // The mod's resources first: an `InitGui.py` may read one at import time (a
+        // shader, a template), and the host that has no filesystem serves them from
+        // this table. A pack with none is the common case and costs nothing.
+        let (name, files) = pack_files(pack)?;
+        if !files.is_empty() {
+            self.runtime.install_pack_files(&name, &files)?;
+        }
         let payload = serde_json::to_string(&entries).map_err(|error| error.to_string())?;
         self.json("load_workbench_sources", &[&payload])
     }

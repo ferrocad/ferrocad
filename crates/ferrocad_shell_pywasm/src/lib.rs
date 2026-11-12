@@ -674,6 +674,15 @@ impl PythonRuntime for RustPythonRuntime {
         })
     }
 
+    /// Install a fetched pack's resources where the loader's `__file__` points.
+    ///
+    /// The interpreter has no filesystem here (`host_env` is off on wasm), so the host
+    /// keeps the text and `bootstrap.py`'s `open` serves it.
+    fn install_pack_files(&self, name: &str, files: &[(String, String)]) -> Result<(), String> {
+        crate::native::install_pack_files(name, files);
+        Ok(())
+    }
+
     /// There is no app script here: `ferrocad_shell` is the only Python module this
     /// runtime installs, so the edition's `add_datum_plane` is absent by construction.
     fn has_function(&self, function: &str) -> bool {

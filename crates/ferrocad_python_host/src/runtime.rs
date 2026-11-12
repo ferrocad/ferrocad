@@ -150,6 +150,19 @@ pub trait PythonRuntime {
         None
     }
 
+    /// Install a fetched pack's non-entry files so a script can `open()` them.
+    ///
+    /// A mod reads its shader or template through
+    /// `open(os.path.join(os.path.dirname(os.path.abspath(__file__)), ...))`, and the
+    /// loader names the entry `<name>/<script>` — so a pack's resource key
+    /// `Resources/a.wgsl` is installed at `<name>/Resources/a.wgsl`. A runtime with a
+    /// real filesystem (the desktop's scanned tree) leaves this a no-op: the files are
+    /// already where the path points.
+    fn install_pack_files(&self, name: &str, files: &[(String, String)]) -> Result<(), String> {
+        let _ = (name, files);
+        Ok(())
+    }
+
     /// The workbench roots this facade can scan, or `None` when it has no filesystem.
     ///
     /// `Some` is passed to the shell's `load_workbenches`; `None` answers "nothing was

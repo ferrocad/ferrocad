@@ -655,6 +655,40 @@ mod coin {
                 .node
                 .lock()
                 .map_err(|_| vm.new_runtime_error("coin: the field is busy"))?;
+            // A node list takes nodes: `stage.parameter.setValues(0, n, [nodes])` is how a
+            // shader stage links its parameters.
+            if core::nodes_mut(&mut node, zelf.field).is_some() {
+                let (start, items) = match values.into_option() {
+                    Some(values) => {
+                        let count = num_or_values.try_float(vm)?.to_f64().max(0.0) as usize;
+                        let items: Vec<PyObjectRef> = values
+                            .clone()
+                            .try_into_value(vm)
+                            .map_err(|_| vm.new_type_error("expected a sequence of nodes"))?;
+                        (start, items.into_iter().take(count).collect::<Vec<_>>())
+                    }
+                    None => {
+                        let items: Vec<PyObjectRef> = num_or_values
+                            .clone()
+                            .try_into_value(vm)
+                            .map_err(|_| vm.new_type_error("expected a sequence of nodes"))?;
+                        (start, items)
+                    }
+                };
+                let mut children = items
+                    .iter()
+                    .map(|value| node_arg(value, vm))
+                    .collect::<PyResult<Vec<Node>>>()?;
+                let Some(buffer) = core::nodes_mut(&mut node, zelf.field) else {
+                    unreachable!("checked above")
+                };
+                if start > buffer.len() {
+                    buffer.resize(start, Node::default());
+                }
+                buffer.truncate(start);
+                buffer.append(&mut children);
+                return Ok(());
+            }
             match values.into_option() {
                 // The three-argument form replaces `num` entries from `start`.
                 Some(values) => {
@@ -1349,6 +1383,7 @@ mod coin {
     fn addOverlay(node: PyRef<PyNode>, vm: &VirtualMachine) -> PyResult<()> {
         let root = node.snapshot(vm)?;
         ferrocad_inventor::overlays::put(Arc::as_ptr(&node.inner) as usize, Scene { root });
+        log::info!("ferrocad: coin overlay registered");
         Ok(())
     }
 

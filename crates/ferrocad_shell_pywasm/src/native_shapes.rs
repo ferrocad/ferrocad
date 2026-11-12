@@ -14,25 +14,31 @@
 //! # The surface
 //!
 //! - `Part.makeBox` / `makeCylinder` / `makeSphere` / `makeCone` / `makeCompound`
+//! - `Part.Wire(edges)` / `Part.Face(wires)` / `Part.makePolygon(points, closed=False)`
 //! - `Part.Shape`: `Volume`, `Area`, `CenterOfMass`, `BoundBox`, `ShapeType`, `isValid()`,
 //!   `isNull()`, the topology getters (`Faces`, `Edges`, `Vertexes`, `Solids`, `Shells`,
-//!   `Wires`), `cut`/`fuse`/`common`, `translate`/`rotate`, `tessellate`
+//!   `Wires`), the B-Rep explorer (`Surface`, `Curve`), `Placement`, `cut`/`fuse`/`common`,
+//!   `translate`/`rotate`, `tessellate`
+//! - `Part.Surface` / `Part.Curve`: the kernel's classification of a face or an edge, with
+//!   the analytic frame (`Location`/`Axis`/`Radius`/`SemiAngle`/…) on the kinds that have
+//!   it and `AttributeError` on the ones that do not, as upstream's per-kind classes do
 //! - `Part.show(shape, name="Shape")`: a `Part::Feature` in the active document, which is
 //!   the write that makes a standalone shape part of the model
 //! - `Mesh.Mesh()` / `Mesh.Mesh(shape)`: points and facets, `Area`, `Volume`, `isSolid()`,
 //!   `isValid()`, `BoundBox`, `Points`, `Facets`, `countPoints()`, `countFacets()`
 //! - `MeshPart.meshFromShape(Shape=…, LinearDeflection=…, AngularDeflection=…)`
 //!
-//! What is not here yet is stated rather than faked: there is no `Part.TopoShape`
-//! B-Rep explorer (`Face.Surface`, `Edge.Curve`), no `Part.Wire`/`Part.Face` construction,
-//! no shape *placement* wrapper (a transform is baked into the returned shape), and no
-//! interactive stage (`ferrocad_stage`'s tools and gizmos — a separate slice). The geometry
-//! a script creates here is real: it is the kernel the viewport draws.
+//! Two cuts are stated rather than discovered: `Shape.Placement` is a value, not the
+//! CPython binding's live view (`shape.Placement.Base.x = …` writes back there; here the
+//! whole placement is assigned), and the interactive stage is not here (it is
+//! `native_stage`). The geometry a script creates here is real: it is the kernel the
+//! viewport draws.
 
 use std::sync::{Arc, OnceLock};
 
 use ferrocad_core::geometry::{Placement, Rotation, Vector3};
-use ferrocad_geom::{ElementKind, GeometryBackend, Shape, TessellationOptions};
+use ferrocad_curves::EdgeCurve;
+use ferrocad_geom::{ElementKind, GeometryBackend, Shape, SurfaceData, TessellationOptions};
 use ferrocad_occt::OcctBackend;
 use rustpython_vm::builtins::PyStrRef;
 use rustpython_vm::function::{FuncArgs, OptionalArg};
@@ -222,9 +228,11 @@ mod part {
     use std::sync::{Arc, Mutex};
 
     use super::{
-        ElementKind, OptionalArg, Placement, Py, PyObjectRef, PyPayload, PyRef, PyResult, PyStrRef,
-        Rotation, Shape, Vector3, VirtualMachine, kernel, pyclass, sub_shapes, tessellate,
+        EdgeCurve, ElementKind, OptionalArg, Placement, Py, PyObjectRef, PyPayload, PyRef, PyResult,
+        PyStrRef, Rotation, Shape, SurfaceData, Vector3, VirtualMachine, kernel, pyclass, sub_shapes,
+        tessellate,
     };
+    use rustpython_vm::types::Representable;
 
     #[pyattr]
     const __version__: &str = env!("CARGO_PKG_VERSION");
@@ -239,18 +247,30 @@ mod part {
     #[derive(Debug, PyPayload, Clone)]
     pub struct PyShape {
         inner: Arc<Mutex<Option<Shape>>>,
+        /// The placement a script assigned (`Shape.Placement = …`); `None` is identity.
+        ///
+        /// The geometry stays baked — `translate`/`rotate` still return moved shapes — so
+        /// this is the outer transform a *later* assignment put on top, applied when the
+        /// shape is read. `None` is the common case and costs nothing.
+        placement: Arc<Mutex<Option<Placement>>>,
     }
 
     impl PyShape {
         fn of(shape: Shape) -> Self {
             Self {
                 inner: Arc::new(Mutex::new(Some(shape))),
+                placement: Arc::new(Mutex::new(None)),
             }
         }
 
-        /// The shape, or `None` for a null handle.
+        /// The shape at its placement, or `None` for a null handle.
         pub(super) fn resolved(&self) -> Option<Shape> {
-            self.inner.lock().ok().and_then(|slot| slot.clone())
+            let base = self.inner.lock().ok().and_then(|slot| slot.clone())?;
+            let placement = *self.placement.lock().ok()?;
+            match placement {
+                Some(placement) => kernel().moved(&base, &placement).ok(),
+                None => Some(base),
+            }
         }
 
         fn shape(&self, vm: &VirtualMachine) -> PyResult<Shape> {
@@ -587,6 +607,62 @@ mod part {
             }
         }
 
+        /// The face's backing surface (`Face.Surface`), when the kernel classifies it.
+        ///
+        /// A plane, cylinder, sphere, cone or torus reports its elementary frame; any
+        /// other surface keeps the kernel's type id (`Part::GeomBSplineSurface`), which is
+        /// what a B-Rep explorer reads.
+        #[pygetset]
+        fn Surface(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let shape = zelf.shape(vm)?;
+            Ok(match kernel().surface_data(&shape) {
+                Some(data) => surface_py(data, vm),
+                None => vm.ctx.none(),
+            })
+        }
+
+        /// The analytic curve behind an edge (`Edge.Curve`), when the kernel classifies
+        /// it: a segment's edge reports a `Line`, a trimmed circular edge a `Circle`, as
+        /// upstream's basis-curve rule does.
+        #[pygetset]
+        fn Curve(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let shape = zelf.shape(vm)?;
+            Ok(match kernel().curve_of(&shape) {
+                Ok(curve) => curve_py(curve, vm),
+                Err(_) => vm.ctx.none(),
+            })
+        }
+
+        /// The placement assigned to this shape (`Shape.Placement`).
+        ///
+        /// The geometry is baked, so this is the outer transform: reading it after
+        /// `translate`/`rotate` gives identity (the move is in the geometry), and a
+        /// shape it is assigned to reports that placement and draws where it says. The
+        /// CPython binding keeps a live view (`shape.Placement.Base.x = …` writes back);
+        /// here a placement is a value, so assign the whole one.
+        #[pygetset]
+        fn Placement(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let placement = zelf
+                .placement
+                .lock()
+                .ok()
+                .and_then(|slot| *slot)
+                .unwrap_or_else(Placement::identity);
+            crate::native::placement_py(placement, vm)
+        }
+
+        #[pygetset(setter)]
+        fn set_Placement(zelf: &Py<Self>, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            let placement = crate::native::placement_of(&value)
+                .ok_or_else(|| vm.new_type_error("Shape.Placement needs a FreeCAD.Placement"))?;
+            let mut slot = zelf
+                .placement
+                .lock()
+                .map_err(|_| vm.new_runtime_error("the placement is busy"))?;
+            *slot = Some(placement);
+            Ok(())
+        }
+
         /// Whether the kernel considers the B-Rep valid.
         #[pymethod]
         fn isValid(zelf: &Py<Self>) -> bool {
@@ -724,6 +800,294 @@ mod part {
                     vm.ctx.new_list(facets).into(),
                 ])
                 .into())
+        }
+    }
+
+    /// A face's backing surface (`Face.Surface`), as the kernel classified it.
+    ///
+    /// The CPython binding has one class per elementary surface (`Part.Plane`,
+    /// `Part.Cylinder`, …); this is one class whose members exist only on the kinds that
+    /// have them, so `surface.Radius` raises `AttributeError` on a plane exactly as
+    /// upstream's class split does. `TypeId` is the same registered name either way.
+    #[pyattr]
+    #[pyclass(name = "Surface", module = "Part")]
+    #[derive(Debug, PyPayload, Clone)]
+    pub struct PySurface {
+        data: SurfaceData,
+    }
+
+    impl PySurface {
+        /// The upstream class name (`"Plane"`, `"Cylinder"`, …).
+        fn kind(&self) -> &str {
+            match &self.data {
+                SurfaceData::Plane { .. } => "Plane",
+                SurfaceData::Cylinder { .. } => "Cylinder",
+                SurfaceData::Sphere { .. } => "Sphere",
+                SurfaceData::Cone { .. } => "Cone",
+                SurfaceData::Torus { .. } => "Toroid",
+                SurfaceData::Other { type_id } => {
+                    type_id.rsplit("::").next().unwrap_or(type_id)
+                }
+            }
+        }
+    }
+
+    fn surface_py(data: SurfaceData, vm: &VirtualMachine) -> PyObjectRef {
+        PySurface { data }.into_ref(&vm.ctx).into()
+    }
+
+    #[pyclass(with(Representable))]
+    impl PySurface {
+        /// The registered type name the kernel reports (`Part::GeomPlane`).
+        #[pygetset]
+        fn TypeId(zelf: &Py<Self>) -> String {
+            match &zelf.data {
+                SurfaceData::Plane { .. } => "Part::GeomPlane".to_string(),
+                SurfaceData::Cylinder { .. } => "Part::GeomCylinder".to_string(),
+                SurfaceData::Sphere { .. } => "Part::GeomSphere".to_string(),
+                SurfaceData::Cone { .. } => "Part::GeomCone".to_string(),
+                SurfaceData::Torus { .. } => "Part::GeomToroid".to_string(),
+                SurfaceData::Other { type_id } => type_id.clone(),
+            }
+        }
+
+        /// The origin (a plane) or the centre (a curved surface).
+        #[pygetset]
+        fn Location(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let point = match &zelf.data {
+                SurfaceData::Plane { origin, .. }
+                | SurfaceData::Cylinder { origin, .. }
+                | SurfaceData::Cone { origin, .. } => *origin,
+                SurfaceData::Sphere { center, .. } | SurfaceData::Torus { center, .. } => *center,
+                SurfaceData::Other { .. } => return Err(no_member(vm, zelf.kind(), "Location")),
+            };
+            Ok(crate::native::vector_py(point, vm))
+        }
+
+        /// The plane's origin, as upstream's `Plane.Position` reports it.
+        #[pygetset]
+        fn Position(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            match &zelf.data {
+                SurfaceData::Plane { origin, .. } => Ok(crate::native::vector_py(*origin, vm)),
+                _ => Err(no_member(vm, zelf.kind(), "Position")),
+            }
+        }
+
+        /// The normal of a plane, or the axis of a surface of revolution.
+        #[pygetset]
+        fn Axis(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let axis = match &zelf.data {
+                SurfaceData::Plane { normal, .. } => *normal,
+                SurfaceData::Cylinder { axis, .. }
+                | SurfaceData::Sphere { axis, .. }
+                | SurfaceData::Cone { axis, .. }
+                | SurfaceData::Torus { axis, .. } => *axis,
+                SurfaceData::Other { .. } => return Err(no_member(vm, zelf.kind(), "Axis")),
+            };
+            Ok(crate::native::vector_py(axis, vm))
+        }
+
+        /// The centre of a cylinder, sphere, cone or torus (a plane has `Location`).
+        #[pygetset]
+        fn Center(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let point = match &zelf.data {
+                SurfaceData::Cylinder { origin, .. } | SurfaceData::Cone { origin, .. } => *origin,
+                SurfaceData::Sphere { center, .. } | SurfaceData::Torus { center, .. } => *center,
+                _ => return Err(no_member(vm, zelf.kind(), "Center")),
+            };
+            Ok(crate::native::vector_py(point, vm))
+        }
+
+        /// The radius of a cylinder, sphere or cone.
+        #[pygetset]
+        fn Radius(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<f64> {
+            match &zelf.data {
+                SurfaceData::Cylinder { radius, .. }
+                | SurfaceData::Sphere { radius, .. }
+                | SurfaceData::Cone { radius, .. } => Ok(*radius),
+                _ => Err(no_member(vm, zelf.kind(), "Radius")),
+            }
+        }
+
+        /// A cone's semi-angle, in radians (upstream's `Cone.SemiAngle`).
+        #[pygetset]
+        fn SemiAngle(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<f64> {
+            match &zelf.data {
+                SurfaceData::Cone { semi_angle, .. } => Ok(*semi_angle),
+                _ => Err(no_member(vm, zelf.kind(), "SemiAngle")),
+            }
+        }
+
+        /// A torus's major radius.
+        #[pygetset]
+        fn MajorRadius(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<f64> {
+            match &zelf.data {
+                SurfaceData::Torus { major_radius, .. } => Ok(*major_radius),
+                _ => Err(no_member(vm, zelf.kind(), "MajorRadius")),
+            }
+        }
+
+        /// A torus's minor radius.
+        #[pygetset]
+        fn MinorRadius(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<f64> {
+            match &zelf.data {
+                SurfaceData::Torus { minor_radius, .. } => Ok(*minor_radius),
+                _ => Err(no_member(vm, zelf.kind(), "MinorRadius")),
+            }
+        }
+    }
+
+    impl Representable for PySurface {
+        fn repr_str(zelf: &Py<Self>, _vm: &VirtualMachine) -> PyResult<String> {
+            Ok(format!("<{} object>", zelf.kind()))
+        }
+    }
+
+    /// An edge's analytic curve (`Edge.Curve`), as the kernel classified it.
+    ///
+    /// The members exist on the kinds that have them: `StartPoint`/`EndPoint` for a
+    /// bounded curve, `Center`/`Axis` for a conic, `Radius` for a circle, the two radii
+    /// for an ellipse. Anything else (a B-spline, an offset) still answers `TypeId` and
+    /// the evaluator (`value`/`tangent`).
+    #[pyattr]
+    #[pyclass(name = "Curve", module = "Part")]
+    #[derive(Debug, PyPayload, Clone)]
+    pub struct PyCurve {
+        curve: EdgeCurve,
+    }
+
+    fn curve_py(curve: EdgeCurve, vm: &VirtualMachine) -> PyObjectRef {
+        PyCurve { curve }.into_ref(&vm.ctx).into()
+    }
+
+    /// A member this kind of `Surface`/`Curve` does not have.
+    ///
+    /// `AttributeError` is the right answer, not `None`: upstream has one class per kind,
+    /// so `hasattr(plane, "Radius")` is `False` there and must be here too.
+    fn no_member(
+        vm: &VirtualMachine,
+        kind: &str,
+        member: &str,
+    ) -> rustpython_vm::builtins::PyBaseExceptionRef {
+        vm.new_attribute_error(format!("a {kind} has no {member}"))
+    }
+
+    #[pyclass(with(Representable))]
+    impl PyCurve {
+        /// The registered type name the kernel reports (`Part::GeomCircle`).
+        #[pygetset]
+        fn TypeId(zelf: &Py<Self>) -> String {
+            format!("Part::Geom{}", zelf.curve.kind())
+        }
+
+        /// The start point of a bounded curve.
+        #[pygetset]
+        fn StartPoint(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            match zelf.curve.endpoints() {
+                Some((start, _)) => Ok(crate::native::vector_py(start, vm)),
+                None => Err(no_member(vm, zelf.curve.kind(), "StartPoint")),
+            }
+        }
+
+        /// The end point of a bounded curve.
+        #[pygetset]
+        fn EndPoint(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            match zelf.curve.endpoints() {
+                Some((_, end)) => Ok(crate::native::vector_py(end, vm)),
+                None => Err(no_member(vm, zelf.curve.kind(), "EndPoint")),
+            }
+        }
+
+        /// The curve's parameter range, `(first, last)`, when it is bounded.
+        #[pygetset]
+        fn ParameterRange(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            match zelf.curve.parameter_range() {
+                Some((first, last)) => Ok(vm
+                    .ctx
+                    .new_tuple(vec![vm.new_pyobj(first), vm.new_pyobj(last)])
+                    .into()),
+                None => Err(no_member(vm, zelf.curve.kind(), "ParameterRange")),
+            }
+        }
+
+        /// The centre of a circle or an ellipse.
+        #[pygetset]
+        fn Center(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let center = match &zelf.curve {
+                EdgeCurve::Circle(circle) => circle.center(),
+                EdgeCurve::Arc(arc) => arc.circle().center(),
+                EdgeCurve::Ellipse(ellipse) => ellipse.center(),
+                EdgeCurve::EllipticalArc(arc) => arc.ellipse().center(),
+                _ => return Err(no_member(vm, zelf.curve.kind(), "Center")),
+            };
+            Ok(crate::native::vector_py(center, vm))
+        }
+
+        /// The plane normal of a circle or an ellipse.
+        #[pygetset]
+        fn Axis(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let axis = match &zelf.curve {
+                EdgeCurve::Circle(circle) => circle.normal(),
+                EdgeCurve::Arc(arc) => arc.circle().normal(),
+                EdgeCurve::Ellipse(ellipse) => ellipse.normal(),
+                EdgeCurve::EllipticalArc(arc) => arc.ellipse().normal(),
+                _ => return Err(no_member(vm, zelf.curve.kind(), "Axis")),
+            };
+            Ok(crate::native::vector_py(axis, vm))
+        }
+
+        /// A circle's radius.
+        #[pygetset]
+        fn Radius(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<f64> {
+            match &zelf.curve {
+                EdgeCurve::Circle(circle) => Ok(circle.radius()),
+                EdgeCurve::Arc(arc) => Ok(arc.circle().radius()),
+                _ => Err(no_member(vm, zelf.curve.kind(), "Radius")),
+            }
+        }
+
+        /// An ellipse's major radius.
+        #[pygetset]
+        fn MajorRadius(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<f64> {
+            match &zelf.curve {
+                EdgeCurve::Ellipse(ellipse) => Ok(ellipse.major_radius()),
+                EdgeCurve::EllipticalArc(arc) => Ok(arc.ellipse().major_radius()),
+                _ => Err(no_member(vm, zelf.curve.kind(), "MajorRadius")),
+            }
+        }
+
+        /// An ellipse's minor radius.
+        #[pygetset]
+        fn MinorRadius(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<f64> {
+            match &zelf.curve {
+                EdgeCurve::Ellipse(ellipse) => Ok(ellipse.minor_radius()),
+                EdgeCurve::EllipticalArc(arc) => Ok(arc.ellipse().minor_radius()),
+                _ => Err(no_member(vm, zelf.curve.kind(), "MinorRadius")),
+            }
+        }
+
+        /// The point at `parameter` (`GeometryCurve.value`).
+        #[pymethod]
+        fn value(zelf: &Py<Self>, parameter: f64, vm: &VirtualMachine) -> PyObjectRef {
+            crate::native::vector_py(zelf.curve.point_at(parameter), vm)
+        }
+
+        /// The unit tangent at `parameter`.
+        #[pymethod]
+        fn tangent(zelf: &Py<Self>, parameter: f64, vm: &VirtualMachine) -> PyObjectRef {
+            crate::native::vector_py(zelf.curve.tangent_at(parameter), vm)
+        }
+
+        /// Whether the curve ends where it starts.
+        #[pymethod]
+        fn isClosed(zelf: &Py<Self>) -> bool {
+            zelf.curve.is_closed()
+        }
+    }
+
+    impl Representable for PyCurve {
+        fn repr_str(zelf: &Py<Self>, _vm: &VirtualMachine) -> PyResult<String> {
+            Ok(format!("<{} object>", zelf.curve.kind()))
         }
     }
 }

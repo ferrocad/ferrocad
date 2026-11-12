@@ -1828,7 +1828,7 @@ handles stay the document half's; a declared handle comes back from
 the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
 full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
-### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage, `host_env`, the view object, the form loader and `Part` construction 2026-11-12)
+### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage, `host_env`, the view object, the form loader, `Part` construction, the B-Rep explorer and `Shape.Placement` 2026-11-12)
 
 The structural half of the parity gap. **Built: the whole facade is now the shared source.**
 `bootstrap.py` went from 2 050 to ~250 lines because the desktop's modules are installed,
@@ -1959,9 +1959,23 @@ loader — so the shared facade has no capability a RustPython host lacks on pur
    `Wire(edges)` and `Face(wires)` (first wire the outline, the rest holes) go through the
    same `ferrocad_curves::polygon` and kernel calls `ferrocad_part_py` makes, so both
    runtimes build the same wire (a triangle from three points is `Wire 3 3`, its face
-   `50.0`; the ring in `tests/shapes.rs` is `Face 96.0 2`). What is *not* there: the B-Rep
-   explorer (`Face.Surface`, `Edge.Curve`) and a `Shape.Placement` wrapper (transforms are
-   baked);
+   `50.0`; the ring in `tests/shapes.rs` is `Face 96.0 2`).
+
+   **The B-Rep explorer is built, one class per notion.** `Face.Surface` answers a
+   `Part.Surface` with the kernel's `TypeId` and, on the kinds that have them,
+   `Location`/`Position`/`Axis`/`Center`/`Radius`/`SemiAngle`/`MajorRadius`/`MinorRadius`. A
+   member the kind does not have raises `AttributeError`, so `hasattr(plane, "Radius")` is
+   `False` exactly as upstream's per-kind classes make it, and `str()`/`repr()` are
+   `<Plane object>` as upstream prints them. `Edge.Curve` answers a `Part.Curve` under the
+   same basis-curve rule the CPython binding follows (a box edge is a
+   `Part::GeomLine`; a trimmed circular edge a `Part::GeomCircle`), with
+   `StartPoint`/`EndPoint`/`ParameterRange` on bounded kinds, `Center`/`Axis`/`Radius` and
+   the two ellipse radii on the conics, and `value`/`tangent`/`isClosed` for every kind
+   including B-splines. `Shape.Placement` reads and accepts a `FreeCAD.Placement`:
+   assigning one applies it when the shape is read, and `translate`/`rotate` keep returning
+   moved shapes, so a transformed shape reports identity. What is *not* there: the CPython
+   binding's **live** placement view (`shape.Placement.Base.x = …` writes back there; here
+   a placement is a value, so the whole one is assigned);
 
    **The stage is the second half, and it is built too.**
    `crates/ferrocad_shell_pywasm/src/native_stage.rs` is a binding over the same

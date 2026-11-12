@@ -9,6 +9,13 @@ use ferrocad_core::Document;
 use ferrocad_shell_pywasm::PywasmScriptHost;
 use serde_json::Value;
 
+/// The registry is process state; the tests that write a document take this one at a time.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 /// Run `f` with RustPython's 16 MiB stack (its compiler recurses; see `properties.rs`).
 fn with_host<R: Send + 'static>(f: impl FnOnce(&PywasmScriptHost) -> R + Send + 'static) -> R {
     std::thread::Builder::new()
@@ -125,6 +132,7 @@ fn a_script_meshes_a_solid() {
 
 #[test]
 fn a_shape_becomes_a_document_object_and_back() {
+    let _guard = serial();
     clear_registry();
     std::thread::Builder::new()
         .stack_size(16 << 20)
@@ -191,6 +199,7 @@ fn a_shape_becomes_a_document_object_and_back() {
 
 #[test]
 fn a_script_builds_wires_and_faces() {
+    let _guard = serial();
     clear_registry();
     with_host(|host| {
         // `makePolygon` uses the same `ferrocad_curves::polygon` the CPython binding
@@ -228,6 +237,7 @@ fn a_script_builds_wires_and_faces() {
 /// the document, and painting it is a view-state write the viewport draws.
 #[test]
 fn a_script_paints_the_face_it_built() {
+    let _guard = serial();
     clear_registry();
     std::thread::Builder::new()
         .stack_size(16 << 20)
@@ -253,4 +263,87 @@ fn a_script_paints_the_face_it_built() {
         .expect("a worker thread")
         .join()
         .expect("no panic");
+}
+
+/// The B-Rep explorer: a face's `Surface` and an edge's `Curve` are the kernel's own
+/// classification, the same calls `ferrocad_part_py` makes for the CPython binding.
+#[test]
+fn a_script_explores_the_surfaces_and_curves_behind_the_brep() {
+    with_host(|host| {
+        // A box: every face is a plane, and an edge's basis curve is the *infinite*
+        // line, as upstream's `TopoShapeEdgePy::getCurve` reports it.
+        let text = output(
+            host,
+            r#"
+b = Part.makeBox(10, 20, 30)
+s = b.Faces[0].Surface
+print(s.TypeId, '|', str(s), '|', repr(s))
+print(round(s.Location.x, 3), round(s.Axis.z, 3), hasattr(s, 'Radius'), hasattr(s, 'Center'))
+c = b.Edges[0].Curve
+print(c.TypeId, '|', str(c), hasattr(c, 'StartPoint'), hasattr(c, 'Center'))
+print(round(c.value(5.0).z, 3))
+"#,
+        );
+        assert_eq!(
+            text,
+            "Part::GeomPlane | <Plane object> | <Plane object>\n\
+             0.0 -0.0 False False\n\
+             Part::GeomLine | <Line object> False False\n\
+             5.0",
+            "{text}"
+        );
+
+        // The curved kinds carry their frame: a cylinder's radius and axis, a circle
+        // edge's centre and closure, a sphere's radius, and a cone's signed semi-angle
+        // (negative here because the cone narrows along +Z, as OCCT reports it).
+        let text = output(
+            host,
+            r#"
+cyl = Part.makeCylinder(5, 10)
+for face in cyl.Faces:
+    if face.Surface.TypeId == 'Part::GeomCylinder':
+        print('cyl', round(face.Surface.Radius, 3), round(face.Surface.Center.z, 3), round(face.Surface.Axis.z, 3), hasattr(face.Surface, 'Position'))
+for edge in cyl.Edges:
+    if edge.Curve.TypeId == 'Part::GeomCircle':
+        print('edge', round(edge.Curve.Radius, 3), round(edge.Curve.Center.z, 3), round(edge.Curve.Axis.z, 3), edge.Curve.isClosed())
+print('sphere', round(Part.makeSphere(5).Faces[0].Surface.Radius, 3))
+for face in Part.makeCone(5, 0, 10).Faces:
+    if face.Surface.TypeId == 'Part::GeomCone':
+        print('cone', round(face.Surface.Radius, 3), round(face.Surface.SemiAngle, 3))
+"#,
+        );
+        assert_eq!(
+            text,
+            "cyl 5.0 0.0 1.0 False\n\
+             edge 5.0 10.0 1.0 True\n\
+             edge 5.0 0.0 1.0 True\n\
+             sphere 5.0\n\
+             cone 5.0 -0.464",
+            "{text}"
+        );
+    });
+}
+
+/// `Shape.Placement`: a value assigned to a shape is applied when the shape is read, so
+/// the geometry a script measures and the geometry the viewport draws agree. The move
+/// stays in the geometry (`translate` keeps returning a moved shape), so the placement a
+/// translated shape reports is identity — the same decomposition upstream reports as "the
+/// location says where it is", not "the location is the history".
+#[test]
+fn a_placement_on_a_shape_moves_what_the_shape_reports() {
+    with_host(|host| {
+        let text = output(
+            host,
+            r#"
+b = Part.makeBox(10, 20, 30)
+print(round(b.BoundBox.XMin), round(b.Placement.Base.x))
+b.Placement = FreeCAD.Placement(FreeCAD.Vector(100, 0, 0), FreeCAD.Rotation())
+print(round(b.BoundBox.XMin), round(b.BoundBox.XMax), round(b.Placement.Base.x))
+print(round(b.Volume, 1), len(b.Faces))
+moved = b.translate(FreeCAD.Vector(0, 5, 0))
+print(round(moved.BoundBox.YMin), round(moved.Placement.Base.y))
+"#,
+        );
+        assert_eq!(text, "0 0\n100 110 100\n6000.0 6\n5 0", "{text}");
+    });
 }

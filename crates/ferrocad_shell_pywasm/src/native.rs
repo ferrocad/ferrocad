@@ -32,7 +32,9 @@
 //! **Document observers** are stored, not pumped: this half has no document-event loop,
 //! and the shell delivers document events to `FerroCADGui` instead.
 
-pub(crate) use ferrocad::{bound_box_py, module_def, object_named_py, vector_of, vector_py};
+pub(crate) use ferrocad::{
+    bound_box_py, module_def, object_named_py, placement_of, placement_py, vector_of, vector_py,
+};
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -1282,6 +1284,16 @@ mod ferrocad {
     /// The vector a Python value is, when it is an `App.Vector`.
     pub(crate) fn vector_of(value: &PyObjectRef) -> Option<Vector3> {
         value.downcast_ref::<PyVector>().map(|vector| vector.inner)
+    }
+
+    /// A `FreeCAD.Placement` for a placement value (`Shape.Placement`).
+    pub(crate) fn placement_py(placement: Placement, vm: &VirtualMachine) -> PyObjectRef {
+        PyPlacement { inner: placement }.into_ref(&vm.ctx).into()
+    }
+
+    /// The placement a Python value holds, when it is a `FreeCAD.Placement`.
+    pub(crate) fn placement_of(value: &PyObjectRef) -> Option<Placement> {
+        value.downcast_ref::<PyPlacement>().map(|placement| placement.inner)
     }
 
     /// An `App.BoundBox` from a min/max pair (a `Part.Shape`'s bounds).

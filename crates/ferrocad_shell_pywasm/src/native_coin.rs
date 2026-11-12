@@ -1383,7 +1383,6 @@ mod coin {
     fn addOverlay(node: PyRef<PyNode>, vm: &VirtualMachine) -> PyResult<()> {
         let root = node.snapshot(vm)?;
         ferrocad_inventor::overlays::put(Arc::as_ptr(&node.inner) as usize, Scene { root });
-        log::info!("ferrocad: coin overlay registered");
         Ok(())
     }
 

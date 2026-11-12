@@ -1,21 +1,13 @@
 # Backend parity: one Gui app, one document half
 
-Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded, B7a–B7e
-built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
-B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
-B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 and B17a built
-(2026-11-11/12); B18 and
-B18a built (steps 1–7, 2026-11-12), B18b built (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
-(born as the parity ledger, now
-`crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
-gates. Two properties are the goal:
-
-1. **Behaviour parity** — the composition (`RustAppBackend + PythonScriptHost`) answers
-   everything `PythonAppBackend` answers, so the legacy type can be deleted.
-2. **Gui parity** — every command the shell shows is a real `FreeCADGui` command:
-   registered once, visible in `listCommands()`, runnable through `runCommand`, with
-   `IsActive` / `IsChecked` honoured.
+Status: **complete (2026-11-12).** Every stage B0–B21 is built; §9 is the close-out,
+and §7 is what is deliberately deferred with its trigger. Two properties were the goal and
+both hold: the composition (`RustAppBackend + PythonScriptHost`) answers what
+`PythonAppBackend` answered (the legacy type is deleted, B5), and every command the shell
+shows is a real `FreeCADGui` command (B1/B2). The gates are
+`crates/ferrocad_parametric/tests/composition_surface.rs` (the surface suite, born as this
+ledger), the shell suite over one linked core, and `ferrocad_shell_pywasm`'s seventeen
+targets — the browser's RustPython half.
 
 ## 0. Why this exists
 
@@ -2451,3 +2443,47 @@ deliberate limit of the doorway, not a runtime gap.
 | the JS half is browser-only | `crates/ferrocad_shell_js/src/lib.rs` (`Page`, `WebPage` behind `cfg(target_family = "wasm")`), `crates/ferrocad_shell_web/src/lib.rs:114-118` |
 | pywasm costs the shipped binary nothing | `crates/ferrocad_parametric/Cargo.toml:42-44` (dev-dependency) |
 | an addon ABI a wasm engine can host | `crates/ferrocad_addon_toy/src/abi.rs:20-25` (`ferrocad.call` import module) |
+
+## 9. Close-out (2026-11-12)
+
+The ledger began as a divergence list (`PythonAppBackend` against the composition) and
+became the platform's delivery model. Read back to front, the last four stages are what the
+plan did not foresee, and they are the ones that leave it finished:
+
+- **B18** made the *script half* one implementation over two interpreters (`PythonHost<R>`
+  + a `Contract`), so a capability is a flag, not a second code path.
+- **B19/B21** made the *mod set* shippable: a pack carries entry scripts **and** the
+  `Resources/` they read, so the browser runs the same workbenches the desktop scans.
+- **B20** made the *scene* one core with two adapters: Coin's class table, field table,
+  `set()` parser and `RootNode` tree live in `ferrocad_inventor`, and
+  `ferrocad_inventor_py` (PyO3) and `native_coin.rs` (RustPython) only translate. The
+  Coin workbenches now load on both hosts, and the grid shader builds from its pack.
+
+**Gates, as run at close-out:**
+
+| gate | what it covers |
+| --- | --- |
+| `cargo test -p ferrocad_parametric --test composition_surface` | the surface suite: one document half, the CPython and RustPython script halves, the capability matrix |
+| `cargo test -p ferrocad_shell_core` (with `engine()`) | the shell suite over the composition |
+| `cargo test -p ferrocad_shell_pywasm` (17 targets) | the RustPython half: native module, writes, `Part`/`Mesh`, stage, forms, `pivy.coin`, packs |
+| `cargo test -p ferrocad_shell_web`, `-p ferrocad_inventor{,_py}`, `-p ferrocad_py` | the browser composition, the scene core and both facades |
+| `cargo check -p ferrocad_parametric --features pywasm` | the desktop preview's composition |
+| `crates/ferrocad_web_gpui/run.sh --check` | the wasm bundle + headless Chrome: probes for the document write path, the kernel, faces, the coin facade, the stage, forms, and the fetched packs |
+| `tools/{api_docs,build_book,userdocs,mods_pack,wasm_audit}.py --check` | the generated docs and the pack/pywasm audits |
+
+**What is not done, and what would start it** (all of §7, condensed):
+
+| deferred | trigger |
+| --- | --- |
+| `ScriptHost::claims` has no implementer | a mod that needs a catalogue id *executed* with different semantics |
+| upstream id aliases (`Std_Undo`, …) | a FreeCAD-shaped mod calling one |
+| a mod importing a *sibling module* | the first mod that does (needs an import hook, not a file) |
+| binary addon assets (icons as bytes) | the first pack that needs one (the format anticipates URLs) |
+| the axis and gizmo settings cards without a script half | a build that wants them with no interpreter |
+| the grid card's values persist for the session only | a settings-model decision (a native card needs a store the document half owns) |
+| `?after-mods=` browser probes | an assertion that has to run *after* the pack fetch (activation) |
+| a live `Shape.Placement` view on RustPython | a script that mutates `Placement.Base.x` in place |
+| `SoType.fromName`/`createInstance` on RustPython | a mod that reaches a Coin class by name |
+
+Each is a slice of the same shape the last four were: find the body, move it below the
+runtime, leave the adapter.

@@ -426,7 +426,10 @@ browser feature set, and a target-scoped entry adds `host_env` for a native buil
 item 3). That feature is also why `Cargo.lock` pins `libc` to 0.2.186 — see
 `[workspace.metadata.libc]`; rustpython 0.5 calls
 `from_bits_retain(libc::POSIX_SPAWN_SETSID)` as an `i32`, and libc 0.2.187 made that
-constant a `c_short`. Second, the compiler recurses, so a host raises the stack before
+constant a `c_short`. 0.6 casts it, so it is the release that retires the pin; it also
+needs rustc 1.97 and a receiver migration in this crate's bindings, so the port is
+described in [`backend-parity.md`](../../project/tasks/backend-parity.md) (B18b item 3)
+instead of being landed. Second, the compiler recurses, so a host raises the stack before
 `PywasmScriptHost::new` (the tests use a 16 MiB worker thread; the browser sets the same
 value as a link argument in `ferrocad_web_gpui/build.rs`, because `wasm-ld`'s default is
 1 MiB). Third, no `window` dependency: RustPython is plain Rust, so this crate also

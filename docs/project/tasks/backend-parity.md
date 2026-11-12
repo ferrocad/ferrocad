@@ -1981,6 +1981,39 @@ gaps are now closed:
    `[workspace.metadata.libc]`; a re-resolution reverts it and the native build fails
    loudly. Drop the pin when RustPython casts the constant itself.
 
+   **RustPython 0.6 evaluated (2026-11-12): it removes the blocker, and the port is
+   deferred.** 0.6.0 does cast the constant (`rustpython-host_env 0.6.0/src/posix.rs`
+   reads `PosixSpawnFlags::from_bits_retain(libc::POSIX_SPAWN_SETSID.into())`), so 0.6
+   is the release this pin waits for. It is not a drop-in, though:
+
+   - **MSRV 1.97.** `rustpython-stdlib 0.6.0` depends on `rustpython-ruff_python_ast`
+     0.16.x, whose only published releases need rustc 1.96 (0.16.5) or 1.97 (0.16.10);
+     `rustpython-vm`'s own `rust-version = 1.95` is optimistic. CI's `stable` and the
+     browser image (1.97.0) are fine, but the workspace declares 1.87 and a developer's
+     `stable` here is 1.95, so the effective floor for the default product build would
+     move to 1.97 and every cached artifact would be invalidated. On this checkout that
+     is a ~50 GB `target/debug` against a full filesystem.
+   - **Two upstream packaging bugs to pin around.** `rustpython-codegen 0.6.0` does not
+     compile against ruff 0.16.10 (AST drift: `ExprCompare`'s `left`/`comparators`,
+     `FStringValue`), so the ruff crates must be held at 0.16.5. `rustpython-stdlib
+     0.6.0` wants `malachite-bigint 0.12` while `pymath 0.2.0` resolves its `^0`
+     requirement to 0.9.2 — two incompatible `BigInt`s — and they only unify by forcing
+     0.12 (`cargo update -p malachite-bigint@0.9.2 --precise 0.12.0`).
+   - **A derive migration in this crate.** 0.6 rejects a `&self` receiver on
+     `#[pymethod]`/`#[pygetset]` when the impl block sits on the payload ("must receive
+     the object, not the payload"), and a downstream crate cannot answer with
+     `impl Py<T>` because of the orphan rule. Every receiver here becomes
+     `zelf: &Py<Self>` with `self` renamed in the body: 219 of them across
+     `native.rs`, `native_shapes.rs` and `native_stage.rs` (~5.8k lines). It is
+     mechanical — the payloads already mutate through `Arc<Mutex>`/`RefCell`, so no
+     `borrow_mut` rewrite is needed — plus `vm.print_exception` now takes
+     `&Py<PyBaseException>`.
+
+   A spike carried that migration to a clean `cargo check -p ferrocad_shell_pywasm` on
+   1.97.1 and was then reverted, so nothing of it is in the tree. Re-attempt when the
+   toolchain can move (or the ruff/malachite packaging settles) — the migration itself
+   is understood and no longer a research question.
+
    Tests: `tests/python_tree.rs` — a default boot's `FreeCAD.__file__` is the
    repository's absolute path and `pathlib.Path(...).is_file()` is true (the wasm `_Path`
    shim's is not), and `FERROCAD_PYTHON_DIR` pointing at a copied tree is what the

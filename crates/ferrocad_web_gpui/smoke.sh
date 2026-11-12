@@ -566,9 +566,38 @@ EOF
 capture_stage
 check_stage
 
+# The forms leg (B18b item 2): `PySideUic.loadUi`'s module is installed on the browser's
+# Python too, so a workbench panel is the same proxy tree here as on the desktop.
+capture_forms() {
+    capture "/?runtime=pywasm&script=import%20ferrocad_ui_py%0Asource%20%3D%20b%27%3Cui%20version%3D%224.0%22%3E%3Cclass%3EProbe%3C%2Fclass%3E%3Cwidget%20class%3D%22QDialog%22%20name%3D%22Form%22%3E%3Cproperty%20name%3D%22windowTitle%22%3E%3Cstring%3EProbe%3C%2Fstring%3E%3C%2Fproperty%3E%3Clayout%20class%3D%22QVBoxLayout%22%20name%3D%22layout%22%3E%3Citem%3E%3Cwidget%20class%3D%22QSpinBox%22%20name%3D%22spin%22%3E%3Cproperty%20name%3D%22value%22%3E%3Cnumber%3E7%3C%2Fnumber%3E%3C%2Fproperty%3E%3C%2Fwidget%3E%3C%2Fitem%3E%3C%2Flayout%3E%3C%2Fwidget%3E%3C%2Fui%3E%27%0Aform%20%3D%20ferrocad_ui_py.load_ui%28source%2C%20%27probe.ui%27%29%0Aform.spin.setValue%2842%29%0Aprint%28form.windowTitle%28%29%2C%20form.spin.value%28%29%2C%20form.findChild%28%27spin%27%29.objectName%28%29%29%0A" "$TMP/forms.log"
+}
+
+check_forms() {
+    LOG="$TMP/forms.log"
+    echo "pywasm forms console lines:"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: script -> ok=true output="Probe 42 spin"'
+
+    echo "pywasm forms forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+ModuleNotFoundError
+ImportError
+TypeError
+AttributeError
+panicked at
+unreachable
+EOF
+}
+
+capture_forms
+check_forms
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, the pywasm stage binds and the Draft bridge loads, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, the pywasm stage binds and the Draft bridge loads, the pywasm form loader reads a panel, no panic or JS error"

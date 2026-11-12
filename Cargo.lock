@@ -2882,6 +2882,7 @@ dependencies = [
  "ferrocad_python_host",
  "ferrocad_shell_api",
  "ferrocad_stage",
+ "ferrocad_ui",
  "log",
  "rustpython-pylib",
  "rustpython-ruff_python_ast",

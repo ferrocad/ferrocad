@@ -6,7 +6,7 @@ B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 and B17a built
 (2026-11-11/12); B18 and
-B18a built (steps 1–7, 2026-11-12), B18b built except `ferrocad_ui_py` (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
+B18a built (steps 1–7, 2026-11-12), B18b built (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1828,7 +1828,7 @@ handles stay the document half's; a declared handle comes back from
 the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
 full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
-### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage, `host_env` and the view object 2026-11-12)
+### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage, `host_env`, the view object and the form loader 2026-11-12)
 
 The structural half of the parity gap. **Built: the whole facade is now the shared source.**
 `bootstrap.py` went from 2 050 to ~250 lines because the desktop's modules are installed,
@@ -1889,12 +1889,12 @@ units) as well as the Gui ones:
   now exercised by shipped mods instead of synthetic ones; the Coin/shader skins and a
   task panel still need a surface this half does not install.
 
-What remains of B18b is `ferrocad_ui_py` (the Qt-shaped dialog surface), and nothing
-else. None of the items below were needed for the facade above them, but all the host
-gaps are now closed:
+**B18b is complete.** Every host gap it listed is closed — the native module, the
+document writes, `Part`/`Mesh`, the stage, `host_env`, the view object and the form
+loader — so the shared facade has no capability a RustPython host lacks on purpose:
 
 1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
-   property rules, every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
+   the property rules, every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
    `Vector`, `Vector2d`, `Matrix`, `Rotation`, `Placement`, `TypeId`, `BoundBox`,
    `Material`, `StringID`, `StringHasher`), and the two remaining classes
    (`ViewObject`, `DocumentSettings` — 2026-11-12):
@@ -1926,8 +1926,8 @@ gaps are now closed:
    `ShapeAppearance[0].DiffuseColor = …` does not write back — assign the whole list
    (CPython keeps a slot per entry). `ShapeColor` also does not propagate an operand's
    colour through a boolean here; that rule lives in `ferrocad_py` only;
-2. ~~`ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh`~~ — **`Part`/`Mesh` and the
-   interactive `ferrocad_stage` built;** `ferrocad_ui_py` is still open. Geometry is
+2. ~~`ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh`~~ — **all three built:**
+   `Part`/`Mesh`, the interactive `ferrocad_stage`, and the form loader. Geometry is
    `ferrocad_shell_pywasm/src/native_shapes.rs`, three native modules over the one kernel:
    - `Part` — `makeBox`/`makeCylinder`/`makeSphere`/`makeCone`/`makeCompound`, and a
      `Shape` with `Volume`/`Area`/`CenterOfMass`/`BoundBox`/`ShapeType`, the topology
@@ -1986,9 +1986,33 @@ gaps are now closed:
    round-trip, workplane snapping, published previews and `pick_at`, a Python tool
    driven through `fs::Tool`, a raising tool, and the Draft bridge) and
    `tests/threaded.rs::a_python_tool_crosses_the_worker_channel` (the desktop path).
-   What is *not* there: `ferrocad_ui_py` (Qt-shaped dialogs, still open), and the
-   `ferrocad_stage_py` `PickHit` class is replaced by the shared `RankedHit` mapping
-   (same fields, so the facade is unaffected);
+   What is *not* there: the `ferrocad_stage_py` `PickHit` class is replaced by the
+   shared `RankedHit` mapping (same fields, so the facade is unaffected);
+
+   **The form loader is the same state machine, and it is built (2026-11-12).**
+   `crates/ferrocad_shell_pywasm/src/native_ui.rs` is a `#[pymodule] mod
+   ferrocad_ui_py`: `load_ui` (a path, UTF-8 bytes, or a `QFile`-like object) over
+   `ferrocad_ui`'s reader, the proxy classes `FormProxy`, `WidgetProxy`,
+   `SignalProxy`, `LayoutProxy` and `LayoutItemProxy`, and `UiLoadError` (a
+   `ValueError`). `FreeCADGui.PySideUic.loadUi` imports that module lazily, so a
+   workbench's Qt Designer panel is the same proxy tree on both runtimes instead of
+   an `ImportError`.
+
+   To keep it one source, the widget state machine and the `findChild` resolution
+   moved into `ferrocad_ui::state`, generic over the binding's callback handle:
+   `ferrocad_ui_py` (PyO3) and this binding both drive it, and only the Python glue
+   is per-VM. Two RustPython facts shaped the glue — a native type's `__getattr__` is
+   not consulted, so the form's widget lookup and the widget's signals are `GetAttr`
+   implementations (`generic_getattr` first), and `len()`/`repr()` are
+   `AsSequence`/`Representable` rather than dunders.
+
+   Tests: `tests/ui.rs` (the proxy surface through `ferrocad_ui_py.load_ui`:
+   lookup by name, clamping and signals, the dialog result, `findChild`, the
+   four-part error, and `UiLoadError` being a `ValueError`) plus the shipped
+   `TaskPanel_Scale.ui` through `FreeCADGui.PySideUic.loadUi`; `smoke.sh`'s
+   `?runtime=pywasm&script=import ferrocad_ui_py…` capture reads `Probe 42 spin` in
+   the browser. `ferrocad_ui` and `ferrocad_ui_py` keep their own suites (4 + 8 tests),
+   which also pin the shared state they now share;
 3. ~~`host_env` on for the **native** RustPython build only, so the desktop runs
    `python/**` from disk~~ — **built:** `rustpython-vm` is declared twice in
    `ferrocad_shell_pywasm`: the base entry keeps the browser's feature set, and a

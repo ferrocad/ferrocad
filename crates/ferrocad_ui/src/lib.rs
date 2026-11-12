@@ -69,6 +69,8 @@ mod error;
 mod model;
 mod parse;
 
+pub mod state;
+
 pub use error::{UiError, UiErrorKind};
 pub use model::{
     Attribute, Color, ComboItem, Connection, ConnectionHint, CustomWidget, Form, IconSet,

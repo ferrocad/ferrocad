@@ -30,6 +30,10 @@ ferrocad_part.workspace = true
 ferrocad_mesh.workspace = true
 ferrocad_geom.workspace = true
 ferrocad_occt.workspace = true
+# The Qt Designer `.ui` reader whose state machine the `ferrocad_ui_py` module drives
+# (B18b item 2): the same crate `ferrocad_ui_py` (PyO3) binds, so a panel and its
+# proxy tree are one source on both runtimes.
+ferrocad_ui.workspace = true
 # The one document presenter every script runtime uses (the Python facade here, the
 # addon verbs in `ferrocad_doc_api`). Core-only, so it brings no kernel.
 ferrocad_doc_api.workspace = true

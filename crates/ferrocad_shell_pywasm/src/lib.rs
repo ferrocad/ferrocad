@@ -74,6 +74,9 @@ mod native_shapes;
 /// `ferrocad_stage` for RustPython: tools, shapes, snapping and the gizmo (B18b item 2).
 mod native_stage;
 
+/// `ferrocad_ui_py` for RustPython: the `.ui` proxy tree behind `PySideUic.loadUi`.
+mod native_ui;
+
 /// Where a native host imports `python/**` from (B18b item 3).
 ///
 /// Only a build with `host_env` can import from disk, so the browser never uses this;
@@ -544,6 +547,9 @@ impl RustPythonRuntime {
             // The interactive stage: tools, `ShapeItem`, snapping and the gizmo, so a
             // mod's tool and a script's preview are the ones the viewport draws.
             .add_native_module(native_stage::stage_module_def(Context::genesis()))
+            // The typed form tree `FreeCADGui.PySideUic.loadUi` imports: a workbench's
+            // `.ui` panel is the same proxy tree on both runtimes.
+            .add_native_module(native_ui::ui_module_def(Context::genesis()))
             // The frozen Python half of the standard library (`types`, `json`, …).
             .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
             .build();

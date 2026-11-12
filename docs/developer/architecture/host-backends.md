@@ -449,6 +449,17 @@ value as a link argument in `ferrocad_web_gpui/build.rs`, because `wasm-ld`'s de
 builds natively and its tests run in CI without a browser (as the JS half's host logic
 now does — only its `WebPage` is `cfg(wasm)`).
 
+**Qt Designer forms are one state machine with two bindings.**
+`FreeCADGui.PySideUic.loadUi` imports `ferrocad_ui_py` lazily: on CPython that is the PyO3
+extension, and on RustPython it is `ferrocad_shell_pywasm/src/native_ui.rs`, a
+`#[pymodule]` over the same `ferrocad_ui` reader and the same `ferrocad_ui::state`
+widget state machine (including `findChild`). Both expose `FormProxy`/`WidgetProxy`/
+`SignalProxy`/`LayoutProxy`/`LayoutItemProxy` and `UiLoadError`, and a member outside the
+modelled set raises the four-part `AttributeError` rather than a silent `None` — so a
+workbench panel behaves the same whether the window runs CPython or the browser's
+RustPython. `load_ui` takes a path, UTF-8 bytes or a `QFile`-like object, which is what
+lets the browser's `:/ui/…` resources reach it through the pure-Python `PySide` reader.
+
 **On the desktop the interpreter lives on a worker.** The VM is not `Send` and its
 compiler recurses, so a host must raise the stack before the interpreter starts; a GPUI app
 cannot raise its own (8 MiB on Linux and macOS, 1 MiB on Windows).

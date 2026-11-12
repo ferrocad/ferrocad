@@ -23,8 +23,9 @@ use pyo3::types::{PyAny, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
 
 use crate::state::{
-    clamp, is_dialog_root, is_grid_layout, is_signal, Callbacks, FormState, LayoutEntry,
-    LayoutEntryKind, LayoutState, WidgetState,
+    class_query, clamp, descendants, find_descendant, find_in_form, is_dialog_root,
+    is_grid_layout, is_signal, layout_contains, text_query, Callbacks, FormState, Found,
+    LayoutEntry, LayoutEntryKind, Query, StateError, WidgetState,
 };
 
 // ---------------------------------------------------------------------------
@@ -948,8 +949,9 @@ impl WidgetProxy {
         name: Option<String>,
     ) -> PyResult<Option<Py<PyAny>>> {
         let found = {
+            let query = query_kind(query)?;
             let state = self.state.borrow();
-            find_descendant(&state, self.widget, query, name.as_deref())?
+            find_descendant(&state, self.widget, &query, name.as_deref())
         };
         found
             .map(|found| self.found_proxy(py, found))
@@ -1116,8 +1118,9 @@ impl FormProxy {
         name: Option<String>,
     ) -> PyResult<Option<Py<PyAny>>> {
         let found = {
+            let query = query_kind(query)?;
             let state = self.state.borrow();
-            find_in_form(&state, query, name.as_deref())?
+            find_in_form(&state, &query, name.as_deref())
         };
         found.map(|found| self.found_proxy(py, found)).transpose()
     }
@@ -1539,182 +1542,23 @@ impl LayoutItemProxy {
     }
 }
 
-/// Whether `container` or any nested layout below it is `target`.
-fn layout_contains(state: &FormState, container: usize, target: usize) -> bool {
-    if container == target {
-        return true;
-    }
-    let mut stack = vec![container];
-    while let Some(layout) = stack.pop() {
-        for entry in &state.layouts[layout].items {
-            if let LayoutEntryKind::Layout(child) = entry.kind {
-                if child == target {
-                    return true;
-                }
-                stack.push(child);
-            }
-        }
-    }
-    false
-}
-
 // ---------------------------------------------------------------------------
 // findChild resolution
 // ---------------------------------------------------------------------------
 
-enum Query {
-    /// A widget/layout name first, then a class name.
-    Text(String),
-    /// A class name only.
-    Class(String),
-}
-
-/// What `findChild` resolved to.
-#[derive(Clone, Copy)]
-enum Found {
-    Widget(usize),
-    Layout(usize),
-}
-
+/// Read a `findChild` query: a name/class-name string, or a class object.
 fn query_kind(query: &Bound<'_, PyAny>) -> PyResult<Query> {
     if let Ok(text) = query.downcast::<PyString>() {
-        return Ok(Query::Text(text.to_str()?.to_owned()));
+        return Ok(text_query(text.to_str()?));
     }
     if let Ok(name) = query.getattr("__name__") {
         if let Ok(name) = name.extract::<String>() {
-            return Ok(Query::Class(name));
+            return Ok(class_query(&name));
         }
     }
     Err(PyTypeError::new_err(
         "findChild() expects a name, a class-name string or a Qt class",
     ))
-}
-
-fn widget_matches(state: &FormState, widget: usize, query: &Query) -> bool {
-    let widget = &state.widgets[widget];
-    match query {
-        Query::Text(text) => &widget.name == text || &widget.class == text,
-        Query::Class(class) => &widget.class == class,
-    }
-}
-
-fn layout_matches(layout: &LayoutState, query: &Query) -> bool {
-    match query {
-        Query::Text(text) => layout.name.as_deref() == Some(text) || &layout.class == text,
-        Query::Class(class) => &layout.class == class,
-    }
-}
-
-/// First layout matching `name` or `query` inside `start` and its descendants.
-///
-/// `None` searches the whole form; `Some(widget)` includes layouts owned by
-/// that widget (Qt treats an installed layout as a QObject child).
-fn find_layout(
-    state: &FormState,
-    start: Option<usize>,
-    name: Option<&str>,
-    query: Option<&Query>,
-) -> Option<usize> {
-    let scope = start.map(|start| {
-        let mut scope = vec![start];
-        scope.extend(descendants(state, start));
-        scope
-    });
-    (0..state.layouts.len()).find(|&index| {
-        let layout = &state.layouts[index];
-        let in_scope = match (&scope, layout.parent) {
-            (None, _) => true,
-            (Some(scope), Some(parent)) => scope.contains(&parent),
-            (Some(_), None) => false,
-        };
-        if !in_scope {
-            return false;
-        }
-        match (name, query) {
-            (Some(name), _) => layout.name.as_deref() == Some(name),
-            (None, Some(query)) => layout_matches(layout, query),
-            (None, None) => false,
-        }
-    })
-}
-
-fn find_in_form(
-    state: &FormState,
-    query: &Bound<'_, PyAny>,
-    name: Option<&str>,
-) -> PyResult<Option<Found>> {
-    if let Some(name) = name {
-        if let Some(widget) = state.widgets.iter().position(|widget| widget.name == name) {
-            return Ok(Some(Found::Widget(widget)));
-        }
-        return Ok(find_layout(state, None, Some(name), None).map(Found::Layout));
-    }
-    let query = query_kind(query)?;
-    // A name wins over a class when the string could be either.
-    if let Query::Text(text) = &query {
-        if let Some(widget) = state.widgets.iter().position(|widget| &widget.name == text) {
-            return Ok(Some(Found::Widget(widget)));
-        }
-        if let Some(layout) = find_layout(state, None, Some(text), None) {
-            return Ok(Some(Found::Layout(layout)));
-        }
-    }
-    if let Some(widget) = (0..state.widgets.len()).find(|&index| widget_matches(state, index, &query)) {
-        return Ok(Some(Found::Widget(widget)));
-    }
-    Ok(find_layout(state, None, None, Some(&query)).map(Found::Layout))
-}
-
-fn find_descendant(
-    state: &FormState,
-    start: usize,
-    query: &Bound<'_, PyAny>,
-    name: Option<&str>,
-) -> PyResult<Option<Found>> {
-    let order = descendants(state, start);
-    if let Some(name) = name {
-        if let Some(widget) = order
-            .iter()
-            .copied()
-            .find(|widget| state.widgets[*widget].name == name)
-        {
-            return Ok(Some(Found::Widget(widget)));
-        }
-        return Ok(find_layout(state, Some(start), Some(name), None).map(Found::Layout));
-    }
-    let query = query_kind(query)?;
-    if let Query::Text(text) = &query {
-        if let Some(widget) = order
-            .iter()
-            .copied()
-            .find(|widget| &state.widgets[*widget].name == text)
-        {
-            return Ok(Some(Found::Widget(widget)));
-        }
-        if let Some(layout) = find_layout(state, Some(start), Some(text), None) {
-            return Ok(Some(Found::Layout(layout)));
-        }
-    }
-    if let Some(widget) = order
-        .into_iter()
-        .find(|widget| widget_matches(state, *widget, &query))
-    {
-        return Ok(Some(Found::Widget(widget)));
-    }
-    Ok(find_layout(state, Some(start), None, Some(&query)).map(Found::Layout))
-}
-
-/// Descendant widget indices in pre-order, excluding `start`.
-fn descendants(state: &FormState, start: usize) -> Vec<usize> {
-    let mut order = Vec::new();
-    let mut stack: Vec<usize> = state.widgets[start].children.iter().rev().copied().collect();
-    while let Some(widget) = stack.pop() {
-        order.push(widget);
-        for child in state.widgets[widget].children.iter().rev() {
-            stack.push(*child);
-        }
-    }
-    order
 }
 
 #[cfg(test)]

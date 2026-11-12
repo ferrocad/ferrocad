@@ -2872,6 +2872,7 @@ name = "ferrocad_shell_pywasm"
 version = "0.1.5"
 dependencies = [
  "ferrocad_core",
+ "ferrocad_curves",
  "ferrocad_doc_api",
  "ferrocad_geom",
  "ferrocad_graphics",

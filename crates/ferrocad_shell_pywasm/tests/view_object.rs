@@ -294,3 +294,48 @@ fn meta_and_settings_are_the_sessions_record() {
         assert!(traceback.contains("Meta must be a dict"), "{traceback}");
     });
 }
+
+#[test]
+fn a_shape_appearance_entry_writes_back() {
+    let _guard = serial();
+    clear_registry();
+    with_host(|host| {
+        open_document("Material");
+        // The kernel also registers `Part::Box` (see the first test).
+        let text = output(host, "print(Part.makeBox(1, 1, 1).ShapeType)\n");
+        assert_eq!(text, "Solid", "{text}");
+
+        // A `ShapeAppearance` entry is a handle, not a copy: writing one field is a
+        // view-state write, which is what the CPython binding's slot does.
+        let text = output(
+            host,
+            "b = FreeCAD.ActiveDocument.addObject('Part::Box', 'Box')\n\
+             vo = b.ViewObject\n\
+             vo.ShapeAppearance[0].DiffuseColor = (0.0, 0.0, 1.0, 1.0)\n\
+             print(tuple(round(v, 3) for v in vo.ShapeAppearance[0].DiffuseColor))\n\
+             print(tuple(round(v, 3) for v in vo.ShapeColor))\n\
+             m = vo.ShapeMaterial\n\
+             m.Shininess = 0.25\n\
+             print(round(vo.ShapeMaterial.Shininess, 3))\n",
+        );
+        assert_eq!(
+            text, "(0.0, 0.0, 1.0, 1.0)\n(0.0, 0.0, 1.0, 1.0)\n0.25",
+            "{text}"
+        );
+        // The registry is what the viewport draws, so this is the real assertion.
+        let color = with_object("Box", |document, id| {
+            ferrocad_core::effective_color(document.object(id).expect("the object"))
+                .expect("a view state")
+        });
+        assert_eq!(color, [0.0, 0.0, 1.0, 1.0]);
+
+        // A material the script built itself has no slot and stays local.
+        let text = output(
+            host,
+            "own = FreeCAD.Material()\n\
+             own.Shininess = 0.5\n\
+             print(round(own.Shininess, 3), round(vo.ShapeMaterial.Shininess, 3))\n",
+        );
+        assert_eq!(text, "0.5 0.25", "{text}");
+    });
+}

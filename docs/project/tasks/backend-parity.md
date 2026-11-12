@@ -1828,7 +1828,7 @@ handles stay the document half's; a declared handle comes back from
 the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
 full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
-### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage, `host_env`, the view object and the form loader 2026-11-12)
+### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage, `host_env`, the view object, the form loader and `Part` construction 2026-11-12)
 
 The structural half of the parity gap. **Built: the whole facade is now the shared source.**
 `bootstrap.py` went from 2 050 to ~250 lines because the desktop's modules are installed,
@@ -1920,12 +1920,14 @@ loader — so the shared facade has no capability a RustPython host lacks on pur
      is a projection rebuilt per access. The annotation-style form is their reader
      (`python/FerroCADGui/forms.py`).
 
-   Two cuts, stated rather than discovered: `RootNode` needs the Coin bindings (the
+   One cut, stated rather than discovered: `RootNode` needs the Coin bindings (the
    CPython binding refuses without `pivy` too) and `Proxy` is the `viewProxy=` argument
-   the native `addObject` does not take; and `ShapeAppearance` entries are copies, so
-   `ShapeAppearance[0].DiffuseColor = …` does not write back — assign the whole list
-   (CPython keeps a slot per entry). `ShapeColor` also does not propagate an operand's
-   colour through a boolean here; that rule lives in `ferrocad_py` only;
+   the native `addObject` does not take. `ShapeAppearance[i]` and `ShapeMaterial` are
+   **handles, not copies**: each carries the slot it came from and writes the changed
+   field back to that view state, as `ferrocad_py`'s slot does, so
+   `ShapeAppearance[0].DiffuseColor = …` is one view-state write (a `Material()` a script
+   builds itself has no slot and stays local). `ShapeColor` still does not propagate an
+   operand's colour through a boolean here; that rule lives in `ferrocad_py` only;
 2. ~~`ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh`~~ — **all three built:**
    `Part`/`Mesh`, the interactive `ferrocad_stage`, and the form loader. Geometry is
    `ferrocad_shell_pywasm/src/native_shapes.rs`, three native modules over the one kernel:
@@ -1946,11 +1948,20 @@ loader — so the shared facade has no capability a RustPython host lacks on pur
      end in the same shape the viewport draws.
 
    Tests: `tests/shapes.rs` (measurements, booleans, transforms, tessellation, mesh
-   welding, `Part.show`, `obj.Shape = …`, and a parametric `Part::Box`), plus the browser
-   capture `/?runtime=pywasm&script=import Part…` in `smoke.sh`, which builds a box with
-   the wasm OCCT kernel and reads `6000.0 Solid` back from the document. What is *not*
-   there: the B-Rep explorer (`Face.Surface`, `Edge.Curve`), `Part.Wire`/`Face`
-   construction and a `Shape.Placement` wrapper (transforms are baked);
+   welding, `Part.show`, `obj.Shape = …`, a parametric `Part::Box`, and the wire/face
+   slice below), plus two browser captures in `smoke.sh`: `/?runtime=pywasm&script=import
+   Part…` builds a box with the wasm OCCT kernel and reads `6000.0 Solid` back from the
+   document, and the faces leg builds a face from `Part.makePolygon` → `Part.Face`, shows
+   it and paints it (`50.0 (0.2, 0.4, 0.6, 1.0)`) — the first path that runs
+   `ferrocad_curves` in the browser.
+
+   **Wire and face construction is built.** `makePolygon(points, closed=False)`,
+   `Wire(edges)` and `Face(wires)` (first wire the outline, the rest holes) go through the
+   same `ferrocad_curves::polygon` and kernel calls `ferrocad_part_py` makes, so both
+   runtimes build the same wire (a triangle from three points is `Wire 3 3`, its face
+   `50.0`; the ring in `tests/shapes.rs` is `Face 96.0 2`). What is *not* there: the B-Rep
+   explorer (`Face.Surface`, `Edge.Curve`) and a `Shape.Placement` wrapper (transforms are
+   baked);
 
    **The stage is the second half, and it is built too.**
    `crates/ferrocad_shell_pywasm/src/native_stage.rs` is a binding over the same

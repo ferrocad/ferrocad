@@ -383,6 +383,92 @@ mod part {
         Ok(shape_py(compound, vm))
     }
 
+    /// The shapes a Python sequence (or a single shape) holds.
+    fn shapes_arg(
+        value: &PyObjectRef,
+        label: &str,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<Shape>> {
+        if let Some(shape) = super::shape_of(value) {
+            return Ok(vec![shape]);
+        }
+        let items: Vec<PyObjectRef> = value
+            .clone()
+            .try_into_value(vm)
+            .map_err(|_| vm.new_type_error(format!("{label} expects Part.Shape objects")))?;
+        items
+            .iter()
+            .map(|item| {
+                super::shape_of(item)
+                    .ok_or_else(|| vm.new_type_error(format!("{label} expects Part.Shape objects")))
+            })
+            .collect()
+    }
+
+    /// `Part.makePolygon(points, closed=False)`: a wire through the points.
+    ///
+    /// The segments are `ferrocad_curves::polygon`'s — the same ones
+    /// `ferrocad_part_py` builds — so the two runtimes make the same wire.
+    #[pyfunction]
+    pub fn makePolygon(
+        points: PyObjectRef,
+        closed: OptionalArg<bool>,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        let items: Vec<PyObjectRef> = points
+            .clone()
+            .try_into_value(vm)
+            .map_err(|_| vm.new_type_error("makePolygon expects a list of Vector points"))?;
+        let mut parsed = Vec::with_capacity(items.len());
+        for item in &items {
+            parsed.push(vector_arg(item, vm)?);
+        }
+        let curves = ferrocad_curves::polygon(&parsed, closed.into_option().unwrap_or(false))
+            .map_err(|error| vm.new_value_error(error.to_string()))?;
+        let mut edges = Vec::with_capacity(curves.len());
+        for curve in &curves {
+            edges.push(
+                kernel()
+                    .make_edge(curve)
+                    .map_err(|error| geometry_error(vm, error))?,
+            );
+        }
+        let wire = kernel()
+            .make_wire(&edges)
+            .map_err(|error| geometry_error(vm, error))?;
+        Ok(shape_py(wire, vm))
+    }
+
+    /// `Part.Wire(edges)`: the wire those edges form.
+    ///
+    /// CPython's `Part.Wire` is a `PartShape` subclass; here a shape is one class
+    /// (`Part.Shape`, whose `ShapeType` says `Wire`), so this is the constructor as a
+    /// function and the result carries the whole `Shape` surface.
+    #[pyfunction]
+    pub fn Wire(edges: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let edges = shapes_arg(&edges, "Part.Wire", vm)?;
+        if edges.is_empty() {
+            return Err(vm.new_value_error("Part.Wire expects at least one edge"));
+        }
+        let wire = kernel()
+            .make_wire(&edges)
+            .map_err(|error| geometry_error(vm, error))?;
+        Ok(shape_py(wire, vm))
+    }
+
+    /// `Part.Face(wires)`: the first wire is the outline, the rest are holes.
+    #[pyfunction]
+    pub fn Face(wires: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let wires = shapes_arg(&wires, "Part.Face", vm)?;
+        if wires.is_empty() {
+            return Err(vm.new_value_error("Part.Face expects at least one wire"));
+        }
+        let face = kernel()
+            .make_face(&wires)
+            .map_err(|error| geometry_error(vm, error))?;
+        Ok(shape_py(face, vm))
+    }
+
     /// `Part.show(shape, name="Shape")`: add the shape to the active document.
     #[pyfunction]
     pub fn show(

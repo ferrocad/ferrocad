@@ -536,6 +536,37 @@ EOF
 capture_kernel
 check_kernel
 
+# The faces leg (B18b item 2): the browser's Python builds a wire with `makePolygon`, turns
+# it into a `Part.Face`, shows it, and paints that face. Wire/face construction is the
+# first path that runs `ferrocad_curves` in the browser, and the paint is the
+# `ShapeAppearance` write-back the viewport draws.
+capture_faces() {
+    capture "/?runtime=pywasm&script=import%20Part%2C%20FreeCAD%0Awire%20%3D%20Part.makePolygon%28%5BFreeCAD.Vector%280%2C%200%2C%200%29%2C%20FreeCAD.Vector%2810%2C%200%2C%200%29%2C%20FreeCAD.Vector%2810%2C%2010%2C%200%29%5D%2C%20True%29%0Apanel%20%3D%20Part.show%28Part.Face%28wire%29%2C%20%27Panel%27%29%0Apanel.ViewObject.ShapeAppearance%5B0%5D.DiffuseColor%20%3D%20%280.2%2C%200.4%2C%200.6%2C%201.0%29%0Aprint%28round%28panel.Shape.Area%2C%201%29%2C%20tuple%28round%28v%2C%202%29%20for%20v%20in%20panel.ViewObject.ShapeAppearance%5B0%5D.DiffuseColor%29%29%0A" "$TMP/faces.log"
+}
+
+check_faces() {
+    LOG="$TMP/faces.log"
+    echo "pywasm faces console lines:"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: script -> ok=true output="50.0 (0.2, 0.4, 0.6, 1.0)"'
+
+    echo "pywasm faces forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+NameError
+TypeError
+ValueError
+read-only
+panicked at
+unreachable
+EOF
+}
+
+capture_faces
+check_faces
+
 # The stage leg (B18b item 2): the browser's Python builds a `ShapeItem`, snaps through
 # `SnapContext`, and asks the shell for the Draft tool bridge — the three facts that say
 # `ferrocad_stage` and `python/FreeCADGui/draft.py` are installed on this host.
@@ -600,4 +631,4 @@ if [ "$FAILED" != 0 ]; then
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, the pywasm stage binds and the Draft bridge loads, the pywasm form loader reads a panel, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, the pywasm faces leg builds and paints a face, the pywasm stage binds and the Draft bridge loads, the pywasm form loader reads a panel, no panic or JS error"

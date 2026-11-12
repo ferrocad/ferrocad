@@ -188,3 +188,69 @@ fn a_shape_becomes_a_document_object_and_back() {
         .join()
         .expect("no panic");
 }
+
+#[test]
+fn a_script_builds_wires_and_faces() {
+    clear_registry();
+    with_host(|host| {
+        // `makePolygon` uses the same `ferrocad_curves::polygon` the CPython binding
+        // does, so the wire has the same three edges and the same closed loop.
+        let text = output(
+            host,
+            "poly = Part.makePolygon(\
+                 [FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(10, 0, 0), FreeCAD.Vector(10, 10, 0)],\n\
+                 True)\n\
+             print(poly.ShapeType, len(poly.Edges), len(poly.Vertexes))\n\
+             face = Part.Face(poly)\n\
+             print(face.ShapeType, round(face.Area, 3))\n\
+             wire = Part.Wire(poly.Edges)\n\
+             print(wire.ShapeType, len(wire.Edges))\n",
+        );
+        assert_eq!(text, "Wire 3 3\nFace 50.0\nWire 3", "{text}");
+
+        // A face with a hole: the second wire is subtracted, not ignored.
+        let text = output(
+            host,
+            "outer = Part.makePolygon(\
+                 [FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(10, 0, 0), \
+                  FreeCAD.Vector(10, 10, 0), FreeCAD.Vector(0, 10, 0)], True)\n\
+             inner = Part.makePolygon(\
+                 [FreeCAD.Vector(2, 2, 0), FreeCAD.Vector(4, 2, 0), \
+                  FreeCAD.Vector(4, 4, 0), FreeCAD.Vector(2, 4, 0)], True)\n\
+             ring = Part.Face([outer, inner])\n\
+             print(ring.ShapeType, round(ring.Area, 3), len(ring.Wires))\n",
+        );
+        assert_eq!(text, "Face 96.0 2", "{text}");
+    });
+}
+
+/// The same script the browser smoke check runs: a face that came from a wire goes into
+/// the document, and painting it is a view-state write the viewport draws.
+#[test]
+fn a_script_paints_the_face_it_built() {
+    clear_registry();
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| {
+            let host = ferrocad_shell_pywasm::live().expect("the interpreter boots");
+            ferrocad_core::application()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert_document("Faces", Document::new());
+
+            let text = output(
+                &host,
+                "import Part, FreeCAD\n\
+                 wire = Part.makePolygon([FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(10, 0, 0), \
+                                          FreeCAD.Vector(10, 10, 0)], True)\n\
+                 panel = Part.show(Part.Face(wire), 'Panel')\n\
+                 panel.ViewObject.ShapeAppearance[0].DiffuseColor = (0.2, 0.4, 0.6, 1.0)\n\
+                 print(round(panel.Shape.Area, 1), tuple(\
+                     round(v, 2) for v in panel.ViewObject.ShapeAppearance[0].DiffuseColor))\n",
+            );
+            assert_eq!(text, "50.0 (0.2, 0.4, 0.6, 1.0)", "{text}");
+        })
+        .expect("a worker thread")
+        .join()
+        .expect("no panic");
+}

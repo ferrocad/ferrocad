@@ -666,10 +666,20 @@ mod ferrocad {
         items.iter().map(|item| view_color(item, vm)).collect()
     }
 
-    /// A detached `Material` instance (the same class the facade re-exports).
-    fn material_py(material: ferrocad_core::Material, vm: &VirtualMachine) -> PyObjectRef {
+    /// A `Material` handle that writes every change back to one view state (the
+    /// `ShapeAppearance`/`ShapeMaterial` case, as the CPython binding's slot does).
+    fn material_slot_py(
+        material: ferrocad_core::Material,
+        object: &str,
+        which: MaterialWhich,
+        vm: &VirtualMachine,
+    ) -> PyObjectRef {
         PyMaterial {
             inner: RefCell::new(material),
+            slot: Some(MaterialSlot {
+                object: object.to_string(),
+                which,
+            }),
         }
         .into_ref(&vm.ctx)
         .into()
@@ -771,14 +781,23 @@ mod ferrocad {
 
         /// `ShapeAppearance`: the shape's material list.
         ///
-        /// The entries are copies. CPython hands back handles that write through; here
-        /// the list is read and the whole list is what a script assigns.
+        /// Each entry is a handle: assigning one of its fields writes the material
+        /// back to the view state, as the CPython binding's slot does. Assigning the
+        /// whole list replaces it.
         #[pygetset]
         fn ShapeAppearance(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
             let items: Vec<PyObjectRef> = view_state_of(&zelf.object, vm)?
                 .appearance()
                 .into_iter()
-                .map(|material| material_py(material, vm))
+                .enumerate()
+                .map(|(index, material)| {
+                    material_slot_py(
+                        material,
+                        &zelf.object,
+                        MaterialWhich::Appearance(index),
+                        vm,
+                    )
+                })
                 .collect();
             Ok(vm.ctx.new_list(items).into())
         }
@@ -795,7 +814,12 @@ mod ferrocad {
 
         #[pygetset]
         fn ShapeMaterial(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            Ok(material_py(view_state_of(&zelf.object, vm)?.material(), vm))
+            Ok(material_slot_py(
+                view_state_of(&zelf.object, vm)?.material(),
+                &zelf.object,
+                MaterialWhich::Material,
+                vm,
+            ))
         }
 
         #[pygetset(setter)]
@@ -2026,12 +2050,32 @@ mod ferrocad {
         }
     }
 
+    /// The view state a `Material` handle is a window onto.
+    ///
+    /// A `ShapeAppearance` entry and `ShapeMaterial` are handles: assigning one of
+    /// their fields is a view-state write, exactly as the CPython binding's
+    /// `MaterialSlot` makes it. A material the script built itself has no slot.
+    #[derive(Debug, Clone)]
+    struct MaterialSlot {
+        object: String,
+        which: MaterialWhich,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum MaterialWhich {
+        /// The view state's material list, at this index.
+        Appearance(usize),
+        /// The view state's single material.
+        Material,
+    }
+
     /// `FreeCAD.Material`: the renderer's appearance values.
     #[pyattr]
     #[pyclass(name = "Material", module = "ferrocad")]
     #[derive(Debug, PyPayload)]
     pub struct PyMaterial {
         inner: RefCell<ferrocad_core::Material>,
+        slot: Option<MaterialSlot>,
     }
 
     impl Constructor for PyMaterial {
@@ -2040,7 +2084,24 @@ mod ferrocad {
         fn py_new(_cls: &Py<PyType>, _args: Self::Args, _vm: &VirtualMachine) -> PyResult<Self> {
             Ok(Self {
                 inner: RefCell::new(ferrocad_core::Material::default()),
+                slot: None,
             })
+        }
+    }
+
+    impl PyMaterial {
+        /// Write this handle's material back to the view state it belongs to.
+        fn write_back(&self, vm: &VirtualMachine) {
+            let Some(slot) = &self.slot else {
+                return;
+            };
+            let material = self.inner.borrow().clone();
+            let which = slot.which;
+            let object = slot.object.clone();
+            let _ = update_view_state(&object, vm, |state| match which {
+                MaterialWhich::Appearance(index) => state.set_appearance_slot(index, material),
+                MaterialWhich::Material => state.material = Some(material),
+            });
         }
     }
 
@@ -2067,6 +2128,7 @@ mod ferrocad {
             vm: &VirtualMachine,
         ) -> PyResult<()> {
             zelf.inner.borrow_mut().diffuse = colour(&value, vm)?;
+            zelf.write_back(vm);
             Ok(())
         }
 
@@ -2082,6 +2144,7 @@ mod ferrocad {
             vm: &VirtualMachine,
         ) -> PyResult<()> {
             zelf.inner.borrow_mut().ambient = colour(&value, vm)?;
+            zelf.write_back(vm);
             Ok(())
         }
 
@@ -2097,6 +2160,7 @@ mod ferrocad {
             vm: &VirtualMachine,
         ) -> PyResult<()> {
             zelf.inner.borrow_mut().specular = colour(&value, vm)?;
+            zelf.write_back(vm);
             Ok(())
         }
 
@@ -2112,6 +2176,7 @@ mod ferrocad {
             vm: &VirtualMachine,
         ) -> PyResult<()> {
             zelf.inner.borrow_mut().emissive = colour(&value, vm)?;
+            zelf.write_back(vm);
             Ok(())
         }
 
@@ -2121,8 +2186,9 @@ mod ferrocad {
         }
 
         #[pygetset(setter)]
-        fn set_Shininess(zelf: &Py<Self>, value: f64) {
+        fn set_Shininess(zelf: &Py<Self>, value: f64, vm: &VirtualMachine) {
             zelf.inner.borrow_mut().shininess = value;
+            zelf.write_back(vm);
         }
 
         #[pygetset]
@@ -2131,8 +2197,9 @@ mod ferrocad {
         }
 
         #[pygetset(setter)]
-        fn set_Transparency(zelf: &Py<Self>, value: f64) {
+        fn set_Transparency(zelf: &Py<Self>, value: f64, vm: &VirtualMachine) {
             zelf.inner.borrow_mut().transparency = value;
+            zelf.write_back(vm);
         }
     }
 

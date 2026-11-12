@@ -29,6 +29,9 @@ ferrocad_core.workspace = true
 ferrocad_part.workspace = true
 ferrocad_mesh.workspace = true
 ferrocad_geom.workspace = true
+# `Part.makePolygon` builds the same `EdgeCurve`s `ferrocad_part_py` does, so a polygon
+# is one implementation rather than a second one here.
+ferrocad_curves.workspace = true
 ferrocad_occt.workspace = true
 # The Qt Designer `.ui` reader whose state machine the `ferrocad_ui_py` module drives
 # (B18b item 2): the same crate `ferrocad_ui_py` (PyO3) binds, so a panel and its

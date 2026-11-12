@@ -67,6 +67,8 @@ mod snapshot;
 
 /// The `ferrocad` native module `python/FreeCAD` binds to `ferrocad_core`.
 mod native;
+// The `pivy.coin` facade over `ferrocad_inventor`: an adapter, not a port (B18b).
+mod native_coin;
 
 /// `Part`, `Mesh` and `MeshPart` over the OCCT kernel (B18b item 2).
 mod native_shapes;
@@ -251,6 +253,20 @@ ferrocad_shell.add_namespace('doc', _fc.ActiveDocument)
 ferrocad_shell.add_namespace('Part', _part)
 ferrocad_shell.add_namespace('Mesh', _mesh)
 ferrocad_shell.add_namespace('MeshPart', _meshpart)
+";
+
+/// Registers `pivy` / `pivy.coin`, the modules a Coin workbench imports.
+///
+/// The native module is `coin`; upstream reaches it as `pivy.coin`, so the package is
+/// the same two-entry alias the PyO3 facade's `install()` creates.
+const PIVY: &str = "\
+import sys
+import types as _types
+import coin as _coin
+_pivy = _types.ModuleType('pivy')
+_pivy.__dict__['coin'] = _coin
+sys.modules['pivy'] = _pivy
+sys.modules['pivy.coin'] = _coin
 ";
 
 /// Loads [`SHELL`] as the module `ferrocad_shell`.
@@ -539,6 +555,10 @@ impl RustPythonRuntime {
                 &rustpython_stdlib::stdlib_module_defs(Context::genesis()),
             )
             .add_native_module(native::module_def(Context::genesis()))
+            // `pivy.coin`: the scene-graph facade the Coin workbenches import, over the
+            // same `ferrocad_inventor` the CPython facade binds. Installed as a `pivy`
+            // package below, so `from pivy import coin` works here too.
+            .add_native_module(native_coin::coin_module_def(Context::genesis()))
             // The 3D kernel a Python script builds with: one `ferrocad_geom::Shape`,
             // the same OCCT backend the document half registered.
             .add_native_module(native_shapes::part_module_def(Context::genesis()))
@@ -621,6 +641,7 @@ impl RustPythonRuntime {
                         ("PARAMETER_FILE", parameter_file.as_deref().unwrap_or("")),
                     ],
                 )?;
+                run_source(vm, "<pivy>", PIVY, &[])?;
                 run_source(vm, "<namespace>", NAMESPACE, &[])
             })();
             boot

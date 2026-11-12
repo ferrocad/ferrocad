@@ -859,6 +859,31 @@ mod ferrocad {
             update_view_state(&zelf.object, vm, |state| state.diffuse_color = Some(colors))
         }
 
+        /// The Coin root of this view provider (`obj.ViewObject.RootNode`).
+        ///
+        /// The tree is `ferrocad_inventor::view_root` — the same body the CPython
+        /// binding adapts — so both runtimes answer the same shape: one separator per
+        /// display representation, each holding a material with one diffuse colour per
+        /// face, bound `PER_PART`. There is deliberately no geometry; that belongs to the
+        /// viewport.
+        #[pygetset]
+        fn RootNode(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let palette: Vec<[f32; 4]> = zelf
+                .diffuse_colors(vm)?
+                .into_iter()
+                .map(|color| {
+                    [
+                        color[0] as f32,
+                        color[1] as f32,
+                        color[2] as f32,
+                        color[3] as f32,
+                    ]
+                })
+                .collect();
+            let tree = ferrocad_inventor::view_root(&palette, DISPLAY_MODES.len().min(2));
+            Ok(crate::native_coin::root_node_py(tree, vm))
+        }
+
         #[pygetset]
         fn DisplayMode(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<String> {
             Ok(view_state_of(&zelf.object, vm)?.display_mode)

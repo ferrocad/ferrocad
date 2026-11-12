@@ -18,9 +18,8 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use ferrocad_inventor::node::{depth_function, light_model, pick_style};
-use ferrocad_inventor::{Node, NodeKind, Scene};
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use ferrocad_inventor::{Node, NodeKind, Scene, ShaderParameter};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 
@@ -209,133 +208,8 @@ impl SoNode {
     /// raises `ValueError` naming the field.
     #[pyo3(name = "set")]
     fn set(mut slf: PyRefMut<'_, Self>, spec: &str) -> PyResult<()> {
-        let (field, value) = split_field_spec(spec)?;
-        apply_field(&mut slf.node.kind, field, value)
-    }
-}
-
-/// Split `"field value"` or `"field=value"` into its two trimmed halves.
-fn split_field_spec(spec: &str) -> PyResult<(&str, &str)> {
-    let spec = spec.trim();
-    let (name, value) = match spec.split_once('=') {
-        Some(pair) => pair,
-        None => {
-            let index = spec.find(char::is_whitespace).ok_or_else(|| {
-                PyValueError::new_err(format!("set: expected \"field value\", got {spec:?}"))
-            })?;
-            (&spec[..index], &spec[index..])
-        }
-    };
-    let (name, value) = (name.trim(), value.trim());
-    if name.is_empty() || value.is_empty() {
-        return Err(PyValueError::new_err(format!(
-            "set: expected \"field value\", got {spec:?}"
-        )));
-    }
-    Ok((name, value))
-}
-
-/// Apply a parsed `set` to the node kind, or name the offending field.
-fn apply_field(kind: &mut NodeKind, field: &str, value: &str) -> PyResult<()> {
-    match kind {
-        NodeKind::DepthBuffer {
-            test,
-            write,
-            function,
-        } => match field {
-            "test" => *test = parse_bool(field, value)?,
-            "write" => *write = parse_bool(field, value)?,
-            "function" => *function = parse_depth_function(field, value)?,
-            _ => return Err(unknown_field("SoDepthBuffer", field)),
-        },
-        NodeKind::LightModel { model } => match field {
-            "model" => *model = parse_light_model(field, value)?,
-            _ => return Err(unknown_field("SoLightModel", field)),
-        },
-        NodeKind::PickStyle { style } => match field {
-            "style" => *style = parse_pick_style(field, value)?,
-            _ => return Err(unknown_field("SoPickStyle", field)),
-        },
-        other => return Err(unknown_field(node_type_name(other), field)),
-    }
-    Ok(())
-}
-
-fn unknown_field(node: &str, field: &str) -> PyErr {
-    PyValueError::new_err(format!("{node}.set: unknown field {field:?}"))
-}
-
-fn parse_bool(field: &str, value: &str) -> PyResult<bool> {
-    match value.to_ascii_uppercase().as_str() {
-        "TRUE" | "1" => Ok(true),
-        "FALSE" | "0" => Ok(false),
-        _ => Err(PyValueError::new_err(format!(
-            "{field}: expected TRUE or FALSE, got {value:?}"
-        ))),
-    }
-}
-
-fn parse_pick_style(field: &str, value: &str) -> PyResult<i32> {
-    match value.to_ascii_uppercase().as_str() {
-        "SHAPE" => Ok(pick_style::SHAPE),
-        "BOUNDING_BOX" => Ok(pick_style::BOUNDING_BOX),
-        "UNPICKABLE" => Ok(pick_style::UNPICKABLE),
-        _ => Err(PyValueError::new_err(format!(
-            "{field}: expected SHAPE, BOUNDING_BOX or UNPICKABLE, got {value:?}"
-        ))),
-    }
-}
-
-fn parse_light_model(field: &str, value: &str) -> PyResult<i32> {
-    match value.to_ascii_uppercase().as_str() {
-        "BASE_COLOR" => Ok(light_model::BASE_COLOR),
-        "PHONG" => Ok(light_model::PHONG),
-        _ => Err(PyValueError::new_err(format!(
-            "{field}: expected BASE_COLOR or PHONG, got {value:?}"
-        ))),
-    }
-}
-
-fn parse_depth_function(field: &str, value: &str) -> PyResult<i32> {
-    match value.to_ascii_uppercase().as_str() {
-        "NEVER" => Ok(depth_function::NEVER),
-        "LESS" => Ok(depth_function::LESS),
-        "EQUAL" => Ok(depth_function::EQUAL),
-        "LEQUAL" => Ok(depth_function::LEQUAL),
-        "GREATER" => Ok(depth_function::GREATER),
-        "NOTEQUAL" => Ok(depth_function::NOTEQUAL),
-        "GEQUAL" => Ok(depth_function::GEQUAL),
-        "ALWAYS" => Ok(depth_function::ALWAYS),
-        _ => Err(PyValueError::new_err(format!(
-            "{field}: expected NEVER, LESS, EQUAL, LEQUAL, GREATER, NOTEQUAL, GEQUAL \
-             or ALWAYS, got {value:?}"
-        ))),
-    }
-}
-
-/// The Coin class name for a node kind (used by `set`'s error messages).
-fn node_type_name(kind: &NodeKind) -> &str {
-    match kind {
-        NodeKind::Separator => "SoSeparator",
-        NodeKind::Switch { .. } => "SoSwitch",
-        NodeKind::Coordinate3(_) => "SoCoordinate3",
-        NodeKind::TextureCoordinate2(_) => "SoTextureCoordinate2",
-        NodeKind::Texture2(_) => "SoTexture2",
-        NodeKind::Normal(_) => "SoNormal",
-        NodeKind::Mesh { .. } => "SoIndexedShape",
-        NodeKind::FaceSet { .. } => "SoFaceSet",
-        NodeKind::PickStyle { .. } => "SoPickStyle",
-        NodeKind::LightModel { .. } => "SoLightModel",
-        NodeKind::DepthBuffer { .. } => "SoDepthBuffer",
-        NodeKind::Material(_) => "SoMaterial",
-        NodeKind::PickId(_) => "SoPickId",
-        NodeKind::Transform(_) => "SoTransform",
-        NodeKind::EventCallback(_) => "SoEventCallback",
-        NodeKind::NaviCube(_) => "SoNaviCube",
-        NodeKind::ShaderProgram => "SoShaderProgram",
-        NodeKind::ShaderStage(stage) => stage.kind.class_name(),
-        NodeKind::ShaderParameter(parameter) => parameter.class_name(),
-        NodeKind::Custom(name) => name,
+        ferrocad_inventor::fields::set_from_text(&mut slf.node, spec)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 }
 
@@ -418,6 +292,9 @@ impl SoType {
             "SoPickStyle" => Some(Py::new(py, fields::SoPickStyle::new())?.into_any()),
             "SoLightModel" => Some(Py::new(py, fields::SoLightModel::new())?.into_any()),
             "SoDepthBuffer" => Some(Py::new(py, fields::SoDepthBuffer::new())?.into_any()),
+            "SoMaterialBinding" => {
+                Some(Py::new(py, fields::SoMaterialBinding::new())?.into_any())
+            }
             "SoShaderProgram" => Some(Py::new(py, fields::SoShaderProgram::new())?.into_any()),
             "SoVertexShader" => Some(Py::new(py, fields::SoVertexShader::new())?.into_any()),
             "SoFragmentShader" => Some(Py::new(py, fields::SoFragmentShader::new())?.into_any()),
@@ -475,6 +352,7 @@ const KNOWN_TYPES: &[&str] = &[
     "SoPickStyle",
     "SoLightModel",
     "SoDepthBuffer",
+    "SoMaterialBinding",
     "SoShaderProgram",
     "SoVertexShader",
     "SoFragmentShader",
@@ -596,6 +474,123 @@ pub fn extract_scene(root: &Bound<'_, PyAny>) -> PyResult<Scene> {
     Ok(Scene {
         root: node.node.clone(),
     })
+}
+
+/// Build the `coin` scene-graph objects for a core [`Node`] tree.
+///
+/// The body of a view provider's `RootNode` is
+/// [`ferrocad_inventor::view_root`]; this is the PyO3 adapter from that neutral tree to
+/// the facade's classes. The RustPython host has its own adapter over the same body, so
+/// the two runtimes answer the same tree.
+pub fn to_py(py: Python<'_>, node: &Node) -> PyResult<PyObject> {
+    let name = ferrocad_inventor::class_name(&node.kind).to_string();
+    let object = SoType { name: name.clone() }
+        .create_instance(py)?
+        .ok_or_else(|| PyRuntimeError::new_err(format!("coin: {name} has no constructor")))?;
+    let target = object.bind(py);
+
+    match &node.kind {
+        NodeKind::Coordinate3(points) => {
+            target.setattr("point", points.iter().map(triple).collect::<Vec<_>>())?;
+        }
+        NodeKind::Normal(normals) => {
+            target.setattr("vector", normals.iter().map(triple).collect::<Vec<_>>())?;
+        }
+        NodeKind::Material(colors) => {
+            let colors: Vec<(f64, f64, f64, f64)> = colors
+                .iter()
+                .map(|c| {
+                    (
+                        f64::from(c[0]),
+                        f64::from(c[1]),
+                        f64::from(c[2]),
+                        f64::from(c[3]),
+                    )
+                })
+                .collect();
+            target.setattr("diffuseColor", colors)?;
+        }
+        NodeKind::Mesh {
+            indices,
+            normal_indices,
+            ..
+        } => {
+            target.setattr("coordIndex", indices.clone())?;
+            if !normal_indices.is_empty() {
+                target.setattr("normalIndex", normal_indices.clone())?;
+            }
+        }
+        NodeKind::FaceSet { num_vertices } => {
+            target.setattr("numVertices", num_vertices.clone())?;
+        }
+        NodeKind::Switch { which } => target.setattr("whichChild", *which)?,
+        NodeKind::PickStyle { style } => target.setattr("style", *style)?,
+        NodeKind::LightModel { model } => target.setattr("model", *model)?,
+        NodeKind::MaterialBinding { value } => target.setattr("value", *value)?,
+        NodeKind::DepthBuffer {
+            test,
+            write,
+            function,
+        } => {
+            target.setattr("test", *test)?;
+            target.setattr("write", *write)?;
+            target.setattr("function", *function)?;
+        }
+        NodeKind::ShaderStage(stage) => {
+            if let Some(source) = &stage.source {
+                target.setattr("source", source)?;
+            }
+            if let Some(path) = &stage.source_program {
+                target.setattr("sourceProgram", path)?;
+            }
+        }
+        NodeKind::ShaderParameter(parameter) => {
+            target.setattr("name", parameter.name())?;
+            match parameter {
+                ShaderParameter::Float { value, .. } => target.setattr("value", *value)?,
+                ShaderParameter::Vec3 { value, .. } => target.setattr("value", triple(value))?,
+                ShaderParameter::Floats { values, .. } => {
+                    let field = target.getattr("value")?;
+                    field.call_method1("setValues", (0usize, values.clone()))?;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // Children: a program and a stage take a node list (`SoMFNode`); a group takes
+    // `addChild`, which copies the child.
+    match &node.kind {
+        NodeKind::ShaderProgram => {
+            let field = target.getattr("shaderObject")?;
+            for child in &node.children {
+                field.call_method1("append", (to_py(py, child)?,))?;
+            }
+        }
+        NodeKind::ShaderStage(_) => {
+            let field = target.getattr("parameter")?;
+            for child in &node.children {
+                field.call_method1("append", (to_py(py, child)?,))?;
+            }
+        }
+        NodeKind::Separator | NodeKind::Switch { .. } => {
+            for child in &node.children {
+                target.call_method1("addChild", (to_py(py, child)?,))?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(object)
+}
+
+/// A core `[f32; 3]` as the tuple the facade's fields parse.
+fn triple(value: &[f32; 3]) -> (f64, f64, f64) {
+    (
+        f64::from(value[0]),
+        f64::from(value[1]),
+        f64::from(value[2]),
+    )
 }
 
 // ---------------------------------------------------------------------------

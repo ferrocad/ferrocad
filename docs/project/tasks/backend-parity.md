@@ -1886,8 +1886,8 @@ units) as well as the Gui ones:
 - With the facade complete, **real mods run**: `tests/mods.rs::the_shipped_settings_clients_load`
   loads `mods/GridOverlay`, `AxisOverlay` and `GizmoOverlay` from source and asserts
   their commands and their `grid`/`axis`/`gizmo` providers. The browser's pack path is
-  now exercised by shipped mods instead of synthetic ones; the Coin/shader skins and a
-  task panel still need a surface this half does not install.
+  now exercised by shipped mods instead of synthetic ones; a task panel still needs a
+  surface this half does not install (the Coin skins got theirs in B20).
 
 **B18b is complete.** Every host gap it listed is closed — the native module, the
 document writes, `Part`/`Mesh`, the stage, `host_env`, the view object and the form
@@ -2197,8 +2197,9 @@ What the shipped packs do today is the capability gap, stated where it shows. Si
 the three native settings clients (`GridOverlay`, `AxisOverlay`, `GizmoOverlay`) load —
 each pack is `Init.py` + `InitGui.py`, two scripts, zero failures — and declare their
 providers; `tests/mods.rs` pins that natively. The Coin/shader skins still record a
-failure, because this half has no Coin scene and the packs read addon resource files, so
-the About card is a mix rather than a failed batch. That is still the parity signal this
+failure, because they read an addon resource file (a WGSL program) and a pack carries
+only its entry scripts — the facade they need is B20's, so what is missing there is the
+resource, not the scene graph. That is still the parity signal this
 slice was for; the binding work that was open here — B18b items 2 and 5 — is built, so a
 pack that creates geometry and writes the document now runs on the browser's Python too.
 
@@ -2214,6 +2215,52 @@ document API works today. A pack that calls `FerroCAD.Grid`, `FerroCADGui.regist
 or `Part` needs the facade: B18a's `view`/`view_state`/`providers`, and B18b for geometry.
 Delivery (B19) and capability (B18) are independent, and shipping both orders is fine —
 but the first *useful* mods are command-only ones, and the real ones wait on B18b.
+
+### B20 — the Coin facade without a second implementation (built 2026-11-12)
+
+`from pivy import coin` is how 75 upstream Python files build scene graphs, and the three
+Coin workbenches in `mods/` are the ones this repository ships. The CPython half already
+had a facade (`ferrocad_inventor_py`), so the RustPython half's "no Coin scene" was not a
+missing dependency to install but a **body in the wrong place**: the class table, the
+field table and Coin's `set("field VALUE")` parser lived in the PyO3 adapter, where a
+second runtime could only copy them.
+
+**The bodies moved into `ferrocad_inventor`**, which was already Python-free:
+
+- `node::class_name(&NodeKind)` — the one class table (it had two copies: the facade and
+  `compile.rs`'s private `class_name`), and `NodeKind::MaterialBinding`/`material_binding`
+  so a `PER_PART` binding round-trips instead of being a class that does not exist
+  (`ferrocad_py`'s `RootNode` built one and only real Coin answered it);
+- `fields::{FieldId, vec3, color, int, float, nodes}` and the `*_mut` forms — the
+  name→buffer table and the buffers, previously `FieldKind`/`NodeListField` inside the
+  PyO3 facade;
+- `fields::set_from_text` + the value parsers — Coin's `SoFieldContainer::set`;
+- `node::view_root(colors, representations)` — the `RootNode` body (two display
+  representations, one material per mode bound `PER_PART`, no geometry).
+
+**The two facades are now adapters.** `ferrocad_inventor_py` lost its copies (its
+`FieldElem::buffer` calls the core accessors; `SoNode.set` is one call) and gained
+`to_py(&Node)`, the adapter from a core tree to its classes; `ferrocad_py`'s
+`RootNode` is `view_root` + `to_py` behind the same "only with the coin bindings"
+guard. The RustPython side is `ferrocad_shell_pywasm/src/native_coin.rs`, installed as
+`pivy`/`pivy.coin`: the class spine (`SoNode` → `SoGroup` → `SoSeparator`/`SoSwitch`, and
+the leaf classes the workbenches construct), one `SoField` class interpreting `FieldId`,
+`addOverlay`/`removeOverlay`/`clearOverlays` over `ferrocad_inventor::overlays`, and
+`ViewObject.RootNode`.
+
+Tests: `ferrocad_inventor` (the field table, the `set` parser, `view_root`),
+`ferrocad_shell_pywasm/tests/coin.rs` (the grid-shaped tree compiles as an overlay
+triangle, removal is by identity, the shader/depth/material fields round-trip, and
+`RootNode` is the shared two-branch tree), the existing `ferrocad_inventor_py` suites
+unchanged, and `tests/mods.rs::the_shipped_coin_skins_load`, which now loads
+`GridOverlayCoin`, `AxisOverlayCoin` and `GizmoOverlayShader` from source and sees their
+`('grid', 'coin')`, `('axis', 'coin')` and `('gizmo', 'ferrocad-shader')` backends
+registered. What still fails for those three is narrower than before: the shader tree is
+built on activation and reads its WGSL from the addon's `Resources/` directory, and a
+pack carries only its entry scripts — a resource-delivery gap, not a missing Coin scene. Cuts, stated: `SoType.fromName`/`createInstance`, the camera and event classes,
+and a field's sequence protocol (`len()`/`obj[i]`) are not bound on RustPython; its
+`SoShaderParameter1f.value` is a float, so the typed `value` on a parameter is the ABI's,
+not Coin's `SoMFFloat`.
 
 ## 5. Open questions, and how each host reaches the engine
 

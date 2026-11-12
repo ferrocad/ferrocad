@@ -20,6 +20,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ferrocad_core.workspace = true
+# `ViewObject.RootNode` is a Coin scene graph: the trunk is `ferrocad_inventor`'s
+# `view_root` (shared with the RustPython host) and the adapter is the PyO3 facade.
+ferrocad_inventor.workspace = true
+ferrocad_inventor_py.workspace = true
 # NOTE: `extension-module` is deliberately *not* a hard dependency feature. It
 # tells PyO3 not to link libpython, which is correct for a packaged extension
 # module but breaks `cargo build --workspace` (the `ferrocad_shell_python` bin needs the

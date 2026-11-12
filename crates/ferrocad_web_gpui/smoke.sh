@@ -568,6 +568,36 @@ EOF
 capture_faces
 check_faces
 
+# The coin leg (B20): the browser's Python imports the `pivy.coin` facade, builds a
+# scene, and registers it on the same pull bridge the shell drains — the three facts that
+# say the Coin workbenches have their surface on this runtime too.
+capture_coin() {
+    capture "/?runtime=pywasm&script=from%20pivy%20import%20coin%0Aimport%20FerroCADGui%0Anode%20%3D%20coin.SoSeparator%28%29%0Acoords%20%3D%20coin.SoCoordinate3%28%29%0Acoords.point.setValues%280%2C%203%2C%20%5B%280.0%2C%200.0%2C%200.0%29%2C%20%281.0%2C%200.0%2C%200.0%29%2C%20%280.0%2C%201.0%2C%200.0%29%5D%29%0Aface%20%3D%20coin.SoFaceSet%28%29%0Aface.numVertices.setValue%283%29%0Anode.addChild%28coords%29%0Anode.addChild%28face%29%0AFerroCADGui.addOverlay%28node%29%0Aprint%28node.getNumChildren%28%29%2C%20coords.point.getNum%28%29%2C%20coin.SoPickStyle.UNPICKABLE%29%0A" "$TMP/coin.log"
+}
+
+check_coin() {
+    LOG="$TMP/coin.log"
+    echo "pywasm coin console lines:"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: script -> ok=true output="2 3 2"'
+
+    echo "pywasm coin forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+NameError
+TypeError
+ImportError
+AttributeError
+panicked at
+unreachable
+EOF
+}
+
+capture_coin
+check_coin
+
 # The stage leg (B18b item 2): the browser's Python builds a `ShapeItem`, snaps through
 # `SnapContext`, and asks the shell for the Draft tool bridge — the three facts that say
 # `ferrocad_stage` and `python/FreeCADGui/draft.py` are installed on this host.
@@ -632,4 +662,4 @@ if [ "$FAILED" != 0 ]; then
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, the pywasm faces leg builds, paints and classifies a face, the pywasm stage binds and the Draft bridge loads, the pywasm form loader reads a panel, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, the pywasm kernel builds a solid, the pywasm faces leg builds, paints and classifies a face, the pywasm coin facade builds and registers an overlay, the pywasm stage binds and the Draft bridge loads, the pywasm form loader reads a panel, no panic or JS error"

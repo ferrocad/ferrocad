@@ -21,7 +21,7 @@ use crate::directive::{Directive, Directives};
 use crate::geometry::{Geometry, Topology, Vertex};
 use crate::node::{
     Node, NodeKind, SO_SWITCH_ALL, SO_SWITCH_INHERIT, Scene, ShaderParameter, ShaderStage,
-    ShaderStageKind, depth_function, pick_style,
+    ShaderStageKind, class_name, depth_function, pick_style,
 };
 use crate::pixels::Viewport;
 use crate::state::State;
@@ -275,6 +275,10 @@ fn walk_children(
             // one the renderer has a single fixed light model (`scene.wgsl`), so a
             // `BASE_COLOR` pipeline would be dead code (plan §4.4).
             NodeKind::LightModel { .. } => {}
+            // `SoMaterialBinding` is recorded like `SoLightModel`: a host that draws
+            // per-face colours has them in its own view state, so the draw binds one
+            // colour and the binding is a round-tripped statement, not a pipeline.
+            NodeKind::MaterialBinding { .. } => {}
             // `SoPickStyle`: only `UNPICKABLE` acts. `SHAPE` (and `BOUNDING_BOX`, which
             // is not modelled) restore pickability, so a nested `UNPICKABLE` does not
             // leak into the rest of the file.
@@ -467,32 +471,6 @@ fn apply_parameter(
         },
     }
     Ok(())
-}
-
-/// The Coin class name for a node kind (used by program errors only).
-fn class_name(kind: &NodeKind) -> &str {
-    match kind {
-        NodeKind::ShaderProgram => "SoShaderProgram",
-        NodeKind::ShaderStage(stage) => stage.kind.class_name(),
-        NodeKind::ShaderParameter(parameter) => parameter.class_name(),
-        NodeKind::Separator => "SoSeparator",
-        NodeKind::Switch { .. } => "SoSwitch",
-        NodeKind::Coordinate3(_) => "SoCoordinate3",
-        NodeKind::TextureCoordinate2(_) => "SoTextureCoordinate2",
-        NodeKind::Texture2(_) => "SoTexture2",
-        NodeKind::Normal(_) => "SoNormal",
-        NodeKind::Mesh { .. } => "SoIndexedShape",
-        NodeKind::FaceSet { .. } => "SoFaceSet",
-        NodeKind::PickStyle { .. } => "SoPickStyle",
-        NodeKind::LightModel { .. } => "SoLightModel",
-        NodeKind::DepthBuffer { .. } => "SoDepthBuffer",
-        NodeKind::Material(_) => "SoMaterial",
-        NodeKind::PickId(_) => "SoPickId",
-        NodeKind::Transform(_) => "SoTransform",
-        NodeKind::EventCallback(_) => "SoEventCallback",
-        NodeKind::NaviCube(_) => "SoNaviCube",
-        NodeKind::Custom(name) => name,
-    }
 }
 
 /// Why a shader program could not be assembled. Reported by [`compile_with_base`].

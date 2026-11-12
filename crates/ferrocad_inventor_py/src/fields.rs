@@ -11,6 +11,7 @@
 //! are deferred (see `docs/developer/viewport/inventor-plan.md` §8); editing a field just rewrites the
 //! node's `Vec`.
 
+use ferrocad_inventor::fields::{self as core, FieldId};
 use ferrocad_inventor::{
     Node, NodeKind, ShaderParameter, ShaderStage, ShaderStageKind, Topology, depth_function,
     light_model, pick_style,
@@ -27,25 +28,6 @@ use crate::{SoNode, node_initializer, node_snapshot_initializer};
 // Field selection
 // ---------------------------------------------------------------------------
 
-/// Which buffer inside a node's [`NodeKind`] a field object addresses.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum FieldKind {
-    /// `SoCoordinate3.point`.
-    Point,
-    /// `SoNormal.vector`.
-    Vector,
-    /// `SoMaterial.diffuseColor`.
-    DiffuseColor,
-    /// `SoIndexedShape.coordIndex`.
-    CoordIndex,
-    /// `SoIndexedFaceSet.normalIndex`.
-    NormalIndex,
-    /// `SoFaceSet.numVertices`.
-    NumVertices,
-    /// `SoShaderParameterArray1f.value` (`SoMFFloat`).
-    ParameterValues,
-}
-
 /// A multi-value element: how to convert it to/from Python and which node buffer
 /// holds it. The sequence helpers below are generic over this.
 trait FieldElem: Copy + Default {
@@ -59,7 +41,7 @@ trait FieldElem: Copy + Default {
     fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Self>;
 
     /// The node buffer this element type backs for `field`.
-    fn buffer<'a>(kind: &'a mut NodeKind, field: FieldKind) -> PyResult<&'a mut Vec<Self>>;
+    fn buffer<'a>(node: &'a mut Node, field: FieldId) -> PyResult<&'a mut Vec<Self>>;
 }
 
 impl FieldElem for [f32; 3] {
@@ -82,12 +64,8 @@ impl FieldElem for [f32; 3] {
         }
     }
 
-    fn buffer<'a>(kind: &'a mut NodeKind, field: FieldKind) -> PyResult<&'a mut Vec<Self>> {
-        match (kind, field) {
-            (NodeKind::Coordinate3(v), FieldKind::Point) => Ok(v),
-            (NodeKind::Normal(v), FieldKind::Vector) => Ok(v),
-            _ => Err(mismatch(Self::LABEL)),
-        }
+    fn buffer<'a>(node: &'a mut Node, field: FieldId) -> PyResult<&'a mut Vec<Self>> {
+        core::vec3_mut(node, field).ok_or_else(|| mismatch(Self::LABEL))
     }
 }
 
@@ -121,11 +99,8 @@ impl FieldElem for [f32; 4] {
         }
     }
 
-    fn buffer<'a>(kind: &'a mut NodeKind, field: FieldKind) -> PyResult<&'a mut Vec<Self>> {
-        match (kind, field) {
-            (NodeKind::Material(v), FieldKind::DiffuseColor) => Ok(v),
-            _ => Err(mismatch(Self::LABEL)),
-        }
+    fn buffer<'a>(node: &'a mut Node, field: FieldId) -> PyResult<&'a mut Vec<Self>> {
+        core::color_mut(node, field).ok_or_else(|| mismatch(Self::LABEL))
     }
 }
 
@@ -146,13 +121,8 @@ impl FieldElem for u32 {
         })
     }
 
-    fn buffer<'a>(kind: &'a mut NodeKind, field: FieldKind) -> PyResult<&'a mut Vec<Self>> {
-        match (kind, field) {
-            (NodeKind::Mesh { indices, .. }, FieldKind::CoordIndex) => Ok(indices),
-            (NodeKind::Mesh { normal_indices, .. }, FieldKind::NormalIndex) => Ok(normal_indices),
-            (NodeKind::FaceSet { num_vertices }, FieldKind::NumVertices) => Ok(num_vertices),
-            _ => Err(mismatch(Self::LABEL)),
-        }
+    fn buffer<'a>(node: &'a mut Node, field: FieldId) -> PyResult<&'a mut Vec<Self>> {
+        core::int_mut(node, field).ok_or_else(|| mismatch(Self::LABEL))
     }
 }
 
@@ -167,14 +137,8 @@ impl FieldElem for f32 {
         obj.extract()
     }
 
-    fn buffer<'a>(kind: &'a mut NodeKind, field: FieldKind) -> PyResult<&'a mut Vec<Self>> {
-        match (kind, field) {
-            (
-                NodeKind::ShaderParameter(ShaderParameter::Floats { values, .. }),
-                FieldKind::ParameterValues,
-            ) => Ok(values),
-            _ => Err(mismatch(Self::LABEL)),
-        }
+    fn buffer<'a>(node: &'a mut Node, field: FieldId) -> PyResult<&'a mut Vec<Self>> {
+        core::float_mut(node, field).ok_or_else(|| mismatch(Self::LABEL))
     }
 }
 
@@ -207,33 +171,33 @@ fn resolve_index(index: isize, len: usize) -> PyResult<usize> {
     }
 }
 
-fn field_len<E: FieldElem>(parent: &Py<PyAny>, field: FieldKind, py: Python<'_>) -> PyResult<usize> {
+fn field_len<E: FieldElem>(parent: &Py<PyAny>, field: FieldId, py: Python<'_>) -> PyResult<usize> {
     let mut node = node_mut(py, parent)?;
-    Ok(E::buffer(&mut node.node.kind, field)?.len())
+    Ok(E::buffer(&mut node.node, field)?.len())
 }
 
 fn field_get<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     index: isize,
 ) -> PyResult<PyObject> {
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     let index = resolve_index(index, buffer.len())?;
     buffer[index].to_py(py)
 }
 
 fn field_set<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     index: isize,
     value: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
     let parsed = E::from_py(value)?;
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     let index = resolve_index(index, buffer.len())?;
     buffer[index] = parsed;
     Ok(())
@@ -241,12 +205,12 @@ fn field_set<E: FieldElem>(
 
 fn field_del<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     index: isize,
 ) -> PyResult<()> {
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     let index = resolve_index(index, buffer.len())?;
     buffer.remove(index);
     Ok(())
@@ -254,11 +218,11 @@ fn field_del<E: FieldElem>(
 
 fn field_values<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
 ) -> PyResult<PyObject> {
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     let list = PyList::empty(py);
     for value in buffer.iter() {
         list.append(value.to_py(py)?)?;
@@ -276,22 +240,22 @@ fn parse_values<E: FieldElem>(values: &Bound<'_, PyAny>) -> PyResult<Vec<E>> {
 }
 
 /// Replace a node buffer wholesale (the property setter, e.g. `coords.point = [...]`).
-fn field_replace<E: FieldElem>(kind: &mut NodeKind, field: FieldKind, values: Vec<E>) -> PyResult<()> {
-    *E::buffer(kind, field)? = values;
+fn field_replace<E: FieldElem>(node: &mut Node, field: FieldId, values: Vec<E>) -> PyResult<()> {
+    *E::buffer(node, field)? = values;
     Ok(())
 }
 
 /// `SoMField.setValues(offset, values)` — Coin replaces the run from `offset`.
 fn field_set_values<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     offset: usize,
     values: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
     let parsed = parse_values::<E>(values)?;
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     if offset > buffer.len() {
         buffer.resize(offset, E::default());
     }
@@ -308,7 +272,7 @@ fn field_set_values<E: FieldElem>(
 /// the written run are left untouched, unlike the two-argument form.
 fn field_set_values_range<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     start: usize,
     num: i64,
@@ -328,7 +292,7 @@ fn field_set_values_range<E: FieldElem>(
         .checked_add(count)
         .ok_or_else(|| PyValueError::new_err("setValues: start + num overflows"))?;
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     if buffer.len() < end {
         buffer.resize(end, E::default());
     }
@@ -339,7 +303,7 @@ fn field_set_values_range<E: FieldElem>(
 /// `SoMField.setNum(n)` — resize to `n`, filling new elements with the default.
 fn field_set_num<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     num: i64,
 ) -> PyResult<()> {
@@ -349,7 +313,7 @@ fn field_set_num<E: FieldElem>(
         )));
     }
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     buffer.resize(num as usize, E::default());
     Ok(())
 }
@@ -357,13 +321,13 @@ fn field_set_num<E: FieldElem>(
 /// `SoMField.setValue(value)` — the singular overload: a one-element field.
 fn field_set_value<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
     let parsed = E::from_py(value)?;
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     buffer.clear();
     buffer.push(parsed);
     Ok(())
@@ -372,14 +336,14 @@ fn field_set_value<E: FieldElem>(
 /// `SoMField.set1Value(index, value)` — set one element, growing to reach it.
 fn field_set_1_value<E: FieldElem>(
     parent: &Py<PyAny>,
-    field: FieldKind,
+    field: FieldId,
     py: Python<'_>,
     index: usize,
     value: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
     let parsed = E::from_py(value)?;
     let mut node = node_mut(py, parent)?;
-    let buffer = E::buffer(&mut node.node.kind, field)?;
+    let buffer = E::buffer(&mut node.node, field)?;
     if buffer.len() <= index {
         buffer.resize(index + 1, E::default());
     }
@@ -398,7 +362,7 @@ macro_rules! multi_field {
         #[pyclass]
         pub struct $name {
             parent: Py<PyAny>,
-            field: FieldKind,
+            field: FieldId,
         }
 
         #[pymethods]
@@ -517,7 +481,7 @@ impl SoCoordinate3 {
             slf.py(),
             SoMFVec3f {
                 parent: field_parent(slf),
-                field: FieldKind::Point,
+                field: FieldId::Point,
             },
         )
     }
@@ -525,7 +489,7 @@ impl SoCoordinate3 {
     #[setter]
     fn set_point(mut slf: PyRefMut<'_, Self>, values: &Bound<'_, PyAny>) -> PyResult<()> {
         let parsed = parse_values::<[f32; 3]>(values)?;
-        field_replace(&mut slf.as_super().node.kind, FieldKind::Point, parsed)
+        field_replace(&mut slf.as_super().node, FieldId::Point, parsed)
     }
 }
 
@@ -546,7 +510,7 @@ impl SoNormal {
             slf.py(),
             SoMFVec3f {
                 parent: field_parent(slf),
-                field: FieldKind::Vector,
+                field: FieldId::Vector,
             },
         )
     }
@@ -554,7 +518,7 @@ impl SoNormal {
     #[setter]
     fn set_vector(mut slf: PyRefMut<'_, Self>, values: &Bound<'_, PyAny>) -> PyResult<()> {
         let parsed = parse_values::<[f32; 3]>(values)?;
-        field_replace(&mut slf.as_super().node.kind, FieldKind::Vector, parsed)
+        field_replace(&mut slf.as_super().node, FieldId::Vector, parsed)
     }
 }
 
@@ -576,7 +540,7 @@ impl SoMaterial {
             slf.py(),
             SoMFColor {
                 parent: field_parent(slf),
-                field: FieldKind::DiffuseColor,
+                field: FieldId::DiffuseColor,
             },
         )
     }
@@ -585,7 +549,7 @@ impl SoMaterial {
     #[pyo3(name = "diffuseColor")]
     fn set_diffuse_color(mut slf: PyRefMut<'_, Self>, values: &Bound<'_, PyAny>) -> PyResult<()> {
         let parsed = parse_values::<[f32; 4]>(values)?;
-        field_replace(&mut slf.as_super().node.kind, FieldKind::DiffuseColor, parsed)
+        field_replace(&mut slf.as_super().node, FieldId::DiffuseColor, parsed)
     }
 }
 
@@ -613,7 +577,7 @@ impl SoIndexedFaceSet {
             slf.py(),
             SoMFInt32 {
                 parent: field_parent(slf),
-                field: FieldKind::CoordIndex,
+                field: FieldId::CoordIndex,
             },
         )
     }
@@ -622,7 +586,7 @@ impl SoIndexedFaceSet {
     #[pyo3(name = "coordIndex")]
     fn set_coord_index(mut slf: PyRefMut<'_, Self>, values: &Bound<'_, PyAny>) -> PyResult<()> {
         let parsed = parse_values::<u32>(values)?;
-        field_replace(&mut slf.as_super().node.kind, FieldKind::CoordIndex, parsed)
+        field_replace(&mut slf.as_super().node, FieldId::CoordIndex, parsed)
     }
 
     #[getter]
@@ -632,7 +596,7 @@ impl SoIndexedFaceSet {
             slf.py(),
             SoMFInt32 {
                 parent: field_parent(slf),
-                field: FieldKind::NormalIndex,
+                field: FieldId::NormalIndex,
             },
         )
     }
@@ -641,7 +605,7 @@ impl SoIndexedFaceSet {
     #[pyo3(name = "normalIndex")]
     fn set_normal_index(mut slf: PyRefMut<'_, Self>, values: &Bound<'_, PyAny>) -> PyResult<()> {
         let parsed = parse_values::<u32>(values)?;
-        field_replace(&mut slf.as_super().node.kind, FieldKind::NormalIndex, parsed)
+        field_replace(&mut slf.as_super().node, FieldId::NormalIndex, parsed)
     }
 }
 
@@ -669,7 +633,7 @@ impl SoIndexedLineSet {
             slf.py(),
             SoMFInt32 {
                 parent: field_parent(slf),
-                field: FieldKind::CoordIndex,
+                field: FieldId::CoordIndex,
             },
         )
     }
@@ -678,7 +642,7 @@ impl SoIndexedLineSet {
     #[pyo3(name = "coordIndex")]
     fn set_coord_index(mut slf: PyRefMut<'_, Self>, values: &Bound<'_, PyAny>) -> PyResult<()> {
         let parsed = parse_values::<u32>(values)?;
-        field_replace(&mut slf.as_super().node.kind, FieldKind::CoordIndex, parsed)
+        field_replace(&mut slf.as_super().node, FieldId::CoordIndex, parsed)
     }
 }
 
@@ -707,7 +671,7 @@ impl SoFaceSet {
             slf.py(),
             SoMFInt32 {
                 parent: field_parent(slf),
-                field: FieldKind::NumVertices,
+                field: FieldId::NumVertices,
             },
         )
     }
@@ -717,8 +681,8 @@ impl SoFaceSet {
     fn set_num_vertices(mut slf: PyRefMut<'_, Self>, values: &Bound<'_, PyAny>) -> PyResult<()> {
         let parsed = parse_values::<u32>(values)?;
         field_replace(
-            &mut slf.as_super().node.kind,
-            FieldKind::NumVertices,
+            &mut slf.as_super().node,
+            FieldId::NumVertices,
             parsed,
         )
     }
@@ -806,6 +770,61 @@ impl SoLightModel {
                 Ok(())
             }
             _ => Err(PyRuntimeError::new_err("SoLightModel: not a light model")),
+        }
+    }
+}
+
+/// A material-binding hint (Coin `SoMaterialBinding`).
+///
+/// **Recorded, not applied**: the compiler binds one colour per draw, and a host that
+/// draws per-face colours already has them in its own view state. It exists so a scene
+/// that declares a binding round-trips — `ViewObject.RootNode` publishes one.
+#[pyclass(extends = SoNode)]
+pub struct SoMaterialBinding;
+
+#[pymethods]
+impl SoMaterialBinding {
+    #[new]
+    pub fn new() -> PyClassInitializer<Self> {
+        node_initializer(NodeKind::MaterialBinding {
+            value: ferrocad_inventor::material_binding::OVERALL,
+        })
+        .add_subclass(SoMaterialBinding)
+    }
+
+    #[classattr]
+    const OVERALL: i32 = ferrocad_inventor::material_binding::OVERALL;
+    #[classattr]
+    const PER_PART: i32 = ferrocad_inventor::material_binding::PER_PART;
+    #[classattr]
+    const PER_PART_INDEXED: i32 = ferrocad_inventor::material_binding::PER_PART_INDEXED;
+    #[classattr]
+    const PER_FACE: i32 = ferrocad_inventor::material_binding::PER_FACE;
+    #[classattr]
+    const PER_FACE_INDEXED: i32 = ferrocad_inventor::material_binding::PER_FACE_INDEXED;
+    #[classattr]
+    const PER_VERTEX: i32 = ferrocad_inventor::material_binding::PER_VERTEX;
+    #[classattr]
+    const PER_VERTEX_INDEXED: i32 = ferrocad_inventor::material_binding::PER_VERTEX_INDEXED;
+
+    #[getter]
+    fn value(slf: PyRef<'_, Self>) -> i32 {
+        match &slf.as_super().node.kind {
+            NodeKind::MaterialBinding { value } => *value,
+            _ => ferrocad_inventor::material_binding::OVERALL,
+        }
+    }
+
+    #[setter]
+    fn set_value(mut slf: PyRefMut<'_, Self>, value: i32) -> PyResult<()> {
+        match &mut slf.as_super().node.kind {
+            NodeKind::MaterialBinding { value: slot } => {
+                *slot = value;
+                Ok(())
+            }
+            _ => Err(PyRuntimeError::new_err(
+                "SoMaterialBinding: not a material binding",
+            )),
         }
     }
 }
@@ -969,41 +988,15 @@ impl SoTransform {
 // `SoMFNode`: a list of node references
 // ---------------------------------------------------------------------------
 
-/// Which node-reference list a [`SoMFNode`] view addresses.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum NodeListField {
-    /// `SoShaderProgram.shaderObject`.
-    ShaderObject,
-    /// A shader stage's `parameter` list.
-    Parameter,
-}
-
-impl NodeListField {
-    fn matches(self, kind: &NodeKind) -> bool {
-        matches!(
-            (self, kind),
-            (Self::ShaderObject, NodeKind::ShaderProgram)
-                | (Self::Parameter, NodeKind::ShaderStage(_))
-        )
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::ShaderObject => "SoShaderProgram.shaderObject",
-            Self::Parameter => "shader stage.parameter",
-        }
-    }
-}
-
 /// Borrow the node list a [`SoMFNode`] view addresses, verifying the parent is the
 /// kind of node that owns it.
 fn node_list_mut<'py>(
     py: Python<'py>,
     parent: &Py<PyAny>,
-    field: NodeListField,
+    field: FieldId,
 ) -> PyResult<PyRefMut<'py, SoNode>> {
-    let node = node_mut(py, parent)?;
-    if !field.matches(&node.node.kind) {
+    let mut node = node_mut(py, parent)?;
+    if core::nodes_mut(&mut node.node, field).is_none() {
         return Err(mismatch(field.label()));
     }
     Ok(node)
@@ -1051,7 +1044,7 @@ fn detached_node(py: Python<'_>, node: &Node) -> PyResult<PyObject> {
 #[pyclass]
 pub struct SoMFNode {
     parent: Py<PyAny>,
-    field: NodeListField,
+    field: FieldId,
 }
 
 #[pymethods]
@@ -1222,7 +1215,7 @@ impl SoShaderProgram {
             slf.py(),
             SoMFNode {
                 parent: field_parent(slf),
-                field: NodeListField::ShaderObject,
+                field: FieldId::ShaderObject,
             },
         )
     }
@@ -1312,7 +1305,7 @@ macro_rules! shader_stage_class {
                     slf.py(),
                     SoMFNode {
                         parent: field_parent(slf),
-                        field: NodeListField::Parameter,
+                        field: FieldId::Parameter,
                     },
                 )
             }
@@ -1482,7 +1475,7 @@ impl SoShaderParameterArray1f {
             slf.py(),
             SoMFFloat {
                 parent: field_parent(slf),
-                field: FieldKind::ParameterValues,
+                field: FieldId::ParameterValues,
             },
         )
     }
@@ -1511,6 +1504,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SoPickStyle>()?;
     m.add_class::<SoLightModel>()?;
     m.add_class::<SoDepthBuffer>()?;
+    m.add_class::<SoMaterialBinding>()?;
     m.add_class::<SoTransform>()?;
     m.add_class::<SoMFVec3f>()?;
     m.add_class::<SoMFColor>()?;

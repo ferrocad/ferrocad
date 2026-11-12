@@ -2771,6 +2771,8 @@ name = "ferrocad_py"
 version = "0.1.4"
 dependencies = [
  "ferrocad_core",
+ "ferrocad_inventor",
+ "ferrocad_inventor_py",
  "pyo3",
 ]
 

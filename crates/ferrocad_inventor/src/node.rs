@@ -54,6 +54,27 @@ pub mod light_model {
     pub const PHONG: i32 = 1;
 }
 
+/// `SoMaterialBinding.value` modes (Coin's `SoMaterialBinding::Binding`).
+///
+/// Recorded only: the compiler binds one colour per draw, and a host that draws
+/// per-face colours already has them in its own view state.
+pub mod material_binding {
+    /// One binding for the whole shape (`OVERALL`).
+    pub const OVERALL: i32 = 0;
+    /// One binding per part (`PER_PART`).
+    pub const PER_PART: i32 = 1;
+    /// One binding per indexed part (`PER_PART_INDEXED`).
+    pub const PER_PART_INDEXED: i32 = 2;
+    /// One binding per face (`PER_FACE`).
+    pub const PER_FACE: i32 = 3;
+    /// One binding per indexed face (`PER_FACE_INDEXED`).
+    pub const PER_FACE_INDEXED: i32 = 4;
+    /// One binding per vertex (`PER_VERTEX`).
+    pub const PER_VERTEX: i32 = 5;
+    /// One binding per indexed vertex (`PER_VERTEX_INDEXED`).
+    pub const PER_VERTEX_INDEXED: i32 = 6;
+}
+
 /// `SoDepthBuffer.function` compare modes (Coin's
 /// `SoDepthBuffer::DepthWriteFunction`). The compiler maps them onto
 /// [`ferrocad_graphics::DepthCompare`], which the renderer's pipeline selection uses.
@@ -251,6 +272,16 @@ pub enum NodeKind {
         /// The requested model ([`light_model::PHONG`] by default).
         model: i32,
     },
+    /// A material-binding hint (`SoMaterialBinding`) — **recorded, not applied**.
+    ///
+    /// The compiler binds one colour per draw, so a per-part binding is a statement
+    /// about a shape's face colours that the host's own view state already carries.
+    /// It is kept so a scene that declares it round-trips (`value` is one of
+    /// [`material_binding`]).
+    MaterialBinding {
+        /// The requested binding ([`material_binding::OVERALL`] by default).
+        value: i32,
+    },
     /// Depth-buffer state (`SoDepthBuffer`).
     ///
     /// The compiler freezes it into the snapshot's `depth` state, which a renderer's
@@ -314,4 +345,74 @@ pub struct Node {
     pub kind: NodeKind,
     /// Child nodes, in scene order.
     pub children: Vec<Node>,
+}
+
+/// The Coin class name of a node kind.
+///
+/// This is the one table: the facades instantiate by name (`SoType.fromName`), report
+/// the name in their errors, and the compiler names a node in a shader error — so it
+/// lives here rather than in a `match` in each of the three places.
+///
+/// A [`NodeKind::Mesh`] answers its concrete class by topology, because that is what a
+/// script can instantiate (`SoIndexedFaceSet` vs `SoIndexedLineSet`).
+pub fn class_name(kind: &NodeKind) -> &str {
+    match kind {
+        NodeKind::Separator => "SoSeparator",
+        NodeKind::Switch { .. } => "SoSwitch",
+        NodeKind::Coordinate3(_) => "SoCoordinate3",
+        NodeKind::TextureCoordinate2(_) => "SoTextureCoordinate2",
+        NodeKind::Texture2(_) => "SoTexture2",
+        NodeKind::Normal(_) => "SoNormal",
+        NodeKind::Mesh { topology, .. } => match topology {
+            Topology::Lines => "SoIndexedLineSet",
+            Topology::Points => "SoIndexedPointSet",
+            Topology::Triangles => "SoIndexedFaceSet",
+        },
+        NodeKind::FaceSet { .. } => "SoFaceSet",
+        NodeKind::PickStyle { .. } => "SoPickStyle",
+        NodeKind::LightModel { .. } => "SoLightModel",
+        NodeKind::MaterialBinding { .. } => "SoMaterialBinding",
+        NodeKind::DepthBuffer { .. } => "SoDepthBuffer",
+        NodeKind::Material(_) => "SoMaterial",
+        NodeKind::PickId(_) => "SoPickId",
+        NodeKind::Transform(_) => "SoTransform",
+        NodeKind::EventCallback(_) => "SoEventCallback",
+        NodeKind::NaviCube(_) => "SoNaviCube",
+        NodeKind::ShaderProgram => "SoShaderProgram",
+        NodeKind::ShaderStage(stage) => stage.kind.class_name(),
+        NodeKind::ShaderParameter(parameter) => parameter.class_name(),
+        NodeKind::Custom(name) => name,
+    }
+}
+
+/// The Coin root a view provider exposes for one view state (`ViewObject.RootNode`).
+///
+/// Upstream's `ViewProviderPartExt` has one scene-graph branch per display
+/// representation, each holding a material with one diffuse colour per face, bound
+/// `PER_PART`. There is deliberately no geometry: it belongs to the viewport, not to
+/// `App`. The body lives here so the CPython and RustPython facades answer the same
+/// tree — they differ only in which classes they instantiate.
+pub fn view_root(colors: &[[f32; 4]], representations: usize) -> Node {
+    let mut root = Node {
+        kind: NodeKind::Separator,
+        children: Vec::with_capacity(representations),
+    };
+    for _ in 0..representations {
+        root.children.push(Node {
+            kind: NodeKind::Separator,
+            children: vec![
+                Node {
+                    kind: NodeKind::Material(colors.to_vec()),
+                    children: Vec::new(),
+                },
+                Node {
+                    kind: NodeKind::MaterialBinding {
+                        value: material_binding::PER_PART,
+                    },
+                    children: Vec::new(),
+                },
+            ],
+        });
+    }
+    root
 }

@@ -164,6 +164,52 @@ fn the_shipped_settings_clients_load() {
     });
 }
 
+/// The **Coin** skins load too (B20).
+///
+/// `mods/GridOverlayCoin`, `AxisOverlayCoin` and `GizmoOverlayShader` import
+/// `pivy.coin` at module scope and declare a provider; the shader tree itself is built on
+/// activation, which is where the WGSL file is read — so loading (and registering) is the
+/// part this host can prove without an addon resource directory.
+#[test]
+fn the_shipped_coin_skins_load() {
+    with_host(|host| {
+        let report = load(
+            host,
+            &serde_json::json!([
+                {"name": "GridOverlayCoin", "script": "InitGui.py",
+                 "source": include_str!("../../../mods/GridOverlayCoin/InitGui.py")},
+                {"name": "AxisOverlayCoin", "script": "InitGui.py",
+                 "source": include_str!("../../../mods/AxisOverlayCoin/InitGui.py")},
+                {"name": "GizmoOverlayShader", "script": "InitGui.py",
+                 "source": include_str!("../../../mods/GizmoOverlayShader/InitGui.py")}
+            ])
+            .to_string(),
+        );
+        let loaded = report["loaded"].as_array().cloned().unwrap_or_default();
+        assert_eq!(
+            loaded.len(),
+            3,
+            "the three Coin skins ran: {report}"
+        );
+        assert_eq!(
+            report["errors"],
+            serde_json::json!([]),
+            "no Coin skin raised: {report}"
+        );
+
+        let providers = evaluate(
+            host,
+            "import FerroCADGui\nprint([(m['feature'], m['backend']) for m in FerroCADGui.providers()])",
+        );
+        for backend in ["('grid', 'coin')", "('axis', 'coin')", "('gizmo', 'ferrocad-shader')"] {
+            assert!(
+                providers.contains(backend),
+                "the Coin backend registered ({backend}): {providers}"
+            );
+        }
+    });
+}
+
 #[test]
 fn a_malformed_entry_is_skipped() {
     with_host(|host| {

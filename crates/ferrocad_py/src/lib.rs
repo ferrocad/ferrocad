@@ -6977,39 +6977,29 @@ impl PyViewObject {
 
     /// The Coin root of this view provider.
     ///
-    /// This is a real `pivy.coin` scene graph when the bindings are importable, and
-    /// it mirrors the view state: one material (per-face colours, bound `PER_PART`)
-    /// for each of the two display representations. There is deliberately no
-    /// geometry — that belongs to the viewport, not to `App`. Without `pivy` there
-    /// is no attribute at all, as in an upstream App-only session.
+    /// This is the `pivy.coin` scene graph when the bindings are installed, and it
+    /// mirrors the view state: one material (per-face colours, bound `PER_PART`) for
+    /// each of the two display representations. There is deliberately no geometry — that
+    /// belongs to the viewport, not to `App`. Without the bindings there is no attribute
+    /// at all, as in an upstream App-only session.
+    ///
+    /// The tree itself is [`ferrocad_inventor::view_root`], the body the RustPython host
+    /// adapts too, so both runtimes answer the same shape.
     #[getter]
     fn RootNode(&self, py: Python<'_>) -> PyResult<PyObject> {
         let colors = self.diffuse_colors(py)?;
-        let coin = py.import("pivy.coin").map_err(|_| {
+        py.import("pivy.coin").map_err(|_| {
             PyAttributeError::new_err(
                 "RootNode needs the pivy Coin bindings; the view state is still \
                  readable as ViewObject properties",
             )
         })?;
-        let root = coin.getattr("SoSeparator")?.call0()?;
-        // The two display representations a Part view provider has ("Flat Lines"
-        // and "Shaded"). Both carry the same material model.
-        for _ in DISPLAY_MODES.iter().take(2) {
-            let separator = coin.getattr("SoSeparator")?.call0()?;
-            let material = coin.getattr("SoMaterial")?.call0()?;
-            let diffuse = material.getattr("diffuseColor")?;
-            diffuse.call_method1("setNum", (colors.len(),))?;
-            for (index, color) in colors.iter().enumerate() {
-                diffuse.call_method1("set1Value", (index, (color[0], color[1], color[2])))?;
-            }
-            let binding = coin.getattr("SoMaterialBinding")?.call0()?;
-            let per_part = binding.getattr("PER_PART")?;
-            binding.setattr("value", per_part)?;
-            separator.call_method1("addChild", (&material,))?;
-            separator.call_method1("addChild", (&binding,))?;
-            root.call_method1("addChild", (&separator,))?;
-        }
-        Ok(root.unbind())
+        let palette: Vec<[f32; 4]> = colors
+            .iter()
+            .map(|color| [color[0] as f32, color[1] as f32, color[2] as f32, 1.0])
+            .collect();
+        let tree = ferrocad_inventor::view_root(&palette, DISPLAY_MODES.len().min(2));
+        ferrocad_inventor_py::to_py(py, &tree)
     }
 
     fn __repr__(&self) -> PyResult<String> {

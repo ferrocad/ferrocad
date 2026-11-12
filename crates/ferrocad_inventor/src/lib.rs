@@ -41,6 +41,9 @@
 
 pub mod compile;
 pub mod event;
+// The node fields as data (name → buffer) and Coin's `set("field VALUE")` parser: the
+// rules both Python facades (`pivy.coin` on PyO3, `coin` on RustPython) interpret.
+pub mod fields;
 pub mod node;
 // The pull-based overlay registry a producer fills and the host drains. Pure data, so
 // a platform-neutral host can use it without the Python facade.
@@ -66,7 +69,8 @@ pub use compile::{ShaderError, compile, compile_diagnostic, compile_with, compil
 pub use event::{Event, EventListener};
 pub use node::{
     Node, NodeKind, SO_SWITCH_ALL, SO_SWITCH_INHERIT, SO_SWITCH_NONE, Scene, ShaderParameter,
-    ShaderStage, ShaderStageKind, depth_function, light_model, pick_style,
+    ShaderStage, ShaderStageKind, class_name, depth_function, light_model, material_binding,
+    pick_style, view_root,
 };
 pub use registry::TypeRegistry;
 pub use state::State;

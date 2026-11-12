@@ -469,6 +469,21 @@ workbench panel behaves the same whether the window runs CPython or the browser'
 RustPython. `load_ui` takes a path, UTF-8 bytes or a `QFile`-like object, which is what
 lets the browser's `:/ui/…` resources reach it through the pure-Python `PySide` reader.
 
+**Coin scenes are one body with two adapters.** `from pivy import coin` is how 75 upstream
+Python files build scene graphs, and `mods/GridOverlayCoin`, `mods/AxisOverlayCoin` and
+`mods/GizmoOverlayShader` are the ones this repository ships. The rules are
+`ferrocad_inventor`'s, not a facade's: `node::class_name` is the class table,
+`fields` is the name→buffer table and Coin's `set("field VALUE")` parser, `view_root` is
+the `ViewObject.RootNode` tree, and `overlays` is the pull registry a host drains. Each
+runtime contributes only an adapter — `ferrocad_inventor_py` (PyO3) and
+`ferrocad_shell_pywasm/src/native_coin.rs` (RustPython) — which is why the browser can
+build, `addOverlay` and `RootNode` the same tree without a second implementation. The
+RustPython adapter answers the subset the shipped workbenches use (the node classes those
+tree builders touch, the field verbs `getNum`/`getValues`/`setValues`/`setValue`/
+`set1Value`/`setNum`, `set`), so a class outside it raises `AttributeError` rather than
+silently doing nothing; `SoType.fromName` and the camera/event classes are not bound there
+yet.
+
 **On the desktop the interpreter lives on a worker.** The VM is not `Send` and its
 compiler recurses, so a host must raise the stack before the interpreter starts; a GPUI app
 cannot raise its own (8 MiB on Linux and macOS, 1 MiB on Windows).

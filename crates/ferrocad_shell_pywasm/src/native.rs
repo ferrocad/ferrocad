@@ -175,13 +175,13 @@ mod ferrocad {
     #[pyclass(flags(HAS_DICT), with(SetAttr))]
     impl PyDocumentObject {
         #[pygetset]
-        fn Name(&self) -> String {
-            self.row.name.clone()
+        fn Name(zelf: &Py<Self>) -> String {
+            zelf.row.name.clone()
         }
 
         #[pygetset]
-        fn TypeId(&self) -> String {
-            self.row.type_id.clone()
+        fn TypeId(zelf: &Py<Self>) -> String {
+            zelf.row.type_id.clone()
         }
 
         // `Label` has no getter on purpose: it is the object's user-visible name, and a
@@ -189,8 +189,8 @@ mod ferrocad {
         // it, `reseed` refreshes it). `Name`/`TypeId` never change, so they stay.
 
         #[pygetset]
-        fn PropertiesList(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let names: Vec<PyObjectRef> = self
+        fn PropertiesList(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let names: Vec<PyObjectRef> = zelf
                 .row
                 .properties
                 .iter()
@@ -201,8 +201,8 @@ mod ferrocad {
 
         /// `[(name, expression)]`; no expressions are stored in this projection.
         #[pygetset]
-        fn ExpressionEngine(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let pairs: Vec<PyObjectRef> = self
+        fn ExpressionEngine(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let pairs: Vec<PyObjectRef> = zelf
                 .row
                 .driven
                 .iter()
@@ -220,8 +220,12 @@ mod ferrocad {
 
         /// The flag names (`PropertyLength`, …) the payload carries.
         #[pymethod]
-        fn getTypeOfProperty(&self, prop: String, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            let row = self
+        fn getTypeOfProperty(
+            zelf: &Py<Self>,
+            prop: String,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let row = zelf
                 .row
                 .property(&prop)
                 .ok_or_else(|| attribute_error(&prop, vm))?;
@@ -234,8 +238,12 @@ mod ferrocad {
         }
 
         #[pymethod]
-        fn getTypeIdOfProperty(&self, prop: String, vm: &VirtualMachine) -> PyResult<String> {
-            self.row
+        fn getTypeIdOfProperty(
+            zelf: &Py<Self>,
+            prop: String,
+            vm: &VirtualMachine,
+        ) -> PyResult<String> {
+            zelf.row
                 .property(&prop)
                 .map(|row| row.type_id.clone())
                 .ok_or_else(|| attribute_error(&prop, vm))
@@ -243,11 +251,11 @@ mod ferrocad {
 
         #[pymethod]
         fn getEnumerationsOfProperty(
-            &self,
+            zelf: &Py<Self>,
             prop: String,
             vm: &VirtualMachine,
         ) -> PyResult<PyObjectRef> {
-            let row = self
+            let row = zelf
                 .row
                 .property(&prop)
                 .ok_or_else(|| attribute_error(&prop, vm))?;
@@ -261,9 +269,9 @@ mod ferrocad {
 
         /// A property's display value, as the payload rendered it.
         #[pymethod]
-        fn __getattr__(&self, name: PyStrRef, vm: &VirtualMachine) -> PyResult<String> {
+        fn __getattr__(zelf: &Py<Self>, name: PyStrRef, vm: &VirtualMachine) -> PyResult<String> {
             let name = name.to_str().unwrap_or_default();
-            self.row
+            zelf.row
                 .property(name)
                 .map(|row| row.value.clone())
                 .ok_or_else(|| attribute_error(name, vm))
@@ -325,37 +333,37 @@ mod ferrocad {
     #[pyclass]
     impl PyDocument {
         #[pygetset]
-        fn Name(&self) -> String {
-            self.row.name.clone()
+        fn Name(zelf: &Py<Self>) -> String {
+            zelf.row.name.clone()
         }
 
         #[pygetset]
-        fn Label(&self) -> String {
-            self.row.name.clone()
+        fn Label(zelf: &Py<Self>) -> String {
+            zelf.row.name.clone()
         }
 
         #[pygetset]
-        fn Objects(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            let mut objects = Vec::with_capacity(self.row.objects.len());
-            for row in self.row.objects.iter().cloned() {
+        fn Objects(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let mut objects = Vec::with_capacity(zelf.row.objects.len());
+            for row in zelf.row.objects.iter().cloned() {
                 objects.push(object_py(row, vm)?);
             }
             Ok(vm.ctx.new_list(objects).into())
         }
 
         #[pygetset]
-        fn UndoCount(&self) -> i64 {
-            self.row.undo_count
+        fn UndoCount(zelf: &Py<Self>) -> i64 {
+            zelf.row.undo_count
         }
 
         #[pygetset]
-        fn RedoCount(&self) -> i64 {
-            self.row.redo_count
+        fn RedoCount(zelf: &Py<Self>) -> i64 {
+            zelf.row.redo_count
         }
 
         #[pymethod]
-        fn getObject(&self, name: String, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            match self
+        fn getObject(zelf: &Py<Self>, name: String, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            match zelf
                 .row
                 .objects
                 .iter()
@@ -375,7 +383,7 @@ mod ferrocad {
         /// pane does.
         #[pymethod]
         fn addObject(
-            &self,
+            _zelf: &Py<Self>,
             r#type: PyStrRef,
             name: OptionalArg<PyStrRef>,
             vm: &VirtualMachine,
@@ -411,7 +419,7 @@ mod ferrocad {
         /// A read-only host has nothing to recompute (its payload is a projection), so
         /// this is `0` rather than a refusal: scripts call it unconditionally.
         #[pymethod]
-        fn recompute(&self, vm: &VirtualMachine) -> PyResult<usize> {
+        fn recompute(_zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<usize> {
             if !crate::document_writes() {
                 return Ok(0);
             }
@@ -429,13 +437,13 @@ mod ferrocad {
         // The facade opens one around an edit (`ferrocad_shell.set_property`), and the
         // doorway's per-write transaction is the undo step it gets.
         #[pymethod]
-        fn openTransaction(&self, _name: OptionalArg<PyStrRef>) {}
+        fn openTransaction(_zelf: &Py<Self>, _name: OptionalArg<PyStrRef>) {}
 
         #[pymethod]
-        fn commitTransaction(&self) {}
+        fn commitTransaction(_zelf: &Py<Self>) {}
 
         #[pymethod]
-        fn abortTransaction(&self) {}
+        fn abortTransaction(_zelf: &Py<Self>) {}
     }
 
     fn document_py(row: DocumentRow, vm: &VirtualMachine) -> PyObjectRef {
@@ -743,25 +751,25 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyQuantity {
         #[pygetset]
-        fn Value(&self) -> f64 {
-            self.inner.value()
+        fn Value(zelf: &Py<Self>) -> f64 {
+            zelf.inner.value()
         }
 
         #[pymethod]
-        fn getValueAs(&self, unit: String, vm: &VirtualMachine) -> PyResult<Self> {
+        fn getValueAs(zelf: &Py<Self>, unit: String, vm: &VirtualMachine) -> PyResult<Self> {
             let unit = Unit::parse(&unit)
                 .ok_or_else(|| vm.new_value_error(format!("unknown unit '{unit}'")))?;
-            if unit.sig != self.inner.sig() {
+            if unit.sig != zelf.inner.sig() {
                 return Err(vm.new_value_error("incompatible unit for getValueAs"));
             }
             Ok(Self {
-                inner: self.inner.in_unit(unit),
+                inner: zelf.inner.in_unit(unit),
             })
         }
 
         #[pymethod]
-        fn __str__(&self) -> String {
-            self.inner.user_string()
+        fn __str__(zelf: &Py<Self>) -> String {
+            zelf.inner.user_string()
         }
     }
 
@@ -790,8 +798,8 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyUnit {
         #[pymethod]
-        fn __str__(&self) -> String {
-            canonical_name(self.inner.sig)
+        fn __str__(zelf: &Py<Self>) -> String {
+            canonical_name(zelf.inner.sig)
         }
     }
 
@@ -828,70 +836,70 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyVector {
         #[pygetset]
-        fn x(&self) -> f64 {
-            self.inner.x
+        fn x(zelf: &Py<Self>) -> f64 {
+            zelf.inner.x
         }
 
         #[pygetset]
-        fn y(&self) -> f64 {
-            self.inner.y
+        fn y(zelf: &Py<Self>) -> f64 {
+            zelf.inner.y
         }
 
         #[pygetset]
-        fn z(&self) -> f64 {
-            self.inner.z
+        fn z(zelf: &Py<Self>) -> f64 {
+            zelf.inner.z
         }
 
         #[pygetset]
-        fn Length(&self) -> f64 {
-            self.inner.length()
+        fn Length(zelf: &Py<Self>) -> f64 {
+            zelf.inner.length()
         }
 
         #[pymethod]
-        fn add(&self, other: PyRef<PyVector>) -> Self {
+        fn add(zelf: &Py<Self>, other: PyRef<PyVector>) -> Self {
             Self {
-                inner: self.inner.add(&other.inner),
+                inner: zelf.inner.add(&other.inner),
             }
         }
 
         #[pymethod]
-        fn sub(&self, other: PyRef<PyVector>) -> Self {
+        fn sub(zelf: &Py<Self>, other: PyRef<PyVector>) -> Self {
             Self {
-                inner: self.inner.sub(&other.inner),
+                inner: zelf.inner.sub(&other.inner),
             }
         }
 
         #[pymethod]
-        fn scale(&self, factor: f64) -> Self {
+        fn scale(zelf: &Py<Self>, factor: f64) -> Self {
             Self {
-                inner: self.inner.scale(factor),
+                inner: zelf.inner.scale(factor),
             }
         }
 
         #[pymethod]
-        fn dot(&self, other: PyRef<PyVector>) -> f64 {
-            self.inner.dot(&other.inner)
+        fn dot(zelf: &Py<Self>, other: PyRef<PyVector>) -> f64 {
+            zelf.inner.dot(&other.inner)
         }
 
         #[pymethod]
-        fn cross(&self, other: PyRef<PyVector>) -> Self {
+        fn cross(zelf: &Py<Self>, other: PyRef<PyVector>) -> Self {
             Self {
-                inner: self.inner.cross(&other.inner),
+                inner: zelf.inner.cross(&other.inner),
             }
         }
 
         #[pymethod]
-        fn normalize(&self) -> Self {
+        fn normalize(zelf: &Py<Self>) -> Self {
             Self {
-                inner: self.inner.normalize(),
+                inner: zelf.inner.normalize(),
             }
         }
 
         #[pymethod]
-        fn __str__(&self) -> String {
+        fn __str__(zelf: &Py<Self>) -> String {
             format!(
                 "Vector ({}, {}, {})",
-                self.inner.x, self.inner.y, self.inner.z
+                zelf.inner.x, zelf.inner.y, zelf.inner.z
             )
         }
     }
@@ -923,13 +931,13 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyVector2d {
         #[pygetset]
-        fn x(&self) -> f64 {
-            self.x
+        fn x(zelf: &Py<Self>) -> f64 {
+            zelf.x
         }
 
         #[pygetset]
-        fn y(&self) -> f64 {
-            self.y
+        fn y(zelf: &Py<Self>) -> f64 {
+            zelf.y
         }
     }
 
@@ -968,18 +976,23 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyMatrix {
         #[pymethod]
-        fn __getattr__(&self, name: PyStrRef, vm: &VirtualMachine) -> PyResult<f64> {
+        fn __getattr__(zelf: &Py<Self>, name: PyStrRef, vm: &VirtualMachine) -> PyResult<f64> {
             let name = name.to_str().unwrap_or_default();
             matrix_index(name)
-                .map(|index| self.inner.borrow().m[index])
+                .map(|index| zelf.inner.borrow().m[index])
                 .ok_or_else(|| attribute_error(name, vm))
         }
 
         #[pymethod]
-        fn __setattr__(&self, name: PyStrRef, value: f64, vm: &VirtualMachine) -> PyResult<()> {
+        fn __setattr__(
+            zelf: &Py<Self>,
+            name: PyStrRef,
+            value: f64,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
             let name = name.to_str().unwrap_or_default();
             let index = matrix_index(name).ok_or_else(|| attribute_error(name, vm))?;
-            self.inner.borrow_mut().m[index] = value;
+            zelf.inner.borrow_mut().m[index] = value;
             Ok(())
         }
     }
@@ -1021,21 +1034,21 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyRotation {
         #[pygetset]
-        fn Angle(&self) -> f64 {
-            self.inner.angle()
+        fn Angle(zelf: &Py<Self>) -> f64 {
+            zelf.inner.angle()
         }
 
         #[pygetset]
-        fn Axis(&self) -> PyVector {
+        fn Axis(zelf: &Py<Self>) -> PyVector {
             PyVector {
-                inner: self.inner.axis(),
+                inner: zelf.inner.axis(),
             }
         }
 
         #[pymethod]
-        fn multVec(&self, vector: PyRef<PyVector>) -> PyVector {
+        fn multVec(zelf: &Py<Self>, vector: PyRef<PyVector>) -> PyVector {
             PyVector {
-                inner: self.inner.to_matrix().transform(&vector.inner),
+                inner: zelf.inner.to_matrix().transform(&vector.inner),
             }
         }
     }
@@ -1075,30 +1088,30 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyPlacement {
         #[pygetset]
-        fn Base(&self) -> PyVector {
+        fn Base(zelf: &Py<Self>) -> PyVector {
             PyVector {
-                inner: self.inner.base,
+                inner: zelf.inner.base,
             }
         }
 
         #[pygetset]
-        fn Rotation(&self) -> PyRotation {
+        fn Rotation(zelf: &Py<Self>) -> PyRotation {
             PyRotation {
-                inner: self.inner.rotation,
+                inner: zelf.inner.rotation,
             }
         }
 
         #[pymethod]
-        fn multVec(&self, vector: PyRef<PyVector>) -> PyVector {
+        fn multVec(zelf: &Py<Self>, vector: PyRef<PyVector>) -> PyVector {
             PyVector {
-                inner: self.inner.to_matrix().transform(&vector.inner),
+                inner: zelf.inner.to_matrix().transform(&vector.inner),
             }
         }
 
         #[pymethod]
-        fn inverse(&self) -> Self {
+        fn inverse(zelf: &Py<Self>) -> Self {
             Self {
-                inner: self.inner.inverse(),
+                inner: zelf.inner.inverse(),
             }
         }
     }
@@ -1126,8 +1139,8 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyTypeId {
         #[pymethod]
-        fn __str__(&self) -> String {
-            self.name.clone()
+        fn __str__(zelf: &Py<Self>) -> String {
+            zelf.name.clone()
         }
     }
 
@@ -1195,44 +1208,44 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyBoundBox {
         #[pygetset]
-        fn XMin(&self) -> f64 {
-            self.inner.borrow().min[0]
+        fn XMin(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().min[0]
         }
 
         #[pygetset]
-        fn YMin(&self) -> f64 {
-            self.inner.borrow().min[1]
+        fn YMin(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().min[1]
         }
 
         #[pygetset]
-        fn ZMin(&self) -> f64 {
-            self.inner.borrow().min[2]
+        fn ZMin(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().min[2]
         }
 
         #[pygetset]
-        fn XMax(&self) -> f64 {
-            self.inner.borrow().max[0]
+        fn XMax(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().max[0]
         }
 
         #[pygetset]
-        fn YMax(&self) -> f64 {
-            self.inner.borrow().max[1]
+        fn YMax(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().max[1]
         }
 
         #[pygetset]
-        fn ZMax(&self) -> f64 {
-            self.inner.borrow().max[2]
+        fn ZMax(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().max[2]
         }
 
         #[pygetset]
-        fn isValid(&self) -> bool {
-            self.inner.borrow().valid
+        fn isValid(zelf: &Py<Self>) -> bool {
+            zelf.inner.borrow().valid
         }
 
         /// Grow the box by `amount` in every direction.
         #[pymethod]
-        fn enlarge(&self, amount: f64) {
-            let mut inner = self.inner.borrow_mut();
+        fn enlarge(zelf: &Py<Self>, amount: f64) {
+            let mut inner = zelf.inner.borrow_mut();
             if inner.valid {
                 for axis in 0..3 {
                     inner.min[axis] -= amount;
@@ -1272,67 +1285,83 @@ mod ferrocad {
     #[pyclass(with(Constructor))]
     impl PyMaterial {
         #[pygetset]
-        fn DiffuseColor(&self) -> (f64, f64, f64, f64) {
-            tuple(self.inner.borrow().diffuse)
+        fn DiffuseColor(zelf: &Py<Self>) -> (f64, f64, f64, f64) {
+            tuple(zelf.inner.borrow().diffuse)
         }
 
         #[pygetset(setter)]
-        fn set_DiffuseColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
-            self.inner.borrow_mut().diffuse = colour(&value, vm)?;
+        fn set_DiffuseColor(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            zelf.inner.borrow_mut().diffuse = colour(&value, vm)?;
             Ok(())
         }
 
         #[pygetset]
-        fn AmbientColor(&self) -> (f64, f64, f64, f64) {
-            tuple(self.inner.borrow().ambient)
+        fn AmbientColor(zelf: &Py<Self>) -> (f64, f64, f64, f64) {
+            tuple(zelf.inner.borrow().ambient)
         }
 
         #[pygetset(setter)]
-        fn set_AmbientColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
-            self.inner.borrow_mut().ambient = colour(&value, vm)?;
+        fn set_AmbientColor(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            zelf.inner.borrow_mut().ambient = colour(&value, vm)?;
             Ok(())
         }
 
         #[pygetset]
-        fn SpecularColor(&self) -> (f64, f64, f64, f64) {
-            tuple(self.inner.borrow().specular)
+        fn SpecularColor(zelf: &Py<Self>) -> (f64, f64, f64, f64) {
+            tuple(zelf.inner.borrow().specular)
         }
 
         #[pygetset(setter)]
-        fn set_SpecularColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
-            self.inner.borrow_mut().specular = colour(&value, vm)?;
+        fn set_SpecularColor(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            zelf.inner.borrow_mut().specular = colour(&value, vm)?;
             Ok(())
         }
 
         #[pygetset]
-        fn EmissiveColor(&self) -> (f64, f64, f64, f64) {
-            tuple(self.inner.borrow().emissive)
+        fn EmissiveColor(zelf: &Py<Self>) -> (f64, f64, f64, f64) {
+            tuple(zelf.inner.borrow().emissive)
         }
 
         #[pygetset(setter)]
-        fn set_EmissiveColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
-            self.inner.borrow_mut().emissive = colour(&value, vm)?;
+        fn set_EmissiveColor(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            zelf.inner.borrow_mut().emissive = colour(&value, vm)?;
             Ok(())
         }
 
         #[pygetset]
-        fn Shininess(&self) -> f64 {
-            self.inner.borrow().shininess
+        fn Shininess(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().shininess
         }
 
         #[pygetset(setter)]
-        fn set_Shininess(&self, value: f64) {
-            self.inner.borrow_mut().shininess = value;
+        fn set_Shininess(zelf: &Py<Self>, value: f64) {
+            zelf.inner.borrow_mut().shininess = value;
         }
 
         #[pygetset]
-        fn Transparency(&self) -> f64 {
-            self.inner.borrow().transparency
+        fn Transparency(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().transparency
         }
 
         #[pygetset(setter)]
-        fn set_Transparency(&self, value: f64) {
-            self.inner.borrow_mut().transparency = value;
+        fn set_Transparency(zelf: &Py<Self>, value: f64) {
+            zelf.inner.borrow_mut().transparency = value;
         }
     }
 
@@ -1368,14 +1397,14 @@ mod ferrocad {
     impl PyStringHasher {
         /// The `StringID` for `text`, or the one with `value` when given an int.
         #[pymethod]
-        fn getID(&self, arg: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyStringID> {
+        fn getID(zelf: &Py<Self>, arg: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyStringID> {
             if let Ok(text) = arg.clone().try_into_value::<String>(vm) {
                 return Ok(PyStringID {
-                    inner: self.inner.get_id(&text),
+                    inner: zelf.inner.get_id(&text),
                 });
             }
             if let Ok(value) = arg.clone().try_into_value::<usize>(vm) {
-                return self
+                return zelf
                     .inner
                     .find_id(value)
                     .map(|inner| PyStringID { inner })
@@ -1385,8 +1414,8 @@ mod ferrocad {
         }
 
         #[pymethod]
-        fn isSame(&self, other: PyRef<Self>) -> bool {
-            self.inner.is_same(&other.inner)
+        fn isSame(zelf: &Py<Self>, other: PyRef<Self>) -> bool {
+            zelf.inner.is_same(&other.inner)
         }
     }
 
@@ -1407,18 +1436,18 @@ mod ferrocad {
     #[pyclass]
     impl PyStringID {
         #[pygetset]
-        fn Value(&self) -> usize {
-            self.inner.value()
+        fn Value(zelf: &Py<Self>) -> usize {
+            zelf.inner.value()
         }
 
         #[pygetset]
-        fn Data(&self) -> String {
-            self.inner.data()
+        fn Data(zelf: &Py<Self>) -> String {
+            zelf.inner.data()
         }
 
         #[pymethod]
-        fn isSame(&self, other: PyRef<Self>) -> bool {
-            self.inner.is_same(&other.inner)
+        fn isSame(zelf: &Py<Self>, other: PyRef<Self>) -> bool {
+            zelf.inner.is_same(&other.inner)
         }
     }
 }

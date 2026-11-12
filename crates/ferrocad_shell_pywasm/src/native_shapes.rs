@@ -37,7 +37,9 @@ use ferrocad_occt::OcctBackend;
 use rustpython_vm::builtins::PyStrRef;
 use rustpython_vm::function::{FuncArgs, OptionalArg};
 use rustpython_vm::types::Constructor;
-use rustpython_vm::{PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine, pyclass, pymodule};
+use rustpython_vm::{
+    Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine, pyclass, pymodule,
+};
 
 pub(crate) use mesh::module_def as mesh_module_def;
 pub(crate) use mesh_part::module_def as mesh_part_module_def;
@@ -212,7 +214,7 @@ mod part {
     use std::sync::{Arc, Mutex};
 
     use super::{
-        ElementKind, OptionalArg, Placement, PyObjectRef, PyPayload, PyRef, PyResult, PyStrRef,
+        ElementKind, OptionalArg, Placement, Py, PyObjectRef, PyPayload, PyRef, PyResult, PyStrRef,
         Rotation, Shape, Vector3, VirtualMachine, kernel, pyclass, sub_shapes, tessellate,
     };
 
@@ -396,8 +398,8 @@ mod part {
     impl PyShape {
         /// The solid volume; `0` when the shape encloses nothing.
         #[pygetset]
-        fn Volume(&self) -> f64 {
-            self.resolved()
+        fn Volume(zelf: &Py<Self>) -> f64 {
+            zelf.resolved()
                 .and_then(|shape| kernel().mass_properties(&shape))
                 .map(|properties| properties.volume)
                 .unwrap_or(0.0)
@@ -405,8 +407,8 @@ mod part {
 
         /// The surface area.
         #[pygetset]
-        fn Area(&self) -> f64 {
-            self.resolved()
+        fn Area(zelf: &Py<Self>) -> f64 {
+            zelf.resolved()
                 .and_then(|shape| kernel().mass_properties(&shape))
                 .map(|properties| properties.area)
                 .unwrap_or(0.0)
@@ -414,8 +416,8 @@ mod part {
 
         /// The centre of mass as a `FreeCAD.Vector`.
         #[pygetset]
-        fn CenterOfMass(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self
+        fn CenterOfMass(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf
                 .resolved()
                 .and_then(|shape| kernel().mass_properties(&shape))
             {
@@ -426,8 +428,8 @@ mod part {
 
         /// The axis-aligned bounds as a `FreeCAD.BoundBox`.
         #[pygetset]
-        fn BoundBox(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let (min, max) = self
+        fn BoundBox(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let (min, max) = zelf
                 .resolved()
                 .and_then(|shape| kernel().bounds(&shape))
                 .unwrap_or((Vector3::zero(), Vector3::zero()));
@@ -436,56 +438,56 @@ mod part {
 
         /// The kernel's topological kind (`Solid`, `Face`, `Compound`, …).
         #[pygetset]
-        fn ShapeType(&self) -> String {
-            self.resolved()
+        fn ShapeType(zelf: &Py<Self>) -> String {
+            zelf.resolved()
                 .and_then(|shape| ferrocad_occt::part_ops::shape_kind(&shape))
                 .unwrap_or("Compound")
                 .to_string()
         }
 
         #[pygetset]
-        fn Faces(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.resolved() {
+        fn Faces(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.resolved() {
                 Some(shape) => list_of_shapes(sub_shapes(&shape, ElementKind::Face), vm),
                 None => vm.ctx.new_list(Vec::new()).into(),
             }
         }
 
         #[pygetset]
-        fn Edges(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.resolved() {
+        fn Edges(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.resolved() {
                 Some(shape) => list_of_shapes(sub_shapes(&shape, ElementKind::Edge), vm),
                 None => vm.ctx.new_list(Vec::new()).into(),
             }
         }
 
         #[pygetset]
-        fn Vertexes(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.resolved() {
+        fn Vertexes(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.resolved() {
                 Some(shape) => list_of_shapes(sub_shapes(&shape, ElementKind::Vertex), vm),
                 None => vm.ctx.new_list(Vec::new()).into(),
             }
         }
 
         #[pygetset]
-        fn Solids(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.resolved() {
+        fn Solids(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.resolved() {
                 Some(shape) => list_of_shapes(sub_shapes(&shape, ElementKind::Solid), vm),
                 None => vm.ctx.new_list(Vec::new()).into(),
             }
         }
 
         #[pygetset]
-        fn Shells(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.resolved() {
+        fn Shells(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.resolved() {
                 Some(shape) => list_of_shapes(sub_shapes(&shape, ElementKind::Shell), vm),
                 None => vm.ctx.new_list(Vec::new()).into(),
             }
         }
 
         #[pygetset]
-        fn Wires(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.resolved() {
+        fn Wires(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.resolved() {
                 Some(shape) => list_of_shapes(sub_shapes(&shape, ElementKind::Wire), vm),
                 None => vm.ctx.new_list(Vec::new()).into(),
             }
@@ -493,21 +495,25 @@ mod part {
 
         /// Whether the kernel considers the B-Rep valid.
         #[pymethod]
-        fn isValid(&self) -> bool {
-            self.resolved()
+        fn isValid(zelf: &Py<Self>) -> bool {
+            zelf.resolved()
                 .map(|shape| kernel().is_valid(&shape))
                 .unwrap_or(false)
         }
 
         /// Whether this is the null shape.
         #[pymethod]
-        fn isNull(&self) -> bool {
-            self.resolved().is_none()
+        fn isNull(zelf: &Py<Self>) -> bool {
+            zelf.resolved().is_none()
         }
 
         #[pymethod]
-        fn cut(&self, other: PyRef<PyShape>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            let (left, right) = (self.shape(vm)?, other.shape(vm)?);
+        fn cut(
+            zelf: &Py<Self>,
+            other: PyRef<PyShape>,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let (left, right) = (zelf.shape(vm)?, other.shape(vm)?);
             let result = kernel()
                 .cut(&left, &right)
                 .map_err(|error| geometry_error(vm, error))?;
@@ -515,8 +521,12 @@ mod part {
         }
 
         #[pymethod]
-        fn fuse(&self, other: PyRef<PyShape>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            let (left, right) = (self.shape(vm)?, other.shape(vm)?);
+        fn fuse(
+            zelf: &Py<Self>,
+            other: PyRef<PyShape>,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let (left, right) = (zelf.shape(vm)?, other.shape(vm)?);
             let result = kernel()
                 .fuse(&left, &right)
                 .map_err(|error| geometry_error(vm, error))?;
@@ -524,8 +534,12 @@ mod part {
         }
 
         #[pymethod]
-        fn common(&self, other: PyRef<PyShape>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            let (left, right) = (self.shape(vm)?, other.shape(vm)?);
+        fn common(
+            zelf: &Py<Self>,
+            other: PyRef<PyShape>,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let (left, right) = (zelf.shape(vm)?, other.shape(vm)?);
             let result = kernel()
                 .common(&left, &right)
                 .map_err(|error| geometry_error(vm, error))?;
@@ -534,8 +548,12 @@ mod part {
 
         /// Translate by `vector`, baking the move into the returned shape.
         #[pymethod]
-        fn translate(&self, vector: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
-            let shape = self.shape(vm)?;
+        fn translate(
+            zelf: &Py<Self>,
+            vector: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let shape = zelf.shape(vm)?;
             let offset = vector_arg(&vector, vm)?;
             let placed = Placement::new(offset, Rotation::identity());
             let moved = kernel()
@@ -547,13 +565,13 @@ mod part {
         /// Rotate about `center` by `angle` degrees around `axis`, baked into the result.
         #[pymethod]
         fn rotate(
-            &self,
+            zelf: &Py<Self>,
             center: PyObjectRef,
             axis: PyObjectRef,
             angle: PyObjectRef,
             vm: &VirtualMachine,
         ) -> PyResult<PyObjectRef> {
-            let shape = self.shape(vm)?;
+            let shape = zelf.shape(vm)?;
             let center = vector_arg(&center, vm)?;
             let axis = vector_arg(&axis, vm)?;
             let degrees = number(&angle, "angle", vm)?;
@@ -574,11 +592,11 @@ mod part {
         /// `(vertices, facets)`: positions as `FreeCAD.Vector`s and index triples.
         #[pymethod]
         fn tessellate(
-            &self,
+            zelf: &Py<Self>,
             deflection: OptionalArg<PyObjectRef>,
             vm: &VirtualMachine,
         ) -> PyResult<PyObjectRef> {
-            let shape = self.shape(vm)?;
+            let shape = zelf.shape(vm)?;
             let linear = match deflection.into_option() {
                 Some(value) => value.try_float(vm)?.to_f64(),
                 None => 0.1,
@@ -622,7 +640,9 @@ mod mesh {
 
     use std::sync::{Arc, Mutex};
 
-    use super::{Constructor, FuncArgs, PyObjectRef, PyPayload, PyResult, VirtualMachine, pyclass};
+    use super::{
+        Constructor, FuncArgs, Py, PyObjectRef, PyPayload, PyResult, VirtualMachine, pyclass,
+    };
 
     #[pyattr]
     const __version__: &str = env!("CARGO_PKG_VERSION");
@@ -680,8 +700,8 @@ mod mesh {
     #[pyclass(with(Constructor))]
     impl PyMesh {
         #[pygetset]
-        fn Points(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let points: Vec<PyObjectRef> = self
+        fn Points(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let points: Vec<PyObjectRef> = zelf
                 .mesh()
                 .points()
                 .iter()
@@ -691,8 +711,8 @@ mod mesh {
         }
 
         #[pygetset]
-        fn Facets(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let facets: Vec<PyObjectRef> = self
+        fn Facets(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let facets: Vec<PyObjectRef> = zelf
                 .mesh()
                 .facets()
                 .iter()
@@ -710,39 +730,39 @@ mod mesh {
         }
 
         #[pygetset]
-        fn Area(&self) -> f64 {
-            self.mesh().area()
+        fn Area(zelf: &Py<Self>) -> f64 {
+            zelf.mesh().area()
         }
 
         #[pygetset]
-        fn Volume(&self) -> f64 {
-            self.mesh().volume()
+        fn Volume(zelf: &Py<Self>) -> f64 {
+            zelf.mesh().volume()
         }
 
         #[pygetset]
-        fn BoundBox(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let bounds = self.mesh().placed_bounds();
+        fn BoundBox(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let bounds = zelf.mesh().placed_bounds();
             crate::native::bound_box_py(bounds.min, bounds.max, vm)
         }
 
         #[pymethod]
-        fn countPoints(&self) -> usize {
-            self.mesh().count_points()
+        fn countPoints(zelf: &Py<Self>) -> usize {
+            zelf.mesh().count_points()
         }
 
         #[pymethod]
-        fn countFacets(&self) -> usize {
-            self.mesh().count_facets()
+        fn countFacets(zelf: &Py<Self>) -> usize {
+            zelf.mesh().count_facets()
         }
 
         #[pymethod]
-        fn isSolid(&self) -> bool {
-            self.mesh().is_solid()
+        fn isSolid(zelf: &Py<Self>) -> bool {
+            zelf.mesh().is_solid()
         }
 
         #[pymethod]
-        fn isValid(&self) -> bool {
-            self.mesh().is_valid()
+        fn isValid(zelf: &Py<Self>) -> bool {
+            zelf.mesh().is_valid()
         }
     }
 }

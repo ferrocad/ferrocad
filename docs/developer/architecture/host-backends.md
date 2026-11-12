@@ -423,13 +423,13 @@ an error in the browser.
 Three operational facts. `rustpython-vm` needs `host_env` **off** to build for
 `wasm32-unknown-unknown`, so the dependency is declared twice: the base entry keeps the
 browser feature set, and a target-scoped entry adds `host_env` for a native build (B18b
-item 3). That feature is also why `Cargo.lock` pins `libc` to 0.2.186 — see
-`[workspace.metadata.libc]`; rustpython 0.5 calls
-`from_bits_retain(libc::POSIX_SPAWN_SETSID)` as an `i32`, and libc 0.2.187 made that
-constant a `c_short`. 0.6 casts it, so it is the release that retires the pin; it also
-needs rustc 1.97 and a receiver migration in this crate's bindings, so the port is
-described in [`backend-parity.md`](../../project/tasks/backend-parity.md) (B18b item 3)
-instead of being landed. Second, the compiler recurses, so a host raises the stack before
+item 3). The browser feature set has no POSIX layer; the target-scoped entry adds
+`host_env` for a native build. That used to force a `libc` pin in `Cargo.lock`;
+RustPython 0.6 casts `libc::POSIX_SPAWN_SETSID` itself, so the pin is gone (0.6 also
+needs rustc 1.97 — the workspace's `rust-version` — and holds the ruff AST at 0.16.5
+in `ferrocad_shell_pywasm`'s manifest, which
+[`backend-parity.md`](../../project/tasks/backend-parity.md) B18b item 3 explains).
+Second, the compiler recurses, so a host raises the stack before
 `PywasmScriptHost::new` (the tests use a 16 MiB worker thread; the browser sets the same
 value as a link argument in `ferrocad_web_gpui/build.rs`, because `wasm-ld`'s default is
 1 MiB). Third, no `window` dependency: RustPython is plain Rust, so this crate also

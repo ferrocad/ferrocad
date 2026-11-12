@@ -41,7 +41,7 @@ use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, pymodule};
 pub(crate) use stage::extract_tool;
 pub(crate) use stage::module_def as stage_module_def;
 
-/// A Python list of any `ToPyObject` values (RustPython 0.5 only converts
+/// A Python list of any `ToPyObject` values (this RustPython converts only
 /// `Vec<PyObjectRef>` directly, so every collection getter comes through here).
 fn list_of<T: ToPyObject>(values: impl IntoIterator<Item = T>, vm: &VirtualMachine) -> PyObjectRef {
     let items: Vec<PyObjectRef> = values
@@ -258,7 +258,7 @@ mod stage {
 
     /// Publish each variant as a class attribute holding an instance of the class.
     ///
-    /// RustPython 0.5 cannot derive a fieldless enum, and `#[pyattr]` runs *while* the
+    /// RustPython cannot derive a fieldless enum, and `#[pyattr]` runs *while* the
     /// type is being created, so an instance built there would meet an uninitialised
     /// static type. `#[extend_class]` runs afterwards (with the type in hand), which is
     /// why the variants are installed here.
@@ -454,44 +454,44 @@ mod stage {
     impl PyHit {
         /// The object that was hit (the packet's pick id).
         #[pygetset]
-        fn entity_id(&self) -> u32 {
-            self.inner.id.0
+        fn entity_id(zelf: &Py<Self>) -> u32 {
+            zelf.inner.id.0
         }
 
         /// The topological sub-element id (`Vertex.part_idx`); `0` when untagged.
         #[pygetset]
-        fn part_idx(&self) -> u32 {
-            self.inner.part
+        fn part_idx(zelf: &Py<Self>) -> u32 {
+            zelf.inner.part
         }
 
         /// The primitive index within the mesh, when the pick path knows it.
         #[pygetset]
-        fn element(&self) -> Option<u32> {
-            self.inner.element
+        fn element(zelf: &Py<Self>) -> Option<u32> {
+            zelf.inner.element
         }
 
         /// The world-space intersection point.
         #[pygetset]
-        fn point(&self) -> (f32, f32, f32) {
-            triple(self.inner.point)
+        fn point(zelf: &Py<Self>) -> (f32, f32, f32) {
+            triple(zelf.inner.point)
         }
 
         /// The world-space surface normal.
         #[pygetset]
-        fn normal(&self) -> (f32, f32, f32) {
-            triple(self.inner.normal)
+        fn normal(zelf: &Py<Self>) -> (f32, f32, f32) {
+            triple(zelf.inner.normal)
         }
 
         /// The distance along the ray from its origin.
         #[pygetset]
-        fn distance(&self) -> f64 {
-            self.inner.distance
+        fn distance(zelf: &Py<Self>) -> f64 {
+            zelf.inner.distance
         }
 
         /// The topology of the hit: `"Triangles"`, `"Lines"` or `"Points"`.
         #[pygetset]
-        fn topology(&self) -> &'static str {
-            match self.inner.topology {
+        fn topology(zelf: &Py<Self>) -> &'static str {
+            match zelf.inner.topology {
                 gfx::Topology::Triangles => "Triangles",
                 gfx::Topology::Lines => "Lines",
                 gfx::Topology::Points => "Points",
@@ -594,9 +594,9 @@ mod stage {
 
         /// Which event this is.
         #[pygetset]
-        fn kind(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn kind(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             PyPointerKind {
-                inner: self.inner.kind,
+                inner: zelf.inner.kind,
             }
             .into_ref(&vm.ctx)
             .into()
@@ -604,14 +604,14 @@ mod stage {
 
         /// The device-pixel position (bottom-left origin).
         #[pygetset]
-        fn position(&self) -> (i32, i32) {
-            (self.inner.position[0], self.inner.position[1])
+        fn position(zelf: &Py<Self>) -> (i32, i32) {
+            (zelf.inner.position[0], zelf.inner.position[1])
         }
 
         /// The button, for a `Down`/`Up` event.
         #[pygetset]
-        fn button(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.inner.button {
+        fn button(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.inner.button {
                 Some(button) => PyMouseButton { inner: button }.into_ref(&vm.ctx).into(),
                 None => vm.ctx.none(),
             }
@@ -619,8 +619,8 @@ mod stage {
 
         /// The pick under the pointer, if it hit geometry.
         #[pygetset]
-        fn hit(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.inner.hit {
+        fn hit(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.inner.hit {
                 Some(hit) => PyHit { inner: hit }.into_ref(&vm.ctx).into(),
                 None => vm.ctx.none(),
             }
@@ -628,19 +628,23 @@ mod stage {
 
         /// The resolved snap point, if the host supplied one.
         #[pygetset]
-        fn snap(&self) -> Option<(f32, f32, f32)> {
-            self.snap.map(triple)
+        fn snap(zelf: &Py<Self>) -> Option<(f32, f32, f32)> {
+            zelf.snap.map(triple)
         }
 
         /// The world-space point under the pointer, if it hit geometry.
         #[pymethod]
-        fn world(&self) -> Option<(f32, f32, f32)> {
-            self.inner.world().map(triple)
+        fn world(zelf: &Py<Self>) -> Option<(f32, f32, f32)> {
+            zelf.inner.world().map(triple)
         }
 
         /// Return a copy carrying `snap` (set by a host before dispatch).
         #[pymethod]
-        fn with_snap(&self, snap: OptionalArg<PyObjectRef>, vm: &VirtualMachine) -> PyResult<Self> {
+        fn with_snap(
+            zelf: &Py<Self>,
+            snap: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<Self> {
             let snap = match snap.into_option().filter(|value| !vm.is_none(value)) {
                 Some(value) => {
                     let point = point_of(&value, vm)?;
@@ -649,7 +653,7 @@ mod stage {
                 None => None,
             };
             Ok(Self {
-                inner: self.inner,
+                inner: zelf.inner,
                 snap,
             })
         }
@@ -703,7 +707,7 @@ mod stage {
         /// Replace the tessellation.
         #[pymethod]
         fn set_shape(
-            &self,
+            zelf: &Py<Self>,
             positions: PyObjectRef,
             normals: OptionalArg<PyObjectRef>,
             triangles: OptionalArg<PyObjectRef>,
@@ -714,7 +718,7 @@ mod stage {
             let normals = opt_vec3(normals, "normals", vm)?;
             let triangles = opt_u32(triangles, "triangles", vm)?;
             let edges = opt_u32(edges, "edges", vm)?;
-            self.item
+            zelf.item
                 .borrow_mut()
                 .set_shape(positions, normals, triangles, edges);
             Ok(())
@@ -723,7 +727,7 @@ mod stage {
         /// Replace the tessellation and tag each position with its sub-element id.
         #[pymethod]
         fn set_mesh(
-            &self,
+            zelf: &Py<Self>,
             positions: PyObjectRef,
             normals: OptionalArg<PyObjectRef>,
             triangles: OptionalArg<PyObjectRef>,
@@ -736,7 +740,7 @@ mod stage {
             let triangles = opt_u32(triangles, "triangles", vm)?;
             let edges = opt_u32(edges, "edges", vm)?;
             let parts = opt_u32(parts, "parts", vm)?;
-            self.item
+            zelf.item
                 .borrow_mut()
                 .set_mesh(positions, normals, triangles, edges, parts);
             Ok(())
@@ -744,48 +748,52 @@ mod stage {
 
         /// The pick id.
         #[pygetset]
-        fn entity_id(&self) -> u32 {
-            self.item.borrow().entity_id()
+        fn entity_id(zelf: &Py<Self>) -> u32 {
+            zelf.item.borrow().entity_id()
         }
 
         /// The sub-element name table (`part id → "Face6"`).
         #[pygetset]
-        fn part_names(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.item.borrow().part_names().iter().cloned(), vm)
+        fn part_names(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.item.borrow().part_names().iter().cloned(), vm)
         }
 
         /// The per-position sub-element ids (empty when untagged).
         #[pygetset]
-        fn parts(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.item.borrow().parts().iter().copied(), vm)
+        fn parts(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.item.borrow().parts().iter().copied(), vm)
         }
 
         /// The display mode.
         #[pygetset]
-        fn draw_mode(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn draw_mode(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             PyDrawMode {
-                inner: self.item.borrow().draw_mode(),
+                inner: zelf.item.borrow().draw_mode(),
             }
             .into_ref(&vm.ctx)
             .into()
         }
 
         #[pygetset(setter)]
-        fn set_draw_mode(&self, mode: PyRef<PyDrawMode>) {
-            let item = self.item.borrow().clone().with_draw_mode(mode.inner);
-            *self.item.borrow_mut() = item;
+        fn set_draw_mode(zelf: &Py<Self>, mode: PyRef<PyDrawMode>) {
+            let item = zelf.item.borrow().clone().with_draw_mode(mode.inner);
+            *zelf.item.borrow_mut() = item;
         }
 
         /// The surface colour (RGBA).
         #[pygetset]
-        fn surface_color(&self) -> (f32, f32, f32, f32) {
-            let color = self.item.borrow().surface_color();
+        fn surface_color(zelf: &Py<Self>) -> (f32, f32, f32, f32) {
+            let color = zelf.item.borrow().surface_color();
             (color[0], color[1], color[2], color[3])
         }
 
         #[pygetset(setter)]
-        fn set_surface_color(&self, color: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
-            self.item
+        fn set_surface_color(
+            zelf: &Py<Self>,
+            color: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            zelf.item
                 .borrow_mut()
                 .set_surface_color(quad_f32(&color, vm)?);
             Ok(())
@@ -793,45 +801,49 @@ mod stage {
 
         /// The edge colour (RGBA).
         #[pygetset]
-        fn edge_color(&self) -> (f32, f32, f32, f32) {
-            let color = self.item.borrow().edge_color();
+        fn edge_color(zelf: &Py<Self>) -> (f32, f32, f32, f32) {
+            let color = zelf.item.borrow().edge_color();
             (color[0], color[1], color[2], color[3])
         }
 
         #[pygetset(setter)]
-        fn set_edge_color(&self, color: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
-            self.item.borrow_mut().set_edge_color(quad_f32(&color, vm)?);
+        fn set_edge_color(
+            zelf: &Py<Self>,
+            color: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            zelf.item.borrow_mut().set_edge_color(quad_f32(&color, vm)?);
             Ok(())
         }
 
         /// The edge width (stored, not yet consumed by the renderer).
         #[pygetset]
-        fn edge_width(&self) -> f32 {
-            self.item.borrow().edge_width()
+        fn edge_width(zelf: &Py<Self>) -> f32 {
+            zelf.item.borrow().edge_width()
         }
 
         #[pygetset(setter)]
-        fn set_edge_width(&self, width: f32) {
-            let item = self.item.borrow().clone().with_edge_width(width);
-            *self.item.borrow_mut() = item;
+        fn set_edge_width(zelf: &Py<Self>, width: f32) {
+            let item = zelf.item.borrow().clone().with_edge_width(width);
+            *zelf.item.borrow_mut() = item;
         }
 
         /// Whether the shape participates in picking.
         #[pygetset]
-        fn selectable(&self) -> bool {
-            self.item.borrow().selectable()
+        fn selectable(zelf: &Py<Self>) -> bool {
+            zelf.item.borrow().selectable()
         }
 
         #[pygetset(setter)]
-        fn set_selectable(&self, selectable: bool) {
-            let item = self.item.borrow().clone().with_selectable(selectable);
-            *self.item.borrow_mut() = item;
+        fn set_selectable(zelf: &Py<Self>, selectable: bool) {
+            let item = zelf.item.borrow().clone().with_selectable(selectable);
+            *zelf.item.borrow_mut() = item;
         }
 
         /// The temporary preview transform (16 row-major floats), if any.
         #[pygetset]
-        fn temporary_transform(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.item.borrow().temporary_transform() {
+        fn temporary_transform(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.item.borrow().temporary_transform() {
                 Some(matrix) => list_of(matrix.values().iter().copied(), vm),
                 None => vm.ctx.none(),
             }
@@ -839,42 +851,42 @@ mod stage {
 
         #[pygetset(setter)]
         fn set_temporary_transform(
-            &self,
+            zelf: &Py<Self>,
             transform: Option<Vec<f64>>,
             vm: &VirtualMachine,
         ) -> PyResult<()> {
             let transform = transform
                 .map(|values| matrix(&values, "temporary_transform", vm))
                 .transpose()?;
-            self.item.borrow_mut().set_temporary_transform(transform);
+            zelf.item.borrow_mut().set_temporary_transform(transform);
             Ok(())
         }
 
         /// The vertex positions (copies).
         #[pygetset]
-        fn positions(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn positions(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             list_of(
-                self.item.borrow().positions().iter().map(|p| triple(*p)),
+                zelf.item.borrow().positions().iter().map(|p| triple(*p)),
                 vm,
             )
         }
 
         /// The per-vertex normals (empty when flat-shaded).
         #[pygetset]
-        fn normals(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.item.borrow().normals().iter().map(|p| triple(*p)), vm)
+        fn normals(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.item.borrow().normals().iter().map(|p| triple(*p)), vm)
         }
 
         /// The flat triangle indices, three per triangle.
         #[pygetset]
-        fn triangles(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.item.borrow().triangles().iter().copied(), vm)
+        fn triangles(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.item.borrow().triangles().iter().copied(), vm)
         }
 
         /// The flat edge segment indices, two per segment.
         #[pygetset]
-        fn edges(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.item.borrow().edges().iter().copied(), vm)
+        fn edges(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.item.borrow().edges().iter().copied(), vm)
         }
     }
 
@@ -911,39 +923,39 @@ mod stage {
     impl PyStage {
         /// Append a copy of `item` (drawn last).
         #[pymethod]
-        fn add(&self, item: PyRef<PyShapeItem>) {
-            self.inner.borrow_mut().add_item(item.item.borrow().clone());
+        fn add(zelf: &Py<Self>, item: PyRef<PyShapeItem>) {
+            zelf.inner.borrow_mut().add_item(item.item.borrow().clone());
         }
 
         /// Drop every item.
         #[pymethod]
-        fn clear(&self) {
-            *self.inner.borrow_mut() = fs::Stage::new();
+        fn clear(zelf: &Py<Self>) {
+            *zelf.inner.borrow_mut() = fs::Stage::new();
         }
 
         /// The number of items.
         #[pymethod]
-        fn count(&self) -> usize {
-            self.inner.borrow().len()
+        fn count(zelf: &Py<Self>) -> usize {
+            zelf.inner.borrow().len()
         }
 
         /// Whether the stage has no items.
         #[pymethod]
-        fn is_empty(&self) -> bool {
-            self.inner.borrow().is_empty()
+        fn is_empty(zelf: &Py<Self>) -> bool {
+            zelf.inner.borrow().is_empty()
         }
 
         /// How many draw packets the stage compiles to right now.
         #[pymethod]
-        fn batch_count(&self) -> usize {
-            self.inner.borrow().to_queue().len()
+        fn batch_count(zelf: &Py<Self>) -> usize {
+            zelf.inner.borrow().to_queue().len()
         }
 
         /// The pick ids of the items, in draw order.
         #[pymethod]
-        fn entities(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn entities(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             list_of(
-                self.inner
+                zelf.inner
                     .borrow()
                     .items()
                     .iter()
@@ -985,19 +997,19 @@ mod stage {
     impl PySnap {
         /// The snapped world-space point (`(x, y, z)`).
         #[pygetset]
-        fn point(&self) -> (f64, f64, f64) {
+        fn point(zelf: &Py<Self>) -> (f64, f64, f64) {
             (
-                f64::from(self.inner.point[0]),
-                f64::from(self.inner.point[1]),
-                f64::from(self.inner.point[2]),
+                f64::from(zelf.inner.point[0]),
+                f64::from(zelf.inner.point[1]),
+                f64::from(zelf.inner.point[2]),
             )
         }
 
         /// What it snapped to.
         #[pygetset]
-        fn kind(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn kind(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             PySnapKind {
-                inner: self.inner.kind,
+                inner: zelf.inner.kind,
             }
             .into_ref(&vm.ctx)
             .into()
@@ -1005,14 +1017,14 @@ mod stage {
 
         /// The local `(u, v)` on the active workplane, when one is known.
         #[pygetset]
-        fn local(&self) -> Option<(f64, f64)> {
-            self.inner.local.map(|local| (local[0], local[1]))
+        fn local(zelf: &Py<Self>) -> Option<(f64, f64)> {
+            zelf.inner.local.map(|local| (local[0], local[1]))
         }
 
         /// Whether a grid snap landed on a **major** intersection.
         #[pygetset]
-        fn major(&self) -> bool {
-            self.inner.major
+        fn major(zelf: &Py<Self>) -> bool {
+            zelf.inner.major
         }
     }
 
@@ -1064,15 +1076,15 @@ mod stage {
     impl PySnapCandidate {
         /// The candidate's world-space point.
         #[pygetset]
-        fn point(&self) -> (f64, f64, f64) {
-            as_tuple(self.inner.point)
+        fn point(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(zelf.inner.point)
         }
 
         /// The kind of feature this candidate is.
         #[pygetset]
-        fn kind(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn kind(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             PySnapKind {
-                inner: self.inner.kind,
+                inner: zelf.inner.kind,
             }
             .into_ref(&vm.ctx)
             .into()
@@ -1141,27 +1153,27 @@ mod stage {
 
         /// The workplane the grid lives on.
         #[pygetset]
-        fn workplane(&self) -> PyWorkplane {
+        fn workplane(zelf: &Py<Self>) -> PyWorkplane {
             PyWorkplane {
-                inner: self.inner.workplane.clone(),
+                inner: zelf.inner.workplane.clone(),
             }
         }
 
         /// The minor (finest) grid step.
         #[pygetset]
-        fn minor(&self) -> f64 {
-            self.inner.minor
+        fn minor(zelf: &Py<Self>) -> f64 {
+            zelf.inner.minor
         }
 
         /// The major step.
         #[pygetset]
-        fn major(&self) -> f64 {
-            self.inner.major
+        fn major(zelf: &Py<Self>) -> f64 {
+            zelf.inner.major
         }
 
         /// Resolve a snap for a world-space `point`.
         #[pymethod]
-        fn snap_point(&self, args: FuncArgs, vm: &VirtualMachine) -> PyResult<PySnap> {
+        fn snap_point(zelf: &Py<Self>, args: FuncArgs, vm: &VirtualMachine) -> PyResult<PySnap> {
             let point = args
                 .args
                 .first()
@@ -1183,7 +1195,7 @@ mod stage {
                 _ => 0.0,
             };
             Ok(PySnap {
-                inner: self.inner.snap_point(point, &candidates, tolerance),
+                inner: zelf.inner.snap_point(point, &candidates, tolerance),
             })
         }
     }
@@ -1236,8 +1248,8 @@ mod stage {
 
         /// The readable value.
         #[pygetset]
-        fn kind(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match &self.inner {
+        fn kind(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match &zelf.inner {
                 fs::WorkplaneKind::World => vm.ctx.new_str("World").into(),
                 fs::WorkplaneKind::Datum(name) => vm
                     .ctx
@@ -1324,46 +1336,46 @@ mod stage {
 
         /// The origin.
         #[pygetset]
-        fn origin(&self) -> (f64, f64, f64) {
-            as_tuple(self.inner.origin)
+        fn origin(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(zelf.inner.origin)
         }
 
         /// The `u` axis (normalized).
         #[pygetset]
-        fn u(&self) -> (f64, f64, f64) {
-            as_tuple(self.inner.u)
+        fn u(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(zelf.inner.u)
         }
 
         /// The `v` axis (normalized).
         #[pygetset]
-        fn v(&self) -> (f64, f64, f64) {
-            as_tuple(self.inner.v)
+        fn v(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(zelf.inner.v)
         }
 
         /// The normal, `u × v`, normalized.
         #[pygetset]
-        fn n(&self) -> (f64, f64, f64) {
-            as_tuple(self.inner.n)
+        fn n(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(zelf.inner.n)
         }
 
         /// Where this frame came from.
         #[pygetset]
-        fn kind(&self) -> PyWorkplaneKind {
+        fn kind(zelf: &Py<Self>) -> PyWorkplaneKind {
             PyWorkplaneKind {
-                inner: self.inner.kind.clone(),
+                inner: zelf.inner.kind.clone(),
             }
         }
 
         /// The world point at local `(a, b)`.
         #[pymethod]
-        fn point(&self, a: f64, b: f64) -> (f64, f64, f64) {
-            as_tuple(self.inner.point(a, b))
+        fn point(zelf: &Py<Self>, a: f64, b: f64) -> (f64, f64, f64) {
+            as_tuple(zelf.inner.point(a, b))
         }
 
         /// The local `(u, v)` of a world point.
         #[pymethod]
-        fn project(&self, point: (f64, f64, f64)) -> (f64, f64) {
-            let local = self.inner.project(triple_f64(point));
+        fn project(zelf: &Py<Self>, point: (f64, f64, f64)) -> (f64, f64) {
+            let local = zelf.inner.project(triple_f64(point));
             (local[0], local[1])
         }
     }
@@ -1506,21 +1518,21 @@ mod stage {
 
         /// The device-pixel viewport size.
         #[pygetset]
-        fn size(&self) -> (u32, u32) {
-            let [w, h] = self.inner.viewport.device_size();
+        fn size(zelf: &Py<Self>) -> (u32, u32) {
+            let [w, h] = zelf.inner.viewport.device_size();
             (w, h)
         }
 
         /// Whether the projection is orthographic.
         #[pygetset]
-        fn is_orthographic(&self) -> bool {
-            self.inner.is_orthographic()
+        fn is_orthographic(zelf: &Py<Self>) -> bool {
+            zelf.inner.is_orthographic()
         }
 
         /// The projection kind: `"perspective"`, `"orthographic"` or `"matrix"`.
         #[pygetset]
-        fn projection_kind(&self) -> &'static str {
-            match self.inner.projection {
+        fn projection_kind(zelf: &Py<Self>) -> &'static str {
+            match zelf.inner.projection {
                 gfx::Projection::Perspective { .. } => "perspective",
                 gfx::Projection::Orthographic { .. } => "orthographic",
                 gfx::Projection::Matrix(_) => "matrix",
@@ -1529,49 +1541,49 @@ mod stage {
 
         /// The eye position in world space.
         #[pygetset]
-        fn position(&self) -> (f64, f64, f64) {
-            as_tuple(fs::screen::camera_position(&self.inner.view))
+        fn position(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(fs::screen::camera_position(&zelf.inner.view))
         }
 
         /// The world direction the camera looks along.
         #[pygetset]
-        fn direction(&self) -> (f64, f64, f64) {
-            as_tuple(fs::screen::camera_forward(&self.inner))
+        fn direction(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(fs::screen::camera_forward(&zelf.inner))
         }
 
         /// The camera's screen-right direction in world space.
         #[pygetset]
-        fn right(&self) -> (f64, f64, f64) {
-            as_tuple(fs::screen::camera_right(&self.inner))
+        fn right(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(fs::screen::camera_right(&zelf.inner))
         }
 
         /// The camera's screen-up direction in world space.
         #[pygetset]
-        fn up(&self) -> (f64, f64, f64) {
-            as_tuple(fs::screen::camera_up(&self.inner))
+        fn up(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(fs::screen::camera_up(&zelf.inner))
         }
 
         /// The camera's orientation as a `(x, y, z, w)` quaternion.
         #[pygetset]
-        fn orientation(&self) -> (f64, f64, f64, f64) {
-            let right = fs::screen::camera_right(&self.inner);
-            let up = fs::screen::camera_up(&self.inner);
+        fn orientation(zelf: &Py<Self>) -> (f64, f64, f64, f64) {
+            let right = fs::screen::camera_right(&zelf.inner);
+            let up = fs::screen::camera_up(&zelf.inner);
             let back = right.cross(&up);
             quaternion(right, up, back)
         }
 
         /// The distance from the eye to the pivot.
         #[pygetset]
-        fn focal_distance(&self) -> f64 {
-            self.inner.eye_distance()
+        fn focal_distance(zelf: &Py<Self>) -> f64 {
+            zelf.inner.eye_distance()
         }
 
         /// The world height of the view at the focal distance.
         #[pygetset]
-        fn height(&self) -> f64 {
-            match self.inner.projection {
+        fn height(zelf: &Py<Self>) -> f64 {
+            match zelf.inner.projection {
                 gfx::Projection::Perspective { fov_y, .. } => {
-                    2.0 * self.inner.eye_distance() * (fov_y / 2.0).tan()
+                    2.0 * zelf.inner.eye_distance() * (fov_y / 2.0).tan()
                 }
                 gfx::Projection::Orthographic { extent, .. } => 2.0 * extent,
                 gfx::Projection::Matrix(_) => 0.0,
@@ -1580,8 +1592,8 @@ mod stage {
 
         /// The vertical field of view in radians (orthographic reports `0`).
         #[pygetset]
-        fn height_angle(&self) -> f64 {
-            match self.inner.projection {
+        fn height_angle(zelf: &Py<Self>) -> f64 {
+            match zelf.inner.projection {
                 gfx::Projection::Perspective { fov_y, .. } => fov_y,
                 _ => 0.0,
             }
@@ -1589,33 +1601,33 @@ mod stage {
 
         /// The viewport aspect ratio.
         #[pygetset]
-        fn aspect_ratio(&self) -> f64 {
-            self.inner.aspect()
+        fn aspect_ratio(zelf: &Py<Self>) -> f64 {
+            zelf.inner.aspect()
         }
 
         /// The world → view matrix (16 row-major floats).
         #[pygetset]
-        fn view_matrix(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.inner.view.values().iter().copied(), vm)
+        fn view_matrix(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.inner.view.values().iter().copied(), vm)
         }
 
         /// The view → clip matrix (16 row-major floats).
         #[pygetset]
-        fn projection_matrix(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.inner.projection_matrix().values().iter().copied(), vm)
+        fn projection_matrix(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.inner.projection_matrix().values().iter().copied(), vm)
         }
 
         /// Project a world point to device pixels (bottom-left origin).
         #[pymethod]
-        fn project(&self, point: (f64, f64, f64)) -> Option<(f64, f64)> {
-            fs::screen::project_device(&self.inner, triple_f64(point)).map(|[x, y]| (x, y))
+        fn project(zelf: &Py<Self>, point: (f64, f64, f64)) -> Option<(f64, f64)> {
+            fs::screen::project_device(&zelf.inner, triple_f64(point)).map(|[x, y]| (x, y))
         }
 
         /// The near and far world points of the ray through normalized viewport
         /// coordinates `(u, v)`.
         #[pymethod]
-        fn ray(&self, u: f64, v: f64) -> Option<((f64, f64, f64), (f64, f64, f64))> {
-            let inverse = self.inner.view_projection().inverse()?;
+        fn ray(zelf: &Py<Self>, u: f64, v: f64) -> Option<((f64, f64, f64), (f64, f64, f64))> {
+            let inverse = zelf.inner.view_projection().inverse()?;
             let x = u * 2.0 - 1.0;
             let y = v * 2.0 - 1.0;
             Some((
@@ -1626,8 +1638,8 @@ mod stage {
 
         /// The ray through a device-pixel position.
         #[pymethod]
-        fn ray_at(&self, x: i32, y: i32) -> Option<((f64, f64, f64), (f64, f64, f64))> {
-            let ray = self.inner.ray_through([x, y])?;
+        fn ray_at(zelf: &Py<Self>, x: i32, y: i32) -> Option<((f64, f64, f64), (f64, f64, f64))> {
+            let ray = zelf.inner.ray_through([x, y])?;
             Some((
                 (ray.origin[0], ray.origin[1], ray.origin[2]),
                 (ray.direction[0], ray.direction[1], ray.direction[2]),
@@ -1724,15 +1736,15 @@ mod stage {
     impl PyGizmoDragEvent {
         /// The targeted entity id.
         #[pygetset]
-        fn target_id(&self) -> u32 {
-            self.inner.target_id
+        fn target_id(zelf: &Py<Self>) -> u32 {
+            zelf.inner.target_id
         }
 
         /// The handle being dragged.
         #[pygetset]
-        fn active_handle(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn active_handle(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             PyGizmoHandle {
-                inner: self.inner.active_handle,
+                inner: zelf.inner.active_handle,
             }
             .into_ref(&vm.ctx)
             .into()
@@ -1740,20 +1752,20 @@ mod stage {
 
         /// The projected numeric readout.
         #[pygetset]
-        fn readout(&self) -> String {
-            self.inner.value.readout()
+        fn readout(zelf: &Py<Self>) -> String {
+            zelf.inner.value.readout()
         }
 
         /// The transform delta since the previous tick (16 row-major floats).
         #[pygetset]
-        fn delta_transform(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.inner.delta_transform.values().iter().copied(), vm)
+        fn delta_transform(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.inner.delta_transform.values().iter().copied(), vm)
         }
 
         /// The transform accumulated since the drag began.
         #[pygetset]
-        fn total_transform(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.inner.total_transform.values().iter().copied(), vm)
+        fn total_transform(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.inner.total_transform.values().iter().copied(), vm)
         }
     }
 
@@ -1769,20 +1781,20 @@ mod stage {
     impl PyGizmoCommitEvent {
         /// The targeted entity id.
         #[pygetset]
-        fn target_id(&self) -> u32 {
-            self.inner.target_id
+        fn target_id(zelf: &Py<Self>) -> u32 {
+            zelf.inner.target_id
         }
 
         /// The final transform to commit to the document.
         #[pygetset]
-        fn total_transform(&self, vm: &VirtualMachine) -> PyObjectRef {
-            list_of(self.inner.total_transform.values().iter().copied(), vm)
+        fn total_transform(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            list_of(zelf.inner.total_transform.values().iter().copied(), vm)
         }
 
         /// The final numeric readout.
         #[pygetset]
-        fn readout(&self) -> String {
-            self.inner.value.readout()
+        fn readout(zelf: &Py<Self>) -> String {
+            zelf.inner.value.readout()
         }
     }
 
@@ -1824,47 +1836,47 @@ mod stage {
     impl PyTransformGizmo {
         /// The targeted entity id.
         #[pygetset]
-        fn target_id(&self) -> u32 {
-            self.inner.borrow().target_id()
+        fn target_id(zelf: &Py<Self>) -> u32 {
+            zelf.inner.borrow().target_id()
         }
 
         /// The gizmo's origin.
         #[pygetset]
-        fn origin(&self) -> (f64, f64, f64) {
-            as_tuple(self.inner.borrow().origin())
+        fn origin(zelf: &Py<Self>) -> (f64, f64, f64) {
+            as_tuple(zelf.inner.borrow().origin())
         }
 
         #[pygetset(setter)]
-        fn set_origin(&self, origin: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
-            self.inner.borrow_mut().set_origin(point_of(&origin, vm)?);
+        fn set_origin(zelf: &Py<Self>, origin: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            zelf.inner.borrow_mut().set_origin(point_of(&origin, vm)?);
             Ok(())
         }
 
         /// The current mode.
         #[pygetset]
-        fn mode(&self, vm: &VirtualMachine) -> PyObjectRef {
+        fn mode(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
             PyGizmoMode {
-                inner: self.inner.borrow().mode(),
+                inner: zelf.inner.borrow().mode(),
             }
             .into_ref(&vm.ctx)
             .into()
         }
 
         #[pygetset(setter)]
-        fn set_mode(&self, mode: PyRef<PyGizmoMode>) {
-            self.inner.borrow_mut().set_mode(mode.inner);
+        fn set_mode(zelf: &Py<Self>, mode: PyRef<PyGizmoMode>) {
+            zelf.inner.borrow_mut().set_mode(mode.inner);
         }
 
         /// The current world radius (`0` before the first `update`).
         #[pygetset]
-        fn scale(&self) -> f64 {
-            self.inner.borrow().scale()
+        fn scale(zelf: &Py<Self>) -> f64 {
+            zelf.inner.borrow().scale()
         }
 
         /// The handle under the pointer, if any.
         #[pygetset]
-        fn hovered(&self, vm: &VirtualMachine) -> PyObjectRef {
-            match self.inner.borrow().hovered() {
+        fn hovered(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            match zelf.inner.borrow().hovered() {
                 Some(handle) => PyGizmoHandle { inner: handle }.into_ref(&vm.ctx).into(),
                 None => vm.ctx.none(),
             }
@@ -1872,32 +1884,32 @@ mod stage {
 
         /// Whether a drag is in progress.
         #[pygetset]
-        fn is_dragging(&self) -> bool {
-            self.inner.borrow().is_dragging()
+        fn is_dragging(zelf: &Py<Self>) -> bool {
+            zelf.inner.borrow().is_dragging()
         }
 
         /// Highlight a handle (or clear).
         #[pymethod]
-        fn set_hovered(&self, handle: OptionalArg<PyRef<PyGizmoHandle>>) -> bool {
+        fn set_hovered(zelf: &Py<Self>, handle: OptionalArg<PyRef<PyGizmoHandle>>) -> bool {
             let handle = handle.into_option().map(|handle| handle.inner);
-            self.inner.borrow_mut().set_hovered(handle)
+            zelf.inner.borrow_mut().set_hovered(handle)
         }
 
         /// Recompute the screen-invariant scale for `camera`.
         #[pymethod]
-        fn update(&self, camera: PyRef<PyCamera>) -> bool {
-            self.inner.borrow_mut().update(&camera.inner)
+        fn update(zelf: &Py<Self>, camera: PyRef<PyCamera>) -> bool {
+            zelf.inner.borrow_mut().update(&camera.inner)
         }
 
         /// Begin a drag on `handle` at the device-pixel `position`.
         #[pymethod]
         fn begin_drag(
-            &self,
+            zelf: &Py<Self>,
             handle: PyRef<PyGizmoHandle>,
             camera: PyRef<PyCamera>,
             position: (i32, i32),
         ) -> bool {
-            self.inner.borrow_mut().begin_drag(
+            zelf.inner.borrow_mut().begin_drag(
                 handle.inner,
                 &camera.inner,
                 [position.0, position.1],
@@ -1907,11 +1919,11 @@ mod stage {
         /// Advance the active drag to `position`.
         #[pymethod]
         fn drag_to(
-            &self,
+            zelf: &Py<Self>,
             camera: PyRef<PyCamera>,
             position: (i32, i32),
         ) -> Option<PyGizmoDragEvent> {
-            self.inner
+            zelf.inner
                 .borrow_mut()
                 .drag_to(&camera.inner, [position.0, position.1])
                 .map(|inner| PyGizmoDragEvent { inner })
@@ -1919,8 +1931,8 @@ mod stage {
 
         /// End the active drag, returning the commit.
         #[pymethod]
-        fn end_drag(&self) -> Option<PyGizmoCommitEvent> {
-            self.inner
+        fn end_drag(zelf: &Py<Self>) -> Option<PyGizmoCommitEvent> {
+            zelf.inner
                 .borrow_mut()
                 .end_drag()
                 .map(|inner| PyGizmoCommitEvent { inner })
@@ -1929,12 +1941,12 @@ mod stage {
         /// Dispatch a pointer event.
         #[pymethod]
         fn handle_event(
-            &self,
+            zelf: &Py<Self>,
             camera: PyRef<PyCamera>,
             event: PyRef<PyPointerEvent>,
             vm: &VirtualMachine,
         ) -> PyResult<PyObjectRef> {
-            let mut gizmo = self.inner.borrow_mut();
+            let mut gizmo = zelf.inner.borrow_mut();
             match event.inner.kind {
                 fs::PointerKind::Down => {
                     if let Some(handle) = gizmo.hovered() {
@@ -1982,20 +1994,20 @@ mod stage {
     impl PyTool {
         /// React to a pointer event. **Override this in a subclass.**
         #[pymethod]
-        fn on_event(&self, _event: PyRef<PyPointerEvent>) -> bool {
+        fn on_event(_zelf: &Py<Self>, _event: PyRef<PyPointerEvent>) -> bool {
             false
         }
 
         /// Append a transient visual.
         #[pymethod]
-        fn add_item(&self, item: PyRef<PyShapeItem>) {
-            self.add(item.item.borrow().clone());
+        fn add_item(zelf: &Py<Self>, item: PyRef<PyShapeItem>) {
+            zelf.add(item.item.borrow().clone());
         }
 
         /// Replace the transient visuals.
         #[pymethod]
-        fn set_items(&self, items: Vec<PyObjectRef>) {
-            let mut slot = self.items.borrow_mut();
+        fn set_items(zelf: &Py<Self>, items: Vec<PyObjectRef>) {
+            let mut slot = zelf.items.borrow_mut();
             slot.clear();
             for item in items {
                 if let Some(item) = item.downcast_ref::<PyShapeItem>() {
@@ -2006,14 +2018,14 @@ mod stage {
 
         /// Drop the transient visuals.
         #[pymethod]
-        fn clear_items(&self) {
-            self.items.borrow_mut().clear();
+        fn clear_items(zelf: &Py<Self>) {
+            zelf.items.borrow_mut().clear();
         }
 
         /// The transient visuals (as copies).
         #[pygetset]
-        fn items(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let items: Vec<PyObjectRef> = self
+        fn items(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let items: Vec<PyObjectRef> = zelf
                 .items
                 .borrow()
                 .iter()
@@ -2128,10 +2140,10 @@ mod stage {
                 match handler {
                     Ok(handler) => {
                         if let Err(error) = handler.call((event,), vm) {
-                            vm.print_exception(error);
+                            vm.print_exception(&error);
                         }
                     }
-                    Err(error) => vm.print_exception(error),
+                    Err(error) => vm.print_exception(&error),
                 }
                 self.items = read_items(&object);
                 self.status = read_status(&object, vm);
@@ -2154,7 +2166,7 @@ mod stage {
                     Ok(method) => match method.call((), vm) {
                         Ok(value) => value.is_true(vm).unwrap_or(true),
                         Err(error) => {
-                            vm.print_exception(error);
+                            vm.print_exception(&error);
                             false
                         }
                     },
@@ -2189,43 +2201,43 @@ mod stage {
     #[pyclass]
     impl PyPickHit {
         #[pygetset]
-        fn entity_id(&self) -> u32 {
-            self.inner.entity_id
+        fn entity_id(zelf: &Py<Self>) -> u32 {
+            zelf.inner.entity_id
         }
 
         #[pygetset]
-        fn part_idx(&self) -> u32 {
-            self.inner.part_idx
+        fn part_idx(zelf: &Py<Self>) -> u32 {
+            zelf.inner.part_idx
         }
 
         #[pygetset]
-        fn part(&self) -> Option<String> {
-            self.inner.part.clone()
+        fn part(zelf: &Py<Self>) -> Option<String> {
+            zelf.inner.part.clone()
         }
 
         #[pygetset]
-        fn object(&self) -> Option<String> {
-            self.inner.object.clone()
+        fn object(zelf: &Py<Self>) -> Option<String> {
+            zelf.inner.object.clone()
         }
 
         #[pygetset]
-        fn point(&self) -> (f32, f32, f32) {
-            triple(self.inner.point)
+        fn point(zelf: &Py<Self>) -> (f32, f32, f32) {
+            triple(zelf.inner.point)
         }
 
         #[pygetset]
-        fn normal(&self) -> (f32, f32, f32) {
-            triple(self.inner.normal)
+        fn normal(zelf: &Py<Self>) -> (f32, f32, f32) {
+            triple(zelf.inner.normal)
         }
 
         #[pygetset]
-        fn distance(&self) -> f64 {
-            self.inner.distance
+        fn distance(zelf: &Py<Self>) -> f64 {
+            zelf.inner.distance
         }
 
         #[pygetset]
-        fn topology(&self) -> &'static str {
-            match self.inner.topology {
+        fn topology(zelf: &Py<Self>) -> &'static str {
+            match zelf.inner.topology {
                 gfx::Topology::Triangles => "Triangles",
                 gfx::Topology::Lines => "Lines",
                 gfx::Topology::Points => "Points",
@@ -2233,8 +2245,8 @@ mod stage {
         }
 
         #[pygetset]
-        fn element(&self) -> u32 {
-            self.inner.element
+        fn element(zelf: &Py<Self>) -> u32 {
+            zelf.inner.element
         }
     }
 

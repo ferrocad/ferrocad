@@ -447,8 +447,9 @@ Two things to verify when it is built rather than assume — both now checked in
 - the browser-built `toy.wasm` (250 KB, `wasm32-unknown-unknown`, no wasm-bindgen) is
   accepted by wasmi's feature set as-is: the desktop must run the bundle the browser ships,
   not a second build of it. **Verified**: `ferrocad_shell_wasm/tests/shipped.rs` (CI step);
-- wasmi's MSRV against the workspace's `rust-version = "1.87"`. `resolver = "3"` prefers an
-  MSRV-compatible release; **verified** — wasmi 2.0.0 declares 1.86 and resolves as-is.
+- wasmi's MSRV against the workspace's `rust-version` (1.87 at the time; 1.97 since the
+  RustPython 0.6 upgrade). `resolver = "3"` prefers an MSRV-compatible release;
+  **verified** — wasmi 2.0.0 declares 1.86 and resolves as-is.
 
 **Gap 1's engine: `rquickjs` (settled 2026-11-08).** QuickJS behind Rust bindings: a
 complete-enough ES2020 in about a megabyte, with no V8 build system to ship. The surface it
@@ -1937,7 +1938,7 @@ gaps are now closed:
      `set_view_stage`, `set_preview_items`, `preview_items`, `clear_previews`,
      `preview_generation`, `pick_at`).
    - The enum variants are class attributes installed with `#[extend_class]`; a
-     RustPython 0.5 `#[pyattr]` runs during type creation, where an instance of that
+     RustPython `#[pyattr]` runs during type creation, where an instance of that
      same type would meet an uninitialised static type. `==`/`!=` compare the wrapped
      value (`Comparable`).
    - **One ranked picker.** `pick_all`/`resolve` moved from `ferrocad_stage_py::view`
@@ -1973,46 +1974,38 @@ gaps are now closed:
    the browser always uses. `bootstrap.py`'s `_missing` probes were already conditional,
    so the real `os`/`_io`/`pathlib`/`tempfile`/`importlib` replace the shims automatically.
 
-   **The upstream blocker is a libc pin, not a patch.** rustpython-vm 0.5 calls
-   `PosixSpawnFlags::from_bits_retain(libc::POSIX_SPAWN_SETSID)`; nix's bitflags base is
-   `c_int`, while libc 0.2.187 changed the constant to `c_short` on Linux (matching the
-   header's type), so `host_env` failed with `expected i32, found i16`. `Cargo.lock`
-   pins libc to 0.2.186 (the last `c_int` release), recorded as
-   `[workspace.metadata.libc]`; a re-resolution reverts it and the native build fails
-   loudly. Drop the pin when RustPython casts the constant itself.
+   **The runtime is RustPython 0.6, and no `libc` pin is needed.** `host_env` needs the
+   POSIX layer `wasm32-unknown-unknown` does not have, which is why `rustpython-vm` is
+   declared twice (base entry for the browser, target-scoped entry adding `host_env`).
+   0.6 is the first release that casts `libc::POSIX_SPAWN_SETSID` itself
+   (`rustpython-host_env`'s posix layer does), so the pin earlier builds needed — 0.2.187
+   made the constant a `c_short` on Linux and 0.5 handed it straight to a `c_int`
+   bitflags — is gone, along with `[workspace.metadata.libc]`. Three things the upgrade
+   brought, recorded because a future `cargo update` can undo them:
 
-   **RustPython 0.6 evaluated (2026-11-12): it removes the blocker, and the port is
-   deferred.** 0.6.0 does cast the constant (`rustpython-host_env 0.6.0/src/posix.rs`
-   reads `PosixSpawnFlags::from_bits_retain(libc::POSIX_SPAWN_SETSID.into())`), so 0.6
-   is the release this pin waits for. It is not a drop-in, though:
+   - **Rust 1.97.** The family's ruff-AST crates declare 1.96/1.97, so `rust-version`
+     moved from 1.87 to 1.97. CI uses `stable` and the pinned browser image already
+     ships 1.97.0; an older local `stable` now fails at the first `cargo` invocation
+     with cargo's own message instead of inside ruff.
+   - **The ruff AST is pinned to 0.16.5 in the manifest.** `rustpython-codegen 0.6.0`
+     was released against 0.16.5; the family's caret ranges resolve 0.16.10, whose
+     `ExprCompare`/`FStringValue` changes make codegen fail to compile. Cargo has no
+     way to pin a transitive dependency, so `ferrocad_shell_pywasm` names the five
+     crates with an `=` requirement. It costs nothing (they are already in the graph)
+     and a plain `cargo update` cannot silently revert it.
+   - **`pymath` and `malachite-bigint` unify on 0.12.** `rustpython-stdlib 0.6.0` wants
+     malachite-bigint 0.12 while `pymath 0.2.0`'s `^0` requirement had resolved to
+     0.9.2, giving two incompatible `BigInt`s; `Cargo.lock` now has the single 0.12
+     (the `^0` requirement admits it). `math.log`/`isqrt`/`gcd` are what catch it.
 
-   - **MSRV 1.97.** `rustpython-stdlib 0.6.0` depends on `rustpython-ruff_python_ast`
-     0.16.x, whose only published releases need rustc 1.96 (0.16.5) or 1.97 (0.16.10);
-     `rustpython-vm`'s own `rust-version = 1.95` is optimistic. CI's `stable` and the
-     browser image (1.97.0) are fine, but the workspace declares 1.87 and a developer's
-     `stable` here is 1.95, so the effective floor for the default product build would
-     move to 1.97 and every cached artifact would be invalidated. On this checkout that
-     is a ~50 GB `target/debug` against a full filesystem.
-   - **Two upstream packaging bugs to pin around.** `rustpython-codegen 0.6.0` does not
-     compile against ruff 0.16.10 (AST drift: `ExprCompare`'s `left`/`comparators`,
-     `FStringValue`), so the ruff crates must be held at 0.16.5. `rustpython-stdlib
-     0.6.0` wants `malachite-bigint 0.12` while `pymath 0.2.0` resolves its `^0`
-     requirement to 0.9.2 — two incompatible `BigInt`s — and they only unify by forcing
-     0.12 (`cargo update -p malachite-bigint@0.9.2 --precise 0.12.0`).
-   - **A derive migration in this crate.** 0.6 rejects a `&self` receiver on
-     `#[pymethod]`/`#[pygetset]` when the impl block sits on the payload ("must receive
-     the object, not the payload"), and a downstream crate cannot answer with
-     `impl Py<T>` because of the orphan rule. Every receiver here becomes
-     `zelf: &Py<Self>` with `self` renamed in the body: 219 of them across
-     `native.rs`, `native_shapes.rs` and `native_stage.rs` (~5.8k lines). It is
-     mechanical — the payloads already mutate through `Arc<Mutex>`/`RefCell`, so no
-     `borrow_mut` rewrite is needed — plus `vm.print_exception` now takes
-     `&Py<PyBaseException>`.
-
-   A spike carried that migration to a clean `cargo check -p ferrocad_shell_pywasm` on
-   1.97.1 and was then reverted, so nothing of it is in the tree. Re-attempt when the
-   toolchain can move (or the ruff/malachite packaging settles) — the migration itself
-   is understood and no longer a research question.
+   The bindings moved with the derive: 0.6 rejects a `&self` receiver on
+   `#[pymethod]`/`#[pygetset]` when the impl block sits on the payload, and a
+   downstream crate cannot answer with `impl Py<T>` because of the orphan rule. The 211
+   receivers across `native.rs`, `native_shapes.rs` and `native_stage.rs` are
+   `zelf: &Py<Self>` with `self` renamed in the body; the payloads already mutated
+   through `Arc<Mutex>`/`RefCell`, so no `borrow_mut` rewrite was needed. Two smaller
+   deltas: `vm.print_exception` takes `&Py<PyBaseException>`, and the nested `mod part` /
+   `mod mesh` import `Py` explicitly (they do not glob-import the parent).
 
    Tests: `tests/python_tree.rs` — a default boot's `FreeCAD.__file__` is the
    repository's absolute path and `pathlib.Path(...).is_file()` is true (the wasm `_Path`

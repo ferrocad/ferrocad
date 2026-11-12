@@ -724,7 +724,7 @@ impl PythonRuntime for RustPythonRuntime {
             match answer {
                 Ok(value) => value.is_true(vm).unwrap_or(false),
                 Err(error) => {
-                    vm.print_exception(error);
+                    vm.print_exception(&error);
                     false
                 }
             }

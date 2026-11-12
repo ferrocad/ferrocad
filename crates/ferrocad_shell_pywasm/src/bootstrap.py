@@ -1,10 +1,11 @@
 """The host gaps a `wasm32-unknown-unknown` RustPython cannot fill itself.
 
 Everything above this file is the desktop's own source: `python/FreeCAD`,
-`python/FreeCADGui`, `python/FerroCADGui` and the `python/FerroCAD` package are installed
-from `python/` by the loader (see `lib.rs`), and `ferrocad` is the native module in
-`native.rs`. This file exists only because the target has no POSIX module, so RustPython's
-frozen `os`/`_io` layer is off and six stdlib modules cannot be imported:
+`python/FreeCADGui`, `python/FerroCADGui` and the `python/FerroCAD` package are run from
+`python/` (a native host imports the tree from disk, see `lib.rs`), and `ferrocad` is the
+native module in `native.rs`. This file fills the gaps a `wasm32-unknown-unknown`
+RustPython has: the target has no POSIX module, so RustPython's frozen `os`/`_io` layer is
+off and six stdlib modules cannot be imported:
 
 - ``contextlib`` — ``suppress`` and ``redirect_stdout``/``redirect_stderr``
 - ``io`` — ``StringIO``, the console's stdout capture
@@ -158,10 +159,10 @@ class _Path:
 def _import_module(name):
     """`importlib.import_module` over the frozen importer.
 
-    The frozen ``importlib`` cannot load here: ``importlib._bootstrap_external``
-    imports ``posix``, which ``host_env``-off builds do not have. The shared modules
-    call ``import_module`` and ``util.find_spec``, and ``__import__`` is the same
-    operation.
+    The frozen ``importlib`` cannot load in a ``host_env``-off build:
+    ``importlib._bootstrap_external`` imports ``posix``, which the wasm target does not
+    have. The shared modules call ``import_module`` and ``util.find_spec``, and
+    ``__import__`` is the same operation.
     """
     return __import__(name, fromlist=["*"])
 
@@ -228,10 +229,11 @@ def _os_fsdecode(value):
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
-# `os` is only importable off `host_env`, which this build does not have. The shared
-# modules use these names for path-like arguments and for the parameter store's
-# environment lookup; there is no filesystem behind any of them (`open` itself refuses,
-# see the module docs), so a path question answers what it can and a read does not exist.
+# `os` is only importable with `host_env`, which the wasm build does not have (a native
+# host gets the real module and this block is skipped). The shared modules use these
+# names for path-like arguments and for the parameter store's environment lookup; there
+# is no filesystem behind any of them (`open` itself refuses, see the module docs), so a
+# path question answers what it can and a read does not exist.
 if _missing("os", "environ", "fdopen", "fspath"):
     _module(
         "os",
@@ -261,7 +263,7 @@ if _missing("os", "environ", "fdopen", "fspath"):
 
 
 def _no_tempfile(*args, **kwargs):
-    """`tempfile.mkstemp`: this host has no temporary files.
+    """`tempfile.mkstemp`: the wasm host has no temporary files.
 
     The parameter store is memory-only here (the loader clears its file path), so the
     atomic save never runs; an explicit save says why instead of failing obscurely.

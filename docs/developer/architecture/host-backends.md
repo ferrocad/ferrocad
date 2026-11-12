@@ -327,12 +327,19 @@ The seam is `crates/ferrocad_python_host`; the trail is
 `python/FreeCAD` package, `python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py`
 and `python/FerroCAD/` package the CPython half imports: documents, the parameter store
 and units; the command registry, selection mirror, dialogs and observers; the provider
-registry, settings and `ViewState`; and the semantic grid/axis/gizmo stores. The native
+registry, settings and `ViewState`; and the semantic grid/axis/gizmo stores. A **native**
+host imports that tree **from disk** (B18b item 3), so editing `python/` is visible to the
+next desktop boot without a Rust rebuild; the tree is `FERROCAD_PYTHON_DIR`, else one
+above the executable (the working directory is not searched, so launching from an
+untrusted directory cannot inject packages). The browser, which has no
+filesystem, installs
+the embedded copy through a small loader. The native
 module supplies what those expect from the engine: `Document`/`DocumentObject` over the
 host's payload, `Quantity`/`Unit`/`Vector`/`Matrix`/`Rotation`/`Placement`/`TypeId`, and
 the three property rules. `bootstrap.py` therefore keeps only the host gaps a
-`host_env`-off RustPython cannot fill — `io`, `contextlib`, `pathlib`, `traceback`,
-`importlib`, `os`, `tempfile` — plus the wiring (`GuiUp`, no parameter file). It was
+`host_env`-off (wasm) RustPython cannot fill — `io`, `contextlib`, `pathlib`, `traceback`,
+`importlib`, `os`, `tempfile` — plus the wiring (`GuiUp`, the parameter file); with the
+feature on, its `_missing` probes leave the real modules in place. It was
 ~2 050 lines of duplicate policy; it is ~250 lines of host shims, so a change to a
 command, a provider rule or a store is one source for both runtimes.
 
@@ -413,14 +420,18 @@ Because the facade is the real one, **real mods load**: `mods/GridOverlay`,
 Coin/shader skins read a resource file and need the overlay bridge, so those still record
 an error in the browser.
 
-Two operational facts: `rustpython-vm` needs `host_env` **off** to build for
-`wasm32-unknown-unknown`, and its compiler recurses, so a host raises the stack before
+Three operational facts. `rustpython-vm` needs `host_env` **off** to build for
+`wasm32-unknown-unknown`, so the dependency is declared twice: the base entry keeps the
+browser feature set, and a target-scoped entry adds `host_env` for a native build (B18b
+item 3). That feature is also why `Cargo.lock` pins `libc` to 0.2.186 — see
+`[workspace.metadata.libc]`; rustpython 0.5 calls
+`from_bits_retain(libc::POSIX_SPAWN_SETSID)` as an `i32`, and libc 0.2.187 made that
+constant a `c_short`. Second, the compiler recurses, so a host raises the stack before
 `PywasmScriptHost::new` (the tests use a 16 MiB worker thread; the browser sets the same
 value as a link argument in `ferrocad_web_gpui/build.rs`, because `wasm-ld`'s default is
-1 MiB).
-No `window` dependency: RustPython is plain Rust, so this crate also builds natively and
-its tests run in CI without a browser (as the JS half's host logic now does — only its
-`WebPage` is `cfg(wasm)`).
+1 MiB). Third, no `window` dependency: RustPython is plain Rust, so this crate also
+builds natively and its tests run in CI without a browser (as the JS half's host logic
+now does — only its `WebPage` is `cfg(wasm)`).
 
 **On the desktop the interpreter lives on a worker.** The VM is not `Send` and its
 compiler recurses, so a host must raise the stack before the interpreter starts; a GPUI app
@@ -428,10 +439,10 @@ cannot raise its own (8 MiB on Linux and macOS, 1 MiB on Windows).
 `threaded::ThreadedScriptHost` is the `ScriptHost` in front of a 16 MiB worker:
 `ThreadedRuntime` sends every call over the channel, and the answers that need no
 interpreter (the greeting, the grant) stay local. `--script-host=pywasm`
-installs it over `live_persistent`, so the preview reads the app's parameter file and
-answers the whole contract; `host_env` is still off, so what it does *not* have is an
-ordinary POSIX layer — the parameter store's two file operations come from the host
-(see B7d).
+installs it over `live_persistent`, so the preview imports `python/` from disk, reads the
+app's parameter file and answers the whole contract; the worker has a real POSIX layer
+(`host_env`), while the facade's parameter store keeps using the host's two file
+operations, which is what makes it independent of the interpreter's `open` (B7d).
 
 **Installed by the browser, chosen by the page.** `ferrocad_shell_web` is the assembly:
 it composes `RustAppBackend` with no script half, with `JsScriptHost`, or with

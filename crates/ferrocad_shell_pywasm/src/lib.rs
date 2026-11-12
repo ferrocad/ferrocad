@@ -17,15 +17,20 @@
 //!
 //! **The runtime is RustPython**, the second option in §6.3. It is a Python VM written
 //! in Rust: no C ABI, no Pyodide download, no COOP/COEP, and — unlike Pyodide — it
-//! compiles for `wasm32-unknown-unknown` with `host_env` off. §6.3's Pyodide row would
-//! have needed a JS-mediated binding layer plus a ~10 MB runtime; MicroPython would
-//! have been the least compatible with `python/`.
+//! compiles for `wasm32-unknown-unknown` with `host_env` off. A **native** build turns
+//! `host_env` on (a target-scoped feature, B18b item 3), which gives the desktop's
+//! interpreter the real `os`/`_io` layer and the POSIX stdlib; the browser keeps the
+//! feature off and `bootstrap.py`'s substitutes. §6.3's Pyodide row would have needed a
+//! JS-mediated binding layer plus a ~10 MB runtime; MicroPython would have been the
+//! least compatible with `python/`.
 //!
 //! **What is shared.** The scripts are literally `python/ferrocad_shell/__init__.py`,
 //! `python/FreeCAD/` (the App facade), `python/FreeCADGui/__init__.py`,
-//! `python/FerroCADGui/__init__.py` and the `python/FerroCAD` package, included as
-//! source; the property rules are `ferrocad_core::present` (see [`snapshot`]). What is
-//! *not* shared is the `*_py` PyO3 bindings: those are CPython extension modules and
+//! `python/FerroCADGui/__init__.py` and the `python/FerroCAD` package. A native host
+//! imports that tree **from disk**, so an edit is seen by the next boot without a
+//! rebuild; the browser (no filesystem) installs the embedded copy through the loader.
+//! The property rules are `ferrocad_core::present` (see [`snapshot`]). What is *not*
+//! shared is the `*_py` PyO3 bindings: those are CPython extension modules and
 //! RustPython cannot load them, so [`native`] binds the same engine types with the
 //! `rustpython-vm` grammar. §6.3 calls this the fork's central trade-off, and it still
 //! holds.
@@ -34,8 +39,9 @@
 //! opening one and `setattr` on an object raise rather than silently missing the
 //! document. Writes, recompute and the `Shape` API are the document half's
 //! (`RustAppBackend`), and the shell's own commands reach them. `bootstrap.py` supplies
-//! only the host gaps (`io`, `contextlib`, `pathlib`, `traceback`, `importlib`, `os`,
-//! `tempfile`) and the wiring.
+//! only the gaps a `host_env`-off build has (`io`, `contextlib`, `pathlib`, `traceback`,
+//! `importlib`, `os`, `tempfile`) and the wiring; with the feature on, its `_missing`
+//! probes leave the real modules in place.
 //!
 //! **Why this crate also builds natively.** `ferrocad_shell_js`'s browser page is
 //! `cfg(wasm)` because it is a `window` bridge, but the half above it is not; nor is
@@ -67,6 +73,63 @@ mod native_shapes;
 
 /// `ferrocad_stage` for RustPython: tools, shapes, snapping and the gizmo (B18b item 2).
 mod native_stage;
+
+/// Where a native host imports `python/**` from (B18b item 3).
+///
+/// Only a build with `host_env` can import from disk, so the browser never uses this;
+/// a wasm target falls back to the embedded copy. `None` means no tree was found and the
+/// embedded copy is installed instead (a release binary without `python/` beside it).
+#[cfg(not(target_family = "wasm"))]
+mod python_tree {
+    use std::path::{Path, PathBuf};
+
+    /// `FERROCAD_PYTHON_DIR`, else a tree above the executable (a `cargo run` and an
+    /// installed binary beside `python/` both resolve). The working directory is
+    /// deliberately **not** searched: launching from an untrusted directory must not
+    /// hand every package in it to the interpreter. In a dev build the manifest
+    /// directory is the last resort, so `CARGO_TARGET_DIR` outside the tree still finds
+    /// the sources the crate was compiled beside.
+    pub(super) fn find() -> Option<PathBuf> {
+        if let Ok(value) = std::env::var("FERROCAD_PYTHON_DIR") {
+            let path = PathBuf::from(value);
+            if is_tree(&path) {
+                return Some(path);
+            }
+        }
+        let mut roots = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            let mut cursor = exe.parent();
+            while let Some(dir) = cursor {
+                roots.push(dir.to_path_buf());
+                cursor = dir.parent();
+            }
+        }
+        #[cfg(debug_assertions)]
+        if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
+            roots.push(Path::new(manifest).to_path_buf());
+        }
+        roots.into_iter().find_map(|root| {
+            [root.join("python"), root.join("ferrocad").join("python")]
+                .into_iter()
+                .find(|candidate| is_tree(candidate))
+        })
+    }
+
+    /// Every package the boot imports, so a half-copied tree is refused rather than
+    /// booting into an `ImportError`.
+    fn is_tree(path: &Path) -> bool {
+        [
+            "FreeCAD",
+            "FreeCADGui",
+            "FerroCAD",
+            "FerroCADGui",
+            "ferrocad_shell",
+        ]
+        .iter()
+        .all(|package| path.join(package).join("__init__.py").is_file())
+            && path.join("ferrocad_shell").join("catalog.json").is_file()
+    }
+}
 
 /// The desktop's RustPython host: a `ScriptHost` in front of a worker thread. Native
 /// only — the browser boots the interpreter on its own thread and raises that stack as a
@@ -107,6 +170,9 @@ pub(crate) fn no_tool(name: &str) -> String {
 
 /// The scripting module: `python/ferrocad_shell`, the **same source** the native
 /// assembly runs. A change there is a change here, with no port in between.
+///
+/// This is the copy the **browser** installs. A native host imports the file from disk
+/// (B18b item 3), so the constant is the fallback for a release without `python/`.
 const SHELL: &str = include_str!("../../../python/ferrocad_shell/__init__.py");
 
 /// The generated built-in catalogue the module reads beside itself at import
@@ -427,8 +493,8 @@ impl RustPythonRuntime {
 
     /// [`live`](Self::live) with the facade's file-backed parameter store.
     ///
-    /// Native only in effect: without `host_env` there is no filesystem, so the store
-    /// stays in memory (the browser).
+    /// The browser has no filesystem (`host_env` is off), so the store stays in memory
+    /// there; a native host resolves the app's parameter file.
     pub fn live_persistent() -> Result<Self, String> {
         Self::boot(DocumentSource::Registry, ParameterStore::File)
     }
@@ -464,10 +530,9 @@ impl RustPythonRuntime {
 
         let interpreter = Interpreter::builder(Settings::default())
             .add_native_modules(
-                // `rustpython-stdlib` without `host_env`: `json`, `sys` and the rest,
-                // minus the `os`/`_io` file layer. `bootstrap.py` supplies the names the
-                // shared facade touches; the parameter file is read and written by
-                // `native.rs` instead of through a POSIX layer.
+                // `rustpython-stdlib`: `json`, `sys` and the rest. On a native build
+                // `host_env` adds the `os`/`_io` file layer; on wasm it is off and
+                // `bootstrap.py` supplies the names the shared facade touches.
                 &rustpython_stdlib::stdlib_module_defs(Context::genesis()),
             )
             .add_native_module(native::module_def(Context::genesis()))
@@ -483,28 +548,51 @@ impl RustPythonRuntime {
             .add_frozen_modules(rustpython_pylib::FROZEN_STDLIB)
             .build();
 
+        #[cfg(not(target_family = "wasm"))]
+        let python_tree = python_tree::find();
+        #[cfg(target_family = "wasm")]
+        let python_tree: Option<std::path::PathBuf> = None;
+
         interpreter.enter(|vm| {
             let boot = (|| -> Result<(), String> {
                 run_source(vm, "<bootstrap>", BOOTSTRAP, &[])?;
-                // The loader defines `_open`/`_install`; they have to run in the same
-                // scope as the call, because `run_source` gives each source a fresh one.
-                let install = format!(
-                    "{LOADER}\nSHELL_FILES = {{'catalog.json': SHELL_CATALOG}}\n\
-                     _install_package('FreeCAD', eval(FREECAD_FILES_SOURCE))\n\
-                     sys.modules['_ferrocad_bootstrap'].configure(sys.modules['FreeCAD'], PARAMETER_STORE, PARAMETER_FILE)\n\
-                     _install('FreeCADGui', FREECADGUI_SOURCE)\n\
-                     _install('FreeCADGui.draft', FREECADGUI_DRAFT_SOURCE)\n\
-                     _install_package('FerroCAD', eval(FERROCAD_FILES_SOURCE))\n\
-                     _install('FerroCADGui', FERROCADGUI_SOURCE)\n\
-                     _install('ferrocad_shell', SHELL_SOURCE)"
-                );
                 let store = match store {
                     ParameterStore::Memory => "memory",
                     ParameterStore::File => "file",
                 };
+                // A native host with a `python/` tree imports the shared facade **from
+                // disk**, so an edit is picked up by the next boot without a rebuild
+                // (B18b item 3; this is what `host_env` buys). The browser has no
+                // filesystem, so it installs the embedded copy through the loader.
+                let install = match &python_tree {
+                    Some(tree) => format!(
+                        "import sys\n\
+                         sys.path.insert(0, {tree:?})\n\
+                         import FreeCAD\n\
+                         sys.modules['_ferrocad_bootstrap'].configure(FreeCAD, {store:?}, {parameter:?})\n\
+                         import FreeCADGui\n\
+                         import FerroCAD\n\
+                         import FerroCADGui\n\
+                         import ferrocad_shell",
+                        parameter = parameter_file.as_deref().unwrap_or(""),
+                    ),
+                    // The loader defines `_open`/`_install`; they have to run in the
+                    // same scope as the call, because `run_source` gives each source a
+                    // fresh one.
+                    None => format!(
+                        "{LOADER}\nSHELL_FILES = {{'catalog.json': SHELL_CATALOG}}\n\
+                         _install_package('FreeCAD', eval(FREECAD_FILES_SOURCE))\n\
+                         sys.modules['_ferrocad_bootstrap'].configure(sys.modules['FreeCAD'], PARAMETER_STORE, PARAMETER_FILE)\n\
+                         _install('FreeCADGui', FREECADGUI_SOURCE)\n\
+                         _install('FreeCADGui.draft', FREECADGUI_DRAFT_SOURCE)\n\
+                         _install_package('FerroCAD', eval(FERROCAD_FILES_SOURCE))\n\
+                         _install('FerroCADGui', FERROCADGUI_SOURCE)\n\
+                         _install('ferrocad_shell', SHELL_SOURCE)"
+                    ),
+                };
                 // A Python dict of each package's sources. `{:?}` renders a Rust string
                 // as a quoted literal (newlines and quotes escaped), which is also a
-                // Python one.
+                // Python one. Unused when the tree was imported from disk.
                 let ferro_files = format!(
                     "{{'__init__': {FERROCAD_INIT:?}, '_params': {FERROCAD_PARAMS:?}, '_grid': {FERROCAD_GRID:?}, '_axis': {FERROCAD_AXIS:?}, '_gizmo': {FERROCAD_GIZMO:?}}}"
                 );

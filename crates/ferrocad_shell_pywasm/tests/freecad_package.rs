@@ -34,10 +34,17 @@ fn evaluate(host: &PywasmScriptHost, code: &str) -> String {
 #[test]
 fn the_app_facade_is_the_shared_package() {
     with_host(|host| {
-        assert_eq!(
-            evaluate(host, "print(FreeCAD.__file__)"),
-            "FreeCAD/__init__.py",
-            "the facade is installed from python/, not written by the host"
+        // A native boot imports `python/` from disk (B18b item 3), so the file is an
+        // absolute path; the assertion is about identity, not the install mechanism:
+        // it is `python/FreeCAD/__init__.py`, not source the host wrote.
+        let file = evaluate(host, "print(FreeCAD.__file__)");
+        assert!(
+            file.ends_with("FreeCAD/__init__.py"),
+            "the facade is the shared source: {file}"
+        );
+        assert!(
+            std::path::Path::new(&file).is_absolute(),
+            "a native host imports the tree from disk: {file}"
         );
         assert_eq!(
             evaluate(host, "print(type(FreeCAD.ActiveDocument).__module__)"),

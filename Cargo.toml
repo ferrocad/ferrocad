@@ -182,6 +182,17 @@ ferrocad = { path = "crates/ferrocad", version = "0.1.4" }
 [workspace.metadata.gpu-allocator]
 windows = "0.62.2"
 
+# Cargo cannot express "libc must keep `POSIX_SPAWN_SETSID` as `c_int`". rustpython-vm
+# 0.5 (the desktop RustPython, `host_env` on) calls
+# `PosixSpawnFlags::from_bits_retain(libc::POSIX_SPAWN_SETSID)`, whose nix bitflags
+# base is `c_int`; libc 0.2.187 changed the constant to `c_short` on Linux (matching
+# the header's type), so the build fails with `expected i32, found i16`. `Cargo.lock`
+# pins libc to 0.2.186 (the last `c_int` release). A re-resolution reverts it; the
+# error is loud (`ferrocad_shell_pywasm` will not compile natively), so re-apply the
+# pin after `cargo update`. Drop it when RustPython casts the constant itself.
+[workspace.metadata.libc]
+version = "0.2.186"
+
 # `lto` pays off for the extension/shared libraries; keep it workspace-wide.
 [profile.release]
 opt-level = 3

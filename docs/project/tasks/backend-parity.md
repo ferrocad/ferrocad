@@ -6,8 +6,7 @@ B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 and B17a built
 (2026-11-11/12); B18 and
-B18a built (steps 1–7, 2026-11-12), B18b built except its
-`host_env` item and `ferrocad_ui_py` (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
+B18a built (steps 1–7, 2026-11-12), B18b built except `ferrocad_ui_py` (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -471,9 +470,10 @@ what is left is the engine behind it.
   `ferrocad_web_gpui/build.rs` already do.
 - **`host_env`.** The crate pins `default-features = false` without `host_env` because
   `wasm32-unknown-unknown` needs that — which also means no real `os`/`_io`, and
-  `bootstrap.py` shims `contextlib`/`io`/`pathlib`/`traceback` to compensate. A native build
-  should turn `host_env` on and make the shims conditional. Until it does, desktop pywasm
-  is a wasm environment running in a native window.
+  `bootstrap.py` shims `contextlib`/`io`/`pathlib`/`traceback` to compensate. A native
+  build should turn `host_env` on and make the shims conditional. Until it does, desktop pywasm
+  is a wasm environment running in a native window. *(Built in B18b item 3: the feature
+  is target-scoped, and a native boot imports `python/` from disk.)*
 - **The facade is read-only.** `setattr` raises, there is no recompute and no `Shape` API,
   because the half does not share the `*_py` bindings (B6). So a desktop pywasm half is a
   *preview of the browser environment*, never a substitute for CPython, and must not
@@ -638,10 +638,10 @@ in `crates/ferrocad_shell_python/tests/runtime.rs`; the naming is tested in
 names `ferrocad_shell_js` only on native and only behind that feature; the reverse edge
 must never exist.
 
-**What is left of the switch is nothing; what is left of parity is `host_env`** (B7d) and
-the wasm addon engine (Gap 2). `--script-host=pywasm` composes RustPython on the worker its
-compiler needs, but with the frozen stdlib the browser has, so a mod that opens a file does
-not get the desktop's filesystem.
+**What is left of the switch is nothing; what is left of parity is the wasm addon engine**
+(Gap 2). `host_env` (B7d) was the other half and is built in B18b item 3: the desktop
+RustPython worker has a real POSIX layer and imports `python/` from disk. `--script-host=pywasm` composes RustPython on the worker its
+compiler needs.
 
 **Exit: met.** 4 composition tests, 5 naming tests, `ferrocad_shell_web` 13 + 2,
 `ferrocad_shell_core` 271.
@@ -665,7 +665,9 @@ the unthreaded host on the *test* thread, and the process aborted with `has over
 stack` at 2 MiB. The test asserts the constants directly now, and the stack is a
 `pub const STACK` with the reason written down beside it.
 
-**`host_env` is still off**, so this is the browser's environment in a real window: the
+**`host_env` is still off** *(superseded by B18b item 3: the feature is target-scoped,
+and the native boot imports `python/` from disk; this paragraph records the B7d state)*, so
+this was the browser's environment in a real window: the
 frozen stdlib has no `os`/`_io`, and `bootstrap.py` supplies `contextlib`, `io`, `pathlib`
 and `traceback` itself. A mod that calls `open()` or walks a directory does not get the
 desktop's filesystem. Turning `host_env` on natively — target-conditional features, plus
@@ -1825,7 +1827,7 @@ handles stay the document half's; a declared handle comes back from
 the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
 full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
-### B18b — run the real facade under RustPython (built 2026-11-11; native module and document writes 2026-11-12)
+### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage and `host_env` 2026-11-12)
 
 The structural half of the parity gap. **Built: the whole facade is now the shared source.**
 `bootstrap.py` went from 2 050 to ~250 lines because the desktop's modules are installed,
@@ -1851,9 +1853,10 @@ units) as well as the Gui ones:
   `activeDocument`/`getDocument`/`listDocuments` read the payload fresh; `newDocument`/
   `openDocument`/`closeDocument`/`setActiveDocument` refuse, because the document half
   owns them.
-- `bootstrap.py` supplies only what a `host_env`-off RustPython cannot: `io`,
+- `bootstrap.py` supplies only what a `host_env`-off (wasm) RustPython cannot: `io`,
   `contextlib`, `pathlib`, `traceback`, `importlib` (with `util.find_spec`), `os` and
-  `tempfile`, and only the ones the interpreter actually lacks (`_missing` probes first).
+  `tempfile`, and only the ones the interpreter actually lacks (`_missing` probes first;
+  a native build has all of them and the probes leave the real modules alone).
   Its `configure` wires the installed facade to the host: `GuiUp`, and either a
   memory-only store or the host's file pair. Nothing above it is policy.
 - **Quantity is the engine's, not a second unit model.** The native class binds
@@ -1885,8 +1888,9 @@ units) as well as the Gui ones:
   now exercised by shipped mods instead of synthetic ones; the Coin/shader skins and a
   task panel still need a surface this half does not install.
 
-What remains of B18b is one host gap. None of it
-is needed for the facade above it:
+What remains of B18b is `ferrocad_ui_py` (the Qt-shaped dialog surface), and nothing
+else. None of the items below were needed for the facade above them, but all the host
+gaps are now closed:
 
 1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
    property rules and every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
@@ -1955,15 +1959,38 @@ is needed for the facade above it:
    What is *not* there: `ferrocad_ui_py` (Qt-shaped dialogs, still open), and the
    `ferrocad_stage_py` `PickHit` class is replaced by the shared `RankedHit` mapping
    (same fields, so the facade is unaffected);
-3. `host_env` on for the **native** RustPython build only (target-specific dependency), so
-   the desktop runs `python/**` from disk; the browser keeps the embedded file map, which
-   this step built. **Blocked upstream:** rustpython-vm 0.5's posix layer wants
-   `libc::POSIX_SPAWN_SETSID` as `i32`, and this toolchain's libc has it as `i16`, so the
-   crate does not compile with `host_env`. The parameter store no longer depends on it
-   (item 4), so this is about running `python/**` from disk, not about settings;
+3. ~~`host_env` on for the **native** RustPython build only, so the desktop runs
+   `python/**` from disk~~ — **built:** `rustpython-vm` is declared twice in
+   `ferrocad_shell_pywasm`: the base entry keeps the browser's feature set, and a
+   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` entry adds `host_env`.
+   Features are additive and target-scoped, so the browser build is unchanged. The boot
+   then resolves a `python/` tree — `FERROCAD_PYTHON_DIR` first, else one above the
+   executable (the working directory is *not* searched, so launching from an untrusted
+   directory cannot inject packages; a dev build also checks beside the crate
+   manifest) — and imports `FreeCAD`, `FreeCADGui`,
+   `FerroCAD`, `FerroCADGui` and `ferrocad_shell` from it through `sys.path`; no tree
+   found (a release without sources) falls back to the embedded map, which is also what
+   the browser always uses. `bootstrap.py`'s `_missing` probes were already conditional,
+   so the real `os`/`_io`/`pathlib`/`tempfile`/`importlib` replace the shims automatically.
+
+   **The upstream blocker is a libc pin, not a patch.** rustpython-vm 0.5 calls
+   `PosixSpawnFlags::from_bits_retain(libc::POSIX_SPAWN_SETSID)`; nix's bitflags base is
+   `c_int`, while libc 0.2.187 changed the constant to `c_short` on Linux (matching the
+   header's type), so `host_env` failed with `expected i32, found i16`. `Cargo.lock`
+   pins libc to 0.2.186 (the last `c_int` release), recorded as
+   `[workspace.metadata.libc]`; a re-resolution reverts it and the native build fails
+   loudly. Drop the pin when RustPython casts the constant itself.
+
+   Tests: `tests/python_tree.rs` — a default boot's `FreeCAD.__file__` is the
+   repository's absolute path and `pathlib.Path(...).is_file()` is true (the wasm `_Path`
+   shim's is not), and `FERROCAD_PYTHON_DIR` pointing at a copied tree is what the
+   console runs, proved by a marker only the copy has. `freecad_package.rs` now asserts
+   the facade is the shared source rather than the embedded spelling;
 4. ~~a file-backed `ParamGet`~~ — **built:** the store and the file format are
    `python/FreeCAD`'s; the host supplies the two file operations
-   (`native.rs::read_parameter_file`/`write_parameter_file`) because `host_env` is off.
+   (`native.rs::read_parameter_file`/`write_parameter_file`), which keeps the store
+   independent of the interpreter's `open` (it was written with `host_env` off, and is
+   unchanged now that it is on).
    `ParameterStore::{Memory, File}` decides per host: the browser and every embedded/test
    host stay in memory, `live_persistent` (the desktop preview) resolves the app's file;
 5. ~~document writes, then `document_grant` → `ReadWrite`~~ — **built:** the native module

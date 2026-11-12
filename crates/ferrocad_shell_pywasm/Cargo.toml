@@ -45,7 +45,6 @@ log = "0.4"
 
 # RustPython, the §6.3 runtime this crate picks: a Python VM written in Rust, so it
 # needs no C ABI and no Pyodide download.
-#
 # Pinned to 0.5: 0.6 requires Rust 1.97 and this workspace builds on 1.95.
 # `rustpython-vm`'s default features include `host_env`, which compiles the `os` and
 # `_io` file layer; that needs a POSIX module `wasm32-unknown-unknown` does not have.
@@ -64,3 +63,16 @@ rustpython-vm = { version = "0.5.0", default-features = false, features = [
 # `default-features = false` keeps `host_env` off, matching the line above.
 rustpython-stdlib = { version = "0.5.0", default-features = false, features = ["compiler"] }
 rustpython-pylib = { version = "0.5.0", features = ["freeze-stdlib"] }
+
+# The desktop's interpreter gets a real host environment (B18b item 3): `os`, `_io` and
+# the POSIX layer, which `wasm32-unknown-unknown` cannot have. Features are additive and
+# this declaration is target-scoped, so only a native build gets `host_env`; the browser
+# keeps the embedded file map.
+#
+# `Cargo.lock` pins `libc` to 0.2.186 for this feature: rustpython-vm 0.5 calls
+# `PosixSpawnFlags::from_bits_retain(libc::POSIX_SPAWN_SETSID)` (an `i32`), and libc
+# 0.2.187 changed that constant to `c_short` on Linux (the header's type). See
+# `[workspace.metadata.libc]` in the workspace manifest; re-apply the pin after
+# `cargo update`.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rustpython-vm = { version = "0.5.0", default-features = false, features = ["host_env"] }

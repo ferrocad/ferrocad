@@ -2331,11 +2331,13 @@ deliberate limit of the doorway, not a runtime gap.
 - **No JS or wasm engine in the default edition.** Both exist behind opt-in features —
   `rquickjs` in B7b, `wasmi` in B7e — so the release binary pays for neither until a
   package turns them on.
-- **Multi-language hosts compose; nothing arbitrates between them** (B8). A target installs
+- **Multi-language hosts compose; the chain is the arbiter** (B8, D12). A target installs
   the host for every language its mod set declares — `compose_all`, first runtime primary —
-  and the browser takes a list in `?runtime=`. What is still deferred is the part with no
-  consumer: precedence for *who owns the console* when two languages register one, and
-  `ScriptHost::claims`.
+  and the browser takes a list in `?runtime=`. Precedence is therefore stated, not open:
+  `HostChain::evaluate` asks the primary and nobody else, so two languages never both
+  answer a console line, and `claims`/`run_command`/`stage_meshes` keep primary-first. What
+  stays deferred is the hook with no implementer and no consumer, `ScriptHost::claims`
+  (see above).
 - **The axis and gizmo cards stay with the script half** (B13). Their schemas are the
   provider registry's (`mods/AxisOverlay`, `mods/GizmoOverlay`) and their stores are
   parameter groups, not view state, so a native card would need a store the document

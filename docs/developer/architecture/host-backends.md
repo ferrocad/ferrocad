@@ -401,6 +401,15 @@ tessellation calls `ferrocad_part::backend()` (OCCT, registered once per process
 doorway cannot carry. This is the place the script half names the kernel; the doorway
 stays kernel-free.
 
+The **B-Rep explorer** is the same `surface_type`/`surface_data`/`curve_of` calls the
+CPython binding makes, so both runtimes classify a face and an edge identically: a box
+edge is a `Part::GeomLine`, a trimmed circular edge a `Part::GeomCircle`. `Part.Surface`
+and `Part.Curve` are one class each rather than upstream's one per kind, and a member the
+kind does not have raises `AttributeError`, so `hasattr(plane, "Radius")` answers what it
+answers upstream. `Shape.Placement` is a value here, not the CPython binding's live view:
+assigning one applies it when the shape is read, and `translate`/`rotate` keep returning
+moved shapes, so a transformed shape reports identity.
+
 **The stage is bound the same way (B18b item 2).** `ferrocad_shell_pywasm/src/native_stage.rs`
 is the RustPython face of `ferrocad_stage_py`: `Tool` (a subclassable base driven through
 `ferrocad_stage::Tool` by an adapter), `ShapeItem`/`Stage`, `PointerEvent`/`Hit` and the

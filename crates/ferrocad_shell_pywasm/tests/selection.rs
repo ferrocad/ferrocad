@@ -169,10 +169,11 @@ fn a_scripted_selection_is_queued_for_the_shell() {
 }
 
 /// `App_Delete` with nothing selected is the script's own early-out (the CPython
-/// answer); with a selection it runs into the read-only document instead. Neither is
-/// a missing `FreeCADGui.Selection` any more.
+/// answer). With a selection it reaches the document and stops at the doorway's one
+/// missing verb: `removeObject` is not part of it (the event vocabulary has no delete
+/// id either), so the command reports that, rather than the selection mirror.
 #[test]
-fn app_delete_refuses_on_the_write_path_not_the_mirror() {
+fn app_delete_refuses_on_the_documents_missing_delete_verb() {
     with_host(|host| {
         let idle = host
             .run_command("App_Delete")
@@ -184,16 +185,15 @@ fn app_delete_refuses_on_the_write_path_not_the_mirror() {
         let refused = host
             .run_command("App_Delete")
             .expect("still the registry's command");
-        assert!(!refused.ok, "{refused:?}");
+        // The command catches its own failure and reports it as a status (one
+        // transaction, then the message), so `ok` is not the field to read.
         assert!(
-            refused.error.contains("openTransaction"),
-            "the refusal names the missing write path: {}",
-            refused.error
+            refused.status.contains("removeObject"),
+            "the refusal names the missing verb: {refused:?}"
         );
         assert!(
-            !refused.error.contains("Selection"),
-            "the mirror answered, so it cannot be the reason: {}",
-            refused.error
+            !refused.status.contains("Selection"),
+            "the mirror answered, so it cannot be the reason: {refused:?}"
         );
     });
 }

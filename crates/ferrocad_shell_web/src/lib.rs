@@ -280,11 +280,49 @@ pub fn page_backend_with_settings(
 ///
 /// The harness drives a host through the query string (`?manipulator=…`, `?click=…`),
 /// so the parsing belongs beside [`from_query`] — and it is a plain function over the
-/// string, which keeps it testable without a browser.
+/// string, which keeps it testable without a browser. The value is percent-decoded: a
+/// `?script=` carries Python, where `%20`, `%27` and the rest are the only way to write
+/// it in a URL.
 pub fn parameter(query: &str, name: &str) -> Option<String> {
     pairs(query)
         .find(|(key, _)| *key == name)
-        .map(|(_, value)| value.to_string())
+        .map(|(_, value)| decode(value))
+}
+
+/// `%XX` and `+` as a URL decoder, tolerant of a malformed escape.
+///
+/// A `%` that does not start two hex digits is kept as written rather than dropped: a
+/// query the page typed by hand should not lose the characters it did type.
+fn decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let escape = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+                match escape.and_then(|digits| u8::from_str_radix(digits, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    None => {
+                        out.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `window.location.search`.
@@ -346,6 +384,34 @@ mod tests {
         );
         assert_eq!(parameter("?js=1", "manipulator"), None);
         assert_eq!(parameter("", "manipulator"), None);
+    }
+
+    #[test]
+    fn a_parameter_is_percent_decoded() {
+        // `?script=` carries Python; only escapes can put a quote, a space or a newline
+        // in a URL. `+` is the form-encoded space, and a lone `%` survives.
+        assert_eq!(
+            parameter(
+                "?script=obj.Float%20%3D%202.5%0Aprint%28%27Probe%27%29",
+                "script"
+            )
+            .as_deref(),
+            Some("obj.Float = 2.5\nprint('Probe')")
+        );
+        assert_eq!(
+            parameter("?script=a+b&runtime=pywasm", "script").as_deref(),
+            Some("a b")
+        );
+        assert_eq!(
+            parameter("?script=100%25", "script").as_deref(),
+            Some("100%")
+        );
+        assert_eq!(parameter("?script=50%", "script").as_deref(), Some("50%"));
+        assert_eq!(
+            parameter("?script=%zz", "script").as_deref(),
+            Some("%zz"),
+            "a malformed escape is kept, not dropped"
+        );
     }
 
     #[test]

@@ -424,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn a_read_write_request_is_reported_when_the_python_engine_cannot_write() {
+    fn a_read_write_request_is_reported_when_no_python_host_can_write() {
         let temp = tempfile::tempdir().expect("a temporary directory");
         with_manifest(
             &temp,
@@ -434,14 +434,17 @@ mod tests {
         );
         let requests = requests_in(&temp);
 
-        // The browser's Python, and `--script-host=pywasm` on the desktop.
-        let warnings = under_granted(&requests, &[Runtime::Pywasm]);
+        // No host of the language at all: the request has nothing that could serve it.
+        let warnings = under_granted(&requests, &[]);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("Draft"), "{warnings:?}");
         assert!(warnings[0].contains("read-write"), "{warnings:?}");
-        assert!(warnings[0].contains("pywasm"), "{warnings:?}");
+        assert!(warnings[0].contains("no script host"), "{warnings:?}");
 
         // Granted where it can be, and the check follows the host that would run it.
+        // B18b item 5: the pywasm host writes through the doorway too, so a Python mod's
+        // read-write request is served in the browser and by the desktop preview.
+        assert!(under_granted(&requests, &[Runtime::Pywasm]).is_empty());
         assert!(under_granted(&requests, &[Runtime::Cpython]).is_empty());
         assert!(under_granted(&requests, &[Runtime::Cpython, Runtime::Js]).is_empty());
     }

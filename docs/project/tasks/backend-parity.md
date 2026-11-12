@@ -6,8 +6,8 @@ B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
 (2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 and B17a built
 (2026-11-11/12); B18 and
-B18a built (steps 1–7, 2026-11-12), B18b built except its Part/Mesh, `host_env` and
-document-write items (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
+B18a built (steps 1–7, 2026-11-12), B18b built except its Part/Mesh and
+`host_env` items (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -961,7 +961,10 @@ The two RustPython hosts override it to `Read`, `WasmAddonHost` reports its mani
 grant, and `HostChain` reports the **primary's** — the console is the primary's, so that is
 the answer a console command gets; a chain with no primary reports `Read` rather than a
 default it cannot honour. The greeting now tells the truth, the way a bundle's already did:
-`FerroCAD shell · RustPython · wasm Python scripting (document read-only)`.
+`FerroCAD shell · RustPython · wasm Python scripting (document read-only)`. (B18b item 5
+changed the RustPython answer for a host that installs the registry — the row above is the
+pre-item-5 state; those hosts are `ReadWrite` now and greet with `(document read-write)`,
+while a fixed-payload host keeps the old line.)
 
 **What that buys, and what it does not.** A host can be asked, so a composition can refuse
 or announce a mismatch, and a surface test can assert the table above instead of trusting
@@ -1787,10 +1790,12 @@ now that `FreeCAD.ParamGet` exists.)
 `tests/selection.rs` (4): a pushed selection makes the selection-backed rows enabled and
 a pushed-empty one disables them; a script's writes are queued in order with their
 sub-elements and points and a second drain is empty; `App_Delete` gives the script's
-"nothing selected" with no selection and the read-only `openTransaction` refusal with
-one; `UndoCount`/`RedoCount` follow the document's stacks and the undo/redo rows with
+"nothing selected" with no selection and stops on the doorway's missing `removeObject`
+with one (B18b item 5 made the transaction methods real enough for the delete to get that
+far); `UndoCount`/`RedoCount` follow the document's stacks and the undo/redo rows with
 them. `the_two_script_halves_agree` now asserts the wasm half answers `App_Delete`'s
-early-out (the CPython answer) and records the write-path refusal as the D15 difference;
+early-out (the CPython answer) and reports the same missing delete verb, where B18a
+recorded the read-only `openTransaction` refusal as the D15 difference;
 it also registers one provider on both halves and compares the manifest (step 5).
 pywasm 1 + 3 + 5 + 4 + 4 + 5 + 4 + 6, parametric composition surface 11.
 
@@ -1820,7 +1825,7 @@ handles stay the document half's; a declared handle comes back from
 the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
 full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
-### B18b — run the real facade under RustPython (built 2026-11-11; native module 2026-11-12)
+### B18b — run the real facade under RustPython (built 2026-11-11; native module and document writes 2026-11-12)
 
 The structural half of the parity gap. **Built: the whole facade is now the shared source.**
 `bootstrap.py` went from 2 050 to ~250 lines because the desktop's modules are installed,
@@ -1880,7 +1885,7 @@ units) as well as the Gui ones:
   now exercised by shipped mods instead of synthetic ones; the Coin/shader skins and a
   task panel still need a surface this half does not install.
 
-What remains of B18b is the rest of the native binding, plus document writes. None of it
+What remains of B18b is the geometry binding, plus one host gap. None of it
 is needed for the facade above it:
 
 1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
@@ -1900,7 +1905,31 @@ is needed for the facade above it:
    (`native.rs::read_parameter_file`/`write_parameter_file`) because `host_env` is off.
    `ParameterStore::{Memory, File}` decides per host: the browser and every embedded/test
    host stay in memory, `live_persistent` (the desktop preview) resolves the app's file;
-5. document writes, then `document_grant` → `ReadWrite` (D15 becomes host policy).
+5. ~~document writes, then `document_grant` → `ReadWrite`~~ — **built:** the native module
+   answers `Document.addObject`, `Document.recompute`, the transaction methods and an
+   object's `setattr` by calling `ferrocad_doc_api`'s doorway over the registry — the same
+   `create`/`set`/`recompute` protocol the JS and bundle halves use — so a Python write is
+   the write the model tree and the stage read next. The value is `str(value)` (editor
+   text), coerced by `present` in the doorway, and the object's instance dict is re-seeded
+   afterwards so the handle a script already holds agrees. One rule changed under it:
+   `present::coerce` keeps a quantity's unit when the text is a bare number (`obj.Length =
+   5` is 5 mm, not a dimensionless 5), which is the rule `Document::set_property` already
+   applied to a `Float` assignment — the pane, CPython and RustPython now agree on it.
+   `Label` lost its getter on
+   purpose: the dict is where a rename lands, and the doorway routes `Label` to the
+   document's label setter in both `create` and `set`. `openTransaction`,
+   `commitTransaction` and `abortTransaction` are accepted no-ops, because each doorway
+   write is its own committed transaction (an outer one cannot group or roll back).
+   `document_grant` is host policy: `ReadWrite` iff the host installed the registry
+   (`DocumentSource::Registry` — the browser and the desktop preview), `Read` for a
+   fixed-payload host, and the console greeting says which. `Runtime::document_grant`
+   names `Pywasm` as `ReadWrite`. Deleting an object is **not** in the doorway yet (the
+   event vocabulary has no delete id either), so `App_Delete` still reports
+   `removeObject` — the next verb, stated rather than hidden. Tests: `tests/writes.rs`
+   (console create + float + rename, the pane's `set_property` path, a refused property,
+   a fixed host's refusal), `tests/threaded.rs` (the threaded host's grant and greeting),
+   and the browser capture `/?runtime=pywasm&script=…` in `smoke.sh`, which creates
+   `Probe` and logs `['Fillet', 'Box', 'Probe'] 2.5`.
 
 ### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19d built)
 
@@ -2019,7 +2048,7 @@ fit. Every road ends at the same object, but the fidelity is not remotely the sa
 | surface | where | how it reaches the engine | fidelity | writes |
 | --- | --- | --- | --- | --- |
 | CPython (`PythonScriptHost`) | desktop | `ferrocad_py`, a PyO3 extension that links `ferrocad_core` and wraps `Arc<Mutex<CoreDocument>>` in `PyDocument`/`PyDocumentObject` | the full object model: properties, observers, extension converters, sub-element resolvers | yes |
-| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`, **one** native function: `document()` returns the active document's JSON, read from `ferrocad_core::application()` on every call (`DocumentSource::Registry`) | a read-only snapshot | no: the ABI has no write |
+| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`, **one** native module: the payload read plus `ferrocad_doc_api`'s doorway (`create`/`set`/`recompute`) over `ferrocad_core::application()` | the property rows and the doorway's verbs | yes on a host that owns the registry, through the doorway (B18b item 5); a fixed-payload host stays read-only |
 | JS (`JsScriptHost` → the page) | desktop (rquickjs) + browser (ES module) | `ferrocad.call(request)` → `ferrocad_doc_api::DocApi` → registry | five verbs: `document`, `properties`, `create`, `set`, `recompute` | yes |
 | wasm bundle | desktop (`wasmi`) + browser (`loader.js`) | the same document API as an import, optionally wrapped by `read_only` | the same five verbs | only with `{"document": "read-write"}` |
 
@@ -2028,9 +2057,10 @@ Three findings:
 1. **There are two mechanisms, not four.** Compiled-in Rust access (CPython through PyO3's
    object model, RustPython through one read function) and the JSON API (JS, wasm
    bundles). Writing a fourth a mechanism for another language would be the mistake.
-2. **Linked is not reachable.** The browser's RustPython has `ferrocad_core` *in the same
-   wasm module* and still cannot write, because `_ferrocad` exposes one read function. What
-   a host can do is decided by its ABI, not by what it links.
+2. **Linked is not reachable unless the ABI says so.** The browser's RustPython has
+   `ferrocad_core` *in the same wasm module*; what changed is the native module's ABI —
+   B18b item 5 gave it the doorway's write verbs, so a script writes the registry the
+   shell draws. A host can do what its ABI exposes, not what it links.
 3. **Fidelity, not language, is what differs.** A Python addon on the desktop can edit
    properties, observe them and load shapes; the same addon on the web can only read. A JS
    addon can edit on both but has five coarse verbs. So a manifest that names only a
@@ -2065,7 +2095,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D12 | several hosts in one target | **A chain with one named primary** (built B8b–B8d), generalising `Addons` rather than widening `Runtime`: three answers merge, four fan out, five are asked in order, and the console/lifecycle/render remain single-owner |
 | D13 | how a user asks for a mixed mod set | **The mod set names the hosts** (B9), not the engines: `--addons mods/Draft,mods/Toy` / `?addons=…`, with each package's entry file deriving its host per platform. `--script-host=` and `?runtime=` become the Python-engine choice and a debugging override, so `?runtime=pywasm,js` is no longer something a user writes |
 | D14 | wasm on the browser without the JS half | **Not built (B8e rejected).** `loader.js` needs `window.ferrocad`, which the page installs only for the JS half, so a wasm addon *derives* the page host rather than an engine being compiled into the module |
-| D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython and the page, read for both RustPython hosts, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
+| D15 | who decides what an addon may do | **The host grants, the manifest requests, and for now the request is granted** (B10): `ScriptHost::document_grant`, read-write for CPython, the page and both RustPython hosts that install the registry (B18b item 5), read for a fixed-payload host, per manifest for a bundle. A mismatch is announced at boot, not enforced — CPython's read-only would be a contract, not a boundary |
 | D16 | what a wasm/JS addon can reach | **The five-verb document API plus the host hooks, no geometry** (B11): an addon draws what it computes (`stage_meshes`) and declares what it writes (`create`/`set`). The Fasteners and Spring packages fit inside that, and explode view needed a `Placement` coercion (B11b), not a new verb |
 | D17 | who applies a workbench manipulator commit | **The script half if it claims one, else the document half** (B12). Part's dress-up and push/pull are document edits: `apply_interaction` builds the feature itself, so the browser and `--script-host=plain` get them, and both paths create the same object names |
 | D18 | who owns `Settings/*` | **Whichever half has rows for the node** (B13). A script half that lists a `Settings` root owns the namespace; otherwise the document half answers with the grid card, whose store is the presentation state the shell mirrors into the backend. The test is the same on both sides — "do I have rows?" — so a rendered row and its write cannot land in different places |

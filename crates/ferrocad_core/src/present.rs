@@ -206,7 +206,20 @@ pub fn coerce(current: &Property, text: &str) -> Result<Property, String> {
             step: *step,
         },
         Property::Quantity(_) => {
-            Property::Quantity(Quantity::parse(text).map_err(|error| format!("{text:?}: {error}"))?)
+            let parsed = Quantity::parse(text).map_err(|error| format!("{text:?}: {error}"))?;
+            // A bare number is in the property's own unit. The pane's field shows
+            // `10 mm`, so editing it to `25` means 25 mm — the same rule a `Float`
+            // assigned to a length follows in `Document::set_property`. An explicit
+            // unit still converts (`25 cm` is 250 mm).
+            let next = match current {
+                Property::Quantity(existing)
+                    if parsed.unit().is_dimensionless() && !existing.unit().is_dimensionless() =>
+                {
+                    Quantity::new(parsed.value(), existing.unit())
+                }
+                _ => parsed,
+            };
+            Property::Quantity(next)
         }
         Property::Enumeration(values, _) => {
             let index = values
@@ -388,6 +401,22 @@ mod tests {
 
     fn mm(value: f64) -> Property {
         Property::Quantity(Quantity::new(value, Unit::Millimeter))
+    }
+
+    #[test]
+    fn a_bare_number_on_a_quantity_keeps_the_property_unit() {
+        let current = mm(10.0);
+        let Property::Quantity(next) = coerce(&current, "25").expect("a bare number") else {
+            panic!("a quantity stays a quantity");
+        };
+        assert_eq!(next.unit(), Unit::Millimeter, "the unit is not lost");
+        assert_eq!(next.value(), 25.0);
+
+        // An explicit unit still converts.
+        let Property::Quantity(cm) = coerce(&current, "25 cm").expect("centimetres") else {
+            panic!("a quantity stays a quantity");
+        };
+        assert_eq!(cm.canonical_value(), 250.0);
     }
 
     #[test]

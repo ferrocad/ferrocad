@@ -788,15 +788,18 @@ fn the_two_script_halves_agree() {
         wasm_idle.status
     );
 
-    // With a selection the difference is D15 and only D15: the wasm document is
-    // read-only, so the delete reaches `openTransaction` and refuses there. The mirror
-    // answered, which is what B18a step 4 added.
+    // With a selection the delete reaches the document and stops at the doorway's one
+    // missing verb: `removeObject` is not part of it (B18b item 5 wrote create/set/
+    // recompute). The command catches its own failure and reports it as a status, so
+    // `ok` is not the field to read. The mirror answered, which is what B18a step 4 added.
     let wasm_selected = wasm.5.expect("the registry still lists App_Delete");
-    assert!(!wasm_selected.ok, "{wasm_selected:?}");
     assert!(
-        wasm_selected.error.contains("openTransaction"),
-        "the refusal names the missing write path: {}",
-        wasm_selected.error
+        wasm_selected.status.contains("removeObject"),
+        "the refusal names the missing verb: {wasm_selected:?}"
+    );
+    assert!(
+        !wasm_selected.status.contains("Selection"),
+        "the mirror answered, so it cannot be the reason: {wasm_selected:?}"
     );
 
     // Same: a registered provider is listed with the same manifest by both halves

@@ -184,11 +184,15 @@ impl Runtime {
     /// [`document_grant`](crate::ScriptHost::document_grant); this is the same table in the
     /// configuration's terms, for a check that runs before any host exists — a manifest that
     /// asks for more than the configuration can give is worth saying at boot.
+    ///
+    /// `Pywasm` is `ReadWrite` because the host that installs it owns the registry (the
+    /// browser's `live()` composition, and the desktop preview's), and its native module
+    /// writes through `ferrocad_doc_api` (B18b item 5). A fixed-payload host is a test
+    /// fixture, not a configuration.
     pub fn document_grant(self) -> DocumentGrant {
         match self {
             Runtime::Plain => DocumentGrant::Read,
-            Runtime::Cpython | Runtime::Js => DocumentGrant::ReadWrite,
-            Runtime::Pywasm => DocumentGrant::Read,
+            Runtime::Cpython | Runtime::Js | Runtime::Pywasm => DocumentGrant::ReadWrite,
         }
     }
 

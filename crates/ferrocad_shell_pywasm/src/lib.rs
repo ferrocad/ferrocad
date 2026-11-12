@@ -72,8 +72,23 @@ pub mod threaded;
 pub use threaded::ThreadedScriptHost;
 
 /// What the console prints when RustPython is the script half.
-pub(crate) const HELLO: &str =
+///
+/// The grant is part of the greeting because it is the first thing a user needs to know
+/// about this console: a host that owns the registry writes, a fixed-payload host (the
+/// crate's sample, a test) does not.
+pub(crate) const HELLO_READ_ONLY: &str =
     "FerroCAD shell · RustPython · wasm Python scripting (document read-only)";
+pub(crate) const HELLO_READ_WRITE: &str =
+    "FerroCAD shell · RustPython · wasm Python scripting (document read-write)";
+
+pub(crate) fn hello() -> String {
+    let greeting = if document_writes() {
+        HELLO_READ_WRITE
+    } else {
+        HELLO_READ_ONLY
+    };
+    greeting.to_string()
+}
 
 /// The refusal a half with no tools answers with.
 pub(crate) fn no_tool(name: &str) -> String {
@@ -252,6 +267,19 @@ fn document_json() -> String {
         Some(DocumentSource::Fixed(payload)) => payload.to_string(),
         Some(DocumentSource::Registry) | None => snapshot::active(),
     }
+}
+
+/// Whether this host's document is the process-wide one the doorway writes.
+///
+/// A [`DocumentSource::Fixed`] host answers from a payload nobody can edit: the
+/// documented object there is a projection, not the registry's. Writes would land in the
+/// registry (a *different* document), so the native module refuses them instead, and
+/// [`RustPythonRuntime::document_grant`] reports `Read` for that host.
+pub(crate) fn document_writes() -> bool {
+    matches!(
+        DOCUMENT.with(|cell| cell.borrow().clone()),
+        Some(DocumentSource::Registry)
+    )
 }
 
 /// The pywasm backend's script half: RustPython behind the shared `ScriptHost`.
@@ -520,15 +548,27 @@ impl PythonRuntime for RustPythonRuntime {
         }
     }
 
-    /// Read-only: the native module's document functions read the host's document and
-    /// refuse the write path.
+    /// Read-write when the host installed the process-wide document (B18b item 5).
+    ///
+    /// The gateway is the native module: `Document.addObject`/`recompute`, a property
+    /// assignment and the transaction no-ops all call `ferrocad_doc_api`'s doorway over
+    /// the registry — the same calls the JS and bundle halves make, so a script's write
+    /// is the one the model tree and the stage read afterwards.
+    ///
+    /// A [`DocumentSource::Fixed`](DocumentSource) host (the crate's sample, and a test)
+    /// keeps `Read`: its document is a payload nobody else can see, so the doorway would
+    /// write somewhere else.
     fn document_grant(&self) -> DocumentGrant {
-        DocumentGrant::Read
+        if crate::document_writes() {
+            DocumentGrant::ReadWrite
+        } else {
+            DocumentGrant::Read
+        }
     }
 
     /// The console's greeting: this is an interpreter, unlike the plain Rust half.
     fn hello(&self) -> Result<Option<String>, String> {
-        Ok(Some(HELLO.to_string()))
+        Ok(Some(crate::hello()))
     }
 
     fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {

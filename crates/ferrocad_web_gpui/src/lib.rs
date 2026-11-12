@@ -151,6 +151,11 @@ pub fn main() {
         // runs one id through the backend so a row a runtime only lists can be checked.
         probe_command(cx);
 
+        // A console line is a keystroke sequence a capture cannot type; `?script=` runs
+        // one snippet in the console namespace, so a document write through the Python
+        // half (B18b item 5) is reachable without a pointer or a keyboard.
+        probe_script(cx);
+
         // Which providers this page has is a configuration fact, not a pixel: log it.
         probe_providers(cx);
 
@@ -412,6 +417,27 @@ fn probe_command(cx: &mut gpui::App) {
             outcome.ok, outcome.status, outcome.select
         ),
         Err(error) => log::error!("ferrocad probe: command {id} -> {error}"),
+    }
+}
+
+/// `?script=<python>` — one console snippet, before the first frame.
+///
+/// A capture has no keyboard, so this is how a **write** is exercised in the browser: the
+/// snippet runs in the same namespace the console uses (so `FreeCAD`/`App`/`doc` are
+/// there), and its outcome is logged. `%0A`, `%27` and the rest let a URL carry the code
+/// (`ferrocad_shell_web::parameter` decodes them).
+fn probe_script(cx: &mut gpui::App) {
+    let query = ferrocad_shell_web::page_query();
+    let Some(code) = ferrocad_shell_web::parameter(&query, "script") else {
+        return;
+    };
+    match ferrocad_shell_core::app::evaluate(cx, &code) {
+        Ok(result) => log::info!(
+            "ferrocad probe: script -> ok={} output={:?}",
+            result.ok,
+            result.output
+        ),
+        Err(error) => log::error!("ferrocad probe: script -> {error}"),
     }
 }
 

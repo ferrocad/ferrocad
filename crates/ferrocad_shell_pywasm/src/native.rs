@@ -5,11 +5,17 @@
 //! extension, and a `wasm32-unknown-unknown` interpreter has no C ABI to load it with.
 //! The *types and rules* are `ferrocad_core`'s; only the binding is per-VM.
 //!
-//! **The document is read-only.** `activeDocument`/`getDocument`/`listDocuments` read
-//! the payload `ferrocad_doc_api::payload` renders from the document the host holds, and
-//! answer with real `Document`/`DocumentObject` instances. Creating, opening and closing
-//! a document raise: the document half owns those, and the shell reaches them through
-//! its own bridge.
+//! **The document is writable when the host owns it.** `activeDocument`/`getDocument`/
+//! `listDocuments` read the payload `ferrocad_doc_api::payload` renders from the document
+//! the host holds, and answer with real `Document`/`DocumentObject` instances. On a host
+//! whose document is the process-wide registry (the browser's `live()` composition, and
+//! the desktop preview's), `Document.addObject`, `Document.recompute` and a property
+//! assignment call `ferrocad_doc_api`'s doorway — the same calls the JS and wasm halves
+//! make — so a script's write is the one the model tree and the stage read afterwards.
+//! A fixed-payload host (the crate's sample, and a test) refuses them: its document is a
+//! projection nobody else can see. Creating, opening and closing a *document* raise on
+//! every host: the document half owns those, and the shell reaches them through its own
+//! bridge.
 //!
 //! **Value types.** `Quantity`, `Unit`, `Vector`, `Vector2d`, `Matrix`, `Rotation`,
 //! `Placement` and `TypeId` are bound over the same `ferrocad_types` structures the
@@ -29,7 +35,7 @@ use ferrocad_core::geometry::{Matrix4, Placement, Rotation, Vector3};
 use ferrocad_core::quantity::{Quantity, canonical_name};
 use ferrocad_core::unit::Unit;
 use rustpython_vm::builtins::{PyDictRef, PyStr, PyStrRef, PyType};
-use rustpython_vm::function::{FuncArgs, PySetterValue};
+use rustpython_vm::function::{FuncArgs, OptionalArg, PySetterValue};
 use rustpython_vm::types::{Constructor, SetAttr};
 use rustpython_vm::{
     Py, PyObjectRef, PyPayload, PyRef, PyResult, VirtualMachine, pyclass, pymodule,
@@ -97,6 +103,29 @@ fn active_row() -> Option<DocumentRow> {
 
 type Observers = RefCell<Vec<PyObjectRef>>;
 
+/// One `ferrocad_doc_api` call: the response's `result`, or the doorway's refusal.
+///
+/// This is the one road to the document a non-Rust runtime has (the JS half and a wasm
+/// bundle use the same protocol), so a Python write and a JS write are the same write.
+fn doorway(request: serde_json::Value) -> Result<serde_json::Value, String> {
+    use ferrocad_shell_api::DocumentApi as _;
+
+    let answer = ferrocad_doc_api::DocApi::new().call(&request.to_string());
+    let answer: serde_json::Value =
+        serde_json::from_str(&answer).map_err(|error| format!("document doorway: {error}"))?;
+    if answer.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
+        return Ok(answer
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null));
+    }
+    Err(answer
+        .get("error")
+        .and_then(|error| error.as_str())
+        .unwrap_or("the document refused the write")
+        .to_string())
+}
+
 thread_local! {
     /// Document observers a script registered. See the module docs: stored, not pumped.
     static OBSERVERS: Observers = const { RefCell::new(Vec::new()) };
@@ -107,10 +136,10 @@ mod ferrocad {
     #![allow(non_snake_case, non_upper_case_globals)]
 
     use super::{
-        Constructor, DocumentRow, FuncArgs, Matrix4, OBSERVERS, ObjectRow, Placement, Py,
-        PyDictRef, PyObjectRef, PyPayload, PyRef, PyResult, PySetterValue, PyStr, PyStrRef, PyType,
-        Quantity, Rotation, SetAttr, Unit, Vector3, VirtualMachine, active_row, canonical_name,
-        pyclass,
+        Constructor, DocumentRow, FuncArgs, Matrix4, OBSERVERS, ObjectRow, OptionalArg, Placement,
+        Py, PyDictRef, PyObjectRef, PyPayload, PyRef, PyResult, PySetterValue, PyStr, PyStrRef,
+        PyType, Quantity, Rotation, SetAttr, Unit, Vector3, VirtualMachine, active_row,
+        canonical_name, doorway, pyclass,
     };
     use std::cell::RefCell;
 
@@ -151,14 +180,13 @@ mod ferrocad {
         }
 
         #[pygetset]
-        fn Label(&self) -> String {
-            self.row.label.clone()
-        }
-
-        #[pygetset]
         fn TypeId(&self) -> String {
             self.row.type_id.clone()
         }
+
+        // `Label` has no getter on purpose: it is the object's user-visible name, and a
+        // getter would shadow the instance dict that a rename updates (`object_py` seeds
+        // it, `reseed` refreshes it). `Name`/`TypeId` never change, so they stay.
 
         #[pygetset]
         fn PropertiesList(&self, vm: &VirtualMachine) -> PyObjectRef {
@@ -242,15 +270,37 @@ mod ferrocad {
         }
     }
 
-    /// Read-only: the document half owns the write path.
+    /// The write path when the host owns the document (B18b item 5).
+    ///
+    /// The value is rendered as editor text — the form the doorway coerces with
+    /// `ferrocad_core::present` — and the instance dict is re-seeded afterwards, because
+    /// a recompute can change other rows (a box's `Length` changes its `Shape`, which is
+    /// what the script reads next).
     impl SetAttr for PyDocumentObject {
         fn setattro(
-            _zelf: &Py<Self>,
-            _name: &Py<PyStr>,
-            _value: PySetterValue,
+            zelf: &Py<Self>,
+            name: &Py<PyStr>,
+            value: PySetterValue,
             vm: &VirtualMachine,
         ) -> PyResult<()> {
-            Err(read_only("editing a property", vm))
+            let property = name.to_str().unwrap_or_default().to_string();
+            let PySetterValue::Assign(value) = value else {
+                // Upstream has no unset for a property row.
+                return Err(attribute_error(&property, vm));
+            };
+            if !crate::document_writes() {
+                return Err(read_only("editing a property", vm));
+            }
+            let text = value.str(vm)?.to_str().unwrap_or_default().to_string();
+            let object = zelf.row.name.clone();
+            doorway(serde_json::json!({
+                "call": "set",
+                "object": object,
+                "property": property,
+                "value": text,
+            }))
+            .map_err(|error| vm.new_value_error(error))?;
+            reseed(zelf, vm)
         }
     }
 
@@ -306,6 +356,76 @@ mod ferrocad {
                 None => Ok(vm.ctx.none()),
             }
         }
+
+        /// Create an object through the document doorway (B18b item 5).
+        ///
+        /// The name is optional, as upstream (`addObject("Part::Box")` gets FreeCAD's
+        /// default); the doorway also applies a `properties` argument, which this binding
+        /// does not take yet — a script sets them one at a time, exactly as the property
+        /// pane does.
+        #[pymethod]
+        fn addObject(
+            &self,
+            r#type: PyStrRef,
+            name: OptionalArg<PyStrRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            if !crate::document_writes() {
+                return Err(read_only("adding an object", vm));
+            }
+            let type_id = r#type.to_str().unwrap_or_default().to_string();
+            let name = name
+                .into_option()
+                .map(|name| name.to_str().unwrap_or_default().to_string())
+                .unwrap_or_default();
+            let answer = doorway(serde_json::json!({
+                "call": "create",
+                "type": type_id,
+                "name": name,
+            }))
+            .map_err(|error| vm.new_value_error(error))?;
+            let created = answer
+                .get("name")
+                .and_then(|name| name.as_str())
+                .unwrap_or_default()
+                .to_string();
+            object_named(&created, vm).ok_or_else(|| {
+                vm.new_runtime_error(format!(
+                    "{created} was created but the document does not list it"
+                ))
+            })
+        }
+
+        /// Recompute through the doorway, answering how many objects executed.
+        ///
+        /// A read-only host has nothing to recompute (its payload is a projection), so
+        /// this is `0` rather than a refusal: scripts call it unconditionally.
+        #[pymethod]
+        fn recompute(&self, vm: &VirtualMachine) -> PyResult<usize> {
+            if !crate::document_writes() {
+                return Ok(0);
+            }
+            let answer = doorway(serde_json::json!({ "call": "recompute" }))
+                .map_err(|error| vm.new_value_error(error))?;
+            Ok(answer
+                .get("recomputed")
+                .and_then(|names| names.as_array())
+                .map(Vec::len)
+                .unwrap_or(0))
+        }
+
+        // Accepted, and deliberately no-ops: every doorway write is its own committed
+        // transaction, so an outer transaction cannot group or roll back several of them.
+        // The facade opens one around an edit (`ferrocad_shell.set_property`), and the
+        // doorway's per-write transaction is the undo step it gets.
+        #[pymethod]
+        fn openTransaction(&self, _name: OptionalArg<PyStrRef>) {}
+
+        #[pymethod]
+        fn commitTransaction(&self) {}
+
+        #[pymethod]
+        fn abortTransaction(&self) {}
     }
 
     fn document_py(row: DocumentRow, vm: &VirtualMachine) -> PyObjectRef {
@@ -316,8 +436,10 @@ mod ferrocad {
     ///
     /// Native types do not reach a Python `__getattr__` from `get_attr` here, so the
     /// payload's values are seeded into the object's dict instead; a normal attribute
-    /// lookup finds them, and `__setattr__` still refuses a write.
+    /// lookup finds them. `Label` is seeded beside them because it has no getter — the
+    /// dict is where a rename lands.
     fn object_py(row: ObjectRow, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let label = row.label.clone();
         let values: Vec<(String, String)> = row
             .properties
             .iter()
@@ -325,6 +447,7 @@ mod ferrocad {
             .collect();
         let object: PyObjectRef = PyDocumentObject { row }.into_ref(&vm.ctx).into();
         if let Some(dict) = object.dict() {
+            dict.set_item("Label", vm.new_pyobj(label), vm)?;
             for (name, value) in values {
                 dict.set_item(&*name, vm.new_pyobj(value), vm)?;
             }
@@ -332,9 +455,40 @@ mod ferrocad {
         Ok(object)
     }
 
+    /// The object the fresh payload names, as a Python instance, or `None`.
+    fn object_named(name: &str, vm: &VirtualMachine) -> Option<PyObjectRef> {
+        let row = active_row()?;
+        object_py(row.objects.into_iter().find(|row| row.name == name)?, vm).ok()
+    }
+
+    /// Refresh an object's instance dict from the payload after a write.
+    ///
+    /// A write recomputes, so rows other than the one assigned can change; replacing the
+    /// whole dict keeps the object a script already holds agreeing with the document.
+    fn reseed(object: &Py<PyDocumentObject>, vm: &VirtualMachine) -> PyResult<()> {
+        let Some(row) = active_row() else {
+            return Ok(());
+        };
+        let Some(fresh) = row
+            .objects
+            .into_iter()
+            .find(|row| row.name == object.row.name)
+        else {
+            return Ok(());
+        };
+        let object_ref: PyObjectRef = object.to_owned().into();
+        if let Some(dict) = object_ref.dict() {
+            dict.set_item("Label", vm.new_pyobj(fresh.label), vm)?;
+            for property in fresh.properties {
+                dict.set_item(&*property.name, vm.new_pyobj(property.value), vm)?;
+            }
+        }
+        Ok(())
+    }
+
     fn read_only(what: &str, vm: &VirtualMachine) -> rustpython_vm::builtins::PyBaseExceptionRef {
         vm.new_runtime_error(format!(
-            "pywasm: {what} is the shell's; the document is read-only from Python"
+            "pywasm: {what} is the shell's; this host's document is read-only from Python"
         ))
     }
 
@@ -480,8 +634,12 @@ mod ferrocad {
             .ok_or_else(|| attribute_error(&prop, vm))
     }
 
-    /// Coercion is the engine's, and its write path is not reachable from this half,
-    /// so the text is accepted verbatim (see the module docs).
+    /// Text passed through: the coercion is the doorway's, on the write itself.
+    ///
+    /// The facade's `set_property` uses this to validate before it assigns; here the
+    /// doorway's `set` runs the same `ferrocad_core::present` coercion on the editor text
+    /// (and refuses with a Python exception when it cannot), so coercing twice would only
+    /// add a second spelling of the rules.
     #[pyfunction]
     pub fn coercePropertyText(
         _object: PyRef<PyDocumentObject>,

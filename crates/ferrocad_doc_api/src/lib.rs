@@ -50,6 +50,9 @@
 //! `sync_stage` draws it). Values are **editor text**, coerced by
 //! `ferrocad_core::present` — the same rules the property pane uses, so `"25"` on a
 //! length keeps its unit and `"fast"` is refused if `Fast` is the enumeration entry.
+//! `Label` is the one non-property write: it is the object's user-visible name, so
+//! `set` routes it to the document's label setter and announces an edit without a
+//! recompute.
 //!
 //! # What this is not
 //!
@@ -212,6 +215,14 @@ fn build(
     for (property, wanted) in wanted {
         match wanted {
             Wanted::Set(text) => {
+                // `Label` is the object's user-visible name, not a property-container
+                // entry (see `set`); a create with a label is a rename beside the
+                // property writes.
+                if property == "Label" {
+                    document.set_label(id, text);
+                    applied.push(property.clone());
+                    continue;
+                }
                 let current = document
                     .object(id)
                     .and_then(|object| object.properties.get(property))
@@ -259,6 +270,22 @@ fn set(request: &Value) -> Result<(Value, Vec<DocumentEvent>), String> {
     let id = document
         .get_by_name(&object_name)
         .ok_or_else(|| format!("no object {object_name:?}"))?;
+    // `Label` is a document-object field, not a property row: the property pane
+    // synthesizes it (`python/ferrocad_shell.properties`), and a rename recomputes
+    // nothing. Every facade can write it, so the doorway can too.
+    if property == "Label" {
+        let transaction = format!("Rename {object_name}");
+        document.open_transaction_named(&transaction);
+        document.set_label(id, &typed);
+        document.commit_transaction();
+        return Ok((
+            json!({ "object": object_name, "property": property, "value": typed }),
+            vec![DocumentEvent::edited(
+                &transaction,
+                std::slice::from_ref(&object_name),
+            )],
+        ));
+    }
     let current = document
         .object(id)
         .and_then(|object| object.properties.get(&property))

@@ -341,10 +341,16 @@ so the console follows an open or a close. The rows' `kind` and display text com
 `ferrocad_core::present`, so the property pane cannot drift between the two Python
 backends.
 
-The document is **read-only**: creating or opening a document and `setattr` on an object
-raise rather than silently missing the document, and recompute, the `Shape` API and every
-write live in the document half. That is the price of not sharing the `*_py` bindings,
-and the code says so where a script would notice.
+The document is **written through the doorway**, not by a second binding. A host that
+installs the process-wide registry (the browser's `live()` composition, and the desktop
+preview's) answers `Document.addObject`, `Document.recompute` and a property assignment by
+calling `ferrocad_doc_api` — the same `create`/`set`/`recompute` calls the JS and bundle
+halves make — so a Python write is the write the model tree and the stage read next
+(B18b item 5). A fixed-payload host (the crate's sample, a test) is a projection with
+nothing behind it and keeps refusing writes. Creating, opening or closing a *document*
+stays the document half's; deleting an object is not a doorway verb yet, and the facade's
+`openTransaction`/`commitTransaction` are accepted no-ops, so each doorway write is its
+own undo step.
 
 **It answers the Gui app's presentation half.** The installed facade carries
 `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`, the two view requests, and the
@@ -661,9 +667,9 @@ the bindings" question: the layer that is shared is the script plus `ferrocad_co
   `mod-events` subscription yet, and a bundle cannot supply the grid/provider hooks. See
   [`js-addons.md`](../../project/research/js-addons.md) §7.
 - **`ferrocad_shell_pywasm` has no tool or `pivy` path.** It is installed (the browser's
-  `?pywasm=1`), so the console and the property rows are real, but a script cannot
-  create an interactive tool, and the Python facade is read-only. `mod-events` (the
-  fixed low-frequency event set a mod subscribes to) is still an open task.
+  `?pywasm=1`), so the console, the property rows and document writes are real, but a
+  script cannot create an interactive tool. `mod-events` (the fixed low-frequency event
+  set a mod subscribes to) is still an open task.
 - **The browser pays for RustPython in binary size** even when it runs
   `?runtime=plain`: the interpreter is compiled in, not fetched. Nothing boots it
   unless the page asks, but the module is bigger. A cargo feature that drops the half

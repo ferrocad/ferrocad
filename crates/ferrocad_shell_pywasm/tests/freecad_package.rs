@@ -1,9 +1,10 @@
 //! B18b item 1: `python/FreeCAD` itself runs under RustPython.
 //!
 //! The App facade is installed from `python/` (documents, `ParamGet`, `Units`), and its
-//! `ferrocad` dependency is the native module in `src/native.rs`. The document is still
-//! read-only — the document half owns the write path — but the *facade* is the desktop's
-//! one source, not a second implementation.
+//! `ferrocad` dependency is the native module in `src/native.rs`. This host boots over a
+//! **fixed payload**, so its document is read-only (a host that owns the registry writes;
+//! see `writes.rs`), but the *facade* is the desktop's one source, not a second
+//! implementation.
 
 use ferrocad_shell_pywasm::PywasmScriptHost;
 

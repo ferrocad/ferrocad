@@ -183,6 +183,34 @@ capture_mods() {
     capture "/?mods=1" "$TMP/mods.log"
 }
 
+# The write leg (B18b item 5): a browser console cannot be typed into, so `?script=` runs
+# one snippet in the console namespace before the first frame. The snippet creates an
+# object and sets a property through the document doorway, then prints the document's
+# object names and the value it assigned — the registry, not a copy, is what answers.
+capture_write() {
+    capture "/?runtime=pywasm&script=obj%20%3D%20App.ActiveDocument.addObject%28%27App%3A%3AFeatureTest%27%2C%20%27Probe%27%29%0Aobj.Float%20%3D%202.5%0Aprint%28%5Bo.Name%20for%20o%20in%20App.ActiveDocument.Objects%5D%2C%20obj.Float%29" "$TMP/write.log"
+}
+
+check_write() {
+    LOG="$TMP/write.log"
+    echo "pywasm document write console lines:"
+    require_line 'ferrocad: scripting runtime pywasm'
+    require_line 'ferrocad probe: script -> ok=true'
+    require_line 'Probe'
+    require_line '2.5'
+
+    echo "pywasm document write forbidden console patterns:"
+    while IFS= read -r pattern; do
+        [ -n "$pattern" ] || continue
+        forbid_pattern "$pattern"
+    done <<'EOF'
+read-only
+ok=false
+panicked at
+unreachable
+EOF
+}
+
 check_mods() {
     LOG="$TMP/mods.log"
     echo "fetched mod pack console lines:"
@@ -476,9 +504,12 @@ check_settings
 capture_mods
 check_mods
 
+capture_write
+check_write
+
 if [ "$FAILED" != 0 ]; then
     echo "smoke check FAILED" >&2
     exit 1
 fi
 
-echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, no panic or JS error"
+echo "smoke check passed: both shapes tessellate, the stage draws the fillet alone, the wasm workbench creates Toy, both Part manipulator commits and gestures build their feature, the plain runtime has the grid card, the fetched mod packs reach the interpreter, a pywasm script creates and edits a document object, no panic or JS error"

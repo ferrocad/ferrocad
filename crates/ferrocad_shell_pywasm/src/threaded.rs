@@ -24,7 +24,7 @@ use ferrocad_python_host::{Contract, PythonHost, PythonRuntime};
 use ferrocad_shell_api::DocumentGrant;
 use ferrocad_stage::Tool;
 
-use crate::{HELLO, no_tool};
+use crate::{HELLO_READ_WRITE, no_tool};
 
 /// The stack the interpreter's compiler needs (see the module docs).
 pub const STACK: usize = 16 << 20;
@@ -168,14 +168,20 @@ impl PythonRuntime for ThreadedRuntime {
         Contract::FULL
     }
 
-    /// Read-only: the bridge behind it exposes one function, and it reads.
+    /// Read-write: the worker boots [`crate::live_persistent`], so its document is the
+    /// process-wide registry the doorway writes (B18b item 5). The thread-local source
+    /// belongs to the worker, so this answers from what that boot *installs*, not from
+    /// the caller's thread.
     fn document_grant(&self) -> DocumentGrant {
-        DocumentGrant::Read
+        DocumentGrant::ReadWrite
     }
 
     /// The console's greeting: this is an interpreter, unlike the plain Rust half.
+    ///
+    /// A constant, because only `evaluate` crosses the channel; the worker boots
+    /// [`crate::live_persistent`], whose grant is `ReadWrite`.
     fn hello(&self) -> Result<Option<String>, String> {
-        Ok(Some(HELLO.to_string()))
+        Ok(Some(HELLO_READ_WRITE.to_string()))
     }
 
     fn tool(&self, name: &str) -> Result<Box<dyn Tool>, String> {

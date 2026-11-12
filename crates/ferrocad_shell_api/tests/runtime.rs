@@ -218,7 +218,8 @@ fn no_mods_derives_no_hosts() {
 fn a_runtime_names_the_grant_its_host_implements() {
     assert_eq!(Runtime::Plain.document_grant(), DocumentGrant::Read);
     assert_eq!(Runtime::Cpython.document_grant(), DocumentGrant::ReadWrite);
-    assert_eq!(Runtime::Pywasm.document_grant(), DocumentGrant::Read);
+    // B18b item 5: the RustPython host owns the registry and writes through the doorway.
+    assert_eq!(Runtime::Pywasm.document_grant(), DocumentGrant::ReadWrite);
     assert_eq!(Runtime::Js.document_grant(), DocumentGrant::ReadWrite);
 }
 

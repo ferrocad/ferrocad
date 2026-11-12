@@ -44,11 +44,12 @@ fn the_constants_are_answered_without_the_interpreter() {
 
     let hello = host.hello().expect("a greeting").expect("one, not silence");
     assert!(hello.contains("RustPython"), "{hello}");
-    // The greeting tells the truth about the grant: this half cannot write.
-    assert!(hello.contains("read-only"), "{hello}");
+    // The greeting tells the truth about the grant: the worker owns the registry, so
+    // this half writes through the doorway (B18b item 5).
+    assert!(hello.contains("read-write"), "{hello}");
     assert_eq!(
         host.document_grant(),
-        ferrocad_shell_api::DocumentGrant::Read
+        ferrocad_shell_api::DocumentGrant::ReadWrite
     );
     // The contract is `FULL` now, so the script's registry answers the commands (this
     // used to assert an empty list while the preview reported `NONE`). The catalogue's

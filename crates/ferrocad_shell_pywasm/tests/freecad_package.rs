@@ -124,6 +124,59 @@ fn the_parameter_store_is_the_shared_one_and_memory_only() {
     });
 }
 
+/// The store is the facade's, but the host supplies the file: a persistent host writes
+/// the same JSON the desktop's CPython half reads, and a second boot reads it back.
+#[test]
+fn the_parameter_file_persists_when_the_host_asks_for_it() {
+    let dir = std::env::temp_dir().join(format!("ferrocad-params-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a temp config dir");
+    // SAFETY: the other tests in this binary boot memory-only hosts, which never read
+    // the environment (the loader clears their parameter path).
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
+
+    let write = || {
+        let host = ferrocad_shell_pywasm::new_persistent().expect("boots");
+        evaluate(
+            &host,
+            "g = FreeCAD.ParamGet('User parameter:Test')\n\
+             g.SetString('persisted', 'yes')\n\
+             g.SetBool('on', True)",
+        );
+    };
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(write)
+        .expect("a worker thread")
+        .join()
+        .expect("no panic");
+
+    let file = dir.join("ferrocad/parameters.json");
+    let saved = std::fs::read_to_string(&file).expect("the store wrote its file");
+    assert!(saved.contains("persisted"), "{saved}");
+
+    let read = || {
+        let host = ferrocad_shell_pywasm::new_persistent().expect("boots");
+        assert_eq!(
+            evaluate(
+                &host,
+                "g = FreeCAD.ParamGet('User parameter:Test')\n\
+                 print(g.GetString('persisted', ''), g.GetBool('on', False))"
+            ),
+            "yes True",
+            "a fresh boot reads the file the previous one wrote"
+        );
+    };
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(read)
+        .expect("a worker thread")
+        .join()
+        .expect("no panic");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The value types are the engine's structures, so unit conversion and vector algebra
 /// mean what they mean natively.
 #[test]
@@ -151,6 +204,53 @@ fn the_value_types_are_the_engines() {
         assert_eq!(
             evaluate(host, "print(str(FreeCAD.Units.Quantity(10.0, 'mm')))"),
             "10 mm"
+        );
+    });
+}
+
+/// The four classes `python/FreeCAD` re-exports last: the interned-string pair and the
+/// two value bags.
+#[test]
+fn the_remaining_value_classes_are_bound() {
+    with_host(|host| {
+        assert_eq!(
+            evaluate(
+                host,
+                "h = FreeCAD.StringHasher()\n\
+                 s = h.getID('Box')\n\
+                 print(s.Value, s.Data, h.isSame(h))"
+            ),
+            "1 Box True"
+        );
+        assert_eq!(
+            evaluate(
+                host,
+                "h = FreeCAD.StringHasher()\n\
+                 print(h.getID('a').isSame(h.getID('a')), h.getID('a').isSame(h.getID('b')))"
+            ),
+            "True False"
+        );
+        assert_eq!(
+            evaluate(
+                host,
+                "b = FreeCAD.BoundBox(0, 0, 0, 1, 2, 3)\n\
+                 print(b.XMin, b.YMax, b.ZMax, b.isValid)"
+            ),
+            "0.0 2.0 3.0 True"
+        );
+        assert_eq!(
+            evaluate(host, "print(FreeCAD.BoundBox().isValid)"),
+            "False",
+            "an empty box is invalid, as upstream's is"
+        );
+        assert_eq!(
+            evaluate(
+                host,
+                "m = FreeCAD.Material()\n\
+                 m.DiffuseColor = (0.5, 0.25, 0.125, 1.0)\n\
+                 print(m.DiffuseColor, m.Transparency)"
+            ),
+            "(0.5, 0.25, 0.125, 1.0) 0.0"
         );
     });
 }

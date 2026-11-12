@@ -408,6 +408,50 @@ mod ferrocad {
         });
     }
 
+    // --- the parameter file -------------------------------------------------
+    //
+    // The store itself is `python/FreeCAD`'s; the host supplies the two file
+    // operations, so a build without a POSIX layer can still persist settings (B18b).
+
+    /// The parameter file's text, or `None` when it does not exist.
+    #[pyfunction]
+    pub fn read_parameter_file(path: String, vm: &VirtualMachine) -> PyResult<Option<String>> {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(Some(text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(vm.new_os_error(format!("cannot read {path}: {error}"))),
+        }
+    }
+
+    /// Replace the parameter file with `text`, creating its directory.
+    ///
+    /// Written beside the target and renamed, so a crash cannot leave a half file in
+    /// place (the facade's report-once rule then covers a real write failure).
+    #[pyfunction]
+    pub fn write_parameter_file(path: String, text: String, vm: &VirtualMachine) -> PyResult<()> {
+        let target = std::path::Path::new(&path);
+        let parent = match target.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => std::path::PathBuf::from("."),
+        };
+        std::fs::create_dir_all(&parent).map_err(|error| {
+            vm.new_os_error(format!("cannot create {}: {error}", parent.display()))
+        })?;
+        let temporary = parent.join(format!(".parameters-{}.tmp", std::process::id()));
+        let write = (|| -> std::io::Result<()> {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&temporary)?;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, target)
+        })();
+        if let Err(error) = write {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(vm.new_os_error(format!("cannot write {path}: {error}")));
+        }
+        Ok(())
+    }
+
     // --- the property rules `ferrocad_shell` reads -------------------------
 
     #[pyfunction]
@@ -879,6 +923,297 @@ mod ferrocad {
         #[pymethod]
         fn __str__(&self) -> String {
             self.name.clone()
+        }
+    }
+
+    /// `FreeCAD.BoundBox`: an axis-aligned box, valid once it spans a point.
+    #[pyattr]
+    #[pyclass(name = "BoundBox", module = "ferrocad")]
+    #[derive(Debug, PyPayload)]
+    pub struct PyBoundBox {
+        inner: RefCell<Box3>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct Box3 {
+        min: [f64; 3],
+        max: [f64; 3],
+        valid: bool,
+    }
+
+    impl Box3 {
+        fn empty() -> Self {
+            Self {
+                min: [0.0; 3],
+                max: [0.0; 3],
+                valid: false,
+            }
+        }
+    }
+
+    impl Constructor for PyBoundBox {
+        type Args = FuncArgs;
+
+        /// `BoundBox()`, `BoundBox(other)` or `BoundBox(xmin, ymin, zmin, xmax, ymax, zmax)`
+        /// — upstream's three forms that carry no sequence coercion.
+        fn py_new(_cls: &Py<PyType>, args: Self::Args, vm: &VirtualMachine) -> PyResult<Self> {
+            let positional = args.args;
+            let inner = match positional.len() {
+                0 => Box3::empty(),
+                1 => match positional[0].downcast_ref::<Self>() {
+                    Some(copy) => *copy.inner.borrow(),
+                    None => {
+                        return Err(vm.new_type_error("BoundBox() takes 0, 1 or 6 arguments"));
+                    }
+                },
+                6 => Box3 {
+                    min: [
+                        number(&positional[0], vm)?,
+                        number(&positional[1], vm)?,
+                        number(&positional[2], vm)?,
+                    ],
+                    max: [
+                        number(&positional[3], vm)?,
+                        number(&positional[4], vm)?,
+                        number(&positional[5], vm)?,
+                    ],
+                    valid: true,
+                },
+                _ => return Err(vm.new_type_error("BoundBox() takes 0, 1 or 6 arguments")),
+            };
+            Ok(Self {
+                inner: RefCell::new(inner),
+            })
+        }
+    }
+
+    #[pyclass(with(Constructor))]
+    impl PyBoundBox {
+        #[pygetset]
+        fn XMin(&self) -> f64 {
+            self.inner.borrow().min[0]
+        }
+
+        #[pygetset]
+        fn YMin(&self) -> f64 {
+            self.inner.borrow().min[1]
+        }
+
+        #[pygetset]
+        fn ZMin(&self) -> f64 {
+            self.inner.borrow().min[2]
+        }
+
+        #[pygetset]
+        fn XMax(&self) -> f64 {
+            self.inner.borrow().max[0]
+        }
+
+        #[pygetset]
+        fn YMax(&self) -> f64 {
+            self.inner.borrow().max[1]
+        }
+
+        #[pygetset]
+        fn ZMax(&self) -> f64 {
+            self.inner.borrow().max[2]
+        }
+
+        #[pygetset]
+        fn isValid(&self) -> bool {
+            self.inner.borrow().valid
+        }
+
+        /// Grow the box by `amount` in every direction.
+        #[pymethod]
+        fn enlarge(&self, amount: f64) {
+            let mut inner = self.inner.borrow_mut();
+            if inner.valid {
+                for axis in 0..3 {
+                    inner.min[axis] -= amount;
+                    inner.max[axis] += amount;
+                }
+            }
+        }
+    }
+
+    /// `FreeCAD.Material`: the renderer's appearance values.
+    #[pyattr]
+    #[pyclass(name = "Material", module = "ferrocad")]
+    #[derive(Debug, PyPayload)]
+    pub struct PyMaterial {
+        inner: RefCell<ferrocad_core::Material>,
+    }
+
+    impl Constructor for PyMaterial {
+        type Args = FuncArgs;
+
+        fn py_new(_cls: &Py<PyType>, _args: Self::Args, _vm: &VirtualMachine) -> PyResult<Self> {
+            Ok(Self {
+                inner: RefCell::new(ferrocad_core::Material::default()),
+            })
+        }
+    }
+
+    /// A four-number colour (`DiffuseColor = (r, g, b, a)`).
+    fn colour(value: &PyObjectRef, vm: &VirtualMachine) -> PyResult<[f64; 4]> {
+        let channels: Vec<f64> = value.clone().try_into_value::<Vec<f64>>(vm)?;
+        if channels.len() != 4 {
+            return Err(vm.new_value_error("a colour takes 4 numbers (r, g, b, a)"));
+        }
+        Ok([channels[0], channels[1], channels[2], channels[3]])
+    }
+
+    #[pyclass(with(Constructor))]
+    impl PyMaterial {
+        #[pygetset]
+        fn DiffuseColor(&self) -> (f64, f64, f64, f64) {
+            tuple(self.inner.borrow().diffuse)
+        }
+
+        #[pygetset(setter)]
+        fn set_DiffuseColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            self.inner.borrow_mut().diffuse = colour(&value, vm)?;
+            Ok(())
+        }
+
+        #[pygetset]
+        fn AmbientColor(&self) -> (f64, f64, f64, f64) {
+            tuple(self.inner.borrow().ambient)
+        }
+
+        #[pygetset(setter)]
+        fn set_AmbientColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            self.inner.borrow_mut().ambient = colour(&value, vm)?;
+            Ok(())
+        }
+
+        #[pygetset]
+        fn SpecularColor(&self) -> (f64, f64, f64, f64) {
+            tuple(self.inner.borrow().specular)
+        }
+
+        #[pygetset(setter)]
+        fn set_SpecularColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            self.inner.borrow_mut().specular = colour(&value, vm)?;
+            Ok(())
+        }
+
+        #[pygetset]
+        fn EmissiveColor(&self) -> (f64, f64, f64, f64) {
+            tuple(self.inner.borrow().emissive)
+        }
+
+        #[pygetset(setter)]
+        fn set_EmissiveColor(&self, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            self.inner.borrow_mut().emissive = colour(&value, vm)?;
+            Ok(())
+        }
+
+        #[pygetset]
+        fn Shininess(&self) -> f64 {
+            self.inner.borrow().shininess
+        }
+
+        #[pygetset(setter)]
+        fn set_Shininess(&self, value: f64) {
+            self.inner.borrow_mut().shininess = value;
+        }
+
+        #[pygetset]
+        fn Transparency(&self) -> f64 {
+            self.inner.borrow().transparency
+        }
+
+        #[pygetset(setter)]
+        fn set_Transparency(&self, value: f64) {
+            self.inner.borrow_mut().transparency = value;
+        }
+    }
+
+    fn tuple(colour: [f64; 4]) -> (f64, f64, f64, f64) {
+        (colour[0], colour[1], colour[2], colour[3])
+    }
+
+    /// `FreeCAD.StringHasher`: the interned-string table.
+    #[pyattr]
+    #[pyclass(name = "StringHasher", module = "ferrocad")]
+    #[derive(PyPayload)]
+    pub struct PyStringHasher {
+        inner: ferrocad_core::StringHasher,
+    }
+
+    impl std::fmt::Debug for PyStringHasher {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("StringHasher")
+        }
+    }
+
+    impl Constructor for PyStringHasher {
+        type Args = FuncArgs;
+
+        fn py_new(_cls: &Py<PyType>, _args: Self::Args, _vm: &VirtualMachine) -> PyResult<Self> {
+            Ok(Self {
+                inner: ferrocad_core::StringHasher::new(),
+            })
+        }
+    }
+
+    #[pyclass(with(Constructor))]
+    impl PyStringHasher {
+        /// The `StringID` for `text`, or the one with `value` when given an int.
+        #[pymethod]
+        fn getID(&self, arg: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyStringID> {
+            if let Ok(text) = arg.clone().try_into_value::<String>(vm) {
+                return Ok(PyStringID {
+                    inner: self.inner.get_id(&text),
+                });
+            }
+            if let Ok(value) = arg.clone().try_into_value::<usize>(vm) {
+                return self
+                    .inner
+                    .find_id(value)
+                    .map(|inner| PyStringID { inner })
+                    .ok_or_else(|| vm.new_value_error(format!("no StringID with value {value}")));
+            }
+            Err(vm.new_value_error("getID expects a string or an integer"))
+        }
+
+        #[pymethod]
+        fn isSame(&self, other: PyRef<Self>) -> bool {
+            self.inner.is_same(&other.inner)
+        }
+    }
+
+    /// `FreeCAD.StringID`: a handle into a `StringHasher`.
+    #[pyattr]
+    #[pyclass(name = "StringID", module = "ferrocad")]
+    #[derive(PyPayload, Clone)]
+    pub struct PyStringID {
+        inner: ferrocad_core::StringId,
+    }
+
+    impl std::fmt::Debug for PyStringID {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "StringID({})", self.inner.value())
+        }
+    }
+
+    #[pyclass]
+    impl PyStringID {
+        #[pygetset]
+        fn Value(&self) -> usize {
+            self.inner.value()
+        }
+
+        #[pygetset]
+        fn Data(&self) -> String {
+            self.inner.data()
+        }
+
+        #[pymethod]
+        fn isSame(&self, other: PyRef<Self>) -> bool {
+            self.inner.is_same(&other.inner)
         }
     }
 }

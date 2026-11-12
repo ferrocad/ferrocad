@@ -20,7 +20,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
 use ferrocad_inventor::Scene;
-use ferrocad_python_host::{PythonHost, PythonRuntime};
+use ferrocad_python_host::{Contract, PythonHost, PythonRuntime};
 use ferrocad_shell_api::DocumentGrant;
 use ferrocad_stage::Tool;
 
@@ -53,11 +53,20 @@ struct Worker {
     thread: Option<JoinHandle<()>>,
 }
 
-/// One call into the interpreter.
-struct Job {
-    function: String,
-    args: Vec<String>,
-    reply: Sender<Result<String, String>>,
+/// One job for the interpreter thread.
+enum Job {
+    /// Call `function` in the shell module.
+    Call {
+        function: String,
+        args: Vec<String>,
+        reply: Sender<Result<String, String>>,
+    },
+    /// Whether the entry module defines `function` (the runtime sees the module table,
+    /// the channel's caller does not).
+    HasFunction {
+        function: String,
+        reply: Sender<bool>,
+    },
 }
 
 impl ThreadedRuntime {
@@ -86,6 +95,27 @@ impl ThreadedRuntime {
         })
     }
 
+    /// Ask the worker whether its entry module defines `function`.
+    fn has_blocking(&self, function: &str) -> bool {
+        let Ok(worker) = self.inner.lock() else {
+            return false;
+        };
+        let Some(jobs) = worker.jobs.as_ref() else {
+            return false;
+        };
+        let (reply, answer) = mpsc::channel();
+        if jobs
+            .send(Job::HasFunction {
+                function: function.to_string(),
+                reply,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        answer.recv().unwrap_or(false)
+    }
+
     /// Send one call to the interpreter thread and wait for its answer.
     fn call_blocking(&self, function: &str, args: &[&str]) -> Result<String, String> {
         let worker = self
@@ -97,7 +127,7 @@ impl ThreadedRuntime {
             .jobs
             .as_ref()
             .ok_or_else(|| "the RustPython thread is gone".to_string())?
-            .send(Job {
+            .send(Job::Call {
                 function: function.to_string(),
                 args: args.iter().map(|arg| (*arg).to_string()).collect(),
                 reply,
@@ -123,6 +153,19 @@ impl Drop for Worker {
 impl PythonRuntime for ThreadedRuntime {
     fn call(&self, function: &str, args: &[&str]) -> Result<String, String> {
         self.call_blocking(function, args)
+    }
+
+    /// Asked on the worker: `add_datum_plane` belongs to the edition's app script, and
+    /// only the interpreter can see whether it is there.
+    fn has_function(&self, function: &str) -> bool {
+        self.has_blocking(function)
+    }
+
+    /// The whole facade. The worker is [`crate::live_persistent`], so its parameter
+    /// store is the app's file (B18b) and `view` answers the appearance the user
+    /// actually saved, which is what made `NONE` necessary before.
+    fn contract(&self) -> Contract {
+        Contract::FULL
     }
 
     /// Read-only: the bridge behind it exposes one function, and it reads.
@@ -152,7 +195,7 @@ impl PythonRuntime for ThreadedRuntime {
 
 /// The worker thread: boot once, then answer calls until the host is dropped.
 fn run(inbox: Receiver<Job>, ready: Sender<Result<(), String>>) {
-    let host = match crate::live() {
+    let host = match crate::live_persistent() {
         Ok(host) => host,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -162,7 +205,18 @@ fn run(inbox: Receiver<Job>, ready: Sender<Result<(), String>>) {
     let _ = ready.send(Ok(()));
 
     while let Ok(job) = inbox.recv() {
-        let args: Vec<&str> = job.args.iter().map(String::as_str).collect();
-        let _ = job.reply.send(host.call(&job.function, &args));
+        match job {
+            Job::Call {
+                function,
+                args,
+                reply,
+            } => {
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let _ = reply.send(host.call(&function, &args));
+            }
+            Job::HasFunction { function, reply } => {
+                let _ = reply.send(host.runtime().has_function(&function));
+            }
+        }
     }
 }

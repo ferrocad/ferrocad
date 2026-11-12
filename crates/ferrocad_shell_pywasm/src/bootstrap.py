@@ -34,6 +34,22 @@ def _module(name, namespace):
     return module
 
 
+def _missing(name, *attributes):
+    """Whether ``name`` is absent, or lacks one of the ``attributes`` we need.
+
+    With ``host_env`` on (every native build) the real stdlib modules are here, and
+    the shared facade should use them — the parameter store reads and writes a real
+    file through ``os``, ``io``, ``tempfile`` and the builtin ``open``. The wasm target
+    has no POSIX module, so those imports fail and the substitutes below cover the
+    handful of names the facade touches. A partially linked module is replaced too.
+    """
+    try:
+        module = __import__(name)
+    except Exception:  # noqa: BLE001 - a missing or broken module is the same answer
+        return True
+    return any(not hasattr(module, attribute) for attribute in attributes)
+
+
 # --- the modules wasm32 cannot import -------------------------------------
 
 
@@ -164,27 +180,32 @@ class _BuiltinImporter:
     """The marker ``python/FreeCAD`` compares a spec's loader against."""
 
 
-_module("io", {"StringIO": _StringIO, "TextIOBase": object, "BytesIO": _StringIO})
-_module(
-    "contextlib",
-    {
-        "suppress": _Suppress,
-        "redirect_stdout": lambda target: _Redirect("stdout", target),
-        "redirect_stderr": lambda target: _Redirect("stderr", target),
-    },
-)
-_module("pathlib", {"Path": _Path, "PurePath": _Path})
-_module("traceback", {"format_exc": lambda: ""})
-_module(
-    "importlib",
-    {
-        "import_module": _import_module,
-        "util": _module("importlib.util", {"find_spec": _find_spec}),
-        "machinery": _module(
-            "importlib.machinery", {"BuiltinImporter": _BuiltinImporter}
-        ),
-    },
-)
+if _missing("io", "StringIO"):
+    _module("io", {"StringIO": _StringIO, "TextIOBase": object, "BytesIO": _StringIO})
+if _missing("contextlib", "suppress"):
+    _module(
+        "contextlib",
+        {
+            "suppress": _Suppress,
+            "redirect_stdout": lambda target: _Redirect("stdout", target),
+            "redirect_stderr": lambda target: _Redirect("stderr", target),
+        },
+    )
+if _missing("pathlib", "Path"):
+    _module("pathlib", {"Path": _Path, "PurePath": _Path})
+if _missing("traceback", "format_exc"):
+    _module("traceback", {"format_exc": lambda: ""})
+if _missing("importlib", "import_module", "util", "machinery"):
+    _module(
+        "importlib",
+        {
+            "import_module": _import_module,
+            "util": _module("importlib.util", {"find_spec": _find_spec}),
+            "machinery": _module(
+                "importlib.machinery", {"BuiltinImporter": _BuiltinImporter}
+            ),
+        },
+    )
 
 
 class _OsPathLike:
@@ -211,31 +232,32 @@ def _os_fsdecode(value):
 # modules use these names for path-like arguments and for the parameter store's
 # environment lookup; there is no filesystem behind any of them (`open` itself refuses,
 # see the module docs), so a path question answers what it can and a read does not exist.
-_module(
-    "os",
-    {
-        "PathLike": _OsPathLike,
+if _missing("os", "environ", "fdopen", "fspath"):
+    _module(
+        "os",
+        {
+            "PathLike": _OsPathLike,
         "fspath": _os_fspath,
         "fsdecode": _os_fsdecode,
         "sep": "/",
         "altsep": None,
         "linesep": "\n",
         "environ": {},
-        "path": _module(
-            "os.path",
-            {
-                "join": lambda *parts: "/".join(str(part) for part in parts),
-                "dirname": lambda path: str(path).rpartition("/")[0],
-                "basename": lambda path: str(path).rpartition("/")[2],
-                "abspath": lambda path: str(path),
-                "expanduser": lambda path: str(path),
-                "exists": lambda path: False,
-                "isfile": lambda path: False,
-                "isdir": lambda path: False,
-            },
-        ),
-    },
-)
+            "path": _module(
+                "os.path",
+                {
+                    "join": lambda *parts: "/".join(str(part) for part in parts),
+                    "dirname": lambda path: str(path).rpartition("/")[0],
+                    "basename": lambda path: str(path).rpartition("/")[2],
+                    "abspath": lambda path: str(path),
+                    "expanduser": lambda path: str(path),
+                    "exists": lambda path: False,
+                    "isfile": lambda path: False,
+                    "isdir": lambda path: False,
+                },
+            ),
+        },
+    )
 
 
 def _no_tempfile(*args, **kwargs):
@@ -247,4 +269,29 @@ def _no_tempfile(*args, **kwargs):
     raise OSError("pywasm: this host has no temporary files")
 
 
-_module("tempfile", {"mkstemp": _no_tempfile})
+if _missing("tempfile", "mkstemp"):
+    _module("tempfile", {"mkstemp": _no_tempfile})
+
+
+def configure(freecad, store, path):
+    """Wire the installed App facade to this host.
+
+    ``store`` is ``"memory"`` or ``"file"``; ``path`` is the parameter file the host
+    resolved (empty for a memory store). A memory store clears the facade's path, so the
+    values last for the process; a file store points the facade at ``path`` and swaps in
+    this host's two file operations, because the interpreter has no ordinary filesystem
+    layer here. Either way the host has a window, so ``GuiUp`` is set — that is what the
+    Gui branches (the tree card, the view mirror) read.
+    """
+    freecad.GuiUp = 1
+    if store == "memory" or not path:
+        freecad._parameter_file_path = lambda: None
+        return
+    native = __import__("ferrocad")
+    freecad._configure_parameter_file(path)
+    freecad._read_parameter_file = native.read_parameter_file
+    freecad._write_parameter_file = native.write_parameter_file
+
+
+# The loader (Rust) calls `configure` from its own scope; a module is how it gets there.
+_module("_ferrocad_bootstrap", {"configure": configure})

@@ -313,12 +313,12 @@ RustPython: ferrocad_shell → imports `ferrocad` → native.rs (rustpython-vm) 
 and the error policies are written once, and an engine supplies `PythonRuntime` — the
 call primitive (`CpythonRuntime` enters the GIL, `RustPythonRuntime` calls into its VM),
 the boot/file hooks, and the typed hooks (display rows, tools, the `pivy` scene, the event
-listener). What a facade *can* answer is a value (`Contract`): CPython is `FULL`,
-RustPython answers every group too (it grew them one at a time; B18a), and the desktop's
-`ThreadedRuntime` is still `NONE` — its parameter store is the worker's dict, not the
-user's file, so it must not claim `view` — and the document half answers what the script
-cannot instead of the host calling a function that would raise, so a capability that
-grows is one flag plus the facade code.
+listener). What a facade *can* answer is a value (`Contract`): CPython is `FULL`, and so
+are both RustPython hosts (it grew the groups one at a time; B18a). The desktop
+`ThreadedRuntime` was `NONE` until its parameter store could be the app's file; with the
+host-supplied file operations it is `FULL` too, and the document half answers what the
+script cannot instead of the host calling a function that would raise, so a capability
+that grows is one flag plus the facade code.
 The seam is `crates/ferrocad_python_host`; the trail is
 [`backend-parity.md`](../../project/tasks/backend-parity.md) B18.
 
@@ -344,9 +344,7 @@ backends.
 The document is **read-only**: creating or opening a document and `setattr` on an object
 raise rather than silently missing the document, and recompute, the `Shape` API and every
 write live in the document half. That is the price of not sharing the `*_py` bindings,
-and the code says so where a script would notice. Four value classes `python/FreeCAD`
-re-exports (`BoundBox`, `Material`, `StringID`, `StringHasher`) are not bound yet; the
-shared module leaves an unbound name absent rather than inventing one.
+and the code says so where a script would notice.
 
 **It answers the Gui app's presentation half.** The installed facade carries
 `FerroCAD.Grid`/`Axis`/`Gizmo`, `FerroCADGui.ViewState`, the two view requests, and the
@@ -364,9 +362,14 @@ writes queued back, `Document.UndoCount`/`RedoCount` from the payload) and holds
 **mod provider registry and its settings cards** (steps 5 and 3:
 `FerroCADGui.registerProvider`/`providers`/`activeProvider`/`providerSkin`/
 `setActiveProvider`/`refreshProviders`/`settings`/`setSetting`/`resetAppearance`). The
-selected backend and the values a script writes persist in the dict-backed
-`FreeCAD.ParamGet` — the process, not a file — so an edit lasts for the session and a
-reload starts from the declared defaults. A predicate that raises disables its row (the
+selected backend and the values a script writes persist in the facade's
+`FreeCAD.ParamGet`. **Where** it persists is the embedding host's choice
+(`ParameterStore`): the browser and every embedded/test host keep it in memory, while the
+desktop preview (`--script-host=pywasm`, `live_persistent`) points it at the app's file —
+`FERROCAD_PARAM_FILE`, else `$XDG_CONFIG_HOME/ferrocad/parameters.json` — so the preview
+reads and writes the same store the CPython half does. The host supplies the store's two
+file operations (`native.rs`), because this interpreter has no ordinary POSIX layer; the
+store, the typed groups and the file format stay `python/FreeCAD`'s. A predicate that raises disables its row (the
 shared `_enabled` rule). The **model tree** appends the synthetic `Settings` root from that
 same registry — the documents themselves stay the document half's, so nothing is listed
 twice — and the **interaction hooks** resolve a mod's manipulator commits through
@@ -395,7 +398,9 @@ cannot raise its own (8 MiB on Linux and macOS, 1 MiB on Windows).
 `threaded::ThreadedScriptHost` is the `ScriptHost` in front of a 16 MiB worker:
 `ThreadedRuntime` sends every call over the channel, and the answers that need no
 interpreter (the greeting, the grant, the tool refusal) stay local. `--script-host=pywasm`
-installs it, with `host_env` still off, so it is the browser's environment in a real window
+installs it over `live_persistent`, so the preview reads the app's parameter file and
+answers the whole contract; `host_env` is still off, so what it does *not* have is an
+ordinary POSIX layer — the parameter store's two file operations come from the host
 (see B7d).
 
 **Installed by the browser, chosen by the page.** `ferrocad_shell_web` is the assembly:

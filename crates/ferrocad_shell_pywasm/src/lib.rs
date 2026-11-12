@@ -213,6 +213,35 @@ thread_local! {
     static DOCUMENT: RefCell<Option<DocumentSource>> = const { RefCell::new(None) };
 }
 
+/// Where the Python parameter store persists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParameterStore {
+    /// Process memory only: the browser, and every embedded host.
+    Memory,
+    /// The facade's file: `FERROCAD_PARAM_FILE`, else the platform config path.
+    File,
+}
+
+/// The file `python/FreeCAD._parameter_file_path` resolves to, computed the same way:
+/// an explicit `FERROCAD_PARAM_FILE`, else `XDG_CONFIG_HOME`/`~/.config` (or `APPDATA`).
+fn parameter_file() -> Option<String> {
+    if let Ok(path) = std::env::var("FERROCAD_PARAM_FILE") {
+        if !path.trim().is_empty() {
+            return Some(path);
+        }
+    }
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| format!("{home}/.config"))
+        })
+        .or_else(|| std::env::var("APPDATA").ok())?;
+    Some(format!("{base}/ferrocad/parameters.json"))
+}
+
 /// The bridge's payload: the document the Rust side built, rendered by [`snapshot`].
 ///
 /// `null` when the source is the registry and no document is open, which the facade
@@ -240,14 +269,32 @@ pub fn new() -> Result<PywasmScriptHost, String> {
     RustPythonRuntime::new().map(PythonHost::new)
 }
 
+/// [`new`] with the facade's file-backed parameter store (native; for tests).
+pub fn new_persistent() -> Result<PywasmScriptHost, String> {
+    RustPythonRuntime::new_persistent().map(PythonHost::new)
+}
+
 /// Boot over the process-wide registry, read on every call.
 ///
 /// The document half must be the shared-registry one
 /// (`RustAppBackend::from_shared_registry`) or the registry holds nothing and the facade
 /// reports no active document. That pairing is what makes `FreeCAD.ActiveDocument` and
 /// the model tree the same object, and what keeps the cascade current after an open.
+///
+/// The parameter store is **memory-only**: this is what the browser gets (it has no
+/// filesystem), and what a test gets (it must not touch the user's config). A desktop
+/// preview that wants the app's store uses [`live_persistent`].
 pub fn live() -> Result<PywasmScriptHost, String> {
     RustPythonRuntime::live().map(PythonHost::new)
+}
+
+/// [`live`] with the facade's **file-backed** parameter store.
+///
+/// For the desktop `--script-host=pywasm`, so the preview reads the same store the
+/// CPython half writes (`FERROCAD_PARAM_FILE`, else the platform config file). The
+/// browser never takes this path — it has no filesystem.
+pub fn live_persistent() -> Result<PywasmScriptHost, String> {
+    RustPythonRuntime::live_persistent().map(PythonHost::new)
 }
 
 /// Boot over a payload rendered from a document the caller built.
@@ -282,13 +329,13 @@ pub fn over(payload: impl Into<String>) -> Result<PywasmScriptHost, String> {
 ///   `App_Rotate` and `App_ToggleVisibility` are judged by their real predicates.
 /// - `providers` — `provider_features`, `set_provider`, `refresh_providers` and
 ///   `provider_skin` over the shared registry. The selected backend persists in the
-///   dict-backed `ParamGet` (the process, not a file), so a reload starts from priority.
+///   parameter store: the process for a memory host, the app's file for a desktop one.
 /// - `settings` — `extra_properties`/`set_extra_property` over the
 ///   `Settings/<Feature>` namespace: the provider selector row and the active
-///   provider's schema. A written value goes through `FreeCAD.ParamGet` (the
-///   dict-backed store, so it is session-only — B18b), coercion and range/choice
-///   checks are the native ones, `resetAppearance` drops the written values, and a
-///   write returns the provider's `refresh` view claim.
+///   provider's schema. A written value goes through `FreeCAD.ParamGet` (memory or the
+///   host's file, per `ParameterStore`), coercion and range/choice checks are the
+///   native ones, `resetAppearance` drops the written values, and a write returns the
+///   provider's `refresh` view claim.
 /// - `tree` — `model_tree`, filtered to the synthetic `Settings` root the shared
 ///   provider registry lists. The documents themselves stay the document half's, so
 ///   nothing is shown twice.
@@ -308,29 +355,62 @@ impl RustPythonRuntime {
         Self::over(snapshot::render(&snapshot::sample()))
     }
 
+    /// [`new`](Self::new) with the facade's file-backed parameter store.
+    pub fn new_persistent() -> Result<Self, String> {
+        Self::boot(
+            DocumentSource::Fixed(Rc::from(snapshot::render(&snapshot::sample()))),
+            ParameterStore::File,
+        )
+    }
+
     /// Boot over the process-wide registry, read on every call.
     pub fn live() -> Result<Self, String> {
-        Self::boot(DocumentSource::Registry)
+        Self::boot(DocumentSource::Registry, ParameterStore::Memory)
+    }
+
+    /// [`live`](Self::live) with the facade's file-backed parameter store.
+    ///
+    /// Native only in effect: without `host_env` there is no filesystem, so the store
+    /// stays in memory (the browser).
+    pub fn live_persistent() -> Result<Self, String> {
+        Self::boot(DocumentSource::Registry, ParameterStore::File)
     }
 
     /// Boot over a payload rendered from a document the caller built.
     pub fn over(payload: impl Into<String>) -> Result<Self, String> {
         let payload: Rc<str> = Rc::from(payload.into());
-        Self::boot(DocumentSource::Fixed(payload))
+        Self::boot(DocumentSource::Fixed(payload), ParameterStore::Memory)
+    }
+
+    /// [`over`](Self::over) with the facade's file-backed parameter store.
+    pub fn over_persistent(payload: impl Into<String>) -> Result<Self, String> {
+        let payload: Rc<str> = Rc::from(payload.into());
+        Self::boot(DocumentSource::Fixed(payload), ParameterStore::File)
     }
 
     /// Start one interpreter over `source`.
     ///
     /// The interpreter and its stdlib are per-host, so two hosts never share Python
     /// state.
-    fn boot(source: DocumentSource) -> Result<Self, String> {
+    fn boot(source: DocumentSource, store: ParameterStore) -> Result<Self, String> {
         DOCUMENT.with(|cell| *cell.borrow_mut() = Some(source));
+        // No POSIX module on wasm, so no file even if the caller asked for one.
+        let store = if cfg!(target_family = "wasm") {
+            ParameterStore::Memory
+        } else {
+            store
+        };
+        let parameter_file = match store {
+            ParameterStore::File => parameter_file(),
+            ParameterStore::Memory => None,
+        };
 
         let interpreter = Interpreter::builder(Settings::default())
             .add_native_modules(
-                // `rustpython-stdlib` built without `host_env`: `json`, `sys` and the
-                // rest, minus the `os`/`_io` file layer the target has no POSIX
-                // module for.
+                // `rustpython-stdlib` without `host_env`: `json`, `sys` and the rest,
+                // minus the `os`/`_io` file layer. `bootstrap.py` supplies the names the
+                // shared facade touches; the parameter file is read and written by
+                // `native.rs` instead of through a POSIX layer.
                 &rustpython_stdlib::stdlib_module_defs(Context::genesis()),
             )
             .add_native_module(native::module_def(Context::genesis()))
@@ -346,17 +426,16 @@ impl RustPythonRuntime {
                 let install = format!(
                     "{LOADER}\nSHELL_FILES = {{'catalog.json': SHELL_CATALOG}}\n\
                      _install_package('FreeCAD', eval(FREECAD_FILES_SOURCE))\n\
-                     FREECAD = sys.modules['FreeCAD']\n\
-                     # This host has a window (the browser module and --script-host=pywasm),\n\
-                     # and no filesystem behind the parameter store: GuiUp answers the Gui\n\
-                     # branches as natively, and the store stays in memory.\n\
-                     FREECAD.GuiUp = 1\n\
-                     FREECAD._parameter_file_path = lambda: None\n\
+                     sys.modules['_ferrocad_bootstrap'].configure(sys.modules['FreeCAD'], PARAMETER_STORE, PARAMETER_FILE)\n\
                      _install('FreeCADGui', FREECADGUI_SOURCE)\n\
                      _install_package('FerroCAD', eval(FERROCAD_FILES_SOURCE))\n\
                      _install('FerroCADGui', FERROCADGUI_SOURCE)\n\
                      _install('ferrocad_shell', SHELL_SOURCE)"
                 );
+                let store = match store {
+                    ParameterStore::Memory => "memory",
+                    ParameterStore::File => "file",
+                };
                 // A Python dict of each package's sources. `{:?}` renders a Rust string
                 // as a quoted literal (newlines and quotes escaped), which is also a
                 // Python one.
@@ -377,6 +456,8 @@ impl RustPythonRuntime {
                         ("FERROCADGUI_SOURCE", FERROCADGUI),
                         ("FERROCAD_FILES_SOURCE", ferro_files.as_str()),
                         ("FREECAD_FILES_SOURCE", freecad_files.as_str()),
+                        ("PARAMETER_STORE", store),
+                        ("PARAMETER_FILE", parameter_file.as_deref().unwrap_or("")),
                     ],
                 )?;
                 run_source(vm, "<namespace>", NAMESPACE, &[])

@@ -376,6 +376,40 @@ def _param_store(root):
     return _raw_param_store(root)
 
 
+def _read_parameter_file(path):
+    """The parameter file's text, or ``None`` when it does not exist.
+
+    A host supplies its own pair of these when it has no ordinary filesystem (the
+    wasm half overrides them with the native module's Rust I/O); this default is the
+    one a normal Python process uses.
+    """
+    try:
+        with _builtins.open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except FileNotFoundError:
+        return None
+
+
+def _write_parameter_file(path, text):
+    """Replace the parameter file with ``text``, atomically."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=".parameters-", suffix=".json", dir=directory
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
 def _load_parameter_file():
     """Merge the configured file into memory, once per configured path.
 
@@ -393,11 +427,15 @@ def _load_parameter_file():
     state["loaded"] = True
 
     try:
-        with _builtins.open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except FileNotFoundError:
-        return
+        text = _read_parameter_file(path)
     except (OSError, ValueError) as exc:
+        _report_parameter_file(path, "read", "cannot read it (%s); starting empty" % exc)
+        return
+    if text is None:
+        return
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
         _report_parameter_file(path, "read", "cannot read it (%s); starting empty" % exc)
         return
 
@@ -487,29 +525,12 @@ def _save_parameter_file():
                 }
             )
     data = {"version": _PARAM_FILE_VERSION, "groups": groups, "values": values}
+    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
-    directory = os.path.dirname(path) or "."
-    temporary = None
     try:
-        os.makedirs(directory, exist_ok=True)
-        descriptor, temporary = tempfile.mkstemp(
-            prefix=".parameters-", suffix=".json", dir=directory
-        )
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        temporary = None
+        _write_parameter_file(path, text)
     except (OSError, TypeError, ValueError) as exc:
         _report_parameter_file(path, "write", "cannot save it (%s)" % exc)
-    finally:
-        if temporary is not None:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
 
 
 def _collapse(path):

@@ -8,6 +8,7 @@
 
 #![cfg(not(target_family = "wasm"))]
 
+use ferrocad_python_host::{Contract, PythonRuntime};
 use ferrocad_shell_api::app::ScriptHost;
 use ferrocad_shell_pywasm::threaded;
 
@@ -49,8 +50,17 @@ fn the_constants_are_answered_without_the_interpreter() {
         host.document_grant(),
         ferrocad_shell_api::DocumentGrant::Read
     );
-    assert!(host.commands().is_empty());
-    assert!(host.run_command("App_Delete").is_none());
+    // The contract is `FULL` now, so the script's registry answers the commands (this
+    // used to assert an empty list while the preview reported `NONE`). The catalogue's
+    // own verbs still fall through to the document half.
+    assert!(
+        !host.commands().is_empty(),
+        "the shared command registry is the preview's"
+    );
+    assert!(
+        host.run_command("App_Move").is_none(),
+        "the document half owns the document verbs"
+    );
     assert!(!host.tool_command("anything", "start"));
     let no_tool = host
         .tool("toy_polyline")
@@ -64,4 +74,23 @@ fn the_stack_the_worker_asks_for_is_the_documented_one() {
     // The value the interpreter's compiler needs; a smaller one aborts inside rustpython
     // rather than failing here, which is why it is a constant and not a parameter.
     assert_eq!(threaded::STACK, 16 << 20);
+}
+
+/// The desktop preview is the whole facade, not the document half's leftovers.
+///
+/// The worker boots `live_persistent`, so `view` answers the appearance the user
+/// actually saved; that store was the one reason this contract had to stay `NONE`.
+#[test]
+fn the_desktop_preview_answers_the_whole_contract() {
+    let runtime = threaded::ThreadedRuntime::live().expect("the worker boots");
+
+    assert_eq!(runtime.contract(), Contract::FULL);
+    assert!(
+        runtime.has_function("interaction"),
+        "the shared shell module answers the interaction hooks"
+    );
+    assert!(
+        !runtime.has_function("add_datum_plane"),
+        "datum geometry is the edition's, and this half installs no app script"
+    );
 }

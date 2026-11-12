@@ -1744,20 +1744,15 @@ Two divergences this section recorded, both closed by B18b:
    capability is absent, and `tests/view.rs::a_broken_predicate_disables_a_command` pins
    the shared rule.
 2. **`gpu_adapter`/`set_gpu_adapter` over-claimed.** They ride `view` but read through
-   `FreeCAD.ParamGet`; with B18b's dict-backed store the calls answer, so the two methods
-   are inside `view` rather than mapped to `None`. The value is session-only until the
-   store has a file behind it (B18b item 4).
+   `FreeCAD.ParamGet`; the calls answer now, so the two methods are inside `view` rather
+   than mapped to `None`. On the desktop preview the store is the app's file, so the
+   value survives a restart (B18b item 4).
 
 **Cost, stated plainly.** `bootstrap.py` is now ~250 lines of host gaps and wiring, and
 `native.rs` is the binding the CPython half gets from PyO3; the facade above both is the
 shared `python/` source (B18b). That is down from ~2 050 lines of duplicate policy: commands, selection, the
 provider registry, settings and the semantic stores all run the same code on both hosts
-now, so a change to any of them is one source. `ThreadedRuntime` (the desktop
-`--script-host=pywasm`) still reports `Contract::NONE`, and that is not laziness: its
-`ParamGet` is the worker's in-memory dict, not the desktop's file-backed store, so
-claiming `view` would make the shell draw the preview's defaults instead of the user's
-saved appearance. Flipping the flags is one line; giving the preview the real store is
-the work, and that is B18b item 4.
+now, so a change to any of them is one source.
 
 **Exit: met.** `crates/ferrocad_shell_pywasm/tests/view.rs` (6): the grid/axis toggles
 return the composed view request and flip back; a pushed `ViewState` is what the next
@@ -1792,8 +1787,8 @@ installed, which is the point: the facade code already existed.
   entry module does not define it. That is also the right answer for the desktop's
   geometry-free base edition, which used to surface the raw `AttributeError`.
 
-The runtime's `Contract` is `FULL` now; the desktop's `ThreadedRuntime` still reports
-`NONE`, for the store reason B18b records above.
+Both RustPython hosts report `FULL`: the in-thread one (browser) and the desktop's
+`ThreadedRuntime` (see the store note above).
 
 **Exit: met.** `tests/interaction.rs` (5): a registered provider owns the commit and
 receives the resolved object, action and values; with no provider the commit and the
@@ -1830,7 +1825,9 @@ units) as well as the Gui ones:
   owns them.
 - `bootstrap.py` supplies only what a `host_env`-off RustPython cannot: `io`,
   `contextlib`, `pathlib`, `traceback`, `importlib` (with `util.find_spec`), `os` and
-  `tempfile`. Nothing above it is policy.
+  `tempfile`, and only the ones the interpreter actually lacks (`_missing` probes first).
+  Its `configure` wires the installed facade to the host: `GuiUp`, and either a
+  memory-only store or the host's file pair. Nothing above it is policy.
 - **Quantity is the engine's, not a second unit model.** The native class binds
   `ferrocad_core::quantity::Quantity` (`Value`, `getValueAs`, `str`, and the 0/1/2-
   argument constructor), so the settings coercion parses and converts exactly as the
@@ -1864,16 +1861,21 @@ What remains of B18b is the *native binding* half, and none of it is needed for 
 above it:
 
 1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
-   property rules and the value classes above, so `python/FreeCAD` itself runs. What is
-   still unbound is `BoundBox`, `Material`, `StringID` and `StringHasher`; the shared
-   modules leave those names absent rather than inventing classes for them;
+   property rules and every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
+   `Vector`, `Vector2d`, `Matrix`, `Rotation`, `Placement`, `TypeId`, `BoundBox`,
+   `Material`, `StringID`, `StringHasher`);
 2. `ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh` (needs `ferrocad_part`,
    `ferrocad_mesh` and OCCT in the RustPython build);
 3. `host_env` on for the **native** RustPython build only (target-specific dependency), so
    the desktop runs `python/**` from disk; the browser keeps the embedded file map, which
    this step built;
-4. a file-backed `ParamGet` (`FerroCAD._params` already has the controls; the store is a
-   dict now), so a written value survives a reload;
+4. ~~a file-backed `ParamGet`~~ — **built:** the store and the file format are
+   `python/FreeCAD`'s; the host supplies the two file operations
+   (`native.rs::read_parameter_file`/`write_parameter_file`) because `host_env` is off.
+   `ParameterStore::{Memory, File}` decides per host: the browser and every embedded/test
+   host stay in memory, `live_persistent` (the desktop preview) resolves the app's file.
+   ~~`host_env`~~ was tried and does not build against this toolchain (rustpython-vm 0.5's
+   posix layer wants `libc::POSIX_SPAWN_SETSID` as `i32`, which this libc has as `i16`);
 5. document writes, then `document_grant` → `ReadWrite` (D15 becomes host policy).
 
 ### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19c built)

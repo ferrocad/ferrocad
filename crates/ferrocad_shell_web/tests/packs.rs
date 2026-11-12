@@ -109,6 +109,19 @@ fn a_pack_installs_its_resources_where_the_mod_reads_them() {
             "an uninstalled path is still FileNotFoundError: {}",
             answer.output
         );
+
+        // The patch is transparent: a real file still opens. That is the desktop preview,
+        // which imports `python/` from disk and keeps `host_env`.
+        let manifest = std::env::current_dir()
+            .expect("a working directory")
+            .join("Cargo.toml");
+        let script = format!(
+            "print(open({manifest:?}, encoding='utf-8').read().startswith('[package]'))",
+            manifest = manifest.to_string_lossy()
+        );
+        let answer = backend.evaluate(&script).expect("evaluate");
+        assert!(answer.ok, "{}", answer.output);
+        assert_eq!(answer.output.trim(), "True", "a real file still opens");
     });
 }
 

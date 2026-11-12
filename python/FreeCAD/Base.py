@@ -11,28 +11,20 @@ from __future__ import annotations
 
 from enum import IntEnum
 
-import ferrocad as _fc
-
-# The value types this module re-exports. A native binding may not provide all of them
-# (the read-only wasm half binds the ones the App surface uses); a missing one is absent
-# from this module rather than a second implementation. `tools/api_docs.py` documents the
-# complete CPython surface.
-_VALUE_TYPES = (
-    "BoundBox",
-    "Material",
-    "Matrix",
-    "Placement",
-    "Quantity",
-    "Rotation",
-    "TypeId",
-    "Unit",
-    "Vector",
-    "Vector2d",
+# Both bindings provide every name here, so a missing one is an import-time error rather
+# than a silently absent type.
+from ferrocad import (
+    BoundBox,
+    Material,
+    Matrix,
+    Placement,
+    Quantity,
+    Rotation,
+    TypeId,
+    Unit,
+    Vector,
+    Vector2d,
 )
-for _name in _VALUE_TYPES:
-    if hasattr(_fc, _name):
-        globals()[_name] = getattr(_fc, _name)
-del _name
 
 try:
     # Upstream reports kernel failures as ``Base.CADKernelError``; this image
@@ -92,7 +84,17 @@ class Precision:
         return 1.0 - 1e-7
 
 
-__all__ = [name for name in _VALUE_TYPES if name in globals()] + [
+__all__ = [
+    "Quantity",
+    "Unit",
+    "Vector",
+    "Vector2d",
+    "Matrix",
+    "Rotation",
+    "Placement",
+    "TypeId",
+    "BoundBox",
+    "Material",
     "ScaleType",
     "Precision",
     "CADKernelError",

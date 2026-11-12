@@ -56,7 +56,7 @@ fn kernel() -> Arc<dyn GeometryBackend> {
 }
 
 /// The active document's handle, with the registry lock released.
-fn active_handle() -> Result<ferrocad_core::DocumentHandle, String> {
+pub(crate) fn active_handle() -> Result<ferrocad_core::DocumentHandle, String> {
     let registry = ferrocad_core::application()
         .lock()
         .map_err(|error| format!("the document registry is poisoned: {error}"))?;
@@ -77,7 +77,7 @@ pub(crate) fn shape_of(value: &PyObjectRef) -> Option<Shape> {
 }
 
 /// The B-Rep a document object holds, read from the registry.
-fn object_shape(object: &str) -> Option<Shape> {
+pub(crate) fn object_shape(object: &str) -> Option<Shape> {
     let handle = active_handle().ok()?;
     let document = handle.lock().ok()?;
     let id = document.get_by_name(object)?;
@@ -92,6 +92,14 @@ fn object_shape(object: &str) -> Option<Shape> {
 /// the registry the native module owns.
 pub(crate) fn shape_py_of(object: &str, vm: &VirtualMachine) -> Option<PyObjectRef> {
     object_shape(object).map(|shape| part::shape_py(shape, vm))
+}
+
+/// How many faces the B-Rep a document object holds has, when it holds one.
+///
+/// `ViewObject.DiffuseColor` answers one colour per face, so it asks the same kernel the
+/// `Faces` getter does rather than guessing.
+pub(crate) fn object_face_count(object: &str) -> Option<usize> {
+    object_shape(object).map(|shape| sub_shapes(&shape, ElementKind::Face).len())
 }
 
 /// A write the host cannot serve: a fixed-payload document, or no active one.

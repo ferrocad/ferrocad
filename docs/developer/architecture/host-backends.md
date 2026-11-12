@@ -414,6 +414,19 @@ object while `threaded::RemoteTool` forwards events and cancel over the channel.
 ranked picker both bindings use is `ferrocad_stage::view::ranked_pick`, so a pick cannot
 mean one thing to `FreeCADGui.getObjectsInfo` and another to a CPython tool.
 
+**Appearance is the document's view state, and a script can write it (B18b item 2).**
+`obj.ViewObject` (`native.rs`) reads and writes `ferrocad_core::ViewState` on the object
+in the registry — the same state `ferrocad_core::effective_color`/`drawable` give the
+viewport — so `Visibility`, `ShapeColor`, `Transparency`, `DiffuseColor`,
+`ShapeAppearance`/`ShapeMaterial` and `DisplayMode` set from a pywasm script are drawn on
+the next sync. The state is created from `DefaultShapeColor`/`DefaultShapeTransparency`
+on first access, and the `App::Origin` family stays opaque. `DocumentObject` forwards
+those names when it has no property of that name (`box.Visibility = False`), and
+`obj.Document` answers the document itself, which is what the facade's view-style store
+keys on (`_view_style`: Draft's `LineColor`/`LineWidth`/`DrawStyle`). `Doc.Meta` and
+`Doc.settings` are process state here, exactly as in the CPython binding — core never
+persists them.
+
 Because the facade is the real one, **real mods load**: `mods/GridOverlay`,
 `mods/AxisOverlay` and `mods/GizmoOverlay` run here and declare their `grid`/`axis`/
 `gizmo` providers, which `tests/mods.rs::the_shipped_settings_clients_load` pins. The

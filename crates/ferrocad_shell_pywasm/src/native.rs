@@ -18,11 +18,16 @@
 //! bridge.
 //!
 //! **Value types.** `Quantity`, `Unit`, `Vector`, `Vector2d`, `Matrix`, `Rotation`,
-//! `Placement` and `TypeId` are bound over the same `ferrocad_types` structures the
-//! CPython module uses, so a workplane computation in a browser console means what it
-//! means natively. The remaining value classes `python/FreeCAD` re-exports (`BoundBox`,
-//! `Material`, `StringID`, `StringHasher`) are not bound here; their absence is recorded
-//! in the B18b ledger rather than papered over with empty classes.
+//! `Placement`, `TypeId`, `BoundBox`, `Material`, `StringID` and `StringHasher` are bound
+//! over the same `ferrocad_types`/`ferrocad_core` structures the CPython module uses, so
+//! a workplane computation in a browser console means what it means natively.
+//!
+//! **The view object is the document's, not a copy.** `obj.ViewObject` reads and writes
+//! `ferrocad_core::ViewState` on the object in the registry — the state
+//! `ferrocad_core::effective_color`/`drawable` give the viewport — so `Visibility`,
+//! `ShapeColor`, `Transparency` and `DisplayMode` set from a script are drawn on the next
+//! sync. `Doc.Meta`/`Doc.settings` are process state (core does not persist them), as in
+//! the CPython binding.
 //!
 //! **Document observers** are stored, not pumped: this half has no document-event loop,
 //! and the shell delivers document events to `FerroCADGui` instead.
@@ -30,11 +35,12 @@
 pub(crate) use ferrocad::{bound_box_py, module_def, object_named_py, vector_of, vector_py};
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 
 use ferrocad_core::geometry::{Matrix4, Placement, Rotation, Vector3};
 use ferrocad_core::quantity::{Quantity, canonical_name};
 use ferrocad_core::unit::Unit;
-use rustpython_vm::builtins::{PyDictRef, PyStr, PyStrRef, PyType};
+use rustpython_vm::builtins::{PyDict, PyDictRef, PyStr, PyStrRef, PyType};
 use rustpython_vm::function::{FuncArgs, OptionalArg, PySetterValue};
 use rustpython_vm::types::{Constructor, SetAttr};
 use rustpython_vm::{
@@ -129,6 +135,15 @@ fn doorway(request: serde_json::Value) -> Result<serde_json::Value, String> {
 thread_local! {
     /// Document observers a script registered. See the module docs: stored, not pumped.
     static OBSERVERS: Observers = const { RefCell::new(Vec::new()) };
+
+    /// `Document.Meta` for this process.
+    ///
+    /// The CPython binding keeps it on the `Document` object it owns, and core never
+    /// persists it, so a script's annotation styles last for the session. A `Document`
+    /// here is a projection rebuilt on every access, hence the document *name* is the
+    /// key. Nothing else reads it: the facade's forms are its only consumer.
+    static DOCUMENT_META: RefCell<BTreeMap<String, BTreeMap<String, String>>> =
+        const { RefCell::new(BTreeMap::new()) };
 }
 
 #[pymodule]
@@ -136,10 +151,10 @@ mod ferrocad {
     #![allow(non_snake_case, non_upper_case_globals)]
 
     use super::{
-        Constructor, DocumentRow, FuncArgs, Matrix4, OBSERVERS, ObjectRow, OptionalArg, Placement,
-        Py, PyDictRef, PyObjectRef, PyPayload, PyRef, PyResult, PySetterValue, PyStr, PyStrRef,
-        PyType, Quantity, Rotation, SetAttr, Unit, Vector3, VirtualMachine, active_row,
-        canonical_name, doorway, pyclass,
+        Constructor, DOCUMENT_META, DocumentRow, FuncArgs, Matrix4, OBSERVERS, ObjectRow,
+        OptionalArg, Placement, Py, PyDict, PyDictRef, PyObjectRef, PyPayload, PyRef, PyResult,
+        PySetterValue, PyStr, PyStrRef, PyType, Quantity, Rotation, SetAttr, Unit, Vector3,
+        VirtualMachine, active_row, canonical_name, doorway, pyclass,
     };
     use std::cell::RefCell;
 
@@ -184,9 +199,72 @@ mod ferrocad {
             zelf.row.type_id.clone()
         }
 
+        /// The document this object belongs to.
+        ///
+        /// The facade's view-style store keys on `(document name, object name)`
+        /// (`python/FreeCAD/_view_style.py`), and a mod reads `obj.Document.Name`, so the
+        /// projection answers it — from the active document, which is the one every row
+        /// here came from.
+        #[pygetset]
+        fn Document(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            match active_row() {
+                Some(row)
+                    if row
+                        .objects
+                        .iter()
+                        .any(|object| object.name == zelf.row.name) =>
+                {
+                    Ok(document_py(row, vm))
+                }
+                _ => Err(vm.new_runtime_error(format!(
+                    "{:?} is not in the active document",
+                    zelf.row.name
+                ))),
+            }
+        }
+
         // `Label` has no getter on purpose: it is the object's user-visible name, and a
         // getter would shadow the instance dict that a rename updates (`object_py` seeds
         // it, `reseed` refreshes it). `Name`/`TypeId` never change, so they stay.
+
+        // The view-provider properties below are forwarded to the view object when the
+        // object has no property of that name, which is how upstream spells
+        // `box.Visibility = False` in a GUI session. A real property wins: a Part feature
+        // that stores `DisplayMode` keeps answering from its own row.
+        #[pygetset]
+        fn Visibility(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_row_or_view(&zelf.row, "Visibility", vm)
+        }
+
+        #[pygetset]
+        fn Transparency(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_row_or_view(&zelf.row, "Transparency", vm)
+        }
+
+        #[pygetset]
+        fn ShapeColor(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_row_or_view(&zelf.row, "ShapeColor", vm)
+        }
+
+        #[pygetset]
+        fn ShapeAppearance(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_row_or_view(&zelf.row, "ShapeAppearance", vm)
+        }
+
+        #[pygetset]
+        fn ShapeMaterial(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_row_or_view(&zelf.row, "ShapeMaterial", vm)
+        }
+
+        #[pygetset]
+        fn DiffuseColor(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_row_or_view(&zelf.row, "DiffuseColor", vm)
+        }
+
+        #[pygetset]
+        fn DisplayMode(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_row_or_view(&zelf.row, "DisplayMode", vm)
+        }
 
         #[pygetset]
         fn PropertiesList(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
@@ -267,14 +345,41 @@ mod ferrocad {
             Ok(vm.ctx.new_list(choices).into())
         }
 
+        /// The object's view state (`obj.ViewObject`).
+        ///
+        /// It is created on first access, from the shape-colour preferences, exactly as
+        /// the CPython binding does — the registry object is shared, so the viewport
+        /// draws what a script sets.
+        #[pygetset]
+        fn ViewObject(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            if crate::native_shapes::active_handle().is_err() {
+                return Err(vm.new_runtime_error(
+                    "pywasm: ViewObject is the registry's; this host's document is a \
+                     fixed payload",
+                ));
+            }
+            Ok(PyViewObject::fresh(&zelf.row.name, vm))
+        }
+
         /// A property's display value, as the payload rendered it.
         #[pymethod]
-        fn __getattr__(zelf: &Py<Self>, name: PyStrRef, vm: &VirtualMachine) -> PyResult<String> {
+        fn __getattr__(
+            zelf: &Py<Self>,
+            name: PyStrRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
             let name = name.to_str().unwrap_or_default();
-            zelf.row
-                .property(name)
-                .map(|row| row.value.clone())
-                .ok_or_else(|| attribute_error(name, vm))
+            if let Some(row) = zelf.row.property(name) {
+                return Ok(vm.new_pyobj(row.value.clone()));
+            }
+            // View-provider properties (`obj.Visibility`, `obj.ShapeColor`, …) are the
+            // view object's, as upstream forwards them in a GUI session. A real
+            // property of that name wins (`DisplayMode` is one on a Part feature).
+            if VIEW_PROPERTIES.contains(&name) {
+                let view = PyViewObject::fresh(&zelf.row.name, vm);
+                return view.get_attr(vm.ctx.intern_str(name), vm);
+            }
+            Err(attribute_error(name, vm))
         }
     }
 
@@ -309,6 +414,16 @@ mod ferrocad {
                     return reseed(zelf, vm);
                 }
             }
+            // A view property the object does not own belongs to its view object
+            // (`box.Visibility = False`), which is how upstream spells it in a GUI
+            // session. The row is checked first: a real `DisplayMode` property is a
+            // document property.
+            if zelf.row.property(&property).is_none()
+                && VIEW_PROPERTIES.contains(&property.as_str())
+            {
+                let view = PyViewObject::fresh(&zelf.row.name, vm);
+                return view.set_attr(vm.ctx.intern_str(property.as_str()), value.clone(), vm);
+            }
             let text = value.str(vm)?.to_str().unwrap_or_default().to_string();
             let object = zelf.row.name.clone();
             doorway(serde_json::json!({
@@ -319,6 +434,438 @@ mod ferrocad {
             }))
             .map_err(|error| vm.new_value_error(error))?;
             reseed(zelf, vm)
+        }
+    }
+
+    // --- view objects -------------------------------------------------------
+
+    /// Properties a document object forwards to its view object when it has no
+    /// property of that name (`box.Visibility = False`, as upstream allows in a GUI
+    /// session).
+    const VIEW_PROPERTIES: &[&str] = &[
+        "Visibility",
+        "Transparency",
+        "ShapeColor",
+        "ShapeAppearance",
+        "ShapeMaterial",
+        "DiffuseColor",
+        "DisplayMode",
+    ];
+
+    /// Display modes a Part view provider offers (upstream's `ViewProviderPartExt`).
+    const DISPLAY_MODES: &[&str] = &["Flat Lines", "Shaded", "Wireframe", "Points"];
+
+    /// A document-object attribute: a real property row first (as editor text, the way
+    /// `__getattr__` answers), then the view object's typed value.
+    fn object_row_or_view(
+        object: &ObjectRow,
+        name: &str,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyObjectRef> {
+        if let Some(row) = object.property(name) {
+            return Ok(vm.new_pyobj(row.value.clone()));
+        }
+        if VIEW_PROPERTIES.contains(&name) {
+            let view = PyViewObject::fresh(&object.name, vm);
+            return view.get_attr(vm.ctx.intern_str(name), vm);
+        }
+        Err(attribute_error(name, vm))
+    }
+
+    /// `App::Origin` and its axes and planes draw opaque whatever the preference says;
+    /// upstream's origin view provider overrides the default the same way.
+    fn is_origin_family(type_id: &str) -> bool {
+        matches!(
+            type_id,
+            "App::Origin" | "App::Plane" | "App::Line" | "App::Point"
+        )
+    }
+
+    /// `DefaultShapeColor` / `DefaultShapeTransparency`, read through the facade.
+    ///
+    /// FreeCAD reads them once, when a view provider is constructed, so the values are
+    /// captured into the object's view state. A bare native module (no `FreeCAD` in the
+    /// interpreter) gets the classic shape colour, which is what the CPython binding
+    /// does without the facade.
+    fn view_defaults(vm: &VirtualMachine) -> (i32, ferrocad_core::Color) {
+        // FreeCAD's classic shape colour (`0xCCCCE6FF`), as Draft records it.
+        const DEFAULT_COLOR: u32 = 0xCCCC_E6FF;
+        let mut transparency = 0i32;
+        let mut color = ferrocad_core::color_from_packed(DEFAULT_COLOR, true);
+        let number = |value: PyObjectRef| value.try_float(vm).ok().map(|number| number.to_f64());
+        let Ok(freecad) = vm.import("FreeCAD", 0) else {
+            return (transparency, color);
+        };
+        let Ok(param_get) = freecad.get_attr(vm.ctx.intern_str("ParamGet"), vm) else {
+            return (transparency, color);
+        };
+        let Ok(group) = param_get.call(
+            (vm.new_pyobj("User parameter:BaseApp/Preferences/View"),),
+            vm,
+        ) else {
+            return (transparency, color);
+        };
+        if let Ok(get_int) = group.get_attr(vm.ctx.intern_str("GetInt"), vm) {
+            if let Ok(value) = get_int.call(
+                (vm.new_pyobj("DefaultShapeTransparency"), vm.new_pyobj(0i64)),
+                vm,
+            ) {
+                if let Some(value) = number(value) {
+                    transparency = (value as i64).clamp(0, 100) as i32;
+                }
+            }
+        }
+        if let Ok(get_unsigned) = group.get_attr(vm.ctx.intern_str("GetUnsigned"), vm) {
+            if let Ok(value) = get_unsigned.call(
+                (
+                    vm.new_pyobj("DefaultShapeColor"),
+                    vm.new_pyobj(DEFAULT_COLOR),
+                ),
+                vm,
+            ) {
+                if let Some(value) = number(value) {
+                    color = ferrocad_core::color_from_packed(value as u32, true);
+                }
+            }
+        }
+        (transparency, color)
+    }
+
+    /// One object's view state, created from the preferences on first access.
+    ///
+    /// The state is `ferrocad_core`'s, on the object in the registry — the same value
+    /// the viewport draws and the CPython binding exposes — so a script's write is
+    /// visible on the next frame. A host whose document is a fixed payload has no
+    /// registry entry and is refused.
+    fn view_state_of(object: &str, vm: &VirtualMachine) -> PyResult<ferrocad_core::ViewState> {
+        let handle =
+            crate::native_shapes::active_handle().map_err(|error| vm.new_runtime_error(error))?;
+        let type_id = {
+            let document = handle.lock().map_err(|error| {
+                vm.new_runtime_error(format!("the document is poisoned: {error}"))
+            })?;
+            let id = document
+                .get_by_name(object)
+                .ok_or_else(|| vm.new_attribute_error(format!("no object {object:?}")))?;
+            let entry = document
+                .object(id)
+                .ok_or_else(|| vm.new_attribute_error(format!("no object {object:?}")))?;
+            match &entry.view {
+                Some(state) => return Ok(state.clone()),
+                None => entry.type_id.clone(),
+            }
+        };
+        // The preferences are read without the document locked: `ParamGet` is Python.
+        let (mut transparency, color) = view_defaults(vm);
+        if is_origin_family(&type_id) {
+            transparency = 0;
+        }
+        let state = ferrocad_core::ViewState::new(transparency, color);
+        let mut document = handle
+            .lock()
+            .map_err(|error| vm.new_runtime_error(format!("the document is poisoned: {error}")))?;
+        if let Some(entry) = document
+            .get_by_name(object)
+            .and_then(|id| document.object_mut(id))
+        {
+            if entry.view.is_none() {
+                entry.view = Some(state.clone());
+            }
+        }
+        Ok(state)
+    }
+
+    /// Apply a change to one object's view state.
+    fn update_view_state(
+        object: &str,
+        vm: &VirtualMachine,
+        change: impl FnOnce(&mut ferrocad_core::ViewState),
+    ) -> PyResult<()> {
+        // Materialising first is also what refuses an object this host does not own.
+        let _ = view_state_of(object, vm)?;
+        let handle =
+            crate::native_shapes::active_handle().map_err(|error| vm.new_runtime_error(error))?;
+        let mut document = handle
+            .lock()
+            .map_err(|error| vm.new_runtime_error(format!("the document is poisoned: {error}")))?;
+        let id = document
+            .get_by_name(object)
+            .ok_or_else(|| vm.new_attribute_error(format!("no object {object:?}")))?;
+        match document
+            .object_mut(id)
+            .and_then(|entry| entry.view.as_mut())
+        {
+            Some(state) => {
+                change(state);
+                Ok(())
+            }
+            None => Err(vm.new_runtime_error(format!("{object} has no view state"))),
+        }
+    }
+
+    /// A colour argument: an `(r, g, b[, a])` sequence, a packed `0xRRGGBBAA` integer,
+    /// or a `Material` (whose opacity is its own field, not the colour's alpha).
+    fn view_color(value: &PyObjectRef, vm: &VirtualMachine) -> PyResult<ferrocad_core::Color> {
+        if let Some(material) = value.downcast_ref::<PyMaterial>() {
+            let material = material.inner.borrow();
+            let mut color = material.diffuse;
+            color[3] = 1.0 - material.transparency;
+            return Ok(color);
+        }
+        if let Ok(channels) = value.clone().try_into_value::<Vec<f64>>(vm) {
+            return match channels.as_slice() {
+                [r, g, b] => Ok([*r, *g, *b, 1.0]),
+                [r, g, b, a] => Ok([*r, *g, *b, *a]),
+                _ => Err(vm.new_value_error("a colour takes 3 or 4 numbers (r, g, b[, a])")),
+            };
+        }
+        if let Ok(packed) = value.clone().try_into_value::<u32>(vm) {
+            return Ok(ferrocad_core::color_from_packed(packed, false));
+        }
+        Err(vm.new_type_error("expected an (r, g, b[, a]) colour or a Material"))
+    }
+
+    /// A material argument: a `Material`, or a colour (the other fields default).
+    fn view_material(
+        value: &PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<ferrocad_core::Material> {
+        if let Some(material) = value.downcast_ref::<PyMaterial>() {
+            return Ok(material.inner.borrow().clone());
+        }
+        Ok(ferrocad_core::Material::from_color(view_color(value, vm)?))
+    }
+
+    /// A `ShapeAppearance` argument: a list of materials or colours, or a single one.
+    fn view_materials(
+        value: &PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<ferrocad_core::Material>> {
+        if value.downcast_ref::<PyMaterial>().is_some() {
+            return Ok(vec![view_material(value, vm)?]);
+        }
+        let items: Vec<PyObjectRef> = value
+            .clone()
+            .try_into_value::<Vec<PyObjectRef>>(vm)
+            .map_err(|_| vm.new_type_error("expected a list of materials or colours"))?;
+        items.iter().map(|item| view_material(item, vm)).collect()
+    }
+
+    /// A `DiffuseColor` argument: a list of colours or materials.
+    fn view_colors(
+        value: &PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<Vec<ferrocad_core::Color>> {
+        if value.downcast_ref::<PyMaterial>().is_some() {
+            return Ok(vec![view_color(value, vm)?]);
+        }
+        let items: Vec<PyObjectRef> = value
+            .clone()
+            .try_into_value::<Vec<PyObjectRef>>(vm)
+            .map_err(|_| vm.new_type_error("expected a list of colours"))?;
+        items.iter().map(|item| view_color(item, vm)).collect()
+    }
+
+    /// A detached `Material` instance (the same class the facade re-exports).
+    fn material_py(material: ferrocad_core::Material, vm: &VirtualMachine) -> PyObjectRef {
+        PyMaterial {
+            inner: RefCell::new(material),
+        }
+        .into_ref(&vm.ctx)
+        .into()
+    }
+
+    /// The view object of one document object (`obj.ViewObject`).
+    ///
+    /// Upstream creates a `Gui::ViewProvider` next to every object only in a GUI
+    /// session; FerroCAD keeps the same small model in every session, in
+    /// `ferrocad_core::ViewState` on the object itself. This is that state's Python
+    /// face for RustPython, so a pywasm script and a CPython one change one value and
+    /// the viewport draws it.
+    ///
+    /// Two members the CPython binding has are absent here on purpose: `RootNode` needs
+    /// the Coin bindings (`pivy`), which the CPython binding also refuses without, and
+    /// `Proxy` is the `viewProxy=` argument the native `addObject` does not take.
+    #[pyattr]
+    #[pyclass(name = "ViewObject", module = "ferrocad")]
+    #[derive(Debug, PyPayload)]
+    pub struct PyViewObject {
+        /// The document object, by name — the identity every other road uses.
+        object: String,
+    }
+
+    impl PyViewObject {
+        fn fresh(object: &str, vm: &VirtualMachine) -> PyObjectRef {
+            PyViewObject {
+                object: object.to_string(),
+            }
+            .into_ref(&vm.ctx)
+            .into()
+        }
+
+        /// Per-face colours: an explicit `DiffuseColor`, else the shape colour repeated
+        /// once per face (empty when the object has no shape).
+        fn diffuse_colors(&self, vm: &VirtualMachine) -> PyResult<Vec<ferrocad_core::Color>> {
+            let state = view_state_of(&self.object, vm)?;
+            if let Some(colors) = &state.diffuse_color {
+                return Ok(colors.clone());
+            }
+            let color = state.effective_color();
+            Ok(
+                match crate::native_shapes::object_face_count(&self.object) {
+                    Some(count) => vec![color; count],
+                    None => Vec::new(),
+                },
+            )
+        }
+    }
+
+    #[pyclass]
+    impl PyViewObject {
+        /// The document object this view object belongs to.
+        #[pygetset]
+        fn Object(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            object_named(&zelf.object, vm)
+                .ok_or_else(|| vm.new_attribute_error(format!("no object {:?}", zelf.object)))
+        }
+
+        #[pygetset]
+        fn Visibility(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<bool> {
+            Ok(view_state_of(&zelf.object, vm)?.visibility)
+        }
+
+        #[pygetset(setter)]
+        fn set_Visibility(zelf: &Py<Self>, value: bool, vm: &VirtualMachine) -> PyResult<()> {
+            update_view_state(&zelf.object, vm, |state| state.visibility = value)
+        }
+
+        /// `Transparency` in percent (`0` opaque … `100` invisible).
+        #[pygetset]
+        fn Transparency(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<i64> {
+            Ok(view_state_of(&zelf.object, vm)?.transparency as i64)
+        }
+
+        #[pygetset(setter)]
+        fn set_Transparency(zelf: &Py<Self>, value: i64, vm: &VirtualMachine) -> PyResult<()> {
+            update_view_state(&zelf.object, vm, |state| {
+                state.transparency = value.clamp(0, 100) as i32
+            })
+        }
+
+        /// The colour the shape is painted with: an explicit `ShapeColor`, else the
+        /// preference-derived default the view state was created with.
+        #[pygetset]
+        fn ShapeColor(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<(f64, f64, f64, f64)> {
+            Ok(tuple(view_state_of(&zelf.object, vm)?.effective_color()))
+        }
+
+        #[pygetset(setter)]
+        fn set_ShapeColor(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            let color = view_color(&value, vm)?;
+            update_view_state(&zelf.object, vm, |state| state.set_shape_color(color))
+        }
+
+        /// `ShapeAppearance`: the shape's material list.
+        ///
+        /// The entries are copies. CPython hands back handles that write through; here
+        /// the list is read and the whole list is what a script assigns.
+        #[pygetset]
+        fn ShapeAppearance(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let items: Vec<PyObjectRef> = view_state_of(&zelf.object, vm)?
+                .appearance()
+                .into_iter()
+                .map(|material| material_py(material, vm))
+                .collect();
+            Ok(vm.ctx.new_list(items).into())
+        }
+
+        #[pygetset(setter)]
+        fn set_ShapeAppearance(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            let materials = view_materials(&value, vm)?;
+            update_view_state(&zelf.object, vm, |state| state.set_appearance(materials))
+        }
+
+        #[pygetset]
+        fn ShapeMaterial(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            Ok(material_py(view_state_of(&zelf.object, vm)?.material(), vm))
+        }
+
+        #[pygetset(setter)]
+        fn set_ShapeMaterial(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            let material = view_material(&value, vm)?;
+            update_view_state(&zelf.object, vm, |state| state.material = Some(material))
+        }
+
+        /// One RGBA colour per face, or the shape's whole colour repeated per face.
+        #[pygetset]
+        fn DiffuseColor(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let items: Vec<PyObjectRef> = zelf
+                .diffuse_colors(vm)?
+                .into_iter()
+                .map(|color| {
+                    let channels: Vec<PyObjectRef> =
+                        color.into_iter().map(|value| vm.new_pyobj(value)).collect();
+                    vm.ctx.new_tuple(channels).into()
+                })
+                .collect();
+            Ok(vm.ctx.new_list(items).into())
+        }
+
+        #[pygetset(setter)]
+        fn set_DiffuseColor(
+            zelf: &Py<Self>,
+            value: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            let colors = view_colors(&value, vm)?;
+            update_view_state(&zelf.object, vm, |state| state.diffuse_color = Some(colors))
+        }
+
+        #[pygetset]
+        fn DisplayMode(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<String> {
+            Ok(view_state_of(&zelf.object, vm)?.display_mode)
+        }
+
+        #[pygetset(setter)]
+        fn set_DisplayMode(zelf: &Py<Self>, value: String, vm: &VirtualMachine) -> PyResult<()> {
+            if !DISPLAY_MODES.contains(&value.as_str()) {
+                return Err(vm.new_value_error(format!("'{value}' is not part of the enumeration")));
+            }
+            update_view_state(&zelf.object, vm, |state| state.display_mode = value)
+        }
+
+        /// The `DisplayMode` choices, as the property pane asks for them.
+        #[pymethod]
+        fn getEnumerationsOfProperty(
+            _zelf: &Py<Self>,
+            name: String,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            if name != "DisplayMode" {
+                return Err(attribute_error(&name, vm));
+            }
+            let items: Vec<PyObjectRef> = DISPLAY_MODES
+                .iter()
+                .map(|mode| vm.new_pyobj(*mode))
+                .collect();
+            Ok(vm.ctx.new_list(items).into())
+        }
+
+        #[pymethod]
+        fn __str__(zelf: &Py<Self>) -> String {
+            format!("<ViewObject of {}>", zelf.object)
         }
     }
 
@@ -444,6 +991,230 @@ mod ferrocad {
 
         #[pymethod]
         fn abortTransaction(_zelf: &Py<Self>) {}
+
+        /// `Doc.Meta`: the session's key/value record.
+        ///
+        /// Core does not persist it and the CPython binding keeps it on the `Document`
+        /// object it owns, so this is process state too; the facade's annotation-style
+        /// form is its reader (`python/FerroCADGui/forms.py`).
+        #[pygetset]
+        fn Meta(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let entries = DOCUMENT_META.with(|meta| {
+                meta.borrow()
+                    .get(&zelf.row.name)
+                    .cloned()
+                    .unwrap_or_default()
+            });
+            let dict = vm.ctx.new_dict();
+            for (key, value) in entries {
+                let _ = dict.set_item(&*key, vm.new_pyobj(value), vm);
+            }
+            dict.into()
+        }
+
+        #[pygetset(setter)]
+        fn set_Meta(zelf: &Py<Self>, value: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            let dict = value
+                .clone()
+                .downcast::<PyDict>()
+                .map_err(|_| vm.new_type_error("Meta must be a dict"))?;
+            let mut entries = std::collections::BTreeMap::new();
+            for (key, value) in &dict {
+                entries.insert(
+                    key.try_to_value::<String>(vm)?,
+                    value.try_to_value::<String>(vm)?,
+                );
+            }
+            DOCUMENT_META.with(|meta| meta.borrow_mut().insert(zelf.row.name.clone(), entries));
+            Ok(())
+        }
+
+        /// A namespaced, typed view over `Meta` (keys `"<namespace>.<key>"`).
+        #[pymethod]
+        fn settings(
+            zelf: &Py<Self>,
+            namespace: String,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            if namespace.is_empty() || !namespace.split('.').all(valid_ident) {
+                return Err(vm.new_value_error(format!("invalid settings namespace '{namespace}'")));
+            }
+            Ok(PyDocumentSettings {
+                document: zelf.row.name.clone(),
+                namespace,
+            }
+            .into_ref(&vm.ctx)
+            .into())
+        }
+    }
+
+    /// A settings key (`[A-Za-z_][A-Za-z0-9_]*`), as the CPython binding validates it.
+    fn valid_ident(name: &str) -> bool {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+            _ => return false,
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+
+    /// `Doc.settings(namespace)`: a typed view over `Document.Meta`.
+    #[pyattr]
+    #[pyclass(name = "DocumentSettings", module = "ferrocad")]
+    #[derive(Debug, PyPayload)]
+    pub struct PyDocumentSettings {
+        document: String,
+        namespace: String,
+    }
+
+    impl PyDocumentSettings {
+        fn full_key(&self, key: &str) -> String {
+            format!("{}.{}", self.namespace, key)
+        }
+
+        fn get_raw(&self, key: &str) -> Option<String> {
+            let full = self.full_key(key);
+            DOCUMENT_META.with(|meta| {
+                meta.borrow()
+                    .get(&self.document)
+                    .and_then(|entries| entries.get(&full).cloned())
+            })
+        }
+
+        fn set_raw(&self, key: &str, value: String) {
+            let full = self.full_key(key);
+            DOCUMENT_META.with(|meta| {
+                meta.borrow_mut()
+                    .entry(self.document.clone())
+                    .or_default()
+                    .insert(full, value);
+            });
+        }
+
+        fn remove_raw(&self, key: &str) {
+            let full = self.full_key(key);
+            DOCUMENT_META.with(|meta| {
+                if let Some(entries) = meta.borrow_mut().get_mut(&self.document) {
+                    entries.remove(&full);
+                }
+            });
+        }
+
+        fn names(&self) -> Vec<String> {
+            let prefix = format!("{}.", self.namespace);
+            DOCUMENT_META.with(|meta| {
+                meta.borrow()
+                    .get(&self.document)
+                    .map(|entries| {
+                        entries
+                            .keys()
+                            .filter_map(|key| key.strip_prefix(&prefix))
+                            .filter(|rest| !rest.contains('.'))
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+        }
+    }
+
+    #[pyclass]
+    impl PyDocumentSettings {
+        #[pymethod]
+        fn getString(zelf: &Py<Self>, key: String, default: OptionalArg<PyStrRef>) -> String {
+            zelf.get_raw(&key).unwrap_or_else(|| {
+                default
+                    .into_option()
+                    .map(|default| default.to_str().unwrap_or_default().to_string())
+                    .unwrap_or_default()
+            })
+        }
+
+        #[pymethod]
+        fn getInt(zelf: &Py<Self>, key: String, default: OptionalArg<i64>) -> i64 {
+            zelf.get_raw(&key)
+                .and_then(|value| value.trim().parse::<i64>().ok())
+                .unwrap_or_else(|| default.into_option().unwrap_or(0))
+        }
+
+        #[pymethod]
+        fn getFloat(zelf: &Py<Self>, key: String, default: OptionalArg<f64>) -> f64 {
+            zelf.get_raw(&key)
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .unwrap_or_else(|| default.into_option().unwrap_or(0.0))
+        }
+
+        #[pymethod]
+        fn getBool(zelf: &Py<Self>, key: String, default: OptionalArg<bool>) -> bool {
+            zelf.get_raw(&key)
+                .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" => Some(true),
+                    "false" | "0" => Some(false),
+                    _ => None,
+                })
+                .unwrap_or_else(|| default.into_option().unwrap_or(false))
+        }
+
+        #[pymethod]
+        fn setString(
+            zelf: &Py<Self>,
+            key: String,
+            value: String,
+            vm: &VirtualMachine,
+        ) -> PyResult<()> {
+            if !valid_ident(&key) {
+                return Err(vm.new_value_error(format!("invalid setting key '{key}'")));
+            }
+            zelf.set_raw(&key, value);
+            Ok(())
+        }
+
+        #[pymethod]
+        fn setInt(zelf: &Py<Self>, key: String, value: i64, vm: &VirtualMachine) -> PyResult<()> {
+            if !valid_ident(&key) {
+                return Err(vm.new_value_error(format!("invalid setting key '{key}'")));
+            }
+            zelf.set_raw(&key, value.to_string());
+            Ok(())
+        }
+
+        #[pymethod]
+        fn setFloat(zelf: &Py<Self>, key: String, value: f64, vm: &VirtualMachine) -> PyResult<()> {
+            if !valid_ident(&key) {
+                return Err(vm.new_value_error(format!("invalid setting key '{key}'")));
+            }
+            zelf.set_raw(&key, format!("{value}"));
+            Ok(())
+        }
+
+        #[pymethod]
+        fn setBool(zelf: &Py<Self>, key: String, value: bool, vm: &VirtualMachine) -> PyResult<()> {
+            if !valid_ident(&key) {
+                return Err(vm.new_value_error(format!("invalid setting key '{key}'")));
+            }
+            zelf.set_raw(&key, if value { "true".into() } else { "false".into() });
+            Ok(())
+        }
+
+        #[pymethod]
+        fn remove(zelf: &Py<Self>, key: String, vm: &VirtualMachine) -> PyResult<()> {
+            if !valid_ident(&key) {
+                return Err(vm.new_value_error(format!("invalid setting key '{key}'")));
+            }
+            zelf.remove_raw(&key);
+            Ok(())
+        }
+
+        /// The keys this namespace owns (no nested ones).
+        #[pymethod]
+        fn keys(zelf: &Py<Self>, vm: &VirtualMachine) -> PyObjectRef {
+            let items: Vec<PyObjectRef> = zelf
+                .names()
+                .into_iter()
+                .map(|name| vm.new_pyobj(name))
+                .collect();
+            vm.ctx.new_list(items).into()
+        }
     }
 
     fn document_py(row: DocumentRow, vm: &VirtualMachine) -> PyObjectRef {

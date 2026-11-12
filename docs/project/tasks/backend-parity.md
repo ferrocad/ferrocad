@@ -1828,7 +1828,7 @@ handles stay the document half's; a declared handle comes back from
 the datum hook is absent. `the_two_script_halves_agree` is unchanged and green, with the
 full pywasm suite (38) and `ferrocad_shell_core --lib` (273).
 
-### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage and `host_env` 2026-11-12)
+### B18b — run the real facade under RustPython (built 2026-11-11; native module, document writes, stage, `host_env` and the view object 2026-11-12)
 
 The structural half of the parity gap. **Built: the whole facade is now the shared source.**
 `bootstrap.py` went from 2 050 to ~250 lines because the desktop's modules are installed,
@@ -1894,9 +1894,38 @@ else. None of the items below were needed for the facade above them, but all the
 gaps are now closed:
 
 1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
-   property rules and every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
+   property rules, every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
    `Vector`, `Vector2d`, `Matrix`, `Rotation`, `Placement`, `TypeId`, `BoundBox`,
-   `Material`, `StringID`, `StringHasher`);
+   `Material`, `StringID`, `StringHasher`), and the two remaining classes
+   (`ViewObject`, `DocumentSettings` — 2026-11-12):
+
+   - **`obj.ViewObject` is the document's view state, not a copy.** It reads and writes
+     `ferrocad_core::ViewState` on the object in the registry — the same value
+     `ferrocad_core::effective_color`/`drawable` give the viewport — so a pywasm write is
+     drawn on the next sync (`tests/view_object.rs` asserts it through the registry, not
+     only through Python). `Visibility`, `Transparency` (clamped 0–100), `ShapeColor`,
+     `ShapeAppearance`, `ShapeMaterial`, `DiffuseColor` (one entry per face, asked of the
+     kernel), `DisplayMode` with its enumeration, `Object`, and `__str__`. The state is
+     created on first access from `DefaultShapeColor`/`DefaultShapeTransparency` (read
+     through `FreeCAD.ParamGet`, falling back to FreeCAD's classic `0xCCCCE6FF`), and
+     `App::Origin`'s family is forced opaque, as upstream's view provider does.
+   - **The document object forwards the seven view properties** (`box.Visibility = False`,
+     `box.ShapeColor = …`) when it has no property of that name, through real getters — a
+     native type's `__getattr__` is not consulted — with the row winning when it exists.
+   - **`obj.Document` answers the document**, which the facade's view-style store keys on
+     (`python/FreeCAD/_view_style.py`), so `LineColor`/`LineWidth`/`PointColor`/
+     `PointSize`/`DrawStyle` (`Draft_SetStyle`) work under RustPython too.
+   - **`Doc.Meta` and `Doc.settings(namespace)`** are process state, matching the CPython
+     binding (core never persists them), keyed by document name because a `Document` here
+     is a projection rebuilt per access. The annotation-style form is their reader
+     (`python/FerroCADGui/forms.py`).
+
+   Two cuts, stated rather than discovered: `RootNode` needs the Coin bindings (the
+   CPython binding refuses without `pivy` too) and `Proxy` is the `viewProxy=` argument
+   the native `addObject` does not take; and `ShapeAppearance` entries are copies, so
+   `ShapeAppearance[0].DiffuseColor = …` does not write back — assign the whole list
+   (CPython keeps a slot per entry). `ShapeColor` also does not propagate an operand's
+   colour through a boolean here; that rule lives in `ferrocad_py` only;
 2. ~~`ferrocad_stage` / `ferrocad_ui_py`; `Part`/`Mesh`~~ — **`Part`/`Mesh` and the
    interactive `ferrocad_stage` built;** `ferrocad_ui_py` is still open. Geometry is
    `ferrocad_shell_pywasm/src/native_shapes.rs`, three native modules over the one kernel:
@@ -2163,7 +2192,7 @@ fit. Every road ends at the same object, but the fidelity is not remotely the sa
 | surface | where | how it reaches the engine | fidelity | writes |
 | --- | --- | --- | --- | --- |
 | CPython (`PythonScriptHost`) | desktop | `ferrocad_py`, a PyO3 extension that links `ferrocad_core` and wraps `Arc<Mutex<CoreDocument>>` in `PyDocument`/`PyDocumentObject` | the full object model: properties, observers, extension converters, sub-element resolvers | yes |
-| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`: the payload read, `ferrocad_doc_api`'s doorway (`create`/`set`/`recompute`) over `ferrocad_core::application()`, `native_shapes` — `Part`/`Mesh` over `ferrocad_part`/`ferrocad_mesh`/`ferrocad_occt` — and `native_stage` (`ferrocad_stage` over the same crate, plus the installed `FreeCADGui/draft.py`) | the property rows, the doorway's verbs, real B-Rep/mesh objects, and interactive tools/previews | yes on a host that owns the registry (doorway text, typed `Shape`); a fixed-payload host stays read-only |
+| RustPython (`PywasmScriptHost`) | desktop + browser | `_ferrocad`: the payload read, `ferrocad_doc_api`'s doorway (`create`/`set`/`recompute`) over `ferrocad_core::application()`, `native_shapes` — `Part`/`Mesh` over `ferrocad_part`/`ferrocad_mesh`/`ferrocad_occt` — and `native_stage` (`ferrocad_stage` over the same crate, plus the installed `FreeCADGui/draft.py`) | the property rows, the doorway's verbs, real B-Rep/mesh objects, interactive tools/previews, and the object's view state (`ViewObject`, read from and written to the registry the viewport draws) | yes on a host that owns the registry (doorway text, typed `Shape`, `ViewObject`); a fixed-payload host stays read-only |
 | JS (`JsScriptHost` → the page) | desktop (rquickjs) + browser (ES module) | `ferrocad.call(request)` → `ferrocad_doc_api::DocApi` → registry | five verbs: `document`, `properties`, `create`, `set`, `recompute` | yes |
 | wasm bundle | desktop (`wasmi`) + browser (`loader.js`) | the same document API as an import, optionally wrapped by `read_only` | the same five verbs | only with `{"document": "read-write"}` |
 

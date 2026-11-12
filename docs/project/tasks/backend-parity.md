@@ -4,10 +4,9 @@ Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded,
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built
-(2026-11-11), B17a recorded; B18 built (2026-11-11), B18a built (2026-11-11),
-B18a steps 6–7 and B18b recorded; B19a built (2026-11-11), B19b built (2026-11-11),
-B19c built (2026-11-11), B19d recorded.** The surface suite
+(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built (2026-11-11), B17a recorded; B18 and
+B18a built (steps 1–7, 2026-11-12), B18b built except its Part/Mesh, `host_env` and
+document-write items (2026-11-12); B19a–B19c built (2026-11-11), B19d recorded.** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1857,8 +1856,8 @@ units) as well as the Gui ones:
   now exercised by shipped mods instead of synthetic ones; the Coin/shader skins and a
   task panel still need a surface this half does not install.
 
-What remains of B18b is the *native binding* half, and none of it is needed for the facade
-above it:
+What remains of B18b is the rest of the native binding, plus document writes. None of it
+is needed for the facade above it:
 
 1. ~~a RustPython `ferrocad` module over `ferrocad_core`~~ — **built:** documents, the
    property rules and every value class `python/FreeCAD` re-exports (`Quantity`, `Unit`,
@@ -1868,14 +1867,15 @@ above it:
    `ferrocad_mesh` and OCCT in the RustPython build);
 3. `host_env` on for the **native** RustPython build only (target-specific dependency), so
    the desktop runs `python/**` from disk; the browser keeps the embedded file map, which
-   this step built;
+   this step built. **Blocked upstream:** rustpython-vm 0.5's posix layer wants
+   `libc::POSIX_SPAWN_SETSID` as `i32`, and this toolchain's libc has it as `i16`, so the
+   crate does not compile with `host_env`. The parameter store no longer depends on it
+   (item 4), so this is about running `python/**` from disk, not about settings;
 4. ~~a file-backed `ParamGet`~~ — **built:** the store and the file format are
    `python/FreeCAD`'s; the host supplies the two file operations
    (`native.rs::read_parameter_file`/`write_parameter_file`) because `host_env` is off.
    `ParameterStore::{Memory, File}` decides per host: the browser and every embedded/test
-   host stay in memory, `live_persistent` (the desktop preview) resolves the app's file.
-   ~~`host_env`~~ was tried and does not build against this toolchain (rustpython-vm 0.5's
-   posix layer wants `libc::POSIX_SPAWN_SETSID` as `i32`, which this libc has as `i16`);
+   host stay in memory, `live_persistent` (the desktop preview) resolves the app's file;
 5. document writes, then `document_grant` → `ReadWrite` (D15 becomes host policy).
 
 ### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19c built)
@@ -1948,11 +1948,13 @@ batch continues. `smoke.sh` regenerates `www/mods/` and adds a `?mods=1` capture
 the index, one named pack's report and the summary, and forbidding an index parse error or
 a 404.
 
-What the shipped packs do today is the capability gap, stated where it shows: every
-`Init.py` loads and every `InitGui.py` records `ImportError: no os specific module found`
-(RustPython runs with `host_env` off, B18b), so the About card reads `6 script(s) loaded`
-with six failures and the status line says `6 loaded, 6 failed`. That is the parity signal
-this slice was for; steps 5–7 and B18b move those numbers.
+What the shipped packs do today is the capability gap, stated where it shows. Since B18b
+the three native settings clients (`GridOverlay`, `AxisOverlay`, `GizmoOverlay`) load —
+each pack is `Init.py` + `InitGui.py`, two scripts, zero failures — and declare their
+providers; `tests/mods.rs` pins that natively. The Coin/shader skins still record a
+failure, because this half has no Coin scene and the packs read addon resource files, so
+the About card is a mix rather than a failed batch. That is still the parity signal this
+slice was for; the remaining binding work (B18b items 2 and 5) moves the rest.
 
 **B19d — choosing the set (recorded).** The About card's B17a `Prefs` selects which packs
 load, so "disable this mod" is one list rather than a flag per host.

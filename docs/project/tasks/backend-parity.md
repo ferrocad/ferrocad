@@ -4,9 +4,10 @@ Status: **design and plan (2026-11-08); B0–B6 built (2026-11-08); B7 recorded,
 built (2026-11-08); B8 recorded (2026-11-09), B8a–B8d built (2026-11-09); B9 recorded,
 B9a–B9b built (2026-11-09); B10 recorded, B10a–B10b built (2026-11-09); B11 recorded,
 B11a–B11b built (2026-11-09); B12 built (2026-11-09); B13, B13b and B13c built
-(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 built (2026-11-11), B17a recorded; B18 and
+(2026-11-11); B14, B15 and B15b built (2026-11-11); B16 built (2026-11-11); B17 and B17a built
+(2026-11-11/12); B18 and
 B18a built (steps 1–7, 2026-11-12), B18b built except its Part/Mesh, `host_env` and
-document-write items (2026-11-12); B19a–B19c built (2026-11-11), B19d recorded.** The surface suite
+document-write items (2026-11-12); B19a–B19d built (2026-11-11/12).** The surface suite
 (born as the parity ledger, now
 `crates/ferrocad_parametric/tests/composition_surface.rs`) and the shell suite are the
 gates. Two properties are the goal:
@@ -1556,29 +1557,52 @@ runtimes.
 in `ferrocad_shell_core` (the card's node, application, halves, addons, version, engine and
 mod rows), plus the whole shell suite (273) and the parametric suites.
 
-### B17a — turn parts of the set off from the About card (recorded 2026-11-11)
+### B17a — turn parts of the set off from the About card (built 2026-11-12)
 
-The card shows the set; this stage changes it. The split is forced by when the decision
-can be applied:
+The card showed the set; this stage changes it. The split is forced by when the decision
+can be applied, and both halves are now built:
 
-- **Providers** are live: switching is already a runtime operation (`set_provider`), so an
-  *enabled* flag can hide a backend from the popovers, the Dev Tools list and the About
-  rows in the same run, refusing activation of the disabled one. Session state first; the
-  store below makes it survive.
-- **Mods and bundles** are read **before the backend exists** — `mod_roots` selects them
-  and `load_workbenches` runs at boot — so their list cannot live behind the backend's
-  settings seam (`PythonSettings` needs the interpreter, which boots inside `Shell::boot`).
-  It needs a host-readable store the host can read first: a small `Prefs` (JSON file next
-to the user's parameters natively, `localStorage` in the page), installed beside the
-  composition. A disabled mod is then a root the host skips, and a disabled bundle drops
-  out of `addon_packs`; the card says “restart to apply” because nothing else can.
-- **The restart is the honest first stage.** Writing state that the next launch reads is
-  the same gesture as `--addons` on the command line, and it keeps the boot path one code
-  path instead of a reloadable composition that no host actually has.
+- **The store is a seam value.** `ferrocad_shell_api::prefs` holds `Prefs` (a versioned
+  JSON map of *refusals*: `disabled_mods`, and `disabled_providers` keyed `feature:backend`),
+  `PrefsReport` (the prefs, the names the boot could see and where the store keeps them) and
+  the `PrefsStore` trait (`load`/`save`/`location`). A disabled entry is a refusal and
+  absence means enabled, so a file from another build cannot switch something on; a
+  malformed file is the defaults, because this is on the boot path.
+- **Native**: `FilePrefs` writes `<XDG_CONFIG_HOME>/ferrocad/prefs.json` beside the
+  parameter file (`FERROCAD_PREFS_FILE` overrides it; `~/.config`, then `%APPDATA%`), with a
+  temp-file rename so a half-written file cannot drop every refusal. `MemoryPrefs` is the
+  test/no-storage store.
+- **Browser**: `LocalStoragePrefs` in `ferrocad_web_gpui` keeps one JSON value under
+  `ferrocad.prefs`; the page reads it before the window boots, because it decides what the
+  fetch asks for. A page with storage disabled still runs: the session change stands and
+  `save` reports why it did not persist.
+- **Boot applies it before the backend exists.** `run_with`, `check_init` and the headless
+  path load the store, expand the roots to packages (`mods::packages`, the rule every
+  scanner already applies), drop the refused names and hand that set to the host
+  derivation, the Python loader and the bundles. `--addons` remains the command-line
+  override: an explicit selection is the boot, and the card does not offer toggles for a set
+  that only that run chose. One stderr line names what was left out.
+- **Providers are live.** `visible_features`/`visible_providers` filter the registry and the
+  Grid/Axis summaries for the header popovers and the Dev Tools list, `activate_provider`
+  refuses a hidden backend, and hiding the active backend is refused with “switch away
+  first” (the feature would otherwise rest on nothing). The About card still lists the
+  hidden backend, because that is where it is turned back on.
+- **The card** replaces the “chosen at launch” placeholder with a `Preferences` row naming
+  the store, one `ferrocad-prefs:mod:<name>` row per mod (enable/disable, “applies at the
+  next start”) and one `ferrocad-prefs:provider:<feature>:<backend>` row per provider
+  (hide/show). The ids are intercepted in `dispatch.rs` beside `ferrocad-provider:`, so no
+  registry entry or `catalog.json` row is invented. A click changes the session first and
+  persists through the store; a failing store says so in the status line.
+- **The browser learns its mod names later.** The index is fetched after the first frame,
+  so `mods::start` passes every index name to `Shell::note_prefs_mods` before loading and
+  fetches only the selected packs (`mods::selected`) — a refused pack is never asked for.
 
-Open question for that stage: whether the *provider* list shares the same `Prefs` file or
-stays in the parameter store. Recommended: one `Prefs` file, because a provider can be
-registered by a mod that a parameter-store read cannot reach before boot.
+**Exit: met.** `ferrocad_shell_api` (4: absence/round-trip, tolerant parse, file store,
+memory store), `ferrocad_shell_python` (2: a refused package leaves the set; an explicit
+selection ignores refusals), `ferrocad_shell_web` (a refused pack is not selected),
+`ferrocad_shell_core` (`the_card_turns_mods_and_providers_off`: the store row, the mod row
+flips and persists, the active provider is not hidden, a hidden provider is refused), plus
+the shell and composition suites.
 
 ### B18 — one Python script half, two interpreters (built 2026-11-11)
 
@@ -1878,7 +1902,7 @@ is needed for the facade above it:
    host stay in memory, `live_persistent` (the desktop preview) resolves the app's file;
 5. document writes, then `document_grant` → `ReadWrite` (D15 becomes host policy).
 
-### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19c built)
+### B19 — mods as a fetched pack (recorded 2026-11-11; B19a–B19d built)
 
 The browser has no filesystem, so `load_workbenches` cannot run there — and the page is
 the one host where "ship a workbench" should not mean "rebuild the module". It can
@@ -1956,8 +1980,12 @@ failure, because this half has no Coin scene and the packs read addon resource f
 the About card is a mix rather than a failed batch. That is still the parity signal this
 slice was for; the remaining binding work (B18b items 2 and 5) moves the rest.
 
-**B19d — choosing the set (recorded).** The About card's B17a `Prefs` selects which packs
-load, so "disable this mod" is one list rather than a flag per host.
+**B19d — choosing the set (built 2026-11-12).** The About card's B17a `Prefs` selects which
+packs load: the browser filters the fetched index (`mods::selected`) before fetching, and the
+desktop filters its scanned package list before the loaders. Both are “restart to apply”
+because the composition is fixed at boot, and the card says so. The browser learns the
+names only when the index arrives, so `Shell::note_prefs_mods` gives the card the list it
+can offer; a refused pack is not fetched at all.
 
 **The dependency that decides the order.** A pack that registers a command and uses the
 document API works today. A pack that calls `FerroCAD.Grid`, `FerroCADGui.registerProvider`
@@ -2047,7 +2075,7 @@ is already solved four ways; reaching *geometry* currently has one road.
 | D22 | which providers the browser has | **One per feature, the document half's** (B15), and that is correct rather than broken: the page ships no `mods/`, has no filesystem for the loader, and its Python facade is a stub. `?providers=1` states it. Parity needs the mods to be shippable (embedded tree + synthetic `os`, or a provider hook in the bundle ABI), which is packaging, not a host |
 | D23 | does the registry list the document half's providers | **Yes, per feature** (B15b). A build that draws the grid and the axis cross has a provider for each, so `provider_features()` names it with the id and label the mods use (`ferrocad` / `FerroCAD (native)`); the popover's *switch* list stays empty, because a one-item radio set is a dead control. Embedding the mods instead would switch the grid to a shader backend the wasm-Python host cannot supply a skin for |
 | D24 | is `--addons` a bundle list or a mod selection | **The selection** (B16). All mods load by default; naming any narrows the boot to exactly those, and the same list feeds the host derivation, the Python loader, the bundles and the provider registry. A bundle flag that left the loader scanning everything made "the mods I asked for" mean two different sets. `?addons=` in the browser keeps its bundle meaning — there is no mod tree in the page |
-| D25 | where "what is this build running" lives | **One card, `Settings/About`, filled by the shell** (B17), opened from the app menu's synthetic `ferrocad-about` row. The composition is installed by the host (it chose the halves and bundles) and copied into the model at boot; workbench rows come from the boot's `load_workbenches` report and provider rows from the registry, whose inactive backends are command rows that run the normal switch. No backend property namespace and no `catalog.json` row are invented for it. Turning parts of the set off is B17a: providers can be live, mods and bundles need a host-readable store read before the backend exists |
+| D25 | where "what is this build running" lives | **One card, `Settings/About`, filled by the shell** (B17), opened from the app menu's synthetic `ferrocad-about` row. The composition is installed by the host (it chose the halves and bundles) and copied into the model at boot; workbench rows come from the boot's `load_workbenches` report and provider rows from the registry, whose inactive backends are command rows that run the normal switch. No backend property namespace and no `catalog.json` row are invented for it. Turning parts of the set off is B17a (built): providers hide live, mods and bundles are a refusal the host reads before the backend exists (`prefs.json` natively, `localStorage` in the page) |
 | D26 | one script half per interpreter, or one over both | **One** (B18). `ferrocad_python_host::PythonHost<R>` implements the 35 `ScriptHost` methods once; an engine supplies `PythonRuntime` (the call primitive, the boot/file hooks, the typed hooks) and a `Contract` value naming which groups of the shell module its facade implements. `CpythonRuntime` is `FULL`, `RustPythonRuntime` is `NONE`, so a missing capability is a recorded flag the host does not call — not an inherited trait default that silently returns nothing. The shared crate depends on neither engine, because features unify: one crate with `cpython`/`pywasm` features could pull `pyo3` into a wasm workspace build |
 
 ## 6. Acceptance

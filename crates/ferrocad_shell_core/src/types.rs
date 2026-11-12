@@ -4,4 +4,5 @@
 //! the shell re-exports them here so `crate::types::PropRow` and the public
 //! `ferrocad_shell_core::PropRow` paths keep working.
 
+pub use ferrocad_shell_api::prefs::*;
 pub use ferrocad_shell_api::types::*;

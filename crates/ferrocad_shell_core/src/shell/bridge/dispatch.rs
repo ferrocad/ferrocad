@@ -108,6 +108,17 @@ impl Shell {
         // The row is in a popover (or the Dev Tools panel); choosing it dismisses
         // the menu.
         self.open_popover = None;
+        // B17a: a backend the user hid in Settings/About is not offered anywhere, so a
+        // row that still names it (a stale panel, a shortcut) is refused here rather than
+        // quietly turning the refusal into an activation.
+        let prefs = self.model.lock().unwrap().prefs.prefs.clone();
+        if !prefs.provider_enabled(feature, backend) {
+            let status = format!("{feature}: {backend} is hidden in Settings/About");
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
         let previous_backend = self.model.lock().unwrap().view.gizmo.backend.clone();
         let outcome = match crate::app::set_provider(cx, feature, backend) {
             Ok(outcome) => outcome,
@@ -235,6 +246,12 @@ impl Shell {
         // behind it, so nothing mod- or Python-side has to learn about it.
         if id == crate::shell::panels::about::OPEN_ID {
             self.open_settings_card(crate::shell::panels::about::ABOUT, cx);
+            return;
+        }
+        // A preferences row is generated chrome too (B17a): the id names the mod or the
+        // provider backend the card turns on or off.
+        if let Some(rest) = id.strip_prefix("ferrocad-prefs:") {
+            self.toggle_pref(rest, cx);
             return;
         }
         // The Dev Tools toggle is shell chrome, not a workbench action: the window can

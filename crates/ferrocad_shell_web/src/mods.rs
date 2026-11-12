@@ -13,6 +13,7 @@
 //! {"version": 1, "mods": [{"name": "GridOverlay", "pack": "GridOverlay.json"}]}
 //! ```
 
+use ferrocad_shell_api::prefs::Prefs;
 use serde::Deserialize;
 
 /// `www/mods/index.json`, as `tools/mods_pack.py` writes it.
@@ -64,6 +65,17 @@ pub fn parse_index(text: &str) -> Result<ModIndex, String> {
         seen.push(&entry.name);
     }
     Ok(index)
+}
+
+/// The packs this page should fetch: the index minus the user's refusals (B17a).
+///
+/// A pack the user turned off in the About card is not skipped *after* the fetch — it is
+/// never asked for, which is the point of a refusal that survives a reload. The returned
+/// entries keep the index's order, which is the packer's name order.
+pub fn selected<'a>(mods: &'a [ModEntry], prefs: &Prefs) -> Vec<&'a ModEntry> {
+    mods.iter()
+        .filter(|entry| prefs.mod_enabled(&entry.name))
+        .collect()
 }
 
 /// `Loading mods 3/7 · Fasteners` — what the status line says while a pack runs.
@@ -199,5 +211,30 @@ mod tests {
         assert_eq!(done_status(6, 6), "mods: 6 loaded, 6 failed");
         assert_eq!(done_status(0, 1), "mods: 0 loaded, 1 failed");
         assert_eq!(done_status(0, 0), "mods: none");
+    }
+
+    /// B17a: a refused pack is never fetched, and the rest keep the index's order.
+    #[test]
+    fn a_refused_pack_is_not_selected() {
+        let index = parse_index(
+            r#"{"version": 1, "mods": [
+                {"name": "AxisOverlay", "pack": "AxisOverlay.json"},
+                {"name": "GridOverlay", "pack": "GridOverlay.json"},
+                {"name": "Spring", "pack": "Spring.json"}
+            ]}"#,
+        )
+        .expect("the packer's shape");
+        let mut prefs = Prefs::default();
+        prefs.set_mod_enabled("GridOverlay", false);
+
+        let picked = selected(&index.mods, &prefs);
+        assert_eq!(
+            picked
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["AxisOverlay", "Spring"]
+        );
+        assert_eq!(selected(&index.mods, &Prefs::default()).len(), 3);
     }
 }

@@ -2338,7 +2338,9 @@ pub(crate) fn dev_tools_body(
     // is cached when the window opens.
     let in_use = shell.in_use_adapter(cx);
     // The commands the losing provider owns: listed, but not runnable (P0 provider UX).
-    let inactive = crate::chrome::inactive_provider_commands(shell.provider_features());
+    // B17a: a backend the user hid in Settings/About is not listed at all.
+    let visible_providers = shell.visible_provider_features();
+    let inactive = crate::chrome::inactive_provider_commands(&visible_providers);
     // Each pane keeps its scrollbar handle on the shell; cloning one is an `Rc` bump,
     // and it keeps the mutable `shell` borrow out of the argument lists below.
     let providers_scroll = shell.dev_scroll.providers.clone();
@@ -2361,7 +2363,7 @@ pub(crate) fn dev_tools_body(
         AccordionSection::new("console", "Python console", px(160.)),
     ];
     let bodies: Vec<AnyElement> = vec![
-        crate::chrome::providers_panel(shell.provider_features(), &providers_scroll, cx)
+        crate::chrome::providers_panel(&visible_providers, &providers_scroll, cx)
             .into_any_element(),
         crate::chrome::gpu_panel(
             shell.gpu_setting(),

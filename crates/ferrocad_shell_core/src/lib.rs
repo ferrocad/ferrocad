@@ -64,11 +64,13 @@ pub use files::{FilePicker, FileTask, NativeFilePicker, OpenOutcome, SaveOutcome
 pub use selection::SelectionItem;
 pub use shell::{Shell, ShellModel};
 pub use shortcuts::Accelerator;
+#[cfg(not(target_family = "wasm"))]
+pub use types::FilePrefs;
 pub use types::{
     ApplyResult, AxisSummary, Bootstrap, Composition, DocumentNode, EvalResult,
-    GpuPreferenceOutcome, GridProvider, GridSummary, ObjectNode, OpenedDocument, PropRow,
-    ProviderFeature, ProviderSkin, SelectionRequest, SetResult, VisibilityOutcome, WorkbenchError,
-    WorkbenchReport,
+    GpuPreferenceOutcome, GridProvider, GridSummary, MemoryPrefs, ObjectNode, OpenedDocument,
+    Prefs, PrefsReport, PrefsStore, PropRow, ProviderFeature, ProviderSkin, SelectionRequest,
+    SetResult, VisibilityOutcome, WorkbenchError, WorkbenchReport,
 };
 pub use view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};
 

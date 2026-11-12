@@ -8,11 +8,11 @@
 //! settings card's row list ([`crate::shell::panels::properties`]), which is why it gets
 //! scrolling, dragging and `Esc` without a second surface.
 //!
-//! Provider rows are the one interactive part: an inactive backend is a **command row**
-//! (`ferrocad-provider:<feature>:<backend>`), so clicking it runs the same switch the
-//! header popover and the Dev Tools panel run. Turning a whole half or bundle off is a
-//! launch decision (`--addons`, `--script-host`, `?runtime=`, `?addons=`), and the card
-//! says so rather than offering a toggle that could not take effect before a restart.
+//! Provider and mod controls are interactive (B17a): a provider row is a **command row**
+//! (`ferrocad-provider:<feature>:<backend>`) and a preference row is one too
+//! (`ferrocad-prefs:mod:<name>` / `ferrocad-prefs:provider:<feature>:<backend>`), so the
+//! card is the runtime control as well as the inventory. Providers are live; a mod
+//! change is a refusal the next boot reads, so the card says so.
 
 use gpui::App;
 
@@ -144,9 +144,40 @@ pub(in crate::shell) fn rows(shell: &Shell, cx: &App) -> Vec<PropRow> {
         ));
     }
 
+    // Preferences (B17a): where a change survives, and what this boot could see.
+    let prefs = &model.prefs;
+    rows.push(value_row(
+        "Preferences",
+        if prefs.store.is_empty() {
+            "session only".to_string()
+        } else {
+            prefs.store.clone()
+        },
+    ));
+    if prefs.mods.is_empty() {
+        // An explicit `--addons`/`?addons=` set is this run's choice, not a stored one;
+        // nothing to offer until a host names the mods it could load.
+        rows.push(value_row(
+            "Change the set",
+            "halves and bundles are chosen at launch (`--addons`, `?addons=`)",
+        ));
+    } else {
+        for name in &prefs.mods {
+            let enabled = prefs.prefs.mod_enabled(name);
+            rows.push(command_row(
+                &format!("mod · {name}"),
+                if enabled { "disable" } else { "enable" },
+                format!("ferrocad-prefs:mod:{name}"),
+            ));
+        }
+        rows.push(value_row("Mod changes", "apply at the next start"));
+    }
+
     // Providers: one row per backend. The active one is tagged; the others name the
     // switch they would run, so this list is also the runtime control. The row carries the
-    // feature name because two features can offer providers with the same label.
+    // feature name because two features can offer providers with the same label. A refused
+    // backend stays listed — this is where it is turned back on — while everything else
+    // hides it.
     for feature in shell.provider_features() {
         for provider in &feature.providers {
             let label = if provider.label.is_empty() {
@@ -155,21 +186,29 @@ pub(in crate::shell) fn rows(shell: &Shell, cx: &App) -> Vec<PropRow> {
                 provider.label.clone()
             };
             let name = format!("{} · {label}", feature.feature);
-            if provider.active {
+            let offered = prefs
+                .prefs
+                .provider_enabled(&feature.feature, &provider.backend);
+            let toggle = format!(
+                "ferrocad-prefs:provider:{}:{}",
+                feature.feature, provider.backend
+            );
+            if !offered {
+                rows.push(command_row(&name, "show", toggle));
+            } else if provider.active {
+                // Hiding the backend that is drawing would leave the feature on nothing;
+                // `toggle_provider` refuses it, so the row does not offer it.
                 rows.push(tagged_row(&name, String::new(), "active"));
             } else {
                 rows.push(command_row(
                     &name,
-                    name.clone(),
+                    "activate",
                     format!("ferrocad-provider:{}:{}", feature.feature, provider.backend),
                 ));
+                rows.push(command_row(&name, "hide", toggle));
             }
         }
     }
 
-    rows.push(value_row(
-        "Change the set",
-        "halves and bundles are chosen at launch (`--addons`, `?addons=`)",
-    ));
     rows
 }

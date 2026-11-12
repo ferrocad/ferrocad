@@ -26,7 +26,12 @@ use web_sys::{Response, Url};
 /// `index_url` is the page's choice (`?mods=`); a value that [`mods::is_off`] accepts
 /// never reaches here. The task is detached — it is a background of the window, not
 /// something a caller waits on.
-pub fn start(app: AsyncApp, shell: WeakEntity<Shell>, index_url: String) {
+pub fn start(
+    app: AsyncApp,
+    shell: WeakEntity<Shell>,
+    index_url: String,
+    prefs: ferrocad_shell_api::prefs::Prefs,
+) {
     app.spawn(async move |app| {
         let base = match page_url() {
             Ok(base) => base,
@@ -58,16 +63,29 @@ pub fn start(app: AsyncApp, shell: WeakEntity<Shell>, index_url: String) {
                 return;
             }
         };
-        let total = index.mods.len();
+        // The card offers every pack the index names — including the refused ones, which is
+        // where they are turned back on. The set the page can *see* is the index's.
+        let names: Vec<String> = index.mods.iter().map(|entry| entry.name.clone()).collect();
+        let _ =
+            app.update(|cx| shell.update(cx, |shell, cx| shell.note_prefs_mods(names.clone(), cx)));
+
+        // B17a: a refused pack is never fetched, not fetched-then-skipped.
+        let selected = mods::selected(&index.mods, &prefs);
+        let refused = index.mods.len() - selected.len();
+        if refused > 0 {
+            log::info!("ferrocad: mods: {refused} pack(s) off in Settings/About");
+        }
+
+        let total = selected.len();
         if total == 0 {
-            log::info!("ferrocad: mods: the index names no packs");
+            log::info!("ferrocad: mods: nothing to load");
             return;
         }
         log::info!("ferrocad: mods: {total} pack(s) from {index_url}");
 
         let mut loaded = 0usize;
         let mut failed = 0usize;
-        for (position, entry) in index.mods.iter().enumerate() {
+        for (position, entry) in selected.into_iter().enumerate() {
             set_status(
                 app,
                 &shell,

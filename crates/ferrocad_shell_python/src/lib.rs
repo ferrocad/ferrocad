@@ -173,10 +173,15 @@ fn frame_pipeline(_window: WindowId) -> Box<dyn FramePipeline> {
 /// Run the application with an edition's configuration.
 pub fn run_with(config: HostConfig) {
     configure_trace();
-    // The mod set first: `--addons` selects it (every mod when unnamed), and one list
-    // feeds the host derivation, the grants, the Python loader and the bundles — so the
-    // flag cannot select a host without also selecting the mod that asked for it.
-    let roots = mod_roots(&config);
+    // The user's refusals first (B17a): a disabled mod is not in this boot at all, so the
+    // set has to be filtered before the hosts are derived from it. `--addons` stays the
+    // command-line override: when it names a set, that set is the boot.
+    let prefs_store = FilePrefs::default();
+    let prefs = prefs_store.load();
+    let all_roots = mod_roots(&config);
+    let known = mod_names(&config, &all_roots);
+    let roots = filter_roots(&config, &all_roots, &prefs);
+    report_refused(&known, &prefs);
     // The scripting configuration: it decides which halves `install` composes, and a value
     // the command line got wrong is reported now rather than after the boot.
     let runtimes = if config.script_hosts.is_empty() {
@@ -244,6 +249,17 @@ pub fn run_with(config: HostConfig) {
         .with_frame_pipeline(frame_pipeline);
     app.run(move |cx: &mut App| {
         ferrocad_shell_core::app::install_composition(cx, composition);
+        // The About card's controls (B17a): what this boot read, and the store a click
+        // writes through. Installed before boot so the model carries it.
+        ferrocad_shell_core::app::install_prefs(
+            cx,
+            ferrocad_shell_core::PrefsReport {
+                prefs: prefs.clone(),
+                mods: known.clone(),
+                store: String::new(),
+            },
+            Some(Box::new(prefs_store)),
+        );
         backend::install_composed(cx, &runtimes, &addons);
         let model = match Shell::boot(cx) {
             Ok(model) => model,
@@ -305,6 +321,71 @@ fn mod_roots(config: &HostConfig) -> Vec<std::path::PathBuf> {
     python::mods_dirs()
 }
 
+/// The names of the packages under `roots` — the set the About card can offer.
+///
+/// Empty when `--addons` names the set: that selection belongs to this run, and a toggle
+/// written now would not change the next one. The card says the set was chosen at launch
+/// instead of offering a switch that cannot take effect.
+fn mod_names(config: &HostConfig, roots: &[std::path::PathBuf]) -> Vec<String> {
+    if !config.addons.is_empty() {
+        return Vec::new();
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for root in roots {
+        for package in mods::packages(root) {
+            if let Some(name) = package.file_name().and_then(|name| name.to_str()) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// `roots` with the user's refusals applied (B17a).
+///
+/// The packages are expanded first: a root may be `mods/` (a directory of packages) or one
+/// package, and the refusal names a package. Expansion is what every scanner already does
+/// with the list, so the filtered result is the same set with the disabled names removed.
+fn filter_roots(
+    config: &HostConfig,
+    roots: &[std::path::PathBuf],
+    prefs: &Prefs,
+) -> Vec<std::path::PathBuf> {
+    if !config.addons.is_empty() {
+        // The command line is the override: an explicit selection is the boot.
+        return roots.to_vec();
+    }
+    roots
+        .iter()
+        .flat_map(|root| mods::packages(root))
+        .filter(|package| {
+            package
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_none_or(|name| prefs.mod_enabled(name))
+        })
+        .collect()
+}
+
+/// Say which mods this run leaves out, once, before anything boots.
+///
+/// `--check-init` is the one boot a person reads from a terminal; the window's console
+/// starts after this decision, so stderr is where the reason belongs.
+fn report_refused(known: &[String], prefs: &Prefs) {
+    let refused: Vec<&str> = known
+        .iter()
+        .filter(|name| !prefs.mod_enabled(name))
+        .map(String::as_str)
+        .collect();
+    if !refused.is_empty() {
+        eprintln!(
+            "ferrocad: prefs: {} mod(s) off: {}",
+            refused.len(),
+            refused.join(", ")
+        );
+    }
+}
+
 /// The script hosts the mod directories ask for (B9a).
 ///
 /// `mods/<Name>/` already says what it needs — `InitGui.py`, `InitGui.js` or `addon.wasm`
@@ -356,8 +437,13 @@ pub fn check_init(config: HostConfig) -> Result<(), String> {
     configure_trace();
     // The mod set before the interpreter, exactly as `run_with` does it: the loader must
     // scan the set this boot derived the hosts from, or `--check-init --addons X` would
-    // report a composition the interpreter then does not match.
-    let roots = mod_roots(&config);
+    // report a composition the interpreter then does not match. The user's refusals apply
+    // here too, or the diagnostic would check a boot the window does not perform.
+    let prefs = FilePrefs::default().load();
+    let all_roots = mod_roots(&config);
+    let known = mod_names(&config, &all_roots);
+    let roots = filter_roots(&config, &all_roots, &prefs);
+    report_refused(&known, &prefs);
     python::configure(&config.entry_module, &config.python_paths, &roots, false);
     python::configure_startup_document(config.open_document.as_deref());
     // The **same composition** `run_with` installs, from the same mod set and derived the
@@ -444,5 +530,70 @@ fn window_options(config: &HostConfig) -> WindowOptions {
             size(px(1180.), px(760.)),
         ))),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod prefs_tests {
+    use super::*;
+
+    /// A `mods/` directory holding three packages, each with an entry script.
+    fn mods_dir(names: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for name in names {
+            let package = dir.path().join(name);
+            std::fs::create_dir_all(&package).expect("package dir");
+            std::fs::write(package.join("InitGui.py"), "# test\n").expect("entry script");
+        }
+        dir
+    }
+
+    fn config(mods: &tempfile::TempDir) -> HostConfig {
+        HostConfig {
+            mods_paths: vec![mods.path().to_path_buf()],
+            ..Default::default()
+        }
+    }
+
+    fn names(roots: &[std::path::PathBuf]) -> Vec<String> {
+        roots
+            .iter()
+            .filter_map(|root| root.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// A refused package is dropped from the boot, and the other packages survive; the
+    /// known list keeps both so the card can offer the one that is off.
+    #[test]
+    fn a_disabled_mod_is_not_in_the_set() {
+        let mods = mods_dir(&["AxisOverlay", "Fasteners", "GridOverlay"]);
+        let config = config(&mods);
+        let all = mod_roots(&config);
+        assert_eq!(mod_names(&config, &all).len(), 3);
+
+        let mut prefs = Prefs::default();
+        prefs.set_mod_enabled("Fasteners", false);
+        assert_eq!(
+            names(&filter_roots(&config, &all, &prefs)),
+            ["AxisOverlay", "GridOverlay"]
+        );
+    }
+
+    /// `--addons` is the command-line override: an explicit selection is the boot, and the
+    /// card does not offer mod toggles for a set that only this run chose.
+    #[test]
+    fn an_explicit_selection_ignores_the_refusals() {
+        let mods = mods_dir(&["AxisOverlay", "GridOverlay"]);
+        let config = HostConfig {
+            addons: vec![mods.path().join("GridOverlay")],
+            ..Default::default()
+        };
+        let all = mod_roots(&config);
+        let mut prefs = Prefs::default();
+        prefs.set_mod_enabled("GridOverlay", false);
+
+        assert_eq!(names(&filter_roots(&config, &all, &prefs)), ["GridOverlay"]);
+        assert!(mod_names(&config, &all).is_empty());
     }
 }

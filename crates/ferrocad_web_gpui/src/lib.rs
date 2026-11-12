@@ -25,11 +25,13 @@
 
 mod host;
 mod mods;
+mod prefs;
 mod settings;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use ferrocad_shell_api::prefs::PrefsStore as _;
 use ferrocad_shell_web::Runtime;
 use settings::WebSettings;
 use gpui::{
@@ -66,6 +68,11 @@ pub fn main() {
         // `ferrocad_shell_web` composes it and logs which one booted. A runtime that
         // cannot boot (a `?js=1` page with no module, an interpreter that fails)
         // costs the console, not the window.
+        //
+        // B17a: the page's refusals (`localStorage`) are read here, before the packs are
+        // fetched, because they decide which packs the fetch asks for.
+        let prefs_store = prefs::LocalStoragePrefs;
+        let prefs = prefs_store.load();
         let (backend, runtimes) = match ferrocad_shell_web::page_backend_with_settings(Some(
             Box::new(WebSettings::default()),
         )) {
@@ -109,6 +116,17 @@ pub fn main() {
             },
         );
         ferrocad_shell_core::app::install_backend(cx, backend);
+        // The About card's controls: what this page read, and the store a click writes
+        // through. The pack names arrive with the fetched index (`note_prefs_mods`).
+        ferrocad_shell_core::app::install_prefs(
+            cx,
+            ferrocad_shell_core::PrefsReport {
+                prefs: prefs.clone(),
+                mods: Vec::new(),
+                store: String::new(),
+            },
+            Some(Box::new(prefs_store)),
+        );
 
         let model = match ferrocad_shell_core::Shell::boot(cx) {
             Ok(model) => model,
@@ -193,7 +211,7 @@ pub fn main() {
                         .unwrap_or_else(|| "1".to_string());
                         if !ferrocad_shell_web::mods::is_off(&value) {
                             let index = ferrocad_shell_web::mods::index_url(&value).to_string();
-                            mods::start(async_app, shell.downgrade(), index);
+                            mods::start(async_app, shell.downgrade(), index, prefs.clone());
                         }
                     }
                 }

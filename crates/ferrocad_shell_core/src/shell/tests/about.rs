@@ -101,3 +101,170 @@ fn the_app_menu_opens_the_about_card(cx: &mut TestAppContext) {
     assert!(value("Engine").is_some(), "and the engine that answered");
     assert!(value("Mods").is_some(), "and the workbench count");
 }
+
+/// A store that records the last save, so a test can assert what a click persisted.
+#[derive(Clone, Default)]
+struct RecordingPrefs(std::rc::Rc<std::cell::RefCell<Option<crate::types::Prefs>>>);
+
+impl crate::types::PrefsStore for RecordingPrefs {
+    fn load(&self) -> crate::types::Prefs {
+        self.0.borrow().clone().unwrap_or_default()
+    }
+
+    fn save(&self, prefs: &crate::types::Prefs) -> Result<(), String> {
+        *self.0.borrow_mut() = Some(prefs.clone());
+        Ok(())
+    }
+
+    fn location(&self) -> String {
+        "test store".to_string()
+    }
+}
+
+/// Boot with the composition, a `PrefsReport` and a recording store.
+fn boot_with_prefs(
+    cx: &mut TestAppContext,
+    mods: &[&str],
+) -> (Arc<Mutex<ShellModel>>, RecordingPrefs) {
+    crate::register_test_core();
+    let store = RecordingPrefs::default();
+    let saved = store.clone();
+    let model = cx.update(|cx| {
+        crate::app::install_composition(
+            cx,
+            Composition {
+                app: "FerroCAD: Test".to_string(),
+                platform: "desktop".to_string(),
+                runtimes: vec!["cpython".to_string()],
+                addons: Vec::new(),
+            },
+        );
+        crate::app::install_prefs(
+            cx,
+            crate::types::PrefsReport {
+                prefs: crate::types::Prefs::default(),
+                mods: mods.iter().map(|name| name.to_string()).collect(),
+                store: String::new(),
+            },
+            Some(Box::new(store)),
+        );
+        crate::app::install_backend(cx, Box::new(ferrocad_shell_python::engine()));
+        Shell::boot(cx).expect("boot shell")
+    });
+    (model, saved)
+}
+
+/// The card offers one row per mod and per provider, and the clicks go through the
+/// generated ids and the host's store (B17a/B19d).
+#[gpui::test]
+fn the_card_turns_mods_and_providers_off(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (model, saved) = boot_with_prefs(cx, &["GridOverlay", "Fasteners"]);
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+
+    shell.update(&mut cx, |shell, cx| shell.run_command("ferrocad-about", cx));
+    let rows_of = |cx: &VisualTestContext| {
+        let shell = shell.clone();
+        shell.read_with(cx, |shell, _| {
+            shell
+                .settings_card
+                .as_ref()
+                .expect("the About card is open")
+                .rows
+                .clone()
+        })
+    };
+
+    let rows = rows_of(&cx);
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.name == "Preferences")
+            .map(|row| row.value.as_str()),
+        Some("test store"),
+        "the card names where a change survives"
+    );
+    let mod_row = |rows: &[crate::types::PropRow]| {
+        rows.iter()
+            .find(|row| row.command.as_deref() == Some("ferrocad-prefs:mod:GridOverlay"))
+            .cloned()
+            .expect("a mod row")
+    };
+    assert_eq!(mod_row(&rows).label, "disable", "it is on right now");
+
+    // The click path: the id is intercepted before the registry, flips the refusal and
+    // persists through the host's store.
+    shell.update(&mut cx, |shell, cx| {
+        shell.run_command("ferrocad-prefs:mod:GridOverlay", cx)
+    });
+    let persisted = saved.0.borrow().clone().expect("the click saved");
+    assert!(!persisted.mod_enabled("GridOverlay"));
+    assert!(persisted.mod_enabled("Fasteners"), "only the clicked one");
+    assert_eq!(mod_row(&rows_of(&cx)).label, "enable");
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.snapshot().status)
+            .contains("after a restart"),
+        "a mod change names when it applies"
+    );
+
+    // Providers are live: hiding one is refused when it is the backend drawing, and a
+    // hidden one cannot be activated again through the provider id.
+    shell.update(&mut cx, |shell, _| {
+        shell.provider_features = Some(vec![crate::types::ProviderFeature {
+            feature: "grid".to_string(),
+            providers: vec![
+                crate::types::GridProvider {
+                    backend: "ferrocad".to_string(),
+                    active: true,
+                    ..Default::default()
+                },
+                crate::types::GridProvider {
+                    backend: "coin".to_string(),
+                    active: false,
+                    ..Default::default()
+                },
+            ],
+        }])
+    });
+    shell.update(&mut cx, |shell, cx| {
+        shell.run_command("ferrocad-prefs:provider:grid:ferrocad", cx)
+    });
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.snapshot().status)
+            .contains("switch away"),
+        "the active backend is not hidden"
+    );
+    shell.update(&mut cx, |shell, cx| {
+        shell.run_command("ferrocad-prefs:provider:grid:coin", cx)
+    });
+    assert!(
+        !saved
+            .0
+            .borrow()
+            .clone()
+            .expect("saved")
+            .provider_enabled("grid", "coin"),
+        "the inactive backend is hidden"
+    );
+    shell.update(&mut cx, |shell, cx| {
+        shell.run_command("ferrocad-provider:grid:coin", cx)
+    });
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.snapshot().status)
+            .contains("hidden in Settings/About"),
+        "activating a hidden backend is refused"
+    );
+    shell.update(&mut cx, |shell, _| {
+        shell.provider_features = None;
+    });
+}

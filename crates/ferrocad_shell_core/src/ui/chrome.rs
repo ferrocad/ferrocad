@@ -352,10 +352,25 @@ pub(crate) fn viewport_header(
     let wp_open = open == Some("wp");
     let snap_open = open == Some("snap");
     let grid_providers = grid
-        .map(|summary| provider_rows("grid", &summary.providers))
+        .map(|summary| {
+            // B17a: a backend the user hid in Settings/About is not offered here either.
+            let providers = crate::shell::prefs::visible_providers(
+                "grid",
+                &summary.providers,
+                &model.prefs.prefs,
+            );
+            provider_rows("grid", &providers)
+        })
         .unwrap_or_default();
     let axis_providers = axis
-        .map(|summary| provider_rows("axis", &summary.providers))
+        .map(|summary| {
+            let providers = crate::shell::prefs::visible_providers(
+                "axis",
+                &summary.providers,
+                &model.prefs.prefs,
+            );
+            provider_rows("axis", &providers)
+        })
         .unwrap_or_default();
     // The gizmo has no summary bridge and the model does not carry the provider
     // list, so read the registry while the popover is open; a bridge failure
@@ -363,6 +378,7 @@ pub(crate) fn viewport_header(
     let gizmo_feature = if gizmo_open {
         crate::app::provider_features(cx)
             .ok()
+            .map(|features| crate::shell::prefs::visible_features(&features, &model.prefs.prefs))
             .and_then(|features| {
                 features
                     .into_iter()

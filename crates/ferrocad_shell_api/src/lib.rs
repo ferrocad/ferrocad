@@ -24,6 +24,7 @@ pub mod dialog;
 pub mod display;
 pub mod document_api;
 pub mod events;
+pub mod prefs;
 pub mod runtime;
 pub mod selection;
 pub mod settings;
@@ -38,6 +39,9 @@ pub use dialog::{DialogField, DialogSpec, Kind, ValueState};
 pub use display::StageMesh;
 pub use document_api::DocumentApi;
 pub use events::{DocumentEvent, DocumentEventSink};
+#[cfg(not(target_family = "wasm"))]
+pub use prefs::FilePrefs;
+pub use prefs::{MemoryPrefs, Prefs, PrefsReport, PrefsStore};
 pub use runtime::{EntryKind, Language, Platform, Runtime};
 pub use selection::SelectionItem;
 pub use settings::{MemorySettings, SettingKind, SettingValue, SettingsBackend};

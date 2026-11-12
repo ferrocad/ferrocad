@@ -21,6 +21,7 @@ use ferrocad_wgpu::WgpuRenderer;
 
 use crate::HostConfig;
 use crate::python;
+use ferrocad_shell_api::prefs::PrefsStore as _;
 use ferrocad_shell_core::display::{DisplaySync, StageMesh};
 
 /// A binary STL written from the same tessellation the viewport draws.
@@ -68,7 +69,10 @@ pub fn run(
     }
 
     // No GUI: `FreeCAD.GuiUp` stays false, and no window is created.
-    let roots = crate::mod_roots(config);
+    // The same set the window loads, refusals included (B17a).
+    let prefs = ferrocad_shell_api::prefs::FilePrefs::default().load();
+    let all_roots = crate::mod_roots(config);
+    let roots = crate::filter_roots(config, &all_roots, &prefs);
     python::configure(&config.entry_module, &config.python_paths, &roots, false);
     python::configure_startup_document(config.open_document.as_deref());
 

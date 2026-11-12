@@ -23,8 +23,8 @@ use crate::model::selection::SelectionItem;
 use crate::model::view::ViewState;
 use crate::types::{
     ApplyResult, AxisSummary, Bootstrap, Composition, DocumentNode, EvalResult,
-    GpuPreferenceOutcome, GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest,
-    SetResult, VisibilityOutcome, WorkbenchReport,
+    GpuPreferenceOutcome, GridSummary, OpenedDocument, Prefs, PrefsReport, PrefsStore, PropRow,
+    ProviderFeature, SelectionRequest, SetResult, VisibilityOutcome, WorkbenchReport,
 };
 use crate::workbench::commands::{CommandInfo, CommandOutcome};
 
@@ -86,6 +86,55 @@ pub fn composition(cx: &App) -> Composition {
     cx.try_global::<CompositionSlot>()
         .map(|slot| slot.0.clone())
         .unwrap_or_default()
+}
+
+/// The prefs the host read before boot, and the store that persists a change (B17a).
+///
+/// Installed as its own global, like the composition: the host resolves it **before** the
+/// backend exists, because `mod_roots` and `load_workbenches` run at boot. Boot copies the
+/// report into the model; a click in the About card writes back through the store.
+struct PrefsSlot {
+    store: Option<Box<dyn PrefsStore>>,
+}
+
+impl Global for PrefsSlot {}
+
+struct PrefsReportSlot(PrefsReport);
+
+impl Global for PrefsReportSlot {}
+
+/// Install what the host read, beside [`install_composition`].
+///
+/// `store` is what a later click saves through. `None` is honest for a host with no
+/// storage: the session still changes, and the card says `session only`.
+pub fn install_prefs(cx: &mut App, mut report: PrefsReport, store: Option<Box<dyn PrefsStore>>) {
+    report.store = match store.as_deref() {
+        Some(store) => store.location(),
+        None => "session only".to_string(),
+    };
+    cx.set_global(PrefsSlot { store });
+    cx.set_global(PrefsReportSlot(report));
+}
+
+/// The prefs the host installed, or the defaults when it installed none.
+pub fn prefs_report(cx: &App) -> PrefsReport {
+    cx.try_global::<PrefsReportSlot>()
+        .map(|slot| slot.0.clone())
+        .unwrap_or_default()
+}
+
+/// Persist `prefs` through the host's store.
+///
+/// No store is not an error: the in-session change stands and only a restart drops it. A
+/// store that fails to write reports why, so the card can say the change is session-only.
+pub fn persist_prefs(cx: &App, prefs: &Prefs) -> Result<(), String> {
+    match cx.try_global::<PrefsSlot>() {
+        Some(slot) => match slot.store.as_deref() {
+            Some(store) => store.save(prefs),
+            None => Ok(()),
+        },
+        None => Ok(()),
+    }
 }
 
 // --- the shell-facing helpers -------------------------------------------------

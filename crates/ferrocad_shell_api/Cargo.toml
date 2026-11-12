@@ -20,3 +20,7 @@ ferrocad_inventor.workspace = true
 ferrocad_geom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# `prefs::tests` round-trips the file store in a temporary directory.
+tempfile = "3"

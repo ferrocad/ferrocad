@@ -501,9 +501,11 @@ on `ShellModel.workbenches`, and `provider_features()`. An inactive provider row
 switch (`ferrocad-provider:<feature>:<backend>`), so the card doubles as a runtime control.
 It is opened from the app menu's synthetic `ferrocad-about` row: no backend answers a
 `Settings/About` property question, and no `catalog.json` row is invented for chrome only a
-window can show. Turning parts of the set *off* is B17a in
-[`backend-parity.md`](../../project/tasks/backend-parity.md) — providers can be live, while
-mods and bundles are read before the backend exists and need a host-readable store.
+window can show. Turning parts of the set *off* is B17a (built) in
+[`backend-parity.md`](../../project/tasks/backend-parity.md): a `ferrocad-prefs:` row hides a
+provider live (and refuses to activate it elsewhere) or records a mod refusal that the host
+reads **before** the backend exists — `prefs.json` beside the user's parameters natively,
+`localStorage` in the page — so the mod applies at the next start.
 
 ## 5. One display path
 

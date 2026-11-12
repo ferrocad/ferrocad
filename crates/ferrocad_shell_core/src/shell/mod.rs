@@ -66,6 +66,8 @@ pub mod bridge;
 mod files;
 pub mod hud;
 pub mod panels;
+// B17a: the About card's preferences controls (live providers, next-boot mods).
+pub(crate) mod prefs;
 
 // Keep the flat `shell::<name>` paths as aliases of the grouped modules, so both
 // `shell::move_hud` and `shell::hud::move_hud` work.
@@ -320,6 +322,9 @@ pub struct ShellModel {
     /// What the host composed for this run (the About card's inventory). Empty when the
     /// host installed none — a test, `--check-init`, a headless run.
     pub composition: Composition,
+    /// What the host read before boot (B17a): the refusals, the mods this boot could see
+    /// and where the store keeps them. The About card's controls read and write it.
+    pub prefs: crate::types::PrefsReport,
     /// The workbench scripts the boot loaded, and the ones that raised. The console keeps
     /// the one-line summary; the About card lists them by name.
     pub workbenches: WorkbenchReport,
@@ -709,9 +714,11 @@ impl Shell {
     /// entities (the console input) need an `App` context. The host installs its
     /// [`AppBackend`](crate::app::AppBackend) before calling this.
     pub fn boot(cx: &mut App) -> Result<Arc<Mutex<ShellModel>>, String> {
-        // The host installs its composition beside the backend (it chose the halves and
-        // bundles before the backend existed), so read it here and hand it to the model.
+        // The host installs its composition and its prefs beside the backend (it chose
+        // the halves, bundles and the set before the backend existed), so read them here
+        // and hand them to the model.
         let composition = crate::app::composition(cx);
+        let prefs = crate::app::prefs_report(cx);
         let model = match crate::app::with_backend_mut(cx, |backend| Self::boot_with(backend)) {
             Some(result) => result?,
             None => {
@@ -723,6 +730,7 @@ impl Shell {
         };
         if let Ok(mut model) = model.lock() {
             model.composition = composition;
+            model.prefs = prefs;
         }
         Ok(model)
     }
@@ -810,6 +818,7 @@ impl Shell {
             console,
             status,
             composition: Composition::default(),
+            prefs: crate::types::PrefsReport::default(),
             workbenches,
         })))
     }

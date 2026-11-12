@@ -54,7 +54,7 @@ js-sys = "0.3"
 # page can `fetch` but has no filesystem, so this is how `www/mods/` reaches the
 # interpreter in a browser.
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Location", "Response", "Url", "Window"] }
+web-sys = { version = "0.3", features = ["Location", "Response", "Storage", "Url", "Window"] }
 serde_json.workspace = true
 # The logger `gpui::web_init` installs forwards to the browser console.
 log = "0.4"

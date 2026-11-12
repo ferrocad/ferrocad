@@ -25,6 +25,15 @@ fn grid_overlay() -> PathBuf {
 fn check_init(extra: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ferrocad_parametric"));
     command.arg("--check-init").args(extra);
+    // B17a: the user's refusals narrow the boot, so a developer who disabled a mod in the
+    // About card would otherwise change what this test boots. A path that cannot exist is
+    // the defaults, which is the checked-in state.
+    command.env(
+        "FERROCAD_PREFS_FILE",
+        std::env::temp_dir()
+            .join("ferrocad-check-init-test")
+            .join("prefs.json"),
+    );
     command.output().expect("the edition binary runs")
 }
 

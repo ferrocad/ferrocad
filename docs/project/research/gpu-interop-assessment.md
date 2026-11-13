@@ -299,7 +299,7 @@ second device is created when interop succeeds.
   `draw_frame` + `image()` fallback. The `render` element is a `gpu_canvas` while the
   presenter is pending/ready and `img(...)` when it is unavailable. Startup requests
   are bounded so an unpainted canvas cannot spin the window.
-- **`ferrocad_gpui`**: new [`interop`](../../../crates/ferrocad_gpui/src/interop.rs) module
+- **`ferrocad_gpui`**: new [`interop`](../../../crates/ferrocad_shell_core/src/runtime/interop.rs) module
   with `GpuiInteropPresenter`. On the first paint it attaches to the window renderer
   (`gpu.try_device::<gpui_wgpu::WgpuRenderer>()`), gets the renderer's own
   `(Device, Queue)`, and builds a `ferrocad_wgpu::WgpuRenderer` at 4× MSAA.
@@ -403,7 +403,7 @@ open) so a late renderer write does not hit a closed peer.
 
 ### Ring depth and reuse rule
 
-`RING_DEPTH = 3` in `crates/ferrocad_gpui/src/interop.rs`. Two would be the
+`RING_DEPTH = 3` in `crates/ferrocad_shell_core/src/runtime/interop.rs`. Two would be the
 minimum for a producer that never waits; three covers a frame still queued behind
 gpui's own scene submission, which is exactly the window the Coin grid's
 full-screen shader widens.

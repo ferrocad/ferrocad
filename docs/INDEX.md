@@ -29,7 +29,7 @@ folders are what `tools/build_book.py` publishes at
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
 | drive `FreeCAD` from another program | [mods/README.md#the-json-boundary-for-automated-clients](mods/README.md#the-json-boundary-for-automated-clients) and [python-api/ferrocad_shell.md](python-api/ferrocad_shell.md) |
 | change FerroCAD | [developer/README.md](developer/README.md) and [developer/architecture.md](developer/architecture.md) |
-| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-31-10-2026.md](project/TODO-31-10-2026.md) |
+| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-13-11-2026.md](project/TODO-13-11-2026.md) |
 | find what a label means | [project/labels.md](project/labels.md) |
 
 ## General concepts
@@ -187,7 +187,7 @@ than deleted.
 
 - [project/README.md](project/README.md) — the folder landing page, reading order and the record rule.
 - [project/ROADMAP.md](project/ROADMAP.md) — the three horizons and their exit criteria.
-- [project/TODO-31-10-2026.md](project/TODO-31-10-2026.md) — the active backlog: the minimum SimpleCAD surface, solids and booleans, surface/subdivision, and constraints with a bound solver.
+- [project/TODO-13-11-2026.md](project/TODO-13-11-2026.md) — the active backlog: the SimpleCAD closure, the two 2026-11-13 regressions, solids/booleans and Draft, surface/subdivision, constraints with a bound solver, and the platform tail.
 - [project/labels.md](project/labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which program owns it.
 
 ### Documentation system
@@ -232,6 +232,8 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Closed history
 
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
+- [project/record/2026-11-13-november-round.md](project/record/2026-11-13-november-round.md) — the November round: the OCCT Rust boundary, the browser shell, the host/backend split, backend parity, the mod format, and the two regressions found at rotation.
+- [project/record/TODO-31-10-2026.md](project/record/TODO-31-10-2026.md) — the closed 2026-10-31 backlog: the SimpleCAD slices, the platform remainder and the surface/sketcher plans.
 - [project/record/TODO-29-10-2026.md](project/record/TODO-29-10-2026.md) — the closed 2026-10-29 backlog: the workplane hierarchy, datum planes, the grid and the SimpleCAD P1 closure.
 - [project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md](project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md) — the round log for the workplane and grid work, including the four grid defects and their mechanisms.
 - [project/record/2026-10-30-fan-out-todo-30.md](project/record/2026-10-30-fan-out-todo-30.md) — the six-stream fan-out over the 2026-10-30 backlog: seven corrected claims, the evidence-sized slices and the open unknowns.
@@ -256,6 +258,10 @@ The folder landing page is the reading order for the spikes and assessments.
 - [project/record/tasks/format-serializers.md](project/record/tasks/format-serializers.md) — split document persistence into two independent serializers.
 - [project/record/tasks/grid-visibility.md](project/record/tasks/grid-visibility.md) — the grid toggle only reached the native grid, not the Coin backend.
 - [project/record/tasks/host-backends.md](project/record/tasks/host-backends.md) — the `S1–S8` plan that delivered the shell/backend split, the host file verbs, the four backends and the `ScriptHost` seam.
+- [project/record/tasks/backend-parity.md](project/record/tasks/backend-parity.md) — the `B0–B21` ledger: one Gui app, one document half, the deleted legacy backend, the two script halves over one document, the fetched packs and the shared Coin scene core. Deferrals in §7.
+- [project/record/tasks/tool-loadout.md](project/record/tasks/tool-loadout.md) — the loadout slots, `Select ▾`, narrowing and hover-to-arm (`U4–U6`).
+- [project/record/tasks/transform-session.md](project/record/tasks/transform-session.md) — the cumulative transform session, the pill, the tape and the rotation lock (`A1–A3`, `U1–U3`); A0 is deferred.
+- [project/record/tasks/wasm-shell.md](project/record/tasks/wasm-shell.md) — the browser shell (`M0–M6`): the crate split, the wasm build, the real shell in Chrome, the 3D viewport, a Part document, editing and `.FCStd` open/save.
 - [project/record/tasks/kernel-state-sharing.md](project/record/tasks/kernel-state-sharing.md) — the kernel-state-sharing task and its K0–K2a slices.
 - [project/record/tasks/links.md](project/record/tasks/links.md) — `App::Link`, link arrays and their interlocks.
 - [project/record/tasks/mesh-module.md](project/record/tasks/mesh-module.md) — the `Mesh`/`MeshPart`/`Mesh::Feature` contract.
@@ -278,18 +284,14 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Active task specs
 
 - [project/tasks/README.md](project/tasks/README.md) — the active-spec policy and the current ones.
-- [project/tasks/backend-parity.md](project/tasks/backend-parity.md) — one Gui app, one document half, B0–B6 built: the surface suite (`crates/ferrocad_parametric/tests/composition_surface.rs`), every shown command in one `FreeCADGui` registry, the Gui-authority verbs running script-first, the model tree listing and switching documents, a mod's interaction provider owning a manipulator commit, the retired legacy type, and the two script halves compared over one document. Stages B0–B6; B7 (packaging: which host can serve which script half) recorded, with B7a (the JS `Page` trait), B7b (the desktop QuickJS page), B7c (the `--script-host=` switch), B7d (desktop RustPython on a 16 MiB worker) and B7e (sandboxed wasm addons via `--addons=`) built.
 - [project/tasks/opening-a-large-model.md](project/tasks/opening-a-large-model.md) — the open-and-sync budget for a 41 MB assembly: what is left after the mesh-hop changes (OCCT's ASCII BRep restore and `BRepMesh`), why a coarser first mesh only recovers a third, and the order to fix it. Stages 1–5.
-- [project/tasks/operation-failure-modelling.md](project/tasks/operation-failure-modelling.md) — typed, recoverable Part failures: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the `FilletRef`/`Recovery` affordances and the `SESSION_HOLD(failure)` payload. Stages F1–F5.
+- [project/tasks/operation-failure-modelling.md](project/tasks/operation-failure-modelling.md) — typed, recoverable Part failures: `OperationFailure::{InvalidGeometry, Kernel}` at the geometry seam, the `FilletRef`/`Recovery` affordances and the `SESSION_HOLD(failure)` payload. F1 landed; F2–F5 open.
 - [project/tasks/simplecad-bringup.md](project/tasks/simplecad-bringup.md) — the SC0–SC8 cut of the SimpleCAD bring-up, including `makeWireString` on the Rust text stack.
 - [project/tasks/text-and-3d-text.md](project/tasks/text-and-3d-text.md) — text boundaries: kernel-free outlines vs Part wires/faces, the wire→shell vs face→solid rule, and why there is no DPI or point size.
-- [project/tasks/transform-session.md](project/tasks/transform-session.md) — the transform session, planned not built: explicit uncommitted state (`PendingEdit`/`EditView`), one cumulative move session, the pill and the 3-D tape. Stages A0–A3 then U1–U3.
-- [project/tasks/tool-loadout.md](project/tasks/tool-loadout.md) — the tool loadout, planned not built: slots, the `Select ▾` topology filter, the bottom-left bar, manipulator narrowing and hover-to-arm. Stages U4–U5.
 - [project/tasks/mod-events.md](project/tasks/mod-events.md) — the mod-facing event contract (stage E1): a fixed low-frequency event set the host advertises, explicit `FerroCAD.subscribe`, and why a mod-to-mod bus is deferred.
-- [project/research/transform-session-compatibility.md](project/research/transform-session-compatibility.md) — the read-only recon behind both plans: what the tree already supports, the five structural changes, and what the plan got wrong (world-space datum, no shell-side document handle).
+- [project/research/transform-session-compatibility.md](project/research/transform-session-compatibility.md) — the read-only recon behind the transform plans: what the tree already supports, the five structural changes, and what the plan got wrong.
 - [project/tasks/ux-research.md](project/tasks/ux-research.md) — the interaction questions U1–U7, their evidence sources and the decision log.
 - [project/tasks/creation-tools-ownership.md](project/tasks/creation-tools-ownership.md) — whether creation tools are a core default or an edition/mod choice, and how override precedence works.
-- [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action.
-- [project/tasks/workplanes.md](project/tasks/workplanes.md) — one workplane state (the world plane is a real plane), ephemeral face binding while drawing, and the `WP` menu as plane choices rather than plumbing.
-- [project/tasks/wasm-shell.md](project/tasks/wasm-shell.md) — the browser shell: **M0–M6 done** (the crate split, the wasm build, the real shell in Chrome, the 3D viewport, a real Part document, editing that writes it, and `.FCStd` open/save).
+- [project/tasks/polyline-vertex-editing-and-active-tool-hud.md](project/tasks/polyline-vertex-editing-and-active-tool-hud.md) — in-flight vertex editing inside the polyline tool, and one dielectric surface for every active action. Built; the numeric-entry tail is in P4.
+- [project/tasks/workplanes.md](project/tasks/workplanes.md) — one workplane state, ephemeral face binding while drawing, and the `WP` menu as plane choices. Built; the remaining gaps are in P4 SK4.
 - [project/tasks/stroke-units.md](project/tasks/stroke-units.md) — the recorded decision that viewport strokes are device pixels, the rejected logical-pixel option, and the plan for reopening it.

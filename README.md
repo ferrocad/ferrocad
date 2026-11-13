@@ -11,10 +11,10 @@ stays `FreeCAD`; the project/distribution is `ferrocad`.
 | Track | What it is | State |
 | --- | --- | --- |
 | **Engine** | the Rust document model behind the `FreeCAD` API | units/quantities, properties, documents, links, expressions, observers, undo, and both serializers. The App/Base surface is the measured MVP. |
-| **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped**; primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **220/408 (53.9%)** upstream API names in the committed tree; **248/408 (60.8%)** in the current worktree. |
-| **Workbench platform** | running upstream workbenches without Qt | `Part::FeaturePython`/`Part2DObjectPython` execute and persist Python proxies; Draft M2 is green (**27/27**), the Draft `--draft` group is **44/0/0/0**, and `test_modification` is **31/0/2** after the M4 import round. |
-| **App shell** | the `bite-gpui` window driving the engine through embedded CPython | viewport, model tree, property editor, console, command registry, wheel/forms, transform gizmo, navigation cube and Dev Tools. SimpleCAD S4.1–S4.3 (view facade, ranked pick, selection object) are in the worktree. |
-| **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **702 passed, 44 failed, 368 errored, 2 skipped**, no aborts. That baseline predates the current Part/Draft batch. |
+| **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped** (2026-11-13); primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **252/408 (61.8%)** upstream API names. |
+| **Workbench platform** | running upstream workbenches without Qt | `Part::FeaturePython`/`Part2DObjectPython` execute and persist Python proxies; Draft M2 is green (**27/27**), the Draft `--draft` group is **50/0/0/1**, and `test_modification` is **31/0/2**. |
+| **App shell** | the `bite-gpui` window over one document backend | viewport, model tree, property editor, console, command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools and the loadout. **One document implementation with four runtimes** (CPython, RustPython, JS, none); the browser shell runs the same `RustAppBackend` and `pivy.coin` scene core. SimpleCAD S4.1–S4.3 (view facade, ranked pick, selection object) are in the tree. |
+| **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **985 passed, 49 failed, 23 errored, 2 skipped**, no aborts. |
 | **Distribution** | how it ships | `v0.1.4`, the base and Parametric artifacts (AppImage + Windows zip), and `cargo install ferrocad`. macOS is not shipped yet. |
 
 This is a **working preview, not a finished product**. It exists to validate the single
@@ -25,7 +25,7 @@ workbenches are deliberately out of scope; the measured subset is stated with ev
 number.
 
 **Roadmap.** [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md) is the three-horizon summary and
-[`docs/project/TODO-31-10-2026.md`](docs/project/TODO-31-10-2026.md) the active backlog. The measured
+[`docs/project/TODO-13-11-2026.md`](docs/project/TODO-13-11-2026.md) the active backlog. The measured
 history is [`docs/project/record/milestones.md`](docs/project/record/milestones.md); the labels
 (`S1`, `P4`, `D0`, …) are indexed in [`docs/project/labels.md`](docs/project/labels.md). Screenshot
 handling (generated viewport snapshots and manual app captures) is in
@@ -267,7 +267,7 @@ the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and 
 against the facade, and [`docs/python-api/`](docs/python-api/index.md) is a signature reference read
 from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
 can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)):
-[`ROADMAP.md`](docs/project/ROADMAP.md) for the horizons, [`TODO-31-10-2026.md`](docs/project/TODO-31-10-2026.md)
+[`ROADMAP.md`](docs/project/ROADMAP.md) for the horizons, [`TODO-13-11-2026.md`](docs/project/TODO-13-11-2026.md)
 for the active backlog, [`record/milestones.md`](docs/project/record/milestones.md) for the measured
 history, [`record/tasks/`](docs/project/record/tasks/README.md) for the closed design specs, and
 [`labels.md`](docs/project/labels.md) for every `S1`/`P4`/`D0`.
@@ -376,24 +376,25 @@ Implemented and measured:
   primitives, booleans, dress-ups, curves/surfaces, NURBS conversion, `ShapeFix`,
   `ChFi2d`, feature objects, `Part::FeaturePython` and topological lineage. The upstream
   Part suite reports **531 passed, 0 failed, 0 errored, 12 skipped**; the API audit
-  covers **220/408** names in the committed tree and **248/408** in the worktree.
+  covers **252/408** names.
 * **Mesh** through `ferrocad_mesh` / `ferrocad_mesh_py`: triangle payloads, STL and
   `.bms`, analysis/editing, `Mesh::Feature`, `MeshPart.meshFromShape`, and the `.FCStd`
   `<Mesh>` member.
 * **The workbench platform**: Python feature proxies (`Part::FeaturePython`,
   `Part::Part2DObjectPython`) execute, change, attach, persist and restore; the Draft M2
-  modules are **27/27**, the Draft `--draft` group is **44/0/0/0**, and
-  `test_modification` is **31/0/2** after the M4 import round.
+  modules are **27/27**, the Draft `--draft` group is **50/0/0/1**, and
+  `test_modification` is **31/0/2**.
 * **The shell and interaction**: the viewport, model tree, property editor, console,
   command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools, and the
   SimpleCAD S4.1–S4.3 view facade, ranked pick and selection object.
 
 Not implemented, or deliberately partial:
 
-* PartDesign's feature tree, Sketcher's solver and constraints, FEM, CAM and the GUI
+* PartDesign's feature tree, a from-scratch Sketcher solver, FEM, CAM and the GUI
   workbenches. `Part::Prism` and the `Sketcher::SketchObject` object type exist where
-  Draft needs them; the `Sketcher` module and solver do not.
-* The rest of the Part API: 160 distinct upstream names are still uncovered. The
+  Draft needs them; the `Sketcher` module and solver do not. The P4 plan binds PlanGCS
+  rather than writing a solver.
+* The rest of the Part API: 156 distinct upstream names are still uncovered. The
   SimpleCAD/Draft runs are the work list.
 * Full upstream `.FCStd` byte-for-byte compatibility and every module payload. The
   format is real and round-trips our documents; it is not a claim of upstream parity.
@@ -410,20 +411,22 @@ The measured subset and its caveats are in
 ## Current work
 
 **H1 (finish Part/OCCT) is closed** except the optional two composed-alias element-map
-counts. **H2 (the workbench platform)** is the Draft M3–M5 breadth: the M4 import round
-took `test_modification` to 31/0/2, and the remaining two errors are the `Sketcher`
-module and TechDraw's `DrawPage`. **H3 (proof by use)** is SimpleCAD: S1–S3 are measured
-and S4.1–S4.3 are the view facade, ranked pick and selection object (integration baseline
-**969 passed / 64 failed / 26 errored / 2 skipped**, 88/88 modules). Packaging is on
-v0.1.4; macOS is the open distribution leg.
+counts and the two documented limits. **H2 (the workbench platform) is built**: one
+document with four runtimes, the browser shell and the backend-parity close-out; what
+remains is Draft M3–M5 breadth (the M4 import round took `test_modification` to 31/0/2).
+**H3 (proof by use)** is SimpleCAD: S1–S3 are measured and S4.1–S4.3 are the view facade,
+ranked pick and selection object (integration baseline **985 passed / 49 failed / 23 errored
+/ 2 skipped**, 88/88 modules). Packaging is on v0.1.4; macOS is the parked distribution leg.
 
-The most recent round closed the **workplane's visual hierarchy and the grid** — a real
-plane state, `Part::DatumPlane`, an adaptive grid whose drawn pitch is the configured
-pitch, and the Coin workplane uniform's host→renderer transport — plus the polyline's
-in-flight editing and commit path. The round log is
+The most recent round is the **November platform round** — the OCCT seam ported to Rust,
+the browser shell, one document with four runtimes (CPython, RustPython, JS, none), the
+backend-parity close-out and the mod pack format — with its two red gates fixed at rotation.
+The round log is
+[`docs/project/record/2026-11-13-november-round.md`](docs/project/record/2026-11-13-november-round.md);
+the previous workplane/grid round is
 [`docs/project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](docs/project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md).
 
-The active backlog is [`docs/project/TODO-31-10-2026.md`](docs/project/TODO-31-10-2026.md); the
+The active backlog is [`docs/project/TODO-13-11-2026.md`](docs/project/TODO-13-11-2026.md); the
 three-horizon summary is [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md). The shell is no longer a
 spike: `cargo run -p ferrocad_toy` (the kernel-free edition) or
 `cargo run -p ferrocad_parametric` (with Part) opens the current window; the headless

@@ -28,7 +28,7 @@ payload = json.loads(ferrocad_toy.bootstrap("Toy"))
 ```json
 {
   "backend": "ferrocad",
-  "document": "Toy",
+  "document": "Sample",
   "version": "0.1.4"
 }
 ```
@@ -47,8 +47,8 @@ tree = json.loads(ferrocad_shell.model_tree())
 [
   {
     "active": true,
-    "label": "Toy",
-    "name": "Toy",
+    "label": "Sample",
+    "name": "Sample",
     "objects": [
       {
         "label": "Params",
@@ -64,6 +64,16 @@ tree = json.loads(ferrocad_shell.model_tree())
         "label": "Group",
         "name": "Group",
         "type": "App::DocumentObjectGroup"
+      },
+      {
+        "label": "Box",
+        "name": "Box",
+        "type": "Part::Box"
+      },
+      {
+        "label": "Fillet",
+        "name": "Fillet",
+        "type": "Part::Fillet"
       },
       {
         "label": "Slab",
@@ -262,7 +272,7 @@ commands = json.loads(ferrocad_shell.commands())
 ## 9. Close the document
 
 ```python
-FreeCAD.closeDocument('Toy')
+FreeCAD.closeDocument(FreeCAD.ActiveDocument.Name)
 ```
 
 | Read back | Value |

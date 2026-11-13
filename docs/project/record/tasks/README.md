@@ -1,6 +1,6 @@
 # Closed task specs
 
-Status: index (2026-11-05). These are the task specs whose implementation is recorded as
+Status: index (2026-11-13). These are the task specs whose implementation is recorded as
 closed. They moved here from [`../../tasks/`](README.md) when their work
 landed, so `tasks/` holds only active specs. The compact history is
 [`../milestones.md`](../milestones.md); the backlogs that closed them are the
@@ -12,6 +12,7 @@ the active backlog or listed below, not kept as an open task.
 
 | Spec | Label | Closed | What it decided or delivered |
 | --- | --- | --- | --- |
+| [`backend-parity.md`](backend-parity.md) | Backend parity `B0–B21` | 2026-11-12 | One `AppBackend` (`RustAppBackend`) plus a `ScriptHost`; the legacy `PythonAppBackend` deleted; every shown command a `FreeCADGui` command; the CPython and RustPython halves over one document; fetched packs with their `Resources/`; one Coin scene core with two adapters. Deferrals and triggers in §7. |
 | [`d0-draft-import.md`](d0-draft-import.md) | Draft `D0` | 2026-10-22 | The five headless import fixes (`Quantity(value, Unit)`, `lazy_loader`, the `PySide` alias, the `Draft_rc` stub, `src/Ext` on `sys.path`), the `--draft` conformance group, and the `FreeCADGui.getDocument` API. |
 | [`dev-tools-window.md`](dev-tools-window.md) | Dev Tools `D1–D6` | 2026-10-22 | The inspector, property editor, console and command list in a separate Dev Tools window; the main window becomes the viewport and status line. |
 | [`element-map-policy.md`](element-map-policy.md) | Lineage `S6c` | 2026-10-24 | The compound-BOP policy and the naming cascade; every reachable guarded map size matches upstream. `FaceMakerCheese` (10) and `makeShellFromWires` (24) remain documented non-results. |
@@ -25,9 +26,12 @@ the active backlog or listed below, not kept as an open task.
 | [`part-feature-proxies.md`](part-feature-proxies.md) | Proxies `P2a–P2e` | 2026-10-24 | `Part::FeaturePython` and `Part::Part2DObjectPython` execute, change, attach, persist and restore; the Draft M2 modules run green. |
 | [`qt-reduction.md`](qt-reduction.md) | Qt `Q0–Q5` | 2026-10-24 | The measured Qt surface, the `.ui` reader and micro-shim, the gpui forms and the native Draft tool layer. The remaining Qt-only GUI paths are documented in `draft-tools.md`. |
 | [`settings-model.md`](settings-model.md) | Settings `S0–S4c` | 2026-10-22 | Provider-advertised settings, the `Settings` tree, file-backed persistence and the grid/axis/gizmo capabilities. Document-scoped overrides (S5) remain optional. |
+| [`tool-loadout.md`](tool-loadout.md) | Loadout `U4–U6` | 2026-10-31 | Loadout slots (`0` Inspect, `1` Move/Rotate, `2` push/pull, `3` fillet), the `Select ▾` topology filter, one-manipulator narrowing, hover-to-arm and the bottom-left bar. |
 | [`toolbar-chrome.md`](toolbar-chrome.md) | Chrome `T0–T7` | 2026-10-22 | The viewport-header split buttons, anchored popovers, the action dock and the title-bar app menu. |
+| [`transform-session.md`](transform-session.md) | Transform `A1–A3`, `U1–U3` | 2026-10-31 | One cumulative `TransformSession`, preview-only writes, the in-context pill, the 3-D measuring tape, and the rotation step with its single-dirty-ring lock. A0 stays deferred by D0; D3/D4/D6 are carried in the backlog. |
 | [`viewport-event-routing.md`](viewport-event-routing.md) | Event routing `P0.8` | 2026-10-22 | Pane events over the canvas no longer reach the viewport, and an editable settings field no longer closes its card. |
 | [`viewport-feedback-and-window-bounds.md`](viewport-feedback-and-window-bounds.md) | Feedback `P0.8` | 2026-10-22 | The Grid control shows its state on hover; a maximized window maps pointer coordinates correctly and hides resize grips. |
+| [`wasm-shell.md`](wasm-shell.md) | Browser shell `M0–M6` | 2026-11-04 | The `ferrocad_shell_api` / `_core` / `_python` split, the wasm build, the real shell in Chrome, the live 3D viewport, a real Part document, editing, `.FCStd` open/save and a headless smoke check. |
 
 The label column uses the historical names; [`../../labels.md`](../../labels.md) is the
 index that disambiguates them (several letters were reused by different programs).

@@ -1,9 +1,10 @@
 # Milestones — high-level history
 
-Status: record (compact, 2026-10-30). This page is the timeline and the current
+Status: record (compact, 2026-11-13). This page is the timeline and the current
 assessment. The per-slice detail — every slice's design, measurements and follow-ups —
 is archived in
 [`archive/milestones-detail-2026-10.md`](archive/milestones-detail-2026-10.md). The
+November round is [`2026-11-13-november-round.md`](2026-11-13-november-round.md). The
 labels are disambiguated in [`../labels.md`](../labels.md).
 
 ## Timeline
@@ -29,24 +30,29 @@ labels are disambiguated in [`../labels.md`](../labels.md).
 | 2026-10-27 (in the tree) | **Fifth fan-out** | SimpleCAD S4.1 view facade, S4.2 ranked pick, S4.3 `SelectionObject`; the Draft M4 import round (`test_modification` **31/0/2**); the Part `part_ops` batch (248/408); the offscreen snapshot path, the `ferrocad_snapshot` renderer and the `tools/screenshot.py` viewport/chrome/desktop scopes, and the first user-doc images with a spec/PNG manifest; the Draft conformance harness. Uncommitted; the full suite is **631/3/4**, and the three failures are test expectations the round has not updated. |
 | 2026-10-29/30 | **Workplanes, datum planes and the grid** | The world plane as a real state and `WP` as a selector, three-point pick, `Part::DatumPlane` and `Save as datum plane`, the offset stem, the workplane carried in the program frame, adaptive grid spacing with a minor style and stroke widths, in-flight polyline vertex editing with one active-action HUD and a creating `finish`; four grid defects fixed with regression tests. SimpleCAD **969/64/26/2** over 88/88; Rust lib tests **1169** ([round log](2026-10-29-workplane-visual-hierarchy-and-grid.md)). |
 | 2026-10-30 | **Fan-out over the backlog** | Six read-only streams checked the new backlog against the tree and corrected seven claims: `Shape.ShapeType`'s inference is the SimpleCAD `NoneType` cause, `makeWireString` is a FreeType port, `Part.Wire` is not the Draft failure, booleans ignore `Refine`, the P3 addons are absent, SK4's creation half does not exist, and macOS `app.sh` already exists. PlanGCS was verified bindable (not templated, no OCCT) ([fan-out record](2026-10-30-fan-out-todo-30.md)). SC1 then made `Shape.ShapeType` exact (SimpleCAD 969/64/26 → **985/49/23**) and SC2 added `Part.makeWireString` on `skrifa`/`read-fonts`, closing the last `Part.*` name. A 3-D text workflow followed (wires → Bullseye faces → extrude/etch), then upstream's `Draft.make_shape_string` as a scripted ShapeString object. |
+| 2026-11-01 | **OCCT in Rust** | `ferrocad_part_cxx` is gone: `ShapeFix`, `ChFi2d`, topology, boolean history and the curve/geom2d helpers ported to Rust over `ferrocad_occt_cxx`'s sys bindings. The kernel seam is one code path. |
+| 2026-11-02/04 | **The browser host** | GPUI + wgpu + WebGL2 in the browser, the wasm OCCT kernel, the shell crate split and the M0–M6 browser shell: a real `Part::Box` + `Part::Fillet` document, editing, `.FCStd` open/save and a headless smoke check. |
+| 2026-11-04/05 | **Hosts and backends** | `ScriptHost`, the host `FilePicker`, `ferrocad_shell_rust`, one display path, shared property presentation, the command catalogue as data, and both browser script halves over `RustAppBackend` ([host-backends](tasks/host-backends.md)). |
+| 2026-11-08/12 | **Backend parity and the mod format** | One `AppBackend`; the legacy `PythonAppBackend` deleted; every shown command a `FreeCADGui` command; `rquickjs` and RustPython halves; the `ferrocad_addon` ABI; fetched packs carrying their `Resources/`; one Coin scene core with CPython and RustPython adapters (B0–B21, [close-out](tasks/backend-parity.md)). |
+| 2026-11-13 | **The rotation fix** | `RootNode` builds through the imported `pivy.coin` (Part back to **531/0/0/12**), the SimpleCAD in-process harness exports the worker's `PYTHONPATH`/OCCT library path (back to **985/49/23/2**), the Part API contract is re-pinned and the generated API/user pages are regenerated. |
 
-## Current state (2026-10-27 baseline)
+## Current state (2026-11-13 baseline)
 
-The 2026-10-27 snapshot below is kept as the delta's starting point; the current numbers
-are in [`TODO-29-10-2026.md`](TODO-29-10-2026.md) §0 (2026-10-30).
+Measured on the current tree, upstream `33adf61`, SimpleCAD `9180c4b`. The Part and
+SimpleCAD rows are in-process runs; the Rust rows are lib tests only. The full evidence is
+in the [November round log](2026-11-13-november-round.md).
 
-| Surface | Then | Now |
+| Surface | Then (2026-10-27/30) | 2026-11-13 |
 | --- | --- | --- |
-| Upstream Part suite | 2 passed, 1 failed, 89 errored, 4 files failed to load | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** |
-| Upstream Draft suite | no group | The `--draft` group (ten files) is **44 passed, 0 failed, 0 errored, 0 load errors**; `test_modification` is **31/0/2** after the fifth round's M4 import work (22/1/10 before it, 17/0/16 at M3's start) |
-| Draft M2 (`test_creation`, `test_array`) | 15 passed, 1 failed, 11 errored | **27 passed, 0 failed, 0 errored, 0 load failures** |
-| Python facade | 377 passed | **588 passed, 3 skipped** (225 subtests) at the last recorded baseline; the worktree adds 47 passing facade/selection tests and a full run of **631/3/4** whose three failures are test expectations for the new wrapper/`Part::Prism` behaviour |
-| Part module | `makeBox` and a shape handle | Primitives, booleans, dress-ups, links and arrays, conics, splines, NURBS conversion, `ShapeFix`, `ChFi2d`, `Sketcher`, feature objects; **220/408** upstream method names committed (**248/408** in the worktree) |
-| Document format | one JSON blob | Native `.ferrocad` + real `.FCStd` ZIP, with an additive lineage sidecar and a Mesh member |
-| Naming | positional strings | Lineage layer with stored maps; every reachable guarded size matches (52/58/26/24/9/6/60) plus the cuts' 20/47; two composed-alias counts remain documented non-results |
-| Workbench platform | no Python-defined objects | `Part::FeaturePython`/`Part2DObjectPython` execute proxies and attach; Draft M2 is green; Draft M3's first slice is in; the Draft tool surface is native |
-| SimpleCAD | not run | **88/88 modules load, 702 passed / 44 failed / 368 errored / 2 skipped, no aborts** (integrated tree, before the fifth round) |
-| Interaction | no wheel/gizmos | The wheel and Move HUD, re-pivot, select mode, the gizmo registry/set, rotate-ring policy; the S4.1–S4.3 view facade is in the worktree |
+| Upstream Part suite | 531 passed, 0 failed, 0 errored, 12 skipped | **531 passed, 0 failed, 0 errored, 12 skipped** (restored 2026-11-13) |
+| Upstream Draft suite | `--draft` 44/0/0/0; `test_modification` 31/0/2 | **`--draft` 50/0/0/1**; `test_modification` 31/0/2 (carried) |
+| Draft M2 | 27/0/0/0 | **27/0/0/0** |
+| Python facade | 631/3/4 (worktree) | not re-measured; the in-process runs are the gate |
+| Part module | 248/408 names in the worktree | **252/408 (61.8%)**, 21 shared classes |
+| SimpleCAD | 702/44/368/2 | **985/49/23/2 over 88/88** (2026-11-13, worker paths exported) |
+| Rust lib tests | 1 186 across 15 crates | **1 452 passed, 2 failed**; `shell_core` SIGSEGVs in parallel, passes 274/2 serially |
+| Book | 36 chapters | **48 chapters** |
+| Hosts | desktop + a browser spike | **one document, four runtimes**; the browser shell runs the same backend |
 
 ### Three lessons
 
@@ -63,10 +69,9 @@ are in [`TODO-29-10-2026.md`](TODO-29-10-2026.md) §0 (2026-10-30).
 
 ### The remaining Part asymmetry
 
-**Two guarded map counts remain documented non-results.** `FaceMakerCheese` (10) needs
-upstream's face-combo alias and `makeShellFromWires` (24) needs a different (ruled-shell)
-topology. Every other guarded size is reproduced. The alias work is optional; no
-advertised API raises “not implemented”.
+**The kernel contract is complete and the suite is green.** `FaceMakerCheese` (10) and
+`makeShellFromWires` (24) remain documented non-results, and `makeCone`'s partial
+revolution plus STEP/IGES import remain advertised limits. Nothing else is outstanding.
 
 The workbench gate is crossed: both Draft M2 modules run green, the Qt-reduction
 Q0–Q5 slices supply the native spatial reference and the remaining forms, and SimpleCAD
@@ -75,7 +80,7 @@ breadth, not more Part surface for its own sake.
 
 ### What is deliberately not claimed
 
-- **Drop-in FreeCAD compatibility.** 531 upstream Part tests are a measured subset, not
+- **Drop-in FreeCAD compatibility.** The upstream Part tests are a measured subset, not
   the whole workbench: PartDesign, Sketcher's solver, FEM, CAM and the GUI workbenches
   are out of scope here.
 - **A finished `.FCStd` writer.** It round-trips our documents; an upstream-FreeCAD open
@@ -86,11 +91,15 @@ breadth, not more Part surface for its own sake.
 
 ## Where the detail lives
 
-- [`TODO-29-10-2026.md`](TODO-29-10-2026.md) — the closed 2026-10-29 backlog and the
-  workplane/grid round's state.
+- [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) — the active backlog and the
+  measurement caveats at this rotation.
+- [`2026-11-13-november-round.md`](2026-11-13-november-round.md) — the November round:
+  the platform work, the one real regression and the harness gap, and the commands that
+  reproduce them.
+- [`TODO-31-10-2026.md`](TODO-31-10-2026.md) — the closed 2026-10-31 backlog.
 - [`2026-10-29-workplane-visual-hierarchy-and-grid.md`](2026-10-29-workplane-visual-hierarchy-and-grid.md)
-  — the round log: what landed, the four grid defects and their mechanisms, the deferred
-  stroke-unit decision, and the measurements at close.
+  — the workplane/grid round: what landed, the four grid defects and their mechanisms,
+  the deferred stroke-unit decision, and the measurements at close.
 - [`TODO-27-10-2026.md`](TODO-27-10-2026.md) — the closed 2026-10-27 backlog and the fifth
   to eighth rounds' state.
 - [`TODO-26-10-2026.md`](TODO-26-10-2026.md) — the compact closed 2026-10-25/27 record;
@@ -100,14 +109,7 @@ breadth, not more Part surface for its own sake.
   M0–M4 slice, the restructure, the MVP and app-shell slices, the reactor decisions, and
   the M3 plan, with their measurements.
 - [`tasks/README.md`](tasks/README.md) — the closed task specs, indexed by label and
-  closing backlog.
-- [`TODO-21-10-2026.md`](TODO-21-10-2026.md), [`TODO-22-10-2026.md`](TODO-22-10-2026.md),
-  [`TODO-23-10-2026.md`](TODO-23-10-2026.md), [`TODO-24-10-2026.md`](TODO-24-10-2026.md)
-  — the compact closed backlogs; their full text is in `archive/` or, for the 24 record,
-  in the file itself.
-- [`2026-10-24-q4-q5-draft-tools.md`](2026-10-24-q4-q5-draft-tools.md) — the closed
-  Q4/Q5 round: what landed, the measurements, and the deviations it records.
-- [`incident-2026-10-21-session-crash.md`](incident-2026-10-21-session-crash.md) — the
-  `systemd-oomd` post-mortem.
+  closing backlog; the new November entries are `backend-parity`, `wasm-shell`,
+  `transform-session` and `tool-loadout`.
 - [`../ROADMAP.md`](../ROADMAP.md) — where the project is going next; [`../labels.md`](../labels.md)
   — what the letters mean.

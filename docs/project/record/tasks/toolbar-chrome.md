@@ -16,7 +16,7 @@ receiving pointer events through an open popover).
 ## 1. Why
 
 The current shell puts **every** registered command in one full-width strip above all
-panes ([`crates/ferrocad_gpui/src/shell.rs`](../../../../crates/ferrocad_gpui/src/shell.rs),
+panes ([`crates/ferrocad_shell_core/src/shell/mod.rs`](../../../../crates/ferrocad_shell_core/src/shell/mod.rs),
 `actions_bar`, rendered at `Shell::render`). With two grid mods loaded that is fourteen
 text buttons (`Delete`, `Move`, `Grid`, `Axis cross`, `Grid settings`, `Mods`,
 `Reload grid settings`, `Activate workplane`, `Clear workplane`, `View workplane`,

@@ -18,9 +18,9 @@ Move form surviving the loss of its selection.
 > `✓`/`✗`), with the drag's numbers drawn on the 3-D tape's legs. The selection half — a
 > topology filter that lets a loadout slot decide whether a click selects a body or a
 > sub-element — is **built** too (U4). Authority:
-> [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
+> [`../../project/record/tasks/transform-session.md`](../../project/record/tasks/transform-session.md)
 > (§4.1, §5) and
-> [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (§2.1).
+> [`../../project/record/tasks/tool-loadout.md`](../../project/record/tasks/tool-loadout.md) (§2.1).
 > Where this note records the retired *deferred* split (§4.2, §5.2), it is marked as
 > history rather than the built model.
 
@@ -81,7 +81,7 @@ command/dialog protocol).
   `FreeCADGui.Selection`. It is pushed before command enablement is listed.
 - **Topology filter (U4, built 2026-10-31).** The active loadout slot presets a
   `SelectFilter` (`Auto`/`Body`/`Face`/`Edge`; see
-  [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md)). The filter
+  [`../../project/record/tasks/tool-loadout.md`](../../project/record/tasks/tool-loadout.md)). The filter
   is applied where the shell **reports** the selection, not at the pick: `Body` rewrites
   `Face6` to its whole body, while `Auto`/`Face`/`Edge` keep the element. `Edge` is
   resolved by the viewport first: it reports the nearest projected edge of the body under

@@ -6807,9 +6807,59 @@ fn operand_color(
     }
 }
 
+/// Build a `ViewObject.RootNode` through the **imported** `pivy.coin` module.
+///
+/// `RootNode` must be a real node of whichever `pivy.coin` the interpreter has:
+/// the desktop installs FerroCAD's facade, while an upstream test image may import
+/// the system pivy. Building with [`ferrocad_inventor_py::to_py`] would mix the two
+/// class families and make a system `SoSearchAction` reject the root. The tree body
+/// still comes from [`ferrocad_inventor::view_root`], so the RustPython host and this
+/// adapter describe the same shape.
+fn view_root_via_coin(
+    py: Python<'_>,
+    coin: &Bound<'_, PyAny>,
+    node: &ferrocad_inventor::Node,
+) -> PyResult<PyObject> {
+    use ferrocad_inventor::NodeKind;
+
+    match &node.kind {
+        NodeKind::Separator => {
+            let root = coin.getattr("SoSeparator")?.call0()?;
+            for child in &node.children {
+                root.call_method1("addChild", (view_root_via_coin(py, coin, child)?,))?;
+            }
+            Ok(root.unbind())
+        }
+        NodeKind::Material(colors) => {
+            let material = coin.getattr("SoMaterial")?.call0()?;
+            let diffuse = material.getattr("diffuseColor")?;
+            diffuse.call_method1("setNum", (colors.len(),))?;
+            for (index, color) in colors.iter().enumerate() {
+                diffuse.call_method1(
+                    "set1Value",
+                    (
+                        index,
+                        (f64::from(color[0]), f64::from(color[1]), f64::from(color[2])),
+                    ),
+                )?;
+            }
+            Ok(material.unbind())
+        }
+        NodeKind::MaterialBinding { .. } => {
+            let binding = coin.getattr("SoMaterialBinding")?.call0()?;
+            let per_part = binding.getattr("PER_PART")?;
+            binding.setattr("value", per_part)?;
+            Ok(binding.unbind())
+        }
+        other => Err(PyRuntimeError::new_err(format!(
+            "RootNode: {} is not part of the view root",
+            ferrocad_inventor::class_name(other)
+        ))),
+    }
+}
+
 #[pymethods]
 impl PyViewObject {
-    /// The view provider proxy, or `None` when none was supplied.
     #[getter]
     fn Proxy(&self, py: Python<'_>) -> PyObject {
         match self.proxy.lock().unwrap().as_ref() {
@@ -6988,7 +7038,7 @@ impl PyViewObject {
     #[getter]
     fn RootNode(&self, py: Python<'_>) -> PyResult<PyObject> {
         let colors = self.diffuse_colors(py)?;
-        py.import("pivy.coin").map_err(|_| {
+        let coin = py.import("pivy.coin").map_err(|_| {
             PyAttributeError::new_err(
                 "RootNode needs the pivy Coin bindings; the view state is still \
                  readable as ViewObject properties",
@@ -6999,7 +7049,7 @@ impl PyViewObject {
             .map(|color| [color[0] as f32, color[1] as f32, color[2] as f32, 1.0])
             .collect();
         let tree = ferrocad_inventor::view_root(&palette, DISPLAY_MODES.len().min(2));
-        ferrocad_inventor_py::to_py(py, &tree)
+        view_root_via_coin(py, coin.as_any(), &tree)
     }
 
     fn __repr__(&self) -> PyResult<String> {

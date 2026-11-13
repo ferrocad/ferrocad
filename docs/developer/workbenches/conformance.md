@@ -170,6 +170,28 @@ still skip honestly: four consumer shapes in `solids.rs` store an empty lineage,
 (`FaceMakerCheese` 10, `makeShellFromWires` 24) are composed-alias counts. See
 [`../../project/record/TODO-24-10-2026.md`](../../project/record/TODO-24-10-2026.md) §P0.
 
+### Current (2026-11-13, upstream `33adf61`, current tree)
+
+| Group | Result |
+| --- | --- |
+| Part | **531 passed**, 0 failed, 0 errored, 12 skipped, **0 files failed to load** |
+| Draft | **50 passed**, 0 failed, 0 errored, 1 skipped, **0 load failures** |
+| Draft M2 (`test_creation`, `test_array`) | **27 passed**, 0 failed, 0 errored, **0 load failures** |
+
+**The five Part errors found on 2026-11-13 are fixed.** `ColorPerFaceTest` passes
+`ViewObject.RootNode` to the **system** `pivy.coin` `SoSearchAction`; B20 had made
+`RootNode` a `ferrocad_inventor_py` node, so the system action rejected it with
+`SoAction_apply` overload `TypeError`. `RootNode` now builds through the imported
+`pivy.coin` while taking its tree body from `ferrocad_inventor::view_root`, so each
+`pivy.coin` gets nodes of its own class family.
+
+**SimpleCAD's in-process run** is **985 / 49 / 23 / 2** (`crates/ferrocad_part_py/tests/simplecad_conformance.rs`).
+That test now exports the repo `python/` tree and `.occt/prefix/lib` to SimpleCAD's
+`scripts/shape_worker.py` subprocess; without them every worker exits 1 with
+`ModuleNotFoundError: FreeCAD`, which reads as “kernel stopped unexpectedly (code 1)”.
+The 2026-11-13 run is recorded in
+[`../../project/record/2026-11-13-november-round.md`](../../project/record/2026-11-13-november-round.md).
+
 ### Draft M2 (Python feature proxies)
 
 The two modules that exercise Python-defined objects are measured separately from the

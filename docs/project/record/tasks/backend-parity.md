@@ -1,6 +1,6 @@
 # Backend parity: one Gui app, one document half
 
-Status: **complete (2026-11-12).** Every stage B0–B21 is built; §9 is the close-out,
+Status: **complete (2026-11-12); archived 2026-11-13.** Every stage B0–B21 is built; §9 is the close-out,
 and §7 is what is deliberately deferred with its trigger. Two properties were the goal and
 both hold: the composition (`RustAppBackend + PythonScriptHost`) answers what
 `PythonAppBackend` answered (the legacy type is deleted, B5), and every command the shell
@@ -122,7 +122,7 @@ Two findings the plan did not predict:
 
 **Exit: met.** The suite runs in the `ferrocad_parametric` job and names every
 divergence. The ownership table it enforces is in
-[`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md).
+[`../../developer/architecture/host-backends.md`](../../../developer/architecture/host-backends.md).
 
 ### B1 — One command registry (built 2026-11-08)
 
@@ -820,7 +820,7 @@ The last row holds two blockers that are decisions, not plumbing:
   switch should refuse rather than compose.
 
 **Pyodide, if it is taken up.** The design rejected it once for three costs, recorded in
-[`host-backends.md` §9](../../developer/architecture/host-backends.md) — a large download,
+[`host-backends.md` §9](../../../developer/architecture/host-backends.md) — a large download,
 a JS-mediated binding layer, and COOP/COEP for shared memory. None of the three has
 changed,
 and two more follow from this codebase: `ferrocad_py`/`ferrocad_part_py` are PyO3 C-ABI

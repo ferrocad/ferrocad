@@ -142,7 +142,7 @@ builds on) must be published from the fork repository before this job runs. `fer
 
 **Discontinuity: `ferrocad_gpui` → `ferrocad_shell_gpui` (2026-11-03), renamed to `ferrocad_shell_python` (2026-11-05).** The GPUI
 shell split into three crates for the browser target
-([`wasm-shell.md`](../../project/tasks/wasm-shell.md)). The published
+([`wasm-shell.md`](../../project/record/tasks/wasm-shell.md)). The published
 **`ferrocad_gpui` package stops at 0.1.5**; it is not a façade and receives no
 further releases. Its successors are new packages:
 

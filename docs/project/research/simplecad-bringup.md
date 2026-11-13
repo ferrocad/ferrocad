@@ -1,6 +1,7 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
-Status: design (2026-10-21).
+Status: design (2026-10-21); re-measured 2026-11-13 (§7). The current integrated baseline is
+**985 passed / 49 failed / 23 errored / 2 skipped over 88/88 modules**.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
@@ -1427,6 +1428,20 @@ returns upstream's `list[list[Wire]]`. Measured: Part extension set **743 / 3** 
 exercise the text tool, so the win is the resolved name, not the count). The scale is
 upstream's `/ 10` formula, reproduced deliberately; see
 [`../tasks/simplecad-bringup.md`](../tasks/simplecad-bringup.md) SC2.
+
+**2026-11-13 — the November-tree re-measure.** The in-process harness (current tree,
+upstream `9180c4b`) reports **985 passed, 49 failed, 23 errored, 2 skipped, 0 load
+errors** — the 2026-10-30 baseline. A first reading was 975/49/33; the extra ten errors
+were not the kernel. SimpleCAD runs curved-surface and offset operations in an isolated
+`scripts/shape_worker.py` **subprocess**, and the in-process harness had not exported
+`PYTHONPATH`/`LD_LIBRARY_PATH`, so each worker exited 1 with `ModuleNotFoundError:
+FreeCAD`. That surfaces in the suite as `The kernel stopped unexpectedly on this geometry
+(code 1)`. The test now exports the repo `python/` tree and `.occt/prefix/lib`
+(`crates/ferrocad_part_py/tests/simplecad_conformance.rs`); `test_surface_ops` is 15
+passed / 1 errored (the known `PartDesign` absence). The 49 failures remain the same
+buckets. See
+[`../record/2026-11-13-november-round.md`](../record/2026-11-13-november-round.md) §2.1
+and [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) §P1.1.
 
 ---
 

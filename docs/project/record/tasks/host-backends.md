@@ -3,7 +3,7 @@
 Status: closed task spec (moved to `record/tasks/` on 2026-11-05). Original status:
 **done — S1–S8 delivered** (2026-11-04 … 2026-11-05), with the CI run green.
 Design authority: [`../../../developer/architecture/host-backends.md`](../../../developer/architecture/host-backends.md).
-Companions: [`../../tasks/wasm-shell.md`](../../tasks/wasm-shell.md) (M0–M6, done), [`../../research/web-wasm-host.md`](../../research/web-wasm-host.md)
+Companions: [`wasm-shell.md`](wasm-shell.md) (M0–M6, done), [`../../research/web-wasm-host.md`](../../research/web-wasm-host.md)
 (the browser findings), [`../../../developer/architecture/repackaging.md`](../../../developer/architecture/repackaging.md)
 (the shell-library/edition shape), [`../../../developer/architecture.md`](../../../developer/architecture.md)
 (the crate map), [`../../../developer/architecture/property-types.md`](../../../developer/architecture/property-types.md)
@@ -926,7 +926,7 @@ Open questions:
 
 ## 12. References
 
-- [`wasm-shell.md`](../../tasks/wasm-shell.md) — the M0–M6 record, the crate split, the
+- [`wasm-shell.md`](wasm-shell.md) — the M0–M6 record, the crate split, the
   `AppBackend` rationale, the browser acceptance baselines.
 - [`../../research/web-wasm-host.md`](../../research/web-wasm-host.md) — the probe, the
   presenter negotiation, and the wasm limits (§6.2).

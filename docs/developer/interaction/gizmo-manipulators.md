@@ -19,8 +19,8 @@ language this suite shares).
 > 3-field coordinate row docked with the loadout, the pending move's in-context `✗`/`✓`
 > pill (§5) and, for a translation, the tape's per-leg ruler tags. The
 > loadout slot deciding which manipulator class may arm at all is built too (§9.2, §14, §19).
-> Plans: [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
-> and [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md); the maths,
+> Plans: [`../../project/record/tasks/transform-session.md`](../../project/record/tasks/transform-session.md)
+> and [`../../project/record/tasks/tool-loadout.md`](../../project/record/tasks/tool-loadout.md); the maths,
 > hit-testing, modifier and ribbon sections here stay authoritative.
 
 ## 0. Direction

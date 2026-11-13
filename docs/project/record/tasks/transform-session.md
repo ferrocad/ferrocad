@@ -1,9 +1,10 @@
 # The transform session: explicit uncommitted state, one move, no undo-as-cancel
 
-Status: **design and plan (2026-10-30).** *Plan only — A1a and A1b are the only pieces with
-code behind them.*
+Status: **A1a–A1c, A2, A3 and U1–U3 built (2026-10-30/31); archived 2026-11-13.**
+A0 (`PendingEdit`/`EditView`) remains deferred by D0; the open decisions (D3, D4, D6)
+are carried in [`../../TODO-13-11-2026.md`](../../TODO-13-11-2026.md) §P5.
 Read against the tree in
-[`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
+[`../research/transform-session-compatibility.md`](../../research/transform-session-compatibility.md),
 which corrected the pending value's shape: the display stage carries **world-space** geometry
 with an identity placement, so the session datum is a world point, not a `Placement`. The
 recon also expected a facade handle for a core pending edit; **D0 removed that need** (the
@@ -344,7 +345,7 @@ On the 900a document (10 drawable shapes, 1.25 M triangles) with `FERROCAD_TIMIN
 
 | | Cost | Why |
 | --- | --- | --- |
-| Drag tick | **was ~570 ms, now microseconds** | The preview used to mark the stage dirty, and a rebuild re-emits every position of every item. `ShapeItem::emit` already writes the world matrix into [`DrawPacket::state`](../../../crates/ferrocad_graphics/src/draw.rs), so `InventorViewport::patch_stage_transforms` writes the new matrix onto the packets the queue already holds — packet count instead of vertex count |
+| Drag tick | **was ~570 ms, now microseconds** | The preview used to mark the stage dirty, and a rebuild re-emits every position of every item. `ShapeItem::emit` already writes the world matrix into [`DrawPacket::state`](../../../../crates/ferrocad_graphics/src/batch.rs), so `InventorViewport::patch_stage_transforms` writes the new matrix onto the packets the queue already holds — packet count instead of vertex count |
 | Commit | **was ~1.4 s, now a rigid transform** | The commit is right to cross into the mod layer (D0), but the display re-read after it was not cheap: a placement write re-bakes the object's `Shape`, so the handle changes — and `ShapeProperty::with_placement` built the replacement with a **fresh, empty** tessellation memo, so the next display sync re-meshed the body. `TessellationCache::record_rigid` now carries the cached mesh onto the new handle, transformed by the same delta, and `ShapeProperty::with_placement_and_memo` hands it on |
 
 The drag half was a bug in the preview path and is fixed. The commit half needed a decision about
@@ -372,7 +373,7 @@ What this deliberately does **not** add:
 - no core `PendingEdit` on the critical path (see §2.2 and the trigger in §5);
 - no per-tick callback into Python, and no synchronous mod callbacks for anything phrased in
   frames. The mod-facing event surface is a separate, small, low-frequency contract in
-  [`mod-events.md`](mod-events.md) (stage **E1**).
+  [`mod-events.md`](../../tasks/mod-events.md) (stage **E1**).
 
 ---
 
@@ -493,7 +494,7 @@ Section numbers are from the synthesis and are re-checked against each file when
 lands; the status column is updated then. The loadout-owned rows are in
 [`tool-loadout.md`](tool-loadout.md) §4.
 
-### 4.1 [`selection-gizmos-and-forms.md`](../../developer/interaction/selection-gizmos-and-forms.md)
+### 4.1 [`selection-gizmos-and-forms.md`](../../../developer/interaction/selection-gizmos-and-forms.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
@@ -501,20 +502,20 @@ lands; the status column is updated then. The loadout-owned rows are in
 | §5.1 / §5.2 Form state machine | replace the floating Move command dialog (`Cancel`/`Move`) with the always-on coordinate row (docked with the loadout) plus an in-context pending-only `✗`/`✓` pill; change context loss from *silently cancelled* to a **locked context** the user must finish with `✗`/`✓` (revised 2026-10-31 from auto-commit), reserving `Esc` for rollback; at rest the row is an inspector (no pill, no tape) | U1 (semantics), U2 (HUD) — done 2026-10-31 |
 | §7 Invariant 3 | "every pending transform session has an explicit rollback (`Esc`), an explicit checkpoint (`Enter`), and locks the context while its delta is non-zero" | U1 |
 
-### 4.2 [`gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
+### 4.2 [`gizmo-manipulators.md`](../../../developer/interaction/gizmo-manipulators.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
 | §5 / §7 lifecycle, snapping, readout | promote `Tab`/digit entry from "deferred escalation" to the primary mechanism of the readout; a translation's numbers are the tape's ruler tags, not a second pill at the tip | U2 — done 2026-10-31 |
 
-### 4.3 [`visual-language.md`](../../developer/interaction/visual-language.md)
+### 4.3 [`visual-language.md`](../../../developer/interaction/visual-language.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
 | §1.5 Text and glass chrome | remove `Cancel`/`Move` button chrome from the translation HUD; the chrome is a docked 3-field row plus an in-context `✗`/`✓` pill, and the tape draws 1 px dashed strokes (`AXIS_X`, `AXIS_Y`, `AXIS_Z`, `INACTIVE_COLOR` ghost ring) with per-leg ruler tags | U2, U3 — done 2026-10-31 |
 | §5 State model | add the post-drag `SESSION_HOLD` where the tape and pill stay live until `Enter`, a context switch or `Esc` (the hover-to-arm case belongs to the loadout note) | U3 |
 
-### 4.4 [`transform-ux.md`](../../developer/interaction/transform-ux.md)
+### 4.4 [`transform-ux.md`](../../../developer/interaction/transform-ux.md)
 
 The mode/pivot/re-pivot note stays authoritative for *what the handles do*; its lifecycle
 section is superseded by §1 here, and its pending-mode discussion by §2. Add the pointer at U1.
@@ -525,7 +526,7 @@ section is superseded by §1 here, and its pending-mode discussion by §2. Add t
 
 A1a–A3 are invisible (no user-visible change, existing tests stay green). U1–U3 are this note's
 share of the UX overhaul; U4–U5 belong to [`tool-loadout.md`](tool-loadout.md), E1 is the
-mod-facing event contract ([`mod-events.md`](mod-events.md)), and U6 is the shared convergence
+mod-facing event contract ([`mod-events.md`](../../tasks/mod-events.md)), and U6 is the shared convergence
 sweep.
 
 | Stage | Deliverable | Why this order | Spec updated |
@@ -642,5 +643,5 @@ sweep.
 | D6 | Does the tape appear for a typed-only session (no drag)? | **decided 2026-10-31** | Yes, once a delta is non-zero — typing is a gesture too. The tape is the session's view, and a typed edit updates the session. |
 | D7 | Are the rotate fields three independent Euler angles? | **decided 2026-10-31** | **No.** The pending value is one `(axis, angle)` step. Three `ΔθX/ΔθY/ΔθZ` fields cannot be independent on `SO(3)`: multiplying them in any order makes the same three numbers a different pose, and anchored detents then decompose into fractional cross-talk (Y 15° then X 15° is ≈ `15.5 / 14.5 / 4.0`). The row shows all three axes but only the pending one is editable; the siblings are locked until `✓`/`✗`. `ABS` is replaced by `WLD`/`LOC` plus `Reset 0°` |
 
-The loadout note owns D2 and D5. The mod-facing event contract is [`mod-events.md`](mod-events.md)
+The loadout note owns D2 and D5. The mod-facing event contract is [`mod-events.md`](../../tasks/mod-events.md)
 (stage E1), which also records what was **not** built: a mod-to-mod event bus.

@@ -194,7 +194,7 @@ which it got.
 The ABI is host-neutral by construction, not only in principle: `loader.js` is the
 *browser's* implementation of the host side, and a native host implements the same
 `ferrocad.call` import over `ferrocad_doc_api` — which is what a desktop addon engine
-(`wasmi`, B7 in [`../tasks/backend-parity.md`](../tasks/backend-parity.md)) would be. The
+(`wasmi`, B7 in [`../record/tasks/backend-parity.md`](../record/tasks/backend-parity.md)) would be. The
 bundle does not know which one it got either.
 
 ## 5. `catalog.json` is not the addon table
@@ -250,7 +250,7 @@ Proven on the desktop too (`ferrocad_shell_wasm/tests/shipped.rs`, in CI): the s
 `ferrocad_addon_toy.wasm` is instantiated by `wasmi` over the **real** `DocApi`, so the
 commands are listed, `Toy_Slab` creates its object through the document API, and the hook
 returns the slab's mesh. Two hosts, one artifact — see
-[`../tasks/backend-parity.md`](../tasks/backend-parity.md) B7e.
+[`../record/tasks/backend-parity.md`](../record/tasks/backend-parity.md) B7e.
 
 Verified in a real page (2026-11-09, `crates/ferrocad_web_gpui/smoke.sh`, headless Chrome
 against the `www/pkg` build of 2026-11-08): `?runtime=js&addons=wasm&keys=ctrl-k;t;o;y;enter
@@ -275,7 +275,7 @@ re-runs this check when a current artifact is wanted.
    `ferrocad_shell_api::document_api::is_write`, which is the drift to watch.
 
 Neither half running on the desktop is deliberate, not a gap in this list: **B7** in
-[`../tasks/backend-parity.md`](../tasks/backend-parity.md) treats a desktop JS engine and a
+[`../record/tasks/backend-parity.md`](../record/tasks/backend-parity.md) treats a desktop JS engine and a
 desktop wasm engine as two *separate* missing dependencies, with the addon one first,
 because the browser is the shipping surface for both.
 

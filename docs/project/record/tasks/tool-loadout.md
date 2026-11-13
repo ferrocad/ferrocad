@@ -1,6 +1,6 @@
 # The tool loadout: slots, the `Select ▾` filter, and hover-to-arm
 
-Status: **U4, U5 and U6 built (2026-10-31).** Slot 1 hosts the triad, Slots 2 and 3 host
+Status: **U4–U6 built (2026-10-31); archived 2026-11-13.** Slot 1 hosts the triad, Slots 2 and 3 host
 the selection's manipulator, Slot 0 is Inspect (selection highlight only), the
 `Select ▾` filter rewrites the reported selection, `0`–`3` and the bottom-left bar equip
 a slot, a slot or filter change commits a dirty
@@ -9,7 +9,7 @@ handle press selects and drags it in one gesture. The sweep and the user page (U
 in: the four interaction specs agree with the tree, the retired vocabulary is deleted,
 and `docs/user/how-to/tool-loadout.md` documents the bar, the filter and hover-to-arm.
 Read against the tree in
-[`../research/transform-session-compatibility.md`](../research/transform-session-compatibility.md),
+[`../research/transform-session-compatibility.md`](../../research/transform-session-compatibility.md),
 which found the loadout **smaller** than this note first assumed: only one compiled manipulator
 is hosted per selection already, and both arm seams take the element — so narrowing is a
 filtered `SelectionRef`, not a new manipulator kind.
@@ -235,7 +235,7 @@ and the projected edge segments, not the shell's view of the stage.
 
 ## 3. Hover-to-arm and zero-click drag
 
-Continuing [`visual-language.md`](../../developer/interaction/visual-language.md) §0.3 ("a
+Continuing [`visual-language.md`](../../../developer/interaction/visual-language.md) §0.3 ("a
 control materialises from pointer proximity or a drag and dissolves when idle"):
 
 ```text
@@ -296,26 +296,26 @@ Slot 1 (Move) equipped
 Section numbers are re-checked against each file when its stage lands. The session-owned rows
 are in [`transform-session.md`](transform-session.md) §4.
 
-### 4.1 [`selection-gizmos-and-forms.md`](../../developer/interaction/selection-gizmos-and-forms.md)
+### 4.1 [`selection-gizmos-and-forms.md`](../../../developer/interaction/selection-gizmos-and-forms.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
 | §2.1 Selection | add topology-filter gating (`SelectFilter::{Body, Face, Edge, Auto}`): when the active slot sets `Body`, `selection_event` strips sub-element names so a first click selects whole bodies | U4 |
 
-### 4.2 [`gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
+### 4.2 [`gizmo-manipulators.md`](../../../developer/interaction/gizmo-manipulators.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
 | §9.2 / §14 kinds, hosting, priority | bring `PushPullStem` and `DressUpScrubber` under the active loadout session filter: a face click in Slot 1 (Body) arms only the triad; in Slot 2 (Face) only the stem | U4 |
 | §19 where the control lives | document the top-left `Select ▾` header pill and the bottom-left `[1 Move] [2 Push/Pull] [3 Fillet]` group | U4 |
 
-### 4.3 [`visual-language.md`](../../developer/interaction/visual-language.md)
+### 4.3 [`visual-language.md`](../../../developer/interaction/visual-language.md)
 
 | Section | Change | Stage |
 | --- | --- | --- |
 | §5 State model | extend IDLE → HOVER → DRAG with hover-to-arm on unselected bodies (`HoverReport::target`); the post-drag `SESSION_HOLD` row is the session note's | U5 |
 
-### 4.4 [`transform-ux.md`](../../developer/interaction/transform-ux.md)
+### 4.4 [`transform-ux.md`](../../../developer/interaction/transform-ux.md)
 
 Its "what the handles do" sections stay authoritative; add a pointer to this note where it
 discusses which manipulator a selection arms (the intent is unchanged — context-driven — the
@@ -366,7 +366,7 @@ before U2/U3, i.e. the loadout can arrive before the pill and the tape.
 - Per-slot settings (a slot remembering a chamfer size) — the bar is a selector, not a preset
   store.
 - Tool slots for creation (polyline, box) — those are transient tools, not loadout slots;
-  [`creation-tools-ownership.md`](creation-tools-ownership.md) decides where they live.
+  [`creation-tools-ownership.md`](../../tasks/creation-tools-ownership.md) decides where they live.
 - Slot persistence across sessions — after U6, if the store already exists for `Gizmo ▾`.
 
 ---

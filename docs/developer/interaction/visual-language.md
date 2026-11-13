@@ -17,9 +17,9 @@ conventions.
 > `SESSION_HOLD` (§5); both are built. The mode switch flips the fields between offsets
 > and world coordinates.
 > Hover-to-arm is built too. Plans:
-> [`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md)
+> [`../../project/record/tasks/transform-session.md`](../../project/record/tasks/transform-session.md)
 > (form, tape, `SESSION_HOLD`) and
-> [`../../project/tasks/tool-loadout.md`](../../project/tasks/tool-loadout.md) (hover-to-arm);
+> [`../../project/record/tasks/tool-loadout.md`](../../project/record/tasks/tool-loadout.md) (hover-to-arm);
 > every token and stroke rule here stays authoritative.
 
 ---
@@ -188,7 +188,7 @@ finish pill and a stage-side tape (all built 2026-10-31):
 The row, the pill and the tape are built (`shell::move_hud::MoveHud`,
 `render::move_fields_bar`, `render::move_finish_overlay`, `shell::pill::PillState`,
 `ferrocad_stage::measure_tape`). Authority for the specification:
-[`../../project/tasks/transform-session.md`](../../project/tasks/transform-session.md) §3.
+[`../../project/record/tasks/transform-session.md`](../../project/record/tasks/transform-session.md) §3.
 
 **Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
 not a floating pill: a centred `380 px` panel on `rgba(22, 24, 29, 0.95)` with a

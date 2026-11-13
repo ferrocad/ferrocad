@@ -96,8 +96,8 @@ the same trees produce byte-identical JSON.
   share (for example `Part::Shape`); `missing.method_classes` lists upstream
   classes we do not expose at all.
 - `coverage.methods` — the headline number: how many of upstream's distinct
-  declared names exist on at least one of our Python classes, the fraction, and
-  the shared-class count. At the 2026-10-30 pin it is **252 of 408 names
+  declared names exist on at least one of our Python classes, the fraction, and the
+  shared-class count. At the 2026-10-30 and 2026-11-13 pins it is **252 of 408 names
   (61.8%) across 21 shared classes**; the per-class gaps are the SimpleCAD/Draft work
   list. Earlier pins were 248/408 (60.8%) and 220/408 (53.9%); always say which tree and
   which extension build produced the figure.

@@ -2,10 +2,10 @@
 
 Status: **handoff note (2026-10-30)**. Not a plan and not a changelog: this is the state a
 fresh session needs to continue without re-deriving it. The plan it refers to is
-[`../tasks/transform-session.md`](../tasks/transform-session.md) (with
-[`../tasks/tool-loadout.md`](../tasks/tool-loadout.md) and
+[`tasks/transform-session.md`](tasks/transform-session.md) (with
+[`tasks/tool-loadout.md`](tasks/tool-loadout.md) and
 [`../tasks/mod-events.md`](../tasks/mod-events.md)); the backlog is
-[`../TODO-31-10-2026.md`](../TODO-31-10-2026.md).
+[`TODO-31-10-2026.md`](TODO-31-10-2026.md).
 
 Everything below is true at `ef33987`, working tree clean, `main` level with `origin/main`.
 

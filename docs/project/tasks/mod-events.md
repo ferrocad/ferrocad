@@ -1,7 +1,7 @@
 # Mod events: advertise, subscribe, and stay out of the frame
 
 Status: **design and plan (2026-10-30); first slice built (2026-11-08).** Stage **E1** of
-the transform overhaul ([`transform-session.md`](transform-session.md) §5), written up separately
+the transform overhaul ([`transform-session.md`](../record/tasks/transform-session.md) §5), written up separately
 because it is about the host/mod boundary rather than the transform itself. The two
 document events are emitted for the scripting halves (§3a); `selection.changed` and
 `transform.committed` are still unbuilt.

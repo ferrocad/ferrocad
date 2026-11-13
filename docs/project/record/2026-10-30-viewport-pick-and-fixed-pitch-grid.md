@@ -4,7 +4,7 @@ Status: record (code round). Companion to
 [`2026-10-30-fan-out-todo-30.md`](2026-10-30-fan-out-todo-30.md), which audited the backlog
 read-only; this one is what the tree changed afterwards. The backlog at the time was
 [`TODO-30-10-2026.md`](TODO-30-10-2026.md); the open work carried to
-[`../TODO-31-10-2026.md`](../TODO-31-10-2026.md).
+[`TODO-31-10-2026.md`](TODO-31-10-2026.md).
 
 ## What prompted it
 

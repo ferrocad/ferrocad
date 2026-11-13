@@ -1,7 +1,8 @@
 # SimpleCAD bring-up: the closing cut
 
-Status: task spec (2026-10-30). Cut from [`../TODO-31-10-2026.md`](../TODO-31-10-2026.md)
-§P1 after the [fan-out](../record/2026-10-30-fan-out-todo-30.md). The measurement it
+Status: task spec (2026-10-30). Cut from [`../record/TODO-31-10-2026.md`](../record/TODO-31-10-2026.md)
+§P1 after the [fan-out](../record/2026-10-30-fan-out-todo-30.md); the current home of the
+open slices is [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) §P1. The measurement it
 starts from is [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7.3;
 the round's closed backdrop is
 [`../record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](../record/2026-10-29-workplane-visual-hierarchy-and-grid.md).

@@ -1,39 +1,49 @@
 # FerroCAD roadmap
 
-Status: roadmap (2026-10-30). The actionable backlog is
-[`TODO-31-10-2026.md`](TODO-31-10-2026.md); the measured history is
-[`record/milestones.md`](record/milestones.md); the letters used below (`H1`, `P4`,
-`S4`, `M3` …) are indexed in [`labels.md`](labels.md).
+Status: roadmap (2026-11-13). The actionable backlog is
+[`TODO-13-11-2026.md`](TODO-13-11-2026.md); the measured history is
+[`record/milestones.md`](record/milestones.md) and the latest round is
+[`record/2026-11-13-november-round.md`](record/2026-11-13-november-round.md); the letters
+used below (`H1`, `P4`, `S4`, `M3` …) are indexed in [`labels.md`](labels.md).
 
 ## Where we are
 
-FerroCAD is a Rust/GPUI + PyO3 + pure-Python reimplementation of FreeCAD. The engine,
-the app shell and the Python `FreeCAD` surface exist; `Part` is a real workbench
-(**531 upstream tests passing, 0 errors, 12 skipped**); the native and `.FCStd`
-serializers are independent; and topological naming is a lineage layer rather than a
-kernel concern.
+FerroCAD is a Rust/GPUI + PyO3/RustPython + pure-Python reimplementation of FreeCAD. The
+engine, the app shell and the Python `FreeCAD` surface exist; `Part` is a real workbench
+(**531 upstream tests passing, 0 errored, 12 skipped** at the 2026-11-13 rotation); the
+native and `.FCStd` serializers are independent; and topological naming is a lineage layer
+rather than a kernel concern. There is **one document implementation and four runtime
+configurations** (CPython, RustPython, JS, none), and the browser runs the same shell as the
+desktop.
 
-The bottleneck is no longer geometry. It is the **breadth of the workbench API** and the
-**interaction surface** on top of it. The Part audit covers **252 of 408 upstream method
-names (61.8%)**, and the SimpleCAD S4.1–S4.3 view facade, ranked pick and selection object
-are in the tree. SimpleCAD's integrated baseline is **969 passed / 64 failed / 26 errored
-/ 2 skipped over 88/88 modules** (2026-10-30). The 2026-10-29 round closed the workplane's
-visual hierarchy and the grid: the spatial reference is no longer the visible defect.
+The bottleneck is no longer geometry. It is the **breadth of the workbench API**, the
+**interaction surface** on top of it, and the **host/platform seam** the November round
+built. The Part audit covers **252 of 408 upstream method names (61.8%)**. The SimpleCAD
+S4.1–S4.3 view facade, ranked pick and selection object are in the tree. SimpleCAD's
+integrated baseline is **985 passed / 49 failed / 23 errored / 2 skipped over 88/88
+modules** (2026-11-13). The rotation's two red readings were fixed the same day: the B20
+`RootNode` change was a real Part regression, and the SimpleCAD `surface_ops` delta was the
+in-process harness not exporting the paths its worker subprocess needs.
+
+The platform picture did change materially: the **browser shell** runs the same
+`RustAppBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
+format. The remaining work is breadth and correctness on top of that platform, not a second
+architecture.
 
 ## The three horizons
 
 | Horizon | Goal | Exit criteria | Backlog |
 | --- | --- | --- | --- |
-| **H1 — Finish Part/OCCT** (closed) | Complete the Part contract honestly | Zero Part failures (achieved); every reachable guarded map size enabled; no “not implemented” left in the seam for advertised API | P5 (optional tail only) |
-| **H2 — Workbench platform** (in progress) | Make Part a platform Draft/BIM/SimpleCAD can build on | `Part::FeaturePython` executes and persists; Draft M2–M5 run headless; Q0–Q5 done | P2 (Draft), P5 |
+| **H1 — Finish Part/OCCT** (closed) | Complete the Part contract honestly | Zero Part failures (achieved 2026-10-27, restored 2026-11-13); every reachable guarded map size enabled; only documented limits remain | P2 (the OCCT tail) |
+| **H2 — Workbench platform** (built) | Make Part a platform Draft/BIM/SimpleCAD can build on | `Part::FeaturePython` executes and persists; Draft M2–M5 run headless; Q0–Q5 done; one document/backend with four runtimes | P2 (Draft), P5 |
 | **H3 — Proof by use** (active) | Prove the platform end to end | SimpleCAD S0–S5 baseline; a published `Parametric` edition; a headless BIM subset | P1, P3, P6 |
 
 ### H1 — Finish Part/OCCT (closed 2026-10-27)
 
 - **The element-map version.** Enabled for every shape that carries a lineage. The
   compound (52), fuse (58), cut/common (26), general-fuse (60), sweep (6), shell/solid
-  (26), loft (24), filled face (9) and compound-cut (20/47) sizes match upstream, and the
-  Part suite reports **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures**.
+  (26), loft (24), filled face (9) and compound-cut (20/47) sizes match upstream. The
+  2026-11-13 suite is **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures**.
 - **The seam remainder.** Landed: partial spheres/revolutions, variable-radius fillets,
   `makeOffset2D` filling, hyperbola/parabola/Bezier (including `Geom2d`), multi-shell
   solids, `DirMode Edge/Normal`, B-spline tube spines, the exact `makeHelix`/
@@ -42,58 +52,56 @@ visual hierarchy and the grid: the spatial reference is no longer the visible de
   parabola, Bezier, rational and periodic B-spline, offset).
 - **The two documented non-results.** `FaceMakerCheese` (10) needs upstream's face-combo
   alias and `makeShellFromWires` (24) needs a different (ruled-shell) topology. Both keep
-  `ElementMapVersion == ""` so upstream's guards skip; no advertised API raises “not
-  implemented”. The only remaining H1 item is optional.
+  `ElementMapVersion == ""` so upstream's guards skip. **Two advertised limits still
+  raise**: `makeCone` with a partial revolution and STEP/IGES `Import`/`insert`.
 
-**Exit met.** The Part suite is green, and the only tail is the optional alias policy.
+**Exit met.** The Part suite is green, and the only tail is the optional alias policy and
+the two documented limits.
 
-### H2 — Workbench platform (in progress)
+### H2 — Workbench platform (built 2026-11-12)
 
+- **One document, four runtimes.** `RustAppBackend` is the document half of the desktop and
+the browser; `PythonScriptHost`, `PywasmScriptHost`, `JsScriptHost` and `runtime=plain` are
+the script halves. The browser shell (M0–M6) runs the real shell in Chrome, and the
+backend-parity ledger (B0–B21) closed the legacy `PythonAppBackend` and made every shown
+command a real `FreeCADGui` command.
+- **The OCCT seam is Rust.** `ferrocad_part_cxx` is gone; `ShapeFix`, `ChFi2d`, topology,
+boolean history and the curve/geom2d helpers are Rust over `ferrocad_occt_cxx`'s sys
+bindings. The kernel contract and its failure classification are now one code path.
 - **Python feature proxies (P2a–P2e, landed).** `Part::FeaturePython` and
-  `Part::Part2DObjectPython` execute a Python `Proxy`, fire `onChanged`, honour
-  `attach=True`, persist natively and call `onDocumentRestored`; the attachment
-  extension supplies `AttachmentSupport`/`MapMode`. The Draft M2 modules run green:
-  `test_creation.py` **26 passed** and `test_array.py` **1 passed**, with **zero
-  failures, errors or load errors**.
-- **Qt Q0–Q5 (landed).** [`../developer/workbenches/draft-tools.md`](../developer/workbenches/draft-tools.md):
-  `FreeCADGui.Snapper`, the async point session, the native `Draft_Line`/`Draft_Wire`
-  tools and `PlaneGui`, the checkable `Draft_Snap_*` bar, and the four remaining forms.
-  The Python suite is **588 passed / 3 skipped** at the last recorded baseline (225
-  subtests); the fifth round adds 47 passing tests.
-- **Draft M3 first slice and M4 import round (landed).** `getEditorMode`/
-  `setEditorMode`, `Placement.isIdentity`/`move`, `Matrix` copy/multiply,
-  `PropertyVectorDistance` and strict `addObject` took `test_modification` from
-  **17/0/16** to **22/1/10**; the fifth round's M4 import work (the derived
-  `Part::Feature.Shape` wrapper, `Part::Prism`, `Shape.fix`/`OrderedEdges`,
-  `Quantity.__eq__`, `getHomePath` and the TechDraw shim) takes it to **31/0/2**. The
-  `--draft` group is **44/0/0/0** across ten files. The two remaining errors are
-  `Sketcher` and TechDraw's `DrawPage`.
-- **Draft M4 remainder and M5.** Import/export (the SVG/wire wrapper, `Import.readDXF`,
-  the `test_draftgeomutils` extension math) and the BIM surface on top — measured by
-  the `drafttests` modules, not by feature claims. This is the main H2 gap.
+`Part::Part2DObjectPython` execute a Python `Proxy`, fire `onChanged`, honour
+`attach=True`, persist natively and call `onDocumentRestored`; the attachment extension
+supplies `AttachmentSupport`/`MapMode`.
+- **Qt Q0–Q5 (landed).** The native `FreeCADGui.Snapper`, the async point session, the
+native `Draft_Line`/`Draft_Wire` tools and `PlaneGui`, the checkable `Draft_Snap_*` bar and
+the remaining forms. `--draft` is **50/0/0/1** at the 2026-11-13 re-run.
+- **The platform tail.** E1 mod events (first slice built), document-scoped settings, the
+gizmo-interface decision, and the backend-parity deferrals (§P5).
 
-**Done when** Draft creates, edits and imports headless, and no upstream workbench path
-needs Qt for its non-GUI behaviour. The Qt-free path is largely there; the Draft
-modification/import breadth is not.
+**Done when** Draft creates, edits and imports headless. The Qt-free path is largely there;
+Draft's modification/import breadth is not, and the platform now makes that a workbench task
+rather than an architecture task.
 
 ### H3 — Proof by use (active)
 
-- **SimpleCAD S0–S3 — the image is in.** The Mesh track landed 2026-10-26:
-  `ferrocad_mesh` (payload, STL, operations, `Mesh::Feature`), `ferrocad_mesh_py`
-  (`Mesh`, `MeshPart`), `Part.Shape.tessellate`, `BOPTools.SplitAPI` and the import-time
-  PySide surface. All **88/88** SimpleCAD unit modules load in one in-process
-  `ferrocad` + `Part` + `Mesh` image: **702 pass, 44 fail, 368 error, 2 skip** (down from 635 errors before the integration fixes). The
-  identity, query and representation frontier closed (deep `Shape.copy()`,
-  `__hash__`/`__eq__`, `Placement(other)`, typed `Faces`/`Wires`, `Face.Surface`
-  classification with `parameter()`), and the S2–S3 baseline is recorded in
-  [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
+- **SimpleCAD S0–S3 — the image is in.** `ferrocad_mesh` (payload, STL, operations,
+  `Mesh::Feature`), `ferrocad_mesh_py` (`Mesh`, `MeshPart`), `Part.Shape.tessellate`,
+  `BOPTools.SplitAPI` and the import-time PySide surface all load in one in-process
+  `ferrocad` + `Part` + `Mesh` image. The 2026-11-13 baseline is **985 pass, 49 fail,
+  23 error, 2 skip over 88/88 modules**; the failures and errors are named in
+  [`TODO-13-11-2026.md`](TODO-13-11-2026.md) §P1.1. The identity, query and representation
+  frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
+  `Faces`/`Wires`, `Face.Surface` classification with `parameter()`).
 - **SimpleCAD S4.1–S4.3 (in the worktree).** The view facade, the ranked pick and the
   `SelectionObject` are implemented and covered by 47 tests. S4.4 snapping, the S4.5
-  push/pull integration and S4.6 previews remain. **Re-measure after the rebuild** — the
-  702/44/368 figure predates the Part API batch.
+  push/pull integration and S4.6 previews remain.
+- **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
+  kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
+  pack reaches the script half. This is the proof-of-use surface that did not exist at the
+  last roadmap.
 - **Publish the edition.** The `Parametric` artifact (OCCT closure, launcher, release
-  matrix) and the Diátaxis book as a release artifact. v0.1.4 is tagged; macOS packaging
-  and signing are still unbuilt.
+  matrix) and the Diátaxis book as a release artifact. v0.1.4 is still the latest tag;
+  macOS packaging and signing are parked.
 - **BIM headless subset.** The `Arch`/BIM modules that do not need a GUI. This has not
   started; it follows the Draft M4/M5 import/export work.
 
@@ -102,14 +110,15 @@ workbench, and compare results with upstream.
 
 ## Not on the roadmap (for now)
 
-PartDesign's feature tree, Sketcher's solver and constraints, FEM, CAM, the GUI
-workbenches, and full upstream `.FCStd` byte-for-byte compatibility. These are
-deliberately out of scope; the project measures a subset and says so.
+PartDesign's feature tree, a from-scratch Sketcher solver (the P4 plan binds PlanGCS
+rather than writing one), FEM, CAM, the GUI workbenches, and full upstream `.FCStd`
+byte-for-byte compatibility. These are deliberately out of scope; the project measures a
+subset and says so.
 
 ## How progress is measured
 
-- **Part:** `cargo test -p ferrocad_part_py --test part_conformance -- --nocapture`,
-  with the upstream revision recorded next to every published number.
+- **Part:** `FERROCAD_UPSTREAM=../freecad-upstream cargo test -p ferrocad_part_py --test part_conformance -- --nocapture`,
+  with the upstream revision recorded next to every published number. Current: **531/0/0/12**.
 - **Part API breadth:** `python3 tools/part_api_audit.py --check`; the pinned contract is
   `contracts/part-api.json`. Record whether the figure came from the committed tree or
   the worktree, and from which extension build.
@@ -117,8 +126,9 @@ deliberately out of scope; the project measures a subset and says so.
   in-process `cargo test -p ferrocad_part_py --test draft_conformance`.
 - **SimpleCAD:** `python3 tools/conformance.py --simplecad` plus
   `tools/simplecad_audit.py --check`, and the in-process
-  `crates/ferrocad_part_py/tests/simplecad_conformance.rs`. Rebuild the combined
-  extension before comparing.
+  `crates/ferrocad_part_py/tests/simplecad_conformance.rs`. The in-process test exports the
+  repo Python/OCCT paths to SimpleCAD's worker subprocess; use it when the extension may
+  be stale, because it builds the current tree.
 - **Engine/app:** per-crate `cargo test` and `pytest tests` (no workspace-wide build).
 - **Docs:** `api_docs`, `userdocs`, `build_book` and the relative-link sweep in `--check`
   mode.
@@ -127,9 +137,10 @@ deliberately out of scope; the project measures a subset and says so.
 
 | Risk | Mitigation |
 | --- | --- |
-| `/home` is nearly full | cap builds (`CARGO_BUILD_JOBS=2`), no workspace-wide builds, keep the archive compact |
-| The upstream pin is informal | record `git rev-parse --short HEAD` with every report |
-| A stale extension or test expectation reads as a regression | rebuild `ferrocad_combined.abi3.so` before believing a Python or SimpleCAD delta; the fifth round's 3 full-suite failures are expectations (`Part::Prism`, the derived shape wrapper), not kernel behaviour |
+| `/home` fills during a workspace-wide build | cap builds (`CARGO_BUILD_JOBS=2`), avoid concurrent workspace builds; 2026-11-13: 89 % used, 77 GB free |
+| The upstream pin is informal | record `git rev-parse --short HEAD` with every report (currently `33adf61`) |
+| A stale extension or test expectation reads as a regression | prefer the in-process conformance tests, which build the current tree; when a Python number is cited, say which `.so` produced it |
+| A green claim outlives the change that broke it | re-run Part/SimpleCAD at every rotation; the 2026-11-13 rotation caught one real regression (B20 `RootNode`) and one harness gap (worker paths) |
 | A proxy layer leaks GUI assumptions | keep the headless conformance image as the gate |
 | Approximations drift into claims | each says “approximation” at the call site and in the record |
 | Naming policy grows into the kernel | the lineage layer stays payload-generic; the kernel only reports provenance |

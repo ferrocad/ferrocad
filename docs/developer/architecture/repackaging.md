@@ -43,7 +43,7 @@ So the two roles are split by name:
   edition depends on this crate.
 
 **Landed (2026-11-03).** The split is described in
-[`wasm-shell.md`](../../project/tasks/wasm-shell.md) and is now structural:
+[`wasm-shell.md`](../../project/record/tasks/wasm-shell.md) and is now structural:
 `ferrocad_shell_api` owns the `AppBackend` trait and every view model it returns,
 `ferrocad_shell_core` owns the GPUI UI and the `cx`-threaded helpers, and
 `ferrocad_shell_python` (renamed from `ferrocad_gpui`, then `ferrocad_shell_gpui`) owns CPython. The browser host

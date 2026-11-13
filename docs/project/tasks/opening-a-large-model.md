@@ -2,7 +2,7 @@
 
 Status: **task (2026-11-05). Stages 1 and 2 landed, plus the hover-pick fix (§1b); stages 3–5 open.**
 Companion: [`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md)
-§10 (the mesh hop), and [`transform-session.md`](transform-session.md) for the
+§10 (the mesh hop), and [`transform-session.md`](../record/tasks/transform-session.md) for the
 edit-time half of the same cost.
 
 ## 0. The complaint

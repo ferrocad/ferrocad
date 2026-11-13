@@ -1,11 +1,11 @@
 # The wasm shell: one GPUI UI crate, two backends
 
-Status: **task (2026-11-03). M0–M6 done (2026-11-04).**
-Companions: [`../research/web-wasm-host.md`](../research/web-wasm-host.md) (the
-probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
-(the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md)
+Status: **complete — M0–M6 done (2026-11-04); archived 2026-11-13.**
+Companions: [`../research/web-wasm-host.md`](../../research/web-wasm-host.md) (the
+probe and the wasm findings), [`../../developer/architecture/repackaging.md`](../../../developer/architecture/repackaging.md)
+(the shell-library/edition shape), [`../record/tasks/dev-tools-window.md`](dev-tools-window.md)
 (why the inspector is a second window today) and
-[`../record/tasks/viewport-event-routing.md`](../record/tasks/viewport-event-routing.md)
+[`../record/tasks/viewport-event-routing.md`](viewport-event-routing.md)
 (occlusion and the `gpui_interop` fallback).
 
 ## 0. Decision
@@ -53,7 +53,7 @@ Naming rationale:
   consumers (`ferrocad`, `ferrocad_parametric`, and the docs) are updated in the
   same change; a façade would preserve a name that no longer describes the
   boundary. The crates.io package stops at 0.1.5 (record it in
-  [`releasing.md`](../../developer/architecture/releasing.md)).
+  [`releasing.md`](../../../developer/architecture/releasing.md)).
 
 ## 1. Why
 
@@ -324,7 +324,7 @@ second implementation:
 | 14 | G-buffer picking needs a synchronous readback | `pick::read_texel` uses `map_async` + `poll(wait_indefinitely)`, which cannot complete in a browser. The presenter reports `supports_pick() == false` on wasm, so the viewport uses its CPU ray cast — pure math over the same queue and camera. | **M3 done** (clicking a box selects it) |
 | 15 | The document links the OCCT kernel | The host must build inside `ghcr.io/lzpel/cross-wasm32-unknown-unknown` (the C++ and the kernel agree on the wasm-EH encoding), with `OCCT_WASM_ROOT` pointing at the fetched `occt-8_0_1_rev3-wasm32_unknown_unknown`, and `ferrocad_wasm::install()` + `__wasm_call_ctors()` before the first kernel call. | **M4 done** (`DocumentBackend`; the `wasm` CI job links the host) |
 
-The full evidence (file:line) is in [`../research/web-wasm-host.md`](../research/web-wasm-host.md).
+The full evidence (file:line) is in [`../research/web-wasm-host.md`](../../research/web-wasm-host.md).
 
 ## 7. Stages
 
@@ -468,13 +468,13 @@ the document in the browser's own file system.
 
 ## 11. References
 
-- [`../research/web-wasm-host.md`](../research/web-wasm-host.md) — the browser
+- [`../research/web-wasm-host.md`](../../research/web-wasm-host.md) — the browser
   probe, the wasm findings and the verified baseline.
-- [`../../developer/architecture/repackaging.md`](../../developer/architecture/repackaging.md)
+- [`../../developer/architecture/repackaging.md`](../../../developer/architecture/repackaging.md)
   — the shell-library/edition shape this split preserves.
-- [`../record/tasks/dev-tools-window.md`](../record/tasks/dev-tools-window.md) —
+- [`../record/tasks/dev-tools-window.md`](dev-tools-window.md) —
   the second-window design the browser cannot take as-is.
-- [`../record/tasks/viewport-event-routing.md`](../record/tasks/viewport-event-routing.md)
+- [`../record/tasks/viewport-event-routing.md`](viewport-event-routing.md)
   — occlusion and the input-gateway fallback.
-- [`../../developer/viewport/inventor-renderer.md`](../../developer/viewport/inventor-renderer.md)
+- [`../../developer/viewport/inventor-renderer.md`](../../../developer/viewport/inventor-renderer.md)
   — the viewport element and the presenter.

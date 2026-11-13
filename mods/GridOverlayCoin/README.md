@@ -82,7 +82,7 @@ cmp mods/GridOverlayCoin/Resources/grid_overlay.wgsl \
    re-adding the same root. The command/dialog callback then returns
    `{"view": {"grid_overlay": ...}}` to make the shell pull it in.
 5. **No Qt.** The dialog is the shell's declarative six-field spec, not a
-   `QDialog`; `QSettings` becomes `FreeCAD.ParamGet` (in-memory today), and
+   `QDialog`; `QSettings` becomes `FreeCAD.ParamGet` (file-backed by the host), and
    `getMainWindow`/toolbars are gone. `FreeCAD.addDocumentObserver` replaces the
    absent `FreeCADGui.addDocumentObserver`.
 6. **Colour space.** The add-on's `#808080` is authored against GL's default

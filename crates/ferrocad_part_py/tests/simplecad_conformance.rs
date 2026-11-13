@@ -21,12 +21,19 @@
 //! how a single module can be isolated.
 //!
 //! It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
+//!
+//! SimpleCAD runs curved-surface and offset operations in an isolated
+//! `scripts/shape_worker.py` **subprocess**. A child does not inherit this
+//! interpreter's built-in modules, so the in-process image must export the same
+//! `PYTHONPATH`/library path a shell would set. Without that, every worker exits 1
+//! with `ModuleNotFoundError: FreeCAD`, and SimpleCAD reports it as
+//! “The kernel stopped unexpectedly on this geometry (code 1)”.
 
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyAny, PyDict, PyList};
 
 /// Register the built-in modules. Must run before the interpreter initialises.
 fn boot() {
@@ -48,6 +55,61 @@ fn simplecad_root(repo: &Path) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| repo.parent().unwrap_or(repo).join("simplecad"));
     path.canonicalize().unwrap_or(path)
+}
+
+/// Export the paths a SimpleCAD worker subprocess needs.
+///
+/// The parent test registers `ferrocad`, `Part`, `Mesh` and `MeshPart` as built-ins;
+/// a subprocess can only import the packaged `python/` tree and the shared OCCT
+/// libraries. Prepend (do not replace) whatever the caller already set, so a
+/// developer's own environment keeps working.
+fn export_child_paths(py: Python<'_>, repo: &Path) -> PyResult<()> {
+    let os = py.import("os")?;
+    let environ = os.getattr("environ")?;
+    let separator = if cfg!(windows) { ";" } else { ":" };
+
+    let python_dir = repo.join("python");
+    if python_dir.is_dir() {
+        prepend_path(&environ, "PYTHONPATH", &python_dir, separator)?;
+    }
+
+    if cfg!(windows) {
+        let dll_dir = repo.join(".occt/prefix/bin");
+        if dll_dir.is_dir() {
+            prepend_path(&environ, "PATH", &dll_dir, separator)?;
+        }
+    } else {
+        let lib_dir = repo.join(".occt/prefix/lib");
+        if lib_dir.is_dir() {
+            prepend_path(&environ, "LD_LIBRARY_PATH", &lib_dir, separator)?;
+            prepend_path(&environ, "DYLD_LIBRARY_PATH", &lib_dir, separator)?;
+        }
+    }
+    Ok(())
+}
+
+/// Prepend `directory` to a path-list variable unless it is already there.
+fn prepend_path(
+    environ: &Bound<'_, PyAny>,
+    name: &str,
+    directory: &Path,
+    separator: &str,
+) -> PyResult<()> {
+    let wanted = directory.to_string_lossy().into_owned();
+    let current: String = environ
+        .get_item(name)
+        .ok()
+        .and_then(|value| value.extract().ok())
+        .unwrap_or_default();
+    if current.split(separator).any(|part| part == wanted) {
+        return Ok(());
+    }
+    let joined = if current.is_empty() {
+        wanted
+    } else {
+        format!("{wanted}{separator}{current}")
+    };
+    environ.set_item(name, joined)
 }
 
 /// Run `tools/conformance.py --simplecad` and return what it printed.
@@ -117,6 +179,7 @@ fn simplecad_conformance() {
 
     boot();
     Python::with_gil(|py| {
+        export_child_paths(py, &repo).expect("export worker paths");
         let report = run_harness(py, &harness, &root).expect("run conformance");
         println!("\n{report}");
         assert!(

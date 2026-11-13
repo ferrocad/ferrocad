@@ -18,7 +18,7 @@ _Every entry point returns a JSON string._
 | `add_namespace(name: str, value) -> None` | Expose ``value`` to the console under ``name``. |
 | `appearance_view() -> str` | The appearance policy the shell should apply at boot, as JSON. |
 | `axis_summary() -> str` | The axis's provider and stem size for the shell's popover. |
-| `bootstrap(doc_name: str = 'Shell') -> str` | Create (or recreate) the sample document and report host status. |
+| `bootstrap(doc_name: str = 'Sample') -> str` | Open the canonical startup sample and report host status. |
 | `close_document(name: str) -> str` | Close a document by name. |
 | `commands() -> str` | The registered workbench commands, with resources and live state, as JSON. |
 | `dialog_accept(payload_json: str) -> str` | Accept an open dialog: ``{"token": ..., "values": {...}}``. |

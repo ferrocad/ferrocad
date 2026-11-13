@@ -15,7 +15,7 @@ stage/program value nodes, the separator is rebuilt, and the same root switch is
 removed from and re-added to the bridge.
 
 There is no Qt, no ``QSettings``, no ``getMainWindow`` and no live scene graph.
-Settings live in ``FreeCAD.ParamGet`` (in-memory today). Ground shadows keep the
+Settings live in ``FreeCAD.ParamGet`` (file-backed by the host). Ground shadows keep the
 upstream parameters and the 80-slot ABI block; the host fills it with each item's
 ``(u, v)`` bounds in the **active plane's** frame, so a bound workplane is shaded too.
 

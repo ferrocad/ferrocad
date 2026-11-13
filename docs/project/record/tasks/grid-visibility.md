@@ -52,7 +52,7 @@ The Coin provider decides visibility from the **third** one
 `setting("enabled")` → `_bind_active()`), and it only re-evaluates inside
 `refresh()`, which today is called from its own dialog and the provider switch —
 never from a grid toggle. `ViewRequest.grid_overlay`
-([`crates/ferrocad_gpui/src/view.rs`](../../../../crates/ferrocad_gpui/src/view.rs))
+([`crates/ferrocad_shell_core/src/model/view.rs`](../../../../crates/ferrocad_shell_core/src/model/view.rs))
 is also only ever set by the mod's `apply_dialog`, so the shell's viewport keeps
 "native ground hidden, overlay draws" even after the toggle.
 

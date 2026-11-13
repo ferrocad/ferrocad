@@ -1,8 +1,8 @@
 # Recon: is the tree compatible with the transform session and the tool loadout?
 
 Status: **reconnaissance (2026-10-30)**, read-only. Read against `d5bc31e`, after the plan was
-split into [`../tasks/transform-session.md`](../tasks/transform-session.md) and
-[`../tasks/tool-loadout.md`](../tasks/tool-loadout.md). No code was changed to answer these
+split into [`../record/tasks/transform-session.md`](../record/tasks/transform-session.md) and
+[`../record/tasks/tool-loadout.md`](../record/tasks/tool-loadout.md). No code was changed to answer these
 questions; every finding cites the line that decides it.
 
 **Headline:** the *display* half is nearly free (the shell already keeps a base stage and an

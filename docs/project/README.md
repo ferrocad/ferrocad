@@ -11,7 +11,8 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
 ## Where to start
 
 - [ROADMAP.md](ROADMAP.md) — the three horizons and their exit criteria.
-- [TODO-31-10-2026.md](TODO-31-10-2026.md) — the active backlog.
+- [TODO-13-11-2026.md](TODO-13-11-2026.md) — the active backlog (the November platform round
+  is closed in [record/2026-11-13-november-round.md](record/2026-11-13-november-round.md)).
 - [labels.md](labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which
   program owns it.
 - [direction/rewrite-strategy.md](direction/rewrite-strategy.md) — the authoritative
@@ -29,12 +30,15 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
   commitment; accepted ideas move to `developer/` or the backlog.
 - [research/](research/) — the spikes and assessments that shaped the design: OCCT
   history, geometry/topology, Coin3D reuse, GPU interop, the upstream dma-buf issue,
-  Python UI research, the grid-overlay fixture and the SimpleCAD bring-up.
-- [record/](record/) — closed history: compact milestones, closed backlogs, closed task
-  specs, incidents, and `archive/` for the full detail.
-- [tasks/](tasks/) — active task specs (the SimpleCAD bring-up cut, the UX research plan,
-  the creation-tool ownership decision, the workplane hierarchy, the polyline/HUD spec and
-  the stroke-unit decision); the backlog tracks the work, and finished specs move to
+  Python UI research, the grid-overlay fixture, the SimpleCAD bring-up, the OCCT 8 audit
+  and upgrade, JS/wasm addons, and the web/wasm host.
+- [record/](record/) — closed history: compact milestones, closed backlogs, round logs,
+  closed task specs, incidents, and `archive/` for the full detail. The latest round is
+  [2026-11-13-november-round.md](record/2026-11-13-november-round.md).
+- [tasks/](tasks/) — active task specs (the SimpleCAD cut, the UX research plan, the
+  creation-tool ownership decision, the workplane hierarchy, the polyline/HUD spec, the
+  stroke-unit decision, the mod event contract, the large-model budget and the failure
+  model); the backlog tracks the work, and finished specs move to
   [`record/tasks/`](record/tasks/README.md).
 - [documentation.md](documentation.md) — the documentation decision: audiences,
   Diátaxis, rustdoc-first and the folder rules behind this layout.

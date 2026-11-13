@@ -5,7 +5,7 @@
 > now `crates/ferrocad_web_gpui` — the real shell on the same stack. The note stays as
 > the record of how the wasm path was established, and the constraints it documents
 > (WebGL2, no readback, the WASI stubs, the cross image) still apply. See
-> [`../tasks/wasm-shell.md`](../tasks/wasm-shell.md) for what shipped.
+> [`../record/tasks/wasm-shell.md`](../record/tasks/wasm-shell.md) for what shipped.
 
 Status: **research note (2026-11-02)**, followed by the first implementation
 (`crates/ferrocad_web`, §11). The research itself changed no crate, manifest or
@@ -1082,7 +1082,7 @@ to `cfg(target_os = "linux")`.
 
 The probe above is now `ferrocad_shell_core`'s real `InventorViewport`, presented by
 the presenter in `runtime/interop.rs` (see
-[`../tasks/wasm-shell.md`](../tasks/wasm-shell.md) §7, M3). The shell owns no
+[`../record/tasks/wasm-shell.md`](../record/tasks/wasm-shell.md) §7, M3). The shell owns no
 renderer in a browser window: `enable_viewport` builds the element with a
 `DeferredView` that only records its size, and the presenter creates the
 `ferrocad_wgpu` renderer on the window's own device during the first paint

@@ -148,7 +148,7 @@ Rules that keep the split honest:
 ### Who owns a Gui verb
 
 The split follows FreeCAD's own two applications, and this is the rule the
-[`backend-parity`](../../project/tasks/backend-parity.md) work is closing toward:
+[`backend-parity`](../../project/record/tasks/backend-parity.md) work is closing toward:
 
 | layer | seam | owns |
 | --- | --- | --- |
@@ -251,7 +251,7 @@ built-ins (`ferrocad_combined_py::register_builtins`, or `ferrocad_py` alone whe
 kernel is needed), so the interpreter and the document half share one `ferrocad_core`
 and therefore one registry. The retired `PythonAppBackend` existed for the opposite
 case — a test binary importing `python/ferrocad.abi3.so`, which carries its own core —
-and B5 of [`backend-parity`](../../project/tasks/backend-parity.md) removed it: the
+and B5 of [`backend-parity`](../../project/record/tasks/backend-parity.md) removed it: the
 shell suite now links `ferrocad_py` (`register_test_core`) and installs
 `ferrocad_shell_python::engine()`. A linked host must never import the combined
 extension over its built-in; the `Part`/`Mesh`/`MeshPart` shims and
@@ -321,7 +321,7 @@ host-supplied file operations it is `FULL` too, and the document half answers wh
 script cannot instead of the host calling a function that would raise, so a capability
 that grows is one flag plus the facade code.
 The seam is `crates/ferrocad_python_host`; the trail is
-[`backend-parity.md`](../../project/tasks/backend-parity.md) B18.
+[`backend-parity.md`](../../project/record/tasks/backend-parity.md) B18.
 
 **The facade is the desktop's own Python.** B18b installs, from source, the same
 `python/FreeCAD` package, `python/FreeCADGui/__init__.py`, `python/FerroCADGui/__init__.py`
@@ -450,7 +450,7 @@ item 3). The browser feature set has no POSIX layer; the target-scoped entry add
 RustPython 0.6 casts `libc::POSIX_SPAWN_SETSID` itself, so the pin is gone (0.6 also
 needs rustc 1.97 — the workspace's `rust-version` — and holds the ruff AST at 0.16.5
 in `ferrocad_shell_pywasm`'s manifest, which
-[`backend-parity.md`](../../project/tasks/backend-parity.md) B18b item 3 explains).
+[`backend-parity.md`](../../project/record/tasks/backend-parity.md) B18b item 3 explains).
 Second, the compiler recurses, so a host raises the stack before
 `PywasmScriptHost::new` (the tests use a 16 MiB worker thread; the browser sets the same
 value as a link argument in `ferrocad_web_gpui/build.rs`, because `wasm-ld`'s default is
@@ -584,7 +584,7 @@ Two engines were missing, and they are different dependencies:
 
 Neither is in a default build, so the release binary pays for neither. The decision trail,
 what is left (desktop RustPython, the wasm addon engine) and the costs are **B7 / B7a–B7c**
-in [`backend-parity.md`](../../project/tasks/backend-parity.md).
+in [`backend-parity.md`](../../project/record/tasks/backend-parity.md).
 
 ### What the window reports (About)
 
@@ -598,7 +598,7 @@ switch (`ferrocad-provider:<feature>:<backend>`), so the card doubles as a runti
 It is opened from the app menu's synthetic `ferrocad-about` row: no backend answers a
 `Settings/About` property question, and no `catalog.json` row is invented for chrome only a
 window can show. Turning parts of the set *off* is B17a (built) in
-[`backend-parity.md`](../../project/tasks/backend-parity.md): a `ferrocad-prefs:` row hides a
+[`backend-parity.md`](../../project/record/tasks/backend-parity.md): a `ferrocad-prefs:` row hides a
 provider live (and refuses to activate it elsewhere) or records a mod refusal that the host
 reads **before** the backend exists — `prefs.json` beside the user's parameters natively,
 `localStorage` in the page — so the mod applies at the next start.

@@ -55,7 +55,7 @@ a workbench command call the same functions.
 - **Changing FerroCAD** — [developer/README.md](developer/README.md): start with
   [developer/architecture.md](developer/architecture.md) for the crate graph.
 - **Planning the next round** — [project/ROADMAP.md](project/ROADMAP.md) for the
-  horizons and [project/TODO-31-10-2026.md](project/TODO-31-10-2026.md) for the active
+  horizons and [project/TODO-13-11-2026.md](project/TODO-13-11-2026.md) for the active
   backlog.
 - **Understanding a decision** — [project/documentation.md](project/documentation.md)
   for the documentation policy, [project/labels.md](project/labels.md) for the labels,

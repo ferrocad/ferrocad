@@ -31,7 +31,9 @@ What is here today:
   ``getCameraNode``, ``getSize``, ``addEventCallbackPivy``/``removeEventCallbackPivy``
   and ``updateGui``. The camera and stage are **published** by the shell into
   ``ferrocad_stage`` (``set_view_camera``/``set_view_stage``) and read back here, so
-  the answers follow the live view rather than a frozen default;
+  the answers follow the live view rather than a frozen default. S4.4 adds
+  ``getWorkplane``/``getFacePlane``: the active plane and an exact face frame, both
+  read from the same publication the viewport's snap context uses;
 * the **headless form loader** — ``PySideUic.loadUi`` returns a proxy tree from
   ``ferrocad_ui_py`` (Q2a). The extension is imported lazily, so this module
   stays Qt-free and importable before it is built;
@@ -203,6 +205,19 @@ def _published_camera():
         return reader()
     except Exception as exc:  # noqa: BLE001 - a broken publication is not a crash
         _report_view_once("ferrocad_stage.view_camera", exc)
+        return None
+
+
+def _published_workplane():
+    """The active workplane the shell (or a script) last published, or ``None``."""
+    module = _stage_module()
+    reader = getattr(module, "view_workplane", None)
+    if reader is None:
+        return None
+    try:
+        return reader()
+    except Exception as exc:  # noqa: BLE001 - a broken publication is not a crash
+        _report_view_once("ferrocad_stage.view_workplane", exc)
         return None
 
 
@@ -657,6 +672,71 @@ class View3DInventor:
         """The nearest entry :meth:`getObjectsInfo` would return, or ``None``."""
         hits = self.getObjectsInfo(pos)
         return hits[0] if hits else None
+
+    # -- the workplane (S4.4) -----------------------------------------------
+
+    def getWorkplane(self):
+        """The active workplane the shell last published, or ``None``.
+
+        The published state is the viewport's own plane, so its ``origin``/``u``/``v``/
+        ``n`` agree with the grid and snap context the user sees. ``label`` is the name
+        the pillar shows (``"XY"``, ``"Face3"``, ``"Datum"``) and ``offset`` is the
+        shift along the normal.
+
+        A plane bound to a face that has since been deleted **raises** rather than
+        returning the last frame that happened to resolve: the binding is stale, and a
+        script that projected onto it would be silently wrong. Rebind with a new face
+        selection or reset to World ``XY``.
+        """
+        state = _published_workplane()
+        if state is None:
+            return None
+        kind = getattr(getattr(state, "kind", None), "kind", None)
+        if isinstance(kind, tuple) and kind and kind[0] == "Face":
+            module = _stage_module()
+            resolver = getattr(module, "face_plane", None)
+            if resolver is not None and resolver(kind[1], kind[2]) is None:
+                raise RuntimeError(
+                    f"the active workplane is bound to {kind[2]} of entity "
+                    f"{kind[1]}, which no longer resolves; rebind it or reset to "
+                    "World XY"
+                )
+        return state
+
+    def getFacePlane(self, obj, element="Face1"):
+        """The exact planar frame of ``element`` on ``obj``, or raise.
+
+        ``obj`` is a document object or its name. The frame comes from the same display
+        tessellation the viewport resolves its snap context from (the published stage),
+        so the numbers match the grid rather than approximating it.
+
+        Raises ``LookupError`` when the object has not been published (a headless run
+        must publish the stage first) and ``ValueError`` when the element is missing or
+        is not a planar face (a curved face has no honest plane).
+        """
+        module = _stage_module()
+        resolver = getattr(module, "face_plane", None)
+        name_of = getattr(module, "entity_of", None)
+        if resolver is None or name_of is None:
+            raise RuntimeError(
+                "getFacePlane needs the `ferrocad_stage` extension; build it with "
+                "`cargo build -p ferrocad_stage_py`"
+            )
+        name = getattr(obj, "Name", None)
+        if not isinstance(name, str) or not name:
+            name = obj if isinstance(obj, str) else ""
+        if not name:
+            raise TypeError("getFacePlane expects a document object or its name")
+        entity = name_of(name)
+        if entity is None:
+            raise LookupError(
+                f"{name} is not in the published stage; publish it with "
+                "ferrocad_stage.set_view_stage(...) before asking for its plane"
+            )
+        state = resolver(entity, str(element))
+        if state is None:
+            raise ValueError(f"{element} of {name} is not a planar face")
+        return state
 
     def _pick_hits(self, pos):
         """The ranked picks under ``pos`` from the published stage."""

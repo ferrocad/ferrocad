@@ -99,14 +99,18 @@ impl Shell {
     /// Publish the camera the Python view facade reports (`getCameraNode`, …).
     ///
     /// The shell owns the camera and the facade cannot see an `InventorViewport`, so
-    /// the live camera is mirrored into `ferrocad_stage` (S4.1). Called from every
-    /// shell render and from each viewport event, so a script that runs in response to
-    /// a click sees the camera that click was made with.
+    /// the live camera is mirrored into `ferrocad_stage` (S4.1). The active workplane is
+    /// mirrored with it (S4.4), because both are per-frame view state read by the same
+    /// facade: every call site that republishes the camera also republishes the plane.
+    /// Called from every shell render and from each viewport event, so a script that
+    /// runs in response to a click sees the camera and plane that click was made with.
     pub(in crate::shell) fn publish_camera(&self, cx: &App) {
         let Some(viewport) = self.viewport.as_ref() else {
             return;
         };
-        crate::stage_view::publish_camera(viewport.read(cx).camera().clone());
+        let viewport = viewport.read(cx);
+        crate::stage_view::publish_camera(viewport.camera().clone());
+        crate::stage_view::publish_workplane(viewport.active_workplane().into());
     }
 
     /// Publish the camera **and**, when nothing has been published yet, the stage.
@@ -121,6 +125,7 @@ impl Shell {
         };
         let viewport = viewport.read(cx);
         crate::stage_view::publish_camera(viewport.camera().clone());
+        crate::stage_view::publish_workplane(viewport.active_workplane().into());
         if !crate::stage_view::has_stage() {
             self.publish_stage(viewport.stage());
         }

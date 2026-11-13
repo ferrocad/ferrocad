@@ -93,9 +93,13 @@ rather than an architecture task.
   push/pull → cut → STL) is green and the 5 Qt groups are classified skips. The identity, query and representation
   frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
   `Faces`/`Wires`, `Face.Surface` classification with `parameter()`).
-- **SimpleCAD S4.1–S4.3 (in the worktree).** The view facade, the ranked pick and the
-  `SelectionObject` are implemented and covered by 47 tests. S4.4 snapping, the S4.5
-  push/pull integration and S4.6 previews remain.
+- **SimpleCAD S4.1–S4.6 — the façade is closed.** The view facade, the ranked pick and
+  the `SelectionObject` are implemented and covered by tests; S4.4 now publishes the
+  viewport's active workplane and resolves an exact face frame through `FreeCADGui`, and
+  S4.5's push/pull stem is verified end to end (selection → stem drag → one transaction).
+  S4.6 keeps `FreeCADGui.Preview` as the shape-preview channel and records 3-D text as a
+  non-goal; the imperative-Coin lifecycle (`getChild`/`insertChild`/`findChild`,
+  `isOfType`) is complete enough for an overlay. SC8 (re-measure) is the next slice.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
   pack reaches the script half. This is the proof-of-use surface that did not exist at the

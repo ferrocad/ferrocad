@@ -21,6 +21,13 @@
 //! answers a click. [`preview_generation`] is the cheap change signal a host polls to
 //! redraw without cloning the list.
 //!
+//! The **active workplane** is published the same way (S4.4, [`publish_workplane`]):
+//! the viewport owns it, and a script (SimpleCAD's snapping) needs its origin, axes and
+//! normal without a window. [`published_face_frame`] resolves a named planar face from
+//! the published stage with the same [`FaceFrame`] rule the viewport's own snap context
+//! uses, so a facade answer agrees with the grid the user sees rather than approximating
+//! it from a second source.
+//!
 //! The state lives here, in the pure stage crate, rather than in the Python facade:
 //! the shell and the facade are separate crates and a platform-neutral host (the
 //! browser) must be able to publish the same queue without linking CPython. The
@@ -33,6 +40,7 @@ use ferrocad_graphics as gfx;
 use ferrocad_graphics::pick::LINE_PICK_PIXELS;
 use ferrocad_types::{Matrix4, Vector3};
 
+use crate::workplane::{FaceFrame, Workplane};
 use crate::ShapeItem;
 
 /// The stage a host last drew, compiled once so a pick does not recompile it.
@@ -73,6 +81,14 @@ impl PublishedStage {
     pub fn parts(&self) -> &HashMap<u32, Vec<String>> {
         &self.parts
     }
+
+    /// The pick id whose published object name is `object` (the inverse of
+    /// [`objects`](Self::objects)).
+    pub fn entity_named(&self, object: &str) -> Option<u32> {
+        self.objects
+            .iter()
+            .find_map(|(id, name)| (name == object).then_some(*id))
+    }
 }
 
 fn camera_cell() -> &'static Mutex<Option<gfx::Camera>> {
@@ -82,6 +98,29 @@ fn camera_cell() -> &'static Mutex<Option<gfx::Camera>> {
 
 fn stage_cell() -> &'static Mutex<Option<Arc<PublishedStage>>> {
     static CELL: OnceLock<Mutex<Option<Arc<PublishedStage>>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(None))
+}
+
+/// The active workplane a host last published (S4.4).
+///
+/// This mirrors the viewport's `ActiveWorkplane` without making this crate depend on
+/// the viewport: the host converts its own type into this value and publishes it. The
+/// plane carries the semantic kind ([`WorkplaneKind`](crate::WorkplaneKind)), so a
+/// consumer can tell a face-bound frame from a transient one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublishedWorkplane {
+    /// The plane: origin plus in-plane axes (the normal is `u × v`).
+    pub plane: Workplane,
+    /// The presentation label without the offset (`"XY"`, `"Face3"`, `"Custom"`).
+    pub label: String,
+    /// The shift along the plane's own normal, in mm, from the frame it was bound to.
+    pub offset: f64,
+    /// The in-plane radius of the finite surface the plane is bound to, if any.
+    pub extent: Option<f64>,
+}
+
+fn workplane_cell() -> &'static Mutex<Option<PublishedWorkplane>> {
+    static CELL: OnceLock<Mutex<Option<PublishedWorkplane>>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
 }
 
@@ -154,6 +193,32 @@ pub fn publish_camera(camera: gfx::Camera) {
     *camera_cell().lock().unwrap() = Some(camera);
 }
 
+/// Publish the active workplane the shell is drawing with (S4.4).
+///
+/// There is always a plane in the viewport; publishing `None` therefore means “no host
+/// has published one”, not “the world plane”. A host republishes this alongside the
+/// camera, so a script that runs on a click sees the plane the click was made on.
+pub fn publish_workplane(workplane: PublishedWorkplane) {
+    *workplane_cell()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(workplane);
+}
+
+/// The published active workplane, if a host has published one.
+pub fn published_workplane() -> Option<PublishedWorkplane> {
+    workplane_cell()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+}
+
+/// Forget the published workplane (the host went back to an unpublished view).
+pub fn clear_workplane() {
+    *workplane_cell()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = None;
+}
+
 /// Publish the compiled stage and the name tables a pick reports.
 ///
 /// `objects` maps a pick id to its document object name; `parts` optionally overrides
@@ -184,6 +249,7 @@ pub fn publish_stage(
 pub fn clear_view() {
     *camera_cell().lock().unwrap() = None;
     *stage_cell().lock().unwrap() = None;
+    clear_workplane();
 }
 
 /// The published camera, if a host has published one.
@@ -203,6 +269,52 @@ pub fn published_stage() -> Option<Arc<PublishedStage>> {
 /// every frame.
 pub fn has_stage() -> bool {
     stage_cell().lock().unwrap().is_some()
+}
+
+// ---------------------------------------------------------------------------
+// Face frames (S4.4)
+// ---------------------------------------------------------------------------
+
+/// The planar frame of `element` on `entity`, resolved from the published stage.
+///
+/// `None` when the stage has not been published, the entity has no such element, or
+/// the element is not a planar face. The frame is the one the viewport's own snap
+/// context uses: the area-weighted centroid and normal of the element's triangles, with
+/// the extent covering the element's vertices. A face that was deleted after being
+/// bound therefore **stops resolving** instead of returning a previous frame.
+pub fn published_face_frame(entity: u32, element: &str) -> Option<FaceFrame> {
+    let stage = published_stage()?;
+    published_face_frame_in(&stage, entity, element)
+}
+
+/// [`published_face_frame`] against an explicit published stage.
+pub fn published_face_frame_in(
+    stage: &PublishedStage,
+    entity: u32,
+    element: &str,
+) -> Option<FaceFrame> {
+    let part = stage
+        .parts()
+        .get(&entity)?
+        .iter()
+        .position(|name| name == element)? as u32;
+    // The surface packet carries the display tessellation the viewport resolved the
+    // same face from (the pick skips an authored program's placeholder quad, and a
+    // face has no program).
+    let packet = stage.queue().packets.iter().find(|packet| {
+        packet.state.id.0 == entity && packet.state.program.is_none()
+    })?;
+    let geometry = packet.geometry.as_ref()?;
+    // The queue's vertices are in the item's local space; the packet's world transform
+    // is the one the renderer draws with, so the frame comes out in world space.
+    let mut positions = Vec::with_capacity(geometry.vertices.len());
+    let mut parts = Vec::with_capacity(geometry.vertices.len());
+    for vertex in &geometry.vertices {
+        let world = transform(&packet.state.world_transform, vertex.position);
+        positions.push([world[0] as f32, world[1] as f32, world[2] as f32]);
+        parts.push(vertex.part_idx);
+    }
+    FaceFrame::resolve(entity, element, &positions, &geometry.indices, &parts, part)
 }
 
 // ---------------------------------------------------------------------------
@@ -395,5 +507,128 @@ fn normal_of(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
         [n[0] / length, n[1] / length, n[2] / length]
     } else {
         n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrocad_geom::Tessellation;
+    use std::sync::MutexGuard;
+
+    /// The published view is process-global, so tests that write it must not race.
+    fn view_lock() -> MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A unit quad in the plane `z = x` (its normal is `(-1, 0, 1) / √2`).
+    fn tilted_quad(entity: u32, name: &str) -> ShapeItem {
+        ShapeItem::new(entity).with_tessellation(&Tessellation {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [0.0, 1.0, 0.0],
+            ],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2, 0, 2, 3],
+            triangle_parts: vec![1, 1],
+            edges: Vec::new(),
+            segment_parts: Vec::new(),
+            vertices: Vec::new(),
+            vertex_parts: Vec::new(),
+            parts: vec![String::new(), name.to_string()],
+        })
+    }
+
+    #[test]
+    fn a_published_face_frame_agrees_with_the_resolver() {
+        let _guard = view_lock();
+        clear_view();
+        let mut stage = crate::Stage::new();
+        stage.add_item(tilted_quad(7, "Face1"));
+        let mut objects = HashMap::new();
+        objects.insert(7, "Body".to_string());
+        publish_stage(&stage, objects, None);
+
+        let published = published_face_frame(7, "Face1").expect("a planar face resolves");
+        // The viewport's own path: the item's buffers straight into the resolver.
+        let item = stage.item(7).expect("the item");
+        let direct = FaceFrame::resolve(
+            7,
+            "Face1",
+            item.positions(),
+            item.triangles(),
+            item.parts(),
+            1,
+        )
+        .expect("the same face resolves directly");
+        assert_eq!(published.plane.origin, direct.plane.origin);
+        assert_eq!(published.plane.n, direct.plane.n);
+        assert!((published.radius - direct.radius).abs() < 1e-9);
+        // Sanity: the normal is the tilted plane's normal, not the world +Z.
+        assert!((published.plane.n.x + std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+        assert!(published.plane.n.z > 0.5);
+    }
+
+    #[test]
+    fn a_stale_face_stops_resolving() {
+        let _guard = view_lock();
+        clear_view();
+        let mut stage = crate::Stage::new();
+        stage.add_item(tilted_quad(7, "Face1"));
+        let mut objects = HashMap::new();
+        objects.insert(7, "Body".to_string());
+        publish_stage(&stage, objects, None);
+        assert!(published_face_frame(7, "Face1").is_some());
+
+        // The document edited: the entity is gone. The frame is not cached, so the
+        // binding cannot answer with a previous frame.
+        let mut edited = crate::Stage::new();
+        edited.add_item(tilted_quad(8, "Face1"));
+        let mut objects = HashMap::new();
+        objects.insert(8, "Body".to_string());
+        publish_stage(&edited, objects, None);
+        assert!(published_face_frame(7, "Face1").is_none());
+
+        // A curved element (an edge name on a face table) has no frame either.
+        assert!(published_face_frame(8, "Edge1").is_none());
+        clear_view();
+    }
+
+    #[test]
+    fn the_published_workplane_round_trips_and_clears() {
+        let _guard = view_lock();
+        clear_view();
+        assert!(published_workplane().is_none());
+        let plane = Workplane::world();
+        publish_workplane(PublishedWorkplane {
+            plane: plane.clone(),
+            label: "XY".to_string(),
+            offset: 5.0,
+            extent: None,
+        });
+        let published = published_workplane().expect("the plane was published");
+        assert_eq!(published.plane, plane);
+        assert_eq!(published.label, "XY");
+        assert_eq!(published.offset, 5.0);
+
+        clear_view();
+        assert!(published_workplane().is_none());
+    }
+
+    #[test]
+    fn an_object_name_maps_back_to_its_entity() {
+        let _guard = view_lock();
+        clear_view();
+        let mut stage = crate::Stage::new();
+        stage.add_item(tilted_quad(7, "Face1"));
+        let mut objects = HashMap::new();
+        objects.insert(7, "Body".to_string());
+        publish_stage(&stage, objects, None);
+        assert_eq!(published_stage().and_then(|s| s.entity_named("Body")), Some(7));
+        assert_eq!(published_stage().and_then(|s| s.entity_named("Nope")), None);
+        clear_view();
     }
 }

@@ -246,40 +246,80 @@ behavioural failure. The table is in
 [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7; the harness rule
 is `Collector(classify_gui=…)` in `tools/conformance.py`. **Size:** S.
 
-## SC4 — S4.4: the plane and the normal through the facade
+## SC4 — S4.4: the plane and the normal through the facade — done 2026-11-13
 
 SimpleCAD's `gui/snapping.py` (`_refine`, `axis_point`) needs the exact face plane/normal
 and the active workplane, not tessellation.
 
-- [ ] Expose the active workplane's origin/axes/normal and the picked face's plane through
+- [x] Expose the active workplane's origin/axes/normal and the picked face's plane through
       `FreeCADGui`, with the same state the viewport already holds.
-- [ ] Write down what a *stale* plane means (a face deleted after binding) and return an
+- [x] Write down what a *stale* plane means (a face deleted after binding) and return an
       explicit error rather than a previous frame.
 
-**Acceptance:** a script reads the plane of a tilted face and gets numbers that agree with
-the viewport's own snap context. **Size:** M (~150 lines).
+**What landed.** `ferrocad_stage::view` publishes a `PublishedWorkplane` (the plane, its
+label, the offset and its extent) beside the camera; the shell republishes it from
+`ActiveWorkplane::into` on every camera publication, so a script sees the frame the grid
+is drawn on. `published_face_frame` resolves a named planar face from the **published
+stage** with the same `FaceFrame::resolve` rule the viewport's snap context uses (the
+queue's world transform applied), and `PublishedStage::entity_named` inverts the
+object-name table. The bindings are `ferrocad_stage.set_view_workplane`,
+`view_workplane`, `entity_of` and `face_plane`; `FreeCADGui.ActiveView.getWorkplane()`
+and `getFacePlane(obj, element)` read them. A face-bound plane whose entity no longer
+resolves raises `RuntimeError` (it is not replayed), and a missing or curved element
+raises `ValueError`.
 
-## SC5 — S4.5: arm the push/pull manipulator from a face selection
+**Acceptance met:** `tests/test_gui_view_facade.py::ViewWorkplaneTest` publishes a quad in
+the plane `z = x` and reads back `n = (-√½, 0, √½)`, `u = (√½, 0, √½)`, `v = (0, 1, 0)`
+and the centroid `(0.5, 0.5, 0.5)`; the Rust tests
+(`ferrocad_stage::view::tests`) prove those numbers equal the resolver's own and that a
+deleted face stops resolving. **Size:** M.
 
-- [ ] Arm the existing stem (`ferrocad_part_gui::push_pull`) from a face selection, so the
+## SC5 — S4.5: arm the push/pull manipulator from a face selection — done 2026-11-13
+
+- [x] Arm the existing stem (`ferrocad_part_gui::push_pull`) from a face selection, so the
       session starts without a separate command.
-- [ ] Carry the session's value into `document/operations.extrude` (the path the edition
+- [x] Carry the session's value into `document/operations.extrude` (the path the edition
       already uses) rather than a second code path.
 
-**Acceptance:** selecting a face and dragging the stem produces the same document edit as
-the current push/pull route, in one transaction. **Size:** M (~200 lines).
+**What landed.** The path already existed end to end — a scripted
+`FreeCADGui.Selection.addSelection(obj, "Face6")` is drained into the shell's own
+selection, `rearm_selection` asks the edition's factory for the stem, and the drag's
+`InteractionCommit` reaches `python/ferrocad_parametric/__init__.py::_push_pull` (one
+`Part::Extrusion` + `Part::Fuse`/`Cut` transaction). This slice closes it with an
+end-to-end test instead of a new route: `the_push_pull_stem_drives_the_document_in_one_
+transaction` in `crates/ferrocad_parametric/tests/push_pull_round_trip.rs` selects a
+planar `Face1`, grabs the projected stem tip, drags along the normal, applies the
+commit through the edition's hook, asserts the fused feature is displayed, and undoes
+once to prove the edit is one transaction.
 
-## SC6 — S4.6: SimpleCAD's own previews
+**Acceptance met:** the stem's commit produces the same document edit the edition's
+push/pull route always produced, in one undo step. **Size:** M (verification + test).
+
+## SC6 — S4.6: SimpleCAD's own previews — decision 2026-11-13
 
 The FerroCAD side already exists (`FreeCADGui.Preview` → `set_preview_items` → the shell
 merges them), so this slice is SimpleCAD-side plus one decision.
 
-- [ ] Decide whether labels/3-D text get a preview channel at all; if not, record it as a
+- [x] Decide whether labels/3-D text get a preview channel at all; if not, record it as a
       non-goal.
-- [ ] Keep the shape-preview path SimpleCAD-compatible (it is the only consumer).
+- [x] Keep the shape-preview path SimpleCAD-compatible (it is the only consumer).
 
-**Acceptance:** a decision recorded; any SimpleCAD overlay the project keeps uses the
-existing channel. **Size:** S (decision) / M if the overlay ports.
+**Decision.** SimpleCAD's Coin previews are **not** ported. The supported preview channel
+is `FreeCADGui.Preview` → transient `ferrocad_stage.ShapeItem`s (unpickable by
+construction, merged by the shell beside the document stage). 3-D text labels are a
+**non-goal** for that channel: a snap label belongs on the status bar / the tool HUD,
+where it is crisp, selectable and independent of camera distance; drawing `SoText2` would
+mean a font rasterisation path the preview system does not need. What *did* land is the
+imperative-coin lifecycle an overlay consumer needs: `SoGroup.getChild`,
+`insertChild`, `removeChild` (node or index too), `removeAllChildren`,
+`findChild`, plus `SoNode.isOfType` and inherited `getClassTypeId()`. A registered overlay
+is pulled by the shared registry and compiles to line geometry with the depth state it
+asked for (`an_overlay_subtree_is_pulled_and_compiles_as_lines` in
+`crates/ferrocad_inventor_py/tests/coin_scene.rs`).
+
+**Acceptance met:** the decision is recorded; the only shape-preview channel is the
+existing `FreeCADGui.Preview`, and an imperative Coin overlay reaches the viewport through
+the shared registry. **Size:** S (decision) + the small facade-completeness tail.
 
 ## SC7 — the workflow acceptance — done 2026-11-13
 

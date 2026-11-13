@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 use ferrocad_inventor::{Node, NodeKind, Scene, ShaderParameter};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyModule, PyType};
 
 mod fields;
 mod events;
@@ -50,6 +50,16 @@ impl SoBase {
         Ok(SoType {
             name: slf.get_type().name()?.to_string(),
         })
+    }
+
+    /// The class type, as Coin's `getClassTypeId` spells it.
+    ///
+    /// A class method, so `coin.SoSeparator.getClassTypeId()` works the way a mod's
+    /// `isOfType` check expects; it is inherited by every subclass of `SoBase`.
+    #[classmethod]
+    #[pyo3(name = "getClassTypeId")]
+    fn class_type_id(cls: &Bound<'_, PyType>) -> PyResult<SoType> {
+        Ok(SoType::named(&cls.name()?.to_string()))
     }
 }
 
@@ -92,8 +102,18 @@ impl SoGroup {
     /// not available; FerroCAD compares the copied nodes instead. Removing a node
     /// that is not present is a no-op.
     #[pyo3(name = "removeChild")]
-    fn remove_child(mut slf: PyRefMut<'_, Self>, child: &Bound<'_, SoNode>) -> PyResult<()> {
+    fn remove_child(mut slf: PyRefMut<'_, Self>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        // Coin allows both `removeChild(node)` and `removeChild(index)`.
+        if let Ok(index) = child.extract::<usize>() {
+            let children = &mut slf.as_super().node.children;
+            if index < children.len() {
+                children.remove(index);
+            }
+            return Ok(());
+        }
         let target = child
+            .downcast::<SoNode>()
+            .map_err(|_| PyTypeError::new_err("removeChild expects a node or an index"))?
             .try_borrow()
             .map_err(|_| PyTypeError::new_err("removeChild: the node is already in use"))?
             .node
@@ -114,6 +134,56 @@ impl SoGroup {
     #[pyo3(name = "getNumChildren")]
     fn get_num_children(slf: PyRef<'_, Self>) -> usize {
         slf.as_super().node.children.len()
+    }
+
+    /// `group.getChild(index)` — the child at `index`, or `None`.
+    ///
+    /// The returned node is a detached copy (the same value semantics `addChild` uses
+    /// in reverse), so mutating it does not change the group until it is re-inserted.
+    #[pyo3(name = "getChild")]
+    fn get_child(slf: PyRef<'_, Self>, index: usize, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let Some(node) = slf.as_super().node.children.get(index).cloned() else {
+            return Ok(None);
+        };
+        to_py(py, &node).map(Some)
+    }
+
+    /// `group.insertChild(child, index)` — insert a copy at `index`.
+    ///
+    /// An index past the end appends, matching Coin's clamp.
+    #[pyo3(name = "insertChild")]
+    fn insert_child(mut slf: PyRefMut<'_, Self>, child: &Bound<'_, SoNode>, index: usize) {
+        let child_node = child.borrow().node.clone();
+        let children = &mut slf.as_super().node.children;
+        let index = index.min(children.len());
+        children.insert(index, child_node);
+    }
+
+    /// `group.removeAllChildren()`.
+    #[pyo3(name = "removeAllChildren")]
+    fn remove_all_children(mut slf: PyRefMut<'_, Self>) {
+        slf.as_super().node.children.clear();
+    }
+
+    /// `group.findChild(node)` — the index of the first structurally equal child, or
+    /// `-1`.
+    ///
+    /// FerroCAD copies on `addChild`, so Coin's pointer identity is unavailable; the
+    /// search compares the copied nodes instead.
+    #[pyo3(name = "findChild")]
+    fn find_child(slf: PyRef<'_, Self>, child: &Bound<'_, SoNode>) -> PyResult<i32> {
+        let target = child
+            .try_borrow()
+            .map_err(|_| PyTypeError::new_err("findChild: the node is already in use"))?
+            .node
+            .clone();
+        Ok(slf
+            .as_super()
+            .node
+            .children
+            .iter()
+            .position(|candidate| *candidate == target)
+            .map_or(-1, |index| index as i32))
     }
 
     fn __len__(slf: PyRef<'_, Self>) -> usize {
@@ -200,6 +270,16 @@ impl SoSwitch {
 
 #[pymethods]
 impl SoNode {
+    /// `node.isOfType(type)` — whether this node's class is `type` or derives from it.
+    ///
+    /// This is the classic Coin spelling (`node.isOfType(coin.SoSeparator.getClassTypeId())`),
+    /// used by mods that walk a scene graph and pick out shapes.
+    #[pyo3(name = "isOfType")]
+    fn is_of_type(slf: &Bound<'_, Self>, type_id: &SoType) -> PyResult<bool> {
+        let name = slf.get_type().name()?.to_string();
+        Ok(derives_from(&name, type_id.name()))
+    }
+
     /// `node.set("field VALUE")` (or `"field=VALUE"`) — set one field from a
     /// string, as Coin's `SoFieldContainer::set` does.
     ///

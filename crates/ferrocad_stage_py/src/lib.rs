@@ -44,9 +44,9 @@ pub use stage::{Stage, extract_stage};
 pub use tool::{PyTool, Tool, extract_tool};
 pub use view::{
     PickHit, clear_previews, clear_view, has_stage, preview_generation, preview_items,
-    publish_camera, publish_stage, published_camera, set_preview_items,
+    publish_camera, publish_stage, publish_workplane, published_camera, set_preview_items,
 };
-pub use workplane::{Workplane, WorkplaneKind};
+pub use workplane::{Workplane, WorkplaneKind, WorkplaneState};
 
 /// The `ferrocad_stage` extension module (the surface of `ferrocad.stage`).
 #[pymodule]

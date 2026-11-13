@@ -296,6 +296,20 @@ pub struct ActiveWorkplane {
     pub extent: Option<f64>,
 }
 
+impl From<&ActiveWorkplane> for ferrocad_stage::view::PublishedWorkplane {
+    /// Project the viewport's state into the process-global publication the Python
+    /// facade reads (S4.4). The plane itself is unchanged: a script sees exactly the
+    /// frame the grid is drawn on.
+    fn from(active: &ActiveWorkplane) -> Self {
+        Self {
+            plane: active.plane.clone(),
+            label: active.label.clone(),
+            offset: active.offset,
+            extent: active.extent,
+        }
+    }
+}
+
 impl ActiveWorkplane {
     /// The default plane: world `XY` at the origin.
     pub fn world() -> Self {

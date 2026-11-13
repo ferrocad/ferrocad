@@ -441,5 +441,113 @@ class PivyEventCallbackTest(unittest.TestCase):
         self.assertFalse(self.view.removeEventCallback("mouse", calls.append))
 
 
+class ViewWorkplaneTest(unittest.TestCase):
+    """S4.4: the active workplane and an exact face frame through the facade.
+
+    The shell publishes the viewport's plane; a headless test publishes the same value
+    with ``ferrocad_stage.set_view_workplane``. A face frame is resolved from the
+    published stage with the same rule the viewport uses, so a tilted face's normal is
+    the grid's normal, not a second approximation.
+    """
+
+    def setUp(self):
+        stage.clear_view()
+        FreeCADGui._clear_documents()
+        if FreeCAD.getDocument("Workplane") is not None:
+            FreeCAD.closeDocument("Workplane")
+        self.doc = FreeCAD.newDocument("Workplane")
+        self.doc.addObject("App::FeaturePython", "Body")
+        self.view = FreeCADGui.getDocument("Workplane").ActiveView
+
+    def tearDown(self):
+        stage.clear_view()
+        FreeCADGui._clear_documents()
+        if FreeCAD.getDocument("Workplane") is not None:
+            FreeCAD.closeDocument("Workplane")
+
+    def _publish_tilted_face(self, entity=7):
+        """A quad in the plane ``z = x``, tagged ``Face1``, published as ``Body``."""
+        corners = [
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, 1.0),
+            (0.0, 1.0, 0.0),
+        ]
+        item = stage.ShapeItem(entity)
+        item.set_mesh(corners, None, [0, 1, 2, 0, 2, 3], [], [1, 1, 1, 1])
+        published = stage.Stage()
+        published.add(item)
+        stage.set_view_stage(published, {entity: "Body"}, {entity: ["", "Face1"]})
+
+    def test_no_published_plane_reads_as_none(self):
+        self.assertIsNone(self.view.getWorkplane())
+
+    def test_the_published_plane_reports_its_frame_and_label(self):
+        plane = stage.Workplane(
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            stage.WorkplaneKind.World,
+        )
+        stage.set_view_workplane(plane, label="XY", offset=25.0, extent=None)
+        state = self.view.getWorkplane()
+        self.assertEqual(state.label, "XY")
+        self.assertEqual(state.offset, 25.0)
+        self.assertIsNone(state.extent)
+        self.assertEqual(state.origin, (0.0, 0.0, 0.0))
+        self.assertEqual(state.n, (0.0, 0.0, 1.0))
+        self.assertEqual(state.workplane.n, (0.0, 0.0, 1.0))
+
+    def test_a_tilted_face_plane_matches_the_published_tessellation(self):
+        self._publish_tilted_face()
+        state = self.view.getFacePlane("Body")
+        root = 0.5**0.5
+        self.assertAlmostEqual(state.n[0], -root, places=6)
+        self.assertAlmostEqual(state.n[1], 0.0, places=6)
+        self.assertAlmostEqual(state.n[2], root, places=6)
+        self.assertAlmostEqual(state.u[0], root, places=6)
+        self.assertAlmostEqual(state.u[2], root, places=6)
+        self.assertEqual(state.v, (0.0, 1.0, 0.0))
+        self.assertEqual(state.origin, (0.5, 0.5, 0.5))
+        self.assertEqual(state.label, "Face1")
+        self.assertGreater(state.extent, 0.0)
+
+    def test_the_kind_survives_publication(self):
+        self._publish_tilted_face()
+        # The face frame is the plane a script binds when it activates Face1.
+        frame = self.view.getFacePlane("Body")
+        stage.set_view_workplane(frame.workplane, label="Face1", offset=0.0)
+        state = self.view.getWorkplane()
+        self.assertEqual(state.kind.kind, ("Face", 7, "Face1"))
+
+    def test_a_deleted_face_raises_instead_of_replaying_a_frame(self):
+        self._publish_tilted_face()
+        frame = self.view.getFacePlane("Body")
+        stage.set_view_workplane(frame.workplane, label="Face1", offset=0.0)
+        self.assertIsNotNone(self.view.getWorkplane())
+
+        # The document edited and entity 7 is gone; the binding is stale.
+        replacement = stage.ShapeItem(8)
+        replacement.set_mesh(
+            [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)],
+            None,
+            [0, 1, 2, 0, 2, 3],
+            [],
+            [1, 1, 1, 1],
+        )
+        replacement_stage = stage.Stage()
+        replacement_stage.add(replacement)
+        stage.set_view_stage(replacement_stage, {8: "Body"}, {8: ["", "Face1"]})
+        with self.assertRaises(RuntimeError):
+            self.view.getWorkplane()
+
+    def test_a_curved_or_missing_element_is_an_explicit_error(self):
+        self._publish_tilted_face()
+        with self.assertRaises(ValueError):
+            self.view.getFacePlane("Body", "Edge1")
+        with self.assertRaises(LookupError):
+            self.view.getFacePlane("Unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

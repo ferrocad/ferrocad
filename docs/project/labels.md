@@ -118,7 +118,7 @@ absorbed the rest. Do not reuse `A`–`D` for new slices without the owner prefi
 | `S1` | same | The headless unit baseline: all 88 modules attempted and classified. | ✅ |
 | `S2` | same | The `Part` planar/topology slice (construction, queries, booleans, extrude, persistence). | ◐ |
 | `S3` | same | The curved/dress-up slice (cylinders/spheres/cones/tori, curve/surface types, offset/thickness, fillet/chamfer, loft/sweep); `S3.4` is the mesh decision. | ◐ |
-| `S4` | same | Interaction parity: `S4.1` view facade, `S4.2` ranked pick, `S4.3` `SelectionObject`, `S4.4` snapping, `S4.5` push/pull, `S4.6` previews. | ◐ (`S4.1`–`S4.3` in the tree, `S4.4` partial, `S4.5` via the FerroCAD push/pull, `S4.6` open) |
+| `S4` | same | Interaction parity: `S4.1` view facade, `S4.2` ranked pick, `S4.3` `SelectionObject`, `S4.4` face plane/workplane, `S4.5` push/pull, `S4.6` previews. | ◐ (`S4.1`–`S4.5` in the tree; `S4.6` is the `FreeCADGui.Preview` channel with 3-D text a non-goal) |
 | `S5` | same | The GUI workbench: the Qt split plane, commands/toolbars, previews on stage, GUI suites under Xvfb. | ▢ |
 
 ## Historic and non-label names

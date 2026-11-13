@@ -1215,18 +1215,22 @@ Acceptance:
 - No kernel dependency reaches `ferrocad_stage`, `ferrocad_viewport` or
   `ferrocad_gpui`.
 
-**S4.1–S4.3 as built (worktree, 2026-10-27).** The view facade, the ranked pick and
-the `SelectionObject` are implemented and covered by `tests/test_gui_view_facade.py`
-(23 passed) and `tests/test_gui_selection_object.py` (part of a 24-test pair with the
-Draft import surface). The facade publishes the camera and stage through
-`ferrocad_stage.set_view_camera`/`set_view_stage`, so a headless script or test sees the
-same answers as the shell; `getObjectsInfo` returns every distinct
-`(entity, sub-element)` nearest first, and `Gui.Selection` reads a shell-pushed snapshot
-and queues writes back. S4.4 snapping works through SimpleCAD's own `gui.snapping` over
-the facade, but the workplane/radius-magnet cases are not measured yet; S4.5 should reuse
-the FerroCAD push/pull stem (P3) rather than a second manipulator; S4.6 previews are
-open. Re-run the S4 acceptance against a rebuilt combined extension before quoting a
-number.
+**S4.1–S4.6 as built (2026-11-13).** The view facade, the ranked pick and the
+`SelectionObject` are implemented and covered by `tests/test_gui_view_facade.py` and
+`tests/test_gui_selection_object.py`. The facade publishes the camera, stage and
+**active workplane** through `ferrocad_stage.set_view_camera`/`set_view_stage`/
+`set_view_workplane`, so a headless script or test sees the same answers as the shell;
+`getObjectsInfo` returns every distinct `(entity, sub-element)` nearest first, and
+`Gui.Selection` reads a shell-pushed snapshot and queues writes back. S4.4 now exposes
+`getWorkplane` and `getFacePlane`: the plane is read from the viewport's publication and a
+face frame from the published stage with the same `FaceFrame` rule the snap context uses,
+so a tilted face's normal and origin are exact rather than tessellation guesses. S4.5's
+stem is the FerroCAD push/pull manipulator; the parametric round-trip test proves a face
+selection's drag edits the document in one transaction. S4.6 keeps
+`FreeCADGui.Preview` (transient `ShapeItem`s) as the shape-preview channel and records
+3-D text as a non-goal; the imperative-Coin lifecycle is now complete enough for an
+overlay (`getChild`/`insertChild`/`removeChild`/`removeAllChildren`/`findChild`,
+`isOfType` and class type ids).
 
 ### S5 — GUI workbench
 

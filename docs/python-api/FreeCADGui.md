@@ -93,6 +93,7 @@ A document's 3D view, shaped like upstream's ``View3DInventor``.
 | addEventCallbackPivy(event_type, callback, data=None) | ``view.addEventCallbackPivy(SoEvent.getClassTypeId(), cb)``. |
 | fitAll() | Accept a fit request (fitting is the shell's; nothing moves here). |
 | getCameraNode() | The published camera as a Coin-``SoCamera``-shaped snapshot, or ``None``. |
+| getFacePlane(obj, element='Face1') | The exact planar frame of ``element`` on ``obj``, or raise. |
 | getObjectInfo(pos) | The nearest entry :meth:`getObjectsInfo` would return, or ``None``. |
 | getObjectsInfo(pos) | Every sub-element under device pixel ``pos``, nearest first. |
 | getPoint(callback=None, *args) | Start a Snapper point session on this view. |
@@ -100,6 +101,7 @@ A document's 3D view, shaped like upstream's ``View3DInventor``.
 | getSceneGraph() | The document's scene root (``None`` when Coin is unavailable). |
 | getSize() | The device-pixel viewport size, or ``(0, 0)`` when unknown. |
 | getViewDirection() | The world direction the camera looks along. |
+| getWorkplane() | The active workplane the shell last published, or ``None``. |
 | redraw() | Accept a redraw request (the shell repaints from its own state). |
 | removeEventCallback(name, callback) -> bool | Drop ``callback`` from ``name``; returns whether it was registered. |
 | removeEventCallbackPivy(event_type, callback) | Undo :meth:`addEventCallbackPivy`; returns whether it was registered. |

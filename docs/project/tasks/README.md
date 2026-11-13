@@ -5,9 +5,9 @@ decision. Completed specs moved to [`../record/tasks/`](../record/tasks/README.m
 
 - [simplecad-bringup.md](simplecad-bringup.md) — **the SC0–SC8 cut of P1.** Triage the
   failures, exact `ShapeType`, `makeWireString` on `skrifa`/`harfrust`, the GUI
-  classification, the S4.4–S4.6 view half, and the workflow acceptance. SC0–SC3 and SC7
-  are done; SC4–SC6 and SC8 are open. The suite is **985/49/18/7**, with the Qt groups
-  classified as skips.
+  classification, the S4.4–S4.6 view half, and the workflow acceptance. SC0–SC7 are
+  done (SC6 is a recorded decision); SC8 — the re-measure — is the open one. The suite
+  is **985/49/18/7**, with the Qt groups classified as skips.
 
 - [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget.** Stages 1
   and 2 landed (the `.FCStd` payloads restore in parallel, `open` 5.9 s → 1.8 s, the 900a

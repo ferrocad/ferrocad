@@ -38,17 +38,19 @@ use pyo3::prelude::*;
 
 use crate::camera::Camera;
 use crate::stage::Stage;
+use crate::workplane::{Workplane, WorkplaneState};
 
 /// The published camera and stage live in the pure stage crate so a platform-neutral
 /// host can publish them without linking CPython; these are the same functions.
 pub use fs::view::{
     clear_previews, clear_view, has_stage, preview_generation, preview_items, publish_camera,
-    publish_stage, published_camera, set_preview_items,
+    publish_stage, publish_workplane, published_camera, published_face_frame, published_stage,
+    published_workplane, set_preview_items,
 };
 // The ranked picker's unit tests build a stage by hand; the binding itself no longer
 // names the published type (the picker lives in the pure crate now).
 #[cfg(test)]
-pub use fs::view::{PublishedStage, published_stage};
+pub use fs::view::PublishedStage;
 
 /// One pick result: what the pointer is over and where.
 ///
@@ -201,11 +203,66 @@ fn py_preview_generation() -> u64 {
     preview_generation()
 }
 
+/// Publish the active workplane a host is drawing with (S4.4).
+///
+/// A headless script or test uses this the way the shell does: the plane becomes what
+/// `FreeCADGui.ActiveDocument.ActiveView.getWorkplane()` returns. `extent` is the
+/// in-plane radius of a bound surface (the grid's patch), and `label` is the pill's
+/// name (`"XY"`, `"Face3"`, `"Datum"`).
+#[pyfunction]
+#[pyo3(signature = (workplane, label="Custom", offset=0.0, extent=None))]
+fn set_view_workplane(
+    workplane: &Workplane,
+    label: &str,
+    offset: f64,
+    extent: Option<f64>,
+) {
+    publish_workplane(fs::view::PublishedWorkplane {
+        plane: workplane.inner.clone(),
+        label: label.to_string(),
+        offset,
+        extent,
+    });
+}
+
+/// The published active workplane, or `None` when no host has published one.
+#[pyfunction]
+fn view_workplane() -> Option<WorkplaneState> {
+    published_workplane().map(WorkplaneState::from)
+}
+
+/// The pick id whose published object name is `object`, or `None`.
+#[pyfunction]
+fn entity_of(object: &str) -> Option<u32> {
+    published_stage()?.entity_named(object)
+}
+
+/// The exact planar frame of `element` on `entity`, resolved from the published stage.
+///
+/// The frame is the one the viewport's snap context uses: the area-weighted centroid
+/// and normal of the element's display triangles, and the extent of its vertices. A
+/// named element that is not a planar face — or an entity the current stage no longer
+/// has — returns `None`, so a caller cannot read a previous frame after a deletion.
+#[pyfunction]
+fn face_plane(entity: u32, element: &str) -> Option<WorkplaneState> {
+    let frame = published_face_frame(entity, element)?;
+    Some(WorkplaneState::from(fs::view::PublishedWorkplane {
+        plane: frame.plane,
+        label: element.to_string(),
+        offset: 0.0,
+        extent: Some(frame.radius),
+    }))
+}
+
 /// Register this module's functions and classes.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PickHit>()?;
     m.add_function(wrap_pyfunction!(set_view_camera, m)?)?;
     m.add_function(wrap_pyfunction!(set_view_stage, m)?)?;
+    m.add_function(wrap_pyfunction!(set_view_workplane, m)?)?;
+    m.add_function(wrap_pyfunction!(view_workplane, m)?)?;
+    m.add_function(wrap_pyfunction!(entity_of, m)?)?;
+    m.add_function(wrap_pyfunction!(face_plane, m)?)?;
     m.add_function(wrap_pyfunction!(view_camera, m)?)?;
     m.add_function(wrap_pyfunction!(pick_at, m)?)?;
     m.add_function(wrap_pyfunction!(py_clear_view, m)?)?;

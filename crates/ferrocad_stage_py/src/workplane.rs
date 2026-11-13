@@ -97,6 +97,106 @@ impl From<fs::WorkplaneKind> for WorkplaneKind {
     }
 }
 
+/// The active workplane a host published (S4.4).
+///
+/// This is the viewport's plane, not a copy the facade keeps: `FreeCADGui.ActiveView`
+/// reads it back through `ferrocad_stage.view_workplane()`, and a face-bound state can
+/// be asked for a named face's exact frame with `ferrocad_stage.face_plane()`.
+/// `workplane` exposes the same frame as the ordinary [`Workplane`] class, while
+/// `label`/`offset`/`extent` carry what the viewport's grid is using.
+#[pyclass(module = "ferrocad_stage", name = "WorkplaneState")]
+#[derive(Clone)]
+pub struct WorkplaneState {
+    pub(crate) inner: fs::view::PublishedWorkplane,
+}
+
+#[pymethods]
+impl WorkplaneState {
+    /// The plane's origin.
+    #[getter]
+    fn origin(&self) -> (f64, f64, f64) {
+        triple(self.inner.plane.origin)
+    }
+
+    /// The in-plane `u` axis (normalized).
+    #[getter]
+    fn u(&self) -> (f64, f64, f64) {
+        triple(self.inner.plane.u)
+    }
+
+    /// The in-plane `v` axis (normalized).
+    #[getter]
+    fn v(&self) -> (f64, f64, f64) {
+        triple(self.inner.plane.v)
+    }
+
+    /// The unit normal, `u × v`.
+    #[getter]
+    fn n(&self) -> (f64, f64, f64) {
+        triple(self.inner.plane.n)
+    }
+
+    /// The presentation label without the offset (`"XY"`, `"Face3"`, `"Custom"`).
+    #[getter]
+    fn label(&self) -> &str {
+        &self.inner.label
+    }
+
+    /// The shift along the plane's own normal, in mm.
+    #[getter]
+    fn offset(&self) -> f64 {
+        self.inner.offset
+    }
+
+    /// The in-plane radius of the finite surface the plane is bound to, if any.
+    #[getter]
+    fn extent(&self) -> Option<f64> {
+        self.inner.extent
+    }
+
+    /// Where the frame came from (`WorkplaneKind.World`, `Face(...)`, …).
+    #[getter]
+    fn kind(&self) -> WorkplaneKind {
+        self.inner.plane.kind.clone().into()
+    }
+
+    /// The same frame as an ordinary [`Workplane`].
+    #[getter]
+    fn workplane(&self) -> Workplane {
+        Workplane {
+            inner: self.inner.plane.clone(),
+        }
+    }
+
+    /// The world point at local `(a, b)`.
+    fn point(&self, a: f64, b: f64) -> (f64, f64, f64) {
+        triple(self.inner.plane.point(a, b))
+    }
+
+    /// The local `(u, v)` of a world point (its normal component is dropped).
+    fn project(&self, point: (f64, f64, f64)) -> (f64, f64) {
+        let local = self.inner.plane.project(vector(point));
+        (local[0], local[1])
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "WorkplaneState(label={:?}, origin={:?}, n={:?}, offset={}, extent={:?})",
+            self.inner.label,
+            triple(self.inner.plane.origin),
+            triple(self.inner.plane.n),
+            self.inner.offset,
+            self.inner.extent
+        )
+    }
+}
+
+impl From<fs::view::PublishedWorkplane> for WorkplaneState {
+    fn from(inner: fs::view::PublishedWorkplane) -> Self {
+        Self { inner }
+    }
+}
+
 /// A right-handed planar frame (`ferrocad_stage::Workplane`).
 ///
 /// `n = u × v`; the axes are normalized and must be non-degenerate and not parallel,
@@ -192,6 +292,7 @@ impl Workplane {
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<WorkplaneKind>()?;
     m.add_class::<Workplane>()?;
+    m.add_class::<WorkplaneState>()?;
     Ok(())
 }
 

@@ -4,6 +4,7 @@
 use ferrocad_inventor::{compile, Topology};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::sync::Mutex;
 
 /// A workbench-style scene build: the same cube the Rust sample draws, but scripted.
 const SCENE_SCRIPT: &str = r#"
@@ -134,5 +135,72 @@ fn extraction_rejects_a_non_node() {
             py.eval(&code, None, None).expect("eval")
         };
         assert!(ferrocad_inventor_py::extract_scene(&not_a_node).is_err());
+    });
+}
+
+/// S4.6: a SimpleCAD-style preview subtree goes through the shared overlay registry
+/// and compiles as line geometry with the depth state the preview asked for.
+///
+/// The registry is a **pull** channel: registering marks it dirty, and taking the
+/// scenes clears the flag. The overlay is never part of the document stage.
+const OVERLAY_SCRIPT: &str = r#"
+from pivy import coin
+
+root = coin.SoSeparator()
+
+# A construction preview draws through the scene: no depth writes.
+depth = coin.SoDepthBuffer()
+depth.test = False
+depth.write = False
+root.addChild(depth)
+
+coords = coin.SoCoordinate3()
+coords.point.setValues(0, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)])
+root.addChild(coords)
+
+lines = coin.SoIndexedLineSet()
+lines.coordIndex.setValues(0, [0, 1, 1, 2])
+root.addChild(lines)
+"#;
+
+#[test]
+fn an_overlay_subtree_is_pulled_and_compiles_as_lines() {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _guard = LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    Python::with_gil(|py| {
+        ferrocad_inventor_py::install(py).expect("install coin");
+        ferrocad_inventor::overlays::clear();
+        let globals = PyDict::new(py);
+        let code = std::ffi::CString::new(OVERLAY_SCRIPT).expect("no NUL");
+        py.run(&code, Some(&globals), None)
+            .expect("run overlay script");
+        let root = globals.get_item("root").expect("get_item").expect("root");
+
+        ferrocad_inventor_py::add_overlay(&root).expect("register the overlay");
+        assert!(
+            ferrocad_inventor::overlays::dirty(),
+            "registering marks the pull channel dirty"
+        );
+        let scenes = ferrocad_inventor::overlays::take_scenes();
+        assert_eq!(scenes.len(), 1, "one registered overlay");
+        assert!(
+            !ferrocad_inventor::overlays::dirty(),
+            "taking the scenes clears the flag"
+        );
+
+        let (queue, _) = compile(&scenes[0]);
+        assert_eq!(queue.len(), 1, "the line set is the only draw");
+        let packet = &queue.packets[0];
+        assert_eq!(packet.topology, Topology::Lines);
+        assert!(
+            !packet.state.depth.write,
+            "the preview draws without writing depth"
+        );
+        assert_eq!(
+            packet.geometry.as_ref().expect("geometry").indices.len(),
+            4,
+            "two segments"
+        );
+        ferrocad_inventor::overlays::clear();
     });
 }

@@ -50,7 +50,7 @@ in the [November round log](2026-11-13-november-round.md).
 | Python facade | 631/3/4 (worktree) | not re-measured; the in-process runs are the gate |
 | Part module | 248/408 names in the worktree | **252/408 (61.8%)**, 21 shared classes |
 | SimpleCAD | 702/44/368/2 | **985/49/23/2 over 88/88** (2026-11-13, worker paths exported) |
-| Rust lib tests | 1 186 across 15 crates | **1 452 passed, 2 failed**; `shell_core` SIGSEGVs in parallel, passes 274/2 serially |
+| Rust lib tests | 1 186 across 15 crates | **1 454 passed, 0 failed**; `ferrocad_shell_core` is 276/0 in default and 32-thread runs |
 | Book | 36 chapters | **48 chapters** |
 | Hosts | desktop + a browser spike | **one document, four runtimes**; the browser shell runs the same backend |
 

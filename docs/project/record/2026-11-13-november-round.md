@@ -39,7 +39,7 @@ number also depends on the built combined extension. The Rust rows are lib tests
 | Draft M2 | **27 passed, 0 failed, 0 errored, 0 load failures** | `test_creation` 26 + `test_array` 1 |
 | SimpleCAD integrated | **985 passed, 49 failed, 23 errored, 2 skipped, 88/88 modules** | `cargo test -p ferrocad_part_py --test simplecad_conformance` |
 | Part API audit | **252 of 408 names (61.8%)**, 21 shared classes, 11 with method gaps | `python3 tools/part_api_audit.py`; 39 functions / 60 classes / 40 object types, contract at 17 source files |
-| Rust lib tests | **1 452 passed, 2 failed** across the measured crates | 1 178 in 21 crates plus `ferrocad_shell_core` 274/2 (serial) |
+| Rust lib tests | **1 454 passed, 0 failed** across the measured crates | 1 178 in 21 crates plus `ferrocad_shell_core` 276/0 |
 | Book | **48 chapters** | `python3 tools/build_book.py --check` |
 
 ### 2.1 One regression and one harness gap (both fixed 2026-11-13)
@@ -67,12 +67,12 @@ change. The contract was re-pinned and `--check` passes.
 
 ### 2.2 Other check state
 
-- `ferrocad_shell_core` lib tests pass **274/2** when run serially. The default parallel run
-  ends in a **SIGSEGV** after the tests, because several tests share the process-wide
-  document registry; the two serial failures are
-  `shell::tests::boot::shell_boots_lists_the_sample_document_and_is_renderable` and
-  `shell::tests::tree::a_document_row_switches_the_shell` (a `Sample` document where the
-  test expects `Shell`).
+- `ferrocad_shell_core` is **276/0**, stable across repeated default and 32-thread runs.
+  The two failures were `boot` and `tree` tests hard-coding the old `Shell` startup
+  document; the tests now read the active startup document's name and object count, so
+  they pass with the checked-in `Sample.FCStd` boot. A parallel-run SIGSEGV observed
+  before this fix no longer reproduces; the crash coincided with those panicking tests in
+  the shared-interpreter suite.
 - `python3 tools/api_docs.py --check` (9 pages), `tools/userdocs.py --check` (8 pages, 6
   generated images) and `tools/build_book.py --check` (48 chapters) are all current after
   the 2026-11-13 regeneration.

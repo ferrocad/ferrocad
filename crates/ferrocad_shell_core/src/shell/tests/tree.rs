@@ -131,6 +131,8 @@ fn space_in_the_tree_toggles_visibility_in_one_undo_step(cx: &mut TestAppContext
 fn a_document_row_switches_the_shell(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (mut cx, shell, model) = palette_window(cx);
+    // The startup document's name is the host's; keep it rather than assuming `Shell`.
+    let startup = model.lock().unwrap().document.clone();
 
     // A second document; `newDocument` makes it the active one.
     let created = crate::python::evaluate("FreeCAD.newDocument('Second')").expect("evaluate");
@@ -148,9 +150,12 @@ fn a_document_row_switches_the_shell(cx: &mut TestAppContext) {
             .map(|doc| (doc.name.clone(), doc.active))
             .collect::<Vec<_>>()
     };
+    let mut listed = documents(&model);
+    listed.sort();
+    let mut expected = vec![("Second".to_string(), true), (startup.clone(), false)];
+    expected.sort();
     assert_eq!(
-        documents(&model),
-        vec![("Second".to_string(), true), ("Shell".to_string(), false)],
+        listed, expected,
         "every document is listed and the active one is marked"
     );
     assert_eq!(
@@ -161,8 +166,10 @@ fn a_document_row_switches_the_shell(cx: &mut TestAppContext) {
 
     // A single click only points the tree at the row; `Enter` is the switch.
     let mut dev_cx = open_dev_tools(&mut cx, &shell);
+    let startup_row: &'static str =
+        Box::leak(format!("doc-{startup}").into_boxed_str());
     let bounds = dev_cx
-        .debug_bounds("doc-Shell")
+        .debug_bounds(startup_row)
         .expect("the document row is drawn");
     dev_cx.simulate_click(bounds.center(), gpui::Modifiers::default());
     draw(&mut dev_cx);
@@ -176,13 +183,13 @@ fn a_document_row_switches_the_shell(cx: &mut TestAppContext) {
     draw(&mut dev_cx);
     assert_eq!(
         model.lock().unwrap().document,
-        "Shell",
+        startup,
         "Enter switches to the clicked document"
     );
     assert!(
         documents(&model)
             .iter()
-            .any(|(name, active)| name == "Shell" && *active),
+            .any(|(name, active)| name == &startup && *active),
         "the tree follows the switch"
     );
 

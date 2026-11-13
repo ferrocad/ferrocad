@@ -51,18 +51,22 @@ fn shell_boots_lists_the_sample_document_and_is_renderable(cx: &mut TestAppConte
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let model = boot_shell(cx);
-    {
+    let object_count = {
         let m = model.lock().unwrap();
+        // The startup document is the host's (`Shell` for the script-built sample,
+        // `Sample` for the checked-in `Sample.FCStd`); assert its contents, not the name.
         let doc = m
             .tree
             .iter()
-            .find(|d| d.name == "Shell")
-            .expect("Shell document");
+            .find(|d| d.active)
+            .expect("an active startup document");
         let names: Vec<&str> = doc.objects.iter().map(|o| o.name.as_str()).collect();
         assert!(names.contains(&"Params"), "objects: {names:?}");
         assert!(names.contains(&"Derived"));
         assert!(m.console.iter().any(|l| l.contains("hello from Python")));
-    }
+        doc.objects.len()
+    };
+    let expected_count = object_count.to_string();
 
     // The property editor is fed from the live model.
     let props = crate::python::properties("Params").expect("properties");
@@ -71,7 +75,7 @@ fn shell_boots_lists_the_sample_document_and_is_renderable(cx: &mut TestAppConte
     // The console round-trips a snippet through the interpreter.
     let out = crate::python::evaluate("len(doc.Objects)").expect("evaluate");
     assert!(out.ok, "eval failed: {}", out.output);
-    assert_eq!(out.output, "3");
+    assert_eq!(out.output, object_count.to_string());
 
     // The shell renders headlessly (no display server, no GPU).
     let window = cx.update(|cx| {
@@ -107,7 +111,7 @@ fn shell_boots_lists_the_sample_document_and_is_renderable(cx: &mut TestAppConte
             m.console
         );
         assert!(
-            m.console.iter().any(|l| l == "3"),
+            m.console.iter().any(|l| l == &expected_count),
             "console: {:?}",
             m.console
         );

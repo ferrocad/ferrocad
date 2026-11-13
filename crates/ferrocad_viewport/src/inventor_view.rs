@@ -4125,11 +4125,12 @@ impl<V: InventorView> InventorViewport<V> {
         self.manipulator_queue = queue;
 
         // A manipulator's pending edit is a property preview: display-only, unpickable,
-        // and shown only while the gesture is live (a release or cancel drops it).
+        // and shown while the gesture is live **or** while the host holds its commit for
+        // ✓/✗ (a held value keeps its ghost, so it can still be seen and re-dragged).
         let mut preview = RenderQueue::default();
         if self.gizmo_style.enabled {
             for manipulator in &self.manipulators {
-                if !manipulator.is_dragging() {
+                if !manipulator.is_dragging() && !manipulator.is_pending() {
                     continue;
                 }
                 for item in manipulator.preview_items() {
@@ -10059,6 +10060,8 @@ mod tests {
     struct FakeManipulator {
         value: f64,
         press: Option<(f64, f64)>,
+        /// Whether a released value is held for the host's decision.
+        pending: bool,
         hovered: bool,
         view: Option<Matrix4>,
         item: ShapeItem,
@@ -10076,6 +10079,12 @@ mod tests {
             Self::recording().0
         }
 
+        /// The same manipulator, reporting a released value the host is holding.
+        fn with_pending(mut self) -> Self {
+            self.pending = true;
+            self
+        }
+
         /// The manipulator and a handle to the style it records.
         fn recording() -> (Self, Rc<RefCell<Option<GizmoStyle>>>) {
             let style = Rc::new(RefCell::new(None));
@@ -10083,6 +10092,7 @@ mod tests {
                 Self {
                     value: 1.0,
                     press: None,
+                    pending: false,
                     hovered: false,
                     view: None,
                     item: ShapeItem::new(777)
@@ -10183,6 +10193,10 @@ mod tests {
             self.press.is_some()
         }
 
+        fn is_pending(&self) -> bool {
+            self.pending
+        }
+
         fn set_hovered(&mut self, hovered: bool) -> bool {
             if self.hovered == hovered {
                 return false;
@@ -10229,6 +10243,24 @@ mod tests {
             .with_manipulator(Box::new(FakeManipulator::new()));
         view.refresh();
         (view, viewport)
+    }
+
+    /// A released value the host is holding keeps its preview: the ghost **is** the value
+    /// under decision, so it must not vanish when the pointer leaves the handle.
+    #[test]
+    fn a_held_manipulator_keeps_its_preview() {
+        let camera = perspective_camera([100, 100]);
+        let mut view = InventorViewport::new(fake(ImageData::default()), camera, Scene::default())
+            .with_manipulator(Box::new(FakeManipulator::new().with_pending()));
+        view.refresh();
+
+        let manipulator = view.manipulator("fake").expect("a manipulator");
+        assert!(!manipulator.is_dragging(), "no gesture is live");
+        assert!(manipulator.is_pending(), "the value is held for ✓/✗");
+        assert!(
+            !view.manipulator_preview_queue.is_empty(),
+            "the held value keeps its ghost"
+        );
     }
 
     #[test]

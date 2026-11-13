@@ -29,10 +29,11 @@
 //! `InteractionCommit::new("push_pull", entity, "extrude" | "pocket")` with the face
 //! element and `[distance]`. The app script owns what that means for the document.
 //!
-//! While the drag is live the stem also publishes a translucent ghost of the selected
-//! face at the pending distance ([`preview_items`](PushPullStem::preview_items)). It is
-//! display-only and unpickable: the exact solid waits for the commit, so the ghost does
-//! not need a kernel recompute.
+//! While the drag is live — and while the shell holds the released value for `✓`/`✗` —
+//! the stem publishes a translucent **swept prism** of the selected face at the pending
+//! distance ([`preview_items`](PushPullStem::preview_items)): the face carried along the
+//! normal, closed by the walls its border sweeps. It is display-only and unpickable, and
+//! the exact boolean result waits for the commit, so the ghost needs no kernel recompute.
 //!
 //! This module is pure presentation: no `pyo3`, no kernel, no document.
 
@@ -147,11 +148,18 @@ pub struct PushPullStem {
     dirty: bool,
     /// The draw order: the halo (a wider stem in the outline ink) first, the stem on top.
     items: [ShapeItem; 2],
-    /// The pending-depth ghost of the selected face, shown only while a drag is active.
+    /// The pending-depth ghost of the selected face, swept along the normal. Shown while a
+    /// drag is active and after a release, while the shell holds the commit.
     preview: ShapeItem,
     /// The face's flat mesh (three vertices per triangle), captured from the stage item.
     face_positions: Vec<[f32; 3]>,
     face_triangles: Vec<u32>,
+    /// The face's border as directed vertex pairs (indices into
+    /// [`face_positions`](Self::face_positions)), in the face's own winding. The swept
+    /// walls use it so the ghost closes into a volume instead of a floating plane.
+    face_border: Vec<(u32, u32)>,
+    /// Whether the released value is held for the host's `✓`/`✗`.
+    pending: bool,
 }
 
 impl PushPullStem {
@@ -212,6 +220,8 @@ impl PushPullStem {
                 .with_blended_surface(),
             face_positions: Vec::new(),
             face_triangles: Vec::new(),
+            face_border: Vec::new(),
+            pending: false,
         })
     }
 
@@ -224,6 +234,7 @@ impl PushPullStem {
     /// pending depth. The factory supplies it from the stage item; a stem built directly
     /// with [`new`](Self::new) has no ghost geometry and simply draws its handle.
     pub fn set_face_geometry(&mut self, positions: Vec<[f32; 3]>, triangles: Vec<u32>) {
+        self.face_border = border_edges(&positions, &triangles);
         self.face_positions = positions;
         self.face_triangles = triangles;
         self.rebuild_preview();
@@ -267,6 +278,11 @@ impl PushPullStem {
     /// Whether a drag is in progress.
     pub fn is_dragging(&self) -> bool {
         self.solver.is_dragging()
+    }
+
+    /// Whether the released distance is held for the host's `✓`/`✗`.
+    pub fn is_pending(&self) -> bool {
+        self.pending
     }
 
     /// Whether the stem is highlighted.
@@ -385,15 +401,21 @@ impl PushPullStem {
     }
 
     /// Advance the drag, returning the signed distance when it changed.
+    ///
+    /// The solver reports the pointer's travel since the press, so the new distance is
+    /// measured from the value the stem held when it was grabbed. The first drag starts
+    /// at zero; a **second** one continues from a held (pending) distance, which is what
+    /// lets a released value be adjusted before `✓` instead of restarting from zero.
     pub fn drag_to(&mut self, camera: &Camera, device: [i32; 2]) -> Option<PushPullChange> {
         let event = self.solver.drag_to(camera, device)?;
         let GizmoValue::Linear { applied, .. } = event.value else {
             return None;
         };
-        if !applied.is_finite() || (applied - self.distance).abs() <= 1e-12 {
+        let distance = self.press_distance + applied;
+        if !distance.is_finite() || (distance - self.distance).abs() <= 1e-12 {
             return None;
         }
-        self.distance = applied;
+        self.distance = distance;
         self.rebuild_preview();
         Some(self.change())
     }
@@ -401,6 +423,9 @@ impl PushPullStem {
     /// End the drag, returning the distance to commit.
     pub fn end_drag(&mut self) -> Option<PushPullChange> {
         self.solver.end_drag()?;
+        // The release hands the value over; the ghost stays until the host spends it
+        // (`✓`) or drops it (`✗` → the shell re-arms a fresh stem).
+        self.pending = true;
         self.dirty = true;
         self.apply_color();
         Some(self.change())
@@ -419,7 +444,12 @@ impl PushPullStem {
         true
     }
 
-    /// Rebuild the face ghost at the current distance (world space; no camera needed).
+    /// Rebuild the swept ghost at the current distance (world space; no camera needed).
+    ///
+    /// The preview is the face **swept** to the pending depth rather than a floating copy
+    /// of it: the cap at the offset plus the walls its border traces. That is what makes
+    /// the ghost read as an extrusion (or a pocket) instead of an unmoored plane, and it
+    /// costs no kernel call — the face's own tessellation is the sweep profile.
     fn rebuild_preview(&mut self) {
         if self.face_positions.is_empty() || self.face_triangles.is_empty() || self.distance == 0.0 {
             self.preview
@@ -428,22 +458,34 @@ impl PushPullStem {
         }
         let offset = self.normal.scale(self.distance);
         let (dx, dy, dz) = (offset.x as f32, offset.y as f32, offset.z as f32);
-        let positions = self
-            .face_positions
-            .iter()
-            .map(|point| [point[0] + dx, point[1] + dy, point[2] + dz])
-            .collect();
-        self.preview.set_shape(
-            positions,
-            Vec::new(),
-            self.face_triangles.clone(),
-            Vec::new(),
+        let base = self.face_positions.len();
+
+        let mut positions = Vec::with_capacity(base * 2);
+        positions.extend_from_slice(&self.face_positions);
+        positions.extend(
+            self.face_positions
+                .iter()
+                .map(|point| [point[0] + dx, point[1] + dy, point[2] + dz]),
         );
+
+        let mut triangles = Vec::with_capacity(self.face_triangles.len() + self.face_border.len() * 6);
+        // The cap at the pending depth keeps the face's own winding.
+        triangles.extend(self.face_triangles.iter().map(|index| index + base as u32));
+        // The walls: the outside of a `a → b` wall is `(b − a) × N`, so `(a, b, b′)` and
+        // `(a, b′, a′)` face away from the swept volume for an outward sweep.
+        for &(a, b) in &self.face_border {
+            let (at, bt) = (a + base as u32, b + base as u32);
+            triangles.extend([a, b, bt, a, bt, at]);
+        }
+
+        self.preview
+            .set_shape(positions, Vec::new(), triangles, Vec::new());
         let color = [
             PUSH_PULL_COLOR[0],
             PUSH_PULL_COLOR[1],
             PUSH_PULL_COLOR[2],
-            0.30,
+            // A volume overlaps itself in most views; a plane's alpha would stack into mud.
+            0.20,
         ];
         self.preview.set_surface_color(color);
         self.preview.set_edge_color(color);
@@ -600,6 +642,10 @@ impl Manipulator for PushPullStem {
         PushPullStem::is_dragging(self)
     }
 
+    fn is_pending(&self) -> bool {
+        PushPullStem::is_pending(self)
+    }
+
     fn set_hovered(&mut self, hovered: bool) -> bool {
         PushPullStem::set_hovered(self, hovered)
     }
@@ -677,6 +723,48 @@ pub fn push_pull_manipulator(
     stage: &Stage,
 ) -> Option<Box<dyn Manipulator>> {
     push_pull_stem_for(selection, stage).map(|stem| Box::new(stem) as Box<dyn Manipulator>)
+}
+
+/// The named face's border, as **directed** vertex pairs in the face's own winding.
+///
+/// The stage hands each triangle its own three vertices, so the border is found by
+/// position rather than by index: a directed edge whose reverse does not occur is on the
+/// boundary of the region, and keeping its direction is what orients the swept wall
+/// outward (`(b − a) × N`). The pairs index the first position with each key, so a caller
+/// can sweep them with the face's own vertex array.
+fn border_edges(positions: &[[f32; 3]], triangles: &[u32]) -> Vec<(u32, u32)> {
+    use std::collections::HashMap;
+    // `+ 0.0` normalises `-0.0`, which is the same point but a different bit pattern.
+    let key = |index: u32| -> [u32; 3] {
+        let point = positions[index as usize];
+        [
+            (point[0] + 0.0).to_bits(),
+            (point[1] + 0.0).to_bits(),
+            (point[2] + 0.0).to_bits(),
+        ]
+    };
+    let mut first: HashMap<[u32; 3], u32> = HashMap::new();
+    for index in 0..positions.len() as u32 {
+        first.entry(key(index)).or_insert(index);
+    }
+    let mut directed: HashMap<([u32; 3], [u32; 3]), ()> = HashMap::new();
+    for triangle in triangles.chunks_exact(3) {
+        for corner in 0..3 {
+            let a = key(triangle[corner]);
+            let b = key(triangle[(corner + 1) % 3]);
+            if a != b {
+                directed.insert((a, b), ());
+            }
+        }
+    }
+    let mut border: Vec<(u32, u32)> = directed
+        .keys()
+        .filter(|(a, b)| !directed.contains_key(&(*b, *a)))
+        .map(|(a, b)| (first[a], first[b]))
+        .collect();
+    // Stable order, so a rebuilt preview is byte-identical for the same face.
+    border.sort_unstable();
+    border
 }
 
 /// The area-weighted centroid and outward unit normal of the named planar face.
@@ -895,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn a_push_pull_drag_ghosts_the_face_at_the_pending_distance() {
+    fn a_push_pull_drag_ghosts_the_swept_extrusion() {
         let camera = camera(5.0);
         let mut stem = stem();
         assert!(
@@ -911,25 +999,83 @@ mod tests {
         assert!(change.distance.abs() > 1e-9);
 
         let ghost = &stem.preview_items()[0];
+        let positions = ghost.positions();
+        // The face's six vertices twice: the profile it starts from and the same profile
+        // at the pending depth. The walls between them are what make it a volume.
+        assert_eq!(positions.len(), 12, "{positions:?}");
+        let plane = change.distance as f32;
         assert!(
-            !ghost.positions().is_empty(),
-            "the face ghosts at the pending depth"
+            positions[..6].iter().all(|point| point[0].abs() < 1e-5),
+            "the sweep starts on the face: {:?}",
+            &positions[..6]
         );
-        let expected = change.distance as f32;
         assert!(
-            ghost
-                .positions()
+            positions[6..]
                 .iter()
-                .all(|point| (point[0] - expected).abs() < 1e-5),
-            "the ghost sits on the face's pending plane: {:?}",
-            ghost.positions()
+                .all(|point| (point[0] - plane).abs() < 1e-5),
+            "the cap sits on the pending plane: {:?}",
+            &positions[6..]
         );
+        // Two cap triangles plus one wall (two triangles) per border edge of the square.
+        assert_eq!(ghost.triangles().len(), 2 * 3 + 4 * 2 * 3);
 
         assert!(stem.cancel_drag());
         assert!(
             stem.preview_items()[0].positions().is_empty(),
             "the cancel removes the ghost"
         );
+    }
+
+    /// A release is not a cancel: the swept ghost stays while the shell holds the commit,
+    /// and the stem reports itself pending so the viewport keeps drawing it.
+    #[test]
+    fn a_release_keeps_the_ghost_and_reports_pending() {
+        let camera = camera(5.0);
+        let mut stem = stem();
+        assert!(!stem.is_pending(), "nothing is pending at rest");
+
+        let grab = grab(&camera, &stem);
+        assert!(stem.begin_drag(&camera, grab));
+        stem.drag_to(&camera, [grab[0] + 20, grab[1]])
+            .expect("a change");
+        assert!(!stem.is_pending(), "a live drag is not pending");
+
+        assert!(Manipulator::drag_end(&mut stem).is_some(), "a commit");
+        assert!(!stem.is_dragging(), "the drag is over");
+        assert!(stem.is_pending(), "the value is held for ✓/✗");
+        assert!(
+            !stem.preview_items()[0].positions().is_empty(),
+            "the ghost survives the release"
+        );
+    }
+
+    /// The held value can be adjusted before it is accepted: a second drag continues from
+    /// the pending distance instead of restarting at zero.
+    #[test]
+    fn a_second_drag_adjusts_the_held_distance() {
+        let camera = camera(5.0);
+        let mut stem = stem();
+        let grab = grab(&camera, &stem);
+        assert!(stem.begin_drag(&camera, grab));
+        let first = stem
+            .drag_to(&camera, [grab[0] + 20, grab[1]])
+            .expect("a change")
+            .distance;
+        stem.end_drag().expect("a commit");
+
+        assert!(stem.begin_drag(&camera, grab), "the stem is grabbable again");
+        let second = stem
+            .drag_to(&camera, [grab[0] + 26, grab[1]])
+            .expect("a change")
+            .distance;
+        assert!(
+            second > first,
+            "the second drag grows the held value: {first} → {second}"
+        );
+        assert!((second - first).abs() > 1e-6);
+        // Cancelling the adjustment returns to the value the drag was grabbed at.
+        assert!(stem.cancel_drag());
+        assert!((stem.distance() - first).abs() < 1e-9, "{first}");
     }
 
     #[test]

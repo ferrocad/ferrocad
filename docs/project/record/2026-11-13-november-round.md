@@ -147,6 +147,30 @@ already had rather than restoring one.
   lib suite is **280 passed**; `ferrocad_viewport --lib` **230 passed**;
   `ferrocad_part_gui` **30 + 1 doctest**.
 
+**The follow-up the pending stage made visible (same day).** Holding a release exposed
+three gaps that the immediate write had hidden:
+
+- **The ghost vanished on release.** The viewport drew a manipulator's `preview_items`
+  only while `is_dragging()`, so the value under decision disappeared the moment it became
+  a decision. `Manipulator::is_pending` (new, default `false`) keeps the preview drawn
+  while the host holds the commit; the stem and the scrubber report it from `end_drag`.
+- **The push/pull ghost was a floating plane.** It is now the face **swept** to the pending
+  depth — the cap at the offset plus the walls its border traces (`border_edges`, by
+  position, because the tessellation gives each triangle its own vertices) — so the volume
+  and the direction are visible without a kernel call. `ferrocad_part_gui`
+  **33 passed**: the prism's vertex/triangle counts, the ghost surviving the release, and
+  the scrubber's swath surviving its own.
+- **A second drag restarted at zero.** `PushPullStem::drag_to` assigned the solver's
+  per-drag travel straight to the distance, so grabbing a held 3 mm stem and pulling reset
+  the value. It now adds the distance at press, which makes the second (and later) drags a
+  continuation; the first drag is unchanged because its press distance is 0. Adjusting is
+  also covered on the shell side: a second release replaces the held commit
+  (`a_second_release_replaces_the_held_commit`), so `✓` applies the latest value.
+- **Result.** `ferrocad_shell_core` **281**, `ferrocad_viewport` **231**, `ferrocad_part_gui`
+  **33 + 1 doctest**, and the edition's `push_pull_round_trip` / `manipulator_round_trip`
+  still green. What is still missing is a **typed** distance while pending (the Move form's
+  docked rows have no manipulator twin); re-dragging is the adjustment today.
+
 ## 4. Where the detail lives
 
 - [`tasks/backend-parity.md`](tasks/backend-parity.md) — the B0–B21 ledger, its

@@ -209,12 +209,15 @@ shell passes it to the app script, which keeps the triad kernel-free.
   its placement already applied, and the display hook applies none — so the extrusion
   direction is read straight off `obj.Shape.mesh()`, the same frame the picked face is
   in.
-- **Preview and scope.** The stem, the readout and the face ghost are live during the
-  drag; the release leaves the value **pending**, so the ghost stays at it and the
-  `✗`/`✓` pair appears beside the readout. The solid appears on `✓` (or `Enter`); `✗`
-  (or `Esc`) puts the stem back at rest and writes nothing. The commit is still the same
-  neutral `InteractionCommit`, so the edition hook is unchanged. The three remaining
-  follow-ups are a stem for a non-planar face, a target-aware triad and stable naming.
+- **Preview and scope.** The ghost is the face **swept** to the pending distance — the cap
+  at the offset plus the walls its border traces — so the volume and its direction are
+  visible without a kernel call. It is live during the drag and stays after it, because
+  the release leaves the value **pending**: the `✗`/`✓` pair appears beside the readout
+  and the solid appears only on `✓` (or `Enter`). Grabbing the stem again continues from
+  the held distance, so the value can be tuned before deciding. `✗` (or `Esc`) puts the
+  stem back at rest and writes nothing. The commit is still the same neutral
+  `InteractionCommit`, so the edition hook is unchanged. The three remaining follow-ups
+  are a stem for a non-planar face, a target-aware triad and stable naming.
 
 ## 5. Select mode: body vs face
 

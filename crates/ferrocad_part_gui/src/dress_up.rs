@@ -29,8 +29,9 @@
 //! arc plus the tick are the only pick targets — the interior between the edge and the
 //! arc is transparent, so a click there still reaches the scene.
 //!
-//! While the scrub is live the scrubber also publishes a translucent swath along the
-//! edge whose half-width is the pending radius
+//! While the scrub is live — and while the shell holds the released radius for
+//! `✓`/`✗` — the scrubber publishes a translucent swath along the edge whose half-width
+//! is the pending radius
 //! ([`preview_items`](DressUpScrubber::preview_items)). It is display-only and unpickable;
 //! the exact fillet surface waits for the commit.
 //!
@@ -173,8 +174,11 @@ pub struct DressUpScrubber {
     dirty: bool,
     /// The draw order: the halo (a wider arc in the outline ink) first, the stroke on top.
     items: [ShapeItem; 2],
-    /// The pending-radius swath along the edge, shown only while a drag is active.
+    /// The pending-radius swath along the edge, shown while a drag is active and after a
+    /// release, while the shell holds the commit.
     preview: ShapeItem,
+    /// Whether the released radius is held for the host's `✓`/`✗`.
+    pending: bool,
 }
 
 impl DressUpScrubber {
@@ -203,6 +207,7 @@ impl DressUpScrubber {
             max: None,
             hovered: false,
             active: None,
+            pending: false,
             style,
             view: None,
             built: None,
@@ -327,6 +332,11 @@ impl DressUpScrubber {
     /// Whether a drag is in progress.
     pub fn is_dragging(&self) -> bool {
         self.active.is_some()
+    }
+
+    /// Whether the released radius is held for the host's `✓`/`✗`.
+    pub fn is_pending(&self) -> bool {
+        self.pending
     }
 
     /// Whether the arc is highlighted.
@@ -672,6 +682,9 @@ impl DressUpScrubber {
     /// End the scrub, returning the value to commit.
     pub fn end_drag(&mut self) -> Option<DressUpChange> {
         self.active.take()?;
+        // The release hands the value over; the swath stays until the host spends it
+        // (`✓`) or drops it (`✗` → the shell re-arms a fresh scrubber).
+        self.pending = true;
         self.dirty = true;
         self.apply_color();
         Some(DressUpChange {
@@ -802,6 +815,10 @@ impl Manipulator for DressUpScrubber {
 
     fn is_dragging(&self) -> bool {
         DressUpScrubber::is_dragging(self)
+    }
+
+    fn is_pending(&self) -> bool {
+        DressUpScrubber::is_pending(self)
     }
 
     fn set_hovered(&mut self, hovered: bool) -> bool {
@@ -974,6 +991,35 @@ mod tests {
         assert!(scrubber.value() > before, "the drag grows the value");
         assert!(scrubber.update(&camera));
         assert!(band_width(&scrubber.preview_items()[0]) > 0.0);
+    }
+
+    /// A release is not a cancel: the swath stays at the pending radius and the scrubber
+    /// reports itself pending, so the viewport keeps drawing it until `✓`/`✗`.
+    #[test]
+    fn a_release_keeps_the_swath_and_reports_pending() {
+        let camera = camera(5.0);
+        let mut scrubber = scrubber(DressUpMode::Fillet);
+        assert!(!scrubber.is_pending(), "nothing is pending at rest");
+
+        let (grab, direction) = grip(&camera, &scrubber);
+        assert!(scrubber.begin_drag(&camera, grab));
+        let far = [
+            grab[0] + (direction[0] * 40.0) as i32,
+            grab[1] + (direction[1] * 40.0) as i32,
+        ];
+        assert!(scrubber.drag_to(&camera, far).is_some(), "the scrub changes");
+        assert!(!scrubber.is_pending(), "a live scrub is not pending");
+        assert!(scrubber.update(&camera), "the swath follows the scrub");
+
+        let radius = scrubber.value();
+        assert!(Manipulator::drag_end(&mut scrubber).is_some(), "a commit");
+        assert!(!scrubber.is_dragging(), "the scrub is over");
+        assert!(scrubber.is_pending(), "the radius is held for ✓/✗");
+        assert!((scrubber.value() - radius).abs() < 1e-12);
+        assert!(
+            band_width(&scrubber.preview_items()[0]) > 0.0,
+            "the swath is still built at the held radius"
+        );
     }
 
     #[test]

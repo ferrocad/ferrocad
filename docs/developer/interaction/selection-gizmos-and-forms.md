@@ -356,6 +356,7 @@ At rest ──Esc──► selection cleared ──► Closed
 At rest ──selection cleared / another hand / a tool / `0` (pointer)──► Closed
 Pending ──competing document edit (selection pruned)──► rollback ──► the new context
 At rest ──release a stem / scrubber──► its commit is held: ghost + ✗/✓ beside the readout
+Held ──drag the handle again──► the value continues from the held one ──► Held
 Held ──✓ / Enter──► one `interaction` transaction ──► At rest (handle re-armed)
 Held ──✗ / Esc──► handle re-armed at rest, nothing written ──► At rest
 ```

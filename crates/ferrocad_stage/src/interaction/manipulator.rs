@@ -133,12 +133,24 @@ pub trait Manipulator {
     ///
     /// This is the manipulator's half of the same contract as `FreeCADGui.Preview`:
     /// transient geometry drawn over the scene, never picked and never written to the
-    /// document. The viewport shows them only while [`is_dragging`](Self::is_dragging) is
-    /// true, so a release or a cancel removes the ghost without an undo step. The default
-    /// is empty: a manipulator whose pending property cannot be shown honestly draws only
-    /// its handle.
+    /// document. The viewport shows them while [`is_dragging`](Self::is_dragging) is true
+    /// **or** [`is_pending`](Self::is_pending) is — a held commit keeps its preview, so
+    /// the user can still see (and re-drag) the value before deciding. A cancel removes
+    /// it without an undo step. The default is empty: a manipulator whose pending
+    /// property cannot be shown honestly draws only its handle.
     fn preview_items(&self) -> &[ShapeItem] {
         &[]
+    }
+
+    /// Whether the manipulator's value is held for the host's decision.
+    ///
+    /// A release is not a cancel: the host may hold the commit behind an `✗`/`✓` pair
+    /// while the user reconsiders. The preview stays visible in that state, and a new
+    /// drag continues from the held value, so the pending edit can still be seen and
+    /// adjusted. The default is `false` — a host that applies a commit immediately never
+    /// enters the state, and a manipulator keeps no value between gestures.
+    fn is_pending(&self) -> bool {
+        false
     }
 
     /// Whether `device` is on a grab target. An unclaimed press falls through to

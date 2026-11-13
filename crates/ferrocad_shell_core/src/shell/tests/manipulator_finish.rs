@@ -8,11 +8,17 @@
 use super::*;
 
 /// A `push_pull` commit as the stem produces it for the test stage's `Face1`.
-fn push_pull_commit() -> InteractionCommit {
-    InteractionCommit::new("push_pull", 7, "extrude")
+fn push_pull_commit_at(distance: f64) -> InteractionCommit {
+    let action = if distance < 0.0 { "pocket" } else { "extrude" };
+    InteractionCommit::new("push_pull", 7, action)
         .with_element("Face1")
-        .with_values(vec![3.0])
-        .with_readout("3.00 mm")
+        .with_values(vec![distance])
+        .with_readout(format!("{action} {:.2} mm", distance.abs()))
+}
+
+/// The commit a first drag at 3 mm produces.
+fn push_pull_commit() -> InteractionCommit {
+    push_pull_commit_at(3.0)
 }
 
 /// Route a commit the way the window's mouse-up handler does.
@@ -57,6 +63,22 @@ fn assert_applied(expected: usize) {
     assert!(
         result.ok,
         "the provider applied the wrong number of commits:\n{}",
+        result.output
+    );
+}
+
+/// Assert that the last applied commit carried `expected` as its first value.
+fn assert_last_value(expected: f64) {
+    let script = format!(
+        "import FerroCAD as _F\n\
+         assert _F._mf_calls, 'no commit was applied'\n\
+         value = _F._mf_calls[-1][2][0]\n\
+         assert abs(value - {expected}) < 1e-9, (value, _F._mf_calls)"
+    );
+    let result = crate::python::evaluate(&script).expect("read the log");
+    assert!(
+        result.ok,
+        "the applied value is not {expected}:\n{}",
         result.output
     );
 }
@@ -196,4 +218,26 @@ fn a_pending_manipulator_refuses_a_hand_switch(cx: &mut TestAppContext) {
         shell.read_with(&cx, |shell, _| shell.interaction_is_pending()),
         "the commit is still held"
     );
+}
+
+/// Re-releasing the stem replaces the held commit: an adjustment made after the first
+/// release is the value `✓` applies.
+#[gpui::test]
+fn a_second_release_replaces_the_held_commit(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, model) = push_pull_shell(cx);
+
+    feed_commit(&mut cx, &shell, push_pull_commit());
+    feed_commit(&mut cx, &shell, push_pull_commit_at(5.0));
+
+    let status = model.lock().unwrap().status.clone();
+    assert!(
+        status.contains("extrude 5.00 mm pending"),
+        "the held value is the latest drag: {status}"
+    );
+    assert_applied(0);
+
+    click_at(&mut cx, "dialog-accept");
+    assert_applied(1);
+    assert_last_value(5.0);
 }

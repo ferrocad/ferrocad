@@ -304,13 +304,15 @@ stateDiagram-v2
   is click-to-focus in the docked row, like a tape ruler tag; it hides below a 28 px chord.
 - **A workbench manipulator's release is the same kind of decision (A4, 2026-11-13).** A
   stem or a scrubber reports its `InteractionCommit` on release, and the shell **holds**
-  it instead of writing it: the ghost stays at the pending value, the status line names
+  it instead of writing it: the preview stays at the pending value, the status line names
   it, and the same `✗`/`✓` pair — beside the dimension pill, since a manipulator has no
   triad — spends it. `✓`/`Enter` calls the app script's `interaction` hook once (one
   transaction); `✗`/`Esc` re-arms the handle at rest and writes nothing. A pick, a hand
-  switch, a tool, or an editing command is refused while it is held. The `+N` workplane
-  offset stem is the exception: it is transient viewport state with its own HUD, no
-  document object and no undo step, so the shell applies it itself.
+  switch, a tool, or an editing command is refused while it is held. The stem also stays
+  grabbable: a second drag continues from the held value, which is the adjustment the
+  hand-scrub needs before accepting. The `+N` workplane offset stem is the exception: it
+  is transient viewport state with its own HUD, no document object and no undo step, so
+  the shell applies it itself.
 - `Shift` — plane override: `begin_drag_with_modifiers` turns an axis press into a drag
   in the plane spanned by that stem and the screen-horizontal.
 - `Ctrl` (or the platform's secondary modifier) — free rotation (15° detents are the
@@ -628,8 +630,9 @@ stage, and **not** the shell; see `architecture.md` §10):
   as a plain gpui text layer (no hitbox).
 - **Preview (A3, 2026-10-31).** While the scrub is live, `preview_items()` publishes a
   translucent screen-facing swath along the edge whose half-width is the pending radius.
-  The viewport draws it only while the drag is active, never picks it, and drops it on
-  release or `Esc`; the feature rebuild still happens at commit.
+  The viewport draws it while the drag is active **or** while the host holds the released
+  value (`Manipulator::is_pending`), never picks it, and drops it on a cancel or after
+  `✗`; the feature rebuild still happens at commit.
 
 `ferrocad_viewport` (generic: it names no manipulator):
 

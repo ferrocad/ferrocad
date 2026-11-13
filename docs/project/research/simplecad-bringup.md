@@ -2,7 +2,9 @@
 
 Status: design (2026-10-21); re-measured 2026-11-13 (§7). The current integrated baseline is
 **985 passed / 49 failed / 18 errored / 7 skipped over 88/88 modules**; the 5 Qt-shim
-errors are now classified skips and the SC7 workflow acceptance is green.
+errors are now classified skips, the SC7 workflow acceptance is green, and SC8 has
+attributed all 49 failures to the named buckets in §7 (37 P2, 11 P3, 1 documented
+test assumption). **P1 is closed.**
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
@@ -1470,6 +1472,37 @@ hole → `exportStl` → `Mesh.Mesh` read-back. The pinned volumes are **12 000*
 **600-area** profiles, **3 000** (boss), **15 000** (fused), **960** (hole) and **14 040**
 (final, 44 STL facets, mesh volume equal to the B-Rep volume). It is in the `workbenches`
 extension set, so `tools/run_tests.py --check` covers it.
+
+**2026-11-13 — SC8: the 49 failures, re-bucketed and attributed.** The integrated run is
+**985 / 49 / 18 / 7 over 88/88** (unchanged by SC4–SC6; the façade slices are not
+exercised by the unit suite). Every one of the 49 failures is named below exactly once.
+The buckets are root causes, not printed messages: **37 failures → P2**, **11 → P3**, and
+**1 is a documented test assumption**; **no failure is unattributed, and none needs a
+missing name or a GUI**. (The 18 errors are the separate known set: 4 `PartDesign`
+imports, 6 behavioural kernel results, 7 single-API gaps and 1 wrapped-drawing edge
+case; the 7 skips are the 5 Qt groups plus the font and text skips.)
+
+| Bucket | n | Owner | Root cause |
+| --- | --- | --- | --- |
+| **Boolean / topology partition** | 16 | P2 | A local split, erase or boolean leaves the wrong face/edge count, falls back to `split_whole`, or returns a non-manifold/incorrectly closed result. |
+| **Document undo, transaction and labels** | 5 | P2 | A failed commit or an undo restores the shape but not the object's label (`Union`, `Block · 1`), and the rotation/slicing document tests bind the same transaction path. |
+| **Part query strictness, tolerance and determinism** | 10 | P2 | `Edge.Curve` on a degenerate edge must raise, `transform` on a transformed container and rounding invalid input must raise, and the healing/plane-normalisation and principal-axis results are off the exact answer. |
+| **Shape identity, ownership and BRep export** | 6 | P2 | A copy's `isSame`/`isPartner`/`hash` identity is inconsistent (a derived face index is lost), an in-place operation changes the input shape's `exportBrepToString`, and a copied shape's face list is not preserved through `Placement` for style mapping. |
+| **Surface / freeform** | 11 | P3 | Surface-line path closure and its document round-trip, wrapped-drawing parameter mapping, and mesh→fitted-surface construction. |
+| **Test assumption: exact `BoundBox`** | 1 | out of surface | The test asserts a rim wire's `BoundBox` falls short of the exact rim (because the upstream display mesh does); FerroCAD's `BoundBox` is exact, so the precondition is false. A precision difference, not a missing API. |
+
+| Bucket | Failing tests |
+| --- | --- |
+| Boolean / topology partition (16) | `test_analytic.AnalyticHoleTests.test_boss_wall_is_rebuilt_in_place_too`; `test_dense_drawing.LocalSplitTests.test_a_line_across_two_faces_splits_only_them`, `…test_a_line_ending_inside_an_edge_rebuilds_its_neighbour`; `test_dense_drawing.NearlyCoplanarTests.test_a_line_across_leaning_triangles_divides_both`; `test_edge_deletion.EraseGeometryTests.test_face_deletion_disconnected_faces_and_empty_result`, `…test_open_surface_divider_merges_without_closing_the_opening`; `test_elongating.ElongateTests.test_cleanup_integrates_dangling_elongations`, `…test_heal_dangling_elongation_integrates_wire_into_solid`; `test_geometry.DocumentTests.test_clean_solid_faces_removes_internal_edges`, `…test_deleting_a_line_beside_a_step_sliver_merges_the_faces`, `…test_erase_internal_edge_on_solid_face`; `test_mesh_glue.MeshGlueTests.test_thin_wall_triangle_profile_and_existing_hole`; `test_precision.NoiseRemovalTests.test_through_push_from_a_slightly_tilted_face_leaves_no_skin`; `test_rotate_edges.RotateEdgesTests.test_rotate_edge_with_copy`, `…test_rotate_ellipse_half_edge_on_solid`; `test_union.UnionGeometryTests.test_rod_a_hair_off_its_bore_fills_it_cleanly` |
+| Document undo, transaction and labels (5) | `test_rotation.RotationDocumentTests.test_multiple_changes_are_atomic_even_if_commit_fails`, `…test_preview_commit_undo_redo_and_native_topology`; `test_slicing.SliceDocumentTests.test_preview_is_read_only_apply_undo_redo_and_zero_gap`; `test_union.UnionDocumentTests.test_late_write_failure_aborts_all_changes`, `…test_one_undo_restores_both_objects_and_unrelated_shape_is_unchanged` |
+| Part query strictness, tolerance and determinism (10) | `test_degenerate_drawing.DegenerateDrawingTests.test_arc_loop_ignores_loose_degenerate_edges`, `…test_border_connection_then_partition_with_sphere`, `…test_free_line_undo_redo_with_unrelated_sphere`, `…test_triangle_completion_still_finds_real_segments`, `…test_two_separate_corner_bridges_partition_ring`; `test_geometry.DocumentTests.test_transformed_container_rejected`; `test_healing.AlignmentTests.test_tilted_face_and_its_hole_become_exact`, `test_healing.DocumentTests.test_heal_runs_isolated_and_undoes_in_one_step`; `test_rotation.RotationGeometryTests.test_symmetric_main_axis_is_deterministic`; `test_rounding.RoundGeometryTests.test_open_mixed_and_multiple_solids_fail_before_rounding` (`type='Solid'`) |
+| Shape identity, ownership and BRep export (6) | `test_dense_deletion.DenseDeletionTests.test_mid_edge_divider_reconnects_neighboring_shell_faces`, `…test_open_shell_merge_and_redraw_keep_hole_and_other_divisions`; `test_dense_drawing.ChangeRecordTests.test_seams_through_a_derived_index_match_a_full_pass`, `…test_snaps_after_a_line_are_patched_without_listing_the_part`, `…test_the_result_index_matches_a_fresh_listing`; `test_material_mapping.MaterialMappingTests.test_rigid_placement_and_uniform_materials_keep_styles` |
+| Surface / freeform (11) | `test_surface_line.FreeEndTests.test_only_lines_closing_a_path_skip_nothing_and_every_answer_matches_the_split` — subtests `[open chain]`, `[from the rim]`, `[across the seam]`, `[beside a closed loop]`, `[hole to rim]`, `[fitted open]`; `test_surface_line.SurfaceLineDocumentTests.test_moved_rotated_object_keeps_placement_and_survives_save_reopen`, `…test_open_segments_skip_the_split_and_the_closing_one_still_divides`; `test_surface_wrap.WrappedDrawingTests.test_mouse_coordinates_reach_adjacent_and_opposite_faces`; `test_mesh_surfaces.SmoothSurfaceTests.test_convert_with_surfaces_reports_fitted_faces_and_keeps_the_source`, `…test_sphere_and_cylinder_close_into_solids` |
+| Test assumption: exact `BoundBox` (1) | `test_dense_drawing.CompletionTests.test_a_line_between_holes_reaches_them_where_their_display_mesh_falls_short` |
+
+SC0 therefore closes with SC8: the 49 failures are filed into P2/P3/the one documented
+test assumption, and the previous "the rest" row is gone. **P1 is closed**; the P2/P3
+items above are ordinary backlog work, not a P1 gate.
 
 ---
 

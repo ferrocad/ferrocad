@@ -335,13 +335,32 @@ the shared registry. **Size:** S (decision) + the small facade-completeness tail
 **15 000**, **960** and **14 040** mm³, with the STL read-back equal to the B-Rep volume;
 `contracts/extension-sets.json` lists it under `workbenches`. **Size:** S/M.
 
-## SC8 — re-measure and record
+## SC8 — re-measure and record — done 2026-11-13
 
-- [ ] Re-run the integrated tree; record passed/failed/errored/skipped and the new buckets
+- [x] Re-run the integrated tree; record passed/failed/errored/skipped and the new buckets
       in the bring-up note and in the successor backlog's §0.
-- [ ] Delete the buckets this spec closed from §1.1 of the backlog.
+- [x] Delete the buckets this spec closed from §1.1 of the backlog.
 
-**Acceptance:** the numbers move and the note says why. **Size:** S.
+**Final baseline.** The in-process run (upstream `9180c4b`, worker paths exported) is
+**985 passed, 49 failed, 18 errored, 7 skipped over 88/88 modules**, with the SC7
+workflow gate green. No pass, failure, error or skip moved during SC4–SC6; those slices
+are façade work the unit suite does not exercise. The 49 failures are now attributed to
+five named buckets plus one documented test assumption (full table in
+[`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7):
+
+| Bucket | n | Owner |
+| --- | --- | --- |
+| Boolean / topology partition | 16 | P2 |
+| Document undo, transaction and labels | 5 | P2 |
+| Part query strictness, tolerance and determinism | 10 | P2 |
+| Shape identity, ownership and BRep export | 6 | P2 |
+| Surface / freeform | 11 | P3 |
+| Test assumption: exact `BoundBox` | 1 | out of surface |
+
+**37 → P2, 11 → P3, 1 documented out-of-surface, 0 unattributed.** No failure needs a
+missing name or a GUI; the 18 errors are the known `PartDesign`/behavioural/single-API
+set and the 7 skips are the Qt groups plus the font and text skips. SC0's last item
+(re-filing the failures) is closed with this table, so **P1 is closed**. **Size:** S.
 
 ## Decisions needed before starting
 

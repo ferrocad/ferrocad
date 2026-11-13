@@ -95,6 +95,25 @@ change. The contract was re-pinned and `--check` passes.
   render + readback + swizzle per frame; the timing/`FERROCAD_TRACE` work makes it
   measurable.
 
+## 5. Same-day close-out (2026-11-13)
+
+The round's open P1 tail was closed after the measurements above, on the same tree:
+
+- **SC4–SC6 landed.** `FreeCADGui.ActiveView.getWorkplane`/`getFacePlane` read the
+  viewport's published plane and an exact face frame; the selection-armed push/pull stem
+  is verified end to end in one transaction; the preview decision keeps
+  `FreeCADGui.Preview` and drops 3-D text, while the imperative-Coin lifecycle
+  (`getChild`/`insertChild`/`removeChild`/`removeAllChildren`/`findChild`, `isOfType`) is
+  complete enough for an overlay.
+- **SC8 closed SC0.** All 49 failures are attributed: 16 boolean/topology partition, 5
+  document undo/transaction/labels, 10 Part query strictness/tolerance, 6 shape
+  identity/ownership/BRep export (37 P2), 11 surface/freeform (P3), and 1 documented
+  test assumption (exact `BoundBox`). The full table is in
+  [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7.
+- **The baseline did not move:** **985 / 49 / 18 / 7 over 88/88**, SC7 green. The
+  paragraph above that calls S4.4–S4.6 the last slices is the state at the round's
+  start, not the close; **P1 is closed**.
+
 ## 4. Where the detail lives
 
 - [`tasks/backend-parity.md`](tasks/backend-parity.md) — the B0–B21 ledger, its

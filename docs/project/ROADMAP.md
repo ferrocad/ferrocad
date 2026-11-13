@@ -19,10 +19,11 @@ desktop.
 The bottleneck is no longer geometry. It is the **breadth of the workbench API**, the
 **interaction surface** on top of it, and the **host/platform seam** the November round
 built. The Part audit covers **252 of 408 upstream method names (61.8%)**. The SimpleCAD
-S4.1–S4.3 view facade, ranked pick and selection object are in the tree. SimpleCAD's
-integrated baseline is **985 passed / 49 failed / 18 errored / 7 skipped over 88/88
-modules** (2026-11-13), with the Qt groups classified as skips and the SC7 workflow
-acceptance green. The rotation's two red readings were fixed the same day: the B20
+S4.1–S4.6 façade is in the tree. SimpleCAD's integrated baseline is **985 passed / 49
+failed / 18 errored / 7 skipped over 88/88 modules** (2026-11-13), with the Qt groups
+classified as skips and the SC7 workflow acceptance green. **P1 is closed:** SC8 attributed
+all 49 failures to named buckets (**37 P2, 11 P3, 1 documented test assumption**), with
+none unattributed. The rotation's two red readings were fixed the same day: the B20
 `RootNode` change was a real Part regression, and the SimpleCAD `surface_ops` delta was the
 in-process harness not exporting the paths its worker subprocess needs.
 
@@ -37,7 +38,7 @@ architecture.
 | --- | --- | --- | --- |
 | **H1 — Finish Part/OCCT** (closed) | Complete the Part contract honestly | Zero Part failures (achieved 2026-10-27, restored 2026-11-13); every reachable guarded map size enabled; only documented limits remain | P2 (the OCCT tail) |
 | **H2 — Workbench platform** (built) | Make Part a platform Draft/BIM/SimpleCAD can build on | `Part::FeaturePython` executes and persists; Draft M2–M5 run headless; Q0–Q5 done; one document/backend with four runtimes | P2 (Draft), P5 |
-| **H3 — Proof by use** (active) | Prove the platform end to end | SimpleCAD S0–S5 baseline; a published `Parametric` edition; a headless BIM subset | P1, P3, P6 |
+| **H3 — Proof by use** (active) | Prove the platform end to end | SimpleCAD S0–S5 baseline; a published `Parametric` edition; a headless BIM subset | P1 (closed), P3, P6 |
 
 ### H1 — Finish Part/OCCT (closed 2026-10-27)
 
@@ -99,7 +100,13 @@ rather than an architecture task.
   S4.5's push/pull stem is verified end to end (selection → stem drag → one transaction).
   S4.6 keeps `FreeCADGui.Preview` as the shape-preview channel and records 3-D text as a
   non-goal; the imperative-Coin lifecycle (`getChild`/`insertChild`/`findChild`,
-  `isOfType`) is complete enough for an overlay. SC8 (re-measure) is the next slice.
+  `isOfType`) is complete enough for an overlay.
+- **P1 closed (SC8).** The 49 failures are filed by SC8 into five named buckets — boolean/
+  topology partition (16), document undo/transaction/labels (5), Part query
+  strictness/tolerance (10), shape identity/ownership/BRep export (6) and surface/freeform
+  (11) — plus one documented test assumption, so **37 → P2, 11 → P3, 1 out of surface, 0
+  unattributed**. The full table is in
+  [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
   pack reaches the script half. This is the proof-of-use surface that did not exist at the

@@ -209,9 +209,12 @@ shell passes it to the app script, which keeps the triad kernel-free.
   its placement already applied, and the display hook applies none — so the extrusion
   direction is read straight off `obj.Shape.mesh()`, the same frame the picked face is
   in.
-- **Preview and scope.** The stem and readout are live; the solid appears on release.
-  A ghost prism is a deliberate follow-up. Non-planar faces, a target-aware triad and
-  stable naming are out.
+- **Preview and scope.** The stem, the readout and the face ghost are live during the
+  drag; the release leaves the value **pending**, so the ghost stays at it and the
+  `✗`/`✓` pair appears beside the readout. The solid appears on `✓` (or `Enter`); `✗`
+  (or `Esc`) puts the stem back at rest and writes nothing. The commit is still the same
+  neutral `InteractionCommit`, so the edition hook is unchanged. The three remaining
+  follow-ups are a stem for a non-planar face, a target-aware triad and stable naming.
 
 ## 5. Select mode: body vs face
 

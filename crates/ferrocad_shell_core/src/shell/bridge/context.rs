@@ -26,6 +26,12 @@ pub(crate) enum InteractionContext {
     /// a translation. It is a distinct context so the refusal names the right verb and
     /// the angular row keeps its own readout.
     PendingRotation { target: Option<u32> },
+    /// A manipulator released a value that is not applied yet: a push/pull distance or a
+    /// fillet radius is on screen as a ghost, and the same `✗`/`✓` pair decides it.
+    ///
+    /// It is its own context because the subject is a sub-element (`Face6`, `Edge1`) of
+    /// the selection rather than the body a move would translate.
+    PendingInteraction,
     /// The Move hand has a selected target and its handles are armed.
     Armed,
     /// A selection exists without handles.
@@ -89,7 +95,8 @@ impl InteractionContext {
             // view-only commands (grid, projection, …). It refuses everything that would
             // spend or drop it, or that would make another body the subject.
             InteractionContext::PendingMove { .. }
-            | InteractionContext::PendingRotation { .. } => {
+            | InteractionContext::PendingRotation { .. }
+            | InteractionContext::PendingInteraction => {
                 matches!(action, Action::RunCommand { edit: false, .. })
             }
             InteractionContext::Modal
@@ -109,6 +116,11 @@ impl Shell {
         }
         if self.active_tool.is_some() {
             return InteractionContext::Tool;
+        }
+        // A released manipulator outranks a move: the two hands are exclusive, and a
+        // held commit is the narrowest unfinished decision on screen.
+        if self.pending_interaction.is_some() {
+            return InteractionContext::PendingInteraction;
         }
         if self.move_is_pending(cx) {
             // The subject is the session's primary target (the body the triad hugs).
@@ -156,6 +168,12 @@ impl Shell {
             }
             InteractionContext::PendingRotation { .. } => {
                 format!("rotation pending — ✓ or ✗ before you {verb}")
+            }
+            InteractionContext::PendingInteraction => {
+                let what = self
+                    .pending_interaction_label()
+                    .unwrap_or_else(|| "change".to_string());
+                format!("{what} pending — ✓ or ✗ before you {verb}")
             }
             InteractionContext::Tool => format!("a tool is active — finish it before you {verb}"),
             InteractionContext::Modal => format!("close the dialog before you {verb}"),

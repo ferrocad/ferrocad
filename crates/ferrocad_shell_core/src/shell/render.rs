@@ -692,6 +692,104 @@ pub(super) fn move_finish_overlay(
     .into_any_element()
 }
 
+/// A released manipulator's finish pair: `✗`/`✓` beside the dimension pill it decides.
+///
+/// The `✗`/`✓` glyphs and the key routes are the Move form's (`Esc`/`Enter`,
+/// [`Shell::discard_pending_interaction`] and [`Shell::commit_pending_interaction`]), and
+/// the ids are the modal pair's, so a test drives either surface the same way. Only one
+/// pair is ever drawn: the hand that hosts a manipulator has no Move form.
+///
+/// It sits at the readout tip the drag left — a manipulator has no triad to anchor to —
+/// and follows the same clamp/freeze rule as the Move pair, so clicking it cannot slide
+/// it out from under the pointer.
+pub(super) fn manipulator_finish_overlay(
+    shell: &mut Shell,
+    window: &Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    // Hidden while the pointer owns a stroke (a second drag on the same stem), so a
+    // release can never land on the pair that is about to appear.
+    let dragging = shell
+        .viewport
+        .as_ref()
+        .is_some_and(|viewport| viewport.read(cx).manipulator_dragging());
+    if dragging || !shell.interaction_is_pending() {
+        return div().into_any_element();
+    }
+    let viewport = window.viewport_size();
+    let pill = shell
+        .hud_rect
+        .map(|rect| rect.size)
+        .unwrap_or_else(|| size(px(88.0), px(36.0)));
+    let hovered = shell
+        .hud_rect
+        .is_some_and(|rect| rect.contains(&window.mouse_position()));
+    let anchor = shell
+        .viewport
+        .as_ref()
+        .and_then(|viewport| viewport.read(cx).manipulator_finish_anchor())
+        .unwrap_or_else(|| shell.dialog_anchor(window, cx));
+    // Bottom-right of the readout, which sits that many pixels above and right of the
+    // tip: the pair lands clear of the number without needing a direction set.
+    let follow = place_finish_with(anchor, None, None, None, 46.0, viewport, pill);
+    let origin = if hovered {
+        shell.hud_lock.unwrap_or(follow)
+    } else {
+        follow
+    };
+    let origin = clamp_hud(origin, viewport, pill);
+    shell.hud_lock = Some(origin);
+    let weak = cx.weak_entity();
+    let measured = div()
+        .on_children_prepainted(move |bounds, _window, cx| {
+            if let Some(rect) = bounds.first().copied() {
+                let _ = weak.update(cx, |shell, _cx| shell.hud_rect = Some(rect));
+            }
+        })
+        .child(manipulator_buttons(cx));
+    deferred(
+        anchored()
+            .anchor(Anchor::TopLeft)
+            .position(origin)
+            .child(measured),
+    )
+    .with_priority(2)
+    .into_any_element()
+}
+
+/// The shared decision strip for a released manipulator (see
+/// [`manipulator_finish_overlay`]).
+pub(super) fn manipulator_buttons(cx: &mut Context<Shell>) -> impl IntoElement {
+    ferrocad_widgets::decision_pill(
+        ferrocad_widgets::DecisionButton::cancel(
+            "dialog-cancel",
+            "✗",
+            cx.listener(|this, _event, _window, cx| {
+                this.discard_pending_interaction(cx);
+            }),
+        ),
+        ferrocad_widgets::DecisionButton::accept(
+            "dialog-accept",
+            "✓",
+            cx.listener(|this, _event, _window, cx| {
+                this.commit_pending_interaction(cx);
+            }),
+        ),
+        ferrocad_widgets::DecisionOptions {
+            outer_id: Some("manipulator-finish".into()),
+            // The pill floats over the canvas, so a right-press on it still names a verb.
+            on_right_press: Some(Box::new(cx.listener(
+                |this, event: &MouseDownEvent, _window, cx| {
+                    if this.active_tool.is_none() {
+                        this.last_pointer = Some(event.position);
+                        this.open_radial(event.position, cx);
+                    }
+                },
+            ))),
+        },
+    )
+}
+
 /// The Move coordinate form, docked with the loadout at the bottom-left of the canvas.
 ///
 /// `[Δ|XYZ]  ΔX [ ]  ΔY [ ]  ΔZ [ ] mm` — one shape, no compact/expanded morphing: the

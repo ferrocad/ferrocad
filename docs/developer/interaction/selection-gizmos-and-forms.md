@@ -355,6 +355,9 @@ Pending ──selection / hand / scope / tool──► refused (status: "move/ro
 At rest ──Esc──► selection cleared ──► Closed
 At rest ──selection cleared / another hand / a tool / `0` (pointer)──► Closed
 Pending ──competing document edit (selection pruned)──► rollback ──► the new context
+At rest ──release a stem / scrubber──► its commit is held: ghost + ✗/✓ beside the readout
+Held ──✓ / Enter──► one `interaction` transaction ──► At rest (handle re-armed)
+Held ──✗ / Esc──► handle re-armed at rest, nothing written ──► At rest
 ```
 
 - **One dialog at a time — for dialogs.** A second *command* dialog is rejected while a
@@ -383,13 +386,15 @@ Pending ──competing document edit (selection pruned)──► rollback ─�
   (`App_Move` → `_move_selection`, one transaction). A typed preview never commits until
   `Enter`.
 - **One context gate (built 2026-10-31).** The shell models what it is doing explicitly
-  (`shell/context.rs`): `InteractionContext` is `Modal → Tool → (PendingMove |
-  PendingRotation) { target } → Armed → Selection → Idle`, and every entry point asks
-  `Shell::gate(action)` before it acts. The pending variants carry the **dirty object**
-  (the session's primary stage entity) and split on the session's mode, so the refusal
-  names the right verb; `Action::Select { target }` carries the body a pick would select,
-  so the rule can be stated against the subject rather than "some selection". `Action` also
-  names `SwitchHand`, `SwitchScope`, `SwitchHandleSet`, `StartTool`,
+  (`shell/context.rs`): `InteractionContext` is `Modal → Tool → PendingInteraction →
+  (PendingMove | PendingRotation) { target } → Armed → Selection → Idle`, and every entry
+  point asks `Shell::gate(action)` before it acts. The pending variants carry the **dirty
+  object** (the session's primary stage entity) and split on the session's mode, so the
+  refusal names the right verb; `PendingInteraction` is the held `InteractionCommit` from
+  a released manipulator, and its refusal names the value (`extrude 3.00 mm pending …`).
+  `Action::Select { target }` carries the body a pick would select, so the rule can be
+  stated against the subject rather than "some selection". `Action` also names
+  `SwitchHand`, `SwitchScope`, `SwitchHandleSet`, `StartTool`,
   `RunCommand { id, edit }` and `Arm`, so a new gesture cannot forget to check the state
   of the one it competes with. Completion (`✓`/`✗`, `Enter`/`Esc`) and field editing are
   not actions: they are how a context is left.

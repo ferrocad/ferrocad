@@ -302,6 +302,15 @@ stateDiagram-v2
   host builds the 3-D protractor from that **same single step** — one arc and one chip,
   never an Euler decomposition. The degree chip persists while the rotation is pending and
   is click-to-focus in the docked row, like a tape ruler tag; it hides below a 28 px chord.
+- **A workbench manipulator's release is the same kind of decision (A4, 2026-11-13).** A
+  stem or a scrubber reports its `InteractionCommit` on release, and the shell **holds**
+  it instead of writing it: the ghost stays at the pending value, the status line names
+  it, and the same `✗`/`✓` pair — beside the dimension pill, since a manipulator has no
+  triad — spends it. `✓`/`Enter` calls the app script's `interaction` hook once (one
+  transaction); `✗`/`Esc` re-arms the handle at rest and writes nothing. A pick, a hand
+  switch, a tool, or an editing command is refused while it is held. The `+N` workplane
+  offset stem is the exception: it is transient viewport state with its own HUD, no
+  document object and no undo step, so the shell applies it itself.
 - `Shift` — plane override: `begin_drag_with_modifiers` turns an axis press into a drag
   in the plane spanned by that stem and the screen-horizontal.
 - `Ctrl` (or the platform's secondary modifier) — free rotation (15° detents are the
@@ -365,8 +374,8 @@ its padded outline/area is pickable.
 | **T3 — modifiers and readout** | gpui modifier/key plumbing, `GizmoValue` on the event, projected numeric tag, Esc cancel, linear grid snapping | ✅ built |
 | **T4 — visual language** | cyan/slate tokens, filled arrowheads, glass planes, shared 2 px feathered ribbon | ✅ built |
 | **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, parametric feature objects | ✅ built (F0.1–F0.6) |
-| **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit, and (A3) a display-only swath preview at the pending radius | ✅ built |
-| **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook, and (A3) a face ghost at the pending depth | ✅ built (2026-10-26) |
+| **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit, (A3) a display-only swath preview at the pending radius, and (A4) the `✗`/`✓` finish pair on release | ✅ built |
+| **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook, (A3) a face ghost at the pending depth, and (A4) the `✗`/`✓` finish pair on release | ✅ built (2026-10-26) |
 | **R — re-pivot origin handle** | `GizmoTarget::Origin`, 10 px disc, snap through the viewport's candidates, `GizmoOrigin` + session user origin | ✅ built (2026-10-26) |
 | **K — kinds and set hosting** | `GizmoKind`, `GizmoFactory::kinds`, `Contributions::gizmos_for`, `GizmoSet` hosted by the viewport, session re-narrowing, the grip's shared commit | ✅ built (2026-10-27) |
 

@@ -4218,17 +4218,45 @@ impl<V: InventorView> InventorViewport<V> {
         if !self.gizmo_style.enabled || !self.gizmo_style.show_readout {
             return None;
         }
-        let (text, anchor) = self.manipulators.iter().rev().find_map(|manipulator| {
-            Some((
-                manipulator.readout()?,
-                manipulator.readout_anchor(&self.camera)?,
-            ))
-        })?;
+        let (text, anchor) = self.manipulator_readout_raw()?;
         let logical = self
             .camera
             .viewport
             .to_logical([anchor[0].round() as i32, anchor[1].round() as i32]);
         Some((text, logical))
+    }
+
+    /// The topmost manipulator's readout text and its **device-pixel** anchor.
+    ///
+    /// Unfiltered: the style's readout policy hides the pill but not the host's finish
+    /// pair, which is a control rather than a label.
+    fn manipulator_readout_raw(&self) -> Option<(String, [f64; 2])> {
+        self.manipulators.iter().rev().find_map(|manipulator| {
+            Some((
+                manipulator.readout()?,
+                manipulator.readout_anchor(&self.camera)?,
+            ))
+        })
+    }
+
+    /// The topmost manipulator's dimension-pill anchor in window-logical pixels.
+    ///
+    /// The host places its `✗`/`✓` finish pair beside the number it decides on. A
+    /// manipulator has no triad to anchor to, so the readout tip is the only point that
+    /// follows the gesture. `None` when no manipulator reports an anchor.
+    pub fn manipulator_finish_anchor(&self) -> Option<Point<Pixels>> {
+        let (_, anchor) = self.manipulator_readout_raw()?;
+        Some(self.window_point(anchor))
+    }
+
+    /// Whether any armed manipulator is mid-drag.
+    ///
+    /// The host hides the finish pair while the pointer owns a stroke, so a release can
+    /// never land on the pair that is about to appear.
+    pub fn manipulator_dragging(&self) -> bool {
+        self.manipulators
+            .iter()
+            .any(|manipulator| manipulator.is_dragging())
     }
 
     /// The numeric readout the viewport would show, if the style allows one.

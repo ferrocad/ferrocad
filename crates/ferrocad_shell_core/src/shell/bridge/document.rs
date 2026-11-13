@@ -125,6 +125,11 @@ impl Shell {
             // The same rollback `Esc` performs: the pending move is not written.
             self.drop_session(&format!("{action} discarded the pending move"), cx);
         }
+        if self.pending_interaction.is_some() {
+            // The held commit names an entity in the document being replaced, so it is
+            // discarded like `Esc` rather than written behind the user's back.
+            self.pending_interaction = None;
+        }
         self.open_popover = None;
         self.row_popup = None;
         let _ = self.close_settings_card(cx);

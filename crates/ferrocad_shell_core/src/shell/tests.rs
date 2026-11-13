@@ -414,3 +414,4 @@ mod picking;
 mod escalation;
 mod files;
 mod loadout;
+mod manipulator_finish;

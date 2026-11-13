@@ -492,6 +492,14 @@ pub struct Shell {
     /// stage for: a session with no datum would have to invent one (see
     /// `TransformSession::begin`).
     session: Option<TransformSession>,
+    /// A released manipulator's commit, held until `✓` applies it or `✗` discards it.
+    ///
+    /// A manipulator drag previews a change (a push/pull distance, a fillet radius) and
+    /// the release decides the value; it does **not** write it. The commit waits here so
+    /// the document sees exactly one transaction, spent by the same finish pair the Move
+    /// form uses. The manipulator keeps its ghost at the pending value meanwhile. `None`
+    /// at rest.
+    pending_interaction: Option<InteractionCommit>,
     /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
     ///
     /// A workplane offset is **transient viewport state** with no document object and
@@ -970,6 +978,7 @@ impl Shell {
             drag_start: None,
             rotation_start: None,
             session: None,
+            pending_interaction: None,
             workplane_session: None,
             hud_rect: None,
             hud_lock: None,
@@ -1295,6 +1304,13 @@ impl Shell {
             if self.dialog.is_none() && self.close_settings_card(cx) {
                 return true;
             }
+            // A released manipulator is the user's work as well, and nothing was written:
+            // `Esc` is its rollback. The handle is re-armed at rest, so the ghost goes
+            // back to where the drag started rather than staying at the pending value.
+            if self.pending_interaction.is_some() {
+                self.discard_pending_interaction(cx);
+                return true;
+            }
             // A pending move is the user's work: Esc is its **rollback**, and the form
             // stays (it belongs to the Move hand). A *clean* form does not swallow Esc:
             // the pivot and tool paths below still run.
@@ -1328,6 +1344,17 @@ impl Shell {
                 self.drop_session("move cancelled", cx);
                 return true;
             }
+        }
+        // Enter applies a released manipulator's held commit. It is the same decision as
+        // the in-context `✓`, and it runs before the Move session's because a held commit
+        // has no move session to spend.
+        if event.keystroke.key == "enter"
+            && !editing
+            && !self.modal_open()
+            && self.pending_interaction.is_some()
+        {
+            self.commit_pending_interaction(cx);
+            return true;
         }
         // Enter commits a pending transform as its own checkpoint. It runs before the
         // tool branch because a pending move outranks finishing a tool, and after the
@@ -2094,13 +2121,18 @@ impl Render for Shell {
         // The Move form is not a modal: its coordinate row docks with the loadout, and
         // the in-context finish pair floats beside the gizmo while a move is pending.
         // A modal or the object wheel hides both rather than stacking; they come back
-        // when that transient layer closes.
-        let body =
-            if self.move_hud.is_some() && !self.modal_open() && !self.wheel.read(cx).is_open() {
-                body.child(move_finish_overlay(self, window, cx))
-            } else {
-                body
-            };
+        // when that transient layer closes. A manipulator's finish pair is the same
+        // control beside its dimension pill; the two hands cannot both be pending, so at
+        // most one pair is drawn.
+        let body = if self.modal_open() || self.wheel.read(cx).is_open() {
+            body
+        } else if self.move_hud.is_some() {
+            body.child(move_finish_overlay(self, window, cx))
+        } else if self.pending_interaction.is_some() {
+            body.child(manipulator_finish_overlay(self, window, cx))
+        } else {
+            body
+        };
         // A row overlay (the colour palette, the slider or an enum dropdown) is
         // anchored at its click and can belong to the canvas, the settings card or a
         // dialog, so it is a root child rather than part of a pane. Its priority

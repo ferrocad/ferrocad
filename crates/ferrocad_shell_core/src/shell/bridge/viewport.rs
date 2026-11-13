@@ -244,7 +244,9 @@ impl Shell {
         self.publish_camera(cx);
         match event {
             ViewportEvent::Selection(selection) => self.on_selection(selection, cx),
-            ViewportEvent::Interaction(commit) => self.on_interaction(commit, cx),
+            ViewportEvent::Interaction(commit) => {
+                self.on_interaction_released(commit.clone(), cx)
+            }
             ViewportEvent::TransformPreview(preview) => self.on_transform_preview(preview, cx),
             ViewportEvent::GizmoOrigin { point, kind } => self.on_gizmo_origin(*point, *kind, cx),
             ViewportEvent::ToolState(status) => self.on_tool_state(status, cx),
@@ -866,6 +868,82 @@ impl Shell {
         cx.notify();
     }
 
+    /// A manipulator drag ended: **hold** its commit for the finish pair.
+    ///
+    /// A drag previews a value — a push/pull distance, an edge radius — and the release
+    /// decides it, so release is not a write. The commit waits in
+    /// [`pending_interaction`](Self::pending_interaction) while the manipulator keeps its
+    /// ghost at the pending value; `✓` applies it through [`Self::on_interaction`] as one
+    /// transaction and `✗` re-arms the handle at rest.
+    ///
+    /// The active plane's offset stem keeps the immediate path: it is transient viewport
+    /// state with its own HUD, no document object and no undo step.
+    pub(in crate::shell) fn on_interaction_released(
+        &mut self,
+        commit: InteractionCommit,
+        cx: &mut Context<Self>,
+    ) {
+        if commit.manipulator == WORKPLANE_OFFSET_ID {
+            self.on_interaction(&commit, cx);
+            return;
+        }
+        self.pending_interaction = Some(commit);
+        let label = self.pending_interaction_label().unwrap_or_default();
+        // The pair is placed fresh beside the dimension pill; a rect measured for the
+        // Move form (or a previous stem) would clamp and hover against the wrong box.
+        self.hud_rect = None;
+        self.hud_lock = None;
+        self.model.lock().unwrap().status = format!("{label} pending — ✓ to apply, ✗ to discard");
+        cx.notify();
+    }
+
+    /// Whether a released manipulator is waiting for `✓`/`✗`.
+    pub(in crate::shell) fn interaction_is_pending(&self) -> bool {
+        self.pending_interaction.is_some()
+    }
+
+    /// The held commit's label (`extrude 3.00 mm`), for the status line and refusals.
+    pub(in crate::shell) fn pending_interaction_label(&self) -> Option<String> {
+        let commit = self.pending_interaction.as_ref()?;
+        Some(if commit.readout.is_empty() {
+            commit.action.clone()
+        } else {
+            format!("{} {}", commit.action, commit.readout)
+        })
+    }
+
+    /// `✓`/`Enter`: spend the held commit through the app script's `interaction` hook.
+    ///
+    /// This is the only writer, so a released manipulator edits the document exactly once.
+    /// Returns whether anything was pending.
+    pub(in crate::shell) fn commit_pending_interaction(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(commit) = self.pending_interaction.take() else {
+            return false;
+        };
+        self.hud_rect = None;
+        self.hud_lock = None;
+        self.on_interaction(&commit, cx);
+        true
+    }
+
+    /// `✗`/`Esc`: drop the held commit and put the handle back at rest.
+    ///
+    /// Nothing was written, so no undo entry is spent. The manipulator is rebuilt from
+    /// the document stage, which is also how the ghost returns to its resting value.
+    /// Returns whether anything was pending.
+    pub(in crate::shell) fn discard_pending_interaction(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(label) = self.pending_interaction_label() else {
+            return false;
+        };
+        self.pending_interaction = None;
+        self.model.lock().unwrap().status = format!("{label} discarded");
+        self.hud_rect = None;
+        self.hud_lock = None;
+        self.rearm_selection(cx);
+        cx.notify();
+        true
+    }
+
     /// Run one synthetic manipulator gesture for `object`'s `element`, and report the
     /// device point the press used.
     ///
@@ -914,13 +992,20 @@ impl Shell {
                 format!("nothing took the press on {object} {} — no manipulator armed?", element.unwrap_or(""))
             })?;
         if let Some(commit) = viewport.update(cx, |viewport, _| viewport.take_interaction_commit()) {
-            self.on_interaction(&commit, cx);
+            // A capture has no second click, so it drives the release **and** the `✓`: the
+            // screenshot shows the committed solid. The interactive path stops at the
+            // pending pair until the user decides.
+            self.on_interaction_released(commit, cx);
+            let _ = self.commit_pending_interaction(cx);
         }
         Ok(handle)
     }
 
     /// Refresh the model panes and the stage after the document changed.
     pub(in crate::shell) fn after_document_edit(&mut self, cx: &mut Context<Self>) {
+        // A document edit is a new state of the world. A commit held before it names
+        // entity ids that edit may have replaced, so it cannot be applied afterwards.
+        self.pending_interaction = None;
         if self.viewport.is_some() {
             match self.build_stage(cx) {
                 Ok(stage) => {

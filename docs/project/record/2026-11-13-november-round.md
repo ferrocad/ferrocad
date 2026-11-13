@@ -120,6 +120,33 @@ The round's open P1 tail was closed after the measurements above, on the same tr
   unchanged. The off-thread polling exposed and fixed a hover-preview bug that could wipe
   a selection's gizmo when a pre-selection preview dissolved.
 
+### 5.1 The manipulator finish pair (after close)
+
+Dragging the Push/Pull stem or the Fillet scrubber applied the edit on release, while the
+Move hand kept its `✓`/`✗` step. The asymmetry was real, but it was **not** a lost
+feature: the drag/commit path has written immediately since the M0 split, and no earlier
+build carried a pending stage for a manipulator. The fix adds the stage the Move form
+already had rather than restoring one.
+
+- **The shell holds the commit.** `ViewportEvent::Interaction` no longer routes straight to
+  `on_interaction`: a released stem or scrubber parks its `InteractionCommit` in
+  `Shell::pending_interaction`, the ghost stays at the pending value, and the status line
+  names it (`extrude 3.00 mm pending — ✓ to apply, ✗ to discard`).
+- **One decision, one writer.** `✓`/`Enter` spend it through the same `on_interaction` →
+  app-script `interaction` hook (one transaction); `✗`/`Esc` drop it and re-arm the handle
+  at rest. The pair is the Move form's own strip (`dialog-accept` / `dialog-cancel`),
+  placed beside the manipulator's dimension pill instead of the triad.
+- **The context gate learned it.** `InteractionContext::PendingInteraction` refuses a pick,
+  a hand switch, a tool and editing commands, and the refusal names the held value.
+- **Exceptions.** The `+N` workplane offset stem keeps its own HUD and immediate apply
+  (transient viewport state, no document object, no undo step); a headless capture
+  (`Shell::probe_manipulator`) drives the release **and** `✓`, so the screenshot workflows
+  still show the committed solid.
+- **Verification.** 4 new `ferrocad_shell_core` shell tests (a release holds; `✓` writes
+  once; `✗`/`Esc` write nothing; `Enter` applies; a hand switch is refused). The crate's
+  lib suite is **280 passed**; `ferrocad_viewport --lib` **230 passed**;
+  `ferrocad_part_gui` **30 + 1 doctest**.
+
 ## 4. Where the detail lives
 
 - [`tasks/backend-parity.md`](tasks/backend-parity.md) — the B0–B21 ledger, its

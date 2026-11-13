@@ -37,6 +37,8 @@
 //    world-`(x, y)` footprint would land off to the side on a vertical workplane.
 //  * Our tokens replace the addon's hard-coded colours: the axis hues are the
 //    linear-token values of #F87171 / #4ADE80, and the ink arrives as `grid_color`.
+//  * The two in-plane axis lines are optional (`program.counts.y`, the Coin
+//    backend's `grid_axes`), so an axis-cross overlay can be the only axis readout.
 //  * Shadows are deferred. The block and its loop are present, compiled and
 //    validated, but `shadow_count` is 0 in this slice, so the loop never runs.
 //    Document bounds are not wired yet (§3.5); a later stage producer fills
@@ -77,7 +79,8 @@ struct Program {
     grid_color: vec4<f32>,
     // (base_spacing, minor_alpha, major_alpha, shadow_opacity)
     values: vec4<f32>,
-    // (shadow_count, ...) — the rest reserved.
+    // (shadow_count, grid_axes, 0, 0). `grid_axes` is 1 when the two in-plane
+    // axis lines are drawn and 0 when they are hidden.
     counts: vec4<f32>,
     // 64 slots x 5 floats packed as 80 vec4s: uniform array elements are 16-byte
     // aligned, so a float array cannot have a 4-byte stride. Flat float `o` lives at
@@ -231,8 +234,13 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
 
     // All derivatives first, so the discards below cannot corrupt them.
     let g = grid_alpha(pu, pv, fwidth(pu), fwidth(pv));
-    let ax = axis_line(pv, fwidth(pv)); // u axis (v == 0)
-    let ay = axis_line(pu, fwidth(pu)); // v axis (u == 0)
+    // `grid_axes` (counts.y) is this backend's knob: the native ground has no
+    // in-plane X/Y lines, so an axis cross can be the only axis readout. Evaluate
+    // both distances unconditionally (the derivatives above must exist) and then
+    // select 0, so the lines below become no-ops rather than branching.
+    let axes = program.counts.y > 0.5;
+    let ax = select(0.0, axis_line(pv, fwidth(pv)), axes); // u axis (v == 0)
+    let ay = select(0.0, axis_line(pu, fwidth(pu)), axes); // v axis (u == 0)
 
     // Fade the **whole plane** as the camera goes edge-on to it. This is a property of
     // the camera, not of the pixel: `dir` varies per fragment, so `abs(dot(dir, n))`
@@ -240,10 +248,16 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     // view — a vertical one on a `YZ` plane, straight through the model. The centre ray
     // is the same for every fragment, so the fade is uniform.
     let centre = vec2<f32>(0.0);
+    let centre_near = unproject(centre, 0.0);
+    let centre_far = unproject(centre, 1.0);
+    let centre_ray = select(centre_far - centre_near, centre_far - frame.eye.xyz, persp);
+    let centre_len = length(centre_ray);
+    // A degenerate centre ray (a host frame that has not set the camera yet) would make
+    // `normalize` NaN on some backends; fall back to looking down the plane normal.
     let centre_dir = select(
-        normalize(unproject(centre, 1.0) - unproject(centre, 0.0)),
-        normalize(unproject(centre, 1.0) - frame.eye.xyz),
-        persp,
+        vec3<f32>(0.0, 0.0, -1.0),
+        centre_ray / max(centre_len, 1e-9),
+        centre_len > 1e-6,
     );
     let grazing = smoothstep(0.0, 0.08, abs(dot(centre_dir, plane_n)));
 

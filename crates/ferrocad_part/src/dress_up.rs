@@ -60,6 +60,7 @@ use ferrocad_core::object_registry::ObjectType;
 use ferrocad_core::prop_status;
 use ferrocad_core::{Document, ObjectId, Property};
 use ferrocad_geom::{ElementRef, Lineage, Shape};
+use ferrocad_types::Placement;
 
 use crate::shape_property::{
     ResolveElementError, ShapeProperty, make_shape_property, positional_name, resolve_element_in,
@@ -101,6 +102,7 @@ impl ObjectType for Fillet {
                 Property::Bool(true),
                 prop_status::NONE,
             ),
+            placement_property(),
             (SHAPE.to_string(), output_shape(), prop_status::OUTPUT),
         ]
     }
@@ -119,6 +121,7 @@ impl ObjectType for Fillet {
                 .fillet(&request.source, &request.edges, radius)
                 .map(|result| result.shape)
                 .map_err(|error| error.to_string())
+                .map(|shape| placed(doc, id, shape))
         });
         store(doc, id, result);
     }
@@ -148,6 +151,7 @@ impl ObjectType for Chamfer {
                 Property::Bool(true),
                 prop_status::NONE,
             ),
+            placement_property(),
             (SHAPE.to_string(), output_shape(), prop_status::OUTPUT),
         ]
     }
@@ -168,6 +172,7 @@ impl ObjectType for Chamfer {
                 .chamfer(&request.source, &request.edges, distance, second)
                 .map(|result| result.shape)
                 .map_err(|error| error.to_string())
+                .map(|shape| placed(doc, id, shape))
         });
         store(doc, id, result);
     }
@@ -177,6 +182,32 @@ impl ObjectType for Chamfer {
 struct Request {
     source: Shape,
     edges: Vec<ElementRef>,
+}
+
+/// The `Placement` every Part feature-shaped object carries.
+///
+/// A dress-up derives from `Part::Feature` upstream, so it is movable like any other
+/// Part object. The rebuild runs on the base's already-placed geometry, so this is a
+/// delta on top of that result, not a transform of the base.
+fn placement_property() -> (String, Property, u32) {
+    (
+        "Placement".to_string(),
+        Property::Placement(Placement::identity()),
+        prop_status::NONE,
+    )
+}
+
+/// Apply the feature's own `Placement` to a rebuilt shape.
+fn placed(doc: &Document, id: ObjectId, shape: Shape) -> Shape {
+    match doc
+        .object(id)
+        .and_then(|object| object.properties.get("Placement"))
+    {
+        Some(Property::Placement(placement)) if *placement != Placement::identity() => {
+            crate::backend().place(&shape, placement).unwrap_or(shape)
+        }
+        _ => shape,
+    }
 }
 
 /// Read the inputs and resolve the edge names through the base shape's lineage.

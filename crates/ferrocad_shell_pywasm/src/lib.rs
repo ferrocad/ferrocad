@@ -492,15 +492,17 @@ pub struct RustPythonRuntime {
 }
 
 impl RustPythonRuntime {
-    /// Boot over the geometry-free sample document.
+    /// Boot over the canonical sample document.
     pub fn new() -> Result<Self, String> {
-        Self::over(snapshot::render(&snapshot::sample()))
+        let sample = snapshot::sample()?;
+        Self::over(snapshot::render(&sample))
     }
 
     /// [`new`](Self::new) with the facade's file-backed parameter store.
     pub fn new_persistent() -> Result<Self, String> {
+        let sample = snapshot::sample()?;
         Self::boot(
-            DocumentSource::Fixed(Rc::from(snapshot::render(&snapshot::sample()))),
+            DocumentSource::Fixed(Rc::from(snapshot::render(&sample))),
             ParameterStore::File,
         )
     }

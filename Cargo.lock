@@ -2835,6 +2835,7 @@ dependencies = [
  "ferrocad_shell_api",
  "ferrocad_stage",
  "log",
+ "naga 29.0.4",
  "rquickjs",
  "serde",
  "serde_json",

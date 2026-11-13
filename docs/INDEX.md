@@ -161,6 +161,7 @@ here.
 - [developer/interaction/navicube-spec.md](developer/interaction/navicube-spec.md) — the producer-neutral NaviCube specification.
 - [developer/interaction/navicube-plan.md](developer/interaction/navicube-plan.md) — making the navigation cube producer-independent: the layering and V1–V4.
 - [developer/interaction/navicube-gpui-design.md](developer/interaction/navicube-gpui-design.md) — the GPUI-native gyro-cube design and the D1–D5 plan.
+- [developer/interaction/scene-lighting-presets.md](developer/interaction/scene-lighting-presets.md) — the compile-time scene/lighting bundles behind `Scene ▾`: the three preset token tables, the light rig, the toggles and the readout.
 - [developer/interaction/selection-gizmos-and-forms.md](developer/interaction/selection-gizmos-and-forms.md) — the interaction state machine: selection, the wheel, gizmos and the floating form.
 - [developer/interaction/topology-selection.md](developer/interaction/topology-selection.md) — the topology/selection seam, the tessellation contract and the F0 plan.
 - [developer/interaction/transform-ux.md](developer/interaction/transform-ux.md) — transform modes, pivots, re-pivoting and push/pull.

@@ -104,12 +104,12 @@ fn the_parametric_edge_scope_selects_an_edge() {
     let meshes = python::stage_meshes().expect("stage meshes");
     let box_mesh = meshes
         .iter()
-        .find(|mesh| mesh.object == "Box")
-        .expect("the seeded Box is displayed");
+        .find(|mesh| mesh.object == "Fillet")
+        .expect("the seeded Fillet is displayed");
     let entity = box_mesh.entity;
     assert!(
         box_mesh.parts.iter().any(|part| part == "Edge1"),
-        "the kernel names the box's edges"
+        "the kernel names the fillet's edges"
     );
     assert_eq!(
         box_mesh.segment_parts.len(),
@@ -133,7 +133,7 @@ fn the_parametric_edge_scope_selects_an_edge() {
         .map(|segment| [segment[0], segment[1]])
         .collect();
 
-    // Shaded: a hover near each edge resolves to an edge of the Box.
+    // Shaded: a hover near each edge resolves to an edge of the Fillet.
     let mut view = edge_view(Stage::new().with_item(item.clone()));
     let mut resolved = 0usize;
     for segment in &segments {
@@ -146,7 +146,7 @@ fn the_parametric_edge_scope_selects_an_edge() {
             .target
             .clone()
             .expect("an edge is under the pointer");
-        assert_eq!(target.object, entity, "the edge belongs to the Box");
+        assert_eq!(target.object, entity, "the edge belongs to the Fillet");
         assert!(
             target
                 .elements

@@ -41,6 +41,7 @@ KNOBS = {
     "minor_width",
     "shadow_enabled",
     "shadow_opacity",
+    "grid_axes",
 }
 
 
@@ -303,6 +304,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertAlmostEqual(fields["minor_width"]["value"], FerroCAD.Grid.minor_width)
         self.assertEqual(fields["shadow_enabled"]["value"], True)
         self.assertAlmostEqual(fields["shadow_opacity"]["value"], 0.30)
+        self.assertEqual(fields["grid_axes"]["value"], True)
 
     def test_the_dialog_seeds_from_the_live_settings(self):
         FerroCAD.Grid.enabled = False
@@ -317,6 +319,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         FerroCAD.Grid.opacity = 0.5
         self.mod.SETTINGS.SetBool("shadow_enabled", False)
         self.mod.SETTINGS.SetFloat("shadow_opacity", 0.25)
+        self.mod.SETTINGS.SetBool("grid_axes", False)
 
         fields = {
             field["name"]: field["value"]
@@ -335,6 +338,7 @@ class GridOverlayCoinTests(unittest.TestCase):
                 "minor_width": 2.0,
                 "shadow_enabled": False,
                 "shadow_opacity": 0.25,
+                "grid_axes": False,
             },
         )
 
@@ -351,6 +355,7 @@ class GridOverlayCoinTests(unittest.TestCase):
                 "minor_width": 2.0,
                 "shadow_enabled": True,
                 "shadow_opacity": 0.25,
+                "grid_axes": False,
             }
         )
 
@@ -371,6 +376,7 @@ class GridOverlayCoinTests(unittest.TestCase):
         self.assertAlmostEqual(self.mod.setting("minor_width"), 2.0)
         self.assertTrue(self.mod.setting("shadow_enabled"))
         self.assertAlmostEqual(self.mod.setting("shadow_opacity"), 0.25)
+        self.assertFalse(self.mod.setting("grid_axes"))
 
     def test_a_bad_color_raises_and_leaves_the_store_alone(self):
         with self.assertRaises(ValueError):
@@ -460,6 +466,23 @@ class GridOverlayCoinTests(unittest.TestCase):
              "shadow_opacity", "shadow_count"} <= names
         )
         self.assertIn("shadow_data", names, "the deferred block is still carried")
+        self.assertIn("grid_axes", names, "the in-plane axis switch reaches the shader")
+
+    def test_grid_axes_off_reaches_the_shader_parameter(self):
+        """`grid_axes` is a shader parameter, not a Python-side skip.
+
+        The WGSL keys the two in-plane lines off `program.counts.y`, so the host
+        matches this node by name and packs 0 when the box is cleared.
+        """
+        self.assertEqual(self.mod.setting("grid_axes"), True, "on by default")
+        grid = self.mod.ShaderGrid("Doc")
+        parameter = next(p for p in grid.parameters if p.name == "grid_axes")
+        self.assertEqual(parameter.value, 1.0)
+
+        self.mod.save_settings({"grid_axes": False})
+        grid = self.mod.ShaderGrid("Doc")
+        parameter = next(p for p in grid.parameters if p.name == "grid_axes")
+        self.assertEqual(parameter.value, 0.0, "counts.y = 0 hides the lines")
 
     def test_the_shader_reads_the_host_workplane_frame(self):
         """The grid follows the active plane through `Frame`, not a mod parameter.
@@ -531,6 +554,21 @@ class GridOverlayCoinTests(unittest.TestCase):
 
         # Leave the shared store at its defaults for the next test.
         FerroCAD.Grid.reset()
+
+    def test_the_axis_line_row_is_this_backends_own(self):
+        """`grid_axes` is advertised by Coin only, and writes the Coin store.
+
+        The native ground has no in-plane X/Y lines, so the row is not in
+        ``_grid.SETTINGS_SCHEMA``; the Coin provider appends it, and its ``set``
+        hook routes through this mod's ``save_settings`` like every other row.
+        """
+        rows = {entry["name"]: entry for entry in self.mod.settings_schema()}
+        self.assertIn("grid_axes", rows)
+        self.assertEqual(rows["grid_axes"]["kind"], "bool")
+        self.assertTrue(rows["grid_axes"]["default"])
+        rows["grid_axes"]["set"](False)
+        self.assertFalse(self.mod.setting("grid_axes"))
+        self.assertFalse(rows["grid_axes"]["get"]())
 
     def test_the_mod_uses_no_qt_and_no_live_scene_graph(self):
         for name in ("QtCore", "QtGui", "QtWidgets", "QDialog", "QSettings"):

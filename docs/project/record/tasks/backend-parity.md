@@ -608,16 +608,17 @@ host's script half (`--script-host=js`) is the remaining wiring, and belongs wit
 
 `Runtime` moved to the seam (`ferrocad_shell_api::runtime`) and the desktop gained the
 browser's switch: `--script-host=plain|cpython|pywasm|js`, or `FERROCAD_SCRIPT_HOST`, with
-CPython as the default. One table of names, aliases and error text, two switches — so
-`?runtime=` and `--script-host=` cannot drift. `ferrocad_shell_web` re-exports the type and
-keeps only its own composition.
+CPython as the primary. Since the default-feature change of 2026-11-13, **no flag
+installs `cpython,js`**: CPython primary, QuickJS subordinate. One table of names, aliases
+and error text, two switches — so `?runtime=` and `--script-host=` cannot drift.
+`ferrocad_shell_web` re-exports the type and keeps only its own composition.
 
 | name | desktop today | notes |
 | --- | --- | --- |
 | `plain` | ✓ | the document half alone: the script-less app the browser already had |
-| `cpython` | ✓ default | the edition's engine |
-| `js` | ✓ with `--features js` | `EnginePage` over `mods/`; without the feature the error says how to build it |
-| `pywasm` | ✓ with `--features pywasm` (B7d) | ✓ | RustPython on the 16 MiB worker its compiler needs |
+| `cpython` | ✓ default primary | the edition's engine |
+| `js` | ✓ default subordinate (`--features js`, in the default feature set) | `EnginePage` over `mods/`; without the feature the error says how to build it |
+| `pywasm` | ✓ with `--features pywasm` (B7d) | RustPython on the 16 MiB worker its compiler needs |
 
 A name this build cannot serve is reported and replaced by `plain` — the browser's rule, so
 a scripting surface that cannot start never costs the window. `backend::install_with` does
@@ -808,7 +809,8 @@ answers the rest from the primary.
 | `commands`, `run_command`, `stage_meshes` | primary first, then each host in order — **built** |
 | `on_document_event`, `on_selection_changed`, `on_view_state_changed`, `event_listener` | fan out to every installed host — **built** (B8b) |
 | `extra_properties`, `set_extra_property`, `apply_interaction`, `open_path`, `save_path` | ask in order; `Option`/`None` already means "not mine" |
-| the remaining ~24 (console, `bootstrap`, `open_startup_document`, tools and dialogs, providers, render) | one named primary; no other host can own them |
+| the remaining ~24 (console, `bootstrap`, `open_startup_document`, tools and dialogs, render) | one named primary; no other host can own them |
+| providers (`provider_features`, `set_provider`, `refresh_providers`, `provider_skin`, `grid_summary`, `axis_summary`) | **merged per feature** since 2026-11-13: one entry per feature, each backend once, one active backend; switches route to the host that lists the backend, sums/skins to its owner |
 
 The last row holds two blockers that are decisions, not plumbing:
 

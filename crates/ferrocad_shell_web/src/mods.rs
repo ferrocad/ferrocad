@@ -151,6 +151,22 @@ mod tests {
         assert_eq!(index.mods[1].pack, "GridOverlay.json");
     }
 
+    /// The packer also names JS workbench modules in the index; the Python loader reads
+    /// the `mods` list and leaves the new key to the page.
+    #[test]
+    fn a_js_list_does_not_disturb_the_pack_list() {
+        let index = parse_index(
+            r#"{
+                "version": 1,
+                "mods": [{"name": "AxisOverlay", "pack": "AxisOverlay.json"}],
+                "js": [{"name": "AxisOverlayJs", "module": "AxisOverlayJs.js"}]
+            }"#,
+        )
+        .expect("an index with JS workbenches");
+        assert_eq!(index.mods.len(), 1);
+        assert_eq!(index.mods[0].name, "AxisOverlay");
+    }
+
     /// An empty list is a legitimate index (a checkout with no authored mods), not a
     /// malformed one.
     #[test]

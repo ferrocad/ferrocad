@@ -23,6 +23,7 @@ use ferrocad_shell_api::catalog;
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::selection::SelectionItem;
+use ferrocad_shell_api::settings::SettingValue;
 use ferrocad_shell_api::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
     GridSummary, OpenedDocument, PropRow, ProviderFeature, ProviderSkin, SelectionRequest,
@@ -481,6 +482,17 @@ impl<R: PythonRuntime> ScriptHost for PythonHost<R> {
         }
     }
 
+    fn set_setting(&self, group: &str, name: &str, value: &SettingValue) {
+        if !self.runtime.contract().settings {
+            return;
+        }
+        let payload = serde_json::json!({ "group": group, "name": name, "value": value })
+            .to_string();
+        if let Err(error) = self.json::<serde_json::Value>("_seed_setting", &[&payload]) {
+            eprintln!("ferrocad: python setting seed: {error}");
+        }
+    }
+
     fn appearance_view(&self) -> Option<CommandOutcome> {
         if !self.runtime.contract().view {
             return None;
@@ -515,6 +527,13 @@ impl<R: PythonRuntime> ScriptHost for PythonHost<R> {
         }
         let payload = serde_json::json!({ "feature": feature, "backend": backend }).to_string();
         self.json("set_provider", &[&payload]).ok()
+    }
+
+    fn release_provider(&self, feature: &str) -> Option<CommandOutcome> {
+        if !self.runtime.contract().providers {
+            return None;
+        }
+        self.json("release_provider", &[feature]).ok()
     }
 
     fn refresh_providers(&self, feature: &str) -> Option<CommandOutcome> {
@@ -571,6 +590,11 @@ impl<R: PythonRuntime> ScriptHost for PythonHost<R> {
             return None;
         }
         self.json("dialog_cancel", &[token]).ok()
+    }
+
+    /// The Python facade mints every dialog token as `d{serial}` (`_register_dialog`).
+    fn owns_dialog(&self, token: &str) -> bool {
+        self.runtime.contract().commands && token.starts_with('d')
     }
 
     fn gpu_adapter(&self) -> Option<String> {

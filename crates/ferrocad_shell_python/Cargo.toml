@@ -65,7 +65,8 @@ ferrocad_shell_pywasm = { workspace = true, optional = true }
 ferrocad_shell_wasm = { workspace = true, optional = true }
 
 [features]
-# Compose `--script-host=js`. Off by default: it compiles QuickJS as C.
+# Compose `--script-host=js`. Off at this crate; the desktop app's default feature
+# set enables it. It compiles QuickJS as C.
 js = ["dep:ferrocad_shell_js", "dep:ferrocad_doc_api", "ferrocad_shell_js/desktop"]
 # Compose `--script-host=pywasm`. Off by default: it compiles a Python VM into the app.
 pywasm = ["dep:ferrocad_shell_pywasm"]

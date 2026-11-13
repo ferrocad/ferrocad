@@ -102,7 +102,10 @@ value changes nothing. On success it runs the backend's `refresh`, so a provider
 draws from these values sees them immediately.
 
 A provider with no `settings` keeps its `command` as its settings entry: that is the
-upstream-compatible fallback, and the reason a ported mod still works unchanged.
+upstream-compatible fallback, and the reason a ported mod still works unchanged. In a
+composed `cpython,js` runtime the merged `Settings/<Feature>` node surfaces that
+command as a runnable row when the active backend has no schema, so the provider's
+dialog is reachable from the same node whichever host owns it.
 
 ## Which backend is active
 
@@ -183,6 +186,14 @@ a failing `deactivate` does not skip the incoming `activate`.
 existed. It does **not** run `deactivate`; the caller owns the effects. It leaves
 the persisted choice alone, so a re-registered backend keeps its selection.
 
+`deactivateProvider(feature)` is the release half used by a composed runtime when a
+feature changes hands between hosts: it runs the applied backend's `deactivate()` and
+forgets that it was applied, **without** changing the persisted choice. The result is
+the same shape as `setActiveProvider` minus `backend`. It is idempotent: with nothing
+applied, the declared backend's `deactivate()` still runs (the documented "restore the
+default"). `HostChain` calls it on the host that is losing the feature, because that
+host cannot select a backend it does not list.
+
 ## Refresh, without switching
 
 A feature's state can change without a backend switch. `refreshProviders(feature)`
@@ -248,7 +259,8 @@ App_ToggleGrid
 
 `mods/GridOverlayCoin` now reads `FerroCAD.Grid.enabled` for `enabled` when the
 semantic API exists (upstream FreeCAD falls back to its private `SETTINGS` knob).
-Its colour, opacity, spacing and shadow knobs stay in its own parameter group.
+Its colour, opacity, spacing, shadow and `grid_axes` (in-plane X/Y line) knobs
+stay in its own parameter group.
 The native backend reads the same switch directly in `apply()`.
 
 The internal note [`../developer/workbenches/mod-providers.md`](../developer/workbenches/mod-providers.md)
@@ -302,6 +314,52 @@ for entry in FerroCADGui.providers("demo"):
     FerroCADGui.unregisterProvider("demo", entry["backend"])
 ```
 
+## JS workbenches
+
+A JS workbench has no `FerroCADGui.registerProvider`; it merges the registry into the
+page object instead. `JsScriptHost` forwards the provider verbs to these hooks, so the
+same `Mods_Settings`, Dev Tools and header-popover paths work:
+
+| Page hook | Answers |
+| --- | --- |
+| `providers()` | JSON `ProviderFeature[]`: the backends **this page implements**, `[{feature, providers: [{backend, label, active, command}]}]` |
+| `setProvider(feature, backend)` | JSON `CommandOutcome`: the chain's **load** verb for one of this page's backends |
+| `releaseProvider(feature)` | JSON `CommandOutcome`: the chain's **unload** verb; the page deactivates its backend and releases its claim |
+| `refreshProvider(feature)` | JSON `CommandOutcome` from the loaded backend's `refresh` |
+| `providerSummary(feature)` | JSON `AxisSummary`/`GridSummary`, or `null` to defer to the document half |
+| `providerSkin(feature)` | JSON `{"source": …}`, or `{"source": null}` for the native material |
+| `onViewState(state)` | the shell's presentation state (the shared axis/grid policy), so an overlay renders the feature's one store |
+
+The registry lives in the page because a JS workbench cannot call the kernel at
+`install()` time (`window.ferrocad` is installed afterwards). `mods/AxisOverlayJs` is the
+reference: it declares **only** `axis`/`js`, renders the shared axis policy from
+`onViewState`, and advertises no schema or command. It is a renderer for one feature, not
+a second settings store. A page that does need provider-private rows can advertise a
+schema; the chain shows it as the loaded backend's form.
+
+A composed runtime (`cpython,js` on the desktop, `pywasm,js` in the browser) presents
+**one catalog and one slot per feature**. `HostChain` lists every backend once (the first
+host's label and command win a duplicate such as `axis`/`ferrocad`) and exactly one
+loaded backend. `set_provider` is the slot's **load** and routes to the one host that
+lists the backend; `release_provider` is its **unload**. The chain records the claim the
+loaded backend states (`view.axis.overlay` / `view.grid_overlay`) and reconciles it into
+any view a command returns, so the native cross/ground follows the slot even when the
+command ran in another host.
+
+`Settings/<Feature>` is therefore **one form**. The selector lists the merged catalog
+and the rows are the feature's canonical schema (the shared `FerroCAD.Axis` /
+`FerroCAD.Grid` policy); a loaded backend that ships no schema — the page's `axis`/`js`
+— no longer substitutes a provider-specific dialog row. A schema write is routed to the
+host that owns the row, and the shell pushes the resulting state to the loaded backend,
+so changing a shared value redraws every backend alike.
+
+Because the catalogs are independent, a switch that **crosses hosts** also has to stop
+the outgoing one: the host that was drawing is asked for `release_provider` (the page's
+`releaseProvider`, Python's `FerroCADGui.deactivateProvider`) before the incoming
+backend loads. `activate_document` re-runs each host's declared provider inside that
+host, so the chain releases the losers there too; otherwise the next document switch
+brought a second cross back.
+
 ## Limits
 
 - The persisted choice is in the in-memory `ParamGet` shim today; there is no
@@ -313,5 +371,20 @@ for entry in FerroCADGui.providers("demo"):
   that follow it.
 - There is no native settings panel; `Mods_Settings` uses the ordinary dialog
   protocol.
+- **A composed runtime merges `Settings/<Feature>`, not just the popover.** `HostChain`
+  builds the node's provider selector over every host's backends and keeps the active
+  backend's rows: the owner's schema when it has one, else the provider's **command**
+  (its settings dialog). A schema write goes to the owner; the selector write is the
+  chain's switch. So in `cpython,js`, `Settings/Axis` offers `ferrocad`, `coin` and `js`
+  in one place, and picking `js` swaps the rows for its settings entry.
+- **A JS backend's selection is session-only.** The page has no `ParamGet`, so the JS
+  half's chosen backend and settings reset on reload; the Python half's persist.
+- A provider with no `settings` schema keeps its `command` as its settings entry, and
+  the merged node surfaces that command as a runnable row. The JS providers use this
+  path; a Python provider may use either.
 - `refreshProviders` runs only the active backend. It does not switch, persist,
   or call `activate`.
+- A JS page's provider choice is session-only today; the Python registry persists
+  through `ParamGet`, and the page has no such store yet.
+- A JS provider's `settings` schema is not wired to `Settings/<Feature>` yet; its
+  command dialog is the settings surface in this slice.

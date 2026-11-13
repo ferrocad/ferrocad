@@ -118,6 +118,21 @@ class GridOverlayForkTests(unittest.TestCase):
         finally:
             self.mod.register_provider()
 
+    def test_the_native_grid_claims_no_overlay(self):
+        """Switching from the Coin shader back to the native ground clears its claim.
+
+        The native backend draws the ground itself, so every view it returns states
+        ``grid_overlay: False``. Without that claim the shell kept the Coin
+        backend's ``true`` and the native ground stayed hidden after the switch.
+        """
+        self.grid.enabled = True
+        result = FerroCADGui.refreshProviders("grid")
+        self.assertIs(result["view"].get("grid_overlay"), False)
+        self.assertTrue(result["view"]["grid"], "the ground itself is still on")
+
+        activated = self.mod.activate()
+        self.assertIs(activated["view"]["grid_overlay"], False)
+
     def test_a_settings_edit_reaches_the_shell_through_refresh(self):
         """``enabled`` off must be *sent*, not only stored.
 

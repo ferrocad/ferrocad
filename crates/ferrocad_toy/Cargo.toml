@@ -37,8 +37,12 @@ ferrocad_inventor.workspace = true
 ferrocad_inventor_py.workspace = true
 
 [features]
-# `--script-host=js`: the browser's JS page on the desktop. Compiles QuickJS as C, so
-# it is opt-in; see docs/project/tasks/backend-parity.md B7.
+# The desktop editions compose CPython plus the QuickJS page by default. Keep this
+# forwarding flag for a build that selects one half explicitly.
+default = ["js"]
+# `--script-host=js`: the browser's JS page on the desktop. Enabled by default so
+# the shipped JS workbenches run without a flag; `--no-default-features` leaves
+# QuickJS out. See docs/project/tasks/backend-parity.md B7.
 js = ["ferrocad/js"]
 # `--script-host=pywasm`: compose RustPython on the desktop (a Python VM in the app).
 pywasm = ["ferrocad/pywasm"]

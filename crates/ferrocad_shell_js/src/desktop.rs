@@ -26,7 +26,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use rquickjs::function::IntoArgs;
@@ -137,9 +136,48 @@ enum Job {
     Evaluate(String, Sender<Result<String, String>>),
     RunCommand(String, Sender<Result<bool, String>>),
     StageMeshes(String, Sender<Result<String, String>>),
-    /// Hand the page the document API. No reply: the function is set up and the call
-    /// returns, which is all the caller needs to know.
-    InstallKernel(Arc<dyn Fn(String) -> String + Send + Sync>),
+    /// Hand the page the host's channels. No reply: the functions are set up and the
+    /// call returns, which is all the caller needs to know.
+    InstallKernel(super::Kernel),
+    /// A dialog the page opened was accepted. The answer is the page's JSON outcome.
+    DialogAccept {
+        token: String,
+        values: String,
+        reply: Sender<Result<String, String>>,
+    },
+    /// A dialog the page opened was cancelled.
+    DialogCancel {
+        token: String,
+        reply: Sender<Result<String, String>>,
+    },
+    /// The page's provider manifests, as JSON.
+    Providers(Sender<Result<String, String>>),
+    /// Switch a feature's active provider through the page's registry.
+    SetProvider {
+        feature: String,
+        backend: String,
+        reply: Sender<Result<String, String>>,
+    },
+    /// Deactivate a feature's active provider without selecting another.
+    ReleaseProvider {
+        feature: String,
+        reply: Sender<Result<String, String>>,
+    },
+    /// Ask the page's active provider to re-read its state.
+    RefreshProvider {
+        feature: String,
+        reply: Sender<Result<String, String>>,
+    },
+    /// The active provider's summary for a feature.
+    ProviderSummary {
+        feature: String,
+        reply: Sender<Result<String, String>>,
+    },
+    /// The active provider's WGSL skin.
+    ProviderSkin {
+        feature: String,
+        reply: Sender<Result<String, String>>,
+    },
     /// A viewport event. Queued: the shell is drawing, and JS is not allowed to
     /// stall the frame.
     Event {
@@ -149,7 +187,13 @@ enum Job {
         entity: u32,
     },
     /// A document event. Queued, because it can arrive from inside a document API call.
-    DocumentEvent { id: String, payload: String },
+    /// A document event the host announces (`document.edited`, …).
+    DocumentEvent {
+        id: String,
+        payload: String,
+    },
+    /// The shell's presentation state, so an overlay can follow the shared policy.
+    ViewState(String, Sender<Result<(), String>>),
 }
 
 impl EnginePage {
@@ -263,17 +307,73 @@ impl Page for EnginePage {
         Ok(())
     }
 
+    fn on_view_state(&self, state: &str) -> Result<(), String> {
+        self.round_trip(|reply| Job::ViewState(state.to_string(), reply))
+    }
+
     fn stage_meshes(&self, have: &str) -> Result<String, String> {
         self.round_trip(|reply| Job::StageMeshes(have.to_string(), reply))
     }
 
-    fn install_kernel(
-        &self,
-        call: Arc<dyn Fn(String) -> String + Send + Sync>,
-    ) -> Result<(), String> {
+    fn dialog_accept(&self, token: &str, values: &str) -> Result<String, String> {
+        self.round_trip(|reply| Job::DialogAccept {
+            token: token.to_string(),
+            values: values.to_string(),
+            reply,
+        })
+    }
+
+    fn dialog_cancel(&self, token: &str) -> Result<String, String> {
+        self.round_trip(|reply| Job::DialogCancel {
+            token: token.to_string(),
+            reply,
+        })
+    }
+
+    fn providers(&self) -> Result<String, String> {
+        self.round_trip(Job::Providers)
+    }
+
+    fn set_provider(&self, feature: &str, backend: &str) -> Result<String, String> {
+        self.round_trip(|reply| Job::SetProvider {
+            feature: feature.to_string(),
+            backend: backend.to_string(),
+            reply,
+        })
+    }
+
+    fn release_provider(&self, feature: &str) -> Result<String, String> {
+        self.round_trip(|reply| Job::ReleaseProvider {
+            feature: feature.to_string(),
+            reply,
+        })
+    }
+
+    fn refresh_provider(&self, feature: &str) -> Result<String, String> {
+        self.round_trip(|reply| Job::RefreshProvider {
+            feature: feature.to_string(),
+            reply,
+        })
+    }
+
+    fn provider_summary(&self, feature: &str) -> Result<String, String> {
+        self.round_trip(|reply| Job::ProviderSummary {
+            feature: feature.to_string(),
+            reply,
+        })
+    }
+
+    fn provider_skin(&self, feature: &str) -> Result<String, String> {
+        self.round_trip(|reply| Job::ProviderSkin {
+            feature: feature.to_string(),
+            reply,
+        })
+    }
+
+    fn install_kernel(&self, kernel: super::Kernel) -> Result<(), String> {
         // No reply to wait for: the job is queued like an event.
         self.jobs
-            .send(Job::InstallKernel(call))
+            .send(Job::InstallKernel(kernel))
             .map_err(|_| "the JS engine is gone".to_string())
     }
 }
@@ -338,41 +438,86 @@ fn run(modules: Vec<PathBuf>, inbox: Receiver<Job>, ready: Sender<Result<(), Str
             Job::StageMeshes(have, reply) => {
                 let _ = reply.send(context.with(|ctx| call_page(&ctx, "stageMeshes", (have,))));
             }
-            Job::InstallKernel(call) => {
+            Job::DialogAccept {
+                token,
+                values,
+                reply,
+            } => {
+                let _ = reply
+                    .send(context.with(|ctx| call_page(&ctx, "onDialogAccept", (token, values))));
+            }
+            Job::DialogCancel { token, reply } => {
+                let _ = reply.send(context.with(|ctx| call_page(&ctx, "onDialogCancel", (token,))));
+            }
+            Job::Providers(reply) => {
+                let _ = reply.send(context.with(|ctx| call_page(&ctx, "providers", ())));
+            }
+            Job::SetProvider {
+                feature,
+                backend,
+                reply,
+            } => {
+                let _ = reply
+                    .send(context.with(|ctx| call_page(&ctx, "setProvider", (feature, backend))));
+            }
+            Job::ReleaseProvider { feature, reply } => {
+                let _ =
+                    reply.send(context.with(|ctx| call_page(&ctx, "releaseProvider", (feature,))));
+            }
+            Job::RefreshProvider { feature, reply } => {
+                let _ =
+                    reply.send(context.with(|ctx| call_page(&ctx, "refreshProvider", (feature,))));
+            }
+            Job::ProviderSummary { feature, reply } => {
+                let _ =
+                    reply.send(context.with(|ctx| call_page(&ctx, "providerSummary", (feature,))));
+            }
+            Job::ProviderSkin { feature, reply } => {
+                let _ = reply.send(context.with(|ctx| call_page(&ctx, "providerSkin", (feature,))));
+            }
+            Job::InstallKernel(kernel) => {
                 let installed = context.with(|ctx| -> Result<(), String> {
-                    let kernel = Object::new(ctx.clone())
-                        .map_err(|error| describe(&ctx, "the document API", error))?;
-                    let api = Function::new(ctx.clone(), move |request: String| -> String {
-                        call(request)
-                    })
-                    .map_err(|error| describe(&ctx, "the document API", error))?;
-                    kernel
-                        .set("call", api)
-                        .map_err(|error| describe(&ctx, "the document API", error))?;
+                    let object = Object::new(ctx.clone())
+                        .map_err(|error| describe(&ctx, "the kernel", error))?;
+                    for (name, sink) in [
+                        ("call", kernel.call),
+                        ("overlay", kernel.overlay),
+                        ("view", kernel.view),
+                        ("dialog", kernel.dialog),
+                    ] {
+                        let function = Function::new(ctx.clone(), move |text: String| -> String {
+                            sink(text)
+                        })
+                        .map_err(|error| describe(&ctx, name, error))?;
+                        object
+                            .set(name, function)
+                            .map_err(|error| describe(&ctx, name, error))?;
+                    }
                     ctx.globals()
-                        .set("ferrocad", kernel)
-                        .map_err(|error| describe(&ctx, "the document API", error))
+                        .set("ferrocad", object)
+                        .map_err(|error| describe(&ctx, "the kernel", error))
                 });
                 if let Err(error) = installed {
                     log::error!("ferrocad js: {error}");
                 }
             }
-            Job::Event {
-                kind,
-                x,
-                y,
-                entity,
-            } => {
-                let answer = context.with(|ctx| call_optional(&ctx, "onEvent", (kind, x, y, entity)));
+            Job::Event { kind, x, y, entity } => {
+                let answer =
+                    context.with(|ctx| call_optional(&ctx, "onEvent", (kind, x, y, entity)));
                 if let Err(error) = answer {
                     log::debug!("ferrocad js: onEvent: {error}");
                 }
             }
             Job::DocumentEvent { id, payload } => {
-                let answer = context.with(|ctx| call_optional(&ctx, "onDocumentEvent", (id, payload)));
+                let answer =
+                    context.with(|ctx| call_optional(&ctx, "onDocumentEvent", (id, payload)));
                 if let Err(error) = answer {
                     log::debug!("ferrocad js: onDocumentEvent: {error}");
                 }
+            }
+            Job::ViewState(state, reply) => {
+                let _ =
+                    reply.send(context.with(|ctx| call_optional(&ctx, "onViewState", (state,))));
             }
         }
     }
@@ -388,9 +533,7 @@ fn install(ctx: &rquickjs::Ctx<'_>, path: &Path) -> Result<(), String> {
     // driven until it settles.
     let module = Module::declare(ctx.clone(), name.clone(), source)
         .map_err(|error| describe(ctx, &name, error))?;
-    let (module, settled) = module
-        .eval()
-        .map_err(|error| describe(ctx, &name, error))?;
+    let (module, settled) = module.eval().map_err(|error| describe(ctx, &name, error))?;
     settled
         .finish::<()>()
         .map_err(|error| describe(ctx, &format!("{name} did not settle"), error))?;
@@ -405,9 +548,9 @@ fn install(ctx: &rquickjs::Ctx<'_>, path: &Path) -> Result<(), String> {
 
 /// The page object a module installed.
 fn page<'js>(ctx: &rquickjs::Ctx<'js>) -> Result<Object<'js>, String> {
-    ctx.globals().get::<_, Object>("__ferrocadJs").map_err(|_| {
-        "no __ferrocadJs: no workbench ran install()".to_string()
-    })
+    ctx.globals()
+        .get::<_, Object>("__ferrocadJs")
+        .map_err(|_| "no __ferrocadJs: no workbench ran install()".to_string())
 }
 
 /// Call one of the page's functions and decode its answer.

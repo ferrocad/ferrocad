@@ -14,10 +14,6 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    // Watch the payload dirs unconditionally, so staging or removing them
-    // between builds re-runs this script and flips the cfgs.
-    println!("cargo:rerun-if-changed=python");
-    println!("cargo:rerun-if-changed=mods");
     // Declare the custom cfgs so the lint does not fire when they are unset.
     println!("cargo:rustc-check-cfg=cfg(have_embedded_python)");
     println!("cargo:rustc-check-cfg=cfg(have_embedded_mods)");
@@ -34,8 +30,14 @@ fn main() {
 }
 
 /// Set `cfg` when `dir` exists beside the manifest.
+///
+/// The `rerun-if-changed` line is emitted only for an existing directory: Cargo
+/// treats a watched path that does not exist as permanently dirty, which made
+/// every development build rerun this script (and rebuild `ferrocad` and every
+/// crate above it) even though staging had never created the directory.
 fn emit_if_present(dir: &str, cfg: &str) {
     if std::path::Path::new(dir).is_dir() {
+        println!("cargo:rerun-if-changed={dir}");
         println!("cargo:rustc-cfg={cfg}");
     }
 }

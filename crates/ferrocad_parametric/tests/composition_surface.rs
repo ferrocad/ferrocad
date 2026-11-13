@@ -49,8 +49,8 @@ static BOOT: Once = Once::new();
 /// The edition's interaction provider, registered once (it lives in the interpreter).
 static PROVIDER: Once = Once::new();
 
-/// The document the app script's `bootstrap()` creates.
-const DOCUMENT: &str = "Shell";
+/// The document the app script's `bootstrap()` opens.
+const DOCUMENT: &str = "Sample";
 
 /// A `FeaturePython` object in that document, with a `Length` and an expression.
 const OBJECT: &str = "Params";
@@ -324,7 +324,7 @@ fn the_tree_lists_the_sample_document() {
     assert_eq!(name, DOCUMENT);
     assert!(active, "the booted document is the active one");
     let names: Vec<&str> = objects.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["Params", "Derived", "Group"], "{objects:?}");
+    assert_eq!(names, ["Params", "Derived", "Group", "Box", "Fillet"], "{objects:?}");
     let types: BTreeMap<&str, &str> = objects
         .iter()
         .map(|(name, type_id)| (name.as_str(), type_id.as_str()))
@@ -347,7 +347,7 @@ fn the_tree_lists_every_document_and_switches() {
         tree.iter()
             .map(|(name, active, _)| (name.as_str(), *active))
             .collect::<Vec<_>>(),
-        vec![("Second", true), (DOCUMENT, false)],
+        vec![("Sample", false), ("Second", true)],
         "every document is listed, in name order, and the active one is marked"
     );
 
@@ -360,7 +360,7 @@ fn the_tree_lists_every_document_and_switches() {
             .iter()
             .map(|(name, active, _)| (name.as_str(), *active))
             .collect::<Vec<_>>(),
-        vec![("Second", false), (DOCUMENT, true)],
+        vec![(DOCUMENT, true), ("Second", false)],
         "the switch moved the active mark"
     );
     assert!(

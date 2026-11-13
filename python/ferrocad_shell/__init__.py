@@ -251,39 +251,25 @@ def load_workbench_sources(payload_json: str = "[]") -> str:
     return _json({"loaded": loaded, "errors": errors})
 
 
-def bootstrap(doc_name: str = "Shell") -> str:
-    """Create (or recreate) the sample document and report host status."""
+def bootstrap(doc_name: str = "Sample") -> str:
+    """Open the canonical startup sample and report host status.
+
+    The sample is one checked-in ``Sample.FCStd`` beside this module: the same bytes
+    the browser embeds, so both hosts boot the same document name and object tree.
+    ``doc_name`` is kept for callers that pass it, but the asset names the document.
+    """
     # A dialog token belongs to the document that requested it: opening a fresh
     # document drops any callback still waiting for the old one.
     FreeCADGui._cancel_all()
-    # ``FerroCAD.closeDocument``/``newDocument`` are the lifecycle entry points:
+    # ``FerroCAD.closeDocument``/``openDocument`` are the lifecycle entry points:
     # they fire ``FerroCADGui``'s document-observer slot (deactivated before the
     # closed document disappears, then closed; created/activated for the new
     # one), so a provider detaches its per-document effects immediately. The
     # upstream ``FreeCAD`` functions keep their exact semantics and do not.
-    if FreeCAD.getDocument(doc_name) is not None:
-        FerroCAD.closeDocument(doc_name)
-    doc = FerroCAD.newDocument(doc_name)
-
-    # A small parametric document: two feature objects wired by an expression,
-    # plus a group so the inspector shows some structure.
-    params = doc.addObject("App::FeaturePython", "Params")
-    params.addProperty("App::PropertyLength", "Length", "Base", "Source length")
-    params.addProperty("App::PropertyEnumeration", "Mode", "Base", "Operation mode")
-    params.Mode = ["Fast", "Accurate"]
-    params.Length = FreeCAD.Units.Quantity("10 mm")
-
-    derived = doc.addObject("App::FeaturePython", "Derived")
-    derived.addProperty("App::PropertyLength", "Result", "Base", "Computed result")
-    derived.setExpression("Result", "Params.Length * 2")
-
-    # The sample document is deliberately geometry-free: a shape needs a workbench's
-    # display hook (see `FerroCAD.register_display_provider`), which the edition's app
-    # script registers. The base app keeps its `pivy.coin` sample scene.
-    group = doc.addObject("App::DocumentObjectGroup", "Group")
-    group.addObject(params)
-
-    doc.recompute()
+    sample = pathlib.Path(__file__).with_name("Sample.FCStd")
+    if FreeCAD.getDocument("Sample") is not None:
+        FerroCAD.closeDocument("Sample")
+    doc = FerroCAD.openDocument(str(sample))
 
     _NAMESPACE.clear()
     _NAMESPACE.update({"FreeCAD": FreeCAD, "App": FreeCAD, "doc": doc})
@@ -543,6 +529,11 @@ def properties(object_name: str) -> str:
         }
     ]
     for prop in obj.PropertiesList:
+        # The synthesized row above is the one the editor edits. A restored archive can
+        # also carry `Label` in the property container; listing it twice would put two
+        # rows in the pane.
+        if prop == "Label":
+            continue
         try:
             value = getattr(obj, prop)
         except Exception:
@@ -1147,6 +1138,35 @@ def take_selection_requests() -> str:
             for request in requests
         ]
     )
+
+
+def _seed_setting(payload_json: str) -> str:
+    """Seed one host-store value into ``FreeCAD.ParamGet``.
+
+    The browser's parameter store is memory-only, so a settings file imported into
+    the host store would otherwise be invisible to ``FerroCAD.Grid``/``Axis`` and
+    the provider registry. ``payload`` is ``{"group", "name", "value"}`` with the
+    value in the store's typed form (``{"Bool": true}``, ``{"Float": 1.0}``, …).
+    """
+    payload = json.loads(payload_json)
+    group = str(payload.get("group", ""))
+    name = str(payload.get("name", ""))
+    value = payload.get("value")
+    if not group or not name or not isinstance(value, dict) or len(value) != 1:
+        raise ValueError("a setting seed wants group, name and one typed value")
+    kind, inner = next(iter(value.items()))
+    parameter = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/" + group)
+    if kind == "Bool":
+        parameter.SetBool(name, bool(inner))
+    elif kind == "Int":
+        parameter.SetInt(name, int(inner))
+    elif kind == "Float":
+        parameter.SetFloat(name, float(inner))
+    elif kind == "String":
+        parameter.SetString(name, str(inner))
+    else:
+        raise ValueError("unknown setting kind %r" % (kind,))
+    return "{}"
 
 
 def set_view_state(state_json: str) -> str:
@@ -1784,6 +1804,31 @@ def set_provider(payload_json: str) -> str:
             "error": "; ".join(str(error) for error in errors),
             "status": str(result.get("status") or ""),
             "view": dict(result.get("view") or {}),
+        }
+    )
+
+
+def release_provider(feature: str) -> str:
+    """Deactivate a feature's applied provider without selecting another.
+
+    The composed runtime calls this when a feature changes hands between hosts:
+    the host that was drawing cannot select the incoming backend (it does not
+    list it), so the chain asks it to run its own ``deactivate`` and release the
+    native-layer claim. The persisted choice is untouched, so switching back is
+    lossless. Returns the command-outcome shape, with any callback errors joined
+    under ``error``.
+    """
+    try:
+        released = FerroCADGui.deactivateProvider(str(feature or ""))
+    except Exception as exc:  # noqa: BLE001 - a result, not a crash
+        return _json({"ok": False, "error": str(exc), "status": "", "view": {}})
+    errors = released.get("errors") or []
+    return _json(
+        {
+            "ok": bool(released.get("ok", True)),
+            "error": "; ".join(str(error) for error in errors),
+            "status": str(released.get("status") or ""),
+            "view": dict(released.get("view") or {}),
         }
     )
 

@@ -125,18 +125,21 @@ the active document, and dropping a `.FCStd` on the window opens it.
 | `?runtime=plain\|pywasm\|js` | which script half to install; `?js=1` and `?pywasm=1` are the short forms, `?runtime=` wins when both are present |
 | `?addons=1` | load `www/addons/toy.js` before the module boots: a JS bundle that registers `Toy_Slab`/`Toy_Taller`, creates a `Toy` object through the document API and draws it through the display hook |
 | `?addons=wasm` | the same workbench as a wasm bundle (`www/addons/toy.wasm`, built from `crates/ferrocad_addon_toy`): `loader.js` instantiates it and provides its one import |
-| `?mods=<url>` | the mod-pack index to fetch, resolved against the page (default `mods/index.json`); `?mods=0` disables the fetch. Packs load **after the first frame**, and only when the composition has a Python half |
+| `?mods=<url>` | the mod-pack index to fetch, resolved against the page (default `mods/index.json`); `?mods=0` disables the fetch. Python packs load **after the first frame** when the composition has a Python half; JS workbenches are imported before the module boots when it has a JS half |
 
 ## Mods
 
 The desktop scans `mods/`; the browser has no filesystem, so it fetches. `tools/mods_pack.py`
-turns each workbench into `www/mods/<Name>.json` plus `www/mods/index.json` (both
-generated and ignored — `run.sh` and `smoke.sh` run the packer). After the window's
-first frame `ferrocad_web_gpui` fetches the index, then each pack in index order, and
-hands the pack document to `load_workbench_pack` on the script half — the same loader
-rule a scanned tree uses (`Init.py` then `InitGui.py`; a script that raises is recorded,
-not fatal). The status line shows `Loading mods 3/7 · Fasteners` and then a summary;
-the About card (`Settings/About`) lists what loaded and what did not.
+turns each Python workbench into `www/mods/<Name>.json`, copies each JS workbench's
+`InitGui.js` to `www/mods/<Name>.js`, and writes `www/mods/index.json` (all generated and
+ignored — `run.sh` and `smoke.sh` run the packer). The page imports the `js` list of
+that index before the module boots, so a JS workbench's commands are part of the first
+`commands()` read. After the window's first frame `ferrocad_web_gpui` fetches the same
+index, then each Python pack in index order, and hands the pack document to
+`load_workbench_pack` on the script half — the same loader rule a scanned tree uses
+(`Init.py` then `InitGui.py`; a script that raises is recorded, not fatal). The status
+line shows `Loading mods 3/7 · Fasteners` and then a summary; the About card
+(`Settings/About`) lists what loaded and what did not.
 
 Delivery and capability are separate. A pack the current facade cannot run (the
 Coin/shader skins read a resource file and need the overlay bridge; a task panel needs
@@ -325,6 +328,12 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   while `registry` is what Dev Tools lists, one provider per feature, and it is the
   provider that actually draws the grid and the axis cross. `?runtime=pywasm,js` composes
   the chain, with both halves installed.
+- **The Coin grid and axis are WGSL, not GLSL.** `GridOverlayCoin` and
+  `AxisOverlayCoin` build `SoShaderProgram` trees; the browser's `pivy.coin` extracts
+  them and wgpu translates the WGSL for the WebGL2 backend. The grid's edge-on fade
+  guards a degenerate centre ray (the page can hand a program frame before the camera
+  is set), so a NaN cannot discard the overlay. `tools/ui_shots.py` applies the user's
+  stored Coin `grid`/`axis` providers, so the Web and Desktop tabs capture the same grid.
 - **The document announces its edits to the script half.** The same capture shows the
   host's `document.edited`/`document.recomputed` events arriving in the page, once per
   edit and with the object it wrote:

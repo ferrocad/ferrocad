@@ -207,6 +207,35 @@ This path requires a `pivy.coin` facade that provides `addOverlay` and
 draws regardless of the `grid_overlay` view flag; that flag only hides the native
 ground. `mods/GridOverlayCoin` is the complete example.
 
+### JS workbenches: `window.ferrocad.overlay`
+
+A JS workbench has no `pivy.coin`, so the page describes the overlay as JSON. The
+host (`ferrocad_shell_js`) extracts the description into the same
+`ferrocad_inventor::Scene` a Coin mod registers, which means the viewport's pull
+bridge, program pipeline, depth state and picking rules are identical.
+
+```js
+window.ferrocad.overlay(JSON.stringify({
+  name: "axis-overlay-js",          // stable id: re-registering replaces it
+  visible: true,                     // false removes it
+  shader: WGSL,                      // the whole module, or vertex/fragment
+  parameters: {                      // the fixed program ABI, by name
+    grid_color: [0.72, 0.30, 0.30],  // vec3: three numbers
+    axis_length: 80.0,               // float: one number
+  },
+  points: [[-1e-6, -1e-6, 0], [1e-6, -1e-6, 0],
+           [1e-6, 1e-6, 0], [-1e-6, 1e-6, 0]],  // optional placeholder quad
+}));
+```
+
+The host validates the program with the same compiler a Coin overlay uses, so an
+unknown parameter name is reported to the page instead of silently drawing nothing.
+`window.ferrocad.view({"axis": {"overlay": true}})` is the native-hide claim the
+Coin axis backend makes; `window.ferrocad.dialog(spec)` opens the same declarative
+dialog a Python command returns. All three ride on the next command outcome, so the
+shell's existing refresh/apply paths do the work. `mods/AxisOverlayJs` is the
+complete example.
+
 ## Next
 
 - [`providers.md`](providers.md) — the feature-provider registry, which is

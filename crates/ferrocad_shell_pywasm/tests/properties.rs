@@ -58,16 +58,17 @@ fn the_box_reports_the_properties_the_pane_shows() {
     names.sort();
     assert_eq!(
         names,
-        ["Height", "Label", "Length", "Placement", "Width"],
+        ["Height", "Label", "Length", "Placement", "Shape", "Width"],
         "the sample box's rows (Label first, as the editor shows it)"
     );
 }
 
 #[test]
-fn a_quantity_is_a_quantity_and_a_float_is_a_float() {
+fn the_value_decides_the_editor_kind() {
     let box_rows = property_rows("Box");
     // D4/D5: the kind comes from the *value*. A length carries a unit, so it is a
-    // quantity; the fillet's radius is a bare float. Neither is decided in Python.
+    // quantity; the fillet's radius is the same `App::PropertyLength` the feature
+    // declares, not a bare float. Neither is decided in Python.
     let length = row(&box_rows, "Length");
     assert_eq!(length["type"], "App::PropertyLength");
     assert_eq!(length["kind"], "quantity");
@@ -76,9 +77,17 @@ fn a_quantity_is_a_quantity_and_a_float_is_a_float() {
 
     let fillet_rows = property_rows("Fillet");
     let radius = row(&fillet_rows, "Radius");
-    assert_eq!(radius["type"], "App::PropertyFloat");
-    assert_eq!(radius["kind"], "float");
-    assert_eq!(radius["value"], "3.0");
+    assert_eq!(radius["type"], "App::PropertyLength");
+    assert_eq!(radius["kind"], "quantity");
+    assert_eq!(radius["value"], "3 mm");
+
+    // An enumeration is still an enumeration: the select box reads its choices.
+    let params_rows = property_rows("Params");
+    let mode = row(&params_rows, "Mode");
+    assert_eq!(mode["type"], "App::PropertyEnumeration");
+    assert_eq!(mode["kind"], "enum");
+    assert_eq!(mode["value"], "Fast");
+    assert_eq!(mode["choices"], serde_json::json!(["Fast", "Accurate"]));
 }
 
 #[test]

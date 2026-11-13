@@ -284,8 +284,10 @@ jobs:
         # QuickJS; `ThreadedScriptHost` is the same `ScriptHost` the browser's
         # wasm-Python half is, on the 16 MiB worker its compiler needs; and
         # `ferrocad_shell_wasm` hosts the same `addon.wasm` bundle the page loads,
-        # sandboxed by `wasmi` with a fuel budget. All three features are off by default,
-        # so no other build compiles an engine.
+        # sandboxed by `wasmi` with a fuel budget. Those features stay off by default
+        # **in these crates**, so a crate-level build compiles no engine; the editions
+        # turn `js` on (`ferrocad_parametric`/`ferrocad_toy` default to it), which is
+        # why the line below names it explicitly rather than relying on that default.
         run: |
           cargo test -p ferrocad_shell_js --features desktop
           cargo test -p ferrocad_shell_wasm

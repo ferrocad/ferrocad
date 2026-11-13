@@ -2,20 +2,23 @@
 """Capture short animated GIFs of the desktop shell's pointer interactions.
 
 The still figures in :mod:`ui_shots` show a control at rest. These GIFs show the
-gesture: a tool switch, a Body/Face/Edge pick, an action-bar Create Box, a pending
-Move and rollback, a Push/Pull drag, a Fillet scrub and a wheel flick. They run the
-Parametric app in a private Xephyr server,
-synthesise the pointer with XTEST, capture the window with ``xwd`` between
-events, and draw a synthetic cursor and a caption on each frame.
+gesture: a tool switch, a Body/Face/Edge pick, an action-bar Create Box, a Move, a
+pending Move and rollback, a Push/Pull drag, a Fillet scrub and a wheel flick. They
+run the Parametric app in a private Xephyr server, synthesise the pointer with XTEST,
+capture the window with ``xwd`` between events, and draw a synthetic cursor and a
+caption on each frame.
 
-The browser host cannot supply these yet: it has no Part Push/Pull or Fillet
-manipulator, and its query harness takes a final screenshot rather than a frame
-sequence. See ``docs/developer/workbenches/screenshot-tool.md``.
+A Web GIF is driven through the Chrome DevTools Protocol instead: one headless page
+stays alive, the capture dispatches the same ``PointerEvent``s the page's own harness
+uses, and it asks for a PNG between moves. Currently the shared Move gesture is the
+Web section (``move-web``); the browser still lacks the Part push/pull and fillet
+manipulators those other GIFs show. See ``docs/developer/workbenches/screenshot-tool.md``.
 
 Usage::
 
     python3 tools/ui_gifs.py                       # every GIF
     python3 tools/ui_gifs.py --section pushpull fillet
+    python3 tools/ui_gifs.py --section move move-web
     python3 tools/ui_gifs.py --section tools --keep-frames
     python3 tools/ui_gifs.py --out-dir docs/user/images
 
@@ -27,6 +30,8 @@ they are not pinned by ``userdocs.py --check``.
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 import os
 import shutil
 import subprocess
@@ -45,6 +50,7 @@ DEFAULT_SCREEN = (1800, 1200)
 
 #: One entry per GIF.
 #:
+#: * ``source`` is ``"web"`` for a CDP-driven browser capture (default: Xephyr).
 #: * ``crop`` is the region of the 1600×1000 window to keep.
 #: * ``scale`` resizes the crop (the Fillet close-up is enlarged 2×).
 #: * ``fps`` is the default frame duration.
@@ -103,6 +109,33 @@ GIFS = {
             {"drag": [(845, 524), (860, 533), (875, 542)]},
             {"caption": "Pending: ✓ commits, Esc rolls back", "release": (875, 542), "wait": 0.7, "duration": 1.2},
             {"caption": "Esc rolls back", "key": "Escape", "wait": 0.7, "duration": 1.4},
+        ],
+    },
+    "move": {
+        "crop": (430, 140, 940, 780),
+        "scale": 0.65,
+        "fps": 6,
+        "steps": [
+            {"caption": "Move · select the filleted body", "click": (900, 450), "wait": 0.7, "duration": 0.9},
+            {"caption": "Grab the X arrow", "move": (830, 515), "wait": 0.3, "duration": 0.5},
+            {"press": (830, 515), "duration": 0.3},
+            {"drag": [(845, 524), (860, 533), (875, 542)]},
+            {"caption": "Release leaves it pending", "release": (875, 542), "wait": 0.7, "duration": 1.0},
+            {"caption": "Click ✓ to accept", "click": (836, 557), "wait": 0.8, "duration": 1.4},
+        ],
+    },
+    "move-web": {
+        "source": "web",
+        "crop": (120, 60, 1080, 900),
+        "scale": 0.6,
+        "fps": 6,
+        "steps": [
+            {"caption": "Move · select the filleted body", "click": (745, 410), "wait": 0.8, "duration": 0.9},
+            {"caption": "Grab the X arrow", "move": (640, 452), "wait": 0.3, "duration": 0.5},
+            {"press": (640, 452), "duration": 0.3},
+            {"drag": [(655, 460), (670, 468), (685, 476), (690, 482)]},
+            {"caption": "Release leaves it pending", "release": (690, 482), "wait": 0.7, "duration": 1.0},
+            {"caption": "Click ✓ to accept", "click": (627, 481), "wait": 0.8, "duration": 1.4},
         ],
     },
     "pushpull": {
@@ -292,6 +325,222 @@ def _save(frames: list, durations: list[int], out: Path) -> None:
     )
 
 
+def _web_pointer(action: str, x: int, y: int, buttons: int) -> str:
+    """A PointerEvent on the page's canvas, the way the harness dispatches it."""
+    return (
+        "(() => { const c = document.querySelector('canvas'); if (!c) return false; "
+        "c.dispatchEvent(new PointerEvent('%s', { pointerId: 1, pointerType: 'mouse', "
+        "isPrimary: true, clientX: %d, clientY: %d, buttons: %d, "
+        "bubbles: true, cancelable: true })); return true; })()"
+        % (action, x, y, buttons)
+    )
+
+
+def capture_web(section: str, spec: dict, args, settings: Path) -> Path:
+    """Record a Web gesture by driving the page through the Chrome DevTools Protocol.
+
+    The still capture can use Chrome's one-shot `--screenshot`; a GIF needs frames
+    between pointer moves, so this keeps one headless page alive and asks it for a
+    PNG after each synthetic `PointerEvent`. The page's own harness dispatches the
+    same events on its canvas (see `www/index.html`), so this is the browser's real
+    input path, not a reimplementation of the shell.
+    """
+    try:
+        import requests
+        import websocket
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "Web GIFs need `requests` and `websocket-client` "
+            "(`pip install requests websocket-client`)"
+        ) from exc
+
+    web_dir = Path(args.web_dir)
+    if not (web_dir / "pkg").is_dir():
+        raise RuntimeError(
+            f"{web_dir}/pkg is missing; build it with "
+            "`crates/ferrocad_web_gpui/run.sh --build-only`"
+        )
+    chrome = stills._find_chrome(args.chrome)
+    port = stills._free_port()
+    served = web_dir / f"capture-gif-settings-{port}.json"
+    shutil.copyfile(settings, served)
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "http.server",
+            str(port),
+            "--bind",
+            "127.0.0.1",
+            "--directory",
+            str(web_dir),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    stills._wait_for_port(port)
+
+    debug = stills._free_port()
+    profile = tempfile.TemporaryDirectory(prefix="ferrocad-gif-chrome-")
+    query = spec.get("query", "runtime=pywasm,js").lstrip("?")
+    url = f"http://127.0.0.1:{port}/?{query}&settings_file={served.name}"
+    chrome_proc = subprocess.Popen(
+        [
+            chrome,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--use-angle=swiftshader",
+            "--enable-unsafe-swiftshader",
+            "--window-size=1600,1000",
+            f"--remote-debugging-port={debug}",
+            f"--user-data-dir={profile.name}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--no-proxy-server",
+            "about:blank",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    stills._wait_for_port(debug)
+
+    ws = None
+    try:
+        target = None
+        for _ in range(100):
+            for item in requests.get(
+                f"http://127.0.0.1:{debug}/json", timeout=2
+            ).json():
+                if item.get("type") == "page":
+                    target = item
+                    break
+            if target:
+                break
+            time.sleep(0.1)
+        if target is None:
+            raise RuntimeError("headless Chrome exposed no page target")
+        ws = websocket.create_connection(
+            target["webSocketDebuggerUrl"], timeout=30, suppress_origin=True
+        )
+        sequence = 0
+
+        def cdp(method: str, **params):
+            nonlocal sequence
+            sequence += 1
+            ws.send(json.dumps({"id": sequence, "method": method, "params": params}))
+            while True:
+                message = json.loads(ws.recv())
+                if message.get("id") == sequence:
+                    if "error" in message:
+                        raise RuntimeError(message["error"])
+                    return message.get("result", {})
+
+        def evaluate(expression: str):
+            answer = cdp(
+                "Runtime.evaluate",
+                expression=expression,
+                returnByValue=True,
+                awaitPromise=True,
+            )
+            return answer.get("result", {}).get("value")
+
+        cdp("Page.enable")
+        cdp("Runtime.enable")
+        cdp("Page.navigate", url=url)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            if evaluate("!!document.querySelector('canvas')"):
+                break
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("the Web shell never drew its canvas")
+        time.sleep(2.0)
+
+        frames: list = []
+        durations: list[int] = []
+        pointer: tuple[int, int] | None = None
+        pressed = False
+        caption: str | None = None
+        default = int(1000 / spec.get("fps", 6))
+
+        with tempfile.TemporaryDirectory(prefix="ferrocad-gif-web-") as tmp:
+            tmp_path = Path(tmp)
+            frame_dir = Path(args.frames_dir) / section if args.keep_frames else None
+            if frame_dir:
+                frame_dir.mkdir(parents=True, exist_ok=True)
+
+            def snap(hold: float | None = None) -> None:
+                raw = tmp_path / f"frame-{len(frames):03d}.png"
+                data = cdp("Page.captureScreenshot", format="png")["data"]
+                raw.write_bytes(base64.b64decode(data))
+                image = _render(raw, spec, pointer, pressed, caption)
+                frames.append(image)
+                durations.append(int(hold * 1000) if hold else default)
+                if frame_dir:
+                    image.save(frame_dir / f"{len(frames) - 1:03d}.png")
+
+            if spec.get("intro", True):
+                snap(hold=0.8)
+            for step in spec["steps"]:
+                if step.get("caption"):
+                    caption = step["caption"]
+                if "click" in step:
+                    x, y = step["click"]
+                    pointer = (x, y)
+                    evaluate(_web_pointer("pointerdown", x, y, 1))
+                    evaluate(_web_pointer("pointerup", x, y, 0))
+                    time.sleep(step.get("wait", 0.5))
+                elif "move" in step:
+                    x, y = step["move"]
+                    pointer = (x, y)
+                    evaluate(_web_pointer("pointermove", x, y, 0))
+                    time.sleep(step.get("wait", 0.3))
+                elif "press" in step:
+                    x, y = step["press"]
+                    pointer = (x, y)
+                    evaluate(_web_pointer("pointerdown", x, y, 1))
+                    pressed = True
+                    time.sleep(step.get("wait", 0.2))
+                elif "drag" in step:
+                    for x, y in step["drag"]:
+                        pointer = (x, y)
+                        evaluate(_web_pointer("pointermove", x, y, 1))
+                        time.sleep(0.15)
+                        snap(hold=0.12)
+                    continue
+                elif "release" in step:
+                    x, y = step["release"]
+                    pointer = (x, y)
+                    evaluate(_web_pointer("pointerup", x, y, 0))
+                    pressed = False
+                    time.sleep(step.get("wait", 0.8))
+                elif "wait" in step:
+                    time.sleep(step["wait"])
+                else:
+                    raise RuntimeError(f"unknown Web step {step!r}")
+                snap(hold=step.get("duration"))
+
+        out = Path(args.out_dir) / f"ui-{section}.gif"
+        _save(frames, durations, out)
+        return out
+    finally:
+        if ws is not None:
+            ws.close()
+        chrome_proc.terminate()
+        try:
+            chrome_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            chrome_proc.kill()
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+        served.unlink(missing_ok=True)
+        profile.cleanup()
+
+
 def capture(section: str, spec: dict, args, display: str, settings: Path) -> Path:
     from Xlib import X
 
@@ -426,6 +675,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--screen", type=int, nargs=2, default=DEFAULT_SCREEN)
     parser.add_argument("--xephyr", default="Xephyr")
     parser.add_argument("--parent-display", default=os.environ.get("DISPLAY"))
+    parser.add_argument("--chrome", default="", help="the Chrome/Chromium executable")
+    parser.add_argument(
+        "--web-dir",
+        default=str(stills.WEB_DIR),
+        help="the built browser shell directory",
+    )
     parser.add_argument("--wait", type=float, default=20.0)
     parser.add_argument(
         "--settings",
@@ -462,6 +717,22 @@ def main(argv: list[str]) -> int:
         return 1
 
     sections = list(GIFS) if "all" in args.section else args.section
+    desktop_sections = [section for section in sections if GIFS[section].get("source") != "web"]
+    web_sections = [section for section in sections if GIFS[section].get("source") == "web"]
+    if desktop_sections:
+        if not args.parent_display:
+            print("error: no parent X display; set DISPLAY", file=sys.stderr)
+            return 1
+        if not Path(args.app_bin).is_file():
+            print(
+                f"error: {args.app_bin} is not built; run `cargo build -p "
+                "ferrocad_parametric`",
+                file=sys.stderr,
+            )
+            return 1
+        if shutil.which(args.xephyr) is None:
+            print(f"error: {args.xephyr} is not on PATH", file=sys.stderr)
+            return 1
     try:
         settings, settings_workspace = stills.resolve_capture_settings(
             args.settings or None
@@ -469,17 +740,25 @@ def main(argv: list[str]) -> int:
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    display, xephyr = stills._start_xephyr(args.parent_display, args.screen, args.xephyr)
+    display = xephyr = None
     try:
-        for section in sections:
-            out = capture(section, GIFS[section], args, display, settings)
+        if desktop_sections:
+            display, xephyr = stills._start_xephyr(
+                args.parent_display, args.screen, args.xephyr
+            )
+            for section in desktop_sections:
+                out = capture(section, GIFS[section], args, display, settings)
+                print(f"wrote {out}")
+        for section in web_sections:
+            out = capture_web(section, GIFS[section], args, settings)
             print(f"wrote {out}")
     finally:
-        xephyr.terminate()
-        try:
-            xephyr.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            xephyr.kill()
+        if xephyr is not None:
+            xephyr.terminate()
+            try:
+                xephyr.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                xephyr.kill()
         if settings_workspace is not None:
             settings_workspace.cleanup()
     return 0

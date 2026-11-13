@@ -86,9 +86,10 @@ fn js_is_the_composition_with_the_page_behind_it() {
 /// A half this build cannot install does not take the ones it can with it.
 ///
 /// The regression: `mods/` declares javascript (one package ships an `InitGui.js`), the
-/// default edition has no `js` feature, and composing `cpython,js` returned `Err` — so
-/// `cargo run -p ferrocad_parametric` installed the document half alone. No workbench
+/// edition was built without the `js` feature, and composing `cpython,js` returned `Err` —
+/// so `cargo run -p ferrocad_parametric` installed the document half alone. No workbench
 /// loaded, and the header's grid popover listed only the document half's provider.
+/// (`js` is a default feature now; this stays as the guard on the skip rule.)
 #[cfg(not(feature = "js"))]
 #[test]
 fn a_half_this_build_lacks_does_not_discard_the_ones_it_has() {

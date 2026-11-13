@@ -841,6 +841,10 @@ impl Shell {
     /// event.
     pub fn refresh_after_mods(&mut self, cx: &mut Context<Self>) {
         self.refresh_commands(cx);
+        // A pack fetched after the first frame registers its providers *after*
+        // `enable_viewport` ran `bootstrap_providers`, so a persisted Coin grid would
+        // be selected but never claim `grid_overlay`. Deliver the claims now.
+        self.bootstrap_providers(cx);
         cx.notify();
     }
 

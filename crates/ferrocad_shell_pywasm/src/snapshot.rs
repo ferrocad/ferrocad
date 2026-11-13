@@ -2,14 +2,18 @@
 //!
 //! The presenter is [`ferrocad_doc_api::payload`] — the same one a JS addon gets over
 //! the JSON API — so the console, the property pane and an addon cannot drift.
-//! This module adds only what is specific to the wasm-Python half: the geometry-free
-//! sample a host with no document registry boots with.
+//! This module adds only what is specific to the wasm-Python half: the sample a host
+//! with no document registry boots with.
 //!
-//! The sample is built here, not through the kernel: `recompute` would need a
-//! registered Part backend, and none of its rows comes from one. That is the half's
-//! one documented shortcut, and it is why the crate has no `ferrocad_part`.
+//! That sample is the one checked-in `python/ferrocad_shell/Sample.FCStd`, embedded
+//! here and in `ferrocad_shell_rust`: the desktop's Python `bootstrap()` opens the
+//! same bytes from disk, so both hosts boot one document name, object tree and shape
+//! rather than two recipes that can drift.
 
-use ferrocad_core::{Document, Placement as DocPlacement, Property, Quantity, Rotation, Vector3};
+use std::sync::Arc;
+
+use ferrocad_core::Document;
+use ferrocad_occt::OcctBackend;
 
 /// The active document in `ferrocad_core`'s registry, as JSON (`null` when none).
 ///
@@ -17,62 +21,25 @@ use ferrocad_core::{Document, Placement as DocPlacement, Property, Quantity, Rot
 /// `RustAppBackend` keeps, so a callback walking the other way cannot deadlock.
 pub use ferrocad_doc_api::payload::active_json as active;
 
-/// The edge the sample's fillet is applied to (the browser's `EDGE`).
-pub const EDGE: &str = "Edge1";
-
-/// The sample's fillet radius, in millimetres (the browser's `RADIUS`).
-pub const RADIUS: f64 = 3.0;
-
 /// The sample document's name.
 pub const DOCUMENT: &str = "Sample";
 
-/// Build the sample's objects and properties with no kernel call.
+/// The one startup document both hosts boot.
+const SAMPLE_FCSTD: &[u8] = include_bytes!("../../../python/ferrocad_shell/Sample.FCStd");
+
+/// Load the canonical sample with the linked kernel.
 ///
-/// `recompute` is deliberately **not** called: it needs a registered Part backend
-/// (OCCT), and none of the property rows comes from it. That is the one documented
-/// shortcut, and it is why the document can be built here at all.
-pub fn sample() -> Document {
-    let mut document = Document::new();
-
-    let base = document.add_object("Box", "Part::Box");
-    document
-        .set_property(base, "Length", Property::Quantity(mm(10.0)))
-        .expect("Length on a fresh box");
-    document
-        .set_property(base, "Width", Property::Quantity(mm(10.0)))
-        .expect("Width on a fresh box");
-    document
-        .set_property(base, "Height", Property::Quantity(mm(10.0)))
-        .expect("Height on a fresh box");
-    document
-        .set_property(
-            base,
-            "Placement",
-            Property::Placement(DocPlacement::new(
-                Vector3::new(-5.0, -5.0, -5.0),
-                Rotation::identity(),
-            )),
-        )
-        .expect("Placement on a fresh box");
-
-    let fillet = document.add_object("Fillet", "Part::Fillet");
-    document
-        .set_property(
-            fillet,
-            "Base",
-            Property::LinkSub("Box".to_string(), vec![EDGE.to_string()]),
-        )
-        .expect("Base on a fresh fillet");
-    document
-        .set_property(fillet, "Radius", Property::Float(RADIUS))
-        .expect("Radius on a fresh fillet");
-
-    document
-}
-
-/// A millimetre-valued quantity.
-fn mm(value: f64) -> Quantity {
-    Quantity::parse(&format!("{value} mm")).expect("a millimetre quantity")
+/// Part is registered before the archive is decoded: `decode_fcstd` restores the
+/// `Part::PropertyPartShape` payload through the property-type registry, and
+/// `recompute` rebuilds the fillet from its `Base`/`Edge1` link. Registration is
+/// idempotent, so a host that already registered its backend keeps it.
+pub fn sample() -> Result<Document, String> {
+    ferrocad_part::register(Arc::new(OcctBackend::new()));
+    let saved =
+        ferrocad_core::fcstd::decode_fcstd(SAMPLE_FCSTD).map_err(|error| error.to_string())?;
+    let mut document = Document::from_saved(&saved);
+    document.recompute()?;
+    Ok(document)
 }
 
 /// [`sample`] under its own name, as the facade's `FreeCAD.ActiveDocument`.

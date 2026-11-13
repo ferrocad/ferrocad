@@ -589,10 +589,12 @@ mod tests {
                     .flat_map(|document| &document.objects)
                     .map(|object| object.label.as_str())
                     .collect();
-                assert!(
-                    objects.contains(&"Fillet"),
-                    "the sample's objects: {objects:?}"
-                );
+                for name in ["Params", "Derived", "Group", "Box", "Fillet"] {
+                    assert!(
+                        objects.contains(&name),
+                        "the sample's objects: {objects:?}"
+                    );
+                }
 
                 // ... and the console reads the same one, through the seeded namespace.
                 let console = composed

@@ -169,7 +169,9 @@ def run(cap):
         )
 
     with cap.step("Close the document"):
-        cap.exec("FreeCAD.closeDocument('Toy')")
+        # The base bootstrap opens the canonical `Sample`; `doc_name` is kept for
+        # callers, but the asset names the document.
+        cap.exec("FreeCAD.closeDocument(FreeCAD.ActiveDocument.Name)")
         cap.result("Open documents", sorted(FreeCAD.listDocuments()))
 
 

@@ -46,16 +46,17 @@ cmp mods/GridOverlayCoin/Resources/grid_overlay.wgsl \
   yet, so the flag is omitted and the program pipeline blends regardless) →
   `SoShaderProgram` → the four-corner `SoCoordinate3` + `SoFaceSet` placeholder.
   There is no per-frame Python work: the grid is a fragment shader over one quad.
-- The **six knobs** and defaults: `enabled=True`, `opacity=0.65`,
+- The **six upstream knobs** and defaults: `enabled=True`, `opacity=0.65`,
   `color="#808080"`, `base_spacing=1.0`, `shadow_enabled=True`,
-  `shadow_opacity=0.30`.
+  `shadow_opacity=0.30`. One Coin-only knob is added: `grid_axes=True`, the
+  in-plane X/Y line switch below.
 - The **command intent**: one discoverable command, no workbench activation.
   The id is `GridOverlayCoin_Settings` and the menu text is
   `Grid Overlay (Coin)`.
 - The **parameter names/types** of the fixed ABI: `grid_color` (vec3),
   `base_spacing`, `minor_alpha`, `major_alpha`, `shadow_opacity`,
-  `shadow_count`, and the optional `shadow_data` float array. The compiler maps
-  them by name; an unknown name fails extraction loudly.
+  `shadow_count`, `grid_axes`, and the optional `shadow_data` float array. The
+  compiler maps them by name; an unknown name fails extraction loudly.
 - **Per-document intent**: one grid per open document, attached on
   create/activate and dropped on delete. Only the active document's grid is
   registered with the single viewport, so two documents do not draw two
@@ -81,7 +82,7 @@ cmp mods/GridOverlayCoin/Resources/grid_overlay.wgsl \
    `program.shaderObject.set1Value`, rebuilding the separator, and removing and
    re-adding the same root. The command/dialog callback then returns
    `{"view": {"grid_overlay": ...}}` to make the shell pull it in.
-5. **No Qt.** The dialog is the shell's declarative six-field spec, not a
+5. **No Qt.** The dialog is the shell's declarative field spec, not a
    `QDialog`; `QSettings` becomes `FreeCAD.ParamGet` (file-backed by the host), and
    `getMainWindow`/toolbars are gone. `FreeCAD.addDocumentObserver` replaces the
    absent `FreeCADGui.addDocumentObserver`.
@@ -95,11 +96,16 @@ cmp mods/GridOverlayCoin/Resources/grid_overlay.wgsl \
    draws.
 8. **A1 look, not the native look.** This is a fixture and deliberately keeps
    the add-on's `MIN_PX = 8.0` line shader. Do not treat it as the product grid.
+9. **Optional in-plane axes.** `grid_axes` (packed into `Program.counts.y`, `1`
+   by default) hides the two X/Y axis lines the shader draws. The native ground
+   has no such lines, so only this backend advertises the row in
+   `Settings/Grid`; turn it off when an axis-cross overlay is the only axis
+   readout.
 
 ## Running it
 
 The mod is picked up by the shell's workbench loader like any other `mods/`
-entry. In the app, `GridOverlayCoin_Settings` opens the six-field dialog; Apply
+entry. In the app, `GridOverlayCoin_Settings` opens the dialog; Apply
 rebuilds and re-registers the overlay and asks the shell for
 `grid_overlay`. Everything headless is covered by
 `tests/test_grid_overlay_coin.py` with a stubbed `pivy.coin`; drawing itself

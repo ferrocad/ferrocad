@@ -44,15 +44,13 @@ highlighted window view and a close-up:
 | --- | --- | --- | --- | --- |
 | **Move** | 1 | translates the selection with the triad and its coordinate row | desktop + browser | [Move](ui-move.md) |
 | **Rotate** | 1 (toggle) | rotates the body with the rings and the angle row | desktop + browser | [Rotate](ui-rotate.md) |
-| **Extrude** | 2 Push/Pull | extrudes a face outward, or pockets it inward, along its normal | desktop + browser (slot only) | [Extrude](ui-extrude.md) |
-| **Fillet** | 3 Fillet | rounds or bevels an edge with the edge scrubber | desktop + browser (slot only) | [Fillet](ui-fillet.md) |
+| **Extrude** | 2 Push/Pull | extrudes a face outward, or pockets it inward, along its normal | desktop + browser | [Extrude](ui-extrude.md) |
+| **Fillet** | 3 Fillet | rounds or bevels an edge with the edge scrubber | desktop + browser | [Fillet](ui-fillet.md) |
 
 Each tool page has a **Desktop / Web** tab pair. The desktop tab is the Parametric
-edition, where the transform gizmo and the Part manipulators are drawn. The browser tab
-is the same shell UI on WebGL2: it draws the transform row, and it arms the Push/Pull and
-Fillet slots, but it does not yet contribute the Part face and edge manipulators. That
-gap is recorded in the
-[browser host's limits](../../../crates/ferrocad_web_gpui/README.md#what-it-does-not-have-yet).
+edition; the browser tab is the same shell UI on WebGL2, with the same transform gizmo
+and Part manipulators over the wasm kernel. Only the window and the sample geometry
+differ.
 
 ## Pick scope in motion
 

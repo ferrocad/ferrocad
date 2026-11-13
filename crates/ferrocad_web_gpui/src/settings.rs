@@ -115,4 +115,34 @@ impl SettingsBackend for WebSettings {
         names.dedup();
         names
     }
+
+    fn groups(&self) -> Vec<String> {
+        let mut groups = self.fallback.groups();
+        if let Some(storage) = Self::storage() {
+            let length = Reflect::get(&storage, &JsValue::from_str("length"))
+                .ok()
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0) as u32;
+            let key = Reflect::get(&storage, &JsValue::from_str("key"))
+                .ok()
+                .and_then(|function| function.dyn_into::<Function>().ok());
+            if let Some(key) = key {
+                for index in 0..length {
+                    let name = key
+                        .call1(&storage, &JsValue::from_f64(index as f64))
+                        .ok()
+                        .and_then(|value| value.as_string());
+                    if let Some(group) = name
+                        .as_deref()
+                        .and_then(|name| name.strip_prefix("ferrocad.settings."))
+                    {
+                        groups.push(group.to_string());
+                    }
+                }
+            }
+        }
+        groups.sort();
+        groups.dedup();
+        groups
+    }
 }

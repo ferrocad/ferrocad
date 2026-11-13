@@ -445,6 +445,7 @@ fn apply_parameter(
             "major_alpha" => parameters.major_alpha = *value,
             "shadow_opacity" => parameters.shadow_opacity = *value,
             "shadow_count" => parameters.shadow_count = *value,
+            "grid_axes" => parameters.grid_axes = *value,
             "axis_length" => parameters.axis_length = *value,
             "axis_width" => parameters.axis_width = *value,
             "axis_opacity" => parameters.axis_opacity = *value,
@@ -1450,6 +1451,32 @@ mod tests {
             compile_with_base(&scene, &Viewport::default(), None).unwrap_err(),
             ShaderError::DuplicateParameter("minor_alpha".to_owned())
         );
+    }
+
+    #[test]
+    fn the_grid_axes_switch_maps_onto_the_program_prefix() {
+        let scene = Scene {
+            root: separator(vec![
+                coords(),
+                program_node(vec![
+                    stage_node(ShaderStageKind::Vertex, Some(WGSL), vec![]),
+                    stage_node(
+                        ShaderStageKind::Fragment,
+                        Some(""),
+                        vec![float_parameter("grid_axes", 0.0)],
+                    ),
+                ]),
+                mesh(),
+            ]),
+        };
+        let (queue, _) = compile(&scene);
+        let parameters = queue.packets[0]
+            .state
+            .program
+            .as_ref()
+            .expect("the mesh carries the program")
+            .parameters();
+        assert_eq!(parameters.grid_axes, 0.0, "the shader reads counts.y");
     }
 
     #[test]

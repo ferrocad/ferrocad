@@ -77,17 +77,17 @@ fn the_part_fillet_manipulator_drives_the_document() {
     let meshes = python::stage_meshes().expect("stage meshes");
     let box_mesh = meshes
         .iter()
-        .find(|mesh| mesh.object == "Box")
-        .expect("the seeded Box is displayed");
+        .find(|mesh| mesh.object == "Fillet")
+        .expect("the seeded Fillet is displayed");
     let entity = box_mesh.entity;
     assert!(
         box_mesh.parts.iter().any(|part| part == "Edge1"),
-        "the kernel names the box's edges"
+        "the kernel names the fillet's edges"
     );
 
     let mut display = DisplaySync::new();
     let stage = display.build(meshes);
-    assert_eq!(display.object_of(entity), Some("Box"));
+    assert_eq!(display.object_of(entity), Some("Fillet"));
 
     // The edition's factory, on an edge selection (the rule Part uses).
     let mut scrubber = dress_up_scrubber_for(
@@ -129,16 +129,16 @@ fn the_part_fillet_manipulator_drives_the_document() {
     let meshes = python::stage_meshes().expect("stage meshes");
     let objects: Vec<&str> = meshes.iter().map(|mesh| mesh.object.as_str()).collect();
     assert!(
-        objects.contains(&"Box_Fillet"),
+        objects.contains(&"Fillet_Fillet"),
         "the fillet is displayed: {objects:?}"
     );
     assert!(
-        !objects.contains(&"Box"),
+        !objects.contains(&"Fillet"),
         "the base is replaced by the feature: {objects:?}"
     );
     let feature = meshes
         .iter()
-        .find(|mesh| mesh.object == "Box_Fillet")
+        .find(|mesh| mesh.object == "Fillet_Fillet")
         .expect("the fillet mesh");
     let faces = feature
         .parts
@@ -160,20 +160,20 @@ fn the_part_fillet_manipulator_drives_the_document() {
 /// simply absent, and a test that only checked `result.ok` after a hand-built commit
 /// would never have noticed.
 #[test]
-fn the_part_move_gizmo_translates_the_box_and_undoes() {
+fn the_part_move_gizmo_translates_the_body_and_undoes() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     boot();
 
     let meshes = python::stage_meshes().expect("stage meshes");
     let box_mesh = meshes
         .iter()
-        .find(|mesh| mesh.object == "Box")
-        .expect("the seeded Box is displayed");
+        .find(|mesh| mesh.object == "Fillet")
+        .expect("the seeded Fillet is displayed");
     let entity = box_mesh.entity;
 
     let mut display = DisplaySync::new();
     let stage = display.build(meshes);
-    assert_eq!(display.object_of(entity), Some("Box"));
+    assert_eq!(display.object_of(entity), Some("Fillet"));
 
     // The edition's composition (`main` does this): base contributions plus the
     // Part dress-up factory. A whole-object selection must still arm the gizmo.
@@ -199,7 +199,7 @@ fn the_part_move_gizmo_translates_the_box_and_undoes() {
     let x_before = min_x(&stage, entity);
     assert!(
         x_before.abs() < 1e-6,
-        "the seeded 20 mm box sits at x = 0: {x_before}"
+        "the seeded 10 mm box sits with its corner at x = 0: {x_before}"
     );
 
     // Grab the middle of the X stem and drag it 30 px along +X. The camera looks
@@ -245,8 +245,9 @@ fn the_part_move_gizmo_translates_the_box_and_undoes() {
     );
 
     // The app hook wraps the move in one named transaction, so one undo puts the
-    // body back where it was.
-    evaluate("doc.undo()");
+    // body back where it was. The shell's `App_Undo` recomputes after the restore;
+    // a parametric feature rebuilds its shape from its (restored) placement.
+    evaluate("doc.undo()\ndoc.recompute()");
     let meshes = python::stage_meshes().expect("stage meshes");
     let stage = display.build(meshes);
     let x_restored = min_x(&stage, entity);

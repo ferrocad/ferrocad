@@ -351,6 +351,39 @@ class ModProviderTests(unittest.TestCase):
         a_deactivate.assert_called_once_with()
         b_activate.assert_called_once_with()
 
+    def test_deactivating_runs_only_the_applied_backends_deactivate(self):
+        feature = "release"
+        self._features.add(feature)
+        a_activate = mock.Mock(return_value=None)
+        a_deactivate = mock.Mock(return_value={"view": {"axis": {"overlay": False}}})
+        b_deactivate = mock.Mock(return_value=None)
+        FerroCADGui.registerProvider(
+            feature, "a", "A", priority=10,
+            activate=a_activate, deactivate=a_deactivate,
+        )
+        FerroCADGui.registerProvider(
+            feature, "b", "B", priority=0, deactivate=b_deactivate
+        )
+
+        FerroCADGui.setActiveProvider(feature, "a")
+        a_activate.assert_called_once_with()
+
+        result = FerroCADGui.deactivateProvider(feature)
+        self.assertTrue(result["ok"])
+        a_deactivate.assert_called_once_with()
+        b_deactivate.assert_not_called()
+        self.assertEqual(result["view"], {"axis": {"overlay": False}})
+        # The persisted choice is untouched, so switching back is lossless.
+        self.assertEqual(FerroCADGui.activeProvider(feature), "a")
+        FerroCADGui.setActiveProvider(feature, "a")
+        self.assertEqual(a_activate.call_count, 2, "a released backend re-activates")
+
+        # Idempotent: with nothing applied, the declared backend's deactivate runs.
+        FerroCADGui.deactivateProvider(feature)
+        self.assertEqual(a_deactivate.call_count, 2)
+        with self.assertRaises(ValueError):
+            FerroCADGui.deactivateProvider("not-registered")
+
     def test_switching_the_grid_backends_adds_and_removes_the_coin_overlay(self):
         FreeCAD.newDocument("Providers")
         FreeCAD.setActiveDocument("Providers")

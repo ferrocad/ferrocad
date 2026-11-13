@@ -97,6 +97,18 @@ def inactive_status():
     return INACTIVE_STATUS % (active or "another backend")
 
 
+def _view(grid):
+    """``FerroCAD.Grid.apply()`` with this backend's native-ground claim.
+
+    The native backend draws the ground itself, so it claims no overlay. Stating
+    that claim is what lets a switch *from* the Coin shader clear it; without it
+    the shell kept ``grid_overlay`` on and the native ground stayed hidden.
+    """
+    request = grid.apply()
+    request["view"]["grid_overlay"] = False
+    return request
+
+
 def activate():
     """Become the drawn grid without changing whether the grid is shown.
 
@@ -110,7 +122,7 @@ def activate():
     grid = grid_api()
     if grid is None:
         return {"status": UPSTREAM_STATUS}
-    return grid.apply()
+    return _view(grid)
 
 
 def deactivate():
@@ -123,7 +135,7 @@ def deactivate():
     grid = grid_api()
     if grid is None:
         return {"status": UPSTREAM_STATUS}
-    return grid.apply()
+    return _view(grid)
 
 
 def refresh():
@@ -138,7 +150,7 @@ def refresh():
     grid = grid_api()
     if grid is None:
         return {"status": UPSTREAM_STATUS}
-    return grid.apply()
+    return _view(grid)
 
 
 def _state(grid):

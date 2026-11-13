@@ -16,15 +16,15 @@ use ferrocad_core::{
 use ferrocad_geom::TessellationOptions;
 use ferrocad_occt::OcctBackend;
 use ferrocad_part::{
-    BOX_TYPE, CHAMFER_TYPE, CUT_TYPE, EXTRUSION_TYPE, FILLET_TYPE, FUSE_TYPE, backend, shape_of,
+    CHAMFER_TYPE, CUT_TYPE, EXTRUSION_TYPE, FILLET_TYPE, FUSE_TYPE, backend, shape_of,
 };
-use ferrocad_shell_api::app::AppBackend;
+use ferrocad_shell_api::app::{AppBackend, ScriptHost};
 use ferrocad_shell_api::catalog::{self, CommandDef, Executor};
 use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::events::DocumentEvent;
 use ferrocad_shell_api::selection::SelectionItem;
-use ferrocad_shell_api::settings::{MemorySettings, SettingsBackend};
+use ferrocad_shell_api::settings::{MemorySettings, SettingKind, SettingsBackend};
 use ferrocad_shell_api::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GridProvider, GridSummary,
     ObjectNode, OpenedDocument, PropRow, ProviderFeature, SetResult, VisibilityOutcome,
@@ -70,12 +70,12 @@ const PUSH_PULL: &str = "push_pull";
 /// The sample document's name (the window title and the status line use it).
 const DOCUMENT: &str = "Sample";
 
-/// The edge the fillet is applied to, as the canvas demo does.
-const EDGE: &str = "Edge1";
-
-/// The fillet radius, in millimetres. Large enough to see, well under the radius at
-/// which the kernel refuses it (the demo's 10 mm box fails at 10 or more).
-const RADIUS: f64 = 3.0;
+/// The one startup document both hosts boot.
+///
+/// It is the same checked-in archive `python/ferrocad_shell.bootstrap` opens on the
+/// desktop, embedded so a host with no `python/` tree on disk (the browser) still
+/// boots the identical document name, object tree and shape.
+const SAMPLE_FCSTD: &[u8] = include_bytes!("../../../python/ferrocad_shell/Sample.FCStd");
 
 /// The tessellation tolerance, in millimetres (the probe's).
 ///
@@ -228,6 +228,9 @@ impl RustAppBackend {
         {
             let mut state = self.state.borrow_mut();
             state.view = appearance_settings::load(settings.as_ref(), &state.view);
+            if let Some(script) = &self.script {
+                seed_script_settings(script.as_ref(), settings.as_ref());
+            }
             state.settings = settings;
         }
         self
@@ -587,9 +590,7 @@ impl AppBackend for RustAppBackend {
     /// outside the build. The saved shapes are recomputed so a file from another build
     /// cannot rely on geometry it did not rebuild here.
     fn open_document(&mut self, name: &str, bytes: &[u8]) -> Result<OpenedDocument, String> {
-        let saved = ferrocad_core::fcstd::decode_fcstd(bytes).map_err(|error| error.to_string())?;
-        let mut document = Document::from_saved(&saved);
-        document.recompute()?;
+        let document = decode_document(bytes)?;
         let objects = document.object_ids().len();
         // The registry path registers and activates it, so `FreeCAD.ActiveDocument` is
         // the file the shell just opened rather than a second copy of it.
@@ -1005,6 +1006,19 @@ impl AppBackend for RustAppBackend {
             let text = format!("{value:.2}");
             format!("{} px", text.trim_end_matches('0').trim_end_matches('.'))
         };
+        // A script half with a provider registry (the JS half, or a Python half whose
+        // summary deferred) keeps its switch list even while the native backend is
+        // active: the popover must still offer the other backend. A build with no
+        // registry has nothing to list, which is the "one provider" case.
+        let providers = self
+            .script
+            .as_deref()
+            .map(|host| host.provider_features())
+            .unwrap_or_default()
+            .into_iter()
+            .find(|feature| feature.feature == "axis")
+            .map(|feature| feature.providers)
+            .unwrap_or_default();
         Ok(AxisSummary {
             feature: "axis".to_string(),
             // The id and label `mods/AxisOverlay` registers for the same provider.
@@ -1012,8 +1026,7 @@ impl AppBackend for RustAppBackend {
             label: Some("FerroCAD (native)".to_string()),
             length: Some(px(view.axis.length)),
             width: Some(px(view.axis.width)),
-            // Nothing switches: one provider, and the registry is the script half's.
-            providers: Vec::new(),
+            providers,
         })
     }
 
@@ -1710,6 +1723,12 @@ fn property_rows(object: &ferrocad_core::DocumentObject) -> Vec<PropRow> {
     });
 
     for (name, value) in object.properties.iter() {
+        // The synthesized row above is the one the editor edits. The archive can also
+        // persist `Label` in the property container, and listing it twice would put two
+        // rows in the pane.
+        if name == "Label" {
+            continue;
+        }
         // One rule for both hosts: the kind and the text come from the value, so
         // a Part length reads as `10 mm` here exactly as it does natively.
         let kind = ferrocad_core::present::kind(value);
@@ -1926,16 +1945,57 @@ fn document_node(name: &str, handle: &DocumentHandle, active: bool) -> DocumentN
     }
 }
 
+/// Seed the script half's own parameter store from the host store.
+///
+/// The browser's Python `FreeCAD.ParamGet` is memory-only, so the imported file's
+/// values would otherwise never reach `FerroCAD.Grid`/`Axis`/`Gizmo`, the provider
+/// registry, or a mod's private knobs (the Coin grid's colour, for one); the host's
+/// request and the script's would then disagree. A script half with no parameter
+/// store ignores the call (the trait default).
+fn seed_script_settings(script: &dyn ScriptHost, settings: &dyn SettingsBackend) {
+    for group in settings.groups() {
+        for name in settings.names(&group) {
+            for kind in [
+                SettingKind::Bool,
+                SettingKind::Int,
+                SettingKind::Float,
+                SettingKind::String,
+            ] {
+                if let Some(value) = settings.get(&group, &name, kind) {
+                    script.set_setting(&group, &name, &value);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Decode a saved document and rebuild it with the linked kernel.
+///
+/// Registering Part first is what lets `decode_fcstd` restore
+/// `Part::PropertyPartShape` payloads through the property-type registry rather
+/// than skipping them. Registration is idempotent (`ferrocad_part` keeps the first
+/// backend), so this is the same path an opened file and the embedded sample take.
+fn decode_document(bytes: &[u8]) -> Result<Document, String> {
+    ferrocad_part::register(Arc::new(OcctBackend::new()));
+    let saved = ferrocad_core::fcstd::decode_fcstd(bytes).map_err(|error| error.to_string())?;
+    let mut document = Document::from_saved(&saved);
+    document.recompute()?;
+    Ok(document)
+}
+
 /// The sample document and why it failed to build, if it did.
 fn sample_document() -> (Document, Option<String>) {
-    // Idempotent: the Part module keeps one backend per process.
-    ferrocad_part::register(Arc::new(OcctBackend::new()));
-    let mut document = Document::new();
-    let boot_error = build_sample(&mut document).err();
-    match boot_error.as_deref() {
-        Some(error) => log::error!("ferrocad: the sample document did not build: {error}"),
-        None => log_shapes(&document),
-    }
+    let (document, boot_error) = match decode_document(SAMPLE_FCSTD) {
+        Ok(document) => {
+            log_shapes(&document);
+            (document, None)
+        }
+        Err(error) => {
+            log::error!("ferrocad: the sample document did not build: {error}");
+            (Document::new(), Some(error))
+        }
+    };
     (document, boot_error)
 }
 
@@ -1976,31 +2036,6 @@ fn log_shapes(document: &Document) {
             Err(error) => log::error!("ferrocad: {} did not tessellate: {error}", object.name),
         }
     }
-}
-
-/// The sample document: a box centred on the origin with a fillet on `Edge1`.
-fn build_sample(document: &mut Document) -> Result<(), String> {
-    // `make_box` builds from the corner at the origin; centre it so the orbit camera,
-    // which pivots on the origin, frames the whole box.
-    let base = document.add_object("Box", BOX_TYPE);
-    document.set_property(
-        base,
-        "Placement",
-        Property::Placement(Placement::new(
-            Vector3::new(-5.0, -5.0, -5.0),
-            Rotation::identity(),
-        )),
-    )?;
-
-    let fillet = document.add_object("Fillet", FILLET_TYPE);
-    document.set_property(
-        fillet,
-        "Base",
-        Property::LinkSub("Box".to_string(), vec![EDGE.to_string()]),
-    )?;
-    document.set_property(fillet, "Radius", Property::Float(RADIUS))?;
-    document.recompute()?;
-    Ok(())
 }
 
 /// The object's document `Visibility` switch, when it has one.
@@ -2109,6 +2144,7 @@ mod tests {
     use std::sync::Mutex;
 
     use ferrocad_inventor::{EventListener, Scene};
+    use ferrocad_part::BOX_TYPE;
     use ferrocad_shell_api::app::{NoopListener, ScriptHost};
     use ferrocad_shell_api::events::DocumentEvent;
     use ferrocad_shell_api::settings::{SettingKind, SettingValue};
@@ -2136,6 +2172,8 @@ mod tests {
         dialogs: Mutex<Vec<String>>,
         /// Every interaction commit a provider claimed, by object name.
         interactions: Mutex<Vec<String>>,
+        /// Every setting the host store seeded into the script's parameter store.
+        settings: Mutex<Vec<(String, String, SettingValue)>>,
     }
 
     /// The script half the tests install.
@@ -2227,6 +2265,14 @@ mod tests {
 
         fn on_view_state_changed(&self, state: &ShellViewState) {
             *self.log.view.lock().unwrap() = Some(state.clone());
+        }
+
+        fn set_setting(&self, group: &str, name: &str, value: &SettingValue) {
+            self.log
+                .settings
+                .lock()
+                .unwrap()
+                .push((group.to_string(), name.to_string(), value.clone()));
         }
 
         fn on_document_event(&self, event: &DocumentEvent) {
@@ -2438,6 +2484,40 @@ mod tests {
         // stopped would leave these empty.
         assert_eq!(log.selected.lock().unwrap().as_slice(), items.as_slice());
         assert!(log.view.lock().unwrap().as_ref().unwrap().grid);
+    }
+
+    #[test]
+    fn the_host_store_seeds_the_script_parameter_store() {
+        let log = Arc::new(Recorded::default());
+        let settings = MemorySettings::default();
+        settings
+            .set(appearance_settings::AXIS_GROUP, "length", 400.0.into())
+            .unwrap();
+        settings
+            .set(grid_settings::GROUP, "enabled", true.into())
+            .unwrap();
+
+        let _backend = RustAppBackend::new()
+            .with_script_host(Box::new(FakeHost { log: log.clone() }))
+            .with_settings_backend(Box::new(settings));
+
+        let seeded = log.settings.lock().unwrap();
+        assert!(
+            seeded.iter().any(|(group, name, value)| {
+                group == appearance_settings::AXIS_GROUP
+                    && name == "length"
+                    && value == &SettingValue::Float(400.0)
+            }),
+            "the axis length crossed into the script: {seeded:?}"
+        );
+        assert!(
+            seeded.iter().any(|(group, name, value)| {
+                group == grid_settings::GROUP
+                    && name == "enabled"
+                    && value == &SettingValue::Bool(true)
+            }),
+            "the grid toggle crossed into the script: {seeded:?}"
+        );
     }
 
     #[test]

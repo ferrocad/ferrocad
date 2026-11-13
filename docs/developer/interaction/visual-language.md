@@ -314,6 +314,11 @@ the glass-top/glass-shade pair.
   must not become a second lighting path: one light, one shader, tokens in.
 - The spec's translucency is deferred (§1.3); the design must look right opaque first.
 
+Compile-time bundles that move the canvas, glass, edge and grid tokens **and** the key
+light together are specified in [`scene-lighting-presets.md`](scene-lighting-presets.md)
+(the `Scene ▾` popover); this section stays the authority for the one light and the
+V2b threshold those presets parameterise.
+
 ---
 
 ## 5. State model

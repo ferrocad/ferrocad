@@ -37,6 +37,7 @@ _Every entry point returns a JSON string._
 | `provider_features() -> str` | Every registered provider feature, with its backends and active flag. |
 | `provider_skin(payload_json: str) -> str` | One feature's provider-supplied WGSL source, for the shell to build. |
 | `refresh_providers(feature: str) -> str` | Ask a feature's active backend to re-read the shared state. |
+| `release_provider(feature: str) -> str` | Deactivate a feature's applied provider without selecting another. |
 | `run_command(name: str) -> str` | Invoke a workbench command by id; returns ``{ok, status?, dialog?, token?}``. |
 | `save_document(path: str) -> str` | Save the active document to ``path`` (the shell picked it). |
 | `set_gpu_adapter(payload_json: str) -> str` | Persist the viewport's GPU adapter choice from the Dev Tools panel. |

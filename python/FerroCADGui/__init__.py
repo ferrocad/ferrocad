@@ -668,6 +668,52 @@ def setActiveProvider(feature: str, backend: str) -> dict:
     return result
 
 
+def deactivateProvider(feature: str) -> dict:
+    """Deactivate ``feature``'s applied backend without selecting another.
+
+    A composed runtime (CPython beside the JS page) needs this when a feature
+    changes hands between hosts: the outgoing host cannot select the incoming
+    backend because it does not list it, so the chain asks it to run the applied
+    backend's ``deactivate`` and forget that it was applied. That removes an
+    overlay and releases a native-layer claim; without it the outgoing overlay
+    kept drawing beside the incoming one.
+
+    The persisted choice is left alone, so switching back is lossless, and the
+    call is idempotent: with nothing applied the declared backend's
+    ``deactivate`` still runs (its documented "restore the default"). Returns
+    ``ok``, ``feature``, ``previous``, ``view``, ``status`` and ``errors``, the
+    same shape as :func:`setActiveProvider` without ``backend``. An unknown
+    feature raises ``ValueError``.
+    """
+    records = _PROVIDERS.get(feature)
+    if not records:
+        raise ValueError(f"no provider is registered for feature {feature!r}")
+
+    declared = _selected(feature)
+    applied = _PROVIDER_APPLIED.pop(feature, None)
+    outgoing = applied if applied is not None else declared
+    result = {
+        "ok": True,
+        "feature": feature,
+        "previous": outgoing,
+        "view": {},
+        "status": "",
+        "errors": [],
+    }
+    statuses = []
+    record = records.get(outgoing) if outgoing is not None else None
+    if record is not None:
+        _invoke_provider(record, feature, "deactivate", result, statuses)
+
+    message = f"{feature}: released"
+    if statuses:
+        message = "; ".join(statuses) + "; " + message
+    if result["errors"]:
+        message += " (reported: " + "; ".join(result["errors"]) + ")"
+    result["status"] = message
+    return result
+
+
 def _invoke_provider(record, feature, hook, result, statuses) -> None:
     """Run one provider callback, isolating and collecting its result."""
     callback = record.get(hook)
@@ -1731,6 +1777,7 @@ __all__ = [
     "providerSkin",
     "activeProvider",
     "setActiveProvider",
+    "deactivateProvider",
     "refreshProviders",
     "gridViewRequest",
     "axisViewRequest",

@@ -90,10 +90,11 @@ pub fn compose_all(
     // A language the mod set declares and this build has no engine for is a packaging
     // gap, not a contradiction: the mods name the hosts they want (B9a) and the edition
     // grants what it can (B10b). Dropping the whole composition here took the halves
-    // that *do* exist with it — the default edition has no `js` feature, and `mods/`
-    // ships an `InitGui.js`, so `cargo run -p ferrocad_parametric` installed no script
-    // half at all: no workbench loaded, and the header listed only the providers the
-    // document half knows.
+    // that *do* exist with it — the editions used to build without the `js` feature while
+    // `mods/` ships an `InitGui.js`, so `cargo run -p ferrocad_parametric` installed no
+    // script half at all: no workbench loaded, and the header listed only the providers
+    // the document half knows. (The editions now default to `cpython,js`; the skip rule
+    // still covers a hand-written `--script-host` that names an engine this build lacks.)
     //
     // With nothing installable the composition is still a refusal, and it is the first
     // member's error that is returned: that is the actionable one (`--features js`), and

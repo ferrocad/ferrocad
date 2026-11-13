@@ -18,9 +18,11 @@
 //! `cargo run -p ferrocad_parametric -- --open model.FCStd` opens a saved model in
 //! the shell (the basic `.FCStd` viewer path).
 //!
-//! `cargo run -p ferrocad_parametric -- --script-host=js` (built with `--features js`)
-//! installs the browser's JS page on the desktop instead of CPython: the same document,
-//! a different script half. `--script-host=pywasm` (`--features pywasm`) does the same
+//! `cargo run -p ferrocad_parametric -- --script-host=js` installs the browser's JS page
+//! on the desktop **alone** instead of CPython: the same document, a different script
+//! half. `js` is a default feature and the default composition is `cpython,js` (CPython
+//! primary, the QuickJS page subordinate), so the flag selects a different set rather
+//! than enabling an engine. `--script-host=pywasm` (`--features pywasm`) does the same
 //! for RustPython, on the 16 MiB worker its compiler needs, and `--script-host=plain`
 //! drops the interpreter entirely. A comma-separated list installs a chain —
 //! `--script-host=cpython,js` puts the page beside CPython, which stays the primary —

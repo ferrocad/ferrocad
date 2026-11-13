@@ -15,42 +15,36 @@ edition offers the second distance.
 <figcaption><strong>Desktop</strong> — the Parametric edition. The scrubber sits on the top-right edge and the label reads <code>R 1.00 mm</code> at rest. Slot 3 is armed and the header shows the <code>Edge</code> filter. Close-up: the radius handle and its label.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
-<img src="../images/ui-fillet-web-window.png" alt="The armed Fillet slot in the browser build">
-<img class="fc-tabs__closeup" src="../images/ui-fillet-web.png" alt="Close-up of the armed Fillet slot">
-<figcaption><strong>Web</strong> — the same slot, armed, with no scrubber. The browser host sets the <code>Edge</code> filter and reports <code>tool: Fillet</code>, but it does not contribute the Part dress-up manipulator, so no radius handle appears on the edge. The cyan box marks the armed slot.</figcaption>
+<img src="../images/ui-fillet-web-window.png" alt="The Fillet scrubber highlighted in the browser build">
+<img class="fc-tabs__closeup" src="../images/ui-fillet-web.png" alt="Close-up of the Fillet scrubber">
+<figcaption><strong>Web</strong> — the browser build with both script halves. The scrubber sits on the selected edge and the label reads <code>R 1.00 mm</code> at rest; the header shows the <code>Edge</code> filter. Close-up: the radius handle and its label.</figcaption>
 </figure>
 </div>
 
 ![Dragging the Fillet radius arc](../images/ui-fillet.gif)
 
 *Animation (desktop): select the top-right edge, drag the radius arc, then release. The
-arc grows with the radius, the readout tracks it, and the fillet is committed on
-release.*
+arc grows with the radius and the readout tracks it; the release leaves the radius
+pending, and the fillet is applied when you accept it with `✓`.*
 
 ## The scrubber
 
 - The **edge filter** is the slot's default. `Edge` resolves the nearest drawn edge of the
   body under the pointer at any distance, so the click and the highlight always name the
   same edge. In a wireframe view the edge is found within about 8 px of the pointer.
-- A drag previews the round (or bevel); the commit is one transaction.
+- A drag previews the round (or bevel) as a swath along the edge, and the release leaves
+  it **pending**: `✓` (or `Enter`) applies it as one transaction, `✗` (or `Esc`) puts the
+  scrubber back at rest. Dragging the arc again adjusts the held radius.
 - The edition creates or updates the `Part::Fillet` / `Part::Chamfer` feature with the
   selected edge as its `Base` and applies the radius (or the two chamfer distances)
   through the kernel.
 
-## The browser build does not have it yet
+## Where it runs
 
-The browser shell arms the Fillet slot and sets the `Edge` filter, but it does not
-contribute the Part dress-up manipulator, so **no scrubber appears**; the status line says
-only `tool: Fillet`. The sample document's `Part::Fillet` is a **feature**, not an
-interactive handle, and the Rust backend declines the `dress_up` commit as "not available
-in this build".
-
-Closing the gap needs the same two halves as Push/Pull:
-`ferrocad_part_gui::fillet_manipulator` added to the web shell's contributions and a Rust
-commit path that creates or updates the `Part::Fillet` / `Part::Chamfer` feature. The
-**desktop** tab is the working reference and the **web** tab records the gap. The gap is
-listed in the browser host's
-[limits](../../../crates/ferrocad_web_gpui/README.md#what-it-does-not-have-yet).
+Fillet is part of the shared shell. `ferrocad_part_gui::fillet_manipulator` is installed
+on both hosts, and the document half applies the `dress_up` commit itself, so the
+**web** tab draws the same radius scrubber as the **desktop** Parametric edition. Only
+the surrounding window and the sample geometry differ.
 
 The slot, filter and pending-session rules are in
 [The tool loadout](ui-tool-loadout.md) and

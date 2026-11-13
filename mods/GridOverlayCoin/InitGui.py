@@ -19,6 +19,11 @@ Settings live in ``FreeCAD.ParamGet`` (file-backed by the host). Ground shadows 
 upstream parameters and the 80-slot ABI block; the host fills it with each item's
 ``(u, v)`` bounds in the **active plane's** frame, so a bound workplane is shaded too.
 
+``grid_axes`` is this backend's own knob (no shared ``FerroCAD.Grid`` counterpart):
+it hides the two in-plane X/Y lines the shader draws, so the grid can sit under an
+axis-cross overlay without the two reading as duplicates. The native ground has no
+such lines, so only this provider advertises the row in ``Settings/Grid``.
+
 The drawn grid follows the host's **active construction plane**. The plane's origin,
 its ``u``/``v``/``n`` axes and the patch radius arrive in the ``Frame`` uniform the
 viewport writes, not in a ``SoShaderParameter``: a mod cannot claim a plane the view
@@ -67,7 +72,8 @@ ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 RESOURCES = os.path.join(ADDON_DIR, "Resources")
 WGSL_PATH = os.path.join(RESOURCES, "grid_overlay.wgsl")
 
-#: The same six knobs and defaults as the upstream add-on (`InitGui.py:134-141`).
+#: The same six knobs and defaults as the upstream add-on (`InitGui.py:134-141`),
+#: plus `grid_axes`, this backend's own switch for the in-plane X/Y lines.
 DEFAULTS = {
     "enabled": True,
     "opacity": 0.65,
@@ -75,6 +81,7 @@ DEFAULTS = {
     "base_spacing": 1.0,
     "shadow_enabled": True,
     "shadow_opacity": 0.30,
+    "grid_axes": True,
 }
 
 #: One store, not two: the add-on's ``QSettings`` group becomes a parameter group.
@@ -108,6 +115,19 @@ COIN_SCHEMA_KEYS = {
     "shadows": "shadow_enabled",
     "shadow_opacity": "shadow_opacity",
 }
+
+#: Provider rows that have no shared ``FerroCAD.Grid`` counterpart: this backend
+#: owns them, so they are advertised only while it is the active grid.
+#: ``grid_axes`` hides the in-plane X/Y lines the shader draws; the native ground
+#: has no such lines, so its card does not offer the row (and does not invent one).
+COIN_ONLY_SCHEMA = (
+    {
+        "name": "grid_axes",
+        "label": "Draw X/Y axis lines",
+        "kind": "bool",
+        "default": True,
+    },
+)
 
 UPSTREAM_STATUS = (
     "Grid Overlay (Coin) needs FerroCAD's pull overlay bridge "
@@ -174,7 +194,7 @@ def setting(key):
         return str(SETTINGS.GetString(key, "dots"))
     if key in ("major_width", "minor_width"):
         return float(SETTINGS.GetFloat(key, 1.0))
-    if key in ("enabled", "shadow_enabled"):
+    if key in ("enabled", "shadow_enabled", "grid_axes"):
         return bool(SETTINGS.GetBool(key, DEFAULTS[key]))
     if key == "color":
         return str(SETTINGS.GetString(key, DEFAULTS[key]))
@@ -246,6 +266,8 @@ def save_settings(values):
         SETTINGS.SetBool("shadow_enabled", bool(values["shadow_enabled"]))
     if "shadow_opacity" in values:
         SETTINGS.SetFloat("shadow_opacity", float(values["shadow_opacity"]))
+    if "grid_axes" in values:
+        SETTINGS.SetBool("grid_axes", bool(values["grid_axes"]))
 
 
 def _grid_view(overlay):
@@ -289,6 +311,12 @@ def settings_schema():
         key = COIN_SCHEMA_KEYS.get(entry["name"])
         if key is None:
             continue
+        spec = dict(entry)
+        spec["get"] = lambda key=key: setting(key)
+        spec["set"] = lambda value, key=key: save_settings({key: value})
+        schema.append(spec)
+    for entry in COIN_ONLY_SCHEMA:
+        key = entry["name"]
         spec = dict(entry)
         spec["get"] = lambda key=key: setting(key)
         spec["set"] = lambda value, key=key: save_settings({key: value})
@@ -444,6 +472,9 @@ class ShaderGrid:
         self.shadow_opacity = coin.SoShaderParameter1f()
         self.shadow_opacity.name = "shadow_opacity"
         self.shadow_opacity.value = 0.0
+        self.grid_axes = coin.SoShaderParameter1f()
+        self.grid_axes.name = "grid_axes"
+        self.grid_axes.value = 1.0
 
         self.parameters = [
             self.grid_color,
@@ -452,6 +483,7 @@ class ShaderGrid:
             self.major_alpha,
             self.shadow_count,
             self.shadow_opacity,
+            self.grid_axes,
         ]
         self.shadow_data = None
         try:
@@ -497,7 +529,7 @@ class ShaderGrid:
 
     # -- parameters -----------------------------------------------------
     def _push_parameters(self):
-        """Write the six knobs into the shader parameter nodes."""
+        """Write the knobs into the shader parameter nodes."""
         color = color_to_linear(setting("color"))
         strength = setting("opacity")
         self.grid_color.value = color
@@ -507,6 +539,8 @@ class ShaderGrid:
         # Shadows are deferred: the block and the loop exist, the count is zero.
         self.shadow_count.value = 0.0
         self.shadow_opacity.value = float(setting("shadow_opacity"))
+        # `counts.y` in the shader: 1 draws the in-plane X/Y lines, 0 hides them.
+        self.grid_axes.value = 1.0 if setting("grid_axes") else 0.0
         if self.shadow_data is not None:
             _set_mf_floats(
                 self.shadow_data.value,
@@ -785,6 +819,12 @@ class GridOverlayCoinCommand:
                     setting("shadow_opacity"),
                     min=0.0,
                     max=1.0,
+                ),
+                _field(
+                    "grid_axes",
+                    "Draw X/Y axis lines",
+                    "bool",
+                    setting("grid_axes"),
                 ),
             ],
             "on_accept": apply_dialog,

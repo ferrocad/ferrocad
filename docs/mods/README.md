@@ -66,7 +66,25 @@ The reference mods in this tree are:
 | --- | --- |
 | `mods/GridOverlay` | the `GridOverlay_Settings` command and the `ferrocad` backend of the `grid` feature |
 | `mods/GridOverlayCoin` | the `GridOverlayCoin_Settings` command, the `coin` backend, and a Coin overlay |
+| `mods/AxisOverlayJs` | a JS workbench that publishes the axis cross through `window.ferrocad.overlay`, with a declarative settings dialog |
 | `python/ferrocad_toy/__init__.py` | a complete small mod in one file: two commands, a display provider, an interaction provider |
+
+A **JS workbench** is `mods/<Name>/InitGui.js`, an ES module exporting `install()`.
+It merges its commands into `window.__ferrocadJs`, writes the document through
+`window.ferrocad.call`, and may use the three presentation channels the JS kernel
+installs: `.overlay(spec)` for a program overlay, `.view(request)` for a `{"view": …}`
+request, and `.dialog(spec)` for a declarative dialog. It may also register a feature
+provider by exposing `providers`, `setProvider`, `releaseProvider`, `refreshProvider`,
+`providerSummary` and `providerSkin` on the page object; `JsScriptHost` forwards the
+provider verbs to them, so the JS backend appears in `Mods_Settings`, Dev Tools and the
+header popover. A page that draws a feature mirrors the shared policy from
+`onViewState(state)` instead of keeping its own settings, so it renders the same store
+as the native backend and follows the same switch.
+`mods/Explode`, `mods/Fasteners` and `mods/AxisOverlayJs` are the shipped examples; the
+browser packs the modules beside the Python workbenches (`tools/mods_pack.py`). Merge
+with `Object.assign({}, page, { … })`, not a fresh object: the page object carries hooks
+(`onEvent`, `onDocumentEvent`, `onDialogAccept`, `onViewState`, `providers`, …) that a
+later package must not drop.
 
 ## The five things a mod can contribute
 

@@ -315,7 +315,8 @@ mod tests {
 
         let frame = struct_by_name(&module, "Frame");
         assert_eq!(layouter[frame].size, 160);
-        // Program: the 1,328-byte grid prefix plus four axis vec4s.
+        // Program: the 1,328-byte grid prefix plus four axis vec4s. The 32-byte
+        // host-bounds tail is optional: this shader does not read it.
         let program = struct_by_name(&module, "Program");
         assert_eq!(layouter[program].size, 1_392);
         assert_eq!(layouter[program].alignment.round_up(1_392), 1_392);

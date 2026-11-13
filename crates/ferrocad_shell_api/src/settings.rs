@@ -131,6 +131,14 @@ pub trait SettingsBackend: Send + Sync {
 
     /// The names with any value in `group`, in deterministic order.
     fn names(&self, group: &str) -> Vec<String>;
+
+    /// The groups with any stored value, in deterministic order.
+    ///
+    /// A store that cannot enumerate its groups returns none; a script host with its
+    /// own store then keeps its defaults instead of seeding.
+    fn groups(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// The in-memory store: the headless/test default and the browser fallback.
@@ -185,6 +193,17 @@ impl SettingsBackend for MemorySettings {
         names.sort();
         names.dedup();
         names
+    }
+
+    fn groups(&self) -> Vec<String> {
+        let values = self
+            .values
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut groups: Vec<String> = values.keys().map(|(group, _)| group.clone()).collect();
+        groups.sort();
+        groups.dedup();
+        groups
     }
 }
 

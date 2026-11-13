@@ -185,12 +185,14 @@ Every UI-control page under `user/explanation/` pairs a full-window snapshot (wi
 box around the control) with a tight close-up, in a **Desktop / Web** tab pair. The tool
 captures each figure from the source that can show it:
 
-- **Move and Rotate** are captured twice: from the wasm browser host in headless Chrome
-  (no display) and from the Parametric app in Xephyr. The browser tab shows the docked
-  transform row; the desktop tab is the one where the triad and rings are visible.
-- **Extrude and Fillet** are captured twice as well. The desktop tab shows the Part
-  manipulator; the browser tab is the documented gap — the slot is armed but no stem or
-  scrubber is contributed.
+- **Move, Rotate, Extrude and Fillet** are captured twice: from the wasm browser host in
+  headless Chrome (no display) and from the Parametric app in Xephyr. Both hosts draw the
+  triad, rings and Part manipulators; the browser's query harness selects the body or
+  face/edge and arms the slot, then presses where the handle is drawn.
+- Both sources apply the same whole settings file, **including the stored Coin
+  `grid`/`axis` providers**. The browser draws those overlays as WGSL through wgpu's
+  WebGL2 backend; the grid shader guards its edge-on centre ray so a degenerate frame
+  cannot discard it (see the [browser README](../../../crates/ferrocad_web_gpui/README.md)).
 - **Chrome, toolbar, action bar and tool loadout** are captured from both hosts. The
   chrome figure opens the application menu; the wheel figure needs a pointer press, so
   both hosts use their input harnesses.
@@ -232,6 +234,8 @@ desktop gestures and writes `ui-<section>.gif`:
 | `pick` | Inspect with the `Body \| Face \| Edge` filter, clicking each scope |
 | `create` | click `Create Box` in the action bar; the status line reports `created Box001` |
 | `pending` | drag the Move X arrow, hold the pending row and ✓/✗, then `Esc` rolls back |
+| `move` | select the filleted body, drag the X arrow, release, then ✓; the feature keeps the accepted placement |
+| `move-web` | the same pending Move and ✓ accept gesture in the browser, through CDP |
 | `pushpull` | select a face, drag the amber stem, release |
 | `fillet` | select an edge, drag the radius arc, release |
 | `wheel` | right-press, flick to Rotate, release, re-pick the rings |
@@ -243,8 +247,9 @@ an optimised GIF with a shared 128-colour palette. `--keep-frames` also writes t
 processed frames under `target/gif-frames/<section>/` for inspection.
 
 ```sh
-python3 tools/ui_gifs.py                       # all seven GIFs
+python3 tools/ui_gifs.py                       # all nine GIFs
 python3 tools/ui_gifs.py --section pushpull fillet
+python3 tools/ui_gifs.py --section move move-web
 python3 tools/ui_gifs.py --section pick --keep-frames
 ```
 
@@ -253,10 +258,13 @@ the font stack, so `--check` does not pin them. `xwd` can move the X input focus
 the root, so the tool restores focus after every capture; without that the next
 synthetic key never reaches the app.
 
-The browser host cannot supply these gestures yet: it has no Part Push/Pull or Fillet
-manipulator, and its query harness produces one final screenshot rather than a frame
-sequence. A browser GIF would need a scripting driver (CDP/Puppeteer) **and** the missing
-manipulators; the desktop route is the one that shows the real gizmo. The `wheel` section
+The browser host can supply these gestures now: its Part Push/Pull and Fillet
+manipulators are the same ones the edition installs, and the page's
+`?keys=…;drag:x1,y1,x2,y2` harness can drive one. A browser GIF needs a frame-capture
+driver, so the `move-web` section keeps one headless page alive through the Chrome
+DevTools Protocol, dispatches the same canvas `PointerEvent`s the harness does, and
+asks for a PNG between moves. The desktop route remains the default for the other
+sections. The `wheel` section
 ends with a re-pick because the wheel's Rotate verb equips the hand but leaves the
 existing triad until the next selection change; the GIF shows that follow-up click rather
 than pretending the rings appear immediately.
@@ -287,7 +295,8 @@ working examples.
 
 ## Browser build + headless Chrome
 
-The still Web tabs use this route. Animated GIFs are **desktop-only** today; see
+The still Web tabs use this route. The `move-web` GIF uses the same page over the
+Chrome DevTools Protocol so it can capture frames between pointer moves; see
 [`tools/ui_gifs.py`](#toolsui_gifspy--interaction-gifs).
 
 The wasm host `ferrocad_web_gpui` is the same `ferrocad_shell_core` window on
@@ -335,9 +344,8 @@ and [`smoke.sh`](../../../crates/ferrocad_web_gpui/smoke.sh).
 
 The Web tab of every UI-control figure uses this route: chrome, wheel, toolbar, action
 bar, loadout, Move, Rotate, Extrude and Fillet. The Desktop tabs use the Parametric
-edition and the Xephyr source in `tools/ui_shots.py`. For Extrude and Fillet the browser
-tab deliberately records the gap: the browser host does not yet contribute the Part face
-and edge manipulators; see [the browser gaps](../../../crates/ferrocad_web_gpui/README.md#what-it-does-not-have-yet).
+edition and the Xephyr source in `tools/ui_shots.py`. Extrude and Fillet show the Part
+stem and scrubber in both tabs.
 
 **What it is good for**
 

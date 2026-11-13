@@ -16,7 +16,16 @@ A pack is::
 
 and the index is::
 
-    {"version": 1, "mods": [{"name": "<Name>", "pack": "<Name>.json"}, ...]}
+    {"version": 1,
+     "mods": [{"name": "<Name>", "pack": "<Name>.json"}, ...],
+     "js": [{"name": "<Name>", "module": "<Name>.js"}, ...]}
+
+A Python workbench travels as a JSON pack because the host runs its scripts through
+``ferrocad_shell.load_workbench_sources``. A **JS** workbench is an ES module the page
+imports itself, so its ``InitGui.js`` is copied verbatim beside the packs; the ``js``
+list names those modules in the same name order. A directory with both entry files
+travels both ways (the two hosts read different entry points), which is why the two
+lists are separate rather than a ``kind`` on one entry.
 
 The browser host hands each fetched pack to
 ``ferrocad_shell_core::app::load_workbench_pack``, whose Python half flattens it to the
@@ -72,6 +81,9 @@ OUT = REPO / "crates" / "ferrocad_web_gpui" / "www" / "mods"
 #: A workbench's entry scripts, in the order the loader runs them.
 SCRIPTS = ("Init.py", "InitGui.py")
 
+#: A JS workbench's entry module, which the page imports rather than the host running.
+JS_SCRIPT = "InitGui.js"
+
 #: The directory whose contents a mod reads with `open(...)` at run time.
 RESOURCES = "Resources"
 
@@ -93,15 +105,24 @@ def entry_scripts(directory: Path) -> list[str]:
 
 
 def workbenches(root: Path) -> list[tuple[str, Path]]:
-    """`root`'s workbench directories, as ``(name, path)`` in name order.
+    """`root`'s Python workbench directories, as ``(name, path)`` in name order.
 
-    Directories that declare no entry script are skipped: ``mods/`` also holds
-    ``README.md`` and the JS/wasm-only packages (`Explode`, `Fasteners`,
-    `Spring`), which the Python loader would not run either.
+    Directories that declare no Python entry script are skipped: ``mods/`` also holds
+    ``README.md`` and the JS/wasm-only packages, which the Python loader would not run.
+    JS workbenches are collected by :func:`js_workbenches` instead.
     """
     found = []
     for child in sorted(root.iterdir(), key=lambda path: path.name):
         if child.is_dir() and entry_scripts(child):
+            found.append((child.name, child))
+    return found
+
+
+def js_workbenches(root: Path) -> list[tuple[str, Path]]:
+    """`root`'s JS workbench directories, as ``(name, path)`` in name order."""
+    found = []
+    for child in sorted(root.iterdir(), key=lambda path: path.name):
+        if child.is_dir() and (child / JS_SCRIPT).is_file():
             found.append((child.name, child))
     return found
 
@@ -141,18 +162,24 @@ def render_pack(name: str, directory: Path) -> str:
     return _encode({"name": name, "version": VERSION, "files": files})
 
 
-def render_index(names: list[str]) -> str:
-    """The index over `names`, which must already be in name order."""
+def render_js(directory: Path) -> str:
+    """One JS workbench's ES module, copied verbatim (text mode, so LF is stable)."""
+    return (directory / JS_SCRIPT).read_text(encoding="utf-8")
+
+
+def render_index(names: list[str], js_names: list[str]) -> str:
+    """The index over the Python `names` and the JS `js_names`, both in name order."""
     return _encode(
         {
             "version": VERSION,
             "mods": [{"name": name, "pack": f"{name}.json"} for name in names],
+            "js": [{"name": name, "module": f"{name}.js"} for name in js_names],
         }
     )
 
 
 def build(root: Path = MODS) -> tuple[dict[Path, str], list[tuple[str, list[str]]]]:
-    """The files to write, and ``(name, scripts)`` per pack for reporting.
+    """The files to write, and ``(name, files)`` per workbench for reporting.
 
     The index is last in both, so a write reports the packs then the index, and
     the pack dict is keyed by the file it goes to.
@@ -164,7 +191,12 @@ def build(root: Path = MODS) -> tuple[dict[Path, str], list[tuple[str, list[str]
         names.append(name)
         summary.append((name, entry_scripts(directory) + resource_files(directory)))
         outputs[OUT / f"{name}.json"] = render_pack(name, directory)
-    outputs[OUT / "index.json"] = render_index(names)
+    js_names = []
+    for name, directory in js_workbenches(root):
+        js_names.append(name)
+        summary.append((name, [JS_SCRIPT]))
+        outputs[OUT / f"{name}.js"] = render_js(directory)
+    outputs[OUT / "index.json"] = render_index(names, js_names)
     return outputs, summary
 
 
@@ -191,7 +223,7 @@ def main(argv: list[str]) -> int:
     if not summary:
         print(
             f"mods pack: {MODS.relative_to(REPO)}/ holds no workbench "
-            "(a directory with Init.py or InitGui.py)",
+            "(a directory with Init.py, InitGui.py or InitGui.js)",
             file=sys.stderr,
         )
         return 2
@@ -205,7 +237,12 @@ def main(argv: list[str]) -> int:
     # index would not name it, but the file would still be fetchable.
     generated = set(outputs)
     orphans = (
-        sorted(path for path in OUT.glob("*.json") if path.is_file() and path not in generated)
+        sorted(
+            path
+            for pattern in ("*.json", "*.js")
+            for path in OUT.glob(pattern)
+            if path.is_file() and path not in generated
+        )
         if OUT.is_dir()
         else []
     )

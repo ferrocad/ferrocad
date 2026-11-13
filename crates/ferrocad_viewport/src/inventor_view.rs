@@ -479,6 +479,12 @@ pub struct InventorViewport<V: InventorView> {
     stage: Stage,
     /// Set when the stage changed, so the queue is rebuilt before the next draw.
     stage_dirty: bool,
+    /// The stage's world AABB, refreshed with the queue.
+    ///
+    /// The axis overlay ends its badges at the part's extents, and only the host can
+    /// measure them. `None` is an empty stage, which clears the claim so the shader
+    /// falls back to its own placement.
+    stage_bounds: Option<([f32; 3], [f32; 3])>,
     /// Where the stage's packets sit in `queue`.
     ///
     /// `Stage::emit_batches` appends after the compiled scene and no stage packet is a
@@ -1640,6 +1646,7 @@ impl<V: InventorView> InventorViewport<V> {
             scene,
             stage,
             stage_dirty: false,
+            stage_bounds: None,
             stage_packets: 0..0,
             tool: None,
             tool_state: None,
@@ -2850,6 +2857,34 @@ impl<V: InventorView> InventorViewport<V> {
         self.shadow_footprints = None;
         self.recompile();
         true
+    }
+
+    /// The stage's world AABB, from its placed vertices.
+    ///
+    /// O(vertices), so it runs with the queue rebuild (and with a transform-only patch
+    /// when a program is drawn, the same condition as the shadow pass). `None` is an
+    /// empty stage.
+    fn measure_stage_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for item in self.stage.items() {
+            let matrix = item.world_matrix();
+            for position in item.positions() {
+                let world = matrix.transform(&Vector3::new(
+                    f64::from(position[0]),
+                    f64::from(position[1]),
+                    f64::from(position[2]),
+                ));
+                let values = [world.x as f32, world.y as f32, world.z as f32];
+                for (axis, value) in values.iter().enumerate() {
+                    if value.is_finite() {
+                        min[axis] = min[axis].min(*value);
+                        max[axis] = max[axis].max(*value);
+                    }
+                }
+            }
+        }
+        (min[0].is_finite() && max[0].is_finite()).then_some((min, max))
     }
 
     /// The explicit override when set, else the stage's per-item footprints **in the
@@ -4966,7 +5001,9 @@ impl<V: InventorView> InventorViewport<V> {
         let stage_count = total - stage_start;
         let scene_len = queue.packets.len();
         self.stage_packets = (scene_len - stage_count)..scene_len;
+        self.stage_bounds = self.measure_stage_bounds();
         apply_program_shadows(&mut program_queue, &self.effective_shadow_footprints());
+        apply_program_bounds(&mut program_queue, self.stage_bounds);
         self.queue = queue;
         self.program_queue = program_queue;
         self.directives = directives;
@@ -6882,6 +6919,23 @@ fn apply_program_shadows(queue: &mut RenderQueue, footprints: &[ShadowFootprint]
         let mut parameters = *program.parameters();
         apply_shadows(&mut parameters, footprints.iter().copied());
         if parameters != *program.parameters() {
+            *program = Arc::new(program.as_ref().clone().with_parameters(parameters));
+        }
+    }
+}
+
+/// Write the stage's world AABB into every program packet's parameters.
+///
+/// The axis overlay ends its badges at the part's extents, and only the host can measure
+/// them. `None` clears the claim, so the shader falls back to its own placement (the
+/// visible boundary) — the state a headless or browser build without a stage has.
+fn apply_program_bounds(queue: &mut RenderQueue, bounds: Option<([f32; 3], [f32; 3])>) {
+    for packet in &mut queue.packets {
+        let Some(program) = packet.state.program.as_mut() else {
+            continue;
+        };
+        let mut parameters = *program.parameters();
+        if ferrocad_graphics::apply_bounds(&mut parameters, bounds) {
             *program = Arc::new(program.as_ref().clone().with_parameters(parameters));
         }
     }
@@ -11893,6 +11947,46 @@ mod tests {
         assert_eq!(viewport.queue.len(), 1);
         assert!(viewport.program_queue.is_empty(), "removing drops the overlay");
         assert!(viewport.overlays().is_empty());
+    }
+
+    /// The host measures the stage and hands the AABB to every program packet, so the
+    /// axis overlay's badges mark the part's extents rather than the window.
+    #[test]
+    fn the_stage_bounds_reach_the_program_parameters() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        viewport.set_stage(Stage::new().with_item(named_slab()));
+        viewport.set_overlays(vec![program_scene()]);
+
+        let bounds = viewport
+            .stage_bounds
+            .expect("the slab has placed vertices");
+        assert!(bounds.0[0] <= bounds.1[0], "min precedes max");
+        let parameters = viewport.program_queue.packets[0]
+            .state
+            .program
+            .as_ref()
+            .expect("the overlay is a program")
+            .parameters();
+        assert_eq!(parameters.bounds_min[3], 1.0, "the host claim is set");
+        assert_eq!(parameters.bounds_max[3], 1.0);
+        assert_eq!(parameters.bounds_max[0], bounds.1[0]);
+        assert_eq!(parameters.bounds_min[2], bounds.0[2]);
+
+        // An empty stage clears the claim, so the shader falls back to the window.
+        viewport.set_stage(Stage::new());
+        viewport.recompile();
+        let parameters = viewport.program_queue.packets[0]
+            .state
+            .program
+            .as_ref()
+            .expect("the overlay is still a program")
+            .parameters();
+        assert_eq!(parameters.bounds_max[3], 0.0);
     }
 
     /// The footprints follow the active plane. A world-`(x, y)` footprint projected onto

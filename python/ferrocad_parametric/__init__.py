@@ -529,13 +529,9 @@ class _SaveDatumPlaneCommand:
 FreeCADGui.addCommand("App_SaveDatumPlane", _SaveDatumPlaneCommand())
 
 
-def bootstrap(doc_name: str = "Shell") -> str:
-    """The base sample document plus a 20 mm solid for the viewport."""
+def bootstrap(doc_name: str = "Sample") -> str:
+    """Open the canonical sample — the same ``Sample.FCStd`` the browser boots."""
     # Materialise the edition preset under the user's persisted values. The
     # settings facades read that store, so every later command sees the preset.
     FerroCADGui.installAppearancePresets()
-    payload = _base_bootstrap(doc_name)
-    doc = FreeCAD.ActiveDocument
-    _add_box(doc, DEFAULT_LENGTH, DEFAULT_WIDTH, DEFAULT_HEIGHT, 0.0, 0.0, "Box")
-    doc.recompute()
-    return payload
+    return _base_bootstrap(doc_name)

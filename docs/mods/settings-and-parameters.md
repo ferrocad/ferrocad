@@ -378,7 +378,7 @@ axis or gizmo backends preserves whatever visibility the user chose.
 A schema entry with a `get` hook has no default in practice: `_read_setting`
 returns the hook's value and ignores `default`
 (`python/FerroCADGui/__init__.py:994-996`). `mods/GridOverlayCoin` uses this for
-all five of its rows, so the Coin rows report the Coin store's fallbacks
+its own rows, so they report the Coin store's fallbacks
 (`#808080`, opacity `0.65`, `mods/GridOverlayCoin/InitGui.py:63-74`) rather than
 the canonical `_grid` defaults (`#94a3b8`, `1.0`).
 

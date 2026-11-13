@@ -121,6 +121,19 @@ Rules that keep the split honest:
   is not in the document at all), `dialog_accept`/`dialog_cancel` (tokens it did not
   mint). That ordering is what keeps `Settings/Grid` resolvable without turning every
   property read into an interpreter round-trip.
+- The provider registry is merged **per feature** across the hosts. `HostChain` lists
+  one entry per feature, each backend once (the first host's label and command win a
+  duplicate such as `axis`/`ferrocad`), and exactly one active backend. `set_provider`
+  routes to the host that lists `(feature, backend)`; `refresh_providers`, the grid/axis
+  summaries and `provider_skin` ask the host that owns the active backend; and a switch a
+  host performs inside its own command or dialog callback is folded back in by comparing
+  its registry before and after the call. Without the merge a JS page's provider was only
+  visible when that half was primary (`--script-host=js`), never beside Python.
+- **`Settings/<Feature>` is composition-wide too.** The chain builds the node's provider
+  selector over every host's backends and keeps the active backend's rows: the owner's
+  schema when it has one, else the provider's command (its settings dialog) as a runnable
+  row. A schema write goes to the owner; the selector write is the chain's switch. A
+  single-host composition keeps its own facade's rows unchanged.
 - The `Settings` namespace is merged **per feature**, and a feature's owner is whoever
   has rows for it. A script half that lists `Settings/<feature>` owns that feature; the
   document half adds the grid card (`ferrocad_shell_rust::grid_settings`) to whatever
@@ -267,25 +280,33 @@ that reason.
 module boots, because the command list is read once at startup). The crate calls out and
 never links the document.
 
-**The page is a trait, not a browser.** [`Page`] is the eight-call contract; `WebPage`
+**The page is a trait, not a browser.** [`Page`] is the whole page contract; `WebPage`
 implements it over `window` and is the only `cfg(wasm)` piece, so the crate builds
 natively and its tests drive a fake page (the command merge, the display hook, the
-document API and the event mapping are all covered without a browser). The desktop's page is
-`EnginePage` (behind `desktop`, B7): an embedded QuickJS that loads `mods/<Name>/InitGui.js`
-the way the Python side loads `InitGui.py`, aliases `window` to the global object and
-installs `ferrocad.call` over the host's `DocumentApi`, so the module — `www/js-demo.js`
-itself — does not know which host it is on. The browser's modules ship in `www/` and its
-page imports them; only the loader differs.
+document API, the events, the dialog round trip and the provider registry are all
+covered without a browser). The desktop's page is `EnginePage` (behind `desktop`, B7):
+an embedded QuickJS that loads `mods/<Name>/InitGui.js` the way the Python side loads
+`InitGui.py`, aliases `window` to the global object and installs `ferrocad.call` over
+the host's `DocumentApi`, so the module — `www/js-demo.js` itself — does not know which
+host it is on. The browser's modules ship in `www/` and its page imports them; only the
+loader differs. Since the packer writes each JS workbench beside the Python packs (B21),
+the same `mods/AxisOverlayJs/InitGui.js` boots on both hosts.
 
-**The document API.** A JS workbench has to create objects and set properties, and a
-second `ferrocad_core` in the page would be a second document. So the host hands the JS
-half a `DocumentApi` (`ferrocad_doc_api`), which `Page::install_kernel` turns into
-`window.ferrocad.call(request)` before the first command runs. The page sees JSON, the
-host's one document answers, and Part arrives because the host registered it — the
-document API itself is core-only. See
+**The document API and the presentation channels.** A JS workbench has to create objects
+and set properties, and a second `ferrocad_core` in the page would be a second document.
+So the host hands the JS half a `DocumentApi` (`ferrocad_doc_api`), which
+`Page::install_kernel` turns into `window.ferrocad.call(request)` before the first command
+runs. The same kernel installs `window.ferrocad.overlay(spec)` (a named program overlay
+described as JSON), `.view(request)` and `.dialog(spec)`; the three are queued in the JS
+host and ride on the next `CommandOutcome`, so the shell's overlay pull, view apply and
+modal paths are reused. The page also answers the provider verbs (`providers`,
+`setProvider`, `refreshProvider`, `providerSummary`, `providerSkin`), which is how a JS
+mod appears in `Mods_Settings` and the header popover beside the native backends. The
+page sees JSON, the host's one document answers, and Part arrives because the host
+registered it — the document API itself is core-only. See
 [`../../project/research/js-addons.md`](../../project/research/js-addons.md) for the
-protocol, the three shapes (static link, document API, copied engine) and what is not built
-(a display hook, a wasm bundle).
+protocol, the three shapes (static link, document API, copied engine), the overlay
+description and the JS provider registry.
 
 The JS backend is the composition
 `RustAppBackend::from_shared_registry().with_script_host(JsScriptHost::with_kernel(..))`.
@@ -514,9 +535,9 @@ intersection, and that is what makes the two-VM comparison a gate for both hosts
 | script half | native desktop | browser | why |
 | --- | --- | --- | --- |
 | none (`plain`) | ✓ `--script-host=plain` | ✓ | no engine; the Rust arms answer. A script-less app on either host |
-| `PythonScriptHost` (CPython) | ✓ default | ✗ | PyO3 needs a native CPython C-ABI |
-| `PywasmScriptHost` (RustPython) | ✓ `--script-host=pywasm` (feature `pywasm`) | ✓ | the same host on the 16 MiB worker its compiler needs (`ThreadedScriptHost`) |
-| `JsScriptHost` | ✓ `--script-host=js` (feature `js`) | ✓ | the contract is `Page`: `WebPage` and the desktop `EnginePage` are the same eight calls |
+| `PythonScriptHost` (CPython) | ✓ default (primary) | ✗ | PyO3 needs a native CPython C-ABI |
+| `PywasmScriptHost` (RustPython) | ✓ `--script-host=pywasm` (feature `pywasm`) | ✓ default (primary) | the same host on the 16 MiB worker its compiler needs (`ThreadedScriptHost`) |
+| `JsScriptHost` | ✓ default (subordinate; feature `js`) or `--script-host=js` alone | ✓ default (subordinate) | the contract is `Page`: `WebPage` and the desktop `EnginePage` implement it |
 
 One table of names, two switches. `Runtime` lives in the seam
 (`ferrocad_shell_api::runtime`), so `?runtime=` and `--script-host=` (or
@@ -524,13 +545,16 @@ One table of names, two switches. `Runtime` lives in the seam
 *composition* stays with each host, because only the host knows what it linked. The
 desktop's is `ferrocad_shell_python::compose`, and a name this build cannot serve is
 reported and replaced by `plain` — the browser's rule, so a scripting surface that cannot
-start never costs the window. The default is CPython on the desktop and `plain` in the
-browser.
+start never costs the window. With no flag, the desktop installs **both** hosts
+(`cpython,js`, CPython primary) and the browser installs **both** its hosts
+(`pywasm,js`, RustPython primary); a `--addons` selection derives its own set, and
+`--script-host=plain` / `?runtime=plain` is the document-only build.
 
 One nuance the derivation made necessary (B14): **a member** a build cannot serve is
 skipped, not fatal. `mods/` declares the hosts it wants (an `InitGui.js` asks for the JS
-half), and a default edition has no `js` feature — so `compose_all("cpython,js")` installs
-the interpreter, prints the feature hint and carries on. Only a list with nothing
+half); the base app's default features include `js`, so the default build installs it. A
+build without that feature (or without `pywasm`) runs `compose_all("cpython,js")`, prints
+the feature hint and carries on with the interpreter. Only a list with nothing
 installable is replaced by `plain`, and then it is the member's own message (`--features
 js`) that is reported, because that one is actionable.
 

@@ -176,6 +176,11 @@ pub struct ProgramParameters {
     /// Number of populated shadow slots (`"shadow_count"`); written by
     /// [`apply_shadows`]. The shader reads it from `counts.x` and stops its loop there.
     pub shadow_count: f32,
+    /// Whether the grid shader draws the in-plane X/Y axis lines (`"grid_axes"`);
+    /// `0` hides them. The native grid's ground has no such lines, so this is the
+    /// Coin backend's knob: turn it off when the axis cross is the only axis readout.
+    /// Packed into `counts.y` (a reserved slot).
+    pub grid_axes: f32,
     /// The packed shadow slots (`"shadow_data"`), laid out exactly like the shader's
     /// `Program.shadows`: 64 slots of `[center.x, center.y, half_extent.x,
     /// half_extent.y, blur]` with flat float `o` at `shadow_data[o / 4][o % 4]`.
@@ -200,6 +205,14 @@ pub struct ProgramParameters {
     /// Whether the axis labels are drawn (`"axis_labels"`); `1` is on. Accepted by
     /// the ABI; the Coin shader cannot draw text, so the native labels own this.
     pub axis_labels: f32,
+    /// The stage's world AABB minimum (`xyz`), with `w = 1` when the host has one.
+    ///
+    /// Host-supplied, like the workplane tail: the axis overlay ends its badges at the
+    /// part's extents, which only the host can measure. `w = 0` means "no claim", and a
+    /// shader falls back to its own placement (the visible boundary).
+    pub bounds_min: [f32; 4],
+    /// The stage's world AABB maximum (`xyz`), with `w = 1` when the host has one.
+    pub bounds_max: [f32; 4],
 }
 
 impl Default for ProgramParameters {
@@ -212,6 +225,7 @@ impl Default for ProgramParameters {
             major_alpha: 0.35,
             shadow_opacity: 0.0,
             shadow_count: 0.0,
+            grid_axes: 1.0,
             shadow_data: [[0.0; 4]; SHADOW_VECS],
             // #4ADE80 and #38BDF8 in linear light, the native axis tokens.
             axis_y: [0.069, 0.730, 0.216],
@@ -222,8 +236,36 @@ impl Default for ProgramParameters {
             axis_ghost_alpha: 0.10,
             axis_origin: 1.0,
             axis_labels: 1.0,
+            bounds_min: [0.0; 4],
+            bounds_max: [0.0; 4],
         }
     }
+}
+
+/// Write the host's stage AABB into a program's parameters.
+///
+/// `None` clears the claim (`w = 0`), which returns the shader to its own placement.
+/// Returns whether anything changed, so a caller can rebuild the program only then.
+pub fn apply_bounds(
+    parameters: &mut ProgramParameters,
+    bounds: Option<([f32; 3], [f32; 3])>,
+) -> bool {
+    let clean = |value: f32| if value.is_finite() { value } else { 0.0 };
+    let (min, max) = match bounds {
+        Some((min, max)) => (
+            [clean(min[0]), clean(min[1]), clean(min[2]), 1.0],
+            [clean(max[0]), clean(max[1]), clean(max[2]), 1.0],
+        ),
+        None => ([0.0; 4], [0.0; 4]),
+    };
+    let mut next = *parameters;
+    next.bounds_min = min;
+    next.bounds_max = max;
+    if next == *parameters {
+        return false;
+    }
+    *parameters = next;
+    true
 }
 
 /// A resolved shader program: inline WGSL plus the fixed-ABI parameters.
@@ -835,5 +877,26 @@ mod tests {
         );
         let shaded = plain.clone().with_parameters(parameters);
         assert_ne!(plain.hash(), shaded.hash(), "live slots are part of identity");
+    }
+
+    #[test]
+    fn the_stage_bounds_claim_is_cleared_when_the_host_has_none() {
+        let mut parameters = ProgramParameters::default();
+        assert_eq!(parameters.bounds_max[3], 0.0, "no claim by default");
+
+        assert!(apply_bounds(
+            &mut parameters,
+            Some(([0.0, 0.0, 0.0], [1.0, 2.0, 3.0]))
+        ));
+        assert_eq!(parameters.bounds_min, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(parameters.bounds_max, [1.0, 2.0, 3.0, 1.0]);
+        assert!(
+            !apply_bounds(&mut parameters, Some(([0.0, 0.0, 0.0], [1.0, 2.0, 3.0]))),
+            "the same bounds are not a change"
+        );
+
+        assert!(apply_bounds(&mut parameters, None));
+        assert_eq!(parameters.bounds_min, [0.0; 4], "clearing drops the claim");
+        assert_eq!(parameters.bounds_max, [0.0; 4]);
     }
 }

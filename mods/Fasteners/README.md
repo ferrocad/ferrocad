@@ -34,7 +34,8 @@ ES module exporting `install()`; the host evaluates it before the window boots a
 than replacing them.
 
 The page is installed automatically when a mod set declares it (B9a):
-`--script-host=js` is not needed, and the desktop needs a build with `--features js`.
+`--script-host=js` is not needed, and `js` is a default feature, so the shipped desktop
+composition (`cpython,js`) already has the page beside CPython.
 
 Every write goes through `window.ferrocad.call`, the JSON API over the document. A host
 that refuses writes answers `{"ok": false, …}` and the command returns `false`; nothing is

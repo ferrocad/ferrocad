@@ -3,6 +3,11 @@
 Status: **spike (2026-11-08).** `ferrocad_doc_api`, the JS half's `with_kernel` and the
 JS display hook (`stageMeshes`) are in the tree and tested; the browser path is wired and
 verified in a real page (§6). The wasm-addon import ABI (§7) is designed, not built.
+**Since this spike** the kernel also installs three presentation channels —
+`window.ferrocad.overlay(spec)`, `.view(request)` and `.dialog(spec)` — and the packer
+copies JS workbench modules beside the Python packs, so `mods/AxisOverlayJs` boots on
+QuickJS and in the browser and draws its WGSL through the same overlay bridge a Coin mod
+uses (§4c).
 
 Companions: [`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md)
 (§4 the JS half, §8 dependency rules), [`../../mods/README.md`](../../mods/README.md)
@@ -196,6 +201,51 @@ The ABI is host-neutral by construction, not only in principle: `loader.js` is t
 `ferrocad.call` import over `ferrocad_doc_api` — which is what a desktop addon engine
 (`wasmi`, B7 in [`../record/tasks/backend-parity.md`](../record/tasks/backend-parity.md)) would be. The
 bundle does not know which one it got either.
+
+## 4c. A program overlay from a JS page
+
+`stageMeshes` gives an object a mesh. An overlay is not an object: it is a shader and a
+four-corner placeholder beside the document scene. A JS page has no `pivy.coin`, so it
+describes the scene as JSON and the host (`ferrocad_shell_js::overlay`) extracts it into
+the same `ferrocad_inventor::Scene` a Coin mod registers:
+
+```js
+window.ferrocad.overlay(JSON.stringify({
+  name: "axis-overlay-js",
+  visible: true,
+  shader: wgsl,
+  parameters: { grid_color: [r, g, b], axis_length: 80 },
+}));
+```
+
+`name` is the overlay's identity: re-registering replaces it and `visible: false` (or
+`overlay("null")`) removes it. The host validates the program with the compiler, so an
+unknown parameter is a message the page can log, not a silent no-op. The registry is the
+pure `ferrocad_inventor::overlays` store, so the viewport's pull, depth and pick rules are
+the Coin ones.
+
+The other two channels ride on the same `CommandOutcome`: `.view({"axis": {"overlay":
+ true}})` is the native-hide claim the Coin axis backend makes, and `.dialog(spec)` opens
+the same declarative modal a Python command returns. `JsScriptHost::dialog_accept` and
+`dialog_cancel` forward to the page's `onDialogAccept`/`onDialogCancel`, and the answer is
+a JSON `CommandOutcome`, so a JS dialog can update its own values and publish a new
+overlay in one step.
+
+**Providers.** The page object also answers `providers()`, `setProvider(feature,
+backend)`, `refreshProvider(feature)`, `providerSummary(feature)` and
+`providerSkin(feature)`. `JsScriptHost` forwards the `ScriptHost` provider verbs to
+them, so a JS mod's manifest reaches `Mods_Settings`, Dev Tools and the header popover,
+and a switch runs the page's own `deactivate`/`activate` callbacks. `mods/AxisOverlayJs`
+registers `axis`/`ferrocad` (native, priority 10) and `axis`/`js` (the program overlay,
+priority 0); the native entry is explicit because a script that registers a feature
+suppresses the document half's synthetic native entry. `HostChain` **merges** the
+registries of every installed half: one entry per feature, each backend once
+(the primary's label and command win a duplicate), and one active backend. A switch is
+routed to the host that lists `(feature, backend)`; summaries, refresh and the skin go
+to the owner of the active backend; and a switch the page makes inside its own command
+or dialog callback is picked up by comparing its registry before and after the call. So
+a `--script-host=js` / `?runtime=js` session and a composed `cpython,js` / `pywasm,js`
+session both list the JS provider beside the Python ones.
 
 ## 5. `catalog.json` is not the addon table
 

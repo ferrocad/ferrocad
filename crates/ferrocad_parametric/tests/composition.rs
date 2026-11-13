@@ -8,8 +8,9 @@
 //! modules from `python/*.abi3.so` instead would give the test a second core, and
 //! the composition would be measuring nothing.
 //!
-//! The edition's app script boots a document named `Shell` with a 20 mm `Box`, so
-//! these use the real geometry rather than a stub.
+//! Both hosts boot the one checked-in `Sample.FCStd`: a 10 mm `Part::Box` centred on
+//! the origin, its 3 mm `Part::Fillet` on `Box.Edge1`, and the parametric
+//! `Params`/`Derived`/`Group` objects. These use the real geometry rather than a stub.
 
 use std::sync::{Mutex, Once};
 
@@ -27,11 +28,11 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 /// The modules are built into the interpreter, which must happen before it starts.
 static BOOT: Once = Once::new();
 
-/// The document the edition's `bootstrap()` creates.
-const DOCUMENT: &str = "Shell";
+/// The canonical document both hosts boot.
+const DOCUMENT: &str = "Sample";
 
-/// The solid that document carries.
-const OBJECT: &str = "Box";
+/// The solid that document draws: the fillet replaces the box it consumes.
+const OBJECT: &str = "Fillet";
 
 /// The sample's live `App::PropertyLength` (the edition's box bakes its length at
 /// creation, so it has no settable one).
@@ -261,7 +262,7 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
     let shown = meshes
         .iter()
         .find(|mesh| mesh.object == OBJECT)
-        .expect("the edition's Box is drawn");
+        .expect("the edition's fillet is drawn");
     let entity = shown.entity;
     assert!(
         shown.parts.iter().any(|part| part == "Edge1"),
@@ -273,14 +274,14 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
     let before = min_x(&stage, entity);
     assert!(
         before.abs() < 1e-6,
-        "the seeded box sits at x = 0: {before}"
+        "the seeded box's corner sits at the origin: {before}"
     );
 
     // 1. The shared transform gizmo is the **edition's**: the Part workbench registers a
     //    `transform`/`apply` provider, so the composition routes the commit to the
     //    script half and the document arm is only the fallback. The transaction's name
-    //    is what makes that observable: the provider records `Move Box`, the document
-    //    arm would record `Transform`.
+    //    is what makes that observable: the provider records `Move <object>`, the
+    //    document arm would record `Transform`.
     let mut matrix = [0.0f64; 16];
     for index in 0..4 {
         matrix[index * 5] = 1.0;
@@ -301,10 +302,10 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
     );
 
     // Which half applied it is observable through the transaction's name: the
-    // document arm records "Transform", the Part hook "Move Box".
+    // document arm records "Transform", the Part hook "Move <object>".
     let undone = backend.run_command("App_Undo").expect("undo runs");
     assert!(
-        undone.status.starts_with("undo: Move Box"),
+        undone.status.starts_with(&format!("undo: Move {OBJECT}")),
         "the edition's provider applied the transform: {}",
         undone.status
     );
@@ -333,7 +334,7 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
         .map(|mesh| mesh.object)
         .collect();
     assert!(
-        objects.iter().any(|name| name == "Box_Fillet"),
+        objects.iter().any(|name| name == "Fillet_Fillet"),
         "the fillet is drawn: {objects:?}"
     );
     assert!(
@@ -350,11 +351,26 @@ fn a_commit_moves_the_placement_not_the_rows() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut backend = composed();
 
+    // The startup sample's visible body is a parametric `Part::Fillet`, whose rebuild
+    // re-bakes the geometry on a placement write. The rigid-row optimisation belongs
+    // to a plain `Part::Feature` (what the edition's `makeBox` creates), so this body
+    // is added on top of the sample rather than borrowed from it.
+    let added = backend
+        .evaluate(
+            "import Part\n\
+             box = FreeCAD.ActiveDocument.addObject('Part::Feature', 'Rigid')\n\
+             box.Shape = Part.makeBox(10, 10, 10)\n\
+             box.Placement = FreeCAD.Placement(FreeCAD.Vector(-5, -5, -5))\n\
+             FreeCAD.ActiveDocument.recompute()",
+        )
+        .expect("the rigid body is added");
+    assert!(added.ok, "{added:?}");
+
     let before = backend.stage_meshes().expect("the stage syncs");
     let row_before = before
         .iter()
-        .find(|mesh| mesh.object == OBJECT)
-        .expect("the box is drawn")
+        .find(|mesh| mesh.object == "Rigid")
+        .expect("the rigid body is drawn")
         .clone();
 
     let mut matrix = [0.0f64; 16];
@@ -366,15 +382,15 @@ fn a_commit_moves_the_placement_not_the_rows() {
     let commit =
         InteractionCommit::new(TRANSFORM_ID, row_before.entity, "apply").with_values(matrix);
     let applied = backend
-        .apply_interaction(&commit, OBJECT)
+        .apply_interaction(&commit, "Rigid")
         .expect("the commit routes");
     assert!(applied.ok, "{}", applied.error);
 
     let after = backend.stage_meshes().expect("the stage re-syncs");
     let row_after = after
         .iter()
-        .find(|mesh| mesh.object == OBJECT)
-        .expect("the box is still drawn");
+        .find(|mesh| mesh.object == "Rigid")
+        .expect("the rigid body is still drawn");
 
     assert_eq!(
         row_after.positions, row_before.positions,
@@ -397,20 +413,27 @@ fn the_document_half_answers_the_display_mode() {
     let mut backend = composed();
 
     // A workbench's convention is document data: `DisplayMode` is a property, so the
-    // document half reads it instead of paying for a display-hook round-trip.
+    // document half reads it instead of paying for a display-hook round-trip. The
+    // sample's Part objects carry no view provider, so the test declares the same
+    // dynamic property the edition adds to the objects it creates.
     let changed = backend
-        .evaluate("FreeCAD.ActiveDocument.Box.DisplayMode = 'Wireframe'")
+        .evaluate(
+            "o = FreeCAD.ActiveDocument.Fillet\n\
+             o.addProperty('App::PropertyEnumeration', 'DisplayMode', 'Part', 'How the object is drawn')\n\
+             o.DisplayMode = ['Shaded', 'Wireframe', 'ShadedWithEdges']\n\
+             o.DisplayMode = 'Wireframe'",
+        )
         .expect("the property is settable");
     assert!(changed.ok, "{changed:?}");
     let meshes = backend.stage_meshes().unwrap();
     let row = meshes
         .iter()
         .find(|mesh| mesh.object == OBJECT)
-        .expect("the box is drawn");
+        .expect("the fillet is drawn");
     assert_eq!(row.display.as_deref(), Some("wireframe"));
 
     let changed = backend
-        .evaluate("FreeCAD.ActiveDocument.Box.DisplayMode = 'ShadedWithEdges'")
+        .evaluate("FreeCAD.ActiveDocument.Fillet.DisplayMode = 'ShadedWithEdges'")
         .unwrap();
     assert!(changed.ok);
     let meshes = backend.stage_meshes().unwrap();
@@ -466,7 +489,7 @@ FerroCAD.display_mesh = _spy
     let meshes = backend.stage_meshes().unwrap();
     assert!(
         meshes.iter().any(|mesh| mesh.object == OBJECT),
-        "the document meshed the box itself"
+        "the document meshed the fillet itself"
     );
 
     let seen = backend.evaluate("str(sorted(calls))").expect("read back");

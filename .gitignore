@@ -30,6 +30,7 @@ __pycache__/
 !/mods/GridOverlayCoin/
 !/mods/AxisOverlay/
 !/mods/AxisOverlayCoin/
+!/mods/AxisOverlayJs/
 !/mods/GizmoOverlay/
 !/mods/GizmoOverlayShader/
 !/mods/Fasteners/

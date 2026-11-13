@@ -26,8 +26,8 @@ struct FakePage {
     ran: Mutex<Vec<String>>,
     /// The `(id, payload)` of each document event.
     events: Mutex<Vec<(String, String)>>,
-    /// The document API the page was handed, if it was.
-    kernel: Mutex<Option<Arc<dyn Fn(String) -> String + Send + Sync>>>,
+    /// The page's channels, as the host handed them over.
+    kernel: Mutex<Option<ferrocad_shell_js::Kernel>>,
 }
 
 impl Default for FakePage {
@@ -79,11 +79,8 @@ impl Page for FakePage {
         Ok(())
     }
 
-    fn install_kernel(
-        &self,
-        call: Arc<dyn Fn(String) -> String + Send + Sync>,
-    ) -> Result<(), String> {
-        *self.kernel.lock().unwrap() = Some(call);
+    fn install_kernel(&self, kernel: ferrocad_shell_js::Kernel) -> Result<(), String> {
+        *self.kernel.lock().unwrap() = Some(kernel);
         Ok(())
     }
 }
@@ -148,6 +145,23 @@ fn the_page_commands_become_palette_rows() {
     assert_eq!(rows[0].group, "JS");
     assert_eq!(rows[0].surface, "hidden");
     assert!(rows[0].enabled);
+}
+
+#[test]
+fn a_page_command_may_name_its_surface_and_parent() {
+    let page = Arc::new(FakePage {
+        commands: r#"[{"id":"AxisOverlayJs_Settings","label":"Axis Cross (JS)",
+            "group":"View","cmd_type":"ForView","surface":"axis",
+            "parent":"App_ToggleAxisCross"}]"#
+            .to_string(),
+        ..FakePage::default()
+    });
+    let rows = host(&page).commands();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].group, "View");
+    assert_eq!(rows[0].cmd_type, "ForView");
+    assert_eq!(rows[0].surface, "axis");
+    assert_eq!(rows[0].parent(), Some("App_ToggleAxisCross"));
 }
 
 #[test]
@@ -250,8 +264,10 @@ fn the_document_api_reaches_the_hosts_document() {
         .kernel
         .lock()
         .unwrap()
-        .clone()
-        .expect("the page took the document");
+        .as_ref()
+        .expect("the page took the document")
+        .call
+        .clone();
     let answer = call(r#"{"op":"commands"}"#.to_string());
 
     assert!(answer.contains("\"ok\":true"), "{answer}");

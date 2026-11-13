@@ -101,11 +101,13 @@ pub struct HostConfig {
     pub addons: Vec<std::path::PathBuf>,
     /// Which script halves to install (`--script-host=`, `FERROCAD_SCRIPT_HOST`).
     ///
-    /// Empty is the edition's engine, CPython. One entry is the common case; more than one
-    /// installs a chain whose **first** entry is the primary (B8c), and each entry has to
-    /// name a different language — `cpython,pywasm` is one host with two interpreters and is
-    /// refused. A configuration this build cannot serve is reported and replaced by
-    /// [`Runtime::Plain`].
+    /// Empty lets the boot decide: `FERROCAD_SCRIPT_HOST` wins when set; a `--addons`
+    /// selection derives its hosts from the mods named (B9a); otherwise the desktop
+    /// defaults to **both** hosts, CPython primary and the QuickJS page subordinate. One
+    /// entry selects that host alone; more than one installs a chain whose **first** entry
+    /// is the primary (B8c), and each entry has to name a different language —
+    /// `cpython,pywasm` is one host with two interpreters and is refused. A configuration
+    /// this build cannot serve is reported and replaced by [`Runtime::Plain`].
     pub script_hosts: Vec<Runtime>,
 }
 
@@ -184,18 +186,7 @@ pub fn run_with(config: HostConfig) {
     report_refused(&known, &prefs);
     // The scripting configuration: it decides which halves `install` composes, and a value
     // the command line got wrong is reported now rather than after the boot.
-    let runtimes = if config.script_hosts.is_empty() {
-        match Runtime::from_env_list() {
-            Ok(Some(runtimes)) => runtimes,
-            Ok(None) => derived_runtimes(&roots),
-            Err(error) => {
-                eprintln!("ferrocad: {error}");
-                derived_runtimes(&roots)
-            }
-        }
-    } else {
-        config.script_hosts.clone()
-    };
+    let runtimes = configured_runtimes(&config, &roots);
     // B10b: a manifest that asks for more than the installed engine can give is said once
     // and then granted as far as it goes. Refusing is not the policy yet.
     for warning in mods::under_granted(&mods::requests(&roots), &runtimes) {
@@ -392,6 +383,31 @@ fn report_refused(known: &[String], prefs: &Prefs) {
 /// — so the set is derived rather than typed. No mods keeps the edition's engine (CPython),
 /// because that is what a run without mods has always had; `--script-host=plain` is still
 /// how to ask for no console at all.
+/// The script halves a desktop boot installs.
+///
+/// `--script-host=`/`FERROCAD_SCRIPT_HOST` win. A `--addons` selection derives from the
+/// mods it named (B9a: a selection must not install a host for a mod it did not select).
+/// With neither, the desktop default is **both hosts** — CPython primary, the QuickJS
+/// page as its subordinate — so a JS workbench runs without a flag. A build without the
+/// `js` feature reports and skips the page in `compose_all`.
+fn configured_runtimes(config: &HostConfig, roots: &[std::path::PathBuf]) -> Vec<Runtime> {
+    if !config.script_hosts.is_empty() {
+        return config.script_hosts.clone();
+    }
+    match Runtime::from_env_list() {
+        Ok(Some(runtimes)) => runtimes,
+        Ok(None) if config.addons.is_empty() => {
+            eprintln!("ferrocad: installing cpython, js (desktop default)");
+            vec![Runtime::Cpython, Runtime::Js]
+        }
+        Ok(None) => derived_runtimes(roots),
+        Err(error) => {
+            eprintln!("ferrocad: {error}");
+            derived_runtimes(roots)
+        }
+    }
+}
+
 fn derived_runtimes(mods_dirs: &[std::path::PathBuf]) -> Vec<Runtime> {
     let kinds = mods::entry_kinds(mods_dirs);
     if kinds.is_empty() {
@@ -451,18 +467,7 @@ pub fn check_init(config: HostConfig) -> Result<(), String> {
     // to include "the script halves the mod set declares were composed": composing a bare
     // `engine()` here is how a derivation that asked for a half the build lacks went
     // unnoticed while it took the working interpreter down with it (fixed in `compose_all`).
-    let runtimes = if config.script_hosts.is_empty() {
-        match Runtime::from_env_list() {
-            Ok(Some(runtimes)) => runtimes,
-            Ok(None) => derived_runtimes(&roots),
-            Err(error) => {
-                eprintln!("ferrocad: {error}");
-                derived_runtimes(&roots)
-            }
-        }
-    } else {
-        config.script_hosts.clone()
-    };
+    let runtimes = configured_runtimes(&config, &roots);
     let addons = mods::addon_packs(&roots);
     let mut backend = backend::compose_all(&runtimes, &addons)?;
     let model = Shell::boot_with(&mut *backend)?;

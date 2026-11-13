@@ -37,6 +37,6 @@ pub use pixels::{Rect, Viewport};
 pub use ribbon::screen_ribbon;
 pub use state::{
     DepthCompare, DepthState, ProgramParameters, SHADOW_MAX, SHADOW_STRIDE, SHADOW_VECS,
-    ShadowFootprint, ShaderProgram, StateSnapshot, apply_shadows,
+    ShadowFootprint, ShaderProgram, StateSnapshot, apply_bounds, apply_shadows,
 };
 pub use workplane::WorkplaneFrame;

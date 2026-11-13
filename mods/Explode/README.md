@@ -21,6 +21,6 @@ this addon can read a placement, rewrite the base and hand the rotation back unt
 ## Running it
 
 `mods/<Name>/InitGui.js` is the JS half's entry file; the page is derived from the mod set
-(B9a), so a desktop build with `--features js` loads it with no switch. Writes go through
-`window.ferrocad.call`; a host that refuses them answers `{"ok": false, …}` and the command
-returns `false`.
+(B9a), so a desktop build loads it with no switch (`js` is a default feature, and the
+default composition is `cpython,js`). Writes go through `window.ferrocad.call`; a host
+that refuses them answers `{"ok": false, …}` and the command returns `false`.

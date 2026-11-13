@@ -31,6 +31,7 @@ use crate::commands::{CommandInfo, CommandOutcome};
 use crate::display::StageMesh;
 use crate::events::DocumentEvent;
 use crate::selection::SelectionItem;
+use crate::settings::SettingValue;
 use crate::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
     GridSummary, OpenedDocument, PropRow, ProviderFeature, SelectionRequest, SetResult,
@@ -668,6 +669,13 @@ pub trait ScriptHost {
     /// What a `FreeCADGui` command reads to answer `IsChecked`.
     fn on_view_state_changed(&self, _state: &ViewState) {}
 
+    /// Seed one host-store value into the script's own parameter store.
+    ///
+    /// The browser's Python parameter store is memory-only, so a settings file imported
+    /// into the host store would otherwise be invisible to `FerroCAD.Grid`/`Axis` and the
+    /// provider registry. A host with no parameter store leaves the default.
+    fn set_setting(&self, _group: &str, _name: &str, _value: &SettingValue) {}
+
     /// The document changed: announce one edit, then its recompute.
     ///
     /// A notification, not a query — the transaction has committed (for
@@ -704,6 +712,17 @@ pub trait ScriptHost {
         None
     }
 
+    /// Deactivate `feature`'s applied backend without selecting another one.
+    ///
+    /// The chain calls this on a host that is losing a feature to a backend it does
+    /// not list: the host runs its own `deactivate` (removing an overlay, releasing a
+    /// native-layer claim) and remembers that nothing is applied. Without it a switch
+    /// that crosses hosts left the outgoing host drawing beside the incoming one.
+    /// `None` when the script has no provider registry or was not drawing `feature`.
+    fn release_provider(&self, _feature: &str) -> Option<CommandOutcome> {
+        None
+    }
+
     /// Re-read `feature`'s registry (a mod's `SetUp` may have changed it).
     fn refresh_providers(&self, _feature: &str) -> Option<CommandOutcome> {
         None
@@ -733,6 +752,16 @@ pub trait ScriptHost {
     /// Cancel a dialog the script opened on `token`.
     fn dialog_cancel(&self, _token: &str) -> Option<CommandOutcome> {
         None
+    }
+
+    /// Whether this host minted the dialog `token` names.
+    ///
+    /// A [`HostChain`](crate::HostChain) routes an accept/cancel to the member that owns
+    /// the token: the primary owns the console, but a subordinate may have opened the
+    /// dialog. The default is `false`; a host whose tokens carry a prefix answers from it,
+    /// and a chain with no claimant falls back to its primary for compatibility.
+    fn owns_dialog(&self, _token: &str) -> bool {
+        false
     }
 
     /// The GPU adapter preference the script's config stores.

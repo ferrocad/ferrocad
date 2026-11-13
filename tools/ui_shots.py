@@ -56,15 +56,13 @@ DEFAULT_SCREEN = (1800, 1200)
 
 #: One entry per figure.
 #:
-#: The two sources boot the same provider set. The browser page ships no `mods/`
-#: (there is no filesystem to scan), so the document half answers `grid` and
-#: `axis` with its native provider. The Desktop captures therefore run with an
-#: empty mod set (see `desktop_capture_config`): loading every package would let a
-#: saved `Providers/<feature>` preference, or the `*Coin`/`*Shader` backends'
-#: defaults, pick a different provider than the Web tab. Both sources also receive
-#: the same whole settings file: the Desktop reads it as its parameter store and
-#: every Web section passes it as `settings_file=<url>`, so the grid, axis and
-#: gizmo values cannot drift between the tabs.
+#: The two sources load the same Python workbenches: the Desktop from
+#: `CAPTURE_MODS`, the Web from the fetched `www/mods/index.json` packs. Both keep
+#: the user's provider choices (the Coin grid and axis included), so the tabs draw
+#: the same grid. Both sources also receive the same whole settings file: the
+#: Desktop reads it as its parameter store and every Web section passes it as
+#: `settings_file=<url>`, so the grid, axis and gizmo values cannot drift between
+#: the tabs.
 #:
 #: * `source` is `web` or `xephyr`.
 #: * `query` is the page harness URL (web only).
@@ -159,16 +157,17 @@ SECTIONS = {
         "box": (16, 928, 358, 38),
         "crop": (12, 924, 366, 46),
     },
-    # The browser sample is centred on the origin; translate it to the desktop's
-    # corner origin, install both script halves, and import the shared settings
-    # file so the Move figure matches the desktop and shows the Grid settings.
+    # The capture arms the transform on the visible Fillet, with an identity matrix:
+    # the triad then sits at the feature's own origin (0, 0, 0), which is the box's
+    # corner in this sample, as it does after the desktop's click. Targeting `Box`
+    # here used to apply a +5 mm translation and move the body away from the triad.
     "move-web": {
         "source": "web",
         "label": "Move (Web)",
-        "query": "?manipulator=transform:apply:Box::1,0,0,5,0,1,0,5,0,0,1,5,0,0,0,1&select=745,410&runtime=pywasm,js",
+        "query": "?manipulator=transform:apply:Fillet::1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1&select=745,410&runtime=pywasm,js",
         "window": (1600, 1000),
-        "box": (10, 884, 492, 38),
-        "crop": (8, 880, 496, 46),
+        "box": (543, 360, 180, 178),
+        "crop": (530, 354, 214, 194),
     },
     "move-desktop": {
         "source": "xephyr",
@@ -202,13 +201,15 @@ SECTIONS = {
         "box": (660, 380, 250, 240),
         "crop": (650, 375, 260, 250),
     },
+    # Both script halves plus the Part contribution draw the same stem the desktop
+    # shows: select the visible body, arm Slot 2, then press the face the stem leaves.
     "extrude-web": {
         "source": "web",
         "label": "Extrude (Web)",
-        "query": "?select=600,400&keys=2",
+        "query": "?select=600,400&keys=2;wait:500;press:740,450;move:740,450;wait:500&runtime=pywasm,js",
         "window": (1600, 1000),
-        "box": (106, 926, 106, 42),
-        "crop": (98, 919, 122, 56),
+        "box": (728, 540, 235, 130),
+        "crop": (718, 528, 255, 154),
     },
     "extrude-desktop": {
         "source": "xephyr",
@@ -222,13 +223,15 @@ SECTIONS = {
         "box": (1020, 435, 250, 65),
         "crop": (1010, 425, 270, 85),
     },
+    # The dress-up handle is contributed by the same Part factory as the edition's, so
+    # the browser's figure shows the radius scrubber on the edge it selected.
     "fillet-web": {
         "source": "web",
         "label": "Fillet (Web)",
-        "query": "?select=600,400&keys=3",
+        "query": "?select=600,400&keys=3;wait:500;press:760,260;move:760,260;wait:500&runtime=pywasm,js",
         "window": (1600, 1000),
-        "box": (212, 926, 76, 42),
-        "crop": (204, 919, 92, 56),
+        "box": (670, 185, 125, 60),
+        "crop": (658, 176, 149, 78),
     },
     "fillet-desktop": {
         "source": "xephyr",
@@ -298,6 +301,19 @@ def _app_binary(path: Path) -> Path:
 #: another file.
 DESKTOP_SETTINGS = Path.home() / ".config" / "ferrocad" / "parameters.json"
 
+#: The Python workbenches the page's `www/mods/index.json` carries. The desktop is
+#: given the same explicit list, so the two tabs load the same providers and cards
+#: (the JS/wasm packages are not Python packs and are not part of this set).
+CAPTURE_MODS = (
+    "mods/AxisOverlay",
+    "mods/AxisOverlayCoin",
+    "mods/GizmoOverlay",
+    "mods/GizmoOverlayShader",
+    "mods/GridOverlay",
+    "mods/GridOverlayCoin",
+)
+
+
 
 def _seed_settings() -> dict:
     """A minimal whole settings file for a machine with no desktop store yet."""
@@ -327,7 +343,8 @@ def resolve_capture_settings(
     snapshot is taken once per run, so a live write from another process cannot
     make one section use different values than the next. Every app launch gets its
     own copy of the snapshot, so the app's shutdown write never touches it or the
-    user's store.
+    user's store. The provider choice and every appearance value stay the
+    desktop's own, so the Coin grid and axis are captured as the user runs them.
     """
     if explicit:
         source = Path(explicit).expanduser()
@@ -341,9 +358,10 @@ def resolve_capture_settings(
     workspace = tempfile.TemporaryDirectory(prefix="ferrocad-settings-")
     path = Path(workspace.name) / "parameters.json"
     if source is None:
-        path.write_text(json.dumps(_seed_settings()), encoding="utf-8")
+        data = _seed_settings()
     else:
-        shutil.copyfile(source, path)
+        data = json.loads(source.read_text(encoding="utf-8"))
+    path.write_text(json.dumps(data), encoding="utf-8")
     return path, workspace
 
 
@@ -353,26 +371,19 @@ def desktop_capture_config(
 ) -> tuple[tempfile.TemporaryDirectory, list[str], dict[str, str]]:
     """A throwaway desktop configuration shared by the still and GIF tools.
 
-    The browser page ships no `mods/` (there is no filesystem to scan), so the
-    document half answers `grid`/`axis`/`gizmo` with its native provider. An
-    empty `--addons` directory gives the desktop the same provider set: loading
-    every package would let a saved `Providers/<feature>` choice, or the
-    `*Coin`/`*Shader` backends' defaults, select a different provider than the
-    Web tab. The edition's own app script and commands still load; only the
-    `mods/` packages are dropped.
-
-    The settings file is copied into the workspace and becomes the app's
-    parameter file. The desktop and the browser therefore read exactly the same
-    values, and the copy means the app's shutdown write cannot modify the source.
+    The app is launched with [`CAPTURE_MODS`], the same six Python workbenches the
+    page's pack index carries, so the two tabs have the same settings cards and
+    provider registry. The settings file is copied into the workspace and becomes
+    the app's parameter file; its provider choices and appearance values are the
+    user's own, and the copy means the app's shutdown write cannot modify the
+    source.
     """
     workspace = tempfile.TemporaryDirectory(prefix="ferrocad-capture-")
-    addons = Path(workspace.name) / "addons"
-    addons.mkdir()
     parameters = Path(workspace.name) / "parameters.json"
     shutil.copyfile(settings, parameters)
     return (
         workspace,
-        [str(app), f"--addons={addons}"],
+        [str(app), *(f"--addons={mod}" for mod in CAPTURE_MODS)],
         {"FERROCAD_PARAM_FILE": str(parameters)},
     )
 
@@ -560,6 +571,12 @@ def _capture_web(spec: dict, args, raw: Path, settings: Path) -> None:
         query += ("&" if query != "?" else "") + f"settings_file={settings_name}"
         url = f"http://127.0.0.1:{port}/{query}"
         with tempfile.TemporaryDirectory(prefix="ferrocad-chrome-") as profile:
+            # Keep Chrome's own temp and cache trees inside the profile. With
+            # `--user-data-dir` it normally leaves no `google-chrome-headless/scoped_dir`
+            # behind, but a killed capture can; this makes the cleanup cover that too.
+            env = os.environ.copy()
+            env["TMPDIR"] = profile
+            env["XDG_CACHE_HOME"] = str(Path(profile) / "cache")
             command = [
                 chrome,
                 "--headless=new",
@@ -578,6 +595,7 @@ def _capture_web(spec: dict, args, raw: Path, settings: Path) -> None:
             proc = subprocess.run(
                 command,
                 cwd=REPO,
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=args.wait + 180.0,

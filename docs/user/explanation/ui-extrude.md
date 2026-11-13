@@ -15,24 +15,27 @@ the face grows a stem along its outward normal.
 <figcaption><strong>Desktop</strong> — the Parametric edition. The amber stem leaves the selected face along its normal; the label is the signed distance. Slot 2 is armed and the header shows the <code>Face</code> filter. Close-up: the stem and the <code>extrude 0.00 mm</code> label at rest.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
-<img src="../images/ui-extrude-web-window.png" alt="The armed Push/Pull slot in the browser build">
-<img class="fc-tabs__closeup" src="../images/ui-extrude-web.png" alt="Close-up of the armed Push/Pull slot">
-<figcaption><strong>Web</strong> — the same slot, armed, with no stem. The browser host sets the <code>Face</code> filter and reports <code>tool: Push/Pull</code>, but it does not contribute the Part manipulator, so there is nothing on the face to drag. The cyan box marks the armed slot.</figcaption>
+<img src="../images/ui-extrude-web-window.png" alt="The Push/Pull stem highlighted in the browser build">
+<img class="fc-tabs__closeup" src="../images/ui-extrude-web.png" alt="Close-up of the Push/Pull stem">
+<figcaption><strong>Web</strong> — the browser build with both script halves. The same amber stem leaves the selected face; the header shows the <code>Face</code> filter and the status reports <code>tool: Push/Pull</code>. Close-up: the stem and the <code>extrude 0.00 mm</code> label at rest.</figcaption>
 </figure>
 </div>
 
 ![Dragging the Push/Pull stem](../images/ui-pushpull.gif)
 
 *Animation (desktop): select a face, drag the amber stem, then release. The label tracks
-the signed distance and the translucent preview follows the drag; the solid appears on
-release.*
+the signed distance and a translucent swept volume follows the drag; the release leaves
+the distance pending, and the solid appears when you accept it with `✓`.*
 
 ## The stem
 
 - The **sign** is the verb. A positive distance is an **extrude** (a fuse); a negative
   distance is a **pocket** (a cut). The label follows the drag.
-- A drag previews the result; the commit is one document transaction, so undo reverses
-  the extrude or pocket as one step.
+- A drag previews the result as a translucent **swept volume** (the face plus the walls it
+  pushes out), and the release leaves it **pending**: the ghost stays at the distance and
+  `✓` (or `Enter`) applies it while `✗` (or `Esc`) puts the stem back at rest. Drag the
+  stem again to adjust the held distance — it continues from the value you left. The
+  commit is one document transaction, so undo reverses the extrude or pocket as one step.
 - Push/Pull defaults the topology filter to `Face`, so the click keeps the face you
   pointed at instead of reporting the whole body. The header's `Select ▾` can override
   the filter without changing the hand.
@@ -42,17 +45,13 @@ or cut). The intermediate extrusion is hidden, so the result is the only solid d
 This is the Parametric edition's workbench hook, not a shell operation: the same neutral
 commit is what a BIM or future workbench would receive.
 
-## The browser build does not have it yet
+## Where it runs
 
-The browser shell arms the Push/Pull slot and sets the `Face` filter, but it does not
-contribute the Part manipulator, so **no stem appears**. Its Rust document backend also
-declines the `push_pull` / `extrude` commit as "not available in this build".
-
-Closing the gap needs both halves: `ferrocad_part_gui::push_pull_manipulator` added to
-the web shell's contributions, and a Rust commit path that builds the extrusion and
-boolean. That is a workbench feature, not a screenshot fix, so the **desktop** tab is the
-working reference and the **web** tab records the gap. The gap is listed in the browser
-host's [limits](../../../crates/ferrocad_web_gpui/README.md#what-it-does-not-have-yet).
+Push/Pull is part of the shared shell, and `ferrocad_part_gui::push_pull_manipulator`
+is installed on both hosts. The **desktop** tab is the Parametric edition; the **web**
+tab is the WebGL2 build, where the same factory draws the stem over the wasm kernel and
+the document half applies the commit. Both hosts select the face, preview the drag and
+commit one transaction; only the surrounding window and the sample geometry differ.
 
 The slot, filter and pending-session rules are in
 [The tool loadout](ui-tool-loadout.md) and

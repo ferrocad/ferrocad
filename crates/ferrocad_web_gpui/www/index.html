@@ -18,12 +18,22 @@
 
     const params = new URLSearchParams(location.search);
 
-    // The loader's half of the document doorway. `JsScriptHost::with_kernel` calls this
-    // once at boot with a function that reaches the host's one document (JSON in, JSON
-    // out). A page without this line still renders the shell; only an addon that edits
-    // the document is missing.
-    window.__ferrocadInstallKernel = (call) => {
-      window.ferrocad = { call };
+    // The loader's half of the host kernel. `JsScriptHost::with_kernel` calls this once
+    // at boot with JSON-in/JSON-out functions: the document API, the program-overlay
+    // channel, and the two presentation queues (a `{"view": …}` request and a dialog
+    // spec). Each sink answers `""` on success or the reason it refused. A page without
+    // this line still renders the shell; only an addon that uses the kernel is missing.
+    window.__ferrocadInstallKernel = (call, overlay, view, dialog) => {
+      const checked = (sink) => (text) => {
+        const error = sink(text);
+        if (error) throw new Error(error);
+      };
+      window.ferrocad = {
+        call,
+        overlay: checked(overlay),
+        view: checked(view),
+        dialog: checked(dialog),
+      };
     };
     // `?reopen=1` captures the next save instead of downloading it, then opens those
     // bytes again -- the save/open round trip through the real commands.
@@ -99,6 +109,37 @@
     if (runsJs) {
       const { install } = await import("./js-demo.js");
       install();
+
+      // JS workbenches travel beside the Python packs: `tools/mods_pack.py` copies
+      // each `mods/<Name>/InitGui.js` to `mods/<Name>.js` and names it in the index's
+      // `js` list. The page imports them before the module boots, so their commands
+      // are part of the first `commands()` read and `window.ferrocad` is installed
+      // by then (their commands use it lazily). `?mods=0` switches both halves off.
+      const modsParam = params.get("mods");
+      const off = ["0", "off", "no", "none", "false"];
+      const on = ["", "1", "on", "yes", "true"];
+      const normal = (modsParam ?? "").trim().toLowerCase();
+      if (!off.includes(normal)) {
+        const indexUrl = on.includes(normal) ? "mods/index.json" : modsParam;
+        try {
+          const response = await fetch(new URL(indexUrl, location.href));
+          if (response.ok) {
+            const index = await response.json();
+            for (const entry of index.js ?? []) {
+              try {
+                const url = new URL(entry.module, new URL(indexUrl, location.href));
+                const module = await import(url.href);
+                module.install();
+                console.log("ferrocad js: installed", entry.name);
+              } catch (error) {
+                console.log("ferrocad js: mod failed", entry.name, String(error));
+              }
+            }
+          }
+        } catch (error) {
+          console.log("ferrocad js: mod index failed", String(error));
+        }
+      }
     }
 
     // `?addons=1` loads the JS workbench bundle and `?addons=wasm` the wasm one. Both

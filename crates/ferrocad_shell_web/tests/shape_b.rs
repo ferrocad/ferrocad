@@ -185,6 +185,16 @@ fn a_script_half_draws_what_the_document_cannot() {
     let (api, mut backend) = compose(Arc::new(Mutex::new(Vec::new())));
     let boot = backend.bootstrap().expect("the sample boots");
     assert_eq!(boot.document, "Sample");
+    // Both hosts boot the one checked-in archive, so the whole tree is the same.
+    let tree = backend.model_tree().expect("a model tree");
+    let objects: Vec<&str> = tree
+        .iter()
+        .flat_map(|document| &document.objects)
+        .map(|object| object.name.as_str())
+        .collect();
+    for name in ["Params", "Derived", "Group", "Box", "Fillet"] {
+        assert!(objects.contains(&name), "the sample's objects: {objects:?}");
+    }
     create_toy(&api);
 
     let stage = backend.stage_meshes().expect("a stage");

@@ -73,7 +73,7 @@ export function install() {
     })),
   );
 
-  window.__ferrocadJs = {
+  window.__ferrocadJs = Object.assign({}, page, {
     active: page.active ?? (() => true),
     commands: () => JSON.stringify(commands),
     evaluate: page.evaluate ?? ((code) => `js: ${code}`),
@@ -85,7 +85,5 @@ export function install() {
       return page.runCommand ? page.runCommand(id) : false;
     },
     stageMeshes: page.stageMeshes ?? (() => "[]"),
-    onEvent: page.onEvent,
-    onDocumentEvent: page.onDocumentEvent,
-  };
+  });
 }

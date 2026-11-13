@@ -97,11 +97,11 @@ capture() {
     # `$CHROME_FLAGS` is word-split on purpose: it is a flag list, not one argument.
     # shellcheck disable=SC2086
     if command -v timeout >/dev/null 2>&1; then
-        timeout 180 "$CHROME" $CHROME_FLAGS --screenshot="$TMP/screenshot.png" \
-            "$BASE$1" >>"$log" 2>&1 || true
+        timeout 180 "$CHROME" $CHROME_FLAGS --user-data-dir="$PROFILE" \
+            --screenshot="$TMP/screenshot.png" "$BASE$1" >>"$log" 2>&1 || true
     else
-        "$CHROME" $CHROME_FLAGS --screenshot="$TMP/screenshot.png" \
-            "$BASE$1" >>"$log" 2>&1 || true
+        "$CHROME" $CHROME_FLAGS --user-data-dir="$PROFILE" \
+            --screenshot="$TMP/screenshot.png" "$BASE$1" >>"$log" 2>&1 || true
     fi
 }
 
@@ -478,6 +478,12 @@ if ! CHROME="$(find_chrome)"; then
 fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/ferrocad-smoke.XXXXXX")"
+# One private profile for every capture. Without `--user-data-dir`, headless Chrome
+# creates `$XDG_CACHE_HOME/google-chrome-headless/scoped_dir*` (its disk and wasm
+# code cache, ~80 MB per run) and leaves it behind when the process is killed. The
+# profile lives under `$TMP`, so a successful run removes it with the rest.
+PROFILE="$TMP/chrome-profile"
+mkdir -p "$PROFILE"
 
 # The packs the page fetches are generated from `mods/` (the directory is ignored, so a
 # fresh checkout has none). Regenerate them, so the mods leg asserts on the tree rather

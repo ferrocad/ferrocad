@@ -63,7 +63,7 @@ The rationale and the edition-side rules are in
 | command resources and enablement | `FreeCADGui._command_list()`, `FreeCADGui.listCommands()` |
 | running a command | `ferrocad_shell.run_command(id)` or `FreeCADGui.runCommand(id)` |
 | dialogs, accept and cancel | `ferrocad_shell.dialog_accept` / `dialog_cancel` |
-| provider selection and switching | `registerProvider`, `activeProvider`, `setActiveProvider`, `refreshProviders` |
+| provider selection and switching | `registerProvider`, `activeProvider`, `setActiveProvider`, `deactivateProvider`, `refreshProviders` |
 | selection-dependent `IsActive` | `ferrocad_shell.set_selection(...)` |
 | view-dependent `IsChecked` | `ferrocad_shell.set_view_state(...)` |
 | display meshes | `FerroCAD.display_mesh(obj)` or `ferrocad_shell.stage_meshes()` |

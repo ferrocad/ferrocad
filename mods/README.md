@@ -14,12 +14,16 @@ workbenches (default `Draft`, at the pinned revision `FERROCAD_FREECAD_TAG`) and
 copies them in as loose files. Authored workbenches are part of the tree and are
 tracked normally; fetched upstream trees are gitignored (the `.gitignore`
 negates `mods/GridOverlay/`, `mods/GridOverlayCoin/`, `mods/AxisOverlay/`,
-`mods/AxisOverlayCoin/`, `mods/GizmoOverlay/` and `mods/GizmoOverlayShader/`, the
-authored workbenches). The authored workbenches are
+`mods/AxisOverlayCoin/`, `mods/AxisOverlayJs/`, `mods/GizmoOverlay/` and
+`mods/GizmoOverlayShader/`, the authored workbenches). The authored workbenches are
 the grid backends (`GridOverlay`, `GridOverlayCoin`), `AxisOverlay`, the
 native axis-cross settings surface added when the axis cross moved out of the
-grid capability, and `AxisOverlayCoin`, the Coin/WGSL axis-cross backend. The gizmo
-capability follows the same split: `GizmoOverlay` is the native settings surface and
-`GizmoOverlayShader` supplies the `ferrocad-shader` skin from its own
-`Resources/gizmo_skin.wgsl`. The
-release workflow runs `cargo xtask mods` before packaging.
+grid capability, `AxisOverlayCoin`, the Coin/WGSL axis-cross backend, and
+`AxisOverlayJs`, the same cross as a JS workbench publishing its shader through
+`window.ferrocad.overlay` and registering the `axis`/`js` provider. The gizmo
+capability follows the same split:
+`GizmoOverlay` is the native settings surface and `GizmoOverlayShader` supplies
+the `ferrocad-shader` skin from its own `Resources/gizmo_skin.wgsl`. The
+script-only workbenches are `Explode` and `Fasteners` (JS, over the document API)
+and `Spring` (a sandboxed wasm bundle). The release workflow runs `cargo xtask
+mods` before packaging.

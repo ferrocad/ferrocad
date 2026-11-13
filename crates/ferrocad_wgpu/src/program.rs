@@ -26,7 +26,7 @@
 //! | binding | block | size | contents |
 //! | --- | --- | ---: | --- |
 //! | 0 | `Frame` | 256 B | `view_proj`, `inv_view_proj`, world-space `eye`, `flags = [perspective, width, height, 0]`, then the host workplane: `workplane_origin = [x, y, z, patch_radius]`, `workplane_u`, `workplane_v`, `workplane_n`, `workplane_steps = [minor, major, 0, 0]`, `grid_stroke = [minor_lines, major_width, minor_width, 0]` |
-//! | 1 | `Program` | 1392 B | `grid_color.rgb` (+ spare), `values = [base_spacing, minor_alpha, major_alpha, shadow_opacity]`, `counts = [shadow_count, 0, 0, 0]`, 80 zero `vec4`s, then the axis extension: `axis_y`, `axis_z`, `axis_values = [length, width, opacity, ghost_alpha]`, `axis_flags = [origin, labels, 0, 0]` |
+//! | 1 | `Program` | 1424 B | `grid_color.rgb` (+ spare), `values = [base_spacing, minor_alpha, major_alpha, shadow_opacity]`, `counts = [shadow_count, grid_axes, 0, 0]`, 80 zero `vec4`s, then the axis extension: `axis_y`, `axis_z`, `axis_values = [length, width, opacity, ghost_alpha]`, `axis_flags = [origin, labels, 0, 0]`, and the host stage bounds: `bounds_min`, `bounds_max` (`xyz` + `w = 1` when claimed) |
 //!
 //! Binding 0 is a dynamic-offset uniform (one slot per view, so several cameras share
 //! one buffer); binding 1 is a per-program buffer keyed on the fingerprint. Every scene
@@ -45,9 +45,10 @@
 //! Shadows are populated by the scene producer (`ferrocad_graphics::apply_shadows`):
 //! the `Program` block carries up to 64 slots of `(centre, half-extent, blur)` and
 //! `counts.x` is the slot count, so `grid_overlay.wgsl`'s loop runs only when the scene
-//! supplied footprints. The four trailing axis `vec4`s are a backward-compatible
-//! extension: the grid shader reads only the prefix, while `axis_overlay.wgsl` declares
-//! the whole block.
+//! supplied footprints. `counts.y` is the Coin grid's `grid_axes` switch (`1` draws the
+//! two in-plane X/Y lines, `0` hides them; the native ground has no such lines). The
+//! four trailing axis `vec4`s are a backward-compatible extension: the grid shader reads
+//! only the prefix, while `axis_overlay.wgsl` declares the whole block.
 
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -62,8 +63,9 @@ use crate::pipeline::DEPTH_FORMAT;
 
 /// The `Frame` block's size (the WGSL layout: two matrices, seven `vec4`s).
 pub const FRAME_SIZE: u64 = 256;
-/// The `Program` block's size (three `vec4`s, 80 shadow `vec4`s, and four axis `vec4`s).
-pub const PROGRAM_SIZE: u64 = 1_392;
+/// The `Program` block's size (three `vec4`s, 80 shadow `vec4`s, four axis `vec4`s and
+/// the two host-bounds `vec4`s).
+pub const PROGRAM_SIZE: u64 = 1_424;
 
 /// The per-view `Frame` uniform (group 2, binding 0).
 ///
@@ -211,7 +213,7 @@ pub struct ProgramBlock {
     pub grid_color: [f32; 4],
     /// `[base_spacing, minor_alpha, major_alpha, shadow_opacity]`.
     pub values: [f32; 4],
-    /// `[shadow_count, 0, 0, 0]`.
+    /// `[shadow_count, grid_axes, 0, 0]`.
     pub counts: [f32; 4],
     /// 80 `vec4`s: 64 shadow slots of 5 floats re-packed on 16-byte boundaries.
     pub shadows: [[f32; 4]; 80],
@@ -223,6 +225,10 @@ pub struct ProgramBlock {
     pub axis_values: [f32; 4],
     /// `[axis_origin, axis_labels, 0, 0]`.
     pub axis_flags: [f32; 4],
+    /// The stage's world AABB minimum (`xyz`); `w = 1` when the host claimed it.
+    pub bounds_min: [f32; 4],
+    /// The stage's world AABB maximum (`xyz`); `w = 1` when the host claimed it.
+    pub bounds_max: [f32; 4],
 }
 
 impl ProgramBlock {
@@ -239,7 +245,7 @@ impl ProgramBlock {
                 parameters.major_alpha,
                 parameters.shadow_opacity,
             ],
-            counts: [parameters.shadow_count, 0.0, 0.0, 0.0],
+            counts: [parameters.shadow_count, parameters.grid_axes, 0.0, 0.0],
             shadows: parameters.shadow_data,
             axis_y: [yr, yg, yb, 0.0],
             axis_z: [zr, zg, zb, 0.0],
@@ -255,6 +261,8 @@ impl ProgramBlock {
                 0.0,
                 0.0,
             ],
+            bounds_min: parameters.bounds_min,
+            bounds_max: parameters.bounds_max,
         }
     }
 }
@@ -870,7 +878,7 @@ mod tests {
         let block = ProgramBlock::new(&parameters);
         assert_eq!(block.grid_color, [0.1, 0.2, 0.3, 0.0]);
         assert_eq!(block.values, [2.5, 0.4, 0.6, 0.0]);
-        assert_eq!(block.counts, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(block.counts, [0.0, 1.0, 0.0, 0.0]);
         assert!(block.shadows.iter().flatten().all(|value| *value == 0.0));
     }
 
@@ -895,7 +903,11 @@ mod tests {
         );
 
         let block = ProgramBlock::new(&parameters);
-        assert_eq!(block.counts, [2.0, 0.0, 0.0, 0.0], "counts.x is the slot count");
+        assert_eq!(
+            block.counts,
+            [2.0, 1.0, 0.0, 0.0],
+            "counts.x is the slot count, counts.y is grid_axes"
+        );
         assert_eq!(block.values[3], 0.3, "the shared strength still rides values.w");
 
         // Slot 0: [centre.x, centre.y, half.x, half.y] then blur in the next vec4.
@@ -928,6 +940,8 @@ mod tests {
             axis_ghost_alpha: 0.2,
             axis_origin: 0.0,
             axis_labels: 1.0,
+            bounds_min: [1.0, 2.0, 3.0, 1.0],
+            bounds_max: [4.0, 5.0, 6.0, 1.0],
             ..Default::default()
         };
         let block = ProgramBlock::new(&parameters);
@@ -935,11 +949,15 @@ mod tests {
         assert_eq!(block.axis_z, [0.4, 0.5, 0.6, 0.0]);
         assert_eq!(block.axis_values, [120.0, 2.5, 0.5, 0.2]);
         assert_eq!(block.axis_flags, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(block.bounds_min, [1.0, 2.0, 3.0, 1.0]);
+        assert_eq!(block.bounds_max, [4.0, 5.0, 6.0, 1.0]);
 
         // The axis tail starts after the grid prefix (three vec4s + 80 shadow vec4s).
         let bytes = bytemuck::bytes_of(&block);
         assert_eq!(&bytes[1_328..1_344], bytemuck::bytes_of(&block.axis_y));
-        assert_eq!(&bytes[1_376..], bytemuck::bytes_of(&block.axis_flags));
+        assert_eq!(&bytes[1_376..1_392], bytemuck::bytes_of(&block.axis_flags));
+        assert_eq!(&bytes[1_392..1_408], bytemuck::bytes_of(&block.bounds_min));
+        assert_eq!(&bytes[1_408..1_424], bytemuck::bytes_of(&block.bounds_max));
     }
 
     /// The pipeline key is a pure function of the program and the depth state.

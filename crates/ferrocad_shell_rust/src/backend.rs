@@ -24,7 +24,7 @@ use ferrocad_shell_api::commands::{CommandInfo, CommandOutcome};
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_api::events::DocumentEvent;
 use ferrocad_shell_api::selection::SelectionItem;
-use ferrocad_shell_api::settings::{MemorySettings, SettingKind, SettingsBackend};
+use ferrocad_shell_api::settings::{MemorySettings, SettingKind, SettingValue, SettingsBackend};
 use ferrocad_shell_api::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GridProvider, GridSummary,
     ObjectNode, OpenedDocument, PropRow, ProviderFeature, SetResult, VisibilityOutcome,
@@ -69,6 +69,18 @@ const PUSH_PULL: &str = "push_pull";
 
 /// The sample document's name (the window title and the status line use it).
 const DOCUMENT: &str = "Sample";
+
+/// The prefix of a script-owned settings node (`Settings/Axis`, `Settings/Grid`).
+const SETTINGS_NODE: &str = "Settings/";
+
+/// The settings group a composition keeps its provider choice in.
+///
+/// This is the key the Python facade already reads and writes for the backends its own
+/// interpreter registers — `FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mods")`
+/// `.GetGroup("Providers").GetString(feature, "")` — so one store answers for both
+/// halves, including a backend only the page lists, which the facade itself can never
+/// name (its `_selected` falls back to priority for a value it does not register).
+const PROVIDER_GROUP: &str = "Mods/Providers";
 
 /// The one startup document both hosts boot.
 ///
@@ -123,6 +135,13 @@ struct State {
     /// How many Move dialogs this backend has minted, so two open forms cannot spend
     /// each other's token.
     move_dialogs: u64,
+    /// The claim the loaded provider last stated (`axis.overlay`, `grid_overlay`).
+    ///
+    /// Kept apart from [`view`](Self::view) because the boot request is rebuilt from the
+    /// store, not from the mirror: without this a restored provider's claim never
+    /// reached the first frame, and the native triad drew beside the overlay that
+    /// replaced it.
+    provider_claim: ViewRequest,
 }
 
 /// What one edit did, kept after the document borrow is released.
@@ -191,6 +210,7 @@ impl RustAppBackend {
                 snap: false,
                 selection: Vec::new(),
                 move_dialogs: 0,
+                provider_claim: ViewRequest::default(),
             }),
             boot_error: None,
             script: None,
@@ -210,6 +230,7 @@ impl RustAppBackend {
                 snap: false,
                 selection: Vec::new(),
                 move_dialogs: 0,
+                provider_claim: ViewRequest::default(),
             }),
             boot_error,
             script: None,
@@ -228,11 +249,9 @@ impl RustAppBackend {
         {
             let mut state = self.state.borrow_mut();
             state.view = appearance_settings::load(settings.as_ref(), &state.view);
-            if let Some(script) = &self.script {
-                seed_script_settings(script.as_ref(), settings.as_ref());
-            }
             state.settings = settings;
         }
+        self.hydrate_script();
         self
     }
 
@@ -247,7 +266,121 @@ impl RustAppBackend {
         script: Box<dyn ferrocad_shell_api::app::ScriptHost>,
     ) -> Self {
         self.script = Some(script);
+        self.hydrate_script();
         self
+    }
+
+    /// Push the host's store into the script half, then re-apply its provider choices.
+    ///
+    /// Called from whichever of [`with_settings_backend`](Self::with_settings_backend)
+    /// and [`with_script_host`](Self::with_script_host) completes the pair, because a
+    /// composition builds them in either order (the desktop installs the store first,
+    /// the browser the script first).
+    ///
+    /// The restore is the read half of what [`set_property`](AppBackend::set_property) and
+    /// [`set_provider`](AppBackend::set_provider) write: either switch records the chosen
+    /// backend in `Mods/Providers`, the same key `FerroCADGui` keeps its own choice in, so
+    /// the composition — not one half — owns the selection. That is what lets a backend
+    /// only the page lists (the JS axis cross) come back after a restart instead of the
+    /// native one it displaced: the switch runs through the host's own `set_provider`, so
+    /// the losing half is released exactly as a click on the selector row would release
+    /// it.
+    fn hydrate_script(&self) {
+        let Some(script) = self.script.as_deref() else {
+            return;
+        };
+        // The store's values reach the script half first: a provider that reads its own
+        // settings while activating has to see them.
+        {
+            let state = self.state.borrow();
+            seed_script_settings(script, state.settings.as_ref());
+        }
+        // Read the choices before switching anything, so no borrow of `state` is held
+        // across a callback that may write through it.
+        let chosen: Vec<(String, String)> = {
+            let state = self.state.borrow();
+            script
+                .provider_features()
+                .into_iter()
+                .filter_map(|feature| {
+                    let stored = stored_provider(state.settings.as_ref(), &feature.feature)?;
+                    // A backend this build no longer lists is the host's own business:
+                    // its registry keeps the default, and the stale entry stays until
+                    // the next switch overwrites it.
+                    if !feature
+                        .providers
+                        .iter()
+                        .any(|provider| provider.backend == stored)
+                    {
+                        return None;
+                    }
+                    let active = feature.providers.iter().find(|provider| provider.active);
+                    (active.map(|provider| provider.backend.as_str()) != Some(stored.as_str()))
+                        .then(|| (feature.feature, stored))
+                })
+                .collect()
+        };
+        for (feature, backend) in chosen {
+            let Some(outcome) = script.set_provider(&feature, &backend) else {
+                continue;
+            };
+            // The switch's own claim (hiding the native triad, say) is the presentation
+            // state the shell reads at boot, so it has to be applied here: no command
+            // runs before the first frame to hand it over.
+            if let Some(view) = outcome.view {
+                let mut state = self.state.borrow_mut();
+                let _ = state.view.apply(&view);
+                absorb_claim(&mut state.provider_claim, &view);
+            }
+        }
+    }
+
+    /// Record the backend `Settings/<Feature>`'s selector just chose.
+    ///
+    /// The value comes back from the registry, not from the row: the form shows a
+    /// label, and the store keeps the id every host resolves. The key is the feature id
+    /// the registry uses (`axis`, not the node's `Axis`), which is also the one the
+    /// Python facade reads.
+    fn remember_provider(&self, object: &str, view: Option<&ViewRequest>) {
+        let Some(node) = object.strip_prefix(SETTINGS_NODE) else {
+            return;
+        };
+        let Some(script) = self.script.as_deref() else {
+            return;
+        };
+        let Some(feature) = script
+            .provider_features()
+            .into_iter()
+            .find(|entry| entry.feature.eq_ignore_ascii_case(node))
+        else {
+            return;
+        };
+        let Some(backend) = feature
+            .providers
+            .iter()
+            .find(|provider| provider.active)
+            .map(|provider| provider.backend.clone())
+        else {
+            return;
+        };
+        self.record_switch(&feature.feature, &backend, view);
+    }
+
+    /// Keep a switch the composition performed: the stored choice and its claim.
+    ///
+    /// Both entry points land here — `Settings/<Feature>`'s provider row and the
+    /// `set_provider` verb the popover and Dev Tools run — so one of them can never
+    /// remember a switch the other forgets.
+    fn record_switch(&self, feature: &str, backend: &str, view: Option<&ViewRequest>) {
+        let mut state = self.state.borrow_mut();
+        let _ = state.settings.set(
+            PROVIDER_GROUP,
+            feature,
+            SettingValue::String(backend.to_string()),
+        );
+        if let Some(view) = view {
+            absorb_claim(&mut state.provider_claim, view);
+        }
     }
 
     /// Run one document edit and announce it, once, when it commits.
@@ -923,7 +1056,11 @@ impl AppBackend for RustAppBackend {
         }
         let request = {
             let state = self.state.borrow();
-            appearance_settings::request(state.settings.as_ref())
+            let mut request = appearance_settings::request(state.settings.as_ref());
+            // The provider's claim rides along: the store describes the user's policy,
+            // and the claim is the loaded backend's, restored from its own switch.
+            absorb_claim(&mut request, &state.provider_claim);
+            request
         };
         Ok(CommandOutcome {
             ok: true,
@@ -1028,6 +1165,24 @@ impl AppBackend for RustAppBackend {
             width: Some(px(view.axis.width)),
             providers,
         })
+    }
+
+    /// Switch a feature's provider, and keep the choice.
+    ///
+    /// The popover and Dev Tools run this verb, while `Settings/<Feature>` writes the
+    /// selector row; both are the composition's switch, so both land in the same store
+    /// (see [`remember_provider`](Self::remember_provider)).
+    fn set_provider(&mut self, feature: &str, backend: &str) -> Result<CommandOutcome, String> {
+        let Some(outcome) = self
+            .script_host()
+            .and_then(|host| host.set_provider(feature, backend))
+        else {
+            return Ok(CommandOutcome::default());
+        };
+        if outcome.ok {
+            self.record_switch(feature, backend, outcome.view.as_ref());
+        }
+        Ok(outcome)
     }
 
     /// The provider registry, as Dev Tools and the header's menus read it.
@@ -1144,11 +1299,16 @@ impl AppBackend for RustAppBackend {
     ) -> Result<SetResult, String> {
         // A script-owned node first: `Settings/Grid` has no `PropertyContainer`, so the
         // document lookup below would refuse a row the tree just offered.
-        if let Some(result) = self
+        let scripted = self
             .script
             .as_deref()
-            .and_then(|host| host.set_extra_property(object, property, value))
-        {
+            .and_then(|host| host.set_extra_property(object, property, value));
+        if let Some(result) = scripted {
+            // The provider selector is the composition's switch, so its answer is kept
+            // in the composition's store: the one key both halves restore from.
+            if result.ok && property == "provider" {
+                self.remember_provider(object, result.view.as_ref());
+            }
             return Ok(result);
         }
         // Then this half's grid card, whose store is the mirrored presentation state.
@@ -1970,6 +2130,27 @@ fn seed_script_settings(script: &dyn ScriptHost, settings: &dyn SettingsBackend)
     }
 }
 
+/// The backend `feature`'s provider selector last chose, if the store holds one.
+fn stored_provider(settings: &dyn SettingsBackend, feature: &str) -> Option<String> {
+    match settings.get(PROVIDER_GROUP, feature, SettingKind::String)? {
+        SettingValue::String(backend) if !backend.is_empty() => Some(backend),
+        _ => None,
+    }
+}
+
+/// Fold a provider's claim (`axis.overlay`, `grid_overlay`) into a view request.
+///
+/// The claim is the loaded backend's, never a user setting, so it is copied as stated
+/// and nothing else of `claim` is taken: the drawing policy belongs to the store.
+fn absorb_claim(into: &mut ViewRequest, claim: &ViewRequest) {
+    if let Some(overlay) = claim.axis.as_ref().and_then(|axis| axis.overlay) {
+        into.axis.get_or_insert_with(Default::default).overlay = Some(overlay);
+    }
+    if let Some(overlay) = claim.grid_overlay {
+        into.grid_overlay = Some(overlay);
+    }
+}
+
 /// Decode a saved document and rebuild it with the linked kernel.
 ///
 /// Registering Part first is what lets `decode_fcstd` restore
@@ -2152,11 +2333,15 @@ mod tests {
         AxisSummary, GpuPreferenceOutcome, GridProvider, GridSummary, ProviderFeature,
         SelectionRequest, WorkbenchReport,
     };
+    use ferrocad_shell_api::view::AxisRequest;
 
     use super::*;
 
     /// The synthetic node the fake script owns: in the tree, absent from the document.
     const SETTINGS_GRID: &str = "Settings/Grid";
+
+    /// The node the provider tests switch backends on.
+    const SETTINGS_AXIS: &str = "Settings/Axis";
 
     /// The manipulator id the fake script owns, so a test can prove the commit order.
     const SCRIPTED: &str = "scripted_grip";
@@ -2174,6 +2359,8 @@ mod tests {
         interactions: Mutex<Vec<String>>,
         /// Every setting the host store seeded into the script's parameter store.
         settings: Mutex<Vec<(String, String, SettingValue)>>,
+        /// Every provider the host asked the script to make active, in order.
+        providers: Mutex<Vec<String>>,
     }
 
     /// The script half the tests install.
@@ -2518,6 +2705,257 @@ mod tests {
             }),
             "the grid toggle crossed into the script: {seeded:?}"
         );
+    }
+
+    /// A script half with two axis providers, so a switch has somewhere to go.
+    ///
+    /// It answers `Settings/Axis`'s `provider` row by switching itself, exactly as the
+    /// Python facade and the JS page do, and states the claim both overlays state
+    /// (`axis.overlay`), so a test can watch a restored switch reach the presentation
+    /// state as well as the store.
+    struct SwitchHost {
+        log: Arc<Recorded>,
+        active: Mutex<&'static str>,
+    }
+
+    /// The backends `SwitchHost` lists, as `(id, label)`.
+    const SWITCH_BACKENDS: [(&str, &str); 2] =
+        [("ferrocad", "FerroCAD (native)"), ("js", "Axis Cross (JS)")];
+
+    impl SwitchHost {
+        fn new(log: Arc<Recorded>) -> Self {
+            Self {
+                log,
+                active: Mutex::new("ferrocad"),
+            }
+        }
+
+        /// Make `backend` active, accepting the id or the label the form shows.
+        fn switch(&self, backend: &str) {
+            let Some((id, _)) = SWITCH_BACKENDS
+                .iter()
+                .find(|(id, label)| *id == backend || *label == backend)
+            else {
+                return;
+            };
+            *self.active.lock().unwrap() = id;
+            self.log.providers.lock().unwrap().push((*id).to_string());
+        }
+
+        fn active(&self) -> &'static str {
+            *self.active.lock().unwrap()
+        }
+    }
+
+    impl ScriptHost for SwitchHost {
+        fn evaluate(&self, _code: &str) -> Result<EvalResult, String> {
+            Err("no console".to_string())
+        }
+
+        fn load_workbenches(&self) -> Result<WorkbenchReport, String> {
+            Ok(WorkbenchReport::default())
+        }
+
+        fn tool(&self, name: &str) -> Result<Box<dyn ferrocad_stage::Tool>, String> {
+            Err(format!("no tool {name}"))
+        }
+
+        fn tool_command(&self, _name: &str, _verb: &str) -> bool {
+            false
+        }
+
+        fn inventor_scene(&self) -> Result<Scene, String> {
+            Ok(Scene::default())
+        }
+
+        fn event_listener(&self) -> Box<dyn EventListener> {
+            Box::new(NoopListener)
+        }
+
+        fn extra_properties(&self, object: &str) -> Option<Vec<PropRow>> {
+            (object == SETTINGS_AXIS).then(|| {
+                let active = self.active();
+                vec![PropRow {
+                    name: "provider".to_string(),
+                    label: String::new(),
+                    type_id: "App::PropertyEnumeration".to_string(),
+                    value: SWITCH_BACKENDS
+                        .iter()
+                        .find(|(id, _)| *id == active)
+                        .map(|(_, label)| (*label).to_string())
+                        .unwrap_or_default(),
+                    status: "provider".to_string(),
+                    editable: true,
+                    command: None,
+                    kind: "enum".to_string(),
+                    min: None,
+                    max: None,
+                    unit: None,
+                    choices: SWITCH_BACKENDS
+                        .iter()
+                        .map(|(id, _)| (*id).to_string())
+                        .collect(),
+                }]
+            })
+        }
+
+        fn set_extra_property(
+            &self,
+            object: &str,
+            property: &str,
+            value: &str,
+        ) -> Option<SetResult> {
+            (object == SETTINGS_AXIS && property == "provider").then(|| {
+                self.switch(value);
+                SetResult {
+                    ok: true,
+                    error: String::new(),
+                    view: None,
+                }
+            })
+        }
+
+        fn provider_features(&self) -> Vec<ProviderFeature> {
+            let active = self.active();
+            vec![ProviderFeature {
+                feature: "axis".to_string(),
+                providers: SWITCH_BACKENDS
+                    .iter()
+                    .map(|(backend, label)| GridProvider {
+                        backend: (*backend).to_string(),
+                        label: (*label).to_string(),
+                        active: *backend == active,
+                        ..Default::default()
+                    })
+                    .collect(),
+            }]
+        }
+
+        fn set_provider(&self, feature: &str, backend: &str) -> Option<CommandOutcome> {
+            (feature == "axis").then(|| {
+                self.switch(backend);
+                CommandOutcome {
+                    ok: true,
+                    status: format!("axis: {backend}"),
+                    view: Some(ViewRequest {
+                        axis: Some(AxisRequest {
+                            overlay: Some(self.active() == "js"),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }
+            })
+        }
+    }
+
+    /// The selector's write is kept in the composition's store, under the key the
+    /// Python facade reads: that is what lets a backend only the page lists (the JS axis
+    /// cross) be the one that comes back at the next boot.
+    #[test]
+    fn a_provider_switch_is_stored_where_both_halves_read_it() {
+        let log = Arc::new(Recorded::default());
+        let settings = MemorySettings::default();
+        let mut backend = RustAppBackend::new()
+            .with_script_host(Box::new(SwitchHost::new(log.clone())))
+            .with_settings_backend(Box::new(settings.clone()));
+
+        let result = backend
+            .set_property(SETTINGS_AXIS, "provider", "Axis Cross (JS)")
+            .expect("the row is the script's");
+        assert!(result.ok, "{result:?}");
+        assert_eq!(
+            log.providers.lock().unwrap().as_slice(),
+            ["js"],
+            "the host performed the switch"
+        );
+        assert_eq!(
+            settings.get(PROVIDER_GROUP, "axis", SettingKind::String),
+            Some(SettingValue::String("js".to_string())),
+            "the choice landed in the shared group"
+        );
+    }
+
+    /// The popover and Dev Tools switch through `set_provider` rather than the settings
+    /// row; both entry points store the choice, so a click in the header survives a
+    /// restart exactly like an edit in `Settings/Axis`.
+    #[test]
+    fn a_popover_switch_is_stored_as_well() {
+        let log = Arc::new(Recorded::default());
+        let settings = MemorySettings::default();
+        let mut backend = RustAppBackend::new()
+            .with_script_host(Box::new(SwitchHost::new(log.clone())))
+            .with_settings_backend(Box::new(settings.clone()));
+
+        let outcome = backend
+            .set_provider("axis", "js")
+            .expect("the host performs the switch");
+        assert!(outcome.ok, "{outcome:?}");
+        assert_eq!(
+            settings.get(PROVIDER_GROUP, "axis", SettingKind::String),
+            Some(SettingValue::String("js".to_string())),
+            "the header's switch is in the composition's store"
+        );
+        let view = backend
+            .appearance_view()
+            .expect("the presentation state answers")
+            .view
+            .expect("it carries a request");
+        assert_eq!(
+            view.axis.and_then(|axis| axis.overlay),
+            Some(true),
+            "and its claim rides the request the shell applies"
+        );
+    }
+
+    /// A stored choice is re-applied through the host's own switch at boot, in either
+    /// build order, and the switch's claim reaches the state the shell reads — no command
+    /// runs before the first frame to hand it over.
+    #[test]
+    fn a_stored_provider_is_restored_at_boot() {
+        for store_first in [true, false] {
+            let log = Arc::new(Recorded::default());
+            let settings = MemorySettings::default();
+            settings
+                .set(
+                    PROVIDER_GROUP,
+                    "axis",
+                    SettingValue::String("js".to_string()),
+                )
+                .unwrap();
+            let host = Box::new(SwitchHost::new(log.clone()));
+            let backend = if store_first {
+                RustAppBackend::new()
+                    .with_settings_backend(Box::new(settings.clone()))
+                    .with_script_host(host)
+            } else {
+                RustAppBackend::new()
+                    .with_script_host(host)
+                    .with_settings_backend(Box::new(settings.clone()))
+            };
+
+            assert_eq!(
+                log.providers.lock().unwrap().as_slice(),
+                ["js"],
+                "the stored backend was made active (store first: {store_first})"
+            );
+            let view = backend
+                .appearance_view()
+                .expect("the presentation state answers")
+                .view
+                .expect("it carries a request");
+            assert_eq!(
+                view.axis.and_then(|axis| axis.overlay),
+                Some(true),
+                "the restored switch's claim is in the boot state (store first: {store_first})"
+            );
+            assert_eq!(
+                settings.get(PROVIDER_GROUP, "axis", SettingKind::String),
+                Some(SettingValue::String("js".to_string())),
+                "a restore is a read, not a rewrite"
+            );
+        }
     }
 
     #[test]

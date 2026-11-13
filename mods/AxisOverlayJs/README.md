@@ -102,7 +102,10 @@ notification.
   `axis_labels` controls a real part of this backend rather than being a no-op.
 - **Session state, shared settings.** The mirrored policy is per session (the shell
   pushes it); the values themselves live in `FerroCAD.Axis`, so switching backends keeps
-  them. The chain's slot survives for the session; the JS page re-registers on boot.
+  them. The provider selection is the composition's, not the page's: the shell stores
+  `Mods/Providers/axis` in its settings group and re-applies it through this backend at
+  boot, so *Axis Cross (JS)* comes back selected after a restart. The chain's slot
+  survives for the session; the JS page re-registers on boot.
 - **Listed beside the Python backends.** A composed `cpython,js` desktop boot (the
   default) or a `pywasm,js` page **merges** the two catalogs: `HostChain` lists one entry
   per feature, each backend once, and one loaded backend. The JS backend therefore

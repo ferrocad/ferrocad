@@ -119,6 +119,16 @@ In order:
 
 A saved value that names a removed or renamed backend is ignored, not an error.
 
+That group is the **composition's** store, not the interpreter's. A composed runtime
+(`cpython,js`) keeps every switch there through the shell's settings backend —
+`FreeCAD.ParamGet` on the desktop, `localStorage` in the browser — including a backend
+only one host lists, which the facade itself can never name (its `_selected` falls back
+to priority for a value it does not recognise). The shell writes it when
+`Settings/<Feature>`'s provider row switches, and re-applies it through the same
+switch at boot, so the JS axis cross comes back selected after a restart instead of
+the native one it displaced. The choice is also pushed into every half's own parameter
+store at boot, which is how a browser session keeps it without a filesystem.
+
 ```python
 import FerroCADGui
 
@@ -362,8 +372,11 @@ brought a second cross back.
 
 ## Limits
 
-- The persisted choice is in the in-memory `ParamGet` shim today; there is no
-  cross-session persistence.
+- The choice is persisted by the **shell**, in the settings store's `Mods/Providers`
+  group, and re-applied at boot. A backend the page registers is restored the same way
+  as the native ones; the page itself keeps no store, so the composition owns the
+  answer. A host that installs no settings store (`MemorySettings`, a headless session)
+  keeps it for the session only.
 - Labels should be unique within a feature. `Mods_Settings` maps a value back to
   a backend by label first, then by id.
 - The registry says which backend **should** be active. A third-party mod that
@@ -377,14 +390,14 @@ brought a second cross back.
   (its settings dialog). A schema write goes to the owner; the selector write is the
   chain's switch. So in `cpython,js`, `Settings/Axis` offers `ferrocad`, `coin` and `js`
   in one place, and picking `js` swaps the rows for its settings entry.
-- **A JS backend's selection is session-only.** The page has no `ParamGet`, so the JS
-  half's chosen backend and settings reset on reload; the Python half's persist.
+- **A JS backend's selection survives a restart**, through the composition's store
+  (above). What a JS host still lacks is a parameter store of its own: the shared policy
+  reaches it as the pushed view state, and the selection as the shell's switch, so a JS
+  provider that wanted private knobs would need a schema-plus-store slice of its own.
 - A provider with no `settings` schema keeps its `command` as its settings entry, and
   the merged node surfaces that command as a runnable row. The JS providers use this
   path; a Python provider may use either.
 - `refreshProviders` runs only the active backend. It does not switch, persist,
   or call `activate`.
-- A JS page's provider choice is session-only today; the Python registry persists
-  through `ParamGet`, and the page has no such store yet.
 - A JS provider's `settings` schema is not wired to `Settings/<Feature>` yet; its
   command dialog is the settings surface in this slice.

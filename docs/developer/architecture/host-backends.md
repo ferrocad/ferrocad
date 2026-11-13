@@ -398,7 +398,11 @@ writes queued back, `Document.UndoCount`/`RedoCount` from the payload) and holds
 `FerroCADGui.registerProvider`/`providers`/`activeProvider`/`providerSkin`/
 `setActiveProvider`/`refreshProviders`/`settings`/`setSetting`/`resetAppearance`). The
 selected backend and the values a script writes persist in the facade's
-`FreeCAD.ParamGet`. **Where** it persists is the embedding host's choice
+`FreeCAD.ParamGet`. The **provider selection** is additionally the shell's: the app
+backend writes `Mods/Providers/<feature>` into the host settings store when
+`Settings/<Feature>`'s row switches and re-applies it through the host's own switch at
+boot, so a backend only the page lists (the JS axis cross) is restored beside the ones
+the interpreter registers. **Where** it persists is the embedding host's choice
 (`ParameterStore`): the browser and every embedded/test host keep it in memory, while the
 desktop preview (`--script-host=pywasm`, `live_persistent`) points it at the app's file —
 `FERROCAD_PARAM_FILE`, else `$XDG_CONFIG_HOME/ferrocad/parameters.json` — so the preview

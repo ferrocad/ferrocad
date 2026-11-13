@@ -142,9 +142,12 @@ pub trait SettingsBackend: Send + Sync {
 }
 
 /// The in-memory store: the headless/test default and the browser fallback.
-#[derive(Default)]
+///
+/// Cloning shares the map, so a test can hand the store to a backend and still read
+/// what was written to it (a provider switch, for one) without a second accessor.
+#[derive(Clone, Default)]
 pub struct MemorySettings {
-    values: RwLock<BTreeMap<(String, String), SettingValue>>,
+    values: std::sync::Arc<RwLock<BTreeMap<(String, String), SettingValue>>>,
 }
 
 impl SettingsBackend for MemorySettings {

@@ -7,9 +7,10 @@
 //!
 //! [`WgpuRenderer`] implements [`InventorView`], so a host can present a frame in
 //! either of the two variants the trait exposes: borrow the offscreen
-//! [`wgpu::Texture`](WgpuRenderer::surface) for zero-copy compositing, or call
-//! [`image`](InventorView::image) for a readback [`ImageData`] (the MVP path while
-//! `bite-gpui` has no wgpu surface primitive).
+//! [`wgpu::Texture`](WgpuRenderer::surface) for zero-copy compositing, or read back an
+//! [`ImageData`]: synchronously with [`image`](InventorView::image) (snapshot/headless)
+//! or deferred with [`begin_image`](InventorView::begin_image) (the live GPUI image path,
+//! whose blocking wait and mapped copy run on a worker thread).
 //!
 //! - [`WgpuRenderer`] — encodes a frame: uploads [`mesh_id`]/[`generation`] cache
 //!   misses, binds each packet's [`StateSnapshot`] and draws it.
@@ -60,7 +61,7 @@ pub mod uniforms;
 
 pub use adapter::{AdapterChoice, AdapterSummary};
 pub use context::GpuContext;
-pub use renderer::{RenderError, WgpuRenderer};
+pub use renderer::{IMAGE_BGRA_FORMAT, RenderError, WgpuRenderer, is_bgra_format};
 pub use snapshot::{
     SnapshotBox, SnapshotCamera, SnapshotDrawMode, SnapshotError, SnapshotGeometry, SnapshotMesh,
     SnapshotShape, SnapshotSpec,

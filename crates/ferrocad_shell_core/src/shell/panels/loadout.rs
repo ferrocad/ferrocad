@@ -385,17 +385,32 @@ impl Shell {
             self.hover_arm = None;
             return;
         };
-        let next = if self.hover_arm_allowed() {
-            match target {
-                Some(reference) => Some(self.loadout.narrow(reference)),
-                // The gizmo consumes the hover and the report is empty there: keep the
-                // preview while the pointer travels from the body onto its handles, so
-                // it does not dissolve just before the press.
-                None if over_gizmo => self.hover_arm.clone(),
-                None => None,
+        // A selection (or a session/tool/modal) owns the handles: the hover preview is
+        // a zero-click convenience for an empty canvas. A preview captured before the
+        // selection must dissolve without wiping the selection's own gizmo — the
+        // readback worker polls the device, which can resolve the hover pick sooner
+        // than the UI's own pass used to. With no selection the old clear is still
+        // right: a tool/session owns the canvas and the preview must not linger.
+        if !self.hover_arm_allowed() {
+            if self.hover_arm.take().is_some() {
+                let selection_empty = self.model.lock().unwrap().selection.is_empty();
+                viewport.update(cx, |viewport, cx| {
+                    viewport.set_gizmo_idle_scale(None);
+                    if selection_empty {
+                        viewport.set_gizmos(ferrocad_stage::GizmoSet::default());
+                    }
+                    cx.notify();
+                });
             }
-        } else {
-            None
+            return;
+        }
+        let next = match target {
+            Some(reference) => Some(self.loadout.narrow(reference)),
+            // The gizmo consumes the hover and the report is empty there: keep the
+            // preview while the pointer travels from the body onto its handles, so
+            // it does not dissolve just before the press.
+            None if over_gizmo => self.hover_arm.clone(),
+            None => None,
         }
         .filter(|reference| self.display.object_of(reference.object).is_some());
         let previous = self.hover_arm.clone();

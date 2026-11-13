@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::mpsc;
 
 // A wasm-safe clock: `std::time::Instant::now()` panics on `wasm32-unknown-unknown`,
 // and the pick path takes a timestamp on every hover.
@@ -87,8 +88,24 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// The offscreen target format (matches gpui's `RenderImage` RGBA expectations).
+/// The RGBA target used by the snapshot and headless writers (they write RGBA PNGs).
+/// The GPUI image path uses [`IMAGE_BGRA_FORMAT`] instead.
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+/// The BGRA image-path target.
+///
+/// gpui's `RenderImage` stores BGRA, so a host that reads the frame back as an image
+/// can ask for this target and wrap the readback bytes without a CPU channel swap.
+/// The `snapshot`/headless writers keep [`TARGET_FORMAT`] because they write RGBA PNGs.
+pub const IMAGE_BGRA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
+
+/// Whether `format` stores blue in byte 0 (a BGRA target).
+pub fn is_bgra_format(format: wgpu::TextureFormat) -> bool {
+    matches!(
+        format,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    )
+}
 
 /// The default multisample count (4× anti-aliasing).
 const DEFAULT_SAMPLES: u32 = 4;
@@ -168,6 +185,28 @@ struct HoverPick {
     camera: Camera,
 }
 
+/// The in-flight asynchronous image readback (P6.2).
+///
+/// The copy has been submitted and the staging buffer handed to the worker thread; the
+/// UI only owns the marker and polls the result channel.
+struct ImageReadback;
+
+/// One readback handed to the worker after its copy was submitted.
+struct ReadbackJob {
+    device: wgpu::Device,
+    buffer: wgpu::Buffer,
+    size: [u32; 2],
+    padded: u32,
+    unpadded: u32,
+    bgra: bool,
+}
+
+/// The worker's answer: the staging buffer (for reuse) and the image.
+struct ReadbackDone {
+    buffer: Option<wgpu::Buffer>,
+    image: Result<ImageData, RenderError>,
+}
+
 /// Draws compiled scenes with wgpu and exposes the result to a host.
 pub struct WgpuRenderer {
     context: GpuContext,
@@ -223,6 +262,12 @@ pub struct WgpuRenderer {
     readback: Option<wgpu::Buffer>,
     /// The byte size [`readback`](Self::readback) was allocated for.
     readback_bytes: u64,
+    /// The in-flight asynchronous readback, if any.
+    image_readback: Option<ImageReadback>,
+    /// Handoff to the readback worker: the copy is submitted before a job is sent.
+    readback_tx: mpsc::Sender<ReadbackJob>,
+    /// Completed readbacks, collected on the UI thread without blocking.
+    readback_rx: mpsc::Receiver<ReadbackDone>,
 }
 
 impl WgpuRenderer {
@@ -240,8 +285,10 @@ impl WgpuRenderer {
 
     /// Create a renderer whose colour attachments use `color_format`.
     ///
-    /// [`TARGET_FORMAT`] (sRGB RGBA) is what gpui's `RenderImage` expects, and is
-    /// what [`new`](Self::new)/[`with_sample_count`](Self::with_sample_count) use.
+    /// [`TARGET_FORMAT`] (sRGB RGBA) is what the snapshot and headless writers
+    /// expect. The GPUI image path uses [`IMAGE_BGRA_FORMAT`] instead, so its readback
+    /// lands in the channel order `RenderImage` stores and needs no CPU swap; see
+    /// [`new_with_choice_and_target`](Self::new_with_choice_and_target).
     /// A browser host passes the canvas surface's format instead: WebGPU canvases
     /// forbid sRGB formats, so they configure `Rgba8Unorm` and hand the renderer
     /// that format, using an sRGB view only when resolving to the canvas.
@@ -283,6 +330,7 @@ impl WgpuRenderer {
             targets.sample_count,
         );
         let pick_pipelines = PickPipelines::new(&context.device, &uniform_layout);
+        let (readback_tx, readback_rx) = spawn_readback_worker();
         Self {
             context,
             targets,
@@ -305,25 +353,47 @@ impl WgpuRenderer {
             hover_point: None,
             readback: None,
             readback_bytes: 0,
+            image_readback: None,
+            readback_tx,
+            readback_rx,
         }
     }
 
-    /// Create a renderer on its own freshly-requested device (the default adapter).
+    /// Create a renderer on its own freshly-requested device (the default adapter),
+    /// targeting [`TARGET_FORMAT`] (RGBA).
     ///
-    /// Handy for the image path, where the host (gpui) does not hand out its device.
+    /// This is the snapshot and headless entry point: they write RGBA PNGs. The GPU
+    /// image path wants [`IMAGE_BGRA_FORMAT`], so it uses
+    /// [`new_with_choice`](Self::new_with_choice).
+    ///
     /// Picks 4× MSAA when the adapter supports it, else 1×.
     pub fn new_default(size: [u32; 2]) -> Result<Self, RenderError> {
-        Self::new_with_choice(size, &AdapterChoice::Auto)
+        Self::new_with_choice_and_target(size, &AdapterChoice::Auto, TARGET_FORMAT)
     }
 
-    /// Create a renderer on its own device from the chosen adapter.
+    /// Create a renderer on its own device from the chosen adapter, targeting the
+    /// **image path's** [`IMAGE_BGRA_FORMAT`] (with an RGBA fallback).
     ///
-    /// [`AdapterChoice::Auto`] is exactly [`new_default`](Self::new_default)'s old
-    /// behaviour. A forced backend or name that the machine cannot satisfy is
-    /// reported as [`RenderError::AdapterUnavailable`].
+    /// This is what the viewport's image path uses. A forced backend or name that the
+    /// machine cannot satisfy is reported as [`RenderError::AdapterUnavailable`].
     pub fn new_with_choice(
         size: [u32; 2],
         choice: &AdapterChoice,
+    ) -> Result<Self, RenderError> {
+        Self::new_with_choice_and_target(size, choice, IMAGE_BGRA_FORMAT)
+    }
+
+    /// Like [`new_with_choice`](Self::new_with_choice), for a specific image target.
+    ///
+    /// The GPUI image path asks for [`IMAGE_BGRA_FORMAT`] so the 13 MB framebuffer
+    /// lands in gpui's own channel order and the per-frame RGBA→BGRA swap disappears.
+    /// An adapter that cannot render to the requested format falls back to
+    /// [`TARGET_FORMAT`]; the readback reports the format it actually used, so the host
+    /// does the right thing either way.
+    pub fn new_with_choice_and_target(
+        size: [u32; 2],
+        choice: &AdapterChoice,
+        color_format: wgpu::TextureFormat,
     ) -> Result<Self, RenderError> {
         let adapter = adapter::request(choice).map_err(|reason| match choice {
             AdapterChoice::Auto => RenderError::Adapter,
@@ -337,12 +407,22 @@ impl WgpuRenderer {
         }))
         .map_err(|_| RenderError::Device)?;
 
-        let samples = if supports_samples(&adapter, DEFAULT_SAMPLES) {
+        let format = if supports_target(&adapter, color_format) {
+            color_format
+        } else {
+            TARGET_FORMAT
+        };
+        let samples = if supports_samples(&adapter, format, DEFAULT_SAMPLES) {
             DEFAULT_SAMPLES
         } else {
             1
         };
-        Ok(Self::with_sample_count(GpuContext::new(device, queue), size, samples))
+        Ok(Self::with_sample_count_and_format(
+            GpuContext::new(device, queue),
+            size,
+            samples,
+            format,
+        ))
     }
 
     /// The GPU context this renderer owns.
@@ -1288,11 +1368,16 @@ impl WgpuRenderer {
             .unwrap_or(&self.default_texture)
     }
 
-    /// Read `texture` back into RGBA8, stripping the row padding wgpu requires.
+    /// Read `texture` back into an [`ImageData`] **synchronously**, stripping the row
+    /// padding wgpu requires.
     ///
-    /// The staging buffer is kept between frames (and dropped on resize): the fallback
-    /// path runs at the viewport's physical size, so allocating ~13 MB per paint was a
-    /// real cost on top of the copy itself.
+    /// This is the snapshot/headless path (one frame, then the process exits). The
+    /// live image path uses [`begin_read_back`](Self::begin_read_back), which hands the
+    /// blocking wait to the readback worker.
+    ///
+    /// The staging buffer is kept between frames (and dropped on resize): the
+    /// fallback path runs at the viewport's physical size, so allocating ~13 MB per
+    /// paint was a real cost on top of the copy itself.
     fn read_back(&mut self, texture: &wgpu::Texture) -> Result<ImageData, RenderError> {
         let [width, height] = self.size;
         let unpadded = width * 4;
@@ -1319,6 +1404,7 @@ impl WgpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("ferrocad readback"),
             });
+        let submit_started = Instant::now();
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture,
@@ -1341,14 +1427,18 @@ impl WgpuRenderer {
             },
         );
         self.context.queue.submit(Some(encoder.finish()));
+        let submit = submit_started.elapsed();
 
+        let wait_started = Instant::now();
         let slice = buffer.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         self.context
             .device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|_| RenderError::Readback("device poll failed"))?;
+        let wait = wait_started.elapsed();
 
+        let copy_started = Instant::now();
         let view = slice
             .get_mapped_range()
             .map_err(|_| RenderError::Readback("mapped range unavailable"))?;
@@ -1366,6 +1456,8 @@ impl WgpuRenderer {
         drop(view);
         buffer.unmap();
         self.readback = Some(buffer);
+        let copy = copy_started.elapsed();
+        trace::readback_sync([width, height], bytes, self.targets.color_format, submit, wait, copy);
 
         // Black-frame probe: only runs where a readback already exists, so it costs an
         // atomic load when tracing is off.
@@ -1375,8 +1467,209 @@ impl WgpuRenderer {
             width,
             height,
             rgba,
+            bgra: is_bgra_format(self.targets.color_format),
         })
     }
+
+    /// Submit an image readback and hand the wait to the worker thread (P6.2).
+    ///
+    /// The UI thread encodes the texture-to-buffer copy and submits it, then sends the
+    /// buffer to the worker. The worker owns the blocking `poll`/map/copy, so a paint
+    /// never waits on the GPU; the result is collected by [`take_read_back`].
+    ///
+    /// At most one readback is in flight: a second request is a no-op (the caller can
+    /// see that from [`image_pending`](InventorView::image_pending)).
+    fn begin_read_back(&mut self) -> Result<(), RenderError> {
+        if self.image_readback.is_some() {
+            return Ok(());
+        }
+        let [width, height] = self.size;
+        let unpadded = width * 4;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded = unpadded.div_ceil(align) * align;
+        let bytes = u64::from(padded) * u64::from(height);
+        let texture = self.targets.color.clone();
+
+        let buffer = match self.readback.take() {
+            Some(buffer) if self.readback_bytes == bytes => buffer,
+            _ => {
+                self.readback_bytes = bytes;
+                self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("ferrocad readback"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            }
+        };
+
+        let submit_started = Instant::now();
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ferrocad readback"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.context.queue.submit(Some(encoder.finish()));
+        let submit = submit_started.elapsed();
+
+        let job = ReadbackJob {
+            device: self.context.device.clone(),
+            buffer,
+            size: self.size,
+            padded,
+            unpadded,
+            bgra: is_bgra_format(self.targets.color_format),
+        };
+        if self.readback_tx.send(job).is_err() {
+            return Err(RenderError::Readback("readback worker stopped"));
+        }
+        self.image_readback = Some(ImageReadback);
+        trace::readback_submitted([width, height], bytes, self.targets.color_format, submit);
+        Ok(())
+    }
+
+    /// Collect a completed asynchronous readback, or `None` while it is in flight.
+    fn take_read_back(&mut self) -> Option<Result<ImageData, RenderError>> {
+        self.image_readback.as_ref()?;
+        match self.readback_rx.try_recv() {
+            Ok(done) => {
+                self.image_readback = None;
+                if let Some(buffer) = done.buffer {
+                    self.readback = Some(buffer);
+                }
+                Some(done.image)
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.image_readback = None;
+                Some(Err(RenderError::Readback("readback worker stopped")))
+            }
+        }
+    }
+}
+
+/// Spawn the readback worker. The thread exits when the renderer drops its sender.
+fn spawn_readback_worker() -> (mpsc::Sender<ReadbackJob>, mpsc::Receiver<ReadbackDone>) {
+    let (job_tx, job_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("ferrocad-readback".to_string())
+        .spawn(move || readback_worker(job_rx, done_tx));
+    (job_tx, done_rx)
+}
+
+/// Wait for a submitted copy, map it and copy the rows out of GPU memory.
+///
+/// This is the blocking half of the image path, and it runs on its own thread: the UI
+/// thread only submits the copy and later polls the result channel.
+fn readback_worker(jobs: mpsc::Receiver<ReadbackJob>, results: mpsc::Sender<ReadbackDone>) {
+    // A device that never completes the copy must not wedge the worker forever; the
+    // UI keeps its previous frame and the next request starts a fresh job.
+    const MAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    while let Ok(job) = jobs.recv() {
+        let wait_started = Instant::now();
+        let slice = job.buffer.slice(..);
+        let (mapped_tx, mapped_rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = mapped_tx.send(result);
+        });
+        // Poll from the worker rather than blocking in `PollType::Wait`: a wait holds
+        // the device's progress lock, and the UI thread polls the same device for
+        // hover picks. A short spin keeps both callers moving and never blocks the UI.
+        let deadline = wait_started + MAP_TIMEOUT;
+        let mapped = loop {
+            match mapped_rx.try_recv() {
+                Ok(result) => break result.is_ok(),
+                Err(mpsc::TryRecvError::Disconnected) => break false,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            if job.device.poll(wgpu::PollType::Poll).is_err() {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        let wait = wait_started.elapsed();
+        let done = if mapped {
+            let copy_started = Instant::now();
+            let image = copy_rows(&slice, job.size, job.padded, job.unpadded, job.bgra);
+            let copy = copy_started.elapsed();
+            job.buffer.unmap();
+            trace::readback_done(
+                job.size,
+                u64::from(job.padded) * u64::from(job.size[1]),
+                wait,
+                copy,
+            );
+            ReadbackDone {
+                buffer: Some(job.buffer),
+                image,
+            }
+        } else {
+            job.buffer.unmap();
+            ReadbackDone {
+                buffer: Some(job.buffer),
+                image: Err(RenderError::Readback("mapped range unavailable")),
+            }
+        };
+        if results.send(done).is_err() {
+            break;
+        }
+    }
+}
+
+/// Copy a mapped readback into an unpadded [`ImageData`].
+fn copy_rows(
+    slice: &wgpu::BufferSlice<'_>,
+    size: [u32; 2],
+    padded: u32,
+    unpadded: u32,
+    bgra: bool,
+) -> Result<ImageData, RenderError> {
+    let view = slice
+        .get_mapped_range()
+        .map_err(|_| RenderError::Readback("mapped range unavailable"))?;
+    let rgba = if padded == unpadded {
+        view.to_vec()
+    } else {
+        let mut rgba = Vec::with_capacity((unpadded * size[1]) as usize);
+        for row in 0..size[1] {
+            let start = (row * padded) as usize;
+            rgba.extend_from_slice(&view[start..start + unpadded as usize]);
+        }
+        rgba
+    };
+    drop(view);
+    Ok(ImageData {
+        width: size[0],
+        height: size[1],
+        rgba,
+        bgra,
+    })
 }
 
 impl InventorView for WgpuRenderer {
@@ -1412,6 +1705,18 @@ impl InventorView for WgpuRenderer {
         self.read_back(&color)
     }
 
+    fn begin_image(&mut self) -> bool {
+        WgpuRenderer::begin_read_back(self).is_ok()
+    }
+
+    fn take_image(&mut self) -> Option<Result<ImageData, Self::Error>> {
+        WgpuRenderer::take_read_back(self)
+    }
+
+    fn image_pending(&self) -> bool {
+        self.image_readback.is_some()
+    }
+
     fn supports_pick(&self) -> bool {
         true
     }
@@ -1422,10 +1727,19 @@ impl InventorView for WgpuRenderer {
     }
 }
 
-/// Whether the adapter supports `count` samples for both the colour and depth formats.
-fn supports_samples(adapter: &wgpu::Adapter, count: u32) -> bool {
+/// Whether the adapter can use `format` as a colour attachment.
+fn supports_target(adapter: &wgpu::Adapter, format: wgpu::TextureFormat) -> bool {
     adapter
-        .get_texture_format_features(TARGET_FORMAT)
+        .get_texture_format_features(format)
+        .allowed_usages
+        .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+}
+
+/// Whether the adapter supports `count` samples for a `format` colour target and the
+/// depth format.
+fn supports_samples(adapter: &wgpu::Adapter, format: wgpu::TextureFormat, count: u32) -> bool {
+    adapter
+        .get_texture_format_features(format)
         .flags
         .sample_count_supported(count)
         && adapter
@@ -1812,6 +2126,127 @@ pub(crate) mod tests {
             texel(0, 0),
             "the triangle should cover the centre but not the corner"
         );
+    }
+
+    /// P6.2: the asynchronous readback returns the same pixels as the synchronous path
+    /// from a BGRA target, and the UI thread only polls for the result.
+    #[test]
+    fn an_async_bgra_readback_matches_the_synchronous_image() {
+        let _gpu = gpu_guard();
+        let (queue, _) = compile(&clip_space_triangle());
+        let Ok(mut renderer) = WgpuRenderer::new_with_choice_and_target(
+            [64, 64],
+            &AdapterChoice::Auto,
+            IMAGE_BGRA_FORMAT,
+        ) else {
+            eprintln!("no GPU adapter available; skipping async readback test");
+            return;
+        };
+        renderer.draw(&queue, &Camera::identity()).expect("draw");
+        let sync = renderer.image().expect("synchronous readback");
+        if !sync.bgra {
+            eprintln!("this adapter cannot render to BGRA; skipping the BGRA readback test");
+            return;
+        }
+
+        renderer.draw(&queue, &Camera::identity()).expect("draw again");
+        assert!(renderer.begin_image(), "the async readback is accepted");
+        let started = Instant::now();
+        let asynchronous = loop {
+            if let Some(result) = renderer.take_image() {
+                break result.expect("asynchronous readback");
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "the readback worker did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        assert_eq!([asynchronous.width, asynchronous.height], [64, 64]);
+        assert_eq!(asynchronous.bgra, sync.bgra);
+        assert_eq!(
+            asynchronous.rgba, sync.rgba,
+            "the worker must return the same framed pixels"
+        );
+    }
+
+    /// P6.2 measurement: the full viewport size used in the backlog's numbers.
+    ///
+    /// Run explicitly (it is a 13 MB readback, not a regression test):
+    /// `FERROCAD_TRACE=1 cargo test -p ferrocad_wgpu --lib measure_the_image_path -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement: 2336x1388 readback, run explicitly with FERROCAD_TRACE=1"]
+    fn measure_the_image_path_at_full_size() {
+        const SIZE: [u32; 2] = [2336, 1388];
+        let _gpu = gpu_guard();
+        let (queue, _) = compile(&clip_space_triangle());
+        let Ok(mut renderer) = WgpuRenderer::new_with_choice_and_target(
+            SIZE,
+            &AdapterChoice::Auto,
+            IMAGE_BGRA_FORMAT,
+        ) else {
+            eprintln!("no GPU adapter available; nothing to measure");
+            return;
+        };
+        renderer.draw(&queue, &Camera::identity()).expect("draw");
+        let sync = renderer.image().expect("synchronous readback");
+        assert_eq!([sync.width, sync.height], SIZE);
+
+        renderer.draw(&queue, &Camera::identity()).expect("draw");
+        assert!(renderer.begin_image(), "the async readback is accepted");
+        let started = Instant::now();
+        loop {
+            if let Some(result) = renderer.take_image() {
+                let image = result.expect("asynchronous readback");
+                assert_eq!([image.width, image.height], SIZE);
+                break;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "the readback worker did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn bgra_targets_are_recognised_by_their_channel_order() {
+        assert!(is_bgra_format(wgpu::TextureFormat::Bgra8UnormSrgb));
+        assert!(is_bgra_format(wgpu::TextureFormat::Bgra8Unorm));
+        assert!(!is_bgra_format(wgpu::TextureFormat::Rgba8UnormSrgb));
+    }
+
+    /// A BGRA target stores the same frame as the RGBA target with the red and blue
+    /// bytes swapped; that is what makes the native wrap safe.
+    #[test]
+    fn a_bgra_target_is_the_rgba_frame_with_channels_swapped() {
+        let _gpu = gpu_guard();
+        let (queue, _) = compile(&clip_space_triangle());
+        let Ok(mut rgba) = WgpuRenderer::new_default([64, 64]) else {
+            eprintln!("no GPU adapter available; skipping BGRA target test");
+            return;
+        };
+        let Ok(mut bgra) = WgpuRenderer::new_with_choice_and_target(
+            [64, 64],
+            &AdapterChoice::Auto,
+            IMAGE_BGRA_FORMAT,
+        ) else {
+            return;
+        };
+        rgba.draw(&queue, &Camera::identity()).expect("rgba draw");
+        bgra.draw(&queue, &Camera::identity()).expect("bgra draw");
+        let rgba = rgba.image().expect("rgba readback");
+        let bgra = bgra.image().expect("bgra readback");
+        assert!(!rgba.bgra);
+        if !bgra.bgra {
+            eprintln!("this adapter cannot render to BGRA; skipping the comparison");
+            return;
+        }
+        let mut expected = bgra.rgba.clone();
+        for pixel in expected.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        assert_eq!(rgba.rgba, expected, "BGRA is RGBA with R and B swapped");
     }
 
     /// The native grid's wide stroke is geometry, not a hint: the same lattice drawn with

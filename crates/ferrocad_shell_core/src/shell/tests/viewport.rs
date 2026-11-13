@@ -1325,6 +1325,12 @@ fn the_move_hud_anchors_to_the_gizmo_not_the_pointer(cx: &mut TestAppContext) {
     };
     let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().unwrap());
     click_select(&mut cx, &shell, ferrocad_geom::SelectionRef::whole(7));
+    // Settle the element's first paint: the first draw captures the canvas bounds and
+    // the second applies them to the camera (the HUD anchor is a projection through
+    // that camera). The assertion below is about the pointer, not the first layout
+    // pass.
+    draw(&mut cx);
+    draw(&mut cx);
 
     let gizmo = cx
         .update(|_window, cx| viewport.read(cx).gizmo_anchor())

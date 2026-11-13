@@ -115,10 +115,28 @@ an intermittent event has a trail even when it is not caught live.
 | `frame N: device lost: reason=… message=…` | device loss | why the device went away |
 | `frame N: black (r=…,g=…,b=…) size=…` | readback probe | an all-but-black frame (see below) |
 | `frame N: recovered (no longer black)` | readback probe | the first lit frame after a black one |
+| `image readback AxB N B format=…: submit … ms, wait … ms, copy … ms (sync)` | a synchronous `image()` (snapshot/headless) | the three stages of the blocking readback |
+| `image readback AxB N B format=…: submit … ms (async)` | an asynchronous readback | what the **UI thread** pays: the texture-to-buffer submission only |
+| `image readback AxB N B: wait … ms, copy … ms (worker)` | the readback worker | the GPU wait and the mapped copy, off the UI thread |
+| `image AxB: rgba->bgra swap … ms, wrap … ms` / `image AxB: bgra (native) …` | `render_image` | the CPU channel swap (when the target is RGBA) and the gpui wrapper |
 
 The frame number is the one in flight when an error arrives, which is why the
 counter is incremented before encoding: a validation error from frame N cannot be
 mistaken for frame N+1.
+
+### The image path's target and readback
+
+The GPUI image path asks for a `Bgra8UnormSrgb` target (`IMAGE_BGRA_FORMAT`), so the
+readback lands in `RenderImage`'s channel order and `render_image` only wraps it. The
+snapshot and headless writers keep `Rgba8UnormSrgb` because they write RGBA PNGs, and
+an adapter that cannot render to BGRA falls back to RGBA; the readback's
+`ImageData.bgra` says which happened.
+
+The live readback is **deferred**: the UI submits the texture-to-buffer copy and the
+worker owns the blocking wait and the mapped copy. The paint that requested it returns
+immediately, and the completed image is collected on a later paint; `readback_poll`
+separates those polls from real invalidations so an idle viewport stops requesting
+frames once the image has landed.
 
 ### The black-frame probe
 

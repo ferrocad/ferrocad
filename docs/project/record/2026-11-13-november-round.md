@@ -113,6 +113,12 @@ The round's open P1 tail was closed after the measurements above, on the same tr
 - **The baseline did not move:** **985 / 49 / 18 / 7 over 88/88**, SC7 green. The
   paragraph above that calls S4.4–S4.6 the last slices is the state at the round's
   start, not the close; **P1 is closed**.
+- **P6.2 took the image path off the UI thread.** The GPUI fallback renders into a BGRA
+  target (no per-frame RGBA→BGRA swap), and a worker owns the blocking readback wait/map;
+  at 2336×1388 the debug swizzle was **368.57 ms** and is now **0.00 ms**, while the
+  UI-thread readback cost fell from **27–44 ms** to **0.2–0.5 ms**. The draw itself is
+  unchanged. The off-thread polling exposed and fixed a hover-preview bug that could wipe
+  a selection's gizmo when a pre-selection preview dissolved.
 
 ## 4. Where the detail lives
 

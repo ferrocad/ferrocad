@@ -483,6 +483,69 @@ pub fn inspect_readback(width: u32, height: u32, rgba: &[u8]) -> Option<Tone> {
     Some(tone)
 }
 
+/// Log the UI-thread half of the asynchronous readback: the copy submission.
+///
+/// The wait and the mapped copy are logged by [`readback_done`] on the worker, so the
+/// two lines together are the before/after comparison for P6.2: the UI thread pays
+/// only `submit`, never the `wait`.
+pub fn readback_submitted(
+    size: [u32; 2],
+    bytes: u64,
+    format: wgpu::TextureFormat,
+    submit: std::time::Duration,
+) {
+    if !enabled() {
+        return;
+    }
+    trace_line!(
+        "image readback {}x{} {bytes} B format={format:?}: submit {:.2} ms (async)",
+        size[0],
+        size[1],
+        submit.as_secs_f64() * 1000.0
+    );
+}
+
+/// Log the worker half of an asynchronous readback: the wait and the mapped copy.
+pub fn readback_done(
+    size: [u32; 2],
+    bytes: u64,
+    wait: std::time::Duration,
+    copy: std::time::Duration,
+) {
+    if !enabled() {
+        return;
+    }
+    trace_line!(
+        "image readback {}x{} {bytes} B: wait {:.2} ms, copy {:.2} ms (worker)",
+        size[0],
+        size[1],
+        wait.as_secs_f64() * 1000.0,
+        copy.as_secs_f64() * 1000.0
+    );
+}
+
+/// Log a synchronous readback (the `image()` path used by snapshots and headless runs).
+pub fn readback_sync(
+    size: [u32; 2],
+    bytes: u64,
+    format: wgpu::TextureFormat,
+    submit: std::time::Duration,
+    wait: std::time::Duration,
+    copy: std::time::Duration,
+) {
+    if !enabled() {
+        return;
+    }
+    trace_line!(
+        "image readback {}x{} {bytes} B format={format:?}: submit {:.2} ms, wait {:.2} ms, copy {:.2} ms (sync)",
+        size[0],
+        size[1],
+        submit.as_secs_f64() * 1000.0,
+        wait.as_secs_f64() * 1000.0,
+        copy.as_secs_f64() * 1000.0
+    );
+}
+
 /// How many wgpu errors and device losses trace mode has logged.
 pub fn error_count() -> u64 {
     ERRORS.load(Ordering::Relaxed)

@@ -25,15 +25,21 @@ use crate::camera::Camera;
 use crate::pixels::Rect;
 use ferrocad_graphics::{Hit, WorkplaneFrame};
 
-/// A CPU-side RGBA8 image, row-major, top-left origin.
+/// A CPU-side 8-bit-per-channel image, row-major, top-left origin.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImageData {
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// `width * height * 4` bytes, RGBA8.
+    /// `width * height * 4` bytes, RGBA unless [`bgra`](Self::bgra) is set.
     pub rgba: Vec<u8>,
+    /// Whether the channels are **BGRA** rather than RGBA.
+    ///
+    /// A renderer whose target is `Bgra8UnormSrgb` reports the framebuffer exactly as
+    /// the GPU wrote it, so a host that wants BGRA (gpui's `RenderImage`) can wrap it
+    /// without a per-frame CPU channel swap.
+    pub bgra: bool,
 }
 
 /// A view onto an invented scene that a host can present.
@@ -68,8 +74,31 @@ pub trait InventorView {
     /// [`image`](Self::image).
     fn borrow_surface(&self) -> Option<&Self::Surface>;
 
-    /// The last drawn frame read back as an RGBA image (the MVP path).
+    /// The last drawn frame read back as an image (the MVP path).
     fn image(&mut self) -> Result<ImageData, Self::Error>;
+
+    /// Begin a **non-blocking** readback of the last drawn frame.
+    ///
+    /// Returns `true` when the backend accepted the request; the image then arrives
+    /// later from [`take_image`](Self::take_image). A backend whose readback is
+    /// inherently synchronous (the default) returns `false`, and the host falls back
+    /// to [`image`](Self::image). This is the seam that keeps the UI thread out of a
+    /// GPU map wait: the copy is submitted here, and the wait/map happen where the
+    /// backend chooses.
+    fn begin_image(&mut self) -> bool {
+        false
+    }
+
+    /// Take the completed readback from [`begin_image`](Self::begin_image), if it is
+    /// ready. `None` means “not yet” (or no request is outstanding).
+    fn take_image(&mut self) -> Option<Result<ImageData, Self::Error>> {
+        None
+    }
+
+    /// Whether a [`begin_image`](Self::begin_image) readback is still in flight.
+    fn image_pending(&self) -> bool {
+        false
+    }
 
     /// Draw a frame of one or more views. The first is the main view; later ones are
     /// **overlays** ([`ViewSpec::overlay`]), each confined to its [`ViewSpec::rect`].

@@ -693,6 +693,13 @@ pub struct InventorViewport<V: InventorView> {
     /// Stable meshes for the protractor rebuild.
     protractor_meshes: ProtractorMeshes,
     frame: Option<Arc<RenderImage>>,
+    /// The next paint was requested **by the image readback**, not by a new
+    /// invalidation. Such a paint only collects the completed image; it does not
+    /// redraw the scene (which would start another readback and spin).
+    readback_poll: bool,
+    /// A real paint arrived while a readback was in flight, so the completed image is
+    /// stale and the scene is drawn again as soon as it lands.
+    readback_dirty: bool,
     /// A host-supplied zero-copy presenter. When ready, its GPU target replaces the
     /// readback `frame`; `None` (the default) is the image path.
     presenter: Option<Rc<RefCell<Box<dyn Presenter>>>>,
@@ -1710,6 +1717,8 @@ impl<V: InventorView> InventorViewport<V> {
             protractor_queue: RenderQueue::default(),
             protractor_meshes: ProtractorMeshes::new(),
             frame: None,
+            readback_poll: false,
+            readback_dirty: true,
             presenter: None,
             presenter_frames: 0,
             last_bounds: None,
@@ -5997,7 +6006,20 @@ impl<V: InventorView> InventorViewport<V> {
                 .any(|manipulator| manipulator.is_dragging())
     }
 
+    /// The test/headless entry point: a refresh that always draws.
+    #[cfg(test)]
     fn refresh(&mut self) {
+        self.refresh_with(true);
+    }
+
+    /// A refresh, optionally **without** drawing the scene.
+    ///
+    /// The image path's readback is deferred (S4.6/P6.2): while one is in flight the
+    /// UI still needs the compile/sync half of a paint (the pick stage, the grid and
+    /// the hover state follow it), but a second draw would only replace a target the
+    /// outstanding copy is reading. A paint that was requested merely to collect the
+    /// completed image therefore passes `draw = false`.
+    fn refresh_with(&mut self, draw: bool) {
         if self.stage_dirty {
             let started = Instant::now();
             self.recompile();
@@ -6168,9 +6190,14 @@ impl<V: InventorView> InventorViewport<V> {
             }
             None => false,
         };
-        if !presented && self.view.draw_frame(&views).is_ok() {
-            if let Ok(image) = self.view.image() {
-                self.frame = Some(Arc::new(render_image(image)));
+        if draw && !presented && !self.view.image_pending() {
+            if self.view.draw_frame(&views).is_ok() {
+                self.readback_dirty = false;
+                if !self.view.begin_image() {
+                    if let Ok(image) = self.view.image() {
+                        self.frame = Some(Arc::new(render_image(image)));
+                    }
+                }
             }
         }
     }
@@ -6436,7 +6463,25 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                 window.request_animation_frame();
             }
         }
-        self.refresh();
+        // The image path's readback is deferred: collect the completed image here. A
+        // paint that was requested only to poll for it does not mark the scene dirty,
+        // so the loop stops once the image lands; a real invalidation does, and the
+        // next draw captures the newer state.
+        let poll = std::mem::take(&mut self.readback_poll);
+        if !poll {
+            self.readback_dirty = true;
+        }
+        if let Some(result) = self.view.take_image() {
+            if let Ok(image) = result {
+                self.frame = Some(Arc::new(render_image(image)));
+            }
+        }
+        let draw = self.readback_dirty && !self.view.image_pending();
+        self.refresh_with(draw);
+        if self.view.image_pending() {
+            self.readback_poll = true;
+            window.request_animation_frame();
+        }
         let refreshed = frame_started.elapsed();
         report_frame_time(refreshed);
 
@@ -7279,18 +7324,55 @@ fn ruler_tag(tag: &RulerTag) -> gpui::Div {
 
 /// Wrap readback pixels as a gpui [`RenderImage`].
 ///
-/// gpui's `RenderImage` holds **BGRA** (see its docs), while [`ImageData`] is RGBA,
-/// so the two colour channels are swapped here. The image is not flipped: the wgpu
-/// readback is already top-left origin, matching gpui.
+/// gpui's `RenderImage` holds **BGRA** (see its docs). A backend whose target is
+/// `Bgra8UnormSrgb` reports [`ImageData::bgra`], so the bytes are handed over as-is;
+/// an RGBA readback (the snapshot/headless writers, a fallback target) is swapped here.
+/// The image is not flipped: the wgpu readback is already top-left origin, matching gpui.
 pub fn render_image(image: ImageData) -> RenderImage {
-    let mut bgra = image.rgba;
-    for pixel in bgra.chunks_exact_mut(4) {
-        pixel.swap(0, 2); // R <-> B
+    let started = Instant::now();
+    let ImageData {
+        width,
+        height,
+        mut rgba,
+        bgra,
+    } = image;
+    if !bgra {
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2); // R <-> B
+        }
     }
-    let buffer: ImageBuffer<Rgba<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(image.width, image.height, bgra)
-            .expect("ImageData length must equal width * height * 4");
-    RenderImage::new([Frame::new(buffer)])
+    let swizzled = started.elapsed();
+    let buffer: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(width, height, rgba)
+        .expect("ImageData length must equal width * height * 4");
+    let image = RenderImage::new([Frame::new(buffer)]);
+    if trace_enabled() {
+        eprintln!(
+            "ferrocad trace: image {width}x{height}: {} {:.2} ms, wrap {:.2} ms",
+            if bgra { "bgra (native)" } else { "rgba->bgra swap" },
+            swizzled.as_secs_f64() * 1000.0,
+            (started.elapsed() - swizzled).as_secs_f64() * 1000.0
+        );
+    }
+    image
+}
+
+/// Whether `FERROCAD_TRACE` is on (the same truthiness as the renderer's trace).
+///
+/// This crate deliberately does not depend on `ferrocad_wgpu`, so the one gate it
+/// needs is repeated here. It is resolved once, and the per-frame cost is an atomic
+/// load.
+fn trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("FERROCAD_TRACE").is_some_and(|value| {
+            let value = value.to_string_lossy();
+            let value = value.trim();
+            !(value.is_empty()
+                || value == "0"
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off"))
+        })
+    })
 }
 
 /// Whether a press on `target` is refused because a pending rotation owns `locked`.
@@ -7396,9 +7478,42 @@ mod tests {
             width: 1,
             height: 1,
             rgba: vec![10, 20, 30, 255],
+            bgra: false,
         });
         assert_eq!(rendered.size(0).width.0, 1);
         assert_eq!(rendered.as_bytes(0).unwrap(), &[30, 20, 10, 255]);
+    }
+
+    /// A BGRA readback is already in gpui's order: the wrapper must hand the bytes over
+    /// unchanged (no per-frame CPU swap).
+    #[test]
+    fn render_image_uses_bgra_bytes_without_swizzling() {
+        let rendered = render_image(ImageData {
+            width: 1,
+            height: 1,
+            rgba: vec![30, 20, 10, 255],
+            bgra: true,
+        });
+        assert_eq!(rendered.as_bytes(0).unwrap(), &[30, 20, 10, 255]);
+    }
+
+    /// P6.2 measurement: the RGBA→BGRA swap and the wrapper at the full 2336×1388 frame.
+    /// Run with `FERROCAD_TRACE=1 cargo test -p ferrocad_viewport --lib
+    /// measure_the_image_wrap -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement: 2336x1388 image wrap, run explicitly with FERROCAD_TRACE=1"]
+    fn measure_the_image_wrap_at_full_size() {
+        const WIDTH: u32 = 2336;
+        const HEIGHT: u32 = 1388;
+        let bytes = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+        for bgra in [false, true] {
+            let _ = render_image(ImageData {
+                width: WIDTH,
+                height: HEIGHT,
+                rgba: bytes.clone(),
+                bgra,
+            });
+        }
     }
 
     /// A triangle at the origin of an identity camera (device == logical at 1x).
@@ -7643,6 +7758,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                bgra: false,
             }),
             perspective_camera([100, 100]),
             triangle_scene(),
@@ -9276,6 +9392,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                bgra: false,
             }),
             camera,
             triangle_scene(),
@@ -9319,6 +9436,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                bgra: false,
             }),
             camera,
             triangle_scene(),
@@ -9359,6 +9477,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                bgra: false,
             }),
             perspective_camera([100, 100]),
             triangle_scene(),
@@ -9446,6 +9565,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                bgra: false,
             }),
             camera,
             triangle_scene(),
@@ -9628,6 +9748,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                bgra: false,
             }),
             camera,
             triangle_scene(),
@@ -9871,6 +9992,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                bgra: false,
             }),
             camera,
             triangle_scene(),

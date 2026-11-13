@@ -14,7 +14,7 @@ stays `FreeCAD`; the project/distribution is `ferrocad`.
 | **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped** (2026-11-13); primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **252/408 (61.8%)** upstream API names. |
 | **Workbench platform** | running upstream workbenches without Qt | `Part::FeaturePython`/`Part2DObjectPython` execute and persist Python proxies; Draft M2 is green (**27/27**), the Draft `--draft` group is **50/0/0/1**, and `test_modification` is **31/0/2**. |
 | **App shell** | the `bite-gpui` window over one document backend | viewport, model tree, property editor, console, command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools and the loadout. **One document implementation with four runtimes** (CPython, RustPython, JS, none); the browser shell runs the same `RustAppBackend` and `pivy.coin` scene core. SimpleCAD S4.1–S4.3 (view facade, ranked pick, selection object) are in the tree. |
-| **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **985 passed, 49 failed, 23 errored, 2 skipped**, no aborts. |
+| **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **985 passed, 49 failed, 18 errored, 7 skipped**, no aborts. The 5 Qt groups are classified skips, and the scripted draw → push/pull → cut → STL workflow is a green acceptance test. |
 | **Distribution** | how it ships | `v0.1.4`, the base and Parametric artifacts (AppImage + Windows zip), and `cargo install ferrocad`. macOS is not shipped yet. |
 
 This is a **working preview, not a finished product**. It exists to validate the single
@@ -415,8 +415,8 @@ counts and the two documented limits. **H2 (the workbench platform) is built**: 
 document with four runtimes, the browser shell and the backend-parity close-out; what
 remains is Draft M3–M5 breadth (the M4 import round took `test_modification` to 31/0/2).
 **H3 (proof by use)** is SimpleCAD: S1–S3 are measured and S4.1–S4.3 are the view facade,
-ranked pick and selection object (integration baseline **985 passed / 49 failed / 23 errored
-/ 2 skipped**, 88/88 modules). Packaging is on v0.1.4; macOS is the parked distribution leg.
+ranked pick and selection object (integration baseline **985 passed / 49 failed / 18 errored
+/ 7 skipped**, 88/88 modules). Packaging is on v0.1.4; macOS is the parked distribution leg.
 
 The most recent round is the **November platform round** — the OCCT seam ported to Rust,
 the browser shell, one document with four runtimes (CPython, RustPython, JS, none), the

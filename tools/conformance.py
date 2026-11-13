@@ -217,12 +217,29 @@ def _short(err) -> str:
     return f"{exc_type.__name__}: {msg}  ({loc})"[:300]
 
 
+#: The Qt shim's deliberate refusal. SimpleCAD's GUI tests call
+#: ``QApplication()``; in a headless FerroCAD image the shim raises this instead of
+#: constructing a widget tree. It is an out-of-surface skip, not a kernel error.
+GUI_SKIP_REASON = "GUI (out of surface): needs a Qt QApplication"
+_QT_SHIM_MARKER = "QApplication() takes no arguments"
+
+
+def _gui_skip(err) -> str | None:
+    """The skip reason when ``err`` is the Qt shim refusing, else ``None``."""
+    if str(err[1]).strip() == _QT_SHIM_MARKER:
+        return GUI_SKIP_REASON
+    return None
+
+
 class Collector(unittest.TestResult):
     """Collects per-test outcomes instead of printing them."""
 
-    def __init__(self):
+    def __init__(self, classify_gui: bool = False):
         super().__init__()
         self.records: list[tuple[str, str, str]] = []
+        # Only the SimpleCAD group turns the Qt shim refusal into a skip; an
+        # upstream test that raises it should stay visible as an error.
+        self.classify_gui = classify_gui
 
     def addSuccess(self, test):
         self.records.append((test.id(), "pass", ""))
@@ -231,6 +248,10 @@ class Collector(unittest.TestResult):
         self.records.append((test.id(), "fail", _short(err)))
 
     def addError(self, test, err):
+        reason = _gui_skip(err) if self.classify_gui else None
+        if reason is not None:
+            self.records.append((test.id(), "skip", reason))
+            return
         self.records.append((test.id(), "error", _short(err)))
 
     def addSkip(self, test, reason):
@@ -248,6 +269,11 @@ class Collector(unittest.TestResult):
         if err is None:
             return
         kind = "fail" if issubclass(err[0], test.failureException) else "error"
+        if kind == "error" and self.classify_gui:
+            reason = _gui_skip(err)
+            if reason is not None:
+                self.records.append((subtest.id(), "skip", reason))
+                return
         self.records.append((subtest.id(), kind, _short(err)))
 
 
@@ -283,14 +309,14 @@ def classify_load_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def run_file(path: Path):
+def run_file(path: Path, classify_gui: bool = False):
     """Load and run one test file; return a dict describing the outcome."""
     module, err = load_module(path)
     if module is None:
         return {"file": path.name, "loaded": False, "reason": classify_load_error(err)}
 
     suite = unittest.defaultTestLoader.loadTestsFromModule(module)
-    result = Collector()
+    result = Collector(classify_gui=classify_gui)
     suite.run(result)
     return {
         "file": path.name,
@@ -494,7 +520,7 @@ def main(argv: list[str]) -> int:
         if path is None:
             print(f"warning: not found: {stem}", file=sys.stderr)
             continue
-        outcomes.append(run_file(path))
+        outcomes.append(run_file(path, classify_gui=group.name == "simplecad"))
 
     print(
         render(

@@ -1,8 +1,10 @@
 # SimpleCAD bring-up: the closing cut
 
-Status: task spec (2026-10-30). Cut from [`../record/TODO-31-10-2026.md`](../record/TODO-31-10-2026.md)
+Status: task spec (2026-10-30); **SC3 and SC7 done 2026-11-13.** Cut from [`../record/TODO-31-10-2026.md`](../record/TODO-31-10-2026.md)
 §P1 after the [fan-out](../record/2026-10-30-fan-out-todo-30.md); the current home of the
-open slices is [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) §P1. The measurement it
+open slices is [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) §P1. Current state:
+**985 passed / 49 failed / 18 errored / 7 skipped** over 88/88 modules (2026-11-13, after
+SC0–SC3; the cut started from 969 / 64 / 26 / 2). The measurement it
 starts from is [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7.3;
 the round's closed backdrop is
 [`../record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](../record/2026-10-29-workplane-visual-hierarchy-and-grid.md).
@@ -230,17 +232,19 @@ of this slice.
 **Acceptance:** the 42nd name resolves with a real implementation, and the test uses a
 vendored font. **Size:** M (~300–450 lines across a new crate + binding, plus a fixture).
 
-## SC3 — classify the `QApplication()` group
+## SC3 — classify the `QApplication()` group — done 2026-11-13
 
-- [ ] Record the 16 tests behind the four failing `setUpClass` hooks (plus the inline
+- [x] Record the 16 tests behind the four failing `setUpClass` hooks (plus the inline
       constructor in `test_elongating.py`, 17 total) as **GUI** in the bring-up note, with
       the widget each one needs.
-- [ ] Make the harness count them as a classified skip rather than an error, so the error
+- [x] Make the harness count them as a classified skip rather than an error, so the error
       budget reflects the API surface.
 
-**Acceptance:** the 5 `TypeError` errors move to a named "GUI (out of surface)" bucket and
-the error count drops by 5 without hiding a behavioural failure. **Size:** S (text + one
-harness rule).
+**Acceptance met:** the 5 `TypeError` errors move to the named
+“GUI (out of surface)” skip bucket and the error count drops by 5 without hiding a
+behavioural failure. The table is in
+[`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7; the harness rule
+is `Collector(classify_gui=…)` in `tools/conformance.py`. **Size:** S.
 
 ## SC4 — S4.4: the plane and the normal through the facade
 
@@ -277,18 +281,19 @@ merges them), so this slice is SimpleCAD-side plus one decision.
 **Acceptance:** a decision recorded; any SimpleCAD overlay the project keeps uses the
 existing channel. **Size:** S (decision) / M if the overlay ports.
 
-## SC7 — the workflow acceptance
+## SC7 — the workflow acceptance — done 2026-11-13
 
-- [ ] One test file (`tests/test_simplecad_workflow.py` or an entry added to the registered
+- [x] One test file (`tests/test_simplecad_workflow.py` or an entry added to the registered
       `tests/test_part.py`) that runs the session end to end:
       `makeBox` → `generalFuse` with a line to split the top → `extrude` + `fuse` →
       `cut` a hole → `exportStl` → read back with `Mesh.Mesh` and check the volume.
-- [ ] Assert volumes at each step (the fan-out verified every API exists; the expected
+- [x] Assert volumes at each step (the fan-out verified every API exists; the expected
       numbers need a first run to pin).
-- [ ] Add the file to the extension-set contract if it needs `Part`.
+- [x] Add the file to the extension-set contract if it needs `Part`.
 
-**Acceptance:** the test passes and its assertion numbers are pinned in the file. **Size:**
-S/M (~120 lines).
+**Acceptance met:** `tests/test_simplecad_workflow.py` passes and pins **12 000**, **3 000**,
+**15 000**, **960** and **14 040** mm³, with the STL read-back equal to the B-Rep volume;
+`contracts/extension-sets.json` lists it under `workbenches`. **Size:** S/M.
 
 ## SC8 — re-measure and record
 

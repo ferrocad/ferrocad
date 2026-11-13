@@ -55,6 +55,38 @@ class TestShort(unittest.TestCase):
         self.assertIn("test_conformance.py", text)
 
 
+class TestGuiSkip(unittest.TestCase):
+    def _err(self):
+        try:
+            raise TypeError("QApplication() takes no arguments")
+        except TypeError:
+            return sys.exc_info()
+
+    def test_the_qt_shim_refusal_is_a_named_skip(self):
+        self.assertEqual(conformance._gui_skip(self._err()), conformance.GUI_SKIP_REASON)
+
+    def test_another_type_error_is_not_a_gui_skip(self):
+        try:
+            raise TypeError("something else")
+        except TypeError:
+            err = sys.exc_info()
+        self.assertIsNone(conformance._gui_skip(err))
+
+    def test_the_collector_only_classifies_when_asked(self):
+        class FakeTest:
+            def id(self):
+                return "fake.FaceRowTests.test_a_row"
+
+        classified = conformance.Collector(classify_gui=True)
+        classified.addError(FakeTest(), self._err())
+        self.assertEqual(classified.records[0][1], "skip")
+        self.assertEqual(classified.records[0][2], conformance.GUI_SKIP_REASON)
+
+        literal = conformance.Collector()
+        literal.addError(FakeTest(), self._err())
+        self.assertEqual(literal.records[0][1], "error")
+
+
 class TestTotals(unittest.TestCase):
     def test_totals(self):
         records = [("a", "pass", ""), ("b", "fail", "x"), ("c", "error", "y"), ("d", "skip", "z")]

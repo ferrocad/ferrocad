@@ -37,7 +37,7 @@ number also depends on the built combined extension. The Rust rows are lib tests
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
 | Draft conformance | **50 passed, 0 failed, 0 errored, 1 skipped, 0 load failures** | same harness with `--test draft_conformance`; the skip is the absent BIM module |
 | Draft M2 | **27 passed, 0 failed, 0 errored, 0 load failures** | `test_creation` 26 + `test_array` 1 |
-| SimpleCAD integrated | **985 passed, 49 failed, 23 errored, 2 skipped, 88/88 modules** | `cargo test -p ferrocad_part_py --test simplecad_conformance` |
+| SimpleCAD integrated | **985 passed, 49 failed, 18 errored, 7 skipped, 88/88 modules** | `cargo test -p ferrocad_part_py --test simplecad_conformance`; 5 Qt groups are classified skips |
 | Part API audit | **252 of 408 names (61.8%)**, 21 shared classes, 11 with method gaps | `python3 tools/part_api_audit.py`; 39 functions / 60 classes / 40 object types, contract at 17 source files |
 | Rust lib tests | **1 454 passed, 0 failed** across the measured crates | 1 178 in 21 crates plus `ferrocad_shell_core` 276/0 |
 | Book | **48 chapters** | `python3 tools/build_book.py --check` |
@@ -59,7 +59,8 @@ number also depends on the built combined extension. The Rust rows are lib tests
    `ModuleNotFoundError: FreeCAD`, which SimpleCAD reports as
    `The kernel stopped unexpectedly on this geometry (code 1)`. The test now exports the
    repo `python/` tree and `.occt/prefix/lib`; `test_surface_ops` is **15 passed / 1
-   errored** (the known `PartDesign` absence).
+   errored** (the known `PartDesign` absence). SC3 then classifies the 5 Qt groups as
+   skips (**985/49/18/7**), and SC7 adds the draw → push/pull → cut → STL acceptance.
 
 The Part API audit's `ours.object_types.files` 16 → 17 drift is benign: the extra source
 file is `crates/ferrocad_part/src/extrusion.rs` (2026-11-11), and registered names did not
@@ -85,8 +86,9 @@ change. The contract was re-pinned and `--check` passes.
   `TechDraw::DrawPage` and the `test_draftgeomutils` reproduction are unchanged.
 - **The Sketcher still has no constraint model and no solver.** PlanGCS is still only
   vendored upstream; `SK1` has not started.
-- **SimpleCAD's remaining 49 failures and 23 errors are not closed**, and `S4.4`–`S4.6`
-  are still the last façade slices.
+- **SimpleCAD's remaining 49 failures and 18 errors are not closed**, and `S4.4`–`S4.6`
+  are still the last façade slices. SC3 and SC7 (the Qt skip classification and the
+  draw → push/pull → cut → STL acceptance) are done.
 - **The edition was not published.** `v0.1.4` is still the latest tag; the browser shell,
   the host split and the Rust OCCT boundary are unreleased.
 - **The image-path cost was instrumented, not removed.** The software fallback still does

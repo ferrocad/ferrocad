@@ -1,7 +1,8 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
 Status: design (2026-10-21); re-measured 2026-11-13 (§7). The current integrated baseline is
-**985 passed / 49 failed / 23 errored / 2 skipped over 88/88 modules**.
+**985 passed / 49 failed / 18 errored / 7 skipped over 88/88 modules**; the 5 Qt-shim
+errors are now classified skips and the SC7 workflow acceptance is green.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
@@ -1442,6 +1443,29 @@ passed / 1 errored (the known `PartDesign` absence). The 49 failures remain the 
 buckets. See
 [`../record/2026-11-13-november-round.md`](../record/2026-11-13-november-round.md) §2.1
 and [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) §P1.1.
+
+**2026-11-13 — SC3: the Qt shim refusal is a classified skip.** The five `TypeError` error
+records are four `setUpClass` hooks and one inline constructor, covering **17 tests**:
+
+| File / group | Tests | What each needs |
+| --- | --- | --- |
+| `test_dense_drawing.FaceRowTests` | 1 | `QApplication`; `QTreeWidget`/`QTreeWidgetItem` (the face browser) |
+| `test_elongating.ElongateTests.test_elongate_dialog_widgets` | 1 (inline) | `QApplication`; `ElongateDialog` (`QDialog`, `QComboBox`, labels) |
+| `test_measuring.PanelTests` | 1 | `QApplication`; `MeasureSession` (`QTableWidget`, `QPushButton`, clipboard) |
+| `test_panel_placement.AnchorTests` | 1 | `QApplication`; `QWidget`/`QDialog` plus layouts and screen geometry |
+| `test_push_pull_ui.PushPullUITests` | 13 | `QApplication`; `PushPullDialog` (combo boxes, distance field, buttons) |
+
+The harness (`tools/conformance.py`) now turns that exact shim message into
+`[SKIP] … GUI (out of surface): needs a Qt QApplication`, but only for the SimpleCAD
+group; an upstream test that raises it stays an error. The suite moves from
+**985/49/23/2** to **985/49/18/7** without changing a pass or failure.
+
+**2026-11-13 — SC7: the workflow acceptance is green.** `tests/test_simplecad_workflow.py`
+runs `makeBox` → split the top with `generalFuse` → extrude/fuse a profile → cut a square
+hole → `exportStl` → `Mesh.Mesh` read-back. The pinned volumes are **12 000** (base),
+**600-area** profiles, **3 000** (boss), **15 000** (fused), **960** (hole) and **14 040**
+(final, 44 STL facets, mesh volume equal to the B-Rep volume). It is in the `workbenches`
+extension set, so `tools/run_tests.py --check` covers it.
 
 ---
 

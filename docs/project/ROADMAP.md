@@ -20,8 +20,9 @@ The bottleneck is no longer geometry. It is the **breadth of the workbench API**
 **interaction surface** on top of it, and the **host/platform seam** the November round
 built. The Part audit covers **252 of 408 upstream method names (61.8%)**. The SimpleCAD
 S4.1–S4.3 view facade, ranked pick and selection object are in the tree. SimpleCAD's
-integrated baseline is **985 passed / 49 failed / 23 errored / 2 skipped over 88/88
-modules** (2026-11-13). The rotation's two red readings were fixed the same day: the B20
+integrated baseline is **985 passed / 49 failed / 18 errored / 7 skipped over 88/88
+modules** (2026-11-13), with the Qt groups classified as skips and the SC7 workflow
+acceptance green. The rotation's two red readings were fixed the same day: the B20
 `RootNode` change was a real Part regression, and the SimpleCAD `surface_ops` delta was the
 in-process harness not exporting the paths its worker subprocess needs.
 
@@ -88,8 +89,8 @@ rather than an architecture task.
   `Mesh::Feature`), `ferrocad_mesh_py` (`Mesh`, `MeshPart`), `Part.Shape.tessellate`,
   `BOPTools.SplitAPI` and the import-time PySide surface all load in one in-process
   `ferrocad` + `Part` + `Mesh` image. The 2026-11-13 baseline is **985 pass, 49 fail,
-  23 error, 2 skip over 88/88 modules**; the failures and errors are named in
-  [`TODO-13-11-2026.md`](TODO-13-11-2026.md) §P1.1. The identity, query and representation
+  18 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
+  push/pull → cut → STL) is green and the 5 Qt groups are classified skips. The identity, query and representation
   frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
   `Faces`/`Wires`, `Face.Surface` classification with `parameter()`).
 - **SimpleCAD S4.1–S4.3 (in the worktree).** The view facade, the ranked pick and the

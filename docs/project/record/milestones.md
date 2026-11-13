@@ -34,7 +34,7 @@ labels are disambiguated in [`../labels.md`](../labels.md).
 | 2026-11-02/04 | **The browser host** | GPUI + wgpu + WebGL2 in the browser, the wasm OCCT kernel, the shell crate split and the M0–M6 browser shell: a real `Part::Box` + `Part::Fillet` document, editing, `.FCStd` open/save and a headless smoke check. |
 | 2026-11-04/05 | **Hosts and backends** | `ScriptHost`, the host `FilePicker`, `ferrocad_shell_rust`, one display path, shared property presentation, the command catalogue as data, and both browser script halves over `RustAppBackend` ([host-backends](tasks/host-backends.md)). |
 | 2026-11-08/12 | **Backend parity and the mod format** | One `AppBackend`; the legacy `PythonAppBackend` deleted; every shown command a `FreeCADGui` command; `rquickjs` and RustPython halves; the `ferrocad_addon` ABI; fetched packs carrying their `Resources/`; one Coin scene core with CPython and RustPython adapters (B0–B21, [close-out](tasks/backend-parity.md)). |
-| 2026-11-13 | **The rotation fix** | `RootNode` builds through the imported `pivy.coin` (Part back to **531/0/0/12**), the SimpleCAD in-process harness exports the worker's `PYTHONPATH`/OCCT library path (back to **985/49/23/2**), the Part API contract is re-pinned and the generated API/user pages are regenerated. |
+| 2026-11-13 | **The rotation fix** | `RootNode` builds through the imported `pivy.coin` (Part back to **531/0/0/12**), the SimpleCAD in-process harness exports the worker's `PYTHONPATH`/OCCT library path (back to **985/49/23/2**), the Part API contract is re-pinned and the generated API/user pages are regenerated. SC3 then classifies the 5 Qt groups as skips and SC7 pins the draw → push/pull → cut → STL acceptance (**985/49/18/7**). |
 
 ## Current state (2026-11-13 baseline)
 
@@ -49,7 +49,7 @@ in the [November round log](2026-11-13-november-round.md).
 | Draft M2 | 27/0/0/0 | **27/0/0/0** |
 | Python facade | 631/3/4 (worktree) | not re-measured; the in-process runs are the gate |
 | Part module | 248/408 names in the worktree | **252/408 (61.8%)**, 21 shared classes |
-| SimpleCAD | 702/44/368/2 | **985/49/23/2 over 88/88** (2026-11-13, worker paths exported) |
+| SimpleCAD | 702/44/368/2 | **985/49/18/7 over 88/88** (2026-11-13, worker paths exported; 5 Qt groups skipped) |
 | Rust lib tests | 1 186 across 15 crates | **1 454 passed, 0 failed**; `ferrocad_shell_core` is 276/0 in default and 32-thread runs |
 | Book | 36 chapters | **48 chapters** |
 | Hosts | desktop + a browser spike | **one document, four runtimes**; the browser shell runs the same backend |

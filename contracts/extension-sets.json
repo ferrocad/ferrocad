@@ -58,6 +58,7 @@
       "test_gui_snapping",
       "test_packaged_modules",
       "test_part",
+      "test_simplecad_workflow",
       "test_text_workflow"
     ]
   }

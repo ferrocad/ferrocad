@@ -22,7 +22,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use ferrocad_core::object_registry::{self, ObjectType};
+use ferrocad_core::object_registry::{self, BodyMembership, ObjectType};
 use ferrocad_core::property_types;
 use ferrocad_core::{
     Document, ExtensionData, ExtensionValue, FcstdKind, ObjectId, Placement, Property, Rotation,
@@ -264,6 +264,18 @@ impl ObjectType for FeaturePython {
 
     fn is_python_feature(&self) -> bool {
         true
+    }
+
+    /// A Python-driven mesh **supports** a body without being its solid.
+    ///
+    /// Upstream's `Body::isAllowed` refuses every mesh (its allow-list is a C++
+    /// class test), which would keep a subdivision cage out of a body entirely.
+    /// A cage is the reference geometry a body's base feature is built from, so
+    /// it takes the `Support` role: any number may join, it never becomes the
+    /// `Tip`, and it does not stop a `Part::Feature`/`PartDesign` solid from
+    /// becoming the `BaseFeature`/`Tip`.
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Support
     }
 }
 

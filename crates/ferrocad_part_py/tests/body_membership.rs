@@ -7,7 +7,8 @@
 //! `BaseFeature`), a `Support` never becomes the `Tip`, a `Feature` does, and
 //! `Denied` is refused. A direct `Group` write is checked the same way.
 //!
-//! Same one-image boot as `part_link`: `ferrocad` + `Part` as built-ins.
+//! Same one-image boot as `part_link`: `ferrocad` + `Part` + `Mesh` as built-ins
+//! (the last for the cage case: `Mesh::FeaturePython` is a body support).
 
 use std::sync::{Mutex, Once};
 
@@ -19,10 +20,12 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 fn boot() {
     static BOOT: Once = Once::new();
     BOOT.call_once(|| {
+        use ferrocad_mesh_py::Mesh as mesh_module;
         use ferrocad_part_py::Part as part_module;
         use ferrocad_py::ferrocad as ferrocad_module;
         pyo3::append_to_inittab!(ferrocad_module);
         pyo3::append_to_inittab!(part_module);
+        pyo3::append_to_inittab!(mesh_module);
     });
 }
 
@@ -289,5 +292,44 @@ fn a_member_moves_between_bodies() {
         assert_eq!(linked_name(&second, "Tip"), Some("Pad".to_string()));
 
         close_document(&ferrocad, "RustBodyMove").expect("closeDocument");
+    });
+}
+
+/// A subdivision cage is a body **support**: it joins without becoming the
+/// body's shape, and it does not use up the one base slot the skin needs.
+#[test]
+fn a_mesh_cage_is_a_support_member() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let _part = PyModule::import(py, "Part").expect("import Part");
+        let _mesh = PyModule::import(py, "Mesh").expect("import Mesh");
+        let ferrocad = PyModule::import(py, "ferrocad").expect("import ferrocad");
+        let doc = new_document(&ferrocad, "RustBodyCage").expect("newDocument");
+        let body = doc
+            .call_method1("addObject", ("PartDesign::Body", "Body"))
+            .expect("body");
+        let cage = doc
+            .call_method1("addObject", ("Mesh::FeaturePython", "Cage"))
+            .expect("cage");
+
+        body.call_method1("addObject", (&cage,)).expect("add cage");
+        assert_eq!(group_names(&body), vec!["Cage"]);
+        assert_eq!(linked_name(&body, "Tip"), None);
+        assert_eq!(
+            linked_name(&body, "BaseFeature"),
+            None,
+            "a support is not the body's base feature"
+        );
+
+        // The skin still owns the one base slot: a support is not a solid.
+        let skin = doc
+            .call_method1("addObject", ("Part::FeaturePython", "Skin"))
+            .expect("skin");
+        body.call_method1("addObject", (&skin,)).expect("add skin");
+        assert_eq!(group_names(&body), vec!["Cage", "Skin"]);
+        assert_eq!(linked_name(&body, "BaseFeature"), Some("Skin".to_string()));
+
+        close_document(&ferrocad, "RustBodyCage").expect("closeDocument");
     });
 }

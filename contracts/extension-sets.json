@@ -61,6 +61,7 @@
       "test_packaged_modules",
       "test_part",
       "test_part_booleans",
+      "test_sculpt_workflow",
       "test_simplecad_workflow",
       "test_text_workflow"
     ]

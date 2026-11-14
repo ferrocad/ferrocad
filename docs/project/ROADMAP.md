@@ -91,13 +91,17 @@ bindings. The kernel contract and its failure classification are now one code pa
 supplies `AttachmentSupport`/`MapMode`.
 - **Qt Q0–Q5 (landed).** The native `FreeCADGui.Snapper`, the async point session, the
 native `Draft_Line`/`Draft_Wire` tools and `PlaneGui`, the checkable `Draft_Snap_*` bar and
-the remaining forms. `--draft` is **50/0/0/1** at the 2026-11-13 re-run.
+the remaining forms. `--draft` is **60/0/0/1 over eleven files** at the 2026-11-16 re-run
+(`test_draftgeomutils` is green and in the gate); `test_modification` is **32/0/1** of 33,
+the one error being the `Sketcher` module that P4 SK3 owns.
 - **The platform tail.** E1 mod events (first slice built), document-scoped settings, the
 gizmo-interface decision, and the backend-parity deferrals (§P5).
 
-**Done when** Draft creates, edits and imports headless. The Qt-free path is largely there;
-Draft's modification/import breadth is not, and the platform now makes that a workbench task
-rather than an architecture task.
+**Done when** Draft creates, edits and imports headless. Creation and modification are
+there; the remaining boundary is `Import.readDXF`, whose blocker is the importer's object
+model (intermediate `Part::Line`/`Part::Circle`, `DxfEntityType` placeholders, block
+compounds and Draft layer proxies), not the DXF grammar — recorded as an explicit gap
+rather than stubbed.
 
 ### H3 — Proof by use (active)
 

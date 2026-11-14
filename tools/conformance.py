@@ -101,9 +101,10 @@ DRAFT_FILES = [
     "test_import",
     # M2/M3 modules that now run green in this group (they need the combined
     # App+Part image, as `test_import` already did). `test_modification` runs
-    # 31/0/2 but stays out: its two remaining errors need `Sketcher` and
-    # `TechDraw::DrawPage`, which this image does not ship. The import modules
-    # are green where they can be: see docs/developer/workbenches/draft-tools.md.
+    # 32/0/1 but stays out: its remaining error needs `Sketcher`, which this
+    # image does not ship. `test_dxf` also stays out (no `Import.readDXF`). The
+    # import modules are green where they can be: see
+    # docs/developer/workbenches/draft-tools.md.
     "test_creation",
     "test_array",
     "test_dwg",
@@ -111,6 +112,10 @@ DRAFT_FILES = [
     # SVG export runs green once `Part.OCC_VERSION` and the conic parameter
     # ranges exist; its one skip is honest (the BIM module is not shipped).
     "test_svg",
+    # The wire/extension math (`Edge.split`, placement interactions) went green
+    # with the `Part.Wire(list)`/`Shape.copy`/`Edge.firstVertex` seam rounds, so
+    # the module is in the gate rather than a measured neighbour.
+    "test_draftgeomutils",
 ]
 
 # `src/Mod/Test` also holds package plumbing; the App group's `--list` has always

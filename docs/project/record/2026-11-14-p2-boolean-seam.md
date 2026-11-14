@@ -546,6 +546,59 @@ errors left are the documented face-order assumption, two "would create invalid 
 refusals (`test_forming`, `test_loop_faces`), `Mesh.decimate`, a removed object's `Name`
 (`test_subdivision`), and the four `PartDesign`-module draft shapes.
 
+### 8.13 The Draft round: a TechDraw page, a green wire module, and the DXF boundary
+
+The Draft remainder was measured rather than assumed, and it is smaller than the backlog
+said:
+
+1. **`test_draftgeomutils` was already green (10/0/0/0).** The backlog's `6/4/0` predated
+the seam rounds: `Part.Wire(list)` ordering, `Shape.copy` keeping its subclass and
+`Edge.firstVertex`/`Wire.OrderedVertexes` following `WireExplorer` closed the
+`get_extended_wire3/4/7/8` failures. No new code; the module joined `DRAFT_FILES`, so it
+is now a gate instead of a neighbour. The `--draft` group is **60/0/0/1 over eleven
+files**.
+2. **`TechDraw::DrawPage` is a document stub, and that is all the test reads.**
+`crates/ferrocad_part_py/src/techdraw.rs` registers `TechDraw::DrawPage`
+(`Template` link, `Views` link list), `TechDraw::DrawSVGTemplate` (`Template` string) and
+`TechDraw::DrawViewDraft` (`Source` link, `Direction` vector) from the Part kernel
+bootstrap, beside `Sketcher::SketchObject` and `PartDesign::Body`. `ferrocad_py` gained
+the generic `DocumentObject.addView` (append to a `Views` link list, `AttributeError` for
+a type without one) and `OutList` is now **every outbound link**, not just a group's
+`Group` — which is what `view in page.OutList` asserts. Nothing draws, projects or writes
+SVG: FerroCAD still has no TechDraw workbench. `test_modification` is **32/0/1 of 33**
+(was 31/0/2); the only error left is `test_draft_to_sketch`'s missing `Sketcher` module,
+which P4 SK3 owns. Pinned by `crates/ferrocad_part_py/tests/part_techdraw_page.rs`
+(page/`OutList`/`InList`/`addView`, plus the rejected non-page type).
+3. **`Import.readDXF` is recorded as out of surface, not stubbed.** The draft test no
+longer fails on `getHomePath`: it reaches `import Import` at `importDXF.py:2915`. The
+blocker is not the ASCII DXF grammar — one `LINE` in the fixture — but the **object model
+the importer is contracted to produce**. `importDXF._import_dxf_file` snapshots
+`doc.Objects`, lets `Import.readDXF` create objects, then runs `DxfDraftPostProcessor`
+over the difference. That post-processor reads `Part::Line`/`Part::Circle`/`Part::Vertex`
+intermediates, `App::FeaturePython` placeholders carrying `DxfEntityType`, block
+`Part::Compound`s under `_BlockDefinitions`, and layer groups whose proxy answers
+`utils.get_type(...) == "Layer"`; the test's `len(doc.Objects) == 3` (Layers container,
+layer `0`, one line) is only meaningful if that model is real. FerroCAD registers none of
+those intermediate types. A Python module that emitted three objects would measure the
+stub, not DXF support, so `test_dxf` stays out of `DRAFT_FILES` and the gap is named here
+and in the backlog.
+
+The contract re-pin that follows is mechanical: `contracts/part-api.json` gains the three
+TechDraw types (object types 40 → 43), and the method coverage is unchanged at
+**253/408 (62.0%)**.
+
+Fresh measurements for the round, same image throughout (upstream @ `33adf61`):
+
+| Measure | Value |
+| --- | --- |
+| `--draft` group (eleven files) | **60 passed, 0 failed, 0 errored, 1 skipped** |
+| `test_modification` | **32/0/1** of 33 |
+| `test_draftgeomutils` | **10/0/0/0** |
+| `test_dxf` | **1/0/1** (`Import.readDXF`, out of surface) |
+| Part conformance | **531/0/0/12** |
+| Python `base` | **707 / 0 / 0 / 8** |
+| Part API audit | **253/408 (62.0%)**, contract re-pinned for the TechDraw types |
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

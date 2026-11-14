@@ -1147,7 +1147,7 @@
   },
   "ours": {
     "source": "crates/ferrocad_part_py/src",
-    "files": 11,
+    "files": 12,
     "functions": {
       "registered": 39,
       "defined": 40,
@@ -1277,9 +1277,9 @@
         "crates/ferrocad_part/src",
         "crates/ferrocad_part_py/src"
       ],
-      "files": 17,
-      "constants": 39,
-      "registered": 40,
+      "files": 18,
+      "constants": 42,
+      "registered": 43,
       "names": [
         "App::Link",
         "App::LinkElement",
@@ -1320,7 +1320,10 @@
         "Part::Wedge",
         "PartDesign::AdditiveBox",
         "PartDesign::Body",
-        "Sketcher::SketchObject"
+        "Sketcher::SketchObject",
+        "TechDraw::DrawPage",
+        "TechDraw::DrawSVGTemplate",
+        "TechDraw::DrawViewDraft"
       ],
       "constant_values": {
         "ADDITIVE_BOX_TYPE": "PartDesign::AdditiveBox",
@@ -1334,6 +1337,7 @@
         "CUT_TYPE": "Part::Cut",
         "CYLINDER_TYPE": "Part::Cylinder",
         "DATUM_PLANE_TYPE": "Part::DatumPlane",
+        "DRAFT_VIEW_TYPE": "TechDraw::DrawViewDraft",
         "ELEMENT_TYPE": "App::LinkElement",
         "EXTRUSION_TYPE": "Part::Extrusion",
         "FEATURE_PYTHON_TYPE": "Part::FeaturePython",
@@ -1348,6 +1352,7 @@
         "MIRRORING_TYPE": "Part::Mirroring",
         "MULTICOMMON_TYPE": "Part::MultiCommon",
         "MULTIFUSE_TYPE": "Part::MultiFuse",
+        "PAGE_TYPE": "TechDraw::DrawPage",
         "PART2D_PYTHON_TYPE": "Part::Part2DObjectPython",
         "PART2D_TYPE": "Part::Part2DObject",
         "PATH_TYPE": "Part::LinkArrayPath",
@@ -1360,6 +1365,7 @@
         "SKETCH_TYPE": "Sketcher::SketchObject",
         "SPHERE_TYPE": "Part::Sphere",
         "SWEEP_TYPE": "Part::Sweep",
+        "TEMPLATE_TYPE": "TechDraw::DrawSVGTemplate",
         "TORUS_TYPE": "Part::Torus",
         "WEDGE_TYPE": "Part::Wedge"
       },
@@ -3485,37 +3491,37 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1559,
+          "line": 1561,
           "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1563,
+          "line": 1565,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1572,
+          "line": 1574,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1581,
+          "line": 1583,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1588,
+          "line": 1590,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 3974,
+          "line": 3976,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
@@ -3802,7 +3808,10 @@
       "Part::LinkArrayElement",
       "PartDesign::AdditiveBox",
       "PartDesign::Body",
-      "Sketcher::SketchObject"
+      "Sketcher::SketchObject",
+      "TechDraw::DrawPage",
+      "TechDraw::DrawSVGTemplate",
+      "TechDraw::DrawViewDraft"
     ]
   },
   "coverage": {

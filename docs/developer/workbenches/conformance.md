@@ -215,7 +215,10 @@ its owner.
 `test_hatch` also imports `TechDraw` for `makeGeomHatch`. FerroCAD supplies that one
 function as a small pure-Python shim (`python/TechDraw`) that reads the standard PAT file
 from `<getResourceDir()>/Mod/TechDraw/PAT/`; `App.getResourceDir()` ends with the
-separator upstream callers assume (`... + "Mod/TechDraw/PAT/FCPAT.pat"`).
+separator upstream callers assume (`... + "Mod/TechDraw/PAT/FCPAT.pat"`). Separately,
+`TechDraw::DrawPage`, `DrawSVGTemplate` and `DrawViewDraft` are registered as document
+types (see [`draft-tools.md`](draft-tools.md#10-draft-conformance-draftteststest_modificationpy-and-the-import-group))
+so `test_modification` can build a Draft view on a page; nothing draws or projects.
 
 ### Native tool suites (not upstream measurements)
 

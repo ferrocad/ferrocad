@@ -4501,11 +4501,18 @@ impl<V: InventorView> InventorViewport<V> {
         if changed {
             // The cached hover describes where the geometry used to be.
             self.hover_answer = None;
-            // A program's shadow block follows the items it shades. The footprints walk
-            // every vertex, so this only runs when a program is actually drawn.
+            // A program's shadow block follows the items it shades, and so does the stage
+            // AABB: the axis overlay places its badges from it, so a part that only moved
+            // used to keep its badges marking where it had been. The footprints walk
+            // every vertex, so both are gated on a program actually being drawn.
             if !self.program_queue.is_empty() {
                 let footprints = self.effective_shadow_footprints();
                 apply_program_shadows(&mut self.program_queue, &footprints);
+                let bounds = self.measure_stage_bounds();
+                if bounds != self.stage_bounds {
+                    self.stage_bounds = bounds;
+                    apply_program_bounds(&mut self.program_queue, bounds);
+                }
             }
         }
         Some(changed)
@@ -11987,6 +11994,92 @@ mod tests {
             .expect("the overlay is still a program")
             .parameters();
         assert_eq!(parameters.bounds_max[3], 0.0);
+    }
+
+    /// The AABB is the stage's **world** box: a part's placement is part of it, so the
+    /// badges mark where the part actually is rather than its unplaced geometry.
+    #[test]
+    fn the_stage_bounds_are_world_space() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(
+            fake(ImageData::default()),
+            camera,
+            triangle_scene(),
+        );
+        // The slab spans `-0.5 .. 0.5`; the placement moves it to `3.5 .. 4.5`.
+        viewport.set_stage(Stage::new().with_item(named_slab().with_placement(
+            Placement::new(Vector3::new(4.0, 0.0, 0.0), Rotation::identity()),
+        )));
+        viewport.set_overlays(vec![program_scene()]);
+        viewport.recompile();
+
+        let (min, max) = viewport.stage_bounds.expect("the slab has placed vertices");
+        assert!((min[0] - 3.5).abs() < 1e-5, "min x includes the placement: {min:?}");
+        assert!((max[0] - 4.5).abs() < 1e-5, "max x includes the placement: {max:?}");
+        let parameters = viewport.program_queue.packets[0]
+            .state
+            .program
+            .as_ref()
+            .expect("the overlay is a program")
+            .parameters();
+        assert!(
+            (parameters.bounds_max[0] - 4.5).abs() < 1e-5,
+            "the program carries the placed box: {:?}",
+            parameters.bounds_max
+        );
+    }
+
+    /// A part that only **moved** moves its badges with it.
+    ///
+    /// A transform-only change takes `set_stage`'s fast path, which patches the packet
+    /// matrices and the shadow footprints in place. The stage AABB is a program input
+    /// too — the axis overlay places its badges from it — so it has to be re-measured
+    /// there, or a moved part leaves its badges marking where it used to be.
+    #[test]
+    fn a_moved_stage_moves_the_program_bounds() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport = InventorViewport::new(
+            fake(ImageData::default()),
+            camera,
+            triangle_scene(),
+        );
+        viewport.set_overlays(vec![program_scene()]);
+        viewport.set_stage(Stage::new().with_item(named_slab()));
+        viewport.recompile();
+        let bounds = |viewport: &InventorViewport<_>| {
+            viewport.program_queue.packets[0]
+                .state
+                .program
+                .as_ref()
+                .expect("the overlay is a program")
+                .parameters()
+                .bounds_max
+        };
+        let before = bounds(&viewport);
+
+        // Only the placement differs, so `set_stage` patches instead of rebuilding.
+        viewport.set_stage(Stage::new().with_item(named_slab().with_placement(
+            Placement::new(Vector3::new(4.0, 0.0, 0.0), Rotation::identity()),
+        )));
+        assert!(
+            !viewport.stage_dirty,
+            "the transform-only path handled the move"
+        );
+        let after = bounds(&viewport);
+        assert!(
+            (after[0] - before[0] - 4.0).abs() < 1e-5,
+            "the +x face followed the part: {before:?} -> {after:?}"
+        );
+        assert_eq!(
+            after[1], before[1],
+            "the other faces did not move"
+        );
     }
 
     /// The footprints follow the active plane. A world-`(x, y)` footprint projected onto

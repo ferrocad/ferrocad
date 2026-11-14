@@ -726,15 +726,18 @@ def _manipulator_specs(obj, element):
 def _fillet_shape_and_edge(obj, element):
     """The shape and edge name a dress-up radius is measured against.
 
-    An edge selection on an ordinary body is that body's own edge. A selection that
-    belongs to an existing ``Part::Fillet`` (its round, or one of the round's edges) is
-    the feature's result, so the trial fillets run on its *base* shape and the edge the
-    feature names. A feature selecting several edges gets no range: one bisection per edge
-    would over-state the ceiling the combined feature survives.
+    A selection that belongs to an existing ``Part::Fillet`` — its round, or one of the
+    round's edges — is the feature's own result, so the trial fillets run on its *base*
+    shape and the edge the feature names. Any other edge, **including another edge of a
+    filleted body**, is an edge of the shape on screen: the trial fillets run on that
+    shape. A feature selecting several edges gets no range, because one bisection per
+    edge over-states the ceiling the combined feature survives.
     """
-    if str(getattr(obj, "TypeId", "")) == "Part::Fillet":
-        if _dress_up_target(obj, element) is None:
-            return None
+    if not element:
+        return None
+    if str(getattr(obj, "TypeId", "")) == "Part::Fillet" and (
+        _dress_up_target(obj, element) is not None
+    ):
         linked = _link_sub(obj)
         if linked is None or len(linked[1]) != 1:
             return None

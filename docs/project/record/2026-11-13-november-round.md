@@ -334,6 +334,13 @@ commit edits that feature.
   Part feature the kernel refused is `Invalid` and keeps its previous shape (or none), so
   committing it is how a body vanishes. The transaction is aborted and the provider returns
   `ok: false`; the status line reports it and the model is untouched.
+- **A plain edge of a filleted body still gets its range.** The first cut of
+  `_fillet_shape_and_edge` answered "no range" for *any* element of a `Part::Fillet` that
+  was not the round — which silently removed the ceiling for the ordinary case of
+  filleting one edge and then another. The feature branch now applies only when the
+  selection belongs to the round; every other edge is bisected on the shape on screen. The
+  regression test asserts both sides of that split (the round resolves to the feature's
+  base shape, a plain edge to the selected body).
 - **Changing or adding, decided.** A gesture on a cap **edits** the existing push/pull. The
   stem is anchored at the base face and rides the swept ghost, so its number is the total
   distance — the feature's own `LengthFwd`. A delta control would have to anchor at the cap,
@@ -356,9 +363,10 @@ commit edits that feature.
   edge was asked for.
 - **Measured.** `ferrocad_parametric --test manipulator_probe` **3 passed** (the bisection,
   the unbounded push/pull, and the re-open: a fillet face *and* one of its round edges
-  edited in place, a refused 50 mm fillet rolled back with the object count unchanged, an
-  extrusion cap seeded at 5 and edited to 7, then flipped to a pocket that reuses the
-  extrusion), the shell's new
+  edited in place, a plain edge of the same body still measured on the body it is on, a
+  refused 50 mm fillet rolled back with the object count unchanged, an extrusion cap
+  seeded at 5 and edited to 7, then flipped to a pocket that reuses the extrusion), the
+  shell's new
   `a_probe_seeds_the_handle_with_the_existing_value` (seeded value and note shown, nothing
   held), `ferrocad_part`'s `a_fillet_keeps_the_provenance_of_the_face_it_creates` and
   `ferrocad_part_gui`'s `the_probe_note_leads_the_numeric_rows_hint`.

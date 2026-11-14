@@ -130,6 +130,30 @@ assert part._interaction(fillet, 'dress_up', 'fillet', round_edge, [2.5])['ok']
 assert fillet.Radius == 2.5, fillet.Radius
 assert len(doc.Objects) == count, 'a round edge edits the feature too'
 
+# The round is measured on the feature's *base* shape (its own edge), while a plain edge
+# of the filleted body is measured on the body on screen — that is the fillet the user is
+# about to add. Getting this wrong silently removed the range for every edge of an
+# already-filleted body.
+round_shape, round_base_edge = part._fillet_shape_and_edge(fillet, round_edge)
+assert round_base_edge == 'Edge1', round_base_edge
+assert round_shape.isSame(fillet.Base[0].Shape), 'the round is measured on its base'
+other = next(
+    name
+    for name in fillet.Shape.mesh()['parts']
+    if name.startswith('Edge')
+    and not any(
+        fillet.Shape.getElement(name).isSame(boundary)
+        for boundary in fillet.Shape.getElement(round).Edges
+    )
+)
+other_bounds = FerroCAD.manipulator_probe(fillet, other, 'dress_up')
+assert other_bounds is not None, other
+assert other_bounds['max'] > 0, other_bounds
+assert 'values' not in other_bounds, 'a plain edge is a new fillet, not an edit'
+other_shape, other_edge = part._fillet_shape_and_edge(fillet, other)
+assert other_edge == other, other_edge
+assert other_shape.isSame(fillet.Shape), 'the plain edge is measured on the body'
+
 # A fillet the kernel refuses must leave the model alone, not empty the viewport: the
 # feature would be invalid and its body consumed.
 before = len(doc.Objects)

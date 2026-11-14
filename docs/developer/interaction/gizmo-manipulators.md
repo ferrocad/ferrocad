@@ -1239,6 +1239,14 @@ without raising** counts as a failure, because OCC does that. The floor is `_PRO
 the probe reports **no ceiling** rather than inventing one. A push/pull distance has no
 range to report at all, and a chamfer would need its own search.
 
+The search needs to know *which* shape to trial-fillet, and that split is easy to get
+wrong: a selection that belongs to an existing fillet (its round, or a boundary edge of
+that round) is measured on the feature's **base** shape with the edge the feature names —
+that is the radius the feature already has. Every other edge, **including another edge of
+a filleted body**, is measured on the shape on screen, because that is the fillet the user
+is about to add. Only a feature that selects several edges reports no range: one bisection
+per edge over-states the ceiling the combined feature survives.
+
 #### The value: re-opening what is already there
 
 A second gesture on a face that a previous operation produced should *change* that

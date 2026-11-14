@@ -4,7 +4,7 @@ Status: round record (written 2026-11-13, extended 2026-11-14). This is the comp
 measurement and what changed while the 2026-10-31 backlog was open. The backlog itself is
 [`TODO-31-10-2026.md`](TODO-31-10-2026.md); its successor was
 [`TODO-13-11-2026.md`](TODO-13-11-2026.md), which closed 2026-11-14 into
-[`../TODO-14-11-2026.md`](../TODO-14-11-2026.md). The task-level detail stays in the
+[`TODO-14-11-2026.md`](TODO-14-11-2026.md). The task-level detail stays in the
 specs under [`../tasks/`](../tasks/README.md) and the design authority in
 [`../../developer/architecture/host-backends.md`](../../developer/architecture/host-backends.md).
 

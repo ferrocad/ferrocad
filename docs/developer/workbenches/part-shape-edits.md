@@ -1,6 +1,6 @@
 # The sub-shape edit seam
 
-Status: design note (2026-11-14).
+Status: design note (2026-11-14, revised 2026-11-15).
 
 `Shape.replaceShape`, `Shape.removeShape`, `Shape.generalFuse`, `Shape.fuse`/`cut`/`common`
 and the erase/split code built on them (`ferrocad_part_py`, and SimpleCAD's
@@ -58,6 +58,29 @@ or erased, which is what `clean_solid_faces`/`erase_elements` need. `PyEdge` now
 `Orientation` and keeps the entry in step with the base
 (`an_edge_orientation_reaches_the_shapes_that_consume_it`).
 
+## `Edge.Placement` and the cached entry
+
+The same divergence as `Orientation`, for the geometry: `Placement`, `translate`, `rotate`
+and `replaceShape` re-bake the base `PartShape`, while the cached `EdgeEntry` keeps the
+shape the edge was built from. `Part.Wire`, `Part.Face`, `ShapeFix`, `ChFi2d` and
+`Edge.Curve` read the entry, so an edge moved by `edge.Placement = …` reached a new wire at
+its **old** place:
+
+```python
+edge = shape.getElement("Edge11").copy()
+edge.Placement = turn.multiply(edge.Placement)   # the base moves …
+wire = Part.Wire([edge])                         # … the wire did not
+```
+
+`Part.Wire([edge.copy()])` was correct only because the copy is a plain `Part.Shape`, which
+has no cached entry. SimpleCAD's rotate-edges path is exactly this idiom, and the erase had
+already opened the body, so the crescent appeared 180° from where it was dropped.
+
+The consumers now take a live edge's geometry from its base (`PyEdge::entry_from`,
+`wire_shapes`, the two `edge_shape` helpers, `Edge.Curve`); the entry's analytic `curve`
+remains the fallback for a shape the kernel cannot classify. Pinned by
+`an_edge_placement_reaches_the_shapes_that_consume_it`.
+
 ## `App::Part`'s extensions are type-static
 
 Upstream instantiates `App::GeoFeatureGroupExtension` (which derives from
@@ -92,24 +115,33 @@ the bridge exposes both the operation code and the fuzzy value on — the same t
 upstream does with `BRepAlgoAPI_BooleanOperation::myOperation`. `Cut` keeps its
 compound-tool rewriting; `Fuse` and `Common` are one plain build.
 
-## SimpleCAD's `close_holes` (a patch to the checkout)
+## SimpleCAD's `close_holes` — an upstream policy, not a seam defect
 
 `erase_elements` closes a hole's wall through SimpleCAD's own `close_holes`, which picks
-the shape of the closure. It used to cap **any** loop it could not fill from a single
-neighbour, so deleting a box's side face handed the face straight back and the “opened”
-body stayed a solid. A loop that *is* the outline of a removed planar face is now read as
-“that face was the opening” and declines, which opens the body.
+the shape of the closure. Deleting a box's side face leaves the “opened” body closed,
+because the boundary loop has **four** neighbours, so the one-neighbour fill branch never
+runs, the coplanar guard is false, and the function falls through to its **cap** branch.
+That is the function's documented policy: "any other flat loop … a new flat cap closes
+it", and the sibling `test_hole_closing.py` asserts that a one-neighbour hole wall does
+close.
 
-This is a 10-line change to the **SimpleCAD checkout**
-(`simplecad/core/geometry.py`, `close_holes`), not to this repository: the rule is theirs,
-the seam it leans on (`Part.Face(wire)`, `replaceShape`, `removeShape`, `makeShell`) is
-ours. It is pending upstream, so the conformance numbers quote
-`../simplecad` @ `9180c4b` **plus this patch**.
+The probes confirm the seam is not at fault: `Part.Face(wire)` builds the 300 mm² cap,
+`Part.makeSolid(shell)` returns a valid closed 12 000 mm³ body, and both the forward and
+the reversed wire are accepted. `test_edge_deletion.py` expects the opposite (5 faces,
+`isClosed() == False`), so the two failures are an **upstream expectation mismatch**, filed
+with the test assumptions.
+
+A twelve-line rule in the **SimpleCAD checkout** (`simplecad/core/geometry.py`,
+`close_holes`) made this loop decline the cap and took `test_edge_deletion` to **25/25**,
+but the project keeps `../simplecad` at `9180c4b` and unmodified, so the experiment was
+reverted. If upstream changes the policy, revisit; do not patch the reference checkout.
 
 ## What is still open in this seam
 
-- **`test_elongating` ×2, `test_mesh_glue`, `test_rotate_edges` ×2,
-  `test_union.test_rod_a_hair_off_its_bore`.** Each needs its own reproduction; none is
-  the seam above.
+- **`test_elongating` ×2, `test_mesh_glue`, `test_union.test_rod_a_hair_off_its_bore`,
+  `test_analytic`'s in-place pair.** Each needs its own reproduction; none is the seam
+  above.
+- **`test_precision.test_through_push_from_a_slightly_tilted_face_leaves_no_skin`** — the
+  last sub-tolerance case; it is a push/pull, not a plain boolean.
 - **A boolean result is a `Compound` around one `Solid`** (see
   [`part-containers.md`](part-containers.md#open-questions)).

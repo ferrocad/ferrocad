@@ -185,7 +185,8 @@ still skip honestly: four consumer shapes in `solids.rs` store an empty lineage,
 `pivy.coin` while taking its tree body from `ferrocad_inventor::view_root`, so each
 `pivy.coin` gets nodes of its own class family.
 
-**SimpleCAD's in-process run** is **985 / 49 / 18 / 7** (`crates/ferrocad_part_py/tests/simplecad_conformance.rs`).
+**SimpleCAD's in-process run** is **1003 / 27 / 17 / 7** (2026-11-15, clean `9180c4b`;
+`crates/ferrocad_part_py/tests/simplecad_conformance.rs`).
 The five Qt groups are reported as `GUI (out of surface): needs a Qt QApplication` skips
 (17 tests behind them), not errors. That test also exports the repo `python/` tree and
 `.occt/prefix/lib` to SimpleCAD's `scripts/shape_worker.py` subprocess; without them every

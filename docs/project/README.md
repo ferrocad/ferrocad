@@ -11,9 +11,10 @@ public surface is [`../user/`](../user/README.md), [`../mods/`](../mods/README.m
 ## Where to start
 
 - [ROADMAP.md](ROADMAP.md) — the three horizons and their exit criteria.
-- [TODO-14-11-2026.md](TODO-14-11-2026.md) — the active backlog (the November round and the
-  manipulator editor round are closed in
-  [record/2026-11-13-november-round.md](record/2026-11-13-november-round.md)).
+- [TODO-15-11-2026.md](TODO-15-11-2026.md) — the active backlog (the November round, the
+  manipulator editor round and the P2 boolean/seam round are closed in
+  [record/2026-11-13-november-round.md](record/2026-11-13-november-round.md) and
+  [record/2026-11-14-p2-boolean-seam.md](record/2026-11-14-p2-boolean-seam.md)).
 - [labels.md](labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which
   program owns it.
 - [direction/rewrite-strategy.md](direction/rewrite-strategy.md) — the authoritative

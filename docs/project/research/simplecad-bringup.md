@@ -1,10 +1,10 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
-Status: design (2026-10-21); re-measured 2026-11-13 (§7). The current integrated baseline is
-**985 passed / 49 failed / 18 errored / 7 skipped over 88/88 modules**; the 5 Qt-shim
-errors are now classified skips, the SC7 workflow acceptance is green, and SC8 has
-attributed all 49 failures to the named buckets in §7 (37 P2, 11 P3, 1 documented
-test assumption). **P1 is closed.**
+Status: design (2026-10-21); re-measured 2026-11-15 (§7). The current integrated baseline is
+**1003 passed / 27 failed / 17 errored / 7 skipped over 88/88 modules** on the clean
+`9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
+is green, and every remaining failure is attributed in §7 (21 P2, 3 P3, 3 documented test
+assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 22 records.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
@@ -1448,7 +1448,7 @@ FreeCAD`. That surfaces in the suite as `The kernel stopped unexpectedly on this
 passed / 1 errored (the known `PartDesign` absence). The 49 failures remain the same
 buckets. See
 [`../record/2026-11-13-november-round.md`](../record/2026-11-13-november-round.md) §2.1
-and [`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) §P1.1.
+and [`../record/TODO-14-11-2026.md`](../record/TODO-14-11-2026.md) §P1.1.
 
 **2026-11-13 — SC3: the Qt shim refusal is a classified skip.** The five `TypeError` error
 records are four `setUpClass` hooks and one inline constructor, covering **17 tests**:
@@ -1529,25 +1529,49 @@ One more, outside the bucket: `App::Part`/`PartDesign::Body` now answer
 `test_geometry.test_transformed_container_rejected` needed.
 
 The 11 that remain in this bucket are re-bucketed below; the re-measured totals and the
-remaining root causes are in [`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) P2.
+remaining root causes are in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) P2.
 
-**2026-11-14 — `close_holes` and the boolean tolerance: 1004 / 26 / 17 / 7.** Two more
-root causes, one in SimpleCAD's own rule and one in the seam:
+**2026-11-14 — the boolean tolerance, and the `close_holes` experiment: 1001 / 29 / 17 /
+7.** Two things happened, one kept and one reverted:
 
-- **`close_holes` capped the opening it should have left open.** Deleting a box's side face
-  came back as the closed solid, because the one-neighbour fill did not apply (four
-  neighbours) and the fallback capped any loop it could not otherwise fill. A loop that
-  *is* the outline of a removed **planar** face is the opening itself, so the function now
-  declines and the body opens. The change is **twelve lines in the SimpleCAD checkout**
-  (`simplecad/core/geometry.py`, `close_holes`) and is pending upstream, so the numbers
-  below quote `9180c4b` **plus that patch**. `test_edge_deletion` is **25/25**.
 - **`Shape.fuse`/`cut`/`common` dropped their `tolerance`.** All three now hand it to the
   kernel with upstream's signed contract — `0` nothing, `> 0` the fuzzy value, `AUTO_FUZZY`
   the bounding-box diagonal × confusion — through one helper on `BRepAlgoAPI_Cut` (the
   class the bridge exposes the operation code and the fuzzy value on). The document
   booleans pass `AUTO_FUZZY` because upstream builds them through the auto-fuzzing
-  `FCBRepAlgoAPI_*` constructors. Closed: the sub-tolerance step, both `test_analytic`
-  cases and `test_rounding`'s solid case.
+  `FCBRepAlgoAPI_*` constructors. `part_shape_ops` pins the three cases.
+- **`close_holes` was investigated, and the checkout stayed clean.** A twelve-line rule in
+  `simplecad/core/geometry.py` made a loop that *is* the outline of a removed planar face
+  decline the cap; it took `test_edge_deletion` to **25/25**, but it edits the **reference
+  checkout**, so it was reverted. The probes explain the shipped behaviour: four neighbours
+  mean the one-neighbour fill never runs, the coplanar guard is false, and the fall-through
+  caps the loop by design (`Part.Face` + `makeSolid` return a valid closed body). The
+  sibling `test_hole_closing.py` asserts that a one-neighbour hole wall *does* close. The
+  two failures are therefore an **upstream expectation mismatch**, filed with the test
+  assumptions; the totals below quote the bare `9180c4b`.
+
+**2026-11-15 — the clean-checkout re-measure: 1003 / 27 / 17 / 7.** The extension was
+rebuilt from the seam round's tree, `../simplecad` was verified clean at `9180c4b`, and the
+full suite ran with the same result twice before the last fix. From the 2026-11-13 baseline
+of **985 / 49 / 18 / 7** that is **22 records gained and none lost**; 88/88 modules load.
+The 22:
+
+- the two `LocalSplitTests` and `NearlyCoplanarTests` (one `generalFuse` build per target);
+- the three `test_geometry.DocumentTests` internal-edge cases and
+  `test_transformed_container_rejected`;
+- the two `test_dense_deletion` cases and the three `ChangeRecordTests`;
+- all eight `test_surface_line` failures (six `FreeEndTests` subtests and the two document
+  tests), because they split a face along a line;
+- both `test_rotate_edges` cases: a live `Part.Edge` handed `Part.Wire`/`Part.Face` the
+  shape it was built from, not the baked, placed one, so `e.Placement = …;
+  Part.Wire(...)` rebuilt the old edges. The consumers now read the base
+  (`PyEdge::entry_from`, `wire_shapes`, `edge_shape`, `Edge.Curve`).
+
+The 27 that remain are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md)
+§P2: 21 P2, 3 P3, and 3 documented test assumptions. The 17 errors are the unchanged set.
+The next cluster is `test_elongating` ×2, still unreproduced, then `test_analytic`'s
+in-place pair. The round record is
+[`../record/2026-11-14-p2-boolean-seam.md`](../record/2026-11-14-p2-boolean-seam.md).
 
 ---
 

@@ -3,18 +3,19 @@
 Status: task spec (2026-10-30); **closed 2026-11-13** (SC0–SC8 done). Cut from
 [`../record/TODO-31-10-2026.md`](../record/TODO-31-10-2026.md) §P1 after the
 [fan-out](../record/2026-10-30-fan-out-todo-30.md); the slices are re-filed in
-[`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) §P1 (closed) as P2/P3 backlog work. Current
-state: **985 passed / 49 failed / 18 errored / 7 skipped** over 88/88 modules (2026-11-13,
-after SC0–SC3; the cut started from 969 / 64 / 26 / 2). The measurement it
+[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P1 (closed) as P2/P3 backlog work. The
+baseline at close was **985 passed / 49 failed / 18 errored / 7 skipped** over 88/88
+modules (2026-11-13, after SC0–SC3; the cut started from 969 / 64 / 26 / 2); the later P2
+seam rounds took it to **1003 / 27 / 17 / 7** on the clean checkout. The measurement it
 starts from is [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7.3;
 the round's closed backdrop is
 [`../record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](../record/2026-10-29-workplane-visual-hierarchy-and-grid.md).
 
 The goal is one scripted session that **draws on a face, extrudes, push/pulls, cuts a hole
 and exports** without hitting a missing member, plus a tree that is green enough for the
-remaining failures to be named rather than counted. Current state: **985 passed / 49
-failed / 23 errored / 2 skipped** over 88/88 modules (2026-10-30, after SC0 and SC1; the cut
-started from 969 / 64 / 26 / 2), and SC2 has closed the last missing `Part.*` name.
+remaining failures to be named rather than counted. At SC0/SC1 the tree was **985 passed /
+49 failed / 23 errored / 2 skipped** over 88/88 modules (2026-10-30; the cut
+started from 969 / 64 / 26 / 2), and SC2 closed the last missing `Part.*` name.
 
 Slices are numbered `SC*`. They are ordered so each one is independently shippable and
 independently testable; `SC1` and `SC2` are the only ones that change the Python surface.
@@ -342,11 +343,11 @@ the shared registry. **Size:** S (decision) + the small facade-completeness tail
       in the bring-up note and in the successor backlog's §0.
 - [x] Delete the buckets this spec closed from §1.1 of the backlog.
 
-**Final baseline.** The in-process run (upstream `9180c4b`, worker paths exported) is
-**985 passed, 49 failed, 18 errored, 7 skipped over 88/88 modules**, with the SC7
-workflow gate green. No pass, failure, error or skip moved during SC4–SC6; those slices
-are façade work the unit suite does not exercise. The 49 failures are now attributed to
-five named buckets plus one documented test assumption (full table in
+**Final baseline (at close, 2026-11-13).** The in-process run (upstream `9180c4b`, worker
+paths exported) was **985 passed, 49 failed, 18 errored, 7 skipped over 88/88 modules**,
+with the SC7 workflow gate green. No pass, failure, error or skip moved during SC4–SC6;
+those slices are façade work the unit suite does not exercise. The 49 failures were
+attributed to five named buckets plus one documented test assumption (full table in
 [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7):
 
 | Bucket | n | Owner |
@@ -358,10 +359,12 @@ five named buckets plus one documented test assumption (full table in
 | Surface / freeform | 11 | P3 |
 | Test assumption: exact `BoundBox` | 1 | out of surface |
 
-**37 → P2, 11 → P3, 1 documented out-of-surface, 0 unattributed.** No failure needs a
-missing name or a GUI; the 18 errors are the known `PartDesign`/behavioural/single-API
-set and the 7 skips are the Qt groups plus the font and text skips. SC0's last item
-(re-filing the failures) is closed with this table, so **P1 is closed**. **Size:** S.
+**37 → P2, 11 → P3, 1 documented out-of-surface, 0 unattributed** at SC8 (the later P2
+seam rounds closed 22 records; see [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2 for
+the current buckets). No failure needed a missing name or a GUI; the 18 errors are the
+known `PartDesign`/behavioural/single-API set and the 7 skips are the Qt groups plus the
+font and text skips. SC0's last item (re-filing the failures) is closed with this table,
+so **P1 is closed**. **Size:** S.
 
 ## Decisions needed before starting
 

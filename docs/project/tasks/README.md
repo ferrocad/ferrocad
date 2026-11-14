@@ -6,8 +6,9 @@ decision. Completed specs moved to [`../record/tasks/`](../record/tasks/README.m
 - [simplecad-bringup.md](simplecad-bringup.md) — **the SC0–SC8 cut of P1.** Triage the
   failures, exact `ShapeType`, `makeWireString` on `skrifa`/`harfrust`, the GUI
   classification, the S4.4–S4.6 view half, the workflow acceptance and the final
-  re-bucketing. **P1 is closed:** SC0–SC8 are done, the baseline is **985/49/18/7**, and
-  all 49 failures are attributed (37 P2 / 11 P3 / 1 documented test assumption).
+  re-bucketing. **P1 is closed:** SC0–SC8 are done. The later P2 seam rounds took the
+  baseline to **1003/27/17/7**, with every failure attributed (21 P2 / 3 P3 / 3
+  documented test assumptions).
 
 - [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget.** Stages 1
   and 2 landed (the `.FCStd` payloads restore in parallel, `open` 5.9 s → 1.8 s, the 900a
@@ -50,7 +51,7 @@ decision. Completed specs moved to [`../record/tasks/`](../record/tasks/README.m
 Completed specs — `backend-parity`, `host-backends`, `wasm-shell`, `transform-session`,
 `tool-loadout` and the earlier work — are indexed in
 [`../record/tasks/`](../record/tasks/README.md). The open work is tracked in
-[`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) and the standing design notes under
+[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) and the standing design notes under
 `architecture/`, `interaction/`, `viewport/` and `workbenches/`.
 
 A new spec belongs here when work is large enough to need its own design, checklist and

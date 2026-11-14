@@ -1,8 +1,9 @@
 # FerroCAD roadmap
 
-Status: roadmap (2026-11-14). The actionable backlog is
-[`TODO-14-11-2026.md`](TODO-14-11-2026.md); the measured history is
-[`record/milestones.md`](record/milestones.md) and the latest round is
+Status: roadmap (2026-11-15). The actionable backlog is
+[`TODO-15-11-2026.md`](TODO-15-11-2026.md); the measured history is
+[`record/milestones.md`](record/milestones.md) and the latest rounds are
+[`record/2026-11-14-p2-boolean-seam.md`](record/2026-11-14-p2-boolean-seam.md) and
 [`record/2026-11-13-november-round.md`](record/2026-11-13-november-round.md); the letters
 used below (`H1`, `P4`, `S4`, `M3` …) are indexed in [`labels.md`](labels.md).
 
@@ -10,7 +11,7 @@ used below (`H1`, `P4`, `S4`, `M3` …) are indexed in [`labels.md`](labels.md).
 
 FerroCAD is a Rust/GPUI + PyO3/RustPython + pure-Python reimplementation of FreeCAD. The
 engine, the app shell and the Python `FreeCAD` surface exist; `Part` is a real workbench
-(**531 upstream tests passing, 0 errored, 12 skipped** at the 2026-11-13 rotation); the
+(**531 upstream tests passing, 0 errored, 12 skipped**, re-measured 2026-11-15); the
 native and `.FCStd` serializers are independent; and topological naming is a lineage layer
 rather than a kernel concern. There is **one document implementation and four runtime
 configurations** (CPython, RustPython, JS, none), and the browser runs the same shell as the
@@ -19,13 +20,16 @@ desktop.
 The bottleneck is no longer geometry. It is the **breadth of the workbench API**, the
 **interaction surface** on top of it, and the **host/platform seam** the November round
 built. The Part audit covers **252 of 408 upstream method names (61.8%)**. The SimpleCAD
-S4.1–S4.6 façade is in the tree. SimpleCAD's integrated baseline is **985 passed / 49
-failed / 18 errored / 7 skipped over 88/88 modules** (2026-11-13), with the Qt groups
-classified as skips and the SC7 workflow acceptance green. **P1 is closed:** SC8 attributed
-all 49 failures to named buckets (**37 P2, 11 P3, 1 documented test assumption**), with
-none unattributed. The rotation's two red readings were fixed the same day: the B20
-`RootNode` change was a real Part regression, and the SimpleCAD `surface_ops` delta was the
-in-process harness not exporting the paths its worker subprocess needs.
+S4.1–S4.6 façade is in the tree. SimpleCAD's integrated baseline is **1003 passed / 27
+failed / 17 errored / 7 skipped over 88/88 modules** (2026-11-15, clean `9180c4b`), with
+the Qt groups classified as skips and the SC7 workflow acceptance green. **P1 is closed**
+(2026-11-13), and the P2 boolean/seam rounds then closed **22 of the 49 failures** without
+losing one: `Shape.generalFuse` is one build per call, a replaced vertex reports its image,
+`Edge.Orientation` and an edge's `Placement` are cached, and `Shape.fuse`/`cut`/`common` honour their signed
+tolerance. Every remaining failure is still attributed (**21 P2, 3 P3, 3 documented test
+assumptions**; none unattributed). The rotation's two red readings were fixed the same day:
+the B20 `RootNode` change was a real Part regression, and the SimpleCAD `surface_ops`
+delta was the in-process harness not exporting the paths its worker subprocess needs.
 
 The platform picture did change materially: the **browser shell** runs the same
 `RustAppBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
@@ -97,8 +101,8 @@ rather than an architecture task.
 - **SimpleCAD S0–S3 — the image is in.** `ferrocad_mesh` (payload, STL, operations,
   `Mesh::Feature`), `ferrocad_mesh_py` (`Mesh`, `MeshPart`), `Part.Shape.tessellate`,
   `BOPTools.SplitAPI` and the import-time PySide surface all load in one in-process
-  `ferrocad` + `Part` + `Mesh` image. The 2026-11-13 baseline is **985 pass, 49 fail,
-  18 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
+  `ferrocad` + `Part` + `Mesh` image. The 2026-11-15 baseline is **1003 pass, 27 fail,
+  17 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
   push/pull → cut → STL) is green and the 5 Qt groups are classified skips. The identity, query and representation
   frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
   `Faces`/`Wires`, `Face.Surface` classification with `parameter()`).
@@ -109,11 +113,13 @@ rather than an architecture task.
   S4.6 keeps `FreeCADGui.Preview` as the shape-preview channel and records 3-D text as a
   non-goal; the imperative-Coin lifecycle (`getChild`/`insertChild`/`findChild`,
   `isOfType`) is complete enough for an overlay.
-- **P1 closed (SC8).** The 49 failures are filed by SC8 into five named buckets — boolean/
-  topology partition (16), document undo/transaction/labels (5), Part query
-  strictness/tolerance (10), shape identity/ownership/BRep export (6) and surface/freeform
-  (11) — plus one documented test assumption, so **37 → P2, 11 → P3, 1 out of surface, 0
-  unattributed**. The full table is in
+- **P1 closed (SC8), and the P2 seam rounds are in.** At SC8 the 49 failures were filed
+  into five named buckets — boolean/topology partition (16), document undo/transaction/
+  labels (5), Part query strictness/tolerance (10), shape identity/ownership/BRep export
+  (6) and surface/freeform (11) — plus one documented test assumption. The seam rounds
+  then closed 22 records (the eight surface-line and both rotate-edges cases among them),
+  leaving **21 → P2, 3 → P3, 3 documented test assumptions, 0 unattributed**. The next
+  cluster is `test_elongating` ×2. The full table is in
   [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
@@ -148,7 +154,8 @@ subset and says so.
   `tools/simplecad_audit.py --check`, and the in-process
   `crates/ferrocad_part_py/tests/simplecad_conformance.rs`. The in-process test exports the
   repo Python/OCCT paths to SimpleCAD's worker subprocess; use it when the extension may
-  be stale, because it builds the current tree.
+  be stale, because it builds the current tree. Current: **1003/27/17/7 over 88/88**
+  (2026-11-15, clean checkout).
 - **Engine/app:** per-crate `cargo test` and `pytest tests` (no workspace-wide build).
 - **Docs:** `api_docs`, `userdocs`, `build_book` and the relative-link sweep in `--check`
   mode.
@@ -157,7 +164,7 @@ subset and says so.
 
 | Risk | Mitigation |
 | --- | --- |
-| `/home` fills during a workspace-wide build | cap builds (`CARGO_BUILD_JOBS=2`), avoid concurrent workspace builds; 2026-11-13: 89 % used, 77 GB free |
+| `/home` fills during a workspace-wide build | cap builds (`CARGO_BUILD_JOBS=2`), avoid concurrent workspace builds; 2026-11-15: 93 % used, 47 GB free |
 | The upstream pin is informal | record `git rev-parse --short HEAD` with every report (currently `33adf61`) |
 | A stale extension or test expectation reads as a regression | prefer the in-process conformance tests, which build the current tree; when a Python number is cited, say which `.so` produced it |
 | A green claim outlives the change that broke it | re-run Part/SimpleCAD at every rotation; the 2026-11-13 rotation caught one real regression (B20 `RootNode`) and one harness gap (worker paths) |

@@ -25,7 +25,7 @@ workbenches are deliberately out of scope; the measured subset is stated with ev
 number.
 
 **Roadmap.** [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md) is the three-horizon summary and
-[`docs/project/TODO-13-11-2026.md`](docs/project/TODO-13-11-2026.md) the active backlog. The measured
+[`docs/project/TODO-15-11-2026.md`](docs/project/TODO-15-11-2026.md) the active backlog. The measured
 history is [`docs/project/record/milestones.md`](docs/project/record/milestones.md); the labels
 (`S1`, `P4`, `D0`, …) are indexed in [`docs/project/labels.md`](docs/project/labels.md). Screenshot
 handling (generated viewport snapshots and manual app captures) is in
@@ -267,7 +267,7 @@ the *behaviour* reference is FreeCAD's own. What FerroCAD adds is generated and 
 against the facade, and [`docs/python-api/`](docs/python-api/index.md) is a signature reference read
 from the live modules. CI runs `tools/userdocs.py --check` and `tools/api_docs.py --check`, so neither
 can drift from the code. Narrative notes live in the repository `docs/` ([index](docs/README.md)):
-[`ROADMAP.md`](docs/project/ROADMAP.md) for the horizons, [`TODO-13-11-2026.md`](docs/project/TODO-13-11-2026.md)
+[`ROADMAP.md`](docs/project/ROADMAP.md) for the horizons, [`TODO-15-11-2026.md`](docs/project/TODO-15-11-2026.md)
 for the active backlog, [`record/milestones.md`](docs/project/record/milestones.md) for the measured
 history, [`record/tasks/`](docs/project/record/tasks/README.md) for the closed design specs, and
 [`labels.md`](docs/project/labels.md) for every `S1`/`P4`/`D0`.
@@ -414,19 +414,22 @@ The measured subset and its caveats are in
 counts and the two documented limits. **H2 (the workbench platform) is built**: one
 document with four runtimes, the browser shell and the backend-parity close-out; what
 remains is Draft M3–M5 breadth (the M4 import round took `test_modification` to 31/0/2).
-**H3 (proof by use)** is SimpleCAD: S1–S3 are measured and S4.1–S4.3 are the view facade,
-ranked pick and selection object (integration baseline **985 passed / 49 failed / 18 errored
-/ 7 skipped**, 88/88 modules). Packaging is on v0.1.4; macOS is the parked distribution leg.
+**H3 (proof by use)** is SimpleCAD: S1–S3 are measured and S4.1–S4.6 are the view facade,
+ranked pick, selection object, workplane/face frames and push/pull stem (integration
+baseline **1003 passed / 27 failed / 17 errored / 7 skipped**, 88/88 modules). Packaging is
+on v0.1.4; macOS is the parked distribution leg.
 
-The most recent round is the **November platform round** — the OCCT seam ported to Rust,
-the browser shell, one document with four runtimes (CPython, RustPython, JS, none), the
-backend-parity close-out and the mod pack format — with its two red gates fixed at rotation.
-The round log is
+The most recent rounds are the **P2 boolean/seam round** — one build per general fuse,
+measured vertex images, cached edge orientation and upstream's signed boolean tolerance,
+which closed 22 SimpleCAD records — and the **November platform round** that preceded it.
+The round logs are
+[`docs/project/record/2026-11-14-p2-boolean-seam.md`](docs/project/record/2026-11-14-p2-boolean-seam.md)
+and
 [`docs/project/record/2026-11-13-november-round.md`](docs/project/record/2026-11-13-november-round.md);
 the previous workplane/grid round is
 [`docs/project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](docs/project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md).
 
-The active backlog is [`docs/project/TODO-13-11-2026.md`](docs/project/TODO-13-11-2026.md); the
+The active backlog is [`docs/project/TODO-15-11-2026.md`](docs/project/TODO-15-11-2026.md); the
 three-horizon summary is [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md). The shell is no longer a
 spike: `cargo run -p ferrocad_toy` (the kernel-free edition) or
 `cargo run -p ferrocad_parametric` (with Part) opens the current window; the headless

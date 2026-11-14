@@ -5,8 +5,22 @@
 //! works) whose members report it as their parent.
 
 use std::ffi::CString;
+use std::sync::Arc;
 
 use pyo3::prelude::*;
+
+/// A body-capable test type.
+///
+/// `PartDesign::Body` validates its members against the capability the *type*
+/// declares, so a test member has to declare one; `App::FeatureTest` (a shape-less
+/// peer of `App::Feature`) deliberately declares nothing and is refused.
+struct BodyMember;
+
+impl ferrocad_core::object_registry::ObjectType for BodyMember {
+    fn body_membership(&self) -> ferrocad_core::object_registry::BodyMembership {
+        ferrocad_core::object_registry::BodyMembership::Feature
+    }
+}
 
 /// Register `ferrocad` as a built-in module and start CPython.
 ///
@@ -16,6 +30,7 @@ fn boot() {
     static BOOT: std::sync::Once = std::sync::Once::new();
     BOOT.call_once(|| {
         use ferrocad_py::ferrocad as ferrocad_module;
+        ferrocad_core::object_registry::register("App::BodyMemberTest", Arc::new(BodyMember));
         pyo3::append_to_inittab!(ferrocad_module);
         pyo3::prepare_freethreaded_python();
     });
@@ -60,7 +75,7 @@ assert body.Group == []
 assert body.AllowCompound is True
 assert body.Tip is None
 
-box2 = doc.addObject("App::FeatureTest", "Box2")
+box2 = doc.addObject("App::BodyMemberTest", "Box2")
 body.addObject(box2)
 assert [o.Name for o in body.Group] == ["Box2"], body.Group
 assert body.hasObject(box2)
@@ -73,7 +88,7 @@ assert body.Group == []
 assert box2.getParent() is None
 
 # Single-group membership: adding to another container moves the object.
-box3 = doc.addObject("App::FeatureTest", "Box3")
+box3 = doc.addObject("App::BodyMemberTest", "Box3")
 body.addObject(box3)
 part.addObject(box3)
 assert body.Group == [], body.Group

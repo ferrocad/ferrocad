@@ -41,9 +41,10 @@
 //!   tessellations, which is the kernel half of
 //!   `MeshPart.meshFromShape(..., Segments=True)`.
 //! - **Editing and analysis** live beside the payload: `area`, point/facet
-//!   deduplication, degenerate-facet removal, normal harmonisation, connected
-//!   components, planar segmentation, self-intersection detection and boundary
-//!   loops. They all operate on the local points and keep the placement.
+//!   deduplication, degenerate-facet removal, normal harmonisation, quadric-error
+//!   decimation (`decimate`, upstream `Mesh.decimate`), connected components,
+//!   planar segmentation, self-intersection detection and boundary loops. They all
+//!   operate on the local points and keep the placement.
 //! - **`.FCStd` mesh members** are supported: `fcstd_members()` returns the raw
 //!   `.bms` bytes and `fcstd_kind()` names them `MeshKernelN.bms`, which core
 //!   writes as `<Mesh file="…"/>`. Restoring needs no temp file; the object's
@@ -57,6 +58,7 @@
 mod bms;
 mod boundary;
 mod components;
+mod decimate;
 mod intersect;
 mod mesh;
 mod mesh_property;

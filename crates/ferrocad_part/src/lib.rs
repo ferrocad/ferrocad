@@ -37,7 +37,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
-use ferrocad_core::object_registry::{self, ObjectType};
+use ferrocad_core::object_registry::{self, BodyMembership, ObjectType};
 use ferrocad_core::{
     Document, ExtensionData, ExtensionValue, ObjectId, Property, Quantity, Unit, prop_status,
 };
@@ -773,6 +773,13 @@ impl ObjectType for Feature {
 
     fn property_meta(&self, name: &str) -> Option<(String, String)> {
         Some(("Base".to_string(), format!("Part feature {name}")))
+    }
+
+    /// A plain Part shape (or a Python-driven one) is a body's **base**: at most
+    /// one, and only while the body has no feature (upstream
+    /// `Body::isAllowed`'s `Part::Feature` branch).
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Base
     }
 }
 

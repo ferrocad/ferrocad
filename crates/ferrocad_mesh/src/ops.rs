@@ -323,7 +323,7 @@ impl Mesh {
     /// and clears them only when the facet count decreases. A removal renumbers
     /// the facets, so the groups are dropped rather than silently pointing at
     /// the wrong triangles.
-    fn replace_topology(&mut self, points: Vec<Vector3>, facets: Vec<[u32; 3]>) {
+    pub(crate) fn replace_topology(&mut self, points: Vec<Vector3>, facets: Vec<[u32; 3]>) {
         let placement = self.placement();
         let segments = if facets.len() == self.facets().len() {
             self.segments().to_vec()

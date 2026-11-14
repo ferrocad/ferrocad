@@ -65,6 +65,30 @@ impl fmt::Display for PropertyChangeError {
 
 impl std::error::Error for PropertyChangeError {}
 
+/// What a document type may contribute to a `PartDesign::Body`.
+///
+/// Upstream decides membership in `PartDesign::Body::isAllowed` by testing the
+/// member's C++ base class. A registered behaviour has no class hierarchy, so the
+/// type declares its answer here instead and the rule itself lives in
+/// [`Document::body_add_check`]. The default denies, so a new type is a body
+/// member only when it says so.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BodyMembership {
+    /// Not a body member (the default). A body cannot contain another body, a
+    /// plain `App::FeaturePython` or a group.
+    #[default]
+    Denied,
+    /// A base solid — a plain Part shape or a Python-driven one. At most one, and
+    /// only while the body has no solid member; it becomes `BaseFeature`.
+    Base,
+    /// A member that supports the body without becoming its `Tip`: a datum, a
+    /// sketch, a link.
+    Support,
+    /// A PartDesign feature (a pad, pocket, dress-up, …): any number, and the
+    /// newest becomes the `Tip`.
+    Feature,
+}
+
 /// A module-defined document-object type.
 ///
 /// Every method has a default, so a module implements only what it needs.
@@ -135,6 +159,16 @@ pub trait ObjectType: Send + Sync {
     fn is_python_feature(&self) -> bool {
         false
     }
+
+    /// What this type may contribute to a `PartDesign::Body`.
+    ///
+    /// The declared counterpart of upstream's `Body::isAllowed`, which branches on
+    /// the member's C++ base class. [`Document::body_add_check`] applies the rules
+    /// (`Base` only while the body is empty, `Support` never becomes the `Tip`,
+    /// `Feature` does). The default denies.
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Denied
+    }
 }
 
 /// The process-wide object-type registry: a type id maps to its behaviour.
@@ -195,6 +229,13 @@ static PYTHON_EXECUTOR_AVAILABLE: AtomicBool = AtomicBool::new(false);
 /// Whether `type_id` has a registered Python-feature behaviour.
 pub fn is_python_feature(type_id: &str) -> bool {
     get(type_id).is_some_and(|behavior| behavior.is_python_feature())
+}
+
+/// What `type_id` declares it may contribute to a `PartDesign::Body`.
+///
+/// An unregistered type declares nothing, so it is denied.
+pub fn body_membership(type_id: &str) -> BodyMembership {
+    get(type_id).map_or(BodyMembership::Denied, |behavior| behavior.body_membership())
 }
 
 #[cfg(test)]

@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_core::{application, canonical_name, format as doc_format, parse_unit, prop_status, status_from_name, status_names, Document as CoreDocument, DocumentFormat, ExtensionData, ExtensionValue, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, StringHasher, StringId, TypeId, Unit, Vector3};
+use ferrocad_core::object_registry::BodyMembership;
 use pyo3::exceptions::{
     PyAttributeError, PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
@@ -3647,16 +3648,42 @@ impl PyDocumentObject {
         if other_id == self.id {
             return Err(PyValueError::new_err("a group cannot contain itself"));
         }
+        // A `PartDesign::Body` validates its members against the capability each
+        // type declares (`Body::isAllowed`). A rejected add leaves both objects
+        // as they were, including the member's previous parent.
+        let body_role = if CoreDocument::is_body_type(&type_id) {
+            Some(doc.body_add_check(self.id, other_id).map_err(PyValueError::new_err)?)
+        } else {
+            None
+        };
         doc.unlink_from_groups(other_id);
         let mut links = match doc.object(self.id).and_then(|o| o.properties.get("Group")) {
             Some(Property::LinkList(l)) => l.clone(),
             _ => vec![],
         };
         if !links.contains(&other_name) {
-            links.push(other_name);
+            links.push(other_name.clone());
         }
         doc.set_property(self.id, "Group", Property::LinkList(links))
             .map_err(PyValueError::new_err)?;
+        // The body's tip follows the declaration: a feature becomes the `Tip`, a
+        // base solid becomes the `BaseFeature`, and a support member changes
+        // neither (upstream `Body::addObject`).
+        match body_role {
+            Some(BodyMembership::Feature) => {
+                doc.set_property(self.id, "Tip", Property::Link(other_name.clone()))
+                    .map_err(PyValueError::new_err)?;
+            }
+            Some(BodyMembership::Base) => {
+                doc.set_property(
+                    self.id,
+                    "BaseFeature",
+                    Property::Link(other_name.clone()),
+                )
+                .map_err(PyValueError::new_err)?;
+            }
+            _ => {}
+        }
         if link_group {
             // See `set_group`: a container's output depends on its members' shapes.
             doc.add_dependency(self.id, other_id);
@@ -4485,16 +4512,24 @@ impl PyDocumentObject {
             ));
         };
         let mut doc = self.inner.lock().unwrap();
+        let type_id = doc
+            .object(self.id)
+            .map(|object| object.type_id.clone())
+            .unwrap_or_default();
+        // A body validates its whole member list (upstream `Body::isAllowed`).
+        // Check *before* the unlink below: that step has side effects on the
+        // members' previous groups, so a rejected assignment must not reach it
+        // (`set_property` vetoes the same list again, too late to undo them).
+        if CoreDocument::is_body_type(&type_id) {
+            doc.body_group_check(&names)
+                .map_err(PyValueError::new_err)?;
+        }
         // Enforce single-group membership.
         for n in &names {
             if let Some(member) = doc.get_by_name(n) {
                 doc.unlink_from_groups(member);
             }
         }
-        let type_id = doc
-            .object(self.id)
-            .map(|object| object.type_id.clone())
-            .unwrap_or_default();
         let members: Vec<ObjectId> = names
             .iter()
             .filter_map(|name| doc.get_by_name(name))

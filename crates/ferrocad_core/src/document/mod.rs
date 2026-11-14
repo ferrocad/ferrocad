@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::expr;
 use crate::geometry::{Rotation, Vector3};
+use crate::object_registry::{self, BodyMembership};
 use crate::observer::Observer;
 use crate::property::{prop_status, Property, PropertyContainer};
 
@@ -409,6 +410,99 @@ impl Document {
                         .any(|e| extension_is_or_derives(e, "App::GroupExtension"))
             })
             .unwrap_or(false)
+    }
+
+    /// Whether `type_id` denotes a `PartDesign::Body`.
+    ///
+    /// It is the one container that validates its members against the capability
+    /// each type declares ([`BodyMembership`]); an `App::Part` accepts anything.
+    pub fn is_body_type(type_id: &str) -> bool {
+        type_id == "PartDesign::Body"
+    }
+
+    /// Whether `member` may join `body`, and how it contributes
+    /// (upstream `PartDesign::Body::isAllowed` plus the one-base rule).
+    ///
+    /// `body` is the body node; callers reach here from `addObject`, where the
+    /// body is empty of that member. A rejected member leaves both objects
+    /// untouched.
+    pub fn body_add_check(
+        &self,
+        body: ObjectId,
+        member: ObjectId,
+    ) -> Result<BodyMembership, String> {
+        let member_object = self
+            .object(member)
+            .ok_or_else(|| "Body: no such object".to_string())?;
+        let membership = object_registry::body_membership(&member_object.type_id);
+        let name = &member_object.name;
+        match membership {
+            BodyMembership::Denied => Err(format!("Body: object '{name}' is not allowed")),
+            BodyMembership::Base => {
+                if self.body_base_feature(body).is_some() || self.body_has_solid_member(body) {
+                    Err(format!(
+                        "Body: '{name}' can only be added as the base feature, and this \
+                         body already has one"
+                    ))
+                } else {
+                    Ok(membership)
+                }
+            }
+            BodyMembership::Support | BodyMembership::Feature => Ok(membership),
+        }
+    }
+
+    /// Check a whole `Group` assignment on a body.
+    ///
+    /// A direct write replaces the member list, so the one-base rule becomes "at
+    /// most one base in the new list" rather than "only while the body is
+    /// empty"; every other rule is per member.
+    pub fn body_group_check(&self, links: &[String]) -> Result<(), String> {
+        let mut bases = 0usize;
+        for name in links {
+            let Some(member) = self.get_by_name(name) else {
+                continue;
+            };
+            let type_id = self
+                .object(member)
+                .map(|object| object.type_id.as_str())
+                .unwrap_or_default();
+            match object_registry::body_membership(type_id) {
+                BodyMembership::Denied => {
+                    return Err(format!("Body: object '{name}' is not allowed"));
+                }
+                BodyMembership::Base => bases += 1,
+                BodyMembership::Support | BodyMembership::Feature => {}
+            }
+        }
+        if bases > 1 {
+            return Err("Body: a body can have only one base feature".to_string());
+        }
+        Ok(())
+    }
+
+    /// The body's `BaseFeature` link, when it has one.
+    fn body_base_feature(&self, body: ObjectId) -> Option<String> {
+        match self.object(body)?.properties.get("BaseFeature")? {
+            Property::Link(name) if !name.is_empty() => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether the body already holds a solid member (a base or a feature).
+    fn body_has_solid_member(&self, body: ObjectId) -> bool {
+        let links = match self.object(body).and_then(|object| object.properties.get("Group")) {
+            Some(Property::LinkList(links)) => links,
+            _ => return false,
+        };
+        links.iter().any(|name| {
+            let membership = self
+                .get_by_name(name)
+                .and_then(|id| self.object(id))
+                .map(|object| object_registry::body_membership(&object.type_id))
+                .unwrap_or_default();
+            matches!(membership, BodyMembership::Base | BodyMembership::Feature)
+        })
     }
 
     /// Remove `member` from any group that lists it (single-group enforcement).

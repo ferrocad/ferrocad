@@ -30,7 +30,7 @@
 //! `Reversed` is `SimpleCAD`'s `narrower = 'bottom'`: not reversed narrows toward the
 //! neutral plane's `+Z`, reversed narrows toward `-Z`.
 
-use ferrocad_core::object_registry::ObjectType;
+use ferrocad_core::object_registry::{BodyMembership, ObjectType};
 use ferrocad_core::{Document, ObjectId, Placement, Property, prop_status};
 use ferrocad_geom::{ElementKind, Lineage, Shape, SurfaceData};
 use ferrocad_types::Vector3;
@@ -101,6 +101,11 @@ impl ObjectType for DatumPlane {
         Some(("Datum".to_string(), format!("Datum plane {name}")))
     }
 
+    /// A datum supports a body but never becomes its `Tip`.
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Support
+    }
+
     fn execute(&self, doc: &mut Document, id: ObjectId) {
         let Some(local) = crate::datum::square_face(PLANE_SIZE) else {
             doc.mark_invalid_with(id, "the datum plane marker could not be built");
@@ -165,6 +170,11 @@ impl ObjectType for Draft {
 
     fn property_meta(&self, name: &str) -> Option<(String, String)> {
         Some(("Draft".to_string(), format!("PartDesign draft {name}")))
+    }
+
+    /// A PartDesign feature: the body's newest one becomes the `Tip`.
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Feature
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {

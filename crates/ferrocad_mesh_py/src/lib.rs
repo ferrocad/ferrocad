@@ -556,6 +556,18 @@ impl PyMesh {
         self.inner.harmonize_normals();
     }
 
+    /// Collapse edges to remove `reduction` of the facets (upstream
+    /// `Mesh.decimate(tolerance, reduction)`).
+    ///
+    /// `tolerance` is the largest quadric error a collapse may introduce and
+    /// `reduction` the fraction of facets to remove (`0..=1`). The mesh is
+    /// edited in place and keeps its placement; a collapse that would fold or
+    /// tear the surface is skipped. `MeshDesign`'s Simplifier tool and
+    /// SimpleCAD's mesh conversion both call this.
+    fn decimate(&mut self, tolerance: f64, reduction: f64) {
+        self.inner.decimate(tolerance, reduction);
+    }
+
     /// One mesh per connected component; each keeps this mesh's placement.
     fn getSeparateComponents(&self, py: Python<'_>) -> PyResult<Vec<Py<PyMesh>>> {
         self.inner

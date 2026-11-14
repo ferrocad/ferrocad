@@ -16,7 +16,7 @@ use std::f64::consts::PI;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
-use ferrocad_core::object_registry::{self, ObjectType};
+use ferrocad_core::object_registry::{self, BodyMembership, ObjectType, PropertyChangeError};
 use ferrocad_core::{Document, Matrix4, ObjectId, Placement, Property, Rotation, prop_status};
 use ferrocad_curves::{Arc as CurveArc, Circle, EdgeCurve, LineSegment, Vector3};
 use ferrocad_geom::{ElementKind, Lineage, Shape, SurfaceSpec};
@@ -2338,6 +2338,11 @@ impl ObjectType for SketchObject {
         Some(("Sketch".to_string(), format!("Sketch {name}")))
     }
 
+    /// A sketch supports a body but never becomes its `Tip`.
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Support
+    }
+
     fn execute(&self, doc: &mut Document, id: ObjectId) {
         let geometry = sketch_geometry(doc, id, GEOMETRY);
         let placement = sketch_placement(doc, id);
@@ -2541,6 +2546,25 @@ impl ObjectType for Body {
         Some(("Body".to_string(), format!("Body {name}")))
     }
 
+    /// A whole `Group` assignment is checked against the members' declared
+    /// capabilities (upstream `Body::isAllowed`; at most one base in the list).
+    /// A rejected assignment leaves the body untouched.
+    fn on_property_change(
+        &self,
+        doc: &Document,
+        _id: ObjectId,
+        name: &str,
+        value: &Property,
+    ) -> Result<(), PropertyChangeError> {
+        if name == "Group" {
+            if let Property::LinkList(links) = value {
+                doc.body_group_check(links)
+                    .map_err(PropertyChangeError::value)?;
+            }
+        }
+        Ok(())
+    }
+
     fn execute(&self, doc: &mut Document, id: ObjectId) {
         // `Tip` first, then the last `Group` member (`addObject` does not set the
         // Tip the way upstream's `Body::addObject` does).
@@ -2625,6 +2649,11 @@ impl ObjectType for AdditiveBox {
 
     fn property_meta(&self, name: &str) -> Option<(String, String)> {
         Some(("Additive".to_string(), format!("Additive box {name}")))
+    }
+
+    /// A PartDesign feature: the body's newest one becomes the `Tip`.
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Feature
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {

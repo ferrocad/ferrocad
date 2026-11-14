@@ -19,7 +19,7 @@
 //! `FreeCAD.Rotation(u, v, n)`; no vector properties (`Origin`/`U`/`V`) are
 //! needed, so there is exactly one authority.
 
-use ferrocad_core::object_registry::ObjectType;
+use ferrocad_core::object_registry::{BodyMembership, ObjectType};
 use ferrocad_core::{Document, ObjectId, Placement, Property, Quantity, Unit, prop_status};
 use ferrocad_geom::Shape;
 use ferrocad_types::Vector3;
@@ -106,6 +106,11 @@ impl ObjectType for DatumPlane {
 
     fn property_meta(&self, name: &str) -> Option<(String, String)> {
         Some(("Datum".to_string(), format!("Datum plane {name}")))
+    }
+
+    /// A datum supports a body but never becomes its `Tip`.
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Support
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {

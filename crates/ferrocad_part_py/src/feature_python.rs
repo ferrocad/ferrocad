@@ -30,7 +30,7 @@ pub mod attach;
 
 use std::sync::Arc;
 
-use ferrocad_core::object_registry::{self, ObjectType};
+use ferrocad_core::object_registry::{self, BodyMembership, ObjectType};
 use ferrocad_core::{prop_status, Document, ObjectId, Property, Placement};
 use ferrocad_part::{make_shape_property, ShapeProperty};
 
@@ -84,6 +84,12 @@ impl ObjectType for FeaturePython {
             return Some(("Attachment".to_string(), format!("Attachment {name}")));
         }
         Some(("Base".to_string(), format!("Part feature {name}")))
+    }
+
+    /// Both variants own a `Shape`, so either can be a body's **base** (a SubD
+    /// wrapper is a `Part::FeaturePython`).
+    fn body_membership(&self) -> BodyMembership {
+        BodyMembership::Base
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {

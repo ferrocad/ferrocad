@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ferrocad_core::object_registry::{self, ObjectType, PropertyChangeError};
+use ferrocad_core::object_registry::{self, BodyMembership, ObjectType, PropertyChangeError};
 use ferrocad_core::{
     Document, ExtensionData, ExtensionValue, ObjectId, Placement, Property, Rotation, ScaleType,
     Vector3,
@@ -179,6 +179,14 @@ impl ObjectType for FeatureWithPlacement {
 
     fn is_python_feature(&self) -> bool {
         self.base.is_python_feature()
+    }
+
+    /// The wrapper declares no membership of its own: the wrapped behaviour does
+    /// (`Part::Feature` is a body's base, and the Python-driven variants are too,
+    /// since they own a `Shape`). Without this forward the wrapping would reset
+    /// the declaration to the default `Denied`.
+    fn body_membership(&self) -> BodyMembership {
+        self.base.body_membership()
     }
 }
 

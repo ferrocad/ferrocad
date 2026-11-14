@@ -488,3 +488,43 @@ else:
         );
     });
 }
+
+/// A circle's analytic X axis is its edge's parameter 0.
+///
+/// `Part.makeCircle(..., normal)` builds the edge from the analytic circle. The
+/// seam used to let `gp_Ax2` choose the X direction from the normal alone, so a
+/// `-Z` circle's edge started half a turn from the `XAxis` the same circle
+/// reported. Sewing two rims that should coincide then split the seam into two
+/// arcs (`SimpleCAD`'s boss rebuild counted three circles instead of two).
+#[test]
+fn a_circles_x_axis_is_its_edges_parameter_zero() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+center = App.Vector(10, 10, 5)
+for normal in ((0, 0, 1), (0, 0, -1), (0, 1, 0), (1, 0, 0)):
+    circle = Part.Circle(center, App.Vector(*normal), 4)
+    edge = circle.toShape()
+    assert len(edge.Vertexes) == 1, (normal, len(edge.Vertexes))
+    seam = edge.Vertexes[0].Point
+    at_zero = circle.value(0)
+    assert (seam - at_zero).Length < 1e-9, (normal, tuple(seam), tuple(at_zero))
+
+    # The reported frame and the edge agree, so a caller can rely on XAxis.
+    frame_point = center + circle.XAxis * circle.Radius
+    assert (seam - frame_point).Length < 1e-6, (normal, tuple(seam), tuple(frame_point))
+
+    # A rotated frame moves the seam with it.
+    in_plane = App.Vector(1, 0, 0) if abs(normal[1]) > 0.5 else App.Vector(0, 1, 0)
+    circle.XAxis = in_plane
+    moved = circle.toShape()
+    assert (moved.Vertexes[0].Point - circle.value(0)).Length < 1e-9
+"#,
+        );
+    });
+}

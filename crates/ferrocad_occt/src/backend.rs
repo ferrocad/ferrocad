@@ -4251,10 +4251,28 @@ fn edge_from_nurbs(curve: &NurbsCurve) -> Result<Shape, GeomError> {
 /// point and a normal only, so the curve comes back with its own `x_axis` after
 /// [`curve_of`](GeometryBackend::curve_of). The geometry (centre, normal, radius)
 /// is what round-trips; an arc's angles are carried by its three points instead.
+/// A full circular edge from the analytic circle.
+///
+/// The **analytic X axis** goes through to `gp_Ax2`: it is the direction the
+/// circle reports as `XAxis`/`AngleXU`, and it is where the edge's parameter 0
+/// (and its seam vertex) must sit. Letting `gp_Ax2` choose the X direction from
+/// the normal alone made a `-Z` circle build its edge with the seam half a turn
+/// from the frame the same circle reported, which split a sew seam into two arcs
+/// (`SimpleCAD`'s boss rebuild counted three circles instead of two).
 fn edge_from_circle(circle: &Circle) -> Result<Shape, GeomError> {
     let center = point(circle.center());
     let normal = ffi::gp::gp_Dir_new(circle.normal().x, circle.normal().y, circle.normal().z);
-    let axis = ffi::gp::gp_Ax2_new(&center, &normal);
+    let x_axis = circle.x_axis();
+    let x_dir = ffi::gp::gp_Dir_new(x_axis.x, x_axis.y, x_axis.z);
+    let axis = match ffi::gp::gp_Ax2_new3(&center, &normal, &x_dir) {
+        Ok(axis) => axis,
+        Err(_) => {
+            return Err(OcctError::NotDone {
+                operation: "make_edge (circle)",
+            }
+            .into())
+        }
+    };
     let circ = ffi::gp::gp_Circ_new(&axis, circle.radius());
     let mut make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeEdge_circle(&circ);
     if !make.IsDone() {

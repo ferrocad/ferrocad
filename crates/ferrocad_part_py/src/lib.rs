@@ -1037,6 +1037,21 @@ impl PartShape {
         Ok(())
     }
 
+    /// `Shape.connectEdgesToWires(shared=False, tolerance=1e-9)` — connect the
+    /// shape's edges into wires and return them as a compound
+    /// (`ShapeAnalysis_FreeBounds::ConnectEdgesToWires`).
+    ///
+    /// The usual input is a boundary set (a sewn shell's free edges); SimpleCAD
+    /// merges coplanar faces by rebuilding one face from that boundary.
+    #[pyo3(signature = (shared = false, tolerance = 1e-9))]
+    fn connectEdgesToWires(&self, shared: bool, tolerance: f64) -> PyResult<PartShape> {
+        let shape = self.named_shape()?;
+        let wires = ferrocad_part::backend()
+            .connect_edges_to_wires(&shape, shared, tolerance)
+            .map_err(kernel_error)?;
+        Ok(PartShape::from_shape(wires))
+    }
+
     /// A copy with every curve and surface converted to a NURBS
     /// (`Shape.toNurbs`, `BRepBuilderAPI_NurbsConvert`).
     fn toNurbs(&self) -> PyResult<Self> {

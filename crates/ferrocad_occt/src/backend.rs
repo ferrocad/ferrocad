@@ -1625,6 +1625,21 @@ impl GeometryBackend for OcctBackend {
         }
     }
 
+    fn connect_edges_to_wires(
+        &self,
+        shape: &Shape,
+        shared: bool,
+        tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        let wires = crate::policy::connect_edges_to_wires(inner, shared, tolerance)?;
+        Ok(erase(&wires))
+    }
+
     fn to_nurbs(&self, shape: &Shape) -> Result<Shape, GeomError> {
         let occt = downcast(shape)?;
         let guard = occt.borrow();
@@ -1797,14 +1812,16 @@ impl GeometryBackend for OcctBackend {
         }
         let mut make =
             ffi::b_rep_builder_api::BRepBuilderAPI_MakeSolid_new(ffi::topo_ds::TopoDS::Shell(inner));
-        let shape = erase(make.pin_mut().Shape());
         if !make.IsDone() {
             return Err(OcctError::NotDone {
                 operation: "make_solid",
             }
             .into());
         }
-        Ok(shape)
+        // Upstream's `makeElementSolid` orients the solid after adding its shells.
+        let mut solid = ffi::topo_ds::TopoDS_Solid_to_owned(make.pin_mut().Solid());
+        ffi::b_rep_lib::BRepLib::OrientClosedSolid(solid.pin_mut());
+        Ok(erase(ffi::topo_ds::cast_solid_to_shape(&solid)))
     }
 
     fn make_shell(&self, faces: &[Shape]) -> Result<Shape, GeomError> {

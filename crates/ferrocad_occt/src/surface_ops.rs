@@ -448,6 +448,13 @@ pub fn offset2d(
 
 /// A solid from `shells`: the first shell is the outer skin and every later
 /// shell is a cavity, as `BRepBuilderAPI_MakeSolid` + `OrientClosedSolid`.
+///
+/// The shells are added **as given**: a cavity shell taken from an existing
+/// solid already carries the reversed orientation, and upstream's
+/// `makeElementSolid` (`BRepBuilderAPI_MakeSolid::Add` per shell, then
+/// `BRepLib::OrientClosedSolid`) does not re-orient them either. A caller that
+/// assembles a hollow body from independent outward shells reverses the inner
+/// one itself.
 pub fn make_hollow_solid(shells: &[Shape]) -> Result<Shape, GeomError> {
     if shells.is_empty() {
         return Err(OcctError::InvalidInput {
@@ -473,8 +480,7 @@ pub fn make_hollow_solid(shells: &[Shape]) -> Result<Shape, GeomError> {
             }
             .into());
         }
-        let reversed = occt::topo_ds::Reversed(shell);
-        make.pin_mut().add_shell(TopoDS::Shell(&reversed));
+        make.pin_mut().add_shell(TopoDS::Shell(&shell));
         iterator.pin_mut().Next();
     }
     if !make.IsDone() {

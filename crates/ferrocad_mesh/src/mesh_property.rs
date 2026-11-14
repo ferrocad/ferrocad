@@ -38,6 +38,9 @@ pub const TYPE_NAME: &str = "Mesh::PropertyMeshKernel";
 /// The registered object type name (`Mesh::Feature`).
 pub const FEATURE_TYPE: &str = "Mesh::Feature";
 
+/// The registered Python-feature object type (`Mesh::FeaturePython`).
+pub const FEATURE_PYTHON_TYPE: &str = "Mesh::FeaturePython";
+
 /// The envelope magic. A raw mesh file has no such prefix, so the forms cannot be
 /// confused.
 const MAGIC: &[u8; 10] = b"FCMESHPROP";
@@ -181,8 +184,8 @@ pub fn mesh_of(property: &Property) -> Option<&MeshProperty> {
     }
 }
 
-/// Register `Mesh::PropertyMeshKernel` and `Mesh::Feature`. Idempotent through
-/// [`crate::register`].
+/// Register `Mesh::PropertyMeshKernel`, `Mesh::Feature` and
+/// `Mesh::FeaturePython`. Idempotent through [`crate::register`].
 pub(crate) fn register() {
     property_types::register_extension(
         TYPE_NAME,
@@ -190,77 +193,125 @@ pub(crate) fn register() {
         restore,
     );
     object_registry::register(FEATURE_TYPE, Arc::new(Feature));
+    object_registry::register(FEATURE_PYTHON_TYPE, Arc::new(FeaturePython));
 }
 
-/// `Mesh::Feature`: a mesh plus a placement.
+/// `Mesh` + `Placement`, shared by `Mesh::Feature` and `Mesh::FeaturePython`.
+fn feature_properties() -> Vec<(String, Property, u32)> {
+    vec![
+        (
+            "Mesh".to_string(),
+            make_mesh_property(MeshProperty::empty()),
+            prop_status::NONE,
+        ),
+        (
+            "Placement".to_string(),
+            Property::Placement(Placement::identity()),
+            prop_status::NONE,
+        ),
+    ]
+}
+
+/// `Mesh::Feature`.
 struct Feature;
 
 impl ObjectType for Feature {
     fn default_properties(&self) -> Vec<(String, Property, u32)> {
-        vec![
-            (
-                "Mesh".to_string(),
-                make_mesh_property(MeshProperty::empty()),
-                prop_status::NONE,
-            ),
-            (
-                "Placement".to_string(),
-                Property::Placement(Placement::identity()),
-                prop_status::NONE,
-            ),
-        ]
+        feature_properties()
     }
 
     fn property_meta(&self, name: &str) -> Option<(String, String)> {
         Some(("Base".to_string(), format!("Mesh feature {name}")))
     }
 
-    /// Keep `Placement` and the mesh transform in sync, upstream
-    /// `MeshFeature::onChanged`.
-    ///
-    /// - `Placement` assignment mirrors the object transform into the mesh, so
-    ///   `obj.Mesh.Topology` and `obj.Mesh.BoundBox` follow it **without** a recompute.
-    /// - `Mesh` assignment adopts the new mesh's transform into `Placement`.
-    ///
-    /// Both writes use [`Document::set_property_derived`], which records the mirror
-    /// in the same transaction but neither re-runs this hook nor touches the object,
-    /// so the pair cannot recurse and an undo of either half restores both.
-    /// Undo/redo re-runs this hook from [`Document`]'s restore path with the same
-    /// result.
     fn on_property_changed(&self, doc: &mut Document, id: ObjectId, name: &str) {
-        match name {
-            "Placement" => {
-                let Some(Property::Placement(placement)) = doc
-                    .object(id)
-                    .and_then(|object| object.properties.get("Placement"))
-                    .cloned()
-                else {
-                    return;
-                };
-                let Some(mut property) = doc
-                    .object(id)
-                    .and_then(|object| object.properties.get("Mesh"))
-                    .and_then(mesh_of)
-                    .cloned()
-                else {
-                    return;
-                };
-                property.mesh_mut().set_placement(placement);
-                doc.set_property_derived(id, "Mesh", make_mesh_property(property));
-            }
-            "Mesh" => {
-                let Some(placement) = doc
-                    .object(id)
-                    .and_then(|object| object.properties.get("Mesh"))
-                    .and_then(mesh_of)
-                    .map(|property| property.mesh().placement())
-                else {
-                    return;
-                };
-                doc.set_property_derived(id, "Placement", Property::Placement(placement));
-            }
-            _ => {}
+        mirror_placement_and_mesh(doc, id, name);
+    }
+}
+
+/// `Mesh::FeaturePython`: a `Mesh::Feature` whose rebuild is a Python proxy.
+///
+/// Upstream this is `Mesh::Feature` plus the `App::FeaturePython` extension
+/// (`Mesh::FeatureMeshPython.cpp`), so it owns the same `Mesh`/`Placement` pair
+/// and the same mirror. `execute` only records a request: core is
+/// interpreter-free, and the binding runs `proxy.execute(obj)` once the document
+/// lock is released (the Part feature types work the same way).
+struct FeaturePython;
+
+impl ObjectType for FeaturePython {
+    fn default_properties(&self) -> Vec<(String, Property, u32)> {
+        feature_properties()
+    }
+
+    fn property_meta(&self, name: &str) -> Option<(String, String)> {
+        Some(("Base".to_string(), format!("Mesh feature {name}")))
+    }
+
+    fn on_property_changed(&self, doc: &mut Document, id: ObjectId, name: &str) {
+        mirror_placement_and_mesh(doc, id, name);
+    }
+
+    fn execute(&self, doc: &mut Document, id: ObjectId) {
+        if !object_registry::python_executor_available() {
+            doc.mark_invalid_with(
+                id,
+                "no Python interpreter is available to run the feature's proxy",
+            );
+            return;
         }
+        doc.mark_python_pending(id);
+    }
+
+    fn is_python_feature(&self) -> bool {
+        true
+    }
+}
+
+/// Keep `Placement` and the mesh transform in sync, upstream
+/// `MeshFeature::onChanged`.
+///
+/// - `Placement` assignment mirrors the object transform into the mesh, so
+///   `obj.Mesh.Topology` and `obj.Mesh.BoundBox` follow it **without** a recompute.
+/// - `Mesh` assignment adopts the new mesh's transform into `Placement`.
+///
+/// Both writes use [`Document::set_property_derived`], which records the mirror
+/// in the same transaction but neither re-runs this hook nor touches the object,
+/// so the pair cannot recurse and an undo of either half restores both.
+/// Undo/redo re-runs this hook from [`Document`]'s restore path with the same
+/// result.
+fn mirror_placement_and_mesh(doc: &mut Document, id: ObjectId, name: &str) {
+    match name {
+        "Placement" => {
+            let Some(Property::Placement(placement)) = doc
+                .object(id)
+                .and_then(|object| object.properties.get("Placement"))
+                .cloned()
+            else {
+                return;
+            };
+            let Some(mut property) = doc
+                .object(id)
+                .and_then(|object| object.properties.get("Mesh"))
+                .and_then(mesh_of)
+                .cloned()
+            else {
+                return;
+            };
+            property.mesh_mut().set_placement(placement);
+            doc.set_property_derived(id, "Mesh", make_mesh_property(property));
+        }
+        "Mesh" => {
+            let Some(placement) = doc
+                .object(id)
+                .and_then(|object| object.properties.get("Mesh"))
+                .and_then(mesh_of)
+                .map(|property| property.mesh().placement())
+            else {
+                return;
+            };
+            doc.set_property_derived(id, "Placement", Property::Placement(placement));
+        }
+        _ => {}
     }
 }
 

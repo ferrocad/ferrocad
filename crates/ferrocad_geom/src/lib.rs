@@ -1146,6 +1146,21 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("sew"))
     }
 
+    /// Connect the shape's edges into wires (`Shape.connectEdgesToWires`,
+    /// `ShapeAnalysis_FreeBounds::ConnectEdgesToWires`).
+    ///
+    /// Returns a compound of the connected wires. `shared` lets adjacent wires
+    /// share vertices within `tolerance`, which is upstream's flag. The default
+    /// reports the operation as unsupported.
+    fn connect_edges_to_wires(
+        &self,
+        _shape: &Shape,
+        _shared: bool,
+        _tolerance: f64,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("connect_edges_to_wires"))
+    }
+
     /// Convert every curve and surface to its NURBS form (`Shape.toNurbs`,
     /// `BRepBuilderAPI_NurbsConvert`).
     ///

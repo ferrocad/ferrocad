@@ -3078,9 +3078,17 @@ impl PyDocumentObject {
 
     /// Whether the object is valid (`DocumentObject.isValid`).
     ///
-    /// A geometry object reports its `Shape`'s validity; an object without a
-    /// `Shape` property is valid.
+    /// A removed object is invalid: its wrapper outlives the document entry, and
+    /// upstream's `isValid` on it is false (a script that keeps the handle uses
+    /// that to notice). A geometry object reports its `Shape`'s validity; an
+    /// object without a `Shape` property is valid.
     fn isValid(slf: &Bound<'_, Self>) -> bool {
+        {
+            let this = slf.borrow();
+            if !object_is_attached(&this.inner, this.id) {
+                return false;
+            }
+        }
         let Ok(shape) = slf.getattr("Shape") else {
             return true;
         };

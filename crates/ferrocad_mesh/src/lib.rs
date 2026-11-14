@@ -68,9 +68,12 @@ use std::sync::OnceLock;
 
 pub use intersect::SelfIntersection;
 pub use mesh::{BoundBox, Mesh, MeshError};
-pub use mesh_property::{FEATURE_TYPE, MeshProperty, TYPE_NAME, make_mesh_property, mesh_of};
+pub use mesh_property::{
+    FEATURE_PYTHON_TYPE, FEATURE_TYPE, MeshProperty, TYPE_NAME, make_mesh_property, mesh_of,
+};
 
-/// Register `Mesh::PropertyMeshKernel` and `Mesh::Feature`. Idempotent.
+/// Register `Mesh::PropertyMeshKernel`, `Mesh::Feature` and
+/// `Mesh::FeaturePython`. Idempotent.
 ///
 /// An embedding application calls this once at startup before creating a
 /// `Mesh::Feature` or restoring a document that contains one.

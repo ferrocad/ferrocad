@@ -977,6 +977,49 @@ fn shapes_of_kind(shape: &TopoDS_Shape, kind: TopAbs_ShapeEnum) -> Vec<UniquePtr
     out
 }
 
+/// `Shape.connectEdgesToWires`: the shape's edges connected into wires, as a
+/// compound (`ShapeAnalysis_FreeBounds::ConnectEdgesToWires`).
+///
+/// An empty result (a shape with no edges) is an empty compound, as upstream's
+/// builder leaves it.
+pub(crate) fn connect_edges_to_wires(
+    shape: &TopoDS_Shape,
+    shared: bool,
+    tolerance: f64,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if shape.IsNull() {
+        return Err(OcctError::InvalidInput {
+            what: "connectEdgesToWires on a null shape",
+        });
+    }
+    let mut input = ffi::top_tools::new_Handle_TopTools_HSequenceOfShape();
+    for edge in shapes_of_kind(shape, TopAbs_ShapeEnum::TopAbs_EDGE) {
+        if let Some(edge) = edge.as_ref() {
+            ffi::top_tools::TopTools_HSequenceOfShape_append(input.pin_mut(), edge);
+        }
+    }
+    let mut wires = ffi::top_tools::new_Handle_TopTools_HSequenceOfShape();
+    ffi::shape_analysis::ShapeAnalysis_FreeBounds_ConnectEdgesToWires(
+        input.pin_mut(),
+        tolerance,
+        shared,
+        wires.pin_mut(),
+    );
+
+    let mut compound = ffi::topo_ds::TopoDS_Compound_new();
+    let builder = ffi::b_rep::BRep_Builder_new();
+    let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+    builder.MakeCompound(compound.pin_mut());
+    let mut compound = ffi::topo_ds::TopoDS_Compound_as_shape(compound);
+    for index in 1..=ffi::top_tools::TopTools_HSequenceOfShape_length(&wires) {
+        builder.Add(
+            compound.pin_mut(),
+            ffi::top_tools::TopTools_HSequenceOfShape_value(&wires, index),
+        );
+    }
+    Ok(ffi::topo_ds::TopoDS_Shape_to_owned(&compound))
+}
+
 /// `Shape.makeOffset2D(distance, join, fill, openResult)`: offset `shape` in its
 /// plane, optionally filling the band between the source and the offset.
 pub(crate) fn offset2d(

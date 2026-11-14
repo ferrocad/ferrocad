@@ -57,6 +57,7 @@
       "test_datum_plane",
       "test_flatmesh_part",
       "test_gui_snapping",
+      "test_p3_addon_surface",
       "test_packaged_modules",
       "test_part",
       "test_part_booleans",

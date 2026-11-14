@@ -300,17 +300,27 @@ fn offset2d_fills_the_band() {
     assert!(surface_ops::offset2d(&wire, 1.0, 7, false, false).is_err());
 }
 
-/// The first shell is the outer skin and the rest remove material.
+/// The shells of a solid with a cavity rebuild that solid.
+///
+/// `Part.makeSolid` adds the shells **as given** and orients the solid
+/// (upstream's `makeElementSolid`), so a cavity shell taken from an existing
+/// solid keeps its reversed orientation.
 #[test]
-fn hollow_solids_have_cavities() {
+fn hollow_solids_keep_the_cavity_the_shells_carry() {
     let backend = backend();
     let outer = backend.make_box(10.0, 10.0, 10.0).expect("outer box");
     let inner = placed_box(&backend, 4.0, Vector3::new(3.0, 3.0, 3.0));
-    let solid = surface_ops::make_hollow_solid(&[
-        shell_of(&backend, &outer),
-        shell_of(&backend, &inner),
-    ])
-    .expect("hollow solid");
+    let cut = backend
+        .cut(&outer, &inner, ferrocad_geom::AUTO_FUZZY)
+        .expect("box with a cavity")
+        .shape;
+    let shells: Vec<Shape> = elements(&backend, &cut, ElementKind::Shell)
+        .into_iter()
+        .map(|shell| shell.shape)
+        .collect();
+    assert_eq!(shells.len(), 2, "one skin and one cavity shell");
+
+    let solid = surface_ops::make_hollow_solid(&shells).expect("hollow solid");
     assert_eq!(elements(&backend, &solid, ElementKind::Solid).len(), 1);
     assert!(backend.is_valid(&solid), "the hollow solid is valid");
     assert_close(volume(&backend, &solid), 1000.0 - 64.0, "hollow volume");
@@ -516,63 +526,193 @@ fn py_length(shape: &Bound<'_, PyAny>) -> f64 {
     number(&shape.getattr("Length").expect("Shape.Length"), "Length")
 }
 
-/// `Part.Solid` with several shells makes a cavity, and `Part.makeSolid` keeps
-/// working for the single-shell case.
+/// `Part.Solid` takes a solid's shells **as given**, so a cavity keeps the
+/// orientation the cut gave its inner shell; `Solid.add` is FerroCAD's
+
+/// convenience, and the caller supplies the cavity orientation there.
+
 #[test]
+
 fn a_part_solid_accepts_cavity_shells() {
+
     boot();
+
     Python::with_gil(|py| {
+
         let part = PyModule::import(py, "Part").expect("import Part");
+
         let outer = part
+
             .call_method1("makeBox", (10.0, 10.0, 10.0))
+
             .expect("outer box");
+
         let inner = part
+
             .call_method1(
+
                 "makeBox",
+
                 (4.0, 4.0, 4.0, vector(py, 3.0, 3.0, 3.0)),
+
             )
+
             .expect("inner box");
 
+        let cut = outer.call_method1("cut", (&inner,)).expect("box with a cavity");
+
+
+        // The shells of a cut already carry the cavity orientation.
         let solid = part
+
+            .getattr("Solid")
+
+            .expect("Part.Solid")
+
+            .call1((&cut,))
+
+            .expect("Part.Solid(cut)");
+
+        assert_eq!(shape_type(&solid), "Solid");
+
+        assert!(valid(&solid));
+
+        assert_close(py_volume(&solid), 1000.0 - 64.0, "the cavity solid volume");
+
+        let shells = solid
+
+            .call_method0("__len__")
+
+            .expect("len")
+
+            .extract::<usize>()
+
+            .expect("len as usize");
+
+        assert_eq!(shells, 2, "the solid keeps both shells");
+
+
+
+        // `Solid.add` takes a shell as given, so an independently built inner
+        // shell is reversed by the caller (upstream has no `Solid.add`).
+        let cavity = part
+            .getattr("makeSolid")
+            .expect("makeSolid")
+            .call1((&cut,))
+            .expect("Part.makeSolid(cut)");
+        assert_close(py_volume(&cavity), 1000.0 - 64.0, "makeSolid cavity volume");
+
+        let open = part
             .getattr("Solid")
             .expect("Part.Solid")
             .call1((&outer,))
             .expect("Part.Solid(outer)");
-        assert_close(py_volume(&solid), 1000.0, "the outer shell alone");
-        solid
-            .call_method1("add", (&inner,))
-            .expect("Solid.add(cavity)");
-        assert_eq!(shape_type(&solid), "Solid");
-        assert!(valid(&solid));
-        assert_close(py_volume(&solid), 1000.0 - 64.0, "the cavity solid volume");
-        let shells = solid
-            .call_method0("__len__")
-            .expect("len")
-            .extract::<usize>()
-            .expect("len as usize");
-        assert_eq!(shells, 2, "the solid keeps both shells");
+        assert_close(py_volume(&open), 1000.0, "the outer shell alone");
+        let inner_shell = inner
+            .getattr("Shell1")
+            .expect("inner shell")
+            .call_method0("copy")
+            .expect("copy");
+        inner_shell.call_method0("reverse").expect("reverse");
+        open.call_method1("add", (&inner_shell,))
+            .expect("Solid.add(reversed cavity)");
+        assert!(valid(&open));
+        assert_close(py_volume(&open), 1000.0 - 64.0, "the cavity solid volume");
 
-        // A compound of both boxes feeds the same constructor.
+        // A compound of both boxes is as given too: the inner shell is outward,
+        // so the caller reverses it before `Part.Solid`/`Part.makeSolid`.
+        let reversed = inner_shell.call_method0("copy").expect("copy");
+
         let compound = part
-            .call_method1("makeCompound", (PyList::new(py, [&outer, &inner]).expect("list"),))
+
+            .call_method1(
+                "makeCompound",
+                (PyList::new(py, [outer.getattr("Shell1").unwrap(), reversed]).expect("list"),),
+            )
+
             .expect("makeCompound");
+
         let from_compound = part
+
             .getattr("Solid")
+
             .expect("Part.Solid")
+
             .call1((&compound,))
+
             .expect("Part.Solid(compound)");
+
         assert_close(
+
             py_volume(&from_compound),
+
             1000.0 - 64.0,
+
             "the compound cavity volume",
+
         );
 
+
+
         // `Part.makeSolid` still promotes a single shell.
+
         let promoted = part
+
             .call_method1("makeSolid", (&outer,))
+
             .expect("Part.makeSolid");
+
         assert_eq!(shape_type(&promoted), "Solid");
+
         assert_close(py_volume(&promoted), 1000.0, "makeSolid volume");
+
+    });
+
+}
+
+/// `Shape.connectEdgesToWires` links a boundary into wires.
+#[test]
+fn connect_edges_to_wires_links_a_boundary() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let boxed = part.call_method1("makeBox", (10.0, 10.0, 10.0)).expect("box");
+        let face = boxed.getattr("Face1").expect("Face1");
+        let edges = face.getattr("Edges").expect("Face1.Edges");
+        let boundary = part
+            .call_method1("makeCompound", (&edges,))
+            .expect("makeCompound(edges)");
+
+        let wires = boundary
+            .call_method1("connectEdgesToWires", (true,))
+            .expect("connectEdgesToWires(shared=True)");
+        let list = wires.getattr("Wires").expect("Wires");
+        assert_eq!(list.len().unwrap(), 1, "the four edges make one wire");
+        let wire = list.get_item(0).expect("the wire");
+        assert_eq!(wire.getattr("Edges").unwrap().len().unwrap(), 4);
+        assert!(wire
+            .call_method0("isClosed")
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
+
+        // Two disjoint edges are two wires, and no edges is an empty compound.
+        let far = part
+            .call_method1(
+                "makeLine",
+                (vector(py, 20.0, 0.0, 0.0), vector(py, 21.0, 0.0, 0.0)),
+            )
+            .expect("far line");
+        let one = part
+            .call_method1("makeLine", (vector(py, 0.0, 0.0, 0.0), vector(py, 1.0, 0.0, 0.0)))
+            .expect("near line");
+        let pair = part
+            .call_method1("makeCompound", (PyList::new(py, [&one, &far]).unwrap(),))
+            .expect("compound of two lines");
+        let wires = pair
+            .call_method1("connectEdgesToWires", (false,))
+            .expect("connectEdgesToWires(shared=False)");
+        assert_eq!(wires.getattr("Wires").unwrap().len().unwrap(), 2);
     });
 }
 

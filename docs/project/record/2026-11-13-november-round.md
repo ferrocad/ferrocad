@@ -121,6 +121,12 @@ The round's open P1 tail was closed after the measurements above, on the same tr
   unchanged. The off-thread polling exposed and fixed a hover-preview bug that could wipe
   a selection's gizmo when a pre-selection preview dissolved.
 
+  **Re-verified 2026-11-16** on the same adapter and size (`FERROCAD_TRACE=1`, debug):
+  target `Bgra8UnormSrgb` samples 4, UI-thread submit **0.20 ms**, worker wait **7.29 ms**
+  + copy **7.61 ms**, native wrap **0.00 ms**; the RGBA fallback still swaps
+  **297.08 ms** at that size. `ferrocad_wgpu` **68/0** and `ferrocad_viewport` **235/0**.
+  The remaining frame cost is the 4× MSAA draw, not the image path.
+
 ### 5.1 The manipulator finish pair (after close)
 
 Dragging the Push/Pull stem or the Fillet scrubber applied the edit on release, while the

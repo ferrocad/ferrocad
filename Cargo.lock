@@ -2789,6 +2789,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_sculpt"
+version = "0.1.5"
+dependencies = [
+ "ferrocad",
+ "ferrocad_combined_py",
+ "ferrocad_shell_python",
+ "pyo3",
+]
+
+[[package]]
 name = "ferrocad_shell_api"
 version = "0.1.5"
 dependencies = [

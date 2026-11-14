@@ -277,8 +277,16 @@ impl Edition {
                     requires_occt: true,
                 })
             }
+            Some("sculpt") | Some("ferrocad_sculpt") | Some("ferrocad-sculpt") => Ok(Self {
+                name: "sculpt",
+                package: "ferrocad_sculpt",
+                binary: "ferrocad_sculpt",
+                payload: "ferrocad-sculpt",
+                requires_occt: true,
+            }),
             Some(other) => Err(format!(
-                "unknown edition `{other}`; known editions: parametric (omit --edition for the base app)"
+                "unknown edition `{other}`; known editions: parametric, sculpt \
+                 (omit --edition for the base app)"
             )),
         }
     }

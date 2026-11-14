@@ -94,6 +94,21 @@ const GEOMETRY_SEAM: &str = "ferrocad_geom";
 /// or through a heavier crate — is the leak the rules are about.
 const SEAM_ONLY: &[&str] = &["ferrocad_curves", "ferrocad_mesh"];
 
+/// Editions whose forbidden list is relaxed to "not *directly*", because they
+/// compose the desktop shell host.
+///
+/// Since `486a985` (`ferrocad_shell_python` → `ferrocad_shell_rust`, the S9
+/// composition) the shell's document half links the Part engine and the kernel, so
+/// every edition that embeds the host reaches them. The promise the rule can still
+/// keep is narrower and is the one that matters: an edition may reach the engine
+/// *only* through the host it composes, never by a dependency of its own. The full
+/// kernel-free base needs the document half split out of `ferrocad_shell_rust`, and
+/// that is recorded in `docs/project/TODO-15-11-2026.md` §P5.
+const COMPOSED_DOCUMENT_HALF: &[(&str, &str)] = &[
+    ("ferrocad", "ferrocad_shell_python"),
+    ("ferrocad_toy", "ferrocad_shell_python"),
+];
+
 /// One edition's dependency rule.
 #[derive(Debug, Clone, Copy)]
 struct Rule {
@@ -131,9 +146,15 @@ const RULES: &[Rule] = &[
     },
     Rule {
         package: "ferrocad_shell_python",
-        reason: "the shell sits below Part",
-        forbidden: KERNEL_FREE,
-        required: &[],
+        reason: "the CPython host must not link a Python extension or a workbench's GUI",
+        // It composes the document half (`ferrocad_shell_rust`), and Part and the
+        // kernel arrive through it — that is the S9 composition, not a leak, so the
+        // "below Part" rule this entry used to carry no longer described the crate.
+        // What it must never reach is a Python extension module (the same types
+        // registered twice) or a workbench's manipulator crate, which belongs to an
+        // edition.
+        forbidden: &["ferrocad_part_py", "ferrocad_mesh_py", "ferrocad_part_gui"],
+        required: &["ferrocad_shell_rust"],
     },
     Rule {
         package: "ferrocad_stage",
@@ -182,6 +203,12 @@ const RULES: &[Rule] = &[
         reason: "the parametric edition links the Part workbench",
         forbidden: &[],
         required: &["ferrocad_part_py", "ferrocad_occt"],
+    },
+    Rule {
+        package: "ferrocad_sculpt",
+        reason: "the Sculpt edition links the Part workbench and the mesh modules",
+        forbidden: &[],
+        required: &["ferrocad_part_py", "ferrocad_mesh_py", "ferrocad_occt"],
     },
     Rule {
         package: "ferrocad_combined_py",
@@ -469,13 +496,8 @@ fn strings(value: &Value) -> Result<Vec<String>, String> {
 }
 
 /// A shortest path `from -> … -> to` over the enabled edges that never enters
-/// `avoid`, if one exists.
-fn path_avoiding(
-    closure: &Closure,
-    from: &str,
-    to: &str,
-    avoid: Option<&str>,
-) -> Option<Vec<String>> {
+/// one of `avoid`, if one exists.
+fn path_avoiding(closure: &Closure, from: &str, to: &str, avoid: &[&str]) -> Option<Vec<String>> {
     if from == to {
         return Some(vec![from.to_string()]);
     }
@@ -484,7 +506,7 @@ fn path_avoiding(
     let mut seen = BTreeSet::from([from]);
     while let Some(node) = queue.pop_front() {
         for (source, target) in &closure.edges {
-            if source != node || Some(target.as_str()) == avoid || !seen.insert(target.as_str()) {
+            if source != node || avoid.contains(&target.as_str()) || !seen.insert(target.as_str()) {
                 continue;
             }
             parents.insert(target.as_str(), source.as_str());
@@ -506,15 +528,22 @@ fn path_avoiding(
 
 /// The route that makes `krate` a violation, if any.
 ///
-/// A [`SEAM_ONLY`] crate is only a violation when it is reachable without going
-/// through [`GEOMETRY_SEAM`]; the seam route is the documented arrangement.
+/// A violation is a route that avoids every intermediate the arrangement allows:
+/// [`GEOMETRY_SEAM`] for a [`SEAM_ONLY`] crate, and [`COMPOSED_DOCUMENT_HALF`]'s
+/// host for the editions that compose it. A crate reachable *only* through those is
+/// the documented arrangement, so no route comes back.
 fn offending_route(closure: &Closure, from: &str, krate: &str) -> Option<Vec<String>> {
-    let avoid = if SEAM_ONLY.contains(&krate) && krate != GEOMETRY_SEAM {
-        Some(GEOMETRY_SEAM)
-    } else {
-        None
-    };
-    path_avoiding(closure, from, krate, avoid)
+    let mut avoid: Vec<&str> = Vec::new();
+    if SEAM_ONLY.contains(&krate) && krate != GEOMETRY_SEAM {
+        avoid.push(GEOMETRY_SEAM);
+    }
+    if let Some((_, via)) = COMPOSED_DOCUMENT_HALF
+        .iter()
+        .find(|(edition, _)| *edition == from)
+    {
+        avoid.push(via);
+    }
+    path_avoiding(closure, from, krate, &avoid)
 }
 
 /// Apply the rules, returning one precise message per violation.
@@ -532,8 +561,13 @@ fn check_rules(
                 continue;
             }
             let route = offending_route(closure, rule.package, krate);
-            if route.is_none() && SEAM_ONLY.contains(&krate.as_str()) {
-                // Reachable only through the geometry seam, which is allowed.
+            if route.is_none()
+                && (SEAM_ONLY.contains(&krate.as_str())
+                    || COMPOSED_DOCUMENT_HALF
+                        .iter()
+                        .any(|(edition, _)| *edition == rule.package))
+            {
+                // Reachable only through the documented intermediate.
                 continue;
             }
             let mut message = format!(
@@ -572,7 +606,13 @@ fn metadata(root: &Path) -> Result<Value, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
         .current_dir(root)
-        .args(["metadata", "--format-version", "1", "--no-deps", "--offline"])
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ])
         .output()
         .map_err(|error| format!("run `cargo metadata`: {error}"))?;
     if !output.status.success() {
@@ -631,7 +671,8 @@ fn check_contract(root: &Path, closures: &BTreeMap<String, Closure>) -> Result<(
             path.display()
         )
     })?;
-    let metadata = json::parse(&text).map_err(|error| format!("parse {}: {error}", path.display()))?;
+    let metadata =
+        json::parse(&text).map_err(|error| format!("parse {}: {error}", path.display()))?;
     let pinned = metadata
         .field("editions")
         .and_then(Value::as_object)
@@ -801,7 +842,13 @@ mod tests {
         let closure = graph.closure("root").expect("closure");
         assert_eq!(
             names(&closure),
-            ["ferrocad_curves", "ferrocad_occt", "mid", "opencascade-sys", "root"]
+            [
+                "ferrocad_curves",
+                "ferrocad_occt",
+                "mid",
+                "opencascade-sys",
+                "root"
+            ]
         );
         // The dev-dep `ferrocad_part`, the build-dep `ferrocad_mesh` and the
         // optional, feature-less `ferrocad_mesh_py` are all absent.
@@ -880,9 +927,7 @@ mod tests {
 
     #[test]
     fn reports_a_forbidden_crate_with_the_offending_rule_and_path() {
-        let graph = graph(
-            &SYNTHETIC.replace("\"name\": \"root\"", "\"name\": \"ferrocad_toy\""),
-        );
+        let graph = graph(&SYNTHETIC.replace("\"name\": \"root\"", "\"name\": \"ferrocad_toy\""));
         let rules = &[Rule {
             package: "ferrocad_toy",
             reason: "the toy edition is deliberately kernel-free",
@@ -892,16 +937,17 @@ mod tests {
         let closures = compute(&graph, rules).expect("closures");
         let violations = check_rules(&closures, rules).expect("check");
         assert_eq!(violations.len(), 3, "{violations:#?}");
-        assert!(
-            violations
-                .iter()
-                .any(|violation| violation.contains("`ferrocad_toy` must not reach `ferrocad_curves`"))
-        );
+        assert!(violations.iter().any(|violation| {
+            violation.contains("`ferrocad_toy` must not reach `ferrocad_curves`")
+        }));
         let occt = violations
             .iter()
             .find(|violation| violation.contains("`ferrocad_toy` must not reach `ferrocad_occt`"))
             .expect("occt violation");
-        assert!(occt.contains("path: ferrocad_toy -> mid -> ferrocad_occt"), "{occt}");
+        assert!(
+            occt.contains("path: ferrocad_toy -> mid -> ferrocad_occt"),
+            "{occt}"
+        );
         let sys = violations
             .iter()
             .find(|violation| violation.contains("`ferrocad_toy` must not reach `opencascade-sys`"))
@@ -933,11 +979,7 @@ mod tests {
             required: &[],
         }];
         let closures = compute(&graph, rules).expect("closures");
-        assert!(
-            closures["ferrocad_toy"]
-                .crates
-                .contains("ferrocad_curves")
-        );
+        assert!(closures["ferrocad_toy"].crates.contains("ferrocad_curves"));
         assert!(check_rules(&closures, rules).expect("check").is_empty());
 
         // A second, seam-less route is a violation.
@@ -960,7 +1002,10 @@ mod tests {
         };
         assert_eq!(
             offending_route(&closure, "ferrocad_toy", "ferrocad_curves"),
-            Some(vec!["ferrocad_toy".to_string(), "ferrocad_curves".to_string()])
+            Some(vec![
+                "ferrocad_toy".to_string(),
+                "ferrocad_curves".to_string()
+            ])
         );
         assert_eq!(
             offending_route(&closure, "ferrocad_toy", "ferrocad_mesh"),
@@ -974,7 +1019,8 @@ mod tests {
 
     #[test]
     fn reports_a_missing_required_crate() {
-        let graph = graph(&SYNTHETIC.replace("\"name\": \"root\"", "\"name\": \"ferrocad_parametric\""));
+        let graph =
+            graph(&SYNTHETIC.replace("\"name\": \"root\"", "\"name\": \"ferrocad_parametric\""));
         let rules = &[Rule {
             package: "ferrocad_parametric",
             reason: "the parametric edition links the Part workbench",

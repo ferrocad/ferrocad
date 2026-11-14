@@ -36,7 +36,11 @@ shape the features build on.
 
 Persistence needs nothing extra: a proxy is stored by its module and class name,
 so a reopened document rebuilds both objects through ``onDocumentRestored``. The
-GUI commands are not part of this slice — the workbench is headless.
+workspace commands (``Sculpt_MakeCage``, ``Sculpt_MakeSkin``,
+``Sculpt_NestInBody``, ``Sculpt_LevelUp``/``Down``, ``Sculpt_AttachProxies``) live
+in ``Sculpt.commands``; importing that module registers them through
+``FreeCADGui``, and the edition's app script does, so any host that loads the
+workbench gets the command surface.
 """
 
 import FreeCAD
@@ -47,6 +51,9 @@ from .subdivision import cage_quads, catmull_clark, triangles
 
 #: Extra subdivision levels used when an object does not say otherwise.
 DEFAULT_LEVELS = 2
+
+#: The box cage `Sculpt_MakeCage` creates (length, width, height, mm).
+DEFAULT_BOX = (40.0, 30.0, 20.0)
 
 #: The sewing tolerance of the patch shell (mm).
 DEFAULT_TOLERANCE = 1e-3
@@ -180,6 +187,7 @@ def nest(body, *objects):
 
 __all__ = [
     "CageProxy",
+    "DEFAULT_BOX",
     "DEFAULT_LEVELS",
     "DEFAULT_TOLERANCE",
     "SkinProxy",

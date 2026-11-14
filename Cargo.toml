@@ -52,6 +52,7 @@ members = [
     "crates/ferrocad_addon_spring",
     "crates/ferrocad_shell_python",
     "crates/ferrocad_parametric",
+    "crates/ferrocad_sculpt",
     "crates/ferrocad_toy",
     "crates/xtask",
 ]

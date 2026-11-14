@@ -229,7 +229,7 @@ jobs:
           export OpenCASCADE_DIR="$PWD/.occt/prefix/lib/cmake/opencascade"
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
-          cargo test -p ferrocad_occt -p ferrocad_part -p ferrocad_part_py -p ferrocad_parametric
+          cargo test -p ferrocad_occt -p ferrocad_part -p ferrocad_part_py -p ferrocad_parametric -p ferrocad_sculpt
 
       - name: The Rust document backend builds and boots without a host (S5)
         # `ferrocad_shell_rust` is the one backend both hosts install, so it must be
@@ -353,8 +353,9 @@ jobs:
           export OCCT_INCLUDE_DIR="$PWD/.occt/prefix/include/opencascade"
           export LD_LIBRARY_PATH="$PWD/.occt/prefix/lib:$LD_LIBRARY_PATH"
           export PYTHONPATH="$PWD/python:$PYTHONPATH"
-          cargo build -p ferrocad_parametric
+          cargo build -p ferrocad_parametric -p ferrocad_sculpt
           target/debug/ferrocad_parametric --check-init
+          target/debug/ferrocad_sculpt --check-init
 
       - name: SimpleCAD S0 static audit (optional; needs a sibling checkout)
         # S0 is measurement only. PR CI does not clone SimpleCAD, so this is a

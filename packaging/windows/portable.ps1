@@ -21,10 +21,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# `bundle` spells the edition `parametric`; accept the crate name too. `base` and
-# `ferrocad` mean the base app, whose artifact has no edition segment.
+# `bundle` spells the edition `parametric`/`sculpt`; accept the crate names too.
+# `base` and `ferrocad` mean the base app, whose artifact has no edition segment.
 if ($Edition -eq 'ferrocad_parametric' -or $Edition -eq 'ferrocad-parametric') {
     $Edition = 'parametric'
+}
+if ($Edition -eq 'ferrocad_sculpt' -or $Edition -eq 'ferrocad-sculpt') {
+    $Edition = 'sculpt'
 }
 if ($Edition -eq 'ferrocad' -or $Edition -eq 'base') {
     $Edition = ''

@@ -39,6 +39,7 @@ done
 case "$EDITION" in
     "" | ferrocad | base) EDITION="" ;;
     ferrocad_parametric | ferrocad-parametric) EDITION=parametric ;;
+    ferrocad_sculpt | ferrocad-sculpt) EDITION=sculpt ;;
 esac
 
 cargo xtask bundle "$@"

@@ -122,6 +122,28 @@ requires a `Part.Wire` as upstream's typed signature does.
 This is how SimpleCAD rebuilds a face one boundary at a time for a concentric offset; the
 empty-leftover case is the area assertion in `a_face_accepts_another_boundary_wire`.
 
+## `Face.cutHoles` is `BRepBuilderAPI_MakeFace::Add` per wire
+
+Upstream's `TopoShapeFacePy::cutHoles` builds `BRepBuilderAPI_MakeFace(face)` and adds
+each item with `Add(wire)` — again no reversal and no containment test, and the items are
+wires, not necessarily `Part.Wire` instances (`Wire.reversed()` returns a plain `Shape`).
+The seam therefore accepts any `Part.Shape` whose shape type is a wire, and a null face
+raises `ValueError` before the list is parsed. Pinned by
+`a_face_cuts_hole_wires`; it is what closed `test_mesh_surfaces`' fitted-face pair.
+
+## `Shape.tessellate` takes upstream's default angular deflection
+
+Upstream's `defaultAngularDeflection(linear)` is `min(0.1, linear * 5 + 0.005)`: a coarse
+linear request still bounds the angular error and a fine one does not explode the triangle
+count. The one-argument `Shape.tessellate(deflection)` form uses it (OCCT's own 0.5 rad is
+much coarser, and `test_mesh_glue` measured the difference), and the STL path shares the
+same `ferrocad_geom::default_angular_deflection`. Passing `angular` explicitly is a house
+extension that pins the angle instead.
+
+A finer default is not free: it is what exposed the `flatmesh` unfold's vertex tear (see
+[`../../project/record/2026-11-14-p2-boolean-seam.md`](../../project/record/2026-11-14-p2-boolean-seam.md)
+§8.4), so a mesh-density-sensitive helper needs a fine-mesh case in its tests.
+
 ## `App::Part`'s extensions are type-static
 
 Upstream instantiates `App::GeoFeatureGroupExtension` (which derives from
@@ -134,8 +156,20 @@ added.
 
 ## The boolean tolerance contract
 
-`fuse`, `cut` and `common` take a `tolerance` and hand it to the kernel the way upstream's
-`TopoShape::makeElementBoolean` does:
+`fuse`, `cut`, `common` and `multiFuse` declare upstream's signature from
+`TopoShape.pyi`:
+
+```python
+fuse(other, tolerance=0.0, *, noElementMap=False)
+```
+
+The **second positional argument is the tolerance**. It used to be a house `glue` flag,
+with `refine` beside it, so a script that passed a fuzzy value positionally
+(`a.fuse(b, 0.001)`) set a truthiness flag and the kernel never saw the number — that is
+what left `test_union`'s rod a hair off its bore. The pair is gone; every internal call
+site passes the tolerance in the second position.
+
+The value reaches the kernel the way upstream's `TopoShape::makeElementBoolean` does:
 
 | `tolerance` | Kernel |
 | --- | --- |

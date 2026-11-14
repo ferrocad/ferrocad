@@ -1,7 +1,7 @@
 # The P2 boolean/seam round — 2026-11-14/15
 
-Status: round record (written 2026-11-15). This is the compact measurement of the P2 work
-that followed the manipulator day. The backlog that held it is
+Status: round record (written 2026-11-15, extended the same evening). This is the compact
+measurement of the P2 work that followed the manipulator day. The backlog that held it is
 [`TODO-14-11-2026.md`](TODO-14-11-2026.md); its successor is
 [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md). The stable contracts are
 [`../../developer/workbenches/part-containers.md`](../../developer/workbenches/part-containers.md)
@@ -20,11 +20,15 @@ the failing-test map is [`../research/simplecad-bringup.md`](../research/simplec
 | **Wire length and `Face.addWire`** | a wire wrapped from a shape counts its B-Rep edges, so `bool(wire)` is true; `Face.addWire` attaches a boundary as `BRep_Builder::Add` does | SimpleCAD **1005/25/17/7** |
 | **Circle frame** | `Part.Circle`'s analytic `XAxis` is the edge's parameter 0 (`gp_Ax2` with the frame, not the normal alone) | SimpleCAD **1006/24/17/7** |
 | **Clean-checkout re-measure** | the `close_holes` experiment was reverted; `../simplecad` stays at `9180c4b` | SimpleCAD **1006/24/17/7** |
+| **Boolean signatures** | `Shape.fuse`/`cut`/`common`/`multiFuse` take upstream's `(other, tolerance=0.0, *, noElementMap)`: the second positional argument is the fuzzy tolerance, and the house-only `glue`/`refine` pair is gone | SimpleCAD **1013/20/14/7**; both `test_union` geometry records close |
+| **Tessellation default** | `Shape.tessellate`'s omitted `angular` is upstream's `defaultAngularDeflection` (`min(0.1, linear * 5 + 0.005)`), one `ferrocad_geom` helper shared with the STL path | `test_mesh_glue` **6/6** (was 5/6) |
+| **`Face.cutHoles` and a circle-based `Cylinder`** | `cutHoles(list)` is `BRepBuilderAPI_MakeFace::Add` per wire on any wire-shaped `Part.Shape`; `Part.Cylinder(circle)` reads radius, centre, axis and X direction from the circle | `test_mesh_surfaces` **7/7** (was 3 pass, 2 fail, 2 error) — P3's SimpleCAD share empties |
+| **The unwrap tear** | `flatmesh` lays each vertex once: a fan-closing triangle keeps the first position instead of moving it | SimpleCAD **1014/20/13/7**; `test_surface_offset`'s across-the-seam error closes |
 
-SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1006 / 24 / 17 / 7 over 88/88
-modules**: **25 failures closed, none added, and the error count moved 18 → 17** (the pass
-total rises by 21 because a fully-passing subtest counts once, not once per sub-case). No
-module failed to load.
+SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1014 / 20 / 13 / 7 over 88/88
+modules**: **29 failures closed, none added, and the errors moved 18 → 13**. The printed
+failure count falls by one less than the records closed in the last two steps because a
+fully-passing module counts once. No module failed to load.
 
 ## 2. The sub-shape seam
 
@@ -169,7 +173,73 @@ So the two failures are an **upstream expectation mismatch**: the shipped policy
 removed planar side face; the test asserts that the body opens. They are filed with the
 test assumptions, not with the P2 defects, and `../simplecad` stays clean.
 
-## 8. Measurements at close
+## 8. The last spread: signatures, tessellation and the unwrap tear
+
+### 8.1 The boolean signatures match upstream's declaration
+
+`TopoShape.pyi` declares `fuse(self, other: Shape, tolerance: float = 0.0, *,
+noElementMap: bool = False)` (and the same shape for `cut`, `common` and `multiFuse`). Our
+declarations put a house-only `glue`/`refine` pair in front, so a script that passed a
+fuzzy tolerance positionally set `glue` instead and the kernel never saw the number;
+`test_union`'s rod stayed a hair off its bore, and a second record took the face-contact
+path. The pair is gone, the second positional argument is the tolerance, and every internal
+call site passes it in that position. `part_shape_ops` pins the new form; the two
+`test_union` geometry records pass (`test_union` is **14/2**, the two remaining being the
+document label `'Union' != 'First'` in §10).
+
+### 8.2 `Shape.tessellate` defaults to upstream's angular deflection
+
+Upstream's `defaultAngularDeflection` is `min(0.1, linear * 5 + 0.005)`: a coarse linear
+request still bounds the angular error and a fine one does not explode the triangle count.
+Our one-argument form used OCCT's own 0.5 rad, which is far coarser than FreeCAD's meshes —
+`test_mesh_glue` measured a display mesh that upstream would not have produced and failed
+its `thin_wall_triangle_profile_and_existing_hole` case. The helper now lives in
+`ferrocad_geom::default_angular_deflection`, is used by `Shape.tessellate` **and** the STL
+path (which had a copy of the formula), and the one-argument form meshes like FreeCAD.
+`test_mesh_glue` is **6/6** and `part_shape_ops`'s
+`tessellate_defaults_to_upstreams_angular_deflection` pins the value.
+
+The finer default is also what exposed §8.4, the only regression this step caused.
+
+### 8.3 `Face.cutHoles`, a circle-based `Cylinder`, and the mesh modules
+
+`Face.cutHoles(list)` was an unimplemented stub. Upstream is a raw
+`BRepBuilderAPI_MakeFace(face).Add(wire)` per item: no reversal, no containment test, and
+only a wire-shaped `Part.Shape` accepted (`Wire.reversed()` is a plain `Shape`). It is
+implemented that way, and a null face raises `ValueError` before the list is parsed.
+`Part.Cylinder` gained upstream's circle-base constructor (radius, centre, axis and X
+direction from the circle) and a cylinder copy, beside the house `radius/center/axis`
+form. Together the two closed `test_mesh_surfaces` **7/7** (was 3 pass, 2 fail, 2 error),
+so P3's SimpleCAD share is empty.
+
+### 8.4 The unwrap tear
+
+The finer tessellation broke `test_flatmesh_part`'s cone case: the cone wall's flat area
+came back **1155.2 against its 1025.2** (12.7 % over), while the same face at a 0.5
+deflection unwrapped to 1024.79. The mesh was not at fault — the sum of its 3-D triangle
+areas is 1025.16, and every interior vertex has a zero angle defect except the two 2:1
+boundary-transition rings (1.3e-5 rad).
+
+`_unfold` was. It walks the dual graph breadth-first and, for each triangle it reaches,
+writes its third vertex position **unconditionally**. In a triangle fan that vertex has
+already been laid by an earlier fan member, so the write *moves* it away from the
+triangles already using it — a tear. On a coarse mesh the fan closes exactly and the
+rewrite is the same number; on a 170-column strip the residual compounds
+multiplicatively, the layout spirals into itself, and 2 357 of 6 120 triangles ended up
+between 1 % and 95× off their true area (the worst a 94× stretch). The relaxation pass
+recovered only part of that: the measured flat area was 1 155 mm² (12.7 % over) where the
+raw seed was 1 379 mm² (34 % over). A first-write-wins layout reproduces 1025.160 for the
+same mesh — the sheet stays isometric and every closing fan keeps the first position. On a
+developable face the two placements agree, so nothing is lost; on a curved one the residual
+stays in that triangle and `_relax` spreads it, which is what the module always claimed to
+do.
+
+`test_a_finely_meshed_cone_wall_still_unwraps_to_its_area` pins a 0.006-deflection cone
+(> 4 000 triangles, so the test only bites on a fine mesh). It also closed SimpleCAD's
+`test_surface_offset.DraftTests` across-the-seam error, which unwraps a drawing that spans
+the cut.
+
+## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),
 `git status` empty. Built with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
@@ -178,25 +248,30 @@ CARGO_BUILD_JOBS=2`; the extension was rebuilt before the Python/SimpleCAD runs.
 | Measure | Value | Command |
 | --- | --- | --- |
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
-| SimpleCAD integrated | **1006 passed, 24 failed, 17 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
-| Part API audit | **253/408 (62.0%)**, contract re-pinned for `Face.addWire` | `python3 tools/part_api_audit.py --check` |
-| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `part_boot` **3**, `part_shape_ops` **13**, all 0 failed | per-crate `cargo test` |
-| Docs/tooling | `api_docs` 9 pages, `userdocs` 8, `build_book` 48 chapters, extension-set contract 50 modules | the four `--check` gates |
+| SimpleCAD integrated | **1014 passed, 20 failed, 13 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| Part API audit | **253/408 (62.0%)**, no contract re-pin needed (`cutHoles` and `Cylinder(circle)` add no distinct name) | `python3 tools/part_api_audit.py --check` |
+| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `part_boot` **3**, `part_shape_ops` **16**, all 0 failed | per-crate `cargo test` |
+| Python extension sets | `base` **707 / 0 / 0 / 8**; `workbenches` **789 / 0 / 0 / 3** | `python3 tools/run_tests.py --extension base` / `workbenches` |
+| Docs/tooling | `api_docs` 9 pages, `userdocs` 8, `build_book` 48 chapters, extension-set contract 50 modules, `test_docs_tooling` 49 | the `--check` gates |
 
 Two runs of the full SimpleCAD suite before the edge-placement fix produced the same
 1001/29/17/7, so that figure was stable rather than a lucky pass; the post-fix runs are
 1003/27/17/7, 1005/25/17/7 and then 1006/24/17/7, with the rotate-edges, elongating and
 boss records closed and the error set unchanged in size (one analytic error left, now
-filed as a face-order assumption).
+filed as a face-order assumption). The signature/tessellation/cutHoles batch then measured
+**1013/20/14/7** and the unwrap fix **1014/20/13/7**, both over 88/88 modules; the run that
+closed nothing also moved no module from load-failure to loaded.
 
-## 9. What the 24 failures are
+## 10. What the 20 failures and 13 errors are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
-in short: **18 → P2** (boolean/topology 3, undo/labels 5, query/tolerance/determinism 9,
-identity 1), **3 → P3** (mesh→fitted-surface 2, wrapped drawing 1) and **3 documented
-test assumptions** (the exact `BoundBox` precondition and the two `close_holes` cases). The
-17 errors are 4 `PartDesign` imports, 1 wrapped-drawing edge case, 11 behavioural/API
-results and **1 documented face-order assumption** (the chamfered single-face selection).
+in short: **16 → P2** (boolean/topology 1, undo/labels 5, query/tolerance/determinism 9,
+identity 1), **1 → P3** (wrapped-drawing parameter mapping) and **3 documented test
+assumptions** (the exact `BoundBox` precondition and the two `close_holes` cases). The 13
+errors are 4 `test_surface_offset` draft shapes, 1 wrapped-drawing area measurement, 7
+behavioural/API results (forming, loop faces, measuring, mesh conversion, slicing,
+subdivision, the surface snap) and **1 documented face-order assumption** (the chamfered
+single-face selection, which is an error rather than a failure).
 
-The next cluster is `test_mesh_glue` and `test_union.test_rod_a_hair_off_its_bore`, both
-still unreproduced, and the last sub-tolerance push/pull.
+The P2 clusters that closed this round are gone from the list, so the next work is the
+undo/label transaction path and the query/tolerance group.

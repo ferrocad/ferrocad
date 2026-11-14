@@ -153,6 +153,8 @@ here.
 ### Interaction
 
 - [developer/interaction/axis-origin-grid.md](developer/interaction/axis-origin-grid.md) — the world triad, the ground/workplane grids, face frames and snapping.
+- [developer/interaction/creation-loadout.md](developer/interaction/creation-loadout.md) — the Add hand: the action-bar split pill, the five creation categories, the in-place tool strip, the topology host and C1–C4.
+- [developer/interaction/creation-pill-loadout.md](developer/interaction/creation-pill-loadout.md) — the Add/Modify seam: the shared topology scope, the context lock, the naming rules and the companion edits.
 - [developer/interaction/gizmo-manipulators.md](developer/interaction/gizmo-manipulators.md) — the context-driven manipulator suite: the Spatial Transactor, F0 and edge dress-up.
 - [developer/interaction/iconography.md](developer/interaction/iconography.md) — the pictogram contract: the upstream and IconMCP inventory, the curated mapping and the 24 glyphs FerroCAD draws.
 - [developer/images/iconography/CREDITS.md](developer/images/iconography/CREDITS.md) — the gallery contact sheets' provenance: the upstream and IconMCP sources with their licences.

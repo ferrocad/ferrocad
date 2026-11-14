@@ -429,7 +429,9 @@ its padded outline/area is pickable.
   manipulator claims the element, keep it otherwise, let `transform_verb` override —
   is deleted: an unclaimed element in Slot 2 now arms nothing, and `1` is the explicit
   way back to the body control. Switching slot or filter with a dirty transform session
-  commits it first.
+  is **refused** while the value is pending (the gate's rule, A4); the older “commits it
+  first” wording is reconciled in
+  [`creation-pill-loadout.md`](creation-pill-loadout.md) §10.5.
 - **Covered by** `ferrocad_stage`'s
   `the_session_offers_one_kind_per_control_and_keeps_the_others_hosted`,
   `the_kind_order_decides_which_gizmo_answers_the_pointer`,
@@ -644,7 +646,10 @@ stage, and **not** the shell; see `architecture.md` §10):
   grab target starts a drag (no orbit, no selection); a press anywhere else falls
   through. Their items are drawn as depth-off overlays (one combined queue), and the
   readout pill comes from `Manipulator::readout`/`readout_anchor`. `Esc` cancels a
-  manipulator drag before a gizmo drag.
+  manipulator drag before a gizmo drag. An armed creation tool clears both the
+  manipulators and the gizmo set when it starts (`Shell::start_tool`), so it is the first
+  consumer behind the cube and the priority order needs no extra tier
+  ([`creation-pill-loadout.md`](creation-pill-loadout.md) §7).
 - The commit is **neutral data** (`InteractionCommit`); the shell maps its entity to a
   document object and calls the app script's `interaction` hook, which Part implements
   with `Part::Fillet`/`Part::Chamfer` (`Radius`, or `Distance`/`Distance2`, then a

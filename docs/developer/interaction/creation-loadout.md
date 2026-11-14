@@ -1,0 +1,394 @@
+# Creation loadout: the action-bar split-pill, tool strip and topology-anchored authoring
+
+Status: design (2026-11-13). Companion to
+[`creation-pill-loadout.md`](creation-pill-loadout.md) (the Add/Modify seam: the context
+lock, the shared scope and the code each hand has to respect), [`visual-language.md`](visual-language.md)
+(tokens, strokes, `HoverReport`), [`transform-ux.md`](transform-ux.md) (loadout slots, the
+unfocused fields, the `Esc` cascade) and [`gizmo-manipulators.md`](gizmo-manipulators.md)
+(`ManipulatorFrame`, planar face normals, edge polylines).
+
+This note specifies the **Add hand**: how the static `Create Box` button in the centre
+action bar becomes a memory split-pill (`⊕ <Tool> ▾`), how its five-category hierarchy
+expands, how arming a creation tool replaces the action bar in place with a live **tool
+strip**, and how an armed tool anchors new geometry onto a **workplane, body, face or
+edge** under the pointer.
+
+---
+
+## 0. Direction: one loadout system, two hands
+
+The desktop shell separates commands along one primary axis: **modifying what is already
+there** versus **adding something new**.
+
+- **The Modify hand** (bottom-left loadout bar):
+  `[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]`. Selection-tied. It governs what a
+  hover or click targets on existing geometry and which manipulator is hosted
+  (`TransformGizmo`, `PushPullStem`, `DressUpScrubber`).
+- **The Add hand** (bottom-centre action bar):
+  `[ Undo  Redo  Fit │ ⊕ Box ▾ │ Search (Ctrl+K) ]`. Authoring-tied. It governs what new
+  shape is created and how its placement frame snaps to the scene, body, face or edge
+  under the pointer.
+
+```text
+Bottom-Left (Modify Hand)                                  Bottom-Centre (Add Hand — Idle)
+[ 1 ✥ Move │ 2 ↕ Push/Pull │ 3 ↱ Fillet │ 0 ⬚ Inspect ]    [ Undo  Redo  Fit │ ⊕ Box ▾ │ 🔍 Search (Ctrl+K) ]
+```
+
+Both hands obey the same four invariants:
+
+1. **Explicit slot hierarchy.** Neither hand guesses a tool from a raw click; the user
+   equips a slot or arms a tool explicitly.
+2. **One topological vocabulary.** Both hands read the same `SelectionRef` (`Body`,
+   `Face`, `Edge`) and build their frames with `ManipulatorFrame` (`origin + orthonormal
+   basis`).
+3. **Zero concurrent limbo.** A pending modification (`Δ ≠ 0`) locks out creation until
+   it is finished (`✓`/`Enter`) or rolled back (`✗`/`Esc`). Conversely, an `ARMED`
+   creation tool suspends the Modify hand's gizmos and manipulators and replaces the
+   centre action bar in place with the **tool strip**.
+4. **Numbers never jump.** Every numeric input is 11–12 px tabular monospace in a
+   screen-anchored bar, unfocused by default so the canvas keeps the keyboard until `Tab`
+   or a digit is pressed.
+
+The seam itself — who wins, what the shared scope is, and which companion sentence
+changes — is [`creation-pill-loadout.md`](creation-pill-loadout.md); this note owns the
+Add hand's chrome, inventory and slices.
+
+---
+
+## 1. Chrome anchor and the five-category hierarchy
+
+The creation pill lives inside the **centre action bar** between `Fit` and
+`Search (Ctrl+K)`, replacing the static `⊕ Create Box` button with a two-part **memory
+split-pill**:
+
+```text
+[ Undo   Redo   Fit │ ⊕ Box ▾ │ 🔍 Search (Ctrl+K) ]
+                      └──┬──┘└┬┘
+           Fast-path verb┘    └─ Category expansion caret
+```
+
+- **Left segment (`⊕ <LastTool>`, default `⊕ Box`).** One-click fast path: arms the
+  displayed tool without opening the category tier. Whenever a tool from the hierarchy is
+  armed, this segment updates its glyph and label so the next click repeats that tool.
+  The memory is session state, not a preference.
+- **Right segment (`▾` caret, 1 px `ui::CHROME_LINE` divider).** A click, or a hover
+  within `HOVER_RADIUS` (12 px), opens the two-tier creation flyout directly above the
+  action bar:
+
+```text
+                  ┌────────────────────────────────────────────────────────────┐
+   Tool row ────► │ ⬡ Box   ◯ Cylinder   △ Cone   ◎ Sphere │ ⊞ Prism   ↻ Rev   │  (ui::WHEEL_GLASS)
+                  ├────────────────────────────────────────────────────────────┤
+Category row ───► │  ✎ Sketch    [ ⬡ Solid ]    ≋ Surface    T Text    ◫ Mesh  │  (ui::CHROME_ACTIVE)
+                  └────────────────────────────────────────────────────────────┘
+                  [ Undo   Redo   Fit │ ⊕ Box ▴ │ 🔍 Search (Ctrl+K) ]
+```
+
+The flyout stacks 6 px above the bar with the same `ui::WHEEL_GLASS` body and
+`ui::DOCK_BORDER` hairline; one `ui::CHROME_LINE` divider separates the tool row from the
+category row. The active category is the `ui::CHROME_ACTIVE` pair, exactly like the
+equipped loadout slot.
+
+### The five categories
+
+| Slot | Category | Standalone tools (no pre-selection) | Selection / profile-gated tools |
+| --- | --- | --- | --- |
+| **1** | **Sketch** | `Rectangle`, `Circle`, `Arc`, `Polyline`, `Line`, `Point` | `Project Edge`, `Offset Wire` |
+| **2** | **Solid** | `Box`, `Cylinder`, `Cone`, `Sphere`, `Torus` | `Prism (Extrude)`, `Revolution`, `Loft`, `Sweep`, `Boolean` |
+| **3** | **Surface** | `Plane Patch`, `Ruled Surface` | `Face from Wire`, `Offset Surface`, `Blend` |
+| **4** | **Text** | `3D Text`, `Engrave Label` | `Text on Face`, `Text along Edge` |
+| **5** | **Mesh** | `Mesh Box`, `Mesh Sphere` | `Mesh from Shape`, `Decimate` |
+
+Within a category's tool row, standalone primitives sit on the left and
+selection-gated features sit to the right of a 1 px `ui::CHROME_LINE` divider.
+
+The inventory is **edition data**, not shell policy: `Contributions` today registers tools
+by id only, so the slice adds a `CreationTool` descriptor (next section) and the shell
+renders whatever the edition contributes. The shell must not name a workbench, and the toy
+edition's `Toy_MakeSlab` is expressible as the `Box`-like tool if the toy wants the pill.
+
+---
+
+## 2. State machine and the in-place tool strip
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Hover: pointer within 12 px of the pill
+    Hover --> Idle: leave
+    Hover --> Expanded: caret click, or hover-expand
+    Hover --> Armed: fast-path click
+    Expanded --> Idle: outside press / Esc
+    Expanded --> Armed: an enabled tool is picked
+    Armed --> Armed: the anchor is placed; the drag handle is live
+    Armed --> Armed: Esc drops the anchor, stays armed
+    Armed --> Idle: Esc with no anchor (restore the dock)
+    Armed --> PillHold: Enter / ✓ / second click (one transaction)
+    PillHold --> Armed: pick a tool (rapid repeat)
+    PillHold --> Expanded: caret again
+    PillHold --> Idle: pointer leaves / Esc / timeout
+```
+
+### State alignment with the two companion machines
+
+1. **`IDLE` corresponds to `ArmedIdle`.** The creation pill is compact in the centre bar;
+   the Modify hand rests in its equipped slot (`1`–`3`, `0`) at bottom-left.
+2. **`ARMED` swaps the action bar in place to the tool strip.** The strip takes the exact
+   same screen slot:
+
+   ```text
+   [ ⬡ Box · Face6 (+N) │ W  20.00   L  20.00   H  20.00 mm │ ⊕ Add ▾ │ ✗ │ ✓ ]
+   ```
+
+   In place, because a second floating HUD would collide with the Modify hand's docked
+   coordinate row on the left, because the numbers stay in one fixed tabular pill
+   (`visual-language.md` §0.4), and because the liminal state must be unmistakable.
+   Entering `ARMED` hides and un-offers the hosted `GizmoSet` and the workbench
+   manipulators (`PushPullStem`, `DressUpScrubber`), and suppresses hover-to-arm
+   (`set_gizmo_idle_scale`) and the right-click radial until the tool leaves `ARMED`.
+   `Shell::start_tool` already does the gizmo/manipulator half.
+3. **`PILL_HOLD` is not `SESSION_HOLD`.** In `visual-language.md` §5, `SESSION_HOLD` is an
+   **uncommitted** transform (`Δ ≠ 0`) holding the context lock with `✗ │ ✓` live. After a
+   creation commit the shape is already written; there is no delta. The post-commit linger
+   is therefore `PILL_HOLD`, and it must gate no action — it is presentation for rapid
+   repeated creation.
+
+---
+
+## 3. Topology-anchored authoring: create on WP, Body, Face or Edge
+
+Just as the Modify hand uses the topology under the pointer to choose between a body
+triad, a face stem and an edge arc, an `ARMED` creation tool uses the topology under the
+pointer to orient its `ManipulatorFrame` (`ferrocad_stage::gizmo::ManipulatorFrame`) and
+its 3-D ghost preview.
+
+### 3.1 Live placement frame (`TargetHost`)
+
+As the pointer moves while a spatial tool (`Box`, `Cylinder`, `Sketch`, `3D Text`, …) is
+`ARMED`, the viewport resolves the pick and the snap candidates into one of three
+placement frames:
+
+| Hovered target | Placement `ManipulatorFrame` | Tool-strip badge | Stage cue |
+| --- | --- | --- | --- |
+| **Empty space / grid** | `origin` = grid/workplane snap; `basis` = the active workplane `(u, v, n)` (`WP: XY` by default) | `· WP: XY` | Snap aurora (`AURORA_COLOR`, `#38BDF8` @ 0.85) + translucent ghost on the workplane |
+| **Planar face** (`Face6`) | `origin` = snapped point on the face (`Centre`, `Vertex`, or the ray hit); `basis` = face tangents `(u, v)` + outward normal `+N`, from the same tessellation normal solver as `PushPullStem` (`gizmo-manipulators.md` §9.1) | `· Face6 (+N)` | Hovered face gets `HIGHLIGHT_TINT` (12 % cyan); the ghost sits flush and extrudes along `+N` |
+| **Edge** (`Edge3`) | `origin` = `Vertex`, `EdgeMid`, or the nearest point on `ShapeItem::edge_polyline`; `basis` = the edge tangent `t` + a camera-aligned normal | `· Edge3` | Edge highlights in `HOVER_RIM`; the ghost aligns its datum axis or sweep path to the edge |
+
+- **Additive vs subtractive (`⊕ Add ▾` / `⊖ Cut`).** When a solid primitive (`Box`,
+  `Cylinder`) is anchored to an existing **face**, the strip exposes a mode segment
+  (`⊕ Add` in `ui::PUSH_PULL_COLOR` `#F59E0B`, `⊖ Cut` in `ui::SUBTRACT_COLOR` `#EF4444`).
+  Choosing `⊖ Cut`, or driving the height negative into the host body (`-N`), turns the
+  ghost `SUBTRACT_COLOR` and commits a boolean cut against the host in one transaction.
+  This is the `PushPullStem` transaction shape already implemented by the parametric
+  edition's `_push_pull`: positive distance → `Part::Fuse`, negative → `Part::Cut`, with
+  the intermediate extrusion hidden. The box-on-face tool reuses that hook rather than
+  adding a second boolean path.
+- **Locking the host frame.** The first canvas click anchors the placement frame at that
+  point, face or edge and leaves the tool in a **pending preview**: the user can scrub the
+  height/radius handle on stage or `Tab` through `W / L / H`, then `Enter`/`✓` (or a second
+  click) to finish immediately.
+
+### 3.2 Enablement gates for profile-consuming tools
+
+Tools that consume existing topology (`Prism`, `Revolution`, `Loft`, `Sweep`,
+`Face from Wire`) evaluate enablement against the actual `SelectionRef`, not the Modify
+hand's `SelectFilter` preset:
+
+```rust
+pub struct CreationTool {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub category: CreationCategory,
+    pub gate: TopologyGate,
+    /// The shape the edition's interaction hook will build.
+    pub commits: ShapeKind,
+}
+
+pub enum TopologyGate {
+    /// Always enabled; places on WP, a hovered face (+N), or a hovered edge.
+    SpatialHost,
+    /// Enabled iff the selection matches the required kind and arity.
+    RequiresSelection { kind: ElementKind, min_arity: usize, max_arity: Option<usize> },
+}
+```
+
+- **Why the selection, not the filter.** When the Modify hand is parked in Slot 2
+  (`Push/Pull`), its default filter is `Face` (`tool-loadout.md` §2.1). If `Prism` checked
+  `SelectFilter != Face`, Slot 2 being equipped would disable `Prism` even with a valid
+  sketch selected in the tree. Checking the selected entity's kind keeps the two hands
+  independent. The brief's `TargetKind` is `ElementKind` here; the shell derives it from
+  the element prefix (`Face6` → `Face`), and a sketch/profile is resolved by the edition to
+  its `Wire`.
+- **A whole-object selection counts as one reference.** `SelectionRef::whole` has no
+  elements, so `min_arity` counts references (2 for `Loft`/`Sweep`, 1 otherwise), not
+  element names.
+- **Disabled feedback.** An unsatisfied gate renders the tool in `ui::INACTIVE_STRUCTURAL`
+  (see §5; the token is new) and refuses to arm it. Hovering writes the exact requirement
+  to the status bar: `5 object(s) · Prism requires a selected Sketch or closed Wire`.
+
+---
+
+## 4. Commit contract, context lock and keyboard routing
+
+### 4.1 Mutual exclusion with pending transforms
+
+Per [`creation-pill-loadout.md`](creation-pill-loadout.md) §1 and
+`gizmo-manipulators.md` §7 (A4), no context switch silently commits or drops an
+uncommitted edit:
+
+1. **Transform pending (`Δ ≠ 0`) → creation locked.** While the Modify hand has an
+   uncommitted Move, Rotate, Push/Pull or Fillet step, the `⊕ Box ▾` pill dims to 45 %
+   alongside the bottom-left loadout bar (`visual-language.md` §1.5) and a click is
+   consumed with:
+   `Pending <verb> — apply (✓ / Enter) or cancel (✗ / Esc) before starting a tool`.
+   The action dock does not dim today; the slice passes the same `blocked` flag the
+   loadout bar already takes.
+2. **Creation `ARMED`, no anchor placed → the switch is free.** If the user armed `Box`
+   but has not placed an anchor (`in_progress_preview == false`), clicking another
+   creation tool or pressing `1`–`3`/`0` cancels the armed tool cleanly; no transaction
+   exists to lose. Today a slot key only changes the parked hand (`rearm_selection`
+   returns early while a tool is active), so this is a slice requirement, not a shipped
+   behaviour.
+3. **Creation `ARMED`, anchor placed → the context is locked.** Once the base point is on
+   the canvas (the ghost waits at a fixed anchor for `✓`/`Enter` or a second click),
+   switching slots or tools is refused with the same prompt until commit or `✗`/`Esc`.
+   The `Tool` context currently allows `SwitchHand`/`SwitchScope`; the slice adds the
+   anchored case to the gate so this refusal is enforced in one place.
+
+### 4.2 Unfocused fields and type-ahead numerics
+
+The tool strip's dimension fields (`W`, `L`, `H`, `R`) follow the keyboard contract of
+`move_fields_bar` (`transform-ux.md` §3.1):
+
+- **Open unfocused.** Arming a tool leaves keyboard focus on the viewport.
+- **`Tab` / `Shift+Tab`** focuses the first dimension field (`W` or `R`) with its text
+  selected, and cycles.
+- **A digit, `-` or `.`** typed while the canvas has focus focuses the primary field and
+  starts replacing its value. (Digits `0`–`3` keep equipping loadout slots only while no
+  field is focused, exactly as the Move form does.)
+- **`Enter` / `✓`** commits. With an anchor on the canvas, it commits at that anchor; with
+  no anchor, it commits at the active workplane origin (`[0, 0, 0]`) with the typed
+  dimensions, preserving the zero-mouse fast path of the old `Create Box` button.
+- The values live on the tool, not in the strip: `ToolStatus` gains a
+  `fields: Vec<ToolField { id, label, unit, value }>` and the host writes back through a
+  `Tool::set_field`. `ToolStatus` is text-only today, so this is a new seam.
+
+### 4.3 Unified `Esc` cascade
+
+`Esc` always closes the innermost transient state first (`transform-ux.md` §3.1):
+
+| State when `Esc` is pressed | Result |
+| --- | --- |
+| **1. `ARMED` with a placed anchor** (preview dirty) | Drops the anchor and returns to `ARMED`; the ghost follows the pointer again. No undo step. |
+| **2. `ARMED` unanchored, or `EXPANDED`** | Cancels the tool, restores the default centre bar (`IDLE`), and re-offers the Modify hand's gizmo/manipulator on the current selection. |
+| **3. Creation `IDLE`, Modify pending (`Δ ≠ 0`)** | Rolls the pending Move / Rotate / Push-Pull / Fillet back to its pre-drag datum. |
+| **4. Both hands clean, selection non-empty** | Clears the selection (hiding the triad and the docked coordinate row). |
+
+---
+
+## 5. Tokens and visual rules
+
+The pill and the strip introduce **zero local hex constants**. Everything binds
+`ferrocad_theme::ui` (packed sRGB for gpui) or `ferrocad_theme::draw` (linear RGBA for the
+renderer):
+
+| Surface / element | Token (`ferrocad_theme`) | Value | Notes |
+| --- | --- | --- | --- |
+| Compact pill & tool strip bg | `ui::DOCK_BG` | `#16181D` @ 0.90 | Same as the idle action bar and the loadout bar |
+| Outer border | `ui::DOCK_BORDER` | `#FFFFFF1F` (12 %) | 1 px perimeter |
+| Internal dividers | `ui::CHROME_LINE` | `#FFFFFF14` | `⊕ Box │ ▾`, `✗ │ ✓`, segment rules |
+| Expanded flyout | `ui::WHEEL_GLASS` | `rgba(15, 18, 24, 0.75)` | 6 px above the bar, `DOCK_BORDER` hairline |
+| Active category & `✓` | `ui::CHROME_ACTIVE` over `ui::CHROME_ACTIVE_BG` | `#67D7FF` on `#1B2B38` @ 0.33 | The equipped-slot highlight pair |
+| Hover bloom (12 px) | `ui::HOVER_RIM` | `#48E5FF` | Category/tool glyphs and `✓` hover ink |
+| Disabled tool | `ui::INACTIVE_STRUCTURAL` | `#94A3B8` | **New token**: `ferrocad_theme::ui` has only `MUTED` (`#8B919A`) today; the stage's `INACTIVE_COLOR` is this value |
+| Dimension fields | `ui::WHEEL_GLASS` bg, `ui::CHROME_LINE` rest, `ui::ACTIVE_ACCENT` (`#38BDF8`) focus | — | 11–12 px tabular `"monospace"`; no caret when blurred |
+| Additive / subtractive | `ui::PUSH_PULL_COLOR` / `ui::SUBTRACT_COLOR` | `#F59E0B` / `#EF4444` | Face-hosted `+N` extrude vs `-N` pocket; also the `✗` hover ink |
+| 3-D ghost preview | `draw::GLASS_TOP` / `draw::GLASS_SHADE` on `BLENDED_DEPTH` | 35 % alpha (new constant) | Display-only, unpickable, no ghost pass; wire in `draw::EDGE_FRONT` (`HIGHLIGHT_TINT` is the 12 % face wash, not a wire ink) |
+
+Two deltas from the current tool strip: its **Finish** is filled `ACCENT` (`#2F4A6D`) with
+`FG` ink, not the `CHROME_ACTIVE_BG`/`CHROME_ACTIVE` pair; and its **Cancel** is neutral
+(`PANEL`/`PANEL_ALT`), not a subtract hover. The creation strip adopts the Move finish
+pill's accents so both hands read as one language.
+
+---
+
+## 6. Viewport hit priority and `HoverReport`
+
+### 6.1 Hit priority
+
+`gizmo-manipulators.md` §14 defines the viewport pick order:
+`navigation cube → workbench manipulators → gizmo → tool → scene`.
+
+Because an `ARMED` creation tool suspends the hosted manipulators and the `GizmoSet` (§2),
+no handle or stem can steal a click, and the effective chain becomes:
+
+```text
+navigation cube ──► armed creation tool (snap + TargetHost) ──► scene
+```
+
+`Shell::start_tool` already clears the manipulators and the gizmo set, so the tool is
+already first behind the cube; no new tier is needed. Orbit, pan and zoom are unaffected:
+camera movement never collapses the expanded pill or aborts an armed tool.
+
+### 6.2 Pass-through indication
+
+`visual-language.md` §6 defines `HoverReport`; today the only emitted value is
+`"navicube"` (a gizmo or manipulator grab target suppresses both fields instead of
+reporting a name).
+
+- When the flyout is `EXPANDED`, a click in the 6 px gap between the flyout and the bar, or
+  in non-interactive padding, passes through to the canvas, collapses the flyout to
+  `IDLE`, and reports `through: Some("creation_pill")` →
+  `clicked through: creation_pill → Slab`.
+- The flyout is gpui chrome, so the **shell** supplies that value; the viewport never sees
+  it. Keep `HoverReport` a neutral viewport type and add a shell-side chrome-through field
+  (decision in [`creation-pill-loadout.md`](creation-pill-loadout.md) §6.4).
+- While `ARMED`, hovering a face or edge populates `HoverReport.target` (`Face6`,
+  `Edge3`); the strip's target badge reads it, so the status line and the badge cannot
+  drift (`armed: Box on Face6 (+N)`).
+
+---
+
+## 7. Non-goals
+
+- **No modal dialogs for primitive creation.** Dimensions are entered inline in the tool
+  strip, never in a centred `380 px` modal blocker (`visual-language.md` §1.5).
+- **No duplicate `Create Box` button.** The split pill *is* the fast path; a static button
+  is not kept beside it. The registry command may remain for Search/menu, but it is not a
+  dock row.
+- **No document/view utilities in the creation pill.** `Undo`, `Redo`, `Fit` and `Search`
+  stay siblings in the idle bar, not categories inside the pill.
+- **No per-tick boolean kernel recompute.** The armed preview is a display-only
+  translucent stage mesh. `Part::Fuse`/`Part::Cut` runs once at commit.
+
+---
+
+## 8. Slice plan and acceptance
+
+| Slice | Deliverable | Acceptance |
+| --- | --- | --- |
+| **C1 — Split pill & flyout** | Replace the static `Create Box` dock row with `[ ⊕ <LastTool> │ ▾ ]`; two-tier `EXPANDED` flyout (five categories + tool row); `TopologyGate` evaluation and the status-bar disabled reason | Clicking `⊕ Box` arms `Box` in one click; `▾` opens the categories; with no sketch selected, `Prism` is `INACTIVE_STRUCTURAL` and its hover reports the requirement; a gap click reports `through: "creation_pill"` |
+| **C2 — In-place tool strip & keyboard** | Swap the bar to the strip when `ARMED`; unfocused `W/L/H`; `Tab`/digit entry; `Enter`/`✓` at the anchor or the WP origin; `Esc` cascade | Arming `Box` hides `Undo/Redo/Fit/Search` and shows `[ ⬡ Box │ W L H │ ✗ │ ✓ ]`; `Enter` immediately creates a 20×20×20 box at the WP origin in one undo step; `Tab` focuses `W`; `Esc` restores the idle bar |
+| **C3 — Pending lock & gizmo suspension** | Dim `⊕ Box ▾` to 45 % and refuse clicks while a transform or manipulator is pending; suspend the `GizmoSet` and manipulators while `ARMED` | Dragging Move by `+10 mm` (uncommitted) and clicking `⊕ Box` refuses the tool and keeps `ΔX = 10`; arming `Box` with a body selected hides the Move triad until the tool commits or cancels |
+| **C4 — Topology host (WP / Face / Edge)** | `TargetHost` frame solver reusing the planar face normal (`+N`) and the edge polyline; 3-D ghost via `Tool::items()`; `⊕ Add` / `⊖ Cut` boolean commit on a face | Hovering planar `Face6` aligns the ghost's `+Z` to the face normal; a click places the anchor; `✓` in Add mode fuses the box to the body in one transaction; Cut mode pockets it |
+
+C1 needs the `CreationTool` descriptors from the edition; C2–C4 are shell/stage work
+against the existing `Tool` and `InteractionCommit::creating` paths. The theme gains the
+`INACTIVE_STRUCTURAL` token; the renderer gains only the ghost constant.
+
+---
+
+## 9. What the tree already does
+
+- `Tool`, `ToolStatus` (label, point count, hint), `Tool::finish() ->
+  Option<InteractionCommit>` with `creates: true`, and the in-place bar swap
+  (`match active_tool { Some(tool) => tool_strip(tool), None => action_dock(model) }`).
+- A tool's first left press on a planar face binds the session workplane (sticky;
+  `Tool::picks_workplane` opts a plane-picking tool out). The hover preview frame is new.
+- The parametric edition's `_push_pull` already commits `Part::Fuse`/`Part::Cut` with a
+  hidden intermediate extrusion, so the face-hosted Add/Cut mode has a working hook.
+- The `GizmoSet`/manipulator suspension, the radial suppression and the hover-to-arm
+  suppression on `start_tool` are built.
+- Missing: the `CreationTool`/`CreationCategory` descriptors, the flyout and its
+  pass-through, the tool-strip fields (`ToolStatus` is text-only), the `TopologyGate`
+  evaluation, `INACTIVE_STRUCTURAL`, and the 35 % ghost constant.

@@ -190,6 +190,11 @@ The row, the pill and the tape are built (`shell::move_hud::MoveHud`,
 `ferrocad_stage::measure_tape`). Authority for the specification:
 [`../../project/record/tasks/transform-session.md`](../../project/record/tasks/transform-session.md) §3.
 
+The two numeric surfaces are exclusive and screen-anchored: the Move row docks above the
+loadout, and the Add hand's dimension strip replaces the centre action bar **in place**, so
+only one input bar is ever live. The Add hand's version of this rule is in
+[`creation-pill-loadout.md`](creation-pill-loadout.md) §3.3.
+
 **Modal surface (A3).** An open command dialog is the one **modal** layer, and it is
 not a floating pill: a centred `380 px` panel on `rgba(22, 24, 29, 0.95)` with a
 `#FFFFFF26` border and a `rgba(15, 18, 24, 0.80)` backdrop. The backdrop blocks the
@@ -344,6 +349,10 @@ a handle is the `HOVER` transition (the existing bloom), a press promotes the bo
 opens the session in the same gesture, and leaving dissolves it. A latched selection
 keeps its triad. The preview writes no selection and no session until the press.
 
+The creation pill's post-commit window is **not** this state: it holds zero uncommitted
+state, so it is `PILL_HOLD` and gates nothing — see
+[`creation-pill-loadout.md`](creation-pill-loadout.md) §3.2.
+
 | Constant | Value | Notes |
 | --- | --- | --- |
 | `HOVER_RADIUS` | 12 px | visual bloom only |
@@ -384,6 +393,10 @@ command's status text. **As built (A4):** `through` is `"navicube"` on the ring'
 negative space; a gizmo/manipulator grab target suppresses both fields (the click is
 consumed), and those interiors report nothing yet because they have no `contains`
 query. A command's `{"status": …}` result and the hover segment share one line.
+
+The Add hand adds the next name, `"creation_pill"`, for the expanded category/tool
+flyout. That flyout is gpui chrome, so the *shell* supplies the value; the viewport never
+sees it (`creation-pill-loadout.md` §7).
 
 ---
 

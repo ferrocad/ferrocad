@@ -193,6 +193,13 @@ pub struct ShapeItem {
     /// An authored shader program that draws this item's packets together with their own
     /// mesh. `None` means the scene material.
     program: Option<Arc<ShaderProgram>>,
+    /// The item's world AABB, with the matrix it was measured at.
+    ///
+    /// The stage AABB is a program input (an axis overlay places its labels from it), so
+    /// it is re-measured whenever an item moves — on every frame of a drag. Caching the
+    /// box against its transform keeps that O(items) instead of O(vertices): a move only
+    /// changes the translation, and a translated box is the box shifted.
+    world_bounds: Option<(Matrix4, ([f32; 3], [f32; 3]))>,
 }
 
 impl ShapeItem {
@@ -232,6 +239,7 @@ impl ShapeItem {
             highlight_wire_mesh: next_mesh_id(),
             generation: Generation(0),
             highlight_generation: Generation(0),
+            world_bounds: None,
             program: None,
         }
     }
@@ -302,7 +310,9 @@ impl ShapeItem {
         self.parts = parts;
         self.part_names.clear();
         self.vertices.clear();
-        // Any geometry change invalidates a renderer's cached upload for this mesh.
+        // Any geometry change invalidates a renderer's cached upload for this mesh, and
+        // the world box measured from the old vertices.
+        self.world_bounds = None;
         self.generation = Generation(self.generation.0 + 1);
         // The highlight is derived from the geometry, so its cache is stale too.
         self.highlight_generation = Generation(self.highlight_generation.0 + 1);
@@ -655,6 +665,52 @@ impl ShapeItem {
         self.temporary_transform
     }
 
+    /// The item's world AABB `(min, max)`, cached against the transform it was measured
+    /// at, or `None` when it has no positions.
+    ///
+    /// Measured once per transform. A **translation** — which is what every frame of a
+    /// move is — shifts the cached box exactly instead of walking the vertices again; any
+    /// other change (a rotation, a scale) re-measures them, so a rotated item's box stays
+    /// its true world box rather than the turned corners of its old one.
+    pub fn world_bounds(&mut self) -> Option<([f32; 3], [f32; 3])> {
+        let world = self.world_matrix();
+        if let Some((measured, box_)) = self.world_bounds {
+            if measured == world {
+                return Some(box_);
+            }
+            if let Some(shift) = translation_between(&measured, &world) {
+                let shifted = (
+                    [box_.0[0] + shift[0], box_.0[1] + shift[1], box_.0[2] + shift[2]],
+                    [box_.1[0] + shift[0], box_.1[1] + shift[1], box_.1[2] + shift[2]],
+                );
+                self.world_bounds = Some((world, shifted));
+                return Some(shifted);
+            }
+        }
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for [x, y, z] in &self.positions {
+            let point = world.transform(&Vector3::new(
+                f64::from(*x),
+                f64::from(*y),
+                f64::from(*z),
+            ));
+            let values = [point.x as f32, point.y as f32, point.z as f32];
+            for (axis, value) in values.iter().enumerate() {
+                if value.is_finite() {
+                    min[axis] = min[axis].min(*value);
+                    max[axis] = max[axis].max(*value);
+                }
+            }
+        }
+        if !(min[0].is_finite() && max[0].is_finite()) {
+            self.world_bounds = None;
+            return None;
+        }
+        self.world_bounds = Some((world, (min, max)));
+        Some((min, max))
+    }
+
     /// The display mode.
     pub fn draw_mode(&self) -> DrawMode {
         self.draw_mode
@@ -746,6 +802,9 @@ impl ShapeItem {
             highlight_wire_mesh: _,
             generation: _,
             highlight_generation: _,
+            // A cache derived from the positions and the transform, which are compared
+            // above: two items equal here have equal boxes whatever each cached.
+            world_bounds: _,
             program,
         } = self;
         *entity_id == other.entity_id
@@ -1319,6 +1378,26 @@ fn next_mesh_id() -> MeshId {
     MeshId(NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
+/// The shift when `transform` and `base` differ **only** in their translation, i.e. one
+/// is the other moved: `transform = translate(shift) * base`.
+///
+/// A null for any rotation or scale, so a caller that needs an exact box falls back to
+/// measuring. Matrices are row-major, so the linear part is everything but `m[3]`,
+/// `m[7]` and `m[11]`.
+fn translation_between(base: &Matrix4, transform: &Matrix4) -> Option<[f32; 3]> {
+    let (a, b) = (&base.m, &transform.m);
+    for index in [0, 1, 2, 4, 5, 6, 8, 9, 10] {
+        if (a[index] - b[index]).abs() > 1.0e-9 {
+            return None;
+        }
+    }
+    Some([
+        (b[3] - a[3]) as f32,
+        (b[7] - a[7]) as f32,
+        (b[11] - a[11]) as f32,
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1376,6 +1455,47 @@ mod tests {
         assert_eq!(queue.packets[0].state.color, item.surface_color());
         assert_eq!(queue.packets[1].topology, Topology::Lines);
         assert_eq!(queue.packets[1].state.color, item.edge_color());
+    }
+
+    /// The world box is cached against its transform: a move shifts it exactly (the
+    /// per-frame case of a drag), and a rotation re-measures, so the box stays the true
+    /// world box rather than the turned corners of the old one.
+    #[test]
+    fn the_world_bounds_follow_a_move_and_a_rotation() {
+        use ferrocad_types::Rotation;
+
+        let mut item = triangle_item();
+        assert_eq!(
+            item.world_bounds(),
+            Some(([0.0, 0.0, 0.0], [1.0, 1.0, 0.0])),
+            "the local box"
+        );
+
+        item.set_placement(Placement::new(
+            Vector3::new(2.0, 0.0, 0.0),
+            Rotation::identity(),
+        ));
+        assert_eq!(
+            item.world_bounds(),
+            Some(([2.0, 0.0, 0.0], [3.0, 1.0, 0.0])),
+            "a move shifts the cached box"
+        );
+
+        // A quarter turn about Z maps `(x, y)` to `(-y, x)`, so the local box
+        // `0..1 x 0..1` becomes `-1..0 x 0..1` before the placement's translation.
+        item.set_placement(Placement::new(
+            Vector3::new(2.0, 0.0, 0.0),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2),
+        ));
+        let (min, max) = item.world_bounds().expect("the triangle still has a box");
+        assert!(
+            (min[0] - 1.0).abs() < 1e-5 && (max[0] - 2.0).abs() < 1e-5,
+            "a rotation re-measures: {min:?} .. {max:?}"
+        );
+        assert!(
+            (min[1] - 0.0).abs() < 1e-5 && (max[1] - 1.0).abs() < 1e-5,
+            "the turned box's y is its old x: {min:?} .. {max:?}"
+        );
     }
 
     #[test]

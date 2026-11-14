@@ -448,7 +448,10 @@ block; `ProgramBlock` writes the whole block and `apply_parameter` maps the new
 names. The axis tail is `axis_y`/`axis_z` (linear RGB stem ink, X reuses
 `grid_color`), `axis_values = [length, width, opacity, ghost_alpha]` and
 `axis_flags = [origin, labels, 0, 0]`. Style changes take part in the program
-fingerprint, so changing the axis look recreates the program buffer and pipeline.
+fingerprint, so changing the axis look rewrites the program buffer; the *pipeline* is
+keyed on the program's identity (source and geometry mode) instead, so a parameter that
+changes per frame — the stage AABB the badges are placed from, under a drag — costs a
+buffer write rather than a shader recompile.
 
 **Workplane extension (host-provided, 2026-10-29).** The `Frame` block grows from 160 to
 256 B with a tail the *viewport* writes; it is not a `Program` parameter, and not a

@@ -303,8 +303,9 @@ pub fn group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 /// pipelines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProgramKey {
-    /// The program's content fingerprint ([`ShaderProgram::hash`]), which already
-    /// includes the geometry mode.
+    /// The program's identity ([`ShaderProgram::identity`]): its source and geometry mode,
+    /// which is all the pipeline is built from. The parameters are **not** part of it, so
+    /// a value that follows the user does not recompile the shader.
     pub program: u64,
     /// Whether the program draws the packet's mesh (`true`) or the ABI placeholder.
     pub geometry: bool,
@@ -338,7 +339,7 @@ impl ProgramKey {
         color_format: wgpu::TextureFormat,
     ) -> Self {
         Self {
-            program: program.hash(),
+            program: program.identity(),
             geometry: program.geometry(),
             topology,
             depth_compare: compare_function(depth.effective_compare()),
@@ -403,10 +404,15 @@ pub struct ProgramPipeline {
     frame_capacity: u32,
     /// The zeroed group 2 bound by every ordinary scene draw.
     default_group: wgpu::BindGroup,
-    /// A program buffer and its group, keyed on the program fingerprint. Invalidated
-    /// when the frame buffer is reallocated (the group holds the old buffer).
+    /// A program buffer and its group, keyed on the program **identity**. The parameters
+    /// are rewritten in place whenever the content fingerprint changes, so a moving part
+    /// (the axis overlay's bounds) reaches the GPU without a new buffer, group or
+    /// pipeline. Invalidated when the frame buffer is reallocated (the group holds it).
     groups: HashMap<u64, wgpu::BindGroup>,
     program_buffers: HashMap<u64, wgpu::Buffer>,
+    /// The content fingerprint last written to each program buffer, so a parameter change
+    /// is uploaded once rather than every draw.
+    uploaded: HashMap<u64, u64>,
     /// The uniform buffers the default group binds.
     _zero_frame: wgpu::Buffer,
     _zero_program: wgpu::Buffer,
@@ -475,6 +481,7 @@ impl ProgramPipeline {
             default_group,
             groups: HashMap::new(),
             program_buffers: HashMap::new(),
+            uploaded: HashMap::new(),
             _zero_frame: zero_frame,
             _zero_program: zero_program,
             placeholder_vertices,
@@ -556,15 +563,20 @@ impl ProgramPipeline {
     }
 
     /// The `Program` buffer and bind group for `program`, creating them on first use.
+    ///
+    /// Keyed on the program identity: the buffer is created once and then rewritten in
+    /// place whenever the content fingerprint changes, which is how a parameter that
+    /// tracks the user (the stage AABB) reaches the GPU without churning pipelines.
     pub fn program_group(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         program: &ShaderProgram,
     ) -> &wgpu::BindGroup {
-        let hash = program.hash();
-        if !self.program_buffers.contains_key(&hash) {
-            crate::trace::program_buffer(hash);
+        let identity = program.identity();
+        let params = program.hash();
+        if !self.program_buffers.contains_key(&identity) {
+            crate::trace::program_buffer(identity);
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ferrocad program"),
                 size: PROGRAM_SIZE,
@@ -576,19 +588,27 @@ impl ProgramPipeline {
                 0,
                 bytemuck::bytes_of(&ProgramBlock::new(program.parameters())),
             );
-            self.program_buffers.insert(hash, buffer);
+            self.program_buffers.insert(identity, buffer);
+            self.uploaded.insert(identity, params);
+        } else if self.uploaded.get(&identity) != Some(&params) {
+            queue.write_buffer(
+                &self.program_buffers[&identity],
+                0,
+                bytemuck::bytes_of(&ProgramBlock::new(program.parameters())),
+            );
+            self.uploaded.insert(identity, params);
         }
-        if !self.groups.contains_key(&hash) {
+        if !self.groups.contains_key(&identity) {
             let group = bind_group(
                 device,
                 &self.group_layout,
                 &self.frames,
-                &self.program_buffers[&hash],
+                &self.program_buffers[&identity],
                 "ferrocad program",
             );
-            self.groups.insert(hash, group);
+            self.groups.insert(identity, group);
         }
-        &self.groups[&hash]
+        &self.groups[&identity]
     }
 
     /// The pipeline drawing `program` with `depth` and `topology`, creating it on first
@@ -976,7 +996,7 @@ mod tests {
         };
 
         let default = key(&DepthState::default());
-        assert_eq!(default.program, program.hash());
+        assert_eq!(default.program, program.identity());
         assert!(!default.geometry, "a plain program keeps the placeholder");
         assert_eq!(default.topology, wgpu::PrimitiveTopology::TriangleList);
         assert_eq!(default.depth_compare, wgpu::CompareFunction::Less);
@@ -984,6 +1004,24 @@ mod tests {
         assert_eq!(default.blend, wgpu::BlendState::ALPHA_BLENDING);
         assert_eq!(default.sample_count, 4);
         assert_eq!(default.color_format, format);
+
+        // A parameter change — the stage AABB following a drag — is not a new pipeline:
+        // the group-2 block is rewritten in place instead.
+        let mut moved = ProgramParameters::default();
+        moved.bounds_max = [4.0, 5.0, 6.0, 1.0];
+        let moved_program = program.clone().with_parameters(moved);
+        assert_ne!(moved_program.hash(), program.hash(), "the content changed");
+        assert_eq!(
+            ProgramKey::new(
+                &moved_program,
+                &DepthState::default(),
+                wgpu::PrimitiveTopology::TriangleList,
+                4,
+                format,
+            ),
+            default,
+            "but the pipeline key did not"
+        );
 
         // A disabled test collapses to Always; the write flag is independent.
         let no_test = key(&DepthState {
@@ -1023,14 +1061,26 @@ mod tests {
             "a different colour format is a different pipeline"
         );
 
-        // A retuned program is a different pipeline.
+        // A retuned program is the **same** pipeline: the parameters are a group-2 block,
+        // rewritten in place when they change, not part of the pipeline's key. That is
+        // what keeps a parameter that tracks the user (the stage AABB) from recompiling
+        // the shader every frame.
         let retuned = program.clone().with_parameters(ProgramParameters {
             base_spacing: 10.0,
             ..Default::default()
         });
-        let retuned_key =
-            ProgramKey::new(&retuned, &DepthState::default(), wgpu::PrimitiveTopology::TriangleList, 4, format);
-        assert_ne!(retuned_key.program, default.program);
+        assert_ne!(retuned.hash(), program.hash(), "the content changed");
+        assert_eq!(
+            ProgramKey::new(
+                &retuned,
+                &DepthState::default(),
+                wgpu::PrimitiveTopology::TriangleList,
+                4,
+                format,
+            ),
+            default,
+            "a parameter edit keeps the pipeline"
+        );
     }
 
     /// The same source used as a plain and as a geometry program must not share a

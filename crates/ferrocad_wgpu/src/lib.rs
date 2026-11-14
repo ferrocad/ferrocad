@@ -19,7 +19,8 @@
 //! - [`batch`] — uploading fresh geometry into GPU meshes.
 //! - [`pipeline`] — the WGSL render pipelines (opaque, transparent, lines, points).
 //! - [`program`] — drawing an authored shader program: group 2 (`Frame`/`Program`), the
-//!   pipeline cache keyed by program content and depth state, and the placeholder quad.
+//!   pipeline cache keyed by the program's identity and depth state, the parameter block
+//!   rewritten in place when it changes, and the placeholder quad.
 //! - [`uniforms`] — the dynamic-uniform buffer (per-frame globals + per-packet
 //!   state in one allocation).
 //! - [`pick`] — the g-buffer picking pass that maps a pixel back to a pick id.

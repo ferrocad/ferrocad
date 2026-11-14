@@ -2861,27 +2861,20 @@ impl<V: InventorView> InventorViewport<V> {
 
     /// The stage's world AABB, from its placed vertices.
     ///
-    /// O(vertices), so it runs with the queue rebuild (and with a transform-only patch
-    /// when a program is drawn, the same condition as the shadow pass). `None` is an
+    /// O(items) after the first measure: each item caches its world box against its
+    /// transform (see [`ShapeItem::world_bounds`]), so the per-frame re-measure a drag
+    /// needs is a transform of one box rather than a walk of every vertex. `None` is an
     /// empty stage.
-    fn measure_stage_bounds(&self) -> Option<([f32; 3], [f32; 3])> {
+    fn measure_stage_bounds(&mut self) -> Option<([f32; 3], [f32; 3])> {
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
-        for item in self.stage.items() {
-            let matrix = item.world_matrix();
-            for position in item.positions() {
-                let world = matrix.transform(&Vector3::new(
-                    f64::from(position[0]),
-                    f64::from(position[1]),
-                    f64::from(position[2]),
-                ));
-                let values = [world.x as f32, world.y as f32, world.z as f32];
-                for (axis, value) in values.iter().enumerate() {
-                    if value.is_finite() {
-                        min[axis] = min[axis].min(*value);
-                        max[axis] = max[axis].max(*value);
-                    }
-                }
+        for item in self.stage.items_mut() {
+            let Some((low, high)) = item.world_bounds() else {
+                continue;
+            };
+            for (axis, (low, high)) in low.iter().zip(high.iter()).enumerate() {
+                min[axis] = min[axis].min(*low);
+                max[axis] = max[axis].max(*high);
             }
         }
         (min[0].is_finite() && max[0].is_finite()).then_some((min, max))

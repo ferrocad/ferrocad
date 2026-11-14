@@ -270,17 +270,21 @@ pub fn apply_bounds(
 
 /// A resolved shader program: inline WGSL plus the fixed-ABI parameters.
 ///
-/// A program is compared and hashed by its **content fingerprint** (source bytes,
-/// parameters and geometry mode), never by the full source or by pointer identity. The
-/// fingerprint is a 64-bit FNV-1a digest, which is what a pipeline cache keys on; two
-/// scene nodes that build the same program therefore share a cache entry, while a
-/// one-byte edit misses. The name is descriptive only and does not participate in
-/// equality.
+/// Two fingerprints come out of it, for two different questions. The
+/// [`identity`](Self::identity) is the source and the geometry mode — all a pipeline is
+/// built from — and is what a **pipeline cache** keys on. The [`hash`](Self::hash) adds
+/// the parameters, so a **parameter upload** knows when the group-2 block changed. Keeping
+/// them apart is what lets a parameter that follows the user (the stage AABB under a drag)
+/// reach the GPU every frame without recompiling the shader every frame.
+///
+/// `PartialEq` is the content fingerprint: two scene nodes that build the same program
+/// share everything, while a one-byte edit misses. The name is descriptive only and does
+/// not participate in equality.
 ///
 /// A **plain** program ignores the packet's geometry and draws the fixed ABI's
 /// placeholder quad; a **geometry** program (see [`with_geometry`](Self::with_geometry))
 /// draws the packet's own mesh with its position/normal/uv/colour vertex attributes.
-/// The mode is part of the fingerprint because the two need different vertex state and
+/// The mode is part of both fingerprints because the two need different vertex state and
 /// therefore different pipelines.
 #[derive(Clone, Debug)]
 pub struct ShaderProgram {
@@ -376,9 +380,23 @@ impl ShaderProgram {
         self.geometry
     }
 
-    /// The stable content fingerprint a pipeline cache keys on.
+    /// The content fingerprint: source, parameters and geometry mode.
+    ///
+    /// This answers "did the parameters change", which is when the fixed-ABI block has to
+    /// be written again. It is deliberately **not** the pipeline cache key: a parameter
+    /// that changes per frame would then mint a pipeline per frame.
     pub fn hash(&self) -> u64 {
         self.hash
+    }
+
+    /// The program's identity: its source and geometry mode, without the parameters.
+    ///
+    /// All a pipeline is built from, so it is what a pipeline cache keys on and what a
+    /// program's group-2 resources are allocated once per. The axis overlay's stage AABB
+    /// moves with the part, so its content fingerprint changes on every frame of a drag;
+    /// its identity does not.
+    pub fn identity(&self) -> u64 {
+        fingerprint(&self.source, &ProgramParameters::default(), self.geometry)
     }
 }
 
@@ -448,6 +466,21 @@ fn fingerprint(source: &str, parameters: &ProgramParameters, geometry: bool) -> 
         parameters.axis_ghost_alpha,
         parameters.axis_origin,
         parameters.axis_labels,
+    ] {
+        write(&value.to_bits().to_le_bytes());
+    }
+    // The stage AABB follows the part, so it is part of the **content** fingerprint —
+    // that is what makes the group-2 block be written again when the part moves. It is
+    // not part of the pipeline identity, which is why a drag does not recompile anything.
+    for value in [
+        parameters.bounds_min[0],
+        parameters.bounds_min[1],
+        parameters.bounds_min[2],
+        parameters.bounds_min[3],
+        parameters.bounds_max[0],
+        parameters.bounds_max[1],
+        parameters.bounds_max[2],
+        parameters.bounds_max[3],
     ] {
         write(&value.to_bits().to_le_bytes());
     }
@@ -611,6 +644,27 @@ impl Default for StateSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pipeline_identity_ignores_the_parameters() {
+        let plain = ShaderProgram::new("axis", "@fragment fn fs_main() {}");
+        let mut moved = ProgramParameters::default();
+        moved.bounds_min = [-1.0, -2.0, -3.0, 1.0];
+        moved.bounds_max = [4.0, 5.0, 6.0, 1.0];
+        let dragged = plain.clone().with_parameters(moved);
+
+        assert_ne!(plain.hash(), dragged.hash(), "the content changed");
+        assert_eq!(
+            plain.identity(),
+            dragged.identity(),
+            "but the pipeline did not: the AABB moves with the part"
+        );
+
+        let edited = ShaderProgram::new("axis", "@fragment fn fs_main() { }");
+        assert_ne!(plain.identity(), edited.identity(), "a source edit is a new pipeline");
+        let geometry = plain.clone().with_geometry();
+        assert_ne!(plain.identity(), geometry.identity(), "so is the geometry mode");
+    }
 
     #[test]
     fn program_identity_is_the_content_fingerprint() {

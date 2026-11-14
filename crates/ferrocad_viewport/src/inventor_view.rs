@@ -4434,6 +4434,31 @@ impl<V: InventorView> InventorViewport<V> {
             .pending_commit()
     }
 
+    /// Give the manipulator `id` a **hard** range measured outside it (the kernel's).
+    ///
+    /// The manipulator clamps its value and rebuilds its preview; the host then re-reads
+    /// the commit with [`manipulator_commit`](Self::manipulator_commit), since a held
+    /// value may have moved into the new range. Returns whether anything changed.
+    pub fn set_manipulator_value_bounds(
+        &mut self,
+        id: &str,
+        min: Option<f64>,
+        max: Option<f64>,
+    ) -> bool {
+        let Some(manipulator) = self
+            .manipulators
+            .iter_mut()
+            .find(|manipulator| manipulator.id() == id)
+        else {
+            return false;
+        };
+        if !manipulator.set_value_bounds(min, max) {
+            return false;
+        }
+        self.rebuild_manipulator_queue();
+        true
+    }
+
     /// The numeric readout the viewport would show, if the style allows one.
     ///
     /// The render path asks the two helpers separately (it positions two pills); this is

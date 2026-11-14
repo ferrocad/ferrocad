@@ -191,6 +191,29 @@ impl Default for ApplyResult {
     }
 }
 
+/// The value range a manipulator's operation survives, as the **document half** measured
+/// it.
+///
+/// The host derives a conservative range from the stage's tessellation on its own; this
+/// is the answer from whatever owns the kernel, so it can be the real limit (`a 5 mm
+/// fillet fails on this edge`) instead of a bound that only says nothing larger could
+/// possibly fit. `min`/`max` are **hard**, with the same meaning as `ferrocad_stage`'s
+/// `NumericField`: the host clamps the value to them.
+///
+/// A half that cannot answer returns `Ok(None)` — not an error and not a made-up range.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct ManipulatorBounds {
+    /// The smallest value the kernel completed, when it found a floor.
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// The largest value the kernel completed, when it found a ceiling.
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// How the value was found (`bisection over 6 trials`), for the record and the log.
+    #[serde(default)]
+    pub note: String,
+}
+
 /// The grid's active provider and spacing, for the header popover (T4).
 ///
 /// The shape is closed: with no provider registered, `backend`/`label`/`spacing`

@@ -22,9 +22,9 @@ here.
 | [`FreeCAD.Units`](FreeCAD.Units.md) | 9 | Quantity parsing, units and number formatting. |
 | [`FreeCAD.Console`](FreeCAD.Console.md) | 5 | The console sink a workbench prints through. |
 | [`FreeCADGui`](FreeCADGui.md) | 23 | Upstream-compatible GUI surface: commands, selection and dialogs. |
-| [`FerroCAD`](FerroCAD.md) | 11 | FerroCAD-only surface: the semantic grid and the module hooks. |
+| [`FerroCAD`](FerroCAD.md) | 13 | FerroCAD-only surface: the semantic grid and the module hooks. |
 | [`FerroCADGui`](FerroCADGui.md) | 25 | FerroCAD-only GUI surface: providers, settings, overlays and view state. |
-| [`ferrocad_shell`](ferrocad_shell.md) | 40 | The host bridge the shell calls. Not upstream API: it is how FerroCAD's window (and `tools/userdocs.py`) drive the facade. |
+| [`ferrocad_shell`](ferrocad_shell.md) | 41 | The host bridge the shell calls. Not upstream API: it is how FerroCAD's window (and `tools/userdocs.py`) drive the facade. |
 
 ## Scope and honesty
 

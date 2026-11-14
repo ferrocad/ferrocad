@@ -290,6 +290,94 @@ FerroCAD.register_display_provider(_display_mesh, default=True)
 FerroCAD.register_interaction_provider(_interaction)
 
 
+#: The smallest radius the scrubber holds; the probe's floor.
+_BOUNDS_FLOOR = 1e-3
+#: Halvings once the bracket is found: about a percent of it, finer than a drag can aim.
+_BOUNDS_TRIALS = 6
+
+
+def _largest_fillet(shape, edge, floor, guess, cap):
+    """The largest radius ``shape.makeFillet`` completes on ``edge``, or ``None``.
+
+    ``floor`` is assumed (and verified) to fit. The search grows from ``guess``,
+    doubling until something fails, then bisects; past ``cap`` it gives up and reports
+    that no ceiling was found rather than inventing one. Every step is a real kernel call
+    on the current shape: the document is never touched.
+    """
+
+    def fits(radius):
+        try:
+            filleted = shape.makeFillet(radius, [edge])
+        except Exception:  # noqa: BLE001 - a trial that fails is the answer
+            return False
+        # OCC can return an invalid solid without raising; that is a failure too.
+        try:
+            return bool(filleted.isValid())
+        except Exception:  # noqa: BLE001 - a shape without the check is trusted
+            return True
+
+    if not fits(floor):
+        return None
+    if fits(guess):
+        low = guess
+        high = guess * 2.0
+        while high <= cap and fits(high):
+            low, high = high, high * 2.0
+        if high > cap:
+            # Nothing inside the body's own range failed: there is no ceiling to claim.
+            return None
+    else:
+        low, high = floor, guess
+    for _ in range(_BOUNDS_TRIALS):
+        mid = 0.5 * (low + high)
+        if fits(mid):
+            low = mid
+        else:
+            high = mid
+    return low
+
+
+def _fillet_bounds(obj, element, manipulator):
+    """The radius range this edge's fillet actually survives, by kernel bisection.
+
+    The shell can prove only the floor from the tessellation — half a body's extent is
+    *not* a ceiling, because a single edge of a cube takes a fillet larger than that.
+    This asks the kernel instead: ``Shape.makeFillet`` for a series of radii on the
+    current shape, so the ceiling is the value that stops working.
+
+    It runs once per arming (the host caches the answer until the shape changes). The
+    factory arms fillets only; a chamfer manipulator would need its own probe.
+    """
+    if manipulator != "dress_up" or not element.startswith("Edge"):
+        return None
+    shape = getattr(obj, "Shape", None)
+    if shape is None:
+        return None
+    try:
+        edge = shape.getElement(element)
+        box = shape.BoundBox
+    except Exception:
+        return None
+    lengths = (box.XLength, box.YLength, box.ZLength)
+    if min(lengths) <= 0.0:
+        return None
+    # A working guess and a cap of twice the body's largest extent: past that the feature
+    # is meaningless, so "no failure found" is the honest answer.
+    guess = max(min(lengths) / 8.0, _BOUNDS_FLOOR * 2.0)
+    cap = 2.0 * max(lengths)
+    top = _largest_fillet(shape, edge, _BOUNDS_FLOOR, guess, cap)
+    if top is None:
+        return None
+    return {
+        "min": _BOUNDS_FLOOR,
+        "max": top,
+        "note": "kernel bisection (%d halvings)" % _BOUNDS_TRIALS,
+    }
+
+
+FerroCAD.register_bounds_provider(_fillet_bounds)
+
+
 #: The parametric edition's appearance preset (declared, not yet materialised).
 #:
 #: Parametric is the neutral edition: no workbench supplies its own surface colour,

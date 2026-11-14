@@ -506,6 +506,16 @@ pub struct Shell {
     /// [`manipulator_form`](crate::shell::manipulator_form)), so a distance or a radius can
     /// be typed instead of dragged. `None` when the hand hosts no numeric manipulator.
     manipulator_form: Option<manipulator_form::ManipulatorForm>,
+    /// Kernel-backed value ranges for the armed manipulator, by
+    /// `(object, element, manipulator)`.
+    ///
+    /// The stage gives a conservative range on its own; this is the document half's
+    /// answer, which can be the value that actually fails. `None` is cached too — "asked,
+    /// and it had no opinion" — so a probe runs once per arming rather than per frame. The
+    /// map is cleared when the shape changes.
+    bounds_cache: HashMap<(String, String, String), Option<crate::types::ManipulatorBounds>>,
+    /// The key a probe is owed for. `Some` between the request and the answer.
+    bounds_pending: Option<(String, String, String)>,
     /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
     ///
     /// A workplane offset is **transient viewport state** with no document object and
@@ -990,6 +1000,8 @@ impl Shell {
             session: None,
             pending_interaction: None,
             manipulator_form: None,
+            bounds_cache: HashMap::new(),
+            bounds_pending: None,
             workplane_session: None,
             hud_rect: None,
             hud_lock: None,
@@ -1856,6 +1868,9 @@ impl Render for Shell {
         // that set, so the row is reconciled here, where it is also painted.
         self.ensure_manipulator_form(cx);
         self.sync_manipulator_form(window, cx);
+        // The kernel's range, if the document half has one: a cache hit applies here, a
+        // miss schedules the probe for after this paint.
+        self.sync_manipulator_bounds(cx);
         let model = self.snapshot();
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);

@@ -328,6 +328,23 @@ pub fn apply_interaction(
     })
 }
 
+/// Ask the document half for the value range a manipulator's operation survives.
+///
+/// `Ok(None)` is "no opinion" — a Rust-only backend, or a workbench with no provider — and
+/// the caller keeps the range it derived from the stage. An `Err` is the probe itself
+/// failing, which is reported and not retried until the shape changes.
+pub fn manipulator_bounds(
+    cx: &mut App,
+    object: &str,
+    element: Option<&str>,
+    manipulator: &str,
+) -> Result<Option<crate::types::ManipulatorBounds>, String> {
+    with_backend_mut(cx, |backend| {
+        backend.manipulator_bounds(object, element, manipulator)
+    })
+    .unwrap_or(Ok(None))
+}
+
 pub fn grid_summary(cx: &App) -> Result<GridSummary, String> {
     with_backend(cx, |backend| backend.grid_summary()).unwrap_or_else(|| Ok(GridSummary::default()))
 }

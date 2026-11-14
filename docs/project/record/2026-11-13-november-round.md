@@ -228,17 +228,17 @@ dragged.
 
 ### 5.4 Bounds the geometry can actually vouch for
 
-"Min/max that won't break the model" has two halves. This slice is the honest half that
-needs no kernel; the authoritative half is recorded as still open.
+"Min/max that won't break the model" has two halves. This slice is the half that needs
+no kernel; the kernel half followed in §5.5.
 
 - **`NumericField` grew `min`/`max`/`hint`**, and the distinction is the feature: `min` and
   `max` are **hard** (the manipulator clamps to them, on a drag or a typed value, and the
   row prints the range), while `hint` is a **note** that must not clamp.
-- **The dress-up scrub gets a conservative ceiling.** `dress_up_ceiling` is half the body's
-  smallest extent — no larger radius can fit anywhere on the body — applied by the factory
-  through the existing `set_bounds(MIN_RADIUS, ceiling)`, so the drag and a typed value are
-  bounded by the same rule. It is documented as a guard, not the kernel's exact limit for
-  an edge, and a flat or point-like mesh yields no ceiling rather than a fabricated one.
+- **The dress-up scrub was given a conservative ceiling — since removed.**
+  `dress_up_ceiling` was half the body's smallest extent, applied by the factory through
+  `set_bounds(MIN_RADIUS, ceiling)`. It was wrong (see §5.5): a single edge takes a fillet
+  far past half the thin extent, so the stage now publishes only the floor it can prove
+  and the ceiling comes from the kernel.
 - **A push/pull distance publishes no hard bound, on purpose.** An extrusion is unbounded
   and a cut deeper than the body is a through-cut — still a solid. What the stem can
   measure is the body's thickness **behind** the face, which is published as the hint
@@ -250,15 +250,59 @@ needs no kernel; the authoritative half is recorded as still open.
   caret is never moved mid-word. The scrubber publishes three decimals, because its floor
   is `0.001` and two would print the bound as `0.00`.
 - **Covered** by `the_numeric_twin_reports_the_body_behind_the_face`,
-  `the_scrubber_publishes_its_bounds_and_a_conservative_ceiling` and the shell's
+  `the_scrubber_publishes_its_floor_and_takes_the_kernel_ceiling` and the shell's
   `the_manipulator_numeric_row_types_a_held_value` (range chip, clamp, rewrite).
   `ferrocad_part_gui` is **39 passed**; `ferrocad_viewport` **235** and
   `ferrocad_shell_core` **286** stay green, as do both edition round-trips.
 
-**Still open (item 4, second half).** The kernel-backed range — a query or trial operation
-per `(object, element, operation)`, debounced off the selection, cached against the shape —
-is the part that can say a specific value will fail rather than that it cannot possibly
-fit. It needs a new backend seam and an async result path into the armed manipulator.
+**The second half (§5.5) landed the same day**, and building it exposed the ceiling above
+as a false bound.
+
+### 5.5 The kernel-backed range, and a ceiling that was wrong
+
+The "second half" of item 4 is built, and building it proved the first half's ceiling was
+a mistake.
+
+- **`dress_up_ceiling` is gone.** Half the body's smallest extent is not a bound on one
+  edge's fillet: a 10 mm cube's `Edge1` completes at ~9.92 mm, and a `30×30×3` box takes
+  29.625 mm on that edge — both far past half the thin extent. The stage still publishes the
+  floor it can prove (`MIN_RADIUS`) and nothing more; the factory arms with
+  `set_bounds(MIN_RADIUS, None)`.
+- **The kernel answers the ceiling.** `ScriptHost::manipulator_bounds(object, element,
+  manipulator)` is a defaulted seam with four answers: `None` (no opinion), `Ok(None)`
+  (asked, no bound), `Ok(Some(bounds))` (`{min, max, note}`), and `Err` (a provider failed;
+  reported once and treated as no opinion). `HostChain` routes it with `every().find_map(…)`,
+  so the first host with an answer wins.
+- **The edition's provider is a real search.** `ferrocad_parametric` registers
+  `FerroCAD.register_bounds_provider`, which asks providers in registration order and skips
+  a raising one. The fillet probe grows a guess (a body extent / 8) by doubling until
+  `Shape.makeFillet` fails, then bisects six times. A result that comes back **invalid
+  without raising** counts as a failure, because OCC returns those. The floor is `1e-3`, the
+  cap is twice the body's largest extent, and if nothing fails below the cap the probe
+  reports **no ceiling** rather than inventing one.
+- **The probe is deferred, then cached.** `sync_manipulator_bounds` runs after the numeric
+  row syncs; a request waits one executor tick plus 120 ms — so a hand switch, a
+  re-selection or a commit collapses into one probe — and then runs on the **UI thread**,
+  because the document half is not safe to enter from a worker. The answer is cached per
+  `(object, element, manipulator)`, **including “no opinion”**, and cleared on any document
+  edit or replacement.
+- **A late answer cannot rewrite the wrong handle.** It is dropped if the armed handle
+  changed; otherwise the range goes into the viewport, a held commit the range clamped is
+  re-read so `✓` applies the allowed value, and only a field whose text disagrees is
+  rewritten.
+- **What stays unbounded.** A push/pull distance: the provider declares no opinion for it,
+  because an extrusion has no ceiling and a deeper cut is a through-cut. The editable
+  surface's own floor remains the only hard minimum.
+- **Measured.** `ferrocad_parametric --test manipulator_bounds` **2 passed** (the reported
+  max succeeds and 1.25× it fails; a push/pull question gets no bound), the provider
+  registry `tests/test_manipulator_bounds.py` **5 passed**, and the shell test installs a
+  provider returning `max: 4.0` and asserts the row, the re-held commit (`4.0`) and the
+  rewritten text. `ferrocad_shell_core` **286**, `ferrocad_viewport` **235**,
+  `ferrocad_part_gui` **39**, and both edition round-trips green.
+
+Two workbench tests that assumed `bootstrap(name)` names the document were made
+name-agnostic — the startup asset names it — which restores the extension-set contract
+check (`run_tests.py --check`: 49 modules, 42 base and 7 workbenches).
 
 ## 4. Where the detail lives
 

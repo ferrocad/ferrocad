@@ -30,6 +30,7 @@ _Every entry point returns a JSON string._
 | `interaction(object_name: str, manipulator: str, action: str, element: str, values_json: str) -> str` | Apply a manipulator commit through the module that supports it. |
 | `load_workbench_sources(payload_json: str = '[]') -> str` | Load workbench scripts **from data**: a fetched mod pack, with no filesystem. |
 | `load_workbenches(dirs_json: str = '[]') -> str` | Best-effort workbench loading. |
+| `manipulator_bounds(payload_json: str) -> str` | The value range a workbench's kernel accepts for one manipulator, as JSON. |
 | `manipulator_specs(payload_json: str) -> str` | The handles the mods declare for the shell's current selection, as JSON. |
 | `model_tree() -> str` | Documents and their objects, for the inspector pane. |
 | `open_document(path: str) -> str` | Open a saved document and make it active (the ``--open`` path). |

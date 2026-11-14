@@ -1174,24 +1174,29 @@ body. Consequences the implementation has to keep:
 Covered by `the_stem_rides_the_ghost` (typed and dragged, plus the host `set_anchor`
 round-trip) and `a_drag_keeps_the_handle_with_the_pointer`.
 
-### Bounds: hard range and a geometry note
+### Bounds: hard range, a geometry note, and the kernel's answer
 
 `NumericField` carries three more things beyond the number, and the distinction between
 them is the point:
 
 - **`min`/`max` are hard.** The manipulator clamps to them, on a drag and on a typed
-  value, and the row prints the range beside the field. The dress-up scrub already had
-  the machinery: `set_bounds(MIN_RADIUS, ceiling)` now runs in the factory, with
-  `dress_up_ceiling` = **half the body's smallest extent** — a conservative ceiling, since
-  no radius larger than that can fit anywhere on the body. It is a guard against an absurd
-  number, not the kernel's exact limit for a particular edge, and the docs say so. A flat
-  or point-like mesh yields no ceiling rather than a fabricated one.
+  value, and the row prints the range beside the field. `Manipulator::set_value_bounds`
+  is a defaulted `false` (a handle that takes no range says so), adopted by
+  `DressUpScrubber`; `ferrocad_viewport::set_manipulator_value_bounds` is how the host
+  publishes a range into an armed handle.
 - **A push/pull distance has no hard bound.** An extrusion is unbounded by construction,
   and a cut deeper than the body is a through-cut — still a solid. So the stem publishes
   `min: None, max: None` and does **not** pretend otherwise.
 - **`hint` is not a bound.** The stem adds one note it can measure honestly: the body's
   thickness **behind** the face (`body 8.00 mm behind this face`), which says where a pocket
   stops being a pocket. The value stays legal past it, so the row must not clamp to it.
+
+The stage sets the floor it can prove — `MIN_RADIUS` for the scrubber — and leaves the
+ceiling to the kernel. It does not invent one: an earlier `dress_up_ceiling` (half the
+body's smallest extent) was **removed** because it is wrong. A 10 mm cube's `Edge1`
+fillet completes at ~9.92 mm, and a `30×30×3` box takes 29.625 mm on that edge, both far
+past half the thin extent. The tessellation says where the surface is, not where a fillet
+runs out; only the kernel knows that.
 
 When a hard bound actually clamps a typed value, the shell rewrites the focused field to
 what the manipulator took and the status line already names the accepted number, so the
@@ -1201,16 +1206,68 @@ rewriting `7.5` to `7.50` mid-word would fight the caret.
 The scrubber publishes three decimals because its floor is `MIN_RADIUS` (`0.001`); two
 decimals would print the bound as `0.00`, which reads as nothing.
 
+#### The seam: a host may know a sharper range
+
+`ScriptHost::manipulator_bounds(object, element, manipulator)` returns
+`Option<Result<Option<ManipulatorBounds>, String>>`, and the four answers are distinct:
+
+- `None` — this host has no opinion (the default, so a host that does not implement the
+  method costs nothing);
+- `Ok(None)` — it asked and there is no bound;
+- `Ok(Some(bounds))` — `{min, max, note}`;
+- `Err(message)` — a provider failed; the shell reports it once in the console and treats
+  it as no opinion.
+
+`HostChain` routes the question with `every().find_map(...)`, so the first host with an
+answer wins and the Python host is asked only if an earlier one stayed silent.
+
+The Python half is a registry, not a single hook: `FerroCAD.register_bounds_provider`
+takes `(obj, element, manipulator) -> dict | None`, and `FerroCAD.manipulator_bounds`
+asks providers in registration order until one answers, reporting and skipping a provider
+that raises. `ferrocad_shell.manipulator_bounds(payload_json)` is the module function the
+Rust host calls; it resolves `object` by name and returns `null` when nobody owns the
+question.
+
+`ferrocad_parametric` owns the fillet probe, and it is a real kernel search on the
+current shape, never a guess. `_largest_fillet` grows a guess (a body extent / 8) by
+doubling until `makeFillet` fails, then bisects `_BOUNDS_TRIALS = 6` times — about a
+percent of the bracket, finer than a drag can aim. Every step calls
+`shape.makeFillet(radius, [edge])` on the shape, and a result that comes back **invalid
+without raising** counts as a failure, because OCC does that. The floor is `_BOUNDS_FLOOR
+= 1e-3`; the cap is twice the body's largest extent, and if nothing fails below the cap
+the probe reports **no ceiling** rather than inventing one. It answers only for
+`manipulator == "dress_up"` and an `Edge*` element: a push/pull stays unbounded, and a
+chamfer would need its own probe.
+
+#### The probe belongs to the paint, once per arming
+
+`shell::sync_manipulator_bounds` runs in `Render::render`, after the numeric row is
+synced. It keys the answer on `(object, element, manipulator)` and caches **even
+`Ok(None)`**, so a host with nothing to say is asked once, not once per frame. A request
+is deferred one executor tick plus 120 ms, so a burst of armings (a hand switch, a
+re-selection, a commit) collapses into one probe and the paint that armed the handle
+never pays for it.
+
+The probe itself runs on the **UI thread**: it enters the document half, which is not
+safe to call from a worker, so the deferral is a debounce, not an off-thread query. An
+answer that lands after the user re-armed on another handle is dropped. Otherwise the
+range goes into the viewport, a held commit the range clamped is re-read (so `✓` applies
+what is actually allowed), and any field whose text no longer matches is rewritten. The
+cache is cleared on every document edit and on a document replacement.
+
 Tests: `the_numeric_twin_reports_the_body_behind_the_face`,
-`the_scrubber_publishes_its_bounds_and_a_conservative_ceiling`, and the shell's
-`the_manipulator_numeric_row_types_a_held_value` (a past-the-range value is clamped and
-the field rewritten to `10.00`).
+`the_scrubber_publishes_its_floor_and_takes_the_kernel_ceiling` (the stage's floor, no
+stage ceiling, and a host range that is enforced rather than printed), the shell's
+`the_manipulator_numeric_row_types_a_held_value` (a provider's `max: 4.0` reaches the
+row, clamps the commit and rewrites the field), the edition's
+`the_edition_bisects_the_radius_the_kernel_completes` (the reported max succeeds and 1.25×
+it fails) and `a_push_pull_question_gets_no_kernel_bound`, plus the registry tests in
+`tests/test_manipulator_bounds.py`.
 
 ### Still open
 
-The **authoritative** bounds — a kernel query (or a trial operation on a copy) per
-`(object, element, operation)`, debounced off the selection and cached against the shape —
-are not built. The hard bounds above are geometric and conservative: they keep a value
-from leaving the body or exceeding half its thinnest extent, and they never claim to be the
-kernel's exact limit. Re-opening an existing `Part::Extrusion`/`Part::Fillet` as a live
-handle is also still open.
+Re-opening an existing `Part::Extrusion`/`Part::Fillet` as a live handle — seeding the
+row from the feature's own value and committing the edit in one transaction, keyed on
+element→feature provenance — is still open. The probe is also asked once per arming, not
+re-asked mid-drag; a shape change during an edit clears the cache rather than growing a
+live range.

@@ -130,6 +130,9 @@ impl Shell {
             // discarded like `Esc` rather than written behind the user's back.
             self.pending_interaction = None;
         }
+        // A range measured on the outgoing document's shape says nothing about the new one.
+        self.bounds_cache.clear();
+        self.bounds_pending = None;
         self.open_popover = None;
         self.row_popup = None;
         let _ = self.close_settings_card(cx);

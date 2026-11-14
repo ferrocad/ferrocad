@@ -26,8 +26,8 @@ use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::settings::SettingValue;
 use ferrocad_shell_api::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
-    GridSummary, OpenedDocument, PropRow, ProviderFeature, ProviderSkin, SelectionRequest,
-    SetResult, WorkbenchReport,
+    GridSummary, ManipulatorBounds, OpenedDocument, PropRow, ProviderFeature, ProviderSkin,
+    SelectionRequest, SetResult, WorkbenchReport,
 };
 use ferrocad_shell_api::view::ViewState;
 use ferrocad_stage::{InteractionCommit, Tool};
@@ -570,6 +570,29 @@ impl<R: PythonRuntime> ScriptHost for PythonHost<R> {
         self.json::<Envelope>("manipulator_specs", &[&payload])
             .ok()
             .map(|envelope| envelope.specs)
+    }
+
+    /// The value range the workbench's kernel accepts for one manipulator.
+    ///
+    /// The script asks every `FerroCAD.register_bounds_provider` and answers `null` when
+    /// none owns the element — the same "no opinion" as this method's `None`, so the
+    /// host keeps the range it derived from the stage.
+    fn manipulator_bounds(
+        &self,
+        object: &str,
+        element: Option<&str>,
+        manipulator: &str,
+    ) -> Option<Result<Option<ManipulatorBounds>, String>> {
+        if !self.runtime.contract().interaction {
+            return None;
+        }
+        let payload = serde_json::json!({
+            "object": object,
+            "element": element,
+            "manipulator": manipulator,
+        })
+        .to_string();
+        Some(self.json::<Option<ManipulatorBounds>>("manipulator_bounds", &[&payload]))
     }
 
     /// A dialog a workbench opened, by the token it handed the shell.

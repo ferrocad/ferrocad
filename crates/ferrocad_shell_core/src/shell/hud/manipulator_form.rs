@@ -240,6 +240,132 @@ impl Shell {
         cx.notify();
         true
     }
+
+    /// The primary selection's object and element, which is what a probe is about.
+    ///
+    /// The manipulator knows only the stage entity; the document half knows only names,
+    /// so this is the one place the two meet. A whole-body selection has no element, and
+    /// the probe is about the object's own shape.
+    pub(in crate::shell) fn armed_element(&self) -> Option<(String, String)> {
+        let model = self.model.lock().unwrap();
+        let primary = model.selection.last()?;
+        Some((
+            primary.object.clone(),
+            primary.elements.first().cloned().unwrap_or_default(),
+        ))
+    }
+
+    /// Ask for the kernel-backed range of the armed manipulator, at most once per key.
+    ///
+    /// The stage's own range is already on the fields; this is the sharper answer. The
+    /// request is **deferred** one executor tick and a short delay, so a burst of armings
+    /// (a hand switch, a re-selection, a commit) collapses into one kernel probe, and the
+    /// paint that armed the handle never pays for it. The probe itself runs on the UI
+    /// thread — it calls into the document half, which is not safe to enter from a worker
+    /// — and the answer is cached until the shape changes.
+    pub(in crate::shell) fn sync_manipulator_bounds(&mut self, cx: &mut Context<Self>) {
+        let Some((id, _)) = self.armed_numeric_fields(cx) else {
+            return;
+        };
+        let Some((object, element)) = self.armed_element() else {
+            return;
+        };
+        let key = (object, element, id);
+        if self.bounds_cache.contains_key(&key) {
+            if let Some(bounds) = self.bounds_cache.get(&key).cloned().flatten() {
+                self.apply_manipulator_bounds(&bounds, cx);
+            }
+            return;
+        }
+        if self.bounds_pending.as_ref() == Some(&key) {
+            return;
+        }
+        self.bounds_pending = Some(key);
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |shell, cx| {
+            executor
+                .timer(std::time::Duration::from_millis(120))
+                .await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.resolve_manipulator_bounds(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Run the probe the pending request names (the deferred task's body).
+    ///
+    /// Separate from the scheduling so a test — or a host that wants the answer sooner —
+    /// can run it directly. Returns whether a probe ran.
+    pub(in crate::shell) fn resolve_manipulator_bounds(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(key) = self.bounds_pending.take() else {
+            return false;
+        };
+        let (object, element, manipulator) = key.clone();
+        let element = (!element.is_empty()).then_some(element.as_str());
+        let answer = crate::app::manipulator_bounds(cx, &object, element, &manipulator);
+        let bounds = match answer {
+            Ok(bounds) => bounds,
+            Err(error) => {
+                // The probe failed (a broken provider). Cache the "no opinion" so it is
+                // not retried every frame, but say why once in the console.
+                self.console_line(format!("kernel bounds: {error}"), cx);
+                None
+            }
+        };
+        self.bounds_cache.insert(key, bounds.clone());
+        if let Some(bounds) = bounds {
+            self.apply_manipulator_bounds(&bounds, cx);
+        }
+        true
+    }
+
+    /// Push a hard range into the armed manipulator and refresh what it implies.
+    ///
+    /// The answer is only for the handle it was asked about: a probe that lands after the
+    /// user re-armed on another element is dropped. A clamped held commit is re-read, so
+    /// `✓` applies the value the range actually allows.
+    fn apply_manipulator_bounds(
+        &mut self,
+        bounds: &crate::types::ManipulatorBounds,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((id, _)) = self.armed_numeric_fields(cx) else {
+            return;
+        };
+        let Some(viewport) = self.viewport.clone() else {
+            return;
+        };
+        let changed = viewport.update(cx, |viewport, _cx| {
+            viewport.set_manipulator_value_bounds(&id, bounds.min, bounds.max)
+        });
+        if !changed {
+            return;
+        }
+        // A field whose text no longer matches the value (the range clamped it) is
+        // rewritten: the probe is authoritative, and the row must not disagree with the
+        // ghost. A field the user is typing into keeps its text unless it was clamped.
+        if let Some(fields) = viewport.read(cx).manipulator_fields(&id) {
+            if let Some(form) = self.manipulator_form.as_ref() {
+                for (input, field) in form.inputs.iter().zip(fields.iter()) {
+                    let typed = input.read(cx).text().trim().parse::<f64>().ok();
+                    let differs = typed.map_or(true, |typed| (typed - field.value).abs() > 1e-9);
+                    if differs {
+                        let text = field_text(field);
+                        input.update(cx, |input, cx| input.set_text(text, cx));
+                    }
+                }
+            }
+        }
+        if let Some(commit) = viewport.read(cx).manipulator_commit(&id) {
+            self.hold_interaction(commit, cx);
+        } else {
+            cx.notify();
+        }
+    }
 }
 
 /// The characters a numeric field accepts: a signed decimal, like the Move fields.

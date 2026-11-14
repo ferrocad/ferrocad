@@ -876,6 +876,17 @@ impl Manipulator for DressUpScrubber {
         DressUpScrubber::set_values(self, values)
     }
 
+    /// Take the kernel's range: it can be tighter than the geometric ceiling, and it can
+    /// raise the floor above the scrub's own minimum.
+    fn set_value_bounds(&mut self, min: Option<f64>, max: Option<f64>) -> bool {
+        let min = min.map_or(self.min, |min| min.max(MIN_RADIUS));
+        if self.min == min && self.max == max {
+            return false;
+        }
+        DressUpScrubber::set_bounds(self, min, max);
+        true
+    }
+
     fn pending_commit(&self) -> Option<InteractionCommit> {
         Some(self.change().into_commit())
     }
@@ -937,35 +948,12 @@ pub fn dress_up_scrubber_for(
         })
         .collect();
     let mut scrubber = DressUpScrubber::new(selection.object, mode, edge.clone(), points);
-    // A radius larger than half the body's smallest extent cannot fit anywhere on it, so
-    // it is a conservative ceiling, not the kernel's exact limit (a particular edge may
-    // allow much less). The row shows it and both the drag and a typed value respect it.
-    if let Some(ceiling) = stage.item(selection.object).and_then(dress_up_ceiling) {
-        scrubber.set_bounds(MIN_RADIUS, Some(ceiling));
-    }
+    // No ceiling from the tessellation: half the body's thinnest extent is not a bound
+    // (a single edge of a cube takes a fillet larger than that), and a bound that is not
+    // true is worse than none. The kernel answers the ceiling; until it does, only the
+    // scrub's own floor applies.
+    scrubber.set_bounds(MIN_RADIUS, None);
     Some(scrubber)
-}
-
-/// A conservative ceiling for a dress-up value: half the body's smallest extent.
-///
-/// No radius larger than this can fit anywhere on the body, so the value is a guard
-/// against an absurd typed or dragged number rather than the kernel's exact limit. `None`
-/// when the item has no usable extent (a flat or point-like mesh), so a degenerate
-/// fixture never gets a fabricated bound.
-pub fn dress_up_ceiling(item: &ShapeItem) -> Option<f64> {
-    let positions = item.positions();
-    let first = positions.first()?;
-    let (mut min, mut max) = (*first, *first);
-    for point in positions {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(point[axis]);
-            max[axis] = max[axis].max(point[axis]);
-        }
-    }
-    let smallest = (0..3)
-        .map(|axis| f64::from(max[axis]) - f64::from(min[axis]))
-        .fold(f64::INFINITY, f64::min);
-    (smallest.is_finite() && smallest > 1e-6).then(|| 0.5 * smallest)
 }
 
 /// The Part GUI's manipulator factory: an edge selection arms a fillet scrubber.
@@ -1535,29 +1523,32 @@ mod tests {
     }
 
     #[test]
-    fn the_scrubber_publishes_its_bounds_and_a_conservative_ceiling() {
+    fn the_scrubber_publishes_its_floor_and_takes_the_kernel_ceiling() {
         let stage = edged_box();
-        assert_eq!(
-            dress_up_ceiling(stage.item(7).expect("the item")),
-            Some(2.0),
-            "half the body's thinnest extent (4 mm)"
-        );
-
         let mut scrubber = dress_up_scrubber_for(
             &SelectionRef::element(7, "Edge1"),
             &stage,
             DressUpMode::Fillet,
         )
         .expect("a scrubber");
+
+        // The tessellation proves a floor and no ceiling: half the body's thinnest extent
+        // is not a bound, because a single edge of a cube takes a larger fillet than that.
         let fields = Manipulator::numeric_fields(&scrubber);
         assert_eq!(fields[0].min, Some(MIN_RADIUS));
-        assert_eq!(fields[0].max, Some(2.0));
+        assert_eq!(fields[0].max, None, "nothing in the stage proves a ceiling");
         assert_eq!(
             fields[0].decimals, 3,
             "the floor is 0.001, so two decimals could not print it"
         );
 
-        // The bound is enforced, not just printed: a typed value beyond it clamps.
+        // The kernel's answer adds the ceiling, and it is enforced, not just printed.
+        assert!(Manipulator::set_value_bounds(
+            &mut scrubber,
+            Some(MIN_RADIUS),
+            Some(2.0)
+        ));
+        assert_eq!(Manipulator::numeric_fields(&scrubber)[0].max, Some(2.0));
         assert!(Manipulator::set_values(&mut scrubber, &[50.0]));
         assert!((scrubber.value() - 2.0).abs() < 1e-12);
         assert_eq!(
@@ -1566,6 +1557,14 @@ mod tests {
                 .values,
             vec![2.0]
         );
+        assert!(
+            !Manipulator::set_value_bounds(&mut scrubber, Some(MIN_RADIUS), Some(2.0)),
+            "the same range is not a change"
+        );
+
+        // A floor the kernel measured that is above the scrub's own minimum is adopted.
+        assert!(Manipulator::set_value_bounds(&mut scrubber, Some(0.5), Some(2.0)));
+        assert_eq!(Manipulator::numeric_fields(&scrubber)[0].min, Some(0.5));
     }
 
     #[test]

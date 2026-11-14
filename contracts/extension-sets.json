@@ -39,6 +39,7 @@
       "test_gui_selection_object",
       "test_gui_selection_write",
       "test_gui_view_facade",
+      "test_manipulator_bounds",
       "test_manipulator_specs",
       "test_mod_providers",
       "test_mvp_workflow",

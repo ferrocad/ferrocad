@@ -651,11 +651,13 @@ fn surface_shell(
         eprintln!("no GPU adapter available; skipping triad-hierarchy test");
         return None;
     }
-    // The stage the shell would build from its display meshes: a two-face slab.
+    // The stage the shell would build from its display meshes: a two-face slab, named
+    // for the boot document's own object so a probe that resolves a name (the kernel
+    // bounds query) finds it.
     let mesh: crate::display::StageMesh = serde_json::from_str(
         r#"{
             "entity": 7,
-            "object": "Slab",
+            "object": "Params",
             "positions": [
                 [-0.5, -0.5, 0.5], [0.0, -0.5, 0.5], [0.0, 0.5, 0.5], [-0.5, 0.5, 0.5],
                 [0.0, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [0.0, 0.5, 0.5]
@@ -693,6 +695,8 @@ fn face_claim_shell(
 /// `push_pull`/`extrude` — the shape a real stem publishes, without the stem.
 struct NumericFace {
     value: f64,
+    min: f64,
+    max: f64,
 }
 
 impl ferrocad_stage::Manipulator for NumericFace {
@@ -738,7 +742,7 @@ impl ferrocad_stage::Manipulator for NumericFace {
 
     fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
         vec![ferrocad_stage::NumericField::millimetres("D", self.value)
-            .bounded(Some(0.0), Some(10.0))]
+            .bounded(Some(self.min), Some(self.max))]
     }
 
     fn set_values(&mut self, values: &[f64]) -> bool {
@@ -748,11 +752,22 @@ impl ferrocad_stage::Manipulator for NumericFace {
         if !value.is_finite() {
             return false;
         }
-        let value = value.clamp(0.0, 10.0);
+        let value = value.clamp(self.min, self.max);
         if (value - self.value).abs() <= 1e-12 {
             return false;
         }
         self.value = value;
+        true
+    }
+
+    fn set_value_bounds(&mut self, min: Option<f64>, max: Option<f64>) -> bool {
+        let (min, max) = (min.unwrap_or(self.min), max.unwrap_or(self.max));
+        if (self.min - min).abs() <= 1e-12 && (self.max - max).abs() <= 1e-12 {
+            return false;
+        }
+        self.min = min;
+        self.max = max;
+        self.value = self.value.clamp(min, max);
         true
     }
 
@@ -775,7 +790,13 @@ fn numeric_face(
         .elements
         .first()
         .filter(|element| element.starts_with("Face"))
-        .map(|_| Box::new(NumericFace { value: 0.0 }) as Box<dyn ferrocad_stage::Manipulator>)
+        .map(|_| {
+            Box::new(NumericFace {
+                value: 0.0,
+                min: 0.0,
+                max: 10.0,
+            }) as Box<dyn ferrocad_stage::Manipulator>
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +941,37 @@ fn the_manipulator_numeric_row_types_a_held_value(cx: &mut TestAppContext) {
         .read_with(&cx, |shell, _| shell.pending_interaction.clone())
         .expect("the clamped value is held");
     assert_eq!(commit.values, vec![10.0]);
+
+    // The kernel's range replaces the handle's own once the probe lands: it is tighter,
+    // so the held value is clamped again and the row follows it.
+    let registered = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            "import FerroCAD\n\
+             FerroCAD.register_bounds_provider(\n\
+                 lambda obj, element, manipulator: {'min': 0.0, 'max': 4.0, 'note': 'test'}\n\
+                 if manipulator == 'push_pull' else None)\n",
+        )
+    });
+    assert!(registered.expect("the provider installs").ok);
+    shell.update(&mut cx, |shell, cx| shell.sync_manipulator_bounds(cx));
+    assert!(
+        shell.update(&mut cx, |shell, cx| shell.resolve_manipulator_bounds(cx)),
+        "the probe runs for the armed handle"
+    );
+    let fields = shell
+        .read_with(&cx, |shell, cx| shell.armed_numeric_fields(cx))
+        .expect("the row's fields")
+        .1;
+    assert_eq!(fields[0].max, Some(4.0), "the kernel's ceiling is published");
+    let commit = shell
+        .read_with(&cx, |shell, _| shell.pending_interaction.clone())
+        .expect("the held commit is refreshed to the kernel range");
+    assert_eq!(commit.values, vec![4.0]);
+    assert_eq!(
+        input.read_with(&cx, |input, _| input.text().to_string()),
+        "4.00",
+        "the field follows the kernel's clamp"
+    );
 
     // `Esc` rolls the typed value back to the handle's resting value.
     press_escape(&mut cx, &shell);

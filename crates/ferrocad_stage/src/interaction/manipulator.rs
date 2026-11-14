@@ -247,6 +247,18 @@ pub trait Manipulator {
         None
     }
 
+    /// Adopt a **hard** value range measured outside the manipulator (the kernel's).
+    ///
+    /// [`numeric_fields`](Self::numeric_fields) publishes the range from the geometry the
+    /// stage itself carries; this is replaced by the document half's answer when one
+    /// exists, so the row shows the value that actually fails rather than one that merely
+    /// could not fit. The manipulator clamps its value and reports the change so the host
+    /// can refresh a held commit. `false` (the default) means "this handle has no range to
+    /// take".
+    fn set_value_bounds(&mut self, _min: Option<f64>, _max: Option<f64>) -> bool {
+        false
+    }
+
     /// Whether `device` is on a grab target. An unclaimed press falls through to
     /// the gizmo, the tool and the scene.
     fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool;

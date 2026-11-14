@@ -901,6 +901,45 @@ def manipulator_specs(payload_json: str) -> str:
     return _json({"specs": serialisable})
 
 
+def manipulator_bounds(payload_json: str) -> str:
+    """The value range a workbench's kernel accepts for one manipulator, as JSON.
+
+    ``payload_json`` is ``{"object": "Box", "element": "Edge1", "manipulator":
+    "dress_up"}``. The answer is ``null`` when no module owns the question, otherwise
+    ``{"min": number|null, "max": number|null, "note": str}``.
+
+    The shell derives a conservative range from the stage tessellation on its own, so
+    this only has to answer where the kernel can: a fillet radius that actually fails,
+    not merely one that could not possibly fit. ``null`` is an answer ("no opinion"),
+    not an error.
+    """
+    try:
+        payload = json.loads(payload_json)
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    object_name = payload.get("object") or ""
+    element = payload.get("element") or ""
+    manipulator = payload.get("manipulator") or ""
+    if not object_name or not manipulator:
+        return _json(None)
+
+    try:
+        doc = _active_doc()
+    except Exception:
+        return _json(None)
+    base = doc.getObject(object_name)
+    if base is None:
+        return _json(None)
+
+    # A provider that raises is a bug in the module, not in the question: the host
+    # reports it through its own console path rather than silently narrowing a range.
+    result = FerroCAD.manipulator_bounds(base, element, manipulator)
+    return _json(result)
+
+
 def commands() -> str:
     """The registered workbench commands, with resources and live state, as JSON.
 

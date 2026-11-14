@@ -33,9 +33,16 @@ the distance pending, and the solid appears when you accept it with `✓`.*
   distance is a **pocket** (a cut). The label follows the drag.
 - A drag previews the result as a translucent **swept volume** (the face plus the walls it
   pushes out), and the release leaves it **pending**: the ghost stays at the distance and
-  `✓` (or `Enter`) applies it while `✗` (or `Esc`) puts the stem back at rest. Drag the
-  stem again to adjust the held distance — it continues from the value you left. The
-  commit is one document transaction, so undo reverses the extrude or pocket as one step.
+  `✓` (or `Enter`) applies it while `✗` (or `Esc`) puts the stem back at rest. The amber
+  stem **rides the swept face** — its base is the face at the pending distance — so it
+  stays under the pointer while you drag. Drag the stem again to adjust the held distance;
+  it continues from the value you left.
+- The same distance is a **number you can type**. A `D` field docks with the loadout as
+  soon as the stem is armed: type `7.5`, press `Enter`, and the ghost, the readout and the
+  commit all follow. `D` is signed — a negative value is a pocket. The row also tells you
+  how much body is behind the face, so you can see where a pocket would go through; the
+  distance itself has no limit. The commit is one document transaction, so undo reverses
+  the extrude or pocket as one step.
 - Push/Pull defaults the topology filter to `Face`, so the click keeps the face you
   pointed at instead of reporting the whole body. The header's `Select ▾` can override
   the filter without changing the hand.

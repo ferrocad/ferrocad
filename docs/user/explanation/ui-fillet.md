@@ -35,6 +35,11 @@ pending, and the fillet is applied when you accept it with `✓`.*
 - A drag previews the round (or bevel) as a swath along the edge, and the release leaves
   it **pending**: `✓` (or `Enter`) applies it as one transaction, `✗` (or `Esc`) puts the
   scrubber back at rest. Dragging the arc again adjusts the held radius.
+- The radius is also a **number you can type**: an `R` field (a chamfer shows `D1`/`D2`)
+  docks with the loadout, and a typed value is held exactly like a dragged one. The row
+  prints the allowed range: the scrubber's floor, and the **largest radius the kernel can
+  complete on that edge**, measured when you arm the handle. A value you type past the
+  ceiling is clamped and the field shows what was taken.
 - The edition creates or updates the `Part::Fillet` / `Part::Chamfer` feature with the
   selected edge as its `Base` and applies the radius (or the two chamfer distances)
   through the kernel.

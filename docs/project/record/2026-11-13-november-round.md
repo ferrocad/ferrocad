@@ -380,11 +380,12 @@ commit edits that feature.
   `ferrocad_shell_core` is **289**, `ferrocad_part` **55**, `ferrocad_part_gui` **40**,
   `ferrocad_viewport` **235**, `ferrocad_stage` **259**, `ferrocad_shell_rust` **58**, and
   the three edition round-trips green.
-- **The boot sample is honest about one thing.** Its persisted element map predates the
-  history fix, so the kernel range for the sample's existing fillet appears only after the
-  first recompute (the seed and the grip work immediately, because they are geometric). The
-  file is a build input that is not itself versioned yet; regenerating it gives it the
-  provenance-carrying map.
+- **The boot sample was regenerated the next day.** Its persisted element map predated the
+  history fix, so the kernel range for the sample's existing fillet appeared only after the
+  first recompute (the seed and the grip worked immediately, because they are geometric).
+  2026-11-14 it was recomputed and saved in place — tree, visibility, labels, property rows
+  and the stage mesh unchanged, archive 2 606 → 5 477 bytes — and committed, so the file
+  that `include_bytes!`s into both hosts is now tracked *and* carries the provenance.
 
 ## 4. Where the detail lives
 

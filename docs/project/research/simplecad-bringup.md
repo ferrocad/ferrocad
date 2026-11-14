@@ -1,10 +1,11 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
 Status: design (2026-10-21); re-measured 2026-11-15 (§7). The current integrated baseline is
-**1003 passed / 27 failed / 17 errored / 7 skipped over 88/88 modules** on the clean
+**1005 passed / 25 failed / 17 errored / 7 skipped over 88/88 modules** on the clean
 `9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
-is green, and every remaining failure is attributed in §7 (21 P2, 3 P3, 3 documented test
-assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 22 records.
+is green, and every remaining failure is attributed in §7 (19 P2, 3 P3, 3 documented test
+assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 24 failures and
+one error.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
@@ -1550,11 +1551,11 @@ remaining root causes are in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) P2
   two failures are therefore an **upstream expectation mismatch**, filed with the test
   assumptions; the totals below quote the bare `9180c4b`.
 
-**2026-11-15 — the clean-checkout re-measure: 1003 / 27 / 17 / 7.** The extension was
+**2026-11-15 — the clean-checkout re-measure: 1005 / 25 / 17 / 7.** The extension was
 rebuilt from the seam round's tree, `../simplecad` was verified clean at `9180c4b`, and the
-full suite ran with the same result twice before the last fix. From the 2026-11-13 baseline
-of **985 / 49 / 18 / 7** that is **22 records gained and none lost**; 88/88 modules load.
-The 22:
+full suite ran with the same result twice before the last two fixes. From the 2026-11-13
+baseline of **985 / 49 / 18 / 7**, **24 failures and 1 error closed and none was added**;
+88/88 modules load. The closed set:
 
 - the two `LocalSplitTests` and `NearlyCoplanarTests` (one `generalFuse` build per target);
 - the three `test_geometry.DocumentTests` internal-edge cases and
@@ -1565,12 +1566,15 @@ The 22:
 - both `test_rotate_edges` cases: a live `Part.Edge` handed `Part.Wire`/`Part.Face` the
   shape it was built from, not the baked, placed one, so `e.Placement = …;
   Part.Wire(...)` rebuilt the old edges. The consumers now read the base
-  (`PyEdge::entry_from`, `wire_shapes`, `edge_shape`, `Edge.Curve`).
+  (`PyEdge::entry_from`, `wire_shapes`, `edge_shape`, `Edge.Curve`);
+- both `test_elongating` cases: a wire wrapped from a shape reported `len() == 0`, so
+  Python made it **falsy** and SimpleCAD's `if obj.Shape` skipped it in the dangling-wire
+  heal. `len()` and iteration now fall back to the B-Rep edges, and `Face.addWire`
+  (upstream's `BRep_Builder::Add`) was added for the offset path the truthy wire exposed.
 
-The 27 that remain are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md)
-§P2: 21 P2, 3 P3, and 3 documented test assumptions. The 17 errors are the unchanged set.
-The next cluster is `test_elongating` ×2, still unreproduced, then `test_analytic`'s
-in-place pair. The round record is
+The 25 that remain are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md)
+§P2: 19 P2, 3 P3, and 3 documented test assumptions. The 17 errors are the unchanged set.
+The next cluster is `test_analytic`'s in-place pair. The round record is
 [`../record/2026-11-14-p2-boolean-seam.md`](../record/2026-11-14-p2-boolean-seam.md).
 
 ---

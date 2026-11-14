@@ -17,10 +17,12 @@ the failing-test map is [`../research/simplecad-bringup.md`](../research/simplec
 | **Sub-shape seam** | One boolean build answers every `Shape.generalFuse` input; a replaced vertex reports its result image; `Edge.Orientation` reaches the cached entry; `App::Part`/`PartDesign::Body` answer the geo-feature-group extension | SimpleCAD **997/32/18/7** |
 | **Boolean tolerance** | `Shape.fuse`/`cut`/`common` hand their `tolerance` to the kernel with upstream's signed contract (`0`, `> 0`, `AUTO_FUZZY`), through one helper | pinned by `part_shape_ops`; totals unchanged by the signature alone |
 | **Edge placement** | a live `Part.Edge` is read from its baked base, not its stale cached entry, in `Part.Wire`/`Part.Face`/`ShapeFix`/`ChFi2d` and `Edge.Curve` | SimpleCAD **1003/27/17/7** |
-| **Clean-checkout re-measure** | the `close_holes` experiment was reverted; `../simplecad` stays at `9180c4b` | SimpleCAD **1003/27/17/7** |
+| **Wire length and `Face.addWire`** | a wire wrapped from a shape counts its B-Rep edges, so `bool(wire)` is true; `Face.addWire` attaches a boundary as `BRep_Builder::Add` does | SimpleCAD **1005/25/17/7** |
+| **Clean-checkout re-measure** | the `close_holes` experiment was reverted; `../simplecad` stays at `9180c4b` | SimpleCAD **1005/25/17/7** |
 
-SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1003 / 27 / 17 / 7 over 88/88
-modules**: **22 passing records gained, none lost**, no module failed to load.
+SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1005 / 25 / 17 / 7 over 88/88
+modules**: **24 failures and 1 error closed, none added** (the pass total rises by 20 because
+a fully-passing subtest counts once, not once per sub-case). No module failed to load.
 
 ## 2. The sub-shape seam
 
@@ -36,7 +38,7 @@ Three root causes, all in the seam:
 3. **`Edge.Orientation = "Internal"` never reached the edge's cached entry**, so a spur read
    `Internal` and arrived in a new wire as `Forward`.
 
-The 20 closed records:
+The 20 failures this seam closed:
 
 | Group | Tests |
 | --- | --- |
@@ -93,7 +95,31 @@ geometry the kernel cannot classify. `part_shape_ops`'s
 `an_edge_placement_reaches_the_shapes_that_consume_it` pins the edge, the wire and
 `Curve.Center` after a placement write. `test_rotate_edges` is **5/5**.
 
-## 5. The `close_holes` experiment, and why it was reverted
+## 5. The wire wrapper, and the elongating cluster
+
+`test_elongating`'s two remaining failures both go through `heal_dangling_wires`, which
+starts with `if … and obj.Shape and not obj.Shape.Faces …`. A probe showed the standalone
+slot **wire** was skipped even though it had four edges: `bool(obj.Shape)` was **False**.
+
+A `Part.Wire` carries the edges it was built from, but a wire reached through a shape
+(`Face.OuterWire`, or the `Shape` a `Part::Feature` hands to Python) is made by
+`PyWire::from_shape`, which leaves that list empty. `Wire.__len__` read only that list, so
+it returned 0 — and Python derives truthiness from `__len__`, so a real four-edge wire was
+falsy. `len(wire)` and iteration now derive the edges from the B-Rep when the cache is
+empty (the same fallback `Wire.Edges` already had).
+
+That exposed a second gap: once SimpleCAD's `partition_concentric_circle` accepted the
+wire, it called `rem_f.addWire(...)` and raised
+`AttributeError: 'Part.Shape' object has no attribute 'addWire'`. Upstream's `Face.addWire`
+is a raw `BRep_Builder::Add(face, wire)` — no reversal, no containment test — so it is
+implemented at the seam (`GeometryBackend::add_wire_to_face` → `policy::face_add_wire`),
+and `Part.Edge` is rejected as upstream's typed signature does. Both are pinned by
+`a_wire_wrapped_from_a_shape_counts_its_edges` and
+`a_face_accepts_another_boundary_wire`. `test_elongating` is **19/0/0/1**. The `addWire`
+work is what keeps `test_offsetting` at **17/17**: once the wire was truthy, its
+`partition_concentric_circle` reached `addWire` for the first time.
+
+## 6. The `close_holes` experiment, and why it was reverted
 
 The round wanted the two `test_edge_deletion` failures closed. A twelve-line rule in the
 SimpleCAD checkout (`simplecad/core/geometry.py`, `close_holes`) made a loop that is the
@@ -116,7 +142,7 @@ So the two failures are an **upstream expectation mismatch**: the shipped policy
 removed planar side face; the test asserts that the body opens. They are filed with the
 test assumptions, not with the P2 defects, and `../simplecad` stays clean.
 
-## 6. Measurements at close
+## 7. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),
 `git status` empty. Built with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
@@ -125,24 +151,26 @@ CARGO_BUILD_JOBS=2`; the extension was rebuilt before the Python/SimpleCAD runs.
 | Measure | Value | Command |
 | --- | --- | --- |
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
-| SimpleCAD integrated | **1003 passed, 27 failed, 17 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
-| Part API audit | **252/408 (61.8%)**, contract unchanged | `python3 tools/part_api_audit.py --check` |
-| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `part_boot` **3**, `part_shape_ops` **10**, all 0 failed | per-crate `cargo test` |
+| SimpleCAD integrated | **1005 passed, 25 failed, 17 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| Part API audit | **253/408 (62.0%)**, contract re-pinned for `Face.addWire` | `python3 tools/part_api_audit.py --check` |
+| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `part_boot` **3**, `part_shape_ops` **12**, all 0 failed | per-crate `cargo test` |
 | Docs/tooling | `api_docs` 9 pages, `userdocs` 8, `build_book` 48 chapters, extension-set contract 50 modules | the four `--check` gates |
 
 Two runs of the full SimpleCAD suite before the edge-placement fix produced the same
-1001/29/17/7, so that figure was stable rather than a lucky pass; the post-fix run is
-1003/27/17/7 with the same 17 errors and the two rotate-edges records closed.
+1001/29/17/7, so that figure was stable rather than a lucky pass; the post-fix runs are
+1003/27/17/7 and then 1005/25/17/7, with the same 17 errors and the rotate-edges and
+elongating records closed.
 
-## 7. What the 27 failures are
+## 8. What the 25 failures are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
-in short: **21 → P2** (boolean/topology 6, undo/labels 5, query/tolerance/determinism 9,
+in short: **19 → P2** (boolean/topology 4, undo/labels 5, query/tolerance/determinism 9,
 identity 1), **3 → P3** (mesh→fitted-surface 2, wrapped drawing 1) and **3 documented
 test assumptions** (the exact `BoundBox` precondition and the two `close_holes` cases). The
 17 errors are unchanged: 4 `PartDesign` imports, 1 wrapped-drawing edge case and 12
 behavioural/API results.
 
-The next cluster is `test_elongating` ×2, still unreproduced, then the `test_analytic`
-in-place pair; `test_mesh_glue` and `test_union.test_rod_a_hair_off_its_bore` remain
+The next cluster is the `test_analytic` in-place pair
+(`test_boss_wall_is_rebuilt_in_place_too` plus the `…chamfered_hole_replaces_in_place`
+error), then `test_mesh_glue` and `test_union.test_rod_a_hair_off_its_bore`, both still
 unreproduced.

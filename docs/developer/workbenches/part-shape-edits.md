@@ -81,6 +81,32 @@ The consumers now take a live edge's geometry from its base (`PyEdge::entry_from
 remains the fallback for a shape the kernel cannot classify. Pinned by
 `an_edge_placement_reaches_the_shapes_that_consume_it`.
 
+## A wire wrapped from a shape counts its edges
+
+`Part.Wire([...])` carries the analytic entries it was built from, but a wire reached
+through a shape — `Face.OuterWire`, or the `Shape` a `Part::Feature` hands to Python — is
+built by `PyWire::from_shape`, which has no entries. `Wire.__len__` and `__getitem__` read
+only that list, so such a wire reported `len() == 0` while `Wire.Edges` returned all four:
+Python derives truthiness from `__len__`, so **`bool(wire)` was False**.
+
+That is not cosmetic. SimpleCAD's `heal_dangling_wires` selects its candidates with
+`if … and obj.Shape and not obj.Shape.Faces …`, so a real slot wire was skipped and two
+`test_elongating` heal cases never ran. Length and iteration now derive the edges from the
+B-Rep when the cache is empty (the same fallback `Wire.Edges` already had), and the three
+paths share one helper (`PyWire::edge_entries`). Pinned by
+`a_wire_wrapped_from_a_shape_counts_its_edges`.
+
+## `Face.addWire` is `BRep_Builder::Add`
+
+Upstream's `TopoShapeFacePy::addWire` adds the wire to the face with
+`BRep_Builder::Add(face, wire)`: no reversal and no containment test, so a caller that means
+a hole reverses the wire first (upstream's doc example does exactly that). The seam exposes
+it as `GeometryBackend::add_wire_to_face` → `policy::face_add_wire`, and the Python method
+requires a `Part.Wire` as upstream's typed signature does.
+
+This is how SimpleCAD rebuilds a face one boundary at a time for a concentric offset; the
+empty-leftover case is the area assertion in `a_face_accepts_another_boundary_wire`.
+
 ## `App::Part`'s extensions are type-static
 
 Upstream instantiates `App::GeoFeatureGroupExtension` (which derives from
@@ -138,9 +164,9 @@ reverted. If upstream changes the policy, revisit; do not patch the reference ch
 
 ## What is still open in this seam
 
-- **`test_elongating` ×2, `test_mesh_glue`, `test_union.test_rod_a_hair_off_its_bore`,
-  `test_analytic`'s in-place pair.** Each needs its own reproduction; none is the seam
-  above.
+- **`test_analytic`'s in-place pair, `test_mesh_glue`,
+  `test_union.test_rod_a_hair_off_its_bore`.** Each needs its own reproduction; none is the
+  seam above.
 - **`test_precision.test_through_push_from_a_slightly_tilted_face_leaves_no_skin`** — the
   last sub-tolerance case; it is a push/pull, not a plain boolean.
 - **A boolean result is a `Compound` around one `Solid`** (see

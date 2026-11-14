@@ -6,7 +6,7 @@ Status: task spec (2026-10-30); **closed 2026-11-13** (SC0–SC8 done). Cut from
 [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P1 (closed) as P2/P3 backlog work. The
 baseline at close was **985 passed / 49 failed / 18 errored / 7 skipped** over 88/88
 modules (2026-11-13, after SC0–SC3; the cut started from 969 / 64 / 26 / 2); the later P2
-seam rounds took it to **1003 / 27 / 17 / 7** on the clean checkout. The measurement it
+seam rounds took it to **1005 / 25 / 17 / 7** on the clean checkout. The measurement it
 starts from is [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7.3;
 the round's closed backdrop is
 [`../record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](../record/2026-10-29-workplane-visual-hierarchy-and-grid.md).
@@ -360,7 +360,7 @@ attributed to five named buckets plus one documented test assumption (full table
 | Test assumption: exact `BoundBox` | 1 | out of surface |
 
 **37 → P2, 11 → P3, 1 documented out-of-surface, 0 unattributed** at SC8 (the later P2
-seam rounds closed 22 records; see [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2 for
+seam rounds closed 24 failures; see [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2 for
 the current buckets). No failure needed a missing name or a GUI; the 18 errors are the
 known `PartDesign`/behavioural/single-API set and the 7 skips are the Qt groups plus the
 font and text skips. SC0's last item (re-filing the failures) is closed with this table,

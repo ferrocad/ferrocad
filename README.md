@@ -11,7 +11,7 @@ stays `FreeCAD`; the project/distribution is `ferrocad`.
 | Track | What it is | State |
 | --- | --- | --- |
 | **Engine** | the Rust document model behind the `FreeCAD` API | units/quantities, properties, documents, links, expressions, observers, undo, and both serializers. The App/Base surface is the measured MVP. |
-| **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped** (2026-11-13); primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **252/408 (61.8%)** upstream API names. |
+| **Part / OCCT** | the real geometry workbench | **531 upstream Part tests passed, 0 failed, 0 errored, 12 skipped** (2026-11-13); primitives, booleans, dress-ups, curves/surfaces, NURBS, `ShapeFix`, `ChFi2d`, feature objects and topological lineage. **253/408 (62.0%)** upstream API names. |
 | **Workbench platform** | running upstream workbenches without Qt | `Part::FeaturePython`/`Part2DObjectPython` execute and persist Python proxies; Draft M2 is green (**27/27**), the Draft `--draft` group is **50/0/0/1**, and `test_modification` is **31/0/2**. |
 | **App shell** | the `bite-gpui` window over one document backend | viewport, model tree, property editor, console, command registry, wheel/forms, transform gizmo, navigation cube, Dev Tools and the loadout. **One document implementation with four runtimes** (CPython, RustPython, JS, none); the browser shell runs the same `RustAppBackend` and `pivy.coin` scene core. SimpleCAD S4.1–S4.3 (view facade, ranked pick, selection object) are in the tree. |
 | **SimpleCAD** | the canvas-first proving ground | **88/88** unit modules load in one image: **985 passed, 49 failed, 18 errored, 7 skipped**, no aborts. The 5 Qt groups are classified skips, and the scripted draw → push/pull → cut → STL workflow is a green acceptance test. |
@@ -376,7 +376,7 @@ Implemented and measured:
   primitives, booleans, dress-ups, curves/surfaces, NURBS conversion, `ShapeFix`,
   `ChFi2d`, feature objects, `Part::FeaturePython` and topological lineage. The upstream
   Part suite reports **531 passed, 0 failed, 0 errored, 12 skipped**; the API audit
-  covers **252/408** names.
+  covers **253/408** names.
 * **Mesh** through `ferrocad_mesh` / `ferrocad_mesh_py`: triangle payloads, STL and
   `.bms`, analysis/editing, `Mesh::Feature`, `MeshPart.meshFromShape`, and the `.FCStd`
   `<Mesh>` member.
@@ -416,12 +416,12 @@ document with four runtimes, the browser shell and the backend-parity close-out;
 remains is Draft M3–M5 breadth (the M4 import round took `test_modification` to 31/0/2).
 **H3 (proof by use)** is SimpleCAD: S1–S3 are measured and S4.1–S4.6 are the view facade,
 ranked pick, selection object, workplane/face frames and push/pull stem (integration
-baseline **1003 passed / 27 failed / 17 errored / 7 skipped**, 88/88 modules). Packaging is
+baseline **1005 passed / 25 failed / 17 errored / 7 skipped**, 88/88 modules). Packaging is
 on v0.1.4; macOS is the parked distribution leg.
 
 The most recent rounds are the **P2 boolean/seam round** — one build per general fuse,
 measured vertex images, cached edge orientation and upstream's signed boolean tolerance,
-which closed 22 SimpleCAD records — and the **November platform round** that preceded it.
+which closed 24 SimpleCAD failures and one error — and the **November platform round** that preceded it.
 The round logs are
 [`docs/project/record/2026-11-14-p2-boolean-seam.md`](docs/project/record/2026-11-14-p2-boolean-seam.md)
 and

@@ -51,7 +51,7 @@ engine through its own native module; the layer that is shared is the
 | `ferrocad_lineage` | `rlib` | The kernel-independent lineage vocabulary: `ElementRef`/`History`/`ElementMap`, `Lineage`/`ReverseMap`/`MapVersion`/`NamePolicy`, generic over the payload. No geometry, no document, no OCCT. |
 | `ferrocad_occt` | `rlib` | The OCCT implementation of `GeometryBackend` (box/fuse/cut/fillet/place), via `opencascade-sys` + the sibling history bridge. Needs OCCT to build; **not** a default member. |
 | `ferrocad_core` | `rlib` | The pure-Rust engine: documents, properties, DAG, transactions, observers, expressions. No Python, no UI, no OCCT. Depends on `ferrocad_types` (and re-exports it). A **leaf** wrt the kernel. |
-| `ferrocad_mesh` | `rlib` | The Mesh workbench core: the `Mesh` payload (points, facets, placement), STL, area/volume/component/planar/intersection/boundary operations, `Mesh::PropertyMeshKernel` and `Mesh::Feature`. No OCCT, no Python. |
+| `ferrocad_mesh` | `rlib` | The Mesh workbench core: the `Mesh` payload (points, facets, placement), STL, area/volume/component/planar/intersection/boundary operations, `Mesh::PropertyMeshKernel`, `Mesh::Feature` and `Mesh::FeaturePython`. No OCCT, no Python. |
 | `ferrocad_py` | `cdylib` | The PyO3 extension, importable as the module `ferrocad`. The only bridge into `ferrocad_core`. |
 | `ferrocad_mesh_py` | `cdylib` | The `Mesh` and `MeshPart` Python modules over `ferrocad_mesh`. `MeshPart` reaches `Part` through Python (`tessellate`, `makePolygon`), so this crate does not link the kernel. |
 | `ferrocad_widgets` | `rlib` | Reusable `bite-gpui` widgets: window chrome, the text field/area, the domain-free `menu` (popover rows, status dots, hover, dividers), and the radial `wheel` (a custom-painted torus with pure wedge hit-testing, plus the `WheelMenu` sidecar that owns the armed/latched gesture and its overlay). Depends on `ferrocad_theme` and `bite-gpui`; on **neither** `ferrocad_core` nor `ferrocad_py`. |
@@ -286,7 +286,7 @@ ferrocad_geom      -> ferrocad_types, ferrocad_curves,
                                                      [seam: Shape, History, GeometryBackend;
                                                      `make_edge`/`curve_of` cross into curves]
 ferrocad_mesh      -> ferrocad_core, ferrocad_types   [mesh payload, STL, operations,
-                                                     Mesh::Feature; no OCCT, no Python]
+                                                     Mesh::Feature(Python); no OCCT, no Python]
 ferrocad_lineage   -> (no workspace deps)             [name, history, map, policy]
 ferrocad_ui        -> roxmltree                        [.ui reader; no Qt, no gpui]
 ferrocad_ui_py     -> ferrocad_ui, pyo3                 [PySideUic proxies; no Qt]

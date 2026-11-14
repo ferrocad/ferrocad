@@ -132,7 +132,7 @@ rather than stubbed.
   so the principal-axis tie and the style mapping hold; the last round closed the four
   `PartDesign` draft errors with a `PartDesign::Draft`/`Plane` document shim, and the
   `Mesh.decimate` error with a quadric-error edge collapse in `ferrocad_mesh`.
-- **P3's first slice — the freeform host is measured, not assumed.**
+- **P3's first slice — the freeform host is measured, not assumed, and the bundle runs.**
   `Mesh::FeaturePython` gives a proxy the same `Mesh`/`Placement` pair and rebuild path a
   `Part::FeaturePython` has, which is the document type the SubD workbench stores its cage
   on. The synthetic Curves/SubD call surface is measured in
@@ -146,13 +146,23 @@ rather than stubbed.
   base without a kernel-side list edit. The two
   SimpleCAD errors that closed with it (a cut's shells rebuilding its cavity, and a removed
   object's `isValid()`) are §8.15 of the round log.
-  Every remaining record is attributed — **6 documented test assumptions and 2 errors, 0
-  unattributed** — and neither the P2 seam list nor P3 has a failure: the last two cases
-  (`test_precision`'s tilted face and `test_surface_wrap`'s inverse) are reference-side
-  checks (§8.8 and §8.11 of the round record). The two errors left are `test_loop_faces`'s
-  twisted-quad merge (the reference's merge accepts an unchecked candidate) and the
-  chamfered single-face face-order assumption. The full table is in
-  [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
+- **The `Sculpt` bundle is the workflow, not a spike.** `python/Sculpt/` pairs a quad cage
+  (`Mesh::FeaturePython`, Catmull-Clark preview) with a `Part::FeaturePython` skin that sews
+  one bicubic patch per refined quad into a closed solid, and nests both in a
+  `PartDesign::Body` — cage as a support member, skin as the `BaseFeature` — which is what
+  the declared capability was for. A cage edit moves both representations through the link
+  graph, an open cage is reported instead of sewn, and a native save restores both proxies.
+  Pinned by 22 cases in `tests/test_sculpt_workflow.py`; the design note is
+  [`../developer/workbenches/sculpt.md`](../developer/workbenches/sculpt.md). What is still
+  missing is the edition descriptor, packaging and the GUI cage tools.
+
+**The SimpleCAD record.** Every remaining record is attributed — **6 documented test
+assumptions and 2 errors, 0 unattributed** — and neither the P2 seam list nor P3 has a
+failure: the last two cases (`test_precision`'s tilted face and `test_surface_wrap`'s
+inverse) are reference-side checks (§8.8 and §8.11 of the round record). The two errors
+left are `test_loop_faces`'s twisted-quad merge (the reference's merge accepts an unchecked
+candidate) and the chamfered single-face face-order assumption. The full table is in
+[`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
   pack reaches the script half. This is the proof-of-use surface that did not exist at the

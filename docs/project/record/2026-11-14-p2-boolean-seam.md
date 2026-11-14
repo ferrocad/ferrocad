@@ -767,6 +767,69 @@ The two errors left are `test_loop_faces`'s twisted-quad merge (the reference's 
 a candidate on area and normal without checking validity) and `test_analytic`'s chamfered
 face-order assumption.
 
+### 8.17 The Sculpt bundle: a cage, a surface and a body
+
+The declared capability had one obvious customer, so the next slice was that customer
+rather than another seam. `python/Sculpt/` is the *bundle* tier of
+[`ideation/surface-and-freeform-modelling.md`](../ideation/surface-and-freeform-modelling.md)
+§7: FerroCAD owns the document model and the body rules, and the geometry is the ordinary
+`Part` API — no new kernel, no native crate.
+
+**Three pieces.** The **cage** is a `Mesh::FeaturePython` holding `CagePoints`,
+`CageFaces` and `Levels`, previewing the Catmull-Clark surface as its `Mesh`. The **skin**
+is a `Part::FeaturePython` with a `Cage` link that subdivides the same hull, builds one
+bicubic patch per refined quad, sews the shell and stores a solid; it follows the cage's
+edits and `Placement` through the link graph, not through a call. `Sculpt.nest(body, *objects)`
+adds both and reports the role each took.
+
+**The cage is a support member, and that is the whole point of the capability round.**
+Upstream's `Body::isAllowed` refuses every mesh — its test is a C++ class hierarchy — so an
+add-on doing this reaches a body only through a binder, and the note's §3 records exactly
+that gap. `Mesh::FeaturePython` now declares `BodyMembership::Support`, so the cage joins
+without taking the one base slot and never becomes the body's shape, and the skin lands as
+`BaseFeature`. Pinned by `body_membership.rs` (`a_mesh_cage_is_a_support_member`) and by
+the bundle's own body cases.
+
+**Two rules worth keeping.** The subdivision uses the standard boundary rules with a
+corner rule the naive reading misses: a boundary vertex with a *single* incident face stays
+put, so a refined open cage keeps the outline the user drew (without it, one refinement of
+a single quad pulls every corner to 1/8 of the diagonal). And the patch surface is a **house
+approximation stated as one**: each refined quad is its bilinear patch raised to a 4×4 pole
+grid, which makes neighbouring patches share their boundary line exactly and the shell sew
+without gaps, but it is G0, not the Catmull-Clark limit patch (that needs the one-ring
+stencils). The level knob is the accuracy dial, and the measurements say what is left:
+
+| Levels | Preview volume | Skin volume | Patches |
+| --- | --- | --- | --- |
+| 1 | 10 000.0 | 10 250.0 | 24 |
+| 2 | 8 402.8 | 8 404.6 | 96 |
+| 3 | 7 993.9 | 7 993.94 | 384 |
+
+(40 × 30 × 20 mm box cage, so the cage itself is 24 000 mm³; in-process debug extension.)
+The skin is slightly *above* the faceted preview at low levels because the bilinear patch
+bulges outside the planar quads; at level 3 the two agree to 0.07 mm³ and the level-to-level
+step has fallen from 1 845 mm³ to about 100.
+
+**Failures are reported, not smoothed over.** An open cage previews but does not sew shut;
+`patch_solid` raises, and the object reads
+`Invalid: proxy.execute failed: the cage is not closed: …` through the binding's normal
+proxy-failure path, keeping its last good shape. A `.FCStd` keeps the properties and the
+shapes but not the proxy (the FCStd writer reports upstream's binary Python object rather
+than inventing an incompatible payload), so the bundle ships `Sculpt.attach(doc)` — the call
+an add-on makes after opening its own file — while a native `.ferrocad` restores the proxy
+itself.
+
+**Measured.** `tests/test_sculpt_workflow.py` (22 cases) is in the `workbenches` extension
+set, which is now **816/0/0/3** over 52 modules (42 base, 10 workbenches); the Rust side
+adds one body-membership case. `makeCage` + recompute is 5 ms at level 2; the skin's first
+rebuild is ~140 ms at level 2 and ~520 ms at level 3 in the debug extension, sewing
+dominating. Nothing in Part, Draft or SimpleCAD moved.
+
+**Not in this slice.** No GUI commands or workbench switcher entry, no cage-point
+manipulator, no edition descriptor or packaging, no third-party add-on hosting, and no
+limit-surface (G1/G2) patches. The design note is
+[`../../developer/workbenches/sculpt.md`](../../developer/workbenches/sculpt.md).
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

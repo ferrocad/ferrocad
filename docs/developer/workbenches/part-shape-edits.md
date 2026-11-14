@@ -199,7 +199,7 @@ behaviour does not have. Each type declares its answer instead, on
 | --- | --- | --- |
 | `Denied` (the default) | `App::FeaturePython`, `PartDesign::Body`, groups | refused, `ValueError("Body: object '…' is not allowed")` |
 | `Base` | `Part::Feature`, `Part::FeaturePython`, `Part::Part2DObjectPython` | at most one, and only while the body holds no solid; becomes `BaseFeature` |
-| `Support` | `Part::DatumPlane`, `PartDesign::Plane`, `Sketcher::SketchObject` | any number; never becomes the `Tip` |
+| `Support` | `Part::DatumPlane`, `PartDesign::Plane`, `Sketcher::SketchObject`, `Mesh::FeaturePython` | any number; never becomes the `Tip` |
 | `Feature` | `PartDesign::AdditiveBox`, `PartDesign::Draft` | any number; the newest becomes the `Tip` |
 
 `DocumentObject.addObject` re-parents a member (`unlink_from_groups`) and then records the
@@ -207,6 +207,11 @@ role; a direct `Group` write is checked the same way. The setter validates **bef
 re-parents: re-parenting has side effects on the members' previous bodies, so a vetoed
 assignment must not reach it. `PartDesign::Body` also vetoes the write itself through
 `on_property_change`, which covers any path that bypasses the setter.
+
+`Mesh::FeaturePython` is the deliberate deviation from upstream's allow-list: upstream
+refuses every mesh in a body (its test is a C++ class hierarchy). A subdivision cage is
+reference geometry the body's base feature is built from, so it takes the `Support` role —
+that is what makes the [Sculpt bundle](sculpt.md) work without a binder.
 
 Two traps:
 

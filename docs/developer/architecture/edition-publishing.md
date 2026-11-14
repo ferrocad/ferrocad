@@ -33,13 +33,23 @@ share a binary and select a `HostConfig` at boot. `Parametric` is not one of tho
 `Part` is a *linked* module, so it needs its own binary. That is the per-edition
 "kernel composition" boundary `occt-integration.md` §4 draws.
 
+`FerroCAD: Sculpt` is the second edition and the first **bundle** tier. Its Rust
+composition is Parametric's minus `ferrocad_part_gui` (it contributes no
+dress-up manipulator yet — the cage manipulator will plug in there), so
+`contracts/editions.json` pins the two closures separately and `--edition sculpt`
+stages the same `lib/` OCCT closure as `--edition parametric`. What differs is the
+app script: `ferrocad_sculpt` re-exports `ferrocad_parametric` (so a
+`Part::FeaturePython` skin gets exactly the Part display and interaction hooks)
+and adds the `Sculpt_*` commands and a sculpted startup sample. A published
+Sculpt artifact is therefore a naming/selection change, not new packaging work.
+
 ## 2. The moving parts
 
 Everything below already exists for the base app; the edition extends each.
 
 1. **The binary.** `cargo xtask bundle` builds `-p ferrocad`; the edition selector
-   (`--edition parametric`) builds `-p ferrocad_parametric` and stages that binary
-   as `bin/ferrocad` so the launchers stay shared.
+   (`--edition parametric` or `--edition sculpt`) builds that edition's crate and
+   stages its binary as `bin/ferrocad` so the launchers stay shared.
 2. **The OCCT closure.** `xtask occt` ([`occt-bundling.md`](occt-bundling.md) §5)
    resolves the per-platform OCCT 8.0.1 prefix (or fetches it with micromamba) and
    records it under `target/occt-runtime/<triple>/`. `bundle --occt` walks the
@@ -66,8 +76,11 @@ Everything below already exists for the base app; the edition extends each.
 ## 3. Naming
 
 - Artifact: `ferrocad-parametric-x86_64.AppImage`, `FerroCAD-Parametric.dmg`,
-  `ferrocad-parametric-windows-x86_64.zip`.
-- Window title: `FerroCAD: Parametric` (already set in the edition's `main`).
+  `ferrocad-parametric-windows-x86_64.zip`; `ferrocad-sculpt-…` for the Sculpt
+  edition (the AppImage and Windows scripts map both the short name and the crate
+  name).
+- Window title: `FerroCAD: Parametric` / `FerroCAD: Sculpt` (set in each
+  edition's `main`).
 - The payload keeps `bin/ferrocad` (generic) so `AppRun`/`.app`/`ferrocad.bat`
   need no edition-specific path; only the outer artifact name identifies it.
 

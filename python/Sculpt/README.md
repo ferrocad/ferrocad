@@ -36,6 +36,22 @@ skin becomes the **BaseFeature**. A later PartDesign feature takes the `Tip`.
   3 is close to converged on a box cage.
 - `Tolerance` — the sewing tolerance of the patch shell (mm).
 
+## The commands
+
+The edition (`ferrocad_sculpt`) registers six commands, grouped under `Sculpt`:
+
+| Command | What it does |
+| --- | --- |
+| `Sculpt_MakeCage` | add a 40 × 30 × 20 box cage with its preview |
+| `Sculpt_MakeSkin` | sew the selected cage (or the document's only one) into a solid |
+| `Sculpt_NestInBody` | nest the selected skin and its cage, or all of them, in a body |
+| `Sculpt_LevelUp` / `Sculpt_LevelDown` | one refinement step, 0…4 |
+| `Sculpt_AttachProxies` | re-attach the proxies after a `.FCStd` load |
+
+Each is one transaction, so one undo reverses it. A host that only wants the
+commands can `import Sculpt.commands; Sculpt.commands.register()`; registration is
+idempotent.
+
 ## Faces and persistence
 
 `CageFaces` is a flat integer list, four indices per face, and any polygon is

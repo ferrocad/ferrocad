@@ -830,6 +830,59 @@ manipulator, no edition descriptor or packaging, no third-party add-on hosting, 
 limit-surface (G1/G2) patches. The design note is
 [`../../developer/workbenches/sculpt.md`](../../developer/workbenches/sculpt.md).
 
+### 8.18 The Sculpt edition: a descriptor, a command surface, and a week-old gate
+
+The bundle needed a home, and the P3 packaging item was the cheap closure: an edition
+binary, an app script and a command surface, mirroring `ferrocad_parametric`.
+`crates/ferrocad_sculpt` registers the combined built-ins and then calls
+`run_edition_with_script("FerroCAD: Sculpt", "ferrocad_sculpt", …)`; the script
+**re-exports** `ferrocad_parametric` rather than copying it, because a
+`Part::FeaturePython` skin is a Part object and needs exactly the Part display and
+interaction providers. What it adds is the command set and a startup sample: a 30 mm
+cage at x = 40, its skin as a body's `BaseFeature`, in the canonical `Sample` beside
+the filleted box.
+
+The six commands are thin, as upstream's are — one transaction, the selection policed,
+the bundle's own functions doing the work: `Sculpt_MakeCage`, `Sculpt_MakeSkin`,
+`Sculpt_NestInBody` (a selected skin brings its cage; supports are added before the
+base, which the base rule requires), `Sculpt_LevelUp`/`Sculpt_LevelDown` (0…4) and
+`Sculpt_AttachProxies` (the `.FCStd` restore path). Registration is idempotent, so an
+app script imported twice, or a test following the shell, cannot raise upstream's
+duplicate-id error.
+
+**The packaging side is `--edition sculpt`.** `xtask` gained the selector (crate,
+binary, payload `ferrocad-sculpt`, `requires_occt`), and both platform scripts map the
+short and crate spellings. `contracts/editions.json` pins the closure: 32 crates,
+Parametric's minus `ferrocad_part_gui` — the Sculpt edition contributes no manipulator
+yet, and that is where the cage drag will land.
+
+**Regenerating the contract exposed a week-old break.** `cargo xtask editions --write`
+refused: `ferrocad` and `ferrocad_toy` violated their kernel-free rule. The cause is
+`486a985` (the S9 composition): `ferrocad_shell_python` depends on
+`ferrocad_shell_rust`, which links `ferrocad_part` and OCCT, so every edition that
+embeds the shell host has reached the engine since then — and `contracts/editions.json`
+had not been regenerated, which is why the check had gone unnoticed as a *drift*
+rather than a rule failure. The rules now say what is true and what they can enforce:
+`COMPOSED_DOCUMENT_HALF` lets the base app and the toy edition reach the engine
+**only through the host they compose**, and a direct `ferrocad_part`/
+`opencascade-sys` edge is still reported with its path; `ferrocad_shell_python`'s own
+rule became "must reach the document half, must not reach a Python extension or the
+Part GUI". The literal promise — a base artifact with no OCCT closure — needs the
+document half split out of `ferrocad_shell_rust`, and that is booked in
+[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P5 instead of being papered over.
+
+**Measured.** `cargo test -p ferrocad_sculpt`: 2/0/0 — the startup sample (cage
+support, skin base, a valid solid) and the command flow (create → skin → nest →
+levels → attach, with one undo removing the nesting transaction).
+`cargo run -p ferrocad_sculpt -- --check-init` builds a cage → skin → body document
+and asserts the registry. `cargo xtask editions --check` is green over 13 editions
+(`ferrocad_sculpt`: 32 crates), and `cargo test -p xtask` is 18/0/0. No Part, Draft or
+SimpleCAD number moved.
+
+**Not in this slice.** The release-matrix entry and the curated payload (Curves/SubD
+in, Silk out, licences recorded), and the cage manipulator — whose home is now the
+edition's `main`, beside the base triad.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

@@ -169,7 +169,11 @@ candidate) and the chamfered single-face face-order assumption. The full table i
   last roadmap.
 - **Publish the edition.** The `Parametric` artifact (OCCT closure, launcher, release
   matrix) and the Diátaxis book as a release artifact. v0.1.4 is still the latest tag;
-  macOS packaging and signing are parked.
+  macOS packaging and signing are parked. **`Sculpt` is now a second edition**
+  (`ferrocad_sculpt`: the Parametric composition minus the Part GUI, its own app script
+  and six `Sculpt_*` commands), and `xtask bundle --edition sculpt` plus both platform
+  scripts support it — what is left for it is a release-matrix entry and the curated
+  payload, not code.
 - **BIM headless subset.** The `Arch`/BIM modules that do not need a GUI. This has not
   started; it follows the Draft M4/M5 import/export work.
 

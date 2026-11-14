@@ -538,7 +538,7 @@ The guarantees in this note are checked by the default test suite:
   committed, cancelled, and wins over the gizmo;
 * `ferrocad_shell_python` — `Contributions` routing (manipulator **and** gizmo factories) and
   `DisplaySync`'s entity map, colour and draw-mode plumbing;
-* `ferrocad_toy` — the whole workbench surface with **no kernel**: it creates an
+* `ferrocad_toy` — the whole workbench surface with **no kernel use**: it creates an
   object (and undoes/redoes it), represents it, resizes it with the grip, moves it
   with the gizmo (and undoes that), and round-trips it through save/open
   (`the_toy_workbench_creates_represents_manipulates_and_records`);

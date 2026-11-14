@@ -212,7 +212,11 @@ and the state scopes. That extension is
 `ferrocad_part_py` and `ferrocad_mesh_py` still ship `rlib` + `cdylib`, but the
 standalone cdylibs are only useful for isolated experiments; mixing them with the
 combined extension would create two cores. `ferrocad_toy` is deliberately kernel-free
-and registers none of these modules. The extension needs OCCT (`./build.sh` builds it
+**as a workbench** and registers none of these modules. (The toy *binary* still
+composes the desktop shell host, which links the Part engine — the edition contract
+records that as the composed-document-half carve-out, and
+[`../../project/TODO-15-11-2026.md`](../../project/TODO-15-11-2026.md) §P5 has the
+task to split it back out.) The extension needs OCCT (`./build.sh` builds it
 when `.occt/prefix` is present); `tests/test_packaged_modules.py` is the packaged-module
 gate that proves the four modules share one registry, and the in-process equivalent
 is `crates/ferrocad_combined_py/tests/combined.rs`.

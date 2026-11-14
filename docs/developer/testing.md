@@ -133,17 +133,33 @@ The rules themselves live in `crates/xtask/src/editions.rs`:
 
 | Crate | Rule |
 | --- | --- |
-| `ferrocad` (base), `ferrocad_toy` | must not reach `ferrocad_occt`, `ferrocad_part`, `ferrocad_part_py`, `ferrocad_part_gui`, `ferrocad_mesh`, `ferrocad_mesh_py`, `opencascade-sys` |
-| `ferrocad_shell_python`, `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_wgpu`, `ferrocad_ui` | the same list, for the same reason: they sit below Part |
+| `ferrocad` (base), `ferrocad_toy` | must not reach `opencascade-sys`, `ferrocad_part_py`, `ferrocad_part_gui`, `ferrocad_mesh_py`, `ferrocad_mesh`, `ferrocad_text` **except through `ferrocad_shell_python`** (see below) |
+| `ferrocad_shell_python` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_part_gui`; must reach `ferrocad_shell_rust` (it composes the document half) |
+| `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_wgpu`, `ferrocad_ui` | must not reach the kernel-free list: they sit below Part |
 | `ferrocad_py` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_occt` (the App-only extension) |
 | `ferrocad_parametric` | must reach `ferrocad_part_py` and `ferrocad_occt` |
+| `ferrocad_sculpt` | must reach `ferrocad_part_py`, `ferrocad_mesh_py` and `ferrocad_occt` |
 | `ferrocad_combined_py` | must reach `ferrocad_part_py` and `ferrocad_mesh_py` |
 
 The purpose is narrow and deliberate: a lightweight edition must not silently
-start bundling OCCT. `ferrocad_toy` is documented as kernel-free, `ferrocad_py`
-is the App-only extension, and the shell/renderer layer sits below Part. The check
-walks transitive edges, not just direct ones, because "the crate I added does not
-mention OCCT" is not the same as "OCCT is not reachable from my edition".
+start bundling OCCT. `ferrocad_py` is the App-only extension, and the
+shell/renderer layer sits below Part. The check walks transitive edges, not just
+direct ones, because "the crate I added does not mention OCCT" is not the same as
+"OCCT is not reachable from my edition".
+
+### The composed-document-half carve-out
+
+Since `486a985` the shell's CPython host composes the document half
+(`ferrocad_shell_python` → `ferrocad_shell_rust`), and that half links
+`ferrocad_part` and the kernel. Every edition that embeds the host therefore
+reaches them, so for the base app and the toy edition the rule is **"not through a
+dependency of its own"**: `COMPOSED_DOCUMENT_HALF` names
+`ferrocad_shell_python` as the one intermediate those two editions may reach the
+kernel through, and a direct `ferrocad_part`/`opencascade-sys` edge is still
+reported with its path. Restoring a literally kernel-free base needs the document
+half split out of `ferrocad_shell_rust`; that is filed in
+[`../project/TODO-15-11-2026.md`](../project/TODO-15-11-2026.md) §P5 rather than
+pretended away here.
 
 ### The geometry seam carve-out
 

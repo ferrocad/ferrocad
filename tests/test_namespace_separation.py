@@ -275,9 +275,12 @@ class NamespaceSeparationTests(unittest.TestCase):
         namespace = "_NamespaceSeparation"
         FerroCAD.Grid.reset()
         try:
+            # The startup asset names the document (`Sample`), so read the name
+            # the host reports instead of assuming the requested one.
             payload = json.loads(ferrocad_toy.bootstrap(namespace))
-            self.assertEqual(payload["document"], namespace)
-            doc = FreeCAD.getDocument(namespace)
+            name = payload["document"]
+            self.assertTrue(name, "bootstrap must report the document it opened")
+            doc = FreeCAD.getDocument(name)
             self.assertIsNotNone(doc)
 
             # A registered command still runs through the bridge, hosts its

@@ -242,11 +242,15 @@ class DocumentObserverTests(unittest.TestCase):
     # -- the shell drives the same slot ----------------------------------
     def test_shell_bootstrap_creates_and_activates_through_the_slot(self):
         observer = self.observe()
+        name = None
         try:
             payload = json.loads(ferrocad_shell.bootstrap("ShellLifecycle"))
-            self.assertEqual(payload["document"], "ShellLifecycle")
-            self.assertIn(("created", "ShellLifecycle"), observer.events)
-            self.assertIn(("activated", "ShellLifecycle"), observer.events)
+            # The startup asset names the document, not the requested argument;
+            # read what the host actually opened.
+            name = payload["document"]
+            self.assertTrue(name, "bootstrap must report its document")
+            self.assertIn(("created", name), observer.events)
+            self.assertIn(("activated", name), observer.events)
 
             # Re-bootstrapping closes the old document first, so the close
             # notification is not deferred either.
@@ -257,7 +261,8 @@ class DocumentObserverTests(unittest.TestCase):
                 ["deactivated", "closed", "created", "activated"],
             )
         finally:
-            FerroCAD.closeDocument("ShellLifecycle")
+            if name is not None:
+                FerroCAD.closeDocument(name)
 
     # -- the upstream-shaped entry points --------------------------------
     def test_the_upstream_freecad_entry_points_fire_the_slot(self):

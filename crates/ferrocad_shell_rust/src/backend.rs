@@ -275,7 +275,14 @@ impl RustAppBackend {
     /// Called from whichever of [`with_settings_backend`](Self::with_settings_backend)
     /// and [`with_script_host`](Self::with_script_host) completes the pair, because a
     /// composition builds them in either order (the desktop installs the store first,
-    /// the browser the script first).
+    /// the browser the script first), and again from
+    /// [`bootstrap`](AppBackend::bootstrap) once the script half is up.
+    ///
+    /// The boot call is the authoritative one on the desktop, where the store *is* the
+    /// interpreter's parameter file: `python/` only joins `sys.path` inside the script
+    /// half's own boot, so a read taken at composition time cannot see `FreeCAD` yet. It
+    /// is idempotent — a choice already applied is not re-applied — so the early pass
+    /// only ever saves the boot one work.
     ///
     /// The restore is the read half of what [`set_property`](AppBackend::set_property) and
     /// [`set_provider`](AppBackend::set_provider) write: either switch records the chosen
@@ -373,11 +380,17 @@ impl RustAppBackend {
     /// remember a switch the other forgets.
     fn record_switch(&self, feature: &str, backend: &str, view: Option<&ViewRequest>) {
         let mut state = self.state.borrow_mut();
-        let _ = state.settings.set(
+        if let Err(error) = state.settings.set(
             PROVIDER_GROUP,
             feature,
             SettingValue::String(backend.to_string()),
-        );
+        ) {
+            // A store that refuses is worth saying out loud: the switch worked, so the
+            // only symptom is the choice being gone after the next restart.
+            log::warn!(
+                "ferrocad: the {feature} provider choice ({backend}) was not stored: {error}"
+            );
+        }
         if let Some(view) = view {
             absorb_claim(&mut state.provider_claim, view);
         }
@@ -677,6 +690,12 @@ impl AppBackend for RustAppBackend {
             Some(host) => host.bootstrap()?,
             None => None,
         };
+        // Now the script half is *up*: its interpreter booted and its mods registered
+        // their providers. The stored provider choice is re-applied here rather than at
+        // composition time, because on the desktop the store *is* the interpreter's
+        // parameter file — `python/` only joins `sys.path` in the boot above, so an
+        // earlier read cannot see `FreeCAD` at all and the restore silently did nothing.
+        self.hydrate_script();
         if let Some(boot) = booted {
             self.boot_error = None;
             return Ok(boot);
@@ -2716,6 +2735,9 @@ mod tests {
     struct SwitchHost {
         log: Arc<Recorded>,
         active: Mutex<&'static str>,
+        /// Whether the mode has booted. `false` models the desktop, where the registry
+        /// does not exist until the interpreter has run: its mods register on boot.
+        registered: Mutex<bool>,
     }
 
     /// The backends `SwitchHost` lists, as `(id, label)`.
@@ -2727,7 +2749,15 @@ mod tests {
             Self {
                 log,
                 active: Mutex::new("ferrocad"),
+                registered: Mutex::new(true),
             }
+        }
+
+        /// The same, but with no provider in the registry until [`bootstrap`] runs.
+        fn unbooted(log: Arc<Recorded>) -> Self {
+            let host = Self::new(log);
+            *host.registered.lock().unwrap() = false;
+            host
         }
 
         /// Make `backend` active, accepting the id or the label the form shows.
@@ -2770,6 +2800,11 @@ mod tests {
 
         fn event_listener(&self) -> Box<dyn EventListener> {
             Box::new(NoopListener)
+        }
+
+        fn bootstrap(&self) -> Result<Option<Bootstrap>, String> {
+            *self.registered.lock().unwrap() = true;
+            Ok(None)
         }
 
         fn extra_properties(&self, object: &str) -> Option<Vec<PropRow>> {
@@ -2816,6 +2851,9 @@ mod tests {
         }
 
         fn provider_features(&self) -> Vec<ProviderFeature> {
+            if !*self.registered.lock().unwrap() {
+                return Vec::new();
+            }
             let active = self.active();
             vec![ProviderFeature {
                 feature: "axis".to_string(),
@@ -2956,6 +2994,50 @@ mod tests {
                 "a restore is a read, not a rewrite"
             );
         }
+    }
+
+    /// The restore runs again once the script half has booted.
+    ///
+    /// This is the desktop's ordering: the store is the interpreter's parameter file, and
+    /// `python/` only joins `sys.path` inside the script half's `bootstrap`, so a registry
+    /// read at composition time finds neither the mods' providers nor a readable store.
+    /// Restoring only there meant the choice was written on every switch and never read
+    /// back: *Axis Cross (JS)* was gone after every restart.
+    #[test]
+    fn a_stored_provider_is_restored_when_the_script_half_boots() {
+        let log = Arc::new(Recorded::default());
+        let settings = MemorySettings::default();
+        settings
+            .set(
+                PROVIDER_GROUP,
+                "axis",
+                SettingValue::String("js".to_string()),
+            )
+            .unwrap();
+        let mut backend = RustAppBackend::new()
+            .with_script_host(Box::new(SwitchHost::unbooted(log.clone())))
+            .with_settings_backend(Box::new(settings));
+        assert!(
+            log.providers.lock().unwrap().is_empty(),
+            "nothing is registered to switch before the boot"
+        );
+
+        backend.bootstrap().expect("the script half boots");
+        assert_eq!(
+            log.providers.lock().unwrap().as_slice(),
+            ["js"],
+            "the stored choice is applied once the registry exists"
+        );
+        let view = backend
+            .appearance_view()
+            .expect("the presentation state answers")
+            .view
+            .expect("it carries a request");
+        assert_eq!(
+            view.axis.and_then(|axis| axis.overlay),
+            Some(true),
+            "and its claim rides the request the shell applies"
+        );
     }
 
     #[test]

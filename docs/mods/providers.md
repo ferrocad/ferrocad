@@ -124,10 +124,12 @@ That group is the **composition's** store, not the interpreter's. A composed run
 `FreeCAD.ParamGet` on the desktop, `localStorage` in the browser — including a backend
 only one host lists, which the facade itself can never name (its `_selected` falls back
 to priority for a value it does not recognise). The shell writes it when
-`Settings/<Feature>`'s provider row switches, and re-applies it through the same
-switch at boot, so the JS axis cross comes back selected after a restart instead of
-the native one it displaced. The choice is also pushed into every half's own parameter
-store at boot, which is how a browser session keeps it without a filesystem.
+`Settings/<Feature>`'s provider row or the popover switches, and re-applies it when the
+script half **boots** — the point where `python/` has joined `sys.path` and the mods
+have registered their providers — so the JS axis cross comes back selected after a
+restart instead of the native one it displaced. The choice is also pushed into every
+half's own parameter store at boot, which is how a browser session keeps it without a
+filesystem.
 
 ```python
 import FerroCADGui

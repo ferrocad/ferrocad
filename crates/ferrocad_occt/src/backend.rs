@@ -1169,6 +1169,23 @@ impl GeometryBackend for OcctBackend {
         Ok(shape)
     }
 
+    fn add_wire_to_face(&self, face: &Shape, wire: &Shape) -> Result<Shape, GeomError> {
+        let face_occt = downcast(face)?;
+        let face_guard = face_occt.borrow();
+        let face_inner = face_guard.as_ref().ok_or(OcctError::InvalidInput {
+            what: "null face",
+        })?;
+        let wire_occt = downcast(wire)?;
+        let wire_guard = wire_occt.borrow();
+        let wire_inner = wire_guard.as_ref().ok_or(OcctError::InvalidInput {
+            what: "null wire",
+        })?;
+        // Upstream's `BRep_Builder::Add(face, wire)`: no reversal, no containment
+        // test. A caller that adds a hole reverses its wire itself.
+        let added = crate::policy::face_add_wire(face_inner, wire_inner).map_err(GeomError::from)?;
+        Ok(erase(&added))
+    }
+
     fn make_face(&self, wires: &[Shape]) -> Result<Shape, GeomError> {
         let (first, rest) = wires.split_first().ok_or(OcctError::InvalidInput {
             what: "a face needs a wire",

@@ -412,3 +412,79 @@ assert abs(circle.Curve.Center.x - 10.0) < 1e-6, circle.Curve.Center
         );
     });
 }
+
+/// A wire wrapped from a kernel shape counts its edges.
+///
+/// `Part.Wire([...])` carries the analytic entries it was built from, but a wire
+/// reached through a shape (`Face.OuterWire`, or the `Shape` a `Part::Feature`
+/// hands to Python) is only a B-Rep wrapper. The cache used to be the only source
+/// for `__len__`, so such a wire reported `len() == 0` and — because Python derives
+/// truthiness from `__len__` — was **falsy** despite having edges.
+#[test]
+fn a_wire_wrapped_from_a_shape_counts_its_edges() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+
+box = Part.makeBox(10, 10, 10)
+outer = box.Faces[0].OuterWire
+assert len(outer) == len(outer.Edges) == 4, (len(outer), len(outer.Edges))
+assert bool(outer), "a four-edge wire must be truthy"
+assert len(list(outer)) == 4, list(outer)
+
+# The sequence and the property describe the same edges.
+from_wire = [round(e.Length, 6) for e in outer]
+from_edges = [round(e.Length, 6) for e in outer.Edges]
+assert from_wire == from_edges, (from_wire, from_edges)
+
+# A wire built with its own entries still reports them.
+built = Part.Wire([Part.makeLine(Part.Vertex(0, 0, 0), Part.Vertex(1, 0, 0))])
+assert len(built) == 1 and bool(built)
+"#,
+        );
+    });
+}
+
+/// `Face.addWire` attaches a boundary as given (`BRep_Builder::Add`).
+///
+/// Upstream adds the wire without reversing or testing containment, so the caller
+/// reverses a hole wire; the face's area then subtracts it. SimpleCAD's concentric
+/// offset rebuilds a face one boundary at a time this way.
+#[test]
+fn a_face_accepts_another_boundary_wire() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import math
+
+import ferrocad as App
+import Part
+
+face = Part.Face(Part.makeCircle(10, App.Vector(0, 0, 0), App.Vector(0, 0, 1)))
+assert len(face.Wires) == 1
+assert abs(face.Area - math.pi * 100.0) < 1e-6, face.Area
+
+hole = Part.Wire([Part.makeCircle(4, App.Vector(0, 0, 0), App.Vector(0, 0, 1))])
+hole.reverse()
+face.addWire(hole)
+
+assert len(face.Wires) == 2, len(face.Wires)
+assert face.isValid()
+assert abs(face.Area - math.pi * (100.0 - 16.0)) < 1e-6, face.Area
+
+# Upstream's signature takes a `Part.Wire`, not a bare edge.
+try:
+    face.addWire(Part.makeCircle(2, App.Vector(0, 0, 0), App.Vector(0, 0, 1)))
+except TypeError:
+    pass
+else:
+    raise AssertionError("Face.addWire accepted a Part.Edge")
+"#,
+        );
+    });
+}

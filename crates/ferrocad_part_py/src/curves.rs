@@ -9382,6 +9382,32 @@ impl PyWire {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The wire's edges as entries, whether they were supplied at construction or
+    /// read back from the B-Rep.
+    ///
+    /// A wire wrapped from a kernel shape (`Face.OuterWire`, or the `Shape` a
+    /// `Part::Feature` hands to Python) carries no analytic entries, so the cache
+    /// alone is not the answer: `len(wire)` must still count the edges, because
+    /// Python derives the wire's truthiness from it. An empty cache made a real
+    /// four-edge wire falsy, and guarding on `if obj.Shape` then skipped it
+    /// (`SimpleCAD`'s dangling-elongation heal).
+    fn edge_entries(slf: &PyRef<'_, Self>) -> Vec<EdgeEntry> {
+        let cached = slf
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if !cached.is_empty() {
+            return cached;
+        }
+        slf.as_super()
+            .sub_shapes(ElementKind::Edge)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|shape| EdgeEntry { shape, curve: None })
+            .collect()
+    }
+
     /// Wrap an existing wire shape (`Face.OuterWire`), with no analytic entries.
     pub(crate) fn from_shape(shape: Shape) -> PyClassInitializer<Self> {
         PyClassInitializer::from(PartShape::from_shape(shape)).add_subclass(Self {
@@ -9450,27 +9476,9 @@ impl PyWire {
 
     #[getter]
     fn Edges(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Vec<Py<PyEdge>>> {
-        let entries = slf.entries();
-        if !entries.is_empty() {
-            return entries
-                .iter()
-                .map(|entry| Py::new(py, PyEdge::from_entry(entry.clone())))
-                .collect();
-        }
-        // A wire wrapped from a kernel shape (for example `Face.OuterWire`) has
-        // no analytic entries; read its edges from the B-Rep instead.
-        slf.as_super()
-            .sub_shapes(ElementKind::Edge)?
+        Self::edge_entries(&slf)
             .into_iter()
-            .map(|shape| {
-                Py::new(
-                    py,
-                    PyEdge::from_entry(EdgeEntry {
-                        shape,
-                        curve: None,
-                    }),
-                )
-            })
+            .map(|entry| Py::new(py, PyEdge::from_entry(entry)))
             .collect()
     }
 
@@ -9651,12 +9659,12 @@ impl PyWire {
 
     /// Upstream wires iterate over their edges; the sequence protocol gives both
     /// `list(wire)` and `for edge in wire:`.
-    fn __len__(&self) -> usize {
-        self.entries().len()
+    fn __len__(slf: PyRef<'_, Self>) -> usize {
+        Self::edge_entries(&slf).len()
     }
 
-    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<Py<PyEdge>> {
-        let entries = self.entries();
+    fn __getitem__(slf: PyRef<'_, Self>, py: Python<'_>, index: isize) -> PyResult<Py<PyEdge>> {
+        let entries = Self::edge_entries(&slf);
         let len = entries.len() as isize;
         let index = if index < 0 { index + len } else { index };
         if index < 0 || index >= len {
@@ -10439,6 +10447,32 @@ impl PyFace {
             .face_parameter_range(&shape)
             .map_err(kernel_error)?;
         Ok(PyTuple::new(py, [u0, u1, v0, v1])?.into_any().unbind())
+    }
+
+    /// Attach a further boundary wire (`Face.addWire`).
+    ///
+    /// Upstream is `BRep_Builder::Add(face, wire)`: the wire is added exactly as
+    /// given — no reversal and no containment test — so a caller that means a hole
+    /// reverses its wire first. This is how a face is rebuilt one boundary at a
+    /// time (`SimpleCAD`'s concentric offset builds the remaining face that way).
+    fn addWire(mut slf: PyRefMut<'_, Self>, wire: &Bound<'_, PyAny>) -> PyResult<()> {
+        let face = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("addWire"))?;
+        let wire = wire
+            .downcast::<PyWire>()
+            .map_err(|_| PyTypeError::new_err("Face.addWire expects a Part.Wire"))?;
+        let wire_shape = wire
+            .borrow()
+            .as_super()
+            .shape()
+            .ok_or_else(|| OCCError::new_err("an empty Part.Wire has no geometry"))?;
+        let added = backend()
+            .add_wire_to_face(&face, &wire_shape)
+            .map_err(kernel_error)?;
+        slf.as_super().replace_shape(Some(added));
+        Ok(())
     }
 }
 

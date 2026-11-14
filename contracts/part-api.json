@@ -1368,10 +1368,10 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 1025,
+    "methods_heuristic": 1026,
     "methods": {
-      "count": 1937,
-      "distinct": 397,
+      "count": 1938,
+      "distinct": 398,
       "classes": {
         "Part.ChFi2d::AnaFilletAlgo": [
           "__repr__",
@@ -2055,6 +2055,7 @@
           "Tolerance",
           "__repr__",
           "add",
+          "addWire",
           "clearModes",
           "curvatureAt",
           "curveOnSurface",
@@ -3440,7 +3441,7 @@
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9114,
+          "line": 9129,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
         },
         {
@@ -3470,13 +3471,13 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9827,
+          "line": 9850,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9835,
+          "line": 9858,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
@@ -3805,10 +3806,10 @@
   "coverage": {
     "methods": {
       "upstream_declared": 609,
-      "ours_declared": 1937,
+      "ours_declared": 1938,
       "upstream_distinct": 408,
-      "covered_distinct": 252,
-      "fraction": 0.6176,
+      "covered_distinct": 253,
+      "fraction": 0.6201,
       "missing_distinct": [
         "Attacher",
         "AttacherType",
@@ -3829,7 +3830,6 @@
         "Tag",
         "Value",
         "Wire",
-        "addWire",
         "build",
         "buildFromNSections",
         "calculateAttachedPlacement",

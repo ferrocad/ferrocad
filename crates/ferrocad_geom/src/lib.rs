@@ -1058,6 +1058,15 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_faces"))
     }
 
+    /// Attach a further boundary wire to an existing face (`Face.addWire`).
+    ///
+    /// Upstream is `BRep_Builder::Add(face, wire)`: the wire is attached exactly
+    /// as given, with no orientation or containment test, so a caller that means
+    /// a hole reverses its wire first (`SimpleCAD`'s concentric offset).
+    fn add_wire_to_face(&self, _face: &Shape, _wire: &Shape) -> Result<Shape, GeomError> {
+        Err(unsupported("add_wire_to_face"))
+    }
+
     /// A face on an elementary `surface`, bounded by `wires`
     /// (`Part.Face(surface, wires)`).
     ///

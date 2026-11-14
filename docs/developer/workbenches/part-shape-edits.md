@@ -347,6 +347,29 @@ or a stepped prism raises with the reason and marks the feature invalid instead 
 approximating. Pinned by `partdesign_draft.rs` (narrowing, widening, the cone, the datum
 plane and a refusal).
 
+## `Shape.connectEdgesToWires` builds a boundary
+
+`Shape.connectEdgesToWires(shared=False, tolerance=1e-9)` returns a compound of
+wires, one per connected chain, via `ShapeAnalysis_FreeBounds::ConnectEdgesToWires`.
+It was missing, and it is the call a face merge reaches for when two faces' sides are
+only geometrically coincident: `Part.makeShell` + `removeSplitter` will not join
+them, so a caller rebuilds one face from the shell's free edges. SimpleCAD's
+`merge_coplanar_face_group` uses it in two of its fallbacks. Pinned by
+`connect_edges_to_wires_links_a_boundary`.
+
+## `Part.makeSolid` adds shells as given
+
+Upstream's `makeElementSolid` is `BRepBuilderAPI_MakeSolid::Add` per shell followed
+by `BRepLib::OrientClosedSolid`; it never reverses a shell, because a cavity shell
+taken from an existing solid already carries the reversed orientation. The seam
+reversed every shell after the first, which turned a rebuilt cavity into a second
+outward skin: a cut box's two shells re-made a solid of 1000 + 64 mm³ that
+`BRepCheck` rejected. It now adds them as given. A caller that assembles a cavity
+from independent outward shells (two `makeBox` shells, say) reverses the inner one
+itself, and `Part.Solid.add` — a FerroCAD convenience upstream does not have —
+documents the same rule. Pinned by `hollow_solids_keep_the_cavity_the_shells_carry`
+and `a_part_solid_accepts_cavity_shells`.
+
 ## What is still open in this seam
 
 - **A boolean result is a `Compound` around one `Solid`** (see
@@ -363,6 +386,9 @@ plane and a refusal).
   body) needs `BRepOffsetAPI_DraftAngle`, which the pinned sys crate does not bind. The
   straight-prism class above is implemented; the rest is recorded rather than approximated.
 - **`PartDesign::Boolean` and `Part::Section`** are still unregistered document types.
+- **`Mesh.decimate`** has no implementation. SimpleCAD calls it only for
+  `convert(..., simplify>0)`, and a decimator (quadric edge collapse) is a new algorithm,
+  not a seam fix.
 - **The wrapped-drawing inverse picks another branch, not another geometry.**
   `WrapFrame.local` inverts `point(q)` by projecting the traced point onto the *target
 triangle's plane* (`basis @ (trace(q) - p)`). On a closed section that residual is

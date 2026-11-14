@@ -23,6 +23,9 @@ result becomes a stable design, the decision is written in
   a shader/extraction fixture.
 - [simplecad-bringup.md](simplecad-bringup.md) — SimpleCAD as the canvas-first proving
   ground: the measured tree and S0–S5.
+- [p3-addon-surface-spike.md](p3-addon-surface-spike.md) — the Curves/SubD call
+  surface measured headlessly: what `Mesh::FeaturePython` and the patch/skin
+  assembly answer, and the two call shapes that had to change.
 - [occt-8-upgrade.md](occt-8-upgrade.md) — what OCCT 8.0.1 actually costs: the measured
   34-of-35 handle aliases plus 13 container aliases, the C++17 and version-gate
   blockers, the `TopoDS`/`Size()` breaks the build found, and the result — the fork

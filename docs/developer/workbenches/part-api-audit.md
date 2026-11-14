@@ -99,7 +99,8 @@ the same trees produce byte-identical JSON.
   declared names exist on at least one of our Python classes, the fraction, and the
   shared-class count. At the 2026-10-30 and 2026-11-13 pins it was **252 of 408 names
   (61.8%) across 21 shared classes**; the 2026-11-15 pin adds `Face.addWire` for
-  **253 of 408 (62.0%)**. The per-class gaps are the SimpleCAD/Draft work
+  **253 of 408 (62.0%)**, and the 2026-11-16 P3 pin adds `Shape.connectEdgesToWires` for
+  **254 of 408 (62.3%)**. The per-class gaps are the SimpleCAD/Draft work
   list. Earlier pins were 248/408 (60.8%) and 220/408 (53.9%); always say which tree and
   which extension build produced the figure.
 - `extra` — our names that upstream does not have in `Part/App` (for example

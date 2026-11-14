@@ -1,7 +1,7 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
 Status: design (2026-10-21); re-measured 2026-11-16 (§7). The current integrated baseline is
-**1036 passed / 6 failed / 5 errored / 7 skipped over 88/88 modules** on the clean
+**1038 passed / 6 failed / 3 errored / 7 skipped over 88/88 modules** on the clean
 `9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
 is green, and every remaining failure is attributed in §7 (no P2 and no P3; 6 documented
 test assumptions). **P1 is closed** (2026-11-13), and the P2 rounds closed 47 failures and
@@ -1672,7 +1672,10 @@ return typed shapes (`part.Point` on a sliced-off vertex), `Part.Toroid` gained
 `import PartDesign`: the draft tool builds a `PartDesign::Body`/`Plane`/`Draft` in a private
 document, so those document types now exist for the straight-prism class the tool asks for
 (a general dress-up needs `BRepOffsetAPI_DraftAngle`, which the pinned sys crate does not
-bind). SimpleCAD measures **1036 / 6 / 5 / 7**, and the 6 failures and 5 errors are bucketed
+bind). The last two errors closed with the P3 round: a cut's shells now rebuild its cavity
+(`Part.makeSolid` adds shells as given, as upstream's `makeElementSolid` does) and a removed
+object's `isValid()` is `False`, so `test_forming` and `test_subdivision` are green.
+SimpleCAD measures **1038 / 6 / 3 / 7**, and the 6 failures and 3 errors are bucketed
 in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 6 documented test assumptions (the
 two above included); the errors are `Mesh.decimate`, a removed object's `Name`, two
 `Shape.isValid()` refusals and 1 face-order assumption. The round record is

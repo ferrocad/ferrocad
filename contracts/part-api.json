@@ -1378,10 +1378,10 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 1031,
+    "methods_heuristic": 1032,
     "methods": {
-      "count": 1940,
-      "distinct": 398,
+      "count": 1946,
+      "distinct": 399,
       "classes": {
         "Part.ChFi2d::AnaFilletAlgo": [
           "__repr__",
@@ -2471,6 +2471,7 @@
           "cleaned",
           "common",
           "complement",
+          "connectEdgesToWires",
           "copy",
           "countElement",
           "cut",
@@ -2598,6 +2599,7 @@
           "cleaned",
           "common",
           "complement",
+          "connectEdgesToWires",
           "copy",
           "countElement",
           "cut",
@@ -2916,6 +2918,7 @@
           "cleaned",
           "common",
           "complement",
+          "connectEdgesToWires",
           "copy",
           "countElement",
           "cut",
@@ -3044,6 +3047,7 @@
           "cleaned",
           "common",
           "complement",
+          "connectEdgesToWires",
           "copy",
           "countElement",
           "cut",
@@ -3183,6 +3187,7 @@
           "cleaned",
           "common",
           "complement",
+          "connectEdgesToWires",
           "copy",
           "countElement",
           "cut",
@@ -3354,6 +3359,7 @@
           "cleaned",
           "common",
           "complement",
+          "connectEdgesToWires",
           "copy",
           "countElement",
           "cut",
@@ -3495,37 +3501,37 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1561,
+          "line": 1576,
           "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1565,
+          "line": 1580,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1574,
+          "line": 1589,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1583,
+          "line": 1598,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1590,
+          "line": 1605,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 3976,
+          "line": 3991,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
@@ -3823,10 +3829,10 @@
   "coverage": {
     "methods": {
       "upstream_declared": 609,
-      "ours_declared": 1940,
+      "ours_declared": 1946,
       "upstream_distinct": 408,
-      "covered_distinct": 253,
-      "fraction": 0.6201,
+      "covered_distinct": 254,
+      "fraction": 0.6225,
       "missing_distinct": [
         "Attacher",
         "AttacherType",
@@ -3853,7 +3859,6 @@
         "changeAttacherType",
         "clearCache",
         "clone",
-        "connectEdgesToWires",
         "continuityWith",
         "countNodes",
         "countTriangles",

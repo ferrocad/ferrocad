@@ -649,6 +649,64 @@ The five errors left are `Mesh.decimate`, a removed object's `Name`, the two
 "would create invalid geometry" refusals and the chamfered face-order assumption. None needs
 a PartDesign workbench.
 
+### 8.15 P3 opens: `Mesh::FeaturePython`, the measured add-on surface, and two errors
+
+P3's first slice was the freeform host. The ideation note had already identified the one
+missing piece for the closest worked answer to a freeform skin: the SubD workbench stores
+its cage on a **`Mesh::FeaturePython`**, which we did not register. That type now exists
+with the same `Mesh`/`Placement` pair and `MeshFeature::onChanged` mirror as `Mesh::Feature`,
+and `execute` records a request for the binding (`Document::mark_python_pending`), so a
+proxy runs exactly as it does for `Part::FeaturePython`.
+
+**The call surface was synthesized and measured, not assumed.** Neither add-on is in this
+checkout, so `tests/test_p3_addon_surface.py` runs the calls their object model documents
+against one `ferrocad` + `Part` + `Mesh` image: a cage on the new type (`CagePoints` +
+`CageFaces`, preview assigned in `execute`), each quad as a bicubic
+`Part.BSplineSurface.buildFromPolesMultsKnots(...).toShape()`, a six-patch `Part.Shell` +
+`sewShape` + `Part.Solid` skin (12 edges, 0 free, volume 1.0), a `Part::FeaturePython`
+wrapper that follows the cage's `Placement`, and Curves' `interpolate` + `Part.Wire` +
+`Part.makeFilledFace`. Every call is answered. The measurement and its caveats are in
+[`research/p3-addon-surface-spike.md`](../research/p3-addon-surface-spike.md).
+
+The one call that was missing is **`Shape.connectEdgesToWires`**
+(`ShapeAnalysis_FreeBounds::ConnectEdgesToWires`, returning a compound of wires); SimpleCAD
+reaches for it when two coplanar faces' sides are only geometrically coincident. It is now
+implemented and pinned by `connect_edges_to_wires_links_a_boundary`.
+
+**Two SimpleCAD errors closed on the way, and both were seam rules rather than surface work:**
+
+1. **A cavity solid rebuilt from its own shells.** Upstream's `makeElementSolid` adds every
+   shell with `BRepBuilderAPI_MakeSolid::Add` and then calls `BRepLib::OrientClosedSolid`;
+   it never reverses them, because a cavity shell taken from a cut already carries the
+   reversed orientation. We reversed everything after the first shell, so `test_forming`'s
+   stretched box-with-a-sphere-cavity rebuilt a solid of 1000 + 33.5 mm³ that `BRepCheck`
+   rejected. `make_hollow_solid` now adds as given; the caller reverses an independently
+   built inner shell, which `Part.Solid.add` (our convenience, upstream has none) documents.
+   Pinned by `hollow_solids_keep_the_cavity_the_shells_carry` and
+   `a_part_solid_accepts_cavity_shells`.
+2. **A removed object was still valid.** `DocumentObject.isValid()` read `Shape` first, and
+   a deleted wrapper's `Shape` raised, whose `else` branch returned `true`. Upstream reports
+   `false` for a removed object, and SimpleCAD's rotate guard tests `not obj.isValid()`
+   before reading `.Name`; our `true` sent it on to the `ReferenceError`. The attachment is
+   checked first now, so `test_subdivision`'s stale-operation guard short-circuits.
+
+The measurements, with the extension and the SimpleCAD harness rebuilt after the change:
+
+| Measure | Before | After |
+| --- | --- | --- |
+| SimpleCAD integrated | 1036/6/5/7 | **1038/6/3/7** over 88/88 |
+| `test_forming` | 16/0/1/0 | **17/0/0/0** |
+| `test_subdivision` | 14/0/1/0 | **15/0/0/0** |
+| Part conformance | 531/0/0/12 | **531/0/0/12** |
+| Rust lib tests | `ferrocad_occt` 63, `ferrocad_mesh` 82, `part_py` 366 | **`ferrocad_occt` 63, `ferrocad_mesh` 82, `part_py` 368**, 0 failed |
+| Part API audit | 253/408 (62.0%) | **254/408 (62.3%)**: `connectEdgesToWires` |
+| Python sets | `base` 707/0/0/8, `workbenches` 789/0/0/3 | **`base` 707/0/0/8, `workbenches` 794/0/0/3** |
+
+The three errors left are `Mesh.decimate` (a decimator is a new algorithm, not a seam fix),
+`test_loop_faces`'s twisted-quad merge (the reference's merge accepts a candidate on area
+and normal without checking validity, so it returns a face `BRepCheck` rejects; every kernel
+call is identical), and the chamfered face-order assumption.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

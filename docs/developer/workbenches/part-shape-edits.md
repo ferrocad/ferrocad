@@ -213,6 +213,21 @@ the bridge exposes both the operation code and the fuzzy value on — the same t
 upstream does with `BRepAlgoAPI_BooleanOperation::myOperation`. `Cut` keeps its
 compound-tool rewriting; `Fuse` and `Common` are one plain build.
 
+## A refused boolean raises `ValueError`
+
+OCCT refuses some boolean operands outright: a solid cut by an open shell returns
+`BOPAlgo_AlertBOPNotAllowed` and a null result — on 7.9.2 exactly as on 8.0.1. Upstream
+does not check `IsDone()`; it hands the null to `makeShapeWithElementMap`, whose
+`NullShapeException` derives from `Base::ValueError`, so Python sees a **`ValueError`**.
+Only an OCCT *exception* leaves that path as a `Part.OCCError`.
+
+`Shape.fuse`/`cut`/`common`/`multiFuse` split the two the same way (`boolean_error` in the
+binding): a `NotDone` or null-input backend error is a `ValueError`, while an
+`OcctError::Exception` stays a `Part.OCCError`. This is not cosmetic — SimpleCAD's
+`preserves_volume` refuses an open result by catching `ValueError`, so an `OCCError` there
+is an unhandled exception. Pinned by
+`a_refused_boolean_raises_value_error_like_upstream`.
+
 ## SimpleCAD's `close_holes` — an upstream policy, not a seam defect
 
 `erase_elements` closes a hole's wall through SimpleCAD's own `close_holes`, which picks
@@ -294,3 +309,18 @@ unmodified here. The detail is in
 - **The `close_holes` cap policy** (`test_edge_deletion` and `test_rounding`) is filed
   above: it is SimpleCAD's documented behaviour, and the reference checkout stays
   unmodified.
+- **The wrapped-drawing inverse picks another branch, not another geometry.**
+  `WrapFrame.local` inverts `point(q)` by projecting the traced point onto the *target
+triangle's plane* (`basis @ (trace(q) - p)`). On a closed section that residual is
+  rank-deficient when the target face is parallel to the start face: at the mouse's
+  previous q the moved point differs by a vector *along the target normal*, which the 2D
+  projection drops, so the solver cannot walk from `(25, 3)` to `(35, 0)`. It falls back to
+  the triangle-corridor unfold, whose Dijkstra tree is rooted in the start face's first
+  triangle (the x<0 half on every OCCT tried), and the four symmetric routes around the box
+  make the -Y route shorter in centre-to-centre length. The developed coordinate comes back
+  as `-45` instead of `35` — the same surface point, the other way round the perimeter.
+  Both choices are the reference's, not the seam's: the guide mesh is OCCT's own (7.9.2 and
+  8.0.1 return the same two facets in the same order), every input tolerance is 1e-7, and
+  the forward `point(35, 0)` is correct. Filed as a documented test assumption; the
+  branch-consistent inverse would have to compare candidates against the previous q in the
+  reference.

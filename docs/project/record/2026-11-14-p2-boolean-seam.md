@@ -27,9 +27,10 @@ the failing-test map is [`../research/simplecad-bringup.md`](../research/simplec
 | **The undo transaction** | `set_label` records `Change::Label`, and a type's derived mirror (`Placement` → `Shape` on a `Part::Feature`, → the mesh transform on a `Mesh::Feature`, a shape assignment's adopted `Placement`) goes through `Document::set_property_derived` | SimpleCAD **1019/15/13/7** — the undo/label bucket empties; `test_union` **16/16** |
 | **A degenerate edge and a writable surface** | `Edge.Curve` raises `TypeError` on a pole/apex edge; `Part.Cylinder`'s `Radius`/`Center`/`Axis` are writable and `toShape(u1, u2, v1, v2)` builds the parameter band | SimpleCAD **1026/8/13/7** — `test_healing` 14/14 and `test_degenerate_drawing` 5/5 |
 | **The placement representation** | a `PartShape` keeps its un-moved geometry beside the placement, so a reset is bit-exact; a rigid `Placement` write is a `TopLoc_Location` (`relocate`), so a moved shape is still a partner of its source | SimpleCAD **1028/6/13/7** — the principal-axis tie and the style-mapping failures close |
+| **The refused boolean** | a boolean OCCT cannot run (a solid cut by an open shell) yields a null result; upstream turns that into `NullShapeException`, a `ValueError`, where our binding raised `Part.OCCError` | SimpleCAD **1029/6/12/7** — `test_surface_wrap`'s area/volume comparison stops erroring |
 
-SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1028 / 6 / 13 / 7 over 88/88
-modules**: **43 failures closed, none added, and the errors moved 18 → 13**. The printed
+SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1029 / 6 / 12 / 7 over 88/88
+modules**: **43 failures closed, none added, and the errors moved 18 → 12**. The printed
 failure count falls by one less than the records closed in the last two steps because a
 fully-passing module counts once. No module failed to load.
 
@@ -470,6 +471,49 @@ The candidate improvements, if this ever matters: a `self_intersections` variant
 reports only pairs above a facet index (the caller in `glue.py` filters to the new cap
 anyway), and a release-built extension for Python timings.
 
+### 8.11 `test_surface_wrap`: a real error fixed, a reference branch filed
+
+This was the last P3 failure ("wrapped-drawing parameter mapping"). Its module carries one
+failure and one error, and they turned out to be different things.
+
+**The error was ours.** `test_changed_faces_measure_the_whole_change_of_area_and_volume`
+calls `preserves_volume(box, Part.makeShell(box.Faces[:-1]))`, which cuts a solid by an
+**open shell**. OCCT refuses that operand outright — `BOPAlgo_AlertBOPNotAllowed`, null
+result — on 7.9.2 as on 8.0.1. Upstream does not check `IsDone()`: `makeElementBoolean`
+feeds the null to `makeShapeWithElementMap`, whose `NullShapeException` derives from
+`Base::ValueError`, so Python sees a `ValueError`. Our seam raised `Part.OCCError` (not a
+`ValueError`), so SimpleCAD's `except ValueError` never caught it and the test errored.
+`Shape.fuse`/`cut`/`common`/`multiFuse` now map a not-done or null-input backend error to
+`ValueError` and keep `OcctError::Exception` as `Part.OCCError`, which is upstream's split.
+Pinned by `a_refused_boolean_raises_value_error_like_upstream`; the module's error count
+drops 1 → 0.
+
+**The failure is a reference branch choice.** `test_mouse_coordinates_reach_adjacent_and_opposite_faces`
+round-trips `q = (15, 3), (25, 3), (35, 0)` through `frame.point(q)` and
+`frame.local(point, face)`. The forward map is right — `point(35, 0)` is `(-10, 5, 0)`, the
+far side of the box. The inverse comes back as `(-45, 0)`, exactly 80 mm — one perimeter —
+from the expected `(35, 0)`: the same surface point, developed the other way round. Three
+measurements locate the choice in the reference, not the seam:
+
+1. The residual `basis @ (trace(q) - p)` projects onto the **target triangle's plane**. On
+the opposite face that plane is parallel to the start face, so the last 5 mm of the
+correction is a vector *along the target normal* and the projection drops it: the
+finite-difference Jacobian at the mouse's previous q has rank **1** (`[[0, 0.05], [0, -0.05]]`),
+and `trf`/`dogbox`/`lm` all fail to leave `(25, 3)` for `(35, 0)`.
+2. The fallback is the triangle-corridor unfold, whose Dijkstra tree is rooted in the start
+face's **first** triangle (`locate` ties both halves of the square at score 0 and takes the
+first). That triangle is the y < 0 half, so the -Y route around the box is 29.76 mm of
+centre-to-centre steps against 36.4 mm via +Y — the -Y branch wins outright, not by a tie.
+3. The guide mesh is the kernel's own: OCCT **7.9.2** and 8.0.1 both mesh the +X face as
+nodes `(10,-10,-10), (10,-10,10), (10,10,-10), (10,10,10)` with triangles `(2,1,3)` then
+`(2,3,4)` — the y < 0 half first — so `locate` roots the corridor the same way on both.
+Every input tolerance is 1e-7; nothing in the boolean or tessellation seam differs.
+
+A branch-consistent inverse would have to prefer, among the verified candidates, the one
+nearest the previous q — reference code this project does not modify. Filed as a documented
+test assumption (the module's failure count stays 1), so **no SimpleCAD failure is a
+FerroCAD defect any more**: 0 P2, 0 P3, 6 documented assumptions.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),
@@ -479,9 +523,9 @@ CARGO_BUILD_JOBS=2`; the extension was rebuilt before the Python/SimpleCAD runs.
 | Measure | Value | Command |
 | --- | --- | --- |
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
-| SimpleCAD integrated | **1028 passed, 6 failed, 13 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| SimpleCAD integrated | **1029 passed, 6 failed, 12 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
 | Part API audit | **253/408 (62.0%)**, contract re-pinned for `Cylinder.toShape` | `python3 tools/part_api_audit.py --check` |
-| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `ferrocad_core` **137**, `ferrocad_mesh` **64**, `part_py` **355**, `part_shape_ops` **20**, all 0 failed | per-crate `cargo test` |
+| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `ferrocad_core` **137**, `ferrocad_mesh` **64**, `part_py` **355**, `part_shape_ops` **21**, all 0 failed | per-crate `cargo test` |
 | Python extension sets | `base` **707 / 0 / 0 / 8**; `workbenches` **789 / 0 / 0 / 3** | `python3 tools/run_tests.py --extension base` / `workbenches` |
 | Docs/tooling | `api_docs` 9 pages, `userdocs` 8, `build_book` 48 chapters, extension-set contract 50 modules, `test_docs_tooling` 49 | the `--check` gates |
 
@@ -491,20 +535,22 @@ Two runs of the full SimpleCAD suite before the edge-placement fix produced the 
 boss records closed and the error set unchanged in size (one analytic error left, now
 filed as a face-order assumption). The signature/tessellation/cutHoles batch then measured
 **1013/20/14/7**, the unwrap fix **1014/20/13/7**, the undo/label round **1019/15/13/7**,
-the query/tolerance round **1026/8/13/7**, and the placement round **1028/6/13/7**, all over
-88/88 modules; no run moved a module from load-failure to loaded.
+the query/tolerance round **1026/8/13/7**, the placement round **1028/6/13/7**, and the
+refused-boolean round **1029/6/12/7**, all over 88/88 modules; no run moved a module from
+load-failure to loaded.
 
-## 10. What the 6 failures and 13 errors are
+## 10. What the 6 failures and 12 errors are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
-in short: **no P2 failure is left**, **1 → P3** (wrapped-drawing parameter mapping) and
-**5 documented test assumptions** (the exact `BoundBox` precondition, the two `close_holes`
-cases and `test_rounding`'s erase-then-refuse sample — that same policy — plus
-`test_precision`'s tilted push, which is a reference-check gap, §8.8). The 13 errors are 4
-`test_surface_offset` draft shapes, 1 wrapped-drawing area measurement, 7 behavioural/API
-results (forming, loop faces, measuring, mesh conversion, slicing, subdivision, the surface
-snap) and **1 documented face-order assumption** (the chamfered single-face selection, which
-is an error rather than a failure).
+in short: **no P2 and no P3 failure is left**, and all **6 are documented test assumptions**
+(the exact `BoundBox` precondition, the two `close_holes` cases and `test_rounding`'s
+erase-then-refuse sample — that same policy — plus `test_precision`'s tilted push and
+`test_surface_wrap`'s inverse branch, which are reference-side checks, §8.8 and §8.11). The
+12 errors are 4 `PartDesign`-module draft shapes (3 in `test_surface_offset`, 1 in
+`test_surface_ops`), 7 behavioural/API results (forming, loop faces, measuring, mesh
+conversion, slicing, subdivision, the surface snap) and **1 documented face-order
+assumption** (the chamfered single-face selection, which is an error rather than a failure).
 
-The P2 seam list is empty; the identity, undo/label and query/tolerance buckets are empty
-too. The one remaining "kernel" case was traced to the reference check, not the seam (§8.8).
+The P2 seam list is empty, and so is P3's; the identity, undo/label and query/tolerance
+buckets are empty too. Both remaining "kernel" cases were traced to the reference, not the
+seam (§8.8, §8.11).

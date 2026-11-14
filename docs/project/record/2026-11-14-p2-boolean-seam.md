@@ -18,11 +18,13 @@ the failing-test map is [`../research/simplecad-bringup.md`](../research/simplec
 | **Boolean tolerance** | `Shape.fuse`/`cut`/`common` hand their `tolerance` to the kernel with upstream's signed contract (`0`, `> 0`, `AUTO_FUZZY`), through one helper | pinned by `part_shape_ops`; totals unchanged by the signature alone |
 | **Edge placement** | a live `Part.Edge` is read from its baked base, not its stale cached entry, in `Part.Wire`/`Part.Face`/`ShapeFix`/`ChFi2d` and `Edge.Curve` | SimpleCAD **1003/27/17/7** |
 | **Wire length and `Face.addWire`** | a wire wrapped from a shape counts its B-Rep edges, so `bool(wire)` is true; `Face.addWire` attaches a boundary as `BRep_Builder::Add` does | SimpleCAD **1005/25/17/7** |
-| **Clean-checkout re-measure** | the `close_holes` experiment was reverted; `../simplecad` stays at `9180c4b` | SimpleCAD **1005/25/17/7** |
+| **Circle frame** | `Part.Circle`'s analytic `XAxis` is the edge's parameter 0 (`gp_Ax2` with the frame, not the normal alone) | SimpleCAD **1006/24/17/7** |
+| **Clean-checkout re-measure** | the `close_holes` experiment was reverted; `../simplecad` stays at `9180c4b` | SimpleCAD **1006/24/17/7** |
 
-SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1005 / 25 / 17 / 7 over 88/88
-modules**: **24 failures and 1 error closed, none added** (the pass total rises by 20 because
-a fully-passing subtest counts once, not once per sub-case). No module failed to load.
+SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1006 / 24 / 17 / 7 over 88/88
+modules**: **25 failures closed, none added, and the error count moved 18 → 17** (the pass
+total rises by 21 because a fully-passing subtest counts once, not once per sub-case). No
+module failed to load.
 
 ## 2. The sub-shape seam
 
@@ -119,7 +121,32 @@ and `Part.Edge` is rejected as upstream's typed signature does. Both are pinned 
 work is what keeps `test_offsetting` at **17/17**: once the wire was truthy, its
 `partition_concentric_circle` reached `addWire` for the first time.
 
-## 6. The `close_holes` experiment, and why it was reverted
+## 6. The circle frame, and the analytic in-place pair
+
+`test_analytic`'s boss case failed on `len(circles) == 2` with three circular edges of
+radius 4. The rebuild is valid and has its one cylinder, but the base rim was **two
+half-circles**: `Part.makeCircle(radius, center, -Z)` built its edge with the seam at
+parameter π while the cylinder's own bottom rim had it at 0, so sewing split the shared
+rim at both points.
+
+The circle itself was consistent — `Circle.XAxis` was `(1, 0, 0)` and `value(0)` the same
+point for both normals — but `edge_from_circle` built `gp_Ax2` from the **normal alone**, so
+OCCT chose its own X direction for `-Z`. The edge now gets the analytic frame
+(`gp_Ax2_new3(center, normal, x_axis)`), which is where upstream's `Geom_Circle`
+parameterises from. Pinned by `a_circles_x_axis_is_its_edges_parameter_zero`; the boss
+rebuild (and its fallback) now produce two single circle edges, and
+`test_boss_wall_is_rebuilt_in_place_too` passes.
+
+The sibling `test_single_face_on_chamfered_hole_replaces_in_place` is a different case: its
+selection is the first face with a horizontal normal between z 2 and 18, which in our
+reconstructed face order is a **box side** (`Face2`, area 600), not a facet of the hole.
+`prepare` correctly rejects it. Every one of the 26 actual wall facets is accepted
+(radius 6.0000, height 19.002, `can_cut` true) and the rebuild gives a valid closed solid
+(volume 21 719.17 against the source's 21 718.16), so the fit and the seam support the
+operation; the test's face-index precondition is what does not hold. It is filed with the
+test assumptions, not with the P2 defects.
+
+## 7. The `close_holes` experiment, and why it was reverted
 
 The round wanted the two `test_edge_deletion` failures closed. A twelve-line rule in the
 SimpleCAD checkout (`simplecad/core/geometry.py`, `close_holes`) made a loop that is the
@@ -142,7 +169,7 @@ So the two failures are an **upstream expectation mismatch**: the shipped policy
 removed planar side face; the test asserts that the body opens. They are filed with the
 test assumptions, not with the P2 defects, and `../simplecad` stays clean.
 
-## 7. Measurements at close
+## 8. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),
 `git status` empty. Built with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
@@ -151,26 +178,25 @@ CARGO_BUILD_JOBS=2`; the extension was rebuilt before the Python/SimpleCAD runs.
 | Measure | Value | Command |
 | --- | --- | --- |
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
-| SimpleCAD integrated | **1005 passed, 25 failed, 17 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| SimpleCAD integrated | **1006 passed, 24 failed, 17 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
 | Part API audit | **253/408 (62.0%)**, contract re-pinned for `Face.addWire` | `python3 tools/part_api_audit.py --check` |
-| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `part_boot` **3**, `part_shape_ops` **12**, all 0 failed | per-crate `cargo test` |
+| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `part_boot` **3**, `part_shape_ops` **13**, all 0 failed | per-crate `cargo test` |
 | Docs/tooling | `api_docs` 9 pages, `userdocs` 8, `build_book` 48 chapters, extension-set contract 50 modules | the four `--check` gates |
 
 Two runs of the full SimpleCAD suite before the edge-placement fix produced the same
 1001/29/17/7, so that figure was stable rather than a lucky pass; the post-fix runs are
-1003/27/17/7 and then 1005/25/17/7, with the same 17 errors and the rotate-edges and
-elongating records closed.
+1003/27/17/7, 1005/25/17/7 and then 1006/24/17/7, with the rotate-edges, elongating and
+boss records closed and the error set unchanged in size (one analytic error left, now
+filed as a face-order assumption).
 
-## 8. What the 25 failures are
+## 9. What the 24 failures are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
-in short: **19 → P2** (boolean/topology 4, undo/labels 5, query/tolerance/determinism 9,
+in short: **18 → P2** (boolean/topology 3, undo/labels 5, query/tolerance/determinism 9,
 identity 1), **3 → P3** (mesh→fitted-surface 2, wrapped drawing 1) and **3 documented
 test assumptions** (the exact `BoundBox` precondition and the two `close_holes` cases). The
-17 errors are unchanged: 4 `PartDesign` imports, 1 wrapped-drawing edge case and 12
-behavioural/API results.
+17 errors are 4 `PartDesign` imports, 1 wrapped-drawing edge case, 11 behavioural/API
+results and **1 documented face-order assumption** (the chamfered single-face selection).
 
-The next cluster is the `test_analytic` in-place pair
-(`test_boss_wall_is_rebuilt_in_place_too` plus the `…chamfered_hole_replaces_in_place`
-error), then `test_mesh_glue` and `test_union.test_rod_a_hair_off_its_bore`, both still
-unreproduced.
+The next cluster is `test_mesh_glue` and `test_union.test_rod_a_hair_off_its_bore`, both
+still unreproduced, and the last sub-tolerance push/pull.

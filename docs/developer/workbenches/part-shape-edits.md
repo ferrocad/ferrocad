@@ -81,6 +81,21 @@ The consumers now take a live edge's geometry from its base (`PyEdge::entry_from
 remains the fallback for a shape the kernel cannot classify. Pinned by
 `an_edge_placement_reaches_the_shapes_that_consume_it`.
 
+## A circle's frame reaches its edge
+
+`Part.makeCircle(radius, center, normal)` and `Circle.toShape()` build the edge from the
+analytic circle. The edge is a `gp_Circ` in a `gp_Ax2`, and `edge_from_circle` used to pass
+only the **normal**, letting OCCT choose the X direction. For a `-Z` normal that choice is
+half a turn from the circle's own `XAxis`/`AngularXU`, so the edge's seam vertex sat at
+parameter π while the same circle reported its `value(0)` on the other side.
+
+That showed up as geometry, not as a curve reading: sewing a rim built with `-Z` to the
+cylinder's own `+Z` rim split the shared edge at both seam points, so one circular rim
+became **two arcs** (`SimpleCAD`'s boss rebuild counted three circles instead of two). The
+edge now takes the analytic frame (`gp_Ax2_new3(center, normal, x_axis)`), which is where
+upstream's `Geom_Circle` parameterises from, and `Circle.XAxis = …` moves the edge's start
+point with it. Pinned by `a_circles_x_axis_is_its_edges_parameter_zero`.
+
 ## A wire wrapped from a shape counts its edges
 
 `Part.Wire([...])` carries the analytic entries it was built from, but a wire reached
@@ -164,10 +179,14 @@ reverted. If upstream changes the policy, revisit; do not patch the reference ch
 
 ## What is still open in this seam
 
-- **`test_analytic`'s in-place pair, `test_mesh_glue`,
-  `test_union.test_rod_a_hair_off_its_bore`.** Each needs its own reproduction; none is the
-  seam above.
+- **`test_mesh_glue`, `test_union.test_rod_a_hair_off_its_bore`.** Each needs its own
+  reproduction; neither is the seam above.
 - **`test_precision.test_through_push_from_a_slightly_tilted_face_leaves_no_skin`** — the
   last sub-tolerance case; it is a push/pull, not a plain boolean.
 - **A boolean result is a `Compound` around one `Solid`** (see
   [`part-containers.md`](part-containers.md#open-questions)).
+- **The chamfered single-face analytic selection is a face-order assumption, not a seam
+  defect.** The test takes the first face with a horizontal normal between z 2 and 18;
+  after SimpleCAD's mesh reconstruction that is a box side, which `prepare` correctly
+  rejects. All 26 actual wall facets are accepted (radius 6.0000, height 19.002) and
+  rebuild a valid closed solid.

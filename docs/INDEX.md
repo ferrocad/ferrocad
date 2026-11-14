@@ -237,7 +237,7 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Closed history
 
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
-- [project/record/2026-11-14-p2-boolean-seam.md](project/record/2026-11-14-p2-boolean-seam.md) — the P2 boolean/seam round: one general-fuse build, vertex images, `Edge.Orientation`/`Placement`, the wire wrapper and `Face.addWire`, the signed boolean tolerance, and the reverted `close_holes` experiment.
+- [project/record/2026-11-14-p2-boolean-seam.md](project/record/2026-11-14-p2-boolean-seam.md) — the P2 boolean/seam round: one general-fuse build, vertex images, `Edge.Orientation`/`Placement`, the wire wrapper, `Face.addWire` and the circle frame, the signed boolean tolerance, and the reverted `close_holes` experiment.
 - [project/record/2026-11-13-november-round.md](project/record/2026-11-13-november-round.md) — the November round: the OCCT Rust boundary, the browser shell, the host/backend split, backend parity, the mod format, the two regressions found at rotation, and the manipulator editor round.
 - [project/record/TODO-14-11-2026.md](project/record/TODO-14-11-2026.md) — the closed 2026-11-14 backlog: the manipulator day, the startup sample, the boolean containers, the sub-shape seam and the open P2–P6 work.
 - [project/record/TODO-13-11-2026.md](project/record/TODO-13-11-2026.md) — the closed 2026-11-13 backlog: the SimpleCAD closure (P1), the two red gates, the image-path round and the open P2–P6 work.

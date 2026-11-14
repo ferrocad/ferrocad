@@ -20,13 +20,13 @@ desktop.
 The bottleneck is no longer geometry. It is the **breadth of the workbench API**, the
 **interaction surface** on top of it, and the **host/platform seam** the November round
 built. The Part audit covers **253 of 408 upstream method names (62.0%)**. The SimpleCAD
-S4.1–S4.6 façade is in the tree. SimpleCAD's integrated baseline is **1005 passed / 25
+S4.1–S4.6 façade is in the tree. SimpleCAD's integrated baseline is **1006 passed / 24
 failed / 17 errored / 7 skipped over 88/88 modules** (2026-11-15, clean `9180c4b`), with
 the Qt groups classified as skips and the SC7 workflow acceptance green. **P1 is closed**
 (2026-11-13), and the P2 boolean/seam rounds then closed **24 of the 49 failures** without
 losing one: `Shape.generalFuse` is one build per call, a replaced vertex reports its image,
 `Edge.Orientation` and an edge's `Placement` are cached, and `Shape.fuse`/`cut`/`common` honour their signed
-tolerance. Every remaining failure is still attributed (**19 P2, 3 P3, 3 documented test
+tolerance. Every remaining failure is still attributed (**18 P2, 3 P3, 3 documented test
 assumptions**; none unattributed). The rotation's two red readings were fixed the same day:
 the B20 `RootNode` change was a real Part regression, and the SimpleCAD `surface_ops`
 delta was the in-process harness not exporting the paths its worker subprocess needs.
@@ -101,7 +101,7 @@ rather than an architecture task.
 - **SimpleCAD S0–S3 — the image is in.** `ferrocad_mesh` (payload, STL, operations,
   `Mesh::Feature`), `ferrocad_mesh_py` (`Mesh`, `MeshPart`), `Part.Shape.tessellate`,
   `BOPTools.SplitAPI` and the import-time PySide surface all load in one in-process
-  `ferrocad` + `Part` + `Mesh` image. The 2026-11-15 baseline is **1005 pass, 25 fail,
+  `ferrocad` + `Part` + `Mesh` image. The 2026-11-15 baseline is **1006 pass, 24 fail,
   17 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
   push/pull → cut → STL) is green and the 5 Qt groups are classified skips. The identity, query and representation
   frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
@@ -117,9 +117,10 @@ rather than an architecture task.
   into five named buckets — boolean/topology partition (16), document undo/transaction/
   labels (5), Part query strictness/tolerance (10), shape identity/ownership/BRep export
   (6) and surface/freeform (11) — plus one documented test assumption. The seam rounds
-  then closed 24 failures and one error (the eight surface-line, both rotate-edges and both
-  elongating cases among them), leaving **19 → P2, 3 → P3, 3 documented test assumptions, 0
-  unattributed**. The next cluster is the `test_analytic` in-place pair. The full table is in
+  then closed 25 failures (the eight surface-line, both rotate-edges, both elongating and the
+  analytic boss cases among them), leaving **18 → P2, 3 → P3, 3 documented test assumptions,
+  0 unattributed**. The chamfered single-face error is filed as a face-order assumption; the
+  next cluster is `test_mesh_glue` and `test_union`'s rod. The full table is in
   [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
@@ -154,7 +155,7 @@ subset and says so.
   `tools/simplecad_audit.py --check`, and the in-process
   `crates/ferrocad_part_py/tests/simplecad_conformance.rs`. The in-process test exports the
   repo Python/OCCT paths to SimpleCAD's worker subprocess; use it when the extension may
-  be stale, because it builds the current tree. Current: **1005/25/17/7 over 88/88**
+  be stale, because it builds the current tree. Current: **1006/24/17/7 over 88/88**
   (2026-11-15, clean checkout).
 - **Engine/app:** per-crate `cargo test` and `pytest tests` (no workspace-wide build).
 - **Docs:** `api_docs`, `userdocs`, `build_book` and the relative-link sweep in `--check`

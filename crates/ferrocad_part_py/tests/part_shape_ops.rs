@@ -276,3 +276,53 @@ assert box.findSubShape(reversed_face) == ("Face", 1)
         );
     });
 }
+
+/// `Edge.Orientation` must survive the shape that consumes the edge.
+///
+/// A `Part.Edge` carries the shape it was built from beside its base `PartShape`,
+/// and `Part.Wire`/`Part.Face`/`replaceShape` read that cached entry. Setting the
+/// flag only on the base left an edge that *reported* `Internal` but reached a new
+/// wire as `Forward`, so an internal spur could never be built — or erased, which is
+/// what SimpleCAD's `clean_solid_faces`/`erase_elements` do.
+#[test]
+fn an_edge_orientation_reaches_the_shapes_that_consume_it() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+
+box = Part.makeBox(20, 20, 10)
+top = [f for f in box.Faces if abs(f.CenterOfMass.z - 10.0) < 1e-4][0]
+spur = Part.makeLine(Part.Vertex(5, 5, 10), Part.Vertex(15, 15, 10))
+spur.Orientation = "Internal"
+assert spur.Orientation == "Internal"
+
+wire = Part.Wire([spur])
+assert wire.Edges[0].Orientation == "Internal", wire.Edges[0].Orientation
+
+face = Part.Face(top.Surface, [top.Wires[0], wire])
+assert len(face.Wires) == 2
+internal = [e for e in face.Edges if e.Orientation == "Internal"]
+assert len(internal) == 1, [e.Orientation for e in face.Edges]
+
+# The spur is not part of the boundary: replacing the top face keeps twelve
+# boundary edges plus the one internal edge.
+replaced = box.replaceShape([(top, face)])
+assert replaced.ShapeType == "Solid"
+assert len(replaced.Edges) == 13, len(replaced.Edges)
+assert len([e for f in replaced.Faces for e in f.Edges if e.Orientation == "Internal"]) == 1
+
+# Erasing the spur leaves the box with its own edges and its own volume.
+cleaned = replaced.removeShape(internal)
+assert cleaned.ShapeType == "Solid", cleaned.ShapeType
+assert cleaned.isValid()
+assert len(cleaned.Faces) == 6, len(cleaned.Faces)
+assert len(cleaned.Edges) == 12, len(cleaned.Edges)
+assert abs(cleaned.Volume - box.Volume) < 1e-6, cleaned.Volume
+assert not [e for f in cleaned.Faces for e in f.Edges if e.Orientation == "Internal"]
+"#,
+        );
+    });
+}

@@ -9015,6 +9015,33 @@ impl PyEdge {
         slf.as_super().copy_handle()
     }
 
+    /// `Edge.Orientation` — the base flag, kept in step with the cached entry.
+    ///
+    /// A `Part.Edge` carries the shape it was built from beside the base
+    /// `PartShape`, and every consumer of an edge (`Part.Wire`, `Part.Face`, a
+    /// boolean, a shape rebuild) reads that cached entry. Setting the flag on the
+    /// base alone would leave an edge that *reports* `Internal` but reaches a new
+    /// wire as `Forward` — which is exactly what erasing an internal edge depends
+    /// on (`SimpleCAD`'s `clean_solid_faces`/`erase_elements`).
+    #[getter]
+    fn Orientation(slf: PyRef<'_, Self>) -> &'static str {
+        slf.as_super().orientation_name()
+    }
+
+    #[setter]
+    fn set_Orientation(mut slf: PyRefMut<'_, Self>, value: &str) -> PyResult<()> {
+        let oriented = slf.as_super().reorient(value)?;
+        if let Some(entry) = slf
+            .entry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            entry.shape = oriented;
+        }
+        Ok(())
+    }
+
     /// The 2D curve (pcurve) attached to this edge, or `None`.
     ///
     /// This slice builds at most one pcurve (`index == 0`, and only for edges made

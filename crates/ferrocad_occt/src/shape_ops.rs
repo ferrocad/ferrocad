@@ -246,28 +246,31 @@ pub(crate) fn general_fuse(
     Some(owned(builder.pin_mut().Shape()))
 }
 
-/// The split parts of input `index` from a General Fuse, as a compound.
-pub(crate) fn general_fuse_modified(
+/// A General Fuse and **one** set of split parts per input, in input order.
+///
+/// One build answers every input: a boolean decides its images once, so an edge image
+/// and the vertex image at its end are the same result shapes, and a caller that swaps
+/// them into a face keeps the face valid. (Rebuilding the fuse per input — what this
+/// replaced — gives every input its own independent copy, and mixing those copies into
+/// one face leaves coincident, unshared vertices.) `None` per input means "no image":
+/// the input survives unchanged, or the kernel reported nothing and no unambiguous
+/// replacement could be found.
+///
+/// OCCT's history answers for edges, faces and solids but **not** for a vertex it
+/// replaces: the arguments' vertices are unified with (or duplicated beside) their
+/// neighbours without a `Modified` relation. When the kernel reports nothing and the
+/// input vertex is gone from the result, the single result vertex at the same point is
+/// reported instead.
+pub(crate) fn general_fuse_parts(
     shapes: &TopTools_ListOfShape,
-    index: i32,
     tolerance: f64,
-) -> Option<UniquePtr<TopoDS_Shape>> {
-    if shapes.IsEmpty() || index < 1 {
+) -> Option<(
+    UniquePtr<TopoDS_Shape>,
+    Vec<Option<UniquePtr<TopoDS_Shape>>>,
+)> {
+    if shapes.IsEmpty() {
         return None;
     }
-    let mut input = None;
-    let mut position = 1;
-    let mut iterator = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(shapes);
-    while iterator.More() {
-        if position == index {
-            input = Some(owned(iterator.Value()));
-            break;
-        }
-        iterator.pin_mut().Next();
-        position += 1;
-    }
-    let input = input?;
-
     let mut builder = ffi::b_rep_algo_api::BRepAlgoAPI_BuilderAlgo_new();
     builder.pin_mut().SetArguments(shapes);
     builder.pin_mut().SetNonDestructive(true);
@@ -280,22 +283,90 @@ pub(crate) fn general_fuse_modified(
     if !builder.IsDone() {
         return None;
     }
+    let fused = owned(builder.pin_mut().Shape());
+    // Only the vertex fill-in needs the result's vertices, and only for an input the
+    // kernel left without an image.
+    let mut result_vertices = None;
 
-    let modified = builder.pin_mut().Modified(&input);
-    if modified.IsEmpty() {
+    let mut inputs = Vec::new();
+    let mut iterator = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(shapes);
+    while iterator.More() {
+        inputs.push(owned(iterator.Value()));
+        iterator.pin_mut().Next();
+    }
+
+    let mut parts = Vec::with_capacity(inputs.len());
+    for input in &inputs {
+        let Some(input) = input.as_ref() else {
+            parts.push(None);
+            continue;
+        };
+        if !builder.pin_mut().Modified(input).IsEmpty() {
+            let modified = builder.pin_mut().Modified(input);
+            let mut images = Vec::new();
+            let mut iterator = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(modified);
+            while iterator.More() {
+                images.push(owned(iterator.Value()));
+                iterator.pin_mut().Next();
+            }
+            parts.push(Some(compound_of_refs(&images)));
+            continue;
+        }
+        if input.ShapeType() != TopAbs_ShapeEnum::TopAbs_VERTEX {
+            parts.push(None);
+            continue;
+        }
+        if result_vertices.is_none() {
+            result_vertices = Some(crate::shape::sub_shape_map(
+                fused.as_ref()?,
+                TopAbs_ShapeEnum::TopAbs_VERTEX,
+            ));
+        }
+        parts.push(
+            result_vertices
+                .as_ref()
+                .and_then(|vertices| replaced_vertex(input, &vertices))
+                .map(|vertex| compound_of_refs(&[vertex])),
+        );
+    }
+    Some((fused, parts))
+}
+
+/// The single result vertex standing where `input` was, when it is no longer there.
+fn replaced_vertex(
+    input: &TopoDS_Shape,
+    vertices: &UniquePtr<ffi::top_tools::TopTools_IndexedMapOfShape>,
+) -> Option<UniquePtr<TopoDS_Shape>> {
+    if vertices.FindIndex(input) > 0 {
+        // The vertex survived the operation: it has no image to report.
         return None;
     }
+    let point = ffi::b_rep::BRep_Tool_Pnt(ffi::topo_ds::TopoDS::Vertex(input));
+    let mut hits = Vec::new();
+    for ordinal in 1..=vertices.Extent() {
+        let vertex = vertices.FindKey(ordinal);
+        let other = ffi::b_rep::BRep_Tool_Pnt(ffi::topo_ds::TopoDS::Vertex(vertex));
+        if point.Distance(&other) <= ffi::precision::Precision::Confusion() {
+            hits.push(owned(vertex));
+        }
+    }
+    if hits.len() != 1 {
+        return None;
+    }
+    hits.pop()
+}
+
+/// A compound holding `shapes`, in order (the bridge carries a list as a compound).
+fn compound_of_refs(shapes: &[UniquePtr<TopoDS_Shape>]) -> UniquePtr<TopoDS_Shape> {
     let mut compound = ffi::topo_ds::TopoDS_Compound_new();
     let builder = ffi::b_rep::BRep_Builder_new();
     let builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
     builder.MakeCompound(compound.pin_mut());
     let mut compound_shape = ffi::topo_ds::TopoDS_Compound_as_shape(compound);
-    let mut iterator = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(modified);
-    while iterator.More() {
-        builder.Add(compound_shape.pin_mut(), iterator.Value());
-        iterator.pin_mut().Next();
+    for shape in shapes.iter().filter_map(|shape| shape.as_ref()) {
+        builder.Add(compound_shape.pin_mut(), shape);
     }
-    Some(compound_shape)
+    compound_shape
 }
 
 /// A comp-solid of the given solids.

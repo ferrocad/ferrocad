@@ -348,9 +348,22 @@ impl Document {
 
     /// Whether an object has `ext`, considering extension inheritance (e.g.
     /// `App::GroupExtensionPython` derives from `App::GroupExtension`).
+    ///
+    /// `App::Part` and `PartDesign::Body` instantiate the geo-feature group extension
+    /// in their constructor (upstream `GeoFeatureGroupExtension::initExtension`,
+    /// which derives from `App::GroupExtension`). That is a static part of the type,
+    /// not a dynamic extension, so it is answered here instead of being stored: the
+    /// file keeps carrying only the extensions a caller actually added.
     pub fn has_extension(&self, id: ObjectId, ext: &str) -> bool {
         self.object(id)
-            .map(|o| o.extensions.iter().any(|e| extension_is_or_derives(e, ext)))
+            .map(|o| {
+                o.extensions.iter().any(|e| extension_is_or_derives(e, ext))
+                    || (Self::is_geo_group_type(&o.type_id)
+                        && matches!(
+                            ext,
+                            "App::GeoFeatureGroupExtension" | "App::GroupExtension"
+                        ))
+            })
             .unwrap_or(false)
     }
 

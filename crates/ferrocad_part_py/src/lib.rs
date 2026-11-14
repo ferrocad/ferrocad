@@ -498,6 +498,34 @@ impl PartShape {
         self.epoch.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// The wrapped shape's orientation name; a null shape reports `Forward`.
+    pub(crate) fn orientation_name(&self) -> &'static str {
+        let Some(shape) = self.shape() else {
+            return "Forward";
+        };
+        ferrocad_part::backend()
+            .orientation(&shape)
+            .unwrap_or("Forward")
+    }
+
+    /// Re-orient the wrapped shape and return the new handle.
+    ///
+    /// The geometry, the placement and the lineage are kept: an orientation change
+    /// alters no topology, so the names still resolve. A subclass that caches the
+    /// shape beside this one (a `Part.Edge` keeps its `EdgeEntry`) must store the
+    /// returned handle too, or the cached copy keeps the old flag.
+    pub(crate) fn reorient(&self, value: &str) -> PyResult<Shape> {
+        let shape = self
+            .shape()
+            .ok_or_else(|| curves::OCCError::new_err("a null shape has no orientation"))?;
+        let oriented = ferrocad_part::backend()
+            .with_orientation(&shape, value)
+            .map_err(kernel_error)?;
+        *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = Some(oriented.clone());
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+        Ok(oriented)
+    }
+
     /// Store the placement and lineage a document property carries beside an
     /// already-placed shape, without re-baking the geometry.
     ///
@@ -2177,12 +2205,7 @@ impl PartShape {
     /// The shape orientation (`Shape.Orientation`).
     #[getter]
     fn Orientation(&self) -> &'static str {
-        let Some(shape) = self.shape() else {
-            return "Forward";
-        };
-        ferrocad_part::backend()
-            .orientation(&shape)
-            .unwrap_or("Forward")
+        self.orientation_name()
     }
 
     /// Set the shape orientation (`Shape.Orientation = "Reversed"`).
@@ -2193,14 +2216,7 @@ impl PartShape {
     /// null shape and an unknown name are errors.
     #[setter]
     fn set_Orientation(&mut self, value: &str) -> PyResult<()> {
-        let shape = self
-            .shape()
-            .ok_or_else(|| curves::OCCError::new_err("a null shape has no orientation"))?;
-        let oriented = ferrocad_part::backend()
-            .with_orientation(&shape, value)
-            .map_err(kernel_error)?;
-        *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = Some(oriented);
-        self.epoch.fetch_add(1, Ordering::SeqCst);
+        self.reorient(value)?;
         Ok(())
     }
 

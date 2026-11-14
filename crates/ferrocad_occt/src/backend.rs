@@ -2372,23 +2372,29 @@ impl GeometryBackend for OcctBackend {
                 .ok_or(OcctError::InvalidInput { what: "null shape" })?;
             let _ = list.pin_mut().Append(inner);
         }
-        let fused = crate::shape_ops::general_fuse(&list, tolerance);
+        let Some((fused, parts)) = crate::shape_ops::general_fuse_parts(&list, tolerance) else {
+            return Err(OcctError::NotDone {
+                operation: "general_fuse",
+            }
+            .into());
+        };
         let Some(fused) = fused.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "general_fuse",
             }
             .into());
         };
-        let mut split = Vec::with_capacity(shapes.len());
-        for index in 1..=shapes.len() as i32 {
-            let modified = crate::shape_ops::general_fuse_modified(&list, index, tolerance);
-            split.push(
-                modified
-                    .as_ref()
-                    .map(|shape| top_level_parts(shape))
-                    .unwrap_or_default(),
-            );
-        }
+        // `parts` is one entry per input, in input order: the split pieces of the
+        // inputs the fuse touched, and nothing for the ones it left alone.
+        let split = parts
+            .iter()
+            .map(|part| {
+                part.as_ref()
+                    .and_then(|part| part.as_ref())
+                    .map(top_level_parts)
+                    .unwrap_or_default()
+            })
+            .collect();
         Ok((erase(fused), split))
     }
 
@@ -3883,6 +3889,7 @@ fn top_level_parts(shape: &TopoDS_Shape) -> Vec<Shape> {
         TopAbs_ShapeEnum::TopAbs_FACE,
         TopAbs_ShapeEnum::TopAbs_EDGE,
         TopAbs_ShapeEnum::TopAbs_WIRE,
+        TopAbs_ShapeEnum::TopAbs_VERTEX,
     ] {
         let map = sub_shape_map(shape, kind);
         if map.Extent() > 0 {
@@ -4470,6 +4477,59 @@ mod provenance_tests {
             BTreeSet::from([OperandId::A, OperandId::B]),
             "both operands are reported",
         );
+    }
+
+    /// A general fuse answers every input from **one** build, so the images it reports
+    /// belong to the result it returns.
+    ///
+    /// Rebuilding the fuse per input (what this replaced) gave each input its own
+    /// independent copy: mixing those copies into one face left coincident, unshared
+    /// vertices, and SimpleCAD's local face split could not rebuild the faces around a
+    /// split line.
+    #[test]
+    fn a_general_fuse_reports_images_of_its_own_result() {
+        let backend = OcctBackend::new();
+        let a = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let b = backend
+            .place(
+                &backend.make_box(10.0, 10.0, 10.0).unwrap(),
+                &Placement {
+                    base: Vector3::new(5.0, 0.0, 0.0),
+                    rotation: Rotation::identity(),
+                },
+            )
+            .unwrap();
+        // An edge as an argument of its own: the fuse cuts it where the other box
+        // crosses it, and reports the pieces.
+        let edge = backend.elements(&a, ElementKind::Edge)[0].shape.clone();
+
+        let (result, split) = backend
+            .general_fuse(&[a.clone(), b, edge], 0.0)
+            .unwrap();
+        assert_eq!(split.len(), 3, "one group per input");
+
+        // Every reported piece must be a sub-shape of the returned result, and at
+        // least one input must report something: the overlap splits a face of the
+        // first box.
+        let mut reported = 0;
+        for pieces in &split {
+            for piece in pieces {
+                reported += 1;
+                let kind = backend.shape_type(piece).expect("a kind");
+                let element_kind = ElementKind::ALL
+                    .into_iter()
+                    .find(|candidate| candidate.prefix() == kind)
+                    .expect("a known element kind");
+                let same_kind = backend.elements(&result, element_kind);
+                assert!(
+                    same_kind
+                        .iter()
+                        .any(|element| backend.same_shape(&element.shape, piece)),
+                    "a reported {kind} belongs to the returned result"
+                );
+            }
+        }
+        assert!(reported > 0, "the overlap splits an input");
     }
 
     /// The intrinsic map of a container: every element named once, nothing else.

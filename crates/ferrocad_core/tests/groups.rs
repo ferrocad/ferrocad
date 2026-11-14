@@ -31,6 +31,32 @@ fn geo_group_types_are_groups_but_plain_groups_are_not_geo() {
     assert!(Document::is_geo_group_type("App::Part"));
     assert!(Document::is_geo_group_type("PartDesign::Body"));
     assert!(!Document::is_geo_group_type("App::DocumentObjectGroup"));
+
+    // The geo-feature group extension is instantiated by the type's constructor
+    // upstream (`GeoFeatureGroupExtension::initExtension`), and it derives from
+    // `GroupExtension`. `hasExtension` must answer for it even though no caller
+    // added it, or a guard that checks for the container extension (SimpleCAD's
+    // `editable`) cannot see an `App::Part`.
+    for (id, type_id) in [(part, "App::Part"), (body, "PartDesign::Body")] {
+        assert!(
+            doc.has_extension(id, "App::GeoFeatureGroupExtension"),
+            "{type_id} answers for its geo-feature group extension"
+        );
+        assert!(
+            doc.has_extension(id, "App::GroupExtension"),
+            "{type_id} answers for the group extension it derives from"
+        );
+    }
+    assert!(!doc.has_extension(plain, "App::GeoFeatureGroupExtension"));
+    assert!(!doc.has_extension(plain, "App::GroupExtension"));
+    assert!(!doc.has_extension(feature, "App::GroupExtension"));
+
+    // The answer is static: it is not written into the object's extension set, so
+    // the file keeps carrying only the extensions a caller actually added.
+    assert!(
+        doc.object(part).unwrap().extensions.is_empty(),
+        "the geo extension is not persisted"
+    );
 }
 
 #[test]

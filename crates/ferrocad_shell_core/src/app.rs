@@ -333,14 +333,14 @@ pub fn apply_interaction(
 /// `Ok(None)` is "no opinion" — a Rust-only backend, or a workbench with no provider — and
 /// the caller keeps the range it derived from the stage. An `Err` is the probe itself
 /// failing, which is reported and not retried until the shape changes.
-pub fn manipulator_bounds(
+pub fn manipulator_probe(
     cx: &mut App,
     object: &str,
     element: Option<&str>,
     manipulator: &str,
-) -> Result<Option<crate::types::ManipulatorBounds>, String> {
+) -> Result<Option<crate::types::ManipulatorProbe>, String> {
     with_backend_mut(cx, |backend| {
-        backend.manipulator_bounds(object, element, manipulator)
+        backend.manipulator_probe(object, element, manipulator)
     })
     .unwrap_or(Ok(None))
 }

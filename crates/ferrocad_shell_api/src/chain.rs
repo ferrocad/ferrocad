@@ -959,16 +959,16 @@ impl ScriptHost for HostChain {
             .and_then(|primary| primary.manipulator_specs(object, element))
     }
 
-    fn manipulator_bounds(
+    fn manipulator_probe(
         &self,
         object: &str,
         element: Option<&str>,
         manipulator: &str,
-    ) -> Option<Result<Option<crate::types::ManipulatorBounds>, String>> {
+    ) -> Option<Result<Option<crate::types::ManipulatorProbe>, String>> {
         // The first member that answers owns the kernel for this element; a member that
         // returns `None` has no opinion, so the next one is asked.
         self.every()
-            .find_map(|host| host.manipulator_bounds(object, element, manipulator))
+            .find_map(|host| host.manipulator_probe(object, element, manipulator))
     }
 
     fn dialog_accept(&self, token: &str, values: &serde_json::Value) -> Option<CommandOutcome> {

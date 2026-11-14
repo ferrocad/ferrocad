@@ -901,17 +901,17 @@ def manipulator_specs(payload_json: str) -> str:
     return _json({"specs": serialisable})
 
 
-def manipulator_bounds(payload_json: str) -> str:
-    """The value range a workbench's kernel accepts for one manipulator, as JSON.
+def manipulator_probe(payload_json: str) -> str:
+    """What a workbench's kernel knows about one manipulator on one element, as JSON.
 
     ``payload_json`` is ``{"object": "Box", "element": "Edge1", "manipulator":
     "dress_up"}``. The answer is ``null`` when no module owns the question, otherwise
-    ``{"min": number|null, "max": number|null, "note": str}``.
+    ``{"values": [number], "min": number|null, "max": number|null, "note": str}``.
 
-    The shell derives a conservative range from the stage tessellation on its own, so
-    this only has to answer where the kernel can: a fillet radius that actually fails,
-    not merely one that could not possibly fit. ``null`` is an answer ("no opinion"),
-    not an error.
+    ``values`` is the operation the selection already carries — an existing extrusion's
+    signed length, an existing fillet's radius — so the handle opens where the feature
+    currently is. The stage derives a conservative range on its own; ``min``/``max`` are
+    the kernel's sharper answer. ``null`` is an answer ("no opinion"), not an error.
     """
     try:
         payload = json.loads(payload_json)
@@ -936,7 +936,7 @@ def manipulator_bounds(payload_json: str) -> str:
 
     # A provider that raises is a bug in the module, not in the question: the host
     # reports it through its own console path rather than silently narrowing a range.
-    result = FerroCAD.manipulator_bounds(base, element, manipulator)
+    result = FerroCAD.manipulator_probe(base, element, manipulator)
     return _json(result)
 
 

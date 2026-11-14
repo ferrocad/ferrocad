@@ -352,6 +352,20 @@ pub fn resolve_element_in(
     name: &str,
 ) -> Result<Shape, ResolveElementError> {
     if let Some(mapped) = lineage.map().get(name) {
+        // A name keeps its kind. When the map points at a different kind the entry is
+        // provenance rather than a reference — a fillet records the edge it consumed
+        // under the round it generated — so the shape's own naming is the only meaning
+        // the caller's name can still have. Falling back to it (rather than failing)
+        // keeps "fillet another edge of the filleted body" working, while a same-kind
+        // entry still wins and cannot silently retarget to a different ordinal.
+        if let Some(kind) = kind_of_name(name)
+            && let Some(mapped_kind) = crate::backend().element_kind(mapped)
+            && mapped_kind != kind
+        {
+            return crate::backend()
+                .resolve(shape, name)
+                .ok_or(ResolveElementError::Missing);
+        }
         return Ok(mapped.clone());
     }
     if !lineage.map().is_empty() {

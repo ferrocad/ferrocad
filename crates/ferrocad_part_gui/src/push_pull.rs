@@ -322,6 +322,25 @@ impl PushPullStem {
         true
     }
 
+    /// Open at `distance` without making it an edit — the length an existing extrusion
+    /// already has.
+    ///
+    /// The stem moves to the existing cap (and the numeric row shows the value), but
+    /// nothing is held for `✓`: only a drag or a typed number makes a commit. A handle
+    /// the user is already editing keeps its value.
+    pub fn seed_distance(&mut self, distance: f64) -> bool {
+        if self.pending || self.is_dragging() {
+            return false;
+        }
+        if !distance.is_finite() || (distance - self.distance).abs() <= 1e-12 {
+            return false;
+        }
+        self.distance = distance;
+        self.dirty = true;
+        self.rebuild_preview();
+        true
+    }
+
     /// The operation the current sign selects.
     pub fn action(&self) -> &'static str {
         self.change().action()
@@ -726,6 +745,13 @@ impl Manipulator for PushPullStem {
             return false;
         };
         PushPullStem::set_distance(self, distance)
+    }
+
+    fn seed_values(&mut self, values: &[f64]) -> bool {
+        let Some(distance) = values.first().copied() else {
+            return false;
+        };
+        PushPullStem::seed_distance(self, distance)
     }
 
     fn pending_commit(&self) -> Option<InteractionCommit> {

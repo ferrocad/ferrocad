@@ -285,6 +285,32 @@ impl DressUpScrubber {
         self.second
     }
 
+    /// Open at the value an existing dress-up feature holds.
+    ///
+    /// The arc moves to that radius and the row shows it, but nothing is pending: only a
+    /// drag or a typed number makes a commit. A handle the user is already editing keeps
+    /// its value.
+    pub fn seed_values(&mut self, values: &[f64]) -> bool {
+        if self.pending || self.is_dragging() {
+            return false;
+        }
+        let Some(first) = values.first().copied() else {
+            return false;
+        };
+        if !first.is_finite() {
+            return false;
+        }
+        let before = (self.value, self.second);
+        self.set_value(first);
+        if self.mode == DressUpMode::Chamfer
+            && let Some(second) = values.get(1).copied()
+            && second.is_finite()
+        {
+            self.set_second(second);
+        }
+        (self.value, self.second) != before
+    }
+
     /// The typed value, ready for a feature property or a readout.
     pub fn typed_value(&self) -> DressUpValue {
         match self.mode {
@@ -874,6 +900,10 @@ impl Manipulator for DressUpScrubber {
 
     fn set_values(&mut self, values: &[f64]) -> bool {
         DressUpScrubber::set_values(self, values)
+    }
+
+    fn seed_values(&mut self, values: &[f64]) -> bool {
+        DressUpScrubber::seed_values(self, values)
     }
 
     /// Take the kernel's range: it can be tighter than the geometric ceiling, and it can

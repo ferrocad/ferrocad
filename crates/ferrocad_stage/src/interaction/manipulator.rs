@@ -259,6 +259,19 @@ pub trait Manipulator {
         false
     }
 
+    /// Adopt the value an existing feature already holds (the document half's answer).
+    ///
+    /// The probe reports what the selection carries — the signed length of the
+    /// extrusion that produced the picked face, the radius of the fillet whose round it
+    /// is — so the handle opens where the feature is and the same gesture *edits* it.
+    /// This is **not** a pending edit: the value is where the handle rests, and only a
+    /// drag or a typed number makes a commit. A handle the user is already editing (a
+    /// drag, a typed value, a held commit) refuses the seed. `false` (the default) means
+    /// "this handle has no such notion".
+    fn seed_values(&mut self, _values: &[f64]) -> bool {
+        false
+    }
+
     /// Whether `device` is on a grab target. An unclaimed press falls through to
     /// the gizmo, the tool and the scene.
     fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool;

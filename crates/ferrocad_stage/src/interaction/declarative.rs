@@ -124,6 +124,8 @@ pub struct DeclarativeHandle {
     /// The readout template. `{value}` is replaced by the formatted value; an empty
     /// template is the bare number.
     pub readout: String,
+    /// The short label the docked numeric row prints before the input (`D`, `R`).
+    pub label: String,
 }
 
 impl DeclarativeHandle {
@@ -153,6 +155,7 @@ impl DeclarativeHandle {
             program: None,
             color: None,
             readout: String::new(),
+            label: "value".to_string(),
         }
     }
 
@@ -642,6 +645,85 @@ impl DeclarativeManipulator {
         commit
     }
 
+    /// The numeric row's field for this handle, in the declaration's own units.
+    ///
+    /// A declared handle has exactly one scalar, so it publishes one field. The
+    /// declaration's `min`/`max` are the hard range the drag already clamps to, which
+    /// makes a type-in and a drag agree.
+    pub fn numeric_fields(&self) -> Vec<crate::interaction::NumericField> {
+        let mut field = crate::interaction::NumericField::millimetres(
+            self.handle.label.clone(),
+            self.value,
+        )
+        .decimals(self.handle.decimals);
+        field.min = self.handle.min;
+        field.max = self.handle.max;
+        vec![field]
+    }
+
+    /// Adopt a typed value: clamp and snap with the drag's own rules.
+    ///
+    /// Returns whether the value moved. A ring's value is degrees and an axis value is
+    /// world units, exactly as a drag would have produced.
+    pub fn set_values(&mut self, values: &[f64]) -> bool {
+        let Some(value) = values.first().copied() else {
+            return false;
+        };
+        self.adopt(value)
+    }
+
+    /// Open at a value the handle did not produce (the document half's seed).
+    ///
+    /// Like a typed value but without the gesture: the handle rests at the value, and
+    /// only a drag or a typed number commits. A live drag keeps its own value.
+    pub fn seed_values(&mut self, values: &[f64]) -> bool {
+        if self.drag.is_some() {
+            return false;
+        }
+        let Some(value) = values.first().copied() else {
+            return false;
+        };
+        self.adopt(value)
+    }
+
+    /// The neutral commit the current value would produce.
+    pub fn pending_commit(&self) -> Option<InteractionCommit> {
+        Some(self.commit())
+    }
+
+    /// Adopt a range measured outside the handle (the kernel's).
+    ///
+    /// The declaration's own `min`/`max` are the fallback; the probe's harder answer
+    /// replaces whichever end it names. The value is clamped with it, so a declared
+    /// handle and a compiled one behave the same under a kernel ceiling.
+    pub fn set_value_bounds(&mut self, min: Option<f64>, max: Option<f64>) -> bool {
+        let (min, max) = (min.or(self.handle.min), max.or(self.handle.max));
+        if self.handle.min == min && self.handle.max == max {
+            return false;
+        }
+        self.handle.min = min;
+        self.handle.max = max;
+        let value = self.clamp(self.value);
+        if (value - self.value).abs() > 1e-12 {
+            self.value = value;
+            self.built = None;
+        }
+        true
+    }
+
+    fn adopt(&mut self, value: f64) -> bool {
+        let value = self.clamp(self.snap(value));
+        if (value - self.value).abs() <= 1e-12 {
+            return false;
+        }
+        self.value = value;
+        self.apply_color();
+        // The handle mesh rides the value (an axis handle sits at `origin + axis*value`),
+        // so the cached build is stale.
+        self.built = None;
+        true
+    }
+
     /// The formatted value at the declaration's decimals. A ring's value is already in
     /// degrees, so the same formatting applies.
     fn format_value(&self) -> String {
@@ -720,6 +802,26 @@ impl Manipulator for DeclarativeManipulator {
 
     fn is_dragging(&self) -> bool {
         DeclarativeManipulator::is_dragging(self)
+    }
+
+    fn numeric_fields(&self) -> Vec<crate::interaction::NumericField> {
+        DeclarativeManipulator::numeric_fields(self)
+    }
+
+    fn set_values(&mut self, values: &[f64]) -> bool {
+        DeclarativeManipulator::set_values(self, values)
+    }
+
+    fn seed_values(&mut self, values: &[f64]) -> bool {
+        DeclarativeManipulator::seed_values(self, values)
+    }
+
+    fn set_value_bounds(&mut self, min: Option<f64>, max: Option<f64>) -> bool {
+        DeclarativeManipulator::set_value_bounds(self, min, max)
+    }
+
+    fn pending_commit(&self) -> Option<InteractionCommit> {
+        DeclarativeManipulator::pending_commit(self)
     }
 
     fn set_hovered(&mut self, hovered: bool) -> bool {
@@ -1350,5 +1452,51 @@ mod tests {
         assert_eq!(commit.target, 11);
         assert_eq!(commit.values, vec![45.0]);
         assert_eq!(commit.readout, "45.00");
+    }
+
+    /// A declared handle is a first-class numeric editor: it publishes a field for the
+    /// docked row, takes a typed value, seeds an existing one, and clamps to the range
+    /// the probe publishes — the same contract the compiled stem and scrubber keep.
+    #[test]
+    fn a_declared_handle_publishes_types_and_seeds_its_value() {
+        let mut handle = handle("radius", 2);
+        handle.label = "R".to_string();
+        handle.decimals = 3;
+        handle.min = Some(0.001);
+        let mut manipulator = DeclarativeManipulator::new(7, handle);
+
+        let fields = manipulator.numeric_fields();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, "R");
+        assert_eq!(fields[0].unit, "mm");
+        assert_eq!(fields[0].decimals, 3);
+        assert_eq!(fields[0].min, Some(0.001));
+
+        // A seed is not an edit: it moves the resting value, and that is what the row
+        // shows and what a later commit would carry.
+        assert!(manipulator.seed_values(&[2.5]));
+        assert_eq!(manipulator.numeric_fields()[0].value, 2.5);
+
+        // A typed value snaps/clamps with the drag's own rules.
+        assert!(manipulator.set_values(&[-4.0]));
+        assert_eq!(manipulator.numeric_fields()[0].value, 0.001);
+        assert_eq!(
+            manipulator.pending_commit().expect("a commit").values,
+            vec![0.001]
+        );
+
+        // The probe's ceiling replaces the declared one and clamps the value with it.
+        assert!(Manipulator::set_value_bounds(
+            &mut manipulator,
+            None,
+            Some(1.0)
+        ));
+        assert_eq!(manipulator.numeric_fields()[0].max, Some(1.0));
+        assert_eq!(manipulator.numeric_fields()[0].value, 0.001);
+        assert!(!Manipulator::set_value_bounds(
+            &mut manipulator,
+            Some(0.001),
+            Some(1.0)
+        ));
     }
 }

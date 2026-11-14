@@ -24,7 +24,8 @@
 //!   "shape": { "positions": [[0, 0, 0]], "normals": [], "triangles": [], "edges": [] },
 //!   "program": "<wgsl source>",
 //!   "color": "#38bdf8",
-//!   "readout": "H {value} mm"
+//!   "readout": "H {value} mm",
+//!   "label": "H"
 //! }
 //! ```
 //!
@@ -82,6 +83,7 @@ struct HandleSpec {
     program: Option<String>,
     color: Option<String>,
     readout: Option<String>,
+    label: Option<String>,
 }
 
 /// The world frame the handle lives in. The default is the identity at the origin.
@@ -229,6 +231,11 @@ fn convert(spec: HandleSpec, target: u32) -> Result<(u32, DeclarativeHandle), St
     handle.program = program;
     handle.color = color;
     handle.readout = readout;
+    handle.label = spec
+        .label
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "value".to_string());
 
     Ok((spec.target.unwrap_or(target), handle))
 }
@@ -409,6 +416,22 @@ mod tests {
         assert!(handle.program.is_none());
         assert!(handle.color.is_none());
         assert!(handle.readout.is_empty());
+        assert_eq!(handle.label, "value", "the numeric row needs a label");
+    }
+
+    #[test]
+    fn a_spec_may_name_the_numeric_field() {
+        let mut spec = minimal();
+        spec["label"] = serde_json::json!("R");
+        spec["decimals"] = serde_json::json!(3);
+        let (_, handle) = handle_from_value(&spec, 7).expect("a valid handle");
+        assert_eq!(handle.label, "R");
+        assert_eq!(handle.decimals, 3);
+
+        // A blank label is the default, not an empty prefix.
+        spec["label"] = serde_json::json!("  ");
+        let (_, handle) = handle_from_value(&spec, 7).expect("a valid handle");
+        assert_eq!(handle.label, "value");
     }
 
     #[test]

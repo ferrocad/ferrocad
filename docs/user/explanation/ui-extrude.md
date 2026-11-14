@@ -52,6 +52,11 @@ or cut). The intermediate extrusion is hidden, so the result is the only solid d
 This is the Parametric edition's workbench hook, not a shell operation: the same neutral
 commit is what a BIM or future workbench would receive.
 
+Pulling the **cap** a previous pull produced re-opens that feature instead of adding
+another one: the stem opens at the existing distance, and `✓` changes the same hidden
+extrusion. Dragging it past zero turns the extrude into a pocket (the boolean is
+rebuilt as a cut), so one face always has one push/pull operation.
+
 ## Where it runs
 
 Push/Pull is part of the shared shell, and `ferrocad_part_gui::push_pull_manipulator`

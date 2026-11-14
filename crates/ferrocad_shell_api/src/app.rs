@@ -34,7 +34,7 @@ use crate::selection::SelectionItem;
 use crate::settings::SettingValue;
 use crate::types::{
     ApplyResult, AxisSummary, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
-    GridSummary, ManipulatorBounds, OpenedDocument, PropRow, ProviderFeature, SelectionRequest,
+    GridSummary, ManipulatorProbe, OpenedDocument, PropRow, ProviderFeature, SelectionRequest,
     SetResult, VisibilityOutcome, WorkbenchReport,
 };
 use crate::view::ViewState;
@@ -375,17 +375,17 @@ pub trait AppBackend {
         })
     }
 
-    fn manipulator_bounds(
+    fn manipulator_probe(
         &mut self,
         object: &str,
         element: Option<&str>,
         manipulator: &str,
-    ) -> Result<Option<ManipulatorBounds>, String> {
+    ) -> Result<Option<ManipulatorProbe>, String> {
         // The kernel is the workbench's: a script half that owns it answers; one that does
         // not says so, and the host keeps its geometric range.
         if let Some(result) = self
             .script_host()
-            .and_then(|host| host.manipulator_bounds(object, element, manipulator))
+            .and_then(|host| host.manipulator_probe(object, element, manipulator))
         {
             return result;
         }
@@ -766,12 +766,12 @@ pub trait ScriptHost {
     /// `None` means this half has no opinion (or no kernel): the host keeps the
     /// conservative range it derived from the stage. `Some(Ok(None))` means it looked and
     /// found no bound, which is a different answer.
-    fn manipulator_bounds(
+    fn manipulator_probe(
         &self,
         _object: &str,
         _element: Option<&str>,
         _manipulator: &str,
-    ) -> Option<Result<Option<ManipulatorBounds>, String>> {
+    ) -> Option<Result<Option<ManipulatorProbe>, String>> {
         None
     }
 

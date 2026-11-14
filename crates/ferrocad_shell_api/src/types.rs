@@ -191,8 +191,7 @@ impl Default for ApplyResult {
     }
 }
 
-/// The value range a manipulator's operation survives, as the **document half** measured
-/// it.
+/// What the **document half** knows about one manipulator's operation on one element.
 ///
 /// The host derives a conservative range from the stage's tessellation on its own; this
 /// is the answer from whatever owns the kernel, so it can be the real limit (`a 5 mm
@@ -200,9 +199,14 @@ impl Default for ApplyResult {
 /// possibly fit. `min`/`max` are **hard**, with the same meaning as `ferrocad_stage`'s
 /// `NumericField`: the host clamps the value to them.
 ///
+/// `values` is the operation the selection **already** carries: the signed length of an
+/// existing extrusion, the radius of an existing fillet. The handle opens at that value,
+/// so the same gesture *edits* the feature instead of adding one. Empty means "this is a
+/// new operation".
+///
 /// A half that cannot answer returns `Ok(None)` — not an error and not a made-up range.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
-pub struct ManipulatorBounds {
+pub struct ManipulatorProbe {
     /// The smallest value the kernel completed, when it found a floor.
     #[serde(default)]
     pub min: Option<f64>,
@@ -212,6 +216,16 @@ pub struct ManipulatorBounds {
     /// How the value was found (`bisection over 6 trials`), for the record and the log.
     #[serde(default)]
     pub note: String,
+    /// The existing operation's value(s), in the manipulator's own field order.
+    #[serde(default)]
+    pub values: Vec<f64>,
+}
+
+impl ManipulatorProbe {
+    /// Whether this answer says anything at all.
+    pub fn is_empty(&self) -> bool {
+        self.min.is_none() && self.max.is_none() && self.values.is_empty()
+    }
 }
 
 /// The grid's active provider and spacing, for the header popover (T4).

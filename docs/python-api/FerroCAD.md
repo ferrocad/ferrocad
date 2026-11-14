@@ -15,12 +15,12 @@ _A mod that imports this depends on FerroCAD; it is not upstream API._
 | --- | --- |
 | `display_mesh(obj)` | The display mesh for `obj`, from the first module that claims it. |
 | `interaction(obj, manipulator, action, element='', values=None)` | Apply a manipulator commit through the first module that supports it. |
-| `manipulator_bounds(obj, element='', manipulator='')` | The first module's answer for ``(obj, element, manipulator)``, or ``None``. |
+| `manipulator_probe(obj, element='', manipulator='')` | The first module's answer for ``(obj, element, manipulator)``, or ``None``. |
 | `manipulator_specs(obj, element='')` | The declarative handles every module declares for ``obj``, in order. |
 | `parameter_file()` | The parameter file in use, or ``None`` while the store is memory-only. |
-| `register_bounds_provider(provider)` | Let ``provider(obj, element, manipulator)`` report the range the kernel keeps. |
 | `register_display_provider(provider, default=False)` | Let ``provider(obj)`` supply the display mesh of a document object. |
 | `register_interaction_provider(provider)` | Let ``provider(obj, manipulator, action, element, values)`` apply an edit. |
+| `register_manipulator_probe(provider)` | Let ``provider(obj, element, manipulator)`` answer for the kernel's side. |
 | `register_manipulator_provider(provider)` | Let ``provider(obj, element)`` declare handles for a selection. |
 | `set_parameter_file(path)` | Point ``FreeCAD.ParamGet`` at ``path`` (always enabled). |
 

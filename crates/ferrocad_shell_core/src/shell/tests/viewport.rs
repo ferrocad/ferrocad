@@ -771,6 +771,18 @@ impl ferrocad_stage::Manipulator for NumericFace {
         true
     }
 
+    fn seed_values(&mut self, values: &[f64]) -> bool {
+        let Some(value) = values.first().copied() else {
+            return false;
+        };
+        let value = value.clamp(self.min, self.max);
+        if (value - self.value).abs() <= 1e-12 {
+            return false;
+        }
+        self.value = value;
+        true
+    }
+
     fn pending_commit(&self) -> Option<ferrocad_stage::InteractionCommit> {
         (self.value != 0.0).then(|| {
             ferrocad_stage::InteractionCommit::new("push_pull", 7, "extrude")
@@ -943,19 +955,20 @@ fn the_manipulator_numeric_row_types_a_held_value(cx: &mut TestAppContext) {
     assert_eq!(commit.values, vec![10.0]);
 
     // The kernel's range replaces the handle's own once the probe lands: it is tighter,
-    // so the held value is clamped again and the row follows it.
+    // so the held value is clamped again and the row follows it. The value it reports for
+    // an existing operation is refused here — the user is already editing one.
     let registered = cx.update(|_window, _cx| {
         crate::python::evaluate(
             "import FerroCAD\n\
-             FerroCAD.register_bounds_provider(\n\
-                 lambda obj, element, manipulator: {'min': 0.0, 'max': 4.0, 'note': 'test'}\n\
+             FerroCAD.register_manipulator_probe(\n\
+                 lambda obj, element, manipulator: {'values': [3.0], 'min': 0.0, 'max': 4.0, 'note': 'test'}\n\
                  if manipulator == 'push_pull' else None)\n",
         )
     });
     assert!(registered.expect("the provider installs").ok);
-    shell.update(&mut cx, |shell, cx| shell.sync_manipulator_bounds(cx));
+    shell.update(&mut cx, |shell, cx| shell.sync_manipulator_probe(cx));
     assert!(
-        shell.update(&mut cx, |shell, cx| shell.resolve_manipulator_bounds(cx)),
+        shell.update(&mut cx, |shell, cx| shell.resolve_manipulator_probe(cx)),
         "the probe runs for the armed handle"
     );
     let fields = shell
@@ -973,7 +986,8 @@ fn the_manipulator_numeric_row_types_a_held_value(cx: &mut TestAppContext) {
         "the field follows the kernel's clamp"
     );
 
-    // `Esc` rolls the typed value back to the handle's resting value.
+    // `Esc` rolls the typed value back, and the re-armed handle is seeded again from
+    // the probe's cached answer — `✗` returns you to the existing feature's value.
     press_escape(&mut cx, &shell);
     assert!(
         !shell.read_with(&cx, |shell, _| shell.interaction_is_pending()),
@@ -981,8 +995,71 @@ fn the_manipulator_numeric_row_types_a_held_value(cx: &mut TestAppContext) {
     );
     assert_eq!(
         input.read_with(&cx, |input, _| input.text().to_string()),
-        "0.00",
-        "the field follows the re-armed handle"
+        "3.00",
+        "the field follows the re-armed and re-seeded handle"
+    );
+}
+
+/// A probe's `values` are the operation the selection **already** carries. The handle
+/// opens at that number and shows it, but holds nothing for `✓` — a seed is not an edit.
+/// Skips without a GPU adapter.
+#[gpui::test]
+fn a_probe_seeds_the_handle_with_the_existing_value(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), numeric_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::PushPull, cx))
+    });
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Face2"),
+    );
+    draw(&mut cx);
+
+    let registered = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            "import FerroCAD\n\
+             FerroCAD.register_manipulator_probe(\n\
+                 lambda obj, element, manipulator: {'values': [3.0], 'min': 0.0, 'max': 4.0, 'note': 'test'}\n\
+                 if manipulator == 'push_pull' else None)\n",
+        )
+    });
+    assert!(registered.expect("the provider installs").ok);
+    shell.update(&mut cx, |shell, cx| shell.sync_manipulator_probe(cx));
+    assert!(
+        shell.update(&mut cx, |shell, cx| shell.resolve_manipulator_probe(cx)),
+        "the probe runs for the armed handle"
+    );
+
+    let fields = shell
+        .read_with(&cx, |shell, cx| shell.armed_numeric_fields(cx))
+        .expect("the row's fields")
+        .1;
+    assert_eq!(
+        fields[0].value, 3.0,
+        "the handle opens at the existing operation's value"
+    );
+    assert_eq!(fields[0].max, Some(4.0), "the kernel's range still applies");
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell.interaction_is_pending()),
+        "a seed is not an edit: nothing is held for ✓"
+    );
+    let input = shell.read_with(&cx, |shell, _| {
+        shell
+            .manipulator_form
+            .as_ref()
+            .expect("a numeric row")
+            .inputs[0]
+            .clone()
+    });
+    assert_eq!(
+        input.read_with(&cx, |input, _| input.text().to_string()),
+        "3.00",
+        "the row shows the seeded value"
     );
 }
 

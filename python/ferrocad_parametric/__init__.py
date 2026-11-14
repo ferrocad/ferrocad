@@ -168,11 +168,20 @@ def _push_pull(obj, element, distance):
     resolves the named sub-shape as its ``Base``. A positive distance is fused, a
     negative one cut; both are one undoable transaction. The intermediate extrusion is
     hidden, so the boolean result is the only solid the display hook draws.
+
+    Picking the cap a previous pull produced **edits that pull** instead of stacking a
+    second feature over the same body; :func:`_extrusion_target` is how the lineage
+    says which feature the face belongs to.
     """
     if abs(distance) < 1e-9:
         return {"ok": True}
     if not element:
         return {"ok": False, "error": "push/pull needs a face element"}
+
+    existing = _extrusion_target(obj, element)
+    if existing is not None:
+        return _edit_extrusion(obj, existing, distance)
+
     normal = _face_normal(obj, element)
     if normal is None:
         return {"ok": False, "error": f"{element} is not a planar face"}
@@ -220,6 +229,81 @@ def _push_pull(obj, element, distance):
     return {"ok": True, "feature": feature_name}
 
 
+def _edit_extrusion(obj, target, distance):
+    """Change the extrusion a cap face belongs to, as one transaction.
+
+    ``obj`` is the boolean the cap is drawn on and ``target`` is what
+    :func:`_extrusion_target` resolved. The boolean is reused while the sign — and so
+    the operation — stays the same; crossing zero swaps a fuse for a cut. The extrusion
+    object is reused either way, so a body still has one push/pull feature.
+    """
+    extrusion, base_obj, base_element, current = target
+    if abs(distance - current) < 1e-9:
+        return {"ok": True, "feature": obj.Name}
+
+    doc = obj.Document
+    label = "Extrude" if distance > 0.0 else "Pocket"
+    kind = "Part::Fuse" if distance > 0.0 else "Part::Cut"
+    feature_name = f"{base_obj.Name}_{'Fuse' if distance > 0.0 else 'Cut'}"
+    doc.openTransaction(f"{label} {base_obj.Name}")
+    try:
+        extrusion.Base = (base_obj, [base_element])
+        extrusion.Solid = True
+        extrusion.LengthFwd = abs(distance)
+        extrusion.Reversed = distance < 0.0
+        extrusion.Visibility = False
+
+        feature = doc.getObject(feature_name)
+        if feature is None:
+            feature = doc.addObject(kind, feature_name)
+        feature.Base = base_obj
+        feature.Tool = extrusion
+        placement = getattr(obj, "Placement", None) or getattr(
+            base_obj, "Placement", None
+        )
+        if placement is not None:
+            if not hasattr(feature, "Placement"):
+                feature.addProperty(
+                    "App::PropertyPlacement",
+                    "Placement",
+                    "Base",
+                    "Placement of the combined solid",
+                )
+            feature.Placement = placement
+        # The cap's old boolean is retired when the operation changed; the extrusion it
+        # pointed at is the one that just moved.
+        if obj.Name != feature_name:
+            doc.removeObject(obj.Name)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": feature_name}
+
+
+def _edit_dress_up(obj, mode, first, second):
+    """Change an existing ``Part::Fillet``/``Chamfer`` in place, as one transaction.
+
+    The picked face *is* the feature's own result, so the feature is the edit target:
+    the base link and the edge selection stay as they are and only the value moves.
+    """
+    doc = obj.Document
+    doc.openTransaction(f"{mode} {obj.Name}")
+    try:
+        if mode == "Fillet":
+            obj.Radius = first
+        else:
+            obj.Distance = first
+            obj.Distance2 = second
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": obj.Name}
+
+
 def _interaction(obj, manipulator, action, element, values):
     """Apply a manipulator commit: a Part dress-up, a push/pull or a move.
 
@@ -265,6 +349,12 @@ def _interaction(obj, manipulator, action, element, values):
     first = float(values[0]) if values else 0.0
     second = float(values[1]) if len(values) > 1 else 0.0
 
+    # A dress-up whose own face was picked is that feature: editing it is the change the
+    # user asked for, not a second feature over its result. Any *other* element of the
+    # result is a new fillet, as it should be.
+    if element and _dress_up_target(obj, element) is not None:
+        return _edit_dress_up(obj, mode, first, second)
+
     doc = obj.Document
     feature_name = f"{obj.Name}_{mode}"
     doc.openTransaction(f"{mode} {obj.Name}")
@@ -291,9 +381,302 @@ FerroCAD.register_interaction_provider(_interaction)
 
 
 #: The smallest radius the scrubber holds; the probe's floor.
-_BOUNDS_FLOOR = 1e-3
+_PROBE_FLOOR = 1e-3
 #: Halvings once the bracket is found: about a percent of it, finer than a drag can aim.
-_BOUNDS_TRIALS = 6
+_PROBE_TRIALS = 6
+
+
+def _element_inputs(shape, element):
+    """The operand element names the kernel says produced ``element``, or ``()``.
+
+    ``Shape.getElementHistory`` returns ``(tag, original, producers)`` and answers
+    ``None`` for a shape with no lineage. This is the one provenance query the UI needs:
+    a face of a boolean result names the face it came from, and a fillet's round names
+    the edge the feature consumed.
+    """
+    try:
+        history = shape.getElementHistory(element)
+    except Exception:  # noqa: BLE001 - a shape without the query has no history
+        return ()
+    if not history:
+        return ()
+    try:
+        return tuple(history[2] or ())
+    except (IndexError, TypeError):
+        return ()
+
+
+def _link_sub(obj, name="Base"):
+    """``(object, [element names])`` for a ``LinkSub`` property, or ``None``."""
+    try:
+        value = getattr(obj, name, None)
+        if not value:
+            return None
+        target, elements = value[0], value[1]
+    except (TypeError, IndexError, ValueError):
+        return None
+    if target is None:
+        return None
+    return target, [str(element) for element in (elements or ())]
+
+
+def _extrusion_target(obj, element):
+    """The existing extrusion that produced ``element``, with its base face.
+
+    A push/pull is a hidden ``Part::Extrusion`` feeding a ``Part::Fuse``/``Part::Cut``.
+    The picked cap is the base face translated by the signed length along its normal, so
+    the two frames identify it without trusting the lineage (a document saved before the
+    kernel recorded it does not carry one). The distance is signed by the extrusion's own
+    ``Reversed``.
+
+    Returns ``(extrusion, base object, base element, signed distance)`` or ``None``.
+    """
+    if str(getattr(obj, "TypeId", "")) not in ("Part::Fuse", "Part::Cut"):
+        return None
+    tool = getattr(obj, "Tool", None)
+    if tool is None or str(getattr(tool, "TypeId", "")) != "Part::Extrusion":
+        return None
+    linked = _link_sub(tool)
+    if linked is None or not linked[1]:
+        return None
+    base_obj, elements = linked
+    distance = float(getattr(tool, "LengthFwd", 0.0) or 0.0)
+    if bool(getattr(tool, "Reversed", False)):
+        distance = -distance
+    if not _is_extrusion_cap(obj, element, base_obj, elements[0], distance):
+        return None
+    return tool, base_obj, elements[0], distance
+
+
+def _is_extrusion_cap(obj, element, base_obj, base_element, distance):
+    """Whether ``element`` is the face the extrusion's sweep produced.
+
+    The cap is the base face translated by the signed length along its normal. Checking
+    that (instead of a name) also covers a document whose stored element map predates the
+    provenance the kernel now records.
+    """
+    if not element.startswith("Face"):
+        return False
+    base = _face_frame(base_obj, base_element)
+    cap = _face_frame(obj, element)
+    if base is None or cap is None:
+        return False
+    normal = base["z"]
+    if sum(normal[axis] * cap["z"][axis] for axis in range(3)) < 0.999:
+        return False
+    spread = max(
+        abs(cap["origin"][axis] - (base["origin"][axis] + normal[axis] * distance))
+        for axis in range(3)
+    )
+    try:
+        diagonal = float(obj.Shape.BoundBox.DiagonalLength)
+    except Exception:  # noqa: BLE001 - a shape without a bound box still has a scale
+        diagonal = 1.0
+    return spread <= 1e-6 * max(diagonal, 1.0)
+
+
+def _dress_up_target(obj, element):
+    """The radius an existing ``Part::Fillet`` holds, when ``element`` is its round.
+
+    The round is the cylinder of the feature's own radius whose axis runs parallel to the
+    filleted edge, so the surface identifies the feature without the lineage (which a
+    document saved before the kernel recorded it does not carry). A chamfer is
+    deliberately not answered — its distances are not the radius the armed scrubber
+    edits.
+    """
+    if str(getattr(obj, "TypeId", "")) != "Part::Fillet":
+        return None
+    linked = _link_sub(obj)
+    if linked is None or not linked[1]:
+        return None
+    base_obj, edges = linked
+    radius = float(getattr(obj, "Radius", 0.0) or 0.0)
+    if radius <= 0.0 or not element.startswith("Face"):
+        return None
+    try:
+        surface = obj.Shape.getElement(element).Surface
+    except Exception:  # noqa: BLE001 - an element the shape cannot resolve
+        return None
+    if type(surface).__name__ != "Cylinder":
+        return None
+    try:
+        if abs(float(surface.Radius) - radius) > 1e-6 * max(1.0, radius):
+            return None
+        axis = surface.Axis
+    except Exception:  # noqa: BLE001 - a surface without an axis is not a round
+        return None
+    for edge_name in edges:
+        try:
+            direction = base_obj.Shape.getElement(edge_name).Curve.Direction
+        except Exception:  # noqa: BLE001 - a curved edge has no single direction
+            continue
+        dot = abs(axis.x * direction.x + axis.y * direction.y + axis.z * direction.z)
+        if dot >= 0.999:
+            return radius
+    return None
+
+
+def _face_frame(obj, element):
+    """The world frame of a face: origin at its area-weighted centroid, z its normal.
+
+    The mesh the display hook draws is already in world coordinates, so the frame a
+    declared handle needs is read straight off it, exactly as :func:`_face_normal` does.
+    """
+    shape = getattr(obj, "Shape", None)
+    if shape is None or shape.isNull():
+        return None
+    mesh = shape.mesh()
+    parts = list(mesh.get("parts") or ())
+    try:
+        face = parts.index(element)
+    except ValueError:
+        return None
+    positions = mesh.get("positions") or ()
+    triangles = mesh.get("triangles") or ()
+    triangle_parts = mesh.get("triangle_parts") or ()
+    normal = [0.0, 0.0, 0.0]
+    centroid = [0.0, 0.0, 0.0]
+    weight = 0.0
+    for index, part in enumerate(triangle_parts):
+        if part != face:
+            continue
+        base = 3 * index
+        try:
+            a = positions[triangles[base]]
+            b = positions[triangles[base + 1]]
+            c = positions[triangles[base + 2]]
+        except (IndexError, TypeError):
+            continue
+        ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+        cross = (
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        )
+        area = 0.5 * math.sqrt(sum(component * component for component in cross))
+        weight += area
+        for axis in range(3):
+            normal[axis] += cross[axis]
+            centroid[axis] += area * (a[axis] + b[axis] + c[axis]) / 3.0
+    if weight <= 0.0:
+        return None
+    length = math.sqrt(sum(component * component for component in normal))
+    if length <= 1e-12:
+        return None
+    z = tuple(component / length for component in normal)
+    centroid = tuple(component / weight for component in centroid)
+    # Any unit vector perpendicular to the normal, then a right-handed y = z x x.
+    helper = (1.0, 0.0, 0.0) if abs(z[0]) < 0.9 else (0.0, 1.0, 0.0)
+    x = (
+        helper[1] * z[2] - helper[2] * z[1],
+        helper[2] * z[0] - helper[0] * z[2],
+        helper[0] * z[1] - helper[1] * z[0],
+    )
+    x_length = math.sqrt(sum(component * component for component in x))
+    x = tuple(component / x_length for component in x)
+    y = (
+        z[1] * x[2] - z[2] * x[1],
+        z[2] * x[0] - z[0] * x[2],
+        z[0] * x[1] - z[1] * x[0],
+    )
+    return {
+        "origin": list(centroid),
+        "x": list(x),
+        "y": list(y),
+        "z": list(z),
+    }
+
+
+#: The declared grip's mesh, in the handle frame's own units (the host scales it to its
+#: pixel `size`). A double cone, so it reads as a handle from any camera.
+_GRIP_SHAPE = {
+    "positions": [
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, 1.0],
+        [0.16, 0.0, 0.0],
+        [0.0, 0.16, 0.0],
+        [-0.16, 0.0, 0.0],
+        [0.0, -0.16, 0.0],
+    ],
+    "normals": [
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+    ],
+    "triangles": [
+        1, 2, 3, 1, 3, 4, 1, 4, 5, 1, 5, 2,
+        0, 3, 2, 0, 4, 3, 0, 5, 4, 0, 2, 5,
+    ],
+    "edges": [],
+}
+
+
+def _manipulator_specs(obj, element):
+    """Declared handles that the compiled factories cannot arm.
+
+    The compiled scrubber needs an *edge*, and an applied fillet's round is a *face*:
+    the edge it came from no longer exists. A declared grip at the round's centroid,
+    seeded with the radius the feature holds, re-opens it — and its commit is the same
+    ``dress_up``/``fillet`` the scrubber sends, so the edit path is shared.
+    """
+    if not element:
+        return None
+    value = _dress_up_target(obj, element)
+    if value is None:
+        return None
+    frame = _face_frame(obj, element)
+    if frame is None:
+        return None
+    linked = _link_sub(obj)
+    return [
+        {
+            "id": "dress_up",
+            "action": "fillet",
+            "element": linked[1][0] if linked and linked[1] else element,
+            "frame": frame,
+            "axis": "z",
+            "kind": "axis",
+            "value": value,
+            "min": _PROBE_FLOOR,
+            "decimals": 3,
+            "label": "R",
+            "size": 42.0,
+            "shape": _GRIP_SHAPE,
+            "readout": "R {value} mm",
+        }
+    ]
+
+
+def _fillet_shape_and_edge(obj, element):
+    """The shape and edge name a dress-up radius is measured against.
+
+    An edge selection is the object's own edge. A face of a ``Part::Fillet`` is the
+    feature's result, so the trial fillets run on its *base* shape and the base edge the
+    lineage names.
+    """
+    if str(getattr(obj, "TypeId", "")) == "Part::Fillet":
+        linked = _link_sub(obj)
+        if linked is None:
+            return None
+        base_obj, edges = linked
+        inputs = set(_element_inputs(obj.Shape, element))
+        match = [edge for edge in edges if edge in inputs]
+        if not match:
+            return None
+        shape = getattr(base_obj, "Shape", None)
+        if shape is None:
+            return None
+        return shape, match[0]
+    if not element.startswith("Edge"):
+        return None
+    shape = getattr(obj, "Shape", None)
+    if shape is None:
+        return None
+    return shape, element
 
 
 def _largest_fillet(shape, edge, floor, guess, cap):
@@ -328,7 +711,7 @@ def _largest_fillet(shape, edge, floor, guess, cap):
             return None
     else:
         low, high = floor, guess
-    for _ in range(_BOUNDS_TRIALS):
+    for _ in range(_PROBE_TRIALS):
         mid = 0.5 * (low + high)
         if fits(mid):
             low = mid
@@ -337,7 +720,7 @@ def _largest_fillet(shape, edge, floor, guess, cap):
     return low
 
 
-def _fillet_bounds(obj, element, manipulator):
+def _fillet_bounds(obj, element):
     """The radius range this edge's fillet actually survives, by kernel bisection.
 
     The shell can prove only the floor from the tessellation — half a body's extent is
@@ -348,13 +731,12 @@ def _fillet_bounds(obj, element, manipulator):
     It runs once per arming (the host caches the answer until the shape changes). The
     factory arms fillets only; a chamfer manipulator would need its own probe.
     """
-    if manipulator != "dress_up" or not element.startswith("Edge"):
+    target = _fillet_shape_and_edge(obj, element)
+    if target is None:
         return None
-    shape = getattr(obj, "Shape", None)
-    if shape is None:
-        return None
+    shape, edge_name = target
     try:
-        edge = shape.getElement(element)
+        edge = shape.getElement(edge_name)
         box = shape.BoundBox
     except Exception:
         return None
@@ -363,19 +745,51 @@ def _fillet_bounds(obj, element, manipulator):
         return None
     # A working guess and a cap of twice the body's largest extent: past that the feature
     # is meaningless, so "no failure found" is the honest answer.
-    guess = max(min(lengths) / 8.0, _BOUNDS_FLOOR * 2.0)
+    guess = max(min(lengths) / 8.0, _PROBE_FLOOR * 2.0)
     cap = 2.0 * max(lengths)
-    top = _largest_fillet(shape, edge, _BOUNDS_FLOOR, guess, cap)
+    top = _largest_fillet(shape, edge, _PROBE_FLOOR, guess, cap)
     if top is None:
         return None
     return {
-        "min": _BOUNDS_FLOOR,
+        "min": _PROBE_FLOOR,
         "max": top,
-        "note": "kernel bisection (%d halvings)" % _BOUNDS_TRIALS,
+        "note": "kernel bisection (%d halvings)" % _PROBE_TRIALS,
     }
 
 
-FerroCAD.register_bounds_provider(_fillet_bounds)
+def _manipulator_probe(obj, element, manipulator):
+    """What this selection already carries, and the range the kernel completes.
+
+    Push/pull seeds from the extrusion whose cap was picked; a dress-up seeds from the
+    fillet whose round was picked. The range is the fillet bisection — the only operation
+    here with a ceiling the kernel can prove.
+    """
+    if not element:
+        # A whole-object selection has no sub-element to follow.
+        return None
+    if manipulator == "push_pull":
+        target = _extrusion_target(obj, element)
+        if target is None:
+            return None
+        return {"values": [target[3]], "note": "existing extrusion"}
+    if manipulator != "dress_up":
+        return None
+    answer = {}
+    value = _dress_up_target(obj, element)
+    if value is not None:
+        answer["values"] = [value]
+    bounds = _fillet_bounds(obj, element)
+    if bounds is not None:
+        answer["min"] = bounds["min"]
+        answer["max"] = bounds["max"]
+        answer["note"] = bounds["note"]
+    elif value is not None:
+        answer["note"] = "existing fillet"
+    return answer or None
+
+
+FerroCAD.register_manipulator_probe(_manipulator_probe)
+FerroCAD.register_manipulator_provider(_manipulator_specs)
 
 
 #: The parametric edition's appearance preset (declared, not yet materialised).

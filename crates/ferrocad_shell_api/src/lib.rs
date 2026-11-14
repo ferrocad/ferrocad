@@ -47,7 +47,7 @@ pub use selection::SelectionItem;
 pub use settings::{MemorySettings, SettingKind, SettingValue, SettingsBackend};
 pub use types::{
     AxisSummary, ApplyResult, Bootstrap, DocumentNode, EvalResult, GpuPreferenceOutcome,
-    GridProvider, GridSummary, ManipulatorBounds, ObjectNode, OpenedDocument, PropRow,
+    GridProvider, GridSummary, ManipulatorProbe, ObjectNode, OpenedDocument, PropRow,
     ProviderFeature, ProviderSkin, SelectionRequest, SetResult, WorkbenchError, WorkbenchReport,
 };
 pub use view::{ProjectionName, ViewRequest, ViewState, WorkplaneAction};

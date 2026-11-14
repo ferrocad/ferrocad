@@ -2428,6 +2428,18 @@ impl GeometryBackend for OcctBackend {
         }
     }
 
+    fn element_kind(&self, shape: &Shape) -> Option<ElementKind> {
+        match crate::part_ops::shape_kind(shape)? {
+            "Solid" => Some(ElementKind::Solid),
+            "Shell" => Some(ElementKind::Shell),
+            "Face" => Some(ElementKind::Face),
+            "Wire" => Some(ElementKind::Wire),
+            "Edge" => Some(ElementKind::Edge),
+            "Vertex" => Some(ElementKind::Vertex),
+            _ => None,
+        }
+    }
+
     fn count_sub_shapes(&self, shape: &Shape, kind: &str) -> Result<usize, GeomError> {
         let occt = downcast(shape)?;
         let guard = occt.borrow();

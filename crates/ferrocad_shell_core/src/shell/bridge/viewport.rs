@@ -1031,8 +1031,8 @@ impl Shell {
         // entity ids that edit may have replaced, so it cannot be applied afterwards.
         self.pending_interaction = None;
         // ...and a range measured on the old shape says nothing about the new one.
-        self.bounds_cache.clear();
-        self.bounds_pending = None;
+        self.probe_cache.clear();
+        self.probe_pending = None;
         if self.viewport.is_some() {
             match self.build_stage(cx) {
                 Ok(stage) => {

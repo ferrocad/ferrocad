@@ -59,17 +59,29 @@ must be *applied*. It consumes the lineage layer; it is not the lineage layer.
 
 A stored name is resolved in this order (`ferrocad_part::resolve_element_in`):
 
-1. If the name is in the forward map, it resolves to the mapped sub-shape. The map outranks the
-   name's ordinal, which may denote a different element after an insert or delete.
-2. If the shape has no lineage (empty map), positional resolution is the only thing that can be
-   known, so the backend resolves `Edge1` as its first edge.
+1. If the name is in the forward map **and the mapped sub-shape has the name's kind**, it resolves
+   to that sub-shape. The map outranks the name's ordinal, which may denote a different element
+   after an insert or delete.
+2. If the name has no map entry and the shape has no lineage (empty map), positional resolution is
+   the only thing that can be known, so the backend resolves `Edge1` as its first edge.
 3. If the shape has a non-empty lineage and the name is absent, the name is **retired**: the
    reference fails (`ResolveElementError::Retired`) rather than falling back positionally.
+4. If the map entry has a **different kind**, it is provenance rather than a reference: a dress-up
+   records the edge it consumed under the round it generated, so `Edge1` can name a face. The
+   shape's own positional naming answers instead — an edge was asked for, and an edge it gets.
 
 The third rule is the invariant: a stale reference makes its feature invalid; it never silently
-dresses a different face. Resolution only reads the map — it never binds, retires or renames — so
-loading or resolving a document cannot change its meaning. The fold itself has the matching property:
+dresses a different face. The fourth keeps that from also breaking the ordinary case ("fillet
+another edge of the filleted body"), where operands and results have independent positional
+namespaces. Resolution only reads the map — it never binds, retires or renames — so loading or
+resolving a document cannot change its meaning. The fold itself has the matching property:
 `ElementMap::apply` inserts only when a name is absent, so an existing name is never rebound.
+
+A second, related rule keeps rule 3 from over-firing: a map should mention every element the result
+actually has. `complete_history` in `ferrocad_part::dress_up` folds identity relations for the
+elements an operation did not report (leaving its modified/generated relations, the provenance
+`ElementReverseMap` answers, unshadowed). A fillet reports one relation, so without it every other
+name would look retired.
 
 ### 0.2 Current measured state
 
@@ -123,7 +135,7 @@ a kernel question, not an inference from a name table.
 | --- | --- | --- |
 | Provenance | `ferrocad_occt/src/backend.rs` `build_history`; `ferrocad_occt/src/history.rs` over the sys `Modified`/`Generated` bindings | **Both operands** and faces/edges/vertices, each with `OperandId`, kind and ordinal. The *names* remain positional (`FaceN` from the operand's own enumeration); the backend still invents them. |
 | Vocabulary and fold | `crates/ferrocad_lineage`; re-exported by `ferrocad_geom` | Payload-generic, no workspace dependencies, unit-tested with `T = String` and with `Shape`. `Lineage`, `ReverseMap`, `MapVersion` and `NamePolicy` are the production types. |
-| Document and property | `ferrocad_part/src/{containers,dress_up,shape_property}.rs` | `ShapeProperty` stores the shape **plus** its `Lineage` in a versioned native envelope; boolean containers fold `OpResult.history`; `resolve_element_in` reads the map before falling back. |
+| Document and property | `ferrocad_part/src/{containers,dress_up,shape_property}.rs` | `ShapeProperty` stores the shape **plus** its `Lineage` in a versioned native envelope; boolean containers **and** fillet/chamfer features fold `OpResult.history` (a dress-up completes it with identity relations for the elements it did not report); `resolve_element_in` reads the map before falling back, and refuses a map entry of a different kind. |
 | Python | `ferrocad_part_py` | `ElementReverseMap` returns `{output: [inputs]}` from the stored reverse map. `ElementMap`/`ElementMapVersion` stay empty until the remaining exact sizes (52/58/26/10/9/24) are reproduced. |
 
 `build_history` enumerates both operands' elements, asks the operation for
@@ -238,6 +250,7 @@ never names a geometry type.
 | Stability | A name means the same logical element if inputs are unchanged | The point of TNP | Golden histories from the spike |
 | No silent rebinding | If lineage cannot justify a name, retire it — never point it elsewhere | A wrong face is worse than a missing one | Split cases |
 | Deletion | A deleted input's name is retired, and resolution reports why | Stale references must fail, not drift | Deleted-name test |
+| Kind | A map entry of a different kind is provenance, not a reference; resolution falls back to the shape's own naming | Operands and results have independent positional namespaces | Fillet–then–fillet test |
 | Completeness | Every output element is named; every input has one of the four relations | Unnamed output is unreferenceable | Compare against `elements()` per kind |
 | No-loss ambiguity | One input → many outputs is a set; every produced output is recorded in the reverse map even when the forward map keeps only the first | A name cannot denote a set, but the relation must not be lost | Reverse-map split cases |
 | Version honesty | A mismatch invalidates rather than guesses | Old files must not resolve through new rules | Round-trip with a bumped version |

@@ -268,19 +268,19 @@ a mistake.
   29.625 mm on that edge — both far past half the thin extent. The stage still publishes the
   floor it can prove (`MIN_RADIUS`) and nothing more; the factory arms with
   `set_bounds(MIN_RADIUS, None)`.
-- **The kernel answers the ceiling.** `ScriptHost::manipulator_bounds(object, element,
+- **The kernel answers the ceiling.** `ScriptHost::manipulator_probe(object, element,
   manipulator)` is a defaulted seam with four answers: `None` (no opinion), `Ok(None)`
-  (asked, no bound), `Ok(Some(bounds))` (`{min, max, note}`), and `Err` (a provider failed;
-  reported once and treated as no opinion). `HostChain` routes it with `every().find_map(…)`,
-  so the first host with an answer wins.
+  (asked, no bound), `Ok(Some(probe))` (`{values, min, max, note}`), and `Err` (a provider
+  failed; reported once and treated as no opinion). `HostChain` routes it with
+  `every().find_map(…)`, so the first host with an answer wins.
 - **The edition's provider is a real search.** `ferrocad_parametric` registers
-  `FerroCAD.register_bounds_provider`, which asks providers in registration order and skips
-  a raising one. The fillet probe grows a guess (a body extent / 8) by doubling until
-  `Shape.makeFillet` fails, then bisects six times. A result that comes back **invalid
-  without raising** counts as a failure, because OCC returns those. The floor is `1e-3`, the
-  cap is twice the body's largest extent, and if nothing fails below the cap the probe
-  reports **no ceiling** rather than inventing one.
-- **The probe is deferred, then cached.** `sync_manipulator_bounds` runs after the numeric
+  `FerroCAD.register_manipulator_probe`, which asks providers in registration order and
+  skips a raising one. The fillet probe grows a guess (a body extent / 8) by doubling
+  until `Shape.makeFillet` fails, then bisects six times. A result that comes back
+  **invalid without raising** counts as a failure, because OCC returns those. The floor is
+  `1e-3`, the cap is twice the body's largest extent, and if nothing fails below the cap
+  the probe reports **no ceiling** rather than inventing one.
+- **The probe is deferred, then cached.** `sync_manipulator_probe` runs after the numeric
   row syncs; a request waits one executor tick plus 120 ms — so a hand switch, a
   re-selection or a commit collapses into one probe — and then runs on the **UI thread**,
   because the document half is not safe to enter from a worker. The answer is cached per
@@ -293,9 +293,9 @@ a mistake.
 - **What stays unbounded.** A push/pull distance: the provider declares no opinion for it,
   because an extrusion has no ceiling and a deeper cut is a through-cut. The editable
   surface's own floor remains the only hard minimum.
-- **Measured.** `ferrocad_parametric --test manipulator_bounds` **2 passed** (the reported
+- **Measured.** `ferrocad_parametric --test manipulator_probe` **2 passed** (the reported
   max succeeds and 1.25× it fails; a push/pull question gets no bound), the provider
-  registry `tests/test_manipulator_bounds.py` **5 passed**, and the shell test installs a
+  registry `tests/test_manipulator_probe.py` **5 passed**, and the shell test installs a
   provider returning `max: 4.0` and asserts the row, the re-held commit (`4.0`) and the
   rewritten text. `ferrocad_shell_core` **286**, `ferrocad_viewport` **235**,
   `ferrocad_part_gui` **39**, and both edition round-trips green.
@@ -303,6 +303,56 @@ a mistake.
 Two workbench tests that assumed `bootstrap(name)` names the document were made
 name-agnostic — the startup asset names it — which restores the extension-set contract
 check (`run_tests.py --check`: 49 modules, 42 base and 7 workbenches).
+
+### 5.6 Changing what is already there (item 5)
+
+A second gesture on a face an earlier operation produced used to stack another feature over
+the body. The probe now also carries the value the selection **already** carries, and the
+commit edits that feature.
+
+- **The probe is `{values, min, max, note}`.** `ManipulatorProbe` grew `values`, which the
+  shell seeds into the armed handle before it applies the range. `Manipulator::seed_values`
+  is defaulted `false`; `PushPullStem::seed_distance` moves the stem to the existing cap
+  **without** making it pending, and `DressUpScrubber::seed_values` sets the radius. A seed
+  holds nothing for `✓` (the shell skips it while a commit is held), so opening an existing
+  operation is not itself an edit.
+- **Which operation is identified geometrically.** A push/pull cap is the extrusion's base
+  face translated by the signed length along its normal (`_is_extrusion_cap`); a fillet's
+  round is the cylinder of the feature's own `Radius` whose axis parallels a filleted edge
+  (`_dress_up_target`). Neither check needs a name, so this works on a document saved
+  before the kernel recorded provenance.
+- **The commit edits the feature.** `_edit_extrusion` reuses the `Part::Extrusion` (and the
+  boolean while the sign stays); crossing zero builds the other boolean over that same
+  extrusion and retires the old one, so one face still has one operation. `_edit_dress_up`
+  sets `Radius`/`Distance` on the picked feature. Both are one transaction.
+- **A fillet's round is a face, and the scrubber needs an edge.** The edition declares an
+  axis grip through `manipulator_specs` instead: at the face centroid, along its normal,
+  labelled `R`, seeded with the radius and speaking the same `dress_up`/`fillet` commit.
+  Declared handles gained the numeric twin (`label` on the wire, `numeric_fields`,
+  `set_values`, `seed_values`, `pending_commit`), so a mod-declared handle types and
+  clamps like a native one.
+- **The Part layer had to make names mean what they say.** `Part::Fillet`/`Chamfer` used to
+  drop the kernel's history (their map was positional-and-self); they now keep it.
+  `complete_history` adds identity relations for the elements a dress-up did not report, so
+  a partial map no longer makes every other name look retired. And
+  `GeometryBackend::element_kind` lets `resolve_element_in` see that a map entry points at
+  a different **kind** — a fillet records the consumed edge under the round it generated —
+  falling back to the shape's own naming rather than handing the kernel a face where an
+  edge was asked for.
+- **Measured.** `ferrocad_parametric --test manipulator_probe` **3 passed** (the bisection,
+  the unbounded push/pull, and the re-open: a fillet face edited in place, an extrusion cap
+  seeded at 5 and edited to 7 with the object count unchanged, then flipped to a pocket
+  that reuses the extrusion), the shell's new
+  `a_probe_seeds_the_handle_with_the_existing_value` (seeded value shown, nothing held),
+  and `ferrocad_part`'s `a_fillet_keeps_the_provenance_of_the_face_it_creates`.
+  `ferrocad_shell_core` is **288**, `ferrocad_part` **55**, `ferrocad_part_gui` **39**,
+  `ferrocad_viewport` **235**, `ferrocad_stage` **259**, `ferrocad_shell_rust` **58**, and
+  the three edition round-trips green.
+- **The boot sample is honest about one thing.** Its persisted element map predates the
+  history fix, so the kernel range for the sample's existing fillet appears only after the
+  first recompute (the seed and the grip work immediately, because they are geometric). The
+  file is a build input that is not itself versioned yet; regenerating it gives it the
+  provenance-carrying map.
 
 ## 4. Where the detail lives
 

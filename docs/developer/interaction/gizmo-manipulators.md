@@ -1206,42 +1206,105 @@ rewriting `7.5` to `7.50` mid-word would fight the caret.
 The scrubber publishes three decimals because its floor is `MIN_RADIUS` (`0.001`); two
 decimals would print the bound as `0.00`, which reads as nothing.
 
-#### The seam: a host may know a sharper range
+#### The seam: a host may know the sharper answer
 
-`ScriptHost::manipulator_bounds(object, element, manipulator)` returns
-`Option<Result<Option<ManipulatorBounds>, String>>`, and the four answers are distinct:
+`ScriptHost::manipulator_probe(object, element, manipulator)` returns
+`Option<Result<Option<ManipulatorProbe>, String>>`, and the answers are distinct:
 
 - `None` — this host has no opinion (the default, so a host that does not implement the
   method costs nothing);
 - `Ok(None)` — it asked and there is no bound;
-- `Ok(Some(bounds))` — `{min, max, note}`;
+- `Ok(Some(probe))` — `{values, min, max, note}`, where `values` is the operation the
+  selection **already** carries and `min`/`max` are the kernel's range;
 - `Err(message)` — a provider failed; the shell reports it once in the console and treats
   it as no opinion.
 
 `HostChain` routes the question with `every().find_map(...)`, so the first host with an
 answer wins and the Python host is asked only if an earlier one stayed silent.
 
-The Python half is a registry, not a single hook: `FerroCAD.register_bounds_provider`
-takes `(obj, element, manipulator) -> dict | None`, and `FerroCAD.manipulator_bounds`
+The Python half is a registry, not a single hook: `FerroCAD.register_manipulator_probe`
+takes `(obj, element, manipulator) -> dict | None`, and `FerroCAD.manipulator_probe`
 asks providers in registration order until one answers, reporting and skipping a provider
-that raises. `ferrocad_shell.manipulator_bounds(payload_json)` is the module function the
+that raises. `ferrocad_shell.manipulator_probe(payload_json)` is the module function the
 Rust host calls; it resolves `object` by name and returns `null` when nobody owns the
 question.
 
-`ferrocad_parametric` owns the fillet probe, and it is a real kernel search on the
-current shape, never a guess. `_largest_fillet` grows a guess (a body extent / 8) by
-doubling until `makeFillet` fails, then bisects `_BOUNDS_TRIALS = 6` times — about a
+`ferrocad_parametric` answers both halves. The **range** is a real kernel search on the
+current shape, never a guess: `_largest_fillet` grows a guess (a body extent / 8) by
+doubling until `makeFillet` fails, then bisects `_PROBE_TRIALS = 6` times — about a
 percent of the bracket, finer than a drag can aim. Every step calls
 `shape.makeFillet(radius, [edge])` on the shape, and a result that comes back **invalid
-without raising** counts as a failure, because OCC does that. The floor is `_BOUNDS_FLOOR
+without raising** counts as a failure, because OCC does that. The floor is `_PROBE_FLOOR
 = 1e-3`; the cap is twice the body's largest extent, and if nothing fails below the cap
-the probe reports **no ceiling** rather than inventing one. It answers only for
-`manipulator == "dress_up"` and an `Edge*` element: a push/pull stays unbounded, and a
-chamfer would need its own probe.
+the probe reports **no ceiling** rather than inventing one. A push/pull distance has no
+range to report at all, and a chamfer would need its own search.
+
+#### The value: re-opening what is already there
+
+A second gesture on a face that a previous operation produced should *change* that
+operation, not stack another one. The probe says which:
+
+- **Push/pull.** `_extrusion_target` looks at the object the face belongs to: a
+  `Part::Fuse`/`Part::Cut` whose `Tool` is a `Part::Extrusion`. The cap is the extrusion's
+  base face translated by the signed length along its normal, so `_is_extrusion_cap`
+  compares the two frames (normals parallel, centroids offset by exactly that vector,
+  within `1e-6` of the body's diagonal). Geometry, not a name: a document saved before the
+  kernel recorded provenance still re-opens correctly.
+- **Fillet.** `_dress_up_target` looks at a `Part::Fillet`: its round is the cylinder of
+  the feature's own `Radius` whose axis is parallel to one of the filleted edges. The
+  surface identifies the feature, so this works on a stale element map too.
+- **Chamfer** is deliberately not answered: the armed scrubber edits a radius, and a
+  chamfer's two distances are a different operation.
+
+The seed applies **before** the range, and only while the handle is at rest: a held
+commit, a live drag or a typed value belongs to the user. `Manipulator::seed_values` is
+new and defaulted `false`; `PushPullStem::seed_distance` moves the stem to the existing
+cap without making it pending, and `DressUpScrubber::seed_values` sets the radius
+likewise. `ferrocad_viewport::seed_manipulator_values` is the host's entry point. A seed
+holds **nothing** for `✓` — the handle opens where the feature is and only the next edit
+makes a commit.
+
+#### The commit edits that feature
+
+`ferrocad_parametric`'s `_interaction` resolves the target again and writes it in one
+transaction:
+
+- `_edit_extrusion` reuses the same `Part::Extrusion` (its `LengthFwd` and `Reversed`
+  move) and the same boolean while the sign stays. Crossing zero changes the operation, so
+  it builds the other boolean (`Fuse` ↔ `Cut`) over that extrusion and retires the old
+  one: the body still has one push/pull feature, not a chain.
+- `_edit_dress_up` sets `Radius` (or `Distance`/`Distance2`) on the picked feature. Its
+  `Base` link and edge selection are already right, so only the value moves.
+
+A fillet's round is a **face**, and the compiled scrubber needs an edge. The edition
+answers that with a declared handle: `manipulator_specs` returns an axis grip at the
+face's area-weighted centroid, along its normal, labelled `R`, seeded with the feature's
+radius and carrying the `dress_up`/`fillet` id the compiled scrubber uses. A declaration
+now also publishes the numeric twin (`DeclarativeHandle::label`, plus `numeric_fields`,
+`set_values`, `seed_values`, `pending_commit` on `DeclarativeManipulator`), so a
+mod-declared handle types and clamps like a native one.
+
+#### Keeping the names honest
+
+Re-opening needs the map to be both **partial-safe** and **kind-safe**, and that exposed
+three gaps in the Part layer:
+
+- `Part::Fillet`/`Chamfer::execute` used to store the shape without the kernel's history,
+  so their element map was positional-and-self and carried no provenance at all. They now
+  keep it, like the booleans.
+- A dress-up reports relations for the filleted edge only, so a map built from that alone
+  made every other name look retired. `complete_history` adds identity relations for the
+  elements the operation did not report, leaving the modified/generated relations (the
+  provenance `ElementReverseMap` answers) unshadowed.
+- `GeometryBackend::element_kind` (defaulted `None`, implemented for OCCT) lets
+  `resolve_element_in` notice that a map entry points at a different **kind**: a fillet
+  records the edge it consumed under the round it generated, so `Edge1` can name a face.
+  A same-kind entry still wins (no silent retarget); a different kind falls back to the
+  shape's own naming, which keeps "fillet another edge of the filleted body" working.
 
 #### The probe belongs to the paint, once per arming
 
-`shell::sync_manipulator_bounds` runs in `Render::render`, after the numeric row is
+`shell::sync_manipulator_probe` runs in `Render::render`, after the numeric row is
 synced. It keys the answer on `(object, element, manipulator)` and caches **even
 `Ok(None)`**, so a host with nothing to say is asked once, not once per frame. A request
 is deferred one executor tick plus 120 ms, so a burst of armings (a hand switch, a
@@ -1251,23 +1314,27 @@ never pays for it.
 The probe itself runs on the **UI thread**: it enters the document half, which is not
 safe to call from a worker, so the deferral is a debounce, not an off-thread query. An
 answer that lands after the user re-armed on another handle is dropped. Otherwise the
-range goes into the viewport, a held commit the range clamped is re-read (so `✓` applies
-what is actually allowed), and any field whose text no longer matches is rewritten. The
-cache is cleared on every document edit and on a document replacement.
+seed and then the range go into the viewport, a held commit the range clamped is re-read
+(so `✓` applies what is actually allowed), and any field whose text no longer matches is
+rewritten. The cache is cleared on every document edit and on a document replacement, so
+an applied edit is re-probed and the handle opens at its new value.
 
 Tests: `the_numeric_twin_reports_the_body_behind_the_face`,
 `the_scrubber_publishes_its_floor_and_takes_the_kernel_ceiling` (the stage's floor, no
 stage ceiling, and a host range that is enforced rather than printed), the shell's
 `the_manipulator_numeric_row_types_a_held_value` (a provider's `max: 4.0` reaches the
-row, clamps the commit and rewrites the field), the edition's
-`the_edition_bisects_the_radius_the_kernel_completes` (the reported max succeeds and 1.25×
-it fails) and `a_push_pull_question_gets_no_kernel_bound`, plus the registry tests in
-`tests/test_manipulator_bounds.py`.
+row, clamps the commit and rewrites the field) and
+`a_probe_seeds_the_handle_with_the_existing_value` (a seed shows the value and holds
+nothing), the edition's `the_edition_bisects_the_radius_the_kernel_completes`,
+`a_push_pull_question_gets_no_kernel_bound` and `an_applied_feature_is_reopened_not_stacked`
+(a fillet face and an extrusion cap: seeded, edited in place, and the sign flip swaps the
+boolean), `ferrocad_part`'s `a_fillet_keeps_the_provenance_of_the_face_it_creates`, plus
+the registry tests in `tests/test_manipulator_probe.py`.
 
 ### Still open
 
-Re-opening an existing `Part::Extrusion`/`Part::Fillet` as a live handle — seeding the
-row from the feature's own value and committing the edit in one transaction, keyed on
-element→feature provenance — is still open. The probe is also asked once per arming, not
-re-asked mid-drag; a shape change during an edit clears the cache rather than growing a
-live range.
+The probe is asked once per arming, not re-asked mid-drag; a shape change during an edit
+clears the cache rather than growing a live range. Re-opening a **chamfer** needs a
+face-level handle for its two distances (the declared grip carries one scalar). A chain of
+several operations on the same face still picks the outermost feature only: the probe
+returns the first answer, not the whole history.

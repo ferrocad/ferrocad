@@ -513,9 +513,9 @@ pub struct Shell {
     /// answer, which can be the value that actually fails. `None` is cached too — "asked,
     /// and it had no opinion" — so a probe runs once per arming rather than per frame. The
     /// map is cleared when the shape changes.
-    bounds_cache: HashMap<(String, String, String), Option<crate::types::ManipulatorBounds>>,
+    probe_cache: HashMap<(String, String, String), Option<crate::types::ManipulatorProbe>>,
     /// The key a probe is owed for. `Some` between the request and the answer.
-    bounds_pending: Option<(String, String, String)>,
+    probe_pending: Option<(String, String, String)>,
     /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
     ///
     /// A workplane offset is **transient viewport state** with no document object and
@@ -1000,8 +1000,8 @@ impl Shell {
             session: None,
             pending_interaction: None,
             manipulator_form: None,
-            bounds_cache: HashMap::new(),
-            bounds_pending: None,
+            probe_cache: HashMap::new(),
+            probe_pending: None,
             workplane_session: None,
             hud_rect: None,
             hud_lock: None,
@@ -1870,7 +1870,7 @@ impl Render for Shell {
         self.sync_manipulator_form(window, cx);
         // The kernel's range, if the document half has one: a cache hit applies here, a
         // miss schedules the probe for after this paint.
-        self.sync_manipulator_bounds(cx);
+        self.sync_manipulator_probe(cx);
         let model = self.snapshot();
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);

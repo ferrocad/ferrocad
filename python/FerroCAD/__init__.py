@@ -81,7 +81,7 @@ _DEFAULT_DISPLAY_PROVIDERS = []
 _INTERACTION_PROVIDERS = []
 _MANIPULATOR_PROVIDERS = []
 # ``provider(obj, element, manipulator)`` → the value range the kernel keeps, or None.
-_BOUNDS_PROVIDERS = []
+_PROBE_PROVIDERS = []
 
 
 def register_display_provider(provider, default=False):
@@ -205,37 +205,44 @@ def manipulator_specs(obj, element=""):
     return list(specs)
 
 
-def register_bounds_provider(provider):
-    """Let ``provider(obj, element, manipulator)`` report the range the kernel keeps.
+def register_manipulator_probe(provider):
+    """Let ``provider(obj, element, manipulator)`` answer for the kernel's side.
 
-    The shell derives a conservative range from the tessellation (nothing larger than
-    half the body could fit), so this is where a module answers the sharper question:
-    *which* value the kernel actually completes. Return
-    ``{"min": float|None, "max": float|None, "note": str}``, or ``None`` when the module
-    does not own that manipulator. The shell clamps a dragged or typed value to the
-    range, so a value the kernel would reject never reaches a commit.
+    The shell derives a conservative range from the tessellation, so this is where a
+    module answers the sharper questions about a manipulator's operation:
+
+    * ``values`` — the operation the selection **already** carries (an existing
+      extrusion's length, an existing fillet's radius). The handle opens at that value
+      and a commit edits the feature instead of adding one.
+    * ``min`` / ``max`` — the range the kernel actually completes. The shell clamps a
+      dragged or typed value to it, so a value the kernel would reject never reaches a
+      commit.
+    * ``note`` — a short explanation for the record and the console.
+
+    Return ``{"values": [float], "min": float|None, "max": float|None, "note": str}``
+    (every key optional), or ``None`` when the module does not own that manipulator.
 
     Keep the probe cheap: it runs once per arming (when the handle appears on a
     selection), not per frame, and the host caches the answer until the shape changes.
     Registration is idempotent.
     """
-    if provider not in _BOUNDS_PROVIDERS:
-        _BOUNDS_PROVIDERS.append(provider)
+    if provider not in _PROBE_PROVIDERS:
+        _PROBE_PROVIDERS.append(provider)
 
 
-def manipulator_bounds(obj, element="", manipulator=""):
+def manipulator_probe(obj, element="", manipulator=""):
     """The first module's answer for ``(obj, element, manipulator)``, or ``None``.
 
     A provider that raises is reported to stderr and skipped, so one broken probe cannot
     make the numeric row unusable; the remaining providers still run.
     """
-    for provider in _BOUNDS_PROVIDERS:
+    for provider in _PROBE_PROVIDERS:
         try:
             result = provider(obj, element, manipulator)
         except Exception as exc:  # noqa: BLE001 - a probe must not break the row
             name = getattr(provider, "__name__", repr(provider))
             print(
-                "FerroCAD: bounds provider %s raised: %s" % (name, exc),
+                "FerroCAD: probe provider %s raised: %s" % (name, exc),
                 file=sys.stderr,
             )
             continue
@@ -296,8 +303,8 @@ __all__ = [
     "interaction",
     "register_manipulator_provider",
     "manipulator_specs",
-    "register_bounds_provider",
-    "manipulator_bounds",
+    "register_manipulator_probe",
+    "manipulator_probe",
     "set_parameter_file",
     "parameter_file",
 ]

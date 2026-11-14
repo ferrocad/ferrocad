@@ -4459,6 +4459,26 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
+    /// Seed the manipulator `id` with the value an existing feature holds.
+    ///
+    /// Unlike [`set_manipulator_values`](Self::set_manipulator_values) this is not a
+    /// pending edit: the handle opens at that value and only a gesture or a typed number
+    /// commits. Returns whether anything changed.
+    pub fn seed_manipulator_values(&mut self, id: &str, values: &[f64]) -> bool {
+        let Some(manipulator) = self
+            .manipulators
+            .iter_mut()
+            .find(|manipulator| manipulator.id() == id)
+        else {
+            return false;
+        };
+        if !manipulator.seed_values(values) {
+            return false;
+        }
+        self.rebuild_manipulator_queue();
+        true
+    }
+
     /// The numeric readout the viewport would show, if the style allows one.
     ///
     /// The render path asks the two helpers separately (it positions two pills); this is

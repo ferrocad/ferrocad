@@ -255,15 +255,17 @@ impl Shell {
         ))
     }
 
-    /// Ask for the kernel-backed range of the armed manipulator, at most once per key.
+    /// Ask the document half about the armed manipulator, at most once per key.
     ///
-    /// The stage's own range is already on the fields; this is the sharper answer. The
-    /// request is **deferred** one executor tick and a short delay, so a burst of armings
-    /// (a hand switch, a re-selection, a commit) collapses into one kernel probe, and the
-    /// paint that armed the handle never pays for it. The probe itself runs on the UI
-    /// thread — it calls into the document half, which is not safe to enter from a worker
-    /// — and the answer is cached until the shape changes.
-    pub(in crate::shell) fn sync_manipulator_bounds(&mut self, cx: &mut Context<Self>) {
+    /// Two answers arrive together: the **seed** (the value an existing feature already
+    /// holds) and the **range** (the values the kernel completes). The stage's own range
+    /// is already on the fields; this is the sharper answer. The request is **deferred**
+    /// one executor tick and a short delay, so a burst of armings (a hand switch, a
+    /// re-selection, a commit) collapses into one kernel probe, and the paint that armed
+    /// the handle never pays for it. The probe itself runs on the UI thread — it calls
+    /// into the document half, which is not safe to enter from a worker — and the answer
+    /// is cached until the shape changes.
+    pub(in crate::shell) fn sync_manipulator_probe(&mut self, cx: &mut Context<Self>) {
         let Some((id, _)) = self.armed_numeric_fields(cx) else {
             return;
         };
@@ -271,23 +273,23 @@ impl Shell {
             return;
         };
         let key = (object, element, id);
-        if self.bounds_cache.contains_key(&key) {
-            if let Some(bounds) = self.bounds_cache.get(&key).cloned().flatten() {
-                self.apply_manipulator_bounds(&bounds, cx);
+        if self.probe_cache.contains_key(&key) {
+            if let Some(probe) = self.probe_cache.get(&key).cloned().flatten() {
+                self.apply_manipulator_probe(&probe, cx);
             }
             return;
         }
-        if self.bounds_pending.as_ref() == Some(&key) {
+        if self.probe_pending.as_ref() == Some(&key) {
             return;
         }
-        self.bounds_pending = Some(key);
+        self.probe_pending = Some(key);
         let executor = cx.background_executor().clone();
         cx.spawn(async move |shell, cx| {
             executor
                 .timer(std::time::Duration::from_millis(120))
                 .await;
             let _ = shell.update(cx, |shell, cx| {
-                shell.resolve_manipulator_bounds(cx);
+                shell.resolve_manipulator_probe(cx);
             });
         })
         .detach();
@@ -297,40 +299,42 @@ impl Shell {
     ///
     /// Separate from the scheduling so a test — or a host that wants the answer sooner —
     /// can run it directly. Returns whether a probe ran.
-    pub(in crate::shell) fn resolve_manipulator_bounds(
+    pub(in crate::shell) fn resolve_manipulator_probe(
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(key) = self.bounds_pending.take() else {
+        let Some(key) = self.probe_pending.take() else {
             return false;
         };
         let (object, element, manipulator) = key.clone();
         let element = (!element.is_empty()).then_some(element.as_str());
-        let answer = crate::app::manipulator_bounds(cx, &object, element, &manipulator);
-        let bounds = match answer {
-            Ok(bounds) => bounds,
+        let answer = crate::app::manipulator_probe(cx, &object, element, &manipulator);
+        let probe = match answer {
+            Ok(probe) => probe,
             Err(error) => {
                 // The probe failed (a broken provider). Cache the "no opinion" so it is
                 // not retried every frame, but say why once in the console.
-                self.console_line(format!("kernel bounds: {error}"), cx);
+                self.console_line(format!("manipulator probe: {error}"), cx);
                 None
             }
         };
-        self.bounds_cache.insert(key, bounds.clone());
-        if let Some(bounds) = bounds {
-            self.apply_manipulator_bounds(&bounds, cx);
+        self.probe_cache.insert(key, probe.clone());
+        if let Some(probe) = probe {
+            self.apply_manipulator_probe(&probe, cx);
         }
         true
     }
 
-    /// Push a hard range into the armed manipulator and refresh what it implies.
+    /// Apply a probe: seed the handle with an existing value, then clamp it to the range.
     ///
-    /// The answer is only for the handle it was asked about: a probe that lands after the
-    /// user re-armed on another element is dropped. A clamped held commit is re-read, so
-    /// `✓` applies the value the range actually allows.
-    fn apply_manipulator_bounds(
+    /// The order matters. A seed only lands while the handle is at rest — a drag, a typed
+    /// value or a held commit is the user's, and the probe must not overwrite it. The
+    /// range is authoritative whenever it arrives. The answer is only for the handle it
+    /// was asked about: a probe that lands after the user re-armed on another element is
+    /// dropped.
+    fn apply_manipulator_probe(
         &mut self,
-        bounds: &crate::types::ManipulatorBounds,
+        probe: &crate::types::ManipulatorProbe,
         cx: &mut Context<Self>,
     ) {
         let Some((id, _)) = self.armed_numeric_fields(cx) else {
@@ -339,15 +343,23 @@ impl Shell {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
-        let changed = viewport.update(cx, |viewport, _cx| {
-            viewport.set_manipulator_value_bounds(&id, bounds.min, bounds.max)
+        let mut changed = false;
+        // A seed is the operation the selection already carries. It must never overwrite
+        // an edit in progress: a held commit is the user's, not the probe's.
+        if !probe.values.is_empty() && self.pending_interaction.is_none() {
+            changed |= viewport.update(cx, |viewport, _cx| {
+                viewport.seed_manipulator_values(&id, &probe.values)
+            });
+        }
+        changed |= viewport.update(cx, |viewport, _cx| {
+            viewport.set_manipulator_value_bounds(&id, probe.min, probe.max)
         });
         if !changed {
             return;
         }
-        // A field whose text no longer matches the value (the range clamped it) is
-        // rewritten: the probe is authoritative, and the row must not disagree with the
-        // ghost. A field the user is typing into keeps its text unless it was clamped.
+        // A field whose text no longer matches the value (seeded, or clamped by the
+        // range) is rewritten: the probe is authoritative, and the row must not disagree
+        // with the ghost. A field the user is typing into keeps its text unless it moved.
         if let Some(fields) = viewport.read(cx).manipulator_fields(&id) {
             if let Some(form) = self.manipulator_form.as_ref() {
                 for (input, field) in form.inputs.iter().zip(fields.iter()) {
@@ -360,8 +372,15 @@ impl Shell {
                 }
             }
         }
-        if let Some(commit) = viewport.read(cx).manipulator_commit(&id) {
-            self.hold_interaction(commit, cx);
+        // Only a value the user was already holding is refreshed. A seeded handle holds
+        // nothing yet: `✓` must stay absent until the gesture (or a typed number) makes
+        // an edit.
+        if self.pending_interaction.is_some() {
+            if let Some(commit) = viewport.read(cx).manipulator_commit(&id) {
+                self.hold_interaction(commit, cx);
+            } else {
+                cx.notify();
+            }
         } else {
             cx.notify();
         }

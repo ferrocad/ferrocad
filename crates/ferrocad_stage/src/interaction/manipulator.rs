@@ -30,6 +30,36 @@ use ferrocad_types::Vector3;
 
 use crate::shape::ShapeItem;
 
+/// One number of a manipulator's pending value, as the host's numeric field shows it.
+///
+/// A manipulator's value is whatever its commit carries (a push/pull distance, a fillet
+/// radius, a chamfer's two distances). The host does not know what those numbers mean, so
+/// the manipulator describes them: this is the typed twin of a drag, the same way
+/// [`InteractionCommit`] is the data twin of the release.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumericField {
+    /// The short label the row prints before the input (`D`, `R`, `D1`).
+    pub label: String,
+    /// The unit after the number (`mm`), empty for none.
+    pub unit: String,
+    /// The value to show, in the manipulator's own units.
+    pub value: f64,
+    /// How many decimals to show (and round a typed value to).
+    pub decimals: usize,
+}
+
+impl NumericField {
+    /// A millimetre field labelled `label`.
+    pub fn millimetres(label: impl Into<String>, value: f64) -> Self {
+        Self {
+            label: label.into(),
+            unit: "mm".to_string(),
+            value,
+            decimals: 2,
+        }
+    }
+}
+
 /// A value a [`Manipulator`] commits to the document.
 ///
 /// The viewport and the shell treat this as opaque data: they route it by
@@ -151,6 +181,34 @@ pub trait Manipulator {
     /// enters the state, and a manipulator keeps no value between gestures.
     fn is_pending(&self) -> bool {
         false
+    }
+
+    /// The typed twin of the pending value: one field per number the commit carries, in
+    /// the commit's order.
+    ///
+    /// The host shows these in a docked numeric row, so a value can be typed or nudged
+    /// instead of dragged. Empty (the default) means the handle has no honest number to
+    /// type — the host then draws only the handle.
+    fn numeric_fields(&self) -> Vec<NumericField> {
+        Vec::new()
+    }
+
+    /// Adopt typed values, in the order [`numeric_fields`](Self::numeric_fields) and the
+    /// commit use.
+    ///
+    /// The manipulator clamps and snaps them with its own rules, marks the value pending
+    /// and rebuilds its preview. Returns whether the value changed.
+    fn set_values(&mut self, _values: &[f64]) -> bool {
+        false
+    }
+
+    /// The commit the current value would produce, without ending a drag.
+    ///
+    /// A typed value has no gesture to release, so the host needs the same neutral data
+    /// [`drag_end`](Self::drag_end) returns. `None` when the current value is not an edit
+    /// (a stem at zero) or the manipulator never commits.
+    fn pending_commit(&self) -> Option<InteractionCommit> {
+        None
     }
 
     /// Whether `device` is on a grab target. An unclaimed press falls through to

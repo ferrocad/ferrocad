@@ -168,8 +168,42 @@ three gaps that the immediate write had hidden:
   (`a_second_release_replaces_the_held_commit`), so `✓` applies the latest value.
 - **Result.** `ferrocad_shell_core` **281**, `ferrocad_viewport` **231**, `ferrocad_part_gui`
   **33 + 1 doctest**, and the edition's `push_pull_round_trip` / `manipulator_round_trip`
-  still green. What is still missing is a **typed** distance while pending (the Move form's
-  docked rows have no manipulator twin); re-dragging is the adjustment today.
+  still green.
+
+### 5.2 The manipulator's numeric twin
+
+The same session also closed the gap that holding a value exposed: a released stem could
+only be adjusted by dragging it again. The twin is the same pending edit typed instead.
+
+- **The seam is three defaulted methods on `Manipulator`.** `numeric_fields()` describes
+  the numbers (`NumericField { label, unit, value, decimals }`, in the commit's order),
+  `set_values()` adopts typed ones (clamping and snapping with the manipulator's own
+  rules) and `pending_commit()` is the commit a release would have produced. The host
+  never interprets a number, so a mod's declared handle can join later.
+- **The row is a view.** `shell::manipulator_form` builds one `TextInput` per field,
+  reconciles it with the viewport's topmost numeric manipulator on every paint, and
+  mirrors values only into **unfocused** fields — so a drag ticks the numbers and typing
+  is never rewritten under the caret. It docks where the Move form does and appears as
+  soon as the handle is armed, so a value can be typed with no drag at all. `Tab` opens a
+  field, `Enter` applies, `Esc` rolls back, a non-slot digit seeds it, and `0`–`3` still
+  switch hands.
+- **One writer.** A typed value goes `set_values` → `pending_commit` → the same
+  `hold_interaction` a release uses, so the ghost, the readout, the `✗`/`✓` pair and the
+  status line all describe it, and `✓` spends exactly one transaction.
+- **Zero is not an edit.** A stem typed back to `0` clears the held commit instead of
+  offering a zero-length extrusion; the ghost goes with it.
+- **Measured.** The four new tests are `ferrocad_part_gui`'s
+  `the_numeric_twin_sets_the_distance_and_commits_it` and
+  `the_numeric_twin_sets_the_radius_and_the_chamfer_distances` (suite **35**),
+  `ferrocad_viewport`'s `a_typed_value_reaches_the_manipulator_and_its_commit` (suite
+  **232**), and `ferrocad_shell_core`'s `the_manipulator_numeric_row_types_a_held_value`
+  (suite **286**, which also checks that `Esc` restores the field to the re-armed
+  handle's value). The suite totals are measured on a tree that also carries the in-flight
+  geometry-sharing work; three of *its* viewport tests (incremental stage bounds and the
+  transform-only packet patch) fail there and are not this change.
+- **Still open.** The stem does not yet ride the ghost; model-aware bounds (a pocket
+  deeper than the body, a radius wider than the edge) need the kernel; and an existing
+  `Part::Extrusion`/`Part::Fillet` is not yet re-openable as a live handle.
 
 ## 4. Where the detail lives
 

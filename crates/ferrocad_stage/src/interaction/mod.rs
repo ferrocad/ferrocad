@@ -18,7 +18,7 @@ pub use declarative::{
     DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape,
 };
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
-pub use manipulator::{InteractionCommit, Manipulator};
+pub use manipulator::{InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
 pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,

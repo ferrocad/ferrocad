@@ -23,8 +23,8 @@ use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
     DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, RingSweep, ShapeItem, SnapKind, Stage, TRANSFORM_ID, ToolStatus, TransformGizmo,
-    TransformSession, TransformTape, WorkplaneLive,
+    Manipulator, NumericField, RingSweep, ShapeItem, SnapKind, Stage, TRANSFORM_ID, ToolStatus,
+    TransformGizmo, TransformSession, TransformTape, WorkplaneLive,
 };
 use ferrocad_types::{Matrix4, Rotation, Vector3};
 use ferrocad_ui::Form;
@@ -72,7 +72,7 @@ pub(crate) mod prefs;
 // Keep the flat `shell::<name>` paths as aliases of the grouped modules, so both
 // `shell::move_hud` and `shell::hud::move_hud` work.
 pub use bridge::{context, dispatch, picking, viewport};
-pub use hud::{move_hud, pill};
+pub use hud::{manipulator_form, move_hud, pill};
 pub use panels::{devtools, dialogs, forms, loadout, palette, popovers, properties};
 
 // The context gate: every action entry point asks `Shell::gate` (see `shell/bridge/context.rs`).
@@ -500,6 +500,12 @@ pub struct Shell {
     /// form uses. The manipulator keeps its ghost at the pending value meanwhile. `None`
     /// at rest.
     pending_interaction: Option<InteractionCommit>,
+    /// The docked numeric row for the armed manipulator, when it publishes one.
+    ///
+    /// It mirrors the same pending value a drag produces (see
+    /// [`manipulator_form`](crate::shell::manipulator_form)), so a distance or a radius can
+    /// be typed instead of dragged. `None` when the hand hosts no numeric manipulator.
+    manipulator_form: Option<manipulator_form::ManipulatorForm>,
     /// The live `Offset Workplane…` session (W2), if its floating HUD is open.
     ///
     /// A workplane offset is **transient viewport state** with no document object and
@@ -983,6 +989,7 @@ impl Shell {
             rotation_start: None,
             session: None,
             pending_interaction: None,
+            manipulator_form: None,
             workplane_session: None,
             hud_rect: None,
             hud_lock: None,
@@ -1198,6 +1205,10 @@ impl Shell {
                 .iter()
                 .chain(std::iter::once(&hud.angle))
                 .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        }) || self.manipulator_form.as_ref().is_some_and(|form| {
+            form.inputs
+                .iter()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
         }) || self
             .prop_inputs
             .values()
@@ -1254,6 +1265,27 @@ impl Shell {
                     if !slot_digit
                         && let Some(Some(typed)) = escalation_key(event)
                         && self.type_into_move_field(typed, window, cx)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        // The manipulator's numeric row owns the same keys as the Move form: `Tab` opens
+        // a field and a **non-slot** digit starts a number. The slot digits stay with the
+        // loadout (`2` equips Push/Pull even with the row visible), exactly as they do
+        // beside the Move form.
+        if !editing && self.manipulator_form_open() {
+            match event.keystroke.key.as_str() {
+                "tab" => {
+                    self.focus_manipulator_field(0, window, cx);
+                    return true;
+                }
+                _ => {
+                    let slot_digit = Slot::from_key(&event.keystroke.key).is_some();
+                    if !slot_digit
+                        && let Some(Some(typed)) = escalation_key(event)
+                        && self.type_into_manipulator_field(typed, window, cx)
                     {
                         return true;
                     }
@@ -1820,6 +1852,10 @@ impl Render for Shell {
         // generation check is a mutex read, and only a real change rebuilds the stage.
         self.sync_previews(cx);
         self.poll_gpu_notice(cx);
+        // The armed manipulator decides whether the numeric row exists; the viewport owns
+        // that set, so the row is reconciled here, where it is also painted.
+        self.ensure_manipulator_form(cx);
+        self.sync_manipulator_form(window, cx);
         let model = self.snapshot();
         // The app menu shows the window's real state; the registry cannot know it.
         let dev_tools_open = self.dev_tools_open(cx);
@@ -1992,6 +2028,7 @@ impl Render for Shell {
                     .items_start()
                     .gap_1()
                     .child(move_fields_bar(self, cx))
+                    .child(manipulator_fields_bar(self, cx))
                     .when(inspect_visible, |el| {
                         el.child(crate::chrome::inspect_bar(self.loadout, cx))
                     })

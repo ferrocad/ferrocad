@@ -214,10 +214,12 @@ shell passes it to the app script, which keeps the triad kernel-free.
   visible without a kernel call. It is live during the drag and stays after it, because
   the release leaves the value **pending**: the `✗`/`✓` pair appears beside the readout
   and the solid appears only on `✓` (or `Enter`). Grabbing the stem again continues from
-  the held distance, so the value can be tuned before deciding. `✗` (or `Esc`) puts the
-  stem back at rest and writes nothing. The commit is still the same neutral
-  `InteractionCommit`, so the edition hook is unchanged. The three remaining follow-ups
-  are a stem for a non-planar face, a target-aware triad and stable naming.
+  the held distance, and the docked **numeric row** (one `D` field in millimetres) is the
+  same pending value typed instead of dragged — so the distance can be tuned either way
+  before deciding. `✗` (or `Esc`) puts the stem back at rest and writes nothing. The
+  commit is still the same neutral `InteractionCommit`, so the edition hook is unchanged.
+  The three remaining follow-ups are a stem that rides the ghost, a stem for a non-planar
+  face, and model-aware bounds on the typed value.
 
 ## 5. Select mode: body vs face
 

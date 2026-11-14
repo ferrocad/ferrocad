@@ -349,6 +349,7 @@ Pending ──Enter / ✓──► one transaction, fields reset ──► At re
 Pending ──Esc / ✗──► rollback: session dropped, preview restored ──► At rest
 At rest ──gizmo drag──► fields mirror the session Δ + preview; no focus taken
 At rest ──Tab / digit / tag click──► one field focused (drag-axis memory)
+At rest ──Tab / non-slot digit on a stem or scrubber──► the manipulator's field opens
 Any ──badge / `=`──► Δ fields ⇄ world coordinates (same pending Δ)
 Any ──selection replaced──► refused while pending; a clean form re-targets
 Pending ──selection / hand / scope / tool──► refused (status: "move/rotation pending") ──► Pending
@@ -357,6 +358,8 @@ At rest ──selection cleared / another hand / a tool / `0` (pointer)──►
 Pending ──competing document edit (selection pruned)──► rollback ──► the new context
 At rest ──release a stem / scrubber──► its commit is held: ghost + ✗/✓ beside the readout
 Held ──drag the handle again──► the value continues from the held one ──► Held
+Held ──type in the docked field──► the same held commit, re-read from the handle ──► Held
+At rest ──type in the docked field──► that value is held (no drag needed) ──► Held
 Held ──✓ / Enter──► one `interaction` transaction ──► At rest (handle re-armed)
 Held ──✗ / Esc──► handle re-armed at rest, nothing written ──► At rest
 ```

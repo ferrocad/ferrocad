@@ -34,9 +34,9 @@ use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, OVERLAY_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
     AxisStyle, FaceFrame, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle, GizmoTarget, GizmoValue,
-    GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, PointerEvent,
-    PointerKind, RingSweep, ShapeItem, SnapCandidate, SnapContext, SnapKind, Tool, ToolStatus,
-    TransformGizmo, TransformTape, ViewProjection, Workplane, axis, feedback, grid,
+    GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, NumericField,
+    PointerEvent, PointerKind, RingSweep, ShapeItem, SnapCandidate, SnapContext, SnapKind, Tool,
+    ToolStatus, TransformGizmo, TransformTape, ViewProjection, Workplane, axis, feedback, grid,
     snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{camera_position, point_segment_distance, project_device, scale_for};
@@ -4373,6 +4373,49 @@ impl<V: InventorView> InventorViewport<V> {
         self.manipulators
             .iter()
             .any(|manipulator| manipulator.is_dragging())
+    }
+
+    /// The topmost armed manipulator that publishes a typed numeric twin: its id and its
+    /// fields, in the commit's order.
+    ///
+    /// The host builds the docked row from this, so the viewport still names no
+    /// manipulator: a stem publishes one distance and a scrubber one radius, and a
+    /// manipulator with no honest number publishes nothing.
+    pub fn numeric_manipulator(&self) -> Option<(String, Vec<NumericField>)> {
+        self.manipulators.iter().rev().find_map(|manipulator| {
+            let fields = manipulator.numeric_fields();
+            (!fields.is_empty()).then(|| (manipulator.id().to_string(), fields))
+        })
+    }
+
+    /// Write typed values into the manipulator `id`, in its own field order.
+    ///
+    /// The manipulator clamps and snaps them and rebuilds its preview; the host then
+    /// re-reads the commit with [`manipulator_commit`](Self::manipulator_commit). Returns
+    /// whether the value changed.
+    pub fn set_manipulator_values(&mut self, id: &str, values: &[f64]) -> bool {
+        let Some(manipulator) = self
+            .manipulators
+            .iter_mut()
+            .find(|manipulator| manipulator.id() == id)
+        else {
+            return false;
+        };
+        if !manipulator.set_values(values) {
+            return false;
+        }
+        self.rebuild_manipulator_queue();
+        true
+    }
+
+    /// The commit the manipulator's current value would produce, without a release.
+    ///
+    /// A typed value has no gesture to end, so this is what the host holds for `✓`.
+    pub fn manipulator_commit(&self, id: &str) -> Option<InteractionCommit> {
+        self.manipulators
+            .iter()
+            .find(|manipulator| manipulator.id() == id)?
+            .pending_commit()
     }
 
     /// The numeric readout the viewport would show, if the style allows one.
@@ -10349,6 +10392,25 @@ mod tests {
             self.pending
         }
 
+        fn numeric_fields(&self) -> Vec<NumericField> {
+            vec![NumericField::millimetres("D", self.value)]
+        }
+
+        fn set_values(&mut self, values: &[f64]) -> bool {
+            let Some(value) = values.first().copied() else {
+                return false;
+            };
+            if (value - self.value).abs() <= 1e-12 {
+                return false;
+            }
+            self.value = value;
+            true
+        }
+
+        fn pending_commit(&self) -> Option<InteractionCommit> {
+            Some(InteractionCommit::new("fake", 7, "set").with_values([self.value]))
+        }
+
         fn set_hovered(&mut self, hovered: bool) -> bool {
             if self.hovered == hovered {
                 return false;
@@ -10413,6 +10475,39 @@ mod tests {
             !view.manipulator_preview_queue.is_empty(),
             "the held value keeps its ghost"
         );
+    }
+
+    /// A typed value reaches the manipulator and its commit: this is the viewport half of
+    /// the docked numeric row.
+    #[test]
+    fn a_typed_value_reaches_the_manipulator_and_its_commit() {
+        let (mut view, _viewport) = manipulator_view();
+
+        let (id, fields) = view.numeric_manipulator().expect("a numeric twin");
+        assert_eq!(id, "fake");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, "D");
+        assert!((fields[0].value - 1.0).abs() < 1e-12, "the fake starts at 1");
+
+        assert!(view.set_manipulator_values("fake", &[3.5]));
+        assert!(
+            !view.set_manipulator_values("fake", &[3.5]),
+            "an unchanged value is not a change"
+        );
+        assert_eq!(
+            view.manipulator("fake")
+                .expect("a manipulator")
+                .readout()
+                .as_deref(),
+            Some("3.50")
+        );
+        let commit = view.manipulator_commit("fake").expect("a commit");
+        assert_eq!(commit.manipulator, "fake");
+        assert_eq!(commit.values, vec![3.5]);
+
+        // An unknown id is refused rather than applied to the first handle.
+        assert!(!view.set_manipulator_values("nope", &[1.0]));
+        assert!(view.manipulator_commit("nope").is_none());
     }
 
     #[test]

@@ -887,6 +887,18 @@ impl Shell {
             self.on_interaction(&commit, cx);
             return;
         }
+        self.hold_interaction(commit, cx);
+    }
+
+    /// Hold `commit` behind the `✗`/`✓` pair and report it on the status line.
+    ///
+    /// Both a release and a **typed** value arrive here: the manipulator's numeric row and
+    /// its drag describe the same pending edit, so they share one writer.
+    pub(in crate::shell) fn hold_interaction(
+        &mut self,
+        commit: InteractionCommit,
+        cx: &mut Context<Self>,
+    ) {
         self.pending_interaction = Some(commit);
         let label = self.pending_interaction_label().unwrap_or_default();
         // The pair is placed fresh beside the dimension pill; a rect measured for the
@@ -894,6 +906,18 @@ impl Shell {
         self.hud_rect = None;
         self.hud_lock = None;
         self.model.lock().unwrap().status = format!("{label} pending — ✓ to apply, ✗ to discard");
+        cx.notify();
+    }
+
+    /// Drop a held commit without writing anything: a typed value that is no edit (a stem
+    /// put back to zero), so there is nothing for `✓` to apply.
+    pub(in crate::shell) fn clear_pending_interaction(&mut self, cx: &mut Context<Self>) {
+        if self.pending_interaction.take().is_none() {
+            return;
+        }
+        self.hud_rect = None;
+        self.hud_lock = None;
+        self.model.lock().unwrap().status = "nothing to apply".to_string();
         cx.notify();
     }
 

@@ -376,8 +376,8 @@ its padded outline/area is pickable.
 | **T3 — modifiers and readout** | gpui modifier/key plumbing, `GizmoValue` on the event, projected numeric tag, Esc cancel, linear grid snapping | ✅ built |
 | **T4 — visual language** | cyan/slate tokens, filled arrowheads, glass planes, shared 2 px feathered ribbon | ✅ built |
 | **F0 — topology prerequisite** | pixel → `ElementRef` selection (faces/edges), tangent-chain traversal, `chamfer` in `GeometryBackend`, parametric feature objects | ✅ built (F0.1–F0.6) |
-| **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit, (A3) a display-only swath preview at the pending radius, and (A4) the `✗`/`✓` finish pair on release | ✅ built |
-| **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook, (A3) a face ghost at the pending depth, and (A4) the `✗`/`✓` finish pair on release | ✅ built (2026-10-26) |
+| **F1 — edge dress-up arc** | `DressUpScrubber`: camera-facing arc over the selected edge, screen-space hit test, radial scrub with snap/bounds, typed readout, viewport commit, (A3) a display-only swath preview at the pending radius, (A4) the `✗`/`✓` finish pair on release, and (A5) the numeric twin (`R`, or `D1`/`D2`) | ✅ built |
+| **F2 — face push/pull stem** | `PushPullStem`: tessellation-derived planar face frame, amber normal stem on the shared axis solver, neutral `push_pull` commit, parametric extrusion/fuse/cut hook, (A3) a swept-volume ghost at the pending depth, (A4) the `✗`/`✓` finish pair on release, and (A5) the `D` numeric field | ✅ built (2026-10-26) |
 | **R — re-pivot origin handle** | `GizmoTarget::Origin`, 10 px disc, snap through the viewport's candidates, `GizmoOrigin` + session user origin | ✅ built (2026-10-26) |
 | **K — kinds and set hosting** | `GizmoKind`, `GizmoFactory::kinds`, `Contributions::gizmos_for`, `GizmoSet` hosted by the viewport, session re-narrowing, the grip's shared commit | ✅ built (2026-10-27) |
 
@@ -705,16 +705,18 @@ and `ferrocad_toy`'s `the_toy_workbench_creates_represents_manipulates_and_recor
 ## 15. Deferred and why
 
 - **Push-Pull** is **built (2026-10-26)** as a Part manipulator rather than a triad mode:
-  `ferrocad_part_gui::PushPullStem` plus the parametric `push_pull` hook. What remains
-  is the ghost prism preview (the solid appears on release) and a per-tick boolean ghost,
-  which needs a kernel recompute per frame and is out of scope.
+  `ferrocad_part_gui::PushPullStem` plus the parametric `push_pull` hook. The ghost is a
+  **swept prism** at the pending depth (2026-11-13, no kernel call) and the numeric twin
+  types the distance; a per-tick boolean ghost still needs a kernel recompute per frame
+  and is out of scope.
 - **Fillet/Chamfer** is end-to-end: `GeometryBackend::{fillet, chamfer}`, `tangent_chain`,
   click selection, the parametric features, the `Manipulator` seam and the
   `ferrocad_part_gui::DressUpScrubber`, and the host wiring
   (`Contributions` factory → viewport → neutral commit → app script's `interaction`
-  hook → `Part::Fillet` → recompute → re-sync). What remains is **type-ahead numerics**
-  (digits targeting the pill), an **`Alt` asymmetric split** (two distance handles), and
-  a chrome control to choose fillet vs chamfer (the factory picks fillet).
+  hook → `Part::Fillet` → recompute → re-sync). The numeric twin is built (2026-11-13):
+  one radius field, or two chamfer distances. What remains is an **`Alt` asymmetric
+  split** (two distance handles) and a chrome control to choose fillet vs chamfer (the
+  factory picks fillet).
 - **Draft** additionally needs a wall-face selection, a pull direction and an angular
   offset operation; its protractor arc is a ring-like scrub (T1) with a degree readout
   (T3).
@@ -1100,3 +1102,61 @@ the header: *how the viewport is drawn*.
 Covered by `ferrocad_stage`'s declarative tests (defaults, world bake, hit, drag, snap,
 clamp, degenerate axis, commit, readout, style), `ferrocad_shell_python`'s spec-validation tests,
 and `tests/test_manipulator_specs.py` (registry, bridge, ordering, failure isolation).
+
+## 20. The manipulator's numeric twin (2026-11-13)
+
+A drag is one way to say a number; the docked row is the other. The row is the same
+pending edit — only the input changes — so a typed distance and a dragged one share one
+writer, one ghost and one `✓`.
+
+### The seam
+
+Three defaulted methods on `Manipulator` (in the commit's own order, so the host never
+interprets a number):
+
+```rust
+fn numeric_fields(&self) -> Vec<NumericField>;      // label, unit, value, decimals
+fn set_values(&mut self, values: &[f64]) -> bool;   // clamp + snap + mark pending
+fn pending_commit(&self) -> Option<InteractionCommit>; // the commit a release would make
+```
+
+- `PushPullStem` publishes one `D` field in millimetres and its `set_values` rebuilds the
+  swept ghost; distance `0` is **no edit**, so `pending_commit` returns `None` and the
+  shell clears the held commit instead of asking for a zero extrusion.
+- `DressUpScrubber` publishes `R`, or `D1`/`D2` in chamfer mode. Its clamp and snap are
+  the drag's, so typing `-1` lands on `MIN_RADIUS` rather than a negative radius.
+- A manipulator that publishes nothing (the height grip, a mod's declarative handle)
+  simply gets no row; `is_pending` still governs whether its preview survives a release.
+
+`ferrocad_viewport` exposes the trio without naming a workbench:
+`numeric_manipulator()` (the topmost armed handle that publishes fields),
+`set_manipulator_values(id, values)` (which also rebuilds the queues, so the preview
+follows immediately) and `manipulator_commit(id)`.
+
+### The row
+
+`shell::manipulator_form` owns it: one `TextInput` per field, rebuilt when the armed
+manipulator or the field labels change (a fillet → chamfer mode switch), and mirrored
+from the viewport on every paint for the **unfocused** fields — so a drag ticks the
+numbers and typing is never rewritten under the caret.
+
+- It docks in the same column as the Move form (`manipulator_fields_bar`), above the
+  loadout, and appears as soon as the handle is armed — a distance can be entered with no
+  drag at all.
+- `Tab` opens a field, `Enter` applies, `Esc` rolls back, and a **non-slot** digit seeds
+  the first field; `0`–`3` still switch hands, exactly as beside the Move form.
+- A typed value goes `set_values` → `pending_commit` → `hold_interaction`, so the status
+  line, the `✗`/`✓` pair and the ghost all describe the typed number.
+
+Tests: `ferrocad_part_gui` (`the_numeric_twin_sets_the_distance_and_commits_it`,
+`the_numeric_twin_sets_the_radius_and_the_chamfer_distances`), `ferrocad_viewport`
+(`a_typed_value_reaches_the_manipulator_and_its_commit`) and `ferrocad_shell_core`
+(`the_manipulator_numeric_row_types_a_held_value`).
+
+### Still open
+
+`PushPullStem`'s stem stays anchored at the face centroid while the ghost grows; the stem
+should ride the ghost (the user-visible complaint that motivated this slice). Validation
+of a *model-breaking* value (a pocket deeper than the body, a radius wider than the edge)
+needs the kernel, so it belongs with the editing slice, as does re-opening an existing
+`Part::Extrusion`/`Part::Fillet` as a live handle.

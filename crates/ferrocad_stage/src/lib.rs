@@ -112,7 +112,7 @@ pub use axis::AxisStyle;
 pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};
 pub use grid::{GridGeometry, GridSpec, GridStyle, Ground, MinorStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
-pub use interaction::{InteractionCommit, Manipulator};
+pub use interaction::{InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use session::{TransformSession, TransformTape};

@@ -265,6 +265,22 @@ impl PushPullStem {
         self.distance
     }
 
+    /// Set the signed distance from a **typed** value — the numeric twin of the drag.
+    ///
+    /// Only finiteness is enforced: the sign picks extrude or pocket and a distance has no
+    /// intrinsic bound. A non-zero value is an edit, so the ghost is rebuilt and the value
+    /// reports pending; zero puts the stem back at rest with nothing to apply.
+    pub fn set_distance(&mut self, distance: f64) -> bool {
+        if !distance.is_finite() || (distance - self.distance).abs() <= 1e-12 {
+            return false;
+        }
+        self.distance = distance;
+        self.pending = distance != 0.0;
+        self.dirty = true;
+        self.rebuild_preview();
+        true
+    }
+
     /// The operation the current sign selects.
     pub fn action(&self) -> &'static str {
         self.change().action()
@@ -646,6 +662,24 @@ impl Manipulator for PushPullStem {
         PushPullStem::is_pending(self)
     }
 
+    fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
+        vec![ferrocad_stage::NumericField::millimetres(
+            "D",
+            self.distance,
+        )]
+    }
+
+    fn set_values(&mut self, values: &[f64]) -> bool {
+        let Some(distance) = values.first().copied() else {
+            return false;
+        };
+        PushPullStem::set_distance(self, distance)
+    }
+
+    fn pending_commit(&self) -> Option<InteractionCommit> {
+        (self.distance != 0.0).then(|| self.change().into_commit())
+    }
+
     fn set_hovered(&mut self, hovered: bool) -> bool {
         PushPullStem::set_hovered(self, hovered)
     }
@@ -980,6 +1014,45 @@ mod tests {
         let inward =
             push_pull_stem_for(&SelectionRef::element(7, "Face1"), &stage).expect("a stem");
         assert!((inward.normal().x + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_numeric_twin_sets_the_distance_and_commits_it() {
+        let mut stem = stem();
+        let fields = Manipulator::numeric_fields(&stem);
+        assert_eq!(fields.len(), 1, "a stem has one number");
+        assert_eq!(fields[0].label, "D");
+        assert_eq!(fields[0].unit, "mm");
+        assert_eq!(fields[0].value, 0.0, "the resting distance");
+        assert!(Manipulator::pending_commit(&stem).is_none(), "zero is no edit");
+
+        assert!(Manipulator::set_values(&mut stem, &[4.5]));
+        assert!((stem.distance() - 4.5).abs() < 1e-12);
+        assert!(stem.is_pending(), "a typed value is pending");
+        assert!(
+            !stem.preview_items()[0].positions().is_empty(),
+            "the ghost follows the field"
+        );
+        let commit = Manipulator::pending_commit(&stem).expect("a commit");
+        assert_eq!(commit.manipulator, PUSH_PULL_ID);
+        assert_eq!(commit.action, "extrude");
+        assert_eq!(commit.element.as_deref(), Some("Face1"));
+        assert_eq!(commit.values, vec![4.5]);
+        assert_eq!(commit.readout, "extrude 4.50 mm");
+
+        // An unchanged value is not a change, and a negative one is a pocket.
+        assert!(!Manipulator::set_values(&mut stem, &[4.5]));
+        assert!(Manipulator::set_values(&mut stem, &[-2.0]));
+        assert_eq!(
+            Manipulator::pending_commit(&stem).expect("a commit").action,
+            "pocket"
+        );
+
+        // Typing zero is no edit at all: the ghost goes and there is nothing to apply.
+        assert!(Manipulator::set_values(&mut stem, &[0.0]));
+        assert!(!stem.is_pending());
+        assert!(stem.preview_items()[0].positions().is_empty());
+        assert!(Manipulator::pending_commit(&stem).is_none());
     }
 
     #[test]

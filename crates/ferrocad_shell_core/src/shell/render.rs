@@ -1100,6 +1100,108 @@ fn move_fields(inputs: &[Entity<TextInput>; 3], absolute: bool) -> AnyElement {
     .into_any_element()
 }
 
+/// The manipulator's numeric twin, docked with the loadout where the Move form sits.
+///
+/// `[D] [ 3.00 ] mm` for a push/pull stem, `[R] [ 1.00 ] mm` for a fillet,
+/// `[D1] [ ] [D2] [ ]` for a chamfer. The manipulator supplies the labels, the unit and
+/// the value (`Manipulator::numeric_fields`), so this row names no workbench: it is the
+/// typed half of the same pending edit the drag produces, and it stays on screen from the
+/// moment the handle is armed — so a distance can be entered without dragging at all.
+///
+/// `Tab`, a non-slot digit, `-` or `.` opens a field; while one has the caret `Enter`
+/// applies and `Esc` rolls back, exactly like the in-context pair.
+pub(super) fn manipulator_fields_bar(
+    shell: &Shell,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let Some(form) = shell.manipulator_form.as_ref() else {
+        return div().into_any_element();
+    };
+    // A modal or the object wheel hides the row rather than stacking with it; it comes
+    // back when that transient layer closes.
+    if shell.modal_open() || shell.wheel.read(cx).is_open() {
+        return div().into_any_element();
+    }
+    let Some((_, fields)) = shell.armed_numeric_fields(cx) else {
+        return div().into_any_element();
+    };
+    let focus = shell.dialog_focus.clone();
+    let mut row = div()
+        .id("manipulator-hud")
+        .debug_selector(|| "manipulator-hud".to_string())
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgba(DOCK_BG))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .occlude()
+        .track_focus(&focus)
+        .focusable()
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            let handled = match event.keystroke.key.as_str() {
+                // `Esc` is only the row's while it has something to roll back; a clean
+                // row lets the key reach the root, where it clears the selection.
+                "escape" => {
+                    if this.interaction_is_pending() {
+                        this.discard_pending_interaction(cx);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                "enter" => {
+                    if this.interaction_is_pending() {
+                        this.commit_pending_interaction(cx);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                "tab" => {
+                    this.cycle_manipulator_focus(event.keystroke.modifiers.shift, window, cx);
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                cx.stop_propagation();
+            }
+        }));
+    for (index, input) in form.inputs.iter().enumerate() {
+        let Some(field) = fields.get(index) else {
+            break;
+        };
+        row = row.child(
+            div()
+                .id(("manipulator-field", index))
+                .debug_selector(move || format!("manipulator-field-{index}"))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(FG))
+                        .child(field.label.clone()),
+                )
+                .child(div().w(px(88.)).flex_shrink_0().child(input.clone()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(field.unit.clone()),
+                ),
+        );
+    }
+    row.into_any_element()
+}
+
 /// The command palette (Ctrl+K): a focused search field over the filtered registry.
 ///
 /// The field holds keyboard focus, so typing filters and `Esc` bubbles to the shell

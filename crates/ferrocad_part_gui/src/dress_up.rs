@@ -301,6 +301,44 @@ impl DressUpScrubber {
         self.typed_value().readout()
     }
 
+    /// The change the current value describes.
+    pub fn change(&self) -> DressUpChange {
+        DressUpChange {
+            target_id: self.target_id,
+            edge: self.edge.clone(),
+            value: self.typed_value(),
+        }
+    }
+
+    /// Set the value from **typed** numbers — the numeric twin of the scrub.
+    ///
+    /// The first number is the radius (or the chamfer's first distance); in chamfer mode
+    /// the second is its second distance. Both are clamped and snapped with the same
+    /// rules a drag uses, and a change marks the value pending so the swath stays visible
+    /// until `✓` or `✗`.
+    pub fn set_values(&mut self, values: &[f64]) -> bool {
+        let Some(first) = values.first().copied() else {
+            return false;
+        };
+        if !first.is_finite() {
+            return false;
+        }
+        let before = (self.value, self.second);
+        self.set_value(first);
+        if self.mode == DressUpMode::Chamfer
+            && let Some(second) = values.get(1).copied()
+            && second.is_finite()
+        {
+            self.set_second(second);
+        }
+        if (self.value, self.second) == before {
+            return false;
+        }
+        self.pending = true;
+        self.dirty = true;
+        true
+    }
+
     /// Replace the primary value (clamped and snapped like a drag tick).
     pub fn set_value(&mut self, value: f64) {
         let value = self.clamp(value);
@@ -672,11 +710,7 @@ impl DressUpScrubber {
         }
         self.value = value;
         self.dirty = true;
-        Some(DressUpChange {
-            target_id: self.target_id,
-            edge: self.edge.clone(),
-            value: self.typed_value(),
-        })
+        Some(self.change())
     }
 
     /// End the scrub, returning the value to commit.
@@ -687,11 +721,7 @@ impl DressUpScrubber {
         self.pending = true;
         self.dirty = true;
         self.apply_color();
-        Some(DressUpChange {
-            target_id: self.target_id,
-            edge: self.edge.clone(),
-            value: self.typed_value(),
-        })
+        Some(self.change())
     }
 
     /// Cancel the scrub, restoring the value it started from. Returns whether a drag
@@ -819,6 +849,24 @@ impl Manipulator for DressUpScrubber {
 
     fn is_pending(&self) -> bool {
         DressUpScrubber::is_pending(self)
+    }
+
+    fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
+        match self.mode {
+            DressUpMode::Fillet => vec![ferrocad_stage::NumericField::millimetres("R", self.value)],
+            DressUpMode::Chamfer => vec![
+                ferrocad_stage::NumericField::millimetres("D1", self.value),
+                ferrocad_stage::NumericField::millimetres("D2", self.second),
+            ],
+        }
+    }
+
+    fn set_values(&mut self, values: &[f64]) -> bool {
+        DressUpScrubber::set_values(self, values)
+    }
+
+    fn pending_commit(&self) -> Option<InteractionCommit> {
+        Some(self.change().into_commit())
     }
 
     fn set_hovered(&mut self, hovered: bool) -> bool {
@@ -991,6 +1039,41 @@ mod tests {
         assert!(scrubber.value() > before, "the drag grows the value");
         assert!(scrubber.update(&camera));
         assert!(band_width(&scrubber.preview_items()[0]) > 0.0);
+    }
+
+    #[test]
+    fn the_numeric_twin_sets_the_radius_and_the_chamfer_distances() {
+        let mut fillet = scrubber(DressUpMode::Fillet);
+        let fields = Manipulator::numeric_fields(&fillet);
+        assert_eq!(fields.len(), 1, "a fillet has one radius");
+        assert_eq!(fields[0].label, "R");
+        assert_eq!(fields[0].unit, "mm");
+        assert_eq!(fields[0].value, 0.25);
+        let commit = Manipulator::pending_commit(&fillet).expect("a commit");
+        assert_eq!(commit.action, "fillet");
+        assert_eq!(commit.values, vec![0.25]);
+
+        assert!(Manipulator::set_values(&mut fillet, &[2.0]));
+        assert!(fillet.is_pending());
+        assert!((fillet.value() - 2.0).abs() < 1e-12);
+        assert_eq!(
+            Manipulator::pending_commit(&fillet).expect("a commit").readout,
+            "R 2.00 mm"
+        );
+
+        // The scrub's own clamp applies: a negative radius lands on the minimum.
+        assert!(Manipulator::set_values(&mut fillet, &[-1.0]));
+        assert!(fillet.value() > 0.0);
+
+        let mut chamfer = scrubber(DressUpMode::Chamfer);
+        let fields = Manipulator::numeric_fields(&chamfer);
+        assert_eq!(fields.len(), 2, "a chamfer has two distances");
+        assert_eq!(fields[1].label, "D2");
+        assert!(Manipulator::set_values(&mut chamfer, &[1.5, 0.5]));
+        assert!((chamfer.second() - 0.5).abs() < 1e-12);
+        let commit = Manipulator::pending_commit(&chamfer).expect("a commit");
+        assert_eq!(commit.action, "chamfer");
+        assert_eq!(commit.values, vec![1.5, 0.5]);
     }
 
     /// A release is not a cancel: the swath stays at the pending radius and the scrubber

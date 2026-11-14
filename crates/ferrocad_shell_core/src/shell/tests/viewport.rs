@@ -619,12 +619,13 @@ fn claim_face(
         .map(|_| Box::new(FaceClaim) as Box<dyn ferrocad_stage::Manipulator>)
 }
 
-/// A shell with a GPU viewport, one two-faced slab on the stage and a manipulator that
-/// claims `Face*`. `None` without a GPU adapter. The viewport is read back through
+/// A shell with a GPU viewport, one two-faced slab on the stage and the given
+/// manipulator factory. `None` without a GPU adapter. The viewport is read back through
 /// `shell.viewport`, so its concrete renderer type stays unnamed here.
-fn face_claim_shell(
+fn surface_shell(
     cx: &mut TestAppContext,
     model: Arc<Mutex<ShellModel>>,
+    manipulator: impl crate::ManipulatorFactory + 'static,
 ) -> Option<(VisualTestContext, Entity<Shell>)> {
     let window = cx.update(|cx| {
         let model = model.clone();
@@ -640,7 +641,7 @@ fn face_claim_shell(
             shell.set_contributions(
                 crate::Contributions::new()
                     .with_gizmo(crate::translate_gizmo)
-                    .with_manipulator(claim_face),
+                    .with_manipulator(manipulator),
             );
             shell.enable_viewport(cx);
             shell.viewport.is_some()
@@ -677,6 +678,99 @@ fn face_claim_shell(
         })
     });
     Some((vcx, shell))
+}
+
+/// A shell with a GPU viewport, one two-faced slab on the stage and a manipulator that
+/// claims `Face*`.
+fn face_claim_shell(
+    cx: &mut TestAppContext,
+    model: Arc<Mutex<ShellModel>>,
+) -> Option<(VisualTestContext, Entity<Shell>)> {
+    surface_shell(cx, model, claim_face)
+}
+
+/// A manipulator with a numeric twin: one `D` field in millimetres that commits a
+/// `push_pull`/`extrude` — the shape a real stem publishes, without the stem.
+struct NumericFace {
+    value: f64,
+}
+
+impl ferrocad_stage::Manipulator for NumericFace {
+    fn id(&self) -> &str {
+        "push_pull"
+    }
+
+    fn items(&self) -> &[ferrocad_stage::ShapeItem] {
+        &[]
+    }
+
+    fn hit(&self, _camera: &ferrocad_inventor::Camera, _device: [i32; 2]) -> bool {
+        false
+    }
+
+    fn drag_begin(&mut self, _camera: &ferrocad_inventor::Camera, _device: [i32; 2]) -> bool {
+        false
+    }
+
+    fn drag_update(&mut self, _camera: &ferrocad_inventor::Camera, _device: [i32; 2]) -> bool {
+        false
+    }
+
+    fn drag_end(&mut self) -> Option<ferrocad_stage::InteractionCommit> {
+        None
+    }
+
+    fn drag_cancel(&mut self) -> bool {
+        false
+    }
+
+    fn is_dragging(&self) -> bool {
+        false
+    }
+
+    fn set_hovered(&mut self, _hovered: bool) -> bool {
+        false
+    }
+
+    fn refresh(&mut self, _camera: &ferrocad_inventor::Camera) -> bool {
+        false
+    }
+
+    fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
+        vec![ferrocad_stage::NumericField::millimetres("D", self.value)]
+    }
+
+    fn set_values(&mut self, values: &[f64]) -> bool {
+        let Some(value) = values.first().copied() else {
+            return false;
+        };
+        if !value.is_finite() || (value - self.value).abs() <= 1e-12 {
+            return false;
+        }
+        self.value = value;
+        true
+    }
+
+    fn pending_commit(&self) -> Option<ferrocad_stage::InteractionCommit> {
+        (self.value != 0.0).then(|| {
+            ferrocad_stage::InteractionCommit::new("push_pull", 7, "extrude")
+                .with_element("Face1")
+                .with_values([self.value])
+                .with_readout(format!("extrude {:.2} mm", self.value))
+        })
+    }
+}
+
+/// The `NumericFace` factory (a plain `fn`, like [`claim_face`]).
+fn numeric_face(
+    selection: &ferrocad_geom::SelectionRef,
+    _stage: &ferrocad_stage::Stage,
+) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
+    selection
+        .elements
+        .first()
+        .filter(|element| element.starts_with("Face"))
+        .map(|_| Box::new(NumericFace { value: 0.0 }) as Box<dyn ferrocad_stage::Manipulator>)
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +825,90 @@ fn a_face_click_in_the_move_slot_arms_only_the_triad(cx: &mut TestAppContext) {
             "the face stem is unoffered in the Move hand"
         );
     });
+}
+
+/// A manipulator's numeric twin: arming a face in the Push/Pull hand docks its `D` field,
+/// and typing into it holds the same commit a release would. Skips without a GPU adapter.
+#[gpui::test]
+fn the_manipulator_numeric_row_types_a_held_value(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), numeric_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::PushPull, cx))
+    });
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Face2"),
+    );
+    draw(&mut cx);
+
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.manipulator_form_open()),
+        "the row follows the armed handle"
+    );
+    assert!(
+        cx.debug_bounds("manipulator-hud").is_some(),
+        "the row is docked with the loadout"
+    );
+    assert!(
+        cx.debug_bounds("manipulator-field-0").is_some(),
+        "one field for one number"
+    );
+    let input = shell.read_with(&cx, |shell, _| {
+        shell
+            .manipulator_form
+            .as_ref()
+            .expect("a numeric row")
+            .inputs[0]
+            .clone()
+    });
+    assert_eq!(
+        input.read_with(&cx, |input, _| input.text().to_string()),
+        "0.00",
+        "the field starts at the handle's resting value"
+    );
+
+    // Type a value the way the field's change event does. The field must hold the caret,
+    // or the row's next sync (it mirrors a drag into every unfocused field) would rewrite
+    // the text from the handle's still-resting value.
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.focus_manipulator_field(0, window, cx));
+    });
+    input.update(&mut cx, |input, cx| input.set_text("7.5", cx));
+    shell.update(&mut cx, |shell, cx| shell.on_manipulator_typed(cx));
+
+    let commit = shell
+        .read_with(&cx, |shell, _| shell.pending_interaction.clone())
+        .expect("the typed value is held for ✓/✗");
+    assert_eq!(commit.values, vec![7.5]);
+    assert_eq!(commit.readout, "extrude 7.50 mm");
+    assert_eq!(commit.element.as_deref(), Some("Face1"));
+    let status = model.lock().unwrap().status.clone();
+    assert!(
+        status.contains("extrude 7.50 mm pending"),
+        "the status names the typed value: {status}"
+    );
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("dialog-accept").is_some(),
+        "the finish pair appears for a typed value too"
+    );
+
+    // `Esc` rolls the typed value back to the handle's resting value.
+    press_escape(&mut cx, &shell);
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell.interaction_is_pending()),
+        "Esc drops the typed commit"
+    );
+    assert_eq!(
+        input.read_with(&cx, |input, _| input.text().to_string()),
+        "0.00",
+        "the field follows the re-armed handle"
+    );
 }
 
 /// The pill keys are a direct hand switch: `1` toggles Move/Rotate while Slot 1 is

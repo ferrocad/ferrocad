@@ -3,5 +3,6 @@
 //! [`move_hud`] owns the form for the current gesture; [`pill`] owns only which field,
 //! if any, the keyboard holds and the form's two switches.
 
+pub mod manipulator_form;
 pub mod move_hud;
 pub mod pill;

@@ -1,11 +1,11 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
 Status: design (2026-10-21); re-measured 2026-11-16 (§7). The current integrated baseline is
-**1038 passed / 6 failed / 3 errored / 7 skipped over 88/88 modules** on the clean
+**1039 passed / 6 failed / 2 errored / 7 skipped over 88/88 modules** on the clean
 `9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
 is green, and every remaining failure is attributed in §7 (no P2 and no P3; 6 documented
-test assumptions). **P1 is closed** (2026-11-13), and the P2 rounds closed 47 failures and
-took P3 from 11 failures to 0.
+test assumptions and 2 documented errors). **P1 is closed** (2026-11-13), and the P2 rounds
+closed 47 failures and took P3 from 11 failures to 0.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
@@ -1675,10 +1675,10 @@ document, so those document types now exist for the straight-prism class the too
 bind). The last two errors closed with the P3 round: a cut's shells now rebuild its cavity
 (`Part.makeSolid` adds shells as given, as upstream's `makeElementSolid` does) and a removed
 object's `isValid()` is `False`, so `test_forming` and `test_subdivision` are green.
-SimpleCAD measures **1038 / 6 / 3 / 7**, and the 6 failures and 3 errors are bucketed
+SimpleCAD measures **1039 / 6 / 2 / 7**, and the 6 failures and 2 errors are bucketed
 in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 6 documented test assumptions (the
-two above included); the errors are `Mesh.decimate`, a removed object's `Name`, two
-`Shape.isValid()` refusals and 1 face-order assumption. The round record is
+two above included); the errors are `test_loop_faces`'s twisted-quad merge and 1 face-order
+assumption (`Mesh.decimate` closed with the decimator, §8.16). The round record is
 [`../record/2026-11-14-p2-boolean-seam.md`](../record/2026-11-14-p2-boolean-seam.md).
 
 ---

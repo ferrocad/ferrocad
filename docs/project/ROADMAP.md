@@ -110,8 +110,8 @@ rather than stubbed.
 - **SimpleCAD S0–S3 — the image is in.** `ferrocad_mesh` (payload, STL, operations,
   `Mesh::Feature`), `ferrocad_mesh_py` (`Mesh`, `MeshPart`), `Part.Shape.tessellate`,
   `BOPTools.SplitAPI` and the import-time PySide surface all load in one in-process
-  `ferrocad` + `Part` + `Mesh` image. The 2026-11-16 baseline is **1038 pass, 6 fail,
-  3 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
+  `ferrocad` + `Part` + `Mesh` image. The 2026-11-16 baseline is **1039 pass, 6 fail,
+  2 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
   push/pull → cut → STL) is green and the 5 Qt groups are classified skips. The identity, query and representation
   frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
   `Faces`/`Wires`, `Face.Surface` classification with `parameter()`).
@@ -123,14 +123,15 @@ rather than stubbed.
   non-goal; the imperative-Coin lifecycle (`getChild`/`insertChild`/`findChild`,
   `isOfType`) is complete enough for an overlay.
 - **P1 closed (SC8), and the P2 rounds closed 47 failures.** From SC8's
-  **985 / 49 / 18 / 7** the failures fell to **6 / 3 / 7**: the eight surface-line cases
+  **985 / 49 / 18 / 7** the failures fell to **6 / 2 / 7**: the eight surface-line cases
   and the rotate-edges/elongating/analytic clusters went with the sub-shape seam, both
   `test_union` geometry records and the two `test_union` document tests with upstream's
   boolean signature and the undo log, `test_mesh_glue` with upstream's tessellation
   default, and `test_mesh_surfaces` with `Face.cutHoles` and a circle-based `Cylinder`.
   The placement representation then made a reset bit-exact and a rigid move a location,
   so the principal-axis tie and the style mapping hold; the last round closed the four
-  `PartDesign` draft errors with a `PartDesign::Draft`/`Plane` document shim.
+  `PartDesign` draft errors with a `PartDesign::Draft`/`Plane` document shim, and the
+  `Mesh.decimate` error with a quadric-error edge collapse in `ferrocad_mesh`.
 - **P3's first slice — the freeform host is measured, not assumed.**
   `Mesh::FeaturePython` gives a proxy the same `Mesh`/`Placement` pair and rebuild path a
   `Part::FeaturePython` has, which is the document type the SubD workbench stores its cage
@@ -138,14 +139,20 @@ rather than stubbed.
   [`research/p3-addon-surface-spike.md`](research/p3-addon-surface-spike.md): cage → bicubic
   `Part.BSplineSurface` patches → `Part.Shell`/`sewShape`/`Part.Solid` → a
   `Part::FeaturePython` wrapper, plus the Curves interpolate/fill pair, all answered.
-  `Shape.connectEdgesToWires` was the one missing call and is now implemented. The two
+  `Shape.connectEdgesToWires` was the one missing call and is now implemented. Body
+  membership is a declared capability rather than a rule list: `ObjectType::body_membership`
+  lets `Part::Feature`, the Python-feature types, datums, sketches and PartDesign features
+  say what they contribute (`Base`/`Support`/`Feature`), so a SubD cage wrapper can be a body
+  base without a kernel-side list edit. The two
   SimpleCAD errors that closed with it (a cut's shells rebuilding its cavity, and a removed
   object's `isValid()`) are §8.15 of the round log.
-  Every remaining record is attributed — **6 documented test assumptions, 0
+  Every remaining record is attributed — **6 documented test assumptions and 2 errors, 0
   unattributed** — and neither the P2 seam list nor P3 has a failure: the last two cases
   (`test_precision`'s tilted face and `test_surface_wrap`'s inverse) are reference-side
-  checks (§8.8 and §8.11 of the round record). The chamfered single-face error is filed as a face-order
-  assumption. The full table is in [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
+  checks (§8.8 and §8.11 of the round record). The two errors left are `test_loop_faces`'s
+  twisted-quad merge (the reference's merge accepts an unchecked candidate) and the
+  chamfered single-face face-order assumption. The full table is in
+  [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
   pack reaches the script half. This is the proof-of-use surface that did not exist at the
@@ -179,7 +186,7 @@ subset and says so.
   `tools/simplecad_audit.py --check`, and the in-process
   `crates/ferrocad_part_py/tests/simplecad_conformance.rs`. The in-process test exports the
   repo Python/OCCT paths to SimpleCAD's worker subprocess; use it when the extension may
-  be stale, because it builds the current tree. Current: **1038/6/3/7 over 88/88**
+  be stale, because it builds the current tree. Current: **1039/6/2/7 over 88/88**
   (2026-11-16, clean checkout).
 - **Engine/app:** per-crate `cargo test` and `pytest tests` (no workspace-wide build).
 - **Docs:** `api_docs`, `userdocs`, `build_book` and the relative-link sweep in `--check`

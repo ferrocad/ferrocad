@@ -188,6 +188,35 @@ is computed from the type in `Document::has_extension` and is **not** written in
 object's extension set, so a file keeps carrying only the extensions a caller actually
 added.
 
+## `PartDesign::Body` membership is declared, not listed
+
+Upstream's `Body::isAllowed` branches on the member's C++ base class, which a registered Rust
+behaviour does not have. Each type declares its answer instead, on
+`ObjectType::body_membership` (`crates/ferrocad_core/src/object_registry.rs`), and
+`Document::body_add_check` / `Document::body_group_check` apply the rules:
+
+| Declaration | Types | Rule |
+| --- | --- | --- |
+| `Denied` (the default) | `App::FeaturePython`, `PartDesign::Body`, groups | refused, `ValueError("Body: object '…' is not allowed")` |
+| `Base` | `Part::Feature`, `Part::FeaturePython`, `Part::Part2DObjectPython` | at most one, and only while the body holds no solid; becomes `BaseFeature` |
+| `Support` | `Part::DatumPlane`, `PartDesign::Plane`, `Sketcher::SketchObject` | any number; never becomes the `Tip` |
+| `Feature` | `PartDesign::AdditiveBox`, `PartDesign::Draft` | any number; the newest becomes the `Tip` |
+
+`DocumentObject.addObject` re-parents a member (`unlink_from_groups`) and then records the
+role; a direct `Group` write is checked the same way. The setter validates **before** it
+re-parents: re-parenting has side effects on the members' previous bodies, so a vetoed
+assignment must not reach it. `PartDesign::Body` also vetoes the write itself through
+`on_property_change`, which covers any path that bypasses the setter.
+
+Two traps:
+
+- **A wrapper must forward the declaration.** `install_feature_placement_sync` wraps
+  `Part::Feature` and the two Python-feature types in `FeatureWithPlacement`; a wrapper that
+  does not forward a trait method answers the trait *default*, so `Part::Feature` silently
+  stopped being a body member until `body_membership` was forwarded. When a wrapper is added
+  around a registered type, forward every method whose default is not the wrapped answer.
+- **`App::Part` is not policed.** It accepts whatever `addObject` is given, as upstream.
+
 ## The boolean tolerance contract
 
 `fuse`, `cut`, `common` and `multiFuse` declare upstream's signature from

@@ -6,7 +6,7 @@ Status: task spec (2026-10-30); **closed 2026-11-13** (SC0–SC8 done). Cut from
 [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P1 (closed) as P2/P3 backlog work. The
 baseline at close was **985 passed / 49 failed / 18 errored / 7 skipped** over 88/88
 modules (2026-11-13, after SC0–SC3; the cut started from 969 / 64 / 26 / 2); the later P2
-rounds took it to **1038 / 6 / 3 / 7** on the clean checkout. The measurement it
+rounds took it to **1039 / 6 / 2 / 7** on the clean checkout. The measurement it
 starts from is [`../research/simplecad-bringup.md`](../research/simplecad-bringup.md) §7.3;
 the round's closed backdrop is
 [`../record/2026-10-29-workplane-visual-hierarchy-and-grid.md`](../record/2026-10-29-workplane-visual-hierarchy-and-grid.md).

@@ -707,6 +707,66 @@ The three errors left are `Mesh.decimate` (a decimator is a new algorithm, not a
 and normal without checking validity, so it returns a face `BRepCheck` rejects; every kernel
 call is identical), and the chamfered face-order assumption.
 
+### 8.16 Body membership as a declaration, and `Mesh.decimate`
+
+**The body round had landed the mechanism and two of its five tests failed.** Both causes
+were real, and neither was a stale target:
+
+1. **The wrapper dropped the declaration.** `install_feature_placement_sync` wraps
+   `Part::Feature` and the two Python-feature types in `FeatureWithPlacement` (it keeps a
+   feature's `Shape` and `Placement` in step). The wrapper forwards `default_properties`,
+   `property_meta`, `execute`, `on_property_change`, `on_property_changed` and
+   `is_python_feature` — and not the new `body_membership`, so the *registered*
+   `Part::Feature` answered the trait default `Denied` and a body refused a plain shape as
+   its base. It forwards the wrapped behaviour's declaration now. The trap is general: any
+   `ObjectType` method a wrapper does not forward answers the default, silently.
+2. **A vetoed write had already been applied.** `set_group` re-parented every member
+   (`unlink_from_groups`) and only then called `set_property`, which is where
+   `PartDesign::Body`'s `on_property_change` vetoes an invalid list. So a rejected
+   `Group = [First, ProxyFeature]` raised `ValueError` *after* stripping both members, and
+   the body was left holding `[Second]` (the one member the new list did not name). The
+   body check (`Document::body_group_check`) now runs before the re-parenting, so a rejected
+   assignment leaves the list and the members' previous parents as they were. The
+   `on_property_change` veto stays as the backstop for paths that bypass the setter.
+
+With `PartDesign::Plane` declaring `Support` (the hinge datum), the declarations are
+complete: `Part::Feature`, `Part::FeaturePython` and `Part::Part2DObjectPython` are `Base`;
+`PartDesign::Plane`, `Part::DatumPlane` and `Sketcher::SketchObject` are `Support`;
+`PartDesign::AdditiveBox` and `PartDesign::Draft` are `Feature`; a plain `App::FeaturePython`,
+another body and a group deny. Pinned by `crates/ferrocad_part_py/tests/body_membership.rs`
+(five cases: a feature becomes the `Tip`, a base only once and then only at the bottom, a
+denied type refused with a reason, a direct `Group` write checked, and a member moving
+between bodies). The contract and the wrapper trap are in
+[`../../developer/workbenches/part-shape-edits.md`](../../developer/workbenches/part-shape-edits.md).
+
+**`Mesh.decimate` was the last SimpleCAD error that needed an algorithm rather than a seam.**
+`ferrocad_mesh::Mesh::decimate(tolerance, reduction)` is now a quadric-error edge collapse:
+each facet contributes its plane quadric scaled by area, a point sums its incident facets,
+and edges collapse cheapest-first (a binary heap with stamped lazy invalidation) until the
+requested fraction of facets is gone or the cheapest collapse costs more than the tolerance.
+A collapse is refused unless the edge is manifold, the link condition holds (no non-manifold
+edge or duplicated facet), no surviving facet flips or degenerates, and neither endpoint is
+on a boundary — so an open mesh keeps its rim instead of shrinking shut. Collapsed points are
+compacted away and facet groups are dropped, because the surviving facets are renumbered; the
+placement is kept. The single-argument pair is upstream's signature
+(`Mesh.decimate(tolerance, reduction)`), and SimpleCAD's conversion calls it on a
+tessellation of the validated shape before rebuilding faces.
+
+Measured with the combined extension and the SimpleCAD harness rebuilt from this tree:
+
+| Measure | Before | After |
+| --- | --- | --- |
+| SimpleCAD integrated | 1038/6/3/7 | **1039/6/2/7** over 88/88 |
+| `test_mesh_conversion` | 9/0/1/0 | **10/0/0/0** |
+| `ferrocad_mesh` lib tests | 63 | **68** (+5: reduction, rim, zero tolerance, tight tolerance, facet groups) |
+| Part conformance | 531/0/0/12 | **531/0/0/12** |
+| Part API audit | 254/408 (62.3%) | **254/408 (62.3%)**, `--check` clean |
+| Python sets | `base` 707/0/0/8, `workbenches` 794/0/0/3 | **unchanged** |
+
+The two errors left are `test_loop_faces`'s twisted-quad merge (the reference's merge accepts
+a candidate on area and normal without checking validity) and `test_analytic`'s chamfered
+face-order assumption.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

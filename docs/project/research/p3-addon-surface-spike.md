@@ -86,8 +86,9 @@ wrapper:
   object is `False` (upstream's answer), so SimpleCAD's guard short-circuits before
   reading `.Name`.
 
-The integrated suite is **1038 passed / 6 failed / 3 errored / 7 skipped over
-88/88 modules**. The three errors left are `Mesh.decimate` (needs a decimator),
-`test_loop_faces`'s twisted-quad merge (the reference's merge accepts a candidate
-on area and normal without checking validity, so it returns an invalid face; the
-kernel calls are identical), and the chamfered face-order assumption.
+The integrated suite is **1039 passed / 6 failed / 2 errored / 7 skipped over
+88/88 modules**. `Mesh.decimate` closed with the quadric-error decimator in
+`ferrocad_mesh`; the two errors left are `test_loop_faces`'s twisted-quad merge (the
+reference's merge accepts a candidate on area and normal without checking validity, so it
+returns an invalid face; the kernel calls are identical) and the chamfered face-order
+assumption.

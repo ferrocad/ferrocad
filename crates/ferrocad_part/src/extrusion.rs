@@ -422,6 +422,33 @@ fn drafted_wire(
         .map_err(|error| error.to_string())
 }
 
+/// A straight prism drafted from `section`: the section swept `direction * length`,
+/// with the far section offset by `tan(angle) * length` in its own plane.
+///
+/// `section` is the hinge end (a face, or a wire); a positive `angle` widens the far
+/// end, the sign `Extrusion`'s `TaperAngle` uses. A face with holes cuts the drafted
+/// inner wires, as a tapered extrusion does. `PartDesign::Draft` calls this for the
+/// straight-prism class it supports.
+pub(crate) fn draft_section(
+    section: &Shape,
+    direction: Vector3,
+    length: f64,
+    angle: f64,
+) -> Result<Shape, String> {
+    extrude_shape(
+        section,
+        &ExtrusionParameters {
+            direction,
+            length_fwd: length,
+            length_rev: 0.0,
+            solid: true,
+            taper_fwd: angle,
+            taper_rev: 0.0,
+            same_as_outer: true,
+        },
+    )
+}
+
 // ---------------------------------------------------------------------------
 // The property readers and the output, shared with the other Part features.
 // ---------------------------------------------------------------------------

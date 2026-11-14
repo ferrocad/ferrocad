@@ -30,6 +30,7 @@ mod containers;
 mod datum;
 mod dress_up;
 mod extrusion;
+mod partdesign;
 mod shape_property;
 
 use std::any::Any;
@@ -48,6 +49,7 @@ use ferrocad_types::{Placement, Vector3};
 pub use datum::DATUM_PLANE_TYPE;
 pub use dress_up::{CHAMFER_TYPE, FILLET_TYPE};
 pub use extrusion::EXTRUSION_TYPE;
+pub use partdesign::{DRAFT_TYPE, PLANE_TYPE};
 
 /// A millimetre length as the property a Part feature stores.
 ///
@@ -277,6 +279,7 @@ pub fn register(backend: Arc<dyn GeometryBackend>) {
     register_shape_list();
     object_registry::register("Part::Feature", Arc::new(Feature));
     object_registry::register(DATUM_PLANE_TYPE, Arc::new(datum::DatumPlane));
+    partdesign::register();
     object_registry::register(BOX_TYPE, Arc::new(BoxPrimitive));
     object_registry::register(CYLINDER_TYPE, Arc::new(CylinderPrimitive));
     object_registry::register(SPHERE_TYPE, Arc::new(SpherePrimitive));

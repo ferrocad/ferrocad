@@ -63,7 +63,7 @@ fn placement_of(doc: &Document, id: ObjectId) -> Placement {
 ///
 /// The corners are in `u` then `v` order; `polygon` closes the wire, and
 /// `make_face` turns it into one planar face.
-fn square_face(size: f64) -> Option<Shape> {
+pub(crate) fn square_face(size: f64) -> Option<Shape> {
     let half = size / 2.0;
     let points = [
         Vector3::new(-half, -half, 0.0),

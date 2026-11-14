@@ -4391,6 +4391,19 @@ impl<V: InventorView> InventorViewport<V> {
         })
     }
 
+    /// The typed fields of the manipulator `id`, in its own order.
+    ///
+    /// The host reads these after a typed edit to see what the manipulator actually took
+    /// (a bound may have clamped it), so the field and the ghost cannot disagree.
+    pub fn manipulator_fields(&self, id: &str) -> Option<Vec<NumericField>> {
+        let fields = self
+            .manipulators
+            .iter()
+            .find(|manipulator| manipulator.id() == id)?
+            .numeric_fields();
+        (!fields.is_empty()).then_some(fields)
+    }
+
     /// Write typed values into the manipulator `id`, in its own field order.
     ///
     /// The manipulator clamps and snaps them and rebuilds its preview; the host then

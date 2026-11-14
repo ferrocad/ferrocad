@@ -46,6 +46,20 @@ pub struct NumericField {
     pub value: f64,
     /// How many decimals to show (and round a typed value to).
     pub decimals: usize,
+    /// The **hard** lower bound: the manipulator keeps the value at or above it.
+    ///
+    /// `None` is unbounded. A hard bound is one the operation cannot survive, or one the
+    /// geometry makes impossible — not a preference.
+    pub min: Option<f64>,
+    /// The **hard** upper bound, on the same terms as [`min`](Self::min).
+    pub max: Option<f64>,
+    /// A note about the geometry the value acts on (`body 8.00 mm thick`), printed muted
+    /// after the row.
+    ///
+    /// This is a **hint**, not a bound: the value stays legal beyond it, so the row must
+    /// not clamp to it. It exists so a depth or a radius can be chosen with the model in
+    /// view instead of by trial recompute.
+    pub hint: Option<String>,
 }
 
 impl NumericField {
@@ -56,7 +70,29 @@ impl NumericField {
             unit: "mm".to_string(),
             value,
             decimals: 2,
+            min: None,
+            max: None,
+            hint: None,
         }
+    }
+
+    /// Bound the value to `min..=max` (either end open).
+    pub fn bounded(mut self, min: Option<f64>, max: Option<f64>) -> Self {
+        self.min = min;
+        self.max = max;
+        self
+    }
+
+    /// Show (and round a typed value to) `decimals` places.
+    pub fn decimals(mut self, decimals: usize) -> Self {
+        self.decimals = decimals;
+        self
+    }
+
+    /// Attach a geometry note (see [`hint`](Self::hint)).
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
     }
 }
 

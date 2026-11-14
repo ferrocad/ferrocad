@@ -226,6 +226,40 @@ dragged.
   round-trip) and `a_drag_keeps_the_handle_with_the_pointer`; `ferrocad_part_gui` is **37
   passed**, and the edition's `push_pull_round_trip` still commits the same distance.
 
+### 5.4 Bounds the geometry can actually vouch for
+
+"Min/max that won't break the model" has two halves. This slice is the honest half that
+needs no kernel; the authoritative half is recorded as still open.
+
+- **`NumericField` grew `min`/`max`/`hint`**, and the distinction is the feature: `min` and
+  `max` are **hard** (the manipulator clamps to them, on a drag or a typed value, and the
+  row prints the range), while `hint` is a **note** that must not clamp.
+- **The dress-up scrub gets a conservative ceiling.** `dress_up_ceiling` is half the body's
+  smallest extent — no larger radius can fit anywhere on the body — applied by the factory
+  through the existing `set_bounds(MIN_RADIUS, ceiling)`, so the drag and a typed value are
+  bounded by the same rule. It is documented as a guard, not the kernel's exact limit for
+  an edge, and a flat or point-like mesh yields no ceiling rather than a fabricated one.
+- **A push/pull distance publishes no hard bound, on purpose.** An extrusion is unbounded
+  and a cut deeper than the body is a through-cut — still a solid. What the stem can
+  measure is the body's thickness **behind** the face, which is published as the hint
+  (`body 8.00 mm behind this face`): it says where a pocket stops being a pocket without
+  forbidding the through-cut.
+- **A clamp never leaves the row lying.** When a hard bound changes a typed value the shell
+  rewrites the focused field to what the manipulator took (`40` → `10.00`), and the status
+  line already names the accepted number; an in-range value is left exactly as typed so a
+  caret is never moved mid-word. The scrubber publishes three decimals, because its floor
+  is `0.001` and two would print the bound as `0.00`.
+- **Covered** by `the_numeric_twin_reports_the_body_behind_the_face`,
+  `the_scrubber_publishes_its_bounds_and_a_conservative_ceiling` and the shell's
+  `the_manipulator_numeric_row_types_a_held_value` (range chip, clamp, rewrite).
+  `ferrocad_part_gui` is **39 passed**; `ferrocad_viewport` **235** and
+  `ferrocad_shell_core` **286** stay green, as do both edition round-trips.
+
+**Still open (item 4, second half).** The kernel-backed range — a query or trial operation
+per `(object, element, operation)`, debounced off the selection, cached against the shape —
+is the part that can say a specific value will fail rather than that it cannot possibly
+fit. It needs a new backend seam and an async result path into the armed manipulator.
+
 ## 4. Where the detail lives
 
 - [`tasks/backend-parity.md`](tasks/backend-parity.md) — the B0–B21 ledger, its

@@ -225,7 +225,9 @@ shell passes it to the app script, which keeps the triad kernel-free.
   moves the handle (a previewed object) moves the whole sweep by the same delta, so the
   distance is untouched.
 - The two remaining follow-ups are a stem for a non-planar face and model-aware bounds on
-  the typed value.
+  the typed value. The row already prints the handle's hard range and the geometry note it
+  can measure honestly (a pushed face's body thickness behind it); the kernel-backed range
+  is a later slice.
 
 ## 5. Select mode: body vs face
 

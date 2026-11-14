@@ -155,6 +155,18 @@ impl Shell {
         viewport.update(cx, |viewport, _cx| {
             viewport.set_manipulator_values(&id, &values)
         });
+        // A hard bound may have clamped the value (a radius below the kernel floor, a
+        // radius past the body's extent): show what the manipulator actually took, so the
+        // field and the ghost cannot disagree. A value that was accepted as typed is left
+        // alone — rewriting it would fight the caret mid-word (`7.5` → `7.50`).
+        if let Some(fields) = viewport.read(cx).manipulator_fields(&id) {
+            for ((input, field), typed) in form.inputs.iter().zip(fields.iter()).zip(values.iter()) {
+                if (field.value - typed).abs() > 1e-9 {
+                    let text = field_text(field);
+                    input.update(cx, |input, cx| input.set_text(text, cx));
+                }
+            }
+        }
         let commit = viewport.read(cx).manipulator_commit(&id);
         match commit {
             Some(commit) => self.hold_interaction(commit, cx),

@@ -1174,8 +1174,43 @@ body. Consequences the implementation has to keep:
 Covered by `the_stem_rides_the_ghost` (typed and dragged, plus the host `set_anchor`
 round-trip) and `a_drag_keeps_the_handle_with_the_pointer`.
 
+### Bounds: hard range and a geometry note
+
+`NumericField` carries three more things beyond the number, and the distinction between
+them is the point:
+
+- **`min`/`max` are hard.** The manipulator clamps to them, on a drag and on a typed
+  value, and the row prints the range beside the field. The dress-up scrub already had
+  the machinery: `set_bounds(MIN_RADIUS, ceiling)` now runs in the factory, with
+  `dress_up_ceiling` = **half the body's smallest extent** — a conservative ceiling, since
+  no radius larger than that can fit anywhere on the body. It is a guard against an absurd
+  number, not the kernel's exact limit for a particular edge, and the docs say so. A flat
+  or point-like mesh yields no ceiling rather than a fabricated one.
+- **A push/pull distance has no hard bound.** An extrusion is unbounded by construction,
+  and a cut deeper than the body is a through-cut — still a solid. So the stem publishes
+  `min: None, max: None` and does **not** pretend otherwise.
+- **`hint` is not a bound.** The stem adds one note it can measure honestly: the body's
+  thickness **behind** the face (`body 8.00 mm behind this face`), which says where a pocket
+  stops being a pocket. The value stays legal past it, so the row must not clamp to it.
+
+When a hard bound actually clamps a typed value, the shell rewrites the focused field to
+what the manipulator took and the status line already names the accepted number, so the
+row and the ghost can never disagree. A value that was accepted as typed is left alone —
+rewriting `7.5` to `7.50` mid-word would fight the caret.
+
+The scrubber publishes three decimals because its floor is `MIN_RADIUS` (`0.001`); two
+decimals would print the bound as `0.00`, which reads as nothing.
+
+Tests: `the_numeric_twin_reports_the_body_behind_the_face`,
+`the_scrubber_publishes_its_bounds_and_a_conservative_ceiling`, and the shell's
+`the_manipulator_numeric_row_types_a_held_value` (a past-the-range value is clamped and
+the field rewritten to `10.00`).
+
 ### Still open
 
-Validation of a *model-breaking* value (a pocket deeper than the body, a radius wider than
-the edge) needs the kernel, so it belongs with the editing slice, as does re-opening an
-existing `Part::Extrusion`/`Part::Fillet` as a live handle.
+The **authoritative** bounds — a kernel query (or a trial operation on a copy) per
+`(object, element, operation)`, debounced off the selection and cached against the shape —
+are not built. The hard bounds above are geometric and conservative: they keep a value
+from leaving the body or exceeding half its thinnest extent, and they never claim to be the
+kernel's exact limit. Re-opening an existing `Part::Extrusion`/`Part::Fillet` as a live
+handle is also still open.

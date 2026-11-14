@@ -1176,30 +1176,76 @@ pub(super) fn manipulator_fields_bar(
         let Some(field) = fields.get(index) else {
             break;
         };
+        let mut cell = div()
+            .id(("manipulator-field", index))
+            .debug_selector(move || format!("manipulator-field-{index}"))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(FG))
+                    .child(field.label.clone()),
+            )
+            .child(div().w(px(88.)).flex_shrink_0().child(input.clone()))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(field.unit.clone()),
+            );
+        // The hard range, when the manipulator has one: the value cannot leave it, so say
+        // so beside the caret instead of letting a typed number be silently clamped.
+        if let Some(text) = bounds_text(field.min, field.max) {
+            cell = cell.child(
+                div()
+                    .id(("manipulator-range", index))
+                    .debug_selector(move || format!("manipulator-range-{index}"))
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(text),
+            );
+        }
+        row = row.child(cell);
+    }
+    // A geometry note (the body's thickness behind a pushed face): a hint, not a bound.
+    if let Some(hint) = fields.iter().find_map(|field| field.hint.clone()) {
         row = row.child(
             div()
-                .id(("manipulator-field", index))
-                .debug_selector(move || format!("manipulator-field-{index}"))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(FG))
-                        .child(field.label.clone()),
-                )
-                .child(div().w(px(88.)).flex_shrink_0().child(input.clone()))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(field.unit.clone()),
-                ),
+                .id("manipulator-hint")
+                .debug_selector(|| "manipulator-hint".to_string())
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(hint),
         );
     }
     row.into_any_element()
+}
+
+/// The hard range as the row prints it: `0.001 … 5`, `≥ 0.001` or `≤ 5`.
+fn bounds_text(min: Option<f64>, max: Option<f64>) -> Option<String> {
+    match (min, max) {
+        (Some(min), Some(max)) => Some(format!("{} … {}", bound_number(min), bound_number(max))),
+        (Some(min), None) => Some(format!("≥ {}", bound_number(min))),
+        (None, Some(max)) => Some(format!("≤ {}", bound_number(max))),
+        (None, None) => None,
+    }
+}
+
+/// A bound without trailing zeros, with enough precision for a kernel floor.
+///
+/// `MIN_RADIUS` is `1e-3`, so two decimals would print it as `0.00` — a bound that reads
+/// as "nothing". Three decimals and a trim keep `0.001`, `5` and `-8` all readable.
+fn bound_number(value: f64) -> String {
+    let text = format!("{value:.3}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// The command palette (Ctrl+K): a focused search field over the filtered registry.

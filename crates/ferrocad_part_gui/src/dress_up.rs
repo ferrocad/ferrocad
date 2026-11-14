@@ -852,11 +852,22 @@ impl Manipulator for DressUpScrubber {
     }
 
     fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
+        let min = Some(self.min);
+        // Three decimals, because the floor is `MIN_RADIUS` (0.001 mm) and a two-decimal
+        // field could not show it.
         match self.mode {
-            DressUpMode::Fillet => vec![ferrocad_stage::NumericField::millimetres("R", self.value)],
+            DressUpMode::Fillet => vec![
+                ferrocad_stage::NumericField::millimetres("R", self.value)
+                    .decimals(3)
+                    .bounded(min, self.max),
+            ],
             DressUpMode::Chamfer => vec![
-                ferrocad_stage::NumericField::millimetres("D1", self.value),
-                ferrocad_stage::NumericField::millimetres("D2", self.second),
+                ferrocad_stage::NumericField::millimetres("D1", self.value)
+                    .decimals(3)
+                    .bounded(min, self.max),
+                ferrocad_stage::NumericField::millimetres("D2", self.second)
+                    .decimals(3)
+                    .bounded(min, self.max),
             ],
         }
     }
@@ -925,12 +936,36 @@ pub fn dress_up_scrubber_for(
             )
         })
         .collect();
-    Some(DressUpScrubber::new(
-        selection.object,
-        mode,
-        edge.clone(),
-        points,
-    ))
+    let mut scrubber = DressUpScrubber::new(selection.object, mode, edge.clone(), points);
+    // A radius larger than half the body's smallest extent cannot fit anywhere on it, so
+    // it is a conservative ceiling, not the kernel's exact limit (a particular edge may
+    // allow much less). The row shows it and both the drag and a typed value respect it.
+    if let Some(ceiling) = stage.item(selection.object).and_then(dress_up_ceiling) {
+        scrubber.set_bounds(MIN_RADIUS, Some(ceiling));
+    }
+    Some(scrubber)
+}
+
+/// A conservative ceiling for a dress-up value: half the body's smallest extent.
+///
+/// No radius larger than this can fit anywhere on the body, so the value is a guard
+/// against an absurd typed or dragged number rather than the kernel's exact limit. `None`
+/// when the item has no usable extent (a flat or point-like mesh), so a degenerate
+/// fixture never gets a fabricated bound.
+pub fn dress_up_ceiling(item: &ShapeItem) -> Option<f64> {
+    let positions = item.positions();
+    let first = positions.first()?;
+    let (mut min, mut max) = (*first, *first);
+    for point in positions {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
+    }
+    let smallest = (0..3)
+        .map(|axis| f64::from(max[axis]) - f64::from(min[axis]))
+        .fold(f64::INFINITY, f64::min);
+    (smallest.is_finite() && smallest > 1e-6).then(|| 0.5 * smallest)
 }
 
 /// The Part GUI's manipulator factory: an edge selection arms a fillet scrubber.
@@ -1470,6 +1505,67 @@ mod tests {
         let anchor = scrubber.anchor().expect("an anchor");
         assert!((anchor.x - 5.0).abs() < 1e-9);
         assert!(anchor.y.abs() < 1e-9);
+    }
+
+    /// A 10 × 4 × 4 box whose `Edge1` runs along `x` at `y = z = 0`.
+    fn edged_box() -> Stage {
+        use ferrocad_geom::Tessellation;
+
+        let mesh = Tessellation {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [10.0, 4.0, 0.0],
+                [0.0, 4.0, 0.0],
+                [0.0, 0.0, 4.0],
+                [10.0, 0.0, 4.0],
+                [10.0, 4.0, 4.0],
+                [0.0, 4.0, 4.0],
+            ],
+            normals: Vec::new(),
+            triangles: vec![0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7],
+            triangle_parts: vec![0, 0, 0, 0],
+            edges: vec![0, 1],
+            segment_parts: vec![1],
+            vertices: Vec::new(),
+            vertex_parts: Vec::new(),
+            parts: vec!["Face1".to_string(), "Edge1".to_string()],
+        };
+        Stage::new().with_item(ShapeItem::from_tessellation(7, &mesh))
+    }
+
+    #[test]
+    fn the_scrubber_publishes_its_bounds_and_a_conservative_ceiling() {
+        let stage = edged_box();
+        assert_eq!(
+            dress_up_ceiling(stage.item(7).expect("the item")),
+            Some(2.0),
+            "half the body's thinnest extent (4 mm)"
+        );
+
+        let mut scrubber = dress_up_scrubber_for(
+            &SelectionRef::element(7, "Edge1"),
+            &stage,
+            DressUpMode::Fillet,
+        )
+        .expect("a scrubber");
+        let fields = Manipulator::numeric_fields(&scrubber);
+        assert_eq!(fields[0].min, Some(MIN_RADIUS));
+        assert_eq!(fields[0].max, Some(2.0));
+        assert_eq!(
+            fields[0].decimals, 3,
+            "the floor is 0.001, so two decimals could not print it"
+        );
+
+        // The bound is enforced, not just printed: a typed value beyond it clamps.
+        assert!(Manipulator::set_values(&mut scrubber, &[50.0]));
+        assert!((scrubber.value() - 2.0).abs() < 1e-12);
+        assert_eq!(
+            Manipulator::pending_commit(&scrubber)
+                .expect("a commit")
+                .values,
+            vec![2.0]
+        );
     }
 
     #[test]

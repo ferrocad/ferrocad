@@ -737,14 +737,19 @@ impl ferrocad_stage::Manipulator for NumericFace {
     }
 
     fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
-        vec![ferrocad_stage::NumericField::millimetres("D", self.value)]
+        vec![ferrocad_stage::NumericField::millimetres("D", self.value)
+            .bounded(Some(0.0), Some(10.0))]
     }
 
     fn set_values(&mut self, values: &[f64]) -> bool {
         let Some(value) = values.first().copied() else {
             return false;
         };
-        if !value.is_finite() || (value - self.value).abs() <= 1e-12 {
+        if !value.is_finite() {
+            return false;
+        }
+        let value = value.clamp(0.0, 10.0);
+        if (value - self.value).abs() <= 1e-12 {
             return false;
         }
         self.value = value;
@@ -858,6 +863,10 @@ fn the_manipulator_numeric_row_types_a_held_value(cx: &mut TestAppContext) {
         cx.debug_bounds("manipulator-field-0").is_some(),
         "one field for one number"
     );
+    assert!(
+        cx.debug_bounds("manipulator-range-0").is_some(),
+        "the row prints the handle's hard range"
+    );
     let input = shell.read_with(&cx, |shell, _| {
         shell
             .manipulator_form
@@ -897,6 +906,20 @@ fn the_manipulator_numeric_row_types_a_held_value(cx: &mut TestAppContext) {
         cx.debug_bounds("dialog-accept").is_some(),
         "the finish pair appears for a typed value too"
     );
+
+    // A value past the hard range is clamped by the handle, and the field is rewritten to
+    // what it actually took — the row and the ghost can never disagree.
+    input.update(&mut cx, |input, cx| input.set_text("40", cx));
+    shell.update(&mut cx, |shell, cx| shell.on_manipulator_typed(cx));
+    assert_eq!(
+        input.read_with(&cx, |input, _| input.text().to_string()),
+        "10.00",
+        "the field shows the clamped value"
+    );
+    let commit = shell
+        .read_with(&cx, |shell, _| shell.pending_interaction.clone())
+        .expect("the clamped value is held");
+    assert_eq!(commit.values, vec![10.0]);
 
     // `Esc` rolls the typed value back to the handle's resting value.
     press_escape(&mut cx, &shell);

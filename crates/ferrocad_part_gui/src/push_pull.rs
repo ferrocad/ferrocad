@@ -162,6 +162,11 @@ pub struct PushPullStem {
     /// [`face_positions`](Self::face_positions)), in the face's own winding. The swept
     /// walls use it so the ghost closes into a volume instead of a floating plane.
     face_border: Vec<(u32, u32)>,
+    /// How far the body extends **behind** the face along `-N`, in world millimetres.
+    ///
+    /// The numeric row's hint: a pocket deeper than this leaves the body. It is a note,
+    /// not a bound — the edit stays legal past it.
+    body_depth: f64,
     /// Whether the released value is held for the host's `✓`/`✗`.
     pending: bool,
 }
@@ -225,6 +230,7 @@ impl PushPullStem {
             face_positions: Vec::new(),
             face_triangles: Vec::new(),
             face_border: Vec::new(),
+            body_depth: 0.0,
             pending: false,
         })
     }
@@ -242,6 +248,23 @@ impl PushPullStem {
         self.face_positions = positions;
         self.face_triangles = triangles;
         self.rebuild_preview();
+    }
+
+    /// How far the body extends behind the face along `-N` (0 when unknown).
+    pub fn body_depth(&self) -> f64 {
+        self.body_depth
+    }
+
+    /// Note how thick the body is behind the face, for the numeric row's hint.
+    ///
+    /// The factory measures it from the whole item: the face's own triangles lie on the
+    /// plane, so they cannot answer it.
+    pub fn set_body_depth(&mut self, depth: f64) {
+        self.body_depth = if depth.is_finite() && depth > 0.0 {
+            depth
+        } else {
+            0.0
+        };
     }
 
     /// The display-only ghost of the face at [`distance`](Self::distance).
@@ -686,10 +709,16 @@ impl Manipulator for PushPullStem {
     }
 
     fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
-        vec![ferrocad_stage::NumericField::millimetres(
-            "D",
-            self.distance,
-        )]
+        let field = ferrocad_stage::NumericField::millimetres("D", self.distance);
+        // A distance itself is unbounded (an extrusion can go as far as the user likes and
+        // a through-cut is still a solid), so the only model-derived number is the body's
+        // thickness behind the face: a note, not a bound.
+        let field = if self.body_depth > 1e-6 {
+            field.with_hint(format!("body {:.2} mm behind this face", self.body_depth))
+        } else {
+            field
+        };
+        vec![field]
     }
 
     fn set_values(&mut self, values: &[f64]) -> bool {
@@ -767,7 +796,23 @@ pub fn push_pull_stem_for(selection: &SelectionRef, stage: &Stage) -> Option<Pus
         }
     }
     stem.set_face_geometry(positions, indices);
+    stem.set_body_depth(body_depth(item, centroid, normal));
     Some(stem)
+}
+
+/// How far the item extends **behind** the face along `-N`, in world millimetres.
+///
+/// The deepest vertex of the whole tessellation behind the face plane: a pocket deeper
+/// than this leaves the body. It is the numeric row's hint, not a bound.
+fn body_depth(item: &ShapeItem, centroid: Vector3, normal: Vector3) -> f64 {
+    item.positions().iter().fold(0.0f64, |deepest, point| {
+        let point = Vector3::new(
+            f64::from(point[0]),
+            f64::from(point[1]),
+            f64::from(point[2]),
+        );
+        deepest.max(centroid.sub(&point).dot(&normal))
+    })
 }
 
 /// The Part GUI's push/pull factory: a planar-face selection arms the stem.
@@ -1124,6 +1169,57 @@ mod tests {
         let inward =
             push_pull_stem_for(&SelectionRef::element(7, "Face1"), &stage).expect("a stem");
         assert!((inward.normal().x + 1.0).abs() < 1e-9);
+    }
+
+    /// A 1 × 1 × 1 box: its `+X` face is `Face1` and the rest is `Body`.
+    fn box_mesh() -> Tessellation {
+        Tessellation {
+            positions: vec![
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 1.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0],
+            ],
+            normals: Vec::new(),
+            triangles: vec![0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6],
+            triangle_parts: vec![0, 0, 1, 1],
+            edges: Vec::new(),
+            segment_parts: Vec::new(),
+            vertices: Vec::new(),
+            vertex_parts: Vec::new(),
+            parts: vec!["Face1".to_string(), "Body".to_string()],
+        }
+    }
+
+    #[test]
+    fn the_numeric_twin_reports_the_body_behind_the_face() {
+        let stage = stage_with(&box_mesh(), 7);
+        let thick =
+            push_pull_stem_for(&SelectionRef::element(7, "Face1"), &stage).expect("a stem");
+        assert!(
+            (thick.body_depth() - 1.0).abs() < 1e-9,
+            "the box is 1 mm thick behind the +X face: {}",
+            thick.body_depth()
+        );
+
+        let fields = Manipulator::numeric_fields(&thick);
+        assert_eq!(fields.len(), 1);
+        assert!(
+            fields[0].min.is_none() && fields[0].max.is_none(),
+            "a distance has no hard bound: an extrusion is unbounded and a through-cut is\
+             still a solid"
+        );
+        let hint = fields[0].hint.as_deref().expect("a geometry note");
+        assert!(hint.contains("body 1.00 mm"), "{hint}");
+
+        // A face with nothing behind it (a flat mesh) carries no note rather than a zero.
+        let flat = stem();
+        assert!(flat.body_depth() < 1e-9);
+        assert!(Manipulator::numeric_fields(&flat)[0].hint.is_none());
     }
 
     #[test]

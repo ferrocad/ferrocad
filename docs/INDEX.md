@@ -141,6 +141,7 @@ here.
 - [developer/architecture/python-bindings.md](developer/architecture/python-bindings.md) — the PyO3 binding design.
 - [developer/architecture/releasing.md](developer/architecture/releasing.md) — how a release is cut: crates.io, the tag and the artifacts.
 - [developer/architecture/repackaging.md](developer/architecture/repackaging.md) — the one-shell/many-editions repackaging strategy.
+- [developer/architecture/transactions.md](developer/architecture/transactions.md) — transactions and undo: which writes are recorded, why a type's derived mirror must be, and how `Label` fits.
 
 ### Viewport
 

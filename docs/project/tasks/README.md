@@ -7,7 +7,7 @@ decision. Completed specs moved to [`../record/tasks/`](../record/tasks/README.m
   failures, exact `ShapeType`, `makeWireString` on `skrifa`/`harfrust`, the GUI
   classification, the S4.4–S4.6 view half, the workflow acceptance and the final
   re-bucketing. **P1 is closed:** SC0–SC8 are done. The later P2 seam rounds took the
-  baseline to **1014/20/13/7**, with every failure attributed (16 P2 / 1 P3 / 3
+  baseline to **1019/15/13/7**, with every failure attributed (11 P2 / 1 P3 / 3
   documented test assumptions).
 
 - [opening-a-large-model.md](opening-a-large-model.md) — **the open/sync budget.** Stages 1

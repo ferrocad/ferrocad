@@ -1,10 +1,10 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
 Status: design (2026-10-21); re-measured 2026-11-15 (§7). The current integrated baseline is
-**1014 passed / 20 failed / 13 errored / 7 skipped over 88/88 modules** on the clean
+**1019 passed / 15 failed / 13 errored / 7 skipped over 88/88 modules** on the clean
 `9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
-is green, and every remaining failure is attributed in §7 (16 P2, 1 P3, 3 documented test
-assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 29 failures and
+is green, and every remaining failure is attributed in §7 (11 P2, 1 P3, 3 documented test
+assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 34 failures and
 took P3 from 11 failures to 1.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
@@ -1576,7 +1576,7 @@ baseline of **985 / 49 / 18 / 7**, **25 failures closed and none was added** (er
   parameter π relative to the `XAxis` the circle reported; sewing split the shared rim into
   two arcs (three circles instead of two). The edge now takes the analytic frame.
 
-The 24 that remained at that point were re-bucketed in
+The 20 that remained at that point were re-bucketed in
 [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 18 P2, 3 P3, and 3 documented test
 assumptions, with the chamfered single-face case filed as a face-order assumption (its
 selection lands on a box side; every actual wall facet is accepted).
@@ -1589,8 +1589,7 @@ checkout. From **1006 / 24 / 17 / 7**:
   `(other, tolerance=0.0, *, noElementMap)`. Our declarations put a house `glue`/`refine`
   pair in front, so a fuzzy tolerance passed positionally landed in `glue` and never reached
   the kernel — `test_union`'s rod stayed a hair off its bore. Both `test_union` geometry
-  records pass; `test_union` is **14/2**, the two left being the document label
-  `'Union' != 'First'`.
+  records pass.
 - `Shape.tessellate`'s omitted `angular` is upstream's `defaultAngularDeflection`
   (`min(0.1, linear * 5 + 0.005)`), one `ferrocad_geom` helper shared with the STL path.
   `test_mesh_glue` is **6/6**.
@@ -1603,8 +1602,27 @@ checkout. From **1006 / 24 / 17 / 7**:
   exact. A vertex is laid once now; the same mesh measures 1 025.16, and
   `test_surface_offset`'s across-the-seam error (which unwraps across the cut) closes.
 
-The 20 that remain and the 13 errors are bucketed in
-[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 16 P2, 1 P3, 3 documented test
+**2026-11-16 — the undo/label round: 1019 / 15 / 13 / 7.** Five failures were one defect:
+half of an edit was written outside the undo log.
+
+- `Label` is a field of the document object, not a property-container entry, so `set_label`
+  wrote it with no change record: `ops.unite` renamed its target to `Union` and
+  `ops.commit_slicing` named the pieces `Block · 1`, `Block · 2`, and undo restored the
+  shape without the name. `set_label` now records `Change::Label`, so an undo *and* a
+  refused transaction put the old name back.
+- A type's derived mirror (`Placement` → the baked `Shape` on a `Part::Feature`, → the mesh
+  transform on a `Mesh::Feature`, and a shape assignment's adopted `Placement`) was written
+  raw, so undoing a move reverted the placement while the geometry stayed put and an
+  aborted rotate left the body where the transaction had put it.
+  `Document::set_property_derived` records the mirror in the same transaction without
+  touching the object or re-firing the hook.
+
+`test_union` is **16/16**, `test_slicing`'s document class and both `test_rotation`
+document tests pass, and the contract is
+[`../../developer/architecture/transactions.md`](../../developer/architecture/transactions.md).
+
+The 15 that remain and the 13 errors are bucketed in
+[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 11 P2, 1 P3, 3 documented test
 assumptions; the errors are 4 `test_surface_offset` draft shapes, 1 wrapped-drawing area
 measurement, 7 behavioural/API results and 1 face-order assumption. The round record is
 [`../record/2026-11-14-p2-boolean-seam.md`](../record/2026-11-14-p2-boolean-seam.md).

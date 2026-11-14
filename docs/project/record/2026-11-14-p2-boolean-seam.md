@@ -599,6 +599,56 @@ Fresh measurements for the round, same image throughout (upstream @ `33adf61`):
 | Python `base` | **707 / 0 / 0 / 8** |
 | Part API audit | **253/408 (62.0%)**, contract re-pinned for the TechDraw types |
 
+### 8.14 The four PartDesign errors: a draft, not a boolean
+
+The error bucket's note said "4 `PartDesign`-module draft shapes". Reading the records was
+worth it: all four were `ModuleNotFoundError: No module named 'PartDesign'`, raised at
+`import PartDesign` (`simplecad/surfaces/offset.py:248`). `PartDesign::Boolean` is not
+touched by any of them. The draft tool's private document builds a `PartDesign::Body`, a
+`PartDesign::Plane` hinge and a `PartDesign::Draft`, and reads the feature's `Shape`.
+
+Upstream's `PartDesign::Draft` is a general dress-up (`BRepOffsetAPI_DraftAngle`): tilt each
+selected face about its intersection with the neutral plane, heal the neighbours. The pinned
+`ferrocad_occt_cxx` does not bind that class, and adding it would mean patching an external
+crate. So the feature was implemented for the class the tool actually asks for, and refuses
+the rest by name:
+
+- one solid that is a straight prism along the neutral plane's normal;
+- every side wall selected (flat walls, or one cylindrical wall), all parallel to the pull;
+- exactly two end caps square to the pull, with the neutral plane through one of them.
+
+The drafted body is then the hinge cap swept to the far cap with a taper — the existing
+tapered-extrusion construction (`BRepOffsetAPI_MakeOffset` + loft, now `extrusion::
+draft_section`). It is exact for that class: the box case's far cap measures
+333.070775677 mm² against `(20 − 2·10·tan 5°)²`, the cylinder wall comes back as a real
+`Part.Cone` with the frustum volume, and `Reversed` is SimpleCAD's `narrower = 'bottom'`.
+`PartDesign::Plane` is a square marker derived from its `Placement` (the hinge the draft
+reads), and `python/PartDesign.py` is the import shim.
+
+Pinned by `crates/ferrocad_part_py/tests/partdesign_draft.rs` (narrowing, widening, the cone,
+the datum plane, a cap selected for drafting, and the `PartDesign` import in a linked host).
+
+A build note that cost a run: the SimpleCAD harness registers `Part` as a **built-in**, and
+the three `test_surface_offset` cases call `offset.draft` in the harness process itself (only
+the `surface_ops` path goes through the shape worker). Rebuilding `ferrocad_combined.abi3.so`
+is therefore not enough to move those three; the harness test binary has to be rebuilt too.
+
+The measurements, with the harness rebuilt after the change:
+
+| Measure | Before | After |
+| --- | --- | --- |
+| `test_surface_offset` | 19/0/3/1 | **22/0/0/1** |
+| `test_surface_ops` | 15/0/1/0 | **16/0/0/0** |
+| SimpleCAD integrated | 1032/6/9/7 | **1036/6/5/7** over 88/88 |
+| Part conformance | 531/0/0/12 | **531/0/0/12** |
+| Python `base` | 707/0/0/8 | **707/0/0/8** |
+| Rust lib tests | `ferrocad_part` 59, `part_py` 360 | **`ferrocad_part` 59, `part_py` 366**, 0 failed |
+| Part API audit | 43 object types | **45 object types**, 253/408 (62.0%) |
+
+The five errors left are `Mesh.decimate`, a removed object's `Name`, the two
+"would create invalid geometry" refusals and the chamfered face-order assumption. None needs
+a PartDesign workbench.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

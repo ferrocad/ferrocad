@@ -320,6 +320,33 @@ unmodified here. The detail is in
 [`../../project/record/2026-11-14-p2-boolean-seam.md`](../../project/record/2026-11-14-p2-boolean-seam.md)
 §8.8.
 
+## `PartDesign::Draft` is a straight-prism dress-up
+
+SimpleCAD's draft tool (`simplecad/surfaces/offset.py`) opens a private document, puts the
+shape in a `Part::Feature`, adds a `PartDesign::Body`, a `PartDesign::Plane` for the hinge
+and a `PartDesign::Draft`, recomputes, and reads the feature's `Shape`. FerroCAD registers
+those three document types (`crates/ferrocad_part/src/partdesign.rs`); `python/PartDesign.py`
+is an import shim that only guarantees the kernel is loaded, so the tool's
+`import PartDesign` no longer fails.
+
+Upstream's `PartDesign::Draft` is a general dress-up: it tilts every selected face about its
+intersection with the neutral plane and heals the neighbours (`BRepOffsetAPI_DraftAngle`).
+The pinned `ferrocad_occt_cxx` does not bind that class, so the feature implements the class
+the tools ask for and **refuses the rest loudly**:
+
+- one solid that is a straight prism along the neutral plane's normal;
+- every side wall selected (flat walls, or one cylindrical wall), all parallel to the pull;
+- exactly two end caps square to the pull, with the neutral plane through one of them.
+
+For that class the drafted body is the hinge cap swept to the far cap with a taper — the
+same `BRepOffsetAPI_MakeOffset` + loft construction a tapered `Part::Extrusion` uses
+(`extrusion::draft_section`) — which is exact: a box drafts to a frustum with planar caps
+and a cylinder wall drafts to a real `Part.Cone`, and `Reversed` is SimpleCAD's
+`narrower = 'bottom'`. A partial wall selection, a hinge inside the body, a free-form wall
+or a stepped prism raises with the reason and marks the feature invalid instead of
+approximating. Pinned by `partdesign_draft.rs` (narrowing, widening, the cone, the datum
+plane and a refusal).
+
 ## What is still open in this seam
 
 - **A boolean result is a `Compound` around one `Solid`** (see
@@ -332,6 +359,10 @@ unmodified here. The detail is in
 - **The `close_holes` cap policy** (`test_edge_deletion` and `test_rounding`) is filed
   above: it is SimpleCAD's documented behaviour, and the reference checkout stays
   unmodified.
+- **A general `PartDesign::Draft`** (partial wall sets, an internal hinge, an arbitrary
+  body) needs `BRepOffsetAPI_DraftAngle`, which the pinned sys crate does not bind. The
+  straight-prism class above is implemented; the rest is recorded rather than approximated.
+- **`PartDesign::Boolean` and `Part::Section`** are still unregistered document types.
 - **The wrapped-drawing inverse picks another branch, not another geometry.**
   `WrapFrame.local` inverts `point(q)` by projecting the traced point onto the *target
 triangle's plane* (`basis @ (trace(q) - p)`). On a closed section that residual is

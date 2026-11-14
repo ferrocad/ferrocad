@@ -32,7 +32,8 @@ its edges, a document edit's halves — a rename, a placement's baked shape — 
 together, and a placement is a `TopLoc_Location` over an un-moved base, so a reset is
 exact and a moved shape keeps its identity. Every remaining failure is still attributed
 (**6 documented test assumptions**; none unattributed, and no P2 or P3 failure is left),
-and the suite's errors are down to 9 (4 need a PartDesign workbench).
+and the suite's errors are down to 5 (none needs a PartDesign workbench; the draft tool's
+`PartDesign::Draft` landed for its straight-prism class).
 
 The platform picture did change materially: the **browser shell** runs the same
 `RustAppBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
@@ -108,8 +109,8 @@ rather than stubbed.
 - **SimpleCAD S0–S3 — the image is in.** `ferrocad_mesh` (payload, STL, operations,
   `Mesh::Feature`), `ferrocad_mesh_py` (`Mesh`, `MeshPart`), `Part.Shape.tessellate`,
   `BOPTools.SplitAPI` and the import-time PySide surface all load in one in-process
-  `ferrocad` + `Part` + `Mesh` image. The 2026-11-16 baseline is **1032 pass, 6 fail,
-  9 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
+  `ferrocad` + `Part` + `Mesh` image. The 2026-11-16 baseline is **1036 pass, 6 fail,
+  5 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
   push/pull → cut → STL) is green and the 5 Qt groups are classified skips. The identity, query and representation
   frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
   `Faces`/`Wires`, `Face.Surface` classification with `parameter()`).
@@ -120,14 +121,15 @@ rather than stubbed.
   S4.6 keeps `FreeCADGui.Preview` as the shape-preview channel and records 3-D text as a
   non-goal; the imperative-Coin lifecycle (`getChild`/`insertChild`/`findChild`,
   `isOfType`) is complete enough for an overlay.
-- **P1 closed (SC8), and the ten P2 seam rounds closed 43 failures.** From SC8's
-  **985 / 49 / 18 / 7** the failures fell to **6 / 13 / 7**: the eight surface-line cases
+- **P1 closed (SC8), and the P2 rounds closed 47 failures.** From SC8's
+  **985 / 49 / 18 / 7** the failures fell to **6 / 5 / 7**: the eight surface-line cases
   and the rotate-edges/elongating/analytic clusters went with the sub-shape seam, both
   `test_union` geometry records and the two `test_union` document tests with upstream's
   boolean signature and the undo log, `test_mesh_glue` with upstream's tessellation
   default, and `test_mesh_surfaces` with `Face.cutHoles` and a circle-based `Cylinder`.
-  The last two went with the placement representation: a reset is bit-exact and a rigid
-  move is a location, so the principal-axis tie and the style mapping hold.
+  The placement representation then made a reset bit-exact and a rigid move a location,
+  so the principal-axis tie and the style mapping hold; the last round closed the four
+  `PartDesign` draft errors with a `PartDesign::Draft`/`Plane` document shim.
   Every remaining record is attributed — **6 documented test assumptions, 0
   unattributed** — and neither the P2 seam list nor P3 has a failure: the last two cases
   (`test_precision`'s tilted face and `test_surface_wrap`'s inverse) are reference-side
@@ -166,7 +168,7 @@ subset and says so.
   `tools/simplecad_audit.py --check`, and the in-process
   `crates/ferrocad_part_py/tests/simplecad_conformance.rs`. The in-process test exports the
   repo Python/OCCT paths to SimpleCAD's worker subprocess; use it when the extension may
-  be stale, because it builds the current tree. Current: **1032/6/9/7 over 88/88**
+  be stale, because it builds the current tree. Current: **1036/6/5/7 over 88/88**
   (2026-11-16, clean checkout).
 - **Engine/app:** per-crate `cargo test` and `pytest tests` (no workspace-wide build).
 - **Docs:** `api_docs`, `userdocs`, `build_book` and the relative-link sweep in `--check`

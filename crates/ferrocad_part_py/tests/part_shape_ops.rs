@@ -363,3 +363,52 @@ assert abs(a.common(touching, None, 0.0).Volume - 500.0) < 1e-6
         );
     });
 }
+
+/// An edge's `Placement` reaches every consumer, not only the edge itself.
+///
+/// A `Part.Edge` keeps the shape it was built from in its cached entry beside the
+/// baked base. `Placement` re-bakes the base; the entry used to keep the old
+/// geometry, so `Part.Wire([edge])` rebuilt the edge at its pre-transform place.
+/// SimpleCAD's rotate-edges path does exactly that (`e.copy(); e.Placement = …;
+/// Part.Wire(...)`), and its crescent landed 180° from where it was dropped.
+#[test]
+fn an_edge_placement_reaches_the_shapes_that_consume_it() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+box = Part.makeBox(10, 10, 10)
+edge = box.Edges[0]
+turn = App.Placement(
+    App.Vector(5, 5, 0),
+    App.Rotation(App.Vector(0, 0, 1), 90),
+    App.Vector(5, 5, 0),
+)
+edge.Placement = turn.multiply(edge.Placement)
+
+def points(shape):
+    return sorted(
+        (round(v.Point.x, 6), round(v.Point.y, 6), round(v.Point.z, 6))
+        for v in shape.Vertexes
+    )
+
+moved = [(15.0, 5.0, 0.0), (15.0, 5.0, 10.0)]
+assert points(edge) == moved, points(edge)
+
+# The wire built from the live edge sees the same geometry as the edge.
+assert points(Part.Wire([edge])) == moved, points(Part.Wire([edge]))
+assert points(Part.Wire([edge]).Edges[0]) == moved
+assert points(Part.Wire(edge)) == moved
+
+# `Edge.Curve` follows too: a moved circle reports its moved centre.
+circle = Part.makeCircle(5, App.Vector(0, 0, 0), App.Vector(0, 0, 1))
+circle.Placement = App.Placement(App.Vector(10, 0, 0), App.Rotation())
+assert abs(circle.Curve.Center.x - 10.0) < 1e-6, circle.Curve.Center
+"#,
+        );
+    });
+}

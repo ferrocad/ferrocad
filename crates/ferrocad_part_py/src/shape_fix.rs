@@ -34,13 +34,16 @@ fn shape_of(value: &Bound<'_, PyAny>, what: &str) -> PyResult<Shape> {
 }
 
 /// Read a `Part.Edge` as a kernel shape (upstream's `TopoShapeEdgePy`).
+///
+/// The live base shape is the current geometry: `Placement`, `translate` and
+/// `replaceShape` re-bake it, while the cached entry keeps the edge as built.
 fn edge_shape(value: &Bound<'_, PyAny>) -> PyResult<Shape> {
     let edge = value
         .downcast::<curves::PyEdge>()
         .map_err(|_| PyTypeError::new_err("expected a Part.Edge"))?;
     edge.borrow()
-        .entry()
-        .map(|entry| entry.shape)
+        .as_super()
+        .shape()
         .ok_or_else(|| OCCError::new_err("an empty Part.Edge has no geometry"))
 }
 

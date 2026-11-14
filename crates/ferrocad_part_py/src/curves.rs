@@ -8726,11 +8726,23 @@ impl PyEdge {
     }
 
     /// The geometry behind a Python edge/curve object.
+    ///
+    /// A live `Part.Edge` is read from its **base** shape, not from the cached
+    /// entry: `Placement`, `translate`, `rotate` and `replaceShape` re-bake the
+    /// base, while the entry keeps the shape the edge was built from. Reading the
+    /// entry here handed `Part.Wire`/`Part.Face` the pre-transform geometry, so an
+    /// edge moved by `edge.Placement = …` reached the new wire at its old place
+    /// (`SimpleCAD`'s rotate-edges path). The base is the one source of truth.
     pub(crate) fn entry_from(value: &Bound<'_, PyAny>) -> PyResult<EdgeEntry> {
         if let Ok(edge) = value.downcast::<PyEdge>() {
-            return edge.borrow().entry().ok_or_else(|| {
+            let edge = edge.borrow();
+            let mut entry = edge.entry().ok_or_else(|| {
                 PyValueError::new_err("an empty Part.Edge has no geometry")
-            });
+            })?;
+            if let Some(shape) = edge.as_super().shape() {
+                entry.shape = shape;
+            }
+            return Ok(entry);
         }
         if let Ok(line) = value.downcast::<PyLineSegment>() {
             let curve = EdgeCurve::LineSegment(line.borrow().curve);
@@ -8987,17 +8999,20 @@ impl PyEdge {
     /// for a shape the kernel cannot classify. An empty edge raises `ValueError`,
     /// as upstream.
     #[getter]
-    fn Curve(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let Some(entry) = self.entry() else {
+    fn Curve(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let Some(entry) = slf.entry() else {
             return Err(empty_error("Curve"));
         };
-        match backend().curve_of(&entry.shape) {
+        // The base carries the current geometry (a `Placement` write re-bakes it);
+        // the entry keeps the shape the edge was built from.
+        let shape = slf.as_super().shape().unwrap_or(entry.shape);
+        match backend().curve_of(&shape) {
             Ok(curve) => Ok(Some(curve_to_py(py, curve)?)),
             Err(_) => {
                 if let Some(curve) = entry.curve {
                     return Ok(Some(curve_to_py(py, curve)?));
                 }
-                let state = self
+                let state = slf
                     .bspline
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -10053,11 +10068,13 @@ fn wire_shapes(value: &Bound<'_, PyAny>) -> PyResult<Vec<Shape>> {
         return Ok(vec![shape]);
     }
     if let Ok(edge) = value.downcast::<PyEdge>() {
+        let edge = edge.borrow();
+        // The base is the current geometry; the cached entry keeps the shape the
+        // edge was built from (a `Placement` write re-bakes only the base).
         let shape = edge
-            .borrow()
-            .entry()
-            .ok_or_else(|| PyValueError::new_err("an empty Part.Edge has no geometry"))?
-            .shape;
+            .as_super()
+            .shape()
+            .ok_or_else(|| PyValueError::new_err("an empty Part.Edge has no geometry"))?;
         let wire = backend().make_wire(&[shape]).map_err(kernel_error)?;
         return Ok(vec![wire]);
     }

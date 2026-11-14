@@ -41,6 +41,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import unittest
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -512,7 +513,8 @@ def main(argv: list[str]) -> int:
             sys.path.insert(0, str(d))
 
     outcomes = []
-    for stem in stems:
+    total = len(stems)
+    for index, stem in enumerate(stems, 1):
         path = next(
             (d / f"{stem}.py" for d in group.roots if (d / f"{stem}.py").is_file()),
             None,
@@ -520,7 +522,29 @@ def main(argv: list[str]) -> int:
         if path is None:
             print(f"warning: not found: {stem}", file=sys.stderr)
             continue
-        outcomes.append(run_file(path, classify_gui=group.name == "simplecad"))
+        # Progress goes to stderr so it streams while a long module runs, and the
+        # report on stdout stays exactly what it was (the in-process conformance
+        # test redirects only `sys.stdout`). A full SimpleCAD run is four minutes
+        # of silence otherwise.
+        print(f"[{index}/{total}] {stem} …", file=sys.stderr, flush=True)
+        started = time.monotonic()
+        outcome = run_file(path, classify_gui=group.name == "simplecad")
+        elapsed = time.monotonic() - started
+        if outcome.get("loaded"):
+            totals = outcome["totals"]
+            print(
+                f"[{index}/{total}] {stem}: {totals['pass']} passed, {totals['fail']} failed, "
+                f"{totals['error']} errored, {totals['skip']} skipped ({elapsed:.1f}s)",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(
+                f"[{index}/{total}] {stem}: did not load ({elapsed:.1f}s)",
+                file=sys.stderr,
+                flush=True,
+            )
+        outcomes.append(outcome)
 
     print(
         render(

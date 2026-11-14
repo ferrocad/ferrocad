@@ -178,6 +178,7 @@ here.
 - [developer/workbenches/grid-overlay-plan.md](developer/workbenches/grid-overlay-plan.md) — the grid-overlay decisions, the `FerroCAD.Grid` surface and G0–G6.
 - [developer/workbenches/mod-providers.md](developer/workbenches/mod-providers.md) — how a mod declares its providers and how the active backend is chosen.
 - [developer/workbenches/part-api-audit.md](developer/workbenches/part-api-audit.md) — the repeatable Part/OCCT surface audit and its `--check` contract.
+- [developer/workbenches/part-containers.md](developer/workbenches/part-containers.md) — the six boolean/compound objects: `Refine`, `MultiCommon.Behavior`, single-compound flattening, arity, lineage and the four commands.
 - [developer/workbenches/qt-strategy.md](developer/workbenches/qt-strategy.md) — running upstream workbench GUIs without Qt: the measured surface and Q0–Q5.
 - [developer/workbenches/screenshot-tool.md](developer/workbenches/screenshot-tool.md) — the three `tools/screenshot.py` scopes, the `tools/ui_shots.py` highlighted UI figures, the `tools/ui_gifs.py` interaction animations (Xephyr and headless Chrome), the snapshot spec and the GPU-free image manifest gate.
 - [developer/workbenches/toy-workbench.md](developer/workbenches/toy-workbench.md) — the kernel-free reference edition and the template for a new workbench.

@@ -1118,6 +1118,18 @@ pub trait GeometryBackend: Send + Sync {
         Vec::new()
     }
 
+    /// The topological kind the kernel reports for `shape` — one of `"Compound"`,
+    /// `"CompSolid"`, `"Solid"`, `"Shell"`, `"Face"`, `"Wire"`, `"Edge"`,
+    /// `"Vertex"`.
+    ///
+    /// This is the kernel's own answer (`TopoDS_Shape::ShapeType`), not a walk over
+    /// the sub-shape lists: a compound that holds exactly one solid is still a
+    /// compound. Upstream's `MultiFuse`/`MultiCommon` use it to decide whether a
+    /// single linked argument is a container to flatten. The default reports `None`.
+    fn shape_type(&self, _shape: &Shape) -> Option<&'static str> {
+        None
+    }
+
     /// The outer boundary wire of a face (`Face.OuterWire`).
     fn outer_wire(&self, _shape: &Shape) -> Option<Shape> {
         None
@@ -1316,6 +1328,23 @@ pub trait GeometryBackend: Send + Sync {
         None
     }
 
+    /// `shape` with redundant edges unified, **and** the relations that name it
+    /// (upstream's `Refine` flag / `TopoShape::makeElementRefine`).
+    ///
+    /// This is [`clean`](Self::clean) with a lineage: an element the unifier kept is
+    /// reported as an identity relation under its new position, so a name recorded
+    /// before the refine still resolves after it. A merged element has no relation the
+    /// kernel exposes through most bindings (the unifier reports no `Modified` map), so
+    /// its input names are retired rather than invented — a backend that can prove the
+    /// merge may report it as modified instead.
+    ///
+    /// A backend with no cleaning pass reports `None`; the caller keeps the unrefined
+    /// result. A backend whose unifier changes nothing still answers with the
+    /// (rebuilt) shape and an all-identity history.
+    fn refine(&self, _shape: &Shape) -> Option<OpResult> {
+        None
+    }
+
     /// Offset a face or a wire by `distance` in the plane it lies in
     /// (`Shape.makeOffset` / `Shape.makeOffset2D`).
     ///
@@ -1364,7 +1393,14 @@ pub trait GeometryBackend: Send + Sync {
 
     /// General fuse of `shapes`: the combined shape and, for each input, the
     /// parts it was split into (`Shape.generalFuse`).
-    fn general_fuse(&self, _shapes: &[Shape]) -> Result<(Shape, Vec<Vec<Shape>>), GeomError> {
+    ///
+    /// `tolerance` is the fuzzy value upstream's `fuzzy_value` argument carries; `0`
+    /// leaves the kernel's own confusion tolerance in charge.
+    fn general_fuse(
+        &self,
+        _shapes: &[Shape],
+        _tolerance: f64,
+    ) -> Result<(Shape, Vec<Vec<Shape>>), GeomError> {
         Err(unsupported("general_fuse"))
     }
 
@@ -1437,6 +1473,18 @@ pub trait GeometryBackend: Send + Sync {
     /// explicitly.
     fn count_sub_shapes(&self, _shape: &Shape, _kind: &str) -> Result<usize, GeomError> {
         Err(unsupported("count_sub_shapes"))
+    }
+
+    /// The immediate sub-shapes of `shape` (`TopoDS_Iterator`), one topological
+    /// level down: a compound reports its members, a solid its shell, a shell its
+    /// faces, a face its wires, a wire its edges, an edge its vertices.
+    ///
+    /// This is upstream's `TopoShape::getSubTopoShapes()`, and what a
+    /// multi-boolean flattens a single compound argument into. Unlike
+    /// [`sub_shapes_of_type`](Self::sub_shapes_of_type), it never recurses and
+    /// never filters by kind. The default reports none.
+    fn children(&self, _shape: &Shape) -> Vec<Shape> {
+        Vec::new()
     }
 
     /// Whether an edge is degenerate (`BRep_Tool::Degenerated`): its 3D curve

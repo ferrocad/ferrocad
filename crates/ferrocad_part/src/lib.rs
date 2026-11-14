@@ -1034,6 +1034,157 @@ mod tests {
         }
     }
 
+    /// Two 10 mm boxes face to face along X make one 10 × 10 × 20 solid, but the
+    /// kernel keeps the seam: ten faces. `Refine` — upstream's default — unifies the
+    /// coplanar pairs and leaves the six of a box.
+    #[test]
+    fn refine_unifies_the_seam_a_boolean_leaves() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes_at(&mut doc, 10.0, 0.0);
+
+        let id = boolean(&mut doc, "Fuse", FUSE_TYPE);
+        let refined = stored_shape(&doc, id);
+        assert_eq!(
+            backend()
+                .elements(&refined, ferrocad_geom::ElementKind::Face)
+                .len(),
+            6,
+            "Refine is on by default, so the seam is unified"
+        );
+        assert!(
+            !stored_property(&doc, id).lineage().map().is_empty(),
+            "the refine keeps the boolean's lineage"
+        );
+        assert!(
+            backend().resolve(&refined, "Face1").is_some(),
+            "a name recorded by the refine still resolves"
+        );
+
+        doc.set_property(id, "Refine", Property::Bool(false)).unwrap();
+        doc.recompute().unwrap();
+        let raw = stored_shape(&doc, id);
+        assert_eq!(
+            backend()
+                .elements(&raw, ferrocad_geom::ElementKind::Face)
+                .len(),
+            10,
+            "Refine off keeps the seam the fuse created"
+        );
+    }
+
+    /// A `Part::Compound` of two overlapping boxes: the common of the children is
+    /// the 5 × 10 × 10 overlap, while the compound itself has no shared volume.
+    fn compound_of_two_overlapping_boxes(doc: &mut Document) -> ObjectId {
+        two_boxes(doc);
+        let id = doc.add_object("Compound", COMPOUND_TYPE);
+        doc.set_property(
+            id,
+            "Links",
+            Property::LinkList(vec!["BoxA".into(), "BoxB".into()]),
+        )
+        .unwrap();
+        doc.recompute().unwrap();
+        id
+    }
+
+    fn volume(shape: &Shape) -> f64 {
+        backend()
+            .mass_properties(shape)
+            .expect("OCCT measures the shape")
+            .volume
+    }
+
+    #[test]
+    fn a_lone_compound_multi_common_flattens_to_its_children() {
+        setup();
+        let mut doc = Document::new();
+        let compound = compound_of_two_overlapping_boxes(&mut doc);
+
+        let id = doc.add_object("Common", MULTICOMMON_TYPE);
+        doc.set_property(id, "Shapes", Property::LinkList(vec!["Compound".into()]))
+            .unwrap();
+        doc.recompute().unwrap();
+        let object = doc.object(id).unwrap();
+        assert!(!object.invalid, "a lone compound is a valid multi-common");
+        assert_eq!(
+            object.properties.get("Behavior"),
+            Some(&Property::Enumeration(
+                vec![
+                    "CommonOfAllShapes".to_string(),
+                    "CommonOfFirstAndRest".to_string()
+                ],
+                0
+            )),
+            "Behavior defaults to CommonOfAllShapes"
+        );
+        let shape = stored_shape(&doc, id);
+        assert!(
+            (volume(&shape) - 500.0).abs() < 1e-6,
+            "CommonOfAllShapes intersects the compound's children: {}",
+            volume(&shape)
+        );
+        assert!(
+            backend().count_sub_shapes(&stored_shape(&doc, compound), "Solid").unwrap() == 2,
+            "the compound is untouched"
+        );
+
+        // `CommonOfFirstAndRest` takes the compound as one shape, so nothing is
+        // flattened: the common of one shape is that shape.
+        doc.set_property(
+            id,
+            "Behavior",
+            Property::Enumeration(
+                vec![
+                    "CommonOfAllShapes".to_string(),
+                    "CommonOfFirstAndRest".to_string(),
+                ],
+                1,
+            ),
+        )
+        .unwrap();
+        doc.recompute().unwrap();
+        assert!(
+            (volume(&stored_shape(&doc, id)) - 2000.0).abs() < 1e-6,
+            "CommonOfFirstAndRest keeps the compound whole"
+        );
+    }
+
+    #[test]
+    fn a_lone_compound_multi_fuse_flattens_to_its_children() {
+        setup();
+        let mut doc = Document::new();
+        compound_of_two_overlapping_boxes(&mut doc);
+
+        let id = doc.add_object("Fuse", MULTIFUSE_TYPE);
+        doc.set_property(id, "Shapes", Property::LinkList(vec!["Compound".into()]))
+            .unwrap();
+        doc.recompute().unwrap();
+        assert!(!doc.object(id).unwrap().invalid, "the fuse of the children runs");
+        let shape = stored_shape(&doc, id);
+        assert!(
+            (volume(&shape) - 1500.0).abs() < 1e-6,
+            "the union of the children is 2 × 1000 − the 500 overlap: {}",
+            volume(&shape)
+        );
+    }
+
+    #[test]
+    fn a_multi_fuse_needs_two_shapes() {
+        setup();
+        let mut doc = Document::new();
+        two_boxes(&mut doc);
+
+        let id = doc.add_object("Fuse", MULTIFUSE_TYPE);
+        doc.set_property(id, "Shapes", Property::LinkList(vec!["BoxA".into()]))
+            .unwrap();
+        let _ = doc.recompute();
+        assert!(
+            doc.object(id).unwrap().invalid,
+            "upstream refuses fewer than two shapes"
+        );
+    }
+
     #[test]
     fn a_compound_contains_its_linked_shapes() {
         setup();

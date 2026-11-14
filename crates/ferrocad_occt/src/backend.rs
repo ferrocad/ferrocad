@@ -1317,7 +1317,7 @@ impl GeometryBackend for OcctBackend {
                     let _ = list.pin_mut().Append(inner);
                 }
             }
-            let fused = crate::shape_ops::general_fuse(&list);
+            let fused = crate::shape_ops::general_fuse(&list, 0.0);
             if let Some(fused) = fused.as_ref() {
                 let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
                 let mut regions = Vec::with_capacity(map.Extent() as usize);
@@ -1430,7 +1430,7 @@ impl GeometryBackend for OcctBackend {
                             let _ = list.pin_mut().Append(inner);
                         }
                     }
-                    let fused = crate::shape_ops::general_fuse(&list);
+                    let fused = crate::shape_ops::general_fuse(&list, 0.0);
                     if let Some(fused) = fused.as_ref() {
                         let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
                         let mut kept = Vec::new();
@@ -1486,7 +1486,7 @@ impl GeometryBackend for OcctBackend {
                     let _ = list.pin_mut().Append(inner);
                 }
             }
-            let fused = crate::shape_ops::general_fuse(&list);
+            let fused = crate::shape_ops::general_fuse(&list, 0.0);
             if let Some(fused) = fused.as_ref() {
                 let map = sub_shape_map(fused, TopAbs_ShapeEnum::TopAbs_FACE);
                 let mut regions = Vec::with_capacity(map.Extent() as usize);
@@ -1641,6 +1641,20 @@ impl GeometryBackend for OcctBackend {
             return Vec::new();
         };
         history::children(compound_inner)
+            .iter()
+            .filter_map(|child| child.as_ref().map(erase))
+            .collect()
+    }
+
+    fn children(&self, shape: &Shape) -> Vec<Shape> {
+        let Ok(occt) = downcast(shape) else {
+            return Vec::new();
+        };
+        let guard = occt.borrow();
+        let Some(inner) = guard.as_ref() else {
+            return Vec::new();
+        };
+        history::children(inner)
             .iter()
             .filter_map(|child| child.as_ref().map(erase))
             .collect()
@@ -2191,6 +2205,18 @@ impl GeometryBackend for OcctBackend {
         Some(erase(op.shape()))
     }
 
+    fn refine(&self, shape: &Shape) -> Option<OpResult> {
+        let cleaned = self.clean(shape)?;
+        let before = downcast(shape).ok()?.borrow();
+        let after = downcast(&cleaned).ok()?.borrow();
+        let history = refine_history(before.as_ref()?, after.as_ref()?);
+        Some(OpResult::new(cleaned, history))
+    }
+
+    fn shape_type(&self, shape: &Shape) -> Option<&'static str> {
+        crate::part_ops::shape_kind(shape)
+    }
+
     fn project(&self, shape: &Shape, tools: &[Shape]) -> Result<Shape, GeomError> {
         // Upstream's `Shape.project` is a *normal* projection
         // (`BRepAlgo_NormalProjection`), not a parallel one: it lays each tool on
@@ -2321,13 +2347,22 @@ impl GeometryBackend for OcctBackend {
             .collect())
     }
 
-    fn general_fuse(&self, shapes: &[Shape]) -> Result<(Shape, Vec<Vec<Shape>>), GeomError> {
+    fn general_fuse(
+        &self,
+        shapes: &[Shape],
+        tolerance: f64,
+    ) -> Result<(Shape, Vec<Vec<Shape>>), GeomError> {
         if shapes.is_empty() {
             return Err(OcctError::InvalidInput {
                 what: "general fuse needs at least one shape",
             }
             .into());
         }
+        let tolerance = if tolerance.is_finite() && tolerance > 0.0 {
+            tolerance
+        } else {
+            0.0
+        };
         let mut list = ffi::top_tools::new_list_of_shape();
         for shape in shapes {
             let occt = downcast(shape)?;
@@ -2337,7 +2372,7 @@ impl GeometryBackend for OcctBackend {
                 .ok_or(OcctError::InvalidInput { what: "null shape" })?;
             let _ = list.pin_mut().Append(inner);
         }
-        let fused = crate::shape_ops::general_fuse(&list);
+        let fused = crate::shape_ops::general_fuse(&list, tolerance);
         let Some(fused) = fused.as_ref() else {
             return Err(OcctError::NotDone {
                 operation: "general_fuse",
@@ -2346,7 +2381,7 @@ impl GeometryBackend for OcctBackend {
         };
         let mut split = Vec::with_capacity(shapes.len());
         for index in 1..=shapes.len() as i32 {
-            let modified = crate::shape_ops::general_fuse_modified(&list, index, 0.0);
+            let modified = crate::shape_ops::general_fuse_modified(&list, index, tolerance);
             split.push(
                 modified
                     .as_ref()
@@ -3591,6 +3626,75 @@ fn element_key(name: &str) -> Option<(ElementKind, i32)> {
     None
 }
 
+/// The relations a refine leaves behind (upstream's `makeElementRefine` history).
+///
+/// The unifier reports no `Modified` map through the bridge, and it *rebuilds* every
+/// sub-shape it keeps, so `IsSame` is false even for an element it did not touch.
+/// Matching is therefore geometric: an input element whose measure and centre of mass
+/// (a vertex: its point) are found once in the result keeps its name through an
+/// identity relation, and one the unifier merged into a larger element — or removed —
+/// is retired. Naming a merged face after either of its parents would be an invention,
+/// which the lineage layer refuses to make.
+fn refine_history(before: &TopoDS_Shape, after: &TopoDS_Shape) -> History {
+    let mut history = History::default();
+    for (kind, occt_kind) in HISTORY_KINDS {
+        let in_map = sub_shape_map(before, occt_kind);
+        let out_map = sub_shape_map(after, occt_kind);
+        let out_keys: Vec<Option<(f64, Vector3)>> = (1..=out_map.Extent())
+            .map(|index| sub_shape_key(kind, &out_map.FindKey(index)))
+            .collect();
+        for ordinal in 1..=in_map.Extent() {
+            let element = in_map.FindKey(ordinal);
+            let matched = sub_shape_key(kind, &element).and_then(|key| {
+                let mut hits = out_keys
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, other)| other.as_ref().is_some_and(|other| same_key(&key, other)))
+                    .map(|(index, _)| index as i32 + 1);
+                let first = hits.next()?;
+                // Two geometrically identical outputs make the match ambiguous, so
+                // the name is retired rather than bound to either.
+                if hits.next().is_some() {
+                    return None;
+                }
+                Some(first)
+            });
+            match matched {
+                Some(index) => history.push_identity(
+                    element_ref(kind, ordinal, &element),
+                    element_ref(kind, index, &out_map.FindKey(index)),
+                ),
+                None => history.push_deleted(
+                    element_ref(kind, ordinal, &element),
+                    ElementId::new(OperandId::A, kind.prefix(), ordinal as usize),
+                ),
+            }
+        }
+    }
+    history.provenance.sort();
+    history
+}
+
+/// A sub-element's geometric identity: its measure (length, area) and its centre of
+/// mass. A vertex measures zero and identifies by its point.
+fn sub_shape_key(kind: ElementKind, shape: &TopoDS_Shape) -> Option<(f64, Vector3)> {
+    if kind == ElementKind::Vertex {
+        let point = ffi::b_rep::BRep_Tool_Pnt(ffi::topo_ds::TopoDS::Vertex(shape));
+        return Some((0.0, Vector3::new(point.X(), point.Y(), point.Z())));
+    }
+    crate::shape_ops::measure_key(shape)
+}
+
+/// Whether two sub-shape keys name the same geometry.
+///
+/// The unifier rebuilds without moving anything, so the two sides agree to rounding;
+/// the tolerance is OCCT's confusion distance for the centre and a relative one for
+/// the measure, which keeps two differently sized faces apart.
+fn same_key(a: &(f64, Vector3), b: &(f64, Vector3)) -> bool {
+    let scale = a.0.abs().max(b.0.abs()).max(1.0);
+    (a.0 - b.0).abs() <= 1e-7 * scale && a.1.sub(&b.1).length() <= 1e-7
+}
+
 /// Record every input sub-element that survives unchanged as the same result
 /// sub-element (`IsSame`), under the same kind.
 ///
@@ -4410,7 +4514,9 @@ mod provenance_tests {
         assert!(backend.intrinsic_history(&lower).is_none());
 
         // General fuse: the result compound names all 60 elements.
-        let (result, _split) = backend.general_fuse(&[a.clone(), b.clone()]).unwrap();
+        let (result, _split) = backend
+            .general_fuse(&[a.clone(), b.clone()], 0.0)
+            .unwrap();
         let history = backend
             .intrinsic_history(&result)
             .expect("the result names itself");
@@ -4430,6 +4536,39 @@ mod provenance_tests {
             .unwrap();
         let sweep = backend.make_pipe(&spine, &profile, 0.001).unwrap();
         assert_eq!(backend.name_every_element(&sweep).identity.len(), 6);
+    }
+
+    #[test]
+    fn a_refine_keeps_every_name_it_does_not_merge() {
+        let backend = OcctBackend::new();
+        let (a, b) = overlapping_boxes(&backend);
+        let fused = backend.fuse(&a, &b).unwrap();
+
+        let refined = backend.refine(&fused.shape).expect("the backend refines");
+        assert!(
+            !refined.shape.is_same(&fused.shape),
+            "the unifier rebuilds the shape even when it merges nothing"
+        );
+        assert!(
+            refined.history.modified.is_empty() && refined.history.generated.is_empty(),
+            "a refine is nothing but identity and deletion"
+        );
+        assert!(
+            refined.history.deleted.is_empty(),
+            "no two faces of this fuse are coplanar, so nothing is merged"
+        );
+        assert_eq!(
+            refined.history.identity.len(),
+            ["Face", "Edge", "Vertex"]
+                .into_iter()
+                .map(|kind| backend.count_sub_shapes(&fused.shape, kind).unwrap())
+                .sum::<usize>(),
+            "every face, edge and vertex keeps its name"
+        );
+        assert!(
+            !refined.history.identity.is_empty(),
+            "matching is geometric, so a rebuilt face still keeps its name"
+        );
     }
 
     #[test]

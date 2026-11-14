@@ -2762,7 +2762,7 @@ impl PartShape {
         let mut inputs = vec![first];
         inputs.extend(shape_sequence(shapes)?);
         let (result, split) = ferrocad_part::backend()
-            .general_fuse(&inputs)
+            .general_fuse(&inputs, fuzzy_value)
             .map_err(kernel_error)?;
         let result = Py::new(py, PartShape::from_shape(result))?;
         let split = split

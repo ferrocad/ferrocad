@@ -222,13 +222,21 @@ pub(crate) fn slice(
 }
 
 /// All split parts of the arguments (General Fuse).
-pub(crate) fn general_fuse(shapes: &TopTools_ListOfShape) -> Option<UniquePtr<TopoDS_Shape>> {
+///
+/// `tolerance` is the fuzzy value: `0` keeps the kernel's confusion tolerance.
+pub(crate) fn general_fuse(
+    shapes: &TopTools_ListOfShape,
+    tolerance: f64,
+) -> Option<UniquePtr<TopoDS_Shape>> {
     if shapes.IsEmpty() {
         return None;
     }
     let mut builder = ffi::b_rep_algo_api::BRepAlgoAPI_BuilderAlgo_new();
     builder.pin_mut().SetArguments(shapes);
     builder.pin_mut().SetNonDestructive(true);
+    if tolerance > 0.0 {
+        ffi::b_rep_algo_api::BRepAlgoAPI_BuilderAlgo_SetFuzzyValue(builder.pin_mut(), tolerance);
+    }
     if ffi::b_rep_algo_api::BRepAlgoAPI_BuilderAlgo_Build(builder.pin_mut()).is_err() {
         return None;
     }
@@ -558,6 +566,19 @@ pub(crate) fn center_of_mass(shape: &TopoDS_Shape) -> Option<Vector3> {
     let props = measure_properties(shape)?;
     let centre = ffi::g_prop::GProp_GProps_CentreOfMass(&props);
     Some(Vector3::new(centre.X(), centre.Y(), centre.Z()))
+}
+
+/// A sub-shape's measure and centre of mass in one pass: a face's area, an edge's
+/// length. Used to recognise the elements a refine kept when the kernel reports no
+/// map to match them with.
+pub(crate) fn measure_key(shape: &TopoDS_Shape) -> Option<(f64, Vector3)> {
+    if shape.IsNull() {
+        return None;
+    }
+    let props = measure_properties(shape)?;
+    let mass = props.Mass();
+    let centre = ffi::g_prop::GProp_GProps_CentreOfMass(&props);
+    Some((mass, Vector3::new(centre.X(), centre.Y(), centre.Z())))
 }
 
 /// `Shape.PrincipalProperties`.

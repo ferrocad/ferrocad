@@ -13,6 +13,9 @@ these commands:
   a placement change);
 * `Part_Box` — a dock command that creates a box in one transaction, the way the toy
   workbench's `Toy_MakeSlab` does;
+* `Part_Fuse`, `Part_Cut`, `Part_Common` and `Part_Compound` — the selection-driven
+  boolean and compound commands: one object per run, the operands hidden behind a
+  boolean, and the shape work left to the object types;
 * `App_SaveDatumPlane` — a view command that saves the shell's live workplane as a
   persistent `Part::DatumPlane`, so it can be picked, moved, hidden, saved and
   bound with `Set WP`.
@@ -1075,6 +1078,237 @@ class _MakeBoxCommand:
 
 
 FreeCADGui.addCommand("Part_Box", _MakeBoxCommand())
+
+
+# ---------------------------------------------------------------------------
+# The boolean and compound commands
+# ---------------------------------------------------------------------------
+#
+# Upstream's `Part_Fuse`/`Part_Cut`/`Part_Common`/`Part_Compound` are thin commands
+# over `BOPTools.BOPFeatures` (`Part/Gui/Command.cpp`, `Part/BOPTools/BOPFeatures.py`):
+# they police the selection, create one object in one undo step, hide the operands and
+# copy the first operand's display attributes. The geometry is the object type's job
+# (`Part::MultiFuse` flattens a lone compound; `Part::MultiCommon` honours
+# `Behavior`), so nothing here touches shapes.
+#
+# One deliberate difference: upstream warns before a boolean over non-solids and waits
+# for a modal answer. A headless run has to answer for the user, so the command
+# proceeds and names the non-solid operands in its status instead of refusing.
+
+_BOOLEAN_COMMANDS = {
+    "Part_Fuse": {
+        "menu": "Union",
+        "tooltip": "Unites the selected shapes",
+        "type": "Part::MultiFuse",
+        "name": "Fusion",
+        "title": "Union",
+        "pair": False,
+        "verb": "united",
+    },
+    "Part_Cut": {
+        "menu": "Cut",
+        "tooltip": "Cuts the second selected shape out of the first",
+        "type": "Part::Cut",
+        "name": "Cut",
+        "title": "Part Cut",
+        "pair": True,
+        "verb": "cut",
+    },
+    "Part_Common": {
+        "menu": "Intersection",
+        "tooltip": "Intersects the selected shapes",
+        "type": "Part::MultiCommon",
+        "name": "Common",
+        "title": "Common",
+        "pair": False,
+        "verb": "intersected",
+    },
+}
+
+
+def _selected_shapes():
+    """The selected objects that carry a shape, in selection order, without repeats."""
+    objects, seen = [], set()
+    for obj in FreeCADGui.Selection.getSelection():
+        name = getattr(obj, "Name", None)
+        if not name or name in seen:
+            continue
+        try:
+            if obj.Shape is None:
+                continue
+        except Exception:  # noqa: BLE001 - an object without a Shape is not a candidate
+            continue
+        seen.add(name)
+        objects.append(obj)
+    return objects
+
+
+def _fused_shape_count(objects):
+    """How many shapes a fuse would see, following upstream's compound unwrapping.
+
+    `CmdPartFuse::activated` walks into a *lone* compound repeatedly: it counts the
+    direct children, then keeps walking while there is exactly one child and that
+    child is itself a compound. The object type flattens the same way, so this only
+    decides whether the command has enough to work with.
+    """
+    if len(objects) != 1:
+        return len(objects)
+    shape = objects[0].Shape
+    count = 1
+    while count == 1 and shape.ShapeType == "Compound":
+        children = shape.childShapes()
+        if not children:
+            return 0
+        count = len(children)
+        shape = children[-1]
+    return count
+
+
+def _boolean_refusal(spec, objects):
+    """Why the selection cannot run the boolean, or ``None`` when it can."""
+    if FreeCAD.ActiveDocument is None:
+        return "no active document"
+    if spec["pair"]:
+        # Upstream's `Part_Cut` is exactly two objects: the first is the base.
+        if len(objects) != 2:
+            return "select exactly 2 shapes"
+        return None
+    if _fused_shape_count(objects) < 2:
+        where = "select at least 2 shapes"
+        if spec["type"] == "Part::MultiFuse":
+            where += " (or one compound holding at least two)"
+        return where
+    return None
+
+
+def _non_solids(objects):
+    """The selected objects whose shape holds no solid."""
+    return [
+        obj.Name
+        for obj in objects
+        if not any(child.ShapeType == "Solid" for child in obj.Shape.childShapes())
+    ]
+
+
+def _copy_appearance(target, source):
+    """Copy the display attributes upstream's `copy_visual_attributes` copies."""
+    for name in ("DisplayMode", "Color"):
+        try:
+            value = getattr(source, name)
+        except Exception:  # noqa: BLE001 - an opened file need not carry them
+            continue
+        try:
+            setattr(target, name, value)
+        except Exception:  # noqa: BLE001
+            continue
+
+
+def _create_boolean(spec, objects):
+    """Create the boolean over `objects` as one undoable step."""
+    doc = FreeCAD.ActiveDocument
+    result = None
+    doc.openTransaction(spec["title"])
+    try:
+        result = doc.addObject(spec["type"], spec["name"])
+        if spec["pair"]:
+            result.Base = objects[0]
+            result.Tool = objects[1]
+        else:
+            result.Shapes = objects
+        _add_appearance(result)
+        _copy_appearance(result, objects[0])
+        doc.recompute()
+        # The operands stay in the document (they are the boolean's history) but out
+        # of the drawing, the way upstream's `move_input_objects` leaves them.
+        for obj in objects:
+            try:
+                obj.Visibility = False
+            except Exception:  # noqa: BLE001
+                pass
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    return result
+
+
+class _BooleanCommand:
+    """``Part_Fuse`` / ``Part_Cut`` / ``Part_Common`` — one boolean over the selection."""
+
+    def __init__(self, command):
+        self.spec = _BOOLEAN_COMMANDS[command]
+
+    def GetResources(self):
+        return {
+            "MenuText": self.spec["menu"],
+            "ToolTip": self.spec["tooltip"],
+            "Group": "Part",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+        }
+
+    def IsActive(self):
+        return (
+            FreeCAD.ActiveDocument is not None
+            and _boolean_refusal(self.spec, _selected_shapes()) is None
+        )
+
+    def Activated(self, iMsg=0):
+        objects = _selected_shapes()
+        refusal = _boolean_refusal(self.spec, objects)
+        if refusal is not None:
+            return {"status": refusal}
+        result = _create_boolean(self.spec, objects)
+        status = f"{self.spec['verb']} {len(objects)} shape(s) into {result.Name}"
+        loose = _non_solids(objects)
+        if loose:
+            status += f" (no solid in {', '.join(loose)})"
+        return {"status": status}
+
+
+for _command in _BOOLEAN_COMMANDS:
+    FreeCADGui.addCommand(_command, _BooleanCommand(_command))
+
+
+class _CompoundCommand:
+    """``Part_Compound`` — collect the selected shapes into a ``Part::Compound``.
+
+    Upstream adds no display copy and hides nothing here: every operand stays visible
+    and the compound joins them. `Links` keeps the selection order and drops repeated
+    picks of one object (`CmdPartCompound::activated`).
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Compound",
+            "ToolTip": "Compounds the selected shapes",
+            "Group": "Part",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selected_shapes())
+
+    def Activated(self, iMsg=0):
+        objects = _selected_shapes()
+        if not objects:
+            return {"status": "select at least one shape"}
+        doc = FreeCAD.ActiveDocument
+        doc.openTransaction("Compound")
+        try:
+            compound = doc.addObject("Part::Compound", "Compound")
+            compound.Links = objects
+            _add_appearance(compound)
+            doc.recompute()
+            doc.commitTransaction()
+        except Exception as exc:  # noqa: BLE001 - one transaction, then report
+            doc.abortTransaction()
+            return {"status": f"compound failed: {exc}"}
+        return {"status": f"compounded {len(objects)} shape(s) into {compound.Name}"}
+
+
+FreeCADGui.addCommand("Part_Compound", _CompoundCommand())
 
 
 class _SaveDatumPlaneCommand:

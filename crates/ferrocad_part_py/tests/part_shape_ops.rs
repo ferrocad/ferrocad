@@ -854,3 +854,38 @@ assert not source.copy().isPartner(source)
         );
     });
 }
+
+#[test]
+fn a_refused_boolean_raises_value_error_like_upstream() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+import ferrocad
+
+# OCCT refuses a solid cut by an open shell (`BOPAlgo_AlertBOPNotAllowed`) and
+# leaves a null result. Upstream feeds that null to `makeShapeWithElementMap`,
+# whose `NullShapeException` is a `ValueError`; only an OCCT *exception* is a
+# `Part.OCCError`. The two must not be swapped.
+box = Part.makeBox(10, 20, 30)
+shell = Part.makeShell(box.Faces[:-1])
+assert shell.ShapeType == "Shell" and not shell.isClosed()
+
+for operation in ("cut", "fuse"):
+    try:
+        getattr(box, operation)(shell)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"{operation} by an open shell must raise ValueError")
+
+# A successful boolean still answers a shape (a compound around one solid).
+solid = box.cut(Part.makeBox(2, 2, 2, ferrocad.Vector(9, 0, 0)))
+assert len(solid.Solids) == 1 and solid.Solids[0].isValid()
+assert solid.Volume < box.Volume
+"#,
+        );
+    });
+}

@@ -3598,6 +3598,21 @@ fn kernel_error(error: ferrocad_geom::GeomError) -> PyErr {
     curves::OCCError::new_err(error.to_string())
 }
 
+/// Upstream's error for a boolean that produced no shape.
+///
+/// OCCT refuses some boolean operands (a solid cut by an open shell reports
+/// `BOPAlgo_AlertBOPNotAllowed`) and leaves a null result. Upstream does not check
+/// `IsDone()`: it feeds that null to `makeShapeWithElementMap`, which raises
+/// `NullShapeException` — a `ValueError`. Only an OCCT *exception* is a
+/// `Part.OCCError` there, so the two are split the same way here.
+fn boolean_error(error: ferrocad_geom::GeomError) -> PyErr {
+    match error.downcast_ref::<ferrocad_occt::OcctError>() {
+        Some(ferrocad_occt::OcctError::Exception { .. }) => kernel_error(error),
+        Some(_) => PyValueError::new_err(error.to_string()),
+        None => kernel_error(error),
+    }
+}
+
 fn translation_matrix(offset: ferrocad_curves::Vector3) -> ferrocad_types::Matrix4 {
     let mut values = ferrocad_types::Matrix4::identity().m;
     values[3] = offset.x;
@@ -3849,7 +3864,7 @@ impl PartShape {
                 BooleanOp::Cut => backend.cut(&shape, target, tolerance),
                 BooleanOp::Common => backend.common(&shape, target, tolerance),
             }
-            .map_err(kernel_error)?;
+            .map_err(boolean_error)?;
             if targets.len() == 1 {
                 single_history = Some(result.history.clone());
             } else {

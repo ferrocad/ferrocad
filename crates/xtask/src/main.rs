@@ -48,6 +48,7 @@ mod closure;
 mod editions;
 mod json;
 mod occt;
+mod payload;
 mod pe;
 
 use std::fs;
@@ -387,10 +388,49 @@ fn bundle(opts: &Options) -> Result<(), String> {
     // The Python sources (facade + app scripts), without build artifacts.
     copy_dir_filtered(&root.join("python"), &out.join("python"))?;
 
-    // The workbenches.
-    let mods = root.join("mods");
-    if mods.is_dir() {
-        copy_dir_filtered(&mods, &out.join("mods"))?;
+    // The workbenches. An edition with a curated descriptor stages only the set it
+    // names; one without stages every mod the checkout holds (the behaviour every
+    // edition had before the descriptor existed).
+    let descriptor = payload::Descriptor::load(&root, edition.name)?;
+    let staged_mods = match &descriptor {
+        Some(descriptor) => {
+            eprintln!(
+                "== curating the payload: {} mod(s) from {}",
+                descriptor.mods.len(),
+                payload::path_for(&root, edition.name).display()
+            );
+            descriptor.stage_mods(&root)?
+        }
+        None => {
+            let mods = root.join("mods");
+            if mods.is_dir() {
+                copy_dir_filtered(&mods, &out.join("mods"))?;
+            }
+            let mut names: Vec<String> = std::fs::read_dir(out.join("mods"))
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .filter(|entry| entry.path().is_dir())
+                        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.sort();
+            names
+        }
+    };
+    if let Some(descriptor) = &descriptor {
+        for name in &staged_mods {
+            copy_dir_filtered(&root.join("mods").join(name), &out.join("mods").join(name))?;
+        }
+        // The add-on licences the review recorded. A missing file is an error: the
+        // payload would otherwise ship an add-on without its text.
+        for (source, destination) in &descriptor.licenses {
+            copy_file(
+                &root.join(source),
+                &out.join("LICENSES").join(destination),
+            )?;
+        }
     }
 
     // The bundled CPython runtime, if we have one.
@@ -409,6 +449,18 @@ fn bundle(opts: &Options) -> Result<(), String> {
         &root.join("LICENSE"),
         &out.join("LICENSES/LGPL-2.1-or-later.txt"),
     )?;
+
+    // What the artifact is, in one file: the curated set an edition declared, or
+    // the open payload every pre-bundle edition staged. Written before the
+    // closure walk so `--check-init` and an unpacked artifact can both read it.
+    let manifest = match &descriptor {
+        Some(descriptor) => descriptor.manifest(&staged_mods),
+        None => payload::open_manifest(edition.name, &staged_mods),
+    };
+    let manifest_path = out.join("PAYLOAD.json");
+    fs::write(&manifest_path, manifest)
+        .map_err(|error| format!("write {}: {error}", manifest_path.display()))?;
+    eprintln!("wrote {}", manifest_path.display());
 
     if let Some(prefix) = &occt_prefix {
         eprintln!("== bundling the shared-library closure ==");

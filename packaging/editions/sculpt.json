@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "edition": "sculpt",
+  "title": "FerroCAD: Sculpt",
+  "app_script": "ferrocad_sculpt",
+  "note": "The curated payload of the bundle tier: the sculpt edition ships the viewport providers and no demo mods, and the add-on set is recorded (including what is deliberately absent) so a release says what it contains. The per-add-on licence review is still open for Curves; SubD Modeler is MIT and Silk is excluded.",
+  "mods": [
+    "AxisOverlay",
+    "AxisOverlayCoin",
+    "AxisOverlayJs",
+    "GizmoOverlay",
+    "GizmoOverlayShader",
+    "GridOverlay",
+    "GridOverlayCoin"
+  ],
+  "bundled_addons": [
+    {
+      "name": "SubD Modeler",
+      "licence": "MIT",
+      "status": "planned: cage modelling, hosted on Mesh::FeaturePython"
+    },
+    {
+      "name": "Curves",
+      "licence": "unreviewed",
+      "status": "planned: licence review open before it may ship"
+    }
+  ],
+  "licenses": [],
+  "excluded_addons": [
+    {
+      "name": "Silk",
+      "licence": "GPL-3.0-only",
+      "status": "excluded: incompatible with this LGPL-2.1 edition"
+    },
+    {
+      "name": "CurvedShapes",
+      "licence": "unreviewed",
+      "status": "excluded: not in the sculpt set"
+    },
+    {
+      "name": "Nodes",
+      "licence": "unreviewed",
+      "status": "excluded: not in the sculpt set"
+    },
+    {
+      "name": "Explode",
+      "licence": "MIT",
+      "status": "excluded: demo mod (JS page), not part of the payload"
+    },
+    {
+      "name": "Fasteners",
+      "licence": "MIT",
+      "status": "excluded: demo mod (JS page), not part of the payload"
+    },
+    {
+      "name": "Spring",
+      "licence": "MIT",
+      "status": "excluded: wasm addon demo, not part of the payload"
+    }
+  ]
+}

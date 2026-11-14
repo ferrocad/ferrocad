@@ -139,12 +139,14 @@ jobs:
           path: ${{ matrix.artifact_path }}
           if-no-files-found: error
 
-  # The Parametric edition: the base app plus the Part workbench, linked against
+  # The OCCT-backed editions: the base app plus a workbench set, linked against
   # OCCT. The OCCT 8.0.1 prefix compiles the crates and is then walked by
   # `xtask bundle --occt`, so one source of truth feeds both (see
   # docs/developer/architecture/occt-bundling.md). `--check-init` boots the staged payload
   # headlessly before the artifact is wrapped; the AppImage/zip is run again
-  # afterwards.
+  # afterwards. Parametric ships the Part workbench; Sculpt ships the same
+  # composition with the Sculpt app script and its curated mod set
+  # (`packaging/editions/sculpt.json`).
   edition:
     needs: verify
     strategy:
@@ -158,11 +160,21 @@ jobs:
         # this leg. See docs/developer/architecture/edition-publishing.md §6.
         include:
           - os: ubuntu-latest
+            edition: parametric
             artifact_name: ferrocad-parametric-linux
             artifact_path: target/dist/ferrocad-parametric-x86_64.AppImage
           - os: windows-latest
+            edition: parametric
             artifact_name: ferrocad-parametric-windows
             artifact_path: target/dist/ferrocad-parametric-windows-x86_64.zip
+          - os: ubuntu-latest
+            edition: sculpt
+            artifact_name: ferrocad-sculpt-linux
+            artifact_path: target/dist/ferrocad-sculpt-x86_64.AppImage
+          - os: windows-latest
+            edition: sculpt
+            artifact_name: ferrocad-sculpt-windows
+            artifact_path: target/dist/ferrocad-sculpt-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -226,27 +238,27 @@ jobs:
 
       - name: Bundle and package the edition (Linux)
         if: runner.os == 'Linux'
-        run: bash packaging/linux/appimage.sh --edition parametric --occt --check-init
+        run: bash packaging/linux/appimage.sh --edition ${{ matrix.edition }} --occt --check-init
 
       - name: Bundle and package the edition (Windows)
         if: runner.os == 'Windows'
-        run: pwsh -File packaging/windows/portable.ps1 -Edition parametric -Occt -CheckInit
+        run: pwsh -File packaging/windows/portable.ps1 -Edition ${{ matrix.edition }} -Occt -CheckInit
 
       - name: Smoke-test the AppImage
         # AppRun sets LD_LIBRARY_PATH to the bundled lib/ and runtime/; the boot
-        # imports the facade and the Part module, then exits (no window/GPU).
+        # imports the facade and the edition's modules, then exits (no window/GPU).
         if: runner.os == 'Linux'
         run: |
           APPIMAGE_EXTRACT_AND_RUN=1 \
-            ./target/dist/ferrocad-parametric-x86_64.AppImage --check-init
+            ./target/dist/ferrocad-${{ matrix.edition }}-x86_64.AppImage --check-init
 
       - name: Smoke-test the packaged layout (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $scratch = Join-Path $env:RUNNER_TEMP 'ferrocad-parametric-smoke'
+          $scratch = Join-Path $env:RUNNER_TEMP "ferrocad-${{ matrix.edition }}-smoke"
           if (Test-Path $scratch) { Remove-Item -Recurse -Force $scratch }
-          Expand-Archive -Path target\dist\ferrocad-parametric-windows-x86_64.zip -DestinationPath $scratch
+          Expand-Archive -Path target\dist\ferrocad-${{ matrix.edition }}-windows-x86_64.zip -DestinationPath $scratch
           & "$scratch\ferrocad.bat" --check-init
           if ($LASTEXITCODE -ne 0) { throw "ferrocad --check-init failed with exit code $LASTEXITCODE" }
 

@@ -31,7 +31,7 @@ runtime_lib() {
     printf '%s' "${lib:-unknown}"
 }
 
-# row <artifact> <facade-dir> <draft-dir> <runtime-dir> <launcher>
+# row <artifact> <facade-dir> <mods-dir> <runtime-dir> <launcher>
 row() {
     printf '| `%s` | %s files | %s files | `%s` | `%s` |\n' \
         "$1" "$(count "$2")" "$(count "$3")" "$(runtime_lib "$4")" "$5"
@@ -44,7 +44,7 @@ appimage_row() {
     chmod +x "$img"
     (cd "$out" && "$img" --appimage-extract >/dev/null 2>&1)
     root="$out/squashfs-root"
-    row "$(basename "$img")" "$root/python" "$root/mods/Draft" "$root/runtime" "AppRun"
+    row "$(basename "$img")" "$root/python" "$root/mods" "$root/runtime" "AppRun"
 }
 
 dmg_row() {
@@ -53,18 +53,18 @@ dmg_row() {
     7z x -y -o"$out" "$1" >/dev/null 2>&1
     app=$(find "$out" -maxdepth 1 -name '*.app' | head -1)
     res="$app/Contents/Resources"
-    row "$(basename "$1")" "$res/python" "$res/mods/Draft" "$res/runtime" "Contents/MacOS/ferrocad"
+    row "$(basename "$1")" "$res/python" "$res/mods" "$res/runtime" "Contents/MacOS/ferrocad"
 }
 
 zip_row() {
     out="$work/zip"
     mkdir -p "$out"
     unzip -q -o "$1" -d "$out"
-    row "$(basename "$1")" "$out/python" "$out/mods/Draft" "$out/runtime" "ferrocad.bat"
+    row "$(basename "$1")" "$out/python" "$out/mods" "$out/runtime" "ferrocad.bat"
 }
 
 {
-    printf '| Artifact | Python facade | Draft workbench | Bundled CPython | Launcher |\n'
+    printf '| Artifact | Python facade | Staged mods | Bundled CPython | Launcher |\n'
     printf '| --- | --- | --- | --- | --- |\n'
     find "$DIST" -name '*.AppImage' -print | sort |
         while IFS= read -r f; do appimage_row "$f"; done

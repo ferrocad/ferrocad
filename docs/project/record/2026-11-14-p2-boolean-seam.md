@@ -389,6 +389,42 @@ unchanged. The timings immediately paid for themselves: `test_mesh_glue` is 56 s
 283 s run (one of its six tests 36 s), and `test_analytic`'s 25 s is 13 separate
 converted-mesh rebuilds. Neither is a performance gate; the suite measures correctness.
 
+### 8.10 The 36-second glue test: where the time goes
+
+`test_mesh_glue.test_thin_wall_triangle_profile_and_existing_hole` is **35.7 s**, and
+essentially all of it is the *second* half — the hollow-tube split, not the thin-wall box:
+
+| Stage | Time | What it is |
+| --- | --- | --- |
+| thin box: split + assertions | 1.7 s | 12-triangle box, 8 refine steps, 5 542 facets per piece |
+| tube: mesh build | 0.07 s | `makeCylinder(8).cut(makeCylinder(6))` tessellated at 0.15 → **1 008 facets** |
+| tube: `Roof.refine` | **12.5 s** | 5 steps of uniform 4× splitting → a **61 488-facet** cap; 504 boundary edges; `height()` is 10.2 s of it |
+| tube: `getSelfIntersections` ×2 | **15.3 s** | 7.6 s per **67 032-facet** result, in the debug-built extension |
+| tube: `stitch_precision` + `clean_precision` | 2.8 s | conforming the body fans to the refined boundary |
+| tube: `Mesh` queries + rebuild | ~1.9 s | `isSolid`/`hasNonManifolds`/`hasNonUniformOrientedFacets` ×2, plus one 67k `Mesh.Mesh(...)` |
+| `assert_closed_stl` (8 pieces) | 0.8 s | write + reload + three checks each |
+
+**The seam is 66× the input.** SimpleCAD fixes the roof-profile tolerance at
+`min(0.025, depth/16)` = 0.025 mm regardless of the input tessellation (0.15 mm), and the
+tube's seam is a **2 mm-wide annulus**: every cap point is within `depth` of a boundary, so
+the whole annulus is refined to 0.025 mm — four 4× splits and then `Roof.stitch` fans every
+boundary-adjacent clipped triangle along the subdivided chain. That is the reference
+algorithm's cost, not a FerroCAD defect, and it is mostly **build-independent**:
+`Roof.refine` is pure Python + numpy (12.5 s), and only its `Vector`/`Rotation` calls touch
+the extension.
+
+The part that *is* ours is the other half: `getSelfIntersections()` over two 67k-facet
+meshes is 15.3 s in a **debug** extension whose grid scan and triangle-pair tests are
+exactly what optimisation affects most. A release build would shrink that leg
+substantially (the debug build is the only artefact this machine can afford right now),
+but it cannot shrink the 67k facets. So: a real algorithmic cost with a debug-multiplied
+kernel leg — not a test artefact, and not something to "fix" by loosening an assertion.
+
+The probe is `target/probe_thin.py` / `target/probe_tube.py` (throwaway, not committed).
+The candidate improvements, if this ever matters: a `self_intersections` variant that
+reports only pairs above a facet index (the caller in `glue.py` filters to the new cap
+anyway), and a release-built extension for Python timings.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

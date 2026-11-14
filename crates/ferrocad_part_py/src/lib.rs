@@ -881,7 +881,7 @@ impl PartShape {
         let mut fused = iter.next().expect("two or more shapes");
         let mut lineage = Lineage::default();
         for target in iter {
-            let result = backend.fuse(&fused, &target).map_err(kernel_error)?;
+            let result = backend.fuse(&fused, &target, 0.0).map_err(kernel_error)?;
             lineage.apply(&result.history);
             fused = result.shape;
         }
@@ -2289,10 +2289,14 @@ impl PartShape {
 
     /// `Shape.fuse(other)` — the union of the two shapes.
     ///
-    /// `glue` and `tolerance` are accepted for upstream signature compatibility
-    /// (`glue` is coerced for truthiness, so a float is accepted as upstream
-    /// allows); the kernel runs the plain boolean. `noElementMap` drops the
-    /// lineage, exactly as upstream's `ElementMapPolicy::Drop`.
+    /// `glue` is accepted for upstream signature compatibility (it is coerced for
+    /// truthiness, so a float is accepted as upstream allows); the kernel runs the
+    /// plain boolean. `tolerance` is upstream `makeElementBoolean`'s `tol`: `0` leaves
+    /// the kernel's confusion tolerance, a positive value is the fuzzy value, and a
+    /// negative one asks for the automatic value. `refine` is accepted and ignored —
+    /// upstream's `makeElementBoolean` does not refine either (`Refine` is the document
+    /// features' property). `noElementMap` drops the lineage, as upstream's
+    /// `ElementMapPolicy::Drop`.
     #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn fuse(
         &self,
@@ -2302,11 +2306,12 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), tolerance, refine);
-        self.boolean(other, BooleanOp::Fuse, noElementMap)
+        let _ = (truthy(glue), refine);
+        self.boolean(other, BooleanOp::Fuse, tolerance, noElementMap)
     }
 
-    /// `Shape.cut(other)` — `self` with `other` removed.
+    /// `Shape.cut(other)` — `self` with `other` removed. `tolerance` as
+    /// [`fuse`](Self::fuse).
     #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn cut(
         &self,
@@ -2316,11 +2321,12 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), tolerance, refine);
-        self.boolean(other, BooleanOp::Cut, noElementMap)
+        let _ = (truthy(glue), refine);
+        self.boolean(other, BooleanOp::Cut, tolerance, noElementMap)
     }
 
-    /// `Shape.common(other)` — the intersection of the two shapes.
+    /// `Shape.common(other)` — the intersection of the two shapes. `tolerance` as
+    /// [`fuse`](Self::fuse).
     #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn common(
         &self,
@@ -2330,11 +2336,14 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), tolerance, refine);
-        self.boolean(other, BooleanOp::Common, noElementMap)
+        let _ = (truthy(glue), refine);
+        self.boolean(other, BooleanOp::Common, tolerance, noElementMap)
     }
 
     /// `Shape.multiFuse(shapes)` — fuse this shape with each shape in `shapes`.
+    ///
+    /// `tolerance` as [`fuse`](Self::fuse); each fold is one boolean over the growing
+    /// result, so the value reaches every step.
     #[pyo3(signature = (shapes, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
     fn multiFuse(
         &self,
@@ -2344,7 +2353,7 @@ impl PartShape {
         refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), tolerance, refine);
+        let _ = (truthy(glue), refine);
         let mut shape = self.named_shape()?;
         // Each fold is one operation with its own history; fold them forward into one
         // lineage, the same way the geometry is folded.
@@ -2353,7 +2362,7 @@ impl PartShape {
         for item in shapes.try_iter()? {
             let other = shape_argument(&item?)?;
             let out = ferrocad_part::backend()
-                .fuse(&shape, &other)
+                .fuse(&shape, &other, tolerance)
                 .map_err(kernel_error)?;
             lineage.apply(&out.history);
             shape = out.shape;
@@ -3722,6 +3731,7 @@ impl PartShape {
         &self,
         other: &Bound<'_, PyAny>,
         operation: BooleanOp,
+        tolerance: f64,
         no_element_map: bool,
     ) -> PyResult<PartShape> {
         let a = self.named_shape()?;
@@ -3739,9 +3749,9 @@ impl PartShape {
         let mut single_history = None;
         for target in &targets {
             let result = match operation {
-                BooleanOp::Fuse => backend.fuse(&shape, target),
-                BooleanOp::Cut => backend.cut(&shape, target),
-                BooleanOp::Common => backend.common(&shape, target),
+                BooleanOp::Fuse => backend.fuse(&shape, target, tolerance),
+                BooleanOp::Cut => backend.cut(&shape, target, tolerance),
+                BooleanOp::Common => backend.common(&shape, target, tolerance),
             }
             .map_err(kernel_error)?;
             if targets.len() == 1 {

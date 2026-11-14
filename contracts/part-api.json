@@ -1368,9 +1368,9 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 1023,
+    "methods_heuristic": 1025,
     "methods": {
-      "count": 1936,
+      "count": 1937,
       "distinct": 397,
       "classes": {
         "Part.ChFi2d::AnaFilletAlgo": [
@@ -2008,6 +2008,7 @@
           "FirstParameter",
           "LastParameter",
           "Length",
+          "Orientation",
           "ParameterRange",
           "Tolerance",
           "__repr__",
@@ -3439,7 +3440,7 @@
         {
           "kind": "not_available_in_this_slice",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9087,
+          "line": 9114,
           "text": "\"Part.Edge.Tolerance is not available in this slice (the seam exposes \\"
         },
         {
@@ -3469,49 +3470,49 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9800,
+          "line": 9827,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/curves.rs",
-          "line": 9808,
+          "line": 9835,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1425,
+          "line": 1453,
           "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1429,
+          "line": 1457,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1438,
+          "line": 1466,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1447,
+          "line": 1475,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1454,
+          "line": 1482,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 3835,
+          "line": 3861,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
@@ -3804,7 +3805,7 @@
   "coverage": {
     "methods": {
       "upstream_declared": 609,
-      "ours_declared": 1936,
+      "ours_declared": 1937,
       "upstream_distinct": 408,
       "covered_distinct": 252,
       "fraction": 0.6176,

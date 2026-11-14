@@ -53,6 +53,15 @@ pub(crate) fn set_operation(op: Pin<&mut BRepAlgoAPI_Cut>, fuse: bool) {
     op.SetOperation(operation);
 }
 
+/// `BRepAlgoAPI_BooleanOperation::SetOperation` from an operation code
+/// (`BOPAlgo_FUSE`/`CUT`/`COMMON`).
+pub(crate) fn set_boolean_operation(
+    mut op: Pin<&mut BRepAlgoAPI_Cut>,
+    operation: BOPAlgo_Operation,
+) {
+    op.as_mut().SetOperation(operation);
+}
+
 /// `SetArguments` + `SetTools`.
 pub(crate) fn configure_cut(
     mut op: Pin<&mut BRepAlgoAPI_Cut>,

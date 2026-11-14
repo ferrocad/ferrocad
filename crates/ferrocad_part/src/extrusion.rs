@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use ferrocad_core::object_registry::{self, ObjectType};
 use ferrocad_core::{Document, ObjectId, Property, prop_status};
-use ferrocad_geom::{ElementKind, Lineage, Shape};
+use ferrocad_geom::{AUTO_FUZZY, ElementKind, Lineage, Shape};
 use ferrocad_types::{Matrix4, Vector3};
 
 use crate::{ShapeProperty, backend, make_shape_property, shape_of};
@@ -298,7 +298,7 @@ fn extrude_shape(source: &Shape, params: &ExtrusionParameters) -> Result<Shape, 
             };
             let inner_shape = drafted_wire(inner, params, taper_fwd, taper_rev)?;
             result = backend
-                .cut(&result, &inner_shape)
+                .cut(&result, &inner_shape, AUTO_FUZZY)
                 .map(|out| out.shape)
                 .map_err(|error| error.to_string())?;
         }

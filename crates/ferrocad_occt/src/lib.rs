@@ -39,7 +39,7 @@
 //! let backend = OcctBackend::new();
 //! let a = backend.make_box(10.0, 10.0, 10.0).unwrap();
 //! let b = backend.make_box(10.0, 10.0, 10.0).unwrap();
-//! let fused = backend.fuse(&a, &b).unwrap();
+//! let fused = backend.fuse(&a, &b, 0.0).unwrap();
 //! assert!(backend.resolve(&fused.shape, "Face1").is_some());
 //! ```
 
@@ -594,7 +594,7 @@ mod tests {
         let backend = OcctBackend::new();
         let a = backend.make_box(10.0, 10.0, 10.0).unwrap();
         let b = backend.make_box(10.0, 10.0, 10.0).unwrap();
-        let out = backend.fuse(&a, &b).unwrap();
+        let out = backend.fuse(&a, &b, 0.0).unwrap();
         assert!(!out.history.is_empty());
         assert!(out.history.deleted.is_empty());
     }
@@ -604,7 +604,7 @@ mod tests {
         let backend = OcctBackend::new();
         let a = backend.make_box(10.0, 10.0, 10.0).unwrap();
         let b = backend.make_box(10.0, 10.0, 10.0).unwrap();
-        let out = backend.cut(&a, &b).unwrap();
+        let out = backend.cut(&a, &b, 0.0).unwrap();
         assert!(!out.history.is_empty());
     }
 

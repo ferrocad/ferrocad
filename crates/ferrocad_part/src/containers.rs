@@ -22,7 +22,7 @@
 
 use ferrocad_core::object_registry::ObjectType;
 use ferrocad_core::{Document, ObjectId, Property, prop_status};
-use ferrocad_geom::{History, Lineage, MapVersion, Shape};
+use ferrocad_geom::{AUTO_FUZZY, History, Lineage, MapVersion, Shape};
 use ferrocad_types::Placement;
 
 use crate::shape_property::{ShapeProperty, make_shape_property, shape_of};
@@ -63,10 +63,15 @@ impl BooleanKind {
     }
 
     fn operation(self, shape: &Shape, other: &Shape) -> Result<ferrocad_geom::OpResult, ferrocad_geom::GeomError> {
+        // Upstream's document booleans are built through the two-shape
+        // `FCBRepAlgoAPI_Fuse`/`Cut`/`Common` constructors, whose constructor computes
+        // the automatic fuzzy value. `Shape.fuse`/`cut`/`common` do not (they are one
+        // `makeElementBoolean` with `tol == 0`), so the two paths must ask for
+        // different tolerances.
         match self {
-            BooleanKind::Fuse => crate::backend().fuse(shape, other),
-            BooleanKind::Cut => crate::backend().cut(shape, other),
-            BooleanKind::Common => crate::backend().common(shape, other),
+            BooleanKind::Fuse => crate::backend().fuse(shape, other, AUTO_FUZZY),
+            BooleanKind::Cut => crate::backend().cut(shape, other, AUTO_FUZZY),
+            BooleanKind::Common => crate::backend().common(shape, other, AUTO_FUZZY),
         }
     }
 }

@@ -326,3 +326,40 @@ assert not [e for f in cleaned.Faces for e in f.Edges if e.Orientation == "Inter
         );
     });
 }
+
+/// `Shape.fuse`/`cut`/`common` pass their `tolerance` to the kernel.
+///
+/// Upstream's `makeElementBoolean` treats `tol` as a signed fuzzy value: `0` leaves the
+/// kernel's confusion tolerance, a positive value is used as given, and a negative one
+/// asks for the automatic value. The seam used to drop the argument, so a caller could
+/// not ask for a tolerant boolean at all.
+#[test]
+fn a_boolean_passes_its_tolerance_to_the_kernel() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+a = Part.makeBox(10, 10, 10)
+b = Part.makeBox(10, 10, 10, App.Vector(10.0 + 1e-4, 0.0, 0.0))
+
+# The 1e-4 gap is wider than the confusion tolerance: two bodies stay two.
+assert len(a.fuse(b).Solids) == 2, len(a.fuse(b).Solids)
+assert len(a.fuse(b, None, 0.0).Solids) == 2
+
+# A fuzzy value wider than the gap bridges it.
+assert len(a.fuse(b, None, 1e-2).Solids) == 1, len(a.fuse(b, None, 1e-2).Solids)
+assert len(a.fuse(b, tolerance=1e-2).Solids) == 1
+assert len(a.multiFuse([b], None, 1e-2).Solids) == 1
+
+# `cut` and `common` take the same argument.
+touching = Part.makeBox(10, 10, 10, App.Vector(5.0, 0.0, 0.0))
+assert abs(a.cut(touching, None, 0.0).Volume - 500.0) < 1e-6, a.cut(touching, None, 0.0).Volume
+assert abs(a.common(touching, None, 0.0).Volume - 500.0) < 1e-6
+"#,
+        );
+    });
+}

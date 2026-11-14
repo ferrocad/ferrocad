@@ -685,7 +685,7 @@ mod part {
         ) -> PyResult<PyObjectRef> {
             let (left, right) = (zelf.shape(vm)?, other.shape(vm)?);
             let result = kernel()
-                .cut(&left, &right)
+                .cut(&left, &right, 0.0)
                 .map_err(|error| geometry_error(vm, error))?;
             Ok(shape_py(result.shape, vm))
         }
@@ -698,7 +698,7 @@ mod part {
         ) -> PyResult<PyObjectRef> {
             let (left, right) = (zelf.shape(vm)?, other.shape(vm)?);
             let result = kernel()
-                .fuse(&left, &right)
+                .fuse(&left, &right, 0.0)
                 .map_err(|error| geometry_error(vm, error))?;
             Ok(shape_py(result.shape, vm))
         }
@@ -711,7 +711,7 @@ mod part {
         ) -> PyResult<PyObjectRef> {
             let (left, right) = (zelf.shape(vm)?, other.shape(vm)?);
             let result = kernel()
-                .common(&left, &right)
+                .common(&left, &right, 0.0)
                 .map_err(|error| geometry_error(vm, error))?;
             Ok(shape_py(result.shape, vm))
         }

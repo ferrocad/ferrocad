@@ -1362,7 +1362,7 @@ impl GeometryBackend for OcctBackend {
                 if inner_area <= 0.0 {
                     return false;
                 }
-                match self.common(outer, inner) {
+                match self.common(outer, inner, 0.0) {
                     Ok(result) => {
                         let overlap = area(&result.shape);
                         (overlap - inner_area).abs() <= 1e-6 * inner_area.max(1.0)
@@ -1401,7 +1401,7 @@ impl GeometryBackend for OcctBackend {
                 };
                 let even: Vec<usize> = (0..count).filter(|index| depth(*index) % 2 == 0).collect();
                 let odd: Vec<usize> = (0..count).filter(|index| depth(*index) % 2 == 1).collect();
-                let intersection_area = |a: &Shape, b: &Shape| match self.common(a, b) {
+                let intersection_area = |a: &Shape, b: &Shape| match self.common(a, b, 0.0) {
                     Ok(result) => area(&result.shape),
                     Err(_) => 0.0,
                 };
@@ -1680,75 +1680,12 @@ impl GeometryBackend for OcctBackend {
         crate::curve::edge_curve(inner)
     }
 
-    fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
-        let a_occt = downcast(a)?;
-        let b_occt = downcast(b)?;
-        let a_guard = a_occt.borrow();
-        let b_guard = b_occt.borrow();
-        let sa = a_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let sb = b_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Fuse_new(sa, sb);
-        if !op.IsDone() {
-            return Err(OcctError::NotDone { operation: "fuse" }.into());
-        }
-        let out_maps = sub_shape_maps(op.pin_mut().Shape());
-        let history = build_history(
-            [(OperandId::A, sa), (OperandId::B, sb)],
-            &out_maps,
-            |sub, mods, gens| {
-                history::collect(op.pin_mut().Modified(sub), mods);
-                history::collect(op.pin_mut().Generated(sub), gens);
-                op.pin_mut().IsDeleted(sub)
-            },
-        );
-        Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
+    fn fuse(&self, a: &Shape, b: &Shape, tolerance: f64) -> Result<OpResult, GeomError> {
+        boolean(a, b, CutOperation::Fuse, tolerance)
     }
 
-    fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
-        let a_occt = downcast(a)?;
-        let b_occt = downcast(b)?;
-        let a_guard = a_occt.borrow();
-        let b_guard = b_occt.borrow();
-        let sa = a_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let sb = b_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-
-        // Upstream's `FCBRepAlgoAPI_BooleanOperation::Build` rewrites a compound
-        // cut before OCCT sees it. One operation object is reused for every
-        // internal build, so its history describes the last of them — which is
-        // exactly what the element map is built from.
-        let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Cut_new_default();
-        // The constructor-time settings, taken from the *original* operands: the
-        // fuzzy value is not recomputed for the internal fuse/cut builds.
-        let initial_arguments = shape_list(&[sa]);
-        let initial_tools = shape_list(&[sb]);
-        history::configure_cut(op.pin_mut(), &initial_arguments, &initial_tools);
-        policy::cut_prepare(op.pin_mut());
-        policy::cut_set_auto_fuzzy(op.pin_mut());
-
-        let Some(result) = build_cut_policy(&mut op, &[sa], &[sb], CutOperation::Cut) else {
-            return Err(OcctError::NotDone { operation: "cut" }.into());
-        };
-
-        let result = result.as_ref().expect("the cut result");
-        let out_maps = sub_shape_maps(result);
-        let history = build_history(
-            [(OperandId::A, sa), (OperandId::B, sb)],
-            &out_maps,
-            |sub, mods, gens| {
-                history::collect(op.pin_mut().Modified(sub), mods);
-                history::collect(op.pin_mut().Generated(sub), gens);
-                op.pin_mut().IsDeleted(sub)
-            },
-        );
-        Ok(OpResult::new(erase(result), history))
+    fn cut(&self, a: &Shape, b: &Shape, tolerance: f64) -> Result<OpResult, GeomError> {
+        boolean(a, b, CutOperation::Cut, tolerance)
     }
 
     fn fillet(
@@ -1760,35 +1697,8 @@ impl GeometryBackend for OcctBackend {
         topology::fillet(shape, edges, radius)
     }
 
-    fn common(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError> {
-        let a_occt = downcast(a)?;
-        let b_occt = downcast(b)?;
-        let a_guard = a_occt.borrow();
-        let b_guard = b_occt.borrow();
-        let sa = a_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let sb = b_guard
-            .as_ref()
-            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
-        let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Common_new(sa, sb);
-        if !op.IsDone() {
-            return Err(OcctError::NotDone {
-                operation: "common",
-            }
-            .into());
-        }
-        let out_maps = sub_shape_maps(op.pin_mut().Shape());
-        let history = build_history(
-            [(OperandId::A, sa), (OperandId::B, sb)],
-            &out_maps,
-            |sub, mods, gens| {
-                history::collect(op.pin_mut().Modified(sub), mods);
-                history::collect(op.pin_mut().Generated(sub), gens);
-                op.pin_mut().IsDeleted(sub)
-            },
-        );
-        Ok(OpResult::new(erase(op.pin_mut().Shape()), history))
+    fn common(&self, a: &Shape, b: &Shape, tolerance: f64) -> Result<OpResult, GeomError> {
+        boolean(a, b, CutOperation::Common, tolerance)
     }
 
     fn make_compound(&self, shapes: &[Shape]) -> Result<Shape, GeomError> {
@@ -3332,6 +3242,27 @@ impl GeometryBackend for OcctBackend {
 enum CutOperation {
     Cut,
     Fuse,
+    Common,
+}
+
+impl CutOperation {
+    /// The `BOPAlgo_Operation` this operation selects on the shared object.
+    fn code(self) -> ffi::bop_algo::BOPAlgo_Operation {
+        match self {
+            CutOperation::Cut => ffi::bop_algo::BOPAlgo_Operation::BOPAlgo_CUT,
+            CutOperation::Fuse => ffi::bop_algo::BOPAlgo_Operation::BOPAlgo_FUSE,
+            CutOperation::Common => ffi::bop_algo::BOPAlgo_Operation::BOPAlgo_COMMON,
+        }
+    }
+
+    /// The operation's name, for diagnostics.
+    fn label(self) -> &'static str {
+        match self {
+            CutOperation::Cut => "cut",
+            CutOperation::Fuse => "fuse",
+            CutOperation::Common => "common",
+        }
+    }
 }
 
 /// The `TopAbs_ShapeEnum` value upstream's `ShapeTypeFromPyType` picks for a
@@ -3490,10 +3421,79 @@ fn build_cut_policy(
 
     let argument_list = shape_list(arguments);
     let tool_list = shape_list(tools);
-    history::set_operation(op.pin_mut(), operation == CutOperation::Fuse);
+    history::set_boolean_operation(op.pin_mut(), operation.code());
     history::configure_cut(op.pin_mut(), &argument_list, &tool_list);
     history::build_cut(op.pin_mut());
     op.IsDone().then(|| owned(op.pin_mut().Shape()))
+}
+
+/// One boolean over two shapes, with upstream's fuzzy contract.
+///
+/// Every boolean is built on `BRepAlgoAPI_Cut`, which is the class the bridge exposes
+/// the operation code and the fuzzy value on — the same thing upstream does through
+/// `BRepAlgoAPI_BooleanOperation` and its `myOperation` field. `Cut` goes through
+/// [`build_cut_policy`] because upstream's `Build` rewrites a compound tool before
+/// OCCT sees it; `Fuse` and `Common` are one plain build.
+///
+/// The fuzzy value follows `TopoShape::makeElementBoolean`: a positive `tolerance` is
+/// used as given, a negative one asks for the automatic value, and `0` leaves the
+/// kernel's own confusion tolerance alone. Upstream's *document* features auto-fuzz
+/// because they are built through the two-shape `FCBRepAlgoAPI_*` constructors, which
+/// is why `containers.rs` passes [`ferrocad_geom::AUTO_FUZZY`] and `Shape.fuse` and
+/// friends pass the caller's tolerance through.
+fn boolean(
+    a: &Shape,
+    b: &Shape,
+    operation: CutOperation,
+    tolerance: f64,
+) -> Result<OpResult, GeomError> {
+    let a_occt = downcast(a)?;
+    let b_occt = downcast(b)?;
+    let a_guard = a_occt.borrow();
+    let b_guard = b_occt.borrow();
+    let sa = a_guard
+        .as_ref()
+        .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+    let sb = b_guard
+        .as_ref()
+        .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+
+    let mut op = ffi::b_rep_algo_api::BRepAlgoAPI_Cut_new_default();
+    // The settings are taken from the *original* operands: the fuzzy value is not
+    // recomputed for the internal fuse/cut builds a compound cut performs.
+    let initial_arguments = shape_list(&[sa]);
+    let initial_tools = shape_list(&[sb]);
+    history::configure_cut(op.pin_mut(), &initial_arguments, &initial_tools);
+    policy::cut_prepare(op.pin_mut());
+    policy::apply_boolean_fuzzy(op.pin_mut(), tolerance);
+
+    let result = match operation {
+        CutOperation::Cut => build_cut_policy(&mut op, &[sa], &[sb], CutOperation::Cut),
+        _ => {
+            history::set_boolean_operation(op.pin_mut(), operation.code());
+            history::build_cut(op.pin_mut());
+            op.IsDone().then(|| owned(op.pin_mut().Shape()))
+        }
+    };
+    let Some(result) = result else {
+        return Err(OcctError::NotDone {
+            operation: operation.label(),
+        }
+        .into());
+    };
+
+    let result = result.as_ref().expect("the boolean result");
+    let out_maps = sub_shape_maps(result);
+    let history = build_history(
+        [(OperandId::A, sa), (OperandId::B, sb)],
+        &out_maps,
+        |sub, mods, gens| {
+            history::collect(op.pin_mut().Modified(sub), mods);
+            history::collect(op.pin_mut().Generated(sub), gens);
+            op.pin_mut().IsDeleted(sub)
+        },
+    );
+    Ok(OpResult::new(erase(result), history))
 }
 
 /// The sub-shape kinds a boolean reports lineage for, coarsest first.
@@ -4486,6 +4486,52 @@ mod provenance_tests {
     /// independent copy: mixing those copies into one face left coincident, unshared
     /// vertices, and SimpleCAD's local face split could not rebuild the faces around a
     /// split line.
+    /// A boolean honours upstream's `tol`: `0` is the kernel's own tolerance, a
+    /// positive value is the fuzzy value, and `AUTO_FUZZY` is the bounding-box
+    /// diagonal times the confusion tolerance.
+    ///
+    /// A gap wider than the fuzzy value keeps two bodies; a fuzzy value wider than the
+    /// gap bridges it into one. This is the contract `Shape.fuse`/`cut`/`common` pass
+    /// their `tolerance` argument to, and it is why the document booleans — which
+    /// upstream builds through the auto-fuzzing `FCBRepAlgoAPI_*` constructors — ask
+    /// for `AUTO_FUZZY` explicitly.
+    #[test]
+    fn a_boolean_honours_the_fuzzy_tolerance() {
+        let backend = OcctBackend::new();
+        let a = backend.make_box(10.0, 10.0, 10.0).unwrap();
+        let b = backend
+            .place(
+                &backend.make_box(10.0, 10.0, 10.0).unwrap(),
+                &Placement {
+                    base: Vector3::new(10.0 + 1e-4, 0.0, 0.0),
+                    rotation: Rotation::identity(),
+                },
+            )
+            .unwrap();
+
+        let exact = backend.fuse(&a, &b, 0.0).unwrap();
+        assert_eq!(
+            backend.elements(&exact.shape, ElementKind::Solid).len(),
+            2,
+            "a 1e-4 gap is wider than the confusion tolerance"
+        );
+
+        let fuzzy = backend.fuse(&a, &b, 1e-2).unwrap();
+        assert_eq!(
+            backend.elements(&fuzzy.shape, ElementKind::Solid).len(),
+            1,
+            "a fuzzy value wider than the gap bridges it"
+        );
+
+        // The automatic value for these bounds is ~2.5e-6, so it does not bridge it.
+        let auto = backend.fuse(&a, &b, ferrocad_geom::AUTO_FUZZY).unwrap();
+        assert_eq!(
+            backend.elements(&auto.shape, ElementKind::Solid).len(),
+            2,
+            "the automatic value is measured from the bounds"
+        );
+    }
+
     #[test]
     fn a_general_fuse_reports_images_of_its_own_result() {
         let backend = OcctBackend::new();
@@ -4548,7 +4594,7 @@ mod provenance_tests {
         // A primitive has no intrinsic map; an operation result gets its names from
         // the operation (even when OCCT hands it back as a compound).
         assert!(backend.intrinsic_history(&a).is_none());
-        let fused = backend.fuse(&a, &b).unwrap();
+        let fused = backend.fuse(&a, &b, 0.0).unwrap();
         let lineage = Lineage::from_history(&fused.history, MapVersion::default());
         assert_eq!(lineage.reverse().len(), 58, "the boolean's own history");
 
@@ -4602,7 +4648,7 @@ mod provenance_tests {
     fn a_refine_keeps_every_name_it_does_not_merge() {
         let backend = OcctBackend::new();
         let (a, b) = overlapping_boxes(&backend);
-        let fused = backend.fuse(&a, &b).unwrap();
+        let fused = backend.fuse(&a, &b, 0.0).unwrap();
 
         let refined = backend.refine(&fused.shape).expect("the backend refines");
         assert!(
@@ -4635,7 +4681,7 @@ mod provenance_tests {
     fn fuse_reports_both_operands_and_all_three_kinds() {
         let backend = OcctBackend::new();
         let (a, b) = overlapping_boxes(&backend);
-        let out = backend.fuse(&a, &b).unwrap();
+        let out = backend.fuse(&a, &b, 0.0).unwrap();
 
         assert_eq!(
             counts(&out.history),
@@ -4671,7 +4717,7 @@ mod provenance_tests {
     fn cut_reports_both_operands_and_all_three_kinds() {
         let backend = OcctBackend::new();
         let (a, b) = overlapping_boxes(&backend);
-        let out = backend.cut(&a, &b).unwrap();
+        let out = backend.cut(&a, &b, 0.0).unwrap();
 
         assert_eq!(
             counts(&out.history),
@@ -4706,8 +4752,8 @@ mod provenance_tests {
         let (a, b) = overlapping_boxes(&backend);
 
         for (first, second) in [
-            (backend.fuse(&a, &b).unwrap(), backend.fuse(&a, &b).unwrap()),
-            (backend.cut(&a, &b).unwrap(), backend.cut(&a, &b).unwrap()),
+            (backend.fuse(&a, &b, 0.0).unwrap(), backend.fuse(&a, &b, 0.0).unwrap()),
+            (backend.cut(&a, &b, 0.0).unwrap(), backend.cut(&a, &b, 0.0).unwrap()),
         ] {
             assert_eq!(
                 first.history.provenance, second.history.provenance,

@@ -32,6 +32,22 @@ pub(crate) fn cut_prepare(mut op: Pin<&mut BRepAlgoAPI_Cut>) {
     op.as_mut().SetNonDestructive(true);
 }
 
+/// Upstream's boolean fuzzy contract (`TopoShape::makeElementBoolean`'s `tolerance`).
+///
+/// A positive value is used as the fuzzy value; a negative one asks for the automatic
+/// value; `0` leaves the kernel's own confusion tolerance alone. Must run after the
+/// operands are installed, because the automatic value is measured from their bounds.
+pub(crate) fn apply_boolean_fuzzy(mut op: Pin<&mut BRepAlgoAPI_Cut>, tolerance: f64) {
+    if !tolerance.is_finite() {
+        return;
+    }
+    if tolerance > 0.0 {
+        ffi::b_rep_algo_api::BRepAlgoAPI_Cut_SetFuzzyValue(op.as_mut(), tolerance);
+    } else if tolerance < 0.0 {
+        cut_set_auto_fuzzy(op);
+    }
+}
+
 /// Upstream's automatic fuzzy value: the diagonal of the combined operand bounds
 /// times `Precision::Confusion()` (`FuzzyHelper::getBooleanFuzzy` defaults its
 /// factor to 1.0).

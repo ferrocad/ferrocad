@@ -40,7 +40,7 @@
 //! let backend = NullBackend;
 //! let a = backend.make_box(10.0, 10.0, 10.0).unwrap();
 //! let b = backend.make_box(10.0, 10.0, 10.0).unwrap();
-//! let result = backend.fuse(&a, &b).unwrap();
+//! let result = backend.fuse(&a, &b, 0.0).unwrap();
 //! assert!(result.history.is_empty()); // the null backend invents no lineage
 //! ```
 
@@ -812,6 +812,15 @@ impl OpResult {
     }
 }
 
+/// Ask a boolean for the kernel's **automatic** fuzzy value.
+///
+/// Upstream's `TopoShape::makeElementBoolean` takes the fuzzy value as a signed
+/// tolerance: `0` leaves the kernel's confusion tolerance, a positive value is used as
+/// given, and a negative one means "compute it" (the operands' bounding-box diagonal
+/// times `Precision::Confusion`, `FCBRepAlgoAPIHelper::setAutoFuzzy`). This constant
+/// names the negative case so a call site reads as the intent rather than as `-1.0`.
+pub const AUTO_FUZZY: f64 = -1.0;
+
 /// A boxed kernel error.
 ///
 /// A backend is a shared service injected at runtime (`Arc<dyn GeometryBackend>`),
@@ -1146,13 +1155,23 @@ pub trait GeometryBackend: Send + Sync {
     }
 
     /// Boolean union.
-    fn fuse(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError>;
+    ///
+    /// `tolerance` is upstream `TopoShape::makeElementBoolean`'s `tol`, and it decides
+    /// the kernel's fuzzy value:
+    ///
+    /// - **`0`** leaves the kernel's own confusion tolerance alone;
+    /// - **positive** is used as the fuzzy value (`SetFuzzyValue`);
+    /// - **negative** ([`AUTO_FUZZY`]) is upstream's automatic value, the operands'
+    ///   bounding-box diagonal times `Precision::Confusion()`.
+    ///
+    /// A backend that has no fuzzy control ignores it.
+    fn fuse(&self, a: &Shape, b: &Shape, tolerance: f64) -> Result<OpResult, GeomError>;
 
-    /// Boolean difference, `a` minus `b`.
-    fn cut(&self, a: &Shape, b: &Shape) -> Result<OpResult, GeomError>;
+    /// Boolean difference, `a` minus `b`. `tolerance` as [`fuse`](Self::fuse).
+    fn cut(&self, a: &Shape, b: &Shape, tolerance: f64) -> Result<OpResult, GeomError>;
 
-    /// Boolean intersection.
-    fn common(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+    /// Boolean intersection. `tolerance` as [`fuse`](Self::fuse).
+    fn common(&self, _a: &Shape, _b: &Shape, _tolerance: f64) -> Result<OpResult, GeomError> {
         Err(unsupported("common"))
     }
 
@@ -2097,7 +2116,7 @@ impl GeometryBackend for NullBackend {
         }))
     }
 
-    fn fuse(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+    fn fuse(&self, _a: &Shape, _b: &Shape, _tolerance: f64) -> Result<OpResult, GeomError> {
         Ok(OpResult::new(
             Shape::new(NullShape {
                 kind: "fuse".to_string(),
@@ -2106,7 +2125,7 @@ impl GeometryBackend for NullBackend {
         ))
     }
 
-    fn cut(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+    fn cut(&self, _a: &Shape, _b: &Shape, _tolerance: f64) -> Result<OpResult, GeomError> {
         Ok(OpResult::new(
             Shape::new(NullShape {
                 kind: "cut".to_string(),
@@ -2253,7 +2272,7 @@ mod tests {
         let backend = NullBackend;
         let a = backend.make_box(1.0, 1.0, 1.0).unwrap();
         let b = backend.make_box(1.0, 1.0, 1.0).unwrap();
-        let out = backend.fuse(&a, &b).unwrap();
+        let out = backend.fuse(&a, &b, 0.0).unwrap();
         assert!(out.history.is_empty());
         assert!(backend.resolve(&out.shape, "Face1").is_none());
     }
@@ -2460,11 +2479,11 @@ mod tests {
             Err(unsupported("make box"))
         }
 
-        fn fuse(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+        fn fuse(&self, _a: &Shape, _b: &Shape, _tolerance: f64) -> Result<OpResult, GeomError> {
             Err(unsupported("fuse"))
         }
 
-        fn cut(&self, _a: &Shape, _b: &Shape) -> Result<OpResult, GeomError> {
+        fn cut(&self, _a: &Shape, _b: &Shape, _tolerance: f64) -> Result<OpResult, GeomError> {
             Err(unsupported("cut"))
         }
 

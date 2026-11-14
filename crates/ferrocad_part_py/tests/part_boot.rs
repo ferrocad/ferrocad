@@ -179,7 +179,9 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
         assert!(ferrocad.hasattr("display_mesh").unwrap());
         assert!(ferrocad.hasattr("interaction").unwrap());
 
-        // `bootstrap` adds the Box because Part is linked in this image.
+        // `bootstrap` opens the canonical sample: `Sample.FCStd`, whose body is built
+        // by Part (a `Part::Box` consumed by a `Part::Fillet`). The document names its
+        // objects; this test reads them from the stage instead of assuming them.
         let _: String = shell
             .call_method0("bootstrap")
             .expect("bootstrap")
@@ -192,15 +194,21 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
             .extract()
             .unwrap();
         let meshes: serde_json::Value = serde_json::from_str(&meshes).unwrap();
-        let box_mesh = meshes
-            .as_array()
-            .expect("an array")
+        let rows = meshes.as_array().expect("an array");
+        let drawn: Vec<&str> = rows
             .iter()
-            .find(|mesh| mesh["object"] == "Box")
-            .expect("the Box is tessellated");
-        let parts: Vec<&str> = box_mesh["parts"]
+            .filter_map(|mesh| mesh["object"].as_str())
+            .collect();
+        assert_eq!(
+            drawn.len(),
+            1,
+            "the sample draws its body and nothing else: {drawn:?}"
+        );
+        let base = drawn[0].to_string();
+        let base_mesh = &rows[0];
+        let parts: Vec<&str> = base_mesh["parts"]
             .as_array()
-            .unwrap()
+            .expect("the mesh names its sub-shapes")
             .iter()
             .filter_map(|part| part.as_str())
             .collect();
@@ -208,19 +216,25 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
             parts.contains(&"Edge1"),
             "the mesh names its edges: {parts:?}"
         );
-        assert!(!box_mesh["edges"].as_array().unwrap().is_empty());
+        assert!(!base_mesh["edges"].as_array().unwrap().is_empty());
 
         // A manipulator commit: create the fillet, recompute, and re-read the display.
         let result: String = shell
             .call_method1(
                 "interaction",
-                ("Box", "dress_up", "fillet", "Edge1", "[2.0]"),
+                (base.as_str(), "dress_up", "fillet", "Edge1", "[2.0]"),
             )
             .expect("interaction")
             .extract()
             .unwrap();
         let result: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(result["ok"], true, "interaction: {result}");
+        let feature_name = format!("{base}_Fillet");
+        assert_eq!(
+            result["feature"].as_str(),
+            Some(feature_name.as_str()),
+            "the commit names its feature: {result}"
+        );
 
         let after: String = shell
             .call_method0("stage_meshes")
@@ -235,14 +249,14 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
             .filter_map(|mesh| mesh["object"].as_str())
             .collect();
         assert!(
-            !objects.contains(&"Box"),
+            !objects.contains(&base.as_str()),
             "the base is replaced by the feature: {objects:?}"
         );
         let feature = after
             .as_array()
             .unwrap()
             .iter()
-            .find(|mesh| mesh["object"] == "Box_Fillet")
+            .find(|mesh| mesh["object"].as_str() == Some(feature_name.as_str()))
             .expect("the fillet is displayed");
         let faces = feature["parts"]
             .as_array()
@@ -256,12 +270,17 @@ fn the_shell_helpers_tessellate_and_dress_up_a_document_shape() {
         let again: String = shell
             .call_method1(
                 "interaction",
-                ("Box", "dress_up", "fillet", "Edge1", "[3.0]"),
+                (base.as_str(), "dress_up", "fillet", "Edge1", "[3.0]"),
             )
             .unwrap()
             .extract()
             .unwrap();
         let again: serde_json::Value = serde_json::from_str(&again).unwrap();
         assert_eq!(again["ok"], true, "second interaction: {again}");
+        assert_eq!(
+            again["feature"].as_str(),
+            Some(feature_name.as_str()),
+            "the second commit edits the same feature: {again}"
+        );
     });
 }

@@ -218,8 +218,14 @@ shell passes it to the app script, which keeps the triad kernel-free.
   same pending value typed instead of dragged — so the distance can be tuned either way
   before deciding. `✗` (or `Esc`) puts the stem back at rest and writes nothing. The
   commit is still the same neutral `InteractionCommit`, so the edition hook is unchanged.
-  The three remaining follow-ups are a stem that rides the ghost, a stem for a non-planar
-  face, and model-aware bounds on the typed value.
+- **The handle rides the ghost.** The stem's base is the **swept** face's centroid, not the
+  face the gesture started from, so it stays on the surface the drag is producing — and,
+  since it is a fixed screen length past the ghost, under the pointer while the drag runs.
+  That is the Move triad's rule (it travels with its body) applied to a sweep. A host that
+  moves the handle (a previewed object) moves the whole sweep by the same delta, so the
+  distance is untouched.
+- The two remaining follow-ups are a stem for a non-planar face and model-aware bounds on
+  the typed value.
 
 ## 5. Select mode: body vs face
 

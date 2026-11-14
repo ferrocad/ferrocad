@@ -201,9 +201,30 @@ only be adjusted by dragging it again. The twin is the same pending edit typed i
   handle's value). The suite totals are measured on a tree that also carries the in-flight
   geometry-sharing work; three of *its* viewport tests (incremental stage bounds and the
   transform-only packet patch) fail there and are not this change.
-- **Still open.** The stem does not yet ride the ghost; model-aware bounds (a pocket
-  deeper than the body, a radius wider than the edge) need the kernel; and an existing
-  `Part::Extrusion`/`Part::Fillet` is not yet re-openable as a live handle.
+- **Still open.** Model-aware bounds (a pocket deeper than the body, a radius wider than
+  the edge) need the kernel, and an existing `Part::Extrusion`/`Part::Fillet` is not yet
+  re-openable as a live handle.
+
+### 5.3 The handle rides the ghost
+
+The last of the session's three follow-ups was spatial: the stem stayed anchored at the
+face centroid while the ghost swept outward, so the handle sat behind the surface being
+dragged.
+
+- **The stem's base is the ghost's centroid** (`centroid + N·distance`), and its tip,
+  hit test, readout anchor and screen scale all build from it. Since the stem is a fixed
+  screen length past the ghost, the pointer's travel and the ghost's travel cancel — the
+  handle stays under the pointer while a drag runs, which is the Move triad's rule applied
+  to a sweep.
+- **The solver is untouched.** It still measures from its press frame at the face; a delta
+  along the axis is the same wherever it is measured, so the value mapping did not change.
+- **`set_anchor` moves the sweep**, not the ghost: the host's "this object is previewed
+  elsewhere" hook translates the face and the handle by one delta and leaves the distance
+  alone. Without that, a script preview would have written the ghost point into the face
+  origin.
+- **Covered** by `the_stem_rides_the_ghost` (typed, dragged, and the `set_anchor`
+  round-trip) and `a_drag_keeps_the_handle_with_the_pointer`; `ferrocad_part_gui` is **37
+  passed**, and the edition's `push_pull_round_trip` still commits the same distance.
 
 ## 4. Where the detail lives
 

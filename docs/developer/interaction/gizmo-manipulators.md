@@ -1153,10 +1153,29 @@ Tests: `ferrocad_part_gui` (`the_numeric_twin_sets_the_distance_and_commits_it`,
 (`a_typed_value_reaches_the_manipulator_and_its_commit`) and `ferrocad_shell_core`
 (`the_manipulator_numeric_row_types_a_held_value`).
 
+### The handle rides the ghost
+
+`PushPullStem`'s base is the **swept** face's centroid — `centroid + N·distance` — not the
+face the gesture started from, so the handle sits on the surface the drag is producing and
+stays under the pointer (the stem is a fixed screen length past the ghost, so the pointer
+travel and the ghost travel cancel). That is the Move triad's rule, which travels with its
+body. Consequences the implementation has to keep:
+
+- `hit`, `tip`, `readout_anchor` and the ribbon's screen scale all build from the ghost,
+  so the grab target and the dimension pill move with it. The reused axis solver still
+  measures from its press frame at the face; a delta along the axis is the same wherever it
+  is measured, so the value is unchanged.
+- `set_anchor` (the host's "the object moved" hook) moves the **sweep origin** by the
+  delta between the requested point and the current ghost, so a previewed object carries
+  the face and the handle together and the distance is untouched.
+- `update` keys its rebuild on the ghost anchor, so a distance change re-emits the stroke
+  even without the caller's `dirty` flag.
+
+Covered by `the_stem_rides_the_ghost` (typed and dragged, plus the host `set_anchor`
+round-trip) and `a_drag_keeps_the_handle_with_the_pointer`.
+
 ### Still open
 
-`PushPullStem`'s stem stays anchored at the face centroid while the ghost grows; the stem
-should ride the ghost (the user-visible complaint that motivated this slice). Validation
-of a *model-breaking* value (a pocket deeper than the body, a radius wider than the edge)
-needs the kernel, so it belongs with the editing slice, as does re-opening an existing
-`Part::Extrusion`/`Part::Fillet` as a live handle.
+Validation of a *model-breaking* value (a pocket deeper than the body, a radius wider than
+the edge) needs the kernel, so it belongs with the editing slice, as does re-opening an
+existing `Part::Extrusion`/`Part::Fillet` as a live handle.

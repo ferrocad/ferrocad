@@ -10,10 +10,10 @@
 //!                    ▲  readout: `extrude 12.30 mm`
 //!                    │
 //!                    │  ← amber stem (screen-invariant length)
-//!                    ●  face centroid
+//!                    ●  ghost centroid (the swept face, at the pending distance)
 //!          ┌─────────┴─────────┐
-//!          │     selected      │
-//!          │       face        │
+//!          │      selected     │
+//!          │        face       │
 //!          └───────────────────┘
 //! ```
 //!
@@ -21,6 +21,10 @@
 //! carries per-position part ids and the part-name table, so `Face6` resolves to its
 //! triangles without a kernel call. Only **planar** faces get a stem; a curved face
 //! (whose triangle normals disagree) returns `None`.
+//!
+//! The stem **rides the ghost**: its base is the swept face's centroid, so the handle sits
+//! on the surface the drag is producing and stays under the pointer, the way the Move
+//! triad travels with its body. At rest the ghost is the face, so the stem starts there.
 //!
 //! The axis drag solver, the screen-space fallback for a near view-aligned stem and
 //! the `Linear` value are reused from [`ferrocad_stage::TransformGizmo`]: the stem's
@@ -250,9 +254,23 @@ impl PushPullStem {
         &self.face
     }
 
-    /// The face centroid the stem starts from.
+    /// The face centroid the sweep starts from (the ghost's datum at zero distance).
+    pub fn centroid(&self) -> Vector3 {
+        self.centroid
+    }
+
+    /// The world point the handle sits at: the **ghost's** centroid.
+    ///
+    /// The stem rides the swept face, the way the Move triad travels with its body, so
+    /// the handle is always on the surface the drag is producing. At rest the ghost is the
+    /// face itself, so this is the face centroid.
     pub fn anchor(&self) -> Option<Vector3> {
-        Some(self.centroid)
+        Some(self.ghost_anchor())
+    }
+
+    /// The ghost's centroid: the face centroid carried along the normal by the distance.
+    fn ghost_anchor(&self) -> Vector3 {
+        self.centroid.add(&self.normal.scale(self.distance))
     }
 
     /// The outward unit normal the stem follows.
@@ -351,29 +369,35 @@ impl PushPullStem {
         true
     }
 
-    /// Move the stem's world anchor (the face centroid). Returns whether it changed.
+    /// Move the stem's world anchor (the ghost's centroid) to `anchor`.
+    ///
+    /// The host moves a handle when the object it sits on is previewed somewhere else, so
+    /// the whole sweep travels with it: the face the sweep starts from moves by the same
+    /// delta, and the distance is untouched.
     pub fn set_anchor(&mut self, anchor: Vector3) -> bool {
-        if self.centroid == anchor {
+        let delta = anchor.sub(&self.ghost_anchor());
+        if delta.is_null() {
             return false;
         }
-        self.centroid = anchor;
-        self.solver.set_frame(frame_at(anchor, self.normal));
+        self.centroid = self.centroid.add(&delta);
+        self.solver.set_frame(frame_at(self.centroid, self.normal));
         self.dirty = true;
         true
     }
 
-    /// Rebuild the stroke for `camera` when the view, the anchor or the style changed.
-    /// Returns whether the geometry was rebuilt.
+    /// Rebuild the stroke for `camera` when the view, the drawn anchor or the style
+    /// changed. Returns whether the geometry was rebuilt.
     pub fn update(&mut self, camera: &Camera) -> bool {
+        let drawn = self.ghost_anchor();
         let changed = self.dirty
             || self.view != Some(camera.view)
-            || self.built_anchor != Some(self.centroid)
+            || self.built_anchor != Some(drawn)
             || self.built_normal != Some(self.normal);
         if !changed {
             return false;
         }
         self.view = Some(camera.view);
-        self.built_anchor = Some(self.centroid);
+        self.built_anchor = Some(drawn);
         self.built_normal = Some(self.normal);
         self.dirty = false;
         self.build(camera);
@@ -386,7 +410,7 @@ impl PushPullStem {
             return false;
         };
         let (Some(from), Some(to)) = (
-            project_device(camera, self.centroid),
+            project_device(camera, self.ghost_anchor()),
             project_device(camera, tip),
         ) else {
             return false;
@@ -507,25 +531,24 @@ impl PushPullStem {
         self.preview.set_edge_color(color);
     }
 
-    /// Where the dimension pill is anchored, in device pixels: the reused axis
-    /// readout's tip while a drag is active, and the stem tip at rest (or the centroid
-    /// when the stem cannot be projected).
+    /// Where the dimension pill is anchored, in device pixels: the stem's tip, which rides
+    /// the ghost. The pill therefore follows the surface the drag is producing, not the face
+    /// it started from (the reused solver's own readout anchor is measured from its press
+    /// frame, i.e. the starting face, so it is deliberately not used here).
     pub fn readout_anchor(&self, camera: &Camera) -> Option<[f64; 2]> {
-        if let Some(anchor) = self.solver.readout_anchor(camera) {
-            return Some(anchor);
-        }
         self.tip(camera)
             .and_then(|tip| project_device(camera, tip))
-            .or_else(|| project_device(camera, self.centroid))
+            .or_else(|| project_device(camera, self.ghost_anchor()))
     }
 
-    /// The stem's world tip: a screen-invariant length along `+N`.
+    /// The stem's world tip: a screen-invariant length along `+N` from the ghost.
     fn tip(&self, camera: &Camera) -> Option<Vector3> {
-        let length = scale_for(camera, self.centroid, self.style.size);
+        let base = self.ghost_anchor();
+        let length = scale_for(camera, base, self.style.size);
         if !length.is_finite() || length <= 0.0 {
             return None;
         }
-        Some(self.centroid.add(&self.normal.scale(length)))
+        Some(base.add(&self.normal.scale(length)))
     }
 
     fn change(&self) -> PushPullChange {
@@ -572,7 +595,7 @@ impl PushPullStem {
             return;
         };
         let forward = camera_forward(camera);
-        let per_pixel = scale_for(camera, self.centroid, 1.0);
+        let per_pixel = scale_for(camera, self.ghost_anchor(), 1.0);
         let active = self.hovered || self.is_dragging();
         let hover_scale = self.style.hover_scale.max(1.0);
         let halo = self.style.halo_width.max(0.0);
@@ -999,6 +1022,93 @@ mod tests {
         assert!((anchor.z - 0.5).abs() < 1e-9);
         assert_eq!(stem.face_name(), "Face1");
         assert_eq!(stem.target_id(), 7);
+        assert!(
+            stem.centroid().is_equal(&anchor, 1e-12),
+            "at rest the ghost is the face itself"
+        );
+    }
+
+    /// The handle rides the ghost: its base is the swept face, not the face the drag
+    /// started from, so it stays on (and under) the surface the drag is producing.
+    #[test]
+    fn the_stem_rides_the_ghost() {
+        let camera = camera(5.0);
+        let mut stem = stem();
+        let face = stem.centroid();
+        let normal = stem.normal();
+
+        assert!(
+            stem.anchor()
+                .expect("an anchor")
+                .is_equal(&face, 1e-12),
+            "at rest the handle is on the face"
+        );
+
+        // A typed 4 mm extrusion carries the handle (and its grab target) out with it.
+        assert!(Manipulator::set_values(&mut stem, &[4.0]));
+        assert!(
+            stem.anchor()
+                .expect("an anchor")
+                .is_equal(&face.add(&normal.scale(4.0)), 1e-9),
+            "the handle rides the ghost: {:?}",
+            stem.anchor()
+        );
+        assert!(stem.update(&camera));
+        let tip = stem
+            .readout_anchor(&camera)
+            .expect("the moved tip projects");
+        assert!(
+            stem.hit(&camera, [tip[0].round() as i32, tip[1].round() as i32]),
+            "the moved handle is grabbable"
+        );
+
+        // A pocket rides the other way.
+        assert!(Manipulator::set_values(&mut stem, &[-2.0]));
+        assert!(stem
+            .anchor()
+            .expect("an anchor")
+            .is_equal(&face.sub(&normal.scale(2.0)), 1e-9));
+
+        // A host that moves the handle (a previewed object) moves the whole sweep: the
+        // distance is untouched and the handle lands exactly where it was asked for.
+        let moved = stem.anchor().expect("an anchor").add(&Vector3::new(1.0, 0.0, 0.0));
+        assert!(stem.set_anchor(moved));
+        assert!(
+            stem.anchor().expect("an anchor").is_equal(&moved, 1e-12),
+            "the handle follows the host"
+        );
+        assert!((stem.distance() + 2.0).abs() < 1e-12, "the value is unchanged");
+        assert!(
+            stem.centroid().is_equal(&face.add(&Vector3::new(1.0, 0.0, 0.0)), 1e-12),
+            "the sweep origin moved by the same delta"
+        );
+    }
+
+    /// During a drag the handle stays under the pointer: the ghost grows by the pointer's
+    /// travel and the stem is a fixed screen length past the ghost.
+    #[test]
+    fn a_drag_keeps_the_handle_with_the_pointer() {
+        let camera = camera(5.0);
+        let mut stem = stem();
+        let face = stem.centroid();
+        let grab = grab(&camera, &stem);
+        assert!(stem.begin_drag(&camera, grab));
+        assert!(stem
+            .drag_to(&camera, [grab[0] + 20, grab[1]])
+            .is_some());
+
+        let ghost = stem.centroid().add(&stem.normal().scale(stem.distance()));
+        assert!(
+            ghost.sub(&face).x > 0.1,
+            "the ghost travelled outward: {}",
+            ghost.sub(&face).x
+        );
+        assert!(
+            stem.anchor()
+                .expect("an anchor")
+                .is_equal(&ghost, 1e-9),
+            "the stem base is the ghost"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # The sub-shape edit seam
 
-Status: design note (2026-11-14, revised 2026-11-15).
+Status: design note (2026-11-14, revised 2026-11-16).
 
 `Shape.replaceShape`, `Shape.removeShape`, `Shape.generalFuse`, `Shape.fuse`/`cut`/`common`
 and the erase/split code built on them (`ferrocad_part_py`, and SimpleCAD's
@@ -234,12 +234,41 @@ A twelve-line rule in the **SimpleCAD checkout** (`simplecad/core/geometry.py`,
 but the project keeps `../simplecad` at `9180c4b` and unmodified, so the experiment was
 reverted. If upstream changes the policy, revisit; do not patch the reference checkout.
 
+## `Shape.Placement` is a location over an un-moved base
+
+Upstream keeps a standalone shape's placement as a `TopLoc_Location` on the shape
+handle: a move changes where the shape *is*, not what its coordinates *are*. We baked the
+placement in (`BRepBuilderAPI_Transform`), which is geometrically equivalent and invisible
+until something asks about **identity** or **exactness**:
+
+- `bake(P)` then `bake(P⁻¹)` left ~5e-15 on a 10 mm cube, so a perfect cube's
+  longest-side tie-break chose Y instead of X.
+- Every sub-shape handle changed, so `isPartner` stopped recognising a rigidly moved
+  shape — and SimpleCAD's style mapping short-circuits on `current.isPartner(original)`,
+  so a moved object fell back to the predominant style.
+
+A `PartShape` now carries the geometry with the accumulated placement removed (its
+**base**) beside the placement. A placement write transforms *from the base*, so
+`Placement = identity` hands the base back untouched; `Shape.copy()` hands the base over
+as a shared immutable handle rather than copying the kernel shape. A **rigid** write is
+`GeometryBackend::relocate`, i.e. `set_location` with a `TopLoc_Location` built from the
+transform, on the same TShape; `isSame` still reports false after a move, as upstream's
+does, because the location is part of the shape. Pinned by
+`a_placement_reset_is_bit_exact` and `a_rigid_move_keeps_the_shapes_identity`.
+
+The rule for a new consumer: treat `Placement` as where the shape sits, never as a value
+to fold into coordinates. A transformed shape reports `1000.000000` mm³ for a 10 mm cube,
+not `1000.0000000000002`.
+
 ## What is still open in this seam
 
-- **`test_mesh_glue`, `test_union.test_rod_a_hair_off_its_bore`.** Each needs its own
-  reproduction; neither is the seam above.
-- **`test_precision.test_through_push_from_a_slightly_tilted_face_leaves_no_skin`** — the
-  last sub-tolerance case; it is a push/pull, not a plain boolean.
+- **`test_precision.test_through_push_from_a_slightly_tilted_face_leaves_no_skin`** — a
+  kernel near-tangency regime, not a tolerance mis-plumbing: `common` returns an exit face
+  ~4e-5 mm too wide when the tool's cap is nearly tangent to the argument's face, and an
+  explicit fuzzy of `1e-5` returns an empty shape. The inputs are exact and our settings
+  match upstream's; recorded in
+  [`../../project/record/2026-11-14-p2-boolean-seam.md`](../../project/record/2026-11-14-p2-boolean-seam.md)
+  §8.8.
 - **A boolean result is a `Compound` around one `Solid`** (see
   [`part-containers.md`](part-containers.md#open-questions)).
 - **The chamfered single-face analytic selection is a face-order assumption, not a seam
@@ -247,3 +276,6 @@ reverted. If upstream changes the policy, revisit; do not patch the reference ch
   after SimpleCAD's mesh reconstruction that is a box side, which `prepare` correctly
   rejects. All 26 actual wall facets are accepted (radius 6.0000, height 19.002) and
   rebuild a valid closed solid.
+- **The `close_holes` cap policy** (`test_edge_deletion` and `test_rounding`) is filed
+  above: it is SimpleCAD's documented behaviour, and the reference checkout stays
+  unmodified.

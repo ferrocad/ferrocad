@@ -20,17 +20,19 @@ desktop.
 The bottleneck is no longer geometry. It is the **breadth of the workbench API**, the
 **interaction surface** on top of it, and the **host/platform seam** the November round
 built. The Part audit covers **253 of 408 upstream method names (62.0%)**. The SimpleCAD
-S4.1–S4.6 façade is in the tree. SimpleCAD's integrated baseline is **1026 passed / 8
+S4.1–S4.6 façade is in the tree. SimpleCAD's integrated baseline is **1028 passed / 6
 failed / 13 errored / 7 skipped over 88/88 modules** (2026-11-16, clean `9180c4b`), with
 the Qt groups classified as skips and the SC7 workflow acceptance green. **P1 is closed**
-(2026-11-13), and the nine P2 seam rounds closed **41 of the 49 failures** without losing
+(2026-11-13), and the ten P2 seam rounds closed **43 of the 49 failures** without losing
 one: `Shape.generalFuse` is one build per call, a replaced vertex reports its image,
 `Edge.Orientation` and an edge's `Placement` are cached, `Shape.fuse`/`cut`/`common` take
 upstream's `(other, tolerance, *, noElementMap)` signature and honour the tolerance,
 `Shape.tessellate` uses upstream's `defaultAngularDeflection`, a shape-wrapped wire counts
-its edges, and a document edit's halves — a rename, a placement's baked shape — undo
-together. Every remaining failure is still attributed (**3 P2, 1 P3, 4 documented test
-assumptions**; none unattributed), and P3 lost all but one of its failures.
+its edges, a document edit's halves — a rename, a placement's baked shape — undo
+together, and a placement is a `TopLoc_Location` over an un-moved base, so a reset is
+exact and a moved shape keeps its identity. Every remaining failure is still attributed
+(**1 P2 kernel-numerics, 1 P3, 4 documented test assumptions**; none unattributed), and P3
+lost all but one of its failures.
 
 The platform picture did change materially: the **browser shell** runs the same
 `RustAppBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
@@ -102,7 +104,7 @@ rather than an architecture task.
 - **SimpleCAD S0–S3 — the image is in.** `ferrocad_mesh` (payload, STL, operations,
   `Mesh::Feature`), `ferrocad_mesh_py` (`Mesh`, `MeshPart`), `Part.Shape.tessellate`,
   `BOPTools.SplitAPI` and the import-time PySide surface all load in one in-process
-  `ferrocad` + `Part` + `Mesh` image. The 2026-11-16 baseline is **1026 pass, 8 fail,
+  `ferrocad` + `Part` + `Mesh` image. The 2026-11-16 baseline is **1028 pass, 6 fail,
   13 error, 7 skip over 88/88 modules**; the SC7 workflow acceptance (draw → extrude →
   push/pull → cut → STL) is green and the 5 Qt groups are classified skips. The identity, query and representation
   frontier closed (deep `Shape.copy()`, `__hash__`/`__eq__`, `Placement(other)`, typed
@@ -114,16 +116,18 @@ rather than an architecture task.
   S4.6 keeps `FreeCADGui.Preview` as the shape-preview channel and records 3-D text as a
   non-goal; the imperative-Coin lifecycle (`getChild`/`insertChild`/`findChild`,
   `isOfType`) is complete enough for an overlay.
-- **P1 closed (SC8), and the nine P2 seam rounds closed 41 failures.** From SC8's
-  **985 / 49 / 18 / 7** the failures fell to **8 / 13 / 7**: the eight surface-line cases
+- **P1 closed (SC8), and the ten P2 seam rounds closed 43 failures.** From SC8's
+  **985 / 49 / 18 / 7** the failures fell to **6 / 13 / 7**: the eight surface-line cases
   and the rotate-edges/elongating/analytic clusters went with the sub-shape seam, both
   `test_union` geometry records and the two `test_union` document tests with upstream's
   boolean signature and the undo log, `test_mesh_glue` with upstream's tessellation
   default, and `test_mesh_surfaces` with `Face.cutHoles` and a circle-based `Cylinder`.
-  Every remaining record is attributed — **3 → P2, 1 → P3, 4 documented test
-  assumptions, 0 unattributed** — and the next item is the base-cached placement.
-  The chamfered single-face error is filed as a face-order assumption. The full table is
-  in [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
+  The last two went with the placement representation: a reset is bit-exact and a rigid
+  move is a location, so the principal-axis tie and the style mapping hold.
+  Every remaining record is attributed — **1 → P2 (OCCT near-tangency), 1 → P3, 4
+  documented test assumptions, 0 unattributed** — and the P2 seam list is down to that
+  one kernel-numerics case. The chamfered single-face error is filed as a face-order
+  assumption. The full table is in [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod
   pack reaches the script half. This is the proof-of-use surface that did not exist at the
@@ -157,7 +161,7 @@ subset and says so.
   `tools/simplecad_audit.py --check`, and the in-process
   `crates/ferrocad_part_py/tests/simplecad_conformance.rs`. The in-process test exports the
   repo Python/OCCT paths to SimpleCAD's worker subprocess; use it when the extension may
-  be stale, because it builds the current tree. Current: **1026/8/13/7 over 88/88**
+  be stale, because it builds the current tree. Current: **1028/6/13/7 over 88/88**
   (2026-11-16, clean checkout).
 - **Engine/app:** per-crate `cargo test` and `pytest tests` (no workspace-wide build).
 - **Docs:** `api_docs`, `userdocs`, `build_book` and the relative-link sweep in `--check`

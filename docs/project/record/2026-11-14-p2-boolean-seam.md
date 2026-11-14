@@ -26,9 +26,10 @@ the failing-test map is [`../research/simplecad-bringup.md`](../research/simplec
 | **The unwrap tear** | `flatmesh` lays each vertex once: a fan-closing triangle keeps the first position instead of moving it | SimpleCAD **1014/20/13/7**; `test_surface_offset`'s across-the-seam error closes |
 | **The undo transaction** | `set_label` records `Change::Label`, and a type's derived mirror (`Placement` → `Shape` on a `Part::Feature`, → the mesh transform on a `Mesh::Feature`, a shape assignment's adopted `Placement`) goes through `Document::set_property_derived` | SimpleCAD **1019/15/13/7** — the undo/label bucket empties; `test_union` **16/16** |
 | **A degenerate edge and a writable surface** | `Edge.Curve` raises `TypeError` on a pole/apex edge; `Part.Cylinder`'s `Radius`/`Center`/`Axis` are writable and `toShape(u1, u2, v1, v2)` builds the parameter band | SimpleCAD **1026/8/13/7** — `test_healing` 14/14 and `test_degenerate_drawing` 5/5 |
+| **The placement representation** | a `PartShape` keeps its un-moved geometry beside the placement, so a reset is bit-exact; a rigid `Placement` write is a `TopLoc_Location` (`relocate`), so a moved shape is still a partner of its source | SimpleCAD **1028/6/13/7** — the principal-axis tie and the style-mapping failures close |
 
-SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1026 / 8 / 13 / 7 over 88/88
-modules**: **41 failures closed, none added, and the errors moved 18 → 13**. The printed
+SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1028 / 6 / 13 / 7 over 88/88
+modules**: **43 failures closed, none added, and the errors moved 18 → 13**. The printed
 failure count falls by one less than the records closed in the last two steps because a
 fully-passing module counts once. No module failed to load.
 
@@ -322,6 +323,72 @@ The two that remain are attribution, not code:
   unplaced base, so identity is exact); it is recorded in §P2 of
   [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) rather than guessed at here.
 
+### 8.7 The placement representation, and the last two P2 failures
+
+Three failures in the last two rounds were the same underlying question: **what is a
+placement?** Upstream stores a standalone shape's placement as a `TopLoc_Location` on the
+shape handle, so the coordinates are untouched by a move. We baked them
+(`BRepBuilderAPI_Transform`), which is geometrically equivalent and observable nowhere —
+until something asks about *identity* or *exactness*.
+
+1. **Clearing a placement was not exact.** `Placement` writes composed a delta onto the
+already-moved coordinates, so `bake(P)` then `bake(P⁻¹)` left 5e-15 behind on a 10 mm
+cube. `main_axis`'s tie-break for a symmetric shape picks the longest local bounding
+dimension, and for a perfect cube those are equal — so `test_symmetric_main_axis_is_deterministic`
+saw Y instead of X. `PartShape` now keeps the geometry with the accumulated placement
+removed and transforms *from it*, so reaching the identity hands the base back untouched;
+`Shape.copy()` hands its base over too (an immutable handle, so no second kernel copy).
+2. **A move replaced every sub-shape handle.** `isPartner` stopped recognising a moved
+shape, and SimpleCAD's `mapped()` short-circuits on `current.isPartner(original)` — so a
+rigidly moved object lost its per-face materials and fell back to the predominant style
+(`test_rigid_placement_and_uniform_materials_keep_styles`). A rigid `Placement` write is
+now `GeometryBackend::relocate`: the same TShape with a new `TopLoc_Location`. `isSame`
+still reports false after a move, as upstream's does, because the location is part of the
+shape.
+
+The change is visible in the numbers: a moved box's volume is now `1000.000000` rather than
+`1000.0000000000002`, because a move no longer rewrites a coordinate. Both are pinned by
+`a_placement_reset_is_bit_exact` and `a_rigid_move_keeps_the_shapes_identity`.
+
+### 8.8 `test_precision`'s tilted face: an OCCT near-tangency artifact
+
+The last boolean/topology failure is `test_through_push_from_a_slightly_tilted_face_leaves_no_skin`.
+It fails inside `opposite_face`'s sweep test — `abs(swept ∩ shape - swept.Volume) <=
+max(1e-7, volume × 1e-8) + profile.Area × gap` — and the numbers say why:
+
+| Quantity | Value |
+| --- | --- |
+| profile | Ø 3.4 mm disk, area **9.0792 mm²** |
+| `gap` (the disk's tilt across its radius) | **3.995e-5 mm** |
+| allowance | **3.63e-4 mm³** |
+| `swept.Volume` | 81.714105 mm³ (= `area × distance`, so the prism is exact) |
+| `swept ∩ divided` | **81.714675 mm³ — larger than the prism it is a subset of** |
+
+A subset cannot be bigger, and the result confirms it: `inter.cut(prism)` is empty and no
+part of `inter` lies outside the box. So the *volume* is what is wrong, and the cause is
+the boolean's own result: the exit face comes back as **two half-discs totalling 9.0796 mm²**
+for a 9.0792 mm² disk, i.e. ~4e-5 mm too wide — the scale of the tilt itself. `BRepAlgoAPI`
+is unstable exactly in this near-tangency band: with an explicit fuzzy of `1e-5` the same
+`common` returns an **empty** shape, and with `5e-5` it returns the whole prism.
+
+We checked the inputs before blaming the kernel: the prism is a clean 3-face solid
+(cylinder + two planar caps, every edge at 1e-7), the same operation with an exact
+(non-tilted) prism is exact whether the caps are coincident with the box faces or interior,
+and our boolean settings match upstream's `FCBRepAlgoAPI_BooleanOperation` (`SetRunParallel`,
+`SetNonDestructive`, no fuzzy for tolerance 0). This is recorded as a kernel-regime limit,
+not a seam contract: the gate is a heuristic that our result misses by 1.6× because of a
+~4e-5 geometric error, not because a tolerance is mis-plumbed.
+
+### 8.9 Test-run visibility
+
+A full SimpleCAD run is four minutes of silence — the in-process test captures `sys.stdout`
+into a `StringIO` and prints the report at the end — so `tools/conformance.py` now writes
+two lines per module to **stderr**: one before it starts, one with its totals and elapsed
+time after. The stdout report, the summary assertion and `tools/test_conformance.py` are
+unchanged. The timings immediately paid for themselves: `test_mesh_glue` is 56 s of the
+283 s run (one of its six tests 36 s), and `test_analytic`'s 25 s is 13 separate
+converted-mesh rebuilds. Neither is a performance gate; the suite measures correctness.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),
@@ -331,9 +398,9 @@ CARGO_BUILD_JOBS=2`; the extension was rebuilt before the Python/SimpleCAD runs.
 | Measure | Value | Command |
 | --- | --- | --- |
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
-| SimpleCAD integrated | **1026 passed, 8 failed, 13 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| SimpleCAD integrated | **1028 passed, 6 failed, 13 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
 | Part API audit | **253/408 (62.0%)**, contract re-pinned for `Cylinder.toShape` | `python3 tools/part_api_audit.py --check` |
-| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `ferrocad_core` **137**, `ferrocad_mesh` **64**, `part_py` **353**, `part_shape_ops` **18**, all 0 failed | per-crate `cargo test` |
+| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `ferrocad_core` **137**, `ferrocad_mesh` **64**, `part_py` **355**, `part_shape_ops` **20**, all 0 failed | per-crate `cargo test` |
 | Python extension sets | `base` **707 / 0 / 0 / 8**; `workbenches` **789 / 0 / 0 / 3** | `python3 tools/run_tests.py --extension base` / `workbenches` |
 | Docs/tooling | `api_docs` 9 pages, `userdocs` 8, `build_book` 48 chapters, extension-set contract 50 modules, `test_docs_tooling` 49 | the `--check` gates |
 
@@ -343,21 +410,20 @@ Two runs of the full SimpleCAD suite before the edge-placement fix produced the 
 boss records closed and the error set unchanged in size (one analytic error left, now
 filed as a face-order assumption). The signature/tessellation/cutHoles batch then measured
 **1013/20/14/7**, the unwrap fix **1014/20/13/7**, the undo/label round **1019/15/13/7**,
-and the query/tolerance round **1026/8/13/7**, all over 88/88 modules; no run moved a module
-from load-failure to loaded.
+the query/tolerance round **1026/8/13/7**, and the placement round **1028/6/13/7**, all over
+88/88 modules; no run moved a module from load-failure to loaded.
 
-## 10. What the 8 failures and 13 errors are
+## 10. What the 6 failures and 13 errors are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
-in short: **3 → P2** (one sub-tolerance push/pull, one principal-axis precision limit, one
-copied-shape face list), **1 → P3** (wrapped-drawing parameter mapping) and **4 documented
-test assumptions** (the exact `BoundBox` precondition, the two `close_holes` cases and
-`test_rounding`'s erase-then-refuse sample, which is the same policy). The 13 errors are 4
-`test_surface_offset` draft shapes, 1 wrapped-drawing area measurement, 7 behavioural/API
-results (forming, loop faces, measuring, mesh conversion, slicing, subdivision, the surface
-snap) and **1 documented face-order assumption** (the chamfered single-face selection, which
-is an error rather than a failure).
+in short: **1 → P2** (`test_precision`'s OCCT near-tangency case, §8.8), **1 → P3**
+(wrapped-drawing parameter mapping) and **4 documented test assumptions** (the exact
+`BoundBox` precondition, the two `close_holes` cases and `test_rounding`'s erase-then-refuse
+sample, which is that same policy). The 13 errors are 4 `test_surface_offset` draft shapes,
+1 wrapped-drawing area measurement, 7 behavioural/API results (forming, loop faces,
+measuring, mesh conversion, slicing, subdivision, the surface snap) and **1 documented
+face-order assumption** (the chamfered single-face selection, which is an error rather than
+a failure).
 
-The query/tolerance group is down to one item, and it needs a placement-representation
-change rather than a tolerance tweak; the rest of the P2 list is one push/pull and one style
-mapping.
+The P2 seam list is down to one kernel-numerics item; the identity, undo/label and
+query/tolerance buckets are empty.

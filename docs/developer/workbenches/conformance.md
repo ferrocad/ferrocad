@@ -185,14 +185,16 @@ still skip honestly: four consumer shapes in `solids.rs` store an empty lineage,
 `pivy.coin` while taking its tree body from `ferrocad_inventor::view_root`, so each
 `pivy.coin` gets nodes of its own class family.
 
-**SimpleCAD's in-process run** is **1026 / 8 / 13 / 7** (2026-11-16, clean `9180c4b`;
+**SimpleCAD's in-process run** is **1028 / 6 / 13 / 7** (2026-11-16, clean `9180c4b`;
 `crates/ferrocad_part_py/tests/simplecad_conformance.rs`).
 The five Qt groups are reported as `GUI (out of surface): needs a Qt QApplication` skips
 (17 tests behind them), not errors. That test also exports the repo `python/` tree and
 `.occt/prefix/lib` to SimpleCAD's `scripts/shape_worker.py` subprocess; without them every
 worker exits 1 with `ModuleNotFoundError: FreeCAD`, which reads as “kernel stopped
 unexpectedly (code 1)”. The 2026-11-13 run is recorded in
-[`../../project/record/2026-11-13-november-round.md`](../../project/record/2026-11-13-november-round.md).
+[`../../project/record/2026-11-13-november-round.md`](../../project/record/2026-11-13-november-round.md),
+and the later P2 seam rounds — through the placement representation of 2026-11-16 — in
+[`../../project/record/2026-11-14-p2-boolean-seam.md`](../../project/record/2026-11-14-p2-boolean-seam.md).
 
 ### Draft M2 (Python feature proxies)
 

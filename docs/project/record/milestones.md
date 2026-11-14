@@ -37,23 +37,24 @@ labels are disambiguated in [`../labels.md`](../labels.md).
 | 2026-11-13 | **The rotation fix** | `RootNode` builds through the imported `pivy.coin` (Part back to **531/0/0/12**), the SimpleCAD in-process harness exports the worker's `PYTHONPATH`/OCCT library path (back to **985/49/23/2**), the Part API contract is re-pinned and the generated API/user pages are regenerated. SC3 then classifies the 5 Qt groups as skips and SC7 pins the draw → push/pull → cut → STL acceptance (**985/49/18/7**). |
 | 2026-11-13 | **The SimpleCAD façade cut closes (P1)** | SC4 publishes the viewport's active workplane and resolves exact face frames (`FreeCADGui.getWorkplane`/`getFacePlane`); SC5 proves the selection-armed push/pull stem edits the document in one transaction; SC6 keeps `FreeCADGui.Preview` as the shape-preview channel, makes 3-D text a non-goal, and completes the `SoGroup` lifecycle (`getChild`/`insertChild`/`removeChild`/`removeAllChildren`/`findChild`, `isOfType`). SC8 then re-bucketed all 49 failures (37 P2, 11 P3, 1 documented test assumption), so **P1 is closed** with the baseline unchanged at **985/49/18/7**. |
 | 2026-11-14/15 | **The P2 boolean/seam round** | The container objects read `Refine`, honour `MultiCommon.Behavior`, flatten a lone compound and enforce `MultiFuse` arity (fidelity: totals unchanged). Then `Shape.generalFuse` answers every input from one build, a replaced vertex reports its result image, `Edge.Orientation` and an edge's `Placement` reach the consumers, a shape-wrapped wire counts its edges, `Face.addWire` exists, a circle's frame reaches its edge's parameter 0, `Shape.fuse`/`cut`/`common` take upstream's `(other, tolerance, *, noElementMap)` signature and honour the tolerance, and `Shape.tessellate` defaults to upstream's `defaultAngularDeflection`. `Face.cutHoles` and a circle-based `Cylinder` close the mesh-surface pair, a `flatmesh` unfold that moved a vertex its own fan had laid is fixed, and the transaction log gains `Change::Label` plus `set_property_derived`, so a rename and a placement's baked shape undo with the edit that made them. SimpleCAD **985/49/18/7 → 1026/8/13/7**, P3 11 → 1; Part stays **531/0/0/12**. The `close_holes` experiment closed `test_edge_deletion` but edited the reference checkout, so it was reverted and the two failures were attributed to an upstream policy ([round log](2026-11-14-p2-boolean-seam.md)). |
+| 2026-11-16 | **The placement representation** | A `PartShape` keeps its un-moved geometry beside the accumulated placement and transforms from it, so clearing a `Placement` is bit-exact (the principal-axis tie resolves to X again) and `Shape.copy()` hands the base over; a rigid placement write becomes `GeometryBackend::relocate`, a `TopLoc_Location` on the same TShape, so `isPartner` survives a move and the per-face style mapping holds. A moved box reads `1000.000000`, not `1000.0000000000002`. SimpleCAD **1026/8/13/7 → 1028/6/13/7**: only the OCCT near-tangency case is left in P2, and P3 has one failure ([round log](2026-11-14-p2-boolean-seam.md)). |
 
-## Current state (2026-11-15 baseline)
+## Current state (2026-11-16 baseline)
 
 Measured on the current tree, upstream `33adf61`, SimpleCAD `9180c4b` (clean). The Part and
 SimpleCAD rows are in-process runs; the Rust rows are lib tests only. The evidence is in
 the [November round log](2026-11-13-november-round.md) and the
 [P2 seam round](2026-11-14-p2-boolean-seam.md).
 
-| Surface | Then (2026-10-27/30) | 2026-11-13 | 2026-11-15 |
+| Surface | Then (2026-10-27/30) | 2026-11-13 | 2026-11-16 |
 | --- | --- | --- | --- |
 | Upstream Part suite | 531 passed, 0 failed, 0 errored, 12 skipped | 531/0/0/12 (restored) | **531/0/0/12** |
 | Upstream Draft suite | `--draft` 44/0/0/0; `test_modification` 31/0/2 | `--draft` 50/0/0/1; 31/0/2 | **not re-run** (carried) |
 | Draft M2 | 27/0/0/0 | 27/0/0/0 | **not re-run** (carried) |
 | Python facade | 631/3/4 (worktree) | not re-measured; the in-process runs are the gate | **not re-run** (carried) |
 | Part module | 248/408 names in the worktree | 252/408 (61.8%), 21 shared classes | **253/408 (62.0%)**, `--check` clean |
-| SimpleCAD | 702/44/368/2 | 985/49/18/7 over 88/88; **P1 closed** | **1026/8/13/7 over 88/88**; 3 P2 / 1 P3 / 4 test assumptions (+1 error assumption) |
-| Rust lib tests | 1 186 across 15 crates | 1 454 passed, 0 failed | **`ferrocad_occt` 82, `ferrocad_part` 59, `ferrocad_core` 137, `ferrocad_mesh` 64, `part_py` 353, `part_shape_ops` 18**, 0 failed (not a full aggregate) |
+| SimpleCAD | 702/44/368/2 | 985/49/18/7 over 88/88; **P1 closed** | **1028/6/13/7 over 88/88**; 1 P2 kernel numerics / 1 P3 / 4 test assumptions (+1 error assumption) |
+| Rust lib tests | 1 186 across 15 crates | 1 454 passed, 0 failed | **`ferrocad_occt` 82, `ferrocad_part` 59, `ferrocad_core` 137, `ferrocad_mesh` 64, `part_py` 355, `part_shape_ops` 20**, 0 failed (not a full aggregate) |
 | Book | 36 chapters | 48 chapters | **48 chapters** |
 | Hosts | desktop + a browser spike | one document, four runtimes; the browser shell runs the same backend | **unchanged** |
 

@@ -368,3 +368,96 @@ fn undo_expression_set_and_remove() {
         Some(&Property::Float(6.0))
     );
 }
+
+/// A rename is part of the transaction that makes it.
+///
+/// `Label` is a field of the document object rather than a property-container
+/// entry, so it needs its own change record. Without one, an operation that names
+/// its result (`Union`, `Block · 1`) kept the new name after the operation was
+/// undone, and a refused operation left its result renamed.
+#[test]
+fn abort_and_undo_restore_a_label() {
+    let mut doc = Document::new();
+    let a = doc.add_object("Box", "App::Feature");
+    assert_eq!(doc.object(a).unwrap().label, "Box");
+
+    doc.open_transaction_named("Union");
+    doc.set_label(a, "Union");
+    assert_eq!(doc.object(a).unwrap().label, "Union");
+    doc.abort_transaction();
+    assert_eq!(doc.object(a).unwrap().label, "Box");
+    assert!(!doc.has_undo());
+
+    doc.open_transaction_named("Union");
+    doc.set_label(a, "Union");
+    doc.commit_transaction();
+    assert_eq!(doc.object(a).unwrap().label, "Union");
+    assert_eq!(doc.available_undos(0), 1);
+
+    assert!(doc.undo());
+    assert_eq!(doc.object(a).unwrap().label, "Box");
+    assert!(doc.redo());
+    assert_eq!(doc.object(a).unwrap().label, "Union");
+}
+
+/// Renaming to the same label records nothing, so it cannot add an undo step.
+#[test]
+fn a_label_rewrite_records_no_transaction() {
+    let mut doc = Document::new();
+    let a = doc.add_object("Box", "App::Feature");
+
+    doc.open_transaction_named("Rename");
+    doc.set_label(a, "Box");
+    assert!(!doc.commit_transaction());
+    assert!(!doc.has_undo());
+}
+
+/// A derived write lands in the transaction of the write that caused it.
+///
+/// A type mirrors one property onto a partner in `on_property_changed` (a
+/// `Part::Feature` bakes `Placement` into `Shape`). Recording the mirror is what
+/// makes the pair one undo step: the primary write alone would leave the partner
+/// at the value the abandoned transaction gave it.
+#[test]
+fn a_derived_property_write_is_reverted_with_its_primary() {
+    let mut doc = Document::new();
+    let a = doc.add_object("A", "App::Feature");
+    doc.set_property(a, "Width", Property::Float(1.0)).unwrap();
+    doc.set_property(a, "Height", Property::Float(2.0)).unwrap();
+
+    doc.open_transaction_named("Move");
+    doc.set_property(a, "Width", Property::Float(5.0)).unwrap();
+    doc.set_property_derived(a, "Height", Property::Float(9.0));
+    doc.abort_transaction();
+    assert_eq!(
+        doc.object(a).unwrap().properties.get("Width"),
+        Some(&Property::Float(1.0))
+    );
+    assert_eq!(
+        doc.object(a).unwrap().properties.get("Height"),
+        Some(&Property::Float(2.0))
+    );
+    assert!(!doc.has_undo());
+
+    doc.open_transaction_named("Move");
+    doc.set_property(a, "Width", Property::Float(5.0)).unwrap();
+    doc.set_property_derived(a, "Height", Property::Float(9.0));
+    doc.commit_transaction();
+    assert_eq!(doc.available_undos(0), 1);
+
+    assert!(doc.undo());
+    assert_eq!(
+        doc.object(a).unwrap().properties.get("Width"),
+        Some(&Property::Float(1.0))
+    );
+    assert_eq!(
+        doc.object(a).unwrap().properties.get("Height"),
+        Some(&Property::Float(2.0))
+    );
+
+    assert!(doc.redo());
+    assert_eq!(
+        doc.object(a).unwrap().properties.get("Height"),
+        Some(&Property::Float(9.0))
+    );
+}

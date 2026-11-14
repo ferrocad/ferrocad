@@ -222,9 +222,11 @@ impl ObjectType for Feature {
     ///   `obj.Mesh.Topology` and `obj.Mesh.BoundBox` follow it **without** a recompute.
     /// - `Mesh` assignment adopts the new mesh's transform into `Placement`.
     ///
-    /// Both writes use [`Document::set_property_raw`], which neither records an undo
-    /// step nor calls this hook, so the pair cannot recurse. Undo/redo re-runs this
-    /// hook from [`Document`]'s restore path with the same result.
+    /// Both writes use [`Document::set_property_derived`], which records the mirror
+    /// in the same transaction but neither re-runs this hook nor touches the object,
+    /// so the pair cannot recurse and an undo of either half restores both.
+    /// Undo/redo re-runs this hook from [`Document`]'s restore path with the same
+    /// result.
     fn on_property_changed(&self, doc: &mut Document, id: ObjectId, name: &str) {
         match name {
             "Placement" => {
@@ -244,7 +246,7 @@ impl ObjectType for Feature {
                     return;
                 };
                 property.mesh_mut().set_placement(placement);
-                doc.set_property_raw(id, "Mesh", make_mesh_property(property));
+                doc.set_property_derived(id, "Mesh", make_mesh_property(property));
             }
             "Mesh" => {
                 let Some(placement) = doc
@@ -255,7 +257,7 @@ impl ObjectType for Feature {
                 else {
                     return;
                 };
-                doc.set_property_raw(id, "Placement", Property::Placement(placement));
+                doc.set_property_derived(id, "Placement", Property::Placement(placement));
             }
             _ => {}
         }

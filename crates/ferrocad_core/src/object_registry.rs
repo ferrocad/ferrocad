@@ -113,13 +113,14 @@ pub trait ObjectType: Send + Sync {
     ///
     /// [`Document::set_property`] calls this after the value is stored, so a type
     /// can keep a **derived** property in sync without a recompute. Use
-    /// [`Document::set_property_raw`] for the derived write: it neither records an
-    /// undo step nor calls this hook, so the two cannot recurse. The default is a
-    /// no-op.
+    /// [`Document::set_property_derived`] for the derived write: it records the
+    /// mirror in the same transaction (so undo restores both halves) but neither
+    /// touches the object nor calls this hook, so the two cannot recurse. The
+    /// default is a no-op.
     ///
-    /// This is where a `Mesh::Feature` mirrors `Placement` into its mesh transform
-    /// (and adopts a newly assigned mesh's transform into `Placement`), which is
-    /// why `obj.Mesh.Topology` follows `obj.Placement` immediately.
+    /// This is where a `Part::Feature` bakes `Placement` into its `Shape` (and a
+    /// `Mesh::Feature` mirrors it into its mesh transform), which is why
+    /// `obj.Shape`/`obj.Mesh` follow `obj.Placement` immediately.
     fn on_property_changed(&self, doc: &mut Document, id: ObjectId, name: &str) {
         let _ = (doc, id, name);
     }

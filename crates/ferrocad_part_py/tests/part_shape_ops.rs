@@ -634,3 +634,75 @@ assert finer == facets(deflection=0.01, angular=0.055), (finer, facets(deflectio
         );
     });
 }
+
+/// `Placement` and `Shape` are one transaction, and a label travels with it.
+///
+/// A `Part::Feature` keeps the object's placement baked into its stored shape, so
+/// a `Placement` write also rewrites `Shape`. That derived half used to be written
+/// raw — invisible to the undo log — so an aborted move left the body where the
+/// abandoned transaction had put it, and an undo reverted the placement while the
+/// geometry stayed moved. A rename had the same shape of bug in the other
+/// direction: `Label` was a field `set_label` wrote directly, so an undo restored
+/// the shape but not the name, and a refused operation left its result renamed.
+#[test]
+fn a_placement_move_undoes_its_shape_and_a_label_undoes_with_it() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+doc = App.newDocument("PlacementUndo")
+doc.UndoMode = 1
+obj = doc.addObject("Part::Feature", "Block")
+obj.Shape = Part.makeBox(10, 20, 30)
+obj.Placement = App.Placement(App.Vector(70, 30, 40), App.Rotation(App.Vector(1, 2, 3), 27))
+doc.recompute()
+original = obj.Shape
+count = doc.UndoCount
+
+# An aborted move leaves both halves alone and adds no undo step.
+doc.openTransaction("Rotate")
+obj.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(App.Vector(1, 2, 3), 48))
+doc.abortTransaction()
+assert obj.Shape.isSame(original), "an aborted move must leave the geometry alone"
+assert (obj.Placement.Base - App.Vector(70, 30, 40)).Length < 1e-12, obj.Placement.Base
+assert doc.UndoCount == count, (doc.UndoCount, count)
+
+# A committed move is one undo step, and undo restores the same shape handle.
+doc.openTransaction("Rotate")
+obj.Placement = App.Placement(App.Vector(0, 0, 0), App.Rotation(App.Vector(1, 2, 3), 48))
+doc.commitTransaction()
+assert doc.UndoCount == count + 1, (doc.UndoCount, count)
+assert not obj.Shape.isSame(original)
+doc.undo()
+assert obj.Shape.isSame(original), "undo must restore the shape that was moved"
+assert (obj.Placement.Base - App.Vector(70, 30, 40)).Length < 1e-12, obj.Placement.Base
+doc.redo()
+assert obj.Placement.Base.Length < 1e-12, obj.Placement.Base
+
+# The name is part of the transaction that sets it.
+doc.openTransaction("Rename")
+obj.Label = "Union"
+doc.commitTransaction()
+assert obj.Label == "Union"
+doc.undo()
+assert obj.Label == "Block", obj.Label
+doc.redo()
+assert obj.Label == "Union", obj.Label
+
+# A refused transaction puts the label back too.
+before = doc.UndoCount
+doc.openTransaction("Rename")
+obj.Label = "Refused"
+doc.abortTransaction()
+assert obj.Label == "Union", obj.Label
+assert doc.UndoCount == before, (doc.UndoCount, before)
+
+App.closeDocument(doc.Name)
+"#,
+        );
+    });
+}

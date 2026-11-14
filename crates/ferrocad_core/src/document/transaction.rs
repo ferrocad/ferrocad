@@ -57,6 +57,17 @@ pub struct PropertySlot {
 pub enum Change {
     /// A property assignment.
     Property(PropertyChange),
+    /// The object's user-visible `Label` changed.
+    ///
+    /// `Label` is a field of the document object, not a property-container entry,
+    /// so it needs its own change: an operation that renames its result (`Union`,
+    /// `Block · 1`) must put the name back when it is undone or aborted, exactly
+    /// as upstream restores it from the object snapshot.
+    Label {
+        object: ObjectId,
+        old: String,
+        new: String,
+    },
     /// A dynamic property slot was added (`addProperty`), removed
     /// (`removeProperty`) or replaced. `old`/`new` are the slot before and after
     /// the edit; `None` on either side means "no property by that name".
@@ -410,6 +421,7 @@ impl Document {
             Change::Property(c) => {
                 self.restore_property_value(c.object, &c.name, Some(&c.new));
             }
+            Change::Label { object, new, .. } => self.restore_label(*object, new),
             Change::PropertySlot {
                 object, name, new, ..
             } => self.restore_property_slot(*object, name, new.as_ref()),
@@ -436,6 +448,7 @@ impl Document {
     fn revert(&mut self, change: &Change) {
         match change {
             Change::Property(c) => self.restore_property_value(c.object, &c.name, c.old.as_ref()),
+            Change::Label { object, old, .. } => self.restore_label(*object, old),
             Change::PropertySlot {
                 object, name, old, ..
             } => self.restore_property_slot(*object, name, old.as_ref()),
@@ -460,6 +473,16 @@ impl Document {
             Change::RemoveExpression { object, prop, old } => {
                 self.set_expression_raw(*object, prop, old);
             }
+        }
+    }
+
+    /// Restore a recorded label without touching the object.
+    ///
+    /// A label is a name, not derived state, so neither undo nor redo marks the
+    /// object for recompute (upstream `DocumentObject::Label` is the same).
+    fn restore_label(&mut self, object: ObjectId, label: &str) {
+        if let Some(obj) = self.objects.get_mut(&object) {
+            obj.label = label.to_string();
         }
     }
 

@@ -197,11 +197,15 @@ impl ObjectType for FeatureWithPlacement {
 ///     what makes a Draft wire's `obj.Shape.Vertexes` come back in global
 ///     coordinates.
 ///
-/// The writes go through [`Document::set_property_raw`], which records no undo
-/// step and does not re-run this hook. Undo/redo re-runs it from the restore path,
-/// so a reverted `Placement` also moves the shape back. Re-baking replaces every
-/// sub-shape handle, so the stored lineage is dropped (positional element names
-/// still resolve); this is the same contract `Shape.translate`/`rotate` have.
+/// The writes go through [`Document::set_property_derived`], so the mirror lands in
+/// the same transaction as the write that caused it: undoing a `Placement` move puts
+/// the geometry back, and aborting a failed operation leaves neither half moved.
+/// (A raw write here used to make the mirror invisible to undo, so a failed commit
+/// left the body where the transaction had put it.) Undo/redo re-runs this hook from
+/// the restore path, so a reverted `Placement` also moves the shape back. Re-baking
+/// replaces every sub-shape handle, so the stored lineage is dropped (positional
+/// element names still resolve); this is the same contract
+/// `Shape.translate`/`rotate` have.
 fn sync_shape_and_placement(
     doc: &mut Document,
     id: ObjectId,
@@ -251,7 +255,7 @@ fn sync_shape_and_placement(
             };
             memo.record_rigid(&shape, &moved, &delta);
             let property = ShapeProperty::with_placement_and_memo(moved, placement, memo);
-            doc.set_property_raw(id, "Shape", make_shape_property(property));
+            doc.set_property_derived(id, "Shape", make_shape_property(property));
         }
         "Shape" => {
             let Some((Some(shape), stored_placement, _lineage)) = shape_property_parts(doc, id)
@@ -268,7 +272,7 @@ fn sync_shape_and_placement(
             if stored_placement != Placement::identity() {
                 // The assigned shape carries its own placement: adopt it.
                 if stored_placement != object_placement {
-                    doc.set_property_raw(id, "Placement", Property::Placement(stored_placement));
+                    doc.set_property_derived(id, "Placement", Property::Placement(stored_placement));
                 }
                 return;
             }
@@ -276,7 +280,11 @@ fn sync_shape_and_placement(
                 // A plain feature: the shape is world-space geometry. Adopt its
                 // (identity) transform, as upstream's non-recomputing rule does.
                 if object_placement != Placement::identity() {
-                    doc.set_property_raw(id, "Placement", Property::Placement(Placement::identity()));
+                    doc.set_property_derived(
+                        id,
+                        "Placement",
+                        Property::Placement(Placement::identity()),
+                    );
                 }
                 return;
             }
@@ -291,7 +299,7 @@ fn sync_shape_and_placement(
                 return;
             };
             let property = ShapeProperty::with_placement(moved, object_placement);
-            doc.set_property_raw(id, "Shape", make_shape_property(property));
+            doc.set_property_derived(id, "Shape", make_shape_property(property));
         }
         _ => {}
     }

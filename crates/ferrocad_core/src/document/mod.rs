@@ -298,14 +298,21 @@ impl Document {
         true
     }
 
+    /// Rename the object (`obj.Label = …`), recording the change so `undo` and
+    /// `abortTransaction` put the old name back.
     pub fn set_label(&mut self, id: ObjectId, label: &str) -> bool {
-        match self.objects.get_mut(&id) {
-            Some(obj) => {
-                obj.label = label.to_string();
-                true
-            }
-            None => false,
+        let old = match self.objects.get_mut(&id) {
+            Some(obj) => std::mem::replace(&mut obj.label, label.to_string()),
+            None => return false,
+        };
+        if old != label {
+            self.record_change(Change::Label {
+                object: id,
+                old,
+                new: label.to_string(),
+            });
         }
+        true
     }
 
     /// Remove a property (`removeProperty`), recording the change so the
@@ -592,7 +599,8 @@ impl Document {
         }));
         // Let the registered type keep derived properties in sync (FreeCAD's
         // `onChanged`). The write is committed already, and the hook's own writes go
-        // through `set_property_raw`, so this cannot recurse.
+        // through `set_property_derived` (recorded, but neither touching nor firing
+        // this hook again), so this cannot recurse.
         if let Some(behavior) = crate::object_registry::get(&type_id) {
             behavior.on_property_changed(self, object, name);
         }
@@ -984,6 +992,40 @@ impl Document {
             }
             None => false,
         }
+    }
+
+    /// Write a property as the *derived* effect of another write, recording it so
+    /// an undo or an abort restores both halves together.
+    ///
+    /// [`set_property`](Self::set_property) records the assignment it was asked
+    /// to make; a type's `on_property_changed` may then mirror it onto a partner
+    /// property — a `Part::Feature`'s `Shape` when `Placement` moves, or the
+    /// `Placement` a shape assignment adopts. A mirror written raw is invisible to
+    /// the undo log, so undoing the primary write left the other half moved (the
+    /// body stayed where the abandoned transaction put it) and redoing it left the
+    /// pair inconsistent.
+    ///
+    /// The mirror does not touch the object or fire observers: the write that
+    /// caused it already did both. It does bump the property version, because the
+    /// value was reassigned, so a geometry handle taken before the write refuses to
+    /// write itself back.
+    pub fn set_property_derived(&mut self, id: ObjectId, name: &str, value: Property) -> bool {
+        let old = {
+            let Some(obj) = self.objects.get_mut(&id) else {
+                return false;
+            };
+            let old = obj.properties.get(name).cloned();
+            obj.properties.set(name.to_string(), value.clone());
+            *obj.property_versions.entry(name.to_string()).or_insert(0) += 1;
+            old
+        };
+        self.record_change(Change::Property(PropertyChange {
+            object: id,
+            name: name.to_string(),
+            old,
+            new: value,
+        }));
+        true
     }
 
     /// Ask the embedding interpreter to run this object's Python proxy.

@@ -485,6 +485,21 @@ pub struct InventorViewport<V: InventorView> {
     /// measure them. `None` is an empty stage, which clears the claim so the shader
     /// falls back to its own placement.
     stage_bounds: Option<([f32; 3], [f32; 3])>,
+    /// Entity id → index into the stage's items, rebuilt with the queue.
+    ///
+    /// [`Stage::item`](ferrocad_stage::Stage::item) is a linear search and a
+    /// transform-only patch asks once per packet, so the commit path was
+    /// `items × packets`. The map makes each lookup constant; `set_stage`'s fast path
+    /// keeps the item set (only placements move), so the queue is still the only place it
+    /// has to be rebuilt.
+    stage_index: std::collections::HashMap<u32, usize>,
+    /// The union of the boxes of every item that is **not** moving, with the ids of the
+    /// moving set it was measured for.
+    ///
+    /// A drag changes one item per event, and the other items' boxes are then unchanged,
+    /// so their union is unchanged too — caching it keeps the per-event re-measure
+    /// proportional to the moving set rather than to the scene. Cleared with the queue.
+    stage_rest: Option<(Vec<u32>, ([f32; 3], [f32; 3]))>,
     /// Where the stage's packets sit in `queue`.
     ///
     /// `Stage::emit_batches` appends after the compiled scene and no stage packet is a
@@ -1647,6 +1662,8 @@ impl<V: InventorView> InventorViewport<V> {
             stage,
             stage_dirty: false,
             stage_bounds: None,
+            stage_index: std::collections::HashMap::new(),
+            stage_rest: None,
             stage_packets: 0..0,
             tool: None,
             tool_state: None,
@@ -2875,6 +2892,76 @@ impl<V: InventorView> InventorViewport<V> {
             for (axis, (low, high)) in low.iter().zip(high.iter()).enumerate() {
                 min[axis] = min[axis].min(*low);
                 max[axis] = max[axis].max(*high);
+            }
+        }
+        (min[0].is_finite() && max[0].is_finite()).then_some((min, max))
+    }
+
+    /// The stage AABB after a transform-only patch, given the entities that moved.
+    ///
+    /// While the **same** items keep moving — every event of a drag — the union of all the
+    /// others cannot change, so only the moving items are re-unionned onto the cached rest:
+    /// the cost follows the drag, not the scene. A different moving set (a second part, or
+    /// the drag ending and something else settling) falls back to the full measure, which
+    /// also refreshes the cache.
+    fn measure_bounds_after(&mut self, moved: &mut Vec<u32>) -> Option<([f32; 3], [f32; 3])> {
+        moved.sort_unstable();
+        moved.dedup();
+        if self
+            .stage_rest
+            .as_ref()
+            .is_some_and(|(known, _)| known == moved)
+        {
+            let rest = self
+                .stage_rest
+                .as_ref()
+                .map(|(_, bounds)| *bounds)
+                .expect("the rest was cached for this moving set");
+            return self.union_of(moved, rest);
+        }
+        let bounds = self.measure_stage_bounds();
+        let rest = self.union_without(moved);
+        self.stage_rest = rest.map(|rest| (moved.clone(), rest));
+        bounds
+    }
+
+    /// `rest` extended by the boxes of the items named in `moved`.
+    fn union_of(&mut self, moved: &[u32], rest: ([f32; 3], [f32; 3])) -> Option<([f32; 3], [f32; 3])> {
+        let mut min = rest.0;
+        let mut max = rest.1;
+        for entity in moved {
+            let Some(index) = self.stage_index.get(entity).copied() else {
+                continue;
+            };
+            let Some(item) = self.stage.items_mut().get_mut(index) else {
+                continue;
+            };
+            let Some((low, high)) = item.world_bounds() else {
+                continue;
+            };
+            for axis in 0..3 {
+                min[axis] = min[axis].min(low[axis]);
+                max[axis] = max[axis].max(high[axis]);
+            }
+        }
+        let finite = min.iter().chain(max.iter()).all(|value| value.is_finite());
+        finite.then_some((min, max))
+    }
+
+    /// The union of every item's box **except** those named in `moved`.
+    fn union_without(&mut self, moved: &[u32]) -> Option<([f32; 3], [f32; 3])> {
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for item in self.stage.items_mut() {
+            if moved.binary_search(&item.entity_id()).is_ok() {
+                continue;
+            }
+            let Some((low, high)) = item.world_bounds() else {
+                continue;
+            };
+            for axis in 0..3 {
+                min[axis] = min[axis].min(low[axis]);
+                max[axis] = max[axis].max(high[axis]);
             }
         }
         (min[0].is_finite() && max[0].is_finite()).then_some((min, max))
@@ -4476,22 +4563,25 @@ impl<V: InventorView> InventorViewport<V> {
         if range.is_empty() || range.end > self.queue.packets.len() {
             return None;
         }
-        let mut changed = false;
+        let mut changed = Vec::new();
         for packet in &mut self.queue.packets[range] {
             let entity = packet.state.id.0;
             if entities.is_some_and(|list| !list.contains(&entity)) {
                 continue;
             }
-            let Some(item) = self.stage.item(entity) else {
+            let Some(index) = self.stage_index.get(&entity).copied() else {
+                continue;
+            };
+            let Some(item) = self.stage.items_mut().get_mut(index) else {
                 continue;
             };
             let world = item.world_matrix();
             if packet.state.world_transform != world {
                 packet.state.world_transform = world;
-                changed = true;
+                changed.push(entity);
             }
         }
-        if changed {
+        if !changed.is_empty() {
             // The cached hover describes where the geometry used to be.
             self.hover_answer = None;
             // A program's shadow block follows the items it shades, and so does the stage
@@ -4501,14 +4591,14 @@ impl<V: InventorView> InventorViewport<V> {
             if !self.program_queue.is_empty() {
                 let footprints = self.effective_shadow_footprints();
                 apply_program_shadows(&mut self.program_queue, &footprints);
-                let bounds = self.measure_stage_bounds();
+                let bounds = self.measure_bounds_after(&mut changed);
                 if bounds != self.stage_bounds {
                     self.stage_bounds = bounds;
                     apply_program_bounds(&mut self.program_queue, bounds);
                 }
             }
         }
-        Some(changed)
+        Some(!changed.is_empty())
     }
 
     /// Offset the overlays from the pose captured when the preview began.
@@ -5001,6 +5091,14 @@ impl<V: InventorView> InventorViewport<V> {
         let stage_count = total - stage_start;
         let scene_len = queue.packets.len();
         self.stage_packets = (scene_len - stage_count)..scene_len;
+        self.stage_index = self
+            .stage
+            .items()
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (item.entity_id(), index))
+            .collect();
+        self.stage_rest = None;
         self.stage_bounds = self.measure_stage_bounds();
         apply_program_shadows(&mut program_queue, &self.effective_shadow_footprints());
         apply_program_bounds(&mut program_queue, self.stage_bounds);
@@ -11987,6 +12085,55 @@ mod tests {
             .expect("the overlay is still a program")
             .parameters();
         assert_eq!(parameters.bounds_max[3], 0.0);
+    }
+
+    /// The incremental measure equals the full one, whatever the moving set does.
+    ///
+    /// The fast path re-unions only the items a patch moved onto the cached union of the
+    /// rest. That cache is exact as long as the moving set is the same, so a drag of one
+    /// part is O(1) per event; here it is checked against a full measure after each move.
+    #[test]
+    fn the_incremental_bounds_match_the_full_measure() {
+        let camera = Camera {
+            viewport: ferrocad_graphics::Viewport::new([100, 100], 1.0),
+            ..Camera::identity()
+        };
+        let mut viewport =
+            InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
+        viewport.set_overlays(vec![program_scene()]);
+        let slab = |entity: u32, x: f64| {
+            named_slab_for(entity).with_placement(Placement::new(
+                Vector3::new(x, 0.0, 0.0),
+                Rotation::identity(),
+            ))
+        };
+        let stage = |a: f64, b: f64, c: f64| {
+            Stage::new()
+                .with_item(slab(1, a))
+                .with_item(slab(2, b))
+                .with_item(slab(3, c))
+        };
+        viewport.set_stage(stage(0.0, 10.0, 20.0));
+        viewport.recompile();
+
+        let check = |viewport: &mut InventorViewport<_>, moving: &str| {
+            let incremental = viewport.stage_bounds;
+            let expected = viewport.measure_stage_bounds();
+            assert_eq!(incremental, expected, "moving set {moving}");
+        };
+
+        // One part dragged around: the same moving set, so the cached rest is reused. The
+        // last position also stops being the extreme, which the cache must notice.
+        for x in [1.0, 2.0, 3.0, 40.0, -5.0, 12.0] {
+            viewport.set_stage(stage(x, 10.0, 20.0));
+            check(&mut viewport, "part 1");
+        }
+        // A different part moves: a new moving set, so the full measure runs.
+        viewport.set_stage(stage(12.0, 50.0, 20.0));
+        check(&mut viewport, "part 2");
+        // Two parts in one patch.
+        viewport.set_stage(stage(-3.0, 50.0, 60.0));
+        check(&mut viewport, "parts 1 and 3");
     }
 
     /// The AABB is the stage's **world** box: a part's placement is part of it, so the

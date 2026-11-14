@@ -116,9 +116,9 @@ pub use interaction::{InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use session::{TransformSession, TransformTape};
-pub use shape::{DrawMode, ShapeItem};
+pub use shape::{DrawMode, ShapeGeometry, ShapeItem};
 /// The GPU-side visual tokens (also available as `ferrocad_graphics::theme`).
-pub use ferrocad_graphics::{ShaderProgram, theme};
+pub use ferrocad_graphics::{DepthState, ShaderProgram, theme};
 pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,
     snap_to_geometry_with,

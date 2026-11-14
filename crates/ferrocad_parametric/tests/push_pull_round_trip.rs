@@ -62,7 +62,7 @@ fn the_push_pull_stem_drives_the_document_in_one_transaction() {
     // stem, so the factory returning `Some` is itself the planarity check.
     let (object, entity, mut stem) = meshes
         .iter()
-        .filter(|mesh| mesh.parts.iter().any(|part| part == "Face1"))
+        .filter(|mesh| mesh.mesh.parts.iter().any(|part| part == "Face1"))
         .find_map(|mesh| {
             push_pull_stem_for(&SelectionRef::element(mesh.entity, "Face1"), &stage)
                 .map(|stem| (mesh.object.clone(), mesh.entity, stem))

@@ -32,8 +32,8 @@ fn main() -> Result<(), String> {
         println!(
             "stage: {} · {} triangles, {} edges",
             mesh.object,
-            mesh.triangles.len() / 3,
-            mesh.edges.len() / 2
+            mesh.mesh.triangles.len() / 3,
+            mesh.mesh.edges.len() / 2
         );
     }
     Ok(())

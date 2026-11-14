@@ -118,7 +118,7 @@ fn the_shipped_bundle_creates_and_draws_through_the_document_api() {
         Some(Ok(meshes)) => {
             assert!(!meshes.is_empty(), "the slab has a mesh");
             assert!(
-                meshes.iter().any(|mesh| !mesh.positions.is_empty()),
+                meshes.iter().any(|mesh| !mesh.mesh.positions.is_empty()),
                 "the mesh has vertices"
             );
         }

@@ -138,6 +138,7 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
         .find(|mesh| mesh.object != "Slab")
         .expect("the new slab");
     let created_min_x = created
+        .mesh
         .positions
         .iter()
         .map(|position| f64::from(position[0]))
@@ -147,7 +148,7 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
         "the new slab sits at x = 60: min x {created_min_x}"
     );
     assert!(
-        find(&displayed, "Slab").positions != created.positions,
+        find(&displayed, "Slab").mesh.positions != created.mesh.positions,
         "the two slabs have their own geometry"
     );
 
@@ -262,8 +263,8 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
     assert!(result.ok, "polyline failed: {}", result.error);
     let displayed = meshes();
     let line = find(&displayed, "Polyline");
-    assert!(line.triangles.is_empty(), "a polyline has no faces");
-    assert_eq!(line.edges.len(), 4, "two segments");
+    assert!(line.mesh.triangles.is_empty(), "a polyline has no faces");
+    assert_eq!(line.mesh.edges.len(), 4, "two segments");
     assert_eq!(line.display.as_deref(), Some("wireframe"));
 
     // Creation is one undoable transaction.

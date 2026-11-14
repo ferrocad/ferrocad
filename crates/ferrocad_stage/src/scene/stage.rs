@@ -186,11 +186,17 @@ mod tests {
 
     /// A commit syncs a rebuilt stage back to the viewport. Only a move may be patched;
     /// anything else the packets encode has to rebuild.
+    ///
+    /// The comparison is by geometry **identity**, which is what a synchroniser that
+    /// kept an unchanged item hands over: the same buffers, mesh ids and emitted passes.
+    /// Rebuilding an equal mesh is a different geometry object (a different upload), so
+    /// it is deliberately *not* a rigid match.
     #[test]
     fn same_rigid_items_sees_only_a_move() {
         let resting = Stage::new().with_item(triangle(7));
         let moved = Stage::new().with_item(
-            triangle(7)
+            resting.items()[0]
+                .clone()
                 .with_placement(Placement::new(
                     ferrocad_types::Vector3::new(1.0, 2.0, 3.0),
                     Rotation::identity(),
@@ -202,19 +208,30 @@ mod tests {
         assert!(resting.same_rigid_items(&moved));
         assert!(moved.same_rigid_items(&resting), "the comparison is symmetric");
 
-        // A rebuilt item allocates fresh mesh ids every time; that is not a difference,
-        // because the viewport keeps the item that already owns the renderer's upload.
+        // Rebuilding the same shape allocates fresh mesh ids and fresh buffers; that is a
+        // different geometry identity, so the renderer would have to upload it again.
         assert!(
-            resting.items()[0].same_rigid_shape(&triangle(7)),
-            "fresh mesh ids are not a change"
+            !resting.items()[0].same_rigid_shape(&triangle(7)),
+            "a rebuilt item is not the same upload"
         );
 
-        let mut recoloured = triangle(7);
+        let mut recoloured = resting.items()[0].clone();
         recoloured.set_surface_color([1.0, 0.0, 0.0, 1.0]);
         assert!(!resting.same_rigid_items(&Stage::new().with_item(recoloured)));
 
         // A different entity is a different object, even at the same place.
         assert!(!resting.same_rigid_items(&Stage::new().with_item(triangle(8))));
+
+        // New geometry on the same item is a new upload, even when it draws the same
+        // shape: `set_shape` copies the geometry it was shared with.
+        let mut rewritten = resting.items()[0].clone();
+        rewritten.set_shape(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![],
+            vec![0, 1, 2],
+            vec![],
+        );
+        assert!(!resting.same_rigid_items(&Stage::new().with_item(rewritten)));
 
         // And a different set of items is a different scene.
         assert!(!resting.same_rigid_items(&Stage::new()));

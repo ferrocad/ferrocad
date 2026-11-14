@@ -21,7 +21,7 @@ fn stage(backend: &RustAppBackend) -> Result<(usize, usize), String> {
     let meshes = backend.stage_meshes()?;
     Ok((
         meshes.len(),
-        meshes.iter().map(|mesh| mesh.triangles.len() / 3).sum(),
+        meshes.iter().map(|mesh| mesh.mesh.triangles.len() / 3).sum(),
     ))
 }
 
@@ -108,12 +108,12 @@ fn main() -> Result<(), String> {
         match (row(&before_move, object), row(&after_move, object)) {
             (Some(before), Some(after)) => eprintln!(
                 "row {object:<32} positions {} ({})   placement {:?} -> {:?}",
-                if before.positions == after.positions {
+                if before.mesh.positions == after.mesh.positions {
                     "identical"
                 } else {
                     "CHANGED"
                 },
-                before.positions.len(),
+                before.mesh.positions.len(),
                 translation(before.placement),
                 translation(after.placement)
             ),

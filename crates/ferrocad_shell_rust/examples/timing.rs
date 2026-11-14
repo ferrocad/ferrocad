@@ -26,7 +26,7 @@ fn main() -> Result<(), String> {
     for index in 0..3 {
         let started = std::time::Instant::now();
         let meshes = backend.stage_meshes()?;
-        let triangles: usize = meshes.iter().map(|mesh| mesh.triangles.len() / 3).sum();
+        let triangles: usize = meshes.iter().map(|mesh| mesh.mesh.triangles.len() / 3).sum();
         eprintln!(
             "rust: stage_meshes {index} {:?} ({} items, {triangles} triangles)",
             started.elapsed(),
@@ -36,7 +36,7 @@ fn main() -> Result<(), String> {
         for mesh in &meshes {
             let mut min = [f32::INFINITY; 3];
             let mut max = [f32::NEG_INFINITY; 3];
-            for point in &mesh.positions {
+            for point in &mesh.mesh.positions {
                 for axis in 0..3 {
                     min[axis] = min[axis].min(point[axis]);
                     max[axis] = max[axis].max(point[axis]);
@@ -51,7 +51,7 @@ fn main() -> Result<(), String> {
                 max[0],
                 max[1],
                 max[2],
-                mesh.triangles.len() / 3
+                mesh.mesh.triangles.len() / 3
             );
         }
     }
@@ -61,7 +61,7 @@ fn main() -> Result<(), String> {
     for mesh in backend.stage_meshes()? {
         stage.add_item(ShapeItem::from_tessellation_owned(
             mesh.entity,
-            mesh.into_tessellation(),
+            (*mesh.mesh).clone(),
         ));
     }
     for index in 0..3 {

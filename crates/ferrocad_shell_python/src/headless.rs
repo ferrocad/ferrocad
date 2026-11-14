@@ -153,11 +153,11 @@ fn write_stl(meshes: &[StageMesh], path: &Path) -> Result<StlReport, String> {
     let mut body = Vec::new();
     let mut count = 0u32;
     for mesh in meshes {
-        for triangle in mesh.triangles.chunks_exact(3) {
+        for triangle in mesh.mesh.triangles.chunks_exact(3) {
             let (Some(p0), Some(p1), Some(p2)) = (
-                mesh.positions.get(triangle[0] as usize),
-                mesh.positions.get(triangle[1] as usize),
-                mesh.positions.get(triangle[2] as usize),
+                mesh.mesh.positions.get(triangle[0] as usize),
+                mesh.mesh.positions.get(triangle[1] as usize),
+                mesh.mesh.positions.get(triangle[2] as usize),
             ) else {
                 continue;
             };
@@ -287,15 +287,12 @@ mod tests {
             entity: 1,
             object: "Triangle".to_string(),
             label: "Triangle".to_string(),
-            positions: vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
-            normals: Vec::new(),
-            triangles: vec![0, 1, 2],
-            triangle_parts: vec![0],
-            edges: Vec::new(),
-            segment_parts: Vec::new(),
-            vertices: Vec::new(),
-            vertex_parts: Vec::new(),
-            parts: Vec::new(),
+            mesh: std::sync::Arc::new(ferrocad_shell_core::display::Tessellation {
+                positions: vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+                triangles: vec![0, 1, 2],
+                triangle_parts: vec![0],
+                ..Default::default()
+            }),
             origin: None,
             placement: None,
             color: None,

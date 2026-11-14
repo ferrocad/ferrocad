@@ -265,7 +265,7 @@ fn a_manipulator_commit_routes_by_who_owns_it() {
         .expect("the edition's fillet is drawn");
     let entity = shown.entity;
     assert!(
-        shown.parts.iter().any(|part| part == "Edge1"),
+        shown.mesh.parts.iter().any(|part| part == "Edge1"),
         "the kernel names the box's edges"
     );
 
@@ -393,10 +393,10 @@ fn a_commit_moves_the_placement_not_the_rows() {
         .expect("the rigid body is still drawn");
 
     assert_eq!(
-        row_after.positions, row_before.positions,
+        row_after.mesh.positions, row_before.mesh.positions,
         "a rigid move does not rewrite the vertices"
     );
-    assert_eq!(row_after.triangles, row_before.triangles);
+    assert_eq!(row_after.mesh.triangles, row_before.mesh.triangles);
     let placement = row_after
         .placement
         .expect("the rows carry the move as a transform");
@@ -540,6 +540,7 @@ doc.recompute()
             .into_iter()
             .find(|mesh| mesh.object == "Ball")
             .expect("the hook draws the sphere")
+            .mesh
             .triangles
             .len()
             / 3

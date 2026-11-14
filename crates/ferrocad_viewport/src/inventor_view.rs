@@ -906,10 +906,10 @@ impl MarkerLayer {
             mesh_id: self.mesh,
             generation: self.generation,
             topology: Topology::Lines,
-            geometry: Some(Geometry {
+            geometry: Some(Arc::new(Geometry {
                 vertices: self.vertices.clone(),
                 indices: self.indices.clone(),
-            }),
+            })),
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
@@ -1134,7 +1134,7 @@ impl GridLayer {
             mesh_id,
             generation,
             topology,
-            geometry: Some(Geometry { vertices, indices }),
+            geometry: Some(Arc::new(Geometry { vertices, indices })),
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
@@ -1599,7 +1599,7 @@ fn feedback_packet(
         mesh_id,
         generation,
         topology,
-        geometry: Some(Geometry { vertices, indices }),
+        geometry: Some(Arc::new(Geometry { vertices, indices })),
         state: StateSnapshot {
             world_transform: Matrix4::identity(),
             color: [1.0, 1.0, 1.0, 1.0],
@@ -8457,7 +8457,10 @@ mod tests {
         use ferrocad_stage::Stage;
 
         let mut view = identity_viewport(Scene::default());
-        view.set_stage(Stage::new().with_item(named_slab_for(7)));
+        // One item, kept across the commit: a sync that leaves the geometry alone hands
+        // over the geometry it already drew (that is what makes the patch possible).
+        let resting = named_slab_for(7);
+        view.set_stage(Stage::new().with_item(resting.clone()));
         view.refresh();
         let drawn = view.queue.len();
         assert!(drawn > 0, "the stage emitted something to patch");
@@ -8466,7 +8469,7 @@ mod tests {
         // The stage a commit syncs back: the same item, moved. The origin comes from the
         // placement's base point, so it moves too — and it is the gizmo's anchor, so it
         // has to be adopted rather than compared.
-        let moved = named_slab_for(7)
+        let moved = resting
             .with_placement(Placement::new(
                 Vector3::new(5.0, 0.0, 0.0),
                 Rotation::identity(),
@@ -12196,17 +12199,23 @@ mod tests {
         let mut viewport =
             InventorViewport::new(fake(ImageData::default()), camera, triangle_scene());
         viewport.set_overlays(vec![program_scene()]);
-        let slab = |entity: u32, x: f64| {
-            named_slab_for(entity).with_placement(Placement::new(
+        // The three items are kept across the whole sequence: a sync that leaves a body
+        // alone hands over its geometry, so a move is the only difference the stage sees.
+        let base = Stage::new()
+            .with_item(named_slab_for(1))
+            .with_item(named_slab_for(2))
+            .with_item(named_slab_for(3));
+        let slab = |index: usize, x: f64| {
+            base.items()[index].clone().with_placement(Placement::new(
                 Vector3::new(x, 0.0, 0.0),
                 Rotation::identity(),
             ))
         };
         let stage = |a: f64, b: f64, c: f64| {
             Stage::new()
-                .with_item(slab(1, a))
-                .with_item(slab(2, b))
-                .with_item(slab(3, c))
+                .with_item(slab(0, a))
+                .with_item(slab(1, b))
+                .with_item(slab(2, c))
         };
         viewport.set_stage(stage(0.0, 10.0, 20.0));
         viewport.recompile();
@@ -12285,7 +12294,8 @@ mod tests {
             triangle_scene(),
         );
         viewport.set_overlays(vec![program_scene()]);
-        viewport.set_stage(Stage::new().with_item(named_slab()));
+        let resting = named_slab();
+        viewport.set_stage(Stage::new().with_item(resting.clone()));
         viewport.recompile();
         let bounds = |viewport: &InventorViewport<_>| {
             viewport.program_queue.packets[0]
@@ -12299,7 +12309,7 @@ mod tests {
         let before = bounds(&viewport);
 
         // Only the placement differs, so `set_stage` patches instead of rebuilding.
-        viewport.set_stage(Stage::new().with_item(named_slab().with_placement(
+        viewport.set_stage(Stage::new().with_item(resting.with_placement(
             Placement::new(Vector3::new(4.0, 0.0, 0.0), Rotation::identity()),
         )));
         assert!(

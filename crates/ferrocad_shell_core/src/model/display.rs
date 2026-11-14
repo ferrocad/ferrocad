@@ -11,9 +11,13 @@
 //! hook (see [`crate::shell`] and `docs/developer/architecture.md` §10).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use ferrocad_stage::{DrawMode, ShapeItem, Stage, theme};
+use ferrocad_stage::shape::BLENDED_DEPTH;
+use ferrocad_stage::{DepthState, DrawMode, ShapeItem, Stage, theme};
 
+/// The mesh a [`StageMesh`] carries (the seam's tessellation vocabulary).
+pub use ferrocad_geom::Tessellation;
 /// The seam's shape payload: documented in [`ferrocad_shell_api::display`].
 pub use ferrocad_shell_api::display::StageMesh;
 
@@ -42,12 +46,26 @@ fn glass_fill() -> [f32; 4] {
 
 /// The entity → document-object map, kept in step with the displayed stage.
 ///
-/// A pick reports an entity id; the inspector and the interaction handler need the
-/// document object's name. This is the only state the display path keeps, and it is
-/// rebuilt wholesale on every sync (a document has hundreds of objects, not millions).
+/// It also keeps the item each entity was last displayed with, so a sync that leaves a
+/// shape alone keeps its stage item — and with it the `MeshId` the renderer caches the
+/// upload under and the emitted vertex buffers the queues share. Rebuilding the item
+/// instead (which is what this used to do) allocated a fresh mesh identity per object per
+/// sync, so a commit re-uploaded the whole document to the GPU and re-emitted every
+/// vertex, twice.
 #[derive(Debug, Default, Clone)]
 pub struct DisplaySync {
     objects: HashMap<u32, String>,
+    /// The item each displayed entity was built as, with the mesh it was built from.
+    /// The mesh is compared by pointer first: a document backend hands over its
+    /// tessellation memo, so an unchanged object is `Arc::ptr_eq` and costs nothing.
+    items: HashMap<u32, Displayed>,
+}
+
+/// One entity's last displayed item and the mesh it was built from.
+#[derive(Debug, Clone)]
+struct Displayed {
+    mesh: Arc<Tessellation>,
+    item: ShapeItem,
 }
 
 impl DisplaySync {
@@ -61,59 +79,60 @@ impl DisplaySync {
     /// A mesh with no positions is skipped (a shape the workbench could not
     /// tessellate), and an empty result means "nothing to show" — the caller keeps the
     /// sample scene.
+    ///
+    /// An entity whose mesh is unchanged keeps the item it had: same [`ShapeItem`], so the
+    /// same mesh identities and the same emitted geometry. Only its placement, origin and
+    /// display attributes are taken from the new row. That is what makes a commit cost
+    /// follow the object that changed instead of the scene: the viewport's queue is still
+    /// re-emitted (a packet list is cheap when every pass is shared), but nothing but the
+    /// edited body is re-uploaded, and a rigid move still takes the transform-only path.
     pub fn build(&mut self, meshes: impl IntoIterator<Item = StageMesh>) -> Stage {
         let mut stage = Stage::new();
-        self.objects.clear();
-        for mut mesh in meshes {
-            if mesh.positions.is_empty() {
+        let mut objects = HashMap::with_capacity(self.objects.len());
+        let mut items = HashMap::with_capacity(self.items.len());
+        for mesh in meshes {
+            if mesh.mesh.positions.is_empty() {
                 continue;
             }
-            // Read the metadata off the row, then give the mesh up: the arrays move
-            // into the stage item instead of being copied a second time. `take` keeps
-            // the struct whole so `into_tessellation` can consume it.
             let entity = mesh.entity;
-            let object = std::mem::take(&mut mesh.object);
-            let display = std::mem::take(&mut mesh.display);
-            let origin = mesh.origin;
             // The rigid move the rows carry, when the host kept them in the frame they
             // were tessellated in. `positions` with it applied is world space, which is
             // what a row with no placement already is.
             let placement = mesh
                 .placement
                 .unwrap_or_else(ferrocad_types::Placement::identity);
-            let color = mesh.color;
-            let mut item = ShapeItem::from_tessellation_owned(entity, mesh.into_tessellation())
-                .with_draw_mode(display_mode(display.as_deref()))
-                .with_placement(placement)
-                .with_origin(origin);
-            if display.as_deref() == Some(GLASS_CARD) {
-                // A datum card: a low-alpha glass fill plus the front-edge rim, in
-                // the blended pass. No occluded ghost edges — the card is meant to
-                // be read through, and its rim is the whole boundary cue.
-                item = item
-                    .with_blended_surface()
-                    .with_surface_color(glass_fill())
-                    .with_shade_color(glass_fill())
-                    .with_edge_color(theme::EDGE_FRONT);
-            } else {
-                // Document solids get the V1 occluded-edge ghost; overlays do not.
-                item = item.with_ghost_edges();
-                if color.is_none() {
-                    // V2b: up-facing facets use the glass-top ink, the rest the shade.
-                    item = item
-                        .with_surface_color(theme::GLASS_TOP)
-                        .with_shade_color(theme::GLASS_SHADE);
+            let mut item = match self.items.remove(&entity) {
+                // The mesh is the same object the last sync drew: keep the item that
+                // already owns the renderer's upload. A script half answers with fresh
+                // rows, so its equal-but-distinct meshes are compared by content — once,
+                // for the rows a script supplies, not for a document's own objects.
+                Some(displayed)
+                    if Arc::ptr_eq(&displayed.mesh, &mesh.mesh)
+                        || *displayed.mesh == *mesh.mesh =>
+                {
+                    displayed.item
                 }
-                if let Some(color) = color {
-                    // The edge colour follows the surface, so a wireframe shows the
-                    // same colour as the shaded item. A workbench colour stays
-                    // single-tone.
-                    item = item.with_surface_color(color).with_edge_color(color);
-                }
-            }
-            self.objects.insert(entity, object);
+                _ => ShapeItem::from_tessellation_owned(entity, (*mesh.mesh).clone()),
+            };
+            item.set_placement(placement);
+            item.set_origin(mesh.origin);
+            // The highlight is view state (what the pointer is over), not the document's:
+            // the shell paints it again after a sync, so a reused item must not bring the
+            // previous selection's parts back with it.
+            item.set_highlight(std::iter::empty());
+            style(&mut item, mesh.display.as_deref(), mesh.color);
+            objects.insert(entity, mesh.object);
+            items.insert(
+                entity,
+                Displayed {
+                    mesh: mesh.mesh,
+                    item: item.clone(),
+                },
+            );
             stage.add_item(item);
         }
+        self.objects = objects;
+        self.items = items;
         stage
     }
 
@@ -158,30 +177,94 @@ fn display_mode(display: Option<&str>) -> DrawMode {
     }
 }
 
+/// Apply a row's display attributes to `item`.
+///
+/// Every field the row controls is written, not just the ones the row sets: an unchanged
+/// item is reused, and a row that switches representation — a solid becoming a glass
+/// datum card, or gaining a workbench colour — must not inherit a flag from the item it
+/// reused.
+fn style(item: &mut ShapeItem, display: Option<&str>, color: Option<[f32; 4]>) {
+    item.set_draw_mode(display_mode(display));
+    if display == Some(GLASS_CARD) {
+        // A datum card: a low-alpha glass fill plus the front-edge rim, in the blended
+        // pass. No occluded ghost edges — the card is meant to be read through, and its
+        // rim is the whole boundary cue.
+        item.set_surface_depth(BLENDED_DEPTH);
+        item.set_wire_depth(DepthState::default());
+        item.set_ghost_edges(false);
+        item.set_ghost_surface(false);
+        item.set_surface_color(glass_fill());
+        item.set_shade_color(Some(glass_fill()));
+        item.set_edge_color(theme::EDGE_FRONT);
+        return;
+    }
+    // Document solids get the V1 occluded-edge ghost; overlays do not.
+    item.set_surface_depth(DepthState::default());
+    item.set_wire_depth(DepthState::default());
+    item.set_ghost_edges(true);
+    item.set_ghost_surface(false);
+    match color {
+        Some(color) => {
+            // The edge colour follows the surface, so a wireframe shows the same colour
+            // as the shaded item. A workbench colour stays single-tone.
+            item.set_surface_color(color);
+            item.set_shade_color(None);
+            item.set_edge_color(color);
+        }
+        None => {
+            // V2b: up-facing facets use the glass-top ink, the rest the shade.
+            item.set_surface_color(theme::GLASS_TOP);
+            item.set_shade_color(Some(theme::GLASS_SHADE));
+            item.set_edge_color(theme::EDGE_FRONT);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A slab whose `Edge1` is the segment from (0,0,0) to (10,0,0), tagged `Face1`.
     fn slab(entity: u32, object: &str) -> StageMesh {
+        slab_with(
+            entity,
+            object,
+            vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+        )
+    }
+
+    /// The same row with an explicit mesh, so a test can change the geometry of one
+    /// entity while another stays put.
+    fn slab_with(entity: u32, object: &str, positions: Vec<[f32; 3]>) -> StageMesh {
         StageMesh {
             entity,
             object: object.to_string(),
             label: object.to_string(),
-            positions: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
-            normals: Vec::new(),
-            triangles: vec![0, 1, 2],
-            triangle_parts: vec![0],
-            edges: vec![0, 1],
-            segment_parts: vec![1],
-            vertices: Vec::new(),
-            vertex_parts: Vec::new(),
-            parts: vec!["Face1".to_string(), "Edge1".to_string()],
+            mesh: Arc::new(Tessellation {
+                positions,
+                triangles: vec![0, 1, 2],
+                triangle_parts: vec![0],
+                edges: vec![0, 1],
+                segment_parts: vec![1],
+                parts: vec!["Face1".to_string(), "Edge1".to_string()],
+                ..Tessellation::default()
+            }),
             origin: Some([0.0, 0.0, 0.0]),
             placement: None,
             color: None,
             display: None,
         }
+    }
+
+    /// The mesh ids `entity` draws with, in packet order.
+    fn mesh_ids(stage: &Stage, entity: u32) -> Vec<u64> {
+        stage
+            .to_queue()
+            .packets
+            .iter()
+            .filter(|packet| packet.state.id.0 == entity)
+            .map(|packet| packet.mesh_id.0)
+            .collect()
     }
 
     #[test]
@@ -205,8 +288,11 @@ mod tests {
     #[test]
     fn a_document_item_is_world_space_with_an_identity_placement() {
         let mut display = DisplaySync::new();
-        let mut mesh = slab(7, "Box");
-        mesh.positions = vec![[5.0, 0.0, 0.0], [15.0, 0.0, 0.0], [5.0, 10.0, 0.0]];
+        let mut mesh = slab_with(
+            7,
+            "Box",
+            vec![[5.0, 0.0, 0.0], [15.0, 0.0, 0.0], [5.0, 10.0, 0.0]],
+        );
         mesh.origin = Some([5.0, 0.0, 0.0]);
         let stage = display.build(vec![mesh]);
         let item = &stage.items()[0];
@@ -273,8 +359,7 @@ mod tests {
     #[test]
     fn a_mesh_without_positions_is_skipped() {
         let mut display = DisplaySync::new();
-        let mut empty = slab(8, "Empty");
-        empty.positions.clear();
+        let empty = slab_with(8, "Empty", Vec::new());
         let stage = display.build(vec![slab(7, "Box"), empty]);
         assert_eq!(stage.len(), 1);
         assert_eq!(display.object_of(7), Some("Box"));
@@ -316,5 +401,148 @@ mod tests {
             stage.item(9).expect("the item").draw_mode(),
             DrawMode::ShadedWithEdges
         );
+    }
+
+    /// A commit that leaves a shape alone must not re-upload it: the item it already drew
+    /// with is kept, mesh identity and all, so the renderer's `(mesh_id, generation)`
+    /// cache hits. Before this, every sync allocated a fresh identity per object and the
+    /// GPU re-uploaded the whole document.
+    #[test]
+    fn an_unchanged_mesh_keeps_its_mesh_identity() {
+        let mut display = DisplaySync::new();
+        let shared = Arc::new(Tessellation {
+            positions: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+            triangles: vec![0, 1, 2],
+            triangle_parts: vec![0],
+            edges: vec![0, 1],
+            segment_parts: vec![1],
+            parts: vec!["Face1".to_string(), "Edge1".to_string()],
+            ..Tessellation::default()
+        });
+        let row = |entity: u32, mesh: &Arc<Tessellation>| StageMesh {
+            entity,
+            object: "Box".to_string(),
+            label: "Box".to_string(),
+            mesh: Arc::clone(mesh),
+            origin: Some([0.0, 0.0, 0.0]),
+            placement: None,
+            color: None,
+            display: None,
+        };
+
+        let first = display.build([row(7, &shared), row(8, &shared)]);
+        let before = (mesh_ids(&first, 7), mesh_ids(&first, 8));
+        assert_eq!(
+            before.0.len(),
+            3,
+            "the surface, the front wire and its occluded ghost"
+        );
+
+        // The same document twice: the document backend hands over the memo's `Arc`, so
+        // this is exactly what a commit that changed nothing looks like.
+        let again = display.build([row(7, &shared), row(8, &shared)]);
+        assert_eq!(mesh_ids(&again, 7), before.0, "entity 7 keeps its upload");
+        assert_eq!(mesh_ids(&again, 8), before.1, "entity 8 keeps its upload");
+
+        // Reordering the rows is not a geometry change either.
+        let reordered = display.build([row(8, &shared), row(7, &shared)]);
+        assert_eq!(mesh_ids(&reordered, 7), before.0);
+        assert_eq!(mesh_ids(&reordered, 8), before.1);
+
+        // One object edited: only that one gets a new identity.
+        let edited = Arc::new(Tessellation {
+            positions: vec![[0.0, 0.0, 0.0], [20.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+            triangles: vec![0, 1, 2],
+            triangle_parts: vec![0],
+            edges: vec![0, 1],
+            segment_parts: vec![1],
+            parts: vec!["Face1".to_string(), "Edge1".to_string()],
+            ..Tessellation::default()
+        });
+        let after = display.build([row(7, &edited), row(8, &shared)]);
+        assert_ne!(mesh_ids(&after, 7), before.0, "the edited body re-uploads");
+        assert_eq!(mesh_ids(&after, 8), before.1, "its neighbour does not");
+    }
+
+    /// A script half answers with fresh rows, so its meshes are equal but distinct. They
+    /// still keep the item: the comparison falls back to the content.
+    #[test]
+    fn a_row_with_equal_content_keeps_its_mesh_identity() {
+        let mut display = DisplaySync::new();
+        let first = display.build([slab(7, "Box")]);
+        let before = mesh_ids(&first, 7);
+        let again = display.build([slab(7, "Box")]);
+        assert_eq!(mesh_ids(&again, 7), before);
+    }
+
+    /// A reused item takes the new row's placement, origin and style — including a switch
+    /// of representation, which must not leave the previous row's flags behind.
+    #[test]
+    fn a_reused_item_takes_the_rows_placement_and_style() {
+        use ferrocad_types::{Placement, Rotation, Vector3};
+
+        let mut display = DisplaySync::new();
+        let shared = Arc::new(Tessellation {
+            positions: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+            triangles: vec![0, 1, 2],
+            triangle_parts: vec![0],
+            edges: vec![0, 1],
+            segment_parts: vec![1],
+            ..Tessellation::default()
+        });
+        let row = |placement: Placement, origin: [f32; 3], display: Option<&str>| StageMesh {
+            entity: 7,
+            object: "Box".to_string(),
+            label: "Box".to_string(),
+            mesh: Arc::clone(&shared),
+            origin: Some(origin),
+            placement: Some(placement),
+            color: None,
+            display: display.map(str::to_string),
+        };
+
+        let resting = display.build([row(Placement::identity(), [0.0; 3], None)]);
+        let mut moved = display.build([row(
+            Placement::new(Vector3::new(3.0, 4.0, 0.0), Rotation::identity()),
+            [3.0, 4.0, 0.0],
+            None,
+        )]);
+        assert_eq!(
+            moved.items()[0].placement(),
+            Placement::new(Vector3::new(3.0, 4.0, 0.0), Rotation::identity())
+        );
+        assert_eq!(moved.items()[0].origin(), Some([3.0, 4.0, 0.0]));
+        // The move is the only change, so the viewport's transform-only path applies.
+        assert!(resting.same_rigid_items(&moved));
+        moved.items_mut()[0].set_placement(Placement::identity());
+        moved.items_mut()[0].set_origin(Some([0.0; 3]));
+        assert!(resting.same_rigid_items(&moved));
+
+        // A datum card reuses the same geometry but replaces every style flag.
+        let card = display.build([row(Placement::identity(), [0.0; 3], Some(GLASS_CARD))]);
+        let item = card.item(7).expect("the card");
+        assert_eq!(item.surface_color(), glass_fill());
+        assert!(!item.ghost_edges(), "the old solid's ghost pass is gone");
+        assert_eq!(item.surface_depth(), ferrocad_stage::shape::BLENDED_DEPTH);
+
+        // And back: the solid's flags come back with it.
+        let solid = display.build([row(Placement::identity(), [0.0; 3], None)]);
+        let item = solid.item(7).expect("the solid");
+        assert!(item.ghost_edges());
+        assert_eq!(item.surface_color(), theme::GLASS_TOP);
+        assert_eq!(item.surface_depth(), DepthState::default());
+    }
+
+    /// The highlight is view state, not the document's: a sync must not paint the
+    /// previous selection onto a shape the reused item brought along.
+    #[test]
+    fn a_reused_item_does_not_keep_the_selection() {
+        let mut display = DisplaySync::new();
+        let mut stage = display.build([slab(7, "Box")]);
+        stage.items_mut()[0].set_highlight([1]);
+        assert!(!stage.items()[0].highlight().is_empty());
+
+        let stage = display.build([slab(7, "Box")]);
+        assert!(stage.items()[0].highlight().is_empty());
     }
 }

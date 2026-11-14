@@ -64,6 +64,7 @@ fn min_x(stage: &[StageMesh]) -> f64 {
         .iter()
         .find(|mesh| mesh.object == "Fillet")
         .expect("the filleted body is drawn")
+        .mesh
         .positions
         .iter()
         .map(|position| f64::from(position[0]))

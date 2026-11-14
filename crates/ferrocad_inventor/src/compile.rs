@@ -584,7 +584,7 @@ fn emit_mesh(
         mesh_id,
         generation,
         topology,
-        geometry: Some(geometry),
+        geometry: Some(Arc::new(geometry)),
         state: state.snapshot(),
     });
 }

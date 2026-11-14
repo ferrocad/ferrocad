@@ -1,7 +1,8 @@
 //! Declarative CAD visual items and their compilation to draw batches.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use ferrocad_geom::Tessellation;
 use ferrocad_graphics::{
@@ -116,15 +117,17 @@ pub const WIRE_DEPTH_BIAS: f32 = 1e-5;
 
 /// A declarative, already-tessellated CAD shape.
 ///
-/// The item owns raw buffers — vertex positions, optional per-vertex normals, triangle
+/// The item draws raw buffers — vertex positions, optional per-vertex normals, triangle
 /// indices and edge segment indices — plus display attributes. It carries no document
 /// object and no scene-graph node: [`emit`](Self::emit) turns it into
 /// [`DrawPacket`](ferrocad_graphics::DrawPacket)s.
 ///
-/// The mesh identity is allocated once at construction and is **stable** across
-/// `emit` calls, so a renderer's `(mesh_id, generation)` upload cache hits; changing the
-/// geometry with [`set_shape`](Self::set_shape) bumps the generation to force a
-/// re-upload.
+/// The buffers, the mesh identities and the emitted [`Geometry`] live in a shared
+/// [`ShapeGeometry`], so an item that keeps its geometry across a document sync shares
+/// all three with every queue compiled from it (see [`ShapeGeometry`]). The mesh
+/// identity is allocated once per geometry and is **stable** across `emit` calls, so a
+/// renderer's `(mesh_id, generation)` upload cache hits; changing the geometry with
+/// [`set_shape`](Self::set_shape) bumps the generation to force a re-upload.
 #[derive(Clone, Debug)]
 pub struct ShapeItem {
     entity_id: u32,
@@ -155,41 +158,30 @@ pub struct ShapeItem {
     wire_depth: DepthState,
     edge_width: f32,
     selectable: bool,
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    /// Per-position texture coordinates; empty means `[0, 0]` everywhere.
-    ///
-    /// A screen-space ribbon puts its lateral coordinate in `x` (`0` at one edge,
-    /// `1` at the other) so the `fs_ribbon` stage can feather the silhouette.
-    uvs: Vec<[f32; 2]>,
     /// Whether the surface uses the unlit, anti-aliased ribbon fragment stage.
     ribbon_aa: bool,
-    triangles: Vec<u32>,
-    edges: Vec<u32>,
-    /// The sub-element id of each position ([`ferrocad_graphics::Vertex::part_idx`]);
-    /// empty means every vertex is part `0`.
-    parts: Vec<u32>,
+    /// The buffers, mesh ids and emitted passes this item draws. Shared, so two items can
+    /// draw the same geometry without a copy (a document sync reuses the item itself for
+    /// an unchanged object; see `DisplaySync`).
+    geometry: Arc<ShapeGeometry>,
     /// The object's own origin in world space (the placement's base point), when the
     /// provider knows it. A gizmo hugs it and doubles as an origin indicator; absent
     /// means the caller falls back to the bounding box's base corner.
     origin: Option<[f32; 3]>,
-    /// Part id → sub-element name (`Face6`), copied from [`Tessellation::parts`].
-    part_names: Vec<String>,
-    /// The position indices of the topological vertices.
-    vertices: Vec<u32>,
-    /// Whether to emit [`Topology::Points`] for [`vertices`](Self::vertices).
+    /// Whether to emit [`Topology::Points`] for the geometry's topological vertices.
     show_vertices: bool,
     /// The part ids to highlight (sorted and deduplicated).
     highlight: Vec<u32>,
-    surface_mesh: MeshId,
-    wire_mesh: MeshId,
-    points_mesh: MeshId,
     highlight_surface_mesh: MeshId,
     highlight_wire_mesh: MeshId,
-    generation: Generation,
     /// Bumped when the highlight changes, so its sub-meshes re-upload without
     /// invalidating the base mesh.
     highlight_generation: Generation,
+    /// The emitted highlight passes, derived from [`highlight`](Self::highlight) and the
+    /// geometry. Cached so re-emitting an unchanged selection is a pointer copy; cleared
+    /// by [`set_highlight`](Self::set_highlight).
+    highlight_surface: OnceLock<Option<Arc<Geometry>>>,
+    highlight_wire: OnceLock<Option<Arc<Geometry>>>,
     /// An authored shader program that draws this item's packets together with their own
     /// mesh. `None` means the scene material.
     program: Option<Arc<ShaderProgram>>,
@@ -200,6 +192,46 @@ pub struct ShapeItem {
     /// box against its transform keeps that O(items) instead of O(vertices): a move only
     /// changes the translation, and a translated box is the box shifted.
     world_bounds: Option<(Matrix4, ([f32; 3], [f32; 3]))>,
+}
+
+/// One shape's buffers, mesh identities and emitted draw passes.
+///
+/// Shared behind an [`Arc`] by every [`ShapeItem`] that draws it. A document sync rebuilds
+/// the stage's items on every commit, and doing that by copying each object's arrays was
+/// O(vertices) in the scene, twice (once into the new item, once into each queue compiled
+/// from it); a fresh [`MeshId`] per build also missed the renderer's upload cache, so the
+/// GPU re-uploaded every mesh. Both follow the geometry from the synchroniser to the
+/// renderer, so the id, the buffers and the emitted [`Geometry`] are shared and only an
+/// object whose mesh actually changed allocates a new identity.
+#[derive(Clone, Debug)]
+pub struct ShapeGeometry {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    /// Per-position texture coordinates; empty means `[0, 0]` everywhere.
+    ///
+    /// A screen-space ribbon puts its lateral coordinate in `x` (`0` at one edge,
+    /// `1` at the other) so the `fs_ribbon` stage can feather the silhouette.
+    uvs: Vec<[f32; 2]>,
+    triangles: Vec<u32>,
+    edges: Vec<u32>,
+    /// The sub-element id of each position ([`ferrocad_graphics::Vertex::part_idx`]);
+    /// empty means every vertex is part `0`.
+    parts: Vec<u32>,
+    /// Part id → sub-element name (`Face6`), copied from [`Tessellation::parts`].
+    part_names: Vec<String>,
+    /// The position indices of the topological vertices.
+    vertices: Vec<u32>,
+    surface_mesh: MeshId,
+    wire_mesh: MeshId,
+    points_mesh: MeshId,
+    generation: Generation,
+    /// The emitted surface pass, built on the first [`emit`](ShapeItem::emit). Cached
+    /// because it is a function of the buffers alone: the world matrix travels in the
+    /// packet state, so a re-emit of an unchanged item is a pointer copy rather than a
+    /// pass over every vertex.
+    surface: OnceLock<Option<Arc<Geometry>>>,
+    wire: OnceLock<Option<Arc<Geometry>>>,
+    points: OnceLock<Option<Arc<Geometry>>>,
 }
 
 impl ShapeItem {
@@ -220,25 +252,16 @@ impl ShapeItem {
             wire_depth: DepthState::default(),
             edge_width: 1.0,
             selectable: true,
-            positions: Vec::new(),
-            normals: Vec::new(),
-            uvs: Vec::new(),
             ribbon_aa: false,
-            triangles: Vec::new(),
-            edges: Vec::new(),
-            parts: Vec::new(),
+            geometry: Arc::new(ShapeGeometry::new()),
             origin: None,
-            part_names: Vec::new(),
-            vertices: Vec::new(),
             show_vertices: false,
             highlight: Vec::new(),
-            surface_mesh: next_mesh_id(),
-            wire_mesh: next_mesh_id(),
-            points_mesh: next_mesh_id(),
             highlight_surface_mesh: next_mesh_id(),
             highlight_wire_mesh: next_mesh_id(),
-            generation: Generation(0),
             highlight_generation: Generation(0),
+            highlight_surface: OnceLock::new(),
+            highlight_wire: OnceLock::new(),
             world_bounds: None,
             program: None,
         }
@@ -302,20 +325,30 @@ impl ShapeItem {
         edges: Vec<u32>,
         parts: Vec<u32>,
     ) {
-        self.positions = positions;
-        self.normals = normals;
-        self.uvs = uvs;
-        self.triangles = triangles;
-        self.edges = edges;
-        self.parts = parts;
-        self.part_names.clear();
-        self.vertices.clear();
-        // Any geometry change invalidates a renderer's cached upload for this mesh, and
-        // the world box measured from the old vertices.
+        self.geometry_mut()
+            .set_mesh(positions, normals, uvs, triangles, edges, parts);
+        // The world box is measured from the old vertices, and the highlight passes were
+        // cut from the old buffers.
         self.world_bounds = None;
-        self.generation = Generation(self.generation.0 + 1);
-        // The highlight is derived from the geometry, so its cache is stale too.
         self.highlight_generation = Generation(self.highlight_generation.0 + 1);
+        self.highlight_surface = OnceLock::new();
+        self.highlight_wire = OnceLock::new();
+    }
+
+    /// The geometry, ready to be rewritten.
+    ///
+    /// A geometry the item has to itself is rewritten in place: the renderer keys its
+    /// upload on `(mesh_id, generation)`, so the generation bump replaces the old buffers
+    /// instead of leaving them in the cache. A **shared** one (the same shape another item
+    /// is drawing, or a synchroniser's cache holds) is replaced by a new geometry with its
+    /// own mesh ids first — rewriting it would change a shape that is on screen, and
+    /// copying it under the same ids would leave two live generations fighting over one
+    /// cache entry.
+    fn geometry_mut(&mut self) -> &mut ShapeGeometry {
+        if Arc::get_mut(&mut self.geometry).is_none() {
+            self.geometry = Arc::new(ShapeGeometry::new());
+        }
+        Arc::get_mut(&mut self.geometry).expect("the geometry has one owner after the check")
     }
 
     /// The builder form of [`set_mesh`](Self::set_mesh).
@@ -333,7 +366,7 @@ impl ShapeItem {
 
     /// The per-position sub-element ids.
     pub fn parts(&self) -> &[u32] {
-        &self.parts
+        &self.geometry.parts
     }
 
     /// Replace the tessellation from a kernel's [`Tessellation`].
@@ -349,15 +382,18 @@ impl ShapeItem {
             Vec::new()
         };
         let parts = parts_from_tessellation(mesh);
-        self.set_mesh(
+        let geometry = self.geometry_mut();
+        geometry.set_mesh(
             mesh.positions.clone(),
             normals,
+            Vec::new(),
             mesh.triangles.clone(),
             mesh.edges.clone(),
             parts,
         );
-        self.part_names = mesh.parts.clone();
-        self.vertices = mesh.vertices.clone();
+        geometry.part_names = mesh.parts.clone();
+        geometry.vertices = mesh.vertices.clone();
+        self.world_bounds = None;
     }
 
     /// The builder form of [`set_tessellation`](Self::set_tessellation).
@@ -381,15 +417,18 @@ impl ShapeItem {
         let parts = parts_from_tessellation(&mesh);
         let part_names = std::mem::take(&mut mesh.parts);
         let vertices = std::mem::take(&mut mesh.vertices);
-        self.set_mesh(
+        let geometry = self.geometry_mut();
+        geometry.set_mesh(
             std::mem::take(&mut mesh.positions),
             normals,
+            Vec::new(),
             std::mem::take(&mut mesh.triangles),
             std::mem::take(&mut mesh.edges),
             parts,
         );
-        self.part_names = part_names;
-        self.vertices = vertices;
+        geometry.part_names = part_names;
+        geometry.vertices = vertices;
+        self.world_bounds = None;
     }
 
     /// The consuming builder form of [`set_tessellation_owned`](Self::set_tessellation_owned).
@@ -410,17 +449,20 @@ impl ShapeItem {
 
     /// The part id → element name table (`Face6`, `Edge3`).
     pub fn part_names(&self) -> &[String] {
-        &self.part_names
+        &self.geometry.part_names
     }
 
     /// The element name for part `id`.
     pub fn part_name(&self, id: u32) -> Option<&str> {
-        self.part_names.get(id as usize).map(String::as_str)
+        self.geometry
+            .part_names
+            .get(id as usize)
+            .map(String::as_str)
     }
 
     /// The position indices of the topological vertices.
     pub fn vertices(&self) -> &[u32] {
-        &self.vertices
+        &self.geometry.vertices
     }
 
     /// Emit the vertices as points (off by default).
@@ -444,6 +486,9 @@ impl ShapeItem {
         }
         self.highlight = next;
         self.highlight_generation = Generation(self.highlight_generation.0 + 1);
+        // The emitted highlight passes were built from the old part set.
+        self.highlight_surface = OnceLock::new();
+        self.highlight_wire = OnceLock::new();
     }
 
     /// The builder form of [`set_highlight`](Self::set_highlight).
@@ -470,16 +515,37 @@ impl ShapeItem {
         self
     }
 
+    /// Set the display mode in place.
+    ///
+    /// The setters from here to [`set_wire_depth`](Self::set_wire_depth) overwrite every
+    /// display field a document row controls. A synchroniser that keeps an item across a
+    /// sync (because its geometry did not change) rewrites the whole group, so a row that
+    /// switches representation — a solid becoming a glass datum card — cannot inherit a
+    /// flag from the item it reused.
+    pub fn set_draw_mode(&mut self, mode: DrawMode) {
+        self.draw_mode = mode;
+    }
+
     /// Set the surface colour.
     pub fn with_surface_color(mut self, color: [f32; 4]) -> Self {
         self.surface_color = color;
         self
     }
 
+    /// Set the surface colour in place (a state change; no re-upload).
+    pub fn set_surface_color(&mut self, color: [f32; 4]) {
+        self.surface_color = color;
+    }
+
     /// Set the edge colour.
     pub fn with_edge_color(mut self, color: [f32; 4]) -> Self {
         self.edge_color = color;
         self
+    }
+
+    /// Set the edge colour in place (a state change; no re-upload).
+    pub fn set_edge_color(&mut self, color: [f32; 4]) {
+        self.edge_color = color;
     }
 
     /// Set the side/down-facing colour for a two-tone surface.
@@ -491,10 +557,20 @@ impl ShapeItem {
         self
     }
 
+    /// Set or clear the side/down-facing colour in place.
+    pub fn set_shade_color(&mut self, color: Option<[f32; 4]>) {
+        self.shade_color = color;
+    }
+
     /// Emit the occluded-edge ghost pass. Document entities opt in; overlays do not.
     pub fn with_ghost_edges(mut self) -> Self {
         self.ghost_edges = true;
         self
+    }
+
+    /// Set whether the occluded-edge ghost pass is emitted.
+    pub fn set_ghost_edges(&mut self, emit: bool) {
+        self.ghost_edges = emit;
     }
 
     /// Emit the occluded surface/wire ghost pass at [`GHOST_SURFACE_ALPHA`].
@@ -505,6 +581,11 @@ impl ShapeItem {
     pub fn with_ghost_surface(mut self) -> Self {
         self.ghost_surface = true;
         self
+    }
+
+    /// Set whether the occluded surface/wire ghost pass is emitted.
+    pub fn set_ghost_surface(&mut self, emit: bool) {
+        self.ghost_surface = emit;
     }
 
     /// Set the alpha of the occluded surface/wire ghost pass (clamped to `0.0..=1.0`).
@@ -558,10 +639,20 @@ impl ShapeItem {
         self
     }
 
+    /// Set the surface pass's depth state in place.
+    pub fn set_surface_depth(&mut self, depth: DepthState) {
+        self.surface_depth = depth;
+    }
+
     /// Set the wire pass's depth state explicitly.
     pub fn with_wire_depth(mut self, depth: DepthState) -> Self {
         self.wire_depth = depth;
         self
+    }
+
+    /// Set the wire pass's depth state in place.
+    pub fn set_wire_depth(&mut self, depth: DepthState) {
+        self.wire_depth = depth;
     }
 
     /// Whether the occluded-edge ghost pass is emitted.
@@ -606,16 +697,6 @@ impl ShapeItem {
     /// re-upload is triggered.
     pub fn set_temporary_transform(&mut self, transform: Option<Matrix4>) {
         self.temporary_transform = transform;
-    }
-
-    /// Set the surface colour (a state change; no re-upload).
-    pub fn set_surface_color(&mut self, color: [f32; 4]) {
-        self.surface_color = color;
-    }
-
-    /// Set the edge colour (a state change; no re-upload).
-    pub fn set_edge_color(&mut self, color: [f32; 4]) {
-        self.edge_color = color;
     }
 
     /// Attach an authored shader program that shades this item's packets.
@@ -689,7 +770,7 @@ impl ShapeItem {
         }
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
-        for [x, y, z] in &self.positions {
+        for [x, y, z] in &self.geometry.positions {
             let point = world.transform(&Vector3::new(
                 f64::from(*x),
                 f64::from(*y),
@@ -748,7 +829,7 @@ impl ShapeItem {
 
     /// The current geometry generation.
     pub fn generation(&self) -> Generation {
-        self.generation
+        self.geometry.generation
     }
 
     /// Whether `other` draws the same packets as this item, apart from where it is.
@@ -757,13 +838,14 @@ impl ShapeItem {
     /// unchanged, so a viewport can keep the packets it already has and patch their
     /// world matrices ([`Stage::same_rigid_items`](crate::Stage::same_rigid_items)).
     ///
-    /// Three groups are deliberately left out: the placement, the preview transform and
-    /// the origin (the last is the placement's base point in world space, so it moves
-    /// with the item — those three are the difference this ignores, and a caller that
-    /// patches adopts them), the mesh identities (two items built from the same geometry
-    /// still allocate different [`MeshId`]s — it is the caller's job to keep the item that
-    /// already owns the renderer's upload), and the two generations (cache keys carrying
-    /// the item's history, not its content).
+    /// Two groups are deliberately left out. The placement, the preview transform and the
+    /// origin are the difference this ignores — the last is the placement's base point in
+    /// world space, so it moves with the item — and a caller that patches adopts them.
+    /// The geometry is compared by **identity** ([`Arc::ptr_eq`]): a [`ShapeGeometry`]
+    /// carries its mesh ids, so the two items drawing one are the same upload in the
+    /// renderer, and a synchroniser that leaves an object alone hands the next stage the
+    /// geometry it already emitted. Comparing the arrays instead would be a pass over
+    /// every vertex on every commit, which is the cost this fast path exists to avoid.
     pub fn same_rigid_shape(&self, other: &Self) -> bool {
         // Destructured without `..` on purpose: a field added to `ShapeItem` must be
         // classified here, or this comparison would silently stop covering it and a
@@ -783,27 +865,20 @@ impl ShapeItem {
             wire_depth,
             edge_width,
             selectable,
-            positions,
-            normals,
-            uvs,
             ribbon_aa,
-            triangles,
-            edges,
-            parts,
+            geometry,
             origin: _,
-            part_names,
-            vertices,
             show_vertices,
             highlight,
-            surface_mesh: _,
-            wire_mesh: _,
-            points_mesh: _,
             highlight_surface_mesh: _,
             highlight_wire_mesh: _,
-            generation: _,
             highlight_generation: _,
+            // The emitted highlight passes derive from `highlight` and `geometry`, which
+            // are compared here.
+            highlight_surface: _,
+            highlight_wire: _,
             // A cache derived from the positions and the transform, which are compared
-            // above: two items equal here have equal boxes whatever each cached.
+            // here: two items equal on those have equal boxes whatever each cached.
             world_bounds: _,
             program,
         } = self;
@@ -819,15 +894,8 @@ impl ShapeItem {
             && *wire_depth == other.wire_depth
             && *edge_width == other.edge_width
             && *selectable == other.selectable
-            && *positions == other.positions
-            && *normals == other.normals
-            && *uvs == other.uvs
             && *ribbon_aa == other.ribbon_aa
-            && *triangles == other.triangles
-            && *edges == other.edges
-            && *parts == other.parts
-            && *part_names == other.part_names
-            && *vertices == other.vertices
+            && Arc::ptr_eq(geometry, &other.geometry)
             && *show_vertices == other.show_vertices
             && *highlight == other.highlight
             && match (program, &other.program) {
@@ -839,7 +907,7 @@ impl ShapeItem {
 
     /// The vertex positions.
     pub fn positions(&self) -> &[[f32; 3]] {
-        &self.positions
+        &self.geometry.positions
     }
 
     /// The object's own origin in world space, when the display provider supplied it.
@@ -864,7 +932,7 @@ impl ShapeItem {
         // transform is deliberately not applied: a drag moves the triad explicitly, and
         // including it here would move the anchor twice.
         let world = self.placement.to_matrix();
-        self.positions.iter().fold(None, |acc, [x, y, z]| {
+        self.geometry.positions.iter().fold(None, |acc, [x, y, z]| {
             let point = world.transform(&Vector3::new(
                 f64::from(*x),
                 f64::from(*y),
@@ -894,17 +962,17 @@ impl ShapeItem {
 
     /// The per-vertex normals (empty when the surface is flat-shaded per triangle).
     pub fn normals(&self) -> &[[f32; 3]] {
-        &self.normals
+        &self.geometry.normals
     }
 
     /// The flat triangle indices, three per triangle.
     pub fn triangles(&self) -> &[u32] {
-        &self.triangles
+        &self.geometry.triangles
     }
 
     /// The flat edge segment indices, two per segment.
     pub fn edges(&self) -> &[u32] {
-        &self.edges
+        &self.geometry.edges
     }
 
     /// The model-space polyline of the topological edge named `name`, if the item
@@ -916,6 +984,380 @@ impl ShapeItem {
     /// on: a click reports `Edge3`, and this resolves it to points. A run that cannot be
     /// chained is returned in emission order rather than dropped.
     pub fn edge_polyline(&self, name: &str) -> Option<Vec<[f32; 3]>> {
+        self.geometry.edge_polyline(name)
+    }
+
+    /// Emit the item's draw packets into `queue`.
+    ///
+    /// Order: surface, wire, points, then the selection highlight: a subtle tint, then
+    /// the opaque highlight wire. Both highlight passes carry [`HIGHLIGHT_DEPTH_BIAS`],
+    /// so they win the depth test against the coplanar base geometry they mark.
+    pub fn emit(&self, queue: &mut RenderQueue) {
+        // The world transform: the placement, with the temporary preview composed after it.
+        let world = self.world_matrix();
+        if self.draw_mode.has_surface() {
+            if let Some(geometry) = self.geometry.surface_pass() {
+                queue.packets.push(self.packet_with_depth(
+                    self.geometry.surface_mesh,
+                    Topology::Triangles,
+                    Arc::clone(geometry),
+                    world,
+                    self.surface_color,
+                    0.0,
+                    self.geometry.generation,
+                    self.surface_depth,
+                    true,
+                ));
+                if self.ghost_surface {
+                    // Pass only where opaque geometry already wrote a nearer depth: the
+                    // hidden portion of a handle shows at 35 % instead of vanishing.
+                    queue.packets.push(self.packet_with_depth(
+                        self.geometry.surface_mesh,
+                        Topology::Triangles,
+                        Arc::clone(geometry),
+                        world,
+                        ghosted(self.surface_color, self.ghost_alpha),
+                        0.0,
+                        self.geometry.generation,
+                        GHOST_DEPTH,
+                        false,
+                    ));
+                }
+            }
+        }
+        if self.draw_mode.has_edges() {
+            if let Some(geometry) = self.geometry.wire_pass() {
+                queue.packets.push(self.packet_with_depth(
+                    self.geometry.wire_mesh,
+                    Topology::Lines,
+                    Arc::clone(geometry),
+                    world,
+                    self.edge_color,
+                    WIRE_DEPTH_BIAS,
+                    self.geometry.generation,
+                    self.wire_depth,
+                    true,
+                ));
+                if self.ghost_edges {
+                    // Pass only where the solid already wrote a nearer depth: the
+                    // hidden portions of the wire show at the ghost token.
+                    queue.packets.push(self.packet_with_depth(
+                        self.geometry.wire_mesh,
+                        Topology::Lines,
+                        Arc::clone(geometry),
+                        world,
+                        theme::EDGE_OCCLUDED,
+                        WIRE_DEPTH_BIAS,
+                        self.geometry.generation,
+                        GHOST_DEPTH,
+                        false,
+                    ));
+                }
+                if self.ghost_surface {
+                    queue.packets.push(self.packet_with_depth(
+                        self.geometry.wire_mesh,
+                        Topology::Lines,
+                        Arc::clone(geometry),
+                        world,
+                        ghosted(self.edge_color, self.ghost_alpha),
+                        WIRE_DEPTH_BIAS,
+                        self.geometry.generation,
+                        GHOST_DEPTH,
+                        false,
+                    ));
+                }
+            }
+        }
+        if self.show_vertices {
+            if let Some(geometry) = self.geometry.points_pass() {
+                queue.packets.push(self.packet(
+                    self.geometry.points_mesh,
+                    Topology::Points,
+                    Arc::clone(geometry),
+                    world,
+                    self.edge_color,
+                    0.0,
+                    self.geometry.generation,
+                ));
+            }
+        }
+
+        if self.highlight.is_empty() {
+            return;
+        }
+        if self.draw_mode.has_surface() {
+            if let Some(geometry) = self.highlight_surface_pass() {
+                let mut packet = self.packet_with_depth(
+                    self.highlight_surface_mesh,
+                    Topology::Triangles,
+                    geometry,
+                    world,
+                    HIGHLIGHT_TINT,
+                    HIGHLIGHT_DEPTH_BIAS,
+                    self.highlight_generation,
+                    HIGHLIGHT_DEPTH,
+                    true,
+                );
+                // Single-colour tint: the item's `shade` would select the untinted
+                // glass-shade token for side/down facets. The base surface below still
+                // carries the real two-tone material.
+                packet.state.shade = [0.0; 4];
+                queue.packets.push(packet);
+            }
+        }
+        // The highlight wire is a selection affordance, not part of the display style: a
+        // selected edge stays visible even when the item draws no base wire (`Shaded`).
+        if let Some(geometry) = self.highlight_wire_pass() {
+            queue.packets.push(self.packet(
+                self.highlight_wire_mesh,
+                Topology::Lines,
+                geometry,
+                world,
+                HIGHLIGHT_COLOR,
+                HIGHLIGHT_WIRE_DEPTH_BIAS,
+                self.highlight_generation,
+            ));
+        }
+    }
+
+    /// The picking id: the entity id when selectable, else the default (0).
+    fn pick_id(&self) -> PickId {
+        if self.selectable {
+            PickId(self.entity_id)
+        } else {
+            PickId::default()
+        }
+    }
+
+    fn packet(
+        &self,
+        mesh_id: MeshId,
+        topology: Topology,
+        geometry: Arc<Geometry>,
+        world_transform: ferrocad_types::Matrix4,
+        color: [f32; 4],
+        depth_bias: f32,
+        generation: Generation,
+    ) -> DrawPacket {
+        self.packet_with_depth(
+            mesh_id,
+            topology,
+            geometry,
+            world_transform,
+            color,
+            depth_bias,
+            generation,
+            DepthState::default(),
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn packet_with_depth(
+        &self,
+        mesh_id: MeshId,
+        topology: Topology,
+        geometry: Arc<Geometry>,
+        world_transform: ferrocad_types::Matrix4,
+        color: [f32; 4],
+        depth_bias: f32,
+        generation: Generation,
+        depth: DepthState,
+        pickable: bool,
+    ) -> DrawPacket {
+        DrawPacket {
+            mesh_id,
+            generation,
+            topology,
+            geometry: Some(geometry),
+            state: StateSnapshot {
+                world_transform,
+                color,
+                shade: self.shade_color.unwrap_or([0.0; 4]),
+                depth_bias,
+                texture: None,
+                id: self.pick_id(),
+                depth,
+                pickable,
+                ribbon: self.ribbon_aa,
+                program: self.program.clone(),
+            },
+        }
+    }
+
+    /// Whether `part` is selected (`highlight` is sorted and deduplicated).
+    fn is_highlighted(&self, part: u32) -> bool {
+        self.highlight.binary_search(&part).is_ok()
+    }
+
+    /// The highlighted triangles, flat-shaded so each carries its part id.
+    ///
+    /// Derived from the geometry plus [`highlight`](Self::highlight), so it is cached
+    /// here rather than in the [`ShapeGeometry`] that the rest of the passes share.
+    fn highlight_surface_pass(&self) -> Option<Arc<Geometry>> {
+        self.highlight_surface
+            .get_or_init(|| {
+                let mut selected = Vec::new();
+                for triangle in self.geometry.triangles.chunks_exact(3) {
+                    if self.is_highlighted(self.geometry.part_at(triangle[0])) {
+                        selected.extend_from_slice(triangle);
+                    }
+                }
+                if selected.is_empty() {
+                    return None;
+                }
+                Some(Arc::new(flat_surface(
+                    &self.geometry.positions,
+                    &self.geometry.uvs,
+                    &selected,
+                    &self.geometry.parts,
+                )))
+            })
+            .clone()
+    }
+
+    /// The highlighted edge segments.
+    fn highlight_wire_pass(&self) -> Option<Arc<Geometry>> {
+        self.highlight_wire
+            .get_or_init(|| {
+                let mut selected = Vec::new();
+                for segment in self.geometry.edges.chunks_exact(2) {
+                    if self.is_highlighted(self.geometry.part_at(segment[0])) {
+                        selected.extend_from_slice(segment);
+                    }
+                }
+                if selected.is_empty() {
+                    return None;
+                }
+                self.geometry.wire_geometry_for(&selected).map(Arc::new)
+            })
+            .clone()
+    }
+}
+
+impl ShapeGeometry {
+    /// The shaded surface: indexed when per-vertex normals are supplied, flat-shaded
+    /// (one unrolled triangle) otherwise. Built once and shared from then on.
+    fn surface_pass(&self) -> Option<&Arc<Geometry>> {
+        self.surface
+            .get_or_init(|| {
+                if self.triangles.len() < 3 {
+                    return None;
+                }
+                if !self.normals.is_empty() && self.normals.len() == self.positions.len() {
+                    let vertices = self
+                        .positions
+                        .iter()
+                        .enumerate()
+                        .zip(&self.normals)
+                        .map(|((index, position), normal)| Vertex {
+                            position: *position,
+                            normal: *normal,
+                            uv: self.uvs.get(index).copied().unwrap_or([0.0, 0.0]),
+                            part_idx: self.parts.get(index).copied().unwrap_or(0),
+                            color: [1.0, 1.0, 1.0, 1.0],
+                        })
+                        .collect();
+                    Some(Arc::new(Geometry {
+                        vertices,
+                        indices: self.triangles.clone(),
+                    }))
+                } else {
+                    Some(Arc::new(flat_surface(
+                        &self.positions,
+                        &self.uvs,
+                        &self.triangles,
+                        &self.parts,
+                    )))
+                }
+            })
+            .as_ref()
+    }
+
+    /// The wireframe: the position buffer indexed by the edge segments. Built once and
+    /// shared from then on.
+    fn wire_pass(&self) -> Option<&Arc<Geometry>> {
+        self.wire
+            .get_or_init(|| self.wire_geometry_for(&self.edges).map(Arc::new))
+            .as_ref()
+    }
+
+    /// The wireframe for a subset of segment indices.
+    ///
+    /// Only the positions the indices name are emitted, re-indexed onto the run: a
+    /// highlight selects one edge of a body that may have a million vertices, and
+    /// carrying the whole buffer would make each selection a full pass over them.
+    fn wire_geometry_for(&self, indices: &[u32]) -> Option<Geometry> {
+        if indices.len() < 2 {
+            return None;
+        }
+        let mut vertices: Vec<Vertex> = Vec::new();
+        let mut remapped = Vec::with_capacity(indices.len());
+        // Positions are referenced repeatedly (a shared corner belongs to several
+        // segments), so the index of the emitted vertex is remembered per position.
+        let mut emitted: HashMap<u32, u32> = HashMap::new();
+        for &index in indices {
+            let Some(position) = self.positions.get(index as usize) else {
+                continue;
+            };
+            let emitted_index = *emitted.entry(index).or_insert_with(|| {
+                let emitted_index = vertices.len() as u32;
+                vertices.push(Vertex {
+                    position: *position,
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.0, 0.0],
+                    part_idx: self.parts.get(index as usize).copied().unwrap_or(0),
+                    color: [1.0, 1.0, 1.0, 1.0],
+                });
+                emitted_index
+            });
+            remapped.push(emitted_index);
+        }
+        if remapped.len() < 2 {
+            return None;
+        }
+        Some(Geometry {
+            vertices,
+            indices: remapped,
+        })
+    }
+
+    /// The topological vertices, as a point list. Built once and shared from then on.
+    fn points_pass(&self) -> Option<&Arc<Geometry>> {
+        self.points
+            .get_or_init(|| {
+                let mut vertices = Vec::with_capacity(self.vertices.len());
+                let mut indices = Vec::with_capacity(self.vertices.len());
+                for &position_index in &self.vertices {
+                    let Some(position) = self.positions.get(position_index as usize) else {
+                        continue;
+                    };
+                    indices.push(vertices.len() as u32);
+                    vertices.push(Vertex {
+                        position: *position,
+                        normal: [0.0, 0.0, 1.0],
+                        uv: [0.0, 0.0],
+                        part_idx: self
+                            .parts
+                            .get(position_index as usize)
+                            .copied()
+                            .unwrap_or(0),
+                        color: [1.0, 1.0, 1.0, 1.0],
+                    });
+                }
+                (!vertices.is_empty()).then(|| Arc::new(Geometry { vertices, indices }))
+            })
+            .as_ref()
+    }
+
+    /// The part id at a position (the triangles and segments that use it agree).
+    fn part_at(&self, position: u32) -> u32 {
+        self.parts.get(position as usize).copied().unwrap_or(0)
+    }
+
+    /// The model-space polyline of the topological edge named `name`, if the geometry
+    /// carries one (see [`ShapeItem::edge_polyline`]).
+    fn edge_polyline(&self, name: &str) -> Option<Vec<[f32; 3]>> {
         let part = self
             .part_names
             .iter()
@@ -946,331 +1388,64 @@ impl ShapeItem {
         }
         Some(points)
     }
+}
 
-    /// Emit the item's draw packets into `queue`.
+impl ShapeGeometry {
+    /// An empty geometry, with its own mesh identities.
+    pub fn new() -> Self {
+        Self {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            uvs: Vec::new(),
+            triangles: Vec::new(),
+            edges: Vec::new(),
+            parts: Vec::new(),
+            part_names: Vec::new(),
+            vertices: Vec::new(),
+            surface_mesh: next_mesh_id(),
+            wire_mesh: next_mesh_id(),
+            points_mesh: next_mesh_id(),
+            generation: Generation(0),
+            surface: OnceLock::new(),
+            wire: OnceLock::new(),
+            points: OnceLock::new(),
+        }
+    }
+
+    /// Replace the buffers.
     ///
-    /// Order: surface, wire, points, then the selection highlight: a subtle tint, then
-    /// the opaque highlight wire. Both highlight passes carry [`HIGHLIGHT_DEPTH_BIAS`],
-    /// so they win the depth test against the coplanar base geometry they mark.
-    pub fn emit(&self, queue: &mut RenderQueue) {
-        // The world transform: the placement, with the temporary preview composed after it.
-        let world = self.world_matrix();
-        if self.draw_mode.has_surface() {
-            if let Some(geometry) = self.surface_geometry() {
-                queue.packets.push(self.packet_with_depth(
-                    self.surface_mesh,
-                    Topology::Triangles,
-                    geometry.clone(),
-                    world,
-                    self.surface_color,
-                    0.0,
-                    self.generation,
-                    self.surface_depth,
-                    true,
-                ));
-                if self.ghost_surface {
-                    // Pass only where opaque geometry already wrote a nearer depth: the
-                    // hidden portion of a handle shows at 35 % instead of vanishing.
-                    queue.packets.push(self.packet_with_depth(
-                        self.surface_mesh,
-                        Topology::Triangles,
-                        geometry,
-                        world,
-                        ghosted(self.surface_color, self.ghost_alpha),
-                        0.0,
-                        self.generation,
-                        GHOST_DEPTH,
-                        false,
-                    ));
-                }
-            }
-        }
-        if self.draw_mode.has_edges() {
-            if let Some(geometry) = self.wire_geometry() {
-                queue.packets.push(self.packet_with_depth(
-                    self.wire_mesh,
-                    Topology::Lines,
-                    geometry.clone(),
-                    world,
-                    self.edge_color,
-                    WIRE_DEPTH_BIAS,
-                    self.generation,
-                    self.wire_depth,
-                    true,
-                ));
-                if self.ghost_edges {
-                    // Pass only where the solid already wrote a nearer depth: the
-                    // hidden portions of the wire show at the ghost token.
-                    queue.packets.push(self.packet_with_depth(
-                        self.wire_mesh,
-                        Topology::Lines,
-                        geometry.clone(),
-                        world,
-                        theme::EDGE_OCCLUDED,
-                        WIRE_DEPTH_BIAS,
-                        self.generation,
-                        GHOST_DEPTH,
-                        false,
-                    ));
-                }
-                if self.ghost_surface {
-                    queue.packets.push(self.packet_with_depth(
-                        self.wire_mesh,
-                        Topology::Lines,
-                        geometry,
-                        world,
-                        ghosted(self.edge_color, self.ghost_alpha),
-                        WIRE_DEPTH_BIAS,
-                        self.generation,
-                        GHOST_DEPTH,
-                        false,
-                    ));
-                }
-            }
-        }
-        if self.show_vertices {
-            if let Some(geometry) = self.points_geometry() {
-                queue.packets.push(self.packet(
-                    self.points_mesh,
-                    Topology::Points,
-                    geometry,
-                    world,
-                    self.edge_color,
-                    0.0,
-                    self.generation,
-                ));
-            }
-        }
-
-        if self.highlight.is_empty() {
-            return;
-        }
-        if self.draw_mode.has_surface() {
-            if let Some(geometry) = self.highlight_surface_geometry() {
-                let mut packet = self.packet_with_depth(
-                    self.highlight_surface_mesh,
-                    Topology::Triangles,
-                    geometry,
-                    world,
-                    HIGHLIGHT_TINT,
-                    HIGHLIGHT_DEPTH_BIAS,
-                    self.highlight_generation,
-                    HIGHLIGHT_DEPTH,
-                    true,
-                );
-                // Single-colour tint: the item's `shade` would select the untinted
-                // glass-shade token for side/down facets. The base surface below still
-                // carries the real two-tone material.
-                packet.state.shade = [0.0; 4];
-                queue.packets.push(packet);
-            }
-        }
-        // The highlight wire is a selection affordance, not part of the display style: a
-        // selected edge stays visible even when the item draws no base wire (`Shaded`).
-        if let Some(geometry) = self.highlight_wire_geometry() {
-            queue.packets.push(self.packet(
-                self.highlight_wire_mesh,
-                Topology::Lines,
-                geometry,
-                world,
-                HIGHLIGHT_COLOR,
-                HIGHLIGHT_WIRE_DEPTH_BIAS,
-                self.highlight_generation,
-            ));
-        }
+    /// The mesh identities stay: a renderer keys its upload on `(mesh_id, generation)`, so
+    /// bumping the generation evicts the stale upload for the same id instead of leaking a
+    /// new one into the cache on every edit.
+    fn set_mesh(
+        &mut self,
+        positions: Vec<[f32; 3]>,
+        normals: Vec<[f32; 3]>,
+        uvs: Vec<[f32; 2]>,
+        triangles: Vec<u32>,
+        edges: Vec<u32>,
+        parts: Vec<u32>,
+    ) {
+        self.positions = positions;
+        self.normals = normals;
+        self.uvs = uvs;
+        self.triangles = triangles;
+        self.edges = edges;
+        self.parts = parts;
+        self.part_names.clear();
+        self.vertices.clear();
+        // Any geometry change invalidates a renderer's cached upload for this mesh, and
+        // the emitted passes built from the old buffers.
+        self.generation = Generation(self.generation.0 + 1);
+        self.surface = OnceLock::new();
+        self.wire = OnceLock::new();
+        self.points = OnceLock::new();
     }
+}
 
-    /// The picking id: the entity id when selectable, else the default (0).
-    fn pick_id(&self) -> PickId {
-        if self.selectable {
-            PickId(self.entity_id)
-        } else {
-            PickId::default()
-        }
-    }
-
-    fn packet(
-        &self,
-        mesh_id: MeshId,
-        topology: Topology,
-        geometry: Geometry,
-        world_transform: ferrocad_types::Matrix4,
-        color: [f32; 4],
-        depth_bias: f32,
-        generation: Generation,
-    ) -> DrawPacket {
-        self.packet_with_depth(
-            mesh_id,
-            topology,
-            geometry,
-            world_transform,
-            color,
-            depth_bias,
-            generation,
-            DepthState::default(),
-            true,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn packet_with_depth(
-        &self,
-        mesh_id: MeshId,
-        topology: Topology,
-        geometry: Geometry,
-        world_transform: ferrocad_types::Matrix4,
-        color: [f32; 4],
-        depth_bias: f32,
-        generation: Generation,
-        depth: DepthState,
-        pickable: bool,
-    ) -> DrawPacket {
-        DrawPacket {
-            mesh_id,
-            generation,
-            topology,
-            geometry: Some(geometry),
-            state: StateSnapshot {
-                world_transform,
-                color,
-                shade: self.shade_color.unwrap_or([0.0; 4]),
-                depth_bias,
-                texture: None,
-                id: self.pick_id(),
-                depth,
-                pickable,
-                ribbon: self.ribbon_aa,
-                program: self.program.clone(),
-            },
-        }
-    }
-
-    /// The shaded surface: indexed when per-vertex normals are supplied, flat-shaded
-    /// (one unrolled triangle) otherwise.
-    fn surface_geometry(&self) -> Option<Geometry> {
-        if self.triangles.len() < 3 {
-            return None;
-        }
-        if !self.normals.is_empty() && self.normals.len() == self.positions.len() {
-            let vertices = self
-                .positions
-                .iter()
-                .enumerate()
-                .zip(&self.normals)
-                .map(|((index, position), normal)| Vertex {
-                    position: *position,
-                    normal: *normal,
-                    uv: self.uvs.get(index).copied().unwrap_or([0.0, 0.0]),
-                    part_idx: self.parts.get(index).copied().unwrap_or(0),
-                    color: [1.0, 1.0, 1.0, 1.0],
-                })
-                .collect();
-            Some(Geometry {
-                vertices,
-                indices: self.triangles.clone(),
-            })
-        } else {
-            Some(flat_surface(
-                &self.positions,
-                &self.uvs,
-                &self.triangles,
-                &self.parts,
-            ))
-        }
-    }
-
-    /// The wireframe: the position buffer indexed by the edge segments.
-    fn wire_geometry(&self) -> Option<Geometry> {
-        self.wire_geometry_for(&self.edges)
-    }
-
-    /// The wireframe for a subset of segment indices.
-    fn wire_geometry_for(&self, indices: &[u32]) -> Option<Geometry> {
-        if indices.len() < 2 {
-            return None;
-        }
-        let vertices = self
-            .positions
-            .iter()
-            .enumerate()
-            .map(|(index, position)| Vertex {
-                position: *position,
-                normal: [0.0, 0.0, 1.0],
-                uv: [0.0, 0.0],
-                part_idx: self.parts.get(index).copied().unwrap_or(0),
-                color: [1.0, 1.0, 1.0, 1.0],
-            })
-            .collect();
-        Some(Geometry {
-            vertices,
-            indices: indices.to_vec(),
-        })
-    }
-
-    /// The topological vertices, as a point list.
-    fn points_geometry(&self) -> Option<Geometry> {
-        let mut vertices = Vec::with_capacity(self.vertices.len());
-        let mut indices = Vec::with_capacity(self.vertices.len());
-        for &position_index in &self.vertices {
-            let Some(position) = self.positions.get(position_index as usize) else {
-                continue;
-            };
-            indices.push(vertices.len() as u32);
-            vertices.push(Vertex {
-                position: *position,
-                normal: [0.0, 0.0, 1.0],
-                uv: [0.0, 0.0],
-                part_idx: self
-                    .parts
-                    .get(position_index as usize)
-                    .copied()
-                    .unwrap_or(0),
-                color: [1.0, 1.0, 1.0, 1.0],
-            });
-        }
-        (!vertices.is_empty()).then_some(Geometry { vertices, indices })
-    }
-
-    /// The part id at a position (the triangles and segments that use it agree).
-    fn part_at(&self, position: u32) -> u32 {
-        self.parts.get(position as usize).copied().unwrap_or(0)
-    }
-
-    fn is_highlighted(&self, part: u32) -> bool {
-        self.highlight.binary_search(&part).is_ok()
-    }
-
-    /// The highlighted triangles, flat-shaded so each carries its part id.
-    fn highlight_surface_geometry(&self) -> Option<Geometry> {
-        let mut selected = Vec::new();
-        for triangle in self.triangles.chunks_exact(3) {
-            if self.is_highlighted(self.part_at(triangle[0])) {
-                selected.extend_from_slice(triangle);
-            }
-        }
-        if selected.is_empty() {
-            return None;
-        }
-        Some(flat_surface(
-            &self.positions,
-            &self.uvs,
-            &selected,
-            &self.parts,
-        ))
-    }
-
-    /// The highlighted edge segments.
-    fn highlight_wire_geometry(&self) -> Option<Geometry> {
-        let mut selected = Vec::new();
-        for segment in self.edges.chunks_exact(2) {
-            if self.is_highlighted(self.part_at(segment[0])) {
-                selected.extend_from_slice(segment);
-            }
-        }
-        if selected.is_empty() {
-            return None;
-        }
-        self.wire_geometry_for(&selected)
+impl Default for ShapeGeometry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1790,12 +1965,49 @@ mod tests {
             .expect("a highlight wire packet");
         assert_eq!(wire.state.depth_bias, HIGHLIGHT_WIRE_DEPTH_BIAS);
         let geometry = wire.geometry.as_ref().expect("fresh geometry");
-        assert_eq!(geometry.indices, vec![6, 7], "only the selected edge");
+        // Only the selected edge is carried: the run is re-indexed onto the positions it
+        // names, so a highlight on a million-vertex body is a two-vertex buffer.
+        assert_eq!(geometry.indices.len(), 2, "one segment");
+        let drawn: Vec<[f32; 3]> = geometry
+            .indices
+            .iter()
+            .map(|&index| geometry.vertices[index as usize].position)
+            .collect();
+        assert_eq!(drawn, vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
         assert!(
             geometry
                 .indices
                 .iter()
                 .all(|&index| geometry.vertices[index as usize].part_idx == 2)
+        );
+    }
+
+    /// The highlight passes are cut from the geometry, so a rewrite rebuilds them: the
+    /// selected part ids may not even exist in the new buffers.
+    #[test]
+    fn rewriting_the_geometry_rebuilds_the_highlight() {
+        let mesh = two_part_tessellation();
+        let mut item = ShapeItem::from_tessellation(7, &mesh)
+            .with_draw_mode(DrawMode::ShadedWithEdges)
+            .with_highlight([1]);
+        assert!(
+            emit(&item).packets.iter().any(|packet| packet.state.color == HIGHLIGHT_TINT),
+            "the selected face is tinted"
+        );
+
+        // A plain triangle: one part, so nothing carries part 1 any more.
+        item.set_shape(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![],
+            vec![0, 1, 2],
+            vec![],
+        );
+        assert!(
+            !emit(&item)
+                .packets
+                .iter()
+                .any(|packet| packet.state.color == HIGHLIGHT_TINT),
+            "the stale tint from the old buffers is gone"
         );
     }
 
@@ -1845,8 +2057,77 @@ mod tests {
     fn set_shape_bumps_the_generation() {
         let mut item = triangle_item();
         assert_eq!(item.generation(), Generation(1));
+        let before = emit(&item).packets[0].mesh_id;
         item.set_shape(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], vec![], vec![0, 1, 2], vec![]);
         assert_eq!(item.generation(), Generation(2));
+        assert_eq!(
+            emit(&item).packets[0].mesh_id,
+            before,
+            "a rewrite the item owns replaces its upload instead of adding one"
+        );
+    }
+
+    /// Re-emitting an item is a pointer copy: the passes are a function of the buffers,
+    /// so they are built on the first emit and shared from then on. That is what makes a
+    /// queue rebuild (a commit, a highlight, `published_stage`) independent of the
+    /// triangle count.
+    #[test]
+    fn a_re_emit_shares_the_emitted_geometry() {
+        let item = triangle_item().with_draw_mode(DrawMode::ShadedWithEdges);
+        let first = emit(&item);
+        let second = emit(&item);
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.packets.iter().zip(&second.packets) {
+            assert!(
+                Arc::ptr_eq(
+                    a.geometry.as_ref().expect("emitted"),
+                    b.geometry.as_ref().expect("emitted")
+                ),
+                "the second emit reuses the buffers"
+            );
+        }
+
+        // A geometry rewrite builds new buffers (and a new generation).
+        let mut rewritten = item.clone();
+        rewritten.set_shape(
+            vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+            vec![],
+            vec![0, 1, 2],
+            vec![],
+        );
+        let third = emit(&rewritten);
+        assert!(!Arc::ptr_eq(
+            first.packets[0].geometry.as_ref().expect("emitted"),
+            third.packets[0].geometry.as_ref().expect("emitted")
+        ));
+    }
+
+    /// Rewriting geometry another item is still drawing gives the rewriter a geometry of
+    /// its own — with its own mesh ids, or two live generations would share one cache
+    /// entry in the renderer.
+    #[test]
+    fn rewriting_a_shared_geometry_allocates_a_new_one() {
+        let mut item = triangle_item().with_draw_mode(DrawMode::ShadedWithEdges);
+        let observer = item.clone();
+        let before = emit(&item).packets[0].mesh_id;
+
+        item.set_shape(
+            vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+            vec![],
+            vec![0, 1, 2],
+            vec![],
+        );
+        assert_ne!(
+            emit(&item).packets[0].mesh_id,
+            before,
+            "a shared rewrite is a new upload, not a replaced one"
+        );
+        assert_eq!(
+            emit(&observer).packets[0].mesh_id,
+            before,
+            "the item it shared with still draws its own geometry"
+        );
+        assert_eq!(observer.positions(), &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
     }
 
     #[test]

@@ -81,7 +81,7 @@ fn the_part_fillet_manipulator_drives_the_document() {
         .expect("the seeded Fillet is displayed");
     let entity = box_mesh.entity;
     assert!(
-        box_mesh.parts.iter().any(|part| part == "Edge1"),
+        box_mesh.mesh.parts.iter().any(|part| part == "Edge1"),
         "the kernel names the fillet's edges"
     );
 
@@ -141,6 +141,7 @@ fn the_part_fillet_manipulator_drives_the_document() {
         .find(|mesh| mesh.object == "Fillet_Fillet")
         .expect("the fillet mesh");
     let faces = feature
+        .mesh
         .parts
         .iter()
         .filter(|part| part.starts_with("Face"))

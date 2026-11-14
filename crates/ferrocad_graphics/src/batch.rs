@@ -12,10 +12,18 @@
 //! miss** — fresh [`Geometry`]. The renderer keys its upload cache on
 //! `(mesh_id, generation)`, so a hit carries no geometry and reuses the upload.
 //!
+//! The geometry is [`Arc`]-shared rather than owned: a packet stream is rebuilt
+//! whenever the document changes (a commit, a highlight, a preview), and paying a copy
+//! of every vertex to re-emit a mesh that did not change is what made a commit take
+//! hundreds of milliseconds on a large document. A producer that compiles the same mesh
+//! twice therefore hands over the same [`Geometry`] twice, for a pointer copy.
+//!
 //! [`DrawBatch`] is the renderer-facing trait; [`DrawPacket`] is the core
 //! implementation. Keeping the boundary a trait (rather than a concrete struct)
 //! lets each backend accept any batch type while the node model and compiler stay
 //! independent of the graphics API.
+
+use std::sync::Arc;
 
 use crate::geometry::{Geometry, Topology};
 use crate::state::StateSnapshot;
@@ -46,7 +54,11 @@ pub struct DrawPacket {
     pub topology: Topology,
     /// Fresh geometry, present **only on a cache miss**. `None` means the renderer
     /// already holds `(mesh_id, generation)` and must reuse it.
-    pub geometry: Option<Geometry>,
+    ///
+    /// Shared, so a producer that re-emits an unchanged mesh (the stage caches each
+    /// item's emitted geometry) pays a pointer copy rather than a pass over every
+    /// vertex.
+    pub geometry: Option<Arc<Geometry>>,
     /// The resolved traversal state to bind for this draw.
     pub state: StateSnapshot,
 }
@@ -88,7 +100,7 @@ impl DrawBatch for DrawPacket {
         self.topology
     }
     fn geometry(&self) -> Option<&Geometry> {
-        self.geometry.as_ref()
+        self.geometry.as_deref()
     }
     fn state(&self) -> &StateSnapshot {
         &self.state

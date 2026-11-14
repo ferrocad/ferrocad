@@ -373,6 +373,53 @@ against the **built** `ferrocad_stage` extension. A second Rust test
 (`the_native_adapter_drives_a_python_tool`) drives a Python `Tool` through the native
 `PyTool` adapter.
 
+### What a commit costs
+
+A document commit rebuilds the stage: `DisplaySync::build` reads every object's mesh and
+`InventorViewport::recompile` compiles the queue. Done naively — a fresh `ShapeItem` and a
+fresh `MeshId` per object per sync — that is O(vertices) twice (once into the new item,
+once into the queue) plus a GPU re-upload of the whole document, because the renderer's
+upload cache is keyed on `(mesh_id, generation)`.
+
+Geometry is therefore shared, in two places:
+
+- `ShapeGeometry` holds the buffers, the mesh ids, the generation and the **emitted**
+  `Arc<Geometry>` of each pass (surface, wire, points). A `ShapeItem` holds it behind an
+  `Arc`, so a clone is a pointer copy and an unchanged item re-emits by pointer too. The
+  emitted passes are a function of the buffers alone (`ShapeItem::emit` puts the world
+  matrix in the packet state), so they are computed once and shared from then on;
+  `DrawPacket::geometry` is `Option<Arc<Geometry>>` for the same reason, which also makes
+  `published_stage`'s per-sync pick queue cheap.
+- `StageMesh::mesh` is an `Arc<Tessellation>`: the document backend hands over its
+  tessellation memo, so a sync copies no vertices and recognises an unchanged object by
+  pointer (`Arc::ptr_eq`, with a content fallback for the equal-but-distinct rows a script
+  half answers with).
+
+`DisplaySync` keeps the item each entity was drawn with and reuses it when the mesh is the
+same, rewriting only the placement, origin and display attributes (which is why
+`ShapeItem` has `set_*` for the whole display group, and why a reused item drops its
+highlight: that is view state). `Stage::same_rigid_items` then compares geometry by
+`Arc::ptr_eq` rather than by content, so the transform-only path stays O(items).
+
+Measured on a synthetic 900 k-triangle, 300-object document in release
+(`cargo run --release --example commit_cost`, a throwaway probe): a one-object edit cost
+36 ms of build plus 107 ms of emit, and re-uploaded all 300 meshes before; it costs 0.6 ms
+plus 0.3 ms and re-uploads the one edited mesh now. A move commit costs 0.18 ms and no
+upload at all. The trade is that the emitted pass stays resident instead of being
+rebuilt and dropped per queue.
+
+**Verification:** `ferrocad_shell_core`'s `an_unchanged_mesh_keeps_its_mesh_identity`
+(two objects, one edited: only the edited one takes a new mesh id, reordering the rows
+changes nothing), `a_row_with_equal_content_keeps_its_mesh_identity`,
+`a_reused_item_takes_the_rows_placement_and_style` (including a solid ↔ datum-card switch)
+and `a_reused_item_does_not_keep_the_selection`; `ferrocad_stage`'s
+`same_rigid_items_sees_only_a_move`, `mesh_ids_are_unique_stable_and_high` and
+`set_shape_bumps_the_generation`; `ferrocad_viewport`'s
+`a_commit_that_only_moved_patches_instead_of_re_emitting` and
+`the_incremental_bounds_match_the_full_measure`; `ferrocad_wgpu`'s
+`a_stage_and_an_inventor_scene_coexist_in_one_pass` (unchanged items reuse the upload
+cache) and `repeated_shape_rewrites_do_not_grow_the_mesh_cache`.
+
 ## 5. Deferred decisions
 
 1. **Batch vocabulary home.** *Done (T4, sub-slice 1):* the vocabulary now lives in the

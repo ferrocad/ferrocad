@@ -900,24 +900,20 @@ impl AppBackend for RustAppBackend {
                 // back the frame the mesh was built in plus the move that places it — the
                 // rows stay identical across a move, so the viewport patches packet
                 // transforms instead of re-emitting 1.24 M vertices.
+                // `rigid` hands back the frame the mesh was built in plus the move that
+                // places it — the rows stay identical across a move, so the viewport
+                // patches packet transforms instead of re-emitting 1.24 M vertices. The
+                // memo's `Arc` is what crosses the seam: the sync does not copy the
+                // mesh, and the synchroniser recognises an unchanged object by pointer.
                 let (mesh, placement) = property
                     .tessellate_rigid(TOLERANCE, TessellationOptions::default().angular_deflection)
                     .map_err(|error| format!("{}: {error}", object.name))?;
-                let mesh = std::sync::Arc::unwrap_or_clone(mesh);
                 meshes.push(StageMesh {
                     // A stable per-document pick id; `DisplaySync` maps it to the name.
                     entity: id as u32 + 1,
                     object: object.name.clone(),
                     label: object.label.clone(),
-                    positions: mesh.positions,
-                    normals: mesh.normals,
-                    triangles: mesh.triangles,
-                    triangle_parts: mesh.triangle_parts,
-                    edges: mesh.edges,
-                    segment_parts: mesh.segment_parts,
-                    vertices: mesh.vertices,
-                    vertex_parts: mesh.vertex_parts,
-                    parts: mesh.parts,
+                    mesh,
                     origin: placement_base(object),
                     placement: Some(placement),
                     color: Some(object_color(object)),

@@ -54,19 +54,19 @@ fn the_toy_slab_names_its_edges() {
         .find(|mesh| mesh.object.starts_with("Slab"))
         .expect("the slab");
 
-    assert_eq!(slab.parts.len(), 18, "six faces and twelve edges");
+    assert_eq!(slab.mesh.parts.len(), 18, "six faces and twelve edges");
     assert!(
-        slab.parts[..6].iter().all(|part| part.starts_with("Face")),
+        slab.mesh.parts[..6].iter().all(|part| part.starts_with("Face")),
         "the first six parts are the faces: {:?}",
-        &slab.parts[..6]
+        &slab.mesh.parts[..6]
     );
     assert!(
-        slab.parts[6..].iter().all(|part| part.starts_with("Edge")),
+        slab.mesh.parts[6..].iter().all(|part| part.starts_with("Edge")),
         "the rest are the edges: {:?}",
-        &slab.parts[6..]
+        &slab.mesh.parts[6..]
     );
-    assert_eq!(slab.segment_parts.len(), 24, "two drawn copies per edge");
-    let tagged: std::collections::BTreeSet<u32> = slab.segment_parts.iter().copied().collect();
+    assert_eq!(slab.mesh.segment_parts.len(), 24, "two drawn copies per edge");
+    let tagged: std::collections::BTreeSet<u32> = slab.mesh.segment_parts.iter().copied().collect();
     assert_eq!(
         tagged,
         (6..18).collect(),

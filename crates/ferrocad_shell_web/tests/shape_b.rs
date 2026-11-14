@@ -14,7 +14,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ferrocad_shell_api::app::{AppBackend, ScriptHost};
-use ferrocad_shell_api::display::StageMesh;
+use ferrocad_shell_api::display::{StageMesh, Tessellation};
 use ferrocad_shell_api::types::{EvalResult, WorkbenchReport};
 use ferrocad_shell_api::{DocumentApi, NoopListener};
 use serde_json::{Value, json};
@@ -46,20 +46,18 @@ fn slab(entity: u32, height: f32) -> StageMesh {
         entity,
         object: "Toy".to_string(),
         label: "Toy".to_string(),
-        positions: vec![
-            [0.0, 0.0, 0.0],
-            [10.0, 0.0, 0.0],
-            [10.0, 10.0, height],
-            [0.0, 10.0, height],
-        ],
-        normals: vec![[0.0, 0.0, 1.0]; 4],
-        triangles: vec![0, 1, 2, 0, 2, 3],
-        triangle_parts: vec![0, 0],
-        edges: Vec::new(),
-        segment_parts: Vec::new(),
-        vertices: Vec::new(),
-        vertex_parts: Vec::new(),
-        parts: Vec::new(),
+        mesh: Arc::new(Tessellation {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [10.0, 10.0, height],
+                [0.0, 10.0, height],
+            ],
+            normals: vec![[0.0, 0.0, 1.0]; 4],
+            triangles: vec![0, 1, 2, 0, 2, 3],
+            triangle_parts: vec![0, 0],
+            ..Default::default()
+        }),
         origin: None,
         placement: None,
         color: None,
@@ -202,7 +200,7 @@ fn a_script_half_draws_what_the_document_cannot() {
     assert!(names(&stage).contains(&"Fillet"), "{:?}", names(&stage));
     // ... and the hook supplied the one it cannot.
     assert_eq!(
-        toy(&stage).positions[3][2],
+        toy(&stage).mesh.positions[3][2],
         20.0,
         "the height the document API reported"
     );
@@ -219,7 +217,7 @@ fn a_script_half_draws_what_the_document_cannot() {
     assert_eq!(set["result"]["value"], "40 mm");
 
     let stage = backend.stage_meshes().expect("a stage");
-    assert_eq!(toy(&stage).positions[3][2], 40.0, "the taller slab");
+    assert_eq!(toy(&stage).mesh.positions[3][2], 40.0, "the taller slab");
 }
 
 #[test]

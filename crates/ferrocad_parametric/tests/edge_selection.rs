@@ -108,19 +108,20 @@ fn the_parametric_edge_scope_selects_an_edge() {
         .expect("the seeded Fillet is displayed");
     let entity = box_mesh.entity;
     assert!(
-        box_mesh.parts.iter().any(|part| part == "Edge1"),
+        box_mesh.mesh.parts.iter().any(|part| part == "Edge1"),
         "the kernel names the fillet's edges"
     );
     assert_eq!(
-        box_mesh.segment_parts.len(),
-        box_mesh.edges.len() / 2,
+        box_mesh.mesh.segment_parts.len(),
+        box_mesh.mesh.edges.len() / 2,
         "one part id per drawn segment"
     );
     assert!(
         box_mesh
+            .mesh
             .segment_parts
             .iter()
-            .all(|id| box_mesh.parts[*id as usize].starts_with("Edge")),
+            .all(|id| box_mesh.mesh.parts[*id as usize].starts_with("Edge")),
         "every segment is tagged with an edge, not a face"
     );
 

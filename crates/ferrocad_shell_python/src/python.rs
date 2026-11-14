@@ -19,7 +19,7 @@ use serde::Deserialize;
 
 use ferrocad_inventor::{Directives, Event, Hit, Scene};
 use ferrocad_shell_core::commands::{CommandInfo, CommandOutcome};
-use ferrocad_shell_core::display::StageMesh;
+use ferrocad_shell_core::display::{StageMesh, Tessellation};
 use ferrocad_shell_core::selection::SelectionItem;
 use ferrocad_shell_core::view::ViewState;
 use ferrocad_types::Vector3;
@@ -418,15 +418,17 @@ fn stage_mesh_from_row(row: &Bound<'_, PyDict>) -> Result<StageMesh, String> {
         entity: required(row, "entity")?,
         object: required(row, "object")?,
         label: optional::<String>(row, "label")?.unwrap_or_default(),
-        positions: points(row, "positions")?,
-        normals: points(row, "normals")?,
-        triangles: indices(row, "triangles")?,
-        triangle_parts: indices(row, "triangle_parts")?,
-        edges: indices(row, "edges")?,
-        segment_parts: indices(row, "segment_parts")?,
-        vertices: indices(row, "vertices")?,
-        vertex_parts: indices(row, "vertex_parts")?,
-        parts: optional(row, "parts")?.unwrap_or_default(),
+        mesh: std::sync::Arc::new(Tessellation {
+            positions: points(row, "positions")?,
+            normals: points(row, "normals")?,
+            triangles: indices(row, "triangles")?,
+            triangle_parts: indices(row, "triangle_parts")?,
+            edges: indices(row, "edges")?,
+            segment_parts: indices(row, "segment_parts")?,
+            vertices: indices(row, "vertices")?,
+            vertex_parts: indices(row, "vertex_parts")?,
+            parts: optional(row, "parts")?.unwrap_or_default(),
+        }),
         origin: fixed::<3>(row, "origin")?,
         // The display hook answers with world-space positions; only a host that keeps the
         // tessellation frame reports a transform.

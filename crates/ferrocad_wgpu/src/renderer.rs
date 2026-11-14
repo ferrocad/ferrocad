@@ -2300,7 +2300,7 @@ pub(crate) mod tests {
                 (Topology::Triangles, line_indices, true)
             };
             packet.topology = topology;
-            packet.geometry = Some(Geometry {
+            packet.geometry = Some(std::sync::Arc::new(Geometry {
                 vertices: lines
                     .iter()
                     .map(|vertex| Vertex {
@@ -2309,7 +2309,7 @@ pub(crate) mod tests {
                     })
                     .collect(),
                 indices,
-            });
+            }));
             packet.state.ribbon = ribbon;
             packet.state.pickable = false;
             let mut queue = RenderQueue::default();
@@ -2399,7 +2399,7 @@ pub(crate) mod tests {
             };
             packet.topology = topology;
             packet.state.depth = depth;
-            packet.geometry = Some(Geometry {
+            packet.geometry = Some(std::sync::Arc::new(Geometry {
                 vertices: lines
                     .iter()
                     .map(|vertex| Vertex {
@@ -2408,7 +2408,7 @@ pub(crate) mod tests {
                     })
                     .collect(),
                 indices,
-            });
+            }));
             let mut queue = RenderQueue::default();
             queue.packets.push(packet);
             renderer.draw(&queue, &camera).expect("draw");
@@ -2459,7 +2459,7 @@ pub(crate) mod tests {
             ],
             vec![0, 1, 2, 0, 2, 3],
         );
-        let geometry = packet.geometry.as_mut().expect("geometry");
+        let geometry = std::sync::Arc::make_mut(packet.geometry.as_mut().expect("geometry"));
         for (vertex, uv) in
             geometry
                 .vertices
@@ -2539,7 +2539,11 @@ pub(crate) mod tests {
                 positions,
                 vec![0, 1, 2],
             );
-            for vertex in &mut packet.geometry.as_mut().expect("fresh geometry").vertices {
+            for vertex in &mut std::sync::Arc::make_mut(
+                packet.geometry.as_mut().expect("fresh geometry"),
+            )
+            .vertices
+            {
                 vertex.normal = normal;
             }
             packet.state.color = theme::GLASS_TOP;
@@ -3063,7 +3067,7 @@ pub(crate) mod tests {
             mesh_id: MeshId(mesh),
             generation: Generation(1),
             topology,
-            geometry: Some(Geometry {
+            geometry: Some(std::sync::Arc::new(Geometry {
                 vertices: positions
                     .iter()
                     .map(|position| Vertex {
@@ -3075,7 +3079,7 @@ pub(crate) mod tests {
                     })
                     .collect(),
                 indices,
-            }),
+            })),
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],
@@ -3320,7 +3324,7 @@ pub(crate) mod tests {
             ],
             vec![0, 1, 2, 3, 4, 5],
         );
-        let geometry = packet.geometry.as_mut().expect("fresh geometry");
+        let geometry = std::sync::Arc::make_mut(packet.geometry.as_mut().expect("fresh geometry"));
         for (index, vertex) in geometry.vertices.iter_mut().enumerate() {
             vertex.color = if index < 3 {
                 [1.0, 0.0, 0.0, 1.0]

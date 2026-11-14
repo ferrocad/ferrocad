@@ -442,7 +442,7 @@ mod tests {
             mesh_id: MeshId(0),
             generation: Generation(0),
             topology,
-            geometry: Some(Geometry { vertices, indices }),
+            geometry: Some(std::sync::Arc::new(Geometry { vertices, indices })),
             state: StateSnapshot {
                 world_transform: Matrix4::identity(),
                 color: [1.0, 1.0, 1.0, 1.0],

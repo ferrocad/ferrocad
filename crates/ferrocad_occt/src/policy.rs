@@ -1489,16 +1489,11 @@ pub(crate) fn face_add_wire(
     Ok(face_shape)
 }
 
-/// `Part.Face(surface, wires)` for an elementary surface described by `spec`.
-pub(crate) fn make_face_on_surface(
+/// The `gp_Ax3` frame of an elementary surface described by `spec`.
+fn surface_frame(
     spec: &SurfaceSpec,
-    wires: &TopTools_ListOfShape,
-) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
-    if wires.IsEmpty() {
-        return Err(OcctError::InvalidInput {
-            what: "a face needs a wire",
-        });
-    }
+    operation: &'static str,
+) -> Result<UniquePtr<ffi::gp::gp_Ax3>, OcctError> {
     let (origin, axis, x_dir, direct) = match spec {
         SurfaceSpec::Plane {
             origin,
@@ -1541,15 +1536,22 @@ pub(crate) fn make_face_on_surface(
         &ffi::gp::gp_Dir_new(axis.x, axis.y, axis.z),
         &ffi::gp::gp_Dir_new(x_dir.x, x_dir.y, x_dir.z),
     )
-    .map_err(|e| occt_exception("make_face_on_surface", e))?;
+    .map_err(|e| occt_exception(operation, e))?;
     if !direct {
         frame.pin_mut().YReverse();
     }
+    Ok(frame)
+}
 
-    let surface: UniquePtr<ffi::geom::Handle_Geom_Surface> = match spec {
+/// The `Geom_Surface` handle of an elementary surface described by `spec`.
+fn surface_handle(
+    spec: &SurfaceSpec,
+    frame: UniquePtr<ffi::gp::gp_Ax3>,
+    operation: &'static str,
+) -> Result<UniquePtr<ffi::geom::Handle_Geom_Surface>, OcctError> {
+    Ok(match spec {
         SurfaceSpec::Plane { .. } => {
-            let plane = ffi::gp::gp_Pln_new_frame(&frame)
-                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+            let plane = ffi::gp::gp_Pln_new_frame(&frame).map_err(|e| occt_exception(operation, e))?;
             let handle = ffi::geom::Geom_Plane_new(&plane);
             ffi::geom::plane_to_surface(&handle)
         }
@@ -1561,12 +1563,12 @@ pub(crate) fn make_face_on_surface(
             radius, semi_angle, ..
         } => {
             let handle = ffi::geom::Geom_ConicalSurface_new(&frame, *semi_angle, *radius)
-                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+                .map_err(|e| occt_exception(operation, e))?;
             ffi::geom::conical_to_surface(&handle)
         }
         SurfaceSpec::Sphere { radius, .. } => {
             let handle = ffi::geom::Geom_SphericalSurface_new(&frame, *radius)
-                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+                .map_err(|e| occt_exception(operation, e))?;
             ffi::geom::spherical_to_surface(&handle)
         }
         SurfaceSpec::Torus {
@@ -1575,10 +1577,65 @@ pub(crate) fn make_face_on_surface(
             ..
         } => {
             let handle = ffi::geom::Geom_ToroidalSurface_new(&frame, *major_radius, *minor_radius)
-                .map_err(|e| occt_exception("make_face_on_surface", e))?;
+                .map_err(|e| occt_exception(operation, e))?;
             ffi::geom::toroidal_to_surface(&handle)
         }
-    };
+    })
+}
+
+/// The face of an elementary surface over the parameter rectangle
+/// `(u1, u2, v1, v2)` (`GeomSurface::toShape`).
+///
+/// Upstream's `GeometrySurfacePy::toShape` hands the four bounds straight to
+/// `BRepBuilderAPI_MakeFace(Geom_Surface, u1, u2, v1, v2)`; so does this, which
+/// is why a full-turn cylinder band (`0, 2π`) comes back as one closed wall with
+/// a seam rather than as a wire problem.
+pub(crate) fn face_on_surface_band(
+    spec: &SurfaceSpec,
+    u1: f64,
+    u2: f64,
+    v1: f64,
+    v2: f64,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    let operation = "make_face_on_band";
+    if !(u1 < u2) || !(v1 < v2) || ![u1, u2, v1, v2].iter().all(|value| value.is_finite()) {
+        return Err(OcctError::InvalidInput {
+            what: "a surface face needs a finite parameter rectangle with u1 < u2 and v1 < v2",
+        });
+    }
+    let frame = surface_frame(spec, operation)?;
+    let surface = surface_handle(spec, frame, operation)?;
+    let make = ffi::b_rep_builder_api::BRepBuilderAPI_MakeFace_surface_range(
+        &surface,
+        u1,
+        u2,
+        v1,
+        v2,
+        ffi::precision::Precision::Confusion(),
+    )
+    .map_err(|e| occt_exception(operation, e))?;
+    if !make.IsDone() {
+        return Err(OcctError::NotDone { operation });
+    }
+    let face = ffi::topo_ds::cast_face_to_shape(make.Face());
+    if face.IsNull() {
+        return Err(OcctError::NotDone { operation });
+    }
+    Ok(ffi::topo_ds::TopoDS_Shape_to_owned(face))
+}
+
+/// `Part.Face(surface, wires)` for an elementary surface described by `spec`.
+pub(crate) fn make_face_on_surface(
+    spec: &SurfaceSpec,
+    wires: &TopTools_ListOfShape,
+) -> Result<UniquePtr<TopoDS_Shape>, OcctError> {
+    if wires.IsEmpty() {
+        return Err(OcctError::InvalidInput {
+            what: "a face needs a wire",
+        });
+    }
+    let frame = surface_frame(spec, "make_face_on_surface")?;
+    let surface = surface_handle(spec, frame, "make_face_on_surface")?;
 
     let mut it = ffi::top_tools::TopTools_ListIteratorOfListOfShape_new(wires);
     if !it.More() || it.Value().ShapeType() != TopAbs_ShapeEnum::TopAbs_WIRE {

@@ -3053,16 +3053,91 @@ impl PyCylinder {
         self.radius
     }
 
+    /// The radius (`Cylinder.Radius`), writable as upstream's is: a script that
+    /// builds an empty surface and fills it in (`surface = Part.Cylinder();
+    /// surface.Radius = …`) is how upstream's healing rebuilds a hole wall.
+    #[setter]
+    fn set_Radius(&mut self, value: f64) -> PyResult<()> {
+        if !(value > 0.0) {
+            return Err(OCCError::new_err("Part.Cylinder needs a positive radius"));
+        }
+        self.radius = value;
+        Ok(())
+    }
+
     /// The axis point (upstream's `Cylinder.Center`).
     #[getter]
     fn Center(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.center)
     }
 
+    #[setter]
+    fn set_Center(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.center = vector(value)?;
+        Ok(())
+    }
+
     /// The unit axis direction (upstream's `Cylinder.Axis`).
     #[getter]
     fn Axis(&self, py: Python<'_>) -> PyResult<PyObject> {
         py_vector(py, self.axis)
+    }
+
+    /// Replace the axis direction, keeping the axis point and projecting the
+    /// frame's `u = 0` direction onto the new plane (upstream's
+    /// `Geom_Cylinder::SetAxis`, which keeps the location).
+    #[setter]
+    fn set_Axis(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let axis = vector(value)?;
+        if axis.is_null() {
+            return Err(OCCError::new_err("Part.Cylinder needs a non-zero axis"));
+        }
+        let axis = axis.normalize();
+        let projected = self.x_dir.sub(&axis.scale(self.x_dir.dot(&axis)));
+        self.x_dir = if projected.length() > 1e-12 {
+            projected.normalize()
+        } else {
+            plane_frame(&axis).0
+        };
+        self.axis = axis;
+        Ok(())
+    }
+
+    /// The cylinder as a `Part.Face` over the parameter rectangle
+    /// `(u1, u2, v1, v2)` (`GeomSurface.toShape`): `u` runs around the axis from
+    /// the frame's `u = 0` direction, `v` along it. A full turn (`0, 2π`) gives
+    /// the whole wall, seam included.
+    #[pyo3(signature = (u1 = None, u2 = None, v1 = None, v2 = None))]
+    fn toShape(
+        &self,
+        py: Python<'_>,
+        u1: Option<f64>,
+        u2: Option<f64>,
+        v1: Option<f64>,
+        v2: Option<f64>,
+    ) -> PyResult<Py<PyFace>> {
+        let (Some(u1), Some(u2), Some(v1), Some(v2)) = (u1, u2, v1, v2) else {
+            return Err(OCCError::new_err(
+                "Part.Cylinder.toShape() needs the parameter rectangle (u1, u2, v1, v2);
+                 a cylinder is unbounded along its axis",
+            ));
+        };
+        let face = backend()
+            .make_face_on_band(
+                &SurfaceSpec::Cylinder {
+                    origin: self.center,
+                    axis: self.axis,
+                    x_dir: self.x_dir,
+                    radius: self.radius,
+                    direct: self.direct,
+                },
+                u1,
+                u2,
+                v1,
+                v2,
+            )
+            .map_err(kernel_error)?;
+        Py::new(py, PyFace::initializer(face))
     }
 
     /// Whether `other` is the same cylinder within `tol`/`atol`
@@ -9038,6 +9113,15 @@ impl PyEdge {
         // The base carries the current geometry (a `Placement` write re-bakes it);
         // the entry keeps the shape the edge was built from.
         let shape = slf.as_super().shape().unwrap_or(entry.shape);
+        // A pole of a sphere or a cone apex has an edge whose curve collapses to a
+        // point. There is no geometry to hand back, and upstream raises `TypeError`
+        // rather than returning a zero-length line or `None`, so a caller cannot
+        // build a degenerate curve by accident from one.
+        if backend().is_degenerate(&shape).map_err(kernel_error)? {
+            return Err(PyTypeError::new_err(
+                "Edge has no curve: this edge is degenerate (a pole or an apex)",
+            ));
+        }
         match backend().curve_of(&shape) {
             Ok(curve) => Ok(Some(curve_to_py(py, curve)?)),
             Err(_) => {

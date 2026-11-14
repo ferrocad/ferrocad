@@ -706,3 +706,60 @@ App.closeDocument(doc.Name)
         );
     });
 }
+
+/// An elementary surface is a value object: it can be filled in after it exists.
+///
+/// Upstream's `Geom_Cylinder` exposes `Radius`, `Center` and `Axis` as readable
+/// *and writable* attributes, and `GeomSurface.toShape(u1, u2, v1, v2)` turns the
+/// parameter band into a face. SimpleCAD's heal builds a hole wall exactly that
+/// way (`surface = Part.Cylinder(); surface.Radius = …; surface.toShape(0, 2π, …)`),
+/// so a read-only surface silently kept the tilted face it was meant to square.
+#[test]
+fn a_cylinder_surface_is_writable_and_bands_into_a_face() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+surface = Part.Cylinder()
+surface.Radius = 1.7
+surface.Center = App.Vector(-5, 6, 4)
+surface.Axis = App.Vector(1, 0, 0)
+assert abs(surface.Radius - 1.7) < 1e-12
+assert (surface.Center - App.Vector(-5, 6, 4)).Length < 1e-12
+assert (surface.Axis - App.Vector(1, 0, 0)).Length < 1e-12
+
+band = surface.toShape(0, 6.283185307179586, 0, 9)
+assert band.ShapeType == "Face", band.ShapeType
+assert abs(band.Area - 2 * 3.141592653589793 * 1.7 * 9) < 1e-6, band.Area
+assert isinstance(band.Surface, Part.Cylinder)
+assert band.isValid()
+
+# The frame's u = 0 direction survives an axis change when it can be projected.
+surface.Axis = App.Vector(0, 1, 0)
+assert abs(surface.Axis.y - 1.0) < 1e-12
+assert abs((surface.Axis - App.Vector(0, 1, 0)).Length) < 1e-12
+quarter = surface.toShape(0, 3.141592653589793 / 2, 0, 2)
+assert abs(quarter.Area - (3.141592653589793 / 2) * 1.7 * 2) < 1e-6, quarter.Area
+
+# A degenerate request is refused, not guessed.
+for bad in ((1, 0, 0, 1), (0, 1, 1, 0)):
+    try:
+        surface.toShape(*bad)
+    except Exception:
+        pass
+    else:
+        raise AssertionError(f"toShape{bad} must be refused")
+try:
+    surface.toShape()
+except Exception:
+    pass
+else:
+    raise AssertionError("a cylinder has no natural bounds")
+"#,
+        );
+    });
+}

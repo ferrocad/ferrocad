@@ -351,3 +351,40 @@ except TypeError:
         );
     });
 }
+
+/// A degenerate edge has no curve to hand back, and upstream says so.
+///
+/// The pole of a sphere (and a cone's apex) is a real edge whose 3D curve
+/// collapses to a point. Returning `None` or a zero-length line let a caller build
+/// a curve from a pole and then fail somewhere unrelated; upstream raises
+/// `TypeError`, which is what SimpleCAD's degenerate-drawing setup asserts before
+/// it exercises the kernel topology that used to crash a drawing operation.
+#[test]
+fn a_degenerate_edge_refuses_to_give_a_curve() {
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let sphere = part
+            .call_method1("makeSphere", (5.0,))
+            .expect("makeSphere");
+        let pole = sub_shapes(&sphere, "Edges")
+            .into_iter()
+            .find(|edge| {
+                edge.getattr("Degenerated")
+                    .expect("Edge.Degenerated")
+                    .extract::<bool>()
+                    .expect("Degenerated as bool")
+            })
+            .expect("a sphere has pole edges");
+        let error = pole.getattr("Curve").expect_err("a pole has no curve");
+        assert!(error.is_instance_of::<PyTypeError>(py), "{error}");
+
+        // A copied pole refuses too, and an ordinary edge still answers.
+        let copy = pole.call_method0("copy").expect("Edge.copy");
+        let error = copy.getattr("Curve").expect_err("a copied pole has no curve");
+        assert!(error.is_instance_of::<PyTypeError>(py), "{error}");
+        let box_shape = part.call_method1("makeBox", (1.0, 1.0, 1.0)).expect("makeBox");
+        let edge = sub_shapes(&box_shape, "Edges").remove(0);
+        assert!(edge.getattr("Curve").is_ok(), "a box edge has a line");
+    });
+}

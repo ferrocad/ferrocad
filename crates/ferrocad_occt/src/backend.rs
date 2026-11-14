@@ -1561,6 +1561,19 @@ impl GeometryBackend for OcctBackend {
         }
     }
 
+    fn make_face_on_band(
+        &self,
+        surface: &SurfaceSpec,
+        u1: f64,
+        u2: f64,
+        v1: f64,
+        v2: f64,
+    ) -> Result<Shape, GeomError> {
+        let face = crate::policy::face_on_surface_band(surface, u1, u2, v1, v2)
+            .map_err(GeomError::from)?;
+        Ok(erase(&face))
+    }
+
     fn surface_type(&self, shape: &Shape) -> Option<String> {
         let occt = downcast(shape).ok()?;
         let guard = occt.borrow();

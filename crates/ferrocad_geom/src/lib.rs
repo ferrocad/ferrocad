@@ -1093,6 +1093,22 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_face_on_surface"))
     }
 
+    /// The face of an elementary `surface` over the parameter rectangle
+    /// `(u1, u2, v1, v2)` (`GeomSurface.toShape`, upstream's
+    /// `BRepBuilderAPI_MakeFace(Geom_Surface, u1, u2, v1, v2)`).
+    ///
+    /// The default reports the operation as unsupported.
+    fn make_face_on_band(
+        &self,
+        _surface: &SurfaceSpec,
+        _u1: f64,
+        _u2: f64,
+        _v1: f64,
+        _v2: f64,
+    ) -> Result<Shape, GeomError> {
+        Err(unsupported("make_face_on_band"))
+    }
+
     /// The backing surface's FreeCAD type id (`Face.Surface.TypeId`).
     fn surface_type(&self, _shape: &Shape) -> Option<String> {
         None

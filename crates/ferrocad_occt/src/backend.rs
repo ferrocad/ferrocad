@@ -3117,6 +3117,27 @@ impl GeometryBackend for OcctBackend {
         Ok(out)
     }
 
+    fn relocate(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
+        let occt = downcast(shape)?;
+        let guard = occt.borrow();
+        let inner = guard
+            .as_ref()
+            .ok_or(OcctError::InvalidInput { what: "null shape" })?;
+        // A location already on the shape would be *replaced* by the write below, so
+        // compose through a real transform instead of silently dropping it.
+        if !inner.Location().IsIdentity() {
+            return self.transform(shape, &placement.to_matrix());
+        }
+        let trsf = transform_from(placement);
+        let location = ffi::top_loc::Location_from_transform(&trsf);
+        // `TopoDS_Shape` keeps the location in the handle, not in the TShape, so a
+        // copy carries the new placement while the identity of every sub-shape is the
+        // one the caller already had.
+        let mut moved = ffi::topo_ds::TopoDS_Shape_to_owned(inner);
+        moved.pin_mut().set_location(&location, false);
+        Ok(erase(&moved))
+    }
+
     fn transform(&self, shape: &Shape, matrix: &Matrix4) -> Result<Shape, GeomError> {
         let occt = downcast(shape)?;
         let guard = occt.borrow();

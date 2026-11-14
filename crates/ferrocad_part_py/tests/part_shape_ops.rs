@@ -809,3 +809,48 @@ assert moving.Placement.Base.Length == 0.0, moving.Placement.Base
         );
     });
 }
+
+/// A rigid `Placement` write keeps the shape's native identity.
+///
+/// Upstream stores a standalone shape's placement as a `TopLoc_Location`, so a move
+/// replaces no sub-shape handle: `isPartner` still recognises the moved shape as the
+/// one it came from, and a style map (or a native cache) keyed on identity keeps
+/// following it. Re-baking the coordinates made every handle new, which is why
+/// SimpleCAD's material mapping lost the styles of a moved object.
+#[test]
+fn a_rigid_move_keeps_the_shapes_identity() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+source = Part.makeBox(10, 10, 10)
+moved = Part.Shape(source)
+assert moved.isPartner(source)
+
+moved.Placement = App.Placement(App.Vector(12, 25, 37), App.Rotation(App.Vector(1, 2, 3), 41))
+assert moved.isPartner(source), "a rigid move must not replace a single handle"
+assert not moved.isSame(source), "the location changed, so it is not the same shape"
+assert abs(moved.Volume - 1000.0) < 1e-9, moved.Volume
+
+# Clearing the placement is the original shape again, not merely an equal one.
+moved.Placement = App.Placement()
+assert moved.isSame(source)
+assert moved.BoundBox.XLength == 10.0
+
+# A translation is a location change too.
+base = Part.makeBox(10, 10, 10)
+translated = Part.Shape(base)
+translated.translate(App.Vector(1, 2, 3))
+assert translated.isPartner(base)
+assert abs(translated.Volume - 1000.0) < 1e-9, translated.Volume
+
+# A copy is not a partner: `copy()` is `BRepBuilderAPI_Copy`.
+assert not source.copy().isPartner(source)
+"#,
+        );
+    });
+}

@@ -841,11 +841,15 @@ fn apply_placement_to(
     if base_guard.is_none() {
         *base_guard = Some(unplaced.clone());
     }
-    // Reaching the identity placement hands the base back untouched.
+    // Reaching the identity placement hands the base back untouched. Any other
+    // placement is a *location* on the base, not a re-baked copy of it: upstream
+    // stores `Shape.Placement` as a `TopLoc_Location`, so a moved shape is still a
+    // partner of the one it came from (a style map or a native cache keyed on
+    // identity keeps following it).
     let moved = if new == Placement::identity() {
         unplaced
     } else {
-        match ferrocad_part::backend().transform(&unplaced, &new.to_matrix()) {
+        match ferrocad_part::backend().relocate(&unplaced, &new) {
             Ok(moved) => moved,
             // A failed re-bake must not leave the pair inconsistent.
             Err(_) => return,

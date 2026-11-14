@@ -1109,6 +1109,18 @@ pub trait GeometryBackend: Send + Sync {
         Err(unsupported("make_face_on_band"))
     }
 
+    /// `shape` moved by a **rigid** `placement`, keeping its native identity
+    /// (`Shape.Placement`, which upstream stores as a `TopLoc_Location`).
+    ///
+    /// Re-baking the coordinates would give the same geometry, but every sub-shape
+    /// handle would be new: `isPartner` would stop recognising the moved shape as
+    /// the one it came from, and a style map (or a native cache) keyed on identity
+    /// would lose it. The default re-bakes by transforming, which is correct
+    /// geometry and the right fallback for a backend with no location concept.
+    fn relocate(&self, shape: &Shape, placement: &Placement) -> Result<Shape, GeomError> {
+        self.transform(shape, &placement.to_matrix())
+    }
+
     /// The backing surface's FreeCAD type id (`Face.Surface.TypeId`).
     fn surface_type(&self, _shape: &Shape) -> Option<String> {
         None

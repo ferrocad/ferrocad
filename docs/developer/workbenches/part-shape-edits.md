@@ -140,6 +140,17 @@ that pair (`None if edge.Degenerated else edge.Curve`).
 caller rebuilds a hole wall square to its aligned rims. An axis write keeps the axis point
 and projects the frame's `u = 0` direction onto the new plane.
 
+`parameter(point)` belongs to the same value-object contract (`GeometrySurfacePy::parameter`):
+it is the inverse of `value(u, v)` and answers `(u, v)` in the surface's own range. Every
+surface class here had it except `Part.Toroid`, which SimpleCAD reads through
+`Face.Surface.parameter` for a click's normal. The torus's `u` is the angle around the axis
+and `v` the angle around the tube, both normalised to `[0, 2π)`.
+
+`Part.BSplineSurface()` starts empty and `interpolate(grid)` **replaces** it in place —
+upstream's `setHandle(sur)` — so `value`/`parameter`/`NbUPoles` work after the call. Keeping
+only the interpolation grid and knots is not enough: every one of those queries reads the
+explicit geometry, and the surface must keep it.
+
 This matters more than it looks: SimpleCAD's heal rebuilds every aligned face, and its
 per-face `except Exception` turns a missing setter into "keep the face as it was". A
 read-only surface therefore left the tilted face tilted *and* pinned its neighbours, which
@@ -227,6 +238,18 @@ binding): a `NotDone` or null-input backend error is a `ValueError`, while an
 `preserves_volume` refuses an open result by catching `ValueError`, so an `OCCError` there
 is an unhandled exception. Pinned by
 `a_refused_boolean_raises_value_error_like_upstream`.
+
+## A sub-shape result is typed
+
+Every list of shapes a `Part.Shape` method returns goes through `wrap_shape`, not a bare
+`Part.Shape`: `generalFuse`'s result and its per-input pieces, `childShapes`,
+`SubShapes`, `Faces`/`Edges`/`Vertices`/`Solids`, `getElement`. Upstream does the same with
+`shape2pyshape` (`TopoShapePy::generalFuse`, `getElements`), and callers depend on it: a
+sliced-off vertex piece must answer `.Point`, which only `Part.Vertex` has.
+
+`childShapes()` keeps its compound-aware walk (the coarsest kind present, depth-first) but
+returns the typed classes now. `BOPTools.SplitAPI.slice` reads those pieces and needed no
+change.
 
 ## SimpleCAD's `close_holes` — an upstream policy, not a seam defect
 

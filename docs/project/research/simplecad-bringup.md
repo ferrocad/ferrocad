@@ -1,7 +1,7 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
 Status: design (2026-10-21); re-measured 2026-11-16 (§7). The current integrated baseline is
-**1029 passed / 6 failed / 12 errored / 7 skipped over 88/88 modules** on the clean
+**1032 passed / 6 failed / 9 errored / 7 skipped over 88/88 modules** on the clean
 `9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
 is green, and every remaining failure is attributed in §7 (no P2 and no P3; 6 documented
 test assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 43 failures
@@ -1664,10 +1664,16 @@ not-done null result to `ValueError` and keep an OCCT exception as `Part.OCCErro
 residual is rank-deficient on the opposite face, and the triangle-corridor fallback unfolds
 the box the -Y way (its Dijkstra tree is rooted in the start face's first triangle, and
 7.9.2/8.0.1 mesh that face identically), so `35` comes back as `-45` — one perimeter away.
-Filed as a documented assumption, which leaves **no P2 and no P3 failure**. The 6 failures
-and 12 errors are bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 6
-documented test assumptions (the two above included); the errors are 4 `PartDesign`-module
-draft shapes, 7 behavioural/API results and 1 face-order assumption. The round record is
+Filed as a documented assumption, which leaves **no P2 and no P3 failure**. Reviewing the
+error bucket then closed three more seam gaps: `generalFuse`/`childShapes`/`SubShapes` now
+return typed shapes (`part.Point` on a sliced-off vertex), `Part.Toroid` gained
+`parameter(point)`, and `BSplineSurface.interpolate` keeps the geometry it interpolates, so
+`value`/`parameter` work afterwards. SimpleCAD measures **1032 / 6 / 9 / 7**, and the 6
+failures and 9 errors are bucketed in
+[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 6 documented test assumptions (the
+two above included); the errors are 4 `PartDesign`-module shapes, `Mesh.decimate`, a
+removed object's `Name`, two `Shape.isValid()` refusals and 1 face-order assumption. The
+round record is
 [`../record/2026-11-14-p2-boolean-seam.md`](../record/2026-11-14-p2-boolean-seam.md).
 
 ---

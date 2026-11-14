@@ -28,9 +28,10 @@ the failing-test map is [`../research/simplecad-bringup.md`](../research/simplec
 | **A degenerate edge and a writable surface** | `Edge.Curve` raises `TypeError` on a pole/apex edge; `Part.Cylinder`'s `Radius`/`Center`/`Axis` are writable and `toShape(u1, u2, v1, v2)` builds the parameter band | SimpleCAD **1026/8/13/7** — `test_healing` 14/14 and `test_degenerate_drawing` 5/5 |
 | **The placement representation** | a `PartShape` keeps its un-moved geometry beside the placement, so a reset is bit-exact; a rigid `Placement` write is a `TopLoc_Location` (`relocate`), so a moved shape is still a partner of its source | SimpleCAD **1028/6/13/7** — the principal-axis tie and the style-mapping failures close |
 | **The refused boolean** | a boolean OCCT cannot run (a solid cut by an open shell) yields a null result; upstream turns that into `NullShapeException`, a `ValueError`, where our binding raised `Part.OCCError` | SimpleCAD **1029/6/12/7** — `test_surface_wrap`'s area/volume comparison stops erroring |
+| **Typed sub-shapes and surface queries** | `generalFuse`/`childShapes`/`SubShapes` answer the typed `Part.*` classes (`shape2pyshape`), `Part.Toroid` gains `parameter(point)`, and `BSplineSurface.interpolate` keeps the geometry it builds | SimpleCAD **1032/6/9/7** — the slicing vertex, the torus click and the fitted-boundary snap stop erroring |
 
-SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1029 / 6 / 12 / 7 over 88/88
-modules**: **43 failures closed, none added, and the errors moved 18 → 12**. The printed
+SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1032 / 6 / 9 / 7 over 88/88
+modules**: **43 failures closed, none added, and the errors moved 18 → 9**. The printed
 failure count falls by one less than the records closed in the last two steps because a
 fully-passing module counts once. No module failed to load.
 
@@ -514,6 +515,37 @@ nearest the previous q — reference code this project does not modify. Filed as
 test assumption (the module's failure count stays 1), so **no SimpleCAD failure is a
 FerroCAD defect any more**: 0 P2, 0 P3, 6 documented assumptions.
 
+### 8.12 The error bucket's three seam gaps
+
+Reviewing the twelve errors of §8.11 for API gaps found three that were ours, all
+upstream-verified:
+
+1. **`generalFuse`, `childShapes` and `SubShapes` answered bare `Part.Shape`s.** Upstream
+   wraps every sub-shape result with `shape2pyshape` (`TopoShapePy::generalFuse`'s per-input
+   `modifies` lists, and `getElements` behind `childShapes`/`SubShapes`/`Faces`/…). So a lone
+   vertex piece is a `Part.Vertex` and answers `.Point`; ours was a plain `Shape`, and
+   SimpleCAD's `slicing.leaves()` walks `childShapes()` to find a sliced-off vertex. All
+   three now go through `wrap_shape`; `BOPTools.SplitAPI.slice` needed no change. Pinned by
+   `general_fuse_and_child_shapes_return_typed_shapes`.
+2. **`Part.Toroid` had no `parameter`.** That is `GeometrySurfacePy::parameter`, which every
+   other surface class here already had; `GeomSurface.parameter` is how SimpleCAD's
+   `normal_at` reads a torus click point, so `test_measuring`'s saddle-face row errored with
+   `AttributeError`. Added as the exact inverse of `value(u, v)` (u around the axis, v around
+   the tube, both normalised to `[0, 2π)`). Pinned by
+   `a_toroids_parameter_inverts_its_value`.
+3. **`BSplineSurface.interpolate` left the surface empty.** Upstream replaces the
+   `Geom_BSplineSurface` handle
+   (`this->getGeomBSplineSurfacePtr()->setHandle(sur)`), so `value`, `parameter` and
+   `UDegree`/`NbUPoles` work afterwards; ours kept only the grid and the knot sequences and
+   every query raised *this BSplineSurface has no control points yet*. The interpolated
+   geometry is kept now, so `test_surface_line`'s fitted-boundary snap (which calls
+   `surface.parameter`) runs. Pinned by `an_interpolated_bspline_surface_answers_queries`.
+
+With those three, SimpleCAD measures **1032 / 6 / 9 / 7** over 88/88 modules. The nine
+errors left are the documented face-order assumption, two "would create invalid geometry"
+refusals (`test_forming`, `test_loop_faces`), `Mesh.decimate`, a removed object's `Name`
+(`test_subdivision`), and the four `PartDesign`-module draft shapes.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),
@@ -523,7 +555,7 @@ CARGO_BUILD_JOBS=2`; the extension was rebuilt before the Python/SimpleCAD runs.
 | Measure | Value | Command |
 | --- | --- | --- |
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
-| SimpleCAD integrated | **1029 passed, 6 failed, 12 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| SimpleCAD integrated | **1032 passed, 6 failed, 9 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
 | Part API audit | **253/408 (62.0%)**, contract re-pinned for `Cylinder.toShape` | `python3 tools/part_api_audit.py --check` |
 | Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `ferrocad_core` **137**, `ferrocad_mesh` **64**, `part_py` **355**, `part_shape_ops` **21**, all 0 failed | per-crate `cargo test` |
 | Python extension sets | `base` **707 / 0 / 0 / 8**; `workbenches` **789 / 0 / 0 / 3** | `python3 tools/run_tests.py --extension base` / `workbenches` |
@@ -535,21 +567,23 @@ Two runs of the full SimpleCAD suite before the edge-placement fix produced the 
 boss records closed and the error set unchanged in size (one analytic error left, now
 filed as a face-order assumption). The signature/tessellation/cutHoles batch then measured
 **1013/20/14/7**, the unwrap fix **1014/20/13/7**, the undo/label round **1019/15/13/7**,
-the query/tolerance round **1026/8/13/7**, the placement round **1028/6/13/7**, and the
-refused-boolean round **1029/6/12/7**, all over 88/88 modules; no run moved a module from
-load-failure to loaded.
+the query/tolerance round **1026/8/13/7**, the placement round **1028/6/13/7**, the
+refused-boolean round **1029/6/12/7**, and the typed-shape/surface round **1032/6/9/7**, all
+over 88/88 modules; no run moved a module from load-failure to loaded.
 
-## 10. What the 6 failures and 12 errors are
+## 10. What the 6 failures and 9 errors are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
 in short: **no P2 and no P3 failure is left**, and all **6 are documented test assumptions**
 (the exact `BoundBox` precondition, the two `close_holes` cases and `test_rounding`'s
 erase-then-refuse sample — that same policy — plus `test_precision`'s tilted push and
 `test_surface_wrap`'s inverse branch, which are reference-side checks, §8.8 and §8.11). The
-12 errors are 4 `PartDesign`-module draft shapes (3 in `test_surface_offset`, 1 in
-`test_surface_ops`), 7 behavioural/API results (forming, loop faces, measuring, mesh
-conversion, slicing, subdivision, the surface snap) and **1 documented face-order
+**9 errors** are 4 `PartDesign`-module draft shapes (3 in `test_surface_offset`, 1 in
+`test_surface_ops`), `Mesh.decimate`, a removed object's `Name` (`test_subdivision`), two
+`Shape.isValid()` refusals (`test_forming`, `test_loop_faces`) and **1 documented face-order
 assumption** (the chamfered single-face selection, which is an error rather than a failure).
+The `test_measuring`, `test_slicing` and `test_surface_line` errors were the three seam gaps
+of §8.12 and are fixed.
 
 The P2 seam list is empty, and so is P3's; the identity, undo/label and query/tolerance
 buckets are empty too. Both remaining "kernel" cases were traced to the reference, not the

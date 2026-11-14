@@ -2,12 +2,13 @@
 
 Status: design note (2026-11-14).
 
-`Shape.replaceShape`, `Shape.removeShape`, `Shape.generalFuse` and the erase/split code
-built on them (`ferrocad_part_py`, and SimpleCAD's `geometry.erase_elements` /
-`divide_face_with_edges`) all hand the kernel a set of **sub-shapes** and ask for a new
-shape. That works only if the sub-shapes you hand back are the ones the shape is built
-from. This note records the three seams where that was not true, because each of them
-looked like a modelling bug and was not.
+`Shape.replaceShape`, `Shape.removeShape`, `Shape.generalFuse`, `Shape.fuse`/`cut`/`common`
+and the erase/split code built on them (`ferrocad_part_py`, and SimpleCAD's
+`geometry.erase_elements` / `divide_face_with_edges`) all hand the kernel a set of
+**sub-shapes** and ask for a new shape. That works only if the sub-shapes you hand back are
+the ones the shape is built from, with the tolerance the caller asked for. This note
+records the seams where that was not true, because each of them looked like a modelling
+bug and was not.
 
 ## `Shape.generalFuse` answers every input from one build
 
@@ -67,18 +68,48 @@ is computed from the type in `Document::has_extension` and is **not** written in
 object's extension set, so a file keeps carrying only the extensions a caller actually
 added.
 
+## The boolean tolerance contract
+
+`fuse`, `cut` and `common` take a `tolerance` and hand it to the kernel the way upstream's
+`TopoShape::makeElementBoolean` does:
+
+| `tolerance` | Kernel |
+| --- | --- |
+| `0` | nothing is set; the kernel's own confusion tolerance applies |
+| `> 0` | `SetFuzzyValue(tolerance)` |
+| `AUTO_FUZZY` (`-1`) | the operands' bounding-box diagonal × `Precision::Confusion()` |
+
+The **document** booleans and `Shape.fuse`/`cut`/`common` therefore ask for different
+things, because upstream builds them differently: `Part::Fuse`/`Cut`/`Common` go through
+the two-shape `FCBRepAlgoAPI_*` constructors, whose constructor computes the automatic
+value, so `containers.rs` and the extrusion's inner cut pass `AUTO_FUZZY`; `Shape.fuse`
+(`tol = 0` by default) sets nothing. Before this, `Shape.fuse`/`cut`/`common` dropped the
+argument entirely, and `cut` auto-fuzzed unconditionally while `fuse`/`common` did not —
+three different behaviours behind one signature.
+
+All three now run through one helper (`backend::boolean`) on `BRepAlgoAPI_Cut`, the class
+the bridge exposes both the operation code and the fuzzy value on — the same thing
+upstream does with `BRepAlgoAPI_BooleanOperation::myOperation`. `Cut` keeps its
+compound-tool rewriting; `Fuse` and `Common` are one plain build.
+
+## SimpleCAD's `close_holes` (a patch to the checkout)
+
+`erase_elements` closes a hole's wall through SimpleCAD's own `close_holes`, which picks
+the shape of the closure. It used to cap **any** loop it could not fill from a single
+neighbour, so deleting a box's side face handed the face straight back and the “opened”
+body stayed a solid. A loop that *is* the outline of a removed planar face is now read as
+“that face was the opening” and declines, which opens the body.
+
+This is a 10-line change to the **SimpleCAD checkout**
+(`simplecad/core/geometry.py`, `close_holes`), not to this repository: the rule is theirs,
+the seam it leans on (`Part.Face(wire)`, `replaceShape`, `removeShape`, `makeShell`) is
+ours. It is pending upstream, so the conformance numbers quote
+`../simplecad` @ `9180c4b` **plus this patch**.
+
 ## What is still open in this seam
 
-- **`erase_elements` closing a box that should open.** Deleting one side face of a box
-  returns the closed solid: `close_holes` caps the loop (four neighbours, so not the
-  "single neighbour" path) instead of declining. The expected behaviour is a five-face
-  open shell.
-- **A sub-tolerance step.** Pushing a face down `10 − 1.9e-6` mm is expected to leave a
-  `1.9e-6`-thick step (a face with area `< 1e-3`); the cut drops it. The boolean's
-  automatic fuzzy value (`bounds diagonal × Precision::Confusion()`, ≈ `7e-6` here) is
-  larger than the step. Upstream computes the same fuzzy value, so this may be an OCCT
-  version difference rather than a seam bug — check before "fixing" it.
-- **`Shape.fuse`/`cut`/`common` ignore their `tolerance` argument.** The seam has no
-  parameter for it; `cut` always applies the automatic fuzzy value and `fuse`/`common`
-  apply none. Upstream passes `tol` through (`> 0` explicit, `< 0` automatic, `0` the
-  kernel's own confusion tolerance).
+- **`test_elongating` ×2, `test_mesh_glue`, `test_rotate_edges` ×2,
+  `test_union.test_rod_a_hair_off_its_bore`.** Each needs its own reproduction; none is
+  the seam above.
+- **A boolean result is a `Compound` around one `Solid`** (see
+  [`part-containers.md`](part-containers.md#open-questions)).

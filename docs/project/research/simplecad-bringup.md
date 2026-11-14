@@ -1531,6 +1531,24 @@ One more, outside the bucket: `App::Part`/`PartDesign::Body` now answer
 The 11 that remain in this bucket are re-bucketed below; the re-measured totals and the
 remaining root causes are in [`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) P2.
 
+**2026-11-14 — `close_holes` and the boolean tolerance: 1004 / 26 / 17 / 7.** Two more
+root causes, one in SimpleCAD's own rule and one in the seam:
+
+- **`close_holes` capped the opening it should have left open.** Deleting a box's side face
+  came back as the closed solid, because the one-neighbour fill did not apply (four
+  neighbours) and the fallback capped any loop it could not otherwise fill. A loop that
+  *is* the outline of a removed **planar** face is the opening itself, so the function now
+  declines and the body opens. The change is **twelve lines in the SimpleCAD checkout**
+  (`simplecad/core/geometry.py`, `close_holes`) and is pending upstream, so the numbers
+  below quote `9180c4b` **plus that patch**. `test_edge_deletion` is **25/25**.
+- **`Shape.fuse`/`cut`/`common` dropped their `tolerance`.** All three now hand it to the
+  kernel with upstream's signed contract — `0` nothing, `> 0` the fuzzy value, `AUTO_FUZZY`
+  the bounding-box diagonal × confusion — through one helper on `BRepAlgoAPI_Cut` (the
+  class the bridge exposes the operation code and the fuzzy value on). The document
+  booleans pass `AUTO_FUZZY` because upstream builds them through the auto-fuzzing
+  `FCBRepAlgoAPI_*` constructors. Closed: the sub-tolerance step, both `test_analytic`
+  cases and `test_rounding`'s solid case.
+
 ---
 
 ## 8. Draft vs SimpleCAD

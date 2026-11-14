@@ -2,14 +2,16 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ferrocad_geom::Tessellation;
 use ferrocad_graphics::{
     DepthCompare, DepthState, DrawPacket, Generation, Geometry, MeshId, PickId, RenderQueue,
-    ShaderProgram, StateSnapshot, Topology, Vertex, theme,
+    ShaderProgram, ShadowFootprint, StateSnapshot, Topology, Vertex, theme,
 };
 use ferrocad_types::{Matrix4, Placement, Vector3};
+
+use crate::workplane::Workplane;
 
 /// How a [`ShapeItem`] is drawn.
 ///
@@ -115,6 +117,11 @@ pub const GHOST_DEPTH: DepthState = DepthState {
 /// stable and lets an exact click on it select the edge rather than the face.
 pub const WIRE_DEPTH_BIAS: f32 = 1e-5;
 
+/// How soft an item's ground shadow is, as a fraction of its larger half-extent.
+const SHADOW_BLUR_FRACTION: f32 = 0.25;
+/// The smallest world-space shadow blur, so a tiny item still has a soft edge.
+const SHADOW_MIN_BLUR: f32 = 1e-3;
+
 /// A declarative, already-tessellated CAD shape.
 ///
 /// The item draws raw buffers — vertex positions, optional per-vertex normals, triangle
@@ -185,13 +192,31 @@ pub struct ShapeItem {
     /// An authored shader program that draws this item's packets together with their own
     /// mesh. `None` means the scene material.
     program: Option<Arc<ShaderProgram>>,
-    /// The item's world AABB, with the matrix it was measured at.
+    /// The item's world AABB and ground footprint, with the transforms they were measured
+    /// at.
     ///
-    /// The stage AABB is a program input (an axis overlay places its labels from it), so
-    /// it is re-measured whenever an item moves — on every frame of a drag. Caching the
-    /// box against its transform keeps that O(items) instead of O(vertices): a move only
-    /// changes the translation, and a translated box is the box shifted.
-    world_bounds: Option<(Matrix4, ([f32; 3], [f32; 3]))>,
+    /// The stage AABB is a program input (an axis overlay places its labels from it) and so
+    /// is the shadow footprint, so both are recomputed whenever an item moves — on every
+    /// frame of a drag. Caching them against their transform keeps that O(items) instead of
+    /// O(vertices): a move only changes the translation, and a translated box (or plane
+    /// footprint) is the box shifted.
+    ///
+    /// Shared by every clone of the item. A document sync rebuilds the stage around
+    /// *clones* of the items it already had, so a cell the viewport measured in the previous
+    /// stage is still there when the next one asks — without it, an unchanged body was
+    /// re-measured (12 ms on a 1.2 M-triangle document) on every commit.
+    measured: Arc<Mutex<Measured>>,
+}
+
+/// What an item measured about itself, and the transform it measured it at.
+///
+/// Both entries are keyed by the matrix (and, for a footprint, the plane) they were taken
+/// at, so a stale one is never used: a translation shifts the cached numbers exactly, and
+/// anything else re-measures.
+#[derive(Clone, Debug, Default)]
+struct Measured {
+    bounds: Option<(Matrix4, ([f32; 3], [f32; 3]))>,
+    footprint: Option<(Matrix4, Workplane, ShadowFootprint)>,
 }
 
 /// One shape's buffers, mesh identities and emitted draw passes.
@@ -262,7 +287,7 @@ impl ShapeItem {
             highlight_generation: Generation(0),
             highlight_surface: OnceLock::new(),
             highlight_wire: OnceLock::new(),
-            world_bounds: None,
+            measured: Arc::new(Mutex::new(Measured::default())),
             program: None,
         }
     }
@@ -327,12 +352,21 @@ impl ShapeItem {
     ) {
         self.geometry_mut()
             .set_mesh(positions, normals, uvs, triangles, edges, parts);
-        // The world box is measured from the old vertices, and the highlight passes were
-        // cut from the old buffers.
-        self.world_bounds = None;
+        // The measurements are of the old vertices, and so are the emitted highlight
+        // passes.
+        self.clear_measurements();
         self.highlight_generation = Generation(self.highlight_generation.0 + 1);
         self.highlight_surface = OnceLock::new();
         self.highlight_wire = OnceLock::new();
+    }
+
+    /// Forget the cached world box and footprint (the geometry changed).
+    fn clear_measurements(&self) {
+        let mut measured = self
+            .measured
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *measured = Measured::default();
     }
 
     /// The geometry, ready to be rewritten.
@@ -393,7 +427,7 @@ impl ShapeItem {
         );
         geometry.part_names = mesh.parts.clone();
         geometry.vertices = mesh.vertices.clone();
-        self.world_bounds = None;
+        self.clear_measurements();
     }
 
     /// The builder form of [`set_tessellation`](Self::set_tessellation).
@@ -428,7 +462,7 @@ impl ShapeItem {
         );
         geometry.part_names = part_names;
         geometry.vertices = vertices;
-        self.world_bounds = None;
+        self.clear_measurements();
     }
 
     /// The consuming builder form of [`set_tessellation_owned`](Self::set_tessellation_owned).
@@ -755,16 +789,28 @@ impl ShapeItem {
     /// its true world box rather than the turned corners of its old one.
     pub fn world_bounds(&mut self) -> Option<([f32; 3], [f32; 3])> {
         let world = self.world_matrix();
-        if let Some((measured, box_)) = self.world_bounds {
-            if measured == world {
+        let mut measured = self
+            .measured
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((at, box_)) = measured.bounds {
+            if at == world {
                 return Some(box_);
             }
-            if let Some(shift) = translation_between(&measured, &world) {
+            if let Some(shift) = translation_between(&at, &world) {
                 let shifted = (
-                    [box_.0[0] + shift[0], box_.0[1] + shift[1], box_.0[2] + shift[2]],
-                    [box_.1[0] + shift[0], box_.1[1] + shift[1], box_.1[2] + shift[2]],
+                    [
+                        box_.0[0] + shift[0],
+                        box_.0[1] + shift[1],
+                        box_.0[2] + shift[2],
+                    ],
+                    [
+                        box_.1[0] + shift[0],
+                        box_.1[1] + shift[1],
+                        box_.1[2] + shift[2],
+                    ],
                 );
-                self.world_bounds = Some((world, shifted));
+                measured.bounds = Some((world, shifted));
                 return Some(shifted);
             }
         }
@@ -785,11 +831,81 @@ impl ShapeItem {
             }
         }
         if !(min[0].is_finite() && max[0].is_finite()) {
-            self.world_bounds = None;
+            measured.bounds = None;
             return None;
         }
-        self.world_bounds = Some((world, (min, max)));
+        measured.bounds = Some((world, (min, max)));
         Some((min, max))
+    }
+
+    /// The item's ground footprint in `plane`'s `(u, v)` frame, measured from its placed
+    /// vertices and cached against the transform and plane it was measured for.
+    ///
+    /// The shader projects a footprint with the plane's `(u, v)`, so the same world
+    /// `(x, y)` box would land in the wrong place on a vertical workplane: the extent has
+    /// to be the plane's own. That makes it a walk over every vertex, which is why it is
+    /// cached exactly like [`world_bounds`](Self::world_bounds) — a move shifts it, and
+    /// only a rotation, a scale, a geometry rewrite or a different plane re-measures.
+    pub fn shadow_footprint(&mut self, plane: &Workplane) -> Option<ShadowFootprint> {
+        if self.geometry.positions.is_empty() {
+            return None;
+        }
+        let world = self.world_matrix();
+        let mut measured = self
+            .measured
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((at, at_plane, footprint)) = &measured.footprint {
+            if *at_plane == *plane {
+                if *at == world {
+                    return Some(*footprint);
+                }
+                if let Some(shift) = translation_between(at, &world) {
+                    let shift = Vector3::new(
+                        f64::from(shift[0]),
+                        f64::from(shift[1]),
+                        f64::from(shift[2]),
+                    );
+                    let shifted = ShadowFootprint {
+                        center: [
+                            footprint.center[0] + shift.dot(&plane.u) as f32,
+                            footprint.center[1] + shift.dot(&plane.v) as f32,
+                        ],
+                        ..*footprint
+                    };
+                    measured.footprint = Some((world, plane.clone(), shifted));
+                    return Some(shifted);
+                }
+            }
+        }
+        let mut min = [f64::INFINITY; 2];
+        let mut max = [f64::NEG_INFINITY; 2];
+        for position in &self.geometry.positions {
+            let point = world.transform(&Vector3::new(
+                f64::from(position[0]),
+                f64::from(position[1]),
+                f64::from(position[2]),
+            ));
+            let relative = point.sub(&plane.origin);
+            let u = relative.dot(&plane.u);
+            let v = relative.dot(&plane.v);
+            min[0] = min[0].min(u);
+            min[1] = min[1].min(v);
+            max[0] = max[0].max(u);
+            max[1] = max[1].max(v);
+        }
+        let half = [
+            ((max[0] - min[0]) * 0.5) as f32,
+            ((max[1] - min[1]) * 0.5) as f32,
+        ];
+        let blur = (SHADOW_BLUR_FRACTION * half[0].max(half[1])).max(SHADOW_MIN_BLUR);
+        let footprint = ShadowFootprint::from_bounds(
+            [min[0] as f32, min[1] as f32],
+            [max[0] as f32, max[1] as f32],
+            blur,
+        );
+        measured.footprint = Some((world, plane.clone(), footprint));
+        Some(footprint)
     }
 
     /// The display mode.
@@ -878,8 +994,9 @@ impl ShapeItem {
             highlight_surface: _,
             highlight_wire: _,
             // A cache derived from the positions and the transform, which are compared
-            // here: two items equal on those have equal boxes whatever each cached.
-            world_bounds: _,
+            // here: two items equal on those have equal boxes (and footprints) whatever
+            // each cached.
+            measured: _,
             program,
         } = self;
         *entity_id == other.entity_id
@@ -1991,7 +2108,10 @@ mod tests {
             .with_draw_mode(DrawMode::ShadedWithEdges)
             .with_highlight([1]);
         assert!(
-            emit(&item).packets.iter().any(|packet| packet.state.color == HIGHLIGHT_TINT),
+            emit(&item)
+                .packets
+                .iter()
+                .any(|packet| packet.state.color == HIGHLIGHT_TINT),
             "the selected face is tinted"
         );
 
@@ -2127,7 +2247,10 @@ mod tests {
             before,
             "the item it shared with still draws its own geometry"
         );
-        assert_eq!(observer.positions(), &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        assert_eq!(
+            observer.positions(),
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        );
     }
 
     #[test]

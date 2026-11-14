@@ -408,13 +408,31 @@ plus 0.3 ms and re-uploads the one edited mesh now. A move commit costs 0.18 ms 
 upload at all. The trade is that the emitted pass stays resident instead of being
 rebuilt and dropped per queue.
 
+The stage's own bookkeeping was the other O(vertices) cost: its world AABB and its
+shadow footprints both walk every placed vertex. Each item caches both against the
+transform (and, for a footprint, the workplane) it was measured at, and the cache cell is
+**shared by the item's clones** — a sync rebuilds the stage around clones of the items it
+already had, so what the previous stage measured survives it. A move shifts one box (a
+plane footprint shifts by `(Δ·u, Δ·v)`); a rotation, a scale, a geometry rewrite or a
+different workplane re-measures.
+
+Measured on the 900a assembly (1.24 M triangles over 10 drawn items, release), a move of
+the 324 k-triangle `b_CF_901a_XAxis1_001_`: `apply_interaction` 0.4 ms, the shell's
+`refresh` 2 ms (1.7 of it the command list crossing into the interpreter),
+`stage_meshes` 0.5 ms, `DisplaySync::build` 0.03 ms, `set_stage` 0.00 ms — the packets are
+patched. Nothing is re-uploaded. Before the measurement caches, a recompile with nothing
+changed cost 12.5 ms (the footprint walk is 14 ms on its own); it is 0.03 ms now, and the
+remaining large number is honest work: editing that 324 k-triangle part re-emits 972 k
+vertices, 55 ms, for that part alone.
+
 **Verification:** `ferrocad_shell_core`'s `an_unchanged_mesh_keeps_its_mesh_identity`
 (two objects, one edited: only the edited one takes a new mesh id, reordering the rows
 changes nothing), `a_row_with_equal_content_keeps_its_mesh_identity`,
 `a_reused_item_takes_the_rows_placement_and_style` (including a solid ↔ datum-card switch)
 and `a_reused_item_does_not_keep_the_selection`; `ferrocad_stage`'s
-`same_rigid_items_sees_only_a_move`, `mesh_ids_are_unique_stable_and_high` and
-`set_shape_bumps_the_generation`; `ferrocad_viewport`'s
+`same_rigid_items_sees_only_a_move`, `mesh_ids_are_unique_stable_and_high`,
+`set_shape_bumps_the_generation` and
+`a_footprint_is_shifted_by_a_move_and_re_measured_by_a_rotation`; `ferrocad_viewport`'s
 `a_commit_that_only_moved_patches_instead_of_re_emitting` and
 `the_incremental_bounds_match_the_full_measure`; `ferrocad_wgpu`'s
 `a_stage_and_an_inventor_scene_coexist_in_one_pass` (unchanged items reuse the upload

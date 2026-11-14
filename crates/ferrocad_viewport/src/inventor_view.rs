@@ -1651,7 +1651,7 @@ impl Render for ViewportDragPreview {
 impl<V: InventorView> InventorViewport<V> {
     /// Wrap `view`, drawing `scene` with `camera`.
     pub fn new(view: V, camera: Camera, scene: Scene) -> Self {
-        let stage = Stage::new();
+        let mut stage = Stage::new();
         let (queue, directives, shader_error, _) = merge_queue(&scene, &stage, &camera.viewport);
         let (queue, mut program_queue) = split_programs(queue);
         apply_program_shadows(&mut program_queue, &stage.shadow_footprints());
@@ -2841,7 +2841,11 @@ impl<V: InventorView> InventorViewport<V> {
     /// the legacy inventor path can replace them with
     /// [`set_shadow_footprints`](Self::set_shadow_footprints). Empty means the shadow
     /// block is cleared and `shadow_count` is `0`.
-    pub fn shadow_footprints(&self) -> Vec<ShadowFootprint> {
+    ///
+    /// Takes `&mut self` because each item caches its footprint against the transform it
+    /// was measured at (see [`ShapeItem::shadow_footprint`]); a first read walks every
+    /// vertex, and a moved item after that is a shifted box.
+    pub fn shadow_footprints(&mut self) -> Vec<ShadowFootprint> {
         self.effective_shadow_footprints()
     }
 
@@ -2975,12 +2979,11 @@ impl<V: InventorView> InventorViewport<V> {
     /// world `(x, y)` box would land in the wrong place on a vertical workplane — a
     /// slab's shadow appeared beside it on `XZ`. The producer projects into the plane,
     /// so every plane gets its own footprint.
-    fn effective_shadow_footprints(&self) -> Vec<ShadowFootprint> {
+    fn effective_shadow_footprints(&mut self) -> Vec<ShadowFootprint> {
+        let plane = self.active_workplane.plane.clone();
         let mut footprints = match &self.shadow_footprints {
             Some(footprints) => footprints.clone(),
-            None => self
-                .stage
-                .shadow_footprints_on(&self.active_workplane.plane),
+            None => self.stage.shadow_footprints_on(&plane),
         };
         footprints.truncate(SHADOW_MAX);
         footprints

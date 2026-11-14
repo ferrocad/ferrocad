@@ -1,7 +1,6 @@
 //! The stage: an ordered collection of declarative visual items.
 
 use ferrocad_graphics::{RenderQueue, ShadowFootprint};
-use ferrocad_types::Vector3;
 
 use crate::shape::ShapeItem;
 use crate::workplane::Workplane;
@@ -16,11 +15,6 @@ use crate::workplane::Workplane;
 pub struct Stage {
     items: Vec<ShapeItem>,
 }
-
-/// How soft an item's ground shadow is, as a fraction of its larger half-extent.
-const SHADOW_BLUR_FRACTION: f32 = 0.25;
-/// The smallest world-space shadow blur, so a tiny item still has a soft edge.
-const SHADOW_MIN_BLUR: f32 = 1e-3;
 
 impl Stage {
     /// An empty stage.
@@ -104,7 +98,7 @@ impl Stage {
     /// Shorthand for [`shadow_footprints_on`](Self::shadow_footprints_on) with the world
     /// `XY` plane. A host that draws a bound workplane should pass that plane instead, so
     /// the shadow lands on the plane the grid is drawn on.
-    pub fn shadow_footprints(&self) -> Vec<ShadowFootprint> {
+    pub fn shadow_footprints(&mut self) -> Vec<ShadowFootprint> {
         self.shadow_footprints_on(&Workplane::world())
     }
 
@@ -118,51 +112,23 @@ impl Stage {
     /// familiar `(x, y)` box, and on a vertical plane it is that plane's own extent. The
     /// shader therefore shades whatever plane the grid is on, not only the ground.
     ///
+    /// Measured from the vertices, but each item keeps its footprint against the transform
+    /// and plane it was taken at ([`ShapeItem::shadow_footprint`]), so a drag re-shifts one
+    /// box per moving item instead of re-projecting the document. That matters: the walk is
+    /// 12 ms on a 1.2 M-triangle document, and this runs on every recompile and on every
+    /// patched drag tick while a program is drawn.
+    ///
     /// `blur` is derived from the footprint, not supplied: a quarter of the larger
-    /// half-extent (at least [`SHADOW_MIN_BLUR`] world units), so a small part gets a
+    /// half-extent (at least `SHADOW_MIN_BLUR` world units), so a small part gets a
     /// proportionally tight shadow and a large one does not smear across the grid.
     ///
     /// Feed the result to [`ferrocad_graphics::apply_shadows`], which enforces the
     /// 64-slot cap and writes `shadow_count`.
-    pub fn shadow_footprints_on(&self, plane: &Workplane) -> Vec<ShadowFootprint> {
-        let mut footprints = Vec::with_capacity(self.items.len());
-        for item in &self.items {
-            let positions = item.positions();
-            if positions.is_empty() {
-                continue;
-            }
-            let mut world = item.placement().to_matrix();
-            if let Some(temporary) = item.temporary_transform() {
-                world = world.mul(&temporary);
-            }
-            let mut min = [f64::INFINITY; 2];
-            let mut max = [f64::NEG_INFINITY; 2];
-            for position in positions {
-                let point = world.transform(&Vector3::new(
-                    f64::from(position[0]),
-                    f64::from(position[1]),
-                    f64::from(position[2]),
-                ));
-                let relative = point.sub(&plane.origin);
-                let u = relative.dot(&plane.u);
-                let v = relative.dot(&plane.v);
-                min[0] = min[0].min(u);
-                min[1] = min[1].min(v);
-                max[0] = max[0].max(u);
-                max[1] = max[1].max(v);
-            }
-            let half = [
-                ((max[0] - min[0]) * 0.5) as f32,
-                ((max[1] - min[1]) * 0.5) as f32,
-            ];
-            let blur = (SHADOW_BLUR_FRACTION * half[0].max(half[1])).max(SHADOW_MIN_BLUR);
-            footprints.push(ShadowFootprint::from_bounds(
-                [min[0] as f32, min[1] as f32],
-                [max[0] as f32, max[1] as f32],
-                blur,
-            ));
-        }
-        footprints
+    pub fn shadow_footprints_on(&mut self, plane: &Workplane) -> Vec<ShadowFootprint> {
+        self.items
+            .iter_mut()
+            .filter_map(|item| item.shadow_footprint(plane))
+            .collect()
     }
 }
 
@@ -171,7 +137,7 @@ mod tests {
     use super::*;
     use crate::shape::DrawMode;
     use ferrocad_graphics::{PickId, RenderQueue, Topology};
-    use ferrocad_types::{Placement, Rotation};
+    use ferrocad_types::{Placement, Rotation, Vector3};
 
     fn triangle(entity_id: u32) -> ShapeItem {
         ShapeItem::new(entity_id)
@@ -339,7 +305,7 @@ mod tests {
             vec![],
             vec![],
         );
-        let stage = Stage::new().with_item(item);
+        let mut stage = Stage::new().with_item(item);
 
         let ground = stage.shadow_footprints();
         assert_eq!(ground[0].center, [1.0, 2.0], "world XY: the (x, y) box");
@@ -355,7 +321,7 @@ mod tests {
 
     #[test]
     fn shadow_footprints_are_one_world_xy_box_per_item() {
-        let stage = Stage::new()
+        let mut stage = Stage::new()
             .with_item(box_at(-5.0, -5.0, 4.0, 2.0))
             .with_item(box_at(2.0, 3.0, 2.0, 4.0));
 
@@ -392,11 +358,51 @@ mod tests {
         assert_eq!(footprints[0].center, [-3.0, 1.0]);
     }
 
+    /// The footprint is cached against its transform, like the world box: a move shifts it
+    /// exactly, and a rotation re-measures, so the cached numbers are always the true
+    /// `(u, v)` box. That is what keeps a drag tick independent of the triangle count —
+    /// the walk is 12 ms on a 1.2 M-triangle document, and a patched tick asks for it.
+    #[test]
+    fn a_footprint_is_shifted_by_a_move_and_re_measured_by_a_rotation() {
+        use crate::StandardPlane;
+
+        // A 2 × 4 box in the ground plane, measured at the origin.
+        let mut stage = Stage::new().with_item(box_at(0.0, 0.0, 2.0, 4.0));
+        let resting = stage.shadow_footprints();
+        assert_eq!(resting[0].center, [1.0, 2.0]);
+        assert_eq!(resting[0].half_extent, [1.0, 2.0]);
+
+        // A translation moves the centre and leaves the extent and the blur alone.
+        stage.items_mut()[0].set_placement(Placement::new(
+            Vector3::new(10.0, -5.0, 0.0),
+            Rotation::identity(),
+        ));
+        let moved = stage.shadow_footprints();
+        assert_eq!(moved[0].center, [11.0, -3.0]);
+        assert_eq!(moved[0].half_extent, resting[0].half_extent);
+        assert_eq!(moved[0].blur, resting[0].blur);
+
+        // A quarter turn about z swaps the extents; the cached box cannot be shifted into
+        // that, so it is measured again.
+        stage.items_mut()[0].set_placement(Placement::new(
+            Vector3::new(10.0, -5.0, 0.0),
+            Rotation::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2),
+        ));
+        let turned = stage.shadow_footprints();
+        assert_eq!(turned[0].half_extent, [2.0, 1.0]);
+
+        // A different plane is a different frame, not a stale hit: the turned box spans
+        // `x = 6..10` (`u`), and its `z` is still 0 (`v`).
+        let front = stage.shadow_footprints_on(&Workplane::standard(StandardPlane::Front));
+        assert_eq!(front[0].center, [8.0, 0.0], "u = x, v = z");
+        assert_eq!(front[0].half_extent, [2.0, 0.0]);
+    }
+
     #[test]
     fn stage_footprints_fill_the_program_shadow_block() {
         use ferrocad_graphics::{ProgramParameters, apply_shadows};
 
-        let stage = Stage::new()
+        let mut stage = Stage::new()
             .with_item(box_at(-5.0, -5.0, 4.0, 4.0))
             .with_item(box_at(2.0, 2.0, 2.0, 2.0));
         let mut parameters = ProgramParameters::default();

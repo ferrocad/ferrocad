@@ -334,6 +334,12 @@ commit edits that feature.
   Part feature the kernel refused is `Invalid` and keeps its previous shape (or none), so
   committing it is how a body vanishes. The transaction is aborted and the provider returns
   `ok: false`; the status line reports it and the model is untouched.
+- **A refused commit re-arms the handle.** `✓` takes the held commit before it is applied,
+  so a failure used to leave the manipulator holding a value it could not write — a ghost
+  and no `✗`/`✓` pair to leave it by. The failure path now re-arms from the unchanged stage
+  (what `✗` does) and keeps the error on the status line. Covered by
+  `a_refused_commit_re_arms_the_handle`, which registers its own unclaimed manipulator id
+  so it cannot depend on another suite's registration order.
 - **A plain edge of a filleted body still gets its range.** The first cut of
   `_fillet_shape_and_edge` answered "no range" for *any* element of a `Part::Fillet` that
   was not the round — which silently removed the ceiling for the ordinary case of
@@ -370,7 +376,7 @@ commit edits that feature.
   `a_probe_seeds_the_handle_with_the_existing_value` (seeded value and note shown, nothing
   held), `ferrocad_part`'s `a_fillet_keeps_the_provenance_of_the_face_it_creates` and
   `ferrocad_part_gui`'s `the_probe_note_leads_the_numeric_rows_hint`.
-  `ferrocad_shell_core` is **288**, `ferrocad_part` **55**, `ferrocad_part_gui` **40**,
+  `ferrocad_shell_core` is **289**, `ferrocad_part` **55**, `ferrocad_part_gui` **40**,
   `ferrocad_viewport` **235**, `ferrocad_stage` **259**, `ferrocad_shell_rust` **58**, and
   the three edition round-trips green.
 - **The boot sample is honest about one thing.** Its persisted element map predates the

@@ -850,18 +850,31 @@ impl Shell {
         let status = match crate::app::apply_interaction(cx, commit, &object) {
             Ok(result) if result.ok => {
                 self.after_document_edit(cx);
-                match (commit.element.as_deref(), commit.readout.is_empty()) {
+                Ok(match (commit.element.as_deref(), commit.readout.is_empty()) {
                     (Some(element), false) => {
                         format!("{element} {} = {}", commit.action, commit.readout)
                     }
                     (Some(element), true) => format!("{element} {}", commit.action),
                     (None, false) => commit.readout.clone(),
                     (None, true) => commit.action.clone(),
-                }
+                })
             }
-            Ok(result) if result.error.is_empty() => "interaction failed".to_string(),
-            Ok(result) => format!("interaction error: {}", result.error),
-            Err(error) => format!("interaction error: {error}"),
+            Ok(result) if result.error.is_empty() => Err("interaction failed".to_string()),
+            Ok(result) => Err(format!("interaction error: {}", result.error)),
+            Err(error) => Err(format!("interaction error: {error}")),
+        };
+        let status = match status {
+            Ok(status) => status,
+            Err(status) => {
+                // A refused edit wrote nothing, but the handle is still holding the value
+                // it tried to apply (the viewport keeps its pending preview). Re-arm it
+                // from the unchanged stage, or it hangs with a ghost and no `✗`/`✓` pair
+                // to get out of — the same state `✗` would have restored.
+                self.hud_rect = None;
+                self.hud_lock = None;
+                self.rearm_selection(cx);
+                status
+            }
         };
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);

@@ -1302,7 +1302,10 @@ now also publishes the numeric twin (`DeclarativeHandle::label`, plus `numeric_f
 **A refused feature is rolled back.** Every edit recomputes and then checks the object's
 `State`: a Part feature the kernel refused is `Invalid`, keeps its previous shape (or
 none), and would empty the viewport, so the transaction is aborted and the provider
-returns `ok: false`. A mis-aimed drag therefore never leaves a hole in the model.
+returns `ok: false`. A refused commit also **re-arms the handle** from the unchanged
+stage: `✓` has already taken the held commit, so otherwise the manipulator would keep its
+ghost and its value with no `✗`/`✓` pair to leave it by. A mis-aimed drag therefore never
+leaves a hole in the model *or* a stuck handle.
 
 #### Changing or adding: the decision
 

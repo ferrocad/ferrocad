@@ -39,7 +39,7 @@ fn install_recorder() {
 import FerroCAD as _F
 if not hasattr(_F, '_mf_calls'):
     _F._mf_calls = []
-    def _mf_recorder(obj, manipulator, action, element, values):
+    def _mf_recorder(obj, manipulator, action, element, values, _F=_F):
         if manipulator != 'push_pull' or action != 'extrude':
             return None
         _F._mf_calls.append([obj.Name if obj is not None else '', element, list(values)])

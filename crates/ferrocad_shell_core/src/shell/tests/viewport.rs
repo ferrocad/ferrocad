@@ -694,6 +694,9 @@ fn face_claim_shell(
 /// A manipulator with a numeric twin: one `D` field in millimetres that commits a
 /// `push_pull`/`extrude` — the shape a real stem publishes, without the stem.
 struct NumericFace {
+    /// The manipulator id its commit carries. A test that needs an unclaimed id (a
+    /// refusal no other suite's provider owns) picks its own.
+    id: &'static str,
     value: f64,
     min: f64,
     max: f64,
@@ -702,7 +705,7 @@ struct NumericFace {
 
 impl ferrocad_stage::Manipulator for NumericFace {
     fn id(&self) -> &str {
-        "push_pull"
+        self.id
     }
 
     fn items(&self) -> &[ferrocad_stage::ShapeItem] {
@@ -798,7 +801,7 @@ impl ferrocad_stage::Manipulator for NumericFace {
 
     fn pending_commit(&self) -> Option<ferrocad_stage::InteractionCommit> {
         (self.value != 0.0).then(|| {
-            ferrocad_stage::InteractionCommit::new("push_pull", 7, "extrude")
+            ferrocad_stage::InteractionCommit::new(self.id, 7, "extrude")
                 .with_element("Face1")
                 .with_values([self.value])
                 .with_readout(format!("extrude {:.2} mm", self.value))
@@ -811,12 +814,29 @@ fn numeric_face(
     selection: &ferrocad_geom::SelectionRef,
     _stage: &ferrocad_stage::Stage,
 ) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
+    numeric_face_with_id(selection, "push_pull")
+}
+
+/// The same handle under an id no other suite's provider claims, so a test can make the
+/// apply fail without depending on registration order.
+fn refused_numeric_face(
+    selection: &ferrocad_geom::SelectionRef,
+    _stage: &ferrocad_stage::Stage,
+) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
+    numeric_face_with_id(selection, "refused")
+}
+
+fn numeric_face_with_id(
+    selection: &ferrocad_geom::SelectionRef,
+    id: &'static str,
+) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
     selection
         .elements
         .first()
         .filter(|element| element.starts_with("Face"))
-        .map(|_| {
+        .map(move |_| {
             Box::new(NumericFace {
+                id,
                 value: 0.0,
                 min: 0.0,
                 max: 10.0,
@@ -1079,6 +1099,84 @@ fn a_probe_seeds_the_handle_with_the_existing_value(cx: &mut TestAppContext) {
         input.read_with(&cx, |input, _| input.text().to_string()),
         "3.00",
         "the row shows the seeded value"
+    );
+}
+
+/// A refused commit wrote nothing, so the shell must not leave the handle holding the
+/// value it could not apply: that state draws a ghost but has no `✗`/`✓` pair to leave
+/// it by. The handle is re-armed from the unchanged stage, exactly as `✗` would. Skips
+/// without a GPU adapter.
+#[gpui::test]
+fn a_refused_commit_re_arms_the_handle(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), refused_numeric_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::PushPull, cx))
+    });
+    click_select(
+        &mut cx,
+        &shell,
+        ferrocad_geom::SelectionRef::element(7, "Face2"),
+    );
+    draw(&mut cx);
+
+    // Type a value and hold it, the way the docked row does.
+    let input = shell.read_with(&cx, |shell, _| {
+        shell
+            .manipulator_form
+            .as_ref()
+            .expect("a numeric row")
+            .inputs[0]
+            .clone()
+    });
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.focus_manipulator_field(0, window, cx));
+    });
+    input.update(&mut cx, |input, cx| input.set_text("7.5", cx));
+    shell.update(&mut cx, |shell, cx| shell.on_manipulator_typed(cx));
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.interaction_is_pending()),
+        "the typed value is held"
+    );
+
+    // A workbench that refuses the edit (the kernel would, on a bad fillet). The handle
+    // answers to an id no other suite's provider claims, so this does not depend on
+    // registration order.
+    let registered = cx.update(|_window, _cx| {
+        crate::python::evaluate(
+            "import FerroCAD\n\
+             FerroCAD.register_interaction_provider(\n\
+                 lambda obj, manipulator, action, element, values: {'ok': False, 'error': 'the kernel refused it'}\n\
+                 if manipulator == 'refused' else None)\n",
+        )
+    });
+    assert!(registered.expect("the provider installs").ok);
+
+    assert!(
+        shell.update(&mut cx, |shell, cx| shell.commit_pending_interaction(cx)),
+        "there was a commit to spend"
+    );
+    assert!(
+        !shell.read_with(&cx, |shell, _| shell.interaction_is_pending()),
+        "a refused apply leaves nothing pending"
+    );
+    let status = model.lock().unwrap().status.clone();
+    assert!(status.contains("the kernel refused it"), "{status}");
+
+    // The handle is still there, at rest: no ghost, nothing to accept.
+    let fields = shell
+        .read_with(&cx, |shell, cx| shell.armed_numeric_fields(cx))
+        .expect("the handle is re-armed")
+        .1;
+    assert_eq!(fields[0].value, 0.0, "the handle is back at rest");
+    assert!(
+        shell
+            .read_with(&cx, |shell, _| shell.pending_interaction.clone())
+            .is_none(),
+        "no commit is held after a refusal"
     );
 }
 

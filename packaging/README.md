@@ -8,9 +8,11 @@ distributable artifact:
 | --- | --- | --- | --- |
 | Linux | `linux/appimage.sh` | `target/dist/ferrocad-<arch>.AppImage` | `appimagetool` |
 | Linux (edition) | `linux/appimage.sh --edition parametric --occt` | `target/dist/ferrocad-parametric-<arch>.AppImage` | `appimagetool` + an OCCT 8.0.1 prefix |
+| Linux (Sculpt) | `linux/appimage.sh --edition sculpt --occt` | `target/dist/ferrocad-sculpt-<arch>.AppImage` | the same, plus the curated payload |
 | macOS | `macos/app.sh` | `target/dist/FerroCAD.app` (+ `FerroCAD.dmg`) | macOS; `hdiutil` for the dmg |
 | Windows | `windows/portable.ps1` | `target/dist/ferrocad-windows-x86_64/` + `.zip` | PowerShell |
 | Windows (edition) | `windows/portable.ps1 -Edition parametric -Occt` | `target/dist/ferrocad-parametric-windows-x86_64.zip` | PowerShell + an OCCT 8.0.1 prefix |
+| Windows (Sculpt) | `windows/portable.ps1 -Edition sculpt -Occt` | `target/dist/ferrocad-sculpt-windows-x86_64.zip` | the same, plus the curated payload |
 
 The macOS packager remains in the tree but is not run by `release.yml` while the
 pinned GPUI fork does not build on macOS (see
@@ -35,11 +37,26 @@ target/dist/ferrocad[-<edition>]/
 ├── bin/ferrocad[.exe]        the app binary (links the PyO3 bindings built in)
 ├── lib/                      OCCT toolkit closure (editions with --occt)
 ├── MANIFEST                  the bundled libraries and their sources
-├── python/                   FreeCAD, FreeCADGui, ferrocad_shell, ferrocad_spike
-├── mods/                     workbenches
+├── PAYLOAD.json              the edition, its curated mod set and its add-on review
+├── python/                   FreeCAD, FreeCADGui, ferrocad_shell, ferrocad_sculpt, Sculpt…
+├── mods/                     workbenches (a curated set for an edition that declares one)
 ├── runtime/                  bundled CPython (when fetched; self-contained)
 └── LICENSES/                 LGPL-2.1-or-later + OCCT (LGPL-2.1 with exception)
 ```
+
+### Curated payloads
+
+An edition that bundles a chosen set declares it in `packaging/editions/<edition>.json`.
+`bundle` then stages only the `mods` it names (a missing one is an error, not a silent
+omission), copies the `licenses` entries into `LICENSES/`, and writes `PAYLOAD.json`
+recording the edition, title, app script, staged mods, and both the `bundled_addons`
+and the `excluded_addons` with their licences and status. An edition with no descriptor
+does what every edition did before: it stages every mod in the checkout.
+
+`packaging/editions/sculpt.json` is the first one. It ships the viewport providers and
+none of the demo mods, records SubD Modeler (MIT) and Curves (licence review open) as
+the add-ons the bundle is for, and records Silk (GPL-3.0) as excluded — an edition
+under LGPL-2.1 cannot ship it.
 
 On Windows the closure's `.dll`s are staged in `bin/` beside `ferrocad.exe`
 rather than in `lib/`, so the loader's default search order finds them.

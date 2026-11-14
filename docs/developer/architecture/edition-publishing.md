@@ -70,8 +70,28 @@ Everything below already exists for the base app; the edition extends each.
 5. **Licenses.** Stage OCCT's license text and its exception under `LICENSES/`,
    as CPython's PSF text already is.
 6. **The release matrix.** `release.yml` builds `ferrocad` and, in the `edition`
-   job, the Parametric artifact set named for the edition
-   (`ferrocad-parametric-<os>`); the edition is not the default download (yet).
+   job, each edition's artifact set named for the edition
+   (`ferrocad-parametric-<os>`, `ferrocad-sculpt-<os>`); no edition is the default
+   download. The `edition` matrix carries the edition name, so adding one is a
+   matrix entry plus its `packaging/editions/<edition>.json`, not new workflow
+   code.
+
+## 2a. The curated payload
+
+An edition that bundles a chosen set declares it in
+`packaging/editions/<edition>.json` (see [`../../packaging/README.md`](../../packaging/README.md)
+"Curated payloads"): the `mods` it stages, the `licenses` its add-ons require, and
+its add-on review — both what it bundles and what it deliberately does not. `bundle`
+fails on a named mod that is absent, so an artifact cannot claim a set it does not
+ship, and writes `PAYLOAD.json` into the payload root so the artifact describes
+itself.
+
+`sculpt.json` is the first descriptor. It ships the viewport providers and none of
+the demo mods; it names SubD Modeler (MIT) and Curves (review open) as the add-ons
+the bundle is *for*, and records Silk (GPL-3.0) as excluded because an LGPL-2.1
+edition cannot ship it. Neither add-on is vendored yet, so `bundled_addons`
+currently reads `planned`: the descriptor is the place the licence review lands,
+not a claim that they ship today.
 
 ## 3. Naming
 

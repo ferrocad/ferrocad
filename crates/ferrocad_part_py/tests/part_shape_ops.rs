@@ -763,3 +763,49 @@ else:
         );
     });
 }
+
+/// A placement write moves the geometry *from its un-moved base*.
+///
+/// `Shape.Placement` used to compose a delta onto the already-moved coordinates, so
+/// returning to the identity left a float round-trip behind (5e-15 on a 10 mm cube —
+/// enough to flip the longest-side tie-break SimpleCAD's `main_axis` uses for a
+/// symmetric shape) and repeated drags compounded it. Upstream gets this for free by
+/// keeping a standalone shape's placement as a `TopLoc_Location`; we keep the
+/// un-moved geometry beside it, so clearing or replacing the placement hands the
+/// original coordinates back untouched.
+#[test]
+fn a_placement_reset_is_bit_exact() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+def sides(shape):
+    box = shape.BoundBox
+    return (box.XLength, box.YLength, box.ZLength)
+
+box = Part.makeBox(10, 10, 10)
+assert sides(box) == (10.0, 10.0, 10.0), sides(box)
+
+# A rotated copy returns to its un-moved geometry exactly.
+box.Placement = App.Placement(App.Vector(80, -20, 30), App.Rotation(App.Vector(1, 2, 3), 27))
+copy = box.copy()
+copy.Placement = App.Placement()
+assert sides(copy) == (10.0, 10.0, 10.0), sides(copy)
+assert copy.Placement.Base.Length == 0.0, copy.Placement.Base
+
+# And repeated drags transform from the base, not from the last result.
+moving = Part.makeBox(10, 10, 10)
+back = App.Vector(-1, -2, -3)
+for _ in range(40):
+    moving.translate(App.Vector(1, 2, 3))
+    moving.translate(back)
+assert sides(moving) == (10.0, 10.0, 10.0), sides(moving)
+assert moving.Placement.Base.Length == 0.0, moving.Placement.Base
+"#,
+        );
+    });
+}

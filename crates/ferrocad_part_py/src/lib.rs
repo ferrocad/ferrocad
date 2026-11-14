@@ -344,6 +344,17 @@ pub struct PartShape {
     /// The baked geometry (pre-existing field name kept for the sub-shape wrappers
     /// in `curves`/`solids`, which rebuild it in place).
     shape: Arc<Mutex<Option<Shape>>>,
+    /// The same geometry with the accumulated [`placement`](PartShape::placement)
+    /// removed (`shape == placement · base`).
+    ///
+    /// A placement write is `transform(base, placement)` rather than
+    /// `transform(current, placement · old⁻¹)`, so **clearing** or replacing a
+    /// placement never compounds a float round-trip through the coordinates it just
+    /// wrote: `base · identity` is the original geometry. Upstream gets that for
+    /// free because it keeps a standalone shape's placement as a `TopLoc_Location`;
+    /// we keep the un-moved geometry beside it instead. `None` means "not derived
+    /// yet", which the first placement write fixes by re-deriving it once.
+    base: Arc<Mutex<Option<Shape>>>,
     /// The accumulated placement baked into `shape`.
     placement: Arc<Mutex<Placement>>,
     lineage: Arc<Mutex<Option<Lineage>>>,
@@ -373,8 +384,16 @@ impl PartShape {
         placement: Placement,
         lineage: Option<Lineage>,
     ) -> Self {
+        // A shape at the identity placement *is* its own base (a primitive, an
+        // operation result). An already-placed one derives the base on the first
+        // placement write instead, so wrapping stays free.
+        let base = match (&shape, placement == Placement::identity()) {
+            (Some(shape), true) => Some(shape.clone()),
+            _ => None,
+        };
         PartShape {
             shape: Arc::new(Mutex::new(shape)),
+            base: Arc::new(Mutex::new(base)),
             placement: Arc::new(Mutex::new(placement)),
             lineage: Arc::new(Mutex::new(lineage)),
             epoch: Arc::new(AtomicU64::new(0)),
@@ -389,8 +408,14 @@ impl PartShape {
 
     /// A second handle to an independent copy of the same shape (for `Shape.copy`
     /// and subclasses).
+    ///
+    /// The un-moved base travels with it: a copy of a moved shape can be returned to
+    /// its un-moved geometry exactly, which is what a caller measuring the copy in
+    /// its own frame needs.
     pub(crate) fn copy_handle(&self) -> Self {
-        Self::with_parts_and_placement(self.shape(), self.placement(), self.lineage())
+        let copy = Self::with_parts_and_placement(self.shape(), self.placement(), self.lineage());
+        copy.set_base(self.base_shape());
+        copy
     }
 
     /// A copy of the wrapped shape (shape handles are cheap to clone).
@@ -407,6 +432,20 @@ impl PartShape {
             .placement
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The geometry with the accumulated placement removed, when it is known.
+    pub(crate) fn base_shape(&self) -> Option<Shape> {
+        self.base
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Adopt `base` as the un-moved geometry (a copy of a placed shape hands its
+    /// own base over, so the copy still knows where it came from).
+    pub(crate) fn set_base(&self, base: Option<Shape>) {
+        *self.base.lock().unwrap_or_else(|e| e.into_inner()) = base;
     }
 
     /// The lineage carried beside the shape, if it has one.
@@ -493,6 +532,8 @@ impl PartShape {
             .placement
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Placement::identity();
+        // The placement is gone, so the new geometry is its own base.
+        self.set_base(shape.clone());
         *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
         *self.lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -500,7 +541,11 @@ impl PartShape {
 
     /// Replace the wrapped geometry, keeping the accumulated placement (an
     /// orientation change, such as `Shape.reverse`, does not move the shape).
+    ///
+    /// The cached un-moved base is dropped: it describes the geometry that was just
+    /// replaced, so the next placement write re-derives one from this shape.
     fn replace_geometry(&self, shape: Option<Shape>) {
+        self.set_base(None);
         *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = shape;
         *self.lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -529,6 +574,9 @@ impl PartShape {
         let oriented = ferrocad_part::backend()
             .with_orientation(&shape, value)
             .map_err(kernel_error)?;
+        // The orientation is part of the geometry, so the cached un-moved base no
+        // longer describes it; the next placement write derives a fresh one.
+        self.set_base(None);
         *self.shape.lock().unwrap_or_else(|e| e.into_inner()) = Some(oriented.clone());
         self.epoch.fetch_add(1, Ordering::SeqCst);
         Ok(oriented)
@@ -546,6 +594,14 @@ impl PartShape {
         placement: Placement,
         lineage: Option<Lineage>,
     ) {
+        // The geometry arrives already placed, so it is only its own base at the
+        // identity placement; otherwise the base is derived when it is next needed.
+        let base = if placement == Placement::identity() {
+            self.shape()
+        } else {
+            None
+        };
+        self.set_base(base);
         *self.placement.lock().unwrap_or_else(|e| e.into_inner()) = placement;
         *self.lineage.lock().unwrap_or_else(|e| e.into_inner()) = lineage;
         self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -555,6 +611,7 @@ impl PartShape {
     fn apply_placement(&self, new: Placement) {
         apply_placement_to(
             &self.shape,
+            &self.base,
             &self.placement,
             &self.lineage,
             &self.epoch,
@@ -739,6 +796,7 @@ fn rotation_placement(
 /// ignored.
 fn apply_placement_to(
     shape: &Mutex<Option<Shape>>,
+    base: &Mutex<Option<Shape>>,
     placement: &Mutex<Placement>,
     lineage: &Mutex<Option<Lineage>>,
     epoch: &AtomicU64,
@@ -754,15 +812,46 @@ fn apply_placement_to(
     if *placement_guard == new {
         return;
     }
-    let delta = compose_placements(&new, &placement_guard.inverse());
+    let mut base_guard = base.lock().unwrap_or_else(|e| e.into_inner());
     let mut shape_guard = shape.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(current) = shape_guard.as_ref() {
-        match ferrocad_part::backend().transform(current, &delta.to_matrix()) {
-            Ok(moved) => *shape_guard = Some(moved),
+
+    // The geometry to move, with no placement on it. A cached base is the exact
+    // geometry the first move started from, so coming back to the identity or to any
+    // earlier placement does not compound a round-trip through the coordinates.
+    let unplaced = match base_guard.as_ref() {
+        Some(base) => Some(base.clone()),
+        None => match shape_guard.as_ref() {
+            None => None,
+            Some(current) if *placement_guard == Placement::identity() => Some(current.clone()),
+            Some(current) => {
+                let inverse = placement_guard.inverse();
+                ferrocad_part::backend()
+                    .transform(current, &inverse.to_matrix())
+                    .ok()
+            }
+        },
+    };
+
+    let Some(unplaced) = unplaced else {
+        // A null shape has no geometry to move; only the recorded placement changes.
+        *placement_guard = new;
+        epoch.fetch_add(1, Ordering::SeqCst);
+        return;
+    };
+    if base_guard.is_none() {
+        *base_guard = Some(unplaced.clone());
+    }
+    // Reaching the identity placement hands the base back untouched.
+    let moved = if new == Placement::identity() {
+        unplaced
+    } else {
+        match ferrocad_part::backend().transform(&unplaced, &new.to_matrix()) {
+            Ok(moved) => moved,
             // A failed re-bake must not leave the pair inconsistent.
             Err(_) => return,
         }
-    }
+    };
+    *shape_guard = Some(moved);
     *placement_guard = new;
     *lineage.lock().unwrap_or_else(|e| e.into_inner()) = None;
     epoch.fetch_add(1, Ordering::SeqCst);
@@ -916,11 +1005,14 @@ impl PartShape {
             .map_err(kernel_error)?;
         let lineage = if noElementMap { None } else { self.lineage() };
         let wrapped = wrap_shape(py, copied)?;
-        wrapped
-            .bind(py)
-            .downcast::<PartShape>()?
-            .borrow()
+        let copy = wrapped.bind(py).downcast::<PartShape>()?;
+        copy.borrow()
             .adopt_placement_and_lineage(self.placement(), lineage);
+        // Hand the un-moved geometry over as the copy's base: the base is an
+        // immutable shape handle, so the copy can transform *from* it (and return to
+        // it exactly) without a second kernel copy. A wrapper with no base yet leaves
+        // `None`, and the first placement write derives one.
+        copy.borrow().set_base(self.base_shape());
         Ok(wrapped)
     }
 
@@ -966,12 +1058,14 @@ impl PartShape {
         let placement = self.placement();
         let epoch = self.epoch.load(Ordering::SeqCst);
         let shape = Arc::clone(&self.shape);
+        let base = Arc::clone(&self.base);
         let placement_cell = Arc::clone(&self.placement);
         let lineage = Arc::clone(&self.lineage);
         let epoch_cell = Arc::clone(&self.epoch);
         let hook = Arc::new(move |new: Placement| {
             apply_placement_to(
                 &shape,
+                &base,
                 &placement_cell,
                 &lineage,
                 &epoch_cell,

@@ -92,11 +92,11 @@ breadth, not more Part surface for its own sake.
 
 ## Where the detail lives
 
-- [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) — the active backlog and the
+- [`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) — the active backlog and the
   measurement caveats at this rotation.
 - [`2026-11-13-november-round.md`](2026-11-13-november-round.md) — the November round:
-  the platform work, the one real regression and the harness gap, and the commands that
-  reproduce them.
+  the platform work, the one real regression and the harness gap, the commands that
+  reproduce them, and (from §5) the manipulator editor round.
 - [`TODO-31-10-2026.md`](TODO-31-10-2026.md) — the closed 2026-10-31 backlog.
 - [`2026-10-29-workplane-visual-hierarchy-and-grid.md`](2026-10-29-workplane-visual-hierarchy-and-grid.md)
   — the workplane/grid round: what landed, the four grid defects and their mechanisms,

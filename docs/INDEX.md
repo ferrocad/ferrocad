@@ -29,7 +29,7 @@ folders are what `tools/build_book.py` publishes at
 | write a mod or a workbench | [mods/README.md](mods/README.md) |
 | drive `FreeCAD` from another program | [mods/README.md#the-json-boundary-for-automated-clients](mods/README.md#the-json-boundary-for-automated-clients) and [python-api/ferrocad_shell.md](python-api/ferrocad_shell.md) |
 | change FerroCAD | [developer/README.md](developer/README.md) and [developer/architecture.md](developer/architecture.md) |
-| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-13-11-2026.md](project/TODO-13-11-2026.md) |
+| understand why, or what is next | [project/direction/rewrite-strategy.md](project/direction/rewrite-strategy.md), [project/ROADMAP.md](project/ROADMAP.md) and [project/TODO-14-11-2026.md](project/TODO-14-11-2026.md) |
 | find what a label means | [project/labels.md](project/labels.md) |
 
 ## General concepts
@@ -190,7 +190,7 @@ than deleted.
 
 - [project/README.md](project/README.md) — the folder landing page, reading order and the record rule.
 - [project/ROADMAP.md](project/ROADMAP.md) — the three horizons and their exit criteria.
-- [project/TODO-13-11-2026.md](project/TODO-13-11-2026.md) — the active backlog: the SimpleCAD closure, the two 2026-11-13 regressions, solids/booleans and Draft, surface/subdivision, constraints with a bound solver, and the platform tail.
+- [project/TODO-14-11-2026.md](project/TODO-14-11-2026.md) — the active backlog: the manipulator editor round's tail, the untracked startup sample, solids/booleans and Draft, surface/subdivision, constraints with a bound solver, and the platform tail.
 - [project/labels.md](project/labels.md) — what every `S1`, `P4`, `D0`, `T4` and `G1` means, and which program owns it.
 
 ### Documentation system
@@ -235,7 +235,8 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Closed history
 
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
-- [project/record/2026-11-13-november-round.md](project/record/2026-11-13-november-round.md) — the November round: the OCCT Rust boundary, the browser shell, the host/backend split, backend parity, the mod format, and the two regressions found at rotation.
+- [project/record/2026-11-13-november-round.md](project/record/2026-11-13-november-round.md) — the November round: the OCCT Rust boundary, the browser shell, the host/backend split, backend parity, the mod format, the two regressions found at rotation, and the manipulator editor round.
+- [project/record/TODO-13-11-2026.md](project/record/TODO-13-11-2026.md) — the closed 2026-11-13 backlog: the SimpleCAD closure (P1), the two red gates, the image-path round and the open P2–P6 work.
 - [project/record/TODO-31-10-2026.md](project/record/TODO-31-10-2026.md) — the closed 2026-10-31 backlog: the SimpleCAD slices, the platform remainder and the surface/sketcher plans.
 - [project/record/TODO-29-10-2026.md](project/record/TODO-29-10-2026.md) — the closed 2026-10-29 backlog: the workplane hierarchy, datum planes, the grid and the SimpleCAD P1 closure.
 - [project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md](project/record/2026-10-29-workplane-visual-hierarchy-and-grid.md) — the round log for the workplane and grid work, including the four grid defects and their mechanisms.

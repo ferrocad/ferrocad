@@ -50,7 +50,7 @@ decision. Completed specs moved to [`../record/tasks/`](../record/tasks/README.m
 Completed specs — `backend-parity`, `host-backends`, `wasm-shell`, `transform-session`,
 `tool-loadout` and the earlier work — are indexed in
 [`../record/tasks/`](../record/tasks/README.md). The open work is tracked in
-[`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) and the standing design notes under
+[`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) and the standing design notes under
 `architecture/`, `interaction/`, `viewport/` and `workbenches/`.
 
 A new spec belongs here when work is large enough to need its own design, checklist and

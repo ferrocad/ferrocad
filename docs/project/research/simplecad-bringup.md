@@ -1448,7 +1448,7 @@ FreeCAD`. That surfaces in the suite as `The kernel stopped unexpectedly on this
 passed / 1 errored (the known `PartDesign` absence). The 49 failures remain the same
 buckets. See
 [`../record/2026-11-13-november-round.md`](../record/2026-11-13-november-round.md) §2.1
-and [`../TODO-13-11-2026.md`](../TODO-13-11-2026.md) §P1.1.
+and [`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) §P1.1.
 
 **2026-11-13 — SC3: the Qt shim refusal is a classified skip.** The five `TypeError` error
 records are four `setUpClass` hooks and one inline constructor, covering **17 tests**:

@@ -1,7 +1,7 @@
 # FerroCAD roadmap
 
-Status: roadmap (2026-11-13). The actionable backlog is
-[`TODO-13-11-2026.md`](TODO-13-11-2026.md); the measured history is
+Status: roadmap (2026-11-14). The actionable backlog is
+[`TODO-14-11-2026.md`](TODO-14-11-2026.md); the measured history is
 [`record/milestones.md`](record/milestones.md) and the latest round is
 [`record/2026-11-13-november-round.md`](record/2026-11-13-november-round.md); the letters
 used below (`H1`, `P4`, `S4`, `M3` …) are indexed in [`labels.md`](labels.md).
@@ -31,6 +31,14 @@ The platform picture did change materially: the **browser shell** runs the same
 `RustAppBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
 format. The remaining work is breadth and correctness on top of that platform, not a second
 architecture.
+
+The **interaction surface** advanced on 2026-11-14: Push/Pull and Fillet are numeric
+editors that **re-open the feature they produced**. A cap or a fillet round (its face or a
+boundary edge) seeds the handle at the value the feature already has, a kernel bisection
+bounds it, and the commit edits that feature in one transaction — while a refused operation
+rolls back and re-arms instead of leaving a hole in the model or a stuck handle. The
+remaining interaction work is the tail (chamfer re-open, a multi-edge range, previews) and
+the creation pill.
 
 ## The three horizons
 

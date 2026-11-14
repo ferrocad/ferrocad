@@ -2,7 +2,7 @@
 
 Status: **A1a–A1c, A2, A3 and U1–U3 built (2026-10-30/31); archived 2026-11-13.**
 A0 (`PendingEdit`/`EditView`) remains deferred by D0; the open decisions (D3, D4, D6)
-are carried in [`../../TODO-13-11-2026.md`](../../TODO-13-11-2026.md) §P5.
+are carried in [`../../TODO-14-11-2026.md`](../../TODO-14-11-2026.md) §P5.
 Read against the tree in
 [`../research/transform-session-compatibility.md`](../../research/transform-session-compatibility.md),
 which corrected the pending value's shape: the display stage carries **world-space** geometry

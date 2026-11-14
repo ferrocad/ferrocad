@@ -49,7 +49,7 @@
 
 #![allow(non_snake_case)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -3581,6 +3581,42 @@ impl PyDocumentObject {
             .collect()
     }
 
+    /// The objects this object links to, in property order and deduplicated.
+    ///
+    /// Upstream `OutList` is every outbound link (`Link`, `LinkList`, `LinkSub`,
+    /// `LinkSubList`), not just a group's `Group`, so a page's views and a
+    /// feature's `Base`/`Tool` all appear.
+    fn outgoing_links(&self, py: Python<'_>) -> Vec<Py<PyDocumentObject>> {
+        let inner = Arc::clone(&self.inner);
+        let names: Vec<String> = {
+            let doc = inner.lock().unwrap();
+            let mut names = Vec::new();
+            if let Some(object) = doc.object(self.id) {
+                for (_, property) in object.properties.iter() {
+                    match property {
+                        Property::Link(name) => names.push(name.clone()),
+                        Property::LinkList(links) => names.extend(links.iter().cloned()),
+                        Property::LinkSub(name, _) => names.push(name.clone()),
+                        Property::LinkSubList(entries) => {
+                            names.extend(entries.iter().map(|(name, _)| name.clone()))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let mut seen = HashSet::new();
+            names.retain(|name| !name.is_empty() && seen.insert(name.clone()));
+            names
+        };
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let id = inner.lock().unwrap().get_by_name(&name)?;
+                Some(get_or_create_object(py, &self.doc, &inner, id))
+            })
+            .collect()
+    }
+
     fn addObject(&self, other: &Bound<'_, PyAny>) -> PyResult<()> {
         let other_ref: PyRef<'_, PyDocumentObject> = other
             .extract()
@@ -3618,6 +3654,43 @@ impl PyDocumentObject {
             doc.add_dependency(self.id, other_id);
         }
         Ok(())
+    }
+
+    /// `DrawPage.addView(view)`: append a view to the page's `Views`.
+    ///
+    /// Upstream this belongs to `TechDraw::DrawPage` (and its Python peer). The
+    /// generic document object answers it when the type carries a `Views` link
+    /// list, so the page's `OutList` — its outbound links — names its views. A
+    /// type without `Views` keeps the normal `AttributeError`.
+    fn addView(&self, other: &Bound<'_, PyAny>) -> PyResult<()> {
+        let other_ref: PyRef<'_, PyDocumentObject> = other
+            .extract()
+            .map_err(|_| PyTypeError::new_err("addView expects a DocumentObject"))?;
+        let other_id = other_ref.id;
+        let other_name = other_ref.name_string();
+        drop(other_ref);
+
+        if other_id == self.id {
+            return Err(PyValueError::new_err("a page cannot contain itself"));
+        }
+        let mut doc = self.inner.lock().unwrap();
+        let type_id = doc
+            .object(self.id)
+            .map(|o| o.type_id.clone())
+            .unwrap_or_default();
+        let mut views = match doc.object(self.id).and_then(|o| o.properties.get("Views")) {
+            Some(Property::LinkList(views)) => views.clone(),
+            _ => {
+                return Err(PyAttributeError::new_err(format!(
+                    "'{type_id}' has no addView"
+                )))
+            }
+        };
+        if !views.contains(&other_name) {
+            views.push(other_name);
+        }
+        doc.set_property(self.id, "Views", Property::LinkList(views))
+            .map_err(PyValueError::new_err)
     }
 
     /// `GroupExtension.removeObject(obj)`: drop `obj` from this group's `Group`
@@ -3849,7 +3922,7 @@ impl PyDocumentObject {
     #[getter]
     fn OutList(slf: &Bound<'_, Self>) -> Vec<Py<PyDocumentObject>> {
         let py = slf.py();
-        slf.borrow().group_members(py)
+        slf.borrow().outgoing_links(py)
     }
 
     /// `InList`: the objects that link to this object (any `Link`/`LinkList`/

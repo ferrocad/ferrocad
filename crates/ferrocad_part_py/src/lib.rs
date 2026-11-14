@@ -42,6 +42,7 @@ mod link;
 mod link_array;
 mod shape_fix;
 mod solids;
+mod techdraw;
 mod text;
 
 use std::collections::HashMap;
@@ -78,6 +79,7 @@ fn register_kernel() {
     link::register();
     link_array::register();
     solids::register_objects();
+    techdraw::register_objects();
     feature_python::register();
     // The document-object behavior lives in `ferrocad_part` and the Python-feature
     // types here; both are kernel-agnostic. Keep their `Shape` in sync with the

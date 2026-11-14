@@ -697,6 +697,7 @@ struct NumericFace {
     value: f64,
     min: f64,
     max: f64,
+    note: Option<String>,
 }
 
 impl ferrocad_stage::Manipulator for NumericFace {
@@ -741,8 +742,12 @@ impl ferrocad_stage::Manipulator for NumericFace {
     }
 
     fn numeric_fields(&self) -> Vec<ferrocad_stage::NumericField> {
-        vec![ferrocad_stage::NumericField::millimetres("D", self.value)
-            .bounded(Some(self.min), Some(self.max))]
+        let field = ferrocad_stage::NumericField::millimetres("D", self.value)
+            .bounded(Some(self.min), Some(self.max));
+        vec![match &self.note {
+            Some(note) => field.with_hint(note.clone()),
+            None => field,
+        }]
     }
 
     fn set_values(&mut self, values: &[f64]) -> bool {
@@ -783,6 +788,14 @@ impl ferrocad_stage::Manipulator for NumericFace {
         true
     }
 
+    fn set_note(&mut self, note: Option<String>) -> bool {
+        if self.note == note {
+            return false;
+        }
+        self.note = note;
+        true
+    }
+
     fn pending_commit(&self) -> Option<ferrocad_stage::InteractionCommit> {
         (self.value != 0.0).then(|| {
             ferrocad_stage::InteractionCommit::new("push_pull", 7, "extrude")
@@ -807,6 +820,7 @@ fn numeric_face(
                 value: 0.0,
                 min: 0.0,
                 max: 10.0,
+                note: None,
             }) as Box<dyn ferrocad_stage::Manipulator>
         })
 }
@@ -1024,7 +1038,7 @@ fn a_probe_seeds_the_handle_with_the_existing_value(cx: &mut TestAppContext) {
         crate::python::evaluate(
             "import FerroCAD\n\
              FerroCAD.register_manipulator_probe(\n\
-                 lambda obj, element, manipulator: {'values': [3.0], 'min': 0.0, 'max': 4.0, 'note': 'test'}\n\
+                 lambda obj, element, manipulator: {'values': [3.0], 'min': 0.0, 'max': 4.0, 'note': 'editing the existing extrusion'}\n\
                  if manipulator == 'push_pull' else None)\n",
         )
     });
@@ -1044,6 +1058,11 @@ fn a_probe_seeds_the_handle_with_the_existing_value(cx: &mut TestAppContext) {
         "the handle opens at the existing operation's value"
     );
     assert_eq!(fields[0].max, Some(4.0), "the kernel's range still applies");
+    assert_eq!(
+        fields[0].hint.as_deref(),
+        Some("editing the existing extrusion"),
+        "the row says the gesture edits what is already there"
+    );
     assert!(
         !shell.read_with(&cx, |shell, _| shell.interaction_is_pending()),
         "a seed is not an edit: nothing is held for ✓"

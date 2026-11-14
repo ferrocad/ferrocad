@@ -113,6 +113,32 @@ assert part._interaction(fillet, 'dress_up', 'fillet', round, [4.0])['ok']
 assert fillet.Radius == 4.0, fillet.Radius
 assert len(doc.Objects) == before, 'the fillet was edited, not stacked'
 
+# The round's own edges are the same handle. The compiled scrubber arms on an edge, and
+# a second fillet on the round's seam is exactly what the kernel refuses.
+round_edge = None
+for name in list(fillet.Shape.mesh()['parts']):
+    if not name.startswith('Edge'):
+        continue
+    edge = fillet.Shape.getElement(name)
+    if any(edge.isSame(boundary) for boundary in fillet.Shape.getElement(round).Edges):
+        round_edge = name
+        break
+assert round_edge is not None, 'the round has boundary edges'
+assert FerroCAD.manipulator_probe(fillet, round_edge, 'dress_up')['values'] == [4.0]
+count = len(doc.Objects)
+assert part._interaction(fillet, 'dress_up', 'fillet', round_edge, [2.5])['ok']
+assert fillet.Radius == 2.5, fillet.Radius
+assert len(doc.Objects) == count, 'a round edge edits the feature too'
+
+# A fillet the kernel refuses must leave the model alone, not empty the viewport: the
+# feature would be invalid and its body consumed.
+before = len(doc.Objects)
+rejected = part._interaction(fillet, 'dress_up', 'fillet', 'Edge1', [50.0])
+assert not rejected['ok'], rejected
+assert len(doc.Objects) == before, 'the rejected feature was rolled back'
+assert fillet.Radius == 2.5, 'the existing fillet is untouched'
+assert 'Invalid' not in fillet.State, fillet.State
+
 box = part.makeBox(10, 10, 10, name='Reopen')
 assert part._push_pull(box, 'Face1', 5.0)['ok']
 fuse = doc.getObject('Reopen_Fuse')

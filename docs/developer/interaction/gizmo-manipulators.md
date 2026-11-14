@@ -1276,13 +1276,40 @@ transaction:
 - `_edit_dress_up` sets `Radius` (or `Distance`/`Distance2`) on the picked feature. Its
   `Base` link and edge selection are already right, so only the value moves.
 
-A fillet's round is a **face**, and the compiled scrubber needs an edge. The edition
+**A round's own edges are the same handle.** The compiled scrubber arms on an *edge*, and
+a fillet's round has four boundary edges (two arcs, two seams). A new fillet on a seam is
+exactly what the kernel refuses — and a refused feature is invalid, consumes its base, and
+leaves nothing drawn. `_dress_up_target` therefore answers for the round's edges too,
+reading them from the face (`Face.Edges`) rather than by name, so grabbing any part of the
+round edits the feature that made it.
+
+A fillet's round is a **face**, and the compiled scrubber cannot arm there. The edition
 answers that with a declared handle: `manipulator_specs` returns an axis grip at the
 face's area-weighted centroid, along its normal, labelled `R`, seeded with the feature's
 radius and carrying the `dress_up`/`fillet` id the compiled scrubber uses. A declaration
 now also publishes the numeric twin (`DeclarativeHandle::label`, plus `numeric_fields`,
-`set_values`, `seed_values`, `pending_commit` on `DeclarativeManipulator`), so a
-mod-declared handle types and clamps like a native one.
+`set_values`, `seed_values`, `set_value_bounds`, `pending_commit` on
+`DeclarativeManipulator`), so a mod-declared handle types and clamps like a native one.
+
+**A refused feature is rolled back.** Every edit recomputes and then checks the object's
+`State`: a Part feature the kernel refused is `Invalid`, keeps its previous shape (or
+none), and would empty the viewport, so the transaction is aborted and the provider
+returns `ok: false`. A mis-aimed drag therefore never leaves a hole in the model.
+
+#### Changing or adding: the decision
+
+A gesture on a face that already carries a push/pull **edits** that feature. That is not
+only a preference — it is what the gesture means: the stem is anchored at the base face
+and rides the swept ghost, so its number is the **total** distance from that face, which
+is the extrusion's `LengthFwd`. Anchoring it at the cap would be a different control (a
+delta), and fusing a shorter prism onto the same base face cannot shorten a body at all.
+The row says `editing the existing extrusion` while the handle is armed, so the meaning is
+visible before the commit. Adding material is expressed by editing (the same solid, the
+same number) or by pulling another face; an explicit "add another" toggle would need the
+modifier state the `Manipulator` trait does not carry today.
+
+A fillet reads the same way: the scrubber's number is the radius, and the round's radius
+*is* the feature's radius, so a round selection can only mean the existing feature.
 
 #### Keeping the names honest
 
@@ -1335,6 +1362,8 @@ the registry tests in `tests/test_manipulator_probe.py`.
 
 The probe is asked once per arming, not re-asked mid-drag; a shape change during an edit
 clears the cache rather than growing a live range. Re-opening a **chamfer** needs a
-face-level handle for its two distances (the declared grip carries one scalar). A chain of
-several operations on the same face still picks the outermost feature only: the probe
-returns the first answer, not the whole history.
+face-level handle for its two distances (the declared grip carries one scalar). A fillet
+feature that selects **several** edges reports no kernel range: one bisection per edge
+would over-state the ceiling the combined feature survives. A chain of several operations
+on the same face still picks the outermost feature only: the probe returns the first
+answer, not the whole history.

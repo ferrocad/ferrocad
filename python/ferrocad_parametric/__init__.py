@@ -170,7 +170,7 @@ def _push_pull(obj, element, distance):
     hidden, so the boolean result is the only solid the display hook draws.
 
     Picking the cap a previous pull produced **edits that pull** instead of stacking a
-    second feature over the same body; :func:`_extrusion_target` is how the lineage
+    second feature over the same body; :func:`_extrusion_target` is how the geometry
     says which feature the face belongs to.
     """
     if abs(distance) < 1e-9:
@@ -222,11 +222,30 @@ def _push_pull(obj, element, distance):
                 )
             feature.Placement = placement
         doc.recompute()
+        if _invalid(feature):
+            doc.abortTransaction()
+            return {
+                "ok": False,
+                "error": f"{label.lower()} on {element} failed; the body is unchanged",
+            }
         doc.commitTransaction()
     except Exception as exc:
         doc.abortTransaction()
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "feature": feature_name}
+
+
+def _invalid(object_):
+    """Whether a feature's last rebuild failed.
+
+    A Part feature whose kernel operation refuses the input is marked invalid and keeps
+    its previous `Shape` (or none on a first build). Committing that state is how a solid
+    disappears from the viewport, so every edit checks it and aborts instead.
+    """
+    try:
+        return "Invalid" in object_.State
+    except Exception:  # noqa: BLE001 - an object without State is assumed valid
+        return False
 
 
 def _edit_extrusion(obj, target, distance):
@@ -275,6 +294,12 @@ def _edit_extrusion(obj, target, distance):
         if obj.Name != feature_name:
             doc.removeObject(obj.Name)
         doc.recompute()
+        if _invalid(feature):
+            doc.abortTransaction()
+            return {
+                "ok": False,
+                "error": f"{label.lower()} edit failed; the body is unchanged",
+            }
         doc.commitTransaction()
     except Exception as exc:
         doc.abortTransaction()
@@ -297,6 +322,9 @@ def _edit_dress_up(obj, mode, first, second):
             obj.Distance = first
             obj.Distance2 = second
         doc.recompute()
+        if _invalid(obj):
+            doc.abortTransaction()
+            return {"ok": False, "error": f"{mode.lower()} edit failed; the body is unchanged"}
         doc.commitTransaction()
     except Exception as exc:
         doc.abortTransaction()
@@ -349,10 +377,15 @@ def _interaction(obj, manipulator, action, element, values):
     first = float(values[0]) if values else 0.0
     second = float(values[1]) if len(values) > 1 else 0.0
 
-    # A dress-up whose own face was picked is that feature: editing it is the change the
-    # user asked for, not a second feature over its result. Any *other* element of the
-    # result is a new fillet, as it should be.
-    if element and _dress_up_target(obj, element) is not None:
+    # A dress-up whose own face or round edge was picked is that feature: editing it is
+    # the change the user asked for, not a second feature over its result (which the
+    # kernel often refuses, emptying the viewport). Any *other* element of the result is
+    # a new fillet, as it should be.
+    if (
+        element
+        and str(getattr(obj, "TypeId", "")) == f"Part::{mode}"
+        and _dress_up_target(obj, element) is not None
+    ):
         return _edit_dress_up(obj, mode, first, second)
 
     doc = obj.Document
@@ -369,6 +402,12 @@ def _interaction(obj, manipulator, action, element, values):
             feature.Distance = first
             feature.Distance2 = second
         doc.recompute()
+        if _invalid(feature):
+            doc.abortTransaction()
+            return {
+                "ok": False,
+                "error": f"{mode.lower()} on {element or 'the selection'} failed; the body is unchanged",
+            }
         doc.commitTransaction()
     except Exception as exc:
         doc.abortTransaction()
@@ -384,26 +423,6 @@ FerroCAD.register_interaction_provider(_interaction)
 _PROBE_FLOOR = 1e-3
 #: Halvings once the bracket is found: about a percent of it, finer than a drag can aim.
 _PROBE_TRIALS = 6
-
-
-def _element_inputs(shape, element):
-    """The operand element names the kernel says produced ``element``, or ``()``.
-
-    ``Shape.getElementHistory`` returns ``(tag, original, producers)`` and answers
-    ``None`` for a shape with no lineage. This is the one provenance query the UI needs:
-    a face of a boolean result names the face it came from, and a fillet's round names
-    the edge the feature consumed.
-    """
-    try:
-        history = shape.getElementHistory(element)
-    except Exception:  # noqa: BLE001 - a shape without the query has no history
-        return ()
-    if not history:
-        return ()
-    try:
-        return tuple(history[2] or ())
-    except (IndexError, TypeError):
-        return ()
 
 
 def _link_sub(obj, name="Base"):
@@ -475,14 +494,67 @@ def _is_extrusion_cap(obj, element, base_obj, base_element, distance):
     return spread <= 1e-6 * max(diagonal, 1.0)
 
 
-def _dress_up_target(obj, element):
-    """The radius an existing ``Part::Fillet`` holds, when ``element`` is its round.
+def _axis_parallels_an_edge(axis, base_obj, edges):
+    """Whether `axis` runs along one of the feature's filleted edges."""
+    for edge_name in edges:
+        try:
+            direction = base_obj.Shape.getElement(edge_name).Curve.Direction
+        except Exception:  # noqa: BLE001 - a curved edge has no single direction
+            continue
+        dot = abs(axis.x * direction.x + axis.y * direction.y + axis.z * direction.z)
+        if dot >= 0.999:
+            return True
+    return False
 
-    The round is the cylinder of the feature's own radius whose axis runs parallel to the
-    filleted edge, so the surface identifies the feature without the lineage (which a
-    document saved before the kernel recorded it does not carry). A chamfer is
-    deliberately not answered — its distances are not the radius the armed scrubber
-    edits.
+
+def _fillet_rounds(obj, base_obj, edges, radius):
+    """The faces this fillet created.
+
+    A round is the cylinder of the feature's own radius whose axis runs parallel to a
+    filleted edge. Geometry identifies it, so this answers on a document saved before the
+    kernel recorded provenance; the surface type keeps a coincidental cylinder out.
+    """
+    shape = getattr(obj, "Shape", None)
+    if shape is None:
+        return []
+    try:
+        parts = [
+            name
+            for name in list(shape.mesh().get("parts") or ())
+            if name.startswith("Face")
+        ]
+    except Exception:  # noqa: BLE001 - a shape without a mesh has no rounds
+        return []
+    rounds = []
+    for name in parts:
+        try:
+            surface = shape.getElement(name).Surface
+        except Exception:  # noqa: BLE001 - an element the shape cannot resolve
+            continue
+        if type(surface).__name__ != "Cylinder":
+            continue
+        try:
+            if abs(float(surface.Radius) - radius) > 1e-6 * max(1.0, radius):
+                continue
+            axis = surface.Axis
+        except Exception:  # noqa: BLE001 - a surface without an axis is not a round
+            continue
+        if _axis_parallels_an_edge(axis, base_obj, edges):
+            rounds.append(name)
+    return rounds
+
+
+def _dress_up_target(obj, element):
+    """The radius an existing ``Part::Fillet`` holds, when ``element`` belongs to it.
+
+    Two selections re-open the feature: the **round face** it created, and any **edge of
+    that round**. The second matters because the compiled edge scrubber arms there, and
+    a new fillet on one of the round's own seams is exactly the edit the kernel refuses —
+    leaving an invalid feature and an empty viewport. The round's boundary edges are read
+    from the face itself (`Face.Edges`), so the test is exact rather than positional.
+
+    A chamfer is deliberately not answered: its distances are not the radius the armed
+    scrubber edits.
     """
     if str(getattr(obj, "TypeId", "")) != "Part::Fillet":
         return None
@@ -491,27 +563,25 @@ def _dress_up_target(obj, element):
         return None
     base_obj, edges = linked
     radius = float(getattr(obj, "Radius", 0.0) or 0.0)
-    if radius <= 0.0 or not element.startswith("Face"):
+    if radius <= 0.0 or not element:
+        return None
+    rounds = _fillet_rounds(obj, base_obj, edges, radius)
+    if not rounds:
+        return None
+    if element in rounds:
+        return radius
+    if not element.startswith("Edge"):
         return None
     try:
-        surface = obj.Shape.getElement(element).Surface
+        picked = obj.Shape.getElement(element)
     except Exception:  # noqa: BLE001 - an element the shape cannot resolve
         return None
-    if type(surface).__name__ != "Cylinder":
-        return None
-    try:
-        if abs(float(surface.Radius) - radius) > 1e-6 * max(1.0, radius):
-            return None
-        axis = surface.Axis
-    except Exception:  # noqa: BLE001 - a surface without an axis is not a round
-        return None
-    for edge_name in edges:
+    for name in rounds:
         try:
-            direction = base_obj.Shape.getElement(edge_name).Curve.Direction
-        except Exception:  # noqa: BLE001 - a curved edge has no single direction
+            boundary = obj.Shape.getElement(name).Edges
+        except Exception:  # noqa: BLE001 - a face without edges is not a round
             continue
-        dot = abs(axis.x * direction.x + axis.y * direction.y + axis.z * direction.z)
-        if dot >= 0.999:
+        if any(picked.isSame(edge) for edge in boundary):
             return radius
     return None
 
@@ -621,9 +691,11 @@ def _manipulator_specs(obj, element):
     The compiled scrubber needs an *edge*, and an applied fillet's round is a *face*:
     the edge it came from no longer exists. A declared grip at the round's centroid,
     seeded with the radius the feature holds, re-opens it — and its commit is the same
-    ``dress_up``/``fillet`` the scrubber sends, so the edit path is shared.
+    ``dress_up``/``fillet`` the scrubber sends, so the edit path is shared. A round
+    *edge* needs no grip: the compiled scrubber arms there and its commit edits the
+    feature (see :func:`_dress_up_target`).
     """
-    if not element:
+    if not element.startswith("Face"):
         return None
     value = _dress_up_target(obj, element)
     if value is None:
@@ -654,23 +726,23 @@ def _manipulator_specs(obj, element):
 def _fillet_shape_and_edge(obj, element):
     """The shape and edge name a dress-up radius is measured against.
 
-    An edge selection is the object's own edge. A face of a ``Part::Fillet`` is the
-    feature's result, so the trial fillets run on its *base* shape and the base edge the
-    lineage names.
+    An edge selection on an ordinary body is that body's own edge. A selection that
+    belongs to an existing ``Part::Fillet`` (its round, or one of the round's edges) is
+    the feature's result, so the trial fillets run on its *base* shape and the edge the
+    feature names. A feature selecting several edges gets no range: one bisection per edge
+    would over-state the ceiling the combined feature survives.
     """
     if str(getattr(obj, "TypeId", "")) == "Part::Fillet":
+        if _dress_up_target(obj, element) is None:
+            return None
         linked = _link_sub(obj)
-        if linked is None:
+        if linked is None or len(linked[1]) != 1:
             return None
         base_obj, edges = linked
-        inputs = set(_element_inputs(obj.Shape, element))
-        match = [edge for edge in edges if edge in inputs]
-        if not match:
-            return None
         shape = getattr(base_obj, "Shape", None)
         if shape is None:
             return None
-        return shape, match[0]
+        return shape, edges[0]
     if not element.startswith("Edge"):
         return None
     shape = getattr(obj, "Shape", None)
@@ -761,8 +833,10 @@ def _manipulator_probe(obj, element, manipulator):
     """What this selection already carries, and the range the kernel completes.
 
     Push/pull seeds from the extrusion whose cap was picked; a dress-up seeds from the
-    fillet whose round was picked. The range is the fillet bisection — the only operation
-    here with a ceiling the kernel can prove.
+    fillet whose round (face or edge) was picked. The range is the fillet bisection — the
+    only operation here with a ceiling the kernel can prove. When a seed is present its
+    note is the user-facing one, because the row prints it: it is how "this edits what
+    you already have" is said without a modal.
     """
     if not element:
         # A whole-object selection has no sub-element to follow.
@@ -771,20 +845,20 @@ def _manipulator_probe(obj, element, manipulator):
         target = _extrusion_target(obj, element)
         if target is None:
             return None
-        return {"values": [target[3]], "note": "existing extrusion"}
+        return {"values": [target[3]], "note": "editing the existing extrusion"}
     if manipulator != "dress_up":
         return None
     answer = {}
     value = _dress_up_target(obj, element)
     if value is not None:
         answer["values"] = [value]
+        answer["note"] = "editing the existing fillet"
     bounds = _fillet_bounds(obj, element)
     if bounds is not None:
         answer["min"] = bounds["min"]
         answer["max"] = bounds["max"]
-        answer["note"] = bounds["note"]
-    elif value is not None:
-        answer["note"] = "existing fillet"
+        if value is None:
+            answer["note"] = bounds["note"]
     return answer or None
 
 

@@ -43,11 +43,13 @@ pending, and the fillet is applied when you accept it with `✓`.*
 - The edition creates or updates the `Part::Fillet` / `Part::Chamfer` feature with the
   selected edge as its `Base` and applies the radius (or the two chamfer distances)
   through the kernel.
-- An **existing fillet can be changed**: select the round face it produced and a small `R`
-  grip appears at the face's centre, already showing the current radius. Drag it (or type
-  in the same docked field) and `✓` edits that `Part::Fillet` — it does not stack a second
-  one. Selecting any *other* edge of the body still makes a new fillet, as you would
-expect.
+- An **existing fillet can be changed**: select the round face it produced, or any edge of
+  that round, and a small `R` grip (or the edge scrubber) appears already showing the
+  current radius. Drag it — or type in the same docked field — and `✓` edits that
+  `Part::Fillet`; it does not stack a second one. Selecting any *other* edge of the body
+  still makes a new fillet, as you would expect.
+- A fillet the kernel refuses is **rolled back**: the status line reports it and the model
+  is exactly as it was, instead of losing the solid.
 
 ## Where it runs
 

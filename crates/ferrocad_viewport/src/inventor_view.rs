@@ -4479,6 +4479,18 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
+    /// Attach the document half's note to the manipulator `id`'s numeric row.
+    pub fn set_manipulator_note(&mut self, id: &str, note: Option<String>) -> bool {
+        let Some(manipulator) = self
+            .manipulators
+            .iter_mut()
+            .find(|manipulator| manipulator.id() == id)
+        else {
+            return false;
+        };
+        manipulator.set_note(note)
+    }
+
     /// The numeric readout the viewport would show, if the style allows one.
     ///
     /// The render path asks the two helpers separately (it positions two pills); this is

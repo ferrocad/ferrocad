@@ -169,6 +169,9 @@ pub struct PushPullStem {
     body_depth: f64,
     /// Whether the released value is held for the host's `✓`/`✗`.
     pending: bool,
+    /// A note the document half sent with the probe (`editing the existing extrusion`),
+    /// printed muted after the row so the gesture's meaning is visible.
+    note: Option<String>,
 }
 
 impl PushPullStem {
@@ -232,6 +235,7 @@ impl PushPullStem {
             face_border: Vec::new(),
             body_depth: 0.0,
             pending: false,
+            note: None,
         })
     }
 
@@ -732,12 +736,24 @@ impl Manipulator for PushPullStem {
         // A distance itself is unbounded (an extrusion can go as far as the user likes and
         // a through-cut is still a solid), so the only model-derived number is the body's
         // thickness behind the face: a note, not a bound.
-        let field = if self.body_depth > 1e-6 {
-            field.with_hint(format!("body {:.2} mm behind this face", self.body_depth))
-        } else {
-            field
-        };
-        vec![field]
+        let body = (self.body_depth > 1e-6)
+            .then(|| format!("body {:.2} mm behind this face", self.body_depth));
+        match (&self.note, body) {
+            // The probe's note comes first: "this edits what you already have" is the
+            // thing the user needs before the depth detail.
+            (Some(note), Some(body)) => vec![field.with_hint(format!("{note} · {body}"))],
+            (Some(note), None) => vec![field.with_hint(note.clone())],
+            (None, Some(body)) => vec![field.with_hint(body)],
+            (None, None) => vec![field],
+        }
+    }
+
+    fn set_note(&mut self, note: Option<String>) -> bool {
+        if self.note == note {
+            return false;
+        }
+        self.note = note;
+        true
     }
 
     fn set_values(&mut self, values: &[f64]) -> bool {
@@ -1246,6 +1262,37 @@ mod tests {
         let flat = stem();
         assert!(flat.body_depth() < 1e-9);
         assert!(Manipulator::numeric_fields(&flat)[0].hint.is_none());
+    }
+
+    #[test]
+    fn the_probe_note_leads_the_numeric_rows_hint() {
+        let stage = stage_with(&box_mesh(), 7);
+        let mut stem =
+            push_pull_stem_for(&SelectionRef::element(7, "Face1"), &stage).expect("a stem");
+        let before = Manipulator::numeric_fields(&stem)[0].hint.clone();
+
+        // The document half says the selection already carries an operation; the row has
+        // to say so too, ahead of the geometry note.
+        assert!(Manipulator::set_note(
+            &mut stem,
+            Some("editing the existing extrusion".to_string())
+        ));
+        let hint = Manipulator::numeric_fields(&stem)[0]
+            .hint
+            .clone()
+            .expect("the note is printed");
+        assert!(hint.starts_with("editing the existing extrusion"), "{hint}");
+        assert!(hint.contains("body 1.00 mm"), "the geometry note survives: {hint}");
+        assert_ne!(Some(hint), before, "the note changed the row");
+
+        // A no-op is not a change, and clearing it restores the geometry note alone.
+        assert!(!Manipulator::set_note(
+            &mut stem,
+            Some("editing the existing extrusion".to_string())
+        ));
+        assert!(Manipulator::set_note(&mut stem, None));
+        let hint = Manipulator::numeric_fields(&stem)[0].hint.clone();
+        assert_eq!(hint.as_deref(), before.as_deref());
     }
 
     #[test]

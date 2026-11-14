@@ -272,6 +272,15 @@ pub trait Manipulator {
         false
     }
 
+    /// Attach a short note the numeric row prints after the value.
+    ///
+    /// The document half's probe uses this to say what the gesture means — `editing the
+    /// existing extrusion` — which is the visible difference between changing a feature
+    /// and adding one. `false` (the default) means the handle has no note slot.
+    fn set_note(&mut self, _note: Option<String>) -> bool {
+        false
+    }
+
     /// Whether `device` is on a grab target. An unclaimed press falls through to
     /// the gizmo, the tool and the scene.
     fn hit(&self, camera: &Camera, device: [i32; 2]) -> bool;

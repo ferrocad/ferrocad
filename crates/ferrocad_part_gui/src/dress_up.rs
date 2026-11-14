@@ -179,6 +179,9 @@ pub struct DressUpScrubber {
     preview: ShapeItem,
     /// Whether the released radius is held for the host's `✓`/`✗`.
     pending: bool,
+    /// A note the document half sent with the probe (`editing the existing fillet`),
+    /// printed muted after the row.
+    note: Option<String>,
 }
 
 impl DressUpScrubber {
@@ -208,6 +211,7 @@ impl DressUpScrubber {
             hovered: false,
             active: None,
             pending: false,
+            note: None,
             style,
             view: None,
             built: None,
@@ -881,7 +885,7 @@ impl Manipulator for DressUpScrubber {
         let min = Some(self.min);
         // Three decimals, because the floor is `MIN_RADIUS` (0.001 mm) and a two-decimal
         // field could not show it.
-        match self.mode {
+        let mut fields = match self.mode {
             DressUpMode::Fillet => vec![
                 ferrocad_stage::NumericField::millimetres("R", self.value)
                     .decimals(3)
@@ -895,7 +899,21 @@ impl Manipulator for DressUpScrubber {
                     .decimals(3)
                     .bounded(min, self.max),
             ],
+        };
+        if let Some(note) = &self.note {
+            for field in &mut fields {
+                field.hint = Some(note.clone());
+            }
         }
+        fields
+    }
+
+    fn set_note(&mut self, note: Option<String>) -> bool {
+        if self.note == note {
+            return false;
+        }
+        self.note = note;
+        true
     }
 
     fn set_values(&mut self, values: &[f64]) -> bool {

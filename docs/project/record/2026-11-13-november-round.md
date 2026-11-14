@@ -318,19 +318,34 @@ commit edits that feature.
   operation is not itself an edit.
 - **Which operation is identified geometrically.** A push/pull cap is the extrusion's base
   face translated by the signed length along its normal (`_is_extrusion_cap`); a fillet's
-  round is the cylinder of the feature's own `Radius` whose axis parallels a filleted edge
-  (`_dress_up_target`). Neither check needs a name, so this works on a document saved
-  before the kernel recorded provenance.
+  round is the cylinder of the feature's own `Radius` whose axis parallels a filleted edge,
+  and its boundary edges are read from the face itself (`Face.Edges`). Neither check needs
+  a name, so this works on a document saved before the kernel recorded provenance.
+- **A round's own edges are the same handle.** The compiled scrubber arms on an edge, and
+  the round has four boundary edges. Grabbing one used to build a second fillet — and on a
+  seam the kernel refuses it, so the new feature was invalid and, with its base consumed,
+  **the solid disappeared**. `_dress_up_target` now answers for the round's edges too, so
+  grabbing any part of the round edits the feature that made it.
 - **The commit edits the feature.** `_edit_extrusion` reuses the `Part::Extrusion` (and the
   boolean while the sign stays); crossing zero builds the other boolean over that same
   extrusion and retires the old one, so one face still has one operation. `_edit_dress_up`
   sets `Radius`/`Distance` on the picked feature. Both are one transaction.
+- **A refused feature is rolled back.** Every edit recomputes and then checks `State`: a
+  Part feature the kernel refused is `Invalid` and keeps its previous shape (or none), so
+  committing it is how a body vanishes. The transaction is aborted and the provider returns
+  `ok: false`; the status line reports it and the model is untouched.
+- **Changing or adding, decided.** A gesture on a cap **edits** the existing push/pull. The
+  stem is anchored at the base face and rides the swept ghost, so its number is the total
+  distance — the feature's own `LengthFwd`. A delta control would have to anchor at the cap,
+  and fusing a shorter prism onto the same base face cannot shorten a body at all. The row
+  says `editing the existing extrusion` (`Manipulator::set_note` → `NumericField::hint`)
+  before the commit, so the meaning is visible. Adding is the same edit, or another face.
 - **A fillet's round is a face, and the scrubber needs an edge.** The edition declares an
   axis grip through `manipulator_specs` instead: at the face centroid, along its normal,
   labelled `R`, seeded with the radius and speaking the same `dress_up`/`fillet` commit.
   Declared handles gained the numeric twin (`label` on the wire, `numeric_fields`,
-  `set_values`, `seed_values`, `pending_commit`), so a mod-declared handle types and
-  clamps like a native one.
+  `set_values`, `seed_values`, `set_value_bounds`, `pending_commit`), so a mod-declared
+  handle types and clamps like a native one.
 - **The Part layer had to make names mean what they say.** `Part::Fillet`/`Chamfer` used to
   drop the kernel's history (their map was positional-and-self); they now keep it.
   `complete_history` adds identity relations for the elements a dress-up did not report, so
@@ -340,12 +355,14 @@ commit edits that feature.
   falling back to the shape's own naming rather than handing the kernel a face where an
   edge was asked for.
 - **Measured.** `ferrocad_parametric --test manipulator_probe` **3 passed** (the bisection,
-  the unbounded push/pull, and the re-open: a fillet face edited in place, an extrusion cap
-  seeded at 5 and edited to 7 with the object count unchanged, then flipped to a pocket
-  that reuses the extrusion), the shell's new
-  `a_probe_seeds_the_handle_with_the_existing_value` (seeded value shown, nothing held),
-  and `ferrocad_part`'s `a_fillet_keeps_the_provenance_of_the_face_it_creates`.
-  `ferrocad_shell_core` is **288**, `ferrocad_part` **55**, `ferrocad_part_gui` **39**,
+  the unbounded push/pull, and the re-open: a fillet face *and* one of its round edges
+  edited in place, a refused 50 mm fillet rolled back with the object count unchanged, an
+  extrusion cap seeded at 5 and edited to 7, then flipped to a pocket that reuses the
+  extrusion), the shell's new
+  `a_probe_seeds_the_handle_with_the_existing_value` (seeded value and note shown, nothing
+  held), `ferrocad_part`'s `a_fillet_keeps_the_provenance_of_the_face_it_creates` and
+  `ferrocad_part_gui`'s `the_probe_note_leads_the_numeric_rows_hint`.
+  `ferrocad_shell_core` is **288**, `ferrocad_part` **55**, `ferrocad_part_gui` **40**,
   `ferrocad_viewport` **235**, `ferrocad_stage` **259**, `ferrocad_shell_rust` **58**, and
   the three edition round-trips green.
 - **The boot sample is honest about one thing.** Its persisted element map predates the

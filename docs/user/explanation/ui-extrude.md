@@ -53,9 +53,12 @@ This is the Parametric edition's workbench hook, not a shell operation: the same
 commit is what a BIM or future workbench would receive.
 
 Pulling the **cap** a previous pull produced re-opens that feature instead of adding
-another one: the stem opens at the existing distance, and `✓` changes the same hidden
-extrusion. Dragging it past zero turns the extrude into a pocket (the boolean is
-rebuilt as a cut), so one face always has one push/pull operation.
+another one: the stem opens at the existing distance, and the row says
+`editing the existing extrusion`. The number is the total from the base face — the stem
+is anchored there — so `✓` sets the same hidden extrusion's length. Dragging it past zero
+turns the extrude into a pocket (the boolean is rebuilt as a cut), so one face always has
+one push/pull operation. Adding more material is the same edit (a longer prism from that
+face is the same solid) or a pull on another face.
 
 ## Where it runs
 

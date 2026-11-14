@@ -351,6 +351,11 @@ impl Shell {
                 viewport.seed_manipulator_values(&id, &probe.values)
             });
         }
+        // The note is how "this edits what you already have" is said: the row prints it
+        // muted after the value. Only a probe that carries a value has one.
+        let note = (!probe.values.is_empty() && !probe.note.is_empty())
+            .then(|| probe.note.clone());
+        changed |= viewport.update(cx, |viewport, _cx| viewport.set_manipulator_note(&id, note));
         changed |= viewport.update(cx, |viewport, _cx| {
             viewport.set_manipulator_value_bounds(&id, probe.min, probe.max)
         });

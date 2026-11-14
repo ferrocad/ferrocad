@@ -1504,6 +1504,33 @@ SC0 therefore closes with SC8: the 49 failures are filed into P2/P3/the one docu
 test assumption, and the previous "the rest" row is gone. **P1 is closed**; the P2/P3
 items above are ordinary backlog work, not a P1 gate.
 
+**2026-11-14 — the sub-shape edit seam.** The first P2 round took the bucket above to
+**997 / 32 / 18 / 7 over 88/88** (from 985 / 49 / 18 / 7). Seventeen failures closed and
+none was added; the 18 errors are the same set. Three root causes, all in the seam rather
+than in the models — the contract is
+[`../../developer/workbenches/part-shape-edits.md`](../../developer/workbenches/part-shape-edits.md):
+
+- **`Shape.generalFuse` rebuilt the boolean once per input**, so every input's images
+  came from a different build and did not share sub-shapes. Mixing them into a face gave
+  coincident, unshared vertices, so a local face split could not rebuild the faces around
+  its line and always fell back to the whole solid. One build now answers every input.
+  Closed: both `LocalSplitTests`, `NearlyCoplanarTests`, all three `ChangeRecordTests`,
+  and — because they split faces the same way — **all eight `test_surface_line`
+  failures** (P3).
+- **The kernel reports no image for a vertex it replaced**, so the rebuilt faces kept a
+  stale vertex at one end. A replaced vertex now reports the single result vertex at its
+  point; a surviving vertex reports nothing.
+- **`Edge.Orientation = "Internal"` never reached the edge's cached entry**, so a spur
+  read `Internal` and arrived in a new wire as `Forward`. Closed:
+  `test_clean_solid_faces_removes_internal_edges`, `test_erase_internal_edge_on_solid_face`.
+
+One more, outside the bucket: `App::Part`/`PartDesign::Body` now answer
+`hasExtension("App::GeoFeatureGroupExtension")`, which is what
+`test_geometry.test_transformed_container_rejected` needed.
+
+The 11 that remain in this bucket are re-bucketed below; the re-measured totals and the
+remaining root causes are in [`../TODO-14-11-2026.md`](../TODO-14-11-2026.md) P2.
+
 ---
 
 ## 8. Draft vs SimpleCAD

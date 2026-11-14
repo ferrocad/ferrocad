@@ -1648,19 +1648,23 @@ impl PartShape {
     /// shape.
     ///
     /// `deflection` is the linear deflection in model units; `angular` is the
-    /// angular deflection in radians. Both decide the triangle count. OCCT stores the
+    /// angular deflection in radians. Omitting `angular` uses upstream's
+    /// `defaultAngularDeflection` (`min(0.1, deflection * 5 + 0.005)`), so the
+    /// one-argument form meshes like FreeCAD; passing one is a house extension that
+    /// pins the angle instead. Both decide the triangle count. OCCT stores the
     /// triangulation on the shape and keeps it when the next request is not finer, so
     /// compare settings on fresh shapes.
-    #[pyo3(signature = (deflection = 0.5, angular = 0.5))]
+    #[pyo3(signature = (deflection = 0.5, angular = None))]
     fn tessellate(
         &self,
         py: Python<'_>,
         deflection: f64,
-        angular: f64,
+        angular: Option<f64>,
     ) -> PyResult<(Vec<Py<PyVector>>, Vec<(usize, usize, usize)>)> {
         let shape = self
             .shape()
             .ok_or_else(|| PyValueError::new_err("cannot tessellate a null shape"))?;
+        let angular = angular.unwrap_or_else(|| ferrocad_geom::default_angular_deflection(deflection));
         let options = TessellationOptions {
             linear_deflection: Some(deflection),
             angular_deflection: angular,
@@ -2289,71 +2293,57 @@ impl PartShape {
 
     /// `Shape.fuse(other)` — the union of the two shapes.
     ///
-    /// `glue` is accepted for upstream signature compatibility (it is coerced for
-    /// truthiness, so a float is accepted as upstream allows); the kernel runs the
-    /// plain boolean. `tolerance` is upstream `makeElementBoolean`'s `tol`: `0` leaves
-    /// the kernel's confusion tolerance, a positive value is the fuzzy value, and a
-    /// negative one asks for the automatic value. `refine` is accepted and ignored —
-    /// upstream's `makeElementBoolean` does not refine either (`Refine` is the document
-    /// features' property). `noElementMap` drops the lineage, as upstream's
-    /// `ElementMapPolicy::Drop`.
-    #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
+    /// The signature is upstream's `fuse(tools, tolerance=0, *, noElementMap=False)`:
+    /// **the second positional argument is the tolerance**, not a `glue` flag (upstream
+    /// dropped `glue`, and `makeElementBoolean` does not refine either — `Refine` is the
+    /// document features' property). `tolerance` is upstream `makeElementBoolean`'s
+    /// `tol`: `0` leaves the kernel's confusion tolerance, a positive value is the fuzzy
+    /// value, and a negative one asks for the automatic value. `noElementMap` drops the
+    /// lineage, as upstream's `ElementMapPolicy::Drop`.
+    #[pyo3(signature = (other, tolerance = 0.0, *, noElementMap = false))]
     fn fuse(
         &self,
         other: &Bound<'_, PyAny>,
-        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
-        refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), refine);
         self.boolean(other, BooleanOp::Fuse, tolerance, noElementMap)
     }
 
-    /// `Shape.cut(other)` — `self` with `other` removed. `tolerance` as
+    /// `Shape.cut(other, tolerance=0)` — `self` with `other` removed. `tolerance` as
     /// [`fuse`](Self::fuse).
-    #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
+    #[pyo3(signature = (other, tolerance = 0.0, *, noElementMap = false))]
     fn cut(
         &self,
         other: &Bound<'_, PyAny>,
-        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
-        refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), refine);
         self.boolean(other, BooleanOp::Cut, tolerance, noElementMap)
     }
 
-    /// `Shape.common(other)` — the intersection of the two shapes. `tolerance` as
-    /// [`fuse`](Self::fuse).
-    #[pyo3(signature = (other, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
+    /// `Shape.common(other, tolerance=0)` — the intersection of the two shapes.
+    /// `tolerance` as [`fuse`](Self::fuse).
+    #[pyo3(signature = (other, tolerance = 0.0, *, noElementMap = false))]
     fn common(
         &self,
         other: &Bound<'_, PyAny>,
-        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
-        refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), refine);
         self.boolean(other, BooleanOp::Common, tolerance, noElementMap)
     }
 
-    /// `Shape.multiFuse(shapes)` — fuse this shape with each shape in `shapes`.
-    ///
-    /// `tolerance` as [`fuse`](Self::fuse); each fold is one boolean over the growing
-    /// result, so the value reaches every step.
-    #[pyo3(signature = (shapes, glue = None, tolerance = 0.0, refine = true, noElementMap = false))]
+    /// `Shape.multiFuse(shapes, tolerance=0, *, noElementMap=False)` — fuse this shape
+    /// with each shape in `shapes`. `tolerance` as [`fuse`](Self::fuse); each fold is
+    /// one boolean over the growing result, so the value reaches every step.
+    #[pyo3(signature = (shapes, tolerance = 0.0, *, noElementMap = false))]
     fn multiFuse(
         &self,
         shapes: &Bound<'_, PyAny>,
-        glue: Option<&Bound<'_, PyAny>>,
         tolerance: f64,
-        refine: bool,
         noElementMap: bool,
     ) -> PyResult<PartShape> {
-        let _ = (truthy(glue), refine);
         let mut shape = self.named_shape()?;
         // Each fold is one operation with its own history; fold them forward into one
         // lineage, the same way the geometry is folded.
@@ -4644,7 +4634,7 @@ mod tessellate_tests {
         let shape = PartShape::from_shape(cube);
 
         Python::with_gil(|py| {
-            let (points, facets) = shape.tessellate(py, 0.1, 0.5).expect("tessellate");
+            let (points, facets) = shape.tessellate(py, 0.1, Some(0.5)).expect("tessellate");
 
             assert_eq!(points.len(), 8, "coincident face vertices are merged");
             assert_eq!(facets.len(), 12, "a box is twelve triangles");
@@ -4678,7 +4668,7 @@ mod tessellate_tests {
             }
 
             let error = PartShape::empty()
-                .tessellate(py, 0.1, 0.5)
+                .tessellate(py, 0.1, Some(0.5))
                 .expect_err("a null shape cannot tessellate");
             assert!(error.is_instance_of::<PyValueError>(py));
         });

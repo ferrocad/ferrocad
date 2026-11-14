@@ -2924,15 +2924,16 @@ impl PyPlane {
     }
 }
 
-/// `Part.Cylinder(radius=1.0, center=None, axis=None)` — an infinite cylindrical
-/// **surface** (upstream's `Part::GeomCylinder`), not the document primitive that
-/// `Part.makeCylinder` returns.
+/// `Part.Cylinder(...)` — an infinite cylindrical **surface** (upstream's
+/// `Part::GeomCylinder`), not the document primitive that `Part.makeCylinder`
+/// returns.
 ///
-/// This slice carries only the elementary description upstream's Python surface
-/// exposes: `Radius`, `Center` and `Axis`. Upstream builds the default from an
-/// empty `gp_Cylinder` (center at the origin, axis `+Z`, radius 1); the `radius` /
-/// `center` / `axis` keywords are our extension — upstream only accepts another
-/// `Cylinder`, a `Circle`, or three points.
+/// Upstream's constructors are `Cylinder()`, `Cylinder(other)`, `Cylinder(other,
+/// distance)`, `Cylinder(point1, point2, point3)` and `Cylinder(circle)`. This
+/// slice implements the default, the copy, the circle base, and the analytic
+/// `radius`/`center`/`axis` form (our extension). The circle base takes its
+/// radius, centre, axis and `u = 0` direction from the circle, which is how a
+/// fitted cylindrical face is built.
 ///
 /// The object is accepted by [`PyCurve2d::toShape`] as the `surface`
 /// argument. It answers no shape queries (`Faces`, `Edges`, …): no B-Rep geometry
@@ -2988,12 +2989,43 @@ impl PyCylinder {
     }
 
     #[new]
-    #[pyo3(signature = (radius = 1.0, center = None, axis = None))]
+    #[pyo3(signature = (radius = None, center = None, axis = None))]
     fn new(
-        radius: f64,
+        radius: Option<&Bound<'_, PyAny>>,
         center: Option<&Bound<'_, PyAny>>,
         axis: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
+        // Upstream's copy and circle-base constructors take one shape argument.
+        if let Some(value) = radius {
+            if let Ok(circle) = value.downcast::<PyCircle>() {
+                if center.is_some() || axis.is_some() {
+                    return Err(PyTypeError::new_err(
+                        "Part.Cylinder(circle) takes no centre or axis",
+                    ));
+                }
+                let circle = circle.borrow();
+                let curve = &circle.curve;
+                return Ok(Self {
+                    radius: curve.radius(),
+                    center: curve.center(),
+                    axis: curve.normal(),
+                    x_dir: curve.x_axis(),
+                    direct: true,
+                });
+            }
+            if let Ok(other) = value.downcast::<PyCylinder>() {
+                if center.is_some() || axis.is_some() {
+                    return Err(PyTypeError::new_err(
+                        "Part.Cylinder(other) takes no centre or axis",
+                    ));
+                }
+                return Ok(other.borrow().clone());
+            }
+        }
+        let radius = match radius {
+            Some(value) => value.extract::<f64>()?,
+            None => 1.0,
+        };
         if !(radius > 0.0) {
             return Err(OCCError::new_err("Part.Cylinder needs a positive radius"));
         }
@@ -10388,9 +10420,48 @@ impl PyFace {
         ))
     }
 
-    fn cutHoles(slf: PyRef<'_, Self>, _holes: &Bound<'_, PyAny>) -> PyResult<()> {
-        require_edge(slf.as_super(), "cutHoles")?;
-        Err(edge_query_error("cutHoles"))
+    /// Cut further boundary wires out of the face (`Face.cutHoles`).
+    ///
+    /// Upstream is `BRepBuilderAPI_MakeFace(face).Add(wire)` for each wire in a
+    /// **list**; the wires are attached as given, so a hole wire that is not
+    /// already reversed is added as material-boundary by the caller's choice. The
+    /// Seam keeps the same rule (`BRep_Builder::Add`).
+    fn cutHoles(mut slf: PyRefMut<'_, Self>, holes: &Bound<'_, PyAny>) -> PyResult<()> {
+        // A null face is our `EmptyFace` contract: ValueError before the list is read.
+        let mut current = slf
+            .as_super()
+            .shape()
+            .ok_or_else(|| empty_error("cutHoles"))?;
+        let Ok(holes) = holes.downcast::<pyo3::types::PyList>() else {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "invalid list of wires",
+            ));
+        };
+        if holes.is_empty() {
+            return Err(OCCError::new_err("empty wire list"));
+        }
+        for item in holes.iter() {
+            // Upstream accepts any `Part.Shape` whose shape type is a wire, not
+            // only a `Part.Wire` instance (`Wire.reversed()` returns a Shape).
+            let shape = if let Ok(wire) = item.downcast::<PyWire>() {
+                wire.borrow().as_super().shape()
+            } else if let Ok(shape) = item.downcast::<PartShape>() {
+                shape.borrow().shape()
+            } else {
+                return Err(OCCError::new_err("argument is not a shape"));
+            };
+            let Some(shape) = shape else {
+                return Err(OCCError::new_err("an empty Part.Wire has no geometry"));
+            };
+            if backend().shape_type(&shape) != Some("Wire") {
+                return Err(OCCError::new_err("shape is not a wire"));
+            }
+            current = backend()
+                .add_wire_to_face(&current, &shape)
+                .map_err(kernel_error)?;
+        }
+        slf.as_super().replace_shape(Some(current));
+        Ok(())
     }
 
     /// Whether surface parameters `(u, v)` lie inside the face (`Face.isPartOfDomain`,

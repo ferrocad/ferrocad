@@ -61,7 +61,7 @@ pub(crate) fn mesh(shape: &TopoDS_Shape, deflection: f64) -> Result<StlMesh, Occ
         });
     }
 
-    let angular = 0.1_f64.min(deflection * 5.0 + 0.005);
+    let angular = ferrocad_geom::default_angular_deflection(deflection);
     let mesher = ffi::b_rep_mesh::IncrementalMesh_new_parallel(
         shape,
         deflection,

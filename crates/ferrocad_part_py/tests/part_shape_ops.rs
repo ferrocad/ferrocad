@@ -348,17 +348,17 @@ b = Part.makeBox(10, 10, 10, App.Vector(10.0 + 1e-4, 0.0, 0.0))
 
 # The 1e-4 gap is wider than the confusion tolerance: two bodies stay two.
 assert len(a.fuse(b).Solids) == 2, len(a.fuse(b).Solids)
-assert len(a.fuse(b, None, 0.0).Solids) == 2
+assert len(a.fuse(b, 0.0).Solids) == 2
 
 # A fuzzy value wider than the gap bridges it.
-assert len(a.fuse(b, None, 1e-2).Solids) == 1, len(a.fuse(b, None, 1e-2).Solids)
+assert len(a.fuse(b, 1e-2).Solids) == 1, len(a.fuse(b, 1e-2).Solids)
 assert len(a.fuse(b, tolerance=1e-2).Solids) == 1
-assert len(a.multiFuse([b], None, 1e-2).Solids) == 1
+assert len(a.multiFuse([b], 1e-2).Solids) == 1
 
 # `cut` and `common` take the same argument.
 touching = Part.makeBox(10, 10, 10, App.Vector(5.0, 0.0, 0.0))
-assert abs(a.cut(touching, None, 0.0).Volume - 500.0) < 1e-6, a.cut(touching, None, 0.0).Volume
-assert abs(a.common(touching, None, 0.0).Volume - 500.0) < 1e-6
+assert abs(a.cut(touching, 0.0).Volume - 500.0) < 1e-6, a.cut(touching, 0.0).Volume
+assert abs(a.common(touching, 0.0).Volume - 500.0) < 1e-6
 "#,
         );
     });
@@ -524,6 +524,112 @@ for normal in ((0, 0, 1), (0, 0, -1), (0, 1, 0), (1, 0, 0)):
     circle.XAxis = in_plane
     moved = circle.toShape()
     assert (moved.Vertexes[0].Point - circle.value(0)).Length < 1e-9
+"#,
+        );
+    });
+}
+
+/// `Face.cutHoles` takes a list of boundary wires, including a reversed `Shape`.
+///
+/// Upstream is `BRepBuilderAPI_MakeFace(face).Add(wire)` for each item, and it
+/// accepts any `Part.Shape` whose type is a wire — so `Wire.reversed()`, which
+/// returns a plain `Shape`, is valid input.
+#[test]
+fn a_face_cuts_hole_wires() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import math
+
+import ferrocad as App
+import Part
+
+face = Part.Face(Part.Wire([Part.makeCircle(10, App.Vector(0, 0, 0), App.Vector(0, 0, 1))]))
+hole = Part.Wire([Part.makeCircle(4, App.Vector(0, 0, 0), App.Vector(0, 0, 1))])
+face.cutHoles([hole.reversed()])          # reversed() is a Part.Shape, not a Part.Wire
+assert len(face.Wires) == 2, len(face.Wires)
+assert face.isValid()
+assert abs(face.Area - math.pi * (100.0 - 16.0)) < 1e-6, face.Area
+
+for bad in ([Part.makeCircle(2)], [Part.Vertex(0, 0, 0)], "wire"):
+    try:
+        Part.Face(Part.Wire([Part.makeCircle(10)])).cutHoles(bad)
+    except Exception:
+        pass
+    else:
+        raise AssertionError("cutHoles accepted " + repr(bad))
+"#,
+        );
+    });
+}
+
+/// The cylinder surface's upstream constructors.
+///
+/// `Part.Cylinder(circle)` takes its radius, centre, axis and `u = 0` direction
+/// from the circle (SimpleCAD builds a fitted cylindrical face this way);
+/// `Part.Cylinder(other)` copies.
+#[test]
+fn a_cylinder_can_be_built_from_a_circle() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+circle = Part.Circle(App.Vector(1, 2, 3), App.Vector(0, 0, -1), 5)
+circle.XAxis = App.Vector(0, 1, 0)
+cylinder = Part.Cylinder(circle)
+assert abs(cylinder.Radius - 5) < 1e-12
+assert (cylinder.Center - App.Vector(1, 2, 3)).Length < 1e-12
+assert (cylinder.Axis - App.Vector(0, 0, -1)).Length < 1e-12
+
+copy = Part.Cylinder(cylinder)
+assert abs(copy.Radius - 5) < 1e-12
+assert (copy.Axis - cylinder.Axis).Length < 1e-12
+
+assert abs(Part.Cylinder().Radius - 1) < 1e-12
+assert abs(Part.Cylinder(2.5).Radius - 2.5) < 1e-12
+
+# The surface frames a face on the circle's own plane.
+face = Part.Face(cylinder, Part.Wire([Part.makeCircle(5, App.Vector(1, 2, 3), App.Vector(0, 0, -1))]))
+assert face.ShapeType == "Face"
+"#,
+        );
+    });
+}
+
+/// The one-argument `Shape.tessellate` uses upstream's angular deflection.
+///
+/// FreeCAD derives `min(0.1, linear * 5 + 0.005)` from the linear value; OCCT's
+/// own 0.5 rad default produced far coarser meshes (a 6 mm bore had a 0.04 mm
+/// chord sag instead of 0.008), which SimpleCAD's glue profile could see.
+#[test]
+fn tessellate_defaults_to_upstreams_angular_deflection() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import ferrocad as App
+import Part
+
+def facets(**kwargs):
+    shape = Part.makeCylinder(6, 10)
+    return len(shape.tessellate(**kwargs)[1])
+
+default = facets(deflection=0.15)
+occt_default = facets(deflection=0.15, angular=0.5)
+derived = facets(deflection=0.15, angular=0.1)
+assert default == derived, (default, derived)
+assert default > occt_default, (default, occt_default)
+
+# A fine linear request tightens the angle further, before the 0.1 rad cap.
+finer = facets(deflection=0.01)
+assert finer == facets(deflection=0.01, angular=0.055), (finer, facets(deflection=0.01, angular=0.055))
 "#,
         );
     });

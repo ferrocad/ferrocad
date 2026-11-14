@@ -437,6 +437,16 @@ impl TessellationOptions {
     }
 }
 
+/// Upstream's default angular deflection for a linear one.
+///
+/// FreeCAD's `defaultAngularDeflection` (`TopoShape.cpp`): at most 0.1 rad, and
+/// `linear * 5 + 0.005` below that, so a coarse linear request still bounds the
+/// angular error and a fine one does not explode the triangle count. OCCT's own
+/// default is 0.5 rad, which is far coarser than upstream's meshes.
+pub fn default_angular_deflection(linear_deflection: f64) -> f64 {
+    (linear_deflection * 5.0 + 0.005).min(0.1)
+}
+
 /// A display mesh with per-primitive sub-element ids.
 ///
 /// This is the neutral bridge between a kernel and a renderer. It carries no kernel

@@ -132,6 +132,21 @@ class DevelopableFaceTests(unittest.TestCase):
         self.assertAlmostEqual(flat_triangle_area(unwrapper), face.Area, delta=face.Area * 0.01)
         self.assertEqual(len(unwrapper.getFlatBoundaryNodes()), 1)
 
+    def test_a_finely_meshed_cone_wall_still_unwraps_to_its_area(self):
+        # The default deflection meshes a cone wall into a long strip (thousands
+        # of triangles, ~340 columns).  The seed used to move a vertex that a
+        # fan had already laid, which tore the triangles already using it; the
+        # tear compounded around the strip and the flat sheet came back 34%
+        # over area.  A vertex is laid once, so the layout stays isometric at
+        # any triangle count.
+        cone = Part.makeCone(10, 6, 20)
+        face = cone.Faces[0]
+        unwrapper = flatmesh.FaceUnwrapper(face.copy(), deflection=0.006)
+        unwrapper.findFlatNodes(5, 0.95)
+        self.assertGreater(len(unwrapper.tris), 4000, "this test only bites on a fine mesh")
+        self.assertAlmostEqual(flat_triangle_area(unwrapper), face.Area, delta=face.Area * 0.01)
+        self.assertEqual(len(unwrapper.getFlatBoundaryNodes()), 1)
+
     def test_the_seam_is_cut_into_two_columns(self):
         part = Part.makeCylinder(10, 40)
         face = part.Faces[0]

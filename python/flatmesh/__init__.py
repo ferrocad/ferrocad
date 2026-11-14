@@ -31,8 +31,13 @@ What it does
 2. **Seed: rigid unfolding.**  Starting at the largest triangle, the mesh is
    laid out one triangle at a time across the dual graph, each new triangle
    placed congruent to its 3-D shape on the far side of the edge it shares with
-   a placed one.  Every triangle keeps its exact area and every edge of the
-   unfolding tree its exact length.
+   a placed one.  Every edge of the unfolding tree keeps its exact length.  A
+   vertex is laid once: when a triangle closes a fan around one that is already
+   laid, the vertex keeps its first position rather than being moved to the
+   second one, because moving it tears the triangles that already use it and the
+   tear compounds around the strip.  On a developable face the two positions
+   agree; on a curved one the residual stays in that triangle and the
+   relaxation pass spreads it.
 3. **Relaxation.**  ``findFlatNodes`` then runs up to ``iterations`` spring
    passes over all mesh edges, pulling each node towards the position that
    restores its neighbours' 3-D edge lengths.  On a planar or developable face
@@ -475,6 +480,18 @@ def _unfold(nodes, triangles, scale):
                     continue
                 u, v, w = shared
                 if flat[u] is None or flat[v] is None:
+                    continue
+                if flat[w] is not None:
+                    # `w` is already laid, by another triangle of its fan.  Keep
+                    # that first position: moving it would tear every triangle
+                    # that already uses it, and the tear compounds multiplicatively
+                    # around the strip (a cone wall came back 34% over area at a
+                    # 0.006 deflection before this guard).  On a developable mesh
+                    # the two placements agree, so nothing is lost; on a curved
+                    # one the residual stays in this triangle and the relaxation
+                    # pass spreads it.
+                    placed[neighbour] = True
+                    queue.append(neighbour)
                     continue
                 pu, pv = flat[u], flat[v]
                 edge_length = math.hypot(pv[0] - pu[0], pv[1] - pu[1])

@@ -3,9 +3,9 @@
 Status: design (2026-10-21); re-measured 2026-11-16 (§7). The current integrated baseline is
 **1028 passed / 6 failed / 13 errored / 7 skipped over 88/88 modules** on the clean
 `9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
-is green, and every remaining failure is attributed in §7 (1 P2 kernel numerics, 1 P3,
-4 documented test assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds
-closed 43 failures and took P3 from 11 failures to 1.
+is green, and every remaining failure is attributed in §7 (no P2; 1 P3, 5 documented test
+assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 43 failures and
+took P3 from 11 failures to 1.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
 hypothesis that it is a better proving ground than `src/Mod/Draft`, map its geometry
@@ -1654,10 +1654,11 @@ question closed both of the remaining P2 failures and one more:
   materials. A moved box's volume is now `1000.000000`, not `1000.0000000000002`.
 
 The 6 that remain and the 13 errors are bucketed in
-[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 1 P2 (the OCCT near-tangency in
-`test_precision`), 1 P3, 4 documented test assumptions; the errors are 4
-`test_surface_offset` draft shapes, 1 wrapped-drawing area measurement, 7 behavioural/API
-results and 1 face-order assumption. The round record is
+[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: no P2 failure, 1 P3, 5 documented
+test assumptions (`test_precision`'s tilted push included: the reference sweep check omits
+the fuzzy it computes, §8.8); the errors are 4 `test_surface_offset` draft shapes, 1
+wrapped-drawing area measurement, 7 behavioural/API results and 1 face-order assumption. The
+round record is
 [`../record/2026-11-14-p2-boolean-seam.md`](../record/2026-11-14-p2-boolean-seam.md).
 
 ---

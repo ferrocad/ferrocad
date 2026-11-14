@@ -31,8 +31,8 @@ upstream's `(other, tolerance, *, noElementMap)` signature and honour the tolera
 its edges, a document edit's halves — a rename, a placement's baked shape — undo
 together, and a placement is a `TopLoc_Location` over an un-moved base, so a reset is
 exact and a moved shape keeps its identity. Every remaining failure is still attributed
-(**1 P2 kernel-numerics, 1 P3, 4 documented test assumptions**; none unattributed), and P3
-lost all but one of its failures.
+(**1 P3, 5 documented test assumptions**; none unattributed, and no P2 failure is left),
+and P3 lost all but one of its failures.
 
 The platform picture did change materially: the **browser shell** runs the same
 `RustAppBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
@@ -124,9 +124,10 @@ rather than an architecture task.
   default, and `test_mesh_surfaces` with `Face.cutHoles` and a circle-based `Cylinder`.
   The last two went with the placement representation: a reset is bit-exact and a rigid
   move is a location, so the principal-axis tie and the style mapping hold.
-  Every remaining record is attributed — **1 → P2 (OCCT near-tangency), 1 → P3, 4
-  documented test assumptions, 0 unattributed** — and the P2 seam list is down to that
-  one kernel-numerics case. The chamfered single-face error is filed as a face-order
+  Every remaining record is attributed — **1 → P3, 5 documented test assumptions, 0
+  unattributed** — and the P2 seam list is empty: the last case (`test_precision`'s tilted
+  face) is the reference check's own omitted fuzzy, not a seam error (§8.8 of the round
+  record). The chamfered single-face error is filed as a face-order
   assumption. The full table is in [`research/simplecad-bringup.md`](research/simplecad-bringup.md) §7.
 - **The browser is a real host.** M0–M6 run the shell in Chrome over the wasm OCCT
   kernel; the `?runtime=plain|pywasm|js` switch selects the script half, and a fetched mod

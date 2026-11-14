@@ -350,34 +350,79 @@ The change is visible in the numbers: a moved box's volume is now `1000.000000` 
 `1000.0000000000002`, because a move no longer rewrites a coordinate. Both are pinned by
 `a_placement_reset_is_bit_exact` and `a_rigid_move_keeps_the_shapes_identity`.
 
-### 8.8 `test_precision`'s tilted face: an OCCT near-tangency artifact
+### 8.8 `test_precision`'s tilted face: the seam is exonerated, the check drops its own fuzzy
 
-The last boolean/topology failure is `test_through_push_from_a_slightly_tilted_face_leaves_no_skin`.
-It fails inside `opposite_face`'s sweep test — `abs(swept ∩ shape - swept.Volume) <=
-max(1e-7, volume × 1e-8) + profile.Area × gap` — and the numbers say why:
+The last "P2" failure is `test_through_push_from_a_slightly_tilted_face_leaves_no_skin`.
+Re-traced 2026-11-16. It is **not** a seam gap: our boolean call is provably upstream's, the
+kernel's error is the same on two OCCT releases, and the one line that decides the test has
+already computed the tolerance it would need.
+
+The geometry: a 9×12×8 block whose entry face leans by `tilt = 2.35e-5` rad. The test cuts a
+Ø 3.4 mm disk into that face, then asks `opposite_face` for the exit through the material.
+`opposite_face` moves the profile to the candidate exit plane, and its **coverage** check
+passes with `fuzzy = 2 × gap + 1e-7` (`geometry.py:1811`). It then runs the **sweep** check
+with `swept.common(shape)` — the default `tolerance = 0` (`geometry.py:1815`):
 
 | Quantity | Value |
 | --- | --- |
-| profile | Ø 3.4 mm disk, area **9.0792 mm²** |
-| `gap` (the disk's tilt across its radius) | **3.995e-5 mm** |
-| allowance | **3.63e-4 mm³** |
-| `swept.Volume` | 81.714105 mm³ (= `area × distance`, so the prism is exact) |
-| `swept ∩ divided` | **81.714675 mm³ — larger than the prism it is a subset of** |
+| profile | Ø 3.4 mm disk, area **9.079202769 mm²** |
+| `gap` (the moved profile's tilt off the exit plane) | **3.9955e-5 mm** |
+| allowance | **3.636e-4 mm³** |
+| `swept.Volume` | 81.714105065 mm³ (= `area × distance` to the last digit) |
+| `swept ∩ divided` at tolerance 0 | **81.714675305 mm³ — +5.702e-4, 1.57× the allowance** |
+| the same `common` at `fuzzy = 2 × gap + 1e-7` | **81.714105065 mm³ — exact** |
 
-A subset cannot be bigger, and the result confirms it: `inter.cut(prism)` is empty and no
-part of `inter` lies outside the box. So the *volume* is what is wrong, and the cause is
-the boolean's own result: the exit face comes back as **two half-discs totalling 9.0796 mm²**
-for a 9.0792 mm² disk, i.e. ~4e-5 mm too wide — the scale of the tilt itself. `BRepAlgoAPI`
-is unstable exactly in this near-tangency band: with an explicit fuzzy of `1e-5` the same
-`common` returns an **empty** shape, and with `5e-5` it returns the whole prism.
+So the function's own tolerance makes its own check exact, and the failure is that the second
+call does not receive it.
 
-We checked the inputs before blaming the kernel: the prism is a clean 3-face solid
-(cylinder + two planar caps, every edge at 1e-7), the same operation with an exact
-(non-tilted) prism is exact whether the caps are coincident with the box faces or interior,
-and our boolean settings match upstream's `FCBRepAlgoAPI_BooleanOperation` (`SetRunParallel`,
-`SetNonDestructive`, no fuzzy for tolerance 0). This is recorded as a kernel-regime limit,
-not a seam contract: the gate is a heuristic that our result misses by 1.6× because of a
-~4e-5 geometric error, not because a tolerance is mis-plumbed.
+The boolean is measuring a real near-tangency, not a dirty input: the prism's far cap is
+parallel to the tilted entry face, hence **tilted by 2.35e-5 rad against the block's x = 0
+face**. The two planes cross at y ≈ 6; OCCT intersects them and returns an exit cap split into
+two pieces (4.540320 mm² on the prism's cap plane + 4.539601 mm² on x = 0) whose total
+**9.079922 mm² is 7.19e-4 larger than the disk**, with a result vertex tolerance of
+**2.1165e-4 = 9 × tilt**. The volume error scales exactly with the tilt, so no
+confusion-scale fuzzy can help:
+
+| `tilt` (rad) | 5e-6 | 1e-5 | 2.35e-5 | 5e-5 | 1e-4 |
+| --- | --- | --- | --- | --- | --- |
+| volume error (mm³) | +1.213e-4 | +2.426e-4 | +5.702e-4 | +1.213e-3 | +2.427e-3 |
+| result vertex tolerance | 4.5e-5 | 9.0e-5 | 2.12e-4 | 4.5e-4 | 9.0e-4 |
+
+**Four checks, four non-findings.**
+
+1. **The boolean call is upstream's.** Upstream's Python `Shape.common` goes through
+   `makeElementBoolean` (`TopoShapeExpansion.cpp:6082`): `SetRunParallel(true)`,
+   `SetNonDestructive(true)`, `SetFuzzyValue` only for `tolerance > 0`, auto-fuzzy only for a
+   negative one — exactly ours. `BRepAlgoAPI_Common` only sets `myOperation`; it does not
+   override `Build`. A Rust probe ran the two-shape `BRepAlgoAPI_Common` (upstream's C++
+   path) and our `Cut` + `SetOperation(COMMON)` path on the same operands:
+   **81.714675305229 for both**, and **81.712824919871 for both** on the exact prism. The seam
+   adds no error.
+2. **It is not an OCCT 8 regression.** The host also has OCCT **7.9.2**; a standalone C++
+   probe against it returns the same **81.714675305229**, the same 4 faces and the same
+   **2.1165e-4** vertex tolerance.
+3. **No tolerance was inflated on the way in.** Every vertex, edge and face of the block, the
+   divided solid, the profile and the prism reports **1e-7**. The inflation appears *inside*
+   the boolean, on the result, identically on both kernels.
+4. **The prism is exact and nothing else touches it.** `swept.Volume = area × distance` to the
+   last digit, its cap plane is parallel to the entry plane, and neither upstream nor this
+   seam runs `ShapeFix`/`UnifySameDomain` inside `common` (upstream does not refine a boolean
+   unless asked). Our `extrude` passes `Copy/Canonize = true` where upstream's `makePrism`
+   passes `false/true`; the copy is bit-identical geometry, and the exact prism result proves
+   it.
+
+And the rest of the test is fine. With the stop supplied, `push_pull`'s `through` path extends
+the tool 0.1 mm past the exit and the overshoot removes the near-tangent skin: the exit comes
+back as **one** face, **86.920797229 mm² (expected 86.920797231) with 2 wires**. Without the
+stop it leaves two coplanar exit faces (91.459912 + 4.540320) and `len(exit_faces) == 1`
+fails next.
+
+**Classification.** A kernel near-tangency artifact plus a reference-check gap: the sweep
+check omits the fuzzy the coverage check has already computed. The fix is one line in
+`../simplecad` (`swept.common(shape, fuzzy)`), which this project cannot make — the reference
+checkout stays at `9180c4b`. Whether FreeCAD 1.1.3's own kernel (OCCT 7.8.x) is accurate
+enough to pass without it is untested here; 7.9.2 is not. Filed as a documented test
+assumption, so **P2 has no SimpleCAD failures left**.
 
 ### 8.9 Test-run visibility
 
@@ -452,14 +497,14 @@ the query/tolerance round **1026/8/13/7**, and the placement round **1028/6/13/7
 ## 10. What the 6 failures and 13 errors are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
-in short: **1 → P2** (`test_precision`'s OCCT near-tangency case, §8.8), **1 → P3**
-(wrapped-drawing parameter mapping) and **4 documented test assumptions** (the exact
-`BoundBox` precondition, the two `close_holes` cases and `test_rounding`'s erase-then-refuse
-sample, which is that same policy). The 13 errors are 4 `test_surface_offset` draft shapes,
-1 wrapped-drawing area measurement, 7 behavioural/API results (forming, loop faces,
-measuring, mesh conversion, slicing, subdivision, the surface snap) and **1 documented
-face-order assumption** (the chamfered single-face selection, which is an error rather than
-a failure).
+in short: **no P2 failure is left**, **1 → P3** (wrapped-drawing parameter mapping) and
+**5 documented test assumptions** (the exact `BoundBox` precondition, the two `close_holes`
+cases and `test_rounding`'s erase-then-refuse sample — that same policy — plus
+`test_precision`'s tilted push, which is a reference-check gap, §8.8). The 13 errors are 4
+`test_surface_offset` draft shapes, 1 wrapped-drawing area measurement, 7 behavioural/API
+results (forming, loop faces, measuring, mesh conversion, slicing, subdivision, the surface
+snap) and **1 documented face-order assumption** (the chamfered single-face selection, which
+is an error rather than a failure).
 
-The P2 seam list is down to one kernel-numerics item; the identity, undo/label and
-query/tolerance buckets are empty.
+The P2 seam list is empty; the identity, undo/label and query/tolerance buckets are empty
+too. The one remaining "kernel" case was traced to the reference check, not the seam (§8.8).

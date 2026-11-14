@@ -260,15 +260,30 @@ The rule for a new consumer: treat `Placement` as where the shape sits, never as
 to fold into coordinates. A transformed shape reports `1000.000000` mm³ for a 10 mm cube,
 not `1000.0000000000002`.
 
+## A near-tangent boolean is not the seam's error
+
+`test_precision.test_through_push_from_a_slightly_tilted_face_leaves_no_skin` used to be
+filed as the last P2 failure. It is not one. The test's own gate fails, not the boolean
+contract:
+
+- `opposite_face` moves the profile to the exit plane and proves coverage with
+  `fuzzy = 2 × gap + 1e-7`; it then runs its sweep test as `swept.common(shape)` with the
+  default tolerance 0. With the same fuzzy the sweep is exact (81.714105065 mm³).
+- At tolerance 0 OCCT sees a near-tangency: the prism cap is tilted by 2.35e-5 rad against
+  the block's x = 0 face, so the exit cap comes back as two pieces totalling 7.19e-4 mm² too
+  much, with a result vertex tolerance of 9 × tilt. The error is linear in the tilt.
+- That is not ours: the two-shape `BRepAlgoAPI_Common` (upstream's C++ call) and this seam's
+  `Cut` + `SetOperation(COMMON)` return the same volume to 12 digits, and an independent
+  build against OCCT 7.9.2 returns it too. Every input tolerance is 1e-7; neither upstream nor
+  this seam refines inside `common`; the prism is exact (`area × distance`).
+
+The reference fix is one line in `../simplecad` (`swept.common(shape, fuzzy)`), which stays
+unmodified here. The detail is in
+[`../../project/record/2026-11-14-p2-boolean-seam.md`](../../project/record/2026-11-14-p2-boolean-seam.md)
+§8.8.
+
 ## What is still open in this seam
 
-- **`test_precision.test_through_push_from_a_slightly_tilted_face_leaves_no_skin`** — a
-  kernel near-tangency regime, not a tolerance mis-plumbing: `common` returns an exit face
-  ~4e-5 mm too wide when the tool's cap is nearly tangent to the argument's face, and an
-  explicit fuzzy of `1e-5` returns an empty shape. The inputs are exact and our settings
-  match upstream's; recorded in
-  [`../../project/record/2026-11-14-p2-boolean-seam.md`](../../project/record/2026-11-14-p2-boolean-seam.md)
-  §8.8.
 - **A boolean result is a `Compound` around one `Solid`** (see
   [`part-containers.md`](part-containers.md#open-questions)).
 - **The chamfered single-face analytic selection is a face-order assumption, not a seam

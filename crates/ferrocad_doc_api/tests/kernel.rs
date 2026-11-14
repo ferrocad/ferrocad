@@ -90,11 +90,17 @@ fn an_addon_creates_and_edits_a_box() {
     );
     assert_eq!(created["ok"], true, "{created}");
     assert_eq!(created["result"]["name"], "Slab");
-    // `BTreeMap` order, which is the pane's order too.
-    assert_eq!(
-        created["result"]["properties"],
-        json!(["Height", "Length", "Width"])
-    );
+    // The set of names the create applied, not their order: `serde_json::Map` is a
+    // `BTreeMap` unless a crate in the build enables `preserve_order`, so a batched
+    // `cargo test` would otherwise fail this on an ordering the API never promises.
+    let mut applied: Vec<String> = created["result"]["properties"]
+        .as_array()
+        .expect("the create reports the properties it applied")
+        .iter()
+        .map(|name| name.as_str().expect("a property name").to_string())
+        .collect();
+    applied.sort();
+    assert_eq!(applied, ["Height", "Length", "Width"]);
     // The create touched the object, so the recompute executed it.
     assert_eq!(created["result"]["recomputed"], 1);
 

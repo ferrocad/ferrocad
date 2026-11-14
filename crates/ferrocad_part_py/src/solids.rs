@@ -1202,6 +1202,29 @@ impl PyToroid {
         curves::py_vector(py, point)
     }
 
+    /// The `(u, v)` parameters of a point on the surface (the inverse of
+    /// [`value`](PyToroid::value)): `u` around the axis, `v` around the tube.
+    ///
+    /// Upstream's `GeometrySurfacePy::parameter` answers this through
+    /// `ShapeAnalysis_Surface::ValueOfUV`, which is how `Face.Surface.parameter`
+    /// reads a torus face's click point.
+    fn parameter(&self, point: &Bound<'_, PyAny>) -> PyResult<(f64, f64)> {
+        let point = curves::vector(point)?;
+        let relative = point.sub(&self.center);
+        let axial = relative.dot(&self.axis);
+        let (x, y) = self.frame();
+        let radial = relative.sub(&self.axis.scale(axial));
+        let mut u = radial.dot(&y).atan2(radial.dot(&x));
+        if u < 0.0 {
+            u += 2.0 * PI;
+        }
+        let mut v = axial.atan2(radial.length() - self.major_radius);
+        if v < 0.0 {
+            v += 2.0 * PI;
+        }
+        Ok((u, v))
+    }
+
     /// The rational B-spline description of the torus: the knot vector of the
     /// standard full-circle rational quadratic representation in both
     /// directions, so the parameter ranges are the full `0..2π`.
@@ -1552,7 +1575,13 @@ impl PyBSplineSurface {
         self.u_periodic = false;
         self.v_periodic = false;
         self.points = Some(rows.clone());
-        self.surface = None;
+        // Upstream's `interpolate` replaces the surface handle, so `value`,
+        // `parameter` and the degree/pole getters keep working on the surface
+        // that was just built (they read the explicit geometry).
+        let face = ferrocad_part::backend()
+            .bspline_surface_face(&rows)
+            .map_err(kernel_error)?;
+        self.surface = ferrocad_occt::part_ops::bspline_surface_data(&face);
         Ok(())
     }
 

@@ -493,3 +493,103 @@ fn brep_strings_round_trip() {
         assert!(error.is_instance_of::<PyTypeError>(py), "{error}");
     });
 }
+
+// --- surface classes and typed sub-shape results -----------------------------
+
+use std::ffi::CString;
+
+/// Run a Python snippet against the booted `Part` module.
+fn run(py: Python<'_>, source: &str) {
+    let code = CString::new(source).expect("the snippet has no NUL");
+    let globals = PyDict::new(py);
+    if let Err(error) = py.run(&code, Some(&globals), None) {
+        error.print(py);
+        panic!("the geometry snippet failed:\n{source}");
+    }
+}
+
+#[test]
+fn a_toroids_parameter_inverts_its_value() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import math
+import Part
+import ferrocad
+
+V = ferrocad.Vector
+torus = Part.Toroid(10, 3)
+for u, v in ((0.0, 0.0), (1.0, 0.5), (2.5, 3.0), (5.0, 5.5)):
+    point = torus.value(u, v)
+    back = torus.parameter(point)
+    assert abs(back[0] - u % math.tau) < 1e-9, (u, back)
+    assert abs(back[1] - v % math.tau) < 1e-9, (v, back)
+    assert (torus.value(*back) - point).Length < 1e-9
+
+# The face of a torus solid is the same surface: Face.Surface.parameter is how
+# SimpleCAD reads a click point for its normal.
+face = next(f for f in Part.makeTorus(10, 3).Faces if isinstance(f.Surface, Part.Toroid))
+click = face.valueAt(0.75, 1.25)
+uv = face.Surface.parameter(click)
+assert (face.valueAt(*uv) - click).Length < 1e-7
+"#,
+        );
+    });
+}
+
+#[test]
+fn an_interpolated_bspline_surface_answers_queries() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+import ferrocad
+
+V = ferrocad.Vector
+surface = Part.BSplineSurface()
+assert surface.interpolate([[V(x, y, .0005*x*x + .0003*y*y) for y in (-1, 5, 11)]
+                            for x in (-1, 5, 11)]) is None
+assert surface.NbUPoles >= 3 and surface.NbVPoles >= 3, (surface.NbUPoles, surface.NbVPoles)
+assert surface.UDegree >= 1 and surface.VDegree >= 1
+for x, y in ((0.0, 0.0), (10.0, 10.0)):
+    point = V(x, y, .0005*x*x + .0003*y*y)
+    uv = surface.parameter(point)
+    assert (surface.value(*uv) - point).Length < 1e-6, (point, surface.value(*uv))
+"#,
+        );
+    });
+}
+
+#[test]
+fn general_fuse_and_child_shapes_return_typed_shapes() {
+    boot();
+    Python::with_gil(|py| {
+        run(
+            py,
+            r#"
+import Part
+import ferrocad
+
+V = ferrocad.Vector
+# Upstream wraps these with shape2pyshape, so a lone vertex piece answers
+# `part.Point` (SimpleCAD's slicing reads it) and a solid piece is a Part.Solid.
+compound = Part.makeCompound([Part.makeBox(1, 1, 1), Part.Vertex(V(5, 50, 60))])
+children = compound.childShapes()
+assert [type(child).__name__ for child in children] == ["Solid", "Vertex"], children
+vertex = next(child for child in children if child.ShapeType == "Vertex")
+assert (vertex.Point - V(5, 50, 60)).Length < 1e-12
+
+box = Part.makeBox(10, 10, 10)
+disk = Part.Face(Part.Wire(Part.makeCircle(3, V(5, 5, 10))))
+result, split = box.generalFuse([disk])
+assert type(result).__name__ == "Compound", type(result)
+pieces = split[0]
+assert pieces and all(type(piece).__name__ in ("Solid", "Compound", "Face") for piece in pieces)
+"#,
+        );
+    });
+}

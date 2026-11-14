@@ -1176,7 +1176,7 @@ impl PartShape {
         &self,
         py: Python<'_>,
         shape_type: Option<&str>,
-    ) -> PyResult<Vec<Py<PartShape>>> {
+    ) -> PyResult<Vec<PyObject>> {
         let shape = match self.shape() {
             Some(shape) => shape,
             // A null shape has no children (upstream's `childShapes` is empty).
@@ -1265,7 +1265,7 @@ impl PartShape {
         };
         shapes
             .into_iter()
-            .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+            .map(|shape| wrap_shape(py, shape))
             .collect()
     }
 
@@ -1852,7 +1852,7 @@ impl PartShape {
     /// [`childShapes`](Self::childShapes) returns without a type filter — one
     /// topological level, or a compound's members.
     #[getter]
-    fn SubShapes(&self, py: Python<'_>) -> PyResult<Vec<Py<PartShape>>> {
+    fn SubShapes(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
         self.childShapes(py, None)
     }
 
@@ -2877,21 +2877,23 @@ impl PartShape {
         py: Python<'_>,
         shapes: &Bound<'_, PyAny>,
         fuzzy_value: f64,
-    ) -> PyResult<(Py<PartShape>, Vec<Vec<Py<PartShape>>>)> {
-        let _ = fuzzy_value;
+    ) -> PyResult<(PyObject, Vec<Vec<PyObject>>)> {
         let first = self.named_shape()?;
         let mut inputs = vec![first];
         inputs.extend(shape_sequence(shapes)?);
         let (result, split) = ferrocad_part::backend()
             .general_fuse(&inputs, fuzzy_value)
             .map_err(kernel_error)?;
-        let result = Py::new(py, PartShape::from_shape(result))?;
+        // Upstream's `TopoShapePy::generalFuse` wraps both the result and every
+        // split piece with `shape2pyshape`, so a lone vertex piece answers
+        // `part.Point` and a solid piece is a `Part.Solid`.
+        let result = wrap_shape(py, result)?;
         let split = split
             .into_iter()
             .map(|parts| {
                 parts
                     .into_iter()
-                    .map(|shape| Py::new(py, PartShape::from_shape(shape)))
+                    .map(|shape| wrap_shape(py, shape))
                     .collect::<PyResult<Vec<_>>>()
             })
             .collect::<PyResult<Vec<_>>>()?;

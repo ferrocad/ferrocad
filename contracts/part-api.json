@@ -1368,9 +1368,9 @@
       ],
       "unresolved": []
     },
-    "methods_heuristic": 1030,
+    "methods_heuristic": 1031,
     "methods": {
-      "count": 1939,
+      "count": 1940,
       "distinct": 398,
       "classes": {
         "Part.ChFi2d::AnaFilletAlgo": [
@@ -3288,6 +3288,7 @@
           "isUPeriodic",
           "isVPeriodic",
           "new",
+          "parameter",
           "toBSpline",
           "value"
         ],
@@ -3484,37 +3485,37 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1461,
+          "line": 1559,
           "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1465,
+          "line": 1563,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1474,
+          "line": 1572,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1483,
+          "line": 1581,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1490,
+          "line": 1588,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 3859,
+          "line": 3974,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {
@@ -3807,7 +3808,7 @@
   "coverage": {
     "methods": {
       "upstream_declared": 609,
-      "ours_declared": 1939,
+      "ours_declared": 1940,
       "upstream_distinct": 408,
       "covered_distinct": 253,
       "fraction": 0.6201,

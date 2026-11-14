@@ -122,6 +122,29 @@ requires a `Part.Wire` as upstream's typed signature does.
 This is how SimpleCAD rebuilds a face one boundary at a time for a concentric offset; the
 empty-leftover case is the area assertion in `a_face_accepts_another_boundary_wire`.
 
+## A degenerate edge has no curve
+
+A sphere pole and a cone apex are real edges whose 3D curve collapses to a point.
+`Edge.Curve` raises `TypeError` for them, as upstream does, rather than returning `None` or
+a zero-length line: a caller that means "this edge has geometry" should be able to check by
+asking. `Edge.Degenerated` is the question to ask instead, and upstream's heal uses exactly
+that pair (`None if edge.Degenerated else edge.Curve`).
+
+## An elementary surface is a value object
+
+`Part.Cylinder` (and its siblings) are filled in after they exist:
+`surface = Part.Cylinder(); surface.Radius = …; surface.Center = …; surface.Axis = …`, and
+`surface.toShape(u1, u2, v1, v2)` builds the face over that parameter band with upstream's
+`BRepBuilderAPI_MakeFace(Geom_Surface, u1, u2, v1, v2)` (a new
+`GeometryBackend::make_face_on_band`). A full turn is one wall with a seam, which is how a
+caller rebuilds a hole wall square to its aligned rims. An axis write keeps the axis point
+and projects the frame's `u = 0` direction onto the new plane.
+
+This matters more than it looks: SimpleCAD's heal rebuilds every aligned face, and its
+per-face `except Exception` turns a missing setter into "keep the face as it was". A
+read-only surface therefore left the tilted face tilted *and* pinned its neighbours, which
+reads as a geometry bug rather than a binding gap.
+
 ## `Face.cutHoles` is `BRepBuilderAPI_MakeFace::Add` per wire
 
 Upstream's `TopoShapeFacePy::cutHoles` builds `BRepBuilderAPI_MakeFace(face)` and adds

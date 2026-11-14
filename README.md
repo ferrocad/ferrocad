@@ -416,13 +416,13 @@ document with four runtimes, the browser shell and the backend-parity close-out;
 remains is Draft M3–M5 breadth (the M4 import round took `test_modification` to 31/0/2).
 **H3 (proof by use)** is SimpleCAD: S1–S3 are measured and S4.1–S4.6 are the view facade,
 ranked pick, selection object, workplane/face frames and push/pull stem (integration
-baseline **1019 passed / 15 failed / 13 errored / 7 skipped**, 88/88 modules). Packaging is
+baseline **1026 passed / 8 failed / 13 errored / 7 skipped**, 88/88 modules). Packaging is
 on v0.1.4; macOS is the parked distribution leg.
 
 The most recent rounds are the **P2 boolean/seam round** — one build per general fuse,
 measured vertex images, cached edge orientation, upstream's `(other, tolerance, *,
 noElementMap)` boolean signature and its tessellation default, and a document transaction
-that records a rename and a placement's baked shape — which closed 34 SimpleCAD failures,
+that records a rename and a placement's baked shape — which closed 41 SimpleCAD failures,
 and the **November platform round** that preceded it. The round logs are
 [`docs/project/record/2026-11-14-p2-boolean-seam.md`](docs/project/record/2026-11-14-p2-boolean-seam.md)
 and

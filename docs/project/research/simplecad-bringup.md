@@ -1,10 +1,10 @@
 # SimpleCAD bring-up: a canvas-first proving ground
 
 Status: design (2026-10-21); re-measured 2026-11-15 (§7). The current integrated baseline is
-**1019 passed / 15 failed / 13 errored / 7 skipped over 88/88 modules** on the clean
+**1026 passed / 8 failed / 13 errored / 7 skipped over 88/88 modules** on the clean
 `9180c4b` checkout; the 5 Qt-shim errors are classified skips, the SC7 workflow acceptance
-is green, and every remaining failure is attributed in §7 (11 P2, 1 P3, 3 documented test
-assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 34 failures and
+is green, and every remaining failure is attributed in §7 (3 P2, 1 P3, 4 documented test
+assumptions). **P1 is closed** (2026-11-13), and the P2 seam rounds closed 41 failures and
 took P3 from 11 failures to 1.
 
 **Purpose.** Audit SimpleCAD 0.38.0 as FerroCAD's next integration target, test the
@@ -1621,8 +1621,30 @@ half of an edit was written outside the undo log.
 document tests pass, and the contract is
 [`../../developer/architecture/transactions.md`](../../developer/architecture/transactions.md).
 
-The 15 that remain and the 13 errors are bucketed in
-[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 11 P2, 1 P3, 3 documented test
+**2026-11-16, later — the query/tolerance round: 1026 / 8 / 13 / 7.** Seven of the nine
+failures in that bucket were two missing contracts:
+
+- `Edge.Curve` returned `None` for a degenerate edge. The pole of a sphere is a real edge
+  whose curve collapses to a point, and upstream raises `TypeError`; all five
+  `test_degenerate_drawing` tests were failing in their shared `setUp` on that line, before
+  reaching the drawing code they exist to exercise.
+- `Part.Cylinder` was read-only and had no `toShape`. Upstream's geometry classes are value
+  objects, so SimpleCAD's heal fills one in (`surface.Radius = …`) and turns the parameter
+  band into the hole wall; the `AttributeError` was swallowed by its per-face
+  `except Exception`, the wall was kept instead of rebuilt, and one kept face pinned its
+  neighbours — the tilted face stayed tilted and the hole never became a circle. `Radius`,
+  `Center` and `Axis` are writable now and `toShape(u1, u2, v1, v2)` builds the band through
+  `BRepBuilderAPI_MakeFace(Geom_Surface, …)`. The healed block reports `aligned_faces: 6`,
+  `aligned_holes: 1` and an unchanged volume.
+
+The two left in that bucket are attribution: `test_rounding`'s erase-then-refuse sample is
+the `close_holes` policy already recorded for `test_edge_deletion`, and
+`test_symmetric_main_axis_is_deterministic` is a placement-precision difference (a perfect
+cube's tie-break sees 5e-15 of bake noise because clearing a placement re-transforms the
+coordinates, where upstream's `TopLoc_Location` clears exactly).
+
+The 8 that remain and the 13 errors are bucketed in
+[`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2: 3 P2, 1 P3, 4 documented test
 assumptions; the errors are 4 `test_surface_offset` draft shapes, 1 wrapped-drawing area
 measurement, 7 behavioural/API results and 1 face-order assumption. The round record is
 [`../record/2026-11-14-p2-boolean-seam.md`](../record/2026-11-14-p2-boolean-seam.md).

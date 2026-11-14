@@ -25,9 +25,10 @@ the failing-test map is [`../research/simplecad-bringup.md`](../research/simplec
 | **`Face.cutHoles` and a circle-based `Cylinder`** | `cutHoles(list)` is `BRepBuilderAPI_MakeFace::Add` per wire on any wire-shaped `Part.Shape`; `Part.Cylinder(circle)` reads radius, centre, axis and X direction from the circle | `test_mesh_surfaces` **7/7** (was 3 pass, 2 fail, 2 error) — P3's SimpleCAD share empties |
 | **The unwrap tear** | `flatmesh` lays each vertex once: a fan-closing triangle keeps the first position instead of moving it | SimpleCAD **1014/20/13/7**; `test_surface_offset`'s across-the-seam error closes |
 | **The undo transaction** | `set_label` records `Change::Label`, and a type's derived mirror (`Placement` → `Shape` on a `Part::Feature`, → the mesh transform on a `Mesh::Feature`, a shape assignment's adopted `Placement`) goes through `Document::set_property_derived` | SimpleCAD **1019/15/13/7** — the undo/label bucket empties; `test_union` **16/16** |
+| **A degenerate edge and a writable surface** | `Edge.Curve` raises `TypeError` on a pole/apex edge; `Part.Cylinder`'s `Radius`/`Center`/`Axis` are writable and `toShape(u1, u2, v1, v2)` builds the parameter band | SimpleCAD **1026/8/13/7** — `test_healing` 14/14 and `test_degenerate_drawing` 5/5 |
 
-SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1019 / 15 / 13 / 7 over 88/88
-modules**: **34 failures closed, none added, and the errors moved 18 → 13**. The printed
+SimpleCAD's integrated run went **985 / 49 / 18 / 7 → 1026 / 8 / 13 / 7 over 88/88
+modules**: **41 failures closed, none added, and the errors moved 18 → 13**. The printed
 failure count falls by one less than the records closed in the last two steps because a
 fully-passing module counts once. No module failed to load.
 
@@ -280,6 +281,47 @@ result of a recompute, not an edit). The rule, the restore path and the limits a
 `abort_and_undo_restore_a_label`, `a_derived_property_write_is_reverted_with_its_primary`
 and `a_placement_move_undoes_its_shape_and_a_label_undoes_with_it` pin it.
 
+### 8.6 The query/tolerance round: a degenerate edge and a writable surface
+
+Seven of the nine failures in this bucket were two missing contracts, both small and both
+about what the kernel is allowed to say.
+
+1. **`Edge.Curve` returned `None` for a degenerate edge.** The pole of a sphere (and a
+   cone's apex) is a real `Edge` whose 3D curve collapses to a point, and upstream raises
+   `TypeError` for it. We returned `None`, so `test_degenerate_drawing`'s shared `setUp`
+   never raised and all five of its tests failed there — before reaching the drawing code
+   they exist to exercise. `Curve` now asks `is_degenerate` first and raises; a copied pole
+   refuses too, and an ordinary edge still answers.
+2. **`Part.Cylinder` was read-only, and had no `toShape`.** Upstream's geometry classes are
+   value objects: `surface = Part.Cylinder(); surface.Radius = …; surface.Center = …;
+   surface.Axis = …` and then `surface.toShape(u1, u2, v1, v2)`. SimpleCAD's heal rebuilds
+   a hole wall exactly that way, so the `AttributeError` was swallowed by its per-face
+   `except Exception`, the wall was **kept** instead of rebuilt, and one kept face pinned
+   its neighbours: the tilted face stayed tilted and the hole never became a circle
+   (`aligned_holes: 0`). `test_healing`'s two failures were the two assertions that read
+   that report. The properties are writable now (an axis change keeps the axis point and
+   projects `u = 0` onto the new plane), and `toShape` builds the band with upstream's
+   `BRepBuilderAPI_MakeFace(Geom_Surface, u1, u2, v1, v2)` through a new
+   `make_face_on_band` seam. The healed block reports `aligned_faces: 6`,
+   `aligned_holes: 1`, every planar axis exactly unit, and its volume unchanged to 1e-15.
+
+The two that remain are attribution, not code:
+
+- **`test_rounding`'s `type='Solid'` sample** is `erase_elements(box, ['Face1'])`, and it
+  expects `selected_edges` to refuse the result. With the `close_holes` policy recorded in
+  §7 the erase **caps the opening**, so the result is a valid closed solid and the refusal
+  never happens. This is the same upstream-policy mismatch as the two `test_edge_deletion`
+  failures, filed with them.
+- **`test_symmetric_main_axis_is_deterministic`** asks a *perfect cube* for a principal
+  axis. All three moments are equal, so `main_axis` falls back to the longest local
+  bounding dimension; for a cube those are equal too and the **first** one must win. Ours
+  differ by 5e-15 because clearing a shape's placement re-transforms its coordinates
+  (`bake(P)`, then `bake(P⁻¹)`) while upstream stores the placement as a
+  `TopLoc_Location` and clearing it is exact. The tie-break then picks Y instead of X. The
+  fix direction is a base-cached placement (`Shape.Placement` writes transform from the
+  unplaced base, so identity is exact); it is recorded in §P2 of
+  [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) rather than guessed at here.
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),
@@ -289,9 +331,9 @@ CARGO_BUILD_JOBS=2`; the extension was rebuilt before the Python/SimpleCAD runs.
 | Measure | Value | Command |
 | --- | --- | --- |
 | Part conformance | **531 passed, 0 failed, 0 errored, 12 skipped, 0 load failures** | `FERROCAD_UPSTREAM=… cargo test -p ferrocad_part_py --test part_conformance -- --nocapture` |
-| SimpleCAD integrated | **1019 passed, 15 failed, 13 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
-| Part API audit | **253/408 (62.0%)**, no contract re-pin needed | `python3 tools/part_api_audit.py --check` |
-| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `ferrocad_core` **108**, `ferrocad_mesh` **63**, `part_boot` **3**, `part_shape_ops` **17**, all 0 failed | per-crate `cargo test` |
+| SimpleCAD integrated | **1026 passed, 8 failed, 13 errored, 7 skipped, 88/88 modules** | `FERROCAD_SIMPLECAD=$PWD/../simplecad cargo test -p ferrocad_part_py --test simplecad_conformance -- --nocapture` |
+| Part API audit | **253/408 (62.0%)**, contract re-pinned for `Cylinder.toShape` | `python3 tools/part_api_audit.py --check` |
+| Rust lib tests | `ferrocad_occt` **82**, `ferrocad_part` **59**, `ferrocad_core` **137**, `ferrocad_mesh` **64**, `part_py` **353**, `part_shape_ops` **18**, all 0 failed | per-crate `cargo test` |
 | Python extension sets | `base` **707 / 0 / 0 / 8**; `workbenches` **789 / 0 / 0 / 3** | `python3 tools/run_tests.py --extension base` / `workbenches` |
 | Docs/tooling | `api_docs` 9 pages, `userdocs` 8, `build_book` 48 chapters, extension-set contract 50 modules, `test_docs_tooling` 49 | the `--check` gates |
 
@@ -300,20 +342,22 @@ Two runs of the full SimpleCAD suite before the edge-placement fix produced the 
 1003/27/17/7, 1005/25/17/7 and then 1006/24/17/7, with the rotate-edges, elongating and
 boss records closed and the error set unchanged in size (one analytic error left, now
 filed as a face-order assumption). The signature/tessellation/cutHoles batch then measured
-**1013/20/14/7** and the unwrap fix **1014/20/13/7**, then the undo/label round
-**1019/15/13/7**, all over 88/88 modules; no run moved a module from load-failure to loaded.
+**1013/20/14/7**, the unwrap fix **1014/20/13/7**, the undo/label round **1019/15/13/7**,
+and the query/tolerance round **1026/8/13/7**, all over 88/88 modules; no run moved a module
+from load-failure to loaded.
 
-## 10. What the 15 failures and 13 errors are
+## 10. What the 8 failures and 13 errors are
 
 The failed records are re-bucketed in [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) §P2;
-in short: **11 → P2** (boolean/topology 1, query/tolerance/determinism 9, identity 1),
-**1 → P3** (wrapped-drawing parameter mapping) and **3 documented test assumptions** (the
-exact `BoundBox` precondition and the two `close_holes` cases). The 13 errors are 4
+in short: **3 → P2** (one sub-tolerance push/pull, one principal-axis precision limit, one
+copied-shape face list), **1 → P3** (wrapped-drawing parameter mapping) and **4 documented
+test assumptions** (the exact `BoundBox` precondition, the two `close_holes` cases and
+`test_rounding`'s erase-then-refuse sample, which is the same policy). The 13 errors are 4
 `test_surface_offset` draft shapes, 1 wrapped-drawing area measurement, 7 behavioural/API
 results (forming, loop faces, measuring, mesh conversion, slicing, subdivision, the surface
 snap) and **1 documented face-order assumption** (the chamfered single-face selection, which
 is an error rather than a failure).
 
-The undo/label bucket is empty: the transaction path is closed. What remains is the
-query/tolerance group and one sub-tolerance push/pull, both of which need a reproduction
-before they need code.
+The query/tolerance group is down to one item, and it needs a placement-representation
+change rather than a tolerance tweak; the rest of the P2 list is one push/pull and one style
+mapping.

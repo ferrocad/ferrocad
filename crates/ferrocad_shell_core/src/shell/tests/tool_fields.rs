@@ -198,7 +198,7 @@ if "Test_LoftProbe" not in FreeCADGui.listCommands():
 
     // With nothing selected the gate is unmet: the row is painted (it exists — a mod's
     // tool is never hidden), but as a disabled row carrying its requirement.
-    click_at(&mut cx, "creation-slot-1-caret");
+    click_at(&mut cx, "creation-pill-0-caret");
     draw(&mut cx);
     assert!(
         cx.debug_bounds("create-row-Test_LoftProbe").is_some(),

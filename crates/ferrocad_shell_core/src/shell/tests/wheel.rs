@@ -395,13 +395,22 @@ for _id, _command in (
     });
     draw(&mut cx);
 
-    // The globals and the pills are dock controls; the tool and the verb are not.
+    // The globals, the single Create Dock toggle and Search are the dock's controls; the
+    // tool, the verb and the pills are not.
     assert!(cx.debug_bounds("dock-App_Undo").is_some());
     assert!(cx.debug_bounds("dock-App_Fit").is_some());
-    // The probe is a `Solid` tool, so it belongs to the second (Solid/Surface) slot.
     assert!(
-        cx.debug_bounds("creation-slot-1").is_some(),
-        "the Solid slot is in the dock"
+        cx.debug_bounds("dock-create-toggle").is_some(),
+        "the dock carries one Create Dock toggle, not the pills"
+    );
+    assert!(
+        cx.debug_bounds("create-dock").is_some(),
+        "the pills live in their own strip"
+    );
+    // The probe is a `Solid` tool, and it is the only creation tool here.
+    assert!(
+        cx.debug_bounds("creation-pill-0").is_some(),
+        "the Solid pill is in the strip"
     );
     assert!(
         cx.debug_bounds("dock-Test_CreationProbe").is_none(),
@@ -412,6 +421,13 @@ for _id, _command in (
         "a face verb is not a dock button"
     );
     assert!(cx.debug_bounds("dock-search").is_some());
+    // The strip sits **above** the dock, not inside it.
+    let strip = cx.debug_bounds("create-dock").expect("the strip");
+    let dock_row = cx.debug_bounds("action-dock").expect("the dock");
+    assert!(
+        strip.origin.y + strip.size.height <= dock_row.origin.y,
+        "the strip is above the dock ({strip:?} / {dock_row:?})"
+    );
 
     // The two bottom bars must not collide. They share a baseline by design (the dock
     // is centred, the hand column is bottom-left), so it is the **horizontal** gap that
@@ -429,7 +445,7 @@ for _id, _command in (
     assert!(!intersect, "the bars do not overlap ({dock:?} / {loadout:?})");
 
     // The caret opens the category flyout: the creation tool is a row, the verb is not.
-    click_at(&mut cx, "creation-slot-1-caret");
+    click_at(&mut cx, "creation-pill-0-caret");
     draw(&mut cx);
     assert!(cx.debug_bounds("create-popover").is_some(), "the flyout opened");
     assert!(
@@ -441,11 +457,12 @@ for _id, _command in (
         cx.debug_bounds("create-row-Test_FaceProbe").is_none(),
         "a wheel verb is not a creation row"
     );
-    // The flyout grows upward from the dock, so it stays over the canvas.
+    // The flyout grows upward from its pill, so it stays over the canvas and off the
+    // strip and the dock both.
     let popover = cx.debug_bounds("create-popover").expect("the flyout");
     assert!(
-        popover.origin.y + popover.size.height <= dock.origin.y,
-        "the flyout sits above the dock ({popover:?} / {dock:?})"
+        popover.origin.y + popover.size.height <= strip.origin.y + px(1.0),
+        "the flyout sits above the strip ({popover:?} / {strip:?})"
     );
 
     // Picking the row loads the slot: the tool runs (it arms), and the pill behind the
@@ -461,25 +478,25 @@ for _id, _command in (
         Some("Test_CreationProbe".to_string())
     );
     assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.creation.slot(1).map(str::to_string)),
+        shell.read_with(&cx, |shell, _| shell.creation.memory("Solid").map(str::to_string)),
         Some("Test_CreationProbe".to_string()),
-        "the pick fills its family's slot"
+        "the pick fills its category's pill"
     );
     assert!(
-        cx.debug_bounds("creation-slot-1").is_some(),
-        "the slot survives the commit"
+        cx.debug_bounds("creation-pill-0").is_some(),
+        "the pill survives the commit"
     );
-    // The left half repeats the slot's tool.
+    // The left half repeats the pill's tool.
     model.lock().unwrap().status.clear();
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
     });
     draw(&mut cx);
-    click_at(&mut cx, "creation-slot-1-arm");
+    click_at(&mut cx, "creation-pill-0-arm");
     draw(&mut cx);
     assert!(
         model.lock().unwrap().status.contains("creation probe ran"),
-        "the pill's left half arms the slot's tool"
+        "the pill's left half arms its tool"
     );
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
@@ -827,14 +844,15 @@ fn backspace_dismisses_the_root_ring(cx: &mut TestAppContext) {
     );
 }
 
-/// The Add hand is **two slots with a remembered tool per category**.
+/// The create dock is **one pill per category**, each remembering its own tool.
 ///
-/// Slot `4` is the Sketch family and Slot `5` Solid/Surface; the flyout shows one
-/// category at a time behind a segmented header, and a tab click loads that family's
-/// slot without arming anything. Picking a row both **binds** the tool to its slot and
-/// **runs** it, which is the same pair of actions a wheel flick performs.
+/// A pill reads `⊕ <Category>: <Tool> ▾`: the left half arms it, the caret opens the
+/// flyout, and the flyout's segmented header shows one category at a time. Picking a
+/// tool **binds** it to its category and **runs** it — the same pair of actions a wheel
+/// flick performs — while clicking a tab only points the pill at what that category
+/// remembers.
 #[gpui::test]
-fn the_creation_slots_remember_a_tool_per_category(cx: &mut TestAppContext) {
+fn each_creation_pill_remembers_its_own_tool(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let script = r#"
@@ -878,26 +896,28 @@ for _id, _command in (
     });
     draw(&mut cx);
 
-    // Both slots are in the dock, and each names a tool of its own family.
-    assert!(cx.debug_bounds("creation-slot-0").is_some(), "Slot 4 is drawn");
-    assert!(cx.debug_bounds("creation-slot-1").is_some(), "Slot 5 is drawn");
-    let family = |index: usize| {
-        shell.read_with(&cx, |shell, _| {
-            shell
-                .creation
-                .slot(index)
-                .map(str::to_string)
-                .or_else(|| {
-                    // The slot has no memory yet: the pill shows the family's first tool.
-                    None
-                })
-        })
-    };
-    assert_eq!(family(0), None, "a fresh session remembers nothing yet");
+    // One pill per category, in the design's order (Sketch, Solid, Surface).
+    assert!(cx.debug_bounds("create-dock").is_some(), "the strip is drawn");
+    for index in 0..3 {
+        let selector = match index {
+            0 => "creation-pill-0",
+            1 => "creation-pill-1",
+            _ => "creation-pill-2",
+        };
+        assert!(cx.debug_bounds(selector).is_some(), "{selector} is a pill");
+    }
+    assert!(
+        cx.debug_bounds("creation-pill-3").is_none(),
+        "a category with no tool is not a pill"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
+        None,
+        "a fresh session has armed nothing"
+    );
 
-    // The flyout has a tab per registered category, and opening it from Slot 5 starts on
-    // the slot's own category.
-    click_at(&mut cx, "creation-slot-1-caret");
+    // The flyout has a tab per registered category, and the caret opens on its own.
+    click_at(&mut cx, "creation-pill-1-caret");
     draw(&mut cx);
     assert!(cx.debug_bounds("create-popover").is_some());
     for tab in ["create-tab-Sketch", "create-tab-Solid", "create-tab-Surface"] {
@@ -905,22 +925,22 @@ for _id, _command in (
     }
     assert!(
         cx.debug_bounds("create-row-Test_SolidTool").is_some(),
-        "the Solid tab lists the solid tools"
+        "the Solid pill opens on the Solid tab"
     );
     assert!(
         cx.debug_bounds("create-row-Test_SketchTool").is_none(),
         "one category at a time"
     );
 
-    // A tab click shows that category's tools and points Slot 5 at the remembered one.
+    // A tab click shows that category's tools and points its pill at the remembered one.
     click_at(&mut cx, "create-tab-Surface");
     draw(&mut cx);
     assert!(cx.debug_bounds("create-row-Test_SurfaceTool").is_some());
     assert!(cx.debug_bounds("create-row-Test_SolidTool").is_none());
     assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.creation.slot(1).map(str::to_string)),
+        shell.read_with(&cx, |shell, _| shell.creation.memory("Surface").map(str::to_string)),
         Some("Test_SurfaceTool".to_string()),
-        "browsing Surface loads it into Slot 5"
+        "browsing Surface loads its pill"
     );
     assert_eq!(
         shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
@@ -928,7 +948,7 @@ for _id, _command in (
         "browsing arms nothing"
     );
 
-    // Picking the row runs (arms) the tool and keeps it in the slot.
+    // Picking the row runs (arms) the tool and keeps it in its own pill.
     click_at(&mut cx, "create-row-Test_SurfaceTool");
     draw(&mut cx);
     assert!(
@@ -943,8 +963,8 @@ for _id, _command in (
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
     });
 
-    // A Sketch pick fills **Slot 4** and leaves Slot 5 where it was.
-    click_at(&mut cx, "creation-slot-1-caret");
+    // A Sketch pick fills **its** pill and leaves the others where they were.
+    click_at(&mut cx, "creation-pill-1-caret");
     draw(&mut cx);
     click_at(&mut cx, "create-tab-Sketch");
     draw(&mut cx);
@@ -952,32 +972,27 @@ for _id, _command in (
     draw(&mut cx);
     assert_eq!(
         shell.read_with(&cx, |shell, _| (
-            shell.creation.slot(0).map(str::to_string),
-            shell.creation.slot(1).map(str::to_string)
+            shell.creation.memory("Sketch").map(str::to_string),
+            shell.creation.memory("Surface").map(str::to_string)
         )),
         (
             Some("Test_SketchTool".to_string()),
             Some("Test_SurfaceTool".to_string())
         ),
-        "each category keeps its own slot"
-    );
-    assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.creation.memory("Surface").map(str::to_string)),
-        Some("Test_SurfaceTool".to_string()),
-        "Surface still remembers its own tool"
+        "each category keeps its own tool"
     );
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
     });
 
-    // `4` runs Slot 4's tool; pressed again while that tool is the running one it opens
-    // the flyout instead. (No edition in this harness ships a real tool, so the
+    // `4` runs the first pill's tool; pressed again while that tool is the running one
+    // it opens the flyout instead. (No edition in this harness ships a real tool, so the
     // "running" half — which the key path only reads — is set directly.)
     model.lock().unwrap().status.clear();
     press_root(&mut cx, &shell, "4");
     assert!(
         model.lock().unwrap().status.contains("Rectangle"),
-        "`4` runs the Sketch slot's tool: {}",
+        "`4` runs the first pill's tool: {}",
         model.lock().unwrap().status
     );
     cx.update(|_window, cx| {
@@ -988,7 +1003,7 @@ for _id, _command in (
     press_root(&mut cx, &shell, "4");
     assert!(
         cx.debug_bounds("create-popover").is_some(),
-        "a second `4` opens the category list"
+        "a second `4` opens that pill's flyout"
     );
     assert!(
         cx.debug_bounds("create-row-Test_SketchTool").is_some(),
@@ -1003,14 +1018,14 @@ for _id, _command in (
     });
 
     // The wheel's commit is the *same* seam: a tool chosen from `Create ▸` fills its
-    // slot and runs, so the next flick down the ring starts from what it loaded.
+    // pill and runs, so the next flick down the ring starts from what it loaded.
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| shell.commit_wheel("Test_SolidTool", cx));
     });
     assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.creation.slot(1).map(str::to_string)),
+        shell.read_with(&cx, |shell, _| shell.creation.memory("Solid").map(str::to_string)),
         Some("Test_SolidTool".to_string()),
-        "the wheel loads the solid slot"
+        "the wheel loads the Solid pill"
     );
     assert!(
         model.lock().unwrap().status.contains("Box"),
@@ -1020,8 +1035,28 @@ for _id, _command in (
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
     });
 
+    // The dock's toggle hides the strip (and closes the flyout); the dock itself stays.
+    click_at(&mut cx, "dock-create-toggle");
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("create-dock").is_none(),
+        "the toggle hides the strip"
+    );
+    assert!(
+        cx.debug_bounds("action-dock").is_some(),
+        "the dock is still there"
+    );
+    assert!(!shell.read_with(&cx, |shell, _| shell.creation.expanded()));
+    click_at(&mut cx, "dock-create-toggle");
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("create-dock").is_some(),
+        "and shows it again"
+    );
+
     let cleanup = crate::python::evaluate(
         "import FreeCADGui\nfor _id in ('Test_SketchTool', 'Test_SolidTool', 'Test_SurfaceTool'):\n    FreeCADGui.removeCommand(_id)",
     );
     assert!(cleanup.expect("remove the tools").ok);
 }
+

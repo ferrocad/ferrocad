@@ -80,7 +80,7 @@ pub use panels::{
 // The context gate: every action entry point asks `Shell::gate` (see `shell/bridge/context.rs`).
 pub(crate) use context::Action;
 
-pub(crate) use creation::{CREATION_KEYS, CREATION_SLOTS, CreationDock};
+pub(crate) use creation::{CREATION_KEYS, CreationDock};
 pub(crate) use loadout::{Loadout, SelectFilter, Slot};
 
 mod render;

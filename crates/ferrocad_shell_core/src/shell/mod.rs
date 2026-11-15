@@ -22,9 +22,9 @@ use gpui::{
 use ferrocad_geom::SelectionRef;
 use ferrocad_inventor::{Scene, Viewport};
 use ferrocad_stage::{
-    DeclarativeManipulator, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue, InteractionCommit,
-    Manipulator, NumericField, RingSweep, ShapeItem, SnapKind, Stage, TRANSFORM_ID, ToolStatus,
-    TransformGizmo, TransformSession, TransformTape, WorkplaneLive,
+    DeclarativeManipulator, DressUpKind, GizmoAxis, GizmoHandle, GizmoMode, GizmoValue,
+    InteractionCommit, Manipulator, NumericField, RingSweep, ShapeItem, SnapKind, Stage,
+    TRANSFORM_ID, ToolStatus, TransformGizmo, TransformSession, TransformTape, WorkplaneLive,
 };
 use ferrocad_types::{Matrix4, Rotation, Vector3};
 use ferrocad_ui::Form;
@@ -1209,6 +1209,12 @@ impl Shell {
         }
         // The radial menu closes before any popover: it is the most transient layer.
         if event.keystroke.key == "escape" && self.close_radial(cx) {
+            return true;
+        }
+        // `Backspace` inside the wheel is "one ring out": a hierarchical menu needs a
+        // way back that does not throw the whole gesture away.
+        if event.keystroke.key == "backspace" && self.wheel_open(cx) {
+            self.back_radial(cx);
             return true;
         }
         // A floating dialog does not own the keyboard once the pointer clicks the

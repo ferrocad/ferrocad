@@ -512,16 +512,32 @@ for _id, _command in (
     });
     draw(&mut cx);
 
-    let ids = |target: Option<SelectionRef>| -> Vec<String> {
+    // `(root wedge id, child ids)` per ring. A category is one root wedge, so a verb
+    // inside one is found by looking into its children.
+    let ids = |target: Option<SelectionRef>| -> Vec<(String, Vec<String>)> {
         shell.read_with(&cx, |shell, _| {
             shell
                 .radial_slots(target.as_ref())
                 .iter()
-                .map(|slot| slot.id.to_string())
+                .map(|slot| {
+                    (
+                        slot.id.to_string(),
+                        slot.children
+                            .iter()
+                            .map(|child| child.id.to_string())
+                            .collect(),
+                    )
+                })
                 .collect()
         })
     };
-    let has = |ids: &[String], id: &str| ids.iter().any(|slot| slot == id);
+    let has = |ids: &[(String, Vec<String>)], id: &str| {
+        ids.iter()
+            .any(|(root, children)| root == id || children.iter().any(|child| child == id))
+    };
+    let roots = |ids: &[(String, Vec<String>)]| -> Vec<String> {
+        ids.iter().map(|(root, _)| root.clone()).collect()
+    };
 
     // A body target: the object verbs and the body-only probe; no face/edge wedges.
     let body = ids(Some(SelectionRef::whole(0)));
@@ -530,7 +546,7 @@ for _id, _command in (
     assert!(!has(&body, "Test_FaceProbe"), "no face verb on a body: {body:?}");
     assert!(!has(&body, "Test_EdgeProbe"), "no edge verb on a body: {body:?}");
     assert_eq!(
-        body.last().map(String::as_str),
+        roots(&body).last().map(String::as_str),
         Some("App_Delete"),
         "the built-in Delete is the final destructive slot: {body:?}"
     );
@@ -545,8 +561,11 @@ for _id, _command in (
     assert!(!has(&face, "Test_BodyProbe"), "no body verb on a face: {face:?}");
     assert!(!has(&face, "Test_EdgeProbe"), "no edge verb on a face: {face:?}");
     assert!(!has(&face, "App_Move"), "Move is a body verb: {face:?}");
-    assert!(has(&face, "App_SetWorkplane"), "Set WP is a face wedge: {face:?}");
-    assert_eq!(face.last().map(String::as_str), Some("App_Delete"));
+    assert!(
+        has(&face, "App_SetWorkplane"),
+        "Set WP is a face verb, in its own category: {face:?}"
+    );
+    assert_eq!(roots(&face).last().map(String::as_str), Some("App_Delete"));
 
     // An edge target: the edge verb, the any-context Save WP is face/body only, Delete
     // last.
@@ -555,18 +574,160 @@ for _id, _command in (
     assert!(!has(&edge, "Test_FaceProbe"), "no face verb on an edge: {edge:?}");
     assert!(!has(&edge, "Test_BodyProbe"), "no body verb on an edge: {edge:?}");
     assert!(!has(&edge, "App_SetWorkplane"), "Set WP is a face verb: {edge:?}");
-    assert_eq!(edge.last().map(String::as_str), Some("App_Delete"));
+    assert_eq!(roots(&edge).last().map(String::as_str), Some("App_Delete"));
 
     // The additive edge probe sorts after the structural ones, before Delete.
-    let edge_probe = edge.iter().position(|id| id == "Test_EdgeProbe").unwrap();
-    let structural = edge
+    let edge_roots = roots(&edge);
+    let edge_probe = edge_roots
+        .iter()
+        .position(|id| id == "Test_EdgeProbe")
+        .unwrap();
+    let structural = edge_roots
         .iter()
         .take_while(|id| *id != "Test_EdgeProbe")
         .count();
     assert_eq!(edge_probe, structural, "tone order is structural → additive");
+    assert!(
+        edge_roots.len() <= ferrocad_widgets::wheel::MAX_WEDGES,
+        "a ring is never more than eight wedges: {edge_roots:?}"
+    );
 
     let cleanup = crate::python::evaluate(
         "import FreeCADGui\nfor _id in ('Test_BodyProbe', 'Test_FaceProbe', 'Test_EdgeProbe', 'Test_DeleteProbe'):\n    FreeCADGui.removeCommand(_id)",
     );
     assert!(cleanup.expect("remove the probes").ok);
+}
+
+/// The ring is **hierarchical**: verbs that declare the same `FerroCAD_WheelGroup` share
+/// one wedge, and the group's children are the verbs. That is the fix for the
+/// twenty-wedge circle: the ring stays a ring however many verbs a workbench registers.
+#[gpui::test]
+fn grouped_verbs_share_one_wedge(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let script = r#"
+import FreeCADGui
+def _probe(name, group, tone):
+    class _Probe:
+        def GetResources(self):
+            return {
+                "MenuText": name,
+                "FerroCAD_Surface": "radial",
+                "FerroCAD_Target": "body",
+                "FerroCAD_Tone": tone,
+                "FerroCAD_WheelGroup": group,
+            }
+        def IsActive(self):
+            return True
+        def Activated(self):
+            return {"status": name}
+    return _Probe()
+
+for _id, _command in (
+    ("Test_UnionProbe", _probe("Union probe", "Booleans", "additive")),
+    ("Test_CutProbe", _probe("Cut probe", "Booleans", "additive")),
+    ("Test_SoloProbe", _probe("Solo probe", "Workplane", "structural")),
+):
+    if _id not in FreeCADGui.listCommands():
+        FreeCADGui.addCommand(_id, _command)
+"#;
+    let registered = crate::python::evaluate(script).expect("register the probes");
+    assert!(registered.ok, "{}", registered.output);
+
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.refresh_commands(cx));
+    });
+    draw(&mut cx);
+
+    let rings = shell.read_with(&cx, |shell, _| {
+        shell
+            .radial_slots(Some(&ferrocad_geom::SelectionRef::whole(0)))
+            .iter()
+            .map(|slot| {
+                (
+                    slot.id.to_string(),
+                    slot.children
+                        .iter()
+                        .map(|child| child.id.to_string())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+    let roots: Vec<&str> = rings.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(
+        roots.contains(&"group:Booleans"),
+        "the two booleans are one wedge: {roots:?}"
+    );
+    assert!(
+        !roots.contains(&"Test_UnionProbe") && !roots.contains(&"Test_CutProbe"),
+        "a grouped verb is not a root wedge: {roots:?}"
+    );
+    let booleans = rings
+        .iter()
+        .find(|(id, _)| id == "group:Booleans")
+        .expect("the group");
+    assert_eq!(
+        booleans.1,
+        vec!["Test_UnionProbe".to_string(), "Test_CutProbe".to_string()],
+        "the children are the verbs, in registry order"
+    );
+    // A group with one verb is not a category: it collapses into that verb.
+    assert!(
+        roots.contains(&"Test_SoloProbe"),
+        "a one-verb group is its verb: {roots:?}"
+    );
+    assert!(!roots.contains(&"group:Workplane"), "{roots:?}");
+    // The ring is a ring: it never grows past the widget's eight readable labels.
+    assert!(
+        roots.len() <= ferrocad_widgets::wheel::MAX_WEDGES,
+        "the root ring is {} wedges: {roots:?}",
+        roots.len()
+    );
+    assert_eq!(
+        roots.last().copied(),
+        Some("App_Delete"),
+        "Delete keeps the last destructive slot: {roots:?}"
+    );
+
+    let cleanup = crate::python::evaluate(
+        "import FreeCADGui\nfor _id in ('Test_UnionProbe', 'Test_CutProbe', 'Test_SoloProbe'):\n    FreeCADGui.removeCommand(_id)",
+    );
+    assert!(cleanup.expect("remove the probes").ok);
+}
+
+/// `Backspace` at the root is the dismiss (the climb-out itself is the widget's own,
+/// covered by `a_category_wedge_opens_its_ring_and_the_deadzone_climbs_back`).
+#[gpui::test]
+fn backspace_dismisses_the_root_ring(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    draw(&mut cx);
+
+    let wheel = shell.read_with(&cx, |shell, _| shell.wheel.clone());
+    let anchor = point(px(400.), px(300.));
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.open_radial(anchor, cx));
+    });
+    draw(&mut cx);
+    assert!(wheel.read_with(&cx, |wheel, _| wheel.is_open()));
+    assert!(cx.debug_bounds("radial-wheel").is_some());
+
+    let root = cx.update(|_window, cx| shell.read(cx).root_focus_handle());
+    cx.update(|window, cx| window.focus(&root, cx));
+    cx.simulate_keystrokes("backspace");
+    draw(&mut cx);
+    assert!(
+        !wheel.read_with(&cx, |wheel, _| wheel.is_open()),
+        "Backspace at the root is the dismiss"
+    );
 }

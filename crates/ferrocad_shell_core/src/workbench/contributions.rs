@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use ferrocad_geom::SelectionRef;
+use ferrocad_stage::DressUpKind;
 use ferrocad_stage::{GizmoKind, Manipulator, Stage, Tool, TransformGizmo};
 use ferrocad_types::Vector3;
 
@@ -95,15 +96,28 @@ pub fn body_corner(entity: u32, stage: &Stage) -> Option<Vector3> {
 /// `Contributions::default().with_manipulator(ferrocad_part_gui::fillet_manipulator)`.
 pub trait ManipulatorFactory: Send + Sync {
     /// The manipulator this workbench arms for `selection`, if it has one.
-    fn create(&self, selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>>;
+    ///
+    /// `dress_up` is the loadout's Slot 3 mode: it decides whether an edge scrubber
+    /// writes a fillet or a chamfer. A factory that has no dress-up clears it.
+    fn create(
+        &self,
+        selection: &SelectionRef,
+        stage: &Stage,
+        dress_up: DressUpKind,
+    ) -> Option<Box<dyn Manipulator>>;
 }
 
 impl<F> ManipulatorFactory for F
 where
-    F: Fn(&SelectionRef, &Stage) -> Option<Box<dyn Manipulator>> + Send + Sync,
+    F: Fn(&SelectionRef, &Stage, DressUpKind) -> Option<Box<dyn Manipulator>> + Send + Sync,
 {
-    fn create(&self, selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
-        self(selection, stage)
+    fn create(
+        &self,
+        selection: &SelectionRef,
+        stage: &Stage,
+        dress_up: DressUpKind,
+    ) -> Option<Box<dyn Manipulator>> {
+        self(selection, stage, dress_up)
     }
 }
 
@@ -251,15 +265,19 @@ impl Contributions {
     }
 
     /// The manipulator for `selection`: the last registered factory that claims it wins.
+    ///
+    /// `dress_up` is Slot 3's mode: the edge scrubber a factory builds is a fillet or a
+    /// chamfer because the slot said so, not because the factory guessed.
     pub fn manipulator_for(
         &self,
         selection: &SelectionRef,
         stage: &Stage,
+        dress_up: DressUpKind,
     ) -> Option<Box<dyn Manipulator>> {
         self.factories
             .iter()
             .rev()
-            .find_map(|factory| factory.create(selection, stage))
+            .find_map(|factory| factory.create(selection, stage, dress_up))
     }
 
     /// The transform gizmos for `selection`, in **hit-priority order**.
@@ -415,45 +433,83 @@ mod tests {
         assert!(contributions.is_empty());
         assert!(
             contributions
-                .manipulator_for(&SelectionRef::element(1, "Edge1"), &stage())
+                .manipulator_for(
+                    &SelectionRef::element(1, "Edge1"),
+                    &stage(),
+                    DressUpKind::Fillet
+                )
                 .is_none()
         );
     }
 
     #[test]
     fn a_registered_factory_claims_its_edges() {
-        let contributions =
-            Contributions::new().with_manipulator(|selection: &SelectionRef, _stage: &Stage| {
+        let contributions = Contributions::new().with_manipulator(
+            |selection: &SelectionRef, _stage: &Stage, _dress_up: DressUpKind| {
                 selection
                     .elements
                     .first()
                     .filter(|element| element.starts_with("Edge"))
                     .map(|_| Box::new(Stub) as Box<dyn Manipulator>)
-            });
+            },
+        );
         assert!(!contributions.is_empty());
         assert!(
             contributions
-                .manipulator_for(&SelectionRef::element(1, "Edge1"), &stage())
+                .manipulator_for(
+                    &SelectionRef::element(1, "Edge1"),
+                    &stage(),
+                    DressUpKind::Fillet
+                )
                 .is_some()
         );
         assert!(
             contributions
-                .manipulator_for(&SelectionRef::element(1, "Face1"), &stage())
+                .manipulator_for(
+                    &SelectionRef::element(1, "Face1"),
+                    &stage(),
+                    DressUpKind::Fillet
+                )
                 .is_none()
+        );
+    }
+
+    /// Slot 3's mode reaches the factory: an edition that builds a different handle for a
+    /// chamfer gets told which one the bar is showing.
+    #[test]
+    fn the_dress_up_mode_reaches_the_factory() {
+        let contributions = Contributions::new().with_manipulator(
+            |_: &SelectionRef, _: &Stage, dress_up: DressUpKind| {
+                (dress_up == DressUpKind::Chamfer)
+                    .then(|| Box::new(Stub) as Box<dyn Manipulator>)
+            },
+        );
+        let edge = SelectionRef::element(1, "Edge1");
+        assert!(
+            contributions
+                .manipulator_for(&edge, &stage(), DressUpKind::Fillet)
+                .is_none(),
+            "the factory is told Fillet"
+        );
+        assert!(
+            contributions
+                .manipulator_for(&edge, &stage(), DressUpKind::Chamfer)
+                .is_some(),
+            "and told Chamfer"
         );
     }
 
     #[test]
     fn the_last_registered_factory_wins() {
         let contributions = Contributions::new()
-            .with_manipulator(|_: &SelectionRef, _: &Stage| {
+            .with_manipulator(|_: &SelectionRef, _: &Stage, _: DressUpKind| {
                 Some(Box::new(Stub) as Box<dyn Manipulator>)
             })
-            .with_manipulator(|_: &SelectionRef, _: &Stage| None);
+            .with_manipulator(|_: &SelectionRef, _: &Stage, _: DressUpKind| None);
         // The later factory declines, so the earlier one still gets its turn.
         assert!(
             contributions
-                .manipulator_for(&SelectionRef::whole(1), &stage())
+                .manipulator_for(&SelectionRef::whole(1), &stage(), DressUpKind::Fillet)
                 .is_some()
         );
     }

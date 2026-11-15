@@ -280,6 +280,9 @@ class _DrawCommand:
     TARGET = ""
     #: `structural`, `additive` or `destructive` (the wheel's tone order).
     TONE = ""
+    #: The wheel category this wedge is a child of (`Surface`, `Edge`, …). A group is
+    #: one wedge that opens its verbs, so a ring stays six to eight readable labels.
+    WHEEL_GROUP = ""
 
     def GetResources(self):
         resources = {
@@ -295,6 +298,8 @@ class _DrawCommand:
             resources["FerroCAD_Target"] = self.TARGET
         if self.TONE:
             resources["FerroCAD_Tone"] = self.TONE
+        if self.WHEEL_GROUP:
+            resources["FerroCAD_WheelGroup"] = self.WHEEL_GROUP
         return resources
 
     def IsActive(self):
@@ -697,6 +702,7 @@ class _ElementCommand(_DrawCommand):
     CATEGORY = ""
     TARGET = "edge,face"
     TONE = "structural"
+    WHEEL_GROUP = "Surface"
 
     def Activated(self, iMsg=0):
         return _arm(self.VERB)
@@ -725,6 +731,7 @@ class _RotateElementCommand(_ElementCommand):
     MENU = "Rotate edge"
     TIP = "Pick a drawing's arc, then drag (or type) the angle"
     TARGET = "edge"
+    WHEEL_GROUP = "Edge"
 
 
 for _name, _command in (
@@ -1024,6 +1031,20 @@ _PALETTE_VERBS = {"Slice", "Cleanup", "Heal"}
 #: tools, so they are reached the same way `Rectangle` is — from `⊕ <tool> ▾`.
 _CREATION_VERBS = {"Loft": "Surface", "Sweep": "Surface"}
 
+#: Verb -> the wheel category it opens under (`FerroCAD_WheelGroup`). A group is one
+#: wedge that opens its verbs, so a face's ring stays `Surface ▸`, `Edge ▸`, workplane
+#: and Delete however many selection verbs the package grows.
+_VERB_GROUP = {
+    "Shell": "Surface",
+    "Draft": "Surface",
+    "FillHole": "Surface",
+    "Unwrap": "Surface",
+    "RemoveRounds": "Edge",
+    "Subdivide": "Modify",
+    "Union": "Booleans",
+    "Intersect": "Booleans",
+}
+
 #: Verb -> the topology it needs before the chrome offers it (`FerroCAD_Gate`). The
 #: pill's rows and the wheel read this, so an impossible verb is greyed with its
 #: requirement rather than silently doing nothing.
@@ -1085,6 +1106,9 @@ class _VerbCommand:
             target, tone = _VERB_WHEEL.get(self.verb, ("body", "structural"))
             resources["FerroCAD_Target"] = target
             resources["FerroCAD_Tone"] = tone
+            group = _VERB_GROUP.get(self.verb)
+            if group:
+                resources["FerroCAD_WheelGroup"] = group
         gate = _VERB_GATE.get(self.verb)
         if gate:
             resources["FerroCAD_Gate"] = gate

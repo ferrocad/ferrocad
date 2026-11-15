@@ -132,19 +132,22 @@ impl Slot {
     ///
     /// Slot 1 hosts both the translate arrows and the rotate rings, so it names the
     /// handle set the user will actually get (`1 Rotate` after the wheel's Rotate verb).
-    /// The other slots are one verb each and ignore `mode`.
-    pub(crate) fn label_for(self, mode: GizmoMode) -> &'static str {
+    /// Slot 3 hosts both dress-ups for the same reason: `3 Fillet` or `3 Chamfer`,
+    /// whichever the last press selected. The other slots are one verb each and ignore
+    /// `mode` and `dress_up`.
+    pub(crate) fn label_for(self, mode: GizmoMode, dress_up: DressUpKind) -> &'static str {
         match (self, mode) {
             (Self::Move, GizmoMode::Rotate) => "Rotate",
+            (Self::Fillet, _) => dress_up.label(),
             _ => self.label(),
         }
     }
 
     /// The status-line spelling: Inspect is `inspect` in lower case.
-    pub(crate) fn status_label(self, mode: GizmoMode) -> &'static str {
+    pub(crate) fn status_label(self, mode: GizmoMode, dress_up: DressUpKind) -> &'static str {
         match self {
             Self::Inspect => "inspect",
-            _ => self.label_for(mode),
+            _ => self.label_for(mode, dress_up),
         }
     }
 
@@ -176,15 +179,20 @@ impl Slot {
     pub(crate) const ALL: [Self; 4] = [Self::Move, Self::PushPull, Self::Fillet, Self::Inspect];
 }
 
-/// The one loadout store: the active slot and the topology filter.
+/// The one loadout store: the active slot, the topology filter, and Slot 3's dress-up.
 ///
 /// The slot is a preset for the filter, not a second copy of it: equipping a slot
 /// (re)sets the filter to that slot's default, and the header's `Select ▾` overrides
 /// the filter alone. The bar and the header therefore cannot disagree.
+///
+/// `dress_up` is the same idea for Slot 3: the slot is *where the dress-up lives*, and
+/// the mode is which dress-up it currently is. Pressing `3` again toggles it, so the
+/// fillet and the chamfer never become two competing buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Loadout {
     slot: Slot,
     filter: SelectFilter,
+    dress_up: DressUpKind,
 }
 
 impl Default for Loadout {
@@ -193,6 +201,7 @@ impl Default for Loadout {
         Self {
             slot,
             filter: slot.default_filter(),
+            dress_up: DressUpKind::default(),
         }
     }
 }
@@ -206,10 +215,20 @@ impl Loadout {
         self.filter
     }
 
+    /// Which dress-up Slot 3 arms (`Fillet` unless the user toggled it).
+    pub(crate) fn dress_up(self) -> DressUpKind {
+        self.dress_up
+    }
+
     /// Equip `slot`, resetting the filter to its default.
     pub(crate) fn set_slot(&mut self, slot: Slot) {
         self.slot = slot;
         self.filter = slot.default_filter();
+    }
+
+    /// Change Slot 3's dress-up without touching the slot or the filter.
+    pub(crate) fn set_dress_up(&mut self, dress_up: DressUpKind) {
+        self.dress_up = dress_up;
     }
 
     /// Override the topology filter without changing the slot.
@@ -249,7 +268,10 @@ impl Shell {
         self.loadout.set_slot(slot);
         self.sync_pick_scope(cx);
         self.rearm_selection(cx);
-        let status = format!("tool: {}", slot.status_label(self.gizmo_mode));
+        let status = format!(
+            "tool: {}",
+            slot.status_label(self.gizmo_mode, self.loadout.dress_up())
+        );
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
         cx.notify();
@@ -258,9 +280,11 @@ impl Shell {
     /// The user's activation of a loadout slot (`0`–`3` or the bottom-left bar).
     ///
     /// Slot 1 hosts **both** hands, so pressing its key while it is equipped toggles
-    /// **Move ⇄ Rotate**. Inspect is its own slot (`0`): it keeps the
-    /// selection, but drops the handles and the numeric surface. A switch to another
-    /// slot, and the first press from one, go through
+    /// **Move ⇄ Rotate**. Slot 3 hosts **both** dress-ups for the same reason: pressing
+    /// `3` while it is equipped toggles **Fillet ⇄ Chamfer**, and the bar's label, icon
+    /// and the scrubber the factory builds all follow. Inspect is its own slot (`0`): it
+    /// keeps the selection, but drops the handles and the numeric surface. A switch to
+    /// another slot, and the first press from one, go through
     /// [`set_loadout_slot`](Self::set_loadout_slot).
     ///
     /// A pending move or rotation blocks all of it: the context gate refuses the
@@ -286,9 +310,26 @@ impl Shell {
             cx.notify();
             return;
         }
+        if slot == Slot::Fillet && self.loadout.slot() == slot {
+            // The slot stays put; the dress-up it arms changes. Re-arming rebuilds the
+            // scrubber through the factory, so the handle on screen is the one the
+            // label names — a fillet's one radius or a chamfer's two distances.
+            let dress_up = self.loadout.dress_up().toggled();
+            self.loadout.set_dress_up(dress_up);
+            self.rearm_selection(cx);
+            let status = format!(
+                "tool: {}",
+                Slot::Fillet.status_label(self.gizmo_mode, dress_up)
+            );
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
         // Entering Slot 1 from another hand always starts at the arrows: Rotate is a
         // sub-mode of Move, not a property of the pill. The same-slot branch above is
-        // the only path that arms the rings.
+        // the only path that arms the rings. Slot 3 likewise always enters as the
+        // dress-up it was left on: switching away and back is not a toggle.
         if slot == Slot::Move {
             self.set_gizmo_mode("translate", cx);
         }

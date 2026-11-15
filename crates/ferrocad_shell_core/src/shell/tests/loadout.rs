@@ -8,16 +8,26 @@
 use super::*;
 
 /// Slot 1 hosts both handle sets, so its bar label names the one the user will get.
+/// Slot 3 hosts both dress-ups, so its label names the one it currently arms.
 #[test]
 fn slot_labels_name_the_hand_they_equip() {
-    assert_eq!(Slot::Move.label_for(GizmoMode::Translate), "Move");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate), "Rotate");
-    assert_eq!(Slot::Move.label_for(GizmoMode::Universal), "Move");
-    assert_eq!(Slot::PushPull.label_for(GizmoMode::Rotate), "Push/Pull");
-    assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate), "Fillet");
-    assert_eq!(Slot::Inspect.label_for(GizmoMode::Rotate), "Inspect");
+    let fillet = DressUpKind::Fillet;
+    assert_eq!(Slot::Move.label_for(GizmoMode::Translate, fillet), "Move");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Rotate, fillet), "Rotate");
+    assert_eq!(Slot::Move.label_for(GizmoMode::Universal, fillet), "Move");
     assert_eq!(
-        Slot::Inspect.status_label(GizmoMode::Rotate),
+        Slot::PushPull.label_for(GizmoMode::Rotate, fillet),
+        "Push/Pull"
+    );
+    assert_eq!(Slot::Fillet.label_for(GizmoMode::Rotate, fillet), "Fillet");
+    assert_eq!(
+        Slot::Fillet.label_for(GizmoMode::Rotate, DressUpKind::Chamfer),
+        "Chamfer",
+        "Slot 3 names the dress-up it arms"
+    );
+    assert_eq!(Slot::Inspect.label_for(GizmoMode::Rotate, fillet), "Inspect");
+    assert_eq!(
+        Slot::Inspect.status_label(GizmoMode::Rotate, fillet),
         "inspect",
         "the status line uses the lower-case inspect"
     );
@@ -159,6 +169,67 @@ fn the_wheel_verbs_equip_the_move_slot(cx: &mut TestAppContext) {
         "Move equips the body hand and its arrows"
     );
     cx.update(|_window, cx| shell.update(cx, |shell, cx| shell.cancel_dialog(cx)));
+}
+
+/// Slot 3 hosts **both** dress-ups: the first press equips the fillet, a second press on
+/// an equipped Slot 3 toggles it to the chamfer and back. The filter and the rest of the
+/// bar are untouched, and the label, the status line and the glyph follow.
+#[gpui::test]
+fn slot_three_toggles_between_fillet_and_chamfer(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut cx, shell, _model) = armed_window(cx);
+    draw(&mut cx);
+
+    // Entering Slot 3 from another hand equips the fillet: a switch away and back is not
+    // a toggle, it is the dress-up the slot was left on.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::Fillet, cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| (shell.loadout.slot(), shell.loadout.dress_up())),
+        (Slot::Fillet, DressUpKind::Fillet)
+    );
+    draw(&mut cx);
+    assert!(cx.debug_bounds("loadout-3").is_some());
+
+    // `3` again is the toggle.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::Fillet, cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.dress_up()),
+        DressUpKind::Chamfer,
+        "the second press is the chamfer"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.slot()),
+        Slot::Fillet,
+        "the slot never moves"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.filter()),
+        SelectFilter::Edge,
+        "and neither does the filter"
+    );
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.model.lock().unwrap().status.clone())
+            .contains("Chamfer"),
+        "the status line names the dress-up"
+    );
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("loadout-3-icon").is_some(),
+        "the pill swaps its glyph"
+    );
+
+    // And back, so a repeated press is a cycle rather than a one-way switch.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::Fillet, cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.dress_up()),
+        DressUpKind::Fillet
+    );
 }
 
 /// The bar is the discoverable, clickable view of the same store: one pill per slot,

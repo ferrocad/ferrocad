@@ -32,6 +32,38 @@ fn target_kind(target: Option<&ferrocad_geom::SelectionRef>) -> Option<crate::co
     })
 }
 
+/// Order one ring: structural, additive, destructive, with the built-in `Delete` last.
+///
+/// A stable sort, so verbs inside a tone keep the registry's order. The result is that
+/// `Move` is north and `Delete` south in every context and at every depth, and "flick
+/// down to delete" never moves as the ring's contents change.
+fn sort_wheel_slots(slots: &mut [WheelSlot]) {
+    slots.sort_by_key(|slot| {
+        let tone = match slot.tone {
+            WheelTone::Structural => 0,
+            WheelTone::Additive => 1,
+            WheelTone::Destructive => 2,
+        };
+        let delete = usize::from(slot.id.as_ref() == DELETE_ID);
+        (tone, delete)
+    });
+}
+
+/// The glyph a category wedge carries: the family of verbs inside it.
+///
+/// A category's label already says which verbs it holds; the glyph says it at a glance
+/// and, with the painted `▸`, keeps a category from reading like a verb in the ring.
+fn wheel_group_icon(group: &str) -> &'static str {
+    match group.to_ascii_lowercase().as_str() {
+        "workplane" => "axes-3d",
+        "booleans" => "merge",
+        "surface" => "make-face",
+        "edge" => "corner-radius",
+        "modify" => "resize-handle",
+        _ => "",
+    }
+}
+
 impl Shell {
     /// Re-read the document's shapes into the viewport's stage.
     ///
@@ -386,9 +418,15 @@ impl Shell {
     /// `target` is the wheel's context target (the object under the pointer), or `None`
     /// when the pointer is over empty space. The wheel is a **context** menu, not a
     /// toolbar: a verb declares the kinds it applies to (`FerroCAD_Target`), so a face
-    /// offers shell/draft/heal and an edge offers chamfer/offset/rotate, and the ring
-    /// stays a ring instead of becoming a twenty-wedge circle. `Delete` keeps the last
-    /// destructive slot in every context.
+    /// offers shell/draft/heal and an edge offers offset/rotate, and `Delete` keeps the
+    /// last destructive slot in every context.
+    ///
+    /// The ring is also **hierarchical**: a verb may declare a wheel group
+    /// (`FerroCAD_WheelGroup`), and the group is one wedge that opens its verbs. That is
+    /// what keeps the root six to eight readable labels however many verbs a workbench
+    /// registers — a flat ring of them is the twenty-wedge circle this replaced. A group
+    /// with one offered verb collapses into that verb (a category of one is not a
+    /// category), and a group with no offered verb is omitted entirely.
     ///
     /// A target **outside** the current selection is not selected yet (opening a menu is
     /// not a mutation), so the registry's selection-dependent `IsActive` cannot be the
@@ -410,8 +448,11 @@ impl Shell {
             icon: command_icons::resolve(command).unwrap_or_default().into(),
             tone,
             enabled: command.enabled || pending,
+            children: Vec::new(),
         };
-        let mut slots: Vec<WheelSlot> = model
+        let mut roots: Vec<WheelSlot> = Vec::new();
+        let mut grouped: Vec<(String, Vec<WheelSlot>)> = Vec::new();
+        for command in model
             .commands
             .iter()
             .filter(|command| !command.dev_only)
@@ -420,16 +461,55 @@ impl Shell {
                     || commands::Surface::parse(&command.surface) == Some(commands::Surface::Radial)
             })
             .filter(|command| kind.is_none_or(|kind| command.applies_to(kind)))
-            .map(|command| {
-                let tone = match command.tone.as_str() {
-                    "additive" => WheelTone::Additive,
-                    "destructive" => WheelTone::Destructive,
-                    _ => WheelTone::Structural,
-                };
-                slot(command, tone)
-            })
-            .collect();
-        if !slots.iter().any(|slot| slot.enabled) {
+        {
+            let tone = match command.tone.as_str() {
+                "additive" => WheelTone::Additive,
+                "destructive" => WheelTone::Destructive,
+                _ => WheelTone::Structural,
+            };
+            let wedge = slot(command, tone);
+            match command.wheel_group() {
+                Some(group) => match grouped
+                    .iter_mut()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(group))
+                {
+                    Some((_, children)) => children.push(wedge),
+                    None => grouped.push((group.to_string(), vec![wedge])),
+                },
+                None => roots.push(wedge),
+            }
+        }
+        for (group, children) in grouped {
+            // A disabled verb is not offered at all: the wheel is a choice, not a greyed
+            // spec sheet. (The pill's flyout is where a gate explains itself.)
+            let mut children: Vec<WheelSlot> =
+                children.into_iter().filter(|child| child.enabled).collect();
+            sort_wheel_slots(&mut children);
+            match children.len() {
+                0 => {}
+                1 => roots.push(children.remove(0)),
+                _ => {
+                    let tone = children
+                        .iter()
+                        .map(|child| child.tone)
+                        .max_by_key(|tone| match tone {
+                            WheelTone::Structural => 0,
+                            WheelTone::Additive => 1,
+                            WheelTone::Destructive => 2,
+                        })
+                        .unwrap_or(WheelTone::Structural);
+                    roots.push(WheelSlot {
+                        id: format!("group:{group}").into(),
+                        label: group.as_str().into(),
+                        icon: wheel_group_icon(&group).into(),
+                        tone,
+                        enabled: true,
+                        children,
+                    });
+                }
+            }
+        }
+        if !roots.iter().any(|slot| slot.enabled) {
             // Context: nothing to manipulate. The same gesture still deserves a wheel,
             // so offer the **creation** tools — the pill's own content — which is the
             // "Add hand" context. With a selection, the object verbs above win.
@@ -438,7 +518,7 @@ impl Shell {
             } else {
                 groups.creation
             };
-            slots = creation
+            roots = creation
                 .iter()
                 .filter(|command| !command.dev_only)
                 .map(|command| slot(command, WheelTone::Structural))
@@ -447,16 +527,10 @@ impl Shell {
         // Stable sort: structural, additive, destructive, with the built-in delete last
         // inside the destructive group. That puts Move north and Delete south in every
         // context, so "flick down to delete" never moves as the ring's contents change.
-        slots.sort_by_key(|slot| {
-            let tone = match slot.tone {
-                WheelTone::Structural => 0,
-                WheelTone::Additive => 1,
-                WheelTone::Destructive => 2,
-            };
-            let delete = usize::from(slot.id.as_ref() == DELETE_ID);
-            (tone, delete)
-        });
-        slots
+        // The widget clamps a ring to `MAX_WEDGES`, and a test asserts the built-in set
+        // stays inside it; this is the ordering, not the cap.
+        sort_wheel_slots(&mut roots);
+        roots
     }
 
     /// Resolve the object under a **window-space** pointer position without changing
@@ -556,6 +630,17 @@ impl Shell {
         wheel.update(cx, |wheel, cx| wheel.close(cx))
     }
 
+    /// Whether the radial menu is open.
+    pub(in crate::shell) fn wheel_open(&self, cx: &Context<Self>) -> bool {
+        self.wheel.read(cx).is_open()
+    }
+
+    /// `Backspace` over an open wheel: climb out of a category, or close at the root.
+    pub(in crate::shell) fn back_radial(&mut self, cx: &mut Context<Self>) {
+        let wheel = self.wheel.clone();
+        let _ = wheel.update(cx, |wheel, cx| wheel.back(cx));
+    }
+
     /// Forward a pointer move to the sidecar (it owns the hover).
     pub(in crate::shell) fn hover_radial(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let wheel = self.wheel.clone();
@@ -638,8 +723,9 @@ impl Shell {
             let stage = viewport.read(cx).stage().clone();
             if !self.contributions.is_empty() {
                 if slot.wants_manipulator()
-                    && let Some(manipulator) =
-                        self.contributions.manipulator_for(&reference, &stage)
+                    && let Some(manipulator) = self
+                        .contributions
+                        .manipulator_for(&reference, &stage, self.loadout.dress_up())
                 {
                     manipulators.push(manipulator);
                 }

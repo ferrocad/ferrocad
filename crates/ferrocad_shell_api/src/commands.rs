@@ -144,6 +144,13 @@ pub struct CommandInfo {
     /// whether it can *run*.
     #[serde(default)]
     pub gate: String,
+    /// `GetResources()["FerroCAD_WheelGroup"]` — the wheel category a radial verb is a
+    /// **child** of (`"Surface"`, `"Booleans"`, `"Edge"`, `"Workplane"`).
+    ///
+    /// The root ring stays six to eight wedges because a group is one wedge: the verbs
+    /// materialise only once the group is opened. Empty means the verb is a root wedge.
+    #[serde(default)]
+    pub wheel_group: String,
     /// `GetResources()["FerroCAD_Parent"]` — the surface's primary command id, for a
     /// command offered in that control's popover (P0.6 extension).
     #[serde(default)]
@@ -234,6 +241,12 @@ impl CommandInfo {
     /// The parsed gate, when the command declares one.
     pub fn topology_gate(&self) -> Option<TopologyGate> {
         TopologyGate::parse(&self.gate)
+    }
+
+    /// The wheel group this verb belongs to, when it is a child rather than a root wedge.
+    pub fn wheel_group(&self) -> Option<&str> {
+        let group = self.wheel_group.trim();
+        (!group.is_empty()).then_some(group)
     }
 }
 

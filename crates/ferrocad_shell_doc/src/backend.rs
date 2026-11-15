@@ -2234,6 +2234,7 @@ fn row(id: &str, menu: &str, surface: &str) -> CommandInfo {
         category: String::new(),
         target: String::new(),
         gate: String::new(),
+        wheel_group: String::new(),
         parent: String::new(),
         wheel: false,
         enabled: true,

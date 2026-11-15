@@ -91,6 +91,15 @@ fn category(registry: &serde_json::Map<String, Value>, id: &str) -> String {
         .to_string()
 }
 
+fn wheel_group(registry: &serde_json::Map<String, Value>, id: &str) -> String {
+    registry
+        .get(id)
+        .unwrap_or_else(|| panic!("{id} is registered"))["wheel_group"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Every id whose surface is exactly `wanted`.
 fn with_surface(registry: &serde_json::Map<String, Value>, wanted: &str) -> Vec<String> {
     let mut ids: Vec<String> = registry
@@ -227,7 +236,6 @@ fn the_shape_verbs_are_wheel_wedges_with_a_context_target() {
         "SimpleCAD_Elongate",
         "SimpleCAD_RotateEdge",
         "SimpleCAD_RemoveRounds",
-        "Part_Chamfer",
     ] {
         assert_eq!(surface(&registry, id), "radial", "{id}");
         assert!(target(&registry, id).contains("edge"), "{id}: {}", target(&registry, id));
@@ -251,11 +259,51 @@ fn the_utilities_are_search_only() {
     for id in [
         "Sketch_Dimension",
         "Part_Compound",
+        // Slot 3 owns the dress-up: `3 Fillet` toggles to `3 Chamfer`, so the chamfer is
+        // a Search/replay spelling of the same edit rather than a second wedge.
+        "Part_Chamfer",
         "SimpleCAD_Slice",
         "SimpleCAD_Cleanup",
         "SimpleCAD_Heal",
     ] {
         assert_eq!(surface(&registry, id), "palette", "{id}");
+    }
+}
+
+/// The wheel is **hierarchical**: a verb declares the category it is a child of, and
+/// the category is one wedge. That is what keeps a face's ring four or five labels
+/// instead of twenty. The root wedges are the direct verbs, and `Delete` is one of them.
+#[test]
+fn the_wheel_verbs_declare_their_category() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    let registry = registry();
+
+    for (id, group) in [
+        ("SimpleCAD_Shell", "Surface"),
+        ("SimpleCAD_Draft", "Surface"),
+        ("SimpleCAD_FillHole", "Surface"),
+        ("SimpleCAD_Unwrap", "Surface"),
+        ("SimpleCAD_Offset", "Surface"),
+        ("SimpleCAD_Elongate", "Surface"),
+        ("SimpleCAD_RotateEdge", "Edge"),
+        ("SimpleCAD_RemoveRounds", "Edge"),
+        ("SimpleCAD_Subdivide", "Modify"),
+        ("SimpleCAD_Union", "Booleans"),
+        ("SimpleCAD_Intersect", "Booleans"),
+        ("Part_Fuse", "Booleans"),
+        ("Part_Cut", "Booleans"),
+        ("Part_Common", "Booleans"),
+        ("Part_HealFaces", "Surface"),
+        ("App_SetWorkplane", "Workplane"),
+        ("App_SaveDatumPlane", "Workplane"),
+    ] {
+        assert_eq!(wheel_group(&registry, id), group, "{id}");
+    }
+    // The direct verbs stay root wedges: Move is north, Delete is the last destructive
+    // slot, and neither hides behind a category.
+    for id in ["App_Move", "App_Rotate", "App_Delete"] {
+        assert_eq!(wheel_group(&registry, id), "", "{id} is a root wedge");
     }
 }
 

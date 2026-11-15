@@ -78,6 +78,20 @@ pub struct WheelSlot {
     pub icon: SharedString,
     pub tone: WheelTone,
     pub enabled: bool,
+    /// The wedges this one opens, when it is a **category** rather than a verb.
+    ///
+    /// A ring is a marking menu, not a toolbar. Verbs that only make sense together
+    /// (`Booleans`, `Surface`, the workplane pair) are one wedge that opens a child
+    /// ring, so the root stays six to eight readable labels however many verbs are
+    /// registered. Empty means the wedge is a verb and committing it runs its id.
+    pub children: Vec<WheelSlot>,
+}
+
+impl WheelSlot {
+    /// Whether this wedge opens a child ring instead of running a command.
+    pub fn is_group(&self) -> bool {
+        !self.children.is_empty()
+    }
 }
 
 /// What is under a pointer position, relative to the wheel's centre.
@@ -135,12 +149,33 @@ pub fn slot_at(centre: Point<Pixels>, position: Point<Pixels>, count: usize) -> 
     WheelHit::Slot(index.min(count - 1))
 }
 
+/// The most wedges a single ring may hold.
+///
+/// A marking menu is a ring of labels, not a toolbar: past eight the labels have
+/// nowhere to go and overlap. The shell groups its verbs (`FerroCAD_WheelGroup`) so a
+/// ring stays inside this, and the widget clamps as a last resort — a ring this long
+/// is painted truncated rather than illegible.
+pub const MAX_WEDGES: usize = 8;
+
 /// A radial menu of `slots`, with `hovered` highlighted.
 ///
 /// The element is [`SIZE`] square and centred on its position; place it so its
 /// centre lands on the gesture anchor. The caller handles pointer events.
 pub fn wheel(key: &'static str, slots: &[WheelSlot], hovered: Option<usize>) -> impl IntoElement {
-    let slots = slots.to_vec();
+    wheel_ring(key, slots, hovered, None)
+}
+
+/// A ring, with the open category's name in the hollow centre.
+///
+/// `centre` is the name of the group being browsed (empty at the root): it is the one
+/// place the wheel can say "you are inside `Booleans`" without a second chrome layer.
+pub fn wheel_ring(
+    key: &'static str,
+    slots: &[WheelSlot],
+    hovered: Option<usize>,
+    centre: Option<SharedString>,
+) -> impl IntoElement {
+    let slots = slots[..slots.len().min(MAX_WEDGES)].to_vec();
     let paint_slots = slots.clone();
     let outer_key: &'static str = key;
     let mut root = div()
@@ -161,7 +196,7 @@ pub fn wheel(key: &'static str, slots: &[WheelSlot], hovered: Option<usize>) -> 
         .size_full(),
     );
 
-    let centre = px(SIZE / 2.0);
+    let centre_px = px(SIZE / 2.0);
     for (index, slot) in slots.iter().enumerate() {
         let offset = slot_offset(index, slots.len());
         let ink = if !slot.enabled {
@@ -190,8 +225,8 @@ pub fn wheel(key: &'static str, slots: &[WheelSlot], hovered: Option<usize>) -> 
                 move || format!("{key}-label-{id}")
             })
             .absolute()
-            .left(px(centre.0 + offset.x.0 - LABEL_HALF_WIDTH))
-            .top(px(centre.0 + offset.y.0 - half))
+            .left(px(centre_px.0 + offset.x.0 - LABEL_HALF_WIDTH))
+            .top(px(centre_px.0 + offset.y.0 - half))
             .w(px(LABEL_HALF_WIDTH * 2.0))
             .flex()
             .flex_col()
@@ -213,7 +248,38 @@ pub fn wheel(key: &'static str, slots: &[WheelSlot], hovered: Option<usize>) -> 
             }
         }
         chip = chip.child(slot.label.clone());
+        if slot.is_group() {
+            // The one glyph that says "this opens": a category's label would otherwise
+            // read exactly like a verb's.
+            chip = chip.child(
+                div()
+                    .debug_selector({
+                        let id = slot.id.clone();
+                        move || format!("{key}-group-{id}")
+                    })
+                    .text_color(rgb(MUTED))
+                    .child("▸"),
+            );
+        }
         root = root.child(chip);
+    }
+    if let Some(centre) = centre {
+        root = root.child(
+            div()
+                .absolute()
+                .left(px(0.0))
+                .top(px(centre_px.0 - LABEL_LINE / 2.0))
+                .w(px(SIZE))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .debug_selector(|| format!("{key}-centre"))
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(centre),
+                ),
+        );
     }
     root
 }
@@ -373,6 +439,12 @@ enum WheelMode {
 const TAP_MS: u64 = 200;
 /// A tap's maximum pointer travel, in logical px.
 const TAP_PX: f32 = 12.0;
+/// How long an **armed** pointer rests on a category wedge before it opens.
+///
+/// A flick is one continuous gesture: pushing past the rim opens the group at once,
+/// and dwelling on it opens it after this beat. Both reach the same place; the dwell
+/// is for a trackpad, where the pointer is already inside the wedge it wants.
+const DWELL_MS: u64 = 140;
 
 /// The radial menu's stateful sidecar.
 ///
@@ -381,18 +453,29 @@ const TAP_PX: f32 = 12.0;
 /// slots) and **what** a selected id means. The trigger itself stays with the host:
 /// it knows its canvas and its pointer.
 ///
+/// The ring is **hierarchical**: a wedge with children is a category, and committing
+/// it descends instead of running a command. A flick opens a group by pushing past the
+/// rim or by resting on it; a latched wheel opens it with a click. The deadzone and
+/// `Backspace` climb back out, `Esc` (or the host's close) ends the gesture anywhere.
+///
 /// ```text
 /// host: open_armed(anchor, slots) ──► Armed ──flick──► emit Selected(id), close
 ///                                       │
-///                                       └─tap──► Latched ──click──► Selected/Closed
+///                                       ├─tap──► Latched ──click──► Selected/Closed
+///                                       │                      │
+///                                       └─dwell/flick past rim─┴─► child ring
 /// ```
 pub struct WheelMenu {
-    slots: Vec<WheelSlot>,
+    roots: Vec<WheelSlot>,
+    /// The open category at each level; empty is the root ring.
+    path: Vec<usize>,
     anchor: Point<Pixels>,
     hovered: Option<usize>,
     mode: Option<WheelMode>,
     pressed_at: Option<Instant>,
     press_position: Point<Pixels>,
+    /// An armed dwell on a category: `(index, when it started)`.
+    dwell: Option<(usize, Instant)>,
 }
 
 impl EventEmitter<WheelEvent> for WheelMenu {}
@@ -402,12 +485,14 @@ impl WheelMenu {
     /// until opened.
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
-            slots: Vec::new(),
+            roots: Vec::new(),
+            path: Vec::new(),
             anchor: Point::default(),
             hovered: None,
             mode: None,
             pressed_at: None,
             press_position: Point::default(),
+            dwell: None,
         }
     }
 
@@ -444,11 +529,13 @@ impl WheelMenu {
             return false;
         }
         self.anchor = anchor;
-        self.slots = slots;
+        self.roots = slots;
+        self.path.clear();
         self.hovered = None;
         self.mode = Some(mode);
         self.pressed_at = (mode == WheelMode::Armed).then(Instant::now);
         self.press_position = anchor;
+        self.dwell = None;
         cx.notify();
         true
     }
@@ -460,6 +547,8 @@ impl WheelMenu {
             self.mode = None;
             self.pressed_at = None;
             self.hovered = None;
+            self.path.clear();
+            self.dwell = None;
             cx.emit(WheelEvent::Closed);
             cx.notify();
         }
@@ -478,12 +567,82 @@ impl WheelMenu {
         self.anchor
     }
 
+    /// The wedges on screen: the open category's ring, clamped to [`MAX_WEDGES`].
+    ///
+    /// Clamping here *and* in [`wheel_ring`] is deliberate: hit-testing and painting
+    /// must see the same ring, or a wedge would run a command its label does not name.
     pub fn slots(&self) -> &[WheelSlot] {
-        &self.slots
+        let ring = self.ring();
+        &ring[..ring.len().min(MAX_WEDGES)]
+    }
+
+    fn ring(&self) -> &[WheelSlot] {
+        let mut ring: &[WheelSlot] = &self.roots;
+        for index in &self.path {
+            match ring.get(*index) {
+                Some(slot) => ring = &slot.children,
+                None => return &[],
+            }
+        }
+        ring
+    }
+
+    /// How many categories deep the wheel currently is (`0` is the root ring).
+    pub fn depth(&self) -> usize {
+        self.path.len()
+    }
+
+    /// The open category's slot, when the wheel has descended.
+    pub fn open_group(&self) -> Option<&WheelSlot> {
+        let (last, parents) = self.path.split_last()?;
+        let mut ring: &[WheelSlot] = &self.roots;
+        for index in parents {
+            ring = &ring.get(*index)?.children;
+        }
+        ring.get(*last)
     }
 
     pub fn hovered(&self) -> Option<usize> {
         self.hovered
+    }
+
+    /// Open a category: the next ring is its children.
+    ///
+    /// Returns whether it descended; a verb (or a disabled wedge) does not.
+    pub fn descend(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        let descends = self
+            .ring()
+            .get(index)
+            .is_some_and(|slot| slot.enabled && slot.is_group());
+        if !descends {
+            return false;
+        }
+        self.path.push(index);
+        self.hovered = None;
+        self.dwell = None;
+        cx.notify();
+        true
+    }
+
+    /// Go back to the parent ring. Returns whether it climbed.
+    pub fn ascend(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.path.pop().is_none() {
+            return false;
+        }
+        self.hovered = None;
+        self.dwell = None;
+        cx.notify();
+        true
+    }
+
+    /// The host's `Backspace`: climb out of a category, or close at the root.
+    /// Returns whether the wheel is still open.
+    pub fn back(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.ascend(cx) {
+            return true;
+        }
+        self.close(cx);
+        false
     }
 
     /// Update the hovered wedge. Safe in either phase; a move outside the ring (or
@@ -492,18 +651,83 @@ impl WheelMenu {
         if self.mode.is_none() {
             return;
         }
-        let hovered = match slot_at(self.anchor, position, self.slots.len()) {
-            WheelHit::Slot(index) => self
-                .slots
-                .get(index)
-                .filter(|slot| slot.enabled)
-                .map(|_| index),
-            _ => None,
-        };
+        match slot_at(self.anchor, position, self.slots().len()) {
+            WheelHit::Slot(index) => {
+                let Some(slot) = self.slots().get(index) else {
+                    self.set_hover(None, cx);
+                    return;
+                };
+                let (enabled, opens) = (
+                    slot.enabled,
+                    slot.is_group() && self.mode == Some(WheelMode::Armed),
+                );
+                if !enabled {
+                    self.set_hover(None, cx);
+                    return;
+                }
+                if self.hovered != Some(index) {
+                    self.hovered = Some(index);
+                    cx.notify();
+                }
+                if opens {
+                    // A dwell is per wedge: moving straight from one category to
+                    // another restarts the beat instead of reusing the old one.
+                    if self.dwell.map(|(held, _)| held) != Some(index) {
+                        let started = Instant::now();
+                        self.dwell = Some((index, started));
+                        self.schedule_dwell(index, started, cx);
+                    }
+                } else {
+                    self.dwell = None;
+                }
+            }
+            WheelHit::Outside => {
+                // Pushing past the rim is the flick's own "open this": the hand is
+                // already moving outward, so the child ring is where it was going.
+                let category = self.hovered.filter(|index| {
+                    self.slots()
+                        .get(*index)
+                        .is_some_and(|slot| slot.enabled && slot.is_group())
+                });
+                let armed = self.mode == Some(WheelMode::Armed);
+                self.dwell = None;
+                if armed && let Some(index) = category {
+                    self.descend(index, cx);
+                } else {
+                    self.set_hover(None, cx);
+                }
+            }
+            WheelHit::Deadzone => {
+                self.dwell = None;
+                self.set_hover(None, cx);
+            }
+        }
+    }
+
+    fn set_hover(&mut self, hovered: Option<usize>, cx: &mut Context<Self>) {
         if hovered != self.hovered {
             self.hovered = hovered;
             cx.notify();
         }
+    }
+
+    /// Open `index` after [`DWELL_MS`], if the pointer is still there and the button
+    /// is still held.
+    fn schedule_dwell(&mut self, index: usize, started: Instant, cx: &mut Context<Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |wheel, cx| {
+            executor.timer(Duration::from_millis(DWELL_MS)).await;
+            let _ = wheel.update(cx, |wheel, cx| {
+                let still_ours = wheel.mode == Some(WheelMode::Armed)
+                    && wheel.hovered == Some(index)
+                    && wheel.dwell.map(|(held, at)| held == index && at == started)
+                        == Some(true);
+                if still_ours {
+                    wheel.descend(index, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// The arming button was released: commit a flicked wedge, latch a tap, or close.
@@ -511,7 +735,39 @@ impl WheelMenu {
         if self.mode != Some(WheelMode::Armed) {
             return;
         }
-        if let Some(id) = self.slot_id_at(position) {
+        if !self.path.is_empty() {
+            // Inside a category the release is the choice: a verb commits, a nested
+            // category opens, and a release on the deadzone climbs out (the hand has
+            // nowhere to go, and cancelling a whole gesture for that is punishing).
+            let index = self.hovered_index_at(position);
+            let target = self
+                .slots()
+                .get(index)
+                .filter(|slot| slot.enabled)
+                .map(|slot| (slot.is_group(), slot.id.clone()));
+            match target {
+                Some((true, _)) => {
+                    self.descend(index, cx);
+                    self.latch(cx);
+                }
+                Some((false, id)) => self.finish(Some(id), cx),
+                None => {
+                    self.ascend(cx);
+                    self.latch(cx);
+                }
+            }
+            return;
+        }
+        if let Some(index) = self.enabled_index_at(position) {
+            let slot = self.slots().get(index);
+            let (group, id) = slot.map(|slot| (slot.is_group(), slot.id.clone())).unwrap();
+            if group {
+                // A release on a category opens it and hands the wheel to the pointer:
+                // no button is held any more, so the child ring is a latched one.
+                self.descend(index, cx);
+                self.latch(cx);
+                return;
+            }
             self.finish(Some(id), cx);
             return;
         }
@@ -522,14 +778,19 @@ impl WheelMenu {
         let travelled = distance(self.press_position, position);
         if elapsed < Duration::from_millis(TAP_MS) && travelled < TAP_PX {
             // A trackpad tap: latch instead of flashing the wheel closed.
-            self.mode = Some(WheelMode::Latched);
-            self.pressed_at = None;
+            self.latch(cx);
             self.pointer_move(position, cx);
-            cx.notify();
             return;
         }
         // A long hold released in the deadzone/outside cancels.
         self.finish(None, cx);
+    }
+
+    fn latch(&mut self, cx: &mut Context<Self>) {
+        self.mode = Some(WheelMode::Latched);
+        self.pressed_at = None;
+        self.dwell = None;
+        cx.notify();
     }
 
     /// A primary click: commit in the latched phase, ignore an armed flick.
@@ -537,14 +798,34 @@ impl WheelMenu {
         if self.mode != Some(WheelMode::Latched) {
             return;
         }
-        match self.slot_id_at(position) {
-            Some(id) => self.finish(Some(id), cx),
-            None => self.finish(None, cx),
+        match slot_at(self.anchor, position, self.slots().len()) {
+            WheelHit::Slot(index) => {
+                let target = self
+                    .slots()
+                    .get(index)
+                    .filter(|slot| slot.enabled)
+                    .map(|slot| (slot.is_group(), slot.id.clone()));
+                match target {
+                    Some((true, _)) => {
+                        self.descend(index, cx);
+                    }
+                    Some((false, id)) => self.finish(Some(id), cx),
+                    None => {}
+                }
+            }
+            // The hollow centre is "one level up"; at the root it is the cancel.
+            WheelHit::Deadzone => {
+                if !self.ascend(cx) {
+                    self.finish(None, cx);
+                }
+            }
+            WheelHit::Outside => self.finish(None, cx),
         }
     }
 
-    /// A host key (Space) while hovered: commit the wedge. Returns whether it did;
-    /// the host closes an open wheel when this is `false`.
+    /// A host key (Space) while hovered: commit the wedge, or open it when it is a
+    /// category. Returns whether it acted; the host closes an open wheel when this is
+    /// `false`.
     pub fn commit_hovered(&mut self, cx: &mut Context<Self>) -> bool {
         if self.mode != Some(WheelMode::Latched) {
             return false;
@@ -552,25 +833,36 @@ impl WheelMenu {
         let Some(index) = self.hovered else {
             return false;
         };
-        let Some(id) = self
-            .slots
+        let Some((group, id)) = self
+            .slots()
             .get(index)
             .filter(|slot| slot.enabled)
-            .map(|slot| slot.id.clone())
+            .map(|slot| (slot.is_group(), slot.id.clone()))
         else {
             return false;
         };
+        if group {
+            self.descend(index, cx);
+            return true;
+        }
         self.finish(Some(id), cx);
         true
     }
 
-    fn slot_id_at(&self, position: Point<Pixels>) -> Option<SharedString> {
-        match slot_at(self.anchor, position, self.slots.len()) {
+    fn hovered_index_at(&self, position: Point<Pixels>) -> usize {
+        match slot_at(self.anchor, position, self.slots().len()) {
+            WheelHit::Slot(index) => index,
+            _ => usize::MAX,
+        }
+    }
+
+    fn enabled_index_at(&self, position: Point<Pixels>) -> Option<usize> {
+        match slot_at(self.anchor, position, self.slots().len()) {
             WheelHit::Slot(index) => self
-                .slots
+                .slots()
                 .get(index)
                 .filter(|slot| slot.enabled)
-                .map(|slot| slot.id.clone()),
+                .map(|_| index),
             _ => None,
         }
     }
@@ -579,6 +871,8 @@ impl WheelMenu {
         self.mode = None;
         self.pressed_at = None;
         self.hovered = None;
+        self.path.clear();
+        self.dwell = None;
         match id {
             Some(id) => cx.emit(WheelEvent::Selected(id)),
             None => cx.emit(WheelEvent::Closed),
@@ -593,9 +887,10 @@ impl Render for WheelMenu {
             return div().into_any_element();
         }
         let anchor = self.anchor;
-        let slots = self.slots.clone();
+        let slots = self.slots().to_vec();
         let hovered = self.hovered;
-        let view = wheel("radial", &slots, hovered);
+        let centre = self.open_group().map(|group| group.label.clone());
+        let view = wheel_ring("radial", &slots, hovered, centre);
         deferred(
             anchored()
                 .anchor(Anchor::TopLeft)
@@ -658,8 +953,75 @@ mod tests {
                 icon: "".into(),
                 tone: WheelTone::Structural,
                 enabled: true,
+                children: Vec::new(),
             })
             .collect()
+    }
+
+    /// `Move` and a `Booleans` category holding `Union` and `Cut`.
+    fn group_slots() -> Vec<WheelSlot> {
+        vec![
+            WheelSlot {
+                id: "move".into(),
+                label: "Move".into(),
+                icon: "move".into(),
+                tone: WheelTone::Structural,
+                enabled: true,
+                children: Vec::new(),
+            },
+            WheelSlot {
+                id: "booleans".into(),
+                label: "Booleans".into(),
+                icon: "".into(),
+                tone: WheelTone::Structural,
+                enabled: true,
+                children: vec![
+                    WheelSlot {
+                        id: "union".into(),
+                        label: "Union".into(),
+                        icon: "".into(),
+                        tone: WheelTone::Additive,
+                        enabled: true,
+                        children: Vec::new(),
+                    },
+                    WheelSlot {
+                        id: "cut".into(),
+                        label: "Cut".into(),
+                        icon: "".into(),
+                        tone: WheelTone::Additive,
+                        enabled: true,
+                        children: Vec::new(),
+                    },
+                ],
+            },
+        ]
+    }
+
+    /// `Move` and `Delete`, with no category: the two-verb ring the gesture tests use.
+    fn menu_slots() -> Vec<WheelSlot> {
+        leaf_slots()
+    }
+
+    /// `Move` and `Delete`, with no category.
+    fn leaf_slots() -> Vec<WheelSlot> {
+        vec![
+            WheelSlot {
+                id: "move".into(),
+                label: "Move".into(),
+                icon: "move".into(),
+                tone: WheelTone::Structural,
+                enabled: true,
+                children: Vec::new(),
+            },
+            WheelSlot {
+                id: "delete".into(),
+                label: "Delete".into(),
+                icon: "trash".into(),
+                tone: WheelTone::Destructive,
+                enabled: true,
+                children: Vec::new(),
+            },
+        ]
     }
 
     #[test]
@@ -726,25 +1088,7 @@ mod tests {
         }
     }
 
-    fn menu_slots() -> Vec<WheelSlot> {
-        vec![
-            WheelSlot {
-                id: "move".into(),
-                label: "Move".into(),
-                icon: "move".into(),
-                tone: WheelTone::Structural,
-                enabled: true,
-            },
-            WheelSlot {
-                id: "delete".into(),
-                label: "Delete".into(),
-                icon: "trash".into(),
-                tone: WheelTone::Destructive,
-                enabled: true,
-            },
-        ]
-    }
-
+    /// `Move` and `Delete`, with no category: the two-verb ring the gesture tests use.
     fn open_menu(
         cx: &mut TestAppContext,
     ) -> (
@@ -868,6 +1212,153 @@ mod tests {
                 "{selector} is painted"
             );
         }
+    }
+
+    /// A category wedge descends on a click and the child ring commits its verb; the
+    /// deadzone climbs back out, and the root deadzone is the cancel.
+    #[gpui::test]
+    fn a_category_wedge_opens_its_ring_and_the_deadzone_climbs_back(
+        cx: &mut TestAppContext,
+    ) {
+        let centre = point(px(200.), px(200.));
+        let (mut visual, wheel, events, _subscription) = open_menu(cx);
+        let over = |index: usize, count: usize| {
+            let offset = slot_offset(index, count);
+            point(centre.x + offset.x, centre.y + offset.y)
+        };
+
+        wheel.update(&mut visual, |wheel, cx| {
+            wheel.open_latched(centre, group_slots(), cx);
+            wheel.pointer_move(over(1, 2), cx);
+        });
+        assert_eq!(
+            wheel.read_with(&visual, |wheel, _| wheel.hovered()),
+            Some(1)
+        );
+        // Clicking the category does not commit anything: it opens the ring.
+        wheel.update(&mut visual, |wheel, cx| wheel.click(over(1, 2), cx));
+        assert!(events.borrow().is_empty(), "a category is not a choice");
+        assert!(wheel.read_with(&visual, |wheel, _| wheel.is_open()));
+        assert_eq!(wheel.read_with(&visual, |wheel, _| wheel.depth()), 1);
+        let children: Vec<String> = wheel
+            .read_with(&visual, |wheel, _| wheel.slots().to_vec())
+            .iter()
+            .map(|slot| slot.id.to_string())
+            .collect();
+        assert_eq!(children, vec!["union".to_string(), "cut".to_string()]);
+        assert_eq!(
+            wheel.read_with(&visual, |wheel, _| {
+                wheel.open_group().map(|group| group.label.to_string())
+            }),
+            Some("Booleans".to_string()),
+            "the centre names the open category"
+        );
+
+        // The deadzone climbs out rather than closing.
+        assert!(wheel.update(&mut visual, |wheel, cx| wheel.back(cx)));
+        assert_eq!(wheel.read_with(&visual, |wheel, _| wheel.depth()), 0);
+        assert!(wheel.read_with(&visual, |wheel, _| wheel.is_open()));
+        // ...and at the root it is the dismiss.
+        assert!(!wheel.update(&mut visual, |wheel, cx| wheel.back(cx)));
+        assert!(!wheel.read_with(&visual, |wheel, _| wheel.is_open()));
+        assert_eq!(events.borrow().last(), Some(&WheelEvent::Closed));
+    }
+
+    /// A latched click inside a child ring commits the child verb.
+    #[gpui::test]
+    fn a_child_wedge_commits_its_own_id(cx: &mut TestAppContext) {
+        let centre = point(px(200.), px(200.));
+        let (mut visual, wheel, events, _subscription) = open_menu(cx);
+        let over = |index: usize, count: usize| {
+            let offset = slot_offset(index, count);
+            point(centre.x + offset.x, centre.y + offset.y)
+        };
+        wheel.update(&mut visual, |wheel, cx| {
+            wheel.open_latched(centre, group_slots(), cx);
+            wheel.click(over(1, 2), cx);
+            wheel.click(over(0, 2), cx);
+        });
+        assert_eq!(
+            events.borrow().last(),
+            Some(&WheelEvent::Selected("union".into()))
+        );
+        assert!(!wheel.read_with(&visual, |wheel, _| wheel.is_open()));
+    }
+
+    /// The flick: dragging past the outer rim while over a category opens it, and the
+    /// release then commits the child under the pointer.
+    #[gpui::test]
+    fn dragging_past_the_rim_opens_the_category_in_one_gesture(cx: &mut TestAppContext) {
+        let centre = point(px(200.), px(200.));
+        let (mut visual, wheel, events, _subscription) = open_menu(cx);
+        let offset = slot_offset(1, 2);
+        let over = point(centre.x + offset.x, centre.y + offset.y);
+        let past = point(
+            centre.x + offset.x * (OUTER_RADIUS + 20.0) / LABEL_RADIUS,
+            centre.y + offset.y * (OUTER_RADIUS + 20.0) / LABEL_RADIUS,
+        );
+
+        wheel.update(&mut visual, |wheel, cx| {
+            wheel.open_armed(centre, group_slots(), cx);
+        });
+        wheel.update(&mut visual, |wheel, cx| wheel.pointer_move(over, cx));
+        assert_eq!(wheel.read_with(&visual, |wheel, _| wheel.depth()), 0);
+        wheel.update(&mut visual, |wheel, cx| wheel.pointer_move(past, cx));
+        assert_eq!(
+            wheel.read_with(&visual, |wheel, _| wheel.depth()),
+            1,
+            "past the rim is the flick's open"
+        );
+
+        let child = {
+            let offset = slot_offset(1, 2);
+            point(centre.x + offset.x, centre.y + offset.y)
+        };
+        wheel.update(&mut visual, |wheel, cx| {
+            wheel.pointer_move(child, cx);
+            wheel.pointer_up(child, cx);
+        });
+        assert_eq!(
+            events.borrow().last(),
+            Some(&WheelEvent::Selected("cut".into())),
+            "the release picks the child wedge"
+        );
+    }
+
+    /// Dwelling on a category opens it without moving further out: the trackpad case.
+    #[gpui::test]
+    fn dwelling_on_a_category_opens_it(cx: &mut TestAppContext) {
+        let centre = point(px(200.), px(200.));
+        let (mut visual, wheel, _events, _subscription) = open_menu(cx);
+        let offset = slot_offset(1, 2);
+        let over = point(centre.x + offset.x, centre.y + offset.y);
+        wheel.update(&mut visual, |wheel, cx| {
+            wheel.open_armed(centre, group_slots(), cx);
+            wheel.pointer_move(over, cx);
+        });
+        assert_eq!(wheel.read_with(&visual, |wheel, _| wheel.depth()), 0);
+        visual.executor().advance_clock(Duration::from_millis(200));
+        visual.run_until_parked();
+        assert_eq!(
+            wheel.read_with(&visual, |wheel, _| wheel.depth()),
+            1,
+            "the dwell opened the ring"
+        );
+    }
+
+    /// The hard guard: whatever the producer hands over, a ring paints at most eight
+    /// wedges, so labels cannot overlap.
+    #[gpui::test]
+    fn a_ring_never_holds_more_than_eight_wedges(cx: &mut TestAppContext) {
+        let centre = point(px(200.), px(200.));
+        let (mut visual, wheel, _events, _subscription) = open_menu(cx);
+        wheel.update(&mut visual, |wheel, cx| {
+            wheel.open_latched(centre, slots(12), cx);
+        });
+        assert_eq!(
+            wheel.read_with(&visual, |wheel, _| wheel.slots().len()),
+            MAX_WEDGES
+        );
     }
 
     #[gpui::test]

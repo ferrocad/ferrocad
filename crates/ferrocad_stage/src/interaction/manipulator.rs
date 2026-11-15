@@ -436,3 +436,54 @@ mod tests {
         assert_eq!(commit.readout, "2.00 × 1.00 mm");
     }
 }
+
+/// Which dress-up the edge scrubber applies when it commits.
+///
+/// Slot 3 of the loadout bar owns both: the slot's mode decides whether a drag on an edge
+/// writes a `Part::Fillet` or a `Part::Chamfer`, and the factory that arms the scrubber
+/// receives it. It lives in the stage because both the host (the slot) and the edition's
+/// manipulator factory (the geometry) need it, and the stage is the seam they share -- no
+/// crate has to depend on the other.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DressUpKind {
+    /// Round the edge (`Part::Fillet`, one radius).
+    #[default]
+    Fillet,
+    /// Bevel the edge (`Part::Chamfer`, two distances or one symmetric).
+    Chamfer,
+}
+
+impl DressUpKind {
+    /// The manipulator action the mode commits under (`fillet` / `chamfer`).
+    pub fn action(self) -> &'static str {
+        match self {
+            Self::Fillet => "fillet",
+            Self::Chamfer => "chamfer",
+        }
+    }
+
+    /// The label Slot 3 shows (`Fillet` / `Chamfer`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fillet => "Fillet",
+            Self::Chamfer => "Chamfer",
+        }
+    }
+
+    /// The other mode: what pressing `3` again equips.
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Fillet => Self::Chamfer,
+            Self::Chamfer => Self::Fillet,
+        }
+    }
+
+    /// Parse a declared mode (`"fillet"`, `"chamfer"`).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "fillet" | "round" => Some(Self::Fillet),
+            "chamfer" | "bevel" => Some(Self::Chamfer),
+            _ => None,
+        }
+    }
+}

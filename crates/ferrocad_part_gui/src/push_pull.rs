@@ -43,6 +43,7 @@
 
 use ferrocad_geom::SelectionRef;
 use ferrocad_graphics::Camera;
+use ferrocad_stage::DressUpKind;
 use ferrocad_stage::gizmo::{
     GizmoHandle, GizmoStyle, GizmoValue, ManipulatorFrame, TransformGizmo, MIN_HIT_RADIUS_PX,
     PUSH_PULL_COLOR,
@@ -865,6 +866,7 @@ fn body_depth(item: &ShapeItem, centroid: Vector3, normal: Vector3) -> f64 {
 pub fn push_pull_manipulator(
     selection: &SelectionRef,
     stage: &Stage,
+    _dress_up: DressUpKind,
 ) -> Option<Box<dyn Manipulator>> {
     push_pull_stem_for(selection, stage).map(|stem| Box::new(stem) as Box<dyn Manipulator>)
 }

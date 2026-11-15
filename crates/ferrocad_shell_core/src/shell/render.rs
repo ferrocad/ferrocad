@@ -6,7 +6,7 @@
 use super::*;
 use super::pill::AxisFrame;
 
-use ferrocad_theme::ui::ACTIVE_ACCENT;
+use ferrocad_theme::ui::{ACTIVE_ACCENT, ROW_HOVER};
 use ferrocad_widgets::icon;
 
 /// An action button's content: an embedded glyph and its word.
@@ -1186,7 +1186,7 @@ pub(super) fn manipulator_fields_bar(
     if shell.modal_open() || shell.wheel.read(cx).is_open() {
         return div().into_any_element();
     }
-    let Some((_, fields)) = shell.armed_numeric_fields(cx) else {
+    let Some((numeric_id, fields)) = shell.armed_numeric_fields(cx) else {
         return div().into_any_element();
     };
     let focus = shell.dialog_focus.clone();
@@ -1236,6 +1236,34 @@ pub(super) fn manipulator_fields_bar(
                 cx.stop_propagation();
             }
         }));
+    // The dress-up row's own toggle: an edge is picked, so Slot 3 is what the row is
+    // about, and its first cell is the mode it will commit. Clicking it is the same
+    // act as pressing `3` again — the row and the bar cannot disagree.
+    if numeric_id == "dress_up" && shell.loadout.slot() == Slot::Fillet {
+        row = row.child(
+            div()
+                .id("manipulator-dress-up")
+                .debug_selector(|| "manipulator-dress-up".to_string())
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|style| style.bg(rgba(ROW_HOVER)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(shell.loadout.dress_up().label()),
+                )
+                .child(div().text_xs().text_color(rgb(MUTED)).child("⇄"))
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.activate_loadout_slot(Slot::Fillet, cx);
+                })),
+        );
+    }
     for (index, input) in form.inputs.iter().enumerate() {
         let Some(field) = fields.get(index) else {
             break;

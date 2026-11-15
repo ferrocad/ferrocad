@@ -377,7 +377,9 @@ mod tests {
         );
 
         let with_manipulator =
-            base_contributions().with_manipulator(|_: &SelectionRef, _: &Stage| None);
+            base_contributions().with_manipulator(
+                |_: &SelectionRef, _: &Stage, _: ferrocad_stage::DressUpKind| None,
+            );
         assert!(
             with_manipulator.gizmo_for(&selection, &stage).is_some(),
             "a workbench manipulator must not replace the gizmo registry"
@@ -385,7 +387,9 @@ mod tests {
 
         // The shape that dropped the triad, kept as the contrast for the assertion above.
         let without_base =
-            Contributions::default().with_manipulator(|_: &SelectionRef, _: &Stage| None);
+            Contributions::default().with_manipulator(
+            |_: &SelectionRef, _: &Stage, _: ferrocad_stage::DressUpKind| None,
+        );
         assert!(without_base.gizmo_for(&selection, &stage).is_none());
     }
 

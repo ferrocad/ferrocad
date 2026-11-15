@@ -343,6 +343,25 @@ impl Shell {
         let Some(viewport) = self.viewport.clone() else {
             return;
         };
+        // The picked feature decides Slot 3's mode. Re-opening a chamfer while the bar
+        // reads `3 Fillet` would rebuild a fillet over it, so the slot follows the
+        // feature and the scrubber is re-armed in that mode. The probe is cached, so the
+        // re-arm's own probe request is answered from the same entry and settles here.
+        if let Some(kind) = ferrocad_stage::DressUpKind::parse(&probe.mode)
+            && self.loadout.slot() == Slot::Fillet
+            && self.loadout.dress_up() != kind
+            && self.pending_interaction.is_none()
+        {
+            self.loadout.set_dress_up(kind);
+            let status = format!(
+                "tool: {}",
+                Slot::Fillet.status_label(self.gizmo_mode, kind)
+            );
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            self.rearm_selection(cx);
+            return;
+        }
         let mut changed = false;
         // A seed is the operation the selection already carries. It must never overwrite
         // an edit in progress: a held commit is the user's, not the probe's.

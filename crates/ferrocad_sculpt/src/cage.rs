@@ -541,7 +541,11 @@ impl Manipulator for CagePointGrip {
 /// Arms when the selection's item publishes cage control points (stage vertices whose
 /// part names are `Point*`): the display hook is the only thing that produces those,
 /// so a Part object, a mesh or the toy slab never arms this grip.
-pub fn cage_manipulator(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
+pub fn cage_manipulator(
+    selection: &SelectionRef,
+    stage: &Stage,
+    _dress_up: ferrocad_stage::DressUpKind,
+) -> Option<Box<dyn Manipulator>> {
     let item = stage.item(selection.object)?;
     let points: Vec<ControlPoint> = item
         .vertices()
@@ -616,7 +620,7 @@ mod tests {
     #[test]
     fn the_factory_reads_the_published_control_points() {
         let stage = stage_with_cage();
-        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage).expect("a cage arms");
+        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage, ferrocad_stage::DressUpKind::Fillet).expect("a cage arms");
         assert_eq!(grip.id(), CAGE_POINT_ID);
         // The overlay is screen-invariant, so it is built on the first `refresh`.
         grip.refresh(&camera());
@@ -661,14 +665,14 @@ mod tests {
             parts: vec!["Vertex1".to_string()],
         });
         stage.add_item(item);
-        assert!(cage_manipulator(&SelectionRef::whole(9), &stage).is_none());
+        assert!(cage_manipulator(&SelectionRef::whole(9), &stage, ferrocad_stage::DressUpKind::Fillet).is_none());
     }
 
     #[test]
     fn a_drag_commits_the_point_in_world_space() {
         let camera = camera();
         let stage = stage_with_cage();
-        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage).expect("a cage arms");
+        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage, ferrocad_stage::DressUpKind::Fillet).expect("a cage arms");
         let _ = grip.refresh(&camera);
 
         // The first control point projects to the camera's centre (400x400 device).
@@ -696,7 +700,7 @@ mod tests {
     fn a_press_away_from_every_marker_misses() {
         let camera = camera();
         let stage = stage_with_cage();
-        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage).expect("a cage arms");
+        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage, ferrocad_stage::DressUpKind::Fillet).expect("a cage arms");
         assert!(!grip.hit(&camera, [5, 5]));
         assert!(!grip.drag_begin(&camera, [5, 5]));
         assert!(grip.drag_end().is_none());
@@ -706,7 +710,7 @@ mod tests {
     fn a_typed_value_is_the_numeric_twin_of_the_drag() {
         let camera = camera();
         let stage = stage_with_cage();
-        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage).expect("a cage arms");
+        let mut grip = cage_manipulator(&SelectionRef::whole(7), &stage, ferrocad_stage::DressUpKind::Fillet).expect("a cage arms");
         let device = project_device(&camera, Vector3::new(0.0, 0.0, 0.0)).expect("visible");
         grip.drag_begin(&camera, [device[0] as i32, device[1] as i32]);
 

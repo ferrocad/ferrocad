@@ -984,11 +984,13 @@ def commands() -> str:
     ``dock``, ``creation``, ``radial``, ``palette``, ``hidden`` or a header control),
     ``FerroCAD_Category`` (the creation pill's tier for a ``creation`` tool),
     ``FerroCAD_Target`` (the context kinds a ``radial`` verb applies to),
+    ``FerroCAD_WheelGroup`` (the wheel category a ``radial`` verb is a child of),
     ``FerroCAD_Parent`` (the surface's primary command id, for a row in that control's
     popover) and ``FerroCAD_Short`` (a compact popover label, used when the full one
     repeats the control's name). They are added here, in the shell bridge, so
     ``FreeCADGui`` itself stays upstream-shaped; the JSON keeps the neutral field names
-    ``surface``/``category``/``target``/``parent``/``short``. A ``checkable`` flag is
+    ``surface``/``category``/``target``/``wheel_group``/``parent``/``short``. A
+    ``checkable`` flag is
     forwarded too, because it changes row behaviour (a toggle keeps its popover open);
     it is true when the command declares ``Checkable`` or implements ``IsChecked``.
     """
@@ -1008,6 +1010,9 @@ def commands() -> str:
         entry["category"] = str(resources.get("FerroCAD_Category") or "")
         entry["target"] = str(resources.get("FerroCAD_Target") or "")
         entry["gate"] = str(resources.get("FerroCAD_Gate") or "")
+        # The wheel category a radial verb is a child of (`Workplane`, `Booleans`, …).
+        # A group is one wedge that opens its verbs, so the root ring stays readable.
+        entry["wheel_group"] = str(resources.get("FerroCAD_WheelGroup") or "")
         # Upstream's icon resource. The shell resolves it as a vendored icon key
         # first, so a mod can name a glyph directly, then as a curated command id.
         entry["pixmap"] = str(resources.get("Pixmap") or "")
@@ -1373,6 +1378,7 @@ _CATALOG_RESOURCES = (
     ("category", "FerroCAD_Category"),
     ("target", "FerroCAD_Target"),
     ("gate", "FerroCAD_Gate"),
+    ("wheel_group", "FerroCAD_WheelGroup"),
     ("parent", "FerroCAD_Parent"),
 )
 
@@ -2505,6 +2511,10 @@ class _SetWorkplaneCommand:
             "FerroCAD_Surface": "workplane",
             "FerroCAD_Parent": "App_Workplane",
             "FerroCAD_Wheel": True,
+            # The two workplane verbs are one wedge that opens them. With only this one
+            # available (a base-only build) the shell collapses the group into it, so
+            # the ring is unchanged there.
+            "FerroCAD_WheelGroup": "Workplane",
             "FerroCAD_Target": "face",
             "FerroCAD_Tone": "structural",
         }

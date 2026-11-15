@@ -611,6 +611,7 @@ impl ferrocad_stage::Manipulator for FaceClaim {
 fn claim_face(
     selection: &ferrocad_geom::SelectionRef,
     _stage: &ferrocad_stage::Stage,
+    _dress_up: ferrocad_stage::DressUpKind,
 ) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
     selection
         .elements
@@ -813,6 +814,7 @@ impl ferrocad_stage::Manipulator for NumericFace {
 fn numeric_face(
     selection: &ferrocad_geom::SelectionRef,
     _stage: &ferrocad_stage::Stage,
+    _dress_up: ferrocad_stage::DressUpKind,
 ) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
     numeric_face_with_id(selection, "push_pull")
 }
@@ -822,6 +824,7 @@ fn numeric_face(
 fn refused_numeric_face(
     selection: &ferrocad_geom::SelectionRef,
     _stage: &ferrocad_stage::Stage,
+    _dress_up: ferrocad_stage::DressUpKind,
 ) -> Option<Box<dyn ferrocad_stage::Manipulator>> {
     numeric_face_with_id(selection, "refused")
 }

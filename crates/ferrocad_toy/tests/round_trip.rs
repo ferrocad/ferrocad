@@ -19,7 +19,7 @@ use ferrocad_shell_python::python;
 use ferrocad_shell_python::{Contributions, DisplaySync, StageMesh};
 use ferrocad_graphics::{Camera, Projection, Viewport};
 use ferrocad_stage::screen::project_device;
-use ferrocad_stage::{GizmoHandle, Stage};
+use ferrocad_stage::{DressUpKind, GizmoHandle, Stage};
 use ferrocad_types::{Placement, Rotation, Vector3};
 
 /// The tests share one interpreter and one document registry.
@@ -175,7 +175,7 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
     );
 
     let mut grip = contributions
-        .manipulator_for(&SelectionRef::whole(entity), &stage)
+        .manipulator_for(&SelectionRef::whole(entity), &stage, DressUpKind::Fillet)
         .expect("the toy factory arms a height grip");
     let anchor = grip.readout_anchor(&camera).expect("the grip projects");
     let grab = [anchor[0].round() as i32, anchor[1].round() as i32];

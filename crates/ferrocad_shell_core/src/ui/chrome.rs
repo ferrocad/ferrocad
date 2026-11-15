@@ -25,7 +25,7 @@ use gpui::{
 
 use std::collections::{HashMap, HashSet};
 
-use ferrocad_stage::GizmoMode;
+use ferrocad_stage::{DressUpKind, GizmoMode};
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
 use ferrocad_widgets::icon;
 use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
@@ -814,20 +814,25 @@ fn select_button(
 /// The loadout slot's glyph: the hand it equips.
 ///
 /// Slot 1 hosts both handle sets, so it names the one the user will actually get —
-/// `rotate-object` rings or `move` arrows — exactly as [`Slot::label_for`] does.
-fn loadout_icon(slot: Slot, mode: GizmoMode) -> &'static str {
+/// `rotate-object` rings or `move` arrows — exactly as [`Slot::label_for`] does. Slot 3
+/// names its dress-up the same way: a fillet's rounded corner or a chamfer's bevel.
+fn loadout_icon(slot: Slot, mode: GizmoMode, dress_up: DressUpKind) -> &'static str {
     match (slot, mode) {
         (Slot::Move, GizmoMode::Rotate) => "rotate-object",
         (Slot::Move, _) => "move",
         (Slot::PushPull, _) => "arrow-up-down",
-        (Slot::Fillet, _) => "corner-radius",
+        (Slot::Fillet, _) => match dress_up {
+            DressUpKind::Fillet => "corner-radius",
+            DressUpKind::Chamfer => "bevel-gauge",
+        },
         (Slot::Inspect, _) => "select-pointer",
     }
 }
 
 /// The loadout bar (U4): `[1 Move] [2 Push/Pull] [3 Fillet] [0 Idle]` over the
 /// canvas' bottom-left corner. The pointer comes last because it is the neutral
-/// hand, not a fourth tool.
+/// hand, not a fourth tool. Slot 3 names the dress-up it currently arms (`3 Fillet`
+/// or `3 Chamfer`), and pressing `3` again is the toggle.
 ///
 /// It shares the creation dock's baseline and glass. The active slot is accented over
 /// `CHROME_ACTIVE_BG`; a click equips it exactly as its key does, so the hotkey stays
@@ -859,6 +864,7 @@ pub(crate) fn loadout_bar(
         .border_color(rgba(DOCK_BORDER))
         .text_xs()
         .when(blocked, |el| el.opacity(0.45));
+    let dress_up = loadout.dress_up();
 
     for slot in Slot::ALL {
         let active = loadout.slot() == slot;
@@ -883,14 +889,14 @@ pub(crate) fn loadout_bar(
                     .items_center()
                     .child(
                         icon::named(
-                            loadout_icon(slot, mode),
+                            loadout_icon(slot, mode, dress_up),
                             icon::ROW,
                             if active { CHROME_ACTIVE } else { FG },
                         )
                         .unwrap_or_else(|| div().into_any_element()),
                     ),
             )
-            .child(slot.label_for(mode));
+            .child(slot.label_for(mode, dress_up));
         if !blocked {
             button = button
                 .cursor_pointer()

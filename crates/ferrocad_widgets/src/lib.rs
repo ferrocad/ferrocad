@@ -57,6 +57,7 @@ pub use text_area::TextAreaState;
 pub use text_buffer::TextBuffer;
 pub use text_field::TextInput;
 pub use wheel::{
-    WheelEvent, WheelHit, WheelMenu, WheelSlot, WheelTone, slot_at, slot_offset, wheel,
+    MAX_WEDGES, WheelEvent, WheelHit, WheelMenu, WheelSlot, WheelTone, slot_at, slot_offset, wheel,
+    wheel_ring,
 };
 pub use window_chrome::window_frame;

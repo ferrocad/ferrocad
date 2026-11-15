@@ -257,3 +257,102 @@ fn the_part_move_gizmo_translates_the_body_and_undoes() {
         "undo restores the placement: {x_restored} vs {x_before}"
     );
 }
+
+/// Slot 3's mode **is** the dress-up: the same factory, the same edge, and a
+/// `Part::Chamfer` instead of a `Part::Fillet` — in one transaction. The picked band then
+/// tells the probe its kind, which is how the bar syncs to `3 Chamfer` on re-open.
+#[test]
+fn the_slot_three_chamfer_mode_drives_the_document() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    boot();
+
+    // A plain body: its own edge, not a fillet's round.
+    evaluate(
+        r#"
+import ferrocad_parametric as part
+part.makeBox(10, 10, 10, name='ChamferMe')
+"#,
+    );
+
+    let meshes = python::stage_meshes().expect("stage meshes");
+    let box_mesh = meshes
+        .iter()
+        .find(|mesh| mesh.object == "ChamferMe")
+        .expect("the box is displayed");
+    let entity = box_mesh.entity;
+    let mut display = DisplaySync::new();
+    let stage = display.build(meshes);
+
+    // The factory the shell calls for Slot 3, in `Chamfer` mode.
+    let mut scrubber = ferrocad_part_gui::fillet_manipulator(
+        &SelectionRef::element(entity, "Edge1"),
+        &stage,
+        ferrocad_stage::DressUpKind::Chamfer,
+    )
+    .expect("a chamfer scrubber over Edge1");
+    assert_eq!(
+        scrubber.numeric_fields()[0].label, "D1",
+        "Slot 3's chamfer publishes distances, not a radius"
+    );
+
+    let camera = camera();
+    let apex = scrubber
+        .readout_anchor(&camera)
+        .expect("the tick projects");
+    let grab = [apex[0].round() as i32, apex[1].round() as i32];
+    assert!(scrubber.drag_begin(&camera, grab), "the tick is grabbable");
+    assert!(
+        scrubber.drag_update(&camera, [grab[0] + 25, grab[1] + 25]),
+        "the scrub moved the distance"
+    );
+    let commit = scrubber.drag_end().expect("a commit");
+    assert_eq!(commit.manipulator, "dress_up");
+    assert_eq!(
+        commit.action, "chamfer",
+        "the slot's mode is the action the document writes"
+    );
+    assert!(commit.values[0] > 0.0, "a positive distance");
+
+    // The shell's route: commit → entity map → the app script's `interaction` hook.
+    let object = display.object_of(commit.target).expect("the object");
+    let result = python::apply_interaction(&commit, object).expect("the hook ran");
+    assert!(result.ok, "chamfer failed: {}", result.error);
+
+    let band = evaluate(
+        r#"
+doc.recompute()
+chamfer = doc.getObject('ChamferMe_Chamfer')
+assert chamfer is not None, 'the feature exists'
+assert str(chamfer.TypeId) == 'Part::Chamfer', chamfer.TypeId
+base = doc.getObject('ChamferMe').Shape.Edges
+band = next(
+    'Face%d' % index
+    for index, face in enumerate(chamfer.Shape.Faces, 1)
+    if face.Edges and all(not any(edge.isSame(other) for other in base) for edge in face.Edges)
+)
+import ferrocad_parametric as part
+probe = part._manipulator_probe(chamfer, band, 'dress_up')
+assert probe['mode'] == 'chamfer', probe
+print(band)
+"#,
+    );
+    let band = band.trim().to_string();
+    let reopened = ferrocad_part_gui::dress_up_scrubber_for(
+        &SelectionRef::element(entity, &band),
+        &stage,
+        DressUpMode::Chamfer,
+    );
+    assert!(
+        reopened.is_none(),
+        "a band is a face: the compiled edge scrubber leaves it to the declared grip"
+    );
+
+    // One feature, one transaction: a single undo removes it.
+    evaluate(
+        r#"
+doc.undo()
+assert doc.getObject('ChamferMe_Chamfer') is None
+doc.recompute()
+"#,
+    );
+}

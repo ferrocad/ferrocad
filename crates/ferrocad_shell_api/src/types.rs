@@ -219,6 +219,15 @@ pub struct ManipulatorProbe {
     /// The existing operation's value(s), in the manipulator's own field order.
     #[serde(default)]
     pub values: Vec<f64>,
+    /// The existing feature's **kind**, when the probe re-opened one (`fillet`,
+    /// `chamfer`).
+    ///
+    /// An edge scrubber is one of two operations, so picking the band of a chamfer must
+    /// put Slot 3 in `Chamfer` mode before the handle is built — otherwise the reuse
+    /// would rebuild a fillet over the feature it was asked to edit. Empty is "no
+    /// opinion", which is right for every other manipulator.
+    #[serde(default)]
+    pub mode: String,
 }
 
 impl ManipulatorProbe {

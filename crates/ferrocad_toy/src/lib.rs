@@ -29,7 +29,7 @@ use ferrocad_stage::gizmo::{GizmoStyle, MIN_HIT_RADIUS_PX};
 use ferrocad_stage::screen::{
     camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
 };
-use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
+use ferrocad_stage::{DrawMode, DressUpKind, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_stage::{
     GizmoAxis, GizmoCommitEvent, GizmoConstraint, GizmoDragEvent, GizmoHandle, GizmoKind,
     GizmoTarget, GizmoValue, ManipulatorFrame, TransformGizmo,
@@ -855,7 +855,11 @@ fn face_normal(item: &ShapeItem, name: &str) -> Option<Vector3> {
 /// The shell routes both registries identically (a neutral [`InteractionCommit`]), so
 /// the adapter changes no pointer, readout or commit behaviour; it only gives the grip
 /// the gizmo vocabulary a kinds-aware host will use.
-pub fn height_grip(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
+pub fn height_grip(
+    selection: &SelectionRef,
+    stage: &Stage,
+    _dress_up: ferrocad_stage::DressUpKind,
+) -> Option<Box<dyn Manipulator>> {
     Some(Box::new(height_gizmo(selection, stage)?))
 }
 
@@ -947,7 +951,7 @@ mod tests {
     #[test]
     fn the_factory_arms_on_a_whole_selection_and_reads_the_top_centre() {
         let stage = slab(7);
-        let grip = height_grip(&SelectionRef::whole(7), &stage).expect("a grip");
+        let grip = height_grip(&SelectionRef::whole(7), &stage, DressUpKind::Fillet).expect("a grip");
         assert_eq!(grip.id(), TOY_HEIGHT_ID);
         let camera = tilted_camera(200.0);
         let top = Vector3::new(0.0, 0.0, 20.0);
@@ -1212,15 +1216,15 @@ mod tests {
     fn only_an_up_facing_face_offers_the_grip() {
         let stage = slab(7);
         assert!(
-            height_grip(&SelectionRef::element(7, "Face2"), &stage).is_some(),
+            height_grip(&SelectionRef::element(7, "Face2"), &stage, DressUpKind::Fillet).is_some(),
             "the top face is the height handle"
         );
         assert!(
-            height_grip(&SelectionRef::element(7, "Face1"), &stage).is_none(),
+            height_grip(&SelectionRef::element(7, "Face1"), &stage, DressUpKind::Fillet).is_none(),
             "a face that does not face up falls back to the body triad"
         );
-        assert!(height_grip(&SelectionRef::whole(9), &stage).is_none());
-        assert!(height_grip(&SelectionRef::whole(7), &Stage::new()).is_none());
+        assert!(height_grip(&SelectionRef::whole(9), &stage, DressUpKind::Fillet).is_none());
+        assert!(height_grip(&SelectionRef::whole(7), &Stage::new(), DressUpKind::Fillet).is_none());
     }
 
     #[test]

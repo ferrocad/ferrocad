@@ -29,7 +29,7 @@ pub use declarative::{
 };
 pub use frame::DragFrame;
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
-pub use manipulator::{CreationHost, InteractionCommit, Manipulator, NumericField};
+pub use manipulator::{CreationHost, DressUpKind, InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
 pub use polygon::PolygonTool;
 pub use rectangle::RectangleTool;

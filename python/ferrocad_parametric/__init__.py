@@ -1109,6 +1109,9 @@ def _manipulator_probe(obj, element, manipulator):
     target = _dress_up_target(obj, element)
     if target is not None:
         answer["values"] = [target[1]]
+        # The kind, not just the number: Slot 3 opens `Fillet` or `Chamfer` from this,
+        # so a picked chamfer band is edited as a chamfer instead of a fillet.
+        answer["mode"] = target[0].lower()
         answer["note"] = "editing the existing %s" % target[0].lower()
     bounds = _fillet_bounds(obj, element)
     if bounds is not None:
@@ -1880,8 +1883,11 @@ class _BooleanCommand:
             "ToolTip": self.spec["tooltip"],
             "Group": "Part",
             "CmdType": "ForEdit",
-            # A combine verb over two or more bodies: a body-context wheel wedge.
+            # A combine verb over two or more bodies: a body-context wheel wedge. The
+            # three booleans are one `Booleans` wedge that opens them, so a body's ring
+            # does not grow a wedge per boolean.
             "FerroCAD_Surface": "radial",
+            "FerroCAD_WheelGroup": "Booleans",
             "FerroCAD_Target": "body",
             "FerroCAD_Tone": "additive",
             "FerroCAD_Gate": "body:2",
@@ -1971,6 +1977,7 @@ class _SaveDatumPlaneCommand:
             "FerroCAD_Parent": "App_Workplane",
             "FerroCAD_Short": "Save WP",
             "FerroCAD_Wheel": True,
+            "FerroCAD_WheelGroup": "Workplane",
             "FerroCAD_Target": "body,face",
             "FerroCAD_Tone": "additive",
         }
@@ -2136,6 +2143,7 @@ class _HealFacesCommand:
             "CmdType": "ForEdit",
             # A face-context repair: the neighbours grow until the body closes again.
             "FerroCAD_Surface": "radial",
+            "FerroCAD_WheelGroup": "Surface",
             "FerroCAD_Target": "face",
             "FerroCAD_Gate": "face:1",
             "FerroCAD_Tone": "structural",
@@ -2167,8 +2175,10 @@ class _ChamferCommand:
             "ToolTip": "Chamfer the selected edges (then drag the grip to tune it)",
             "Group": "Part",
             "CmdType": "ForEdit",
-            # An edge dress-up: the Slot 3 sibling of the fillet scrubber.
-            "FerroCAD_Surface": "radial",
+            # Slot 3 owns the dress-up: `3 Fillet` and `3 Chamfer` are one hand, so this
+            # command is the Search/replay spelling of the same edit, not a wheel wedge
+            # (the wheel has one `chamfer` child for a mod that wants it explicitly).
+            "FerroCAD_Surface": "palette",
             "FerroCAD_Target": "edge",
             "FerroCAD_Gate": "edge:1",
             "FerroCAD_Tone": "additive",

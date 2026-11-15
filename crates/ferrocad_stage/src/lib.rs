@@ -114,7 +114,8 @@ pub use frame::DragFrame;
 pub use grid::{GridGeometry, GridSpec, GridStyle, Ground, MinorStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use interaction::{
-    CreationHost, HoverTarget, InteractionCommit, Manipulator, NumericField, TargetKind,
+    CreationHost, DressUpKind, HoverTarget, InteractionCommit, Manipulator, NumericField,
+    TargetKind,
 };
 pub use plane_points::PlanePointsTool;
 pub use interaction::box_tool::BoxTool;

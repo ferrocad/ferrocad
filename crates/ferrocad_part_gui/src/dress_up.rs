@@ -62,7 +62,7 @@ use ferrocad_stage::gizmo::{GizmoStyle, MIN_HIT_RADIUS_PX};
 use ferrocad_stage::screen::{
     camera_forward, point_segment_distance, project_device, push_ribbon_uv, scale_for,
 };
-use ferrocad_stage::{DrawMode, InteractionCommit, Manipulator, ShapeItem, Stage};
+use ferrocad_stage::{DrawMode, DressUpKind, InteractionCommit, Manipulator, ShapeItem, Stage};
 use ferrocad_types::{Matrix4, Vector3};
 
 /// The scrubber's registry id (`InteractionCommit::manipulator`).
@@ -1018,12 +1018,22 @@ pub fn dress_up_scrubber_for(
     Some(scrubber)
 }
 
-/// The Part GUI's manipulator factory: an edge selection arms a fillet scrubber.
+/// The Part GUI's manipulator factory: an edge selection arms the Slot 3 scrubber.
 ///
-/// `ferrocad_shell_python::Contributions` accepts a factory of this shape, so an edition wires
-/// the manipulator in one line and the base app stays Part-free.
-pub fn fillet_manipulator(selection: &SelectionRef, stage: &Stage) -> Option<Box<dyn Manipulator>> {
-    dress_up_scrubber_for(selection, stage, DressUpMode::Fillet)
+/// The loadout's dress-up mode decides what the scrubber **is**: `Fillet` (one radius) or
+/// `Chamfer` (two distances). The factory does not guess — the bottom-left bar's
+/// `3 Fillet` / `3 Chamfer` is the user's answer, and the commit's action carries it so the
+/// document writes a `Part::Fillet` or a `Part::Chamfer`.
+pub fn fillet_manipulator(
+    selection: &SelectionRef,
+    stage: &Stage,
+    dress_up: DressUpKind,
+) -> Option<Box<dyn Manipulator>> {
+    let mode = match dress_up {
+        DressUpKind::Fillet => DressUpMode::Fillet,
+        DressUpKind::Chamfer => DressUpMode::Chamfer,
+    };
+    dress_up_scrubber_for(selection, stage, mode)
         .map(|scrubber| Box::new(scrubber) as Box<dyn Manipulator>)
 }
 
@@ -1729,5 +1739,31 @@ mod tests {
     fn a_commit_for_another_manipulator_is_not_a_dress_up() {
         let commit = InteractionCommit::new("some_other", 1, "fillet").with_element("Edge1");
         assert!(DressUpChange::from_commit(&commit).is_none());
+    }
+
+    /// Slot 3's mode reaches the handle: the factory builds the dress-up the bar names,
+    /// and the one the bar names is the one the commit carries.
+    #[test]
+    fn the_factory_builds_the_dress_up_slot_three_names() {
+        let stage = slab(7);
+        let selection = SelectionRef::element(7, "Edge1");
+        for (kind, label) in [
+            (DressUpKind::Fillet, "R"),
+            (DressUpKind::Chamfer, "D1"),
+        ] {
+            let scrubber = fillet_manipulator(&selection, &stage, kind)
+                .expect("an edge arms the scrubber");
+            let fields = scrubber.numeric_fields();
+            assert_eq!(fields[0].label, label, "{kind:?}");
+        }
+        // The other slots' handles are not dress-ups: a face claims nothing here.
+        assert!(
+            fillet_manipulator(
+                &SelectionRef::element(7, "Face1"),
+                &stage,
+                DressUpKind::Chamfer
+            )
+            .is_none()
+        );
     }
 }

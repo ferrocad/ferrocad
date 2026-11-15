@@ -17,6 +17,12 @@ these commands:
   ``Contributions``) and the creating commit it finishes with: one transaction makes a
   parametric `Part::FeaturePython` wire and the `Part::Extrusion` that links it, so
   editing the wire's points moves the pad;
+* `Sketch_Polyline` — the same tool under `sketch_polyline`: the finished drawing becomes
+  a `Sketcher::SketchObject` (one segment per edge, `Coincident` at every vertex, the
+  `Horizontal`/`Vertical` autoconstraints) and the `Part::Extrusion` that links the
+  sketch, so the sketch can be dragged and dimensioned;
+* `Sketch_Dimension` — add a driving dimension to the selected sketch edge at its
+  current value; `setDatum` then resizes the profile and the pad follows;
 * `Part_Fuse`, `Part_Cut`, `Part_Common` and `Part_Compound` — the selection-driven
   boolean and compound commands: one object per run, the operands hidden behind a
   boolean, and the shape work left to the object types;
@@ -49,6 +55,7 @@ import FreeCADGui
 import FerroCAD
 import FerroCADGui
 import Part  # noqa: F401  (links the kernel; registers Part::Feature/Fillet/Chamfer)
+import Sketcher
 
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
 # `set_property`, `evaluate`, `stage_meshes`, `interaction`, ...).
@@ -365,6 +372,9 @@ def _interaction(obj, manipulator, action, element, values):
     if manipulator == "polyline" and action == "create":
         # A creating commit: there is no target object, the points are the input.
         return _create_polyline([float(value) for value in values])
+
+    if manipulator == "sketch_polyline" and action == "create":
+        return _create_sketch_polyline([float(value) for value in values])
 
     if manipulator == "transform" and action == "apply" and len(values) == 16:
         delta = FreeCAD.Placement(FreeCAD.Matrix(*values))
@@ -1374,6 +1384,226 @@ class _PolylineCommand:
 
 
 FreeCADGui.addCommand("Part_Polyline", _PolylineCommand())
+
+
+def _plane_frame(points):
+    """``(origin, x, y, z)`` of the plane through the points, unit axes.
+
+    The first three non-collinear points define it. A straight polyline has no plane,
+    and world XY is the honest fallback (the pad then has nothing to sweep).
+    """
+    origin = points[0]
+    for index in range(1, len(points) - 1):
+        normal = points[index].sub(origin).cross(points[index + 1].sub(origin))
+        if normal.Length <= 1e-9:
+            continue
+        normal = normal.normalize()
+        along = points[1].sub(origin)
+        if along.Length <= 1e-9:
+            along = FreeCAD.Vector(1.0, 0.0, 0.0)
+        # Orthogonalise: the first segment lies in the plane, but the cross product
+        # above is not guaranteed to leave it perpendicular under rounding.
+        along = along.sub(
+            FreeCAD.Vector(
+                normal.x * along.dot(normal),
+                normal.y * along.dot(normal),
+                normal.z * along.dot(normal),
+            )
+        )
+        along = along.normalize()
+        return origin, along, normal.cross(along), normal
+    return (
+        origin,
+        FreeCAD.Vector(1.0, 0.0, 0.0),
+        FreeCAD.Vector(0.0, 1.0, 0.0),
+        FreeCAD.Vector(0.0, 0.0, 1.0),
+    )
+
+
+def _to_sketch_plane(points):
+    """The world points as local ``(u, v)`` on their own plane, plus the frame."""
+    frame = _plane_frame(points)
+    origin, x_axis, y_axis, _ = frame
+    local = []
+    for point in points:
+        delta = point.sub(origin)
+        local.append((delta.dot(x_axis), delta.dot(y_axis)))
+    return local, frame
+
+
+def _create_sketch_polyline(values):
+    """Create a constrained sketch from a finished polyline commit and pad it.
+
+    The points are world-space (they were snapped on the active workplane). The
+    sketch is built in its own local XY plane and its ``Placement`` puts that plane
+    back where the drawing was, so a profile drawn on a face stays on the face —
+    and "horizontal" in the autoconstraints means horizontal *in the sketch*.
+
+    One named transaction holds the sketch and the extrusion that links it. The
+    profile is closed (the pad needs a face to sweep), the shared vertices get
+    ``Coincident`` constraints, and the straight edges get ``Horizontal``/``Vertical``
+    where they already are, through the same two-phase autoconstraint pair the
+    sketcher exposes. ``solve()`` then leaves only the genuinely free degrees of
+    freedom.
+    """
+    if len(values) < 6 or len(values) % 3:
+        return {"ok": False, "error": "a sketch needs at least two complete points"}
+    world = _polyline_points(values)
+    if world[0].sub(world[-1]).Length > 1e-9:
+        world.append(world[0])
+    if len(world) < 4:
+        return {"ok": False, "error": "a sketch profile needs at least three points"}
+    local, (origin, x_axis, y_axis, normal) = _to_sketch_plane(world)
+
+    doc = FreeCAD.ActiveDocument
+    if doc is None:
+        doc = FreeCAD.newDocument("Unnamed")
+    doc.openTransaction("Sketch")
+    try:
+        sketch = doc.addObject("Sketcher::SketchObject", "Sketch")
+        sketch.Placement = FreeCAD.Placement(
+            origin, FreeCAD.Rotation(x_axis, y_axis, normal, "ZXY")
+        )
+        segments = [
+            Part.LineSegment(
+                FreeCAD.Vector(local[index][0], local[index][1], 0.0),
+                FreeCAD.Vector(local[index + 1][0], local[index + 1][1], 0.0),
+            )
+            for index in range(len(local) - 1)
+        ]
+        sketch.addGeometry(segments, False)
+        sketch.detectMissingPointOnPointConstraints(1e-6)
+        sketch.makeMissingPointOnPointCoincident(True)
+        sketch.detectMissingVerticalHorizontalConstraints(1e-6)
+        sketch.makeMissingVerticalHorizontal(True)
+        sketch.solve()
+
+        extrusion = doc.addObject("Part::Extrusion", f"{sketch.Name}_Extrusion")
+        extrusion.Base = (sketch, [])
+        extrusion.DirMode = "Custom"
+        extrusion.Dir = normal
+        extrusion.Solid = True
+        extrusion.LengthFwd = DEFAULT_WIRE_THICKNESS
+        _add_appearance(extrusion)
+        doc.recompute()
+        if _invalid(extrusion):
+            # Keep the sketch the user drew; only the pad the kernel refused goes.
+            doc.removeObject(extrusion.Name)
+            extrusion = None
+            doc.recompute()
+        else:
+            sketch.Visibility = False
+        if _invalid(sketch):
+            doc.abortTransaction()
+            return {"ok": False, "error": "the sketch could not be built; nothing was added"}
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": extrusion.Name if extrusion is not None else sketch.Name}
+
+
+def _dimension_target():
+    """The selected sketch edge: ``(sketch, zero-based index, kind, value)``.
+
+    A selection names an edge ``EdgeN`` (1-based, as the shape reports it); the
+    sketch's geometry list is index-aligned with that. A circle or arc takes a
+    ``Radius`` datum; a straight edge takes the ``Distance`` between its endpoints.
+    """
+    for item in FreeCADGui.Selection.getSelectionEx():
+        sketch = item.Object
+        if str(getattr(sketch, "TypeId", "")) != "Sketcher::SketchObject":
+            continue
+        geometry = list(getattr(sketch, "Geometry", []) or [])
+        for name in item.SubElementNames:
+            text = str(name)
+            if not text.startswith("Edge"):
+                continue
+            index = int(text[4:]) - 1
+            if not 0 <= index < len(geometry):
+                continue
+            edge = geometry[index]
+            curve = getattr(edge, "Curve", None)
+            if str(getattr(curve, "TypeId", "")) == "Part::GeomCircle":
+                return sketch, index, "Radius", float(curve.Radius)
+            return sketch, index, "Distance", float(edge.Length)
+    return None
+
+
+def _add_dimension(sketch, index, kind, value):
+    """Add one driving dimension at the value the edge already has."""
+    if kind == "Radius":
+        constraint = Sketcher.Constraint("Radius", index, value)
+    else:
+        constraint = Sketcher.Constraint("Distance", index, 1, index, 2, value)
+    return sketch.addConstraint(constraint)
+
+
+class _SketchPolylineCommand:
+    """``Sketch_Polyline`` — draw a constrained sketch profile and pad it.
+
+    The drawing is the native ``polyline`` tool under the ``sketch_polyline`` id, so
+    the commit says what it is: the edited geometry is a sketch, not a bare wire.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "New sketch",
+            "ToolTip": "Draw a closed sketch profile on the workplane and pad it",
+            "Group": "Sketch",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def Activated(self, iMsg=0):
+        return {"tool": "sketch_polyline"}
+
+
+class _DimensionCommand:
+    """``Sketch_Dimension`` — dimension the selected sketch edge at its current value.
+
+    The constraint is driving and starts at the value the edge already has, so adding
+    it moves nothing. Changing it is ``setDatum``; the linked pad follows on the next
+    recompute.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Dimension",
+            "ToolTip": "Add a driving dimension to the selected sketch edge",
+            "Group": "Sketch",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and _dimension_target() is not None
+
+    def Activated(self, iMsg=0):
+        target = _dimension_target()
+        if target is None:
+            return {"status": "select a sketch edge to dimension"}
+        sketch, index, kind, value = target
+        doc = sketch.Document
+        doc.openTransaction(f"Dimension {sketch.Name}")
+        try:
+            position = _add_dimension(sketch, index, kind, value)
+            doc.recompute()
+            doc.commitTransaction()
+        except Exception as exc:
+            doc.abortTransaction()
+            return {"status": f"dimension failed: {exc}"}
+        return {
+            "status": "%s on %s.Edge%d = %g; datum %d"
+            % (kind, sketch.Name, index + 1, value, position)
+        }
+
+
+FreeCADGui.addCommand("Sketch_Polyline", _SketchPolylineCommand())
+FreeCADGui.addCommand("Sketch_Dimension", _DimensionCommand())
 
 
 class _BooleanCommand:

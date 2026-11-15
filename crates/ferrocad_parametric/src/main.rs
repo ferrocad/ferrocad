@@ -63,17 +63,68 @@ assert boxed.Shape.ShapeType == "Solid", boxed.Shape.ShapeType
 FreeCAD.closeDocument(name)
 "#;
 
-/// The edition's shell contributions: Part's two manipulators and the polyline tool.
+/// The polyline tool under a workbench-specific manipulator id.
+///
+/// `PolylineTool` is generic: it collects snapped points and commits them as
+/// `polyline`/`create`. The edition decides what that drawing *means* — `Part_Polyline`
+/// makes a wire, `Sketch_Polyline` makes a constrained sketch — and the commit is where
+/// that intent has to travel, because the tool itself knows nothing about documents.
+struct TaggedPolyline {
+    inner: ferrocad_stage::PolylineTool,
+    tag: &'static str,
+}
+
+impl TaggedPolyline {
+    fn new(tag: &'static str) -> Self {
+        Self {
+            inner: ferrocad_stage::PolylineTool::new(),
+            tag,
+        }
+    }
+}
+
+impl ferrocad_stage::Tool for TaggedPolyline {
+    fn on_event(&mut self, event: &ferrocad_stage::PointerEvent, snap: Option<ferrocad_stage::Snap>) {
+        self.inner.on_event(event, snap);
+    }
+
+    fn items(&self) -> &[ferrocad_stage::ShapeItem] {
+        self.inner.items()
+    }
+
+    fn on_key(&mut self, key: &str, ctrl: bool) -> bool {
+        self.inner.on_key(key, ctrl)
+    }
+
+    fn status(&self) -> ferrocad_stage::ToolStatus {
+        self.inner.status()
+    }
+
+    fn cancel(&mut self) -> bool {
+        self.inner.cancel()
+    }
+
+    fn finish(&mut self) -> Option<ferrocad_stage::InteractionCommit> {
+        let mut commit = self.inner.finish()?;
+        commit.manipulator = self.tag.to_string();
+        Some(commit)
+    }
+}
+
+/// The edition's shell contributions: Part's two manipulators and the polyline tools.
 ///
 /// Factored out of `main` so the test can inspect the registry the window would use.
 fn contributions() -> ferrocad::Contributions {
     ferrocad::base_contributions()
         .with_manipulator(ferrocad_part_gui::fillet_manipulator)
         .with_manipulator(ferrocad_part_gui::push_pull_manipulator)
-        // The `Part_Polyline` command starts this tool; its creating commit is applied by
-        // the app script, which builds the wire and the extrusion that links it.
+        // `Part_Polyline` starts the wire tool; `Sketch_Polyline` the sketch one. They
+        // share the stage's state machine and differ only in the id their commit carries.
         .with_tool("polyline", || {
-            Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+            Box::new(TaggedPolyline::new("polyline")) as Box<dyn ferrocad_stage::Tool>
+        })
+        .with_tool("sketch_polyline", || {
+            Box::new(TaggedPolyline::new("sketch_polyline")) as Box<dyn ferrocad_stage::Tool>
         })
 }
 
@@ -174,14 +225,18 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    /// The registry the window installs: the base tools survive, and `Part_Polyline`'s
-    /// `polyline` is the edition's own.
+    /// The registry the window installs: the base tools survive, and each command's
+    /// `polyline` id is the edition's own.
     #[test]
-    fn the_edition_registers_the_polyline_tool() {
+    fn the_edition_registers_the_polyline_tools() {
         let contributions = super::contributions();
         assert!(
             contributions.tool_for("polyline").is_some(),
-            "Draft_Wire arms the polyline tool"
+            "Part_Polyline arms the wire tool"
+        );
+        assert!(
+            contributions.tool_for("sketch_polyline").is_some(),
+            "Sketch_Polyline arms the sketch tool"
         );
         assert!(
             contributions.tool_for("workplane_points").is_some(),

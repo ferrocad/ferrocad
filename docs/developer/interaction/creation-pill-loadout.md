@@ -76,7 +76,12 @@ to save.
 
 The flyout (`▾`) shows one category at a time behind a segmented header (`Sketch | Solid | Surface |
 …`, empty categories omitted); picking a tool binds it to its pill and runs it, and
-clicking a tab only points the pill at that category's remembered tool. The rows are
+clicking a tab only points the pill at that category's remembered tool. Holding `Shift`
+**peeks** it: the equipped pill's list appears while the key is down and goes away when it
+is released, which is the keyboard's hover over the slot. The peek stands down whenever
+`Shift` already means something — a running tool, an armed gizmo (plane drag), a pending
+transform, a focused field — and never closes a flyout the user opened with the caret.
+The rows are
 numbered `1`–`8` in their own right-hand column, and a number pressed while the flyout is
 open picks that row — the panel owns the digits while it is up, so `5` is the fifth tool
 there and the Sketch pill otherwise. The pill's caret reads `^` while its flyout is open,

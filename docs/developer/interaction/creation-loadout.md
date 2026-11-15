@@ -68,6 +68,16 @@ The Add hand is its **own strip**, above the action dock, not a control inside i
   bar (`Sketch | Solid | Surface | …`). The list used to be one flat column mixing drawing
   tools, primitives and profile features. The caret reads `^` while that pill's flyout is
   open, so the row says which list is showing.
+- **Hold `Shift` to peek.** While the canvas has nothing else for the key, holding `Shift`
+  shows the equipped pill's flyout and releasing it gives the flyout back — the keyboard's
+  hover over the slot, the list without the click. It stands down whenever `Shift` already
+  means something, which on this canvas it usually does: a running tool, an armed gizmo
+  (plane drag), a pending or open transform (`Shift`+`Tab`), a focused field (a capital) or
+  a modal, the wheel or the settings card. A flyout the user opened with the caret is never
+  adopted, so letting go never closes a menu somebody asked for. The peek rides the
+  platform's **modifier** transition (`on_modifiers_changed`) rather than a key press: a
+  modifier key emits no key event of its own — a Wayland session sends none at all — so a
+  key-up hook would work on some desktops and silently not on others.
 - **The list is numbered.** Its rows carry `1`–`8` in a column of their own (separate
   from the gate's requirement hint, which a disabled row shows in the same menu), and
   pressing a number while the flyout is open picks that row into its pill: the same

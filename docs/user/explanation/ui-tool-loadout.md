@@ -90,6 +90,10 @@ the tool it was last left on.
   pill without moving the pointer. A row that needs a selection says so instead (for
   example `select at least 2 profiles` for Loft). The caret reads `^` while a pill's list
   is open.
+- **Hold `Shift`** to peek that list: the equipped pill's menu appears while the key is
+  held and disappears when you let go, so you can look before you leap without a click.
+  It stays out of the way when `Shift` is busy elsewhere (drawing, dragging a handle,
+  typing in a field), and it never closes a list you opened yourself.
 - The dock's `⊕ Create Dock ^` button folds the strip away (and `▾` brings it back), so
   the bottom bar stays `Undo · Redo · Fit · Create Dock · Search` however many tools an
   edition registers.

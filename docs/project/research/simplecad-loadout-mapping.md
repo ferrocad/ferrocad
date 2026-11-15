@@ -611,10 +611,10 @@ Three follow-ups from the live window:
   for Move ⇄ Rotate. The key never opens the menu. The flyout shows **one category at a
   time** behind a segmented header, with a tab click pointing the pill at the remembered
   tool and a row click binding and running it. The rows carry `1`–`8` in their own column
-  and those digits
-  pick a row while the flyout is open (the panel owns the keyboard, as the wheel does),
-  so a category is navigable without the pointer; the pill's caret reads `^` while its
-  list is showing. The wheel's `Create ▸` commits through the same path, so a flick
+  and those digits pick a row while the flyout is open (the panel owns the keyboard, as
+  the wheel does), so a category is navigable without the pointer; the pill's caret reads
+  `^` while its list is showing, and holding `Shift` peeks the equipped pill's list while
+  the key is down. The wheel's `Create ▸` commits through the same path, so a flick
   loads the pill and arms the tool at the pointer.
 - **A session adds a pill; it does not take the dock.** The armed tool's pill (its label,
   its `W/L/H` row or point count, its hint, `✗`/`✓`) is the top row of the same

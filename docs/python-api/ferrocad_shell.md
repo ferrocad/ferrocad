@@ -14,6 +14,7 @@ _Every entry point returns a JSON string._
 | Function | Summary |
 | --- | --- |
 | `activate_document(name: str) -> str` | Make one open document active: the host bridge's verb. |
+| `activate_workbench(payload_json: str) -> str` | Activate a workbench by name and return the catalogue. |
 | `active_document() -> str` | The active document's name, as JSON (``""`` when none is open). |
 | `add_namespace(name: str, value) -> None` | Expose ``value`` to the console under ``name``. |
 | `appearance_view() -> str` | The appearance policy the shell should apply at boot, as JSON. |
@@ -52,6 +53,7 @@ _Every entry point returns a JSON string._
 | `take_selection_requests() -> str` | Drain the writes a script queued on ``FreeCADGui.Selection``. |
 | `tool_bridge(name: str)` | The ``ferrocad_stage.Tool`` that forwards viewport input to ``name``. |
 | `tool_command(name: str, verb: str) -> bool` | Send a session verb (``cancel``/``finish``) to a Python-backed tool. |
+| `workbenches() -> str` | Every registered workbench and what it declares, as JSON. |
 
 ## Values
 

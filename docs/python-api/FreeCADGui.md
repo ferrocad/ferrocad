@@ -13,16 +13,22 @@ _`Selection` is a read-only snapshot pushed by the shell._
 
 | Function | Summary |
 | --- | --- |
+| `activateWorkbench(name: str)` | Make ``name`` the active workbench and return it. |
 | `activeDocument()` | The ``GuiDocument`` for ``FreeCAD.ActiveDocument``, or ``None``. |
+| `activeWorkbench()` | The active workbench, or ``None``. |
 | `addCommand(name: str, command) -> None` | Register ``command`` under ``name`` (``"<Workbench>_<Action>"``). |
 | `addDocumentObserver(observer) -> None` | Upstream-shaped alias for :func:`FerroCADGui.addDocumentListener`. |
 | `addModule(name: str) -> None` | Record a module name for the next commit without importing it. |
+| `addWorkbench(workbench) -> None` | Register ``workbench`` under its class name; a second one replaces it. |
 | `doCommand(text: str)` | Evaluate a Python command string in ``FreeCAD``'s namespace. |
 | `getDocument(name)` | The ``GuiDocument`` for an open App document, or ``None``. |
-| `getMainWindow()` | The headless main window (a stable singleton). |
+| `getMainWindow()` | The main window: the adopted Qt one when a host has it, else the headless seam. |
+| `getWorkbench(name: str)` | The workbench registered as ``name``, or ``None``. |
 | `listCommands() -> list` | The registered command ids, in registration order. |
+| `listWorkbenches() -> dict` | ``{name: workbench}``, in registration order (upstream's dict). |
 | `removeCommand(name: str) -> None` | Drop ``name`` from the registry (a no-op when absent). |
 | `removeDocumentObserver(observer) -> bool` | Remove a GUI document observer; returns whether it was registered. |
+| `removeWorkbench(name: str) -> bool` | Drop ``name`` from the registry (deactivating it first). Returns whether it existed. |
 | `runCommand(name: str, *args)` | Invoke ``name`` and return whatever ``Activated`` returned. |
 | `updateGui() -> None` | Request a repaint (upstream ``Gui.updateGui``). |
 
@@ -106,6 +112,26 @@ A document's 3D view, shaped like upstream's ``View3DInventor``.
 | removeEventCallback(name, callback) -> bool | Drop ``callback`` from ``name``; returns whether it was registered. |
 | removeEventCallbackPivy(event_type, callback) | Undo :meth:`addEventCallbackPivy`; returns whether it was registered. |
 | updateGui() | Request a repaint (upstream ``Gui.updateGui``). |
+
+## Class `Workbench`
+
+The base every workbench subclasses (upstream's ``Gui.Workbench``).
+
+| Member | Summary |
+| --- | --- |
+| Activated() | The Qt half: runs only where a real Qt main window is hosted. |
+| ContextMenu(recipient) | Declare the context menu for ``recipient`` on demand. |
+| Deactivated() | Undo what :meth:`Activated` did. Runs only if that half ran. |
+| GetClassName() | The upstream class name; a Python workbench reports this one. |
+| `Icon` (attribute) | — |
+| Initialize() | Register the workbench's commands and append its rows. Runs once. |
+| `MenuText` (attribute) | — |
+| `StatusTip` (attribute) | — |
+| `ToolTip` (attribute) | — |
+| appendContextMenu(path, commands) -> None | Declare a context-menu row; the same ``path``/``commands`` shape. |
+| appendMenu(path, commands) -> None | Declare a menu row; ``path`` is a string or a list of levels. |
+| appendToolbar(name, commands) -> None | Declare a toolbar row: ``commands`` in order, with ``"Separator"`` entries. |
+| listCommands() -> list | Every command id this workbench declared, first occurrence first. |
 
 ## Object `HintManager`
 

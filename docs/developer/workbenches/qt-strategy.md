@@ -773,3 +773,44 @@ widgets, 32 classes) and Q2a/Q2b as `crates/ferrocad_ui_py` (the proxy tree plus
 surgery, combo mutation, dialog results and property access), so
 `FreeCADGui.PySideUic.loadUi` works headlessly; the shim's `.ui` support is still only the
 `QFile` resource read that §2.6 needed.
+
+## 9. The workbench host (2026-11-15)
+
+A workbench is the container those commands live in, and upstream's contract for it is
+small enough to run Qt-free. `FreeCADGui` now has it:
+
+| Name | What it does |
+| --- | --- |
+| `Workbench` | the base class: `MenuText`/`ToolTip`/`Icon`, `appendToolbar`/`appendMenu`/`appendContextMenu`, `listCommands`, `Initialize`/`Activated`/`Deactivated`/`ContextMenu`, `GetClassName` |
+| `addWorkbench`, `removeWorkbench` | register by **class name** (a second one replaces) |
+| `listWorkbenches`, `getWorkbench`, `activeWorkbench` | read the registry |
+| `activateWorkbench(name)` | initialise once, then the Qt half if a host exists |
+| `_workbench_catalogue()` | the declarations as data, for the shell |
+| `ferrocad_shell.workbenches()` / `activate_workbench(json)` | the same, across the bridge |
+
+**The lifecycle is split where the halves actually differ.** `Initialize` is the Qt-free
+half — `Gui.addCommand` plus the `append*` calls — and runs once, on first activation, in
+every configuration. `Activated` is the half that puts a dock on a main window, installs an
+event filter and starts timers, so it runs **only** when a host has adopted a real Qt
+window (`FreeCADGui._set_gui_host(window)`); `Deactivated` mirrors it, so a workbench
+activated headlessly has nothing to undo, and `getMainWindow()` answers the adopted window
+when there is one. That split is what lets an upstream workbench's declarations load in a
+build that has no Qt at all — `../simplecad/InitGui.py` is five lines and its
+`Initialize` is the whole workbench.
+
+**Command groups.** `addCommand` accepts either shape upstream registers through it: a
+command (`Activated`) or a **group** (`GetCommands`), which a toolbar renders as a
+dropdown. A group is listed with `is_group: true` and its member ids, and running one
+refuses by name rather than guessing the default member.
+
+**What it is not.** The declarations are not chrome: the shell reads them (and will draw
+them), and nothing here creates a widget. A workbench whose `Activated` is Qt-only still
+cannot be shown — that is the `controller.activate()` boundary the SimpleCAD bring-up
+records in [`../../project/tasks/simplecad-bringup.md`](../../project/tasks/simplecad-bringup.md)
+§UI-2.
+
+Pinned by `tests/test_workbench_host.py` (10 cases): registration and replacement, the
+once-only `Initialize`, the catalogue's shape, the unknown-name refusal, the
+host-gated `Activated`/`Deactivated` pair, `getMainWindow()` following the host, groups,
+and — when the sibling checkout is present — `../simplecad`'s own `InitGui.py` declaring
+its five toolbars and six menus with all 49 ids registered.

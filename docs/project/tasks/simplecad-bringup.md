@@ -481,7 +481,7 @@ product path and the only one that gives an interactive viewport; it is per-tool
 | # | Slice | State |
 | --- | --- | --- |
 | **UI-1** | **Measure the Qt-blocked unit modules headlessly.** `--simplecad-gui` runs the five modules the main group skips (they build a `QApplication` in `setUpClass`) against real PySide6 with the offscreen platform, and self-skips when no distribution is installed. | **landed 2026-11-15**: **78 / 1 / 0 / 0** over five modules |
-| UI-2 | **The workbench host.** `Gui.Workbench`, `addWorkbench`, `listWorkbenches`, `activateWorkbench`, `activeWorkbench`, `appendToolbar`/`appendMenu`/`appendContextMenu` → the shell's command catalogue. `../simplecad/InitGui.py` imports and declares its five toolbars and menus; `--check-init` proves it headlessly. | next |
+| UI-2 | **The workbench host.** `Gui.Workbench`, `addWorkbench`, `listWorkbenches`, `activateWorkbench`, `activeWorkbench`, `appendToolbar`/`appendMenu`/`appendContextMenu` → the shell's command catalogue. `../simplecad/InitGui.py` imports and declares its five toolbars and menus; `--check-init` proves it headlessly. | **landed 2026-11-15**: five toolbars, six menus, 49 ids; see UI-5 |
 | UI-3 | **The edition skeleton.** `ferrocad_simplecad` (module + `--edition simplecad`), `SimpleCAD_*` command ids, and the first three tools on our stage: Rectangle (two clicks), Line (the polyline tool), Push/Pull (the existing stem). Each pinned by a round-trip test in the Parametric mould. | after UI-2 |
 | UI-4 | **The rest of the tool surface, in use order.** Circle/Arc/Polygon, Round (the dress-up scrubber, already generic), Offset/Elongate, Move/Rotate, the surface tools (imprint/shell/fill-hole/unwrap) — each a command over `simplecad.modeling`. The 63 `tests/gui/gui_*.py` scripts are the behavioural reference: each is a state machine to translate into a stage-tool test. | incremental |
 | UI-5 | **The two windows that are not the viewport**: the face browser (a dock panel) and the numeric-input rows. The shell already has a properties panel and a manipulator numeric row; these are the same seams. | after UI-3 |
@@ -517,3 +517,45 @@ the case is *about* — the new line closes the region through both rims — **w
 operation after the failing assert gives 9 faces of 9, `isValid()`, `isClosed()`, and the
 volume unchanged (13 108.4073 mm³). Recorded, not "fixed": matching a mesh-derived bound
 would make `BoundBox` wrong for every other caller.
+
+## UI-5. UI-2, as measured
+
+```sh
+python3 tools/run_tests.py --extension base        # test_workbench_host: 10 cases
+```
+
+`FreeCADGui` gained the workbench host (`Workbench`, `addWorkbench`, `removeWorkbench`,
+`listWorkbenches`, `getWorkbench`, `activateWorkbench`, `activeWorkbench`,
+`_workbench_catalogue`, `_set_gui_host`) and `ferrocad_shell` the two bridge entries
+(`workbenches()`, `activate_workbench(json)`); the contract is
+[`../../developer/workbenches/qt-strategy.md`](../../developer/workbenches/qt-strategy.md) §9.
+
+Two decisions the port needed:
+
+- **The lifecycle splits where the halves differ.** `Initialize` is Qt-free (commands plus
+  `append*`) and runs once; `Activated` puts a dock on a main window, so it runs only when
+  a host has adopted one — and `Deactivated` mirrors it, so a headless activation has
+  nothing to undo. Without that split, SimpleCAD's `Activated` (a Qt controller, three
+  timers and a Coin display) would fail on every load.
+- **`addCommand` takes groups.** SimpleCAD registers `SmartSelectGroup`, which implements
+  `GetCommands` and no `Activated`; upstream renders it as a toolbar dropdown. Our
+  validation required `Activated`, so the whole workbench registration aborted. A group is
+  now accepted, listed (`is_group`, `commands`) and refused by name if run.
+
+**The checkout loads.** With `../simplecad` on the path, `import InitGui` registers
+`SimpleCADWorkbench`, and activating it runs `commands.register()` (53 ids) then
+`Initialize`'s appends:
+
+| Declared | Count |
+| --- | ---: |
+| toolbars | **5** (`SimpleCAD Draw` 8 slots, `Modify` 20, `Surface` 8, `Inspect` 4, `Mesh` 4) |
+| menus | **6** (one per group plus the `Separator`/`Settings`/`MCP` root row) |
+| command ids the workbench lists | **49** (deduped across rows; `Separator` excluded) |
+| command ids registered in total | **101** (the 49 plus the shell's own) |
+
+Every row's ids are registered and in the `SimpleCAD_` namespace, and the `Inspect`
+toolbar's `SimpleCAD_SmartSelect` is reported as a group.
+
+This is the **declaration** half of route (a) — it is the part that is genuinely portable.
+The next slice (UI-3) is the first native tool: `ferrocad_simplecad` registering our own
+command ids and a two-click Rectangle on the GPUI stage.

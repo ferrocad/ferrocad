@@ -1507,12 +1507,18 @@ fn action_label(
 }
 
 /// The armed tool's pill: what is running, its numbers (or its point count), its hint,
-/// and the `Cancel` / `Finish` pair.
+/// and — once there is something to finish — the `Cancel` / `Finish` pair.
 ///
 /// It is a **new pill above the create dock**, not a replacement for the dock: the Add
 /// hand is a loadout, so a session adds a row and leaves the slots where the user's
 /// fingers expect them. The pill itself is the same glass as the rest of the column, so
 /// the session reads as part of the same instrument.
+///
+/// At rest the pill is a **readout**, exactly like the Modify hand's coordinate row: a
+/// tool that has placed nothing has nothing to finish, so it shows its name, its count and
+/// its hint and no buttons at all. The pair appears with the first placed point (or with a
+/// tool that publishes fields, whose row *is* the pending value), which is the same rule
+/// the Modify hand follows for an uncommitted move.
 ///
 /// **Cancel** is neutral (no accent fill) and ends the session through
 /// [`Shell::cancel_tool`]; **Finish** is the accent action and takes the same host path
@@ -1594,56 +1600,67 @@ fn tool_pill(
             fields = fields.child(div().text_color(rgb(MUTED)).child(unit));
         }
         pill = pill.child(fields);
-    } else {
+    } else if status.points > 0 {
+        // The count is only worth a cell once there is one: at rest a two-click tool's
+        // "0 points" is noise, and the pill is meant to read as a readout, not a dialog.
         pill = pill.child(div().text_color(rgb(MUTED)).child(format!(
             "{} point{}",
             status.points,
             if status.points == 1 { "" } else { "s" }
         )));
     }
-    pill.child(
+    // Finish needs something to finish: at rest the pill is a readout (name, numbers or
+    // count, hint) and the pair arrives with the first placed point — or with a tool that
+    // publishes fields, whose row *is* the pending value. `Esc` and another pill are the
+    // ways out of a tool that has placed nothing, exactly as they are for an idle hand.
+    let finishable = !status.fields.is_empty() || status.points > 0;
+    pill = pill.child(
         div()
             .min_w_0()
             .truncate()
             .text_color(rgb(MUTED))
             .child(status.hint.clone()),
-    )
-    // The abort action is neutral: the accent fill belongs to Finish.
-    .child(
-        div()
-            .id("tool-cancel")
-            .debug_selector(|| "tool-cancel".to_string())
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .bg(rgb(PANEL))
-            .text_color(rgb(FG))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(PANEL_ALT)))
-            .child(action_label("close", "Cancel", FG, "tool-cancel-icon"))
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.cancel_tool(cx);
-            })),
-    )
-    // Finish is a real button, not a hint: a trackpad user can end the session without
-    // finding `Enter`. It calls the same host path as the key.
-    .child(
-        div()
-            .id("tool-finish")
-            .debug_selector(|| "tool-finish".to_string())
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .bg(rgb(ACCENT))
-            .text_color(rgb(FG))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(PANEL_ALT)))
-            .child(action_label("check", "Finish", FG, "tool-finish-icon"))
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.finish_active_tool(cx);
-            })),
-    )
-    .into_any_element()
+    );
+    if !finishable {
+        return pill.into_any_element();
+    }
+    pill
+        // The abort action is neutral: the accent fill belongs to Finish.
+        .child(
+            div()
+                .id("tool-cancel")
+                .debug_selector(|| "tool-cancel".to_string())
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(PANEL))
+                .text_color(rgb(FG))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(PANEL_ALT)))
+                .child(action_label("close", "Cancel", FG, "tool-cancel-icon"))
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.cancel_tool(cx);
+                })),
+        )
+        // Finish is a real button, not a hint: a trackpad user can end the session without
+        // finding `Enter`. It calls the same host path as the key.
+        .child(
+            div()
+                .id("tool-finish")
+                .debug_selector(|| "tool-finish".to_string())
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(rgb(ACCENT))
+                .text_color(rgb(FG))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(PANEL_ALT)))
+                .child(action_label("check", "Finish", FG, "tool-finish-icon"))
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.finish_active_tool(cx);
+                })),
+        )
+        .into_any_element()
 }
 
 /// The bottom-centre column: the armed tool's pill, the create dock, and the action

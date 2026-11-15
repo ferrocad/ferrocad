@@ -437,7 +437,28 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
         cx.debug_bounds("action-dock").is_some(),
         "the dock is still rendered during a session"
     );
-    let strip = cx.debug_bounds("tool-strip").expect("the tool's pill");
+    assert!(
+        cx.debug_bounds("tool-strip").is_some(),
+        "the tool's pill is drawn"
+    );
+    // A tool that has placed nothing has nothing to finish: the pill is a readout, exactly
+    // as the Modify hand's coordinate row is at rest, and the pair arrives with the first
+    // placed point.
+    assert!(
+        cx.debug_bounds("tool-cancel").is_none(),
+        "no Cancel before a point is placed"
+    );
+    assert!(
+        cx.debug_bounds("tool-finish").is_none(),
+        "no Finish before a point is placed"
+    );
+    model.lock().unwrap().tool = Some(ToolStatus::new(
+        "test_polyline",
+        "Polyline",
+        2,
+        "Enter to finish",
+    ));
+    draw(&mut cx);
     assert!(cx.debug_bounds("tool-cancel").is_some(), "Cancel is a button");
     assert!(cx.debug_bounds("tool-finish").is_some(), "Finish is a button");
     // Both actions carry a glyph: an X to abort, a check to commit.
@@ -447,6 +468,7 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
             "{selector} is painted"
         );
     }
+    let strip = cx.debug_bounds("tool-strip").expect("the grown pill");
 
     // Bottom-centre and inside the canvas: it overlays the scene, it does not sit above
     // it in the column.
@@ -488,13 +510,20 @@ fn finish_and_enter_end_the_tool_through_the_same_path(cx: &mut TestAppContext) 
         })
     });
 
-    // The button ends the session and leaves the document/status alone.
+    // The button ends the session and leaves the document/status alone. It is only drawn
+    // once the tool has a point to finish, so the session is given one first.
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             shell.start_tool("test_polyline", cx);
         })
     });
     let status_before = model.lock().unwrap().status.clone();
+    model.lock().unwrap().tool = Some(ToolStatus::new(
+        "test_polyline",
+        "Polyline",
+        1,
+        "Enter to finish",
+    ));
     draw(&mut cx);
     click_at(&mut cx, "tool-finish");
     assert!(model.lock().unwrap().tool.is_none(), "Finish ends the session");

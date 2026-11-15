@@ -230,13 +230,19 @@ impl Shell {
     /// The peek is the keyboard's hover: a held key borrows the caret's flyout for the
     /// slot the Add hand holds, so the category is one key away without a click, and
     /// letting go gives it back. It is deliberately **narrow**, because `Shift` already
-    /// means something on this canvas — it turns a gizmo axis drag into a plane drag — so
-    /// the peek refuses whenever the canvas has its own use for the key:
+    /// means something on this canvas, so the peek refuses whenever the canvas has its own
+    /// use for the key:
     ///
-    /// - a tool owns the canvas (`Shift` is inside the tool's gesture then),
-    /// - a handle is armed or a transform is open or pending (plane drag, `Shift`+`Tab`),
+    /// - a handle is armed or a transform is open or pending (`Shift` is the gizmo's
+    ///   plane drag, `Shift`+`Tab` walks the fields),
+    /// - the armed tool publishes fields (`Shift`+`Tab` is its own numeric row),
     /// - a field owns the keyboard (a capital letter),
     /// - a modal, the wheel or the settings card is up (they take their own keys).
+    ///
+    /// A tool that owns the canvas with **no** fields is the one running state that does
+    /// not stand down: a two-click drawing tool leaves `Shift` free, and hopping to
+    /// another pill while one is armed is the point of a loadout. The session is replaced,
+    /// not stacked, so the peek costs nothing.
     ///
     /// A flyout the user opened (the caret) is never adopted: releasing the key closes
     /// only what the peek opened.
@@ -244,8 +250,7 @@ impl Shell {
         if self.creation_peek || self.popover_open("create") {
             return;
         }
-        if self.active_tool.is_some()
-            || self.modal_open()
+        if self.modal_open()
             || self.settings_card.is_some()
             || self.wheel.read(cx).is_open()
             || self.typing_focused(window, cx)
@@ -256,6 +261,7 @@ impl Shell {
             || self.pending_interaction.is_some()
             || self.session.is_some()
             || self.model.lock().unwrap().gizmo_armed
+            || self.has_tool_fields()
         {
             return;
         }

@@ -1250,7 +1250,8 @@ for _id, _command in (
     draw(&mut cx);
     assert!(cx.debug_bounds("create-popover").is_none());
 
-    // A tool owns the canvas: `Shift` is part of the tool's own gestures there.
+    // A tool owns the canvas but publishes no fields, so `Shift` is free: peeking is how
+    // another pill is reached mid-session, which is the whole point of a loadout.
     cx.update(|_window, cx| {
         shell.update(cx, |shell, _| {
             shell.active_tool = Some("Test_PeekSketch".to_string())
@@ -1258,9 +1259,23 @@ for _id, _command in (
     });
     peek(&mut cx);
     assert!(
-        cx.debug_bounds("create-popover").is_none(),
-        "no peek while a tool holds the canvas"
+        cx.debug_bounds("create-popover").is_some(),
+        "the peek still works while a fieldless tool is armed"
     );
+    release(&mut cx);
+
+    // A tool with a numeric row keeps `Shift` for itself: `Shift`+`Tab` walks its fields.
+    model.lock().unwrap().tool = Some(
+        ToolStatus::new("Test_PeekBox", "Box", 0, "tab to edit").with_fields(vec![
+            ferrocad_stage::ToolField::number("w", "W", 20.0, "mm"),
+        ]),
+    );
+    peek(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_none(),
+        "no peek while the tool publishes fields"
+    );
+    model.lock().unwrap().tool = None;
 
     // An armed gizmo: `Shift` turns an axis drag into a plane drag, so the key is the
     // canvas' and not the dock's.

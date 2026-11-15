@@ -967,11 +967,12 @@ impl Manipulator for DressUpScrubber {
     }
 }
 
-/// The scrubber a selection asks for, when it names an **edge** of a displayed item.
+/// The scrubber a selection asks for, when it names an **edge** of a displayed body.
 ///
 /// This is the presentation half of the edge manipulator: a workbench registers it as
 /// a manipulator factory and the host calls it on every selection. A face or vertex
-/// selection, an unknown entity or a mesh without a wire run returns `None`.
+/// selection, an unknown entity, an item with no faces (a sketch's display is a compound
+/// of edges, so is a wire) or a mesh without a wire run returns `None`.
 pub fn dress_up_scrubber_for(
     selection: &SelectionRef,
     stage: &Stage,
@@ -981,7 +982,20 @@ pub fn dress_up_scrubber_for(
     if !edge.starts_with("Edge") {
         return None;
     }
-    let points = stage.item(selection.object)?.edge_polyline(edge)?;
+    let item = stage.item(selection.object)?;
+    // A dress-up replaces edges **of a solid**. The body's own faces are the test, not the
+    // object's type: `SelectionRef` carries no type and a compiled factory must not need
+    // one. A sketch's display is a compound of edges (and a `Part::Feature` wire is one
+    // too), so it has no face and arms nothing here — the fillet it would offer is one the
+    // document has to refuse.
+    if !item
+        .part_names()
+        .iter()
+        .any(|name| name.starts_with("Face"))
+    {
+        return None;
+    }
+    let points = item.edge_polyline(edge)?;
     if points.len() < 2 {
         return None;
     }
@@ -1644,6 +1658,42 @@ mod tests {
                 DressUpMode::Fillet
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn a_feature_with_no_faces_arms_no_scrubber() {
+        // A sketch (and a `Part::Feature` wire) displays as a compound of edges, so its
+        // item has no `Face*` part. A dress-up replaces edges of a *solid*: arming here
+        // would offer an operation the document has to refuse.
+        use ferrocad_geom::Tessellation;
+
+        let mesh = Tessellation {
+            positions: vec![],
+            normals: Vec::new(),
+            triangles: vec![],
+            triangle_parts: vec![],
+            edges: vec![0, 1, 2, 3, 4, 5, 6, 7],
+            segment_parts: vec![0, 0, 1, 1, 2, 2, 3, 3],
+            vertices: Vec::new(),
+            vertex_parts: Vec::new(),
+            parts: vec![
+                "Edge1".to_string(),
+                "Edge2".to_string(),
+                "Edge3".to_string(),
+                "Edge4".to_string(),
+            ],
+        };
+        let stage = Stage::new().with_item(ShapeItem::from_tessellation(7, &mesh));
+
+        assert!(
+            dress_up_scrubber_for(
+                &SelectionRef::element(7, "Edge1"),
+                &stage,
+                DressUpMode::Fillet
+            )
+            .is_none(),
+            "a face-less item has no edge a fillet could replace"
         );
     }
 

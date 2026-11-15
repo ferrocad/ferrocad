@@ -117,6 +117,7 @@ pub use interaction::{
     CreationHost, HoverTarget, InteractionCommit, Manipulator, NumericField, TargetKind,
 };
 pub use plane_points::PlanePointsTool;
+pub use interaction::box_tool::BoxTool;
 pub use rectangle::RectangleTool;
 pub use arc::ArcTool;
 pub use circle::CircleTool;
@@ -131,7 +132,7 @@ pub use snap::{
     snap_to_geometry_with,
 };
 pub use stage::Stage;
-pub use tool::{PolylineTool, TaggedPolyline, Tool, ToolStatus};
+pub use tool::{PolylineTool, TaggedPolyline, Tool, ToolField, ToolStatus};
 pub use workplane::{FaceFrame, StandardPlane, Workplane, WorkplaneKind};
 pub use workplane_stem::{
     STEM_PIXELS, WORKPLANE_ENTITY, WORKPLANE_OFFSET_ACTION, WORKPLANE_OFFSET_ID,

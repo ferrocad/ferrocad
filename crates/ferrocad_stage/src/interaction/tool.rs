@@ -18,7 +18,7 @@ use crate::workplane::Workplane;
 /// counts the placed vertices, and `hint` says what the next actions are. When
 /// `active` is `false` the host hides the strip; a tool with no session state (the
 /// default implementation) reports exactly that.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ToolStatus {
     /// The tool's own id (the registry id lives in the host, e.g. `toy_polyline`).
     pub id: String,
@@ -30,6 +30,78 @@ pub struct ToolStatus {
     pub points: usize,
     /// One-line hint for the next actions.
     pub hint: String,
+    /// The numeric (or short string) fields the docked strip shows and edits.
+    ///
+    /// Empty for a tool whose only input is the pointer. A tool that has parameters
+    /// (`Box`: W/L/H) lists them here; the host renders them as one tabular-monospace
+    /// row and writes an edit back through [`Tool::set_field`].
+    pub fields: Vec<ToolField>,
+}
+
+/// One field the tool strip shows: a label, a tabular-monospace value and a unit.
+///
+/// The value is **text**, not a number: the user is typing into it, and a half-typed
+/// `2.` or `-` is a legitimate intermediate state. A tool parses it in
+/// [`Tool::set_field`] and refuses what it cannot use.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolField {
+    /// The key [`Tool::set_field`] receives (`"w"`).
+    pub id: String,
+    /// The strip's one-to-three character label (`W`).
+    pub label: String,
+    /// The value as shown and edited (`20.00`).
+    pub value: String,
+    /// The unit shown after the value (`mm`), empty for none.
+    pub unit: String,
+    /// The step a scrub or an arrow key would use, in the unit's space.
+    pub step: f64,
+    /// The smallest acceptable value, when the field is bounded.
+    pub min: Option<f64>,
+    /// The largest acceptable value, when the field is bounded.
+    pub max: Option<f64>,
+}
+
+impl ToolField {
+    /// A numeric field, formatted to two decimals.
+    pub fn number(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        value: f64,
+        unit: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            value: format!("{value:.2}"),
+            unit: unit.into(),
+            step: 1.0,
+            min: None,
+            max: None,
+        }
+    }
+
+    /// A short string field (`A` for an angle name, a text tool's content).
+    pub fn text(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        value: impl Into<String>,
+        unit: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            unit: unit.into(),
+            step: 1.0,
+            min: None,
+            max: None,
+        }
+    }
+
+    /// The value as a number, when it parses.
+    pub fn number_value(&self) -> Option<f64> {
+        self.value.trim().parse::<f64>().ok()
+    }
 }
 
 impl ToolStatus {
@@ -51,7 +123,14 @@ impl ToolStatus {
             active: true,
             points,
             hint: hint.into(),
+            fields: Vec::new(),
         }
+    }
+
+    /// The same status with the docked strip's fields.
+    pub fn with_fields(mut self, fields: Vec<ToolField>) -> Self {
+        self.fields = fields;
+        self
     }
 
     /// Whether a session is active.
@@ -65,6 +144,7 @@ impl ToolStatus {
         self.active = false;
         self.points = 0;
         self.hint.clear();
+        self.fields.clear();
         self
     }
 }
@@ -156,6 +236,16 @@ pub trait Tool {
     /// scene. The default ignores it — a polyline anchors on its own clicks and needs no
     /// placement frame — so a tool that does not care costs nothing.
     fn hover(&mut self, _target: Option<&crate::interaction::HoverTarget>) {}
+
+    /// Write one of the strip's fields back into the tool.
+    ///
+    /// `text` is what the user typed (the raw field text, not a parsed number): a
+    /// half-typed value is legal input, and the tool decides what to do with it.
+    /// Returns whether the tool accepted the edit — a refusal leaves the tool (and the
+    /// strip) as it was, so a stray key cannot resize a shape to a nonsense value.
+    fn set_field(&mut self, _id: &str, _text: &str) -> bool {
+        false
+    }
 }
 
 /// The polyline tool's id in its status (the host's registry id is separate).

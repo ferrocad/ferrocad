@@ -336,6 +336,7 @@ impl CommandDef {
             tone: self.tone.to_string(),
             category: String::new(),
             target: self.target.to_string(),
+            gate: String::new(),
             parent: self.parent.to_string(),
             // Built-ins resolve through the curated table; a workbench or mod command
             // can override this with a vendored icon key or an upstream id.

@@ -4,7 +4,7 @@
 //! shell); this library holds what the edition *contributes*, so the round-trip test
 //! can inspect the same registry the window installs.
 
-pub use ferrocad_stage::{ArcTool, CircleTool, PolygonTool, RectangleTool};
+pub use ferrocad_stage::{ArcTool, BoxTool, CircleTool, PolygonTool, RectangleTool};
 
 /// The tool id the two-click rectangle is registered under.
 pub const RECTANGLE_TOOL: &str = "rectangle";

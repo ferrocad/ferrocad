@@ -211,18 +211,29 @@ impl Shell {
     /// through, plus the document object beneath it. Empty when there is none.
     pub(in crate::shell) fn hover_line(&self, cx: &App) -> String {
         let Some(viewport) = self.viewport.as_ref() else {
-            return String::new();
+            // A headless shell has no pick to report, but it still knows which chrome
+            // panel the last click left through.
+            return self
+                .pass_through()
+                .map(|overlay| format!("clicked through: {overlay}"))
+                .unwrap_or_default();
         };
         // Every shell render publishes the camera: an orbit or a zoom moves it without
         // telling the shell, and the next render is the first point a Python call can
         // observe it. This is the freshness the view facade's getCameraNode relies on.
         self.publish_view(cx);
-        let report = viewport.read(cx).hover_report();
+        let mut report = viewport.read(cx).hover_report().clone();
+        // A press that reached the scene through an open creation flyout is reported
+        // here rather than by the viewport: the pick and the camera stay pure, and only
+        // the shell knows a chrome panel was under the pointer.
+        if let Some(overlay) = self.pass_through() {
+            report.through = Some(overlay);
+        }
         let target = report
             .target
             .as_ref()
             .and_then(|reference| self.display.object_of(reference.object));
-        hover_status(report, target)
+        hover_status(&report, target)
     }
 
     /// Re-read the tree and the selected object's properties after a change.

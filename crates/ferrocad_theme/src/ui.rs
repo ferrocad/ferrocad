@@ -37,6 +37,11 @@ pub const ACCENT: u32 = 0x2f4a6d;
 pub const FG: u32 = 0xd8dbe0;
 /// Muted text and inactive marks (`#8B919A`).
 pub const MUTED: u32 = 0x8b919a;
+/// A structurally **inactive** control (`#94A3B8`): a creation tool the current selection
+/// cannot satisfy, a menu row that is disabled by its topology gate. It is a lighter
+/// slate than [`MUTED`], so "disabled" reads as a state rather than as low contrast
+/// (the design's `ui::INACTIVE_STRUCTURAL`).
+pub const INACTIVE_STRUCTURAL: u32 = 0x94a3b8;
 /// The chrome accent (`#67D7FF`): the NaviCube bar and the Dev Tools `active` badge.
 pub const CHROME_ACTIVE: u32 = 0x67d7ff;
 /// The chrome accent's fill (`#1B2B38` at 33%): behind a pressed chrome control, such as

@@ -326,6 +326,20 @@ impl Shell {
         if self.loadout.filter() == filter {
             return;
         }
+        // An armed creation tool owns what a click means until it ends. Its gate is the
+        // selection-shaped half of that: changing the pick scope would change what the
+        // tool is allowed to anchor on mid-session, so it is refused with the tool named.
+        if let Some(gate) = self.armed_creation_gate() {
+            let status = format!(
+                "{} needs {} — finish it before changing the scope",
+                self.armed_tool_label(),
+                gate.requirement()
+            );
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return;
+        }
         if self.gate(Action::SwitchScope, cx) {
             return;
         }

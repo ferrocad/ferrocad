@@ -2986,6 +2986,7 @@ dependencies = [
  "ferrocad",
  "ferrocad_combined_py",
  "ferrocad_part_gui",
+ "ferrocad_shell_api",
  "ferrocad_shell_python",
  "ferrocad_stage",
  "ferrocad_types",

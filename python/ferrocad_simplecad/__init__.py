@@ -1024,6 +1024,22 @@ _PALETTE_VERBS = {"Slice", "Cleanup", "Heal"}
 #: tools, so they are reached the same way `Rectangle` is — from `⊕ <tool> ▾`.
 _CREATION_VERBS = {"Loft": "Surface", "Sweep": "Surface"}
 
+#: Verb -> the topology it needs before the chrome offers it (`FerroCAD_Gate`). The
+#: pill's rows and the wheel read this, so an impossible verb is greyed with its
+#: requirement rather than silently doing nothing.
+_VERB_GATE = {
+    "Shell": "face:1",
+    "Draft": "face:1",
+    "FillHole": "face:1",
+    "Unwrap": "face:1",
+    "RemoveRounds": "edge:1",
+    "Subdivide": "face:1:1",
+    "Union": "body:2",
+    "Intersect": "body:2",
+    "Loft": "body:2",
+    "Sweep": "body:2",
+}
+
 
 def _run_verb(verb, value=None):
     """Run one selection verb. A refusal is a status, never an exception."""
@@ -1069,6 +1085,9 @@ class _VerbCommand:
             target, tone = _VERB_WHEEL.get(self.verb, ("body", "structural"))
             resources["FerroCAD_Target"] = target
             resources["FerroCAD_Tone"] = tone
+        gate = _VERB_GATE.get(self.verb)
+        if gate:
+            resources["FerroCAD_Gate"] = gate
         return resources
 
     def IsActive(self):

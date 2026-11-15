@@ -887,6 +887,13 @@ impl Shell {
         let status = match crate::app::apply_interaction(cx, commit, &object) {
             Ok(result) if result.ok => {
                 self.after_document_edit(cx);
+                // A creation is `PILL_HOLD`: the pill keeps the tool's accent for a
+                // moment, and this is where the strip's edit state ends (the commit
+                // owns the numbers it was given).
+                if commit.creates {
+                    self.hold_pill();
+                    self.tool_field = None;
+                }
                 Ok(match (commit.element.as_deref(), commit.readout.is_empty()) {
                     (Some(element), false) => {
                         format!("{element} {} = {}", commit.action, commit.readout)

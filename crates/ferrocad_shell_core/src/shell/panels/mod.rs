@@ -12,3 +12,4 @@ pub mod loadout;
 pub mod palette;
 pub mod popovers;
 pub mod properties;
+pub mod tool_fields;

@@ -378,6 +378,10 @@ def _interaction(obj, manipulator, action, element, values):
         # A creating commit: there is no target object, the points are the input.
         return _create_polyline([float(value) for value in values])
 
+    if manipulator == "box" and action == "create":
+        # The Box tool's strip committed: size and corner, nothing else.
+        return _create_box([float(value) for value in values])
+
     if manipulator == "sketch_polyline" and action == "create":
         return _create_sketch_polyline([float(value) for value in values])
 
@@ -1169,12 +1173,14 @@ def _add_appearance(obj):
     return obj
 
 
-def _add_box(doc, length, width, height, x, y, name):
+def _add_box(doc, length, width, height, x, y, name, z=0.0):
     """Add the object and its properties; the caller owns the transaction."""
     box = doc.addObject("Part::Feature", name)
     box.Shape = Part.makeBox(float(length), float(width), float(height))
     _add_appearance(box)
-    box.Placement = FreeCAD.Placement(FreeCAD.Vector(float(x), float(y), 0.0))
+    box.Placement = FreeCAD.Placement(
+        FreeCAD.Vector(float(x), float(y), float(z))
+    )
     return box
 
 
@@ -1185,6 +1191,7 @@ def makeBox(
     x=0.0,
     y=0.0,
     name="Box",
+    z=0.0,
 ):
     """Create a Part box in the active document as one undoable transaction.
 
@@ -1196,7 +1203,7 @@ def makeBox(
         doc = FreeCAD.newDocument("Unnamed")
     doc.openTransaction("Create Box")
     try:
-        box = _add_box(doc, length, width, height, x, y, name)
+        box = _add_box(doc, length, width, height, x, y, name, z)
         doc.recompute()
         doc.commitTransaction()
     except Exception:
@@ -1304,6 +1311,26 @@ def add_datum_plane(payload: str) -> str:
     return json.dumps({"ok": True, "object": obj.Name})
 
 
+def _create_box(values):
+    """One `box` commit: width, length, height and the corner, one transaction.
+
+    The tool's `W` runs along the placement frame's `u` (world X for the workplane),
+    `L` along `v` and `H` along the normal, which is `Part.makeBox`'s own (X, Y, Z)
+    order — so the numbers go in unchanged and the box the strip showed is the box
+    that lands.
+    """
+    if len(values) < 6:
+        return {"ok": False, "error": "a box needs a size and a corner"}
+    w, l, h, x, y, z = (float(value) for value in values[:6])
+    if min(w, l, h) <= 0.0:
+        return {"ok": False, "error": "a box needs a positive size"}
+    try:
+        box = makeBox(w, l, h, x, y, z=z)
+    except Exception as exc:  # noqa: BLE001 - one bad commit must not break the shell
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": box.Name}
+
+
 class _MakeBoxCommand:
     """``Part_Box`` — add a box to the document."""
 
@@ -1323,8 +1350,10 @@ class _MakeBoxCommand:
         return FreeCAD.ActiveDocument is not None
 
     def Activated(self):
-        box = makeBox()
-        return {"status": f"created {box.Name}"}
+        # Arm the **Box tool**: the pill shows it with its `W`/`L`/`H` strip and `Enter`
+        # creates it, so a pointer is optional and the numbers are the input. Search and
+        # the app menu still reach this command, which is why it stays registered.
+        return {"tool": "box"}
 
 
 FreeCADGui.addCommand("Part_Box", _MakeBoxCommand())
@@ -1855,6 +1884,7 @@ class _BooleanCommand:
             "FerroCAD_Surface": "radial",
             "FerroCAD_Target": "body",
             "FerroCAD_Tone": "additive",
+            "FerroCAD_Gate": "body:2",
         }
 
     def IsActive(self):
@@ -2107,6 +2137,7 @@ class _HealFacesCommand:
             # A face-context repair: the neighbours grow until the body closes again.
             "FerroCAD_Surface": "radial",
             "FerroCAD_Target": "face",
+            "FerroCAD_Gate": "face:1",
             "FerroCAD_Tone": "structural",
         }
 
@@ -2139,6 +2170,7 @@ class _ChamferCommand:
             # An edge dress-up: the Slot 3 sibling of the fillet scrubber.
             "FerroCAD_Surface": "radial",
             "FerroCAD_Target": "edge",
+            "FerroCAD_Gate": "edge:1",
             "FerroCAD_Tone": "additive",
         }
 

@@ -1833,6 +1833,24 @@ impl<V: InventorView> InventorViewport<V> {
         self.tool.as_ref().map(|tool| tool.status())
     }
 
+    /// Write one of the tool strip's fields back into the active tool.
+    ///
+    /// The tool parses the text and decides; a refusal leaves the tool, its preview and
+    /// the queued status untouched, so a stray key cannot resize a shape to nonsense.
+    /// Returns whether the edit was accepted.
+    pub fn set_tool_field(&mut self, id: &str, text: &str) -> bool {
+        let Some(tool) = self.tool.as_mut() else {
+            return false;
+        };
+        if !tool.set_field(id, text) {
+            return false;
+        }
+        let status = tool.status();
+        self.rebuild_transient();
+        self.tool_state = Some(status);
+        true
+    }
+
     /// Take the tool status queued for the host (the next gpui handler emits it as
     /// [`ViewportEvent::ToolState`]).
     pub fn take_tool_state(&mut self) -> Option<ToolStatus> {
@@ -13843,6 +13861,48 @@ mod tests {
         view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
         view.refresh();
         view
+    }
+
+    /// C2: the strip's field write-back reaches the tool and its preview, and a refused
+    /// value changes nothing.
+    #[test]
+    fn a_tool_field_edit_resizes_the_tools_preview() {
+        let mut view = identity_viewport(Scene::default());
+        view.set_tool(Some(Box::new(ferrocad_stage::BoxTool::new())));
+        let status = view.tool_status().expect("the box is armed");
+        assert_eq!(status.fields.first().map(|f| f.value.as_str()), Some("20.00"));
+        let before = view
+            .tool
+            .as_ref()
+            .expect("armed")
+            .items()[0]
+            .positions()
+            .to_vec();
+
+        assert!(view.set_tool_field("w", "35.5"), "the tool accepted 35.5");
+        let status = view.take_tool_state().expect("the new status is queued");
+        assert_eq!(status.fields[0].value, "35.50");
+        let after = view
+            .tool
+            .as_ref()
+            .expect("armed")
+            .items()[0]
+            .positions()
+            .to_vec();
+        assert_ne!(before, after, "the ghost resized with the field");
+
+        // A refused value leaves the tool, its status and the queued state alone.
+        assert!(!view.set_tool_field("w", "0"));
+        assert!(!view.set_tool_field("l", "wide"));
+        assert!(
+            view.take_tool_state().is_none(),
+            "a refusal queues nothing"
+        );
+        assert_eq!(
+            view.tool_status().expect("armed").fields[0].value,
+            "35.50",
+            "the accepted value survives the refusals"
+        );
     }
 
     /// The **logical** (top-left origin) position of a world XY point under the identity

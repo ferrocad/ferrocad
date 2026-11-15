@@ -2122,6 +2122,9 @@ mod stage {
                 .and_then(|value| value.clone().try_into_value::<usize>(vm).ok())
                 .unwrap_or(0),
             hint: string("hint"),
+            // A scripted tool's fields are not parsed here: the strip is the native
+            // tools' surface until a script can report fields of its own.
+            fields: Vec::new(),
         }
     }
 

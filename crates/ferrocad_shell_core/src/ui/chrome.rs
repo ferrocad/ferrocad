@@ -33,9 +33,8 @@ use ferrocad_widgets::scroll::scroll_area;
 
 use ferrocad_theme::ui::{
     ACTIVE_ACCENT, CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, DOCK_BG, DOCK_BORDER, GLASS,
-    ROW_HOVER,
+    INACTIVE_STRUCTURAL, ROW_HOVER,
 };
-
 use crate::commands::{self, CommandInfo, Surface};
 use crate::types::{AxisSummary, GridSummary, ProviderFeature};
 use crate::shell::{ACCENT, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell, ShellModel, Slot};
@@ -700,7 +699,7 @@ fn workplane_button(
                     .anchor(Anchor::TopLeft)
                     .position(position)
                     .snap_to_window_with_margin(px(8.))
-                    .child(popover_with_info("wp", Vec::new(), rows, cx)),
+                    .child(popover_with_info("wp", Vec::new(), rows, None, cx)),
             )
             .with_priority(1),
         );
@@ -804,7 +803,7 @@ fn select_button(
                     .anchor(Anchor::TopLeft)
                     .position(position)
                     .snap_to_window_with_margin(px(8.))
-                    .child(popover_with_info("select", Vec::new(), rows, cx)),
+                    .child(popover_with_info("select", Vec::new(), rows, None, cx)),
             )
             .with_priority(1),
         );
@@ -1104,7 +1103,7 @@ fn split_button_with_rows(
                     .anchor(Anchor::TopLeft)
                     .position(position)
                     .snap_to_window_with_margin(px(8.))
-                    .child(popover_with_info(key, info, rows, cx)),
+                    .child(popover_with_info(key, info, rows, None, cx)),
             )
             .with_priority(1),
         );
@@ -1115,7 +1114,7 @@ fn split_button_with_rows(
 /// An anchored popover: a plain column of command rows, dismissed by an outside
 /// press. It has no backdrop, so the canvas beneath still receives pointer events.
 fn popover(key: &'static str, rows: Vec<PopoverRow>, cx: &mut Context<Shell>) -> impl IntoElement {
-    popover_with_info(key, Vec::new(), rows, cx)
+    popover_with_info(key, Vec::new(), rows, None, cx)
 }
 
 /// A popover with read-only value rows above its commands (T4).
@@ -1124,10 +1123,14 @@ fn popover(key: &'static str, rows: Vec<PopoverRow>, cx: &mut Context<Shell>) ->
 /// adapter: it maps registry commands to rows and turns a click into the command run.
 /// A **state** row (`keep_open`) runs in place so the menu stays open and its dot
 /// follows; an action row dismisses the menu.
+/// `pass_through` names an overlay to report when a press dismisses the panel (the
+/// creation flyout's negative space): the shell then adds `clicked through: <name>` to
+/// the hover line, without teaching the viewport anything about chrome.
 fn popover_with_info(
     key: &'static str,
     info: Vec<PopoverInfo>,
     rows: Vec<PopoverRow>,
+    pass_through: Option<&'static str>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let keep_open: HashSet<String> = rows
@@ -1172,7 +1175,12 @@ fn popover_with_info(
     };
     let shell = cx.entity().downgrade();
     let on_dismiss = move |_window: &mut Window, cx: &mut App| {
-        let _ = shell.update(cx, |shell, cx| shell.close_popover(cx));
+        let _ = shell.update(cx, |shell, cx| {
+            if let Some(overlay) = pass_through {
+                shell.note_pass_through(overlay);
+            }
+            shell.close_popover(cx)
+        });
     };
 
     menu(key, info, rows, on_row, on_dismiss)
@@ -1458,6 +1466,7 @@ pub(crate) fn action_dock(
     open: bool,
     anchor: Option<Point<Pixels>>,
     blocked: bool,
+    holding: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let groups = model.surfaces();
@@ -1559,7 +1568,16 @@ pub(crate) fn action_dock(
     }
     // The Add hand: one split pill, never a row of tools. An edition with no creation
     // commands (a bare composition) simply has no pill.
-    if let Some(pill) = creation_pill(&groups.creation, active, open, anchor, blocked, cx) {
+    if let Some(pill) = creation_pill(
+        &groups.creation,
+        model,
+        active,
+        open,
+        anchor,
+        blocked,
+        holding,
+        cx,
+    ) {
         panel = panel.child(pill);
         panel = panel.child(dock_divider(3));
     }
@@ -1626,6 +1644,29 @@ fn creation_rank(category: Option<&str>) -> usize {
         .unwrap_or(CREATION_CATEGORIES.len())
 }
 
+/// The selection's topology, as a [`TopologyGate`](commands::TopologyGate) sees it:
+/// the reference count and the kind (faces/edges win over a bare body, because that is
+/// what the user picked).
+pub(crate) fn selection_topology(
+    selection: &[crate::selection::SelectionItem],
+) -> (usize, commands::ElementKind) {
+    let kind = selection
+        .iter()
+        .find_map(|item| item.elements.first())
+        .map(|element| commands::ElementKind::of_element(Some(element.as_str())))
+        .unwrap_or(commands::ElementKind::Body);
+    (selection.len(), kind)
+}
+
+/// Whether a creation command's topology gate is satisfied right now.
+fn gate_satisfied(model: &ShellModel, command: &CommandInfo) -> bool {
+    let Some(gate) = command.topology_gate() else {
+        return true;
+    };
+    let (count, kind) = selection_topology(&model.selection);
+    gate.satisfied(count, kind)
+}
+
 /// The memory split-pill: `⊕ <LastTool> ▾`.
 ///
 /// The left segment arms the remembered creation tool (one click, no flyout); the caret
@@ -1634,10 +1675,12 @@ fn creation_rank(category: Option<&str>) -> usize {
 /// primitive the old `Create Box` button did.
 fn creation_pill(
     creation: &[&CommandInfo],
+    model: &ShellModel,
     active: Option<&str>,
     open: bool,
     anchor: Option<Point<Pixels>>,
     blocked: bool,
+    holding: bool,
     cx: &mut Context<Shell>,
 ) -> Option<AnyElement> {
     // Registry order is the edition's; the pill lists by category, stably.
@@ -1663,8 +1706,23 @@ fn creation_pill(
 
     let arm_id = remembered.id.clone();
     let arm_label = remembered.label().to_string();
+    // A tool whose selection-dependent gate is unmet stays **visible and clickable**: a
+    // click reports what it needs rather than doing nothing, which is the same refusal
+    // the pill's row shows. A command disabled by its own `IsActive` is not clickable.
+    let gate = remembered.topology_gate();
+    let gated = gate.is_some_and(|gate| {
+        let (count, kind) = selection_topology(&model.selection);
+        !gate.satisfied(count, kind)
+    });
+    let requirement = gate.map(|gate| gate.requirement()).unwrap_or_default();
     let arm_enabled = remembered.enabled && !blocked;
-    let ink = if arm_enabled { FG } else { MUTED };
+    let ink = if gated {
+        INACTIVE_STRUCTURAL
+    } else if arm_enabled {
+        FG
+    } else {
+        MUTED
+    };
 
     let container = div()
         .id("creation-pill")
@@ -1673,6 +1731,9 @@ fn creation_pill(
         .flex_row()
         .items_center()
         .rounded_sm()
+        // `PILL_HOLD`: the accent fill lingers for a moment after a creation commit. It
+        // is decoration, not a state — the dock still accepts every click.
+        .when(holding && !blocked, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
         .child(
             div()
                 .id("creation-pill-arm")
@@ -1688,7 +1749,13 @@ fn creation_pill(
                 })
                 .child(format!("⊕ {arm_label}"))
                 .when(arm_enabled, |el| {
+                    let requirement = requirement.clone();
+                    let arm_label = arm_label.clone();
                     el.on_click(cx.listener(move |this, _event, _window, cx| {
+                        if !requirement.is_empty() {
+                            this.report_tool_requirement(&arm_label, &requirement, cx);
+                            return;
+                        }
                         this.run_command(&arm_id, cx);
                     }))
                 }),
@@ -1727,6 +1794,16 @@ fn creation_pill(
             let rank = creation_rank(command.category());
             let mut row = PopoverRow::of(command);
             row.divider_before = previous.is_some_and(|previous| previous != rank);
+            let gate = command.topology_gate();
+            if let Some(gate) = gate {
+                let (count, kind) = selection_topology(&model.selection);
+                if !gate.satisfied(count, kind) {
+                    // Disabled in `INACTIVE_STRUCTURAL`, with the requirement as the
+                    // row's right-hand hint: the reason is visible before the click.
+                    row.enabled = false;
+                    row.accel = gate.requirement();
+                }
+            }
             previous = Some(rank);
             rows.push(row);
         }
@@ -1746,7 +1823,7 @@ fn creation_pill(
                     .anchor(Anchor::BottomLeft)
                     .position(position)
                     .snap_to_window_with_margin(px(8.))
-                    .child(popover("create", rows, cx)),
+                    .child(popover_with_info("create", Vec::new(), rows, Some("creation_pill"), cx)),
             )
             .with_priority(1),
         );

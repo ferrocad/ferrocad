@@ -204,4 +204,84 @@ impl Shell {
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| id.to_string())
     }
+
+    /// Report a creation tool's unmet topology requirement without running it.
+    ///
+    /// The pill's left arm and its disabled rows both end here: a click that cannot
+    /// create anything says *what is missing* rather than doing nothing, which is the
+    /// one detail a greyed row cannot carry on its own.
+    pub(crate) fn report_tool_requirement(
+        &mut self,
+        label: &str,
+        requirement: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let status = format!("{label}: {requirement}");
+        self.model.lock().unwrap().status = status.clone();
+        self.console_line(status, cx);
+        cx.notify();
+    }
+
+    /// The topology gate the **armed** creation tool declares, when the current
+    /// selection does not satisfy it.
+    ///
+    /// This is what makes `Select ▾` refuse to move the ground under a tool that is
+    /// already armed: the tool was armed for a face, and changing the pick scope would
+    /// change what a click means mid-session. `active_creation` is only *memory* — a
+    /// gate blocks the scope switch only while the tool is actually running.
+    pub(in crate::shell) fn armed_creation_gate(&self) -> Option<commands::TopologyGate> {
+        if self.active_tool.is_none() {
+            return None;
+        }
+        let id = self.active_creation.as_deref()?;
+        let model = self.model.lock().unwrap();
+        let command = commands::find(&model.commands, id)?;
+        let gate = command.topology_gate()?;
+        let (count, kind) = crate::chrome::selection_topology(&model.selection);
+        (!gate.satisfied(count, kind)).then_some(gate)
+    }
+
+    /// The armed tool's display label (`Box`), for a refusal that names it.
+    pub(in crate::shell) fn armed_tool_label(&self) -> String {
+        self.model
+            .lock()
+            .unwrap()
+            .tool
+            .as_ref()
+            .filter(|status| status.active)
+            .map(|status| status.label.clone())
+            .or_else(|| self.active_tool.clone())
+            .unwrap_or_else(|| "the tool".to_string())
+    }
+
+    /// Whether the creation pill is in its post-commit **`PILL_HOLD`** linger.
+    ///
+    /// The hold is deliberately not an [`InteractionContext`]: it follows a completed
+    /// creation, so it owns no uncommitted state and gates no action. It only keeps the
+    /// pill's accent for a moment so the tool that made the shape stays obvious.
+    pub(crate) fn pill_holding(&self) -> bool {
+        self.pill_hold
+            .is_some_and(|since| since.elapsed() < PILL_HOLD)
+    }
+
+    /// Enter `PILL_HOLD` (after a creation commit lands).
+    pub(crate) fn hold_pill(&mut self) {
+        self.pill_hold = Some(web_time::Instant::now());
+    }
+
+    /// Record that a click passed through an overlay's negative space.
+    ///
+    /// The viewport's [`HoverReport`](ferrocad_viewport::HoverReport) stays
+    /// document-and-camera pure; the shell supplies the chrome-side answer, because only
+    /// the shell knows which popover was open when the press reached the scene.
+    pub(crate) fn note_pass_through(&mut self, overlay: &'static str) {
+        self.pass_through = Some((overlay, web_time::Instant::now()));
+    }
+
+    /// The overlay a click just passed through, while the report is still fresh.
+    pub(crate) fn pass_through(&self) -> Option<&'static str> {
+        self.pass_through
+            .filter(|(_, since)| since.elapsed() < PASS_THROUGH_WINDOW)
+            .map(|(overlay, _)| overlay)
+    }
 }

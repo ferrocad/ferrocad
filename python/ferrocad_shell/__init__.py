@@ -1007,6 +1007,7 @@ def commands() -> str:
         # command that names neither is a plain creation entry or an any-context verb.
         entry["category"] = str(resources.get("FerroCAD_Category") or "")
         entry["target"] = str(resources.get("FerroCAD_Target") or "")
+        entry["gate"] = str(resources.get("FerroCAD_Gate") or "")
         # Upstream's icon resource. The shell resolves it as a vendored icon key
         # first, so a mod can name a glyph directly, then as a curated command id.
         entry["pixmap"] = str(resources.get("Pixmap") or "")
@@ -1371,6 +1372,7 @@ _CATALOG_RESOURCES = (
     ("tone", "FerroCAD_Tone"),
     ("category", "FerroCAD_Category"),
     ("target", "FerroCAD_Target"),
+    ("gate", "FerroCAD_Gate"),
     ("parent", "FerroCAD_Parent"),
 )
 

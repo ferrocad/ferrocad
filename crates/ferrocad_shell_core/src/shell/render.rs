@@ -6,6 +6,7 @@
 use super::*;
 use super::pill::AxisFrame;
 
+use ferrocad_theme::ui::ACTIVE_ACCENT;
 use ferrocad_widgets::icon;
 
 /// An action button's content: an embedded glyph and its word.
@@ -42,8 +43,12 @@ fn action_label(
 /// **Cancel** is neutral (no accent fill) and ends the session through
 /// [`Shell::cancel_tool`]; **Finish** is the accent action and takes the same host path
 /// as `Enter` ([`Shell::finish_active_tool`]), so the button and the key cannot drift.
-pub(super) fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl IntoElement {
-    let pill = div()
+pub(super) fn tool_strip(
+    status: &ToolStatus,
+    edit: Option<&crate::shell::tool_fields::ToolFieldEdit>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let mut pill = div()
         .id("tool-strip")
         .debug_selector(|| "tool-strip".to_string())
         .occlude()
@@ -58,12 +63,71 @@ pub(super) fn tool_strip(status: &ToolStatus, cx: &mut Context<Shell>) -> impl I
         .border_1()
         .border_color(rgba(DOCK_BORDER))
         .text_xs()
-        .child(div().text_color(rgb(FG)).child(status.label.clone()))
-        .child(div().text_color(rgb(MUTED)).child(format!(
+        .child(div().text_color(rgb(FG)).child(status.label.clone()));
+    // The numeric row (C2): one tabular-monospace group, the fields separated by
+    // hairlines, the unit printed once at the end. It is docked — the strip is in the
+    // same bottom-centre slot as the idle dock — so no number follows the pointer.
+    if !status.fields.is_empty() {
+        let mut fields = div()
+            .id("tool-fields")
+            .debug_selector(|| "tool-fields".to_string())
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .font_family("monospace");
+        let unit = status
+            .fields
+            .iter()
+            .find(|field| !field.unit.is_empty())
+            .map(|field| field.unit.clone())
+            .unwrap_or_default();
+        for (index, field) in status.fields.iter().enumerate() {
+            let focused = edit.is_some_and(|edit| edit.index == index);
+            let value = edit
+                .filter(|edit| edit.index == index)
+                .map(|edit| edit.text.clone())
+                .unwrap_or_else(|| field.value.clone());
+            let mut cell = div()
+                .id(SharedString::from(format!("tool-field-{}", field.id)))
+                .debug_selector({
+                    let id = field.id.clone();
+                    move || format!("tool-field-{id}")
+                })
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .rounded_sm()
+                .child(div().text_color(rgb(MUTED)).child(field.label.clone()))
+                .child(
+                    div()
+                        .debug_selector({
+                            let id = field.id.clone();
+                            move || format!("tool-field-{id}-value")
+                        })
+                        .text_color(rgb(if focused { ACTIVE_ACCENT } else { FG }))
+                        .child(value),
+                );
+            if focused {
+                // A caret, so "this field owns the keyboard" needs no focus ring.
+                cell = cell.child(div().text_color(rgb(ACTIVE_ACCENT)).child("▏"));
+            }
+            fields = fields.child(cell);
+        }
+        if !unit.is_empty() {
+            fields = fields.child(div().text_color(rgb(MUTED)).child(unit));
+        }
+        pill = pill.child(fields);
+    } else {
+        pill = pill.child(div().text_color(rgb(MUTED)).child(format!(
             "{} point{}",
             status.points,
             if status.points == 1 { "" } else { "s" }
-        )))
+        )));
+    }
+    let pill = pill
         .child(
             div()
                 .min_w_0()

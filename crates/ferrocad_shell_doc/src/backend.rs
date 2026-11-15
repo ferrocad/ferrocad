@@ -2233,6 +2233,7 @@ fn row(id: &str, menu: &str, surface: &str) -> CommandInfo {
         tone: String::new(),
         category: String::new(),
         target: String::new(),
+        gate: String::new(),
         parent: String::new(),
         wheel: false,
         enabled: true,

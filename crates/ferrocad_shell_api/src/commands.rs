@@ -135,6 +135,15 @@ pub struct CommandInfo {
     /// and the wrong answer for a face-only tool, so the wheel's own verbs declare it.
     #[serde(default)]
     pub target: String,
+    /// `GetResources()["FerroCAD_Gate"]` — the topology a creation command needs before
+    /// it can run (`"body:2"`, `"face:1:1"`, `"edge:1"`). Empty means always enabled.
+    ///
+    /// This is the chrome's half of `TopologyGate`: it is evaluated against the current
+    /// selection so the pill can grey a row and the scope switch can refuse to move the
+    /// ground under an armed tool. The command's own `IsActive` stays the authority on
+    /// whether it can *run*.
+    #[serde(default)]
+    pub gate: String,
     /// `GetResources()["FerroCAD_Parent"]` — the surface's primary command id, for a
     /// command offered in that control's popover (P0.6 extension).
     #[serde(default)]
@@ -220,6 +229,102 @@ impl CommandInfo {
     pub fn applies_to(&self, kind: TargetKind) -> bool {
         self.targets()
             .is_none_or(|kinds| kinds.contains(&kind))
+    }
+
+    /// The parsed gate, when the command declares one.
+    pub fn topology_gate(&self) -> Option<TopologyGate> {
+        TopologyGate::parse(&self.gate)
+    }
+}
+
+/// What a creation command needs selected before it can run.
+///
+/// Declared as `FerroCAD_Gate: "<kind>:<min>[:<max>]"` — `body:2` (two or more
+/// references), `face:1:1` (exactly one face), `edge:1`. A **reference** is one selected
+/// object or sub-element, so a whole-object selection counts as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TopologyGate {
+    /// The kind of reference required.
+    pub kind: ElementKind,
+    /// The fewest references that satisfy the gate.
+    pub min_arity: usize,
+    /// The most references it accepts, when it has a ceiling.
+    pub max_arity: Option<usize>,
+}
+
+impl TopologyGate {
+    /// Parse `"body:2"`, `"face:1:1"`, `"any:0"`; `None` for empty or malformed.
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        let mut parts = value.split(':');
+        let kind = match parts.next()?.trim().to_ascii_lowercase().as_str() {
+            "any" | "" => ElementKind::Any,
+            "body" | "object" | "solid" | "profile" => ElementKind::Body,
+            "face" => ElementKind::Face,
+            "edge" | "wire" => ElementKind::Edge,
+            _ => return None,
+        };
+        let min_arity = parts.next().and_then(|min| min.trim().parse().ok()).unwrap_or(0);
+        let max_arity = parts.next().and_then(|max| max.trim().parse().ok());
+        Some(Self {
+            kind,
+            min_arity,
+            max_arity,
+        })
+    }
+
+    /// Whether `count` references of `kind` satisfy the gate.
+    pub fn satisfied(&self, count: usize, kind: ElementKind) -> bool {
+        let kind_ok = self.kind == ElementKind::Any || kind == ElementKind::Any || self.kind == kind;
+        kind_ok && count >= self.min_arity && self.max_arity.is_none_or(|max| count <= max)
+    }
+
+    /// The sentence a refused click reports (`select 1 face`).
+    pub fn requirement(&self) -> String {
+        if self.kind == ElementKind::Any && self.min_arity == 0 {
+            return String::new();
+        }
+        let (one, many) = match self.kind {
+            ElementKind::Any => ("reference", "references"),
+            ElementKind::Body => ("body", "bodies"),
+            ElementKind::Face => ("face", "faces"),
+            ElementKind::Edge => ("edge", "edges"),
+        };
+        match self.max_arity {
+            Some(max) if max == self.min_arity => {
+                format!("select {max} {}", if max == 1 { one } else { many })
+            }
+            Some(max) => format!("select {}–{max} {many}", self.min_arity),
+            None if self.min_arity <= 1 => format!("select a {one}"),
+            None => format!("select at least {} {many}", self.min_arity),
+        }
+    }
+}
+
+/// The kind of reference a [`TopologyGate`] counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ElementKind {
+    /// Any reference at all.
+    Any,
+    /// A whole body (or several).
+    Body,
+    /// A face (`Face6`).
+    Face,
+    /// An edge (`Edge3`).
+    Edge,
+}
+
+impl ElementKind {
+    /// The kind a selected sub-element name names, or `Body` for a whole object.
+    pub fn of_element(element: Option<&str>) -> Self {
+        match element {
+            Some(name) if name.starts_with("Face") => Self::Face,
+            Some(name) if name.starts_with("Edge") => Self::Edge,
+            _ => Self::Body,
+        }
     }
 }
 

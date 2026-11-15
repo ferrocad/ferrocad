@@ -742,6 +742,10 @@ impl Shell {
             self.commit_session(cx);
         }
         self.close_move_hud(cx);
+        // A new session ends the pill's post-commit linger and drops any half-typed
+        // field: the strip belongs to the tool that is about to run.
+        self.pill_hold = None;
+        self.tool_field = None;
         let status = tool.status();
         self.active_tool = Some(id.to_string());
         // A tool session owns the pointer, but it is not a loadout change: the hand the

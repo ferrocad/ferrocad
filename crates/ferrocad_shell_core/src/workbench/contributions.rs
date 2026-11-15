@@ -64,6 +64,9 @@ pub fn base_contributions() -> Contributions {
         .with_tool("workplane_points", || {
             Box::new(ferrocad_stage::PlanePointsTool::new()) as Box<dyn Tool>
         })
+        // The primitive every edition can place: `Part_Box` arms it, the strip carries
+        // its `W`/`L`/`H`, and `Enter` commits — the zero-mouse creation path.
+        .with_tool("box", || Box::new(ferrocad_stage::BoxTool::new()) as Box<dyn Tool>)
 }
 
 /// The world-aligned base corner (minimum X/Y/Z) of a body's bounding box.

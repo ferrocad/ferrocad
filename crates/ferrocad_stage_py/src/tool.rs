@@ -162,6 +162,10 @@ impl fs::Tool for PyTool {
                     .and_then(|value| value.extract::<usize>().ok())
                     .unwrap_or(0),
                 hint: string("hint"),
+                // A scripted tool's fields are not parsed here: the bridge's strip is the
+                // native tools' surface, and a Python tool that wants fields reports them
+                // through its own status dict once that seam exists.
+                fields: Vec::new(),
             }
         })
     }

@@ -73,7 +73,7 @@ pub(crate) mod prefs;
 // `shell::move_hud` and `shell::hud::move_hud` work.
 pub use bridge::{context, dispatch, picking, viewport};
 pub use hud::{manipulator_form, move_hud, pill};
-pub use panels::{devtools, dialogs, forms, loadout, palette, popovers, properties};
+pub use panels::{devtools, dialogs, forms, loadout, palette, popovers, properties, tool_fields};
 
 // The context gate: every action entry point asks `Shell::gate` (see `shell/bridge/context.rs`).
 pub(crate) use context::Action;
@@ -110,6 +110,16 @@ const KIND_ENUM: &str = "enum";
 /// Its children (`Settings/<Feature>`) are provider settings, not objects, and the
 /// root itself is not a document: the model tree never switches to it.
 const SETTINGS_ROOT: &str = "Settings";
+
+/// How long the creation pill lingers in its accent after a commit (`PILL_HOLD`).
+///
+/// Long enough to read as "that is the tool that just ran", short enough that it is
+/// plainly not a pending decision — the design's `PILL_HOLD` is not `SESSION_HOLD`.
+pub(crate) const PILL_HOLD: std::time::Duration = std::time::Duration::from_millis(1200);
+
+/// How long a pass-through note (`clicked through: creation_pill`) stays on the line.
+pub(crate) const PASS_THROUGH_WINDOW: std::time::Duration =
+    std::time::Duration::from_millis(1500);
 
 /// Whether two names address the same tree node.
 ///
@@ -368,6 +378,16 @@ pub struct Shell {
     /// preference: arming any `creation`-surface command remembers it, and the dock's
     /// left segment repeats it. `None` until the user arms one.
     active_creation: Option<String>,
+    /// The tool strip's numeric field being edited (C2). `None` while every field is
+    /// resting, which is the default: the canvas keeps the keyboard.
+    tool_field: Option<tool_fields::ToolFieldEdit>,
+    /// When a creation commit last landed, for `PILL_HOLD`: the pill lingers in its
+    /// accent for a moment so the tool that made the shape is the one the next click
+    /// repeats. It is **not** a context: it holds no uncommitted state and gates nothing.
+    pill_hold: Option<web_time::Instant>,
+    /// The overlay a click just passed through (`"creation_pill"`), with when it happened.
+    /// Reported on the status line for a moment; no document concept is involved.
+    pass_through: Option<(&'static str, web_time::Instant)>,
     /// The open command dialog (A3); one at a time.
     dialog: Option<OpenDialog>,
     /// Focus for the modal, so Esc cancels and Enter in a field accepts.
@@ -965,6 +985,9 @@ impl Shell {
             shortcuts,
             active_tool: None,
             active_creation: None,
+            tool_field: None,
+            pill_hold: None,
+            pass_through: None,
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
@@ -1247,6 +1270,41 @@ impl Shell {
             return true;
         }
         let editing = self.settings_card.is_some() || cancel_dialog || field_focused;
+        // The armed tool's numeric strip (C2): `Tab` focuses a field, a digit starts one,
+        // `Backspace` edits it, and the inner `Esc` gives the keyboard back to the canvas.
+        // Only a tool that **publishes** fields takes these keys, so a two-click tool's own
+        // digit shortcuts (the polygon's side count) are untouched.
+        if !editing
+            && !self.modal_open()
+            && self.active_tool.is_some()
+            && !self.wheel.read(cx).is_open()
+            && self.has_tool_fields()
+        {
+            match event.keystroke.key.as_str() {
+                "tab" => {
+                    self.cycle_tool_field(event.keystroke.modifiers.shift, cx);
+                    return true;
+                }
+                "escape" if self.tool_field.is_some() => {
+                    self.clear_tool_field(cx);
+                    return true;
+                }
+                "backspace" | "delete" if self.tool_field.is_some() => {
+                    self.backspace_tool_field(cx);
+                    return true;
+                }
+                _ => {
+                    if !event.keystroke.modifiers.control
+                        && !event.keystroke.modifiers.alt
+                        && !event.keystroke.modifiers.platform
+                        && let Some(Some(typed)) = escalation_key(event)
+                        && self.type_into_tool_field(typed, cx)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
         // In the tree window, Enter switches to the document row that was last
         // clicked. A document is not a selectable object, so nothing else in this
         // handler owns the key there; the row's double click is the mouse twin.
@@ -2065,13 +2123,14 @@ impl Render for Shell {
             // Swap, do not stack: while a session runs the bottom-centre slot shows
             // the tool surface, so a second command cannot be started underneath it.
             .child(match active_tool {
-                Some(tool) => tool_strip(tool, cx).into_any_element(),
+                Some(tool) => tool_strip(tool, self.tool_field_edit(), cx).into_any_element(),
                 None => crate::chrome::action_dock(
                     &model,
                     self.active_creation.as_deref(),
                     self.popover_open("create"),
                     self.popover_anchor,
                     self.move_is_pending(cx) || self.pending_interaction.is_some(),
+                    self.pill_holding(),
                     cx,
                 )
                 .into_any_element(),

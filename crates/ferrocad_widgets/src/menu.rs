@@ -16,7 +16,8 @@ use gpui::{
 };
 
 use ferrocad_theme::ui::{
-    ACTIVE_ACCENT, CHROME_LINE, DOT_INACTIVE, FG, MUTED, POPOVER_BG, POPOVER_BORDER, ROW_HOVER,
+    ACTIVE_ACCENT, CHROME_LINE, DOT_INACTIVE, FG, INACTIVE_STRUCTURAL, MUTED, POPOVER_BG,
+    POPOVER_BORDER, ROW_HOVER,
 };
 
 use crate::icon;
@@ -146,7 +147,9 @@ pub fn menu(
         let text_color = if enabled && (!toggle || checked) {
             FG
         } else {
-            MUTED
+            // A disabled row is **structurally** inactive, not merely quiet: the lighter
+            // slate reads as "this exists — the selection is what is missing".
+            INACTIVE_STRUCTURAL
         };
 
         let mut el = div()

@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::{Mutex, Once};
 
 use ferrocad_shell_python::python;
+use ferrocad_shell_api::commands::TopologyGate;
 use pyo3::types::PyAnyMethods;
 use serde_json::Value;
 
@@ -256,4 +257,51 @@ fn the_utilities_are_search_only() {
     ] {
         assert_eq!(surface(&registry, id), "palette", "{id}");
     }
+}
+
+/// The gate each command declares, parsed by the same code the chrome uses.
+fn gate(registry: &serde_json::Map<String, Value>, id: &str) -> Option<TopologyGate> {
+    registry
+        .get(id)
+        .unwrap_or_else(|| panic!("{id} is registered"))["gate"]
+        .as_str()
+        .and_then(TopologyGate::parse)
+}
+
+/// C1: a creation tool declares the topology it needs, and the gate is the selection's,
+/// not the Modify hand's: two profiles satisfy `Loft`, one does not.
+#[test]
+fn the_gated_tools_declare_what_they_need() {
+    use ferrocad_shell_api::commands::ElementKind;
+
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    let registry = registry();
+
+    let loft = gate(&registry, "SimpleCAD_Loft").expect("Loft declares a gate");
+    assert!(
+        !loft.satisfied(1, ElementKind::Body),
+        "one profile is not a loft: {}",
+        loft.requirement()
+    );
+    assert!(loft.satisfied(2, ElementKind::Body), "two profiles are");
+    assert_eq!(loft.requirement(), "select at least 2 bodies");
+
+    let shell = gate(&registry, "SimpleCAD_Shell").expect("Shell declares a gate");
+    assert!(!shell.satisfied(1, ElementKind::Body), "a body is not a face");
+    assert!(shell.satisfied(1, ElementKind::Face), "one face is enough");
+
+    let chamfer = gate(&registry, "Part_Chamfer").expect("Chamfer declares a gate");
+    assert!(chamfer.satisfied(1, ElementKind::Edge), "one edge is enough");
+    assert!(!chamfer.satisfied(1, ElementKind::Face), "a face is not an edge");
+
+    let subdivide = gate(&registry, "SimpleCAD_Subdivide").expect("Subdivide declares a gate");
+    assert!(subdivide.satisfied(1, ElementKind::Face));
+    assert!(!subdivide.satisfied(2, ElementKind::Face), "one face, not two");
+
+    // A tool with no gate is always offered (the Box is the pill's default).
+    assert!(
+        gate(&registry, "Part_Box").is_none(),
+        "the box needs nothing selected"
+    );
 }

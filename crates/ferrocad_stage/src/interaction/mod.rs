@@ -8,6 +8,7 @@
 //! three-point workplane pick.
 
 pub mod arc;
+pub mod box_tool;
 pub mod circle;
 pub mod declarative;
 pub mod frame;
@@ -21,6 +22,7 @@ pub mod target;
 pub mod tool;
 
 pub use arc::ArcTool;
+pub use box_tool::BoxTool;
 pub use circle::CircleTool;
 pub use declarative::{
     DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape,
@@ -36,4 +38,4 @@ pub use snap::{
     snap_to_geometry_with,
 };
 pub use target::{HoverTarget, TargetKind};
-pub use tool::{PolylineTool, TaggedPolyline, Tool, ToolStatus};
+pub use tool::{PolylineTool, TaggedPolyline, Tool, ToolField, ToolStatus};

@@ -72,8 +72,33 @@ edition and the browser composition are unchanged in behaviour:
 | `ferrocad_shell_web` | 8 | **8** |
 | `ferrocad_parametric` (`--no-default-features`) | 33 | **33** (with `part`) |
 | `ferrocad_sculpt` (`--no-default-features`) | 9 | **9** (with `part`) |
+| `ferrocad_shell_doc` for `wasm32-unknown-unknown` | — | **clean `cargo check`** (no kernel in the graph) |
+| Browser host (`run.sh --build-only`) | — | **built** in 17 m 30 s, 71 MB module; `ferrocad_shell_doc` and `ferrocad_shell_rust` both compile for wasm |
+| Browser smoke (`run.sh --check`) | — | **passed** in headless Chrome (both shapes tessellate, the stage draws the fillet alone, the wasm workbench and both manipulator commits/gestures build their features, the pywasm kernel builds a solid, no panic or JS error) |
 
-## 4. Decisions
+## 4. The wasm proof
+
+The architectural reason for the split was not only the native base app: the document
+graph, the undo history and `.FCStd` I/O are the parts a browser or lightweight wasm
+target needs, and they must not drag a native kernel with them.
+
+- **The kernel-free crate is wasm-clean by construction.**
+  `cargo check -p ferrocad_shell_doc --target wasm32-unknown-unknown` compiles the whole
+  document half (and its `ferrocad_core`/`ferrocad_shell_api`/`serde_json` closure) with
+  no OCCT, no `ferrocad_part` and no C++ build script in the graph.
+- **The browser host still links the kernel, now through the plugin.**
+  `crates/ferrocad_web_gpui/run.sh --build-only` rebuilt in the digest-pinned cross image
+  against the prebuilt wasm OCCT: `ferrocad_shell_doc` and `ferrocad_shell_rust` both
+  compiled for `wasm32-unknown-unknown`, and the linked module is 71 MB.
+- **The behaviour is unchanged.** `run.sh --check` passed the full headless-Chrome
+  baseline: `Box · 12 triangles`, `Fillet · 40 triangles`, `stage draws Fillet`, the save
+  and reopen round trip, the wasm workbench's `Toy`, both Part manipulator commits and
+  their gestures, the pywasm kernel solid, and no panic or JS error.
+
+The build's only failures were two smoke assertions that had drifted from the app script
+(§5), not from the split.
+
+## 5. Decisions
 
 - **One trait, boxed at construction.** The engine is `Box<dyn DocumentEngine>` rather
   than a type parameter so `DocumentBackend` is one type in both builds: `engine()`,
@@ -93,17 +118,22 @@ edition and the browser composition are unchanged in behaviour:
   constructors are `PartEngine::backend()` / `::shared_backend()`. Keeping an alias
   whose `new()` silently meant *kernel-free* would have been a trap.
 
-## 5. What the verification found
+## 6. What the verification found
 
 - `ferrocad_toy`'s `round_trip` test closed the bootstrap document by the name `Toy`,
   while the shell's startup sample names it `Sample`; it had been failing since
   `a35d4de` made the base `bootstrap` ignore its `doc_name` argument. The test now
   closes the active document by the name it reports.
+- The browser smoke asserted a two-object reopened document (the sample script has
+  seeded `Params`/`Derived`/`Group` since the app-shell round, so it is five) and the
+  pywasm-only provider line for the `pywasm,js` chain (whose axis overlay adds a switch
+  and lists `axis=1,grid=1`). Both expectations were refreshed; the wasm build and the
+  rest of the smoke were already green.
 - `cargo xtask editions --write` changed only the base/toy closures (part and OCCT out,
   `ferrocad_shell_doc` in) and added `ferrocad_shell_doc` to the host and edition
   closures. `--check` then passed with no carve-out.
 
-## 6. What this does not do
+## 7. What this does not do
 
 - It does not move the *scripting* halves; `ferrocad_shell_python` still embeds CPython
   and still links libpython. The split is about the geometry engine, not the interpreter.

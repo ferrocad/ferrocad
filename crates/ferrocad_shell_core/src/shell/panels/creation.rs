@@ -13,9 +13,12 @@
 //!   points that category's pill at the tool the category remembers, so the pill behind
 //!   the flyout already shows what the next click would arm. Picking a tool runs it.
 //! - `5`–`9` arm the pill at that position, continuing the Modify hand's `0`–`3` so one
-//!   digit space addresses both hands; pressing the same key again opens that pill's
-//!   flyout. The action dock carries a single `⊕ Create Dock ^` toggle, which shows and
-//!   hides the strip, so the strip is never mixed into the dock's own row.
+//!   digit space addresses both hands. Pressing a key arms that pill's tool; pressing it
+//!   again steps the pill to the next tool of its category, so a key walks a slot the way
+//!   `1` walks Move ⇄ Rotate. The strip is the **continuation** of the action loadout, and
+//!   arming a tool adds a pill of its own above it rather than replacing it. The action
+//!   dock carries a single `⊕ Create Dock ^` toggle, which shows and hides the strip, so
+//!   the strip is never mixed into the dock's own row.
 //!
 //! The radial menu's `Create ▸` commits through the same path, so a wheel flick loads a
 //! pill and arms the tool at the pointer.
@@ -138,27 +141,29 @@ impl Shell {
             .collect()
     }
 
-    /// Arm the pill at `index` (`5`, `6`, …), or open its flyout when it is armed.
+    /// Arm the pill at `index` (`5`, `6`, …), stepping to the next tool in its category
+    /// when that pill is already the Add hand's equipped one.
     ///
-    /// Returns whether the key was the Add hand's. A second press while **that pill's**
-    /// tool is the running one opens the flyout — "arm, then browse", the Add hand's
-    /// counterpart of Slot 1's re-press. The dock remembers the *command* it armed and
-    /// `active_tool` holds the *tool* that command started, so the two together are how
-    /// "this pill's tool is the one on the canvas" is spelled. A press while a different
-    /// tool owns the canvas is not ours, so the digit still reaches that tool's own
-    /// shortcuts and its numeric strip; a tool that publishes fields takes its digits
-    /// before this path is reached at all.
+    /// The create dock is the **continuation of the action loadout**, so its keys behave
+    /// like the Modify hand's: `5` selects the Sketch pill with the tool it currently
+    /// holds and arms it, and `5` again steps the pill to the next Sketch tool and arms
+    /// that. The key never opens a menu — the flyout is the caret's and the wheel's
+    /// `Create ▸`'s — because browsing a list is exactly what the slot exists to save.
+    ///
+    /// Returns whether the key was the Add hand's.
     pub(crate) fn activate_creation_slot(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
-        let Some((category, command)) = self.creation_pills().into_iter().nth(index) else {
+        let Some((category, current)) = self.creation_pills().into_iter().nth(index) else {
             return false;
         };
-        if self.active_tool.is_some() && self.creation.active() == Some(command.id.as_str()) {
-            self.open_creation_flyout(&category, cx);
-            return true;
-        }
-        if self.active_tool.is_some() {
-            return false;
-        }
+        // `active` names the tool the Add hand armed last, so a pill whose tool *is* that
+        // one is the equipped slot: the press steps it on instead of re-arming it. A
+        // press from another pill — or from nothing — arms what the pill names.
+        let command = if self.creation.active() == Some(current.id.as_str()) {
+            self.next_creation_tool(&category, &current.id)
+                .unwrap_or(current)
+        } else {
+            current
+        };
         if let Some(gate) = command.topology_gate() {
             let (count, kind) = {
                 let model = self.model.lock().unwrap();
@@ -172,6 +177,46 @@ impl Shell {
         }
         self.run_command(&command.id, cx);
         true
+    }
+
+    /// The next tool of `category` after `current`, wrapping round.
+    ///
+    /// A tool the selection cannot use right now is stepped over rather than selected:
+    /// the key's whole point is that it always moves on, and stopping on a tool the gate
+    /// refuses would leave the user pressing the same key against the same refusal.
+    fn next_creation_tool(
+        &self,
+        category: &str,
+        current: &str,
+    ) -> Option<crate::commands::CommandInfo> {
+        let tools = self.creation_slot_tools(category);
+        if tools.len() < 2 {
+            return None;
+        }
+        let (count, kind) = {
+            let model = self.model.lock().unwrap();
+            crate::chrome::selection_topology(&model.selection)
+        };
+        let usable = |command: &crate::commands::CommandInfo| {
+            command.enabled
+                && command
+                    .topology_gate()
+                    .is_none_or(|gate| gate.satisfied(count, kind))
+        };
+        let start = tools
+            .iter()
+            .position(|command| command.id == current)
+            .map_or(0, |index| index + 1);
+        let rotated: Vec<&crate::commands::CommandInfo> = (0..tools.len())
+            .map(|step| &tools[(start + step) % tools.len()])
+            .filter(|command| command.id != current)
+            .collect();
+        rotated
+            .iter()
+            .copied()
+            .find(|command| usable(command))
+            .or_else(|| rotated.first().copied())
+            .cloned()
     }
 
     /// Open the flyout on `category` (a pill's caret, or a second key press).
@@ -212,11 +257,11 @@ impl Shell {
         cx.notify();
     }
 
-    /// The tools of one creation category, in the order the flyout lists them.
+    /// Every tool of one creation category, in the order the flyout lists them.
     ///
-    /// The flyout numbers its rows `1`–`8`; this is the same list, so `3` is the third
-    /// row whatever the edition registers.
-    pub(crate) fn creation_category_tools(&self, category: &str) -> Vec<crate::commands::CommandInfo> {
+    /// The key path steps through this list (`5` → the next Sketch tool), so it is the
+    /// whole category, not just the rows a digit can name.
+    pub(crate) fn creation_slot_tools(&self, category: &str) -> Vec<crate::commands::CommandInfo> {
         let model = self.model.lock().unwrap();
         let surfaces = model.surfaces();
         surfaces
@@ -229,9 +274,18 @@ impl Shell {
                     .category()
                     .is_some_and(|name| name.eq_ignore_ascii_case(category))
             })
-            .take(crate::chrome::CREATION_ROW_KEYS)
             .cloned()
             .collect()
+    }
+
+    /// The tools of one creation category as the flyout numbers them.
+    ///
+    /// The flyout numbers its rows `1`–`8`; this is the same list cut at that length, so
+    /// `3` is the third row whatever the edition registers.
+    pub(crate) fn creation_category_tools(&self, category: &str) -> Vec<crate::commands::CommandInfo> {
+        let mut tools = self.creation_slot_tools(category);
+        tools.truncate(crate::chrome::CREATION_ROW_KEYS);
+        tools
     }
 
     /// Pick the flyout row at `index` (0-based) into its category's pill.

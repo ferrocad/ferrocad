@@ -25,7 +25,7 @@ use gpui::{
 
 use std::collections::{HashMap, HashSet};
 
-use ferrocad_stage::{DressUpKind, GizmoMode};
+use ferrocad_stage::{DressUpKind, GizmoMode, ToolStatus};
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
 use ferrocad_widgets::icon;
 use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, MenuTab, menu_with_tabs};
@@ -33,7 +33,7 @@ use ferrocad_widgets::scroll::scroll_area;
 
 use ferrocad_theme::ui::{
     ACTIVE_ACCENT, CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, DOCK_BG, DOCK_BORDER, GLASS,
-    INACTIVE_STRUCTURAL, ROW_HOVER,
+    INACTIVE_STRUCTURAL, ROW_HOVER, WHEEL_GLASS,
 };
 use crate::commands::{self, CommandInfo, Surface};
 use crate::types::{AxisSummary, GridSummary, ProviderFeature};
@@ -1482,26 +1482,191 @@ fn gpu_row(
 }
 
 
-/// The action dock: the `dock` surface as one centred strip over the bottom of the
-/// canvas.
+/// An action button's content: an embedded glyph and its word.
+fn action_label(
+    key: &'static str,
+    label: &'static str,
+    ink: u32,
+    selector: &'static str,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .debug_selector(move || selector.to_string())
+                .flex()
+                .items_center()
+                .child(
+                    icon::named(key, icon::ROW, ink).unwrap_or_else(|| div().into_any_element()),
+                ),
+        )
+        .child(label)
+}
+
+/// The armed tool's pill: what is running, its numbers (or its point count), its hint,
+/// and the `Cancel` / `Finish` pair.
 ///
-/// **The strict contract.** In the idle state this strip holds exactly
+/// It is a **new pill above the create dock**, not a replacement for the dock: the Add
+/// hand is a loadout, so a session adds a row and leaves the slots where the user's
+/// fingers expect them. The pill itself is the same glass as the rest of the column, so
+/// the session reads as part of the same instrument.
+///
+/// **Cancel** is neutral (no accent fill) and ends the session through
+/// [`Shell::cancel_tool`]; **Finish** is the accent action and takes the same host path
+/// as `Enter` ([`Shell::finish_active_tool`]), so the button and the key cannot drift.
+fn tool_pill(
+    status: &ToolStatus,
+    edit: Option<&crate::shell::panels::tool_fields::ToolFieldEdit>,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let mut pill = div()
+        .id("tool-strip")
+        .debug_selector(|| "tool-strip".to_string())
+        .occlude()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgba(WHEEL_GLASS))
+        .border_1()
+        .border_color(rgba(DOCK_BORDER))
+        .text_xs()
+        .child(div().text_color(rgb(FG)).child(status.label.clone()));
+    // The numeric row (C2): one tabular-monospace group, the fields separated by
+    // hairlines, the unit printed once at the end. It is docked with the pill, so no
+    // number follows the pointer.
+    if !status.fields.is_empty() {
+        let mut fields = div()
+            .id("tool-fields")
+            .debug_selector(|| "tool-fields".to_string())
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .font_family("monospace");
+        let unit = status
+            .fields
+            .iter()
+            .find(|field| !field.unit.is_empty())
+            .map(|field| field.unit.clone())
+            .unwrap_or_default();
+        for (index, field) in status.fields.iter().enumerate() {
+            let focused = edit.is_some_and(|edit| edit.index == index);
+            let value = edit
+                .filter(|edit| edit.index == index)
+                .map(|edit| edit.text.clone())
+                .unwrap_or_else(|| field.value.clone());
+            let mut cell = div()
+                .id(SharedString::from(format!("tool-field-{}", field.id)))
+                .debug_selector({
+                    let id = field.id.clone();
+                    move || format!("tool-field-{id}")
+                })
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .rounded_sm()
+                .child(div().text_color(rgb(MUTED)).child(field.label.clone()))
+                .child(
+                    div()
+                        .debug_selector({
+                            let id = field.id.clone();
+                            move || format!("tool-field-{id}-value")
+                        })
+                        .text_color(rgb(if focused { ACTIVE_ACCENT } else { FG }))
+                        .child(value),
+                );
+            if focused {
+                // A caret, so "this field owns the keyboard" needs no focus ring.
+                cell = cell.child(div().text_color(rgb(ACTIVE_ACCENT)).child("▏"));
+            }
+            fields = fields.child(cell);
+        }
+        if !unit.is_empty() {
+            fields = fields.child(div().text_color(rgb(MUTED)).child(unit));
+        }
+        pill = pill.child(fields);
+    } else {
+        pill = pill.child(div().text_color(rgb(MUTED)).child(format!(
+            "{} point{}",
+            status.points,
+            if status.points == 1 { "" } else { "s" }
+        )));
+    }
+    pill.child(
+        div()
+            .min_w_0()
+            .truncate()
+            .text_color(rgb(MUTED))
+            .child(status.hint.clone()),
+    )
+    // The abort action is neutral: the accent fill belongs to Finish.
+    .child(
+        div()
+            .id("tool-cancel")
+            .debug_selector(|| "tool-cancel".to_string())
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(rgb(PANEL))
+            .text_color(rgb(FG))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL_ALT)))
+            .child(action_label("close", "Cancel", FG, "tool-cancel-icon"))
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.cancel_tool(cx);
+            })),
+    )
+    // Finish is a real button, not a hint: a trackpad user can end the session without
+    // finding `Enter`. It calls the same host path as the key.
+    .child(
+        div()
+            .id("tool-finish")
+            .debug_selector(|| "tool-finish".to_string())
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(rgb(ACCENT))
+            .text_color(rgb(FG))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(PANEL_ALT)))
+            .child(action_label("check", "Finish", FG, "tool-finish-icon"))
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.finish_active_tool(cx);
+            })),
+    )
+    .into_any_element()
+}
+
+/// The bottom-centre column: the armed tool's pill, the create dock, and the action
+/// dock, bottom-anchored in that order (top to bottom).
+///
+/// **The strict contract.** The dock row itself holds exactly
 ///
 /// ```text
-/// [ Undo  Redo  Fit │ ⊕ <LastTool> ▾ │ Search (Ctrl+K) ]
+/// [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
 /// ```
 ///
-/// — the `dock`-surface globals, the **creation pill** and Search. It never grows a
+/// — the `dock`-surface globals, the strip's toggle and Search. It never grows a
 /// horizontal list of creation or modification buttons: a creation tool declares
-/// `FerroCAD_Surface: "creation"` and appears inside the pill, a shape verb declares
-/// `"radial"` or `"palette"` and appears in the wheel or only in Search. A dock full of
-/// verbs is a toolbar, and the Add hand exists precisely so it is not one.
+/// `FerroCAD_Surface: "creation"` and gets a pill of its own in the create dock above, a
+/// shape verb declares `"radial"` or `"palette"` and appears in the wheel or only in
+/// Search. A dock full of verbs is a toolbar, and the Add hand exists precisely so it is
+/// not one.
 ///
-/// `active` is the last armed creation command (the pill's memory), `open` whether the
-/// pill's flyout is the open popover, `anchor` the pointer press that opened it, and
-/// `blocked` a pending transform or manipulator: the dock then dims to 45 % and its
+/// `blocked` is a pending transform or manipulator: the dock then dims to 45 % and its
 /// clicks are dropped, exactly as the hand column does, so a second command cannot be
-/// started underneath an uncommitted one.
+/// started underneath an uncommitted one. `tool` is the armed tool's status (with the
+/// field being typed into, if any): its pill is **added above** the strip rather than
+/// swapped for it, so a session never takes the loadout out of the user's hands.
 pub(crate) fn action_dock(
     model: &ShellModel,
     creation: &CreationDock,
@@ -1509,6 +1674,10 @@ pub(crate) fn action_dock(
     anchor: Option<Point<Pixels>>,
     blocked: bool,
     holding: bool,
+    tool: Option<(
+        &ToolStatus,
+        Option<&crate::shell::panels::tool_fields::ToolFieldEdit>,
+    )>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let groups = model.surfaces();
@@ -1680,8 +1849,10 @@ pub(crate) fn action_dock(
             .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx))),
     );
 
-    // A column, bottom-anchored: the create dock sits **above** the action dock, so the
-    // strip is never mixed into the dock's own row and the two never reflow each other.
+    // A column, bottom-anchored: the armed tool's pill sits **above** the create dock,
+    // which sits above the action dock. A row is added upward when a session starts, so
+    // the dock keeps its baseline and the strip keeps its own row — activating a tool
+    // never swaps the loadout away.
     let mut column = div()
         .absolute()
         .left(px(0.))
@@ -1691,6 +1862,9 @@ pub(crate) fn action_dock(
         .flex_col()
         .items_center()
         .gap(px(6.));
+    if let Some((status, edit)) = tool {
+        column = column.child(tool_pill(status, edit, cx));
+    }
     if creation.expanded()
         && let Some(strip) = create_dock(&groups.creation, creation, model, blocked, holding, cx)
     {
@@ -1834,8 +2008,11 @@ fn create_dock(
         let open = dock
             .tab()
             .is_some_and(|tab| tab.eq_ignore_ascii_case(category));
+        // The pill holding the Add hand's armed tool is the equipped slot, so it lights up
+        // like the Modify bar's hand does.
+        let armed = dock.active() == Some(command.id.as_str());
         row = row.child(creation_pill(
-            index, category, command, open, model, blocked, holding, cx,
+            index, category, command, open, armed, model, blocked, holding, cx,
         ));
     }
     Some(row.into_any_element())
@@ -1846,13 +2023,22 @@ fn create_dock(
 /// The category is the quiet half and the tool is the loud one, so the row reads as a
 /// set of loadouts (`Sketch: Rectangle`, `Solid: Box`) rather than as four buttons with
 /// two words each. The key leads, muted, exactly as it does on the Modify hand's bar
-/// (`1 Move`): both hands are one digit space, and the strip says so. The left half arms
-/// the tool; the caret opens that category's flyout.
+/// (`1 Move`): both hands are one digit space, and the strip says so.
+///
+/// The left half is the pill's **slot**: it goes through
+/// [`Shell::activate_creation_slot`](crate::shell::Shell), so a click and the pill's key
+/// are the same gesture — arm the tool it names, or step to the next tool of the category
+/// when this pill already holds the armed one. The caret opens the flyout.
+///
+/// `armed` is the equipped slot — this pill holds the tool the Add hand armed last — and
+/// it takes the accent the Modify bar gives its hand.
+#[allow(clippy::too_many_arguments)]
 fn creation_pill(
     index: usize,
     category: &str,
     command: &CommandInfo,
     open: bool,
+    armed: bool,
     model: &ShellModel,
     blocked: bool,
     holding: bool,
@@ -1861,14 +2047,13 @@ fn creation_pill(
     // A tool whose selection-dependent gate is unmet stays **visible and clickable**: a
     // click reports what it needs rather than doing nothing, which is the same refusal
     // the flyout's row shows. A command disabled by its own `IsActive` is not clickable.
+    // The slot itself re-checks the gate, because it may step to a *different* tool of the
+    // category.
     let gated = !gate_satisfied(model, command);
-    let requirement = command
-        .topology_gate()
-        .filter(|_| gated)
-        .map(|gate| gate.requirement())
-        .unwrap_or_default();
     let arm_enabled = command.enabled && !blocked;
-    let ink = if gated {
+    let ink = if armed {
+        CHROME_ACTIVE
+    } else if gated {
         INACTIVE_STRUCTURAL
     } else if arm_enabled {
         FG
@@ -1889,13 +2074,15 @@ fn creation_pill(
         .flex_row()
         .items_center()
         .rounded_sm()
-        // `PILL_HOLD`: the accent fill lingers for a moment after a creation commit. It
-        // is decoration, not a state — the strip still accepts every click.
-        .when(holding && !blocked, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
+        // `PILL_HOLD`: the accent fill lingers for a moment after a creation commit.
+        // The equipped slot keeps the same wash for as long as its tool is the armed one
+        // (the Modify bar's lit hand), so the fill means "this is the slot in hand" and
+        // the linger is only its tail. Decoration either way: the strip takes every click.
+        .when((armed || holding) && !blocked, |el| {
+            el.bg(rgba(CHROME_ACTIVE_BG))
+        })
         .child({
-            let arm_id = command.id.clone();
-            let arm_label = command.label().to_string();
-            let category = category.to_string();
+            let label = command.label().to_string();
             let mut arm = div()
                 .id(SharedString::from(format!("creation-pill-{index}-arm")))
                 .debug_selector({
@@ -1918,20 +2105,15 @@ fn creation_pill(
                     div()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(ink))
-                        .child(arm_label.clone()),
+                        .child(label),
                 );
             if arm_enabled {
                 arm = arm
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)));
-                let requirement = requirement.clone();
-                arm = arm.on_click(cx.listener(move |this, _event, _window, cx| {
-                    if !requirement.is_empty() {
-                        this.report_tool_requirement(&arm_label, &requirement, cx);
-                        return;
-                    }
-                    this.run_command(&arm_id, cx);
-                }));
+                    .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.activate_creation_slot(index, cx);
+                    }));
             }
             arm
         })

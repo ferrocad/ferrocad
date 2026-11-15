@@ -846,11 +846,12 @@ fn backspace_dismisses_the_root_ring(cx: &mut TestAppContext) {
 
 /// The create dock is **one pill per category**, each remembering its own tool.
 ///
-/// A pill reads `⊕ <Category>: <Tool> ▾`: the left half arms it, the caret opens the
+/// A pill reads `5 ⊕ <Category>: <Tool> ▾`: the left half arms it, the caret opens the
 /// flyout, and the flyout's segmented header shows one category at a time. Picking a
 /// tool **binds** it to its category and **runs** it — the same pair of actions a wheel
 /// flick performs — while clicking a tab only points the pill at what that category
-/// remembers.
+/// remembers. The keys `5`–`9` are the loadout's: a press arms the pill's tool and a
+/// press on the equipped pill steps to the next tool of that category.
 #[gpui::test]
 fn each_creation_pill_remembers_its_own_tool(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -873,6 +874,7 @@ def _tool(name, category):
 
 for _id, _command in (
     ("Test_SketchTool", _tool("Rectangle", "Sketch")),
+    ("Test_SketchCircle", _tool("Circle", "Sketch")),
     ("Test_SolidTool", _tool("Box", "Solid")),
     ("Test_SurfaceTool", _tool("Loft", "Surface")),
 ):
@@ -985,32 +987,60 @@ for _id, _command in (
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
     });
 
-    // `5` runs the first pill's tool; pressed again while that tool is the running one
-    // it opens the flyout instead. (No edition in this harness ships a real tool, so the
-    // "running" half — which the key path only reads — is set directly.)
+    // The keys are the loadout's, so start from a fresh Add hand: a press **selects** the
+    // pill and arms the tool it names, and a press on the pill that already holds the
+    // armed tool **steps to the next tool of that category**. No press opens a menu.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| shell.creation = CreationDock::default());
+    });
     model.lock().unwrap().status.clear();
     press_root(&mut cx, &shell, "5");
     assert!(
         model.lock().unwrap().status.contains("Rectangle"),
-        "`5` runs the first pill's tool: {}",
+        "`5` arms the first pill's tool: {}",
         model.lock().unwrap().status
     );
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, _| {
-            shell.active_tool = Some("Test_SketchTool".to_string())
-        });
-    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
+        Some("Test_SketchTool".to_string()),
+        "and that pill is the equipped one"
+    );
+    assert!(
+        cx.debug_bounds("create-popover").is_none(),
+        "the key never opens the menu"
+    );
+
+    model.lock().unwrap().status.clear();
     press_root(&mut cx, &shell, "5");
     assert!(
-        cx.debug_bounds("create-popover").is_some(),
-        "a second `5` opens that pill's flyout"
+        model.lock().unwrap().status.contains("Circle"),
+        "a second `5` steps to the next Sketch tool: {}",
+        model.lock().unwrap().status
     );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.memory("Sketch").map(str::to_string)),
+        Some("Test_SketchCircle".to_string()),
+        "and the pill now holds it"
+    );
+
+    // Two Sketch tools, so a third press wraps back to the first.
+    model.lock().unwrap().status.clear();
+    press_root(&mut cx, &shell, "5");
     assert!(
-        cx.debug_bounds("create-row-Test_SketchTool").is_some(),
-        "on the Sketch tab"
+        model.lock().unwrap().status.contains("Rectangle"),
+        "a third `5` wraps round the category: {}",
+        model.lock().unwrap().status
     );
-    // The list is **numbered** (`1`–`8`, in a column of its own), and a number picks
-    // that row into its pill without touching the pointer.
+
+    // The flyout is the caret's route to the same pill. Its list is **numbered** (`1`–`8`,
+    // in a column of its own), and a number picks that row into its pill without touching
+    // the pointer.
+    click_at(&mut cx, "creation-pill-0-caret");
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_some(),
+        "the caret opens the pill's list"
+    );
     assert!(
         cx.debug_bounds("create-row-Test_SketchTool-key").is_some(),
         "the row carries its selection key"
@@ -1037,13 +1067,13 @@ for _id, _command in (
     });
 
     // The same digit space keeps going: `6` is the Solid pill and `7` the Surface one, in
-    // strip order. Each press arms its own pill, and a second `6` while the Solid tool is
-    // the running one browses Solid rather than re-arming it.
+    // strip order. Solid holds one tool, so its key re-arms it — there is nothing to step
+    // to — and still opens no menu.
     model.lock().unwrap().status.clear();
     press_root(&mut cx, &shell, "6");
     assert!(
         model.lock().unwrap().status.contains("Box"),
-        "`6` runs the second pill's tool: {}",
+        "`6` arms the second pill's tool: {}",
         model.lock().unwrap().status
     );
     assert_eq!(
@@ -1051,35 +1081,22 @@ for _id, _command in (
         Some("Test_SolidTool".to_string()),
         "and it is the armed one"
     );
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, _| {
-            shell.active_tool = Some("Test_SolidTool".to_string())
-        });
-    });
+    model.lock().unwrap().status.clear();
     press_root(&mut cx, &shell, "6");
     assert!(
-        cx.debug_bounds("create-popover").is_some(),
-        "a second `6` opens the Solid pill's flyout"
+        model.lock().unwrap().status.contains("Box"),
+        "a single-tool slot re-arms itself: {}",
+        model.lock().unwrap().status
     );
     assert!(
-        cx.debug_bounds("create-row-Test_SolidTool").is_some(),
-        "on the Solid tab"
+        cx.debug_bounds("create-popover").is_none(),
+        "and still opens no menu"
     );
-    assert!(
-        cx.debug_bounds("create-row-Test_SketchTool").is_none(),
-        "one category at a time"
-    );
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| {
-            shell.close_popover(cx);
-            shell.active_tool = None;
-        });
-    });
     model.lock().unwrap().status.clear();
     press_root(&mut cx, &shell, "7");
     assert!(
         model.lock().unwrap().status.contains("Loft"),
-        "`7` runs the third pill's tool: {}",
+        "`7` arms the third pill's tool: {}",
         model.lock().unwrap().status
     );
 
@@ -1121,7 +1138,7 @@ for _id, _command in (
     );
 
     let cleanup = crate::python::evaluate(
-        "import FreeCADGui\nfor _id in ('Test_SketchTool', 'Test_SolidTool', 'Test_SurfaceTool'):\n    FreeCADGui.removeCommand(_id)",
+        "import FreeCADGui\nfor _id in ('Test_SketchTool', 'Test_SketchCircle', 'Test_SolidTool', 'Test_SurfaceTool'):\n    FreeCADGui.removeCommand(_id)",
     );
     assert!(cleanup.expect("remove the tools").ok);
 }

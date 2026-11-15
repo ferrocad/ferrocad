@@ -431,12 +431,13 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
     assert_eq!(active_canvas.size.width, idle_canvas.size.width);
     assert_eq!(active_canvas.size.height, idle_canvas.size.height);
 
-    // Swap, do not stack: the idle dock is gone, the active surface is present.
+    // Stack, do not swap: the idle dock stays and the tool's pill is added above it, so
+    // activating a tool never takes the loadout (or `Search`) off the screen.
     assert!(
-        cx.debug_bounds("action-dock").is_none(),
-        "the idle action dock is not rendered during a session"
+        cx.debug_bounds("action-dock").is_some(),
+        "the dock is still rendered during a session"
     );
-    let strip = cx.debug_bounds("tool-strip").expect("the active-action surface");
+    let strip = cx.debug_bounds("tool-strip").expect("the tool's pill");
     assert!(cx.debug_bounds("tool-cancel").is_some(), "Cancel is a button");
     assert!(cx.debug_bounds("tool-finish").is_some(), "Finish is a button");
     // Both actions carry a glyph: an X to abort, a check to commit.

@@ -50,7 +50,7 @@ fn first_field(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<String> 
 }
 
 #[gpui::test]
-fn the_armed_box_swaps_the_dock_in_place_without_moving_the_canvas(cx: &mut TestAppContext) {
+fn the_armed_box_adds_a_pill_above_the_dock_without_moving_the_canvas(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let window = cx.update(|cx| {
@@ -64,6 +64,7 @@ fn the_armed_box_swaps_the_dock_in_place_without_moving_the_canvas(cx: &mut Test
     let shell: Entity<Shell> = window.root(&mut cx).unwrap();
     draw(&mut cx);
     let dock = cx.debug_bounds("action-dock").expect("the idle dock");
+    let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
     assert!(cx.debug_bounds("tool-strip").is_none());
 
     cx.update(|_window, cx| {
@@ -78,12 +79,12 @@ fn the_armed_box_swaps_the_dock_in_place_without_moving_the_canvas(cx: &mut Test
     });
     draw(&mut cx);
 
-    // The swap is in place: the strip stands where the dock did, and the canvas keeps its
-    // rectangle exactly.
-    assert!(cx.debug_bounds("tool-strip").is_some(), "the strip replaced the dock");
+    // The pill is **added above** the dock, not swapped for it: the session is one more
+    // row in the bottom-centre column, so the loadout stays where the user's hand is.
+    assert!(cx.debug_bounds("tool-strip").is_some(), "the tool's pill");
     assert!(
-        cx.debug_bounds("action-dock").is_none(),
-        "the dock is not stacked under the strip"
+        cx.debug_bounds("action-dock").is_some(),
+        "the dock stays: activating a tool does not take the loadout away"
     );
     assert!(cx.debug_bounds("tool-fields").is_some(), "the numeric row is docked");
     for field in ["w", "l", "h"] {
@@ -93,20 +94,29 @@ fn the_armed_box_swaps_the_dock_in_place_without_moving_the_canvas(cx: &mut Test
             "the {field} field is painted"
         );
     }
-    // In place: the strip occupies the dock's slot (same baseline, same centre), so the
-    // canvas rectangle the element layout reserved does not change.
-    let strip = cx.debug_bounds("tool-strip").expect("the strip");
-    assert_eq!(strip.origin.y, dock.origin.y, "same baseline");
+    // The dock keeps its baseline (the column grows upward), the pill sits above it, and
+    // the canvas rectangle the layout reserved is untouched.
+    let dock_after = cx.debug_bounds("action-dock").expect("the dock");
+    assert_eq!(dock_after.origin.y, dock.origin.y, "the dock does not move");
+    assert_eq!(dock_after.center().x, dock.center().x, "and keeps its centre");
+    let strip = cx.debug_bounds("tool-strip").expect("the pill");
+    assert!(
+        strip.origin.y + strip.size.height <= dock_after.origin.y,
+        "the pill is above the dock (strip {strip:?}, dock {dock_after:?})"
+    );
     assert_eq!(
         strip.center().x,
-        dock.center().x,
-        "same centre as the dock it replaced"
+        dock_after.center().x,
+        "the column is one centred stack"
     );
+    let canvas_after = cx.debug_bounds("main-canvas").expect("the canvas");
+    assert_eq!(canvas_after.origin.y, canvas.origin.y, "the canvas does not move");
+    assert_eq!(canvas_after.size.height, canvas.size.height);
     assert_eq!(first_field(&shell, &cx).as_deref(), Some("20.00"));
     assert_eq!(
         shell.read_with(&cx, |shell, _| shell.has_tool_fields()),
         true,
-        "the strip owns Tab while the tool publishes fields"
+        "the pill owns Tab while the tool publishes fields"
     );
 }
 

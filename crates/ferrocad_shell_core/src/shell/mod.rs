@@ -1407,11 +1407,12 @@ impl Shell {
         // The Add hand's slots: `5`–`9` arm the pill at that position (`5` Sketch,
         // `6` Solid, `7` Surface, `8` Text, `9` Mesh — in strip order). They continue the
         // Modify hand's `0`–`3` rather than restarting beside them, so one digit space
-        // addresses both hands: a press equips the pill's tool and a second press while
-        // that tool is running opens its category flyout. Unlike the loadout digits these
-        // are offered while a tool is armed — that is where the "again" in "press `5`
-        // again" lives — but a tool that publishes its own numbers still wins the digit
-        // for its shortcuts, which `activate_creation_slot` decides.
+        // addresses both hands: a press selects the pill and arms the tool it names, and a
+        // press on the pill that already holds the armed tool **steps to the next tool in
+        // that category** — the loadout's own idea of a slot with several tools behind it,
+        // the same shape as Slot 1's `1` Move ⇄ Rotate. Nothing here opens the flyout; that
+        // is the caret's and the wheel's. A tool that publishes fields takes its digits
+        // before this path is reached.
         if !editing
             && !self.modal_open()
             && !self.wheel.read(cx).is_open()
@@ -2066,8 +2067,9 @@ impl Render for Shell {
             .h_full()
             .bg(rgb(BG))
             .debug_selector(|| "main-viewport".to_string());
-        // The active tool's surface is an overlay in the canvas' bottom-centre slot (see
-        // `tool_strip`), not a row above it: it must not change the canvas rectangle.
+        // The armed tool's pill **adds a row** to the bottom-centre column (above the
+        // create dock) instead of replacing the dock, so a session never hides the hand
+        // that started it. The column is an overlay, so the canvas keeps its rectangle.
         let active_tool = model.tool.as_ref().filter(|tool| tool.is_active());
         // The canvas hosts the viewport, the floating control pill (top-left) and the
         // bottom-centre surface, which both have their own hitboxes so the scene still
@@ -2162,21 +2164,22 @@ impl Render for Shell {
                         cx,
                     ))
             })
-            // Swap, do not stack: while a session runs the bottom-centre slot shows
-            // the tool surface, so a second command cannot be started underneath it.
-            .child(match active_tool {
-                Some(tool) => tool_strip(tool, self.tool_field_edit(), cx).into_any_element(),
-                None => crate::chrome::action_dock(
+            // Stack, do not swap: the tool's pill goes above the create dock above the
+            // dock, so the loadout stays in place and the column grows upward from a
+            // fixed baseline.
+            .child(
+                crate::chrome::action_dock(
                     &model,
                     &self.creation,
                     self.popover_open("create"),
                     self.popover_anchor,
                     self.move_is_pending(cx) || self.pending_interaction.is_some(),
                     self.pill_holding(),
+                    active_tool.map(|tool| (tool, self.tool_field_edit())),
                     cx,
                 )
                 .into_any_element(),
-            })
+            )
             .child(self.wheel.clone().into_any_element());
         if let Some(note) = self.gpu_notice.clone() {
             canvas = canvas.child(gpu_notice_banner(note, cx));

@@ -240,3 +240,41 @@ over 53 modules (11 workbench modules); it does not drive the new commands yet, 
 the next widening. The
 Part API audit contract is re-pinned for the installed `drag` method (the audit tracks
 `installed_as_methods`).
+
+## 9. The workplane state contract (2026-11-15)
+
+The state refactor that landed on 2026-10-29 was correct and left one ambiguous door open.
+`ActiveWorkplane` has no absence — the world plane is the default and is present from the
+first frame — but `Viewport::set_workplane(Option<FaceFrame>)` still accepted `None`,
+which the implementation read as "the world plane" and every caller read as "no plane".
+The workplane task spec had recorded exactly that as the state problem
+([`../tasks/workplanes.md`](../tasks/workplanes.md) §1).
+
+**What closed it.**
+
+- **The `Option` entry point is deleted.** `set_active_workplane(ActiveWorkplane)` is the
+  only setter. Tier 1's first press, `activate_hovered_workplane` and
+  `set_workplane_from_element` each bind `ActiveWorkplane::of(&frame)`;
+  `clear_workplane()` binds `ActiveWorkplane::world()`. So "no active workplane" is not
+  expressible, and a consumer reads the plane without an `Option`. No other crate named the
+  removed method: the shell uses the verb-level `activate_hovered_workplane` /
+  `clear_workplane`.
+- **`is_default()` compares the frame.** It was the offset, the label and
+  `kind == World`; it is now also `plane == Workplane::world()`. The pill's highlight and
+  Tier 1's bind-or-not decision both read this test, so a frame that merely *reads* `XY`
+  (a shifted origin) must not count as the default.
+- **The contract is written once.** §1.2 of the task spec is now a table of the five ways
+  in (world standard, face, datum, custom/view, offset) with the `kind`, the label,
+  `is_default()`, `extent` and the constructor for each, plus the five rules a consumer may
+  rely on — including that the label is presentation and the kind is the truth, and that
+  `extent` is the grid's rule rather than the plane's identity.
+
+**Measured.** `ferrocad_viewport` **235 passed / 0 failed / 1 ignored** (the extended
+`resetting_the_default_plane_is_a_no_op` asserts that a reset leaves a world *binding*, and
+that a shifted-but-`XY` frame is not the default); `ferrocad_shell_core` **289/0**;
+`ferrocad_toy` **18/0** plus its five round-trip suites; `cargo check -p
+ferrocad_shell_core -p ferrocad_toy --all-targets` clean.
+
+**What is still open, and is not a state question.** `SketchObject.drag` has no
+manipulator in front of it, and the Python suite does not drive `Sketch_Polyline` /
+`Sketch_Dimension` yet. Both are new surface on top of a contract that is now closed.

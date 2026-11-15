@@ -1,8 +1,9 @@
 # Workplanes: one model, three ways in
 
-Status: task spec (2026-10-29). **Built**: the state model, the three tiers' entry points,
-`Pick 3 points`, `Save as datum plane` and the visual hierarchy are in the tree (§7); the
-four slices and their remaining gaps are recorded in §8.
+Status: task spec (2026-10-29; the plane-state contract closed 2026-11-15). **Built**: the
+state model, the three tiers' entry points, `Pick 3 points`, `Save as datum plane` and the
+visual hierarchy are in the tree (§7); the one ambiguous entry point was removed and the
+contract spelled out in §1.2; the four slices and their remaining gaps are recorded in §8.
 Companion to
 [`../../developer/interaction/selection-gizmos-and-forms.md`](../../developer/interaction/selection-gizmos-and-forms.md)
 (the context wheel, §2.2), [`../../developer/interaction/gizmo-manipulators.md`](../../developer/interaction/gizmo-manipulators.md)
@@ -44,12 +45,15 @@ points are not.
 - **The style differs, not the geometry.** `GridStyle::workplane()` uses 1 mm minor dots
   and 10 mm majors, while the world uses 10 mm / 100 mm (`grid.rs:22–25,149`). That is the
   only reason a bound grid *looks* unlike the origin grid.
-- **The viewport holds `Option<FaceFrame>`, not a plane.** `set_workplane(Option<FaceFrame>)`
-  is documented as **sticky** ("only replaced by another activation or cleared by `Esc`"),
-  with `activate_hovered_workplane()`, `clear_workplane()` and `view_workplane()`
-  (`inventor_view.rs`). `None` means "world", and the grid, axes, origin node and snap
-  context all fall back to `Workplane::world()` — so the *rendering* already treats the
-  world plane as active; only the state has no name for it.
+- **The viewport holds a plane, and it is never absent.** The active plane is
+  `ActiveWorkplane { plane, label, offset, extent }`, not an `Option`: the world `XY`
+  plane is the default and is present from the first frame, so `None` cannot mean “no
+  workplane”. `set_active_workplane` is the only setter; `activate_hovered_workplane()`,
+  `set_workplane_from_element()`, `set_workplane_frame()`, `set_view_plane()`,
+  `set_standard_plane()` and `offset_workplane()` each build one, and `clear_workplane()`
+  re-binds the world plane rather than deleting it (`inventor_view.rs`). The old
+  `set_workplane(Option<FaceFrame>)` shim — where `None` read as both “world” and
+  “nothing” — was removed on 2026-11-15 (§1.2).
 - **Hover previews already exist.** A hovered planar face gets a local grid after
   `FACE_DWELL` ("the bloom arrives without pointer motion"), and `snap_context()` uses
   `frame.plane` when a workplane is active, else `snap_grid.map(SnapContext::world)`.
@@ -74,20 +78,55 @@ points are not.
   no "set this frame" call, and `FreeCADGui`'s only `setWorkplane` is Draft's own
   `WorkingPlane` state (`python/FreeCADGui/draft.py:509`).
 
-## 1. The state problem
+## 1. The state problem, and the contract that closed it
 
-`Option<FaceFrame>` has three meanings packed into two values:
+### 1.1 The problem
 
-| Intent | Today |
+`Option<FaceFrame>` packed three meanings into two values:
+
+| Intent | Under `Option<FaceFrame>` |
 | --- | --- |
 | "the world XY plane is active" (the default, and what the grid draws) | `None` |
 | "a face is active" | `Some(frame)` |
 | "no plane at all" | `None` — indistinguishable from the world |
 
-Because there is no value for "world", the UI cannot say `WP: XY`, the `WP` pill cannot
-show a dot, and `Clear` has to print a denial when it is already at the default. The fix
-is a state change, not copy: make the world plane a first-class active plane and give
-`Datum` and a custom frame somewhere to live.
+Because there was no value for “world”, the UI could not say `WP: XY`, the `WP` pill
+could not show state, and `Clear` had to print a denial when it was already at the
+default. The fix was a state change, not copy: make the world plane a first-class active
+plane and give `Datum` and a custom frame somewhere to live.
+
+### 1.2 The contract (closed 2026-11-15)
+
+The source of truth is `ActiveWorkplane` in `crates/ferrocad_viewport/src/inventor_view.rs`.
+There are five ways in and **no way to express “no plane”**:
+
+| Plane | `plane.kind` | Pill label | `is_default()` | `extent` | Built by |
+| --- | --- | --- | --- | --- | --- |
+| world `XY` | `World` | `XY` | **yes** | `None` | `ActiveWorkplane::world()` (the starting state; `clear_workplane`) |
+| world `XZ` / `YZ` | `World` | `XZ` / `YZ` | no | `None` | `ActiveWorkplane::standard`, `set_standard_plane` |
+| a planar face | `Face { entity, element }` | the element (`Face3`) | no | `Some(radius)` | `activate_hovered_workplane`, `set_workplane_from_element`, Tier 1's first press |
+| a datum plane | `Datum(name)` | the name | no | `None` | the datum-object route (`Part::DatumPlane`) |
+| a transient frame | `Custom` | `Custom` / `View` | no | `None` | `set_workplane_frame` (a 3-point pick), `set_view_plane`, an offset |
+
+The rules a consumer may rely on:
+
+1. **There is no absence.** `set_active_workplane(ActiveWorkplane)` is the only setter;
+   the `set_workplane(Option<FaceFrame>)` shim was deleted, so no caller can mean “the
+   default” by passing nothing. A reset is `ActiveWorkplane::world()` — a *binding*, not a
+   deletion — and `clear_workplane()` is that spelling for the `Esc` path.
+2. **`is_default()` tests the frame, not the name.** It is `offset == 0 && label == "XY" &&
+   plane == Workplane::world()`: a frame that merely *reads* `XY` (a shifted origin, a
+   rotated pair) is a bound plane, so the pill highlights it and a creation tool still
+   binds to it.
+3. **The kind is the truth, the label is presentation.** `plane.kind` says where the plane
+   came from; `label` says what the pill reads, and a world-aligned `XZ` keeps
+   `kind = World` while reading `XZ`.
+4. **`extent` is the grid's rule, not the plane's identity.** It is `Some` only for a
+   plane bound to a finite surface, which is what makes a face grid a face-sized patch
+   rather than the camera-following ground.
+5. **A face plane is `Face { entity, element }` and nothing else** — the element is the
+   shape's own face name, resolved once by `face_frame_for`, so the hover bloom and the
+   explicit binding cannot disagree about which face is meant.
 
 ## 2. Three ways in
 
@@ -117,7 +156,7 @@ The binding is **per tool session** (not per click): one plane for the whole sha
 
 - `App_SetWorkplane` (`Set from selection` in the `WP` menu, `Set WP` in the wheel) calls
   `set_workplane_from_element(entity, element)`, which resolves the face's own centroid
-  and normal rather than the click point, then `set_workplane(Some(frame))`.
+  and normal rather than the click point, then binds `ActiveWorkplane::of(&frame)`.
 - The binding is **sticky**: it survives pointer moves and empty-space clicks.
 - The grid, axes and origin node move to the frame (they already render at the active
   plane; the animation is presentation).
@@ -255,12 +294,13 @@ Everything here already has the pieces; this is the map to connect them.
 
 The prerequisite for all three tiers.
 
-- The viewport's plane is `ActiveWorkplane { plane, label }`, **not** `Option<FaceFrame>`:
-  it starts at world `XY` (`label: "XY"`) and is never absent. `set_active_workplane`
-  takes an explicit plane; `set_workplane(Some(frame))` labels the frame from its
-  `WorkplaneKind` (`Face1`), and `set_workplane(None)` / `clear_workplane()` reset to
-  world. `active_workplane()` returns `&ActiveWorkplane`; `is_default()` is the pill's
-  dot test.
+- The viewport's plane is `ActiveWorkplane { plane, label, offset, extent }`, **not**
+  `Option<FaceFrame>`: it starts at world `XY` (`label: "XY"`) and is never absent.
+  `set_active_workplane` takes an explicit plane, `ActiveWorkplane::of(frame)` labels a
+  frame from its `WorkplaneKind` (`Face1`), and `clear_workplane()` re-binds the world
+  plane. `active_workplane()` returns `&ActiveWorkplane`; `is_default()` is the pill's
+  “unbound” test. *(2026-11-15: the `set_workplane(Option<FaceFrame>)` shim that survived
+  this refactor is gone; §1.2 is the contract.)*
 - **The grid is the origin grid, moved.** The active plane uses the same generator, the
   same steps (`grid_minor`/`grid_major`), the same ink and the camera-following radius;
   snapping uses those steps too, so the drawn grid and the snap agree. The finer 1 mm/10 mm
@@ -439,6 +479,34 @@ Verified: `ferrocad_stage` 195, `ferrocad_viewport` 176, `ferrocad_shell_python 
 `ferrocad_toy` 18, Python `tools/run_tests.py --extension Part` 721 passed / 3 skipped
 (7 new datum-plane tests, and the new module is in the extension-set contract),
 `cargo check -p ferrocad`.
+
+### 7.7 The state contract, spelled once (2026-11-15)
+
+The 2026-10-29 refactor left the state right but kept the old entry point:
+`Viewport::set_workplane(Option<FaceFrame>)` still let a caller pass `None`, which read as
+“the world plane” in the implementation and as “no plane” to every reader. That method is
+**gone**; the only setter is `set_active_workplane(ActiveWorkplane)`, and §1.2 is the
+contract it implements. Two further sharpenings landed with it:
+
+- **`is_default()` compares the frame.** It was `offset == 0`, the label `XY` and
+  `kind == World`; it is now also `plane == Workplane::world()`, so a frame that merely
+  reads `XY` (a shifted origin) is a bound plane. Nothing in the tree produced such a
+  frame, but the pill's highlight and Tier 1's bind-or-not decision both read this test,
+  so it should mean what it says.
+- **A reset is a binding.** `clear_workplane()` calls `set_active_workplane(
+  ActiveWorkplane::world())`, so “cleared” and “world XY is active” are one state. The
+  no-op test asserts the plane is still there afterwards (label `XY`, `kind = World`,
+  origin zero, `extent = None`), which is the property a consumer relies on to read a
+  plane without an `Option`.
+
+Call sites migrated: `activate_hovered_workplane`, `set_workplane_from_element`, Tier 1's
+first press, and two axis-label tests. No other crate named the removed method (the shell
+uses the verb-level `activate_hovered_workplane`/`clear_workplane`).
+
+Verified: `ferrocad_viewport` **235 passed / 0 failed / 1 ignored** (the extended
+`resetting_the_default_plane_is_a_no_op`), `ferrocad_shell_core` **289/0**, `ferrocad_toy`
+**18/0** plus its five round-trip suites, and `cargo check -p ferrocad_shell_core -p
+ferrocad_toy --all-targets` clean.
 
 ## 8. Reflection (2026-10-29): visual hierarchy and parked work
 

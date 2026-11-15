@@ -377,7 +377,7 @@ active `n`. Keeping the cube world-only is deliberate: mixing the two would make
 | --- | --- |
 | `ferrocad_graphics` | `Vertex.color` (G0); `Topology::{Points, Lines}` already |
 | `ferrocad_stage` | `Workplane`, `FaceFrame` (face → frame from the tessellation), `GridSpec`, `GridStyle`, `SnapContext`, the grid producer, the triad builder, `SnapKind` extensions. Pure math: no kernel, no gpui, no Python |
-| `ferrocad_viewport` | building the frames from the display tessellation (`SelectionRef` → `WorkplaneKind::Face`), drawing the producer and the local layers, routing hover/clicks, the aurora and pill, `set_workplane`/`set_grid` |
+| `ferrocad_viewport` | building the frames from the display tessellation (`SelectionRef` → `WorkplaneKind::Face`), drawing the producer and the local layers, routing hover/clicks, the aurora and pill, `set_active_workplane`/`set_grid` |
 | `ferrocad_shell_python` / the edition | the **policy**: grid on/off, steps, units, sketch mode, the command that activates a datum plane. Preferences come from `App::ParamGet` |
 | `ferrocad_part` and others | nothing — a workplane is a frame, not a shape |
 
@@ -483,11 +483,14 @@ the visual work can use it.
   (`GridStyle::workplane`), its face's radius, and `WIRE_DEPTH_BIAS` so it sits on the
   surface instead of z-fighting with it. While a local layer exists the world ground drops
   to `WORLD_DIM` (25 %) and the world triad to `WORLD_TRIAD_DIM` (30 %).
-- **Activation** — `set_workplane(Some(FaceFrame))` / `activate_hovered_workplane()` /
-  `clear_workplane()`. The plane is **sticky** (§10.4): it survives pointer moves and
-  empty-space clicks. `Esc` clears it (after it has had the chance to cancel a manipulator
-  or gizmo drag). Snapping switches to `SnapContext { minor: 1, major: 10 }` on the active
-  plane; the world grid snapping step applies when none is active.
+- **Activation** — `set_active_workplane(ActiveWorkplane)` is the one setter,
+  `activate_hovered_workplane()` binds the face under the pointer and `clear_workplane()`
+  re-binds the world plane (there is no “no plane” state — see
+  [`../../project/tasks/workplanes.md`](../../project/tasks/workplanes.md) §1.2). The
+  plane is **sticky** (§10.4): it survives pointer moves and empty-space clicks. `Esc`
+  clears it (after it has had the chance to cancel a manipulator or gizmo drag). Snapping
+  switches to `SnapContext { minor: 1, major: 10 }` on the active plane; the world grid
+  snapping step applies when none is active.
 - **Caching** — the ground and triad keys now include the ink. A dimmed grid bakes
   different per-vertex alpha, so it is different geometry, not a different packet colour;
   without this the world level never receded.

@@ -8,10 +8,10 @@ unfocused fields, the `Esc` cascade) and [`gizmo-manipulators.md`](gizmo-manipul
 (`ManipulatorFrame`, planar face normals, edge polylines).
 
 This note specifies the **Add hand**: how the static `Create Box` button in the centre
-action bar becomes a memory split-pill (`⊕ <Tool> ▾`), how its five-category hierarchy
-expands, how arming a creation tool replaces the action bar in place with a live **tool
-strip**, and how an armed tool anchors new geometry onto a **workplane, body, face or
-edge** under the pointer.
+bar became a create dock of one pill per category, how its five-category hierarchy
+expands, how the pills sit in the **bottom row right after the Modify hand's bar**, and
+how an armed tool anchors new geometry onto a **workplane, body, face or edge** under the
+pointer.
 
 ---
 
@@ -27,24 +27,29 @@ there** versus **adding something new**.
   dress-ups: it reads `3 Fillet` until pressed again, which toggles it to `3 Chamfer` (and
   the mode is what the scrubber's commit — and the document's `Part::Fillet` /
   `Part::Chamfer` — follows). Slot 1 has the same shape for `Move`/`Rotate`.
-- **The Add hand** (bottom-centre action bar):
-  `[ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]` over a **create dock** of
-  one pill per category. Authoring-tied. It governs what new shape is created and how its
-  placement frame snaps to the scene, body, face or edge under the pointer.
+- **The Add hand** (bottom row, right after the Modify bar): the **create dock**, one pill
+  per category. Authoring-tied. It governs what new shape is created and how its placement
+  frame snaps to the scene, body, face or edge under the pointer.
+- **The globals** (left edge, a vertical pill): `Undo`, `Redo`, `Fit` and Search. They are
+  not a hand: they never change with the selection or the edition, and they are the one
+  row that is not about geometry.
 
 ```text
-Bottom-Left (Modify Hand)                                  Bottom-Centre (Add Hand — Idle)
-[ 1 ✥ Move │ 2 ↕ Push/Pull │ 3 ↱ Fillet │ 0 ⬚ Inspect ]    [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ 🔍 Search (Ctrl+K) ]
+Left edge (globals)        Bottom row (Modify hand, then Add hand)
+[ Undo  ]                  [ 1 ✥ Move │ 2 ↕ Push/Pull │ 3 ↱ Fillet │ 0 ⬚ Inspect ]
+[ Redo  ]                  [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
+[ Fit   ]
+[───────]
+[ 🔍 Search (Ctrl+K) ]
 ```
 
 ### 0.1 The create dock and its flyout
 
-The Add hand is its **own strip**, above the action dock, not a control inside it — the
-**continuation of the action loadout** rather than a separate tray:
+The Add hand is the **continuation of the Modify loadout**, in the same row: the bar's four
+slots, then one pill per category.
 
 ```text
-[ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ │ 9 ⊕ Mesh: Mesh Box ▾ ]   create dock
-[ Undo  Redo  Fit  │  ⊕ Create Dock ^  │  Search (Ctrl+K) ]                                     action dock
+[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
 ```
 
 - **One pill per category.** `Sketch`, `Solid`, `Surface`, `Text`, `Mesh` — in the
@@ -96,16 +101,15 @@ The Add hand is its **own strip**, above the action dock, not a control inside i
 - **Per-category memory.** Picking a tool binds it to its category's pill *and* runs it.
   Clicking a **tab** only points that category's pill at the tool the category remembers,
   so the pill behind the flyout already names what the next click would run.
-- **The dock keeps its contract.** The action dock holds a single
-  `⊕ Create Dock ^` toggle (and `▾` when the strip is folded away): the strip is shown by
-  default and the toggle is the only way it leaves, so the dock never grows a list of
-  tools.
-- **Activating a tool adds a pill; it does not replace the dock.** The armed tool's pill
-  (`[ ⬡ Box │ W 20.00 L 20.00 H 20.00 mm │ ✗ │ ✓ ]`) is the **top row of the same
-  bottom-centre column**, above the create dock. A session therefore never takes the
-  loadout — or `Undo`/`Search` — off the screen, and the slots stay where the user's hand
-  is: the column is bottom-anchored and grows upward, so the dock keeps its baseline and
-  the canvas keeps its rectangle.
+- **The strip is permanent, and the globals are not part of it.** There is no
+  `⊕ Create Dock` toggle: a loadout that can be folded away is not a loadout, and the six
+  keys that address it would then address nothing. The globals dock holds `Undo`, `Redo`,
+  `Fit` and Search and nothing else, so it never changes width with an edition.
+- **Activating a tool adds a pill; it does not replace anything.** The armed tool's pill
+  (`[ ⬡ Box │ W 20.00 L 20.00 H 20.00 mm │ ✗ │ ✓ ]`) sits **bottom-centre over the canvas**,
+  which the create dock left free when it moved down beside the Modify bar. A session
+  therefore never takes the loadout, the dock or Search off the screen, and — because the
+  pill is an absolute overlay like the wheel — the canvas keeps its rectangle.
 - **The wheel loads the same pills.** `Create ▸` in the radial menu holds the same
   categories and tools; committing one performs the same two actions a row click does —
   bind the tool to its category's pill, then run it (which arms it at the pointer).
@@ -120,7 +124,7 @@ Both hands obey the same four invariants:
 3. **Zero concurrent limbo.** A pending modification (`Δ ≠ 0`) locks out creation until
    it is finished (`✓`/`Enter`) or rolled back (`✗`/`Esc`). Conversely, an `ARMED`
    creation tool suspends the Modify hand's gizmos and manipulators and adds the tool's
-   own pill above the bottom-centre column.
+   own pill over the bottom of the canvas.
 4. **Numbers never jump.** Every numeric input is 11–12 px tabular monospace in a
    screen-anchored bar, unfocused by default so the canvas keeps the keyboard until `Tab`
    or a digit is pressed.
@@ -133,7 +137,12 @@ Add hand's chrome, inventory and slices.
 
 ## 1. Chrome anchor and the five-category hierarchy
 
-The creation pill lives inside the **centre action bar** between `Fit` and
+**Superseded by §0.1 and §9** for the chrome: this section records the first slice, when
+one memory split-pill lived inside the centre bar. The hierarchy it describes (five
+categories, a gate per tool, a flyout that grows upward) is unchanged; the *anchor* is now
+one pill per category in the bottom row, right after the Modify bar.
+
+The creation pill lived inside the **centre action bar** between `Fit` and
 `Search (Ctrl+K)`, replacing the static `⊕ Create Box` button with a two-part **memory
 split-pill**:
 
@@ -207,15 +216,18 @@ stateDiagram-v2
 
 ### State alignment with the two companion machines
 
-1. **`IDLE` corresponds to `ArmedIdle`.** The creation pill is compact in the centre bar;
-   the Modify hand rests in its equipped slot (`1`–`3`, `0`) at bottom-left.
-2. **`ARMED` adds the tool strip above the dock.** The strip is the top row of the same
-   bottom-centre column:
+1. **`IDLE` corresponds to `ArmedIdle`.** The create dock rests as one pill per category in
+   the bottom row, and the Modify hand rests in its equipped slot (`1`–`3`, `0`) just to its
+   left.
+2. **`ARMED` adds the tool's pill, bottom-centre.** Nothing is swapped, and the bottom row
+   and the left column stay where they were:
 
    ```text
-   [ ⬡ Box · Face6 (+N) │ W  20.00   L  20.00   H  20.00 mm │ ✗ │ ✓ ]     armed pill
-   [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]   create dock
-   [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]                 action dock
+   [ Undo ]   [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
+   [ Redo ]
+   [ Fit  ]                          [ ⬡ Box · Face6 (+N) │ W  20.00   L  20.00   H  20.00 mm │ ✗ │ ✓ ]
+   [──────]
+   [ 🔍 Search (Ctrl+K) ]
    ```
 
    The `✗`/`✓` pair is the pending half: a tool that has placed nothing shows its name,
@@ -224,10 +236,11 @@ stateDiagram-v2
    that publishes fields, because its row is the pending value — so `ARMED` always looks
    like "something is in progress" and never like a dialog nobody opened.
 
-   One column, not a second floating HUD: the numbers stay in one fixed tabular pill
-   (`visual-language.md` §0.4), the column grows upward from a fixed bottom baseline so
-   neither the canvas nor the dock moves, and the loadout the session was started from
-   stays in hand — the same reason the Modify bar keeps its slots while a move is pending.
+   The pill is an **absolute overlay**, not a row in a layout: a floating HUD would collide
+   with the Modify hand's docked coordinate row, the numbers stay in one fixed tabular pill
+   (`visual-language.md` §0.4), and the canvas rectangle never moves. The loadout the
+   session was started from stays in hand — the same reason the Modify bar keeps its slots
+   while a move is pending.
    Entering `ARMED` hides and un-offers the hosted `GizmoSet` and the workbench
    manipulators (`PushPullStem`, `DressUpScrubber`), and suppresses hover-to-arm
    (`set_gizmo_idle_scale`) and the right-click radial until the tool leaves `ARMED`.
@@ -322,12 +335,11 @@ Per [`creation-pill-loadout.md`](creation-pill-loadout.md) §1 and
 uncommitted edit:
 
 1. **Transform pending (`Δ ≠ 0`) → creation locked.** While the Modify hand has an
-   uncommitted Move, Rotate, Push/Pull or Fillet step, the `⊕ Box ▾` pill dims to 45 %
-   alongside the bottom-left loadout bar (`visual-language.md` §1.5) and a click is
+   uncommitted Move, Rotate, Push/Pull or Fillet step, the create dock dims to 45 %
+   alongside the loadout bar (`visual-language.md` §1.5) and a click is
    consumed with:
    `Pending <verb> — apply (✓ / Enter) or cancel (✗ / Esc) before starting a tool`.
-   The action dock does not dim today; the slice passes the same `blocked` flag the
-   loadout bar already takes.
+   The globals dock dims with the same `blocked` flag.
 2. **Creation `ARMED`, no anchor placed → the switch is free.** If the user armed `Box`
    but has not placed an anchor (`in_progress_preview == false`), clicking another
    creation tool or pressing `1`–`3`/`0` cancels the armed tool cleanly; no transaction
@@ -498,15 +510,15 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   (never the worker-dispatching `surfaces.operations`), and **one** transaction. A refusal is
   a status sentence and writes nothing; each verb has a documented default number, which
   `Activated(value)` overrides until the C2 `ToolField` strip can carry it.
-- **The action dock is the contract.** `dock` = the globals only (`Undo`, `Redo`, `Fit`);
-  the row then holds the **create dock toggle** and Search, and nothing else. The Add
-  hand's pills are the strip above it, one per `FerroCAD_Category` in the design's order
-  (`Sketch`, `Solid`, `Surface`, `Text`, `Mesh`); a pill's `▾` opens its category's
-  flyout, whose rows are that category's `creation` commands. An
+- **The globals dock is the contract.** `dock` = the globals only (`Undo`, `Redo`, `Fit`)
+  plus Search, in a **vertical pill on the canvas' left edge** (`chrome::globals_dock`),
+  and nothing else. The Add hand's pills are in the bottom row, one per
+  `FerroCAD_Category` in the design's order (`Sketch`, `Solid`, `Surface`, `Text`, `Mesh`),
+  permanently and right after the Modify bar; a pill's `▾` opens its category's flyout,
+  whose rows are that category's `creation` commands. An
   unannotated command (or an unknown `FerroCAD_Surface`) falls back to the **palette**, so
-  a mod cannot overflow the strip; the shell test asserts the three-item dock, the pills'
-  presence, the flyout opening, and that the strip's rectangle clears the bottom-left hand
-  column.
+  a mod cannot overflow the dock; the shell test asserts the globals-only dock, the pills'
+  presence beside the loadout bar, and the flyout opening.
 - **One session, one owner.** Arming a tool (or a pending manipulator) dims the hand
   column to 45 % and drops its clicks; the dock dims the same way while a transform or
   manipulator is pending. The armed tool's row is **added above** the create dock

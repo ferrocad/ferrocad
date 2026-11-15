@@ -49,15 +49,17 @@ over the canvas:
 
 - the [toolbar](ui-toolbars.md) pill at the top-left;
 - the [tool loadout](ui-tool-loadout.md) and the Move coordinate row at the bottom-left;
-- the [action bar](ui-action-bar.md) at the bottom-centre, with the create dock above it
-  and a running tool's own pill above that;
+- the [globals dock](ui-action-bar.md) on the left edge, centred down it;
+- the bottom row: the [tool loadout](ui-tool-loadout.md) at the bottom-left and the create
+  dock right after it;
+- the Move coordinate row, above the loadout;
 - the [wheel menu](ui-wheel-menu.md) at the pointer;
 - command dialogs, the Search palette, the settings card and the in-context `✗`/`✓`
   finish pill.
 
-Those surfaces are deliberately not stacked. The bottom-centre column is the one
-bottom-anchored stack — tool pill, create dock, action bar — so opening a tool adds a row
-without moving the others; the Move coordinates sit above the loadout so typing a large
+Those surfaces are deliberately sparse. The only things that stack are at the bottom-left
+(one row) and the bottom-centre (the armed tool's pill), and the canvas rectangle never
+moves because of them; the Move coordinates sit above the loadout so typing a large
 delta cannot move the
 inputs; and a modal or the wheel hides the transient Move pieces rather than drawing on
 top of them.

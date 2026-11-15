@@ -597,11 +597,11 @@ Three follow-ups from the live window:
   workplane verbs. A category with no applicable child is omitted. The hollow centre now
   paints `◂ Back` beside the open category's name.
 - **The Add hand is its own strip, one pill per category.** The dock's single memory
-  pill became a **create dock** above the action dock:
+  pill became a **create dock** in the bottom row, right after the Modify bar:
   `5 ⊕ Sketch: Rectangle ▾  6 ⊕ Solid: Box ▾  7 ⊕ Surface: Loft ▾  9 ⊕ Mesh: Mesh Box ▾`,
-  one per registered category (a category with no tool is not a pill). The dock keeps a
-  single `⊕ Create Dock ^` toggle, so its own row is still
-  `[ Undo Redo Fit │ ⊕ Create Dock │ Search ]` and never a list of tools. Each pill
+  one per registered category (a category with no tool is not a pill), permanently — there
+  is no create-dock toggle. The globals (`Undo`, `Redo`, `Fit`, Search) are a vertical
+  pill on the canvas' **left edge**, so the dock never holds a tool. Each pill
   remembers its category's tool and leads with its key, as the Modify bar does — `5`–`9`
   are the Add hand's, continuing the Modify hand's `0`–`3` so one digit space addresses
   both hands (`4` is left unbound). A key press **selects** the pill and starts the tool
@@ -617,13 +617,13 @@ Three follow-ups from the live window:
   the key is down. The wheel's `Create ▸` commits through the same path, so a flick
   loads the pill and arms the tool at the pointer.
 - **A session adds a pill; it does not take the dock.** The armed tool's pill (its label,
-  its `W/L/H` row or point count, its hint, `✗`/`✓`) is the top row of the same
-  bottom-centre column, above the create dock, so the loadout and the dock stay in place
+  its `W/L/H` row or point count, its hint, `✗`/`✓`) is an **overlay over the canvas'
+  bottom-centre**, so the loadout, the create dock and the globals stay in place
   while a tool runs. The pair is the **pending half**: it appears with the first placed
   point (or at once for a tool whose fields are the input) and not before, so arming a
-  tool that has placed nothing is a readout, not a dialog. The column is bottom-anchored
-  and grows upward: the dock keeps its baseline and the canvas keeps its rectangle
-  (`chrome::action_dock` owns the column, `chrome::tool_pill` the row).
+  tool that has placed nothing is a readout, not a dialog. The canvas keeps its rectangle
+  (`chrome::globals_dock` owns the left column, `chrome::create_dock` the bottom row,
+  `chrome::tool_strip` the overlay).
 - **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
   `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
   `select at least 2 profiles` instead of `select at least 2 bodies`.

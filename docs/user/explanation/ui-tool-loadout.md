@@ -29,7 +29,8 @@ and `0`. Each hand re-picks its target so the relevant handles appear.*
 ## The bar
 
 The bar reads `[1 Move] [2 Push/Pull] [3 Fillet] [0 Inspect]` and shares its baseline and
-glass with the action bar. Each slot shows its key, a glyph and a label. The active slot
+its glass with the create dock, which sits right after it in the same bottom row. Each slot
+shows its key, a glyph and a label. The active slot
 is drawn in accent ink over a tinted background; a click equips it exactly as its key
 does, so the hotkey stays discoverable without opening a menu.
 
@@ -60,12 +61,11 @@ adds no numeric surface.
 
 ## The Add hand
 
-Above the bottom-centre bar sits the **create dock**: one pill per category, each naming
-the tool it was last left on.
+Right after the bar sits the **create dock**: one pill per category, each naming the tool
+it was last left on. It is always there — nothing folds it away.
 
 ```
-[ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ │ 9 ⊕ Mesh: Mesh Box ▾ ]
-[ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
+[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
 ```
 
 - The **left half** of a pill is that pill's *slot*: pressing its key and clicking it do
@@ -78,12 +78,12 @@ the tool it was last left on.
   tool in that category** — so `5`, `5`, `5` walks the sketch tools, wrapping round — and
   each press starts the one it lands on. A tool that needs a selection you do not have is
   skipped rather than selected.
-- Starting a tool does not take the dock away: the tool's own pill (its name, its numbers
-  or point count, and its hint) appears **above** the create dock, so the slots, the dock
-  and Search stay where they were while you draw. The `✗`/`✓` pair on that pill appears
-  only once there is something to finish — the first placed point, or a tool whose numbers
-  are the input — so arming a tool that has done nothing looks like a readout, not a
-dialog.
+- Starting a tool does not take anything away: the tool's own pill (its name, its numbers
+  or point count, and its hint) appears **over the bottom-centre of the canvas**, so the
+  slots, the dock and Search stay where they were while you draw. The `✗`/`✓` pair on that
+  pill appears only once there is something to finish — the first placed point, or a tool
+  whose numbers are the input — so arming a tool that has done nothing looks like a
+  readout, not a dialog.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that
@@ -98,9 +98,6 @@ dialog.
   including while a drawing tool is armed, which is how you hop to another pill. It stays
   out of the way when `Shift` is busy elsewhere (dragging a handle, editing a number,
   typing in a field), and it never closes a list you opened yourself.
-- The dock's `⊕ Create Dock ^` button folds the strip away (and `▾` brings it back), so
-  the bottom bar stays `Undo · Redo · Fit · Create Dock · Search` however many tools an
-  edition registers.
 
 Each hand has its own page: [Move](ui-move.md), [Rotate](ui-rotate.md), [Extrude](ui-extrude.md)
 and [Fillet](ui-fillet.md).

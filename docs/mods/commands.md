@@ -53,7 +53,8 @@ The conventional id is `"<Workbench>_<Action>"`.
 
 ## `GetResources`
 
-The shell reads these keys when it builds the viewport header and the action dock:
+The shell reads these keys when it builds the viewport header, the dock and the create
+dock:
 
 | Key | Used as | Default |
 | --- | --- | --- |

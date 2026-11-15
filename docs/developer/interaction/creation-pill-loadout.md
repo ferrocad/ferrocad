@@ -11,7 +11,9 @@ model, §6 pass-through, §10 non-goals) and
 
 The creation pill and the transform loadout are **one loadout system with two hands**:
 the Modify hand (bottom-left) hosts manipulators for existing geometry, and the Add hand
-(bottom-centre) hosts authoring tools for new geometry. Both replace implicit inference
+sits in the **same bottom row, right after it**, hosting authoring tools for new geometry;
+the globals (`Undo`, `Redo`, `Fit`, Search) are a column on the left edge. Both hands
+replace implicit inference
 with an explicit, user-chosen slot, and both bind to the same topological targets
 (Scene / Body / Face / Edge).
 
@@ -42,25 +44,28 @@ inventory, tool strip, tokens and slice plan are in
 
 | | Add hand (creation pill) | Modify hand (transform loadout) |
 | --- | --- | --- |
-| Chrome anchor | centre action bar (bottom-centre) | loadout bar (bottom-left, `left: 16 px`, `bottom: 12 px`) |
+| Chrome anchor | bottom row, right after the Modify bar (one pill per category) | loadout bar (bottom-left, `left: 16 px`, `bottom: 12 px`) |
 | Slots | a create dock of one pill per category (`5`–`9` arm them, in strip order) over 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
 | Governs | what you make, and which surface/edge it anchors to | what a pick targets, and which manipulator is hosted |
-| Active state | IDLE → HOVER → EXPANDED → ARMED (the tool's pill is added above the create dock) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
+| Active state | IDLE → HOVER → EXPANDED → ARMED (the tool's pill is added over the canvas' bottom) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
 | Topology binding | WP: place on the grid · Body: feature from a profile · Face: place on the face `+N` · Edge: place along the edge | Body: `TransformGizmo` · Face: `PushPullStem` · Edge: `DressUpScrubber` · Inspect: highlight only |
 | Commit | new shape added, selected, one undo step | transform/manipulator session committed (`✓`/`Enter`), one undo step |
 
 The placement, idle:
 
 ```
-Bottom-left (Modify)                                  Bottom-centre (Add, idle)
-[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]      [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
-
-[ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]     ← the create dock, above
+Left edge                                             Bottom row (Modify, then Add)
+[ Undo ]                                             [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]
+[ Redo ]                                             [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]
+[ Fit  ]
+[──────]
+[ 🔍 Search (Ctrl+K) ]
 ```
 
-The Add hand is its **own strip**, one pill per category, sitting above the action dock —
-the **continuation of the action loadout**, not a separate tray: the dock carries a single
-`⊕ Create Dock ^` toggle and never a list of tools. Each pill reads
+The Add hand is the **continuation of the action loadout**, in the same row: the bar's four
+slots and then one pill per category. Nothing folds it away — there is no create-dock
+toggle, and the globals dock holds only `Undo`/`Redo`/`Fit`/Search, so it never gains a
+list of tools. Each pill reads
 `<key> ⊕ <Category>: <Tool> ▾` and remembers its category's tool; its left half is the
 **slot**, the same gesture as its key. The keys are the **one digit space both hands
 share**: `0`–`3` equip the Modify hand's slots and `5`–`9` are the Add hand's pills at
@@ -98,14 +103,16 @@ their labels, glyphs and the handles they build all come from the slot rather th
 command. The docked numeric row carries the same toggle beside its fields, so the row and
 the bar can never disagree.
 
-The placement, ARMED (the tool's pill is added above the strip; nothing is swapped and the
-canvas rectangle does not move):
+The placement, ARMED (the tool's pill is an overlay; nothing is swapped and the canvas
+rectangle does not move):
 
 ```
-Bottom-left (Modify, parked)                          Bottom-centre (Add, armed)
-[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]      [ Box on WP:XY │ W 20.00  L 20.00  H 20.00 mm │ ✗ │ ✓ ]
-                                                     [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
-                                                     [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
+Left edge                    Bottom row (Modify, then Add)              Canvas bottom-centre
+[ Undo ]                     [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]
+[ Redo ]                     [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]   [ Box on WP:XY │ W 20.00  L 20.00  H 20.00 mm │ ✗ │ ✓ ]
+[ Fit  ]
+[──────]
+[ 🔍 Search (Ctrl+K) ]
 ```
 
 **Mutual exclusion.** The two hands are exclusive only through the existing context:
@@ -114,8 +121,8 @@ Bottom-left (Modify, parked)                          Bottom-centre (Add, armed)
   (`Δ ≠ 0`, the `✗`/`✓` pair on screen), the gate already refuses `StartTool`,
   `SwitchHand`, `SwitchScope`, `Select` and editing commands; only the completion keys,
   field editing and `CmdType: ForView` commands pass. A creation tool therefore cannot
-  arm. The loadout bar dims to 45 % and drops clicks (`chrome::loadout_bar(blocked)`);
-  the action dock does not dim yet (§4).
+  arm. The loadout bar, the create dock and the globals dock all dim to 45 % and drop
+  clicks.
 - **Armed Add suspends Modify.** `Shell::start_tool` already closes the Move form, clears
   `set_manipulators([])` and `set_gizmo(None)`, and sets the tool; `hover_arm_allowed`
   requires `active_tool.is_none()`; the right-press radial is not opened while a tool is
@@ -294,9 +301,10 @@ the label is `⊕ Box ▾` (the tool it arms) and there is no duplicate `Create 
 - **Context.** `StartTool` is refused while a move/rotation/manipulator is pending, and the
   status names the finish pair; arming a creation tool clears the gizmo set, the
   manipulators and the Move form; the radial does not open while the tool runs.
-- **Chrome.** Armed, the tool's pill is **added above** the create dock and the viewport
-  rect is identical before and after; the dock and the strip keep their rows; the loadout
-  bar dims only while pending (and, if decided, while armed).
+- **Chrome.** Armed, the tool's pill is an **overlay** over the canvas' bottom-centre and
+  the viewport rect is identical before and after; the bottom row and the globals column
+  keep their places; every hand surface dims only while pending (and, if decided, while
+  armed).
 - **Naming.** `PILL_HOLD` leaves nothing pending and gates no action; `SESSION_HOLD` keeps
   its uncommitted-transform meaning.
 - **Topology.** A face hover aligns the preview's `+Z` with the face normal; an edge hover

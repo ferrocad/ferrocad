@@ -2,7 +2,7 @@
 
 The wheel menu is a radial marking menu that opens at the pointer. It exists so an
 object verb is one gesture away: you do not have to find a permanent toolbar row, and the
-action bar does not have to reflow every time the selection changes.
+dock does not have to reflow every time the selection changes.
 
 The menu is a ring of wedges around a hollow centre. The centre is a **deadzone**: a
 release there cancels. Slots are ordered by tone — structural, additive, destructive —
@@ -35,7 +35,7 @@ category and reads `◂ Back`: click it (or press `Backspace`) to go back up.
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
 <img src="../images/ui-wheel-menu-window.png" alt="The wheel menu highlighted in the desktop application window">
 <img class="fc-tabs__closeup" src="../images/ui-wheel-menu.png" alt="Close-up of the wheel menu">
-<figcaption><strong>Desktop</strong> — the wheel opened over the canvas, with the toolbar, loadout and action bar around it. Move, Rotate and Toggle visibility are root verbs beside the `Workplane ▸`, `Create ▸` and `Modify ▸` categories; Delete is the destructive slot, ordered last.</figcaption>
+<figcaption><strong>Desktop</strong> — the wheel opened over the canvas, with the toolbar, the loadout and create dock along the bottom, and the globals dock on the left. Move, Rotate and Toggle visibility are root verbs beside the `Workplane ▸`, `Create ▸` and `Modify ▸` categories; Delete is the destructive slot, ordered last.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-wheel-menu-web-window.png" alt="The wheel menu highlighted in the browser build">
@@ -93,7 +93,8 @@ The wedges carry the same state as any other command:
   red for destructive; hover adds the standard highlight tint.
 
 If no object verb is enabled — for example over empty space with nothing to manipulate —
-the wheel falls back to the **creation and global** verbs from the action bar, so the same
+the wheel falls back to the **creation and global** verbs from the create dock and the
+dock, so the same
 gesture is never a dead end. If there is still nothing to offer, the wheel does not open.
 
 ## The context target
@@ -106,7 +107,7 @@ when the wheel opens:
 | an object already selected | the selection verbs | unchanged | unchanged |
 | an object outside the selection | object verbs, offered | unchanged | the target replaces the selection |
 | empty space, with a selection | the selection verbs | unchanged | unchanged |
-| empty space, with no selection | creation verbs from the action bar | unchanged | unchanged |
+| empty space, with no selection | creation verbs from the create dock | unchanged | unchanged |
 
 Opening the wheel is read-only. A target outside the selection is **promoted only when a
 verb is chosen**, and a target already in the selection is not re-selected: the command

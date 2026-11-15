@@ -191,7 +191,7 @@ The row, the pill and the tape are built (`shell::move_hud::MoveHud`,
 [`../../project/record/tasks/transform-session.md`](../../project/record/tasks/transform-session.md) §3.
 
 The two numeric surfaces are exclusive and screen-anchored: the Move row docks above the
-loadout, and the Add hand's dimension strip replaces the centre action bar **in place**, so
+loadout, and the Add hand's dimension pill is an overlay over the bottom of the canvas, so
 only one input bar is ever live. The Add hand's version of this rule is in
 [`creation-pill-loadout.md`](creation-pill-loadout.md) §3.3.
 

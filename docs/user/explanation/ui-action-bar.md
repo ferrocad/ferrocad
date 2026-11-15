@@ -1,9 +1,9 @@
-# The action bar
+# The globals dock
 
-The action bar is the strip that floats at the **bottom-centre** of the canvas. It
-carries the commands that create something or act on the whole document; the verbs that
-depend on what is under the pointer live in the wheel menu. That split is why the action
-bar does not change width when the selection changes.
+The `dock` surface is the **vertical pill on the left edge** of the canvas: `Undo`, `Redo`,
+`Fit` and Search. It carries the commands that act on the whole document; the verbs that
+depend on what is under the pointer live in the wheel menu, and the two hands' tools live in
+the bottom row. That split is why the dock never changes width when the selection changes.
 
 <div class="fc-tabs" data-fc-tabs>
 <div class="fc-tabs__bar" role="tablist" aria-label="Which host draws the figure">
@@ -11,38 +11,41 @@ bar does not change width when the selection changes.
 <button class="fc-tabs__tab" data-fc-tab="web" type="button" role="tab" aria-selected="false">Web</button>
 </div>
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
-<img src="../images/ui-action-bar-desktop-window.png" alt="The action bar highlighted in the desktop application window">
-<img class="fc-tabs__closeup" src="../images/ui-action-bar-desktop.png" alt="Close-up of the action bar">
-<figcaption><strong>Desktop</strong> — the bottom-centre strip: Undo, Redo, Fit, the creation pill (`⊕ Box ▾`) and Search. A running tool replaces this strip in the same slot with its docked fields.</figcaption>
+<img src="../images/ui-action-bar-desktop-window.png" alt="The globals dock highlighted in the desktop application window">
+<img class="fc-tabs__closeup" src="../images/ui-action-bar-desktop.png" alt="Close-up of the globals dock">
+<figcaption><strong>Desktop</strong> — the left-edge column: Undo, Redo, Fit, then Search. The bottom row below it belongs to the two hands.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
-<img src="../images/ui-action-bar-web-window.png" alt="The action bar highlighted in the browser build">
-<img class="fc-tabs__closeup" src="../images/ui-action-bar-web.png" alt="Close-up of the action bar in the browser build">
-<figcaption><strong>Web</strong> — the same slot in the browser build, with Fit, Undo, Redo and Search. The registry decides the buttons; the shell does not name a workbench.</figcaption>
+<img src="../images/ui-action-bar-web-window.png" alt="The globals dock highlighted in the browser build">
+<img class="fc-tabs__closeup" src="../images/ui-action-bar-web.png" alt="Close-up of the globals dock in the browser build">
+<figcaption><strong>Web</strong> — the same column in the browser build, with Undo, Redo, Fit and Search. The registry decides the buttons; the shell does not name a workbench.</figcaption>
 </figure>
 </div>
 
 ## What is on it
 
-The bar is a row of command buttons, a divider, and **Search (Ctrl+K)**:
+The dock is a column of command buttons, a hairline, and **Search (Ctrl+K)**:
 
 - Each button shows a curated glyph (when the command has one), its label, and its live
   state.
 - A disabled command is muted and does not respond.
 - A checked or live command is drawn in accent ink. The background is reserved for an
-  additive hover; the bar is a command strip, not a checklist.
+  additive hover; the dock is a command strip, not a checklist.
 - **Search** opens the command palette. `Ctrl+K` on Windows and Linux, `Cmd+K` on macOS.
 
 A command's check state comes from `IsChecked()`; its enablement comes from
-`IsActive()`. The bar rebuilds when the selection changes, so a command enables or
+`IsActive()`. The dock rebuilds when the selection changes, so a command enables or
 disables without anyone telling the button to.
+
+It holds the globals and nothing else: creation tools are pills in the [create
+dock](ui-tool-loadout.md) beside the Modify hand, and object verbs are wheel wedges. That is
+why it never grows when a workbench registers another tool.
 
 ## While a tool is running
 
-Starting a tool **adds a pill above** the action bar's column: the tool's own pill sits on
-top of the create dock, which sits on top of the bar. The dock and the create dock stay
-where they were — the column grows upward from a fixed bottom edge — so the canvas
-rectangle does not move and the loadout the tool was started from stays in hand.
+Starting a tool **adds a pill over the bottom-centre of the canvas**. Nothing is swapped:
+the dock keeps its column, and the bottom row keeps both hands, so the canvas rectangle
+does not move and the loadout the tool was started from stays in hand.
 
 The tool's pill shows:
 
@@ -71,14 +74,15 @@ fixed menu, so a workbench's commands are searchable as soon as they are registe
 
 ## Where the buttons come from
 
-The bar renders the commands assigned to the `dock` surface, skipping diagnostics that
+The dock renders the commands assigned to the `dock` surface, skipping diagnostics that
 are marked dev-only. A command with no `FerroCAD_Surface` lands on the dock by default,
-which is always safe; `FerroCAD_Surface: "radial"` removes it from the bar and makes it a
-wheel wedge instead. See [Commands](../../mods/commands.md) for the surface keys and
+which is always safe; `FerroCAD_Surface: "radial"` removes it from the dock and makes it a
+wheel wedge instead, and `"creation"` makes it a pill in the create dock. See
+[Commands](../../mods/commands.md) for the surface keys and
 [Dialogs and transactions](../../mods/commands.md#dialogs) for the return shapes a
 command can use.
 
-The action bar is also the place a workbench puts its **global** switches. Selection
-verbs belong in the wheel, and environment state belongs in the
-[toolbar](ui-toolbars.md), so the bottom strip never has to grow just because something
-became selected.
+The dock is the place a workbench puts its **global** switches. Selection verbs belong in
+the wheel, environment state belongs in the [toolbar](ui-toolbars.md), and new geometry
+belongs to the Add hand, so the dock never has to grow just because something became
+selected.

@@ -10,17 +10,17 @@ then use the linked pages as the reference.
 | --- | --- | --- | --- |
 | **Window chrome** | around the canvas | the title bar and application menu, the status line, and the Dev Tools window | [Window chrome](ui-chrome.md) |
 | **Toolbar** | floating pill at the top-left | Grid, Axes, WP, Gizmo, Select and Snap | [The viewport toolbar](ui-toolbars.md) |
-| **Action bar** | bottom-centre | the workbench's global commands, the create dock's toggle and Search; a running tool adds its own pill above them | [The action bar](ui-action-bar.md) |
+| **Action bar** | column on the left edge | the workbench's global commands and Search | [The globals dock](ui-action-bar.md) |
 | **Wheel menu** | at the pointer, on demand | the verbs for the object under the pointer: Move, Rotate, visibility, workplane and Delete in the built-in set | [The wheel menu](ui-wheel-menu.md) |
-| **Tool loadout** | bottom-left | the one hand the pointer carries: `1 Move`/`Rotate`, `2 Push/Pull`, `3 Fillet`, `0 Inspect` | [The tool loadout](ui-tool-loadout.md) |
+| **Tools** | bottom row: loadout at the bottom-left, create dock right after it | the hand the pointer carries (`1 Move`/`Rotate`, `2 Push/Pull`, `3 Fillet`, `0 Inspect`), then one pill per creation category | [The tool loadout](ui-tool-loadout.md) |
 
 Also in the window:
 
-- **Search palette** (`Ctrl+K`, or `Cmd+K` on macOS) — the action bar's search over the
+- **Search palette** (`Ctrl+K`, or `Cmd+K` on macOS) — the dock's search over the
   command registry.
 - **Dev Tools** — the application menu's second window, or the inspector column in the
   browser build.
-- **Tool strip** — replaces the action bar while a tool is collecting points.
+- **Tool pill** — appears over the bottom-centre of the canvas while a tool is armed.
 - **Pending-transform form** — the docked coordinate or angle row and the `✓`/`✗` pill.
 - **Dialogs, the settings card and popovers** — transient surfaces over the canvas;
   `Esc` closes the topmost one.
@@ -39,19 +39,19 @@ Also in the window:
 
 *The loadout switches hands; each hand re-picks its target so the relevant handles appear.*
 
-## Why the wheel and the action bar both exist
+## Why the wheel and the dock both exist
 
 They serve different jobs. The wheel is the **immediate, spatial** layer: it opens at the
-pointer and offers the verbs that fit the object under it. The action bar is the
-**persistent, explicit** layer: it shows the current workbench and keeps the commands that
+pointer and offers the verbs that fit the object under it. The globals dock is the
+**persistent, explicit** layer: it keeps the commands that
 are not tied to a particular selection one click away. The wheel is fast and
-context-aware; the bar is stable and legible about state. They are complementary, not
+context-aware; the dock is stable and legible about state. They are complementary, not
 competing.
 
 ![The wheel opening and flicking to Rotate](../images/ui-wheel.gif)
 
 *The wheel is the immediate layer: it opens at the pointer, and flicking to a wedge
-equips the hand. The persistent action bar keeps the non-selection commands one click
+equips the hand. The persistent dock keeps the non-selection commands one click
 away.*
 
 A persistent bar is also the natural home for a **mode/context switch** between the 2-D
@@ -67,7 +67,7 @@ offers them, a sketch or a surface cut — adds geometry; extruding a face or ro
 edge modifies geometry that already exists. That gives a command a natural context and a
 natural surface:
 
-- **Add** verbs are usually creation commands. They belong on the action bar, and on the
+- **Add** verbs are usually creation commands. They belong in the create dock, and on the
   wheel when the creation target is the object under the pointer.
 - **Modify** verbs are usually selection-tied. Move, Rotate, Push/Pull, Fillet and
   visibility belong on the wheel and in the loadout, because their target is the thing you
@@ -75,8 +75,9 @@ natural surface:
 
 ![Create Box adds a box](../images/ui-create.gif)
 
-*Add: click `⊕ Box` in the action bar (or pick a tool from its `▾` menu), then press
-`Enter`. The armed tool replaces the strip with its `W`/`L`/`H` fields, and the status
+*Add: click the `⊕ Box` pill in the create dock (or pick a tool from its `▾` menu), then
+press `Enter`. The armed tool adds its own pill over the canvas with `W`/`L`/`H` fields,
+and the status
 line confirms that the box was created.*
 
 ![Dragging the Push/Pull stem](../images/ui-pushpull.gif)
@@ -97,7 +98,7 @@ boolean whose inputs are not final. In those states "add" and "modify" blur, and
 is least sure what comes next. The window handles them with explicit state rather than by
 guessing:
 
-- a running tool adds its pill above the action bar instead of replacing it, so the dock and the create dock stay put;
+- a running tool adds its pill over the canvas instead of replacing anything, so the dock and the create dock stay put;
 - a pending transform owns the context until `Enter`/`✓` or `Esc`/`✗`;
 - the wheel does not open while a tool or dialog owns the canvas;
 - `Esc` closes the topmost transient surface first.
@@ -123,7 +124,7 @@ header and the status line.*
 ## Where to start
 
 - Walk the surfaces in order: [Window chrome](ui-chrome.md),
-  [The viewport toolbar](ui-toolbars.md), [The action bar](ui-action-bar.md),
+  [The viewport toolbar](ui-toolbars.md), [The globals dock](ui-action-bar.md),
   [The wheel menu](ui-wheel-menu.md), [The tool loadout](ui-tool-loadout.md).
 - Learn the hands: [Move](ui-move.md), [Rotate](ui-rotate.md), [Extrude](ui-extrude.md),
   [Fillet](ui-fillet.md), and Inspect in [The tool loadout](ui-tool-loadout.md#the-slots).

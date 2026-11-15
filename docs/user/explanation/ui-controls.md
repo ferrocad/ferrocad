@@ -16,9 +16,9 @@ rest of this page is the longer tour.
 | --- | --- | --- | --- |
 | **Window chrome** | around the canvas | the title bar, the application menu, the status line and the Dev Tools window | [Window chrome](ui-chrome.md) |
 | **Toolbar** | floating pill at the top-left of the canvas | environment state: grid, axes, workplane, gizmo, selection filter and snapping | [The viewport toolbar](ui-toolbars.md) |
-| **Action bar** | bottom-centre of the canvas | the workbench's creation and global commands, and Search | [The action bar](ui-action-bar.md) |
+| **Globals dock** | column on the left edge of the canvas | the workbench's global commands (Undo, Redo, Fit) and Search | [The globals dock](ui-action-bar.md) |
 | **Wheel menu** | at the pointer, on demand | the verbs that apply to the object under the pointer | [The wheel menu](ui-wheel-menu.md) |
-| **Tool loadout** | bottom-left of the canvas | the one hand the pointer carries, plus the topology filter | [The tool loadout](ui-tool-loadout.md) |
+| **Tools** | bottom row: the loadout at the bottom-left, the create dock right after it | the hand the pointer carries, the topology filter, and the pill per creation category | [The tool loadout](ui-tool-loadout.md) |
 
 ```mermaid
 flowchart TD
@@ -26,11 +26,13 @@ flowchart TD
     Canvas["3-D canvas"]
     Header["Toolbar pill, top-left"]
     Loadout["Tool loadout, bottom-left"]
-    Dock["Action bar, bottom-centre"]
+    Create["Create dock, right of the loadout"]
+    Dock["Globals dock, left edge"]
     Wheel["Wheel menu, at the pointer"]
     Frame --> Canvas
     Canvas --> Header
     Canvas --> Loadout
+    Canvas --> Create
     Canvas --> Dock
     Canvas --> Wheel
 ```
@@ -68,8 +70,8 @@ status line name the same scope.*
 
 - **The canvas comes first.** The toolbar is an overlay, not a pane header, so the
   scene reaches the title bar. Opening a tool or a dialog does not move the canvas
-  rectangle either: the bottom-centre column (tool pill, create dock, action bar) is
-  bottom-anchored and grows upward.
+  rectangle either: the globals are a column on the left edge, the hands share one bottom
+  row, and the armed tool's pill floats over the canvas.
 - **State is ink, not a box.** An active tool, a checked command and a custom
   workplane are drawn in accent ink. A background is kept for hover, the active loadout
   slot and a selected segment, so the scene stays visually dominant.

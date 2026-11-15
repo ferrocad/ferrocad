@@ -214,14 +214,15 @@ tooltip can carry `GetResources()["ToolTip"]`). Placement is `FerroCAD_Surface`-
 derived from `Group`; a command with no `FerroCAD_Surface` (or an unrecognised one) lands in
 **Search**, so it cannot disappear and cannot overflow a canvas strip either.
 
-**The dock is not a toolbar.** It holds exactly three things: the `dock` globals
-(`Undo`, `Redo`, `Fit`), the **creation pill** (`⊕ <LastTool> ▾`) and Search. A creation
-tool declares `creation` and appears in the pill's flyout; a shape verb declares
+**The dock is not a toolbar.** It holds exactly the `dock` globals (`Undo`, `Redo`, `Fit`)
+and Search, in a column on the canvas' left edge. A creation tool declares `creation` and
+gets a pill in the create dock (the bottom row, right after the Modify hand's bar); a shape
+verb declares
 `radial` and appears in the wheel; a utility with no gesture of its own declares
 `palette` and appears only in Search (and Dev Tools). A strip that grew one button per
-registered command is the failure this split exists to prevent — the shell's own
-`action_dock` test asserts the three-item contract and that the strip never reaches the
-bottom-left hand column.
+registered command is the failure this split exists to prevent — the shell's
+`globals_dock` test asserts the globals-only contract, and the create-dock test asserts the
+pills sit after the loadout bar rather than inside the dock.
 
 A **state** row runs through `Shell::run_command_in_place`, which restores the open
 menu afterwards: several options can be set in one visit and the markers follow the
@@ -512,9 +513,10 @@ return {"tool": "toy_measure"}                         # starts a registered too
   `App_Delete` is additionally pinned last inside the destructive group, so the flick
   never finds another destructive verb under it.
 
-  The bottom dock therefore contains only the **globals, the creation pill and
-  Search** (`Undo`, `Redo`, `Fit`, `⊕ <Tool> ▾`, `Search (Ctrl+K)`), so it never
-  reflows when the selection changes and never grows a row of tools. The Dock's `Move`
+  The dock therefore contains only the **globals and Search** (`Undo`, `Redo`, `Fit`,
+  `Search (Ctrl+K)`) in a column on the left edge, and the create dock beside the Modify
+  bar holds the creation pills, so neither ever reflows when the selection changes and
+  neither grows a row of tools. The Dock's `Move`
   split and its gizmo-options popover are gone; the gizmo is armed by selecting, and
   its settings remain reachable from `Settings/Gizmo` and Dev Tools.
 

@@ -30,9 +30,16 @@ and `0`. Each hand re-picks its target so the relevant handles appear.*
 
 The bar reads `[1 Move] [2 Push/Pull] [3 Fillet] [0 Inspect]` and shares its baseline and
 its glass with the create dock, which sits right after it in the same bottom row. Each slot
-shows its key, a glyph and a label. The active slot
+shows its key, a glyph and a label. The slot you are holding
 is drawn in accent ink over a tinted background; a click equips it exactly as its key
 does, so the hotkey stays discoverable without opening a menu.
+
+**One hand owns the canvas at a time**, so only one of the two bars is lit: while a
+creation tool runs, `Move`/`Push-Pull`/`Fillet` keep their names but lose the accent, and
+the create dock's pill is the lit one. Pressing or clicking a slot is also the request to
+take the canvas back — a tool that has not placed anything yet simply steps aside, while
+one that has placed something answers `Polyline: finish (Enter / ✓) or cancel (Esc) before
+you switch tools`, because that in-progress shape is yours to finish or drop.
 
 Slot 1 hosts both handle sets, so its label names the one you will actually get: `Move`
 for the translation arrows, `Rotate` for the rotation rings. Pressing `1` while Move is
@@ -74,10 +81,12 @@ it was last left on. It is always there — nothing folds it away.
   and `0` equip the Modify hand, and `5`–`9` are the create dock's pills — `5` Sketch,
   `6` Solid, `7` Surface, `8` Text, `9` Mesh. `4` is not bound to anything.
 - Pressing a pill's key **selects** it and starts the tool it names; the pill lights up,
-  like the hand the Modify bar is holding. Pressing the same key again **steps to the next
-  tool in that category** — so `5`, `5`, `5` walks the sketch tools, wrapping round — and
-  each press starts the one it lands on. A tool that needs a selection you do not have is
-  skipped rather than selected.
+  like the hand the Modify bar is holding — and the Modify bar stops lighting its slot at
+  the same time, because only one hand owns the canvas. Pressing the same key again **steps
+  to the next
+tool in that category** — so `5`, `5`, `5` walks the sketch tools, wrapping round — and
+each press starts the one it lands on. A tool that needs a selection you do not have is
+skipped rather than selected.
 - Starting a tool does not take anything away. An armed tool that has placed nothing shows
   only its hover ghost — the anchor marker in the placement plane, for a two-click tool —
   and no row at all; once a click places a point (or the tool's numbers are its input) its

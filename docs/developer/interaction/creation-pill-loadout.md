@@ -207,6 +207,11 @@ so the two directions are enforced where they belong:
   `hover_arm_allowed` requires no tool; the radial is closed.
 - **Modify → Add:** the pending contexts refuse `StartTool`; the loadout bar is dimmed.
 
+That split left the **return** direction unowned — nothing ended a tool when the user
+took the Modify hand back — and the bars could read as two live hands at once. §9 is the
+seam that fixes it: one derived `Hand`, one transition, and two bars that paint only the
+hand that owns the canvas.
+
 ### 3.3 `ARMED` already suspends the Modify hand
 
 `start_tool` already does what the Add hand needs: it gates on `Action::StartTool`, closes
@@ -327,3 +332,54 @@ the label is `⊕ Box ▾` (the tool it arms) and there is no duplicate `Create 
 - No change to the Modify hand's manipulator math or to `SESSION_HOLD`.
 - No new topological primitive: `SelectionRef`/`ElementKind` stay the vocabulary.
 - No modal dimension dialog for a creation tool; the strip replaces it.
+
+---
+
+## 9. One active hand
+
+**The defect (2026-11-15, from the live window).** With a body selected the Modify hand is
+live: `1 Move` is lit and its `Δ` row is docked. Pressing the product pill
+(`5 ⊕ Sketch: Polyline`) arms the tool, and `start_tool` clears the gizmo and *closes* the
+dock — but the loadout bar still paints `1 Move` as the equipped slot, and nothing stops
+the user from taking the Modify hand back **by click**: `activate_loadout_slot` asks
+the gate, the context is `Tool`, and `InteractionContext::Tool` allows every action (`§3.2`).
+The three states the shell actually keeps were implicit:
+
+| Field | Means | Cleared when |
+| --- | --- | --- |
+| `loadout.slot` | which Modify hand is equipped | never (it is a setting) |
+| `creation.active` | the last creation command armed | never (it is the pill's memory) |
+| `active_tool` | a tool owns the pointer | the tool ends, `Esc`, or another tool starts |
+
+Only `active_tool` decides who owns the canvas, so "both hands active" means "a tool is
+running and a Modify slot is equipped" — which is *always* true, and read as a bug the
+moment both bars paint an accent. The paths that let the canvas be handed back while a
+tool ran were:
+
+- the loadout bar's click (`activate_loadout_slot`) and the palette's `Move` verb
+  (`run_command` → `set_loadout_slot(Slot::Move)`) — both allowed by the `Tool` context;
+- `App_Move`'s translation spec re-opened the Move form directly (`open_move_hud`), which
+  had no tool guard of its own.
+
+**The rule: one hand owns the canvas, and it is derived.**
+
+```rust
+/// Which hand owns the canvas. The two are exclusive by construction.
+pub(crate) enum Hand { Modify, Add }   // Add ⟺ a creation tool is running
+```
+
+- **One transition.** Every path that equips a Modify slot — the bar's click, the `0`–`3`
+  keys, the wheel's `Move`/`Rotate`, the palette, a workbench command — goes through
+  `Shell::yield_to_modify_hand`, which is the *only* place the Add hand is stood down.
+  It **ends a tool that has placed nothing** (`chrome::tool_has_begun` false: the switch is
+  free, there is no transaction to lose — the design's own rule from §6) and **refuses one
+  that has begun**, naming the finish pair, because that session owns uncommitted geometry.
+- **One painter.** Both bars ask `Shell::active_hand()`: the Modify bar accents a slot only
+  in `Hand::Modify`, and a create pill takes its accent only in `Hand::Add`. The *names*
+  stay — the bar still reads `1 Move`, the pill still reads `Sketch: Polyline` — so the
+  memory each hand keeps is visible without claiming to be live.
+- **One structural guard.** `open_move_hud` returns early in `Hand::Add`, so the `Δ` row
+  cannot be up next to an armed tool however the command was reached.
+
+The bars therefore read as one instrument: exactly one of them is lit, and the other is a
+memory that is one gesture away.

@@ -2217,9 +2217,10 @@ const DIMENSIONAL_KINDS: &[&str] = &[
 ];
 
 /// Upstream's `PointPos` numbering, as the API carries it.
-const POINT_POS_NONE: i64 = 0;
-const POINT_POS_START: i64 = 1;
-const POINT_POS_END: i64 = 2;
+pub(crate) const POINT_POS_NONE: i64 = 0;
+pub(crate) const POINT_POS_START: i64 = 1;
+pub(crate) const POINT_POS_END: i64 = 2;
+pub(crate) const POINT_POS_MID: i64 = 3;
 
 /// How close two edge endpoints must be to be joined into one wire (OCCT's
 /// `Precision::Confusion`, loosened slightly for coordinates reached through a
@@ -2403,7 +2404,7 @@ fn sketch_placement(doc: &Document, id: ObjectId) -> Option<Placement> {
 /// reordered. Upstream's positional GeoId and its root-axis constants live on the
 /// Python side and are translated at the boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum GeoRef {
+pub(crate) enum GeoRef {
     /// A geometry element by its stable id; encoded `#g3`.
     Id(String),
     /// A root reference: `-1` is the X axis (its start is the root point) and
@@ -2446,18 +2447,18 @@ impl GeoRef {
 /// `Sketcher.Constraint` round trip is exact. `second`/`third` are `None` where
 /// upstream carries `GeoUndef`; `driving`/`active` default to `true`.
 #[derive(Clone, Debug, PartialEq)]
-struct SketchConstraint {
-    kind: String,
-    first: GeoRef,
-    first_pos: i64,
-    second: Option<GeoRef>,
-    second_pos: i64,
-    third: Option<GeoRef>,
-    third_pos: i64,
-    value: f64,
-    name: String,
-    driving: bool,
-    active: bool,
+pub(crate) struct SketchConstraint {
+    pub(crate) kind: String,
+    pub(crate) first: GeoRef,
+    pub(crate) first_pos: i64,
+    pub(crate) second: Option<GeoRef>,
+    pub(crate) second_pos: i64,
+    pub(crate) third: Option<GeoRef>,
+    pub(crate) third_pos: i64,
+    pub(crate) value: f64,
+    pub(crate) name: String,
+    pub(crate) driving: bool,
+    pub(crate) active: bool,
 }
 
 impl SketchConstraint {
@@ -2969,6 +2970,66 @@ fn surface_index_of(state: &SketchGeometryState, reference: &GeoRef) -> PyResult
     state.surface_index(reference).map_err(PyValueError::new_err)
 }
 
+/// Read the geometry and the constraints of a sketch straight from the document.
+///
+/// `execute` has no Python object, so it cannot go through the property getters;
+/// this is the same data, read the same way, with the same alignment repair.
+fn document_geometry(doc: &Document, id: ObjectId) -> SketchGeometryState {
+    let shapes = sketch_geometry(doc, id, GEOMETRY);
+    let mut ids = match doc.object(id).and_then(|object| object.properties.get(GEOMETRY_IDS)) {
+        Some(Property::StringList(values)) => values.clone(),
+        _ => Vec::new(),
+    };
+    let mut construction = sketch_bool_property(doc, id, CONSTRUCTION);
+    ids.truncate(shapes.len());
+    construction.truncate(shapes.len());
+    while ids.len() < shapes.len() {
+        ids.push(next_geometry_id(&ids));
+    }
+    while construction.len() < shapes.len() {
+        construction.push(false);
+    }
+    SketchGeometryState {
+        shapes,
+        ids,
+        construction,
+    }
+}
+
+fn document_constraints(doc: &Document, id: ObjectId) -> Vec<SketchConstraint> {
+    match doc
+        .object(id)
+        .and_then(|object| object.properties.get(CONSTRAINT_DATA))
+    {
+        Some(Property::StringList(entries)) => entries
+            .iter()
+            .filter_map(|entry| SketchConstraint::decode(entry))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Solve the stored geometry against the stored constraints.
+///
+/// `None` is a system that cannot be solved at all — a dangling reference, a
+/// constraint the solver cannot apply, or geometry it cannot parameterize. The
+/// caller must leave `Geometry` untouched in that case; a merely *unconverged*
+/// system is returned (with `converged == false`) so a caller can report which
+/// constraints still conflict.
+fn solve_geometry(
+    state: &SketchGeometryState,
+    constraints: &[SketchConstraint],
+) -> PyResult<Option<ferrocad_sketch_solver::Solution>> {
+    let curves = crate::sketch_solver::curves_of(&state.shapes);
+    let Ok(converted) = crate::sketch_solver::constraints_of(constraints, &state.ids) else {
+        return Ok(None);
+    };
+    match ferrocad_sketch_solver::solve(&curves, &converted) {
+        Ok(solution) => Ok(Some(solution)),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Commit the pending constraints of `pending_name` into `Constraints`.
 ///
 /// `include_second` is upstream's flag. Detection here already emits each
@@ -3114,14 +3175,44 @@ impl ObjectType for SketchObject {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        // Solve first: a sketch's stored geometry is its last input, and upstream's
+        // execute keeps it solved. A failed solve leaves `Geometry` alone and the
+        // shape is built from what is stored, so a conflicting sketch is reported
+        // by `solve()` rather than silently mangled by a recompute.
+        let state = document_geometry(doc, id);
+        let constraints = document_constraints(doc, id);
+        let solved = if state.shapes.is_empty() {
+            None
+        } else {
+            solve_geometry(&state, &constraints)
+                .ok()
+                .flatten()
+                .filter(|solution| solution.converged)
+        };
+        let shapes = match solved {
+            Some(solution) => {
+                let shapes = crate::sketch_solver::shapes_of(&solution.curves, &state.shapes);
+                if solution.curves.iter().zip(&crate::sketch_solver::curves_of(&state.shapes)).any(|(a, b)| a != b)
+                {
+                    // The solved geometry is the new input; write it raw, as the
+                    // derived half of the execute, so it cannot re-trigger the
+                    // recompute that is running now.
+                    doc.set_property_raw(
+                        id,
+                        GEOMETRY,
+                        make_shape_list_property(ShapeListProperty::new(shapes.clone())),
+                    );
+                }
+                shapes
+            }
+            None => state.shapes.clone(),
+        };
         // Construction geometry is addressable and counted, but it never reaches
         // the output Shape: that is the whole point of the flag.
-        let geometry = sketch_geometry(doc, id, GEOMETRY);
-        let construction = sketch_bool_property(doc, id, CONSTRUCTION);
-        let geometry: Vec<Shape> = geometry
+        let geometry: Vec<Shape> = shapes
             .into_iter()
             .enumerate()
-            .filter(|(index, _)| !construction.get(*index).copied().unwrap_or(false))
+            .filter(|(index, _)| !state.construction.get(*index).copied().unwrap_or(false))
             .map(|(_, shape)| shape)
             .collect();
         let placement = sketch_placement(doc, id);
@@ -3318,15 +3409,38 @@ fn sketch_constraint_objects(object: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     constraint_objects(object.py(), &state, &constraints)
 }
 
-/// `RedundantConstraints`: upstream's one-based indices of the redundant set.
+/// `RedundantConstraints`: the one-based indices of the constraints that add no
+/// rank beyond their predecessors.
 ///
-/// FerroCAD has no solver and therefore no rank analysis, so there is nothing to
-/// report and the list is empty rather than invented. A script that filters with
-/// this list (Draft's `make_sketch` does) keeps every constraint it added.
+/// The index is **1-based**, matching upstream's `RedundantConstraints` (Draft's
+/// `make_sketch` deletes with `idx - 1`). The analysis runs whether or not the
+/// system converges: redundancy is a statement about the equations, not about the
+/// solution. A system the solver cannot even build (a dangling reference) reports
+/// an empty list rather than guessing.
 #[pyfunction]
 fn sketch_redundant_constraints(object: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
     require_sketch(object, "RedundantConstraints")?;
-    Ok(Vec::new())
+    let state = read_geometry(object)?;
+    let constraints = sketch_constraints(object)?;
+    Ok(solve_geometry(&state, &constraints)?
+        .map(|solution| solution.redundant.iter().map(|index| index + 1).collect())
+        .unwrap_or_default())
+}
+
+/// `ConflictingConstraints`: the one-based indices of the constraints still
+/// violated at the best fit.
+///
+/// FerroCAD's definition is deliberately concrete: a constraint is conflicting
+/// when its residual is above the solver's tolerance after the iteration has
+/// stopped. It is 1-based, as `RedundantConstraints` is.
+#[pyfunction]
+fn sketch_conflicting_constraints(object: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    require_sketch(object, "ConflictingConstraints")?;
+    let state = read_geometry(object)?;
+    let constraints = sketch_constraints(object)?;
+    Ok(solve_geometry(&state, &constraints)?
+        .map(|solution| solution.conflicting.iter().map(|index| index + 1).collect())
+        .unwrap_or_default())
 }
 
 /// `addConstraint(constraint)`: append one constraint or a sequence of them.
@@ -3344,6 +3458,16 @@ fn sketch_add_constraint(
     let added = constraint_arguments(constraint, &state)?;
     if added.is_empty() {
         return Ok(-1);
+    }
+    // A constraint the solver cannot apply is refused here, not stored and
+    // silently ignored by the next solve. This runs the solver's own residual
+    // code, so the two cannot drift apart.
+    let curves = crate::sketch_solver::curves_of(&state.shapes);
+    for record in &added {
+        let converted = crate::sketch_solver::constraint_of(record, &state.ids)
+            .map_err(PyValueError::new_err)?;
+        ferrocad_sketch_solver::check(&curves, std::slice::from_ref(&converted))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
     }
     let mut constraints = sketch_constraints(object)?;
     let first = constraints.len();
@@ -3408,24 +3532,43 @@ fn sketch_get_datum(object: &Bound<'_, PyAny>, index: usize) -> PyResult<f64> {
     Ok(constraint.value)
 }
 
-/// `solve()`: check the model, and report `0` when every constraint names a
-/// geometry or root that exists (upstream's "converged" code) or `-1` when one
-/// does not.
+/// `solve()`: solve the constraints, write the solved geometry back and return
+/// the remaining degrees of freedom.
 ///
-/// **This does not move geometry.** FerroCAD stores the constraint model and
-/// diagnoses its references; the numerical solve is P4 SK2's PlanGCS binding.
-/// A sketch whose constraints are not yet satisfied by its geometry therefore
-/// still reports `0` — the datum is the authored value, not a solved one.
+/// `-1` means "not solved": a dangling reference, a constraint the solver cannot
+/// apply, or a system that does not converge. `Geometry` is not touched in that
+/// case, so a failed solve never corrupts a sketch. On success the solved curves
+/// replace `Geometry` (the stable ids and the construction flags are preserved by
+/// position) and the return value is the DOF count — upstream's convention, where
+/// `solve() == 0` means fully constrained.
+///
+/// This is a real solve now: geometry moves. The documented approximation left is
+/// the parameterization (lines, circles, arcs and points; a spline or an ellipse
+/// is carried but not moved).
 #[pyfunction]
 fn sketch_solve(object: &Bound<'_, PyAny>) -> PyResult<i32> {
     require_sketch(object, "solve")?;
     let state = read_geometry(object)?;
-    for constraint in sketch_constraints(object)? {
-        if !state.resolves(&constraint) {
-            return Ok(-1);
-        }
+    let constraints = sketch_constraints(object)?;
+    let Some(solution) = solve_geometry(&state, &constraints)? else {
+        return Ok(-1);
+    };
+    if !solution.converged {
+        return Ok(-1);
     }
-    Ok(0)
+    let original = crate::sketch_solver::curves_of(&state.shapes);
+    if solution.curves.iter().zip(&original).any(|(a, b)| a != b) {
+        let shapes = crate::sketch_solver::shapes_of(&solution.curves, &state.shapes);
+        write_geometry(
+            object,
+            &SketchGeometryState {
+                shapes,
+                ids: state.ids.clone(),
+                construction: state.construction.clone(),
+            },
+        )?;
+    }
+    Ok(solution.dof as i32)
 }
 
 /// Add a staged constraint unless the sketch already says the same thing.
@@ -3605,6 +3748,10 @@ fn install_sketch_methods(m: &Bound<'_, PyModule>) -> PyResult<()> {
     attributes.set_item(
         "RedundantConstraints",
         wrap_pyfunction!(sketch_redundant_constraints, m)?,
+    )?;
+    attributes.set_item(
+        "ConflictingConstraints",
+        wrap_pyfunction!(sketch_conflicting_constraints, m)?,
     )?;
     globals.set_item("_SKETCH_ATTRIBUTES", attributes)?;
 

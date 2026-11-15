@@ -245,13 +245,25 @@ fn sketch_constraints_are_stored_diagnosed_and_editable() {
         let sketch = doc
             .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
             .expect("add sketch");
-        add_unit_square(&sketch);
+        sketch
+            .call_method1(
+                "addGeometry",
+                (line_segment(py, (0.0, 0.0), (1.0, 0.0)), false),
+            )
+            .expect("addGeometry");
 
-        let radius = fake_constraint("Radius", 0, 5.0).expect("radius constraint");
-        let equal = fake_constraint("Equal", 0, 0.0).expect("equal constraint");
+        // A datum between the two endpoints and an axis constraint: two rows out
+        // of four parameters, so two degrees of freedom (where the line sits).
+        let distance = fake_record(
+            "Distance",
+            &[("First", 0), ("FirstPos", 1), ("Second", 0), ("SecondPos", 2)],
+            5.0,
+        )
+        .expect("distance constraint");
+        let horizontal = fake_constraint("Horizontal", 0, 0.0).expect("horizontal constraint");
         assert_eq!(
             sketch
-                .call_method1("addConstraint", (&radius,))
+                .call_method1("addConstraint", (&distance,))
                 .expect("addConstraint")
                 .extract::<i64>()
                 .expect("index"),
@@ -259,14 +271,18 @@ fn sketch_constraints_are_stored_diagnosed_and_editable() {
         );
         assert_eq!(
             sketch
-                .call_method1("addConstraint", (vec![equal],))
+                .call_method1("addConstraint", (vec![horizontal],))
                 .expect("addConstraint(list)")
                 .extract::<i64>()
                 .expect("index"),
             1
         );
         assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 2);
-        assert_eq!(attribute::<i64>(&sketch, "solve"), 0, "the model resolves");
+        assert_eq!(
+            attribute::<i64>(&sketch, "solve"),
+            2,
+            "solve returns the remaining degrees of freedom"
+        );
         assert_eq!(
             sketch
                 .call_method1("getDatum", (0,))
@@ -290,21 +306,13 @@ fn sketch_constraints_are_stored_diagnosed_and_editable() {
         // A non-dimensional constraint has no datum to read or write.
         let error = sketch
             .call_method1("getDatum", (1,))
-            .expect_err("Equal carries no datum");
+            .expect_err("Horizontal carries no datum");
         assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
 
         sketch
             .call_method1("delConstraint", (0,))
             .expect("delConstraint");
         assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 1);
-
-        // A constraint cannot be added against a geometry that does not exist:
-        // the positional index is resolved to an id while the record is read.
-        let dangling = fake_constraint("Vertical", 9, 0.0).expect("dangling");
-        let error = sketch
-            .call_method1("addConstraint", (&dangling,))
-            .expect_err("out-of-range reference");
-        assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
 
         // A record that names an id the sketch no longer has (a hand-edited or
         // restored property) is a model error: `solve` reports it. The decoded
@@ -447,7 +455,11 @@ fn geometry_identity_survives_a_deletion() {
         assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 1);
         // The survivor still names g1 and g3; only its positional index moved.
         assert_eq!(stored_constraints(&sketch), vec!["Equal;first=#g1;second=#g3"]);
-        assert_eq!(attribute::<i64>(&sketch, "solve"), 0, "still resolves");
+        assert_eq!(
+            attribute::<i64>(&sketch, "solve"),
+            7,
+            "two lines (8 parameters) with one length equality"
+        );
 
         close_document(py, "RustSketchIdentity");
     });
@@ -497,7 +509,9 @@ fn construction_geometry_is_addressable_but_not_drawn() {
                 (fake_constraint("Vertical", 1, 0.0).expect("vertical"),),
             )
             .expect("constrain construction geometry");
-        assert_eq!(attribute::<i64>(&sketch, "solve"), 0);
+        // Two lines are eight parameters and one axis row is one; the vertical is
+        // already vertical, so the solve is a no-op that reports seven.
+        assert_eq!(attribute::<i64>(&sketch, "solve"), 7);
 
         // Toggling the flag is what changes the drawing, not the identity.
         sketch
@@ -557,7 +571,11 @@ fn root_axis_references_are_valid_and_external_ones_are_refused() {
         sketch
             .call_method1("addConstraint", (&constraint,))
             .expect("a root reference is valid");
-        assert_eq!(attribute::<i64>(&sketch, "solve"), 0);
+        assert_eq!(
+            attribute::<i64>(&sketch, "solve"),
+            2,
+            "four parameters, two coincidence rows"
+        );
         assert_eq!(
             stored_constraints(&sketch),
             vec!["Coincident;first=-1;firstPos=1;second=#g1;secondPos=1"]

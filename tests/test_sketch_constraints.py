@@ -111,10 +111,10 @@ class SketchDocumentTests(unittest.TestCase):
         self.assertEqual(self.sketch.GeometryCount, 2)
 
     def test_constraints_round_trip_through_the_document(self):
-        self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
+        self.sketch.addGeometry(_segment((0, 0), (2, 0)), False)
         index = self.sketch.addConstraint(
             [
-                Sketcher.Constraint("Radius", 0, 5.0),
+                Sketcher.Constraint("Distance", 0, 1, 0, 2, 5.0),
                 Sketcher.Constraint("Equal", 0, 0),
             ]
         )
@@ -122,7 +122,7 @@ class SketchDocumentTests(unittest.TestCase):
         self.assertEqual(self.sketch.ConstraintCount, 2)
 
         constraints = self.sketch.Constraints
-        self.assertEqual([c.Type for c in constraints], ["Radius", "Equal"])
+        self.assertEqual([c.Type for c in constraints], ["Distance", "Equal"])
         self.assertAlmostEqual(constraints[0].Value, 5.0)
         self.assertEqual(constraints[1].Second, 0)
 
@@ -132,10 +132,10 @@ class SketchDocumentTests(unittest.TestCase):
         self.assertEqual(self.sketch.ConstraintCount, 0)
 
     def test_datum_reads_and_writes_and_refuses_a_non_dimension(self):
-        self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
+        self.sketch.addGeometry(_segment((0, 0), (2, 0)), False)
         self.sketch.addConstraint(
             [
-                Sketcher.Constraint("Radius", 0, 5.0),
+                Sketcher.Constraint("Distance", 0, 1, 0, 2, 5.0),
                 Sketcher.Constraint("Vertical", 0),
             ]
         )
@@ -148,16 +148,16 @@ class SketchDocumentTests(unittest.TestCase):
             self.sketch.setDatum(1, 3.0)
 
     def test_deleting_a_constraint_reindexes_the_rest(self):
-        self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
+        self.sketch.addGeometry(_segment((0, 0), (2, 0)), False)
         self.sketch.addConstraint(
             [
-                Sketcher.Constraint("Radius", 0, 5.0),
-                Sketcher.Constraint("Diameter", 0, 9.0),
+                Sketcher.Constraint("Distance", 0, 1, 0, 2, 5.0),
+                Sketcher.Constraint("DistanceX", 0, 1, 0, 2, 9.0),
             ]
         )
         self.sketch.delConstraint(0)
         self.assertEqual(self.sketch.ConstraintCount, 1)
-        self.assertEqual(self.sketch.Constraints[0].Type, "Diameter")
+        self.assertEqual(self.sketch.Constraints[0].Type, "DistanceX")
         with self.assertRaises(IndexError):
             self.sketch.delConstraint(4)
 
@@ -174,9 +174,10 @@ class SketchDocumentTests(unittest.TestCase):
         self.assertEqual(root.Second, 0)
 
     def test_solve_reports_a_dangling_record_but_moves_nothing(self):
-        self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
+        self.sketch.addGeometry(_segment((0, 0), (2, 0)), False)
         self.sketch.addConstraint(Sketcher.Constraint("Vertical", 0))
-        self.assertEqual(self.sketch.solve(), 0)
+        # Four parameters, one row: the line may still translate.
+        self.assertEqual(self.sketch.solve(), 3)
 
         # An index that names no geometry is refused while the record is read.
         with self.assertRaises(IndexError):
@@ -239,7 +240,11 @@ class SketchDocumentTests(unittest.TestCase):
             (0, 1),
             "the surviving constraint is re-indexed, not scrambled",
         )
-        self.assertEqual(self.sketch.solve(), 0)
+        self.assertEqual(
+            self.sketch.solve(),
+            7,
+            "two lines (8 parameters) and one length equality",
+        )
         with self.assertRaises(IndexError):
             self.sketch.delGeometry(5)
 
@@ -255,7 +260,7 @@ class SketchDocumentTests(unittest.TestCase):
 
         # A construction element is a valid constraint target.
         self.sketch.addConstraint(Sketcher.Constraint("Vertical", 1))
-        self.assertEqual(self.sketch.solve(), 0)
+        self.assertEqual(self.sketch.solve(), 7)
 
         self.sketch.toggleConstruction(1)
         self.document.recompute()
@@ -279,7 +284,7 @@ class SketchDocumentTests(unittest.TestCase):
 
         self.assertEqual(list(self.sketch.GeometryIds), ["g1", "g2"])
         self.assertTrue(self.sketch.getConstruction(1))
-        self.assertEqual(self.sketch.solve(), 0)
+        self.assertEqual(self.sketch.solve(), 8, "two unconstrained lines")
 
     def test_root_axis_references_are_valid_and_external_ones_are_not(self):
         self.sketch.addGeometry(_segment((0, 0), (1, 0)), False)
@@ -288,7 +293,7 @@ class SketchDocumentTests(unittest.TestCase):
                 "Coincident", -1, Sketcher.PointPos.start, 0, Sketcher.PointPos.start
             )
         )
-        self.assertEqual(self.sketch.solve(), 0)
+        self.assertEqual(self.sketch.solve(), 2, "four parameters, two rows")
         self.assertEqual(self.sketch.ConstraintData, [
             "Coincident;first=-1;firstPos=1;second=#g1;secondPos=1"
         ])
@@ -344,7 +349,7 @@ class SketchPersistenceTests(unittest.TestCase):
                 loaded = reopened.getObject("Sketch")
                 self.assertEqual(list(loaded.GeometryIds), ["g1", "g2"])
                 self.assertEqual(list(loaded.Construction), [False, True])
-                self.assertEqual(loaded.solve(), 0)
+                self.assertEqual(loaded.solve(), 5, "8 parameters, 3 constraint rows")
                 constraints = loaded.Constraints
                 self.assertEqual([c.Type for c in constraints], ["Equal", "Coincident"])
                 self.assertEqual(constraints[1].First, -1, "a root reference survives")
@@ -352,6 +357,134 @@ class SketchPersistenceTests(unittest.TestCase):
                 App.closeDocument(document.Name)
                 if reopened is not None:
                     App.closeDocument(reopened.Name)
+
+
+class SketchSolverTests(unittest.TestCase):
+    """The constraints actually move geometry.
+
+    `solve()` returns the remaining degrees of freedom (upstream's convention: `0`
+    means fully constrained) and `-1` means "not solved" — a dangling reference, a
+    constraint the solver cannot apply, or a system that does not converge.
+    """
+
+    def setUp(self):
+        self.document, self.sketch = _document("SketchSolver")
+
+    def tearDown(self):
+        _close(self.document)
+
+    def _rectangle(self):
+        """Four roughly, not exactly, rectangular sides."""
+        for start, end in [
+            ((0.0, 0.0), (10.3, 0.2)),
+            ((10.0, 0.4), (9.8, 6.0)),
+            ((9.9, 6.3), (0.1, 6.1)),
+            ((0.2, 5.8), (0.0, 0.3)),
+        ]:
+            self.sketch.addGeometry(_segment(start, end), False)
+        self.sketch.addConstraint(
+            [
+                Sketcher.Constraint("Coincident", 0, 2, 1, 1),
+                Sketcher.Constraint("Coincident", 1, 2, 2, 1),
+                Sketcher.Constraint("Coincident", 2, 2, 3, 1),
+                Sketcher.Constraint("Coincident", 3, 2, 0, 1),
+                Sketcher.Constraint("Horizontal", 0),
+                Sketcher.Constraint("Vertical", 1),
+                Sketcher.Constraint("Horizontal", 2),
+                Sketcher.Constraint("Vertical", 3),
+            ]
+        )
+
+    def test_a_perturbed_rectangle_closes_and_keeps_four_degrees_of_freedom(self):
+        self._rectangle()
+        self.assertEqual(
+            self.sketch.solve(), 4, "width, height, x and y are still free"
+        )
+        self.document.recompute()
+
+        edges = self.sketch.Shape.Edges
+        self.assertEqual(len(edges), 4)
+        points = [(edge.Vertexes[0].Point, edge.Vertexes[-1].Point) for edge in edges]
+        for index in range(4):
+            self.assertTrue(
+                points[index][1].isEqual(points[(index + 1) % 4][0], 1e-6),
+                f"corner {index} is open",
+            )
+        # Axis alignment: the horizontal sides share a Y, the vertical ones an X.
+        self.assertAlmostEqual(points[0][0].y, points[0][1].y, places=6)
+        self.assertAlmostEqual(points[1][0].x, points[1][1].x, places=6)
+
+    def test_a_distance_datum_resizes_the_profile(self):
+        self._rectangle()
+        self.assertGreaterEqual(self.sketch.solve(), 0)
+        self.sketch.addConstraint(
+            Sketcher.Constraint("DistanceX", 0, 1, 1, 1, 20.0)
+        )
+        self.sketch.addConstraint(
+            Sketcher.Constraint("DistanceY", 1, 1, 1, 2, 8.0)
+        )
+        self.assertEqual(self.sketch.solve(), 2, "only the origin is free")
+        self.document.recompute()
+
+        box = self.sketch.Shape.BoundBox
+        self.assertAlmostEqual(box.XLength, 20.0, places=6)
+        self.assertAlmostEqual(box.YLength, 8.0, places=6)
+
+    def test_a_radius_datum_resizes_a_circle(self):
+        self.sketch.addGeometry(
+            Part.Circle(App.Vector(0, 0, 0), App.Vector(0, 0, 1), 3.0), False
+        )
+        self.assertEqual(self.sketch.solve(), 3, "centre and radius are free")
+        self.sketch.addConstraint(Sketcher.Constraint("Radius", 0, 7.5))
+        self.assertEqual(self.sketch.solve(), 2)
+        self.document.recompute()
+        self.assertAlmostEqual(self.sketch.Shape.Edges[0].Curve.Radius, 7.5, places=6)
+
+    def test_a_construction_line_drives_the_real_profile(self):
+        self.sketch.addGeometry(_segment((0, 0), (4, 0)), False)
+        self.sketch.addGeometry(_segment((0, 5), (1, 5)), True)
+        self.sketch.addConstraint(Sketcher.Constraint("Equal", 0, 1))
+        self.sketch.addConstraint(
+            Sketcher.Constraint("Distance", 1, 1, 1, 2, 7.0)
+        )
+        self.assertGreaterEqual(self.sketch.solve(), 0)
+        self.document.recompute()
+
+        edges = self.sketch.Shape.Edges
+        self.assertEqual(len(edges), 1, "construction geometry is not drawn")
+        self.assertAlmostEqual(edges[0].Length, 7.0, places=6)
+
+    def test_a_duplicate_constraint_is_reported_one_based(self):
+        self.sketch.addGeometry(_segment((0, 0), (4, 0)), False)
+        self.sketch.addConstraint(Sketcher.Constraint("Vertical", 0))
+        self.sketch.addConstraint(Sketcher.Constraint("Vertical", 0))
+        self.assertGreaterEqual(self.sketch.solve(), 0)
+        self.assertEqual(
+            self.sketch.RedundantConstraints,
+            [2],
+            "the later duplicate, 1-based as upstream reports it",
+        )
+        self.assertEqual(self.sketch.ConflictingConstraints, [])
+
+    def test_contradictory_constraints_are_refused_and_named(self):
+        self.sketch.addGeometry(_segment((0, 0), (4, 0)), False)
+        self.sketch.addConstraint(Sketcher.Constraint("Horizontal", 0))
+        self.sketch.addConstraint(Sketcher.Constraint("Distance", 0, 1, 0, 2, 10.0))
+        self.sketch.addConstraint(Sketcher.Constraint("Distance", 0, 1, 0, 2, 20.0))
+
+        self.assertEqual(self.sketch.solve(), -1, "the two datums cannot both hold")
+        conflicting = self.sketch.ConflictingConstraints
+        self.assertIn(3, conflicting, "the second distance is named")
+        # A refused solve does not touch the geometry.
+        self.document.recompute()
+        self.assertAlmostEqual(self.sketch.Shape.Edges[0].Length, 4.0, places=6)
+
+    def test_a_constraint_the_solver_cannot_apply_is_refused(self):
+        self.sketch.addGeometry(_segment((0, 0), (4, 0)), False)
+        with self.assertRaises(ValueError) as caught:
+            self.sketch.addConstraint(Sketcher.Constraint("Radius", 0, 3.0))
+        self.assertIn("radius", str(caught.exception))
+        self.assertEqual(self.sketch.ConstraintCount, 0)
 
 
 class SketchPlaneTests(unittest.TestCase):

@@ -1147,10 +1147,10 @@
   },
   "ours": {
     "source": "crates/ferrocad_part_py/src",
-    "files": 12,
+    "files": 13,
     "functions": {
       "registered": 39,
-      "defined": 56,
+      "defined": 57,
       "names": [
         "Part.Precision::angular",
         "Part.Precision::confusion",
@@ -1198,6 +1198,7 @@
       "installed_as_methods": [
         "sketch_add_constraint",
         "sketch_add_geometry",
+        "sketch_conflicting_constraints",
         "sketch_constraint_count",
         "sketch_constraint_objects",
         "sketch_del_constraint",
@@ -1295,7 +1296,7 @@
         "crates/ferrocad_part/src",
         "crates/ferrocad_part_py/src"
       ],
-      "files": 19,
+      "files": 20,
       "constants": 44,
       "registered": 45,
       "names": [
@@ -3519,37 +3520,37 @@
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1603,
+          "line": 1604,
           "text": "/// raising. A non-shape operand returns `NotImplemented`, letting Python try"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1607,
+          "line": 1608,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1616,
+          "line": 1617,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1625,
+          "line": 1626,
           "text": "return Ok(py.NotImplemented());"
         },
         {
           "kind": "not_implemented",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 1632,
+          "line": 1633,
           "text": "Err(_) => Ok(py.NotImplemented()),"
         },
         {
           "kind": "not_implemented_yet",
           "file": "crates/ferrocad_part_py/src/lib.rs",
-          "line": 4050,
+          "line": 4051,
           "text": "\"{operation}: partial revolutions are not implemented yet\""
         },
         {

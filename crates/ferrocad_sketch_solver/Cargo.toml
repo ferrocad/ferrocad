@@ -1,0 +1,19 @@
+[package]
+name = "ferrocad_sketch_solver"
+version = "0.1.4"
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's 2D sketch constraint solver: Levenberg-Marquardt and a rank-revealing DOF analysis (no kernel)"
+keywords = ["cad", "freecad", "sketch", "constraints", "solver"]
+categories = ["science", "mathematics"]
+documentation = "https://docs.rs/ferrocad_sketch_solver"
+
+[lib]
+name = "ferrocad_sketch_solver"
+
+[dependencies]
+ferrocad_curves.workspace = true

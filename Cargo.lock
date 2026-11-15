@@ -2759,6 +2759,7 @@ dependencies = [
  "ferrocad_occt",
  "ferrocad_part",
  "ferrocad_py",
+ "ferrocad_sketch_solver",
  "ferrocad_stage_py",
  "ferrocad_text",
  "ferrocad_types",
@@ -2963,6 +2964,13 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "ferrocad_sketch_solver"
+version = "0.1.4"
+dependencies = [
+ "ferrocad_curves",
 ]
 
 [[package]]

@@ -41,6 +41,7 @@ pub mod feature_python;
 mod link;
 mod link_array;
 mod shape_fix;
+mod sketch_solver;
 mod solids;
 mod techdraw;
 mod text;

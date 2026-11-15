@@ -46,6 +46,7 @@
       "ferrocad_part",
       "ferrocad_part_py",
       "ferrocad_py",
+      "ferrocad_sketch_solver",
       "ferrocad_text",
       "ferrocad_theme",
       "ferrocad_types"
@@ -81,6 +82,7 @@
       "ferrocad_shell_js",
       "ferrocad_shell_python",
       "ferrocad_shell_rust",
+      "ferrocad_sketch_solver",
       "ferrocad_stage",
       "ferrocad_stage_py",
       "ferrocad_text",
@@ -124,6 +126,7 @@
       "ferrocad_shell_js",
       "ferrocad_shell_python",
       "ferrocad_shell_rust",
+      "ferrocad_sketch_solver",
       "ferrocad_stage",
       "ferrocad_stage_py",
       "ferrocad_text",

@@ -269,7 +269,7 @@ EOF
 
     echo "round-trip console lines:"
     require_line 'ferrocad harness: save Sample'
-    require_line 'ferrocad harness: reopened -> opened reopened.FCStd (2 object(s))'
+    require_line 'ferrocad harness: reopened -> opened reopened.FCStd (5 object(s))'
 
     echo "forbidden console patterns:"
     while IFS= read -r pattern; do
@@ -416,7 +416,9 @@ check_settings() {
     LOG="$TMP/providers_chain.log"
     echo "provider console lines (pywasm,js chain):"
     require_line 'ferrocad: scripting runtime pywasm,js'
-    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1'
+    # The chain has the JS page's axis overlay as well, so the axis popover offers a
+    # switch and the registry lists the features in the script half's order.
+    require_line 'ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=1 registry=axis=1,grid=1'
 
     for log in settings settings_write settings_js settings_pywasm settings_command settings_command_js settings_file providers_pywasm providers_chain; do
         LOG="$TMP/$log.log"

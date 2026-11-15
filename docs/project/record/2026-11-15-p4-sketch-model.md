@@ -320,6 +320,12 @@ including the existing applied-fillet round grip. The bridge now resolves the na
 selection with no live object is `None`. `tests/test_manipulator_specs.py` pins the
 argument (`ferrocad_shell.manipulator_specs` → the object, not `"Thing"`).
 
+**When the grips arm.** Declared handles are requested only for the loadout slots that
+want a manipulator (`Push/Pull` and `Fillet`), so a sketch's vertex grips appear with one
+of those hands equipped — the same gate the applied-fillet round grip has. A dedicated
+sketch hand is a UI decision (four hands is U4's list), and widening the gate would arm
+every declared handle in the `Move` hand too, so it is recorded rather than taken.
+
 **What the preview is, and is not.** The grip rides the pointer's target in the sketch
 plane; the *solved* geometry appears on commit, because the solve is a document operation
 and a manipulator never edits the document during a drag. The result is still

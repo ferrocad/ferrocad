@@ -220,6 +220,13 @@ A **fully constrained** vertex still gets a grip. The drag then reports the degr
 freedom it kept (`0`) and moves nothing, which is the honest refusal — a grip that
 disappeared would look like a broken handle.
 
+**When they arm.** Declared handles are requested only for the loadout slots that want a
+manipulator — `Push/Pull` and `Fillet` today (`Loadout::wants_manipulator`) — so the
+vertex grips appear with one of those hands equipped, exactly like the applied-fillet
+round grip. A dedicated sketch hand is a **UI** decision (U4's hand list, not U4's
+mechanism) and is deliberately not taken here: widening the gate would arm every declared
+handle in the `Move` hand as well, which is a different change.
+
 ## The solve
 
 The solver is `ferrocad_sketch_solver`; the sketch object calls it from `solve()` and from

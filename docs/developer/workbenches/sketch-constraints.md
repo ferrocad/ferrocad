@@ -116,6 +116,7 @@ every other object type, exactly as if the attribute did not exist):
 | `setDatum(index, value)` | method | Write a dimensional constraint's datum |
 | `getDatum(index)` | method | Read it; a non-dimensional kind is a `ValueError` |
 | `solve()` | method | Solve; returns the remaining degrees of freedom (`0` = fully constrained) or `-1` |
+| `drag(geometry, pos, target)` | method | Solve with one soft pull on a point toward `target`; returns the same DOF count (never `0` or `-1` because of a prior) |
 | `GeometryCount` | attribute | `len(Geometry)` — construction geometry is included |
 | `ConstraintCount` | attribute | number of stored records |
 | `Constraints` | attribute | the records as `Sketcher.Constraint` objects, in positional GeoIds |
@@ -265,8 +266,20 @@ rows pulling a geometry point toward `target`, and only those rows.
 * A prior on a root axis is refused (`InapplicablePrior`): the origin cannot be dragged,
   and ignoring it would look like a drag that does nothing.
 
-Nothing Python-facing uses priors yet; the 3-D move/push-pull manipulators and the sketch
-drag tool are their intended consumers.
+**`SketchObject.drag(geometry, pos, target)` is the Python consumer.** `geometry` is the
+same positional GeoId `addConstraint` takes (a negative root axis raises `ValueError`),
+`pos` is upstream's `PointPos` (`1` start, `2` end, `3` mid, `0` the curve itself), and
+`target` is an `(x, y)` pair or anything with `x`/`y`, in the sketch's local plane. It
+solves with one prior, writes the moved geometry back, and returns the remaining DOF —
+the same number `solve()` returns, because the prior never enters the rank analysis. A
+system that cannot be built or will not converge returns `-1` and leaves `Geometry`
+untouched, so a drag can never corrupt a sketch.
+
+What a drag therefore does, precisely: it moves the free degrees of freedom toward the
+pointer and loses to every hard constraint. A pinned point does not move (and reports
+`0`, not a conflict); on a line whose two ends share a `Horizontal` row, dragging one end
+vertically moves both, because that is what the row means. The sketch drag tool and the
+3-D manipulators are the remaining consumers.
 
 ### Where it stops
 
@@ -328,15 +341,18 @@ quantity, which is what the `.FCStd` writer already infers from the unit signatu
   a refused radius-on-a-line, unparameterized geometry carried through, two broken islands
   diagnosed separately, an already-satisfied island still reporting DOF and redundancy, a
   soft prior dragging one free parameter, and a prior on a root refused.
-- `crates/ferrocad_part_py/tests/part_sketcher.rs` (**16** cases): the model, the datum
+- `crates/ferrocad_part_py/tests/part_sketcher.rs` (**18** cases): the model, the datum
   edits, the dangling record, the autoconstraint detection, identity across a deletion,
-  construction addressability/exclusion, the root axes and `findPlane` on a wire.
-- `tests/test_sketch_constraints.py` (**36** cases): the record type, the document surface,
+  construction addressability/exclusion, the root axes, `findPlane` on a wire, a free
+  drag that keeps the DOF count and the redundancy set, and a fully constrained drag that
+  moves nothing and reports `0`.
+- `tests/test_sketch_constraints.py` (**40** cases): the record type, the document surface,
   the identity and construction surface, the migration of a sketch without the identity
-  properties, the refusals, the `.FCStd` round trip, and the end-to-end solve cases — a
+  properties, the refusals, the `.FCStd` round trip, the end-to-end solve cases — a
   rectangle closing with four degrees of freedom and honouring `DistanceX`/`DistanceY`, a
   radius datum resizing a circle, a construction line driving the real profile, a redundant
   duplicate at 1-based index 2, and a contradictory pair refused with the geometry left
-  untouched.
+  untouched — and the drag cases (`drag()` on a free end, against a hard row, on a pinned
+  point, and the two refusals).
 - Part conformance stayed **531/0/0/12** after the seam changes; `workbenches` is
   **859/0/0/3** and `base` **707/0/0/8**.

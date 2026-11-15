@@ -1,9 +1,9 @@
-//! Shell tests: the creation pill's gate, the tool strip's fields and `PILL_HOLD`.
+//! Shell tests: the completion row's fields, the gate and `PILL_HOLD`.
 //!
 //! The C1/C2 promises this module pins:
 //!
-//! * an armed creation tool swaps the dock **in place** and publishes its numeric strip,
-//!   without moving the canvas by a pixel;
+//! * arming a creation tool shows nothing until its first click, then the completion row
+//!   joins the bottom-left column with the tool's numbers, without moving the canvas;
 //! * `Tab` focuses a field and a typed digit resizes the tool's own preview;
 //! * a selection-dependent `TopologyGate` greys the row and names its requirement, and
 //!   refuses `Select ▾` while the tool is armed;
@@ -13,7 +13,11 @@
 
 use super::*;
 
-/// A shell with the Box tool contributed and nothing else changed.
+/// A shell with the Box tool contributed, armed and **begun** — its first click anchored.
+///
+/// The click is simulated where the tool would report it: the model's status, which is
+/// what the row reads. A headless shell has no viewport, so the tool instance itself lives
+/// nowhere here (the tool-side write-back is pinned by `box_tool`'s own tests).
 fn box_window(cx: &mut TestAppContext) -> (VisualTestContext, Entity<Shell>, Arc<Mutex<ShellModel>>) {
     let model = boot_shell(cx);
     let window = cx.update(|cx| {
@@ -35,8 +39,20 @@ fn box_window(cx: &mut TestAppContext) -> (VisualTestContext, Entity<Shell>, Arc
             shell.start_tool("box", cx);
         });
     });
+    place_the_box_anchor(&model);
     draw(&mut cx);
     (cx, shell, model)
+}
+
+/// The click that anchors the armed box, as the tool reports it.
+fn place_the_box_anchor(model: &Arc<Mutex<ShellModel>>) {
+    let mut model = model.lock().unwrap();
+    if let Some(tool) = model.tool.clone() {
+        model.tool = Some(ferrocad_stage::ToolStatus {
+            points: 1,
+            ..tool
+        });
+    }
 }
 
 /// The armed box's first field value (`W`), as the strip and the tool agree on it.
@@ -79,9 +95,25 @@ fn the_armed_box_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext) 
     });
     draw(&mut cx);
 
-    // The pill is **added** to the canvas, not swapped for anything: the globals dock
-    // keeps its column on the left edge and the bottom row keeps both hands.
-    assert!(cx.debug_bounds("tool-strip").is_some(), "the tool's pill");
+    // Armed and nothing more: no row. The canvas shows the placement ghost, and that is
+    // all — a parameter tool included, because `BoxTool` anchors on the press and only
+    // then offers its numbers.
+    assert!(
+        cx.debug_bounds("tool-strip").is_none(),
+        "no completion row before the click"
+    );
+    assert!(
+        cx.debug_bounds("tool-fields").is_none(),
+        "and no numbers to type into"
+    );
+
+    // The click anchors the box; now the row is there to type into.
+    place_the_box_anchor(&model);
+    draw(&mut cx);
+
+    // The row is **added** to the column, not swapped for anything: the globals dock
+    // keeps its place on the left edge and the bottom row keeps both hands.
+    assert!(cx.debug_bounds("tool-strip").is_some(), "the completion row");
     assert!(
         cx.debug_bounds("globals-dock").is_some(),
         "the dock stays: activating a tool does not take the chrome away"

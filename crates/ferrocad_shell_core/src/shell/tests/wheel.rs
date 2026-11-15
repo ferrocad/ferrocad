@@ -1270,17 +1270,32 @@ for _id, _command in (
     );
     release(&mut cx);
 
-    // A tool with a numeric row keeps `Shift` for itself: `Shift`+`Tab` walks its fields.
+    // A tool that has begun and publishes numbers keeps `Shift` for itself: `Shift`+`Tab`
+    // walks its fields once the completion row is on screen.
     model.lock().unwrap().tool = Some(
-        ToolStatus::new("Test_PeekBox", "Box", 0, "tab to edit").with_fields(vec![
+        ToolStatus::new("Test_PeekBox", "Box", 1, "tab to edit").with_fields(vec![
             ferrocad_stage::ToolField::number("w", "W", 20.0, "mm"),
         ]),
     );
     peek(&mut cx);
     assert!(
         cx.debug_bounds("create-popover").is_none(),
-        "no peek while the tool publishes fields"
+        "no peek while the completion row is up"
     );
+
+    // Before the click the same tool has no row, so `Shift` is still the dock's: the box's
+    // numbers cannot be typed into a row that is not there.
+    model.lock().unwrap().tool = Some(
+        ToolStatus::new("Test_PeekBox", "Box", 0, "click to place").with_fields(vec![
+            ferrocad_stage::ToolField::number("w", "W", 20.0, "mm"),
+        ]),
+    );
+    peek(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_some(),
+        "the peek works before the click, when no fields are live"
+    );
+    release(&mut cx);
     model.lock().unwrap().tool = None;
 
     // An armed gizmo: `Shift` turns an axis drag into a plane drag, so the key is the

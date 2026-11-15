@@ -1505,17 +1505,18 @@ fn action_label(
         .child(label)
 }
 
-/// Whether the armed tool has **begun** — a click has placed something, or the tool's
-/// fields are its own input.
+/// Whether the armed tool has **begun** — its first click has placed the anchor (or its
+/// first point).
 ///
 /// This is the rule that keeps arming a tool quiet. Pressing a pill or a key equips the
-/// slot and lets the canvas show the hover ghost of what the next click would make; the
-/// completion row (the tool's name, its numbers and the `✗`/`✓` pair) is a response to a
-/// click, not to equipping, so it only appears once there is something to complete. A
-/// parameter tool is the one exception, because its fields *are* the pending value: there
-/// is nothing to place until they are set.
+/// slot and lets the canvas show the placement ghost of what the next click would make;
+/// the completion row — the tool's name, its numbers and the `✗`/`✓` pair — is a response
+/// to that click, not to equipping, so it only appears once there is something to
+/// complete. Every tool reports the click through `ToolStatus::points`, including the
+/// parameter tools: `BoxTool` anchors on the press and only then offers `W`/`L`/`H`, so the
+/// numbers are typed *after* the placement rather than in front of an empty canvas.
 pub(crate) fn tool_has_begun(status: &ToolStatus) -> bool {
-    !status.fields.is_empty() || status.points > 0
+    status.points > 0
 }
 
 /// The armed tool's row: what is running, its numbers (or its point count), its hint and

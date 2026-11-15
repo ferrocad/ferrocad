@@ -1,8 +1,8 @@
-//! `Shell` methods: the tool strip's numeric fields (C2).
+//! `Shell` methods: the completion row's numeric fields (C2).
 //!
-//! An armed creation tool publishes its parameters on [`ToolStatus::fields`], the
-//! bottom-centre strip draws them as one tabular-monospace row, and this module owns the
-//! small editing machine behind it:
+//! An armed creation tool publishes its parameters on [`ToolStatus::fields`]; once the
+//! tool has **begun** (a click placed its anchor) the completion row draws them as one
+//! tabular-monospace row, and this module owns the small editing machine behind it:
 //!
 //! ```text
 //! Tab / Shift+Tab   focus the next / previous field (the tool's own values seed it)
@@ -34,14 +34,18 @@ pub(crate) struct ToolFieldEdit {
 }
 
 impl Shell {
-    /// The armed tool's fields, if it has any.
+    /// The fields the completion row is **showing**, if it is showing at all.
+    ///
+    /// Empty before the first click: a tool that has placed nothing has no row on screen
+    /// (see `chrome::tool_has_begun`), and a field nobody can see must not take the
+    /// keyboard — the digits belong to the loadout until the row exists.
     pub(crate) fn tool_fields(&self) -> Vec<ferrocad_stage::ToolField> {
         self.model
             .lock()
             .unwrap()
             .tool
             .as_ref()
-            .filter(|status| status.active)
+            .filter(|status| status.active && crate::chrome::tool_has_begun(status))
             .map(|status| status.fields.clone())
             .unwrap_or_default()
     }
@@ -51,7 +55,8 @@ impl Shell {
         self.tool_field.as_ref()
     }
 
-    /// Whether the armed tool publishes any fields (so `Tab` belongs to the strip).
+    /// Whether the completion row is on screen with fields to edit (so `Tab` belongs to
+    /// it).
     pub(crate) fn has_tool_fields(&self) -> bool {
         !self.tool_fields().is_empty()
     }

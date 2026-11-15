@@ -207,25 +207,66 @@ The iteration is Levenberg-Marquardt on the dense normal equations with a Choles
 and adaptive damping. It stops at `max\|r\| ≤ 1e-9`, at a vanishing step, or after 200
 iterations, whichever comes first.
 
+### Islands
+
+A constraint couples only the geometry it names, and a root-axis reference couples
+nothing (the axes are fixed), so the sketch is split into connected components before
+anything is evaluated. Each island is then handled at the cheapest tier that applies:
+
+| Tier | Condition | Work |
+| --- | --- | --- |
+| **1** | the island has no constraint and no prior | none — the island's parameter count is added to DOF |
+| **2** | every residual is already within tolerance and there is no prior | no iteration; the rank analysis still runs, so DOF and redundancy are reported |
+| **3** | otherwise | the Levenberg-Marquardt iteration, the rank analysis, and — if it fails — the conflict diagnosis |
+
+The split is not only a speed measure: it is what makes a multi-conflict sketch
+diagnosable. Leave-one-out over a whole sketch finds nothing when two *independent*
+islands are each broken, because removing one constraint still leaves the other
+unconverged. Per island, each diagnosis is local and its indices are mapped back to the
+global constraint list.
+
 ### Degrees of freedom, redundancy and conflicts
 
-* **DOF** = parameters − rank(J). The rank comes from Gram-Schmidt over the Jacobian rows
-  *in constraint order*, so a constraint that says nothing its predecessors did not say is
-  the one named.
+* **DOF** = parameters − rank(J), summed over the islands. The rank comes from
+  Gram-Schmidt over the Jacobian rows *in constraint order*, so a constraint that says
+  nothing its predecessors did not say is the one named.
 * **`RedundantConstraints`** is 1-based (Draft's `make_sketch` deletes with `idx - 1`). A
   multi-row constraint is redundant only when *every* row is dependent; calling a partly
   dependent constraint redundant would make deleting it destructive. The analysis runs
-  whether or not the system converges — redundancy is a statement about the equations.
+  whether or not an island converges — redundancy is a statement about the equations.
 * **`ConflictingConstraints`** is also 1-based, and it is a diagnosis, not a residual
-  dump: when the system does not converge, the solver removes one constraint at a time and
-  names those whose removal lets the rest solve. That reports the constraint a user has to
-  change instead of the dozen rows a single bad datum drags off. If no single removal helps
-  (two independent conflicts), it falls back to the constraints still violated at the best
-  fit.
+  dump. Two filters pick the candidates first: a constraint has to be part of a
+  **rank-dependent cycle** (its row was a combination of earlier ones, or it owns a
+  direction a dependent row consumed) *or* still be **violated** at the best fit. Then the
+  solver removes one candidate at a time and names those whose removal lets the rest of
+  the island solve — the constraint a user has to change, not the dozen rows a single bad
+  datum drags off. If no single removal helps, it falls back to the constraints still
+  violated at the best fit.
 
 `addConstraint` runs the solver's own residual code on the new record before storing it,
 so a constraint the solver could never apply is a `ValueError` at that point rather than a
 silent no-op in the next solve.
+
+### Soft priors — the drag seam
+
+`ferrocad_sketch_solver::SoftPrior { reference, target, weight }` plus
+`solve_with_priors` is the seam an interactive drag uses: each prior adds two weighted
+rows pulling a geometry point toward `target`, and only those rows.
+
+* Priors are **penalties, not constraints**. They never enter the convergence test or the
+  rank analysis, so they steer the degrees of freedom the constraints leave free instead
+  of fighting them: dragging a pinned point moves nothing and reports nothing, where a
+  hard constraint would report a conflict. `dof` and `redundant` are exactly what they
+  would be without the prior.
+* The penalty optimum trades a small hard-constraint violation (`O(weight²)`) for the
+  pull, so the solver runs one prior-free pass afterwards to restore hard feasibility —
+  the dragged free parameter stays where the prior put it. The return is therefore a
+  hard-feasible point near the prior's constrained optimum, not the exact QP solution.
+* A prior on a root axis is refused (`InapplicablePrior`): the origin cannot be dragged,
+  and ignoring it would look like a drag that does nothing.
+
+Nothing Python-facing uses priors yet; the 3-D move/push-pull manipulators and the sketch
+drag tool are their intended consumers.
 
 ### Where it stops
 
@@ -282,9 +323,11 @@ quantity, which is what the `.FCStd` writer already infers from the unit signatu
 
 - `Draft.make_sketch`/`Draft.draftify` for a three-point wire: `test_modification.py`
   **33/0/0/0**, and the `--draft` gate **93/0/0/1** (was 60/0/0/1).
-- `crates/ferrocad_sketch_solver/src/lib.rs` (**10** unit cases): a perturbed rectangle
+- `crates/ferrocad_sketch_solver/src/lib.rs` (**14** unit cases): a perturbed rectangle
   closing, a distance and a radius datum, an arc radius, redundancy, a conflict, `Block`,
-  a refused radius-on-a-line, and unparameterized geometry carried through.
+  a refused radius-on-a-line, unparameterized geometry carried through, two broken islands
+  diagnosed separately, an already-satisfied island still reporting DOF and redundancy, a
+  soft prior dragging one free parameter, and a prior on a root refused.
 - `crates/ferrocad_part_py/tests/part_sketcher.rs` (**16** cases): the model, the datum
   edits, the dangling record, the autoconstraint detection, identity across a deletion,
   construction addressability/exclusion, the root axes and `findPlane` on a wire.

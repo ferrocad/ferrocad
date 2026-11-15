@@ -147,9 +147,27 @@ stored, drawn and constrained-never: they are carried through the solve untouche
 pins at the position the solve started from, which makes it idempotent rather than a stored
 reference point. All three are in the contract page.
 
-**Measured.** `ferrocad_sketch_solver` **10** unit cases; `part_sketcher` **16** (the
-DOF assertions replaced the old `solve() == 0`); `tests/test_sketch_constraints.py`
-**29 → 36** with the end-to-end solve cases (rectangle, datums, circle radius,
-construction-driven profile, redundancy, conflict refusal); `workbenches` **852 → 859**;
-the Draft gate still **93/0/0/1** (with `make_sketch` now solving for real) and Part still
-**531/0/0/12**.
+**Islands, and the conflict diagnosis that needed them.** The solve is per connected
+component: a constraint couples only the geometry it names, and a root-axis reference
+couples nothing. Three tiers fall out — an unconstrained island is answered from its
+parameter count, an already-satisfied one skips the iteration but keeps the rank analysis,
+an active one solves and diagnoses. The split is not only a speed measure: leave-one-out
+over a whole sketch finds nothing when two *independent* islands are broken, because
+removing one constraint still leaves the other unconverged. Per island, the diagnosis also
+filters candidates first (rank-dependent cycle, or violated at the best fit), so the
+leave-one-out only runs on constraints that could possibly be responsible.
+
+**The drag seam.** `SoftPrior` + `solve_with_priors` add weighted rows pulling a geometry
+point toward a target. They are penalties, not constraints: they never enter the
+convergence test or the rank analysis, so a prior steers the free degrees of freedom
+instead of fighting a hard constraint — dragging a pinned point moves nothing and reports
+nothing. One prior-free pass runs afterwards to restore hard feasibility, so the result is
+a hard-feasible point near the prior's constrained optimum rather than an exact QP
+solution. A prior on a root axis is refused. No Python surface calls it yet.
+
+**Measured.** `ferrocad_sketch_solver` **14** unit cases (four for the island split, the
+tier fast paths and the prior seam); `part_sketcher` **16** (the DOF assertions replaced
+the old `solve() == 0`); `tests/test_sketch_constraints.py` **29 → 36** with the end-to-end
+solve cases (rectangle, datums, circle radius, construction-driven profile, redundancy,
+conflict refusal); `workbenches` **852 → 859**; the Draft gate still **93/0/0/1** (with
+`make_sketch` now solving for real) and Part still **531/0/0/12**.

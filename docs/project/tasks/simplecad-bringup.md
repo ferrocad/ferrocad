@@ -483,7 +483,7 @@ product path and the only one that gives an interactive viewport; it is per-tool
 | **UI-1** | **Measure the Qt-blocked unit modules headlessly.** `--simplecad-gui` runs the five modules the main group skips (they build a `QApplication` in `setUpClass`) against real PySide6 with the offscreen platform, and self-skips when no distribution is installed. | **landed 2026-11-15**: **78 / 1 / 0 / 0** over five modules |
 | UI-2 | **The workbench host.** `Gui.Workbench`, `addWorkbench`, `listWorkbenches`, `activateWorkbench`, `activeWorkbench`, `appendToolbar`/`appendMenu`/`appendContextMenu` → the shell's command catalogue. `../simplecad/InitGui.py` imports and declares its five toolbars and menus; `--check-init` proves it headlessly. | **landed 2026-11-15**: five toolbars, six menus, 49 ids; see UI-5 |
 | UI-3 | **The edition skeleton.** `ferrocad_simplecad` (crate, app script, `--check-init`), the `SimpleCAD_Rectangle` id and the two-click rectangle on our stage, and the Parametric tool/manipulator ids re-registered beside it so the inherited command set resolves. Pinned by a round-trip test in the Parametric mould. | **landed 2026-11-15**: edition + first native tool; see UI-6 |
-| UI-4 | **The rest of the tool surface, in use order.** Circle/Arc/Polygon, Round (the dress-up scrubber, already generic), Offset/Elongate, Move/Rotate, the surface tools (imprint/shell/fill-hole/unwrap) — each a command over `simplecad.modeling`. The 63 `tests/gui/gui_*.py` scripts are the behavioural reference: each is a state machine to translate into a stage-tool test. | incremental |
+| UI-4 | **The rest of the tool surface, in use order.** The three round drawing tools — Circle, Polygon, Arc — landed 2026-11-15 (see UI-7). Next: Round (the dress-up scrubber, already generic), Offset/Elongate, Move/Rotate, then the surface tools (imprint/shell/fill-hole/unwrap), each a command over `simplecad.modeling`. The 63 `tests/gui/gui_*.py` scripts are the behavioural reference: each is a state machine to translate into a stage-tool test. | **in progress**: Circle/Polygon/Arc landed |
 | UI-5 | **The two windows that are not the viewport**: the face browser (a dock panel) and the numeric-input rows. The shell already has a properties panel and a manipulator numeric row; these are the same seams. | after UI-3 |
 
 ## UI-4. UI-1, as measured
@@ -593,9 +593,9 @@ viewport's `dispatch_tool` calls `finish_tool()` when it turns true — which is
 path `Enter` takes, so there is one commit route rather than a second one. The pointer-up
 that follows the press emits the commit.
 
-**The script names the object, the tool collects the geometry.** `_create_rectangle`
-turns the twelve committed numbers into one `Part::Feature` in one named transaction,
-through `simplecad.core.geometry.rectangle` when the package is importable and
+**The script names the object, the tool collects the geometry.** The hook turns the
+committed numbers into one `Part::Feature` in one named transaction, through
+`simplecad.core.geometry.rectangle` when the package is importable and
 `Part.Face(Part.makePolygon(…))` when it is not — the round trip asserts both build the
 same face (area 40, bbox 10 × 4). The provider is registered as `_interaction`, not
 `interaction`: `interaction` is the *shell* entry point the Python host calls by name,
@@ -614,6 +614,62 @@ and shadowing it hands the hook a JSON string where the host expects a list.
 
 **Not done, deliberately.** Packaging is not wired (`xtask bundle` still knows
 `parametric` and `sculpt`; no `packaging/editions/simplecad.json`, no release-matrix
-row), and the rest of the tool surface — Circle/Arc/Polygon, Round, Offset,
-Move/Rotate, the surface tools — is UI-4. Line and Push/Pull already work here because
-they are the Parametric edition's tools, not new ones.
+row), and the rest of the tool surface — Round, Offset, Move/Rotate, the surface
+tools — is UI-4. Line and Push/Pull already work here because they are the Parametric
+edition's tools, not new ones.
+
+## UI-7. UI-4's first slice, as measured
+
+The three round drawing tools are in, with upstream's click sequences (`controller.py`'s
+own hints: "Click circle center · Tab for radius", "Click center, then start, then arc
+end"):
+
+| Tool | Clicks | Commit (numbers) | Object |
+| --- | --- | --- | --- |
+| `SimpleCAD_Circle` | centre, rim | centre + rim + normal (9) | a `Part::Feature` face |
+| `SimpleCAD_Polygon` | centre, vertex | + side count (10) | a face |
+| `SimpleCAD_Arc` | centre, start, end | start + halfway + end (9) | a `Part::Feature` **edge** |
+
+The 9/10 numbers are points and a normal rather than a radius, because the script must not
+re-derive the plane from a rule: the tool saw the plane, so the tool states it.
+
+**One shared rule for the plane.** `interaction/frame.rs` now owns what the rectangle used
+to inline: `drag_axes` (the axis least aligned with the drag is the normal) and
+`DragFrame` (centre, radius, `u` along the drag, `v` square to it, plus `ring()`,
+`polygon(sides)` and `arc(sweep)` sampling). `rectangle_corners` calls `drag_axes`, so
+"which plane did the user draw in" has one definition. The frame keeps the normal it was
+built from, so a ground-plane circle commits exactly `(0, 0, 1)` instead of
+`1.0000000000000002`.
+
+**The arc's sweep accumulates.** `atan2` alone folds a drag back at ±180°, so a user who
+swept three quarters of a turn would get the quarter they did not draw. The tool wraps each
+step to `(-π, π]` and adds it, clamped just under a full turn (upstream refuses exactly
+360°). The commit is **three points on the arc**, which is exactly what upstream's
+`Arc.edge()` hands the kernel (`Part.Arc(p0, p1, p2).toShape()`), so the script needs no
+plane arithmetic at all.
+
+**The side count is the user's, within what a tool can offer.** Six by default (upstream
+`polygon_sides = 6`); a digit `3`–`9` while the tool is armed changes it and rebuilds the
+preview. Upstream uses a spinbox — that is UI-5's numeric rows, not this slice. The count
+travels in the commit, so two polygons in one document can differ.
+
+**The script is a table, not four branches.** `_BUILDERS` maps a tool id to `(object name,
+builder, arity)`, `_commit` owns the transaction/`_invalid`/appearance shape, and
+`_interaction` is now `action != create → None; no entry → None; else commit`. The circle
+and the polygon use `simplecad.core.geometry` when importable and the equivalent `Part`
+construction when not — the round trip checks both paths build the same area.
+
+| Check | Result |
+| --- | --- |
+| `ferrocad_stage --lib` | **287** (+19: 5 `DragFrame`, 4 circle, 5 polygon, 5 arc) |
+| `ferrocad_simplecad` | **6** round trips: rectangle, circle, polygon (6 and 4 sides), arc, degenerate clicks, vertical rectangle |
+| `--check-init` | draws all four and asserts them: rectangle 40 mm², circle 25π, hexagon 300·sin 60°, arc `5π` long and a `Part.Circle` |
+| `ferrocad_viewport`, `ferrocad_part_gui` | **235 / 0 / 1 ignored**, **41 / 0** (unchanged) |
+| `cargo xtask editions --check` | green over 14 editions (no dependency change) |
+
+**Still open in UI-4.** Round (the dress-up scrubber is generic already, so it is a
+command with the right `selection` filter), Offset/Elongate, Move/Rotate, and the surface
+tools. Face **partitioning** is also untouched: upstream's `draw_profile`/`draw_edge` divide
+a host face or imprint an edge onto a solid, while this edition always writes a standalone
+`Part::Feature` — the same simplification UI-3 made for the rectangle, and the reason a
+drawn circle on a box's face is a new object rather than a hole in it.

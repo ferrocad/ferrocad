@@ -384,11 +384,15 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   Option<InteractionCommit>` with `creates: true`, and the in-place bar swap
   (`match active_tool { Some(tool) => tool_strip(tool), None => action_dock(model) }`).
 - `Tool::completed()` — the **self-finishing** seam, defaulted to `false`. A tool that
-  needs no more input (the two-click rectangle) says so, and the viewport finishes it on
-  the event that completed it instead of waiting for `Enter`; the commit still travels
-  the `Enter` path, so there is one route, not two. A polyline keeps the default (its
-  length is the user's call). `ferrocad_simplecad`'s `SimpleCAD_Rectangle` is the first
-  tool to use it.
+  needs no more input (the two-click rectangle, circle and polygon, the three-click arc)
+  says so, and the viewport finishes it on the event that completed it instead of waiting
+  for `Enter`; the commit still travels the `Enter` path, so there is one route, not two.
+  A polyline keeps the default (its length is the user's call). `ferrocad_simplecad`'s
+  `SimpleCAD_Rectangle`/`_Circle`/`_Polygon`/`_Arc` are the tools that use it.
+- `ferrocad_stage::frame::DragFrame` — the plane a creation drag names (the axis least
+  aligned with it is the normal), with the ring/polygon/arc sampling the round tools
+  preview with. `rectangle_corners` uses the same `drag_axes`, so "the plane the user drew
+  in" has one definition and no tool needs active-workplane state to preview honestly.
 - A tool's first left press on a planar face binds the session workplane (sticky;
   `Tool::picks_workplane` opts a plane-picking tool out). The hover preview frame is new.
 - The parametric edition's `_push_pull` already commits `Part::Fuse`/`Part::Cut` with a

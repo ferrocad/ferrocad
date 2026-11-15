@@ -55,7 +55,13 @@ The Add hand is its **own strip**, above the action dock, not a control inside i
   and pressing the same key again opens that pill's flyout instead.
 - **The flyout** (`▾`, or the second press) shows one **category at a time** behind a
   segmented header bar (`Sketch | Solid | Surface | …`). The list used to be one flat
-  column mixing drawing tools, primitives and profile features.
+  column mixing drawing tools, primitives and profile features. The caret reads `^`
+  while that pill's flyout is open, so the row says which list is showing.
+- **The list is numbered.** Its rows carry `1`–`8` in a column of their own (separate
+  from the gate's requirement hint, which a disabled row shows in the same menu), and
+  pressing a number while the flyout is open picks that row into its pill: the same
+  bind-and-run a click does. The panel owns the digits while it is open — `4` means "the
+  fourth tool" there and "the fourth pill" otherwise.
 - **Per-category memory.** Picking a tool binds it to its category's pill *and* runs it.
   Clicking a **tab** only points that category's pill at the tool the category remembers,
   so the pill behind the flyout already names what the next click would run.

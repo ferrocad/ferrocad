@@ -64,7 +64,10 @@ reads `⊕ <Category>: <Tool> ▾` and remembers its category's tool; the left h
 and `4`/`5`/… arm the pill at that position (a second press opens its flyout). The
 flyout shows one category at a time behind a segmented header (`Sketch | Solid | Surface |
 …`, empty categories omitted); picking a tool binds it to its pill and runs it, and
-clicking a tab only points the pill at that category's remembered tool. The first press from another
+clicking a tab only points the pill at that category's remembered tool. The rows are
+numbered `1`–`8` in their own right-hand column, and a number pressed while the flyout is
+open picks that row — the panel owns the digits while it is up. The pill's caret reads `^`
+while its flyout is open, `▾` otherwise. The first press from another
 hand is not a toggle — the slot keeps the tool it was left on.
 
 Slot 3 reads `3 Fillet` until you press `3` again, which toggles it to `3 Chamfer` (and

@@ -605,8 +605,11 @@ Three follow-ups from the live window:
   remembers its category's tool; `4`, `5`, … arm the pill at that position and a second
   press opens its flyout. The flyout shows **one category at a time** behind a segmented
   header, with a tab click pointing the pill at the remembered tool and a row click
-  binding and running it. The wheel's `Create ▸` commits through the same path, so a
-  flick loads the pill and arms the tool at the pointer.
+  binding and running it. The rows carry `1`–`8` in their own column and those digits
+  pick a row while the flyout is open (the panel owns the keyboard, as the wheel does),
+  so a category is navigable without the pointer; the pill's caret reads `^` while its
+  list is showing. The wheel's `Create ▸` commits through the same path, so a flick
+  loads the pill and arms the tool at the pointer.
 - **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
   `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
   `select at least 2 profiles` instead of `select at least 2 bodies`.

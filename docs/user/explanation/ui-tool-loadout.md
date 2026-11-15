@@ -75,6 +75,10 @@ the tool it was last left on.
   tool puts it in its pill and starts it; clicking a **category** tab just shows that
   category's tools and points its pill at the tool it was last left on, so nothing starts
   until you pick one.
+- The list is **numbered**: press `1`–`8` while it is open to pick that tool into its
+  pill without moving the pointer. A row that needs a selection says so instead (for
+  example `select at least 2 profiles` for Loft). The caret reads `^` while a pill's list
+  is open.
 - The dock's `⊕ Create Dock ^` button folds the strip away (and `▾` brings it back), so
   the bottom bar stays `Undo · Redo · Fit · Create Dock · Search` however many tools an
   edition registers.

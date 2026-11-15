@@ -93,7 +93,7 @@ def register_display_provider(provider, default=False):
 
     ``default`` marks the provider that tessellates a **Shape-bearing** object the
     way the document itself would — the Part workbench's. A host that can mesh the
-    document itself (``RustAppBackend``) asks the script half only for what it
+    document itself (``DocumentBackend``) asks the script half only for what it
     cannot mesh, so it skips default providers for the objects it already has and
     still asks every other provider, which is how a mod overrides one object's
     mesh without paying for the other nine.

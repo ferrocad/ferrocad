@@ -4,9 +4,10 @@ FerroCAD's **browser shell**: the real `ferrocad_shell_core` UI — leading bar,
 viewport header, status line, model inspector, property editor and console — in a
 GPUI window on WebGL2, over a real `ferrocad_core::Document` whose geometry is built
 by the OCCT kernel compiled to wasm, with no CPython anywhere in the dependency
-graph. The document backend itself is `ferrocad_shell_rust`'s `RustAppBackend` —
-the same crate a desktop edition installs — so the browser host owns only the
-window, the page bridge and the file picker.
+graph. The document backend itself is `ferrocad_shell_doc`'s `DocumentBackend` with
+`ferrocad_shell_rust`'s `PartEngine` plugged in — the same pair a desktop edition
+installs — so the browser host owns only the window, the page bridge and the file
+picker.
 
 This crate used to be the step-2 probe (a `Part::Box` composited through
 `gpui_interop`). The shell split (M0) and the wasm build (M1) made it a host; M2
@@ -20,7 +21,7 @@ document. The plan and the verified baselines are in
 1. **The same shell crate as the desktop app.** `ferrocad_shell_core` compiles for
    `wasm32-unknown-unknown` and opens its window through `gpui`'s web backend. There
    is no second implementation of the chrome, panels or key handling.
-2. **The seam, not a stub.** `ferrocad_shell_rust::RustAppBackend` implements
+2. **The seam, not a stub.** `ferrocad_shell_doc::DocumentBackend` implements
    `ferrocad_shell_api`'s `AppBackend` over a real document. The shell asks it for
    the tree, the property rows, the commands and the stage exactly as it asks the
    Python backend natively: clicking a shape (or a tree row) fills the property pane
@@ -163,7 +164,7 @@ The native appearance groups are `Mods/grid/ferrocad`, `Mods/axis/ferrocad` and
 `Mods/gizmo/ferrocad`; their keys are the settings cards' rows (`enabled`, `color`,
 `minor`, `major`, `length`, `size`, …). An empty store means the built-in `ViewState`
 defaults — the grid is off, the axis cross is on, spacing is 10/100 mm, and the grid
-ink is `#94a3b8`. `RustAppBackend::appearance_view` applies stored values at boot and
+ink is `#94a3b8`. `DocumentBackend::appearance_view` applies stored values at boot and
 `set_view_state` writes every applied change back to the host store. `?settings_file=`
 imports the same groups into a fresh browser profile.
 
@@ -201,7 +202,7 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   (`Grid / Axes / WP / Gizmo / Select: Body / Snap`), the live 3D viewport (the
   filleted shape, the axis cross and the navigation cube), the in-window `Model` /
   `Properties` / `Console` column, the loadout bar and the status line
-  (`2 object(s) · Sample`, `FreeCAD 0.1.5 · rust`).
+  (`5 object(s) · Sample`, `FreeCAD 0.1.5 · rust`).
 - The console greets with `FerroCAD shell · Rust document backend · OCCT · no
   CPython`: the Rust document really is the one answering. Under `?pywasm=1` it greets
   with `FerroCAD shell · RustPython · wasm Python scripting` and the Console evaluates
@@ -231,9 +232,10 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   edit is one step. Zooming out three notches and running `Fit` through the palette
   (`ctrl-k;f;i;t;enter`) reframes the stage and prints `fit`; `Fit` is a view request,
   so it changes no stored presentation state.
-- **Open and save.** `?reopen=1` runs `App_Save` (`saved Sample (3788 bytes)`), captures
-  the bytes the page would have downloaded, and opens them through the file seam:
-  `opened Sample (2 object(s))`. The tree, the stage, the title and the status line all
+- **Open and save.** `?reopen=1` runs `App_Save` (`ferrocad harness: save Sample 9367`),
+  captures the bytes the page would have downloaded, and opens them through the file
+  seam: `reopened -> opened reopened.FCStd (5 object(s))`. The tree, the stage, the title
+  and the status line all
   come from the decoded document, and the selection is cleared. `?keys=ctrl-o` reaches
   the page bridge (`open requested`). The shell owns both verbs (S6) and asks this
   host's `WebFilePicker`, which delegates to the page: the `<input>`, the download and
@@ -321,7 +323,10 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   is the measurement, and it runs at boot, before the fetch:
 
   ```
+  # ?runtime=pywasm
   ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=0 registry=grid=1,axis=1
+  # ?runtime=pywasm,js (the chain: the page's axis overlay adds a switch)
+  ferrocad probe: providers grid=FerroCAD (native) switch=0 axis=FerroCAD (native) switch=1 registry=axis=1,grid=1
   ```
 
   `switch=0` is the popover's list — nothing to switch *to* with no provider mod loaded —
@@ -344,7 +349,7 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   ```
 
   They come from the *document API* (`DocApi::with_events`), not from the document half: an
-  addon's own `create`/`set` never passes through `RustAppBackend`. A shell-driven edit
+  addon's own `create`/`set` never passes through `DocumentBackend`. A shell-driven edit
   (Move, undo, a property write) emits through the backend instead, so each edit is
   announced once, by whichever half performed it. `smoke.sh` asserts both lines.
 - **The fetched mod packs reach the interpreter.** `?mods=1` walks `www/mods/index.json`
@@ -381,7 +386,7 @@ Headless Chrome, WebGL2 through ANGLE/SwiftShader
   `ferrocad_part_gui` and installs its two factories beside
   `ferrocad_shell_core::base_contributions()` — the same handles the Parametric edition
   contributes — and the document half applies the commits itself
-  (`RustAppBackend::apply_interaction`), so no interpreter is involved on either side.
+  (`DocumentBackend::apply_interaction`), so no interpreter is involved on either side.
   Both halves of the interaction are checked in this host: `?manipulator=` sends the
   commit a handle would release, and `?gesture=` drives the handle itself — equip the
   hand, select the edge or face, press where the manipulator drew and scrub — through

@@ -38,7 +38,8 @@ use ferrocad_theme::ui::{
 use crate::commands::{self, CommandInfo, Surface};
 use crate::types::{AxisSummary, GridSummary, ProviderFeature};
 use crate::shell::{
-    ACCENT, CreationDock, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell, ShellModel, Slot,
+    ACCENT, CREATION_KEYS, CreationDock, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell,
+    ShellModel, Slot,
 };
 
 use super::command_icons;
@@ -1840,11 +1841,13 @@ fn create_dock(
     Some(row.into_any_element())
 }
 
-/// One creation pill: `⊕ <Category>: <Tool> ▾`.
+/// One creation pill: `5 ⊕ <Category>: <Tool> ▾`.
 ///
 /// The category is the quiet half and the tool is the loud one, so the row reads as a
 /// set of loadouts (`Sketch: Rectangle`, `Solid: Box`) rather than as four buttons with
-/// two words each. The left half arms the tool; the caret opens that category's flyout.
+/// two words each. The key leads, muted, exactly as it does on the Modify hand's bar
+/// (`1 Move`): both hands are one digit space, and the strip says so. The left half arms
+/// the tool; the caret opens that category's flyout.
 fn creation_pill(
     index: usize,
     category: &str,
@@ -1872,6 +1875,9 @@ fn creation_pill(
     } else {
         MUTED
     };
+    // The pill's hotkey, by position. It is what the Modify hand's bar puts in front of
+    // its label (`1 Move`), so `5 Sketch: Rectangle` reads as the same kind of slot.
+    let key = CREATION_KEYS.get(index).copied().unwrap_or_default();
 
     let container = div()
         .id(SharedString::from(format!("creation-pill-{index}")))
@@ -1905,6 +1911,7 @@ fn creation_pill(
                 .rounded_sm()
                 .text_xs()
                 .text_color(rgb(ink))
+                .child(div().text_color(rgb(MUTED)).child(key))
                 .child("⊕")
                 .child(div().text_color(rgb(MUTED)).child(format!("{category}:")))
                 .child(

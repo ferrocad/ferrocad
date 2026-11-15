@@ -1222,7 +1222,7 @@ impl Shell {
         }
         // The creation flyout is a **numbered list**: `1`–`8` pick that tool into its
         // pill, exactly as clicking the row does. The panel owns the digits while it is
-        // open, so a number means the list here and a pill (`4`, `5`, …) otherwise.
+        // open, so a number means the list here and a pill (`5`–`9`) otherwise.
         if !event.keystroke.modifiers.control
             && !event.keystroke.modifiers.alt
             && !event.keystroke.modifiers.platform
@@ -1404,12 +1404,14 @@ impl Shell {
             self.activate_loadout_slot(slot, cx);
             return true;
         }
-        // The Add hand's slots: `4` arms the Sketch family's tool and `5` the
-        // Solid/Surface one; a second press while that tool is running opens the
-        // category flyout. Unlike the loadout digits these are offered while a tool is
-        // armed — that is where the "again" in "press `4` again" lives — but a tool that
-        // publishes no numbers still wins the digit for its own shortcuts, which
-        // `activate_creation_slot` decides.
+        // The Add hand's slots: `5`–`9` arm the pill at that position (`5` Sketch,
+        // `6` Solid, `7` Surface, `8` Text, `9` Mesh — in strip order). They continue the
+        // Modify hand's `0`–`3` rather than restarting beside them, so one digit space
+        // addresses both hands: a press equips the pill's tool and a second press while
+        // that tool is running opens its category flyout. Unlike the loadout digits these
+        // are offered while a tool is armed — that is where the "again" in "press `5`
+        // again" lives — but a tool that publishes its own numbers still wins the digit
+        // for its shortcuts, which `activate_creation_slot` decides.
         if !editing
             && !self.modal_open()
             && !self.wheel.read(cx).is_open()

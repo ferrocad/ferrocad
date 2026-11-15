@@ -36,6 +36,17 @@ fn slot_labels_name_the_hand_they_equip() {
         [Slot::Move, Slot::PushPull, Slot::Fillet, Slot::Inspect],
         "Inspect is the last pill"
     );
+    assert_eq!(
+        Slot::ALL.map(Slot::key),
+        ["1", "2", "3", "0"],
+        "the Modify hand's digits"
+    );
+    assert_eq!(
+        CREATION_KEYS,
+        ["5", "6", "7", "8", "9"],
+        "the Add hand's pills continue past the Modify hand's slots: one digit space, \
+         so a press can never mean two things"
+    );
 }
 
 /// Select `reference` the way a click does, so the shell re-applies the loadout filter

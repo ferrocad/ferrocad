@@ -985,14 +985,14 @@ for _id, _command in (
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
     });
 
-    // `4` runs the first pill's tool; pressed again while that tool is the running one
+    // `5` runs the first pill's tool; pressed again while that tool is the running one
     // it opens the flyout instead. (No edition in this harness ships a real tool, so the
     // "running" half — which the key path only reads — is set directly.)
     model.lock().unwrap().status.clear();
-    press_root(&mut cx, &shell, "4");
+    press_root(&mut cx, &shell, "5");
     assert!(
         model.lock().unwrap().status.contains("Rectangle"),
-        "`4` runs the first pill's tool: {}",
+        "`5` runs the first pill's tool: {}",
         model.lock().unwrap().status
     );
     cx.update(|_window, cx| {
@@ -1000,10 +1000,10 @@ for _id, _command in (
             shell.active_tool = Some("Test_SketchTool".to_string())
         });
     });
-    press_root(&mut cx, &shell, "4");
+    press_root(&mut cx, &shell, "5");
     assert!(
         cx.debug_bounds("create-popover").is_some(),
-        "a second `4` opens that pill's flyout"
+        "a second `5` opens that pill's flyout"
     );
     assert!(
         cx.debug_bounds("create-row-Test_SketchTool").is_some(),
@@ -1035,6 +1035,53 @@ for _id, _command in (
             shell.active_tool = None;
         });
     });
+
+    // The same digit space keeps going: `6` is the Solid pill and `7` the Surface one, in
+    // strip order. Each press arms its own pill, and a second `6` while the Solid tool is
+    // the running one browses Solid rather than re-arming it.
+    model.lock().unwrap().status.clear();
+    press_root(&mut cx, &shell, "6");
+    assert!(
+        model.lock().unwrap().status.contains("Box"),
+        "`6` runs the second pill's tool: {}",
+        model.lock().unwrap().status
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
+        Some("Test_SolidTool".to_string()),
+        "and it is the armed one"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.active_tool = Some("Test_SolidTool".to_string())
+        });
+    });
+    press_root(&mut cx, &shell, "6");
+    assert!(
+        cx.debug_bounds("create-popover").is_some(),
+        "a second `6` opens the Solid pill's flyout"
+    );
+    assert!(
+        cx.debug_bounds("create-row-Test_SolidTool").is_some(),
+        "on the Solid tab"
+    );
+    assert!(
+        cx.debug_bounds("create-row-Test_SketchTool").is_none(),
+        "one category at a time"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.close_popover(cx);
+            shell.active_tool = None;
+        });
+    });
+    model.lock().unwrap().status.clear();
+    press_root(&mut cx, &shell, "7");
+    assert!(
+        model.lock().unwrap().status.contains("Loft"),
+        "`7` runs the third pill's tool: {}",
+        model.lock().unwrap().status
+    );
 
     // The wheel's commit is the *same* seam: a tool chosen from `Create ▸` fills its
     // pill and runs, so the next flick down the ring starts from what it loaded.
@@ -1078,4 +1125,3 @@ for _id, _command in (
     );
     assert!(cleanup.expect("remove the tools").ok);
 }
-

@@ -12,9 +12,10 @@
 //!   header (`Sketch | Solid | Surface | …`, empty categories omitted). Picking a tab
 //!   points that category's pill at the tool the category remembers, so the pill behind
 //!   the flyout already shows what the next click would arm. Picking a tool runs it.
-//! - `4`, `5`, … arm the pill at that position; pressing the same key again opens that
-//!   pill's flyout. The action dock carries a single `⊕ Create Dock ^` toggle, which
-//!   shows and hides the strip, so the strip is never mixed into the dock's own row.
+//! - `5`–`9` arm the pill at that position, continuing the Modify hand's `0`–`3` so one
+//!   digit space addresses both hands; pressing the same key again opens that pill's
+//!   flyout. The action dock carries a single `⊕ Create Dock ^` toggle, which shows and
+//!   hides the strip, so the strip is never mixed into the dock's own row.
 //!
 //! The radial menu's `Create ▸` commits through the same path, so a wheel flick loads a
 //! pill and arms the tool at the pointer.
@@ -29,7 +30,13 @@ use crate::shell::*;
 /// entry, in that order.
 pub(crate) const CREATION_SLOTS: usize = 5;
 /// The key labels, by pill position.
-pub(crate) const CREATION_KEYS: [&str; CREATION_SLOTS] = ["4", "5", "6", "7", "8"];
+///
+/// The two hands share one digit space: `0`–`3` equip the Modify hand's slots
+/// (`Slot::from_key`) and `5`–`9` arm the Add hand's pills, so the create dock is a
+/// loadout in exactly the sense the bottom-left bar is. `4` is deliberately unbound —
+/// it is the one digit between the two runs, and the shell leaves it to whatever owns
+/// the canvas rather than inventing a meaning for it.
+pub(crate) const CREATION_KEYS: [&str; CREATION_SLOTS] = ["5", "6", "7", "8", "9"];
 
 /// The Add hand's state: which tool each category remembers, the last tool armed, the
 /// flyout's tab, and whether the strip is showing.
@@ -131,12 +138,16 @@ impl Shell {
             .collect()
     }
 
-    /// Arm the pill at `index` (`4`, `5`, …), or open its flyout when it is armed.
+    /// Arm the pill at `index` (`5`, `6`, …), or open its flyout when it is armed.
     ///
     /// Returns whether the key was the Add hand's. A second press while **that pill's**
-    /// tool is the running one opens the flyout — "arm, then browse". A press while a
-    /// different tool owns the canvas is not ours, so the digit still reaches that
-    /// tool's own shortcuts and its numeric strip.
+    /// tool is the running one opens the flyout — "arm, then browse", the Add hand's
+    /// counterpart of Slot 1's re-press. The dock remembers the *command* it armed and
+    /// `active_tool` holds the *tool* that command started, so the two together are how
+    /// "this pill's tool is the one on the canvas" is spelled. A press while a different
+    /// tool owns the canvas is not ours, so the digit still reaches that tool's own
+    /// shortcuts and its numeric strip; a tool that publishes fields takes its digits
+    /// before this path is reached at all.
     pub(crate) fn activate_creation_slot(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
         let Some((category, command)) = self.creation_pills().into_iter().nth(index) else {
             return false;
@@ -312,5 +323,23 @@ mod tests {
         assert_eq!(dock.tab(), None, "hiding the strip closes its flyout");
         assert!(dock.toggle_expanded());
         assert_eq!(dock.tab(), None, "showing it again starts closed");
+    }
+
+    /// The Add hand's keys continue the Modify hand's: the loadout bar owns `0`–`3`, so
+    /// the pills start at `5` and neither hand can shadow the other's digits.
+    #[test]
+    fn the_pill_keys_continue_past_the_modify_hand() {
+        assert_eq!(CREATION_KEYS, ["5", "6", "7", "8", "9"]);
+        assert_eq!(CREATION_KEYS.len(), CREATION_SLOTS, "one key per pill");
+        for key in CREATION_KEYS {
+            assert!(
+                Slot::from_key(key).is_none(),
+                "`{key}` arms a create pill, not a Modify slot"
+            );
+        }
+        assert!(
+            Slot::from_key("4").is_none(),
+            "`4` is the gap between the two runs and stays unbound"
+        );
     }
 }

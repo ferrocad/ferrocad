@@ -7,7 +7,7 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "The browser host's scripting runtime switch: one RustAppBackend, no script half, RustPython or the page's JS"
+description = "The browser host's scripting runtime switch: one document backend, no script half, RustPython or the page's JS"
 keywords = ["cad", "freecad", "wasm"]
 categories = ["graphics"]
 documentation = "https://docs.rs/ferrocad_shell_web"
@@ -16,7 +16,7 @@ publish = false
 [dependencies]
 # The seam every configuration is composed from.
 ferrocad_shell_api.workspace = true
-# The document half: the same `RustAppBackend` a desktop edition installs.
+# The document half: the same `DocumentBackend` a desktop edition installs.
 ferrocad_shell_rust.workspace = true
 # The wasm-Python script half (RustPython). Plain Rust, so this crate and its
 # switch tests build for the host as well as the browser.

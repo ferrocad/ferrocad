@@ -7,7 +7,7 @@
 //! [`ferrocad_shell_web`](https://docs.rs/ferrocad_shell_web): a real
 //! `ferrocad_core::Document` whose geometry is built by the OCCT kernel compiled to
 //! wasm, so the tree, the property rows and the viewport all come from one document.
-//! The document half is the same `RustAppBackend` crate a desktop edition installs;
+//! The document half is the same `DocumentBackend` crate a desktop edition installs;
 //! this host adds the window, the page bridge, the file picker and the choice of
 //! scripting runtime (`?runtime=plain|pywasm|js`, see `ferrocad_shell_web`).
 //!
@@ -171,7 +171,7 @@ pub fn main() {
                 // The workbench surface a browser session gets: the same handles a
                 // desktop edition contributes (the parametric edition adds these two
                 // manipulators to `ferrocad::base_contributions`), and no interpreter
-                // is involved on either side — `RustAppBackend::apply_interaction`
+                // is involved on either side — `DocumentBackend::apply_interaction`
                 // applies the commits itself.
                 shell.set_contributions(contributions());
                 shell
@@ -295,7 +295,7 @@ fn probe_manipulator(cx: &mut gpui::App) {
 /// clients (`mods/GridOverlay`, `AxisOverlay`, `GizmoOverlay`) do register there since
 /// B18b. This probe runs at boot, though, before the page fetches a pack, so it reports
 /// the native provider alone. With an empty registry at that instant the facade's
-/// summaries are the closed empty case, which `RustAppBackend` treats as "not mine": the
+/// summaries are the closed empty case, which `DocumentBackend` treats as "not mine": the
 /// header names the native provider that draws the ground, and `registry` (the document
 /// half's `provider_features`) agrees. After the fetch both halves list the mods.
 fn probe_providers(cx: &mut gpui::App) {

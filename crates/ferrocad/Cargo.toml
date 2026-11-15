@@ -71,3 +71,7 @@ js = ["ferrocad_shell_python/js"]
 pywasm = ["ferrocad_shell_python/pywasm"]
 # `--addons`: sandboxed wasm workbenches beside any script half.
 addons = ["ferrocad_shell_python/addons"]
+# Compose the OCCT-backed document half. Off by default (this is the published base
+# app: `cargo install ferrocad` must not need a kernel); `ferrocad_parametric` and
+# `ferrocad_sculpt` enable it.
+part = ["ferrocad_shell_python/part"]

@@ -5,14 +5,14 @@
 //! ```
 
 use ferrocad_shell_api::app::AppBackend;
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_rust::PartEngine;
 use ferrocad_stage::{ShapeItem, Stage};
 
 fn main() -> Result<(), String> {
     let path = std::env::args()
         .nth(1)
         .ok_or_else(|| "usage: timing <model.FCStd>".to_string())?;
-    let mut backend = RustAppBackend::new();
+    let mut backend = PartEngine::backend();
     backend.bootstrap()?;
 
     let started = std::time::Instant::now();

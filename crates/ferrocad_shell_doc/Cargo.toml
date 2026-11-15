@@ -1,0 +1,30 @@
+[package]
+name = "ferrocad_shell_doc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "FerroCAD's kernel-free document half: a real ferrocad_core::Document behind the shell's AppBackend"
+keywords = ["cad", "freecad"]
+categories = ["graphics"]
+documentation = "https://docs.rs/ferrocad_shell_doc"
+
+[dependencies]
+# The engine: a real document, its property graph and its undo history. Pure
+# workspace crates below the geometry seam: no kernel, no OCCT, no C++.
+ferrocad_core.workspace = true
+# The interaction vocabulary a manipulator commit arrives in.
+ferrocad_stage.workspace = true
+# The seam and the command catalogue. Both are pure crates: no gpui, no CPython.
+ferrocad_shell_api.workspace = true
+# The Move form's values arrive as JSON, where they would arrive from Python.
+serde_json.workspace = true
+log = "0.4"
+
+[dev-dependencies]
+# The `ScriptHost` contract names a `Scene` and an `EventListener`; the tests write a
+# fake host, so they need the vocabulary even though the document half never does.
+ferrocad_inventor.workspace = true

@@ -20,7 +20,7 @@
 //! ```
 //!
 //! `entity` is the pick identity the stage uses for the object (`id + 1`, the same
-//! convention `RustAppBackend` assigns), so a display hook that answers for an object
+//! convention `DocumentBackend` assigns), so a display hook that answers for an object
 //! can echo it and a pick still resolves to the right name.
 //!
 //! `status` is the names of the property's flag mask, the way FreeCAD's
@@ -42,7 +42,7 @@ use serde_json::{Value, json};
 /// The active document and its shared handle, if one is open.
 ///
 /// The registry lock is released before the handle is locked, the same order
-/// `RustAppBackend` keeps: a callback that walks from the document back to the
+/// `DocumentBackend` keeps: a callback that walks from the document back to the
 /// registry must not deadlock against the other order.
 pub fn active() -> Option<(String, DocumentHandle)> {
     let registry = ferrocad_core::application()
@@ -108,7 +108,7 @@ pub fn object_value(object: &DocumentObject) -> Value {
         "name": object.name,
         "label": object.label,
         "type_id": object.type_id,
-        // The stage's pick identity (`RustAppBackend` assigns `id + 1`): a display
+        // The stage's pick identity (`DocumentBackend` assigns `id + 1`): a display
         // hook echoes it so a pick of its mesh resolves to this object's name.
         "entity": object.id as u32 + 1,
         "additional_type_ids": object.type_id.split("::").map(str::to_string).collect::<Vec<_>>(),

@@ -1,6 +1,6 @@
 //! The host settings store reaches the Python facade's parameter store.
 //!
-//! The browser's `FreeCAD.ParamGet` is memory-only. `RustAppBackend` hydrates its
+//! The browser's `FreeCAD.ParamGet` is memory-only. `DocumentBackend` hydrates its
 //! own appearance state from the host store, then seeds the same values into the
 //! script half before boot; without that, the facade's `appearance_view` answers
 //! with its defaults and overrides an imported settings file.

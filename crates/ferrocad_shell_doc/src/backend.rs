@@ -1,9 +1,8 @@
 //! The engine: a real `ferrocad_core::Document` behind `AppBackend`.
 //!
-//! The tree, the property rows and the viewport stage are read from one document,
-//! and the geometry is built by the OCCT kernel (compiled to wasm in the browser,
-//! linked natively on the desktop). Nothing here knows which: the host supplies the
-//! window (or none) and, when it has one, the file-picker hooks.
+//! The tree, the property rows and the viewport stage are read from one document.
+//! Nothing here knows which geometry kernel — if any — is behind it: the parts that
+//! need one are the [`DocumentEngine`] the host installs (see the crate docs).
 
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
@@ -12,11 +11,6 @@ use ferrocad_core::DocumentHandle;
 use ferrocad_core::{
     Document, Matrix4, ObjectId, Placement, Property, Quantity, Rotation, Unit, Vector3,
     status_names,
-};
-use ferrocad_geom::TessellationOptions;
-use ferrocad_occt::OcctBackend;
-use ferrocad_part::{
-    CHAMFER_TYPE, CUT_TYPE, EXTRUSION_TYPE, FILLET_TYPE, FUSE_TYPE, backend, shape_of,
 };
 use ferrocad_shell_api::app::{AppBackend, ScriptHost};
 use ferrocad_shell_api::catalog::{self, CommandDef, Executor};
@@ -35,6 +29,7 @@ use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
 use crate::appearance_settings;
 use crate::grid_settings;
+use crate::{DocumentEngine, NoEngine};
 
 /// The commands the Rust half answers, whose ids the catalogue names once.
 ///
@@ -67,7 +62,12 @@ const DRESS_UP: &str = "dress_up";
 /// The Part workbench's face push/pull stem (same contract as [`DRESS_UP`]).
 const PUSH_PULL: &str = "push_pull";
 
-/// The sample document's name (the window title and the status line use it).
+/// The one startup document's name (the window title and the status line use it).
+///
+/// The engine supplies the contents — the Part-backed one is the same checked-in
+/// archive `python/ferrocad_shell.bootstrap` opens on the desktop, embedded so a
+/// host with no `python/` tree on disk (the browser) still boots the identical
+/// document name, object tree and shape.
 const DOCUMENT: &str = "Sample";
 
 /// The prefix of a script-owned settings node (`Settings/Axis`, `Settings/Grid`).
@@ -81,19 +81,6 @@ const SETTINGS_NODE: &str = "Settings/";
 /// halves, including a backend only the page lists, which the facade itself can never
 /// name (its `_selected` falls back to priority for a value it does not register).
 const PROVIDER_GROUP: &str = "Mods/Providers";
-
-/// The one startup document both hosts boot.
-///
-/// It is the same checked-in archive `python/ferrocad_shell.bootstrap` opens on the
-/// desktop, embedded so a host with no `python/` tree on disk (the browser) still
-/// boots the identical document name, object tree and shape.
-const SAMPLE_FCSTD: &[u8] = include_bytes!("../../../python/ferrocad_shell/Sample.FCStd");
-
-/// The tessellation tolerance, in millimetres (the probe's).
-///
-/// It is `ferrocad_part::DISPLAY_DEFLECTION` so the document half and a display hook
-/// share one memo entry per shape (see that constant).
-const TOLERANCE: f64 = ferrocad_part::DISPLAY_DEFLECTION;
 
 /// The opaque steel grey the desktop Part workbench gives document solids.
 const DEFAULT_COLOR: [f32; 4] = [0.30, 0.34, 0.40, 1.0];
@@ -147,7 +134,7 @@ struct State {
 /// What one edit did, kept after the document borrow is released.
 ///
 /// Built inside the document closure (where the object ids are known) and announced
-/// by [`RustAppBackend::announce`] once the lock is gone, so a script callback cannot
+/// by [`DocumentBackend::announce`] once the lock is gone, so a script callback cannot
 /// re-enter a held document.
 struct EditReport {
     /// The transaction name (`Set property`, `Move`, …).
@@ -168,31 +155,52 @@ impl EditReport {
     }
 }
 
-/// The Rust `AppBackend`: a real document, no interpreter.
+/// The document half's `AppBackend`: a real document, no interpreter.
 ///
 /// A host installs one of these on the shell (the browser host does, and so does a
-/// desktop edition) instead of an interpreter-backed backend.
-pub struct RustAppBackend {
+/// desktop edition) instead of an interpreter-backed backend. Everything it does is
+/// kernel-free; [`engine`](Self::engine) is the only part that is not.
+pub struct DocumentBackend {
     state: RefCell<State>,
     /// Why the sample document could not be built, if it could not.
     boot_error: Option<String>,
     /// The scripting half, when the host augments this document with one (the JS
     /// surface, S7). The document half never needs it.
     script: Option<Box<dyn ferrocad_shell_api::app::ScriptHost>>,
+    /// The geometry half: object-type registration, the sample, meshing and the
+    /// Part feature edits a manipulator commit asks for. [`NoEngine`] in a build
+    /// that links no kernel.
+    engine: Box<dyn DocumentEngine>,
 }
 
-impl RustAppBackend {
-    /// Compose Part with the OCCT kernel and build the sample document.
+impl DocumentBackend {
+    /// The kernel-free backend: a real document and an empty sample.
     ///
-    /// In a wasm build this must run after the module's static constructors
-    /// (`__wasm_call_ctors`): the kernel's C++ runtime has to be initialised before
-    /// the first call.
+    /// A build with this backend opens and saves `.FCStd` files, keeps an undo
+    /// history and answers the whole `AppBackend` surface; it draws no stored shape,
+    /// because meshing one needs a kernel. A script half still supplies its own
+    /// meshes, which is how a kernel-free edition (the toy) draws anything at all.
     pub fn new() -> Self {
-        let (document, boot_error) = sample_document();
-        Self::isolated(DOCUMENT, document, boot_error)
+        Self::with_engine(NoEngine)
     }
 
-    /// Boot against the process-wide registry `ferrocad_py` binds to.
+    /// Compose `engine` and build its sample document.
+    ///
+    /// In a wasm build this must run after the module's static constructors
+    /// (`__wasm_call_ctors`): a kernel's C++ runtime has to be initialised before
+    /// the first call. A kernel-free engine has no such constraint.
+    pub fn with_engine(engine: impl DocumentEngine) -> Self {
+        let engine: Box<dyn DocumentEngine> = Box::new(engine);
+        let (document, boot_error) = engine.sample();
+        Self::isolated(DOCUMENT, document, boot_error, engine)
+    }
+
+    /// Boot against the process-wide registry `ferrocad_py` binds to, kernel-free.
+    pub fn from_shared_registry() -> Self {
+        Self::from_shared_registry_with(NoEngine)
+    }
+
+    /// Boot against the process-wide registry `ferrocad_py` binds to, with `engine`.
     ///
     /// Nothing is built here. [`bootstrap`](AppBackend::bootstrap) adopts whatever the
     /// registry holds — the document an interpreter created, or the sample when the
@@ -201,7 +209,7 @@ impl RustAppBackend {
     ///
     /// Nothing is captured either: every access reads the registry's active document,
     /// so a script that opens or closes one is visible on the next call.
-    pub fn from_shared_registry() -> Self {
+    pub fn from_shared_registry_with(engine: impl DocumentEngine) -> Self {
         Self {
             state: RefCell::new(State {
                 source: DocSource::SharedRegistry,
@@ -214,11 +222,22 @@ impl RustAppBackend {
             }),
             boot_error: None,
             script: None,
+            engine: Box::new(engine),
         }
     }
 
+    /// The geometry half this backend was composed with.
+    pub fn engine(&self) -> &dyn DocumentEngine {
+        self.engine.as_ref()
+    }
+
     /// A backend that owns `document` under `name`.
-    fn isolated(name: &str, document: Document, boot_error: Option<String>) -> Self {
+    fn isolated(
+        name: &str,
+        document: Document,
+        boot_error: Option<String>,
+        engine: Box<dyn DocumentEngine>,
+    ) -> Self {
         Self {
             state: RefCell::new(State {
                 source: DocSource::Isolated {
@@ -234,6 +253,7 @@ impl RustAppBackend {
             }),
             boot_error,
             script: None,
+            engine,
         }
     }
 
@@ -257,7 +277,7 @@ impl RustAppBackend {
 
     /// Add a scripting surface to this document backend.
     ///
-    /// The JS host (S7) is the first user: the document stays `RustAppBackend`, and
+    /// The JS host (S7) is the first user: the document stays `DocumentBackend`, and
     /// the script half is a [`ScriptHost`](ferrocad_shell_api::app::ScriptHost) that
     /// calls into the page. The shell finds it through `script_host()`, so
     /// `evaluate`, the event listener and the script's commands all work unchanged.
@@ -450,29 +470,17 @@ impl RustAppBackend {
         let feature = format!("{object}_{mode}");
         let transaction = format!("{mode} {object}");
         let edge = edge.to_string();
-        let type_id = if fillet { FILLET_TYPE } else { CHAMFER_TYPE };
         self.edit(|_, document| {
             if document.get_by_name(object).is_none() {
                 return Ok((apply_refused(format!("no object {object}")), None));
             }
-            let executed = in_transaction(document, &transaction, |document| {
-                let id = match document.get_by_name(&feature) {
-                    Some(id) => id,
-                    None => document.add_object(&feature, type_id),
-                };
-                document.set_property(
-                    id,
-                    "Base",
-                    Property::LinkSub(object.to_string(), vec![edge.clone()]),
-                )?;
-                if fillet {
-                    document.set_property(id, "Radius", length(first))?;
-                } else {
-                    document.set_property(id, "Distance", length(first))?;
-                    document.set_property(id, "Distance2", length(second))?;
-                }
-                document.recompute()
-            })?;
+            let executed = match in_transaction(document, &transaction, |document| {
+                self.engine
+                    .dress_up(document, object, &feature, &edge, first, second, fillet)
+            }) {
+                Ok(executed) => executed,
+                Err(error) => return Ok((apply_refused(error), None)),
+            };
             Ok((
                 ApplyResult {
                     ok: true,
@@ -488,16 +496,12 @@ impl RustAppBackend {
     }
 
     /// The face push/pull commit: extrude the named face and fuse or cut it into the
-    /// body — the same three objects the edition's Python provider builds.
+    /// body.
     ///
-    /// The sign of the distance decides, as it does there: outward is a fuse, inward a
-    /// cut. The extrusion is hidden and the boolean consumes its `Base`, so the body is
-    /// replaced rather than drawn beside its own result.
-    ///
-    /// No placement is copied onto the boolean: this path's display reads the stored
-    /// shape, and `Base`'s shape already carries the body's placement, so the operands
-    /// are in world space. (The Python provider re-applies placements itself, which is
-    /// why it copies one.)
+    /// The sign of the distance decides the transaction's name, and the engine builds
+    /// the extrusion and the boolean: outward is a fuse, inward a cut. The extrusion is
+    /// hidden and the boolean consumes its `Base`, so the body is replaced rather than
+    /// drawn beside its own result.
     fn push_pull(
         &mut self,
         commit: &InteractionCommit,
@@ -518,57 +522,23 @@ impl RustAppBackend {
         let transaction = format!("{} {object}", if outward { "Extrude" } else { "Pocket" });
         let extrusion_name = format!("{object}_Extrusion");
         let feature_name = format!("{object}_{}", if outward { "Fuse" } else { "Cut" });
-        let feature_type = if outward { FUSE_TYPE } else { CUT_TYPE };
         self.edit(|_, document| {
-            let Some(base) = document.get_by_name(object) else {
+            if document.get_by_name(object).is_none() {
                 return Ok((apply_refused(format!("no object {object}")), None));
+            }
+            let executed = match in_transaction(document, &transaction, |document| {
+                self.engine.push_pull(
+                    document,
+                    object,
+                    &extrusion_name,
+                    &feature_name,
+                    &face,
+                    distance,
+                )
+            }) {
+                Ok(executed) => executed,
+                Err(error) => return Ok((apply_refused(error), None)),
             };
-            // The face's outward normal, in the frame its shape is stored in.
-            let shape = match document
-                .object(base)
-                .and_then(|object| object.properties.get("Shape"))
-                .and_then(shape_of)
-                .and_then(|property| property.shape())
-            {
-                Some(shape) => shape,
-                None => {
-                    return Ok((apply_refused(format!("{object} has no shape")), None));
-                }
-            };
-            let Some(face_shape) = backend().resolve(&shape, &face) else {
-                return Ok((
-                    apply_refused(format!("{object} has no sub-shape {face}")),
-                    None,
-                ));
-            };
-            let Some(normal) = backend().planar_normal(&face_shape) else {
-                return Ok((apply_refused(format!("{face} is not a planar face")), None));
-            };
-            let executed = in_transaction(document, &transaction, |document| {
-                let extrusion = match document.get_by_name(&extrusion_name) {
-                    Some(id) => id,
-                    None => document.add_object(&extrusion_name, EXTRUSION_TYPE),
-                };
-                document.set_property(
-                    extrusion,
-                    "Base",
-                    Property::LinkSub(object.to_string(), vec![face.clone()]),
-                )?;
-                document.set_property(extrusion, "Dir", Property::Vector(normal))?;
-                document.set_property(extrusion, "Solid", Property::Bool(true))?;
-                document.set_property(extrusion, "LengthFwd", Property::Float(distance.abs()))?;
-                document.set_property(extrusion, "Reversed", Property::Bool(!outward))?;
-                // The boolean is what is drawn; the sweep is scaffolding.
-                hide_object(document, extrusion, Some(false));
-
-                let feature = match document.get_by_name(&feature_name) {
-                    Some(id) => id,
-                    None => document.add_object(&feature_name, feature_type),
-                };
-                document.set_property(feature, "Base", Property::Link(object.to_string()))?;
-                document.set_property(feature, "Tool", Property::Link(extrusion_name.clone()))?;
-                document.recompute()
-            })?;
             Ok((
                 ApplyResult {
                     ok: true,
@@ -671,13 +641,13 @@ impl RustAppBackend {
     }
 }
 
-impl Default for RustAppBackend {
+impl Default for DocumentBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AppBackend for RustAppBackend {
+impl AppBackend for DocumentBackend {
     fn bootstrap(&mut self) -> Result<Bootstrap, String> {
         if let Some(error) = self.boot_error.clone() {
             return Err(error);
@@ -705,7 +675,7 @@ impl AppBackend for RustAppBackend {
         // its own document never leaves the sample behind it.
         let shared = matches!(&self.state.borrow().source, DocSource::SharedRegistry);
         if shared && self.active_document().is_none() {
-            let (document, boot_error) = sample_document();
+            let (document, boot_error) = self.engine.sample();
             self.install_document(DOCUMENT, document);
             if let Some(error) = boot_error {
                 self.boot_error = Some(error.clone());
@@ -733,7 +703,10 @@ impl AppBackend for RustAppBackend {
         {
             return Ok(line);
         }
-        Ok("FerroCAD shell · Rust document backend · OCCT · no CPython".to_string())
+        Ok(format!(
+            "FerroCAD shell · Rust document backend · {} · no CPython",
+            self.engine.kernel()
+        ))
     }
 
     /// Replace the sample with a decoded `.FCStd` file.
@@ -742,7 +715,7 @@ impl AppBackend for RustAppBackend {
     /// outside the build. The saved shapes are recomputed so a file from another build
     /// cannot rely on geometry it did not rebuild here.
     fn open_document(&mut self, name: &str, bytes: &[u8]) -> Result<OpenedDocument, String> {
-        let document = decode_document(bytes)?;
+        let document = decode_document(self.engine.as_ref(), bytes)?;
         let objects = document.object_ids().len();
         // The registry path registers and activates it, so `FreeCAD.ActiveDocument` is
         // the file the shell just opened rather than a second copy of it.
@@ -889,25 +862,18 @@ impl AppBackend for RustAppBackend {
                 let Some(object) = document.object(id) else {
                     continue;
                 };
-                let Some(property) = object.properties.get("Shape").and_then(shape_of) else {
+                let Some(meshed) = self.engine.mesh(object) else {
                     continue;
                 };
-                if property.shape().is_none() {
-                    continue;
-                };
-                // The property memoises: a sync of an unchanged document copies, it
-                // does not re-mesh (the kernel meshes per face either way). `rigid` hands
-                // back the frame the mesh was built in plus the move that places it — the
-                // rows stay identical across a move, so the viewport patches packet
-                // transforms instead of re-emitting 1.24 M vertices.
-                // `rigid` hands back the frame the mesh was built in plus the move that
-                // places it — the rows stay identical across a move, so the viewport
-                // patches packet transforms instead of re-emitting 1.24 M vertices. The
-                // memo's `Arc` is what crosses the seam: the sync does not copy the
-                // mesh, and the synchroniser recognises an unchanged object by pointer.
-                let (mesh, placement) = property
-                    .tessellate_rigid(TOLERANCE, TessellationOptions::default().angular_deflection)
-                    .map_err(|error| format!("{}: {error}", object.name))?;
+                // The engine memoises: a sync of an unchanged document copies, it does
+                // not re-mesh (a kernel meshes per face either way). It hands back the
+                // frame the mesh was built in plus the move that places it — the rows
+                // stay identical across a move, so the viewport patches packet
+                // transforms instead of re-emitting 1.24 M vertices. The memo's `Arc` is
+                // what crosses the seam: the sync does not copy the mesh, and the
+                // synchroniser recognises an unchanged object by pointer.
+                let (mesh, placement) =
+                    meshed.map_err(|error| format!("{}: {error}", object.name))?;
                 meshes.push(StageMesh {
                     // A stable per-document pick id; `DisplaySync` maps it to the name.
                     entity: id as u32 + 1,
@@ -1773,7 +1739,7 @@ impl AppBackend for RustAppBackend {
 /// The generic gizmo commit: `values` are the 16 row-major elements of the
 /// world-space transform, composed on the left of the object's placement.
 fn apply_transform(
-    backend: &mut RustAppBackend,
+    backend: &mut DocumentBackend,
     commit: &InteractionCommit,
     object: &str,
 ) -> Result<ApplyResult, String> {
@@ -1878,7 +1844,7 @@ fn names_a_provider(
     backend.is_some() || label.is_some() || !providers.is_empty()
 }
 
-fn property_rows(object: &ferrocad_core::DocumentObject) -> Vec<PropRow> {
+pub fn property_rows(object: &ferrocad_core::DocumentObject) -> Vec<PropRow> {
     let mut rows = Vec::with_capacity(object.properties.len() + 1);
     // `Label` is a document-object field, not a property-container entry; FreeCAD
     // presents it as an ordinary row and so does the native backend.
@@ -2035,7 +2001,7 @@ fn current_placement(document: &Document, id: ObjectId) -> Option<Placement> {
 /// `stage_meshes` reads.
 ///
 /// The caller owns the transaction; this only writes the property.
-fn hide_object(document: &mut Document, id: ObjectId, visible: Option<bool>) -> Option<bool> {
+pub fn hide_object(document: &mut Document, id: ObjectId, visible: Option<bool>) -> Option<bool> {
     let object = document.object(id)?;
     let current = visibility_property(object)
         .or_else(|| object.view.as_ref().map(|view| view.visibility))
@@ -2166,72 +2132,18 @@ fn absorb_claim(into: &mut ViewRequest, claim: &ViewRequest) {
     }
 }
 
-/// Decode a saved document and rebuild it with the linked kernel.
+/// Decode a saved document and rebuild it with the engine's kernel.
 ///
-/// Registering Part first is what lets `decode_fcstd` restore
-/// `Part::PropertyPartShape` payloads through the property-type registry rather
-/// than skipping them. Registration is idempotent (`ferrocad_part` keeps the first
-/// backend), so this is the same path an opened file and the embedded sample take.
-fn decode_document(bytes: &[u8]) -> Result<Document, String> {
-    ferrocad_part::register(Arc::new(OcctBackend::new()));
+/// Asking the engine to register its object types first is what lets `decode_fcstd`
+/// restore a kernel-owned property payload through the property-type registry rather
+/// than skipping it. Registration is idempotent (an engine keeps the first backend),
+/// so this is the same path an opened file and the embedded sample take.
+fn decode_document(engine: &dyn DocumentEngine, bytes: &[u8]) -> Result<Document, String> {
+    engine.register_types();
     let saved = ferrocad_core::fcstd::decode_fcstd(bytes).map_err(|error| error.to_string())?;
     let mut document = Document::from_saved(&saved);
     document.recompute()?;
     Ok(document)
-}
-
-/// The sample document and why it failed to build, if it did.
-fn sample_document() -> (Document, Option<String>) {
-    let (document, boot_error) = match decode_document(SAMPLE_FCSTD) {
-        Ok(document) => {
-            log_shapes(&document);
-            (document, None)
-        }
-        Err(error) => {
-            log::error!("ferrocad: the sample document did not build: {error}");
-            (Document::new(), Some(error))
-        }
-    };
-    (document, boot_error)
-}
-
-/// Report the sample document's shapes: one line per tessellated object.
-///
-/// A feature the kernel refuses keeps its last good shape and records why; that is
-/// document state, so it is logged rather than treated as a failed boot. The
-/// triangle counts are the probe's "40 triangles" baseline, and make a silent
-/// tessellation change visible in the browser console.
-fn log_shapes(document: &Document) {
-    let backend = backend();
-    for id in document.object_ids() {
-        let Some(object) = document.object(id) else {
-            continue;
-        };
-        if object.invalid {
-            log::warn!(
-                "ferrocad: {} is invalid: {}",
-                object.name,
-                object.error.as_deref().unwrap_or("no reason recorded")
-            );
-        }
-        let Some(shape) = object
-            .properties
-            .get("Shape")
-            .and_then(shape_of)
-            .and_then(|property| property.shape())
-        else {
-            continue;
-        };
-        match backend.tessellate(&shape, &TessellationOptions::absolute(TOLERANCE)) {
-            Ok(mesh) => log::info!(
-                "ferrocad: {} · {} triangles, {} edges",
-                object.name,
-                mesh.triangles.len() / 3,
-                mesh.edges.len() / 2
-            ),
-            Err(error) => log::error!("ferrocad: {} did not tessellate: {error}", object.name),
-        }
-    }
 }
 
 /// The object's document `Visibility` switch, when it has one.
@@ -2296,10 +2208,6 @@ fn refused(error: String) -> SetResult {
     }
 }
 
-/// A millimetre length as the property a Part feature stores (`App::PropertyLength`).
-fn length(value: f64) -> Property {
-    Property::Quantity(Quantity::new(value, Unit::Millimeter))
-}
 
 /// A commit this half cannot apply, in the verdict shape the seam uses.
 fn apply_refused(error: impl Into<String>) -> ApplyResult {
@@ -2340,7 +2248,6 @@ mod tests {
     use std::sync::Mutex;
 
     use ferrocad_inventor::{EventListener, Scene};
-    use ferrocad_part::BOX_TYPE;
     use ferrocad_shell_api::app::{NoopListener, ScriptHost};
     use ferrocad_shell_api::events::DocumentEvent;
     use ferrocad_shell_api::settings::{SettingKind, SettingValue};
@@ -2606,7 +2513,7 @@ mod tests {
     ///
     /// The card is not a document — the shell never follows it, and it exists in a
     /// build with no documents at all — so a test about documents asks for these.
-    fn documents(backend: &RustAppBackend) -> Vec<DocumentNode> {
+    fn documents(backend: &DocumentBackend) -> Vec<DocumentNode> {
         backend
             .model_tree()
             .unwrap()
@@ -2615,10 +2522,71 @@ mod tests {
             .collect()
     }
 
-    fn backend_with_script() -> (RustAppBackend, Arc<Recorded>) {
+    /// A test engine whose sample is one `Box` that recomputes.
+    ///
+    /// The document half's own sample is empty (it links no kernel), but a test that
+    /// asserts an edit, an undo announcement or a typed move needs an object that
+    /// recomputes and carries `Length`/`Placement`. This is the smallest such
+    /// fixture: one registered type, no geometry.
+    struct SampleBox;
+
+    impl ferrocad_core::object_registry::ObjectType for SampleBox {
+        fn default_properties(&self) -> Vec<(String, Property, u32)> {
+            vec![
+                (
+                    "Length".to_string(),
+                    Property::Quantity(Quantity::new(10.0, Unit::Millimeter)),
+                    ferrocad_core::prop_status::NONE,
+                ),
+                (
+                    "Placement".to_string(),
+                    Property::Placement(Placement::identity()),
+                    ferrocad_core::prop_status::NONE,
+                ),
+            ]
+        }
+    }
+
+    impl DocumentEngine for SampleBox {
+        fn register_types(&self) {
+            ferrocad_core::object_registry::register("Test::Box", Arc::new(SampleBox));
+            ferrocad_core::object_registry::register("Test::Fillet", Arc::new(SampleFillet));
+        }
+
+        fn sample(&self) -> (Document, Option<String>) {
+            self.register_types();
+            let mut document = Document::new();
+            document.add_object("Box", "Test::Box");
+            // A dependency, so a recompute of the box also executes the feature that
+            // consumes it — the announcement test is about that path, not one object.
+            let fillet = document.add_object("Fillet", "Test::Fillet");
+            let _ = document.set_property(
+                fillet,
+                "Base",
+                Property::LinkSub("Box".to_string(), Vec::new()),
+            );
+            let _ = document.recompute();
+            (document, None)
+        }
+    }
+
+    /// The fixture's dependent feature: it links `Box` and recomputes after it.
+    struct SampleFillet;
+
+    impl ferrocad_core::object_registry::ObjectType for SampleFillet {
+        fn default_properties(&self) -> Vec<(String, Property, u32)> {
+            vec![(
+                "Base".to_string(),
+                Property::LinkSub(String::new(), Vec::new()),
+                ferrocad_core::prop_status::NONE,
+            )]
+        }
+    }
+
+    fn backend_with_script() -> (DocumentBackend, Arc<Recorded>) {
         let log = Arc::new(Recorded::default());
-        let backend =
-            RustAppBackend::new().with_script_host(Box::new(FakeHost { log: log.clone() }));
+        let backend = DocumentBackend::with_engine(SampleBox)
+            .with_script_host(Box::new(FakeHost { log: log.clone() }));
         (backend, log)
     }
 
@@ -2699,7 +2667,7 @@ mod tests {
             .set(grid_settings::GROUP, "enabled", true.into())
             .unwrap();
 
-        let _backend = RustAppBackend::new()
+        let _backend = DocumentBackend::new()
             .with_script_host(Box::new(FakeHost { log: log.clone() }))
             .with_settings_backend(Box::new(settings));
 
@@ -2891,7 +2859,7 @@ mod tests {
     fn a_provider_switch_is_stored_where_both_halves_read_it() {
         let log = Arc::new(Recorded::default());
         let settings = MemorySettings::default();
-        let mut backend = RustAppBackend::new()
+        let mut backend = DocumentBackend::new()
             .with_script_host(Box::new(SwitchHost::new(log.clone())))
             .with_settings_backend(Box::new(settings.clone()));
 
@@ -2918,7 +2886,7 @@ mod tests {
     fn a_popover_switch_is_stored_as_well() {
         let log = Arc::new(Recorded::default());
         let settings = MemorySettings::default();
-        let mut backend = RustAppBackend::new()
+        let mut backend = DocumentBackend::new()
             .with_script_host(Box::new(SwitchHost::new(log.clone())))
             .with_settings_backend(Box::new(settings.clone()));
 
@@ -2960,11 +2928,11 @@ mod tests {
                 .unwrap();
             let host = Box::new(SwitchHost::new(log.clone()));
             let backend = if store_first {
-                RustAppBackend::new()
+                DocumentBackend::new()
                     .with_settings_backend(Box::new(settings.clone()))
                     .with_script_host(host)
             } else {
-                RustAppBackend::new()
+                DocumentBackend::new()
                     .with_script_host(host)
                     .with_settings_backend(Box::new(settings.clone()))
             };
@@ -3010,7 +2978,7 @@ mod tests {
                 SettingValue::String("js".to_string()),
             )
             .unwrap();
-        let mut backend = RustAppBackend::new()
+        let mut backend = DocumentBackend::new()
             .with_script_host(Box::new(SwitchHost::unbooted(log.clone())))
             .with_settings_backend(Box::new(settings));
         assert!(
@@ -3066,7 +3034,7 @@ mod tests {
             .apply(&appearance_settings::request(&settings))
             .unwrap();
 
-        let backend = RustAppBackend::new().with_settings_backend(Box::new(settings));
+        let backend = DocumentBackend::new().with_settings_backend(Box::new(settings));
         let view = backend.state.borrow().view.clone();
         assert!(view.grid, "the stored toggle hydrated at install");
         assert_eq!(view.grid_minor, 20.0);
@@ -3353,7 +3321,7 @@ mod tests {
     /// listing nothing here is what made the browser's Dev Tools say there were none.
     #[test]
     fn without_a_script_the_registry_names_the_document_halfs_providers() {
-        let backend = RustAppBackend::new();
+        let backend = DocumentBackend::new();
         let features = backend.provider_features().unwrap();
         let names: Vec<&str> = features
             .iter()
@@ -3384,7 +3352,7 @@ mod tests {
     /// axis cross. Same rule as the grid card's provider.
     #[test]
     fn without_a_script_the_axis_summary_names_the_native_provider() {
-        let backend = RustAppBackend::new();
+        let backend = DocumentBackend::new();
         let summary = backend.axis_summary().unwrap();
         assert_eq!(summary.feature, "axis");
         assert_eq!(summary.backend.as_deref(), Some("ferrocad"));
@@ -3448,7 +3416,7 @@ mod tests {
             }
         }
 
-        let backend = RustAppBackend::new().with_script_host(Box::new(EmptyProviders));
+        let backend = DocumentBackend::new().with_script_host(Box::new(EmptyProviders));
         let grid = backend.grid_summary().unwrap();
         assert_eq!(grid.backend.as_deref(), Some("ferrocad"));
         assert_eq!(grid.label.as_deref(), Some("FerroCAD (native)"));
@@ -3462,7 +3430,7 @@ mod tests {
     /// and the card it opens is the document half's (B13).
     #[test]
     fn the_grid_settings_command_selects_the_card_with_no_interpreter() {
-        let mut backend = RustAppBackend::new();
+        let mut backend = DocumentBackend::new();
         let commands = backend.commands().unwrap();
         let row = commands
             .iter()
@@ -3495,7 +3463,7 @@ mod tests {
     /// decides between the card and its headless modal (B13b).
     #[test]
     fn a_script_that_implements_the_grid_settings_verb_answers_first() {
-        let mut backend = RustAppBackend::new().with_script_host(Box::new(GridSettingsHost));
+        let mut backend = DocumentBackend::new().with_script_host(Box::new(GridSettingsHost));
         let outcome = backend
             .run_command(catalog::VIEW_GRID_SETTINGS)
             .expect("the verb answers");
@@ -3542,7 +3510,7 @@ mod tests {
 
     #[test]
     fn without_a_script_the_document_answers_alone() {
-        let mut backend = RustAppBackend::new();
+        let mut backend = DocumentBackend::new();
         let tree = backend.model_tree().unwrap();
         // The document, plus the grid card: the shell's presentation state needs no
         // interpreter to be configured, and `?runtime=plain` has no other source.
@@ -3576,7 +3544,7 @@ mod tests {
     /// mutate the state itself, because the shell owns it and pushes it back.
     #[test]
     fn a_grid_row_write_asks_the_shell_for_the_change() {
-        let mut backend = RustAppBackend::new();
+        let mut backend = DocumentBackend::new();
         let before = backend.properties(SETTINGS_GRID).unwrap();
         assert_eq!(
             before
@@ -3654,8 +3622,8 @@ mod tests {
     /// A shared-registry backend that has booted.
     ///
     /// Nothing is built before `bootstrap()`, so a shared test starts with the run.
-    fn shared() -> RustAppBackend {
-        let mut backend = RustAppBackend::from_shared_registry();
+    fn shared() -> DocumentBackend {
+        let mut backend = DocumentBackend::from_shared_registry();
         backend.bootstrap().expect("boot the sample");
         backend
     }
@@ -3663,7 +3631,7 @@ mod tests {
     #[test]
     fn an_empty_registry_gets_the_sample() {
         let _serial = clear_registry();
-        let mut backend = RustAppBackend::from_shared_registry();
+        let mut backend = DocumentBackend::from_shared_registry();
         // Constructing the backend builds nothing: a script half boots *after* the
         // constructor runs, and a sample document sitting in front of the one it
         // creates is exactly the drift the merge exists to end.
@@ -3675,7 +3643,9 @@ mod tests {
         let tree = documents(&backend);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].name, DOCUMENT);
-        assert!(tree[0].objects.iter().any(|object| object.name == "Box"));
+        // The kernel-free engine's sample is an empty document: a build with no
+        // geometry kernel still boots a document, it just has nothing to draw.
+        assert!(tree[0].objects.is_empty(), "{tree:?}");
     }
 
     #[test]
@@ -3708,7 +3678,7 @@ mod tests {
 
             fn bootstrap(&self) -> Result<Option<Bootstrap>, String> {
                 let mut document = Document::new();
-                document.add_object("FromHost", BOX_TYPE);
+                document.add_object("FromHost", "App::FeaturePython");
                 registry().insert_document("FromHost", document);
                 Ok(Some(Bootstrap {
                     version: "9.9".to_string(),
@@ -3718,7 +3688,7 @@ mod tests {
             }
         }
 
-        let mut backend = RustAppBackend::from_shared_registry().with_script_host(Box::new(Boots));
+        let mut backend = DocumentBackend::from_shared_registry().with_script_host(Box::new(Boots));
         let boot = backend.bootstrap().unwrap();
         assert_eq!(boot.backend, "script");
         assert_eq!(boot.document, "FromHost");
@@ -3737,10 +3707,10 @@ mod tests {
         // shell must display *that* one, not build a sample beside it.
         {
             let mut document = Document::new();
-            document.add_object("Imported", BOX_TYPE);
+            document.add_object("Imported", "App::FeaturePython");
             registry().insert_document("FromPython", document);
         }
-        let mut backend = RustAppBackend::from_shared_registry();
+        let mut backend = DocumentBackend::from_shared_registry();
         assert_eq!(backend.bootstrap().unwrap().document, "FromPython");
         let tree = documents(&backend);
         assert_eq!(tree.len(), 1);
@@ -3760,7 +3730,15 @@ mod tests {
         // A file written by one backend and opened by another: the same path the
         // browser host takes with bytes from its picker.
         let bytes = {
-            let source = RustAppBackend::new();
+            let source = DocumentBackend::new();
+            // A document with content, so the re-open proves the tree came from the
+            // file rather than from an empty sample.
+            source
+                .edit(|_, document| {
+                    document.add_object("Imported", "App::FeaturePython");
+                    Ok(((), None))
+                })
+                .unwrap();
             source.save_document().unwrap()
         };
         let mut backend = shared();
@@ -3778,7 +3756,7 @@ mod tests {
     fn reopening_a_name_keeps_the_registry_handle() {
         let _serial = clear_registry();
         let bytes = {
-            let source = RustAppBackend::new();
+            let source = DocumentBackend::new();
             source.save_document().unwrap()
         };
         let mut backend = shared();
@@ -3789,32 +3767,6 @@ mod tests {
         // Replacing the contents inside the same handle is what keeps a `PyDocument`
         // wrapper (and anything else holding the document) valid across a re-open.
         assert!(Arc::ptr_eq(&before, &after));
-    }
-
-    #[test]
-    fn an_edit_and_its_undo_run_against_the_registry_document() {
-        let _serial = clear_registry();
-        let mut backend = shared();
-        let handle = registry().get(DOCUMENT).unwrap();
-        let length = |document: &Document| {
-            property_rows(
-                document
-                    .object(document.get_by_name("Box").unwrap())
-                    .unwrap(),
-            )
-            .into_iter()
-            .find(|row| row.name == "Length")
-            .map(|row| row.value)
-        };
-        let original = length(&lock(&handle)).unwrap();
-
-        assert!(backend.set_property("Box", "Length", "7").unwrap().ok);
-        assert_ne!(length(&lock(&handle)).unwrap(), original);
-
-        assert!(backend.run_command(UNDO).unwrap().ok);
-        // Read through the registry's own handle: the undo reached the document the
-        // Python wrappers hold, not a copy of it.
-        assert_eq!(length(&lock(&handle)).unwrap(), original);
     }
 
     #[test]
@@ -3836,126 +3788,4 @@ mod tests {
         assert!(backend.set_visibility("Box", None).is_err());
     }
 
-    /// Whether `name` holds a shape, in the document the registry serves.
-    fn has_shape(document: &Document, name: &str) -> bool {
-        document
-            .get_by_name(name)
-            .and_then(|id| document.object(id))
-            .and_then(|object| object.properties.get("Shape"))
-            .and_then(shape_of)
-            .and_then(|property| property.shape())
-            .is_some()
-    }
-
-    #[test]
-    fn a_dress_up_commit_builds_the_feature_with_no_interpreter() {
-        let _serial = clear_registry();
-        let mut backend = shared();
-
-        let commit = InteractionCommit::new(DRESS_UP, 1, "fillet")
-            .with_element("Edge1")
-            .with_values([2.0]);
-        let result = backend.apply_interaction(&commit, "Box").unwrap();
-        assert!(result.ok, "{}", result.error);
-
-        let handle = registry().get(DOCUMENT).unwrap();
-        {
-            let document = lock(&handle);
-            let id = document.get_by_name("Box_Fillet").expect("the feature");
-            assert_eq!(document.object(id).unwrap().type_id, FILLET_TYPE);
-            assert!(has_shape(&document, "Box_Fillet"), "the fillet built");
-            // The scrub's radius is the row the pane would show.
-            match document.object(id).unwrap().properties.get("Radius") {
-                Some(Property::Quantity(value)) => {
-                    assert!((value.value_mm() - 2.0).abs() < 1e-9)
-                }
-                other => panic!("a length radius, got {other:?}"),
-            }
-        }
-
-        // The same commit again reuses the feature: a drag must not leave one per frame.
-        // The guard is scoped: `apply_interaction` takes the same document lock.
-        let commit = commit.with_values([3.0]);
-        assert!(backend.apply_interaction(&commit, "Box").unwrap().ok);
-        let document = lock(&handle);
-        let fillets = document
-            .object_ids()
-            .iter()
-            .filter(|id| {
-                document
-                    .object(**id)
-                    .is_some_and(|object| object.type_id == FILLET_TYPE)
-            })
-            .count();
-        // The sample's own `Fillet` plus `Box_Fillet`.
-        assert_eq!(fillets, 2);
-    }
-
-    #[test]
-    fn a_chamfer_commit_writes_both_distances() {
-        let _serial = clear_registry();
-        let mut backend = shared();
-        let commit = InteractionCommit::new(DRESS_UP, 1, "chamfer")
-            .with_element("Edge1")
-            .with_values([1.5, 0.5]);
-        assert!(backend.apply_interaction(&commit, "Box").unwrap().ok);
-
-        let handle = registry().get(DOCUMENT).unwrap();
-        let document = lock(&handle);
-        let id = document.get_by_name("Box_Chamfer").expect("the feature");
-        assert_eq!(document.object(id).unwrap().type_id, CHAMFER_TYPE);
-        for (name, expected) in [("Distance", 1.5), ("Distance2", 0.5)] {
-            match document.object(id).unwrap().properties.get(name) {
-                Some(Property::Quantity(value)) => {
-                    assert!((value.value_mm() - expected).abs() < 1e-9, "{name}")
-                }
-                other => panic!("{name} is a length, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn a_push_pull_commit_extrudes_a_face_and_fuses_it_with_no_interpreter() {
-        let _serial = clear_registry();
-        let mut backend = shared();
-
-        let commit = InteractionCommit::new(PUSH_PULL, 1, "extrude")
-            .with_element("Face1")
-            .with_values([3.0]);
-        let result = backend.apply_interaction(&commit, "Box").unwrap();
-        assert!(result.ok, "{}", result.error);
-
-        let handle = registry().get(DOCUMENT).unwrap();
-        {
-            let document = lock(&handle);
-            let sweep = document.get_by_name("Box_Extrusion").expect("the sweep");
-            assert_eq!(document.object(sweep).unwrap().type_id, EXTRUSION_TYPE);
-            // The boolean is what is drawn; the sweep is scaffolding, so it is hidden.
-            assert!(!ferrocad_core::is_visible(document.object(sweep).unwrap()));
-            assert!(has_shape(&document, "Box_Extrusion"));
-
-            let id = document.get_by_name("Box_Fuse").expect("the boolean");
-            assert_eq!(document.object(id).unwrap().type_id, FUSE_TYPE);
-            assert!(has_shape(&document, "Box_Fuse"));
-            // The boolean consumes the body and links its tool.
-            assert!(
-                document
-                    .object(id)
-                    .unwrap()
-                    .properties
-                    .get("Tool")
-                    .is_some()
-            );
-        }
-
-        // Inward is a cut, with its own feature name (guard scoped: the commit locks).
-        let commit = InteractionCommit::new(PUSH_PULL, 1, "pocket")
-            .with_element("Face1")
-            .with_values([-2.0]);
-        assert!(backend.apply_interaction(&commit, "Box").unwrap().ok);
-        let document = lock(&handle);
-        let id = document.get_by_name("Box_Cut").expect("the cut");
-        assert_eq!(document.object(id).unwrap().type_id, CUT_TYPE);
-        assert!(has_shape(&document, "Box_Cut"));
-    }
 }

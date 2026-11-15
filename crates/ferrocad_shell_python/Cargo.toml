@@ -34,8 +34,11 @@ ferrocad_shell_api.workspace = true
 # The seam over the interpreter: the CPython half is one `PythonRuntime` impl, so the
 # same 35 `ScriptHost` methods serve RustPython (B18).
 ferrocad_python_host.workspace = true
-# The document half the desktop composes this crate's `PythonScriptHost` with.
-ferrocad_shell_rust.workspace = true
+# The document half the desktop composes this crate's `PythonScriptHost` with. By
+# default it is the kernel-free backend; the `part` feature adds the OCCT engine for
+# an edition that links the Part workbench (`ferrocad/part`).
+ferrocad_shell_doc.workspace = true
+ferrocad_shell_rust = { workspace = true, optional = true }
 bite-gpui = { version = "=1.25.203" }
 # Embedding CPython in the host (not the extension-module mode).
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
@@ -65,6 +68,10 @@ ferrocad_shell_pywasm = { workspace = true, optional = true }
 ferrocad_shell_wasm = { workspace = true, optional = true }
 
 [features]
+# Compose the OCCT-backed document half. Off by default so the base app and the toy
+# edition stay kernel-free; `ferrocad_parametric` and `ferrocad_sculpt` enable it
+# through `ferrocad/part`.
+part = ["dep:ferrocad_shell_rust"]
 # Compose `--script-host=js`. Off at this crate; the desktop app's default feature
 # set enables it. It compiles QuickJS as C.
 js = ["dep:ferrocad_shell_js", "dep:ferrocad_doc_api", "ferrocad_shell_js/desktop"]

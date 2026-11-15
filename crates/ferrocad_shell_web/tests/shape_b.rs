@@ -5,7 +5,7 @@
 //! calling [`DocumentApi`] — so the test exercises the whole chain the browser uses:
 //!
 //! ```text
-//! addon ──▶ DocApi ──▶ ferrocad_core (one registry) ──▶ RustAppBackend::stage_meshes
+//! addon ──▶ DocApi ──▶ ferrocad_core (one registry) ──▶ DocumentBackend::stage_meshes
 //! ```
 //!
 //! The object it draws is `App::FeaturePython`: in the tree, no `Shape`, so the
@@ -135,7 +135,7 @@ impl ScriptHost for DoorwayHost {
 
 fn compose(seen: Arc<Mutex<Vec<Vec<String>>>>) -> (Arc<dyn DocumentApi>, Box<dyn AppBackend>) {
     let api: Arc<dyn DocumentApi> = Arc::new(ferrocad_doc_api::DocApi::new());
-    let backend = ferrocad_shell_rust::RustAppBackend::from_shared_registry().with_script_host(
+    let backend = ferrocad_shell_rust::PartEngine::shared_backend().with_script_host(
         Box::new(DoorwayHost {
             api: Arc::clone(&api),
             seen,

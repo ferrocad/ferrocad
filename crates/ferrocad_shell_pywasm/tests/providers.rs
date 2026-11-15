@@ -231,7 +231,7 @@ FerroCADGui.registerProvider('grid', 'demo', 'Demo Grid', settings=[{'name': 'sp
 }
 
 /// A fresh interpreter has no provider: the closed empty summary is what the document half
-/// defers on (`RustAppBackend`'s `names_a_provider`), so it must stay empty rather than
+/// defers on (`DocumentBackend`'s `names_a_provider`), so it must stay empty rather than
 /// inventing one.
 #[test]
 fn an_empty_registry_claims_nothing() {

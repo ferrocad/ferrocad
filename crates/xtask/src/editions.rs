@@ -94,21 +94,6 @@ const GEOMETRY_SEAM: &str = "ferrocad_geom";
 /// or through a heavier crate — is the leak the rules are about.
 const SEAM_ONLY: &[&str] = &["ferrocad_curves", "ferrocad_mesh"];
 
-/// Editions whose forbidden list is relaxed to "not *directly*", because they
-/// compose the desktop shell host.
-///
-/// Since `486a985` (`ferrocad_shell_python` → `ferrocad_shell_rust`, the S9
-/// composition) the shell's document half links the Part engine and the kernel, so
-/// every edition that embeds the host reaches them. The promise the rule can still
-/// keep is narrower and is the one that matters: an edition may reach the engine
-/// *only* through the host it composes, never by a dependency of its own. The full
-/// kernel-free base needs the document half split out of `ferrocad_shell_rust`, and
-/// that is recorded in `docs/project/TODO-15-11-2026.md` §P5.
-const COMPOSED_DOCUMENT_HALF: &[(&str, &str)] = &[
-    ("ferrocad", "ferrocad_shell_python"),
-    ("ferrocad_toy", "ferrocad_shell_python"),
-];
-
 /// One edition's dependency rule.
 #[derive(Debug, Clone, Copy)]
 struct Rule {
@@ -147,14 +132,13 @@ const RULES: &[Rule] = &[
     Rule {
         package: "ferrocad_shell_python",
         reason: "the CPython host must not link a Python extension or a workbench's GUI",
-        // It composes the document half (`ferrocad_shell_rust`), and Part and the
-        // kernel arrive through it — that is the S9 composition, not a leak, so the
-        // "below Part" rule this entry used to carry no longer described the crate.
-        // What it must never reach is a Python extension module (the same types
-        // registered twice) or a workbench's manipulator crate, which belongs to an
-        // edition.
+        // It composes the kernel-free `ferrocad_shell_doc`; the Part engine is behind
+        // its `part` feature, which only an edition that links the Part workbench
+        // turns on. What it must never reach is a Python extension module (the same
+        // types registered twice) or a workbench's manipulator crate, which belongs to
+        // an edition.
         forbidden: &["ferrocad_part_py", "ferrocad_mesh_py", "ferrocad_part_gui"],
-        required: &["ferrocad_shell_rust"],
+        required: &[],
     },
     Rule {
         package: "ferrocad_stage",
@@ -529,19 +513,12 @@ fn path_avoiding(closure: &Closure, from: &str, to: &str, avoid: &[&str]) -> Opt
 /// The route that makes `krate` a violation, if any.
 ///
 /// A violation is a route that avoids every intermediate the arrangement allows:
-/// [`GEOMETRY_SEAM`] for a [`SEAM_ONLY`] crate, and [`COMPOSED_DOCUMENT_HALF`]'s
-/// host for the editions that compose it. A crate reachable *only* through those is
-/// the documented arrangement, so no route comes back.
+/// [`GEOMETRY_SEAM`] for a [`SEAM_ONLY`] crate. A crate reachable *only* through the
+/// seam is the documented arrangement, so no route comes back.
 fn offending_route(closure: &Closure, from: &str, krate: &str) -> Option<Vec<String>> {
     let mut avoid: Vec<&str> = Vec::new();
     if SEAM_ONLY.contains(&krate) && krate != GEOMETRY_SEAM {
         avoid.push(GEOMETRY_SEAM);
-    }
-    if let Some((_, via)) = COMPOSED_DOCUMENT_HALF
-        .iter()
-        .find(|(edition, _)| *edition == from)
-    {
-        avoid.push(via);
     }
     path_avoiding(closure, from, krate, &avoid)
 }
@@ -561,13 +538,8 @@ fn check_rules(
                 continue;
             }
             let route = offending_route(closure, rule.package, krate);
-            if route.is_none()
-                && (SEAM_ONLY.contains(&krate.as_str())
-                    || COMPOSED_DOCUMENT_HALF
-                        .iter()
-                        .any(|(edition, _)| *edition == rule.package))
-            {
-                // Reachable only through the documented intermediate.
+            if route.is_none() && SEAM_ONLY.contains(&krate.as_str()) {
+                // Reachable only through the documented seam.
                 continue;
             }
             let mut message = format!(

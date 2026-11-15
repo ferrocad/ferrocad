@@ -18,7 +18,7 @@ use ferrocad_occt::OcctBackend;
 /// The active document in `ferrocad_core`'s registry, as JSON (`null` when none).
 ///
 /// The registry lock is released before the document is locked — the same order
-/// `RustAppBackend` keeps, so a callback walking the other way cannot deadlock.
+/// `DocumentBackend` keeps, so a callback walking the other way cannot deadlock.
 pub use ferrocad_doc_api::payload::active_json as active;
 
 /// The sample document's name.

@@ -1,10 +1,10 @@
 //! The CPython half of the [`ScriptHost`] seam.
 //!
-//! [`RustAppBackend`](ferrocad_shell_rust::RustAppBackend) is the document half; this is
+//! [`DocumentBackend`](ferrocad_shell_doc::DocumentBackend) is the document half; this is
 //! the script half alone, so the two compose into the desktop's engine:
 //!
 //! ```text
-//! RustAppBackend::from_shared_registry()
+//! DocumentBackend::from_shared_registry()
 //!     .with_script_host(Box::new(PythonScriptHost))
 //! ```
 //!
@@ -21,7 +21,7 @@
 //!
 //! # What is deliberately *not* here
 //!
-//! The five merged methods of `RustAppBackend` (`model_tree`, `properties`,
+//! The five merged methods of `DocumentBackend` (`model_tree`, `properties`,
 //! `set_property`, `dialog_accept`, `dialog_cancel`) are not implemented as `AppBackend`
 //! calls here. The document half owns them and asks this half only for the part it cannot
 //! answer, through [`extra_tree_nodes`], [`extra_properties`] and [`set_extra_property`] —

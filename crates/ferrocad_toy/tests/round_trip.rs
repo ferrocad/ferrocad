@@ -279,7 +279,11 @@ fn the_toy_workbench_creates_represents_manipulates_and_records() {
     let _ = std::fs::remove_file(&path);
     let path = path.to_string_lossy().to_string();
     evaluate(&format!("doc.saveAs({path:?})"));
-    evaluate("FreeCAD.closeDocument('Toy')");
+    // The sample asset names the document; close it by the name it actually has
+    // rather than assuming the edition's title.
+    let name = evaluate("doc.Name").trim().to_string();
+    // `evaluate` prints the value's repr, which for a string already carries quotes.
+    evaluate(&format!("FreeCAD.closeDocument({name})"));
     evaluate(&format!("FreeCAD.openDocument({path:?})"));
 
     let displayed = meshes();

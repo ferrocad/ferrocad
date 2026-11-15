@@ -1,7 +1,7 @@
 //! One startup document, loaded by both hosts.
 //!
 //! The desktop's app script opens `python/ferrocad_shell/Sample.FCStd` from disk;
-//! `RustAppBackend` decodes the same archive from its embedded bytes (the browser's
+//! `DocumentBackend` decodes the same archive from its embedded bytes (the browser's
 //! path). This test boots both in one process and compares the document name, the
 //! object tree, the object types and the dimensions a user sees in the property pane.
 
@@ -10,7 +10,7 @@ use std::sync::{Mutex, Once};
 use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_python::{PythonScriptHost, python};
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_rust::{DocumentBackend, PartEngine};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
 /// The interpreter and the document registry are process-wide.
@@ -19,8 +19,8 @@ static PYTHON: Mutex<()> = Mutex::new(());
 /// The modules are built into the interpreter, which must happen before it starts.
 static BOOT: Once = Once::new();
 
-/// The desktop composition: `RustAppBackend` over the registry the interpreter fills.
-fn desktop() -> RustAppBackend {
+/// The desktop composition: `DocumentBackend` over the registry the interpreter fills.
+fn desktop() -> DocumentBackend {
     BOOT.call_once(|| {
         ferrocad_combined_py::register_builtins();
         // Headless: the parameter store stays in memory, so a test run never writes
@@ -28,7 +28,7 @@ fn desktop() -> RustAppBackend {
         python::configure("ferrocad_shell", &[], &[], false);
     });
     let mut backend =
-        RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost));
+        PartEngine::shared_backend().with_script_host(Box::new(PythonScriptHost));
     backend.bootstrap().expect("the desktop sample boots");
     backend
 }
@@ -75,7 +75,7 @@ fn min_x(stage: &[StageMesh]) -> f64 {
 fn the_desktop_and_the_browser_boot_one_sample() {
     let _guard = PYTHON.lock().unwrap_or_else(|error| error.into_inner());
     let desktop = desktop();
-    let browser = RustAppBackend::new();
+    let browser = PartEngine::backend();
 
     assert_eq!(
         tree(&desktop),
@@ -127,11 +127,11 @@ fn the_desktop_and_the_browser_boot_one_sample() {
 /// The browser's document half can move the visible dress-up feature itself.
 ///
 /// The sample's visible body is `Fillet`, not the hidden `Box`; the browser installs
-/// `RustAppBackend` with no script half, so its transform path is `apply_transform`.
+/// `DocumentBackend` with no script half, so its transform path is `apply_transform`.
 /// This is the path the Web Move GIF exercises.
 #[test]
 fn the_browser_document_half_moves_the_dressed_up_body() {
-    let mut browser = RustAppBackend::new();
+    let mut browser = PartEngine::backend();
     let before = browser.stage_meshes().expect("the stage syncs");
     assert!(
         min_x(&before).abs() < 1e-6,

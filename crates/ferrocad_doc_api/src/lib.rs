@@ -4,7 +4,7 @@
 //! Neither can be linked into a script runtime: a second copy is a second document
 //! (and, for Part, a second kernel). So this crate is the **wrapper**: it implements
 //! [`DocumentApi`] over the process-wide registry — the same document
-//! `RustAppBackend` answers the model tree from — and every runtime that is not Rust
+//! `DocumentBackend` answers the model tree from — and every runtime that is not Rust
 //! reaches the document through it:
 //!
 //! ```text

@@ -1,15 +1,15 @@
 //! Which scripting half the browser host runs.
 //!
-//! The browser has one document half — [`ferrocad_shell_rust`]'s `RustAppBackend`,
+//! The browser has one document half — [`ferrocad_shell_rust`]'s `DocumentBackend`,
 //! the same one a desktop edition installs — and a choice of scripting halves. This
 //! crate is the switch between them, so the host itself stays "window, page bridge,
 //! file picker":
 //!
 //! ```text
-//! (no query)           RustAppBackend + pywasm,js        (the default chain)
-//! ?runtime=plain       RustAppBackend                     (document only)
-//! ?runtime=pywasm      RustAppBackend + PywasmScriptHost  (RustPython, in the module)
-//! ?runtime=js          RustAppBackend + JsScriptHost      (the page's ES module)
+//! (no query)           DocumentBackend + pywasm,js        (the default chain)
+//! ?runtime=plain       DocumentBackend                     (document only)
+//! ?runtime=pywasm      DocumentBackend + PywasmScriptHost  (RustPython, in the module)
+//! ?runtime=js          DocumentBackend + JsScriptHost      (the page's ES module)
 //! ?runtime=pywasm,js   both, RustPython first            (a chain, B8)
 //! ```
 //!
@@ -35,7 +35,7 @@
 //!
 //! **The pywasm pairing is not arbitrary.** The Python facade reads
 //! `FreeCAD.ActiveDocument` from `ferrocad_core`'s process-wide registry, so that
-//! configuration must use `RustAppBackend::from_shared_registry` — otherwise the
+//! configuration must use `DocumentBackend::from_shared_registry` — otherwise the
 //! document lives in the backend's own handle and the console sees nothing. The JS
 //! configuration uses the same source for the same reason: its page reaches the
 //! document through `ferrocad_doc_api::DocApi`, which reads the registry. The plain
@@ -63,7 +63,7 @@ pub fn plain() -> Box<dyn AppBackend> {
 
 /// [`plain`] with the host's settings store installed.
 pub fn plain_with_settings(settings: Option<Box<dyn SettingsBackend>>) -> Box<dyn AppBackend> {
-    let mut backend = ferrocad_shell_rust::RustAppBackend::new();
+    let mut backend = ferrocad_shell_rust::PartEngine::backend();
     if let Some(settings) = settings {
         backend = backend.with_settings_backend(settings);
     }
@@ -140,9 +140,9 @@ pub fn backend_with_settings(
 
     let mut backend = match script {
         Some(script) => {
-            ferrocad_shell_rust::RustAppBackend::from_shared_registry().with_script_host(script)
+            ferrocad_shell_rust::PartEngine::shared_backend().with_script_host(script)
         }
-        None => ferrocad_shell_rust::RustAppBackend::new(),
+        None => ferrocad_shell_rust::PartEngine::backend(),
     };
     if let Some(settings) = settings {
         backend = backend.with_settings_backend(settings);

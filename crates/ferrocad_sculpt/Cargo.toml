@@ -30,7 +30,9 @@ name = "ferrocad_sculpt"
 path = "src/lib.rs"
 
 [dependencies]
-ferrocad.workspace = true
+# The base app, with the OCCT-backed document half switched on (see the Parametric
+# edition's manifest).
+ferrocad = { workspace = true, features = ["part"] }
 # The combined App/Part/Mesh/MeshPart extension: registering its built-ins is what
 # puts `Part`, `Mesh` and `MeshPart` in this edition's embedded interpreter, which
 # is what `python/Sculpt` builds its cage and skin on.

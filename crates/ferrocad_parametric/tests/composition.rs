@@ -1,4 +1,4 @@
-//! The composed desktop backend: `RustAppBackend` for the document, the embedded
+//! The composed desktop backend: `DocumentBackend` for the document, the embedded
 //! interpreter's `PythonScriptHost` for everything a script owns.
 //!
 //! This is the acceptance for the S9 merge, and it runs the way the edition runs:
@@ -18,7 +18,7 @@ use ferrocad_shell_api::app::{AppBackend, ScriptHost};
 use ferrocad_shell_api::catalog;
 use ferrocad_shell_python::DisplaySync;
 use ferrocad_shell_python::{PythonScriptHost, python};
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_rust::{DocumentBackend, PartEngine};
 use ferrocad_stage::{InteractionCommit, Stage, TRANSFORM_ID};
 use ferrocad_types::Vector3;
 
@@ -43,13 +43,13 @@ const SAMPLE: &str = "Params";
 /// The `ScriptHost` half owns the boot: `backend.bootstrap()` starts the interpreter,
 /// imports the app script and creates the document in the shared registry, and only
 /// then does the document half read it.
-fn composed() -> RustAppBackend {
+fn composed() -> DocumentBackend {
     BOOT.call_once(|| {
         ferrocad_combined_py::register_builtins();
         python::configure("ferrocad_parametric", &[], &[], true);
     });
     let mut backend =
-        RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost));
+        PartEngine::shared_backend().with_script_host(Box::new(PythonScriptHost));
     let boot = backend.bootstrap().expect("the composed backend boots");
     assert_eq!(boot.document, DOCUMENT, "the script half made the document");
     backend
@@ -65,7 +65,7 @@ import FerroCADGui; FerroCADGui.registerProvider(\
 )";
 
 /// The value of one property row, or `None` when the row is absent.
-fn row(backend: &RustAppBackend, object: &str, name: &str) -> Option<String> {
+fn row(backend: &DocumentBackend, object: &str, name: &str) -> Option<String> {
     backend
         .properties(object)
         .expect("properties answer")

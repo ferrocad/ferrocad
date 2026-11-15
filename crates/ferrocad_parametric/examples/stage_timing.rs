@@ -14,10 +14,10 @@ use std::time::Instant;
 use ferrocad_shell_api::app::AppBackend;
 use ferrocad_shell_api::display::StageMesh;
 use ferrocad_shell_python::{PythonScriptHost, python};
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_rust::{DocumentBackend, PartEngine};
 use ferrocad_stage::InteractionCommit;
 
-fn stage(backend: &RustAppBackend) -> Result<(usize, usize), String> {
+fn stage(backend: &DocumentBackend) -> Result<(usize, usize), String> {
     let meshes = backend.stage_meshes()?;
     Ok((
         meshes.len(),
@@ -25,7 +25,7 @@ fn stage(backend: &RustAppBackend) -> Result<(usize, usize), String> {
     ))
 }
 
-fn time(label: &str, backend: &RustAppBackend) {
+fn time(label: &str, backend: &DocumentBackend) {
     let started = Instant::now();
     match stage(backend) {
         Ok((items, triangles)) => eprintln!(
@@ -44,7 +44,7 @@ fn main() -> Result<(), String> {
 
     // The desktop: the document half with the interpreter as its script half.
     let mut over_python =
-        RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost));
+        PartEngine::shared_backend().with_script_host(Box::new(PythonScriptHost));
     let boot = over_python.bootstrap()?;
     eprintln!("boot {} ({})", boot.document, boot.backend);
     if let Some(path) = &path {
@@ -52,7 +52,7 @@ fn main() -> Result<(), String> {
         eprintln!("open {} objects", opened.objects);
     }
     // The same registry, no script half: `stage_meshes` tessellates the document.
-    let over_document = RustAppBackend::from_shared_registry();
+    let over_document = PartEngine::shared_backend();
 
     // Each half twice in a row: the second call of a pair is the memo hit, and the
     // halves use different deflections, so alternating them would measure the

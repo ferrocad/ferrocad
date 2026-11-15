@@ -6,7 +6,7 @@
 //! facade does not implement is asked nothing — see [`Contract`] — and the document half
 //! answers, which is what a build with no script half does anyway.
 //!
-//! The five merged methods of `RustAppBackend` (`model_tree`, `properties`,
+//! The five merged methods of `DocumentBackend` (`model_tree`, `properties`,
 //! `set_property`, `dialog_accept`, `dialog_cancel`) are deliberately *not* implemented
 //! as `AppBackend` calls here. The document half owns them and asks this half only for
 //! the part it cannot answer, through

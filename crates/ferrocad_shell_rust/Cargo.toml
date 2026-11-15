@@ -7,26 +7,26 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "FerroCAD's Rust document backend: a real ferrocad_core::Document behind the shell's AppBackend"
+description = "FerroCAD's Part-backed document half: the kernel-free document backend with the OCCT engine plugged in"
 keywords = ["cad", "freecad"]
 categories = ["graphics"]
 documentation = "https://docs.rs/ferrocad_shell_rust"
 
 [dependencies]
-# The engine: a real document, its Part features and the kernel that tessellates them.
+# The document half: the graph, the property rows, the undo history, `.FCStd` I/O and
+# the whole `AppBackend` surface. Pure crates below the geometry seam.
+ferrocad_shell_doc.workspace = true
+# The engine: Part's object types, the sample, and the two feature edits a
+# manipulator commit builds.
 ferrocad_core.workspace = true
 ferrocad_part.workspace = true
 ferrocad_occt.workspace = true
 ferrocad_geom.workspace = true
-# The interaction vocabulary a manipulator commit arrives in.
-ferrocad_stage.workspace = true
-# The seam and the command catalogue. Both are pure crates: no gpui, no CPython.
-ferrocad_shell_api.workspace = true
-# The Move form's values arrive as JSON, where they would arrive from Python.
-serde_json.workspace = true
 log = "0.4"
 
 [dev-dependencies]
 # The `ScriptHost` contract names a `Scene` and an `EventListener`; the tests write a
-# fake host, so they need the vocabulary even though the document half never does.
+# fake host, so they need the vocabulary.
 ferrocad_inventor.workspace = true
+ferrocad_shell_api.workspace = true
+ferrocad_stage.workspace = true

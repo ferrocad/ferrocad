@@ -1,6 +1,6 @@
 //! The desktop's engine: the composition the shell installs.
 //!
-//! [`engine`] is one `AppBackend` — [`RustAppBackend`] over the process-wide document
+//! [`engine`] is one `AppBackend` — [`DocumentBackend`] over the process-wide document
 //! registry, with [`PythonScriptHost`] as its script half — so a document question is
 //! answered in Rust and a scripting question through [`crate::python`].
 //!
@@ -13,11 +13,29 @@ use pyo3::prelude::{PyAnyMethods, Python};
 
 use ferrocad_shell_api::Runtime;
 use ferrocad_shell_api::app::AppBackend;
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_doc::DocumentBackend;
 use gpui::App;
 
 use crate::script_host::PythonScriptHost;
 use crate::settings::PythonSettings;
+
+/// The document half this build composes.
+///
+/// A build with the `part` feature plugs `ferrocad_shell_rust`'s [`PartEngine`] into
+/// the kernel-free backend; without it the backend boots an empty sample and draws
+/// no stored shape. The editions that link the Part workbench enable the feature
+/// (`ferrocad/part`); the base app and the toy edition do not, which is what keeps
+/// their dependency closure free of the kernel.
+fn document_half() -> DocumentBackend {
+    #[cfg(feature = "part")]
+    {
+        ferrocad_shell_rust::PartEngine::shared_backend()
+    }
+    #[cfg(not(feature = "part"))]
+    {
+        DocumentBackend::from_shared_registry()
+    }
+}
 
 /// Install the composed backend as this app's engine.
 ///
@@ -49,8 +67,7 @@ pub fn install_composed(cx: &mut App, runtimes: &[Runtime], addons: &[std::path:
             eprintln!(
                 "ferrocad: continuing without a script half; the document half answers alone"
             );
-            let plain = RustAppBackend::from_shared_registry()
-                .with_settings_backend(Box::new(PythonSettings));
+            let plain = document_half().with_settings_backend(Box::new(PythonSettings));
             ferrocad_shell_core::app::install_backend(cx, Box::new(plain));
         }
     }
@@ -113,8 +130,7 @@ pub fn compose_all(
     }
     let script = with_addons(hosts, addons)?;
 
-    let mut backend = RustAppBackend::from_shared_registry()
-        .with_settings_backend(Box::new(PythonSettings));
+    let mut backend = document_half().with_settings_backend(Box::new(PythonSettings));
     if let Some(script) = script {
         backend = backend.with_script_host(script);
     }
@@ -311,8 +327,8 @@ fn js_page() -> Result<Box<dyn ferrocad_shell_api::ScriptHost + Send + Sync>, St
 /// document it creates, so composing the two halves cannot put a sample document in
 /// front of the real one. `--check-init` deliberately does **not** use this — it
 /// composes the derived set, so a packaging gap in a mod set is caught there.
-pub fn engine() -> RustAppBackend {
-    RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost))
+pub fn engine() -> DocumentBackend {
+    document_half().with_script_host(Box::new(PythonScriptHost))
 }
 
 /// Build the Python-backed tool `name` through the app script's bridge.

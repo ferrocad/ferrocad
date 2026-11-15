@@ -36,7 +36,7 @@ pub type ThreadedScriptHost = PythonHost<ThreadedRuntime>;
 /// Boot RustPython on its own thread, over the process-wide document registry.
 ///
 /// The interpreter has to be bound to the same registry the document half answers from
-/// (`RustAppBackend::from_shared_registry`), which is what makes `FreeCAD.ActiveDocument`
+/// (`DocumentBackend::from_shared_registry`), which is what makes `FreeCAD.ActiveDocument`
 /// and the model tree one document.
 pub fn live() -> Result<ThreadedScriptHost, String> {
     ThreadedRuntime::live().map(PythonHost::new)

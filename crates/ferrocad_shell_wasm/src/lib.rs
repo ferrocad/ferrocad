@@ -1,7 +1,7 @@
 //! The wasm-addon scripting surface: a workbench bundle, hosted and sandboxed.
 //!
 //! **wasm is a delivery format here, not an engine mirror.** The desktop does not compile
-//! `ferrocad_core`/`ferrocad_part` to wasm: `RustAppBackend` already holds the native
+//! `ferrocad_core`/`ferrocad_part` to wasm: `DocumentBackend` already holds the native
 //! document, and putting a wasm boundary between a script half and the core would be a
 //! cost with no behaviour behind it. What wasm buys is a *package* that is isolated from
 //! the host: the bundle cannot read the filesystem, cannot reach the network, cannot

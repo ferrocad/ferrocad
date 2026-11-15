@@ -1,7 +1,7 @@
 //! The bridge over the process-wide registry: the document the host installed.
 //!
 //! The browser's wasm-Python configuration pairs this script half with
-//! `RustAppBackend::from_shared_registry`, so `FreeCAD.ActiveDocument` and the model
+//! `DocumentBackend::from_shared_registry`, so `FreeCAD.ActiveDocument` and the model
 //! tree are one document. This proves that pairing without a browser: with nothing
 //! open the facade says so, then it reads a document installed *after* boot, then it
 //! follows a replacement — with no interpreter restart in between.

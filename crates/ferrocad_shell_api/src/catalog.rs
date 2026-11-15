@@ -287,7 +287,7 @@ pub fn find(id: &str) -> Option<&'static CommandDef> {
 /// generated JSON, so the Python registry does not have to mirror it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Executor {
-    /// The document half (`RustAppBackend`). The app script may still take it over
+    /// The document half (`DocumentBackend`). The app script may still take it over
     /// through `ScriptHost::claims`.
     Shell,
     /// The app script when one is installed; a Rust arm is the `?runtime=plain`

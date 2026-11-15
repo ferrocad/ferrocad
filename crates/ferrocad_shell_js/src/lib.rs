@@ -2,11 +2,11 @@
 //!
 //! The JS backend is a *composition*, not a fork: the document half is
 //! [`ferrocad_shell_rust`](https://crates.io/crates/ferrocad_shell_rust)'s
-//! `RustAppBackend`, and this crate supplies the script half the shell asks for
+//! `DocumentBackend`, and this crate supplies the script half the shell asks for
 //! through `AppBackend::script_host()`:
 //!
 //! ```text
-//! RustAppBackend (document)  +  JsScriptHost (this crate)  =  the JS backend
+//! DocumentBackend (document)  +  JsScriptHost (this crate)  =  the JS backend
 //! ```
 //!
 //! The page owns the module. `www/js-demo.js` installs `window.__ferrocadJs` with

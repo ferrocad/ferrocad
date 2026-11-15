@@ -110,7 +110,7 @@ pub(crate) use ferrocad_shell_python::python;
 
 /// Bind the interpreter's `ferrocad` module to **this binary's** core.
 ///
-/// The shell tests run the desktop composition (`RustAppBackend` +
+/// The shell tests run the desktop composition (`DocumentBackend` +
 /// `PythonScriptHost`), and the document half answers from `ferrocad_core`'s
 /// process-wide registry. The script half must be bound to that same registry:
 /// importing `python/ferrocad.abi3.so` would give the interpreter its own

@@ -1,11 +1,11 @@
 //! The wasm-Python scripting surface: [`ScriptHost`] over RustPython.
 //!
 //! The JS backend's composition ([`ferrocad_shell_js`]) is the shape here too: the
-//! document half stays `ferrocad_shell_rust`'s `RustAppBackend`, and this crate is the
+//! document half stays `ferrocad_shell_rust`'s `DocumentBackend`, and this crate is the
 //! script half the shell asks for through `AppBackend::script_host()`:
 //!
 //! ```text
-//! RustAppBackend (document)  +  PywasmScriptHost (this crate)  =  the pywasm backend
+//! DocumentBackend (document)  +  PywasmScriptHost (this crate)  =  the pywasm backend
 //! ```
 //!
 //! [`PywasmScriptHost::live`] is what the browser host composes: it reads the active
@@ -38,7 +38,7 @@
 //! **What the facade does not do.** The document is read-only from Python: creating or
 //! opening one and `setattr` on an object raise rather than silently missing the
 //! document. Writes, recompute and the `Shape` API are the document half's
-//! (`RustAppBackend`), and the shell's own commands reach them. `bootstrap.py` supplies
+//! (`DocumentBackend`), and the shell's own commands reach them. `bootstrap.py` supplies
 //! only the gaps a `host_env`-off build has (`io`, `contextlib`, `pathlib`, `traceback`,
 //! `importlib`, `os`, `tempfile`) and the wiring; with the feature on, its `_missing`
 //! probes leave the real modules in place.
@@ -419,7 +419,7 @@ pub fn new_persistent() -> Result<PywasmScriptHost, String> {
 /// Boot over the process-wide registry, read on every call.
 ///
 /// The document half must be the shared-registry one
-/// (`RustAppBackend::from_shared_registry`) or the registry holds nothing and the facade
+/// (`DocumentBackend::from_shared_registry`) or the registry holds nothing and the facade
 /// reports no active document. That pairing is what makes `FreeCAD.ActiveDocument` and
 /// the model tree the same object, and what keeps the cascade current after an open.
 ///

@@ -10,7 +10,7 @@
 //!
 //! This module is that card, derived from the one store the document half already
 //! mirrors: `AppBackend::set_view_state` is called at boot and after every applied
-//! request, so `RustAppBackend` always holds the shell's current [`ViewState`].
+//! request, so `DocumentBackend` always holds the shell's current [`ViewState`].
 //! Nothing is duplicated and nothing is persisted here, which also means the rows
 //! and what the viewport draws cannot disagree.
 //!

@@ -41,7 +41,7 @@ ferrocad_shell_api.workspace = true
 # Part's manipulators: the edge dress-up arc and the face push/pull stem. Pure
 # presentation over `ferrocad_stage`, so the browser gets the same handles the
 # parametric edition contributes — and the commits they emit are applied by the
-# document half (see `ferrocad_shell_rust::RustAppBackend::apply_interaction`).
+# document half (see `ferrocad_shell_rust::DocumentBackend::apply_interaction`).
 ferrocad_part_gui.workspace = true
 # The commit the `?manipulator=` probe builds: the same value a handle emits.
 ferrocad_stage.workspace = true

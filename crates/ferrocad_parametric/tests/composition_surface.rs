@@ -1,6 +1,6 @@
 //! The composition's surface: what the desktop backend answers.
 //!
-//! The desktop is one `AppBackend`: `RustAppBackend` for the document,
+//! The desktop is one `AppBackend`: `DocumentBackend` for the document,
 //! `PythonScriptHost` for everything a script owns. This file began as the B0 parity
 //! ledger, comparing that composition with the retired `PythonAppBackend`
 //! (`docs/project/tasks/backend-parity.md`). B5 deleted the legacy type, so each
@@ -37,7 +37,7 @@ use ferrocad_shell_api::selection::SelectionItem;
 use ferrocad_shell_api::types::PropRow;
 use ferrocad_shell_api::view::ViewState;
 use ferrocad_shell_python::{PythonScriptHost, python};
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_rust::{DocumentBackend, PartEngine};
 use ferrocad_stage::{InteractionCommit, TRANSFORM_ID};
 
 /// One interpreter and one document registry per process, shared by the tests.
@@ -106,7 +106,7 @@ if not getattr(FerroCAD, '_surface_transform', False):
 /// The caller holds [`PYTHON`]: the interpreter and the registry are process-wide.
 /// `bootstrap()` is what starts the interpreter and makes the sample document, so it
 /// runs before the cleanup; the second call then makes the sample the only document.
-fn fresh() -> RustAppBackend {
+fn fresh() -> DocumentBackend {
     BOOT.call_once(|| {
         ferrocad_combined_py::register_builtins();
         // Headless (`GuiUp == 0`): the parameter store stays in memory, so a test
@@ -114,7 +114,7 @@ fn fresh() -> RustAppBackend {
         python::configure("ferrocad_shell", &[], &[], false);
     });
     let mut backend =
-        RustAppBackend::from_shared_registry().with_script_host(Box::new(PythonScriptHost));
+        PartEngine::shared_backend().with_script_host(Box::new(PythonScriptHost));
     backend.bootstrap().expect("the composition boots");
     // After the boot, because `bootstrap` is what puts `python/` on `sys.path`.
     PROVIDER.call_once(|| {
@@ -145,7 +145,7 @@ fn print(code: &str) -> String {
 }
 
 /// One property row's value, or `None` when the row is absent.
-fn row_value(backend: &RustAppBackend, object: &str, name: &str) -> Option<String> {
+fn row_value(backend: &DocumentBackend, object: &str, name: &str) -> Option<String> {
     backend
         .properties(object)
         .expect("properties answer")
@@ -155,7 +155,7 @@ fn row_value(backend: &RustAppBackend, object: &str, name: &str) -> Option<Strin
 }
 
 /// Whether `Params.Length` is the only property a script can turn into a row, etc.
-fn length_is(backend: &RustAppBackend, value: &str) -> bool {
+fn length_is(backend: &DocumentBackend, value: &str) -> bool {
     row_value(backend, OBJECT, "Length")
         .unwrap_or_default()
         .contains(value)
@@ -188,7 +188,7 @@ fn the_test_image_has_one_core() {
 // ---------------------------------------------------------------------------
 
 /// Rows by id, so a test names what it asserts.
-fn command_rows(backend: &RustAppBackend) -> BTreeMap<String, ferrocad_shell_api::commands::CommandInfo> {
+fn command_rows(backend: &DocumentBackend) -> BTreeMap<String, ferrocad_shell_api::commands::CommandInfo> {
     backend
         .commands()
         .expect("commands answer")
@@ -260,7 +260,7 @@ fn the_command_list_is_the_catalogue_plus_the_script() {
 /// `(document, active, [(object, type)])`, in the order the tree reports.
 type Tree = Vec<(String, bool, Vec<(String, String)>)>;
 
-fn tree_rows(backend: &RustAppBackend) -> Tree {
+fn tree_rows(backend: &DocumentBackend) -> Tree {
     backend
         .model_tree()
         .expect("the tree answers")
@@ -285,7 +285,7 @@ fn tree_rows(backend: &RustAppBackend) -> Tree {
 /// and since B13 the document half offers it even in a build with no provider registered
 /// (`Settings/grid` is answered from the shell's view state), so a test about documents
 /// has to ask for the documents. `the_settings_root_is_not_a_document` pins the other half.
-fn documents(backend: &RustAppBackend) -> Tree {
+fn documents(backend: &DocumentBackend) -> Tree {
     tree_rows(backend)
         .into_iter()
         .filter(|(name, _, _)| name != "Settings")
@@ -373,7 +373,7 @@ fn the_tree_lists_every_document_and_switches() {
 // Command outcomes
 // ---------------------------------------------------------------------------
 
-fn run(backend: &mut RustAppBackend, id: &str) -> CommandOutcome {
+fn run(backend: &mut DocumentBackend, id: &str) -> CommandOutcome {
     backend.run_command(id).expect("run_command answers")
 }
 

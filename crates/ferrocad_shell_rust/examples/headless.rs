@@ -10,10 +10,10 @@
 //! `docs/developer/architecture/occt-bundling.md`).
 
 use ferrocad_shell_api::app::AppBackend;
-use ferrocad_shell_rust::RustAppBackend;
+use ferrocad_shell_rust::PartEngine;
 
 fn main() -> Result<(), String> {
-    let mut backend = RustAppBackend::new();
+    let mut backend = PartEngine::backend();
     let boot = backend.bootstrap()?;
     println!("boot: {} · backend {}", boot.version, boot.backend);
 

@@ -43,6 +43,7 @@ members = [
     "crates/ferrocad_python_host",
     "crates/ferrocad_doc_api",
     "crates/ferrocad_shell_core",
+    "crates/ferrocad_shell_doc",
     "crates/ferrocad_shell_rust",
     "crates/ferrocad_shell_js",
     "crates/ferrocad_shell_wasm",
@@ -158,6 +159,7 @@ ferrocad_shell_api = { path = "crates/ferrocad_shell_api", version = "0.1.5" }
 # The document as JSON calls: the doorway a non-Rust script runtime shares. Core-only
 # on purpose, so the wasm-Python half can depend on it without the kernel.
 ferrocad_doc_api = { path = "crates/ferrocad_doc_api", version = "0.1.5" }
+ferrocad_shell_doc = { path = "crates/ferrocad_shell_doc", version = "0.1.5" }
 ferrocad_shell_rust = { path = "crates/ferrocad_shell_rust", version = "0.1.5" }
 ferrocad_shell_js = { path = "crates/ferrocad_shell_js", version = "0.1.5" }
 # The wasm-addon script half: a bundle's doorway over the document, hosted by

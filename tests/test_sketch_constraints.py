@@ -1,10 +1,11 @@
-"""The ``Sketcher`` constraint surface: the model, its encoding and its limits.
+"""The ``Sketcher`` constraint surface: the model, its encoding, the solver and its gaps.
 
-``Sketcher.Constraint`` is a record, not an operation: ``Sketcher::SketchObject``
-stores the records it is given, decodes them back into objects, and reports
-whether every reference resolves. No numerical solve happens (that is P4 SK2's
-PlanGCS binding), so these tests pin the model and the honest gaps rather than
-any geometry movement.
+``Sketcher.Constraint`` is a record, and ``Sketcher::SketchObject`` stores the records
+it is given, decodes them back into objects, reports whether every reference resolves,
+and **solves** them: ``solve()`` moves the geometry and returns the remaining degrees of
+freedom, ``RedundantConstraints``/``ConflictingConstraints`` come from the Jacobian's
+rank, and a system that cannot be satisfied leaves the geometry untouched. These tests
+pin the model, the geometry movement and the honest gaps around it.
 
 Run::
 
@@ -91,7 +92,7 @@ class ConstraintRecordTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             Sketcher.Constraint(3, 0)
 
-    def test_the_solver_is_not_part_of_this_module(self):
+    def test_the_module_exposes_no_solver_object(self):
         with self.assertRaises(AttributeError) as caught:
             Sketcher.Solver  # noqa: B018 - attribute access is the assertion
         self.assertIn("Constraint", str(caught.exception))
@@ -191,7 +192,7 @@ class SketchDocumentTests(unittest.TestCase):
             self.sketch.Constraints  # noqa: B018 - the getter is the assertion
         self.assertIn("gone", str(caught.exception))
 
-    def test_redundant_constraints_is_empty_without_a_solver(self):
+    def test_redundant_constraints_is_empty_when_nothing_is_redundant(self):
         self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
         self.sketch.addConstraint(Sketcher.Constraint("Vertical", 0))
         self.assertEqual(self.sketch.RedundantConstraints, [])

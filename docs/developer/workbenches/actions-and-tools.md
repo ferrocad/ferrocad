@@ -201,15 +201,26 @@ The shell renders the **chrome** from `CommandInfo` (P0.6):
 | `checked` | a toggled tint (grid, snap) |
 | `checkable` | a popover row that toggles: the menu stays open after the click |
 | `cmd_type` | metadata; `ForEdit` implies an undoable edit, `ForView` does not |
-| `surface` | `grid` / `axis` / `workplane` / `snap` / `mods` / `dock` / `hidden` — the control that owns it; absent means `dock` |
+| `surface` | `dock` / `creation` / `radial` / `palette` / `grid` / `axis` / `workplane` / `snap` / `mods` / `hidden` — the control that owns it; absent means `palette` |
+| `category` | the creation pill's tier for a `creation` tool: `Sketch`, `Solid`, `Surface`, `Text`, `Mesh` |
+| `target` | the context kinds a `radial` verb applies to: `body`, `face`, `edge`, or a comma-separated combination; absent means every context |
 | `parent` | the surface's primary command id, for a row in that control's popover |
 | `short` | a compact popover label when `menu` repeats the control's name |
 
 The list is rebuilt on the events in §3.2. A command whose `enabled` is false stays
 visible — the user should see that the action exists and why it is unavailable (the
 tooltip can carry `GetResources()["ToolTip"]`). Placement is `FerroCAD_Surface`-driven, never
-derived from `Group`; a command with no `FerroCAD_Surface` lands on the dock so it cannot
-disappear.
+derived from `Group`; a command with no `FerroCAD_Surface` (or an unrecognised one) lands in
+**Search**, so it cannot disappear and cannot overflow a canvas strip either.
+
+**The dock is not a toolbar.** It holds exactly three things: the `dock` globals
+(`Undo`, `Redo`, `Fit`), the **creation pill** (`⊕ <LastTool> ▾`) and Search. A creation
+tool declares `creation` and appears in the pill's flyout; a shape verb declares
+`radial` and appears in the wheel; a utility with no gesture of its own declares
+`palette` and appears only in Search (and Dev Tools). A strip that grew one button per
+registered command is the failure this split exists to prevent — the shell's own
+`action_dock` test asserts the three-item contract and that the strip never reaches the
+bottom-left hand column.
 
 A **state** row runs through `Shell::run_command_in_place`, which restores the open
 menu afterwards: several options can be set in one visit and the markers follow the
@@ -449,10 +460,13 @@ return {"tool": "toy_measure"}                         # starts a registered too
 
   Object verbs are **contextual**, not ambient: they do not belong in the bottom
   strip. A command declares `FerroCAD_Surface: "radial"` (and optionally
-  `FerroCAD_Tone: "additive" | "destructive"`), which removes it from the dock and
-  makes it a wedge in the wheel. The built-ins today are `App_Move` and
-  `App_Rotate` (structural), `App_ToggleVisibility` (structural) and `App_Delete`
-  (destructive).
+  `FerroCAD_Tone: "additive" | "destructive"` and `FerroCAD_Target:
+  "body"|"face"|"edge"`), which removes it from the dock and makes it a wedge in the
+  wheel **for the context kinds it names**. The built-ins today are `App_Move`,
+  `App_Rotate` and `App_ToggleVisibility` (structural, body) and `App_Delete`
+  (destructive, every context). The `target` field is what keeps the ring a ring: a
+  face target offers the face verbs, an edge target the dress-ups, a body target the
+  object verbs, instead of every verb appearing everywhere.
 
   `FerroCAD_Wheel: true` also offers a command in the wheel **without** moving it off
   its own surface. `App_SetWorkplane` uses it: the row belongs in the `WP` menu, but
@@ -479,8 +493,8 @@ return {"tool": "toy_measure"}                         # starts a registered too
   a `WheelTarget`: if it is outside the selection it is promoted only when a verb is
   chosen; if it is already selected the whole selection is used; over void the
   selection's verbs open at the pointer, and with neither the wheel falls back to the
-  **creation** verbs from the dock (`Toy_MakeSlab`, `Toy_Polyline`), so the same gesture
-  is never a dead end. The full interaction state machine is
+  **creation** commands (the pill's own rows: `Toy_MakeSlab`, `Toy_Polyline`), so the
+  same gesture is never a dead end. The full interaction state machine is
   [`selection-gizmos-and-forms.md`](../interaction/selection-gizmos-and-forms.md).
 
   The wheel is painted by `ferrocad_widgets::wheel` (`slot_at` is pure geometry).
@@ -493,14 +507,15 @@ return {"tool": "toy_measure"}                         # starts a registered too
   move/release — and maps a selected id to `commit_wheel`, which promotes the context
   target if it was not selected and then runs the command.
   Ordering is by tone (structural, additive, destructive), so the destructive slot is
-  always **south** (`N: Move`, `S: Delete` with the two built-ins) and muscle memory
-  does not move when a new verb lands.
+  always **south** and muscle memory does not move when a new verb lands; the built-in
+  `App_Delete` is additionally pinned last inside the destructive group, so the flick
+  never finds another destructive verb under it.
 
-  The bottom dock therefore contains only **creation + global** commands
-  (`Toy_MakeSlab`, `Toy_Polyline`, `Search (Ctrl+K)`), so it never reflows when the
-  selection changes. The Dock's `Move` split and its gizmo-options popover are gone;
-  the gizmo is armed by selecting, and its settings remain reachable from
-  `Settings/Gizmo` and Dev Tools.
+  The bottom dock therefore contains only the **globals, the creation pill and
+  Search** (`Undo`, `Redo`, `Fit`, `⊕ <Tool> ▾`, `Search (Ctrl+K)`), so it never
+  reflows when the selection changes and never grows a row of tools. The Dock's `Move`
+  split and its gizmo-options popover are gone; the gizmo is armed by selecting, and
+  its settings remain reachable from `Settings/Gizmo` and Dev Tools.
 
 ---
 

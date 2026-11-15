@@ -485,14 +485,45 @@ pointing, so the profile tools can draw on a face and the script can divide it.
 
 [`creation-loadout.md`]: ../../developer/interaction/creation-loadout.md
 
+### Step 6 — C1, the dock contract and the creation pill
+
+The live window exposed a chrome defect, not a modelling one: every Part/SimpleCAD command
+declared `FerroCAD_Surface: "dock"` (and SimpleCAD's drawing tools declared the edition name
+`"SimpleCAD"`, an unknown value that fell back to the dock), so the bottom-centre strip became
+a twenty-button row that overflowed under the bottom-left loadout bar.
+
+- **Two surfaces were missing.** `Surface` gained `creation` (a creation tool: offered by the
+  split pill and Search) and `palette` (registered and searchable, offered by no canvas
+  surface). The **fallback for an unannotated or unknown surface moved from `dock` to
+  `palette`**, so no mod can overflow a canvas strip again while staying reachable in Search.
+- **Every command was re-filed.** Drawing tools (`SimpleCAD_Rectangle|Circle|Polygon|Arc`,
+  `Part_Box`, `Part_Polyline`, `Sketch_Polyline`, `Sculpt_MakeCage|MakeSkin`,
+  `Toy_MakeSlab|Polyline`) → `creation` with `FerroCAD_Category` (`Sketch`/`Solid`/`Mesh`);
+  `SimpleCAD_Loft|Sweep` → `creation`/`Surface`; shape and document verbs → `radial` with
+  `FerroCAD_Target` (`body`/`face`/`edge`) and a tone; utilities → `palette`.
+- **The pill is one control.** `⊕ <label>` runs the remembered `creation` command (the first
+  `Solid` tool when nothing is armed), `▾` opens the flyout, whose rows are the `creation`
+  commands grouped by category in the design's order with a hairline between groups. Arming a
+  tool remembers it; picking a wheel verb does not change it.
+- **Two hands cannot both own the canvas.** The hand column dims to 45 % while a creation tool
+  is armed, and the dock dims the same way while a transform or manipulator is pending.
+- **The wheel is filtered by the target kind.** `radial_slots` reads the target's element
+  (`Face6`/`Edge3`) and offers only the verbs whose `FerroCAD_Target` names that kind, so the
+  ring is the design's five-to-eight wedges; `App_Delete` is pinned to the final destructive
+  slot. The empty-space fallback is the **creation** row, not the dock globals.
+- **Limits, recorded.** The flyout is one flat list with dividers, not the two-tier
+  hierarchy; `TopologyGate` reasons are not shown; `ToolStatus` has no fields, so the armed
+  strip is still label / points / hint / `✗` / `✓` (`Tool::set_field` is C2); the primitive
+  tools do not exist, so `⊕ Add`/`⊖ Cut` on a hovered face waits on them.
+
 ### Measured
 
 | Check | Result |
 | --- | --- |
-| `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing + **4** face-hosted cases |
-| `ferrocad_stage` / `ferrocad_viewport` | **299** / **236** (the anchor-on-a-face case included) |
+| `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing + **4** face-hosted + **4** chrome-surface cases |
+| `ferrocad_stage` / `ferrocad_viewport` / `ferrocad_shell_api` | **299** / **236** / **74** |
 | `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (41 part_gui, 18 toy unit) |
-| `ferrocad_shell_core` | **290** |
+| `ferrocad_shell_core` | **292** (the wheel-filter and dock-contract cases included) |
 | `run_tests.py --extension base` / `workbenches` | **718 / 0 / 0 / 8**, **881 / 0 / 0 / 3** |
 | `--check-init` (both editions) | `ferrocad: init OK` |
 | `xtask editions --check` | green, 14 editions (no dependency change) |

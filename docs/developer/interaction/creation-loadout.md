@@ -367,7 +367,7 @@ reporting a name).
 
 | Slice | Deliverable | Acceptance |
 | --- | --- | --- |
-| **C1 — Split pill & flyout** | Replace the static `Create Box` dock row with `[ ⊕ <LastTool> │ ▾ ]`; two-tier `EXPANDED` flyout (five categories + tool row); `TopologyGate` evaluation and the status-bar disabled reason | Clicking `⊕ Box` arms `Box` in one click; `▾` opens the categories; with no sketch selected, `Prism` is `INACTIVE_STRUCTURAL` and its hover reports the requirement; a gap click reports `through: "creation_pill"` |
+| **C1 — Split pill & flyout** | Replace the static `Create Box` dock row with `[ ⊕ <LastTool> ▾ ]`; two-tier `EXPANDED` flyout (five categories + tool row); `TopologyGate` evaluation and the status-bar disabled reason | Clicking `⊕ Box` arms `Box` in one click; `▾` opens the categories; with no sketch selected, `Prism` is `INACTIVE_STRUCTURAL` and its hover reports the requirement; a gap click reports `through: "creation_pill"`. **The pill landed 2026-11-15** as one split control in the action dock (left arm = the remembered `creation` command, `▾` = the flyout grouped by `FerroCAD_Category`, rows gated by `IsActive`); the two-tier hierarchy and the status-bar reason open with C2's strip |
 | **C2 — In-place tool strip & keyboard** | Swap the bar to the strip when `ARMED`; unfocused `W/L/H`; `Tab`/digit entry; `Enter`/`✓` at the anchor or the WP origin; `Esc` cascade | Arming `Box` hides `Undo/Redo/Fit/Search` and shows `[ ⬡ Box │ W L H │ ✗ │ ✓ ]`; `Enter` immediately creates a 20×20×20 box at the WP origin in one undo step; `Tab` focuses `W`; `Esc` restores the idle bar |
 | **C3 — Pending lock & gizmo suspension** | Dim `⊕ Box ▾` to 45 % and refuse clicks while a transform or manipulator is pending; suspend the `GizmoSet` and manipulators while `ARMED` | Dragging Move by `+10 mm` (uncommitted) and clicking `⊕ Box` refuses the tool and keeps `ΔX = 10`; arming `Box` with a body selected hides the Move triad until the tool commits or cancels |
 | **C4 — Topology host (WP / Face / Edge)** | `TargetHost` frame solver reusing the planar face normal (`+N`) and the edge polyline; 3-D ghost via `Tool::items()`; `⊕ Add` / `⊖ Cut` boolean commit on a face | Hovering planar `Face6` aligns the ghost's `+Z` to the face normal; a click places the anchor; `✓` in Add mode fuses the box to the body in one transaction; Cut mode pockets it. **The frame solver, the ghost and the face-hosted commit landed 2026-11-15** (`HoverTarget`, `CreationHost`, `_imprint`); the Add/Cut half waits on a primitive tool (C1/C2) |
@@ -411,6 +411,20 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   (never the worker-dispatching `surfaces.operations`), and **one** transaction. A refusal is
   a status sentence and writes nothing; each verb has a documented default number, which
   `Activated(value)` overrides until the C2 `ToolField` strip can carry it.
+- **The action dock is the contract.** `dock` = the globals only (`Undo`, `Redo`, `Fit`);
+  the strip then holds the **creation pill** and Search, and nothing else. The pill is the
+  memory split control: `⊕ <label>` runs the last armed `creation` command (the first
+  `Solid` tool when nothing is armed — Box), and `▾` opens the flyout, whose rows are the
+  `creation` commands grouped by `FerroCAD_Category` in the design's order
+  (`Sketch`, `Solid`, `Surface`, `Text`, `Mesh`) with a hairline between groups. An
+  unannotated command (or an unknown `FerroCAD_Surface`) falls back to the **palette**, so
+  a mod cannot overflow the strip; the shell test asserts the three-item dock, the pill's
+  presence, the flyout opening upward, and that the strip's rectangle clears the
+  bottom-left hand column.
+- **One session, one owner.** Arming a tool (or a pending manipulator) dims the hand
+  column to 45 % and drops its clicks; the dock dims the same way while a transform or
+  manipulator is pending. The armed tool still swaps the dock **in place**
+  (`render::tool_strip`, label / point count / hint / `✗` / `✓`).
 - A tool's first left press on a planar face binds the session workplane (sticky;
   `Tool::picks_workplane` opts a plane-picking tool out). **The hover preview frame is in**
   (C4, 2026-11-15): `ferrocad_stage::HoverTarget` resolves the pointer into the face's
@@ -426,8 +440,9 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   hidden intermediate extrusion, so the face-hosted Add/Cut mode has a working hook.
 - The `GizmoSet`/manipulator suspension, the radial suppression and the hover-to-arm
   suppression on `start_tool` are built.
-- Missing: the `CreationTool`/`CreationCategory` descriptors, the flyout and its
-  pass-through, the tool-strip fields (`ToolStatus` is text-only), the `TopologyGate`
-  evaluation and `INACTIVE_STRUCTURAL`. The primitive placements are missing too: only the
-  four drawing tools are stage tools, so `⊕ Add` / `⊖ Cut` on a hovered face has a frame
-  and a commit path but no box ghost or height handle yet.
+- Missing: the two-tier flyout (the categories are one flat list with dividers), the
+  `TopologyGate` evaluation and its disabled reason, **`ToolStatus` fields** (`W:`, `R:` —
+  the strip is still label / points / hint / `✗` / `✓`), `Tool::set_field` and the
+  type-ahead write-back, and the primitive placements. Only the four drawing tools are
+  stage tools, so `⊕ Add` / `⊖ Cut` on a hovered face has a frame and a commit path but no
+  box ghost or height handle yet.

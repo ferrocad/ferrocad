@@ -55,15 +55,17 @@ members = [
     "crates/ferrocad_shell_python",
     "crates/ferrocad_parametric",
     "crates/ferrocad_sculpt",
+    "crates/ferrocad_simplecad",
     "crates/ferrocad_toy",
     "crates/xtask",
 ]
 # The GUI crates (`ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_shell_core`,
 # `ferrocad_shell_python`, `ferrocad`), the renderer (`ferrocad_wgpu`, which pulls in the
 # whole GPU stack) and the pivy facade (`ferrocad_inventor_py`, which needs CPython
-# headers), plus the OCCT-backed editions (`ferrocad_parametric`, via
-# `ferrocad_part_py`), are workspace members so `-p <crate>` works, but they are
-# excluded from `default-members` because building them is slow. The pure
+# headers), plus the OCCT-backed editions (`ferrocad_parametric`, `ferrocad_sculpt`
+# and `ferrocad_simplecad`, via `ferrocad_part_py`), are workspace members so
+# `-p <crate>` works, but they are excluded from `default-members` because building
+# them is slow. The pure
 # `ferrocad_graphics`, scene core `ferrocad_inventor`, `ferrocad_stage`,
 # `ferrocad_mesh` (pure data: no kernel, no OCCT, no Python) and `ferrocad_part_gui`
 # (presentation only: no kernel, no GPU, no CPython) stay in `default-members`.

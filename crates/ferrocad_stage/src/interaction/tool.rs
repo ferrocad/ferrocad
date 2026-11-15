@@ -135,6 +135,17 @@ pub trait Tool {
     fn picks_workplane(&self) -> bool {
         false
     }
+
+    /// Whether the session needs no more input, so the host should finish it now.
+    ///
+    /// A two-click rectangle is complete on the second press; a polyline never is (its
+    /// length is the user's call). The host finishes such a tool immediately after the
+    /// event that completed it, exactly as `Enter` would, so the commit reaches the
+    /// workbench through the same path. The default is `false`: a host-driven `Enter`
+    /// stays the only way to end a session.
+    fn completed(&self) -> bool {
+        false
+    }
 }
 
 /// The polyline tool's id in its status (the host's registry id is separate).
@@ -521,6 +532,65 @@ impl PolylineTool {
         if let Some(vertex) = self.points.get_mut(index) {
             *vertex = point;
         }
+    }
+}
+
+/// The polyline tool under a workbench-specific manipulator id.
+///
+/// [`PolylineTool`] is generic: it collects snapped points and commits them as
+/// `polyline`/`create`. The edition decides what that drawing *means* — `Part_Polyline`
+/// makes a wire, `Sketch_Polyline` makes a constrained sketch — and the commit is where
+/// that intent has to travel, because the tool itself knows nothing about documents.
+///
+/// The tool is shared rather than copied so the two editions that draw wires cannot
+/// drift: `ferrocad_parametric` registers it twice (once per id) and the SimpleCAD
+/// edition registers the same pair.
+#[derive(Clone, Debug)]
+pub struct TaggedPolyline {
+    inner: PolylineTool,
+    tag: &'static str,
+}
+
+impl TaggedPolyline {
+    /// The polyline tool, committing under `tag`.
+    pub fn new(tag: &'static str) -> Self {
+        Self {
+            inner: PolylineTool::new(),
+            tag,
+        }
+    }
+
+    /// The manipulator id its commit carries.
+    pub fn tag(&self) -> &'static str {
+        self.tag
+    }
+}
+
+impl Tool for TaggedPolyline {
+    fn on_event(&mut self, event: &PointerEvent, snap: Option<Snap>) {
+        self.inner.on_event(event, snap);
+    }
+
+    fn items(&self) -> &[ShapeItem] {
+        self.inner.items()
+    }
+
+    fn on_key(&mut self, key: &str, ctrl: bool) -> bool {
+        self.inner.on_key(key, ctrl)
+    }
+
+    fn status(&self) -> ToolStatus {
+        self.inner.status()
+    }
+
+    fn cancel(&mut self) -> bool {
+        self.inner.cancel()
+    }
+
+    fn finish(&mut self) -> Option<InteractionCommit> {
+        let mut commit = self.inner.finish()?;
+        commit.manipulator = self.tag.to_string();
+        Some(commit)
     }
 }
 
@@ -984,5 +1054,24 @@ mod tests {
         let mut tool = PolylineTool::new();
         place(&mut tool, [0.0, 0.0, 0.0]);
         assert!(tool.finish().is_none(), "one point is not a polyline");
+    }
+
+    #[test]
+    fn the_tag_is_what_the_commit_carries() {
+        // The same state machine, two workbench meanings: the tag is the only
+        // difference between `Part_Polyline` and `Sketch_Polyline`.
+        let mut tool = TaggedPolyline::new("sketch_polyline");
+        assert_eq!(tool.tag(), "sketch_polyline");
+        for point in [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]] {
+            let press = event(PointerKind::Down, Some(MouseButton::Left), Some(point));
+            tool.on_event(&press, snap(point));
+        }
+        assert_eq!(tool.status().points, 2, "the inner tool's state is reported");
+
+        let commit = tool.finish().expect("two points commit");
+        assert_eq!(commit.manipulator, "sketch_polyline");
+        assert_eq!(commit.action, "create");
+        assert_eq!(commit.values, vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert!(tool.finish().is_none(), "the commit owns the geometry");
     }
 }

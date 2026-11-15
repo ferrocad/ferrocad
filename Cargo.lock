@@ -2980,6 +2980,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrocad_simplecad"
+version = "0.1.5"
+dependencies = [
+ "ferrocad",
+ "ferrocad_combined_py",
+ "ferrocad_part_gui",
+ "ferrocad_shell_python",
+ "ferrocad_stage",
+ "pyo3",
+]
+
+[[package]]
 name = "ferrocad_sketch_solver"
 version = "0.1.4"
 dependencies = [

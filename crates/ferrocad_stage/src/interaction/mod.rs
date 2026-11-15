@@ -11,6 +11,7 @@ pub mod declarative;
 pub mod input;
 pub mod manipulator;
 pub mod plane_points;
+pub mod rectangle;
 pub mod snap;
 pub mod tool;
 
@@ -20,8 +21,9 @@ pub use declarative::{
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use manipulator::{InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
+pub use rectangle::RectangleTool;
 pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,
     snap_to_geometry_with,
 };
-pub use tool::{PolylineTool, Tool, ToolStatus};
+pub use tool::{PolylineTool, TaggedPolyline, Tool, ToolStatus};

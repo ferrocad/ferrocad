@@ -1,0 +1,58 @@
+# FerroCAD: SimpleCAD — the canvas-first edition.
+#
+# A thin binary in the Parametric/Sculpt mould: it registers the combined
+# App/Part/Mesh module set as builtins, then delegates to the base app
+# (`ferrocad::run_edition_with_script`) with its own app script
+# (`ferrocad_simplecad`). The script re-exports the Parametric display and
+# interaction providers — a SimpleCAD face is a `Part::Feature`, so it needs
+# exactly those hooks — and adds the `SimpleCAD_*` command set on top.
+#
+# It needs OCCT (via `ferrocad_combined_py`), so it is a workspace member but NOT
+# in `default-members`, and it is an application binary, so it is NOT published.
+# See `docs/developer/architecture/edition-publishing.md`.
+[package]
+name = "ferrocad_simplecad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+description = "FerroCAD: SimpleCAD — the base app plus the canvas-first tools"
+
+[[bin]]
+name = "ferrocad_simplecad"
+path = "src/main.rs"
+
+[lib]
+name = "ferrocad_simplecad"
+path = "src/lib.rs"
+
+[dependencies]
+# The base app, with the OCCT-backed document half switched on (see the Parametric
+# edition's manifest).
+ferrocad = { workspace = true, features = ["part"] }
+# The combined App/Part/Mesh/MeshPart extension: registering its built-ins is what
+# puts `Part`, `Mesh` and `MeshPart` in this edition's embedded interpreter, which is
+# what the SimpleCAD script builds its faces on.
+ferrocad_combined_py.workspace = true
+# The creation tools this edition contributes: the two-click rectangle.
+ferrocad_stage.workspace = true
+# The Part manipulators it re-registers: the dress-up scrubber and the push/pull stem
+# (the script re-exports the Parametric command set, so the ids behind it must resolve).
+ferrocad_part_gui.workspace = true
+pyo3 = { version = "0.25", features = ["auto-initialize"] }
+
+[dev-dependencies]
+# The round trip boots the edition's own app script through the same host the shell
+# uses (one interpreter, one document registry).
+ferrocad_shell_python.workspace = true
+
+[features]
+# Same script-half selection as the Parametric edition.
+default = ["js"]
+js = ["ferrocad/js"]
+pywasm = ["ferrocad/pywasm"]
+addons = ["ferrocad/addons"]

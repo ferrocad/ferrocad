@@ -4126,6 +4126,13 @@ impl<V: InventorView> InventorViewport<V> {
         if let Some(tool) = self.tool.as_mut() {
             tool.on_event(&event, snap);
         }
+        // A tool that needs no more input ends itself here: the second rectangle
+        // corner completes the box. `finish_tool` hands the commit to the host on the
+        // same path `Enter` uses, and the pointer-up that follows this press emits it.
+        if self.tool.as_ref().is_some_and(|tool| tool.completed()) {
+            self.finish_tool();
+            return true;
+        }
         self.rebuild_transient();
         // Report a status change (a placed point, a changed hint); a plain cursor move
         // leaves the status equal and emits nothing.

@@ -195,6 +195,16 @@ const RULES: &[Rule] = &[
         required: &["ferrocad_part_py", "ferrocad_mesh_py", "ferrocad_occt"],
     },
     Rule {
+        package: "ferrocad_simplecad",
+        reason: "the SimpleCAD edition is the Parametric composition plus its canvas tools",
+        // It shares the Sculpt/Parametric closure on purpose: a SimpleCAD face is a
+        // `Part::Feature`, so the edition needs the same kernel the Parametric one
+        // does — and the same Part manipulators, because it re-exports that edition's
+        // command set (push/pull and the dress-up scrubber are its core interactions).
+        forbidden: &[],
+        required: &["ferrocad_part_py", "ferrocad_part_gui", "ferrocad_occt"],
+    },
+    Rule {
         package: "ferrocad_combined_py",
         reason: "the combined extension links Part and Mesh",
         forbidden: &[],
@@ -1020,6 +1030,8 @@ mod tests {
             "ferrocad_ui",
             "ferrocad_py",
             "ferrocad_parametric",
+            "ferrocad_sculpt",
+            "ferrocad_simplecad",
             "ferrocad_combined_py",
         ] {
             assert!(editions.contains(&edition), "no rule for {edition}");

@@ -194,6 +194,34 @@ def simplecad_group(root: Path) -> Group:
     )
 
 
+#: SimpleCAD's unit modules that build a Qt widget tree in ``setUpClass``. The main
+#: group skips them (our ``python/PySide`` stub refuses ``QApplication(...)``), and
+#: ``--simplecad-gui`` runs them against the real distribution with the offscreen
+#: platform. Keep this list in step with the skips the main group reports.
+SIMPLECAD_GUI_FILES = (
+    "test_dense_drawing",
+    "test_elongating",
+    "test_measuring",
+    "test_panel_placement",
+    "test_push_pull_ui",
+)
+
+#: The real-Qt backend the GUI group aliases (`python/PySide` reads this).
+GUI_BACKEND_ENV = "FERROCAD_PYSIDE_BACKEND"
+GUI_BACKEND = "PySide6"
+
+
+def simplecad_gui_group(root: Path) -> Group:
+    unit = root / "tests" / "unit"
+    return Group(
+        "simplecad-gui",
+        (unit,),
+        SIMPLECAD_GUI_FILES,
+        lambda: list(SIMPLECAD_GUI_FILES),
+        import_roots=(root,),
+    )
+
+
 def _is_unittest_frame(filename: str) -> bool:
     """Whether ``filename`` belongs to the stdlib's ``unittest`` package."""
     parts = Path(filename).parts
@@ -444,6 +472,14 @@ def main(argv: list[str]) -> int:
         help="run the SimpleCAD tests/unit/test_*.py modules",
     )
     parser.add_argument(
+        "--simplecad-gui",
+        action="store_true",
+        help=(
+            "run the SimpleCAD unit modules that need a real Qt widget tree "
+            "(needs PySide6; sets the offscreen platform)"
+        ),
+    )
+    parser.add_argument(
         "--simplecad-root",
         metavar="PATH",
         default=None,
@@ -477,8 +513,30 @@ def main(argv: list[str]) -> int:
         parser.error("--part and --draft are separate groups; run one at a time")
     if args.simplecad and (args.part or args.draft):
         parser.error("--simplecad is a separate group; run it alone")
+    if args.simplecad_gui and (args.part or args.draft or args.simplecad):
+        parser.error("--simplecad-gui is a separate group; run it alone")
 
-    if args.simplecad:
+    if args.simplecad_gui:
+        root = simplecad_path(args.simplecad_root)
+        if not root.is_dir():
+            print(
+                f"skipped: SimpleCAD checkout not found at {root} "
+                "(set SIMPLECAD_DIR, FERROCAD_SIMPLECAD or --simplecad-root)"
+            )
+            return 0
+        # A real Qt is opt-in in `python/PySide`; this group is the one place that
+        # opts in. Without the distribution the group skips — a widget tree is not
+        # something the pure-Python stub can pretend to be.
+        if importlib.util.find_spec(GUI_BACKEND) is None:
+            print(
+                f"skipped: the SimpleCAD GUI group needs a real Qt; "
+                f"{GUI_BACKEND} is not installed"
+            )
+            return 0
+        os.environ.setdefault(GUI_BACKEND_ENV, GUI_BACKEND)
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        group = simplecad_gui_group(root)
+    elif args.simplecad:
         root = simplecad_path(args.simplecad_root)
         if not root.is_dir():
             print(
@@ -556,8 +614,12 @@ def main(argv: list[str]) -> int:
         render(
             outcomes,
             root,
-            source_label="simplecad" if args.simplecad else "upstream",
-            source_version=package_version(root) if args.simplecad else None,
+            source_label=(
+                "simplecad (GUI)"
+                if args.simplecad_gui
+                else "simplecad" if args.simplecad else "upstream"
+            ),
+            source_version=package_version(root) if args.simplecad or args.simplecad_gui else None,
         )
     )
     return 0

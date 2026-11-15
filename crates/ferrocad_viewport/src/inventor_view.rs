@@ -450,10 +450,13 @@ impl ActiveWorkplane {
     }
 
     /// Whether this is the default world `XY` plane (the only state that is “unbound”).
+    ///
+    /// The test is the **frame**, not the name: `offset = 0`, the label `XY` and exactly
+    /// [`Workplane::world()`]. A frame that merely reads `XY` — a shifted origin, a
+    /// rotated pair — is a bound plane, so a creation tool still binds it (Tier 1) and
+    /// the pill still reports it in `CHROME_ACTIVE`.
     pub fn is_default(&self) -> bool {
-        self.offset == 0.0
-            && self.label == "XY"
-            && matches!(self.plane.kind, ferrocad_stage::WorkplaneKind::World)
+        self.offset == 0.0 && self.label == "XY" && self.plane == Workplane::world()
     }
 }
 
@@ -3898,7 +3901,7 @@ impl<V: InventorView> InventorViewport<V> {
             && let Some(frame) = hit.as_ref().and_then(|hit| self.face_frame_at(hit))
         {
             self.ephemeral_restore = Some(self.active_workplane.clone());
-            self.set_workplane(Some(frame));
+            self.set_active_workplane(ActiveWorkplane::of(&frame));
         }
         let mut changed = self.dispatch_tool(kind, device, stage_button(button), hit.as_ref());
         let event = Event::MouseButton {
@@ -5717,8 +5720,13 @@ impl<V: InventorView> InventorViewport<V> {
         &self.active_workplane
     }
 
-    /// Set the active plane directly (`World`, a `XZ`/`YZ` standard, or a custom frame).
-    /// Returns whether the active plane changed.
+    /// Set the active plane directly — the world `XY` plane, a standard `XZ`/`YZ`, a
+    /// resolved face, or a custom frame. Returns whether the active plane changed.
+    ///
+    /// This is the **only** way to change the plane, and there is no "no plane": the type
+    /// has no absence, so a caller cannot silently mean the default by passing nothing. A
+    /// reset is [`ActiveWorkplane::world`], which is the same call as any other binding
+    /// (`clear_workplane` is that, spelled for the `Esc` path).
     pub fn set_active_workplane(&mut self, plane: ActiveWorkplane) -> bool {
         if self.active_workplane == plane {
             return false;
@@ -5729,18 +5737,6 @@ impl<V: InventorView> InventorViewport<V> {
         true
     }
 
-    /// Activate `frame` as the workplane, or return to the world `XY` plane with `None`.
-    /// Returns whether the active plane changed.
-    ///
-    /// The plane is **sticky**: it survives pointer moves and empty-space clicks, and is
-    /// only replaced by another activation or reset by `Esc`.
-    pub fn set_workplane(&mut self, frame: Option<FaceFrame>) -> bool {
-        match frame {
-            Some(frame) => self.set_active_workplane(ActiveWorkplane::of(&frame)),
-            None => self.set_active_workplane(ActiveWorkplane::world()),
-        }
-    }
-
     /// Activate the face under the pointer, if one resolved. Returns whether a workplane
     /// became active.
     pub fn activate_hovered_workplane(&mut self) -> bool {
@@ -5748,7 +5744,7 @@ impl<V: InventorView> InventorViewport<V> {
         let Some(frame) = self.hover_face.as_ref().map(|face| face.frame.clone()) else {
             return false;
         };
-        self.set_workplane(Some(frame))
+        self.set_active_workplane(ActiveWorkplane::of(&frame))
     }
 
     /// Activate one of the three world-standard axis planes (`XY`, `XZ`, `YZ`).
@@ -5837,13 +5833,13 @@ impl<V: InventorView> InventorViewport<V> {
         let Some(frame) = self.face_frame_for(entity, part as u32) else {
             return false;
         };
-        self.set_workplane(Some(frame))
+        self.set_active_workplane(ActiveWorkplane::of(&frame))
     }
 
     /// Reset the active workplane to the world `XY` plane. Returns whether it was
     /// anything else (resetting at the default is a no-op).
     pub fn clear_workplane(&mut self) -> bool {
-        self.set_workplane(None)
+        self.set_active_workplane(ActiveWorkplane::world())
     }
 
     /// Orient the camera down the active workplane's normal, with the plane's `V` axis
@@ -14521,7 +14517,7 @@ mod tests {
             WorkplaneKind::Datum("Rotated".into()),
         )
         .expect("a frame");
-        view.set_workplane(Some(FaceFrame { plane, radius: 5.0 }));
+        view.set_active_workplane(ActiveWorkplane::of(&FaceFrame { plane, radius: 5.0 }));
         view.refresh();
 
         let after: Vec<(char, [f32; 2])> = view
@@ -14550,7 +14546,7 @@ mod tests {
             WorkplaneKind::Datum("Local".into()),
         )
         .expect("a frame");
-        view.set_workplane(Some(FaceFrame { plane, radius: 5.0 }));
+        view.set_active_workplane(ActiveWorkplane::of(&FaceFrame { plane, radius: 5.0 }));
         let texts: Vec<char> = view.axis_labels().iter().map(|label| label.text).collect();
         assert_eq!(texts, vec!['U', 'V', 'N']);
     }
@@ -14724,6 +14720,32 @@ mod tests {
         assert!(view.activate_hovered_workplane());
         assert!(view.clear_workplane(), "a bound plane resets");
         assert!(view.active_workplane().is_default());
+
+        // A reset is a binding to the world plane, not the removal of the plane: the
+        // state has no absence, so "no workplane" is not expressible and every consumer
+        // can read a plane without an unwrap.
+        let active = view.active_workplane();
+        assert_eq!(active.label, "XY");
+        assert_eq!(active.plane.kind, ferrocad_stage::WorkplaneKind::World);
+        assert_eq!(active.plane.origin, Vector3::zero());
+        assert!(active.extent.is_none(), "the world plane has no finite surface");
+        assert!(
+            !view.set_active_workplane(ActiveWorkplane::world()),
+            "re-setting the default changes nothing"
+        );
+
+        // `is_default` tests the frame, not the name: a frame that merely *reads* `XY` is a
+        // bound plane, so the pill highlights it and a creation tool binds to it.
+        let shifted = ActiveWorkplane {
+            plane: ferrocad_stage::Workplane {
+                origin: Vector3::new(0.0, 0.0, 5.0),
+                ..ferrocad_stage::Workplane::world()
+            },
+            label: "XY".to_string(),
+            offset: 0.0,
+            extent: None,
+        };
+        assert!(!shifted.is_default(), "a shifted frame is not the world plane");
     }
 
     #[test]

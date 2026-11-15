@@ -119,6 +119,12 @@ impl Shell {
     /// a click. It also opens a clean session at the selection's current pose when one
     /// is not already live, so the first typed value has a datum.
     pub(in crate::shell) fn open_move_hud(&mut self, cx: &mut Context<Self>) {
+        // One owner of the canvas: the Move form is the Modify hand's surface, so it
+        // cannot be up beside a running creation tool however the command was reached
+        // (the palette's `Move`, a workbench verb, a dialog spec).
+        if self.active_hand().is_add() {
+            return;
+        }
         if self.move_hud.is_some() {
             self.refresh_move_origin(cx);
             return;

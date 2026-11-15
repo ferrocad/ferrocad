@@ -38,8 +38,8 @@ use ferrocad_theme::ui::{
 use crate::commands::{self, CommandInfo, Surface};
 use crate::types::{AxisSummary, GridSummary, ProviderFeature};
 use crate::shell::{
-    ACCENT, CREATION_KEYS, CreationDock, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell,
-    ShellModel, Slot,
+    ACCENT, CREATION_KEYS, CreationDock, FG, Hand, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter,
+    Shell, ShellModel, Slot,
 };
 
 use super::command_icons;
@@ -855,10 +855,13 @@ fn loadout_icon(slot: Slot, mode: GizmoMode, dress_up: DressUpKind) -> &'static 
 /// itself.
 ///
 /// `blocked` dims the bar and drops every click while a move is pending: the hand cannot
-/// change until the user finishes it with `✗`/`✓`.
+/// change until the user finishes it with `✗`/`✓`. `hand` is [`Hand`]: the slot is
+/// accented only while the Modify hand owns the canvas, so a parked bar next to a live
+/// create pill never reads as two active hands.
 pub(crate) fn loadout_bar(
     loadout: Loadout,
     mode: GizmoMode,
+    hand: Hand,
     blocked: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
@@ -881,7 +884,11 @@ pub(crate) fn loadout_bar(
     let dress_up = loadout.dress_up();
 
     for slot in Slot::ALL {
-        let active = loadout.slot() == slot;
+        // The bar lights the hand it holds **only while that hand owns the canvas**: with
+        // a creation tool running, the Modify hand is parked, and a lit slot next to a lit
+        // create pill is exactly the "two active hands" the bars must never show. The key
+        // and the label stay, so the parked hand is still legible.
+        let active = hand.is_modify() && loadout.slot() == slot;
         let key = slot.key();
         let mut button = div()
             .id(SharedString::from(format!("loadout-{key}")))
@@ -1944,6 +1951,7 @@ pub(crate) fn create_dock(
     creation: &[&CommandInfo],
     dock: &CreationDock,
     model: &ShellModel,
+    hand: Hand,
     blocked: bool,
     holding: bool,
     cx: &mut Context<Shell>,
@@ -1972,9 +1980,10 @@ pub(crate) fn create_dock(
         let open = dock
             .tab()
             .is_some_and(|tab| tab.eq_ignore_ascii_case(category));
-        // The pill holding the Add hand's armed tool is the equipped slot, so it lights up
-        // like the Modify bar's hand does.
-        let armed = dock.active() == Some(command.id.as_str());
+        // The pill holding the running tool is the **live** slot, so it lights up exactly
+        // while the Add hand owns the canvas. With the Modify hand live the strip is a
+        // memory: the pills still name their tools, and none of them is accented.
+        let armed = hand.is_add() && dock.active() == Some(command.id.as_str());
         row = row.child(creation_pill(
             index, category, command, open, armed, model, blocked, holding, cx,
         ));
@@ -2039,9 +2048,10 @@ fn creation_pill(
         .items_center()
         .rounded_sm()
         // `PILL_HOLD`: the accent fill lingers for a moment after a creation commit.
-        // The equipped slot keeps the same wash for as long as its tool is the armed one
-        // (the Modify bar's lit hand), so the fill means "this is the slot in hand" and
-        // the linger is only its tail. Decoration either way: the strip takes every click.
+        // The equipped pill keeps the same wash while the Add hand owns the canvas (and
+        // `armed` is false for the whole bar when it does not), so the fill means "this
+        // is the slot in hand" and the linger is only its tail. Decoration either way:
+        // the strip takes every click.
         .when((armed || holding) && !blocked, |el| {
             el.bg(rgba(CHROME_ACTIVE_BG))
         })

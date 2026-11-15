@@ -83,6 +83,37 @@ pub(crate) use context::Action;
 pub(crate) use creation::{CREATION_KEYS, CreationDock};
 pub(crate) use loadout::{Loadout, SelectFilter, Slot};
 
+/// Which hand owns the canvas.
+///
+/// The two hands are exclusive by construction: the Add hand exists only while a creation
+/// tool owns the pointer, and the Modify hand owns it otherwise. The state is **derived**
+/// from the running tool rather than stored, so the two cannot disagree — a second flag is
+/// exactly what used to let the bars read as two live hands
+/// (`docs/developer/interaction/creation-pill-loadout.md` §9).
+///
+/// Every path that equips a Modify slot goes through
+/// [`Shell::yield_to_modify_hand`](Shell), the one place the Add hand is stood down, and
+/// both chrome bars paint their accent only for the live hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Hand {
+    /// The Modify hand: handles, the `Δ` row, the topology filter.
+    Modify,
+    /// The Add hand: a creation tool owns the pointer.
+    Add,
+}
+
+impl Hand {
+    /// Whether the Add hand — a creation tool — owns the canvas.
+    pub(crate) fn is_add(self) -> bool {
+        matches!(self, Self::Add)
+    }
+
+    /// Whether the Modify hand owns the canvas.
+    pub(crate) fn is_modify(self) -> bool {
+        matches!(self, Self::Modify)
+    }
+}
+
 mod render;
 mod timing;
 use render::*;
@@ -1382,9 +1413,14 @@ impl Shell {
         // above the gizmo escalation below, so `2` on an armed triad equips the face
         // hand instead of seeding the Move HUD with 2. A focused Δ field consumes its
         // own digits first; the Move HUD's resting fields do not count as a modal.
+        //
+        // They are offered while a creation tool runs too: the press is the request to
+        // take the canvas back, and `activate_loadout_slot` decides it — an unbegun tool
+        // is ended (the switch is free), a begun one answers with its finish pair. A
+        // tool with a numeric row eats digits first, above, so a value never becomes a
+        // hand switch.
         if !editing
             && !self.modal_open()
-            && self.active_tool.is_none()
             && !self.wheel.read(cx).is_open()
             && !event.keystroke.modifiers.control
             && !event.keystroke.modifiers.alt
@@ -2167,6 +2203,11 @@ impl Render for Shell {
                         // the Add hand's pills, which is what "the same digit space"
                         // means on screen. The row wraps only when an edition registers
                         // so many categories that it would leave the canvas.
+                        //
+                        // Both bars are told which hand is live, so exactly one of them
+                        // paints an accent: the live hand, never a memory that happens to
+                        // still name a tool.
+                        let hand = self.active_hand();
                         let mut row = div()
                             .flex()
                             .flex_row()
@@ -2176,16 +2217,17 @@ impl Render for Shell {
                         row = row.child(crate::chrome::loadout_bar(
                             self.loadout,
                             self.gizmo_mode,
-                            // The hand cannot change under an uncommitted move **or** while
-                            // an armed creation tool owns the canvas: that is the mutual
-                            // exclusion the two hands promise.
-                            self.move_is_pending(cx) || self.active_tool.is_some(),
+                            hand,
+                            // A pending move parks the bar: the hand cannot change until
+                            // the user finishes it with `✗`/`✓`.
+                            self.move_is_pending(cx),
                             cx,
                         ));
                         if let Some(strip) = crate::chrome::create_dock(
                             &model.surfaces().creation,
                             &self.creation,
                             &model,
+                            hand,
                             self.move_is_pending(cx) || self.pending_interaction.is_some(),
                             self.pill_holding(),
                             cx,

@@ -248,6 +248,64 @@ impl Loadout {
 }
 
 impl Shell {
+    /// Which hand owns the canvas right now.
+    ///
+    /// The one question both bars, the Move row and every hand-switching entry point ask,
+    /// instead of each testing `active_tool` for itself.
+    pub(crate) fn active_hand(&self) -> Hand {
+        if self.active_tool.is_some() {
+            Hand::Add
+        } else {
+            Hand::Modify
+        }
+    }
+
+    /// Whether the Add hand is running a tool that has **begun** — it has placed its
+    /// anchor (or its first point), so it owns uncommitted geometry.
+    ///
+    /// A tool that has merely been armed has nothing to lose: its session is a placement
+    /// preview, so giving the canvas back to the Modify hand is free.
+    pub(crate) fn add_hand_holds_work(&self) -> bool {
+        self.active_hand().is_add()
+            && self
+                .model
+                .lock()
+                .unwrap()
+                .tool
+                .as_ref()
+                .is_some_and(|status| status.active && crate::chrome::tool_has_begun(status))
+    }
+
+    /// Hand the canvas back to the Modify hand: the **one** transition out of the Add hand.
+    ///
+    /// Every path that equips a Modify slot calls this — the bar's click, the `0`–`3` keys,
+    /// the wheel's `Move`/`Rotate`, the palette, a workbench command. A tool that has
+    /// placed nothing is ended (`Esc`'s own path: no transaction exists to lose); one that
+    /// has begun is refused with the finish pair named, because that session owns
+    /// uncommitted geometry. Returns whether the hand may switch.
+    pub(crate) fn yield_to_modify_hand(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.active_hand().is_add() {
+            return true;
+        }
+        if self.add_hand_holds_work() {
+            let label = self
+                .model
+                .lock()
+                .unwrap()
+                .tool
+                .as_ref()
+                .map(|status| status.label.clone())
+                .unwrap_or_else(|| "the tool".to_string());
+            let status = format!("{label}: finish (Enter / ✓) or cancel (Esc) before you switch tools");
+            self.model.lock().unwrap().status = status.clone();
+            self.console_line(status, cx);
+            cx.notify();
+            return false;
+        }
+        self.cancel_tool(cx);
+        true
+    }
+
     /// Equip a loadout slot (`0`–`3` or the bottom-left bar).
     ///
     /// A slot change is a **context exit**: a dirty transform session commits first,
@@ -258,6 +316,12 @@ impl Shell {
         // Changing the hand would spend or drop the pending move; a same-slot call is
         // just a re-arm and is always allowed.
         if self.loadout.slot() != slot && self.gate(Action::SwitchHand, cx) {
+            return;
+        }
+        // The Modify hand cannot be equipped beside a running creation tool: the canvas
+        // has one owner, and taking it back is the transition that decides what happens
+        // to that tool (ended if it has placed nothing, refused if it has).
+        if !self.yield_to_modify_hand(cx) {
             return;
         }
         if self.loadout.slot() == slot {
@@ -291,6 +355,12 @@ impl Shell {
     /// change until the user finishes with `✓`/`✗`.
     pub(crate) fn activate_loadout_slot(&mut self, slot: Slot, cx: &mut Context<Self>) {
         if self.gate(Action::SwitchHand, cx) {
+            return;
+        }
+        // The Add hand owns the canvas while a creation tool runs, so a press on this bar
+        // is also the request to take the canvas back. One transition decides it, before
+        // the same-slot toggles below (they re-arm, which a running tool would ignore).
+        if !self.yield_to_modify_hand(cx) {
             return;
         }
         if slot == Slot::Inspect && self.loadout.slot() == slot {

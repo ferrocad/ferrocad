@@ -49,6 +49,94 @@ fn slot_labels_name_the_hand_they_equip() {
     );
 }
 
+/// One hand owns the canvas.
+///
+/// Taking the Modify hand back stands an **unbegun** creation tool down (the switch is
+/// free — nothing has been placed), refuses one that has **begun** with its finish pair
+/// named, and the Move row cannot be up beside a tool however the command was reached.
+#[gpui::test]
+fn the_two_hands_never_own_the_canvas_at_once(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(Contributions::new().with_tool("test_polyline", || {
+                Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+            }));
+        });
+    });
+
+    // At rest the Modify hand owns the canvas.
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.active_hand()),
+        Hand::Modify
+    );
+
+    // Arming a creation tool gives the canvas to the Add hand, and the Modify hand's
+    // surface cannot open beside it — not even by asking directly.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("test_polyline", cx);
+            shell.open_move_hud(cx);
+        });
+    });
+    assert_eq!(shell.read_with(&cx, |shell, _| shell.active_hand()), Hand::Add);
+    assert!(
+        shell.read_with(&cx, |shell, _| shell.move_hud.is_none()),
+        "the Move row is the Modify hand's: it cannot be up in the Add hand"
+    );
+
+    // Nothing placed: the switch is free, so the press ends the tool and hands the canvas
+    // back — no transaction exists to lose.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::Move, cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.active_hand()),
+        Hand::Modify,
+        "an unbegun tool yields the canvas"
+    );
+    assert!(shell.read_with(&cx, |shell, _| shell.active_tool.is_none()));
+
+    // A tool that has begun owns uncommitted geometry: the switch is refused and says why.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.start_tool("test_polyline", cx));
+    });
+    model.lock().unwrap().tool = Some(ToolStatus::new(
+        "test_polyline",
+        "Polyline",
+        1,
+        "click the next point",
+    ));
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.activate_loadout_slot(Slot::PushPull, cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.active_hand()),
+        Hand::Add,
+        "a begun tool keeps the canvas"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.loadout.slot()),
+        Slot::Move,
+        "and the hand it refused to leave"
+    );
+    let status = model.lock().unwrap().status.clone();
+    assert!(
+        status.contains("Polyline") && status.contains("switch tools"),
+        "the refusal names the tool and the rule: {status}"
+    );
+}
+
 /// Select `reference` the way a click does, so the shell re-applies the loadout filter
 /// and re-arms.
 fn click(cx: &mut VisualTestContext, shell: &Entity<Shell>, reference: SelectionRef) {

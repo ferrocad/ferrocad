@@ -678,3 +678,50 @@ pub(crate) fn evaluate(
     }
     Ok(out)
 }
+
+/// Evaluate the soft dragging priors at `x`.
+///
+/// Each prior adds two weighted rows, `w·(p_x − target_x)` and `w·(p_y − target_y)`,
+/// which pull a free degree of freedom toward `target` inside the normal
+/// equations without counting as a hard constraint: they never enter the
+/// convergence test or the rank analysis. A prior on a root axis is refused — the
+/// origin cannot be dragged, and silently ignoring it would look like a working
+/// drag that does nothing.
+pub(crate) fn evaluate_priors(
+    layout: &Layout,
+    curves: &[Curve2d],
+    initial: &[f64],
+    x: &[f64],
+    priors: &[crate::SoftPrior],
+) -> Result<Vec<Row>, SolveError> {
+    if priors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let evaluator = Evaluator {
+        layout,
+        curves,
+        x,
+        initial,
+        size: layout.len(),
+    };
+    let mut rows = Vec::with_capacity(priors.len() * 2);
+    for (index, prior) in priors.iter().enumerate() {
+        if !matches!(prior.reference.reference, Reference::Geometry(_)) {
+            return Err(SolveError::InapplicablePrior { prior: index });
+        }
+        let point = evaluator.point(index, prior.reference)?;
+        rows.push(
+            point
+                .x
+                .sub(&Row::constant(prior.target.x, evaluator.size))
+                .scale(prior.weight),
+        );
+        rows.push(
+            point
+                .y
+                .sub(&Row::constant(prior.target.y, evaluator.size))
+                .scale(prior.weight),
+        );
+    }
+    Ok(rows)
+}

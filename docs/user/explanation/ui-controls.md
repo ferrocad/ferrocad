@@ -70,8 +70,8 @@ status line name the same scope.*
 
 - **The canvas comes first.** The toolbar is an overlay, not a pane header, so the
   scene reaches the title bar. Opening a tool or a dialog does not move the canvas
-  rectangle either: the globals are a column on the left edge, the hands share one bottom
-  row, and the armed tool's pill floats over the canvas.
+  rectangle either: the globals are a column on the left edge, the hands and the tool's
+  completion row share the bottom-left column, and that column grows upward.
 - **State is ink, not a box.** An active tool, a checked command and a custom
   workplane are drawn in accent ink. A background is kept for hover, the active loadout
   slot and a selected segment, so the scene stays visually dominant.

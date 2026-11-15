@@ -85,13 +85,14 @@ slots, then one pill per category.
   (`on_modifiers_changed`) rather than a key press: a modifier key emits no key event of
   its own — a Wayland session sends none at all — so a key-up hook would work on some
   desktops and silently not on others.
-- **Nothing placed, nothing to finish.** The armed tool's pill is a **readout** at rest —
-  `Rectangle · 0 points · click two corners` — and the `✗`/`✓` pair appears with the first
-  placed point (or at once for a tool that publishes fields, whose row *is* the pending
-  value). That is the Modify hand's own rule: an idle hand shows its coordinates and no
-  finish pair, because there is nothing to finish. The tool stays armed throughout, so
-  the hover ghost is exactly where it was; `Esc` and another pill are the way out of a
-  tool that has placed nothing.
+- **Nothing placed, no completion row.** Equipping a tool is quiet: the canvas shows the
+  hover ghost of what the first click would make (for a two-click tool, the anchor marker
+  in the placement plane) and **no row at all**. The completion row — `Rectangle ·
+  1 point · click the opposite corner · ✗ ✓` — is a response to a click, and appears
+  directly above the hands' bar in the bottom-left column. A parameter tool is the one
+  exception, because its fields *are* the pending value: there is nothing to place until
+  they are set. The tool stays armed throughout; `Esc` and another pill are the way out
+  of one that has placed nothing.
 - **The list is numbered.** Its rows carry `1`–`8` in a column of their own (separate
   from the gate's requirement hint, which a disabled row shows in the same menu), and
   pressing a number while the flyout is open picks that row into its pill: the same
@@ -105,11 +106,14 @@ slots, then one pill per category.
   `⊕ Create Dock` toggle: a loadout that can be folded away is not a loadout, and the six
   keys that address it would then address nothing. The globals dock holds `Undo`, `Redo`,
   `Fit` and Search and nothing else, so it never changes width with an edition.
-- **Activating a tool adds a pill; it does not replace anything.** The armed tool's pill
-  (`[ ⬡ Box │ W 20.00 L 20.00 H 20.00 mm │ ✗ │ ✓ ]`) sits **bottom-centre over the canvas**,
-  which the create dock left free when it moved down beside the Modify bar. A session
-  therefore never takes the loadout, the dock or Search off the screen, and — because the
-  pill is an absolute overlay like the wheel — the canvas keeps its rectangle.
+- **Activating a tool adds a row; it does not replace anything.** Once the tool has begun —
+  a click has placed a point, or its fields are its input — its **completion row**
+  (`[ ⬡ Box │ W 20.00 L 20.00 H 20.00 mm │ ✗ │ ✓ ]`) is drawn in the bottom-left column,
+  directly **above the two hands' bar**. Arming alone adds nothing: an armed tool that has
+  placed nothing shows only its hover ghost on the canvas (for a drawing tool, the plane
+  marker that says where the first click will land), so nothing ever looks like a dialog
+  nobody opened. The loadout, the create dock and the globals stay in place, and the
+  canvas keeps its rectangle.
 - **The wheel loads the same pills.** `Create ▸` in the radial menu holds the same
   categories and tools; committing one performs the same two actions a row click does —
   bind the tool to its category's pill, then run it (which arms it at the pointer).
@@ -194,7 +198,7 @@ edition's `Toy_MakeSlab` is expressible as the `Box`-like tool if the toy wants 
 
 ---
 
-## 2. State machine and the tool pill
+## 2. State machine and the completion row
 
 ```mermaid
 stateDiagram-v2
@@ -219,26 +223,25 @@ stateDiagram-v2
 1. **`IDLE` corresponds to `ArmedIdle`.** The create dock rests as one pill per category in
    the bottom row, and the Modify hand rests in its equipped slot (`1`–`3`, `0`) just to its
    left.
-2. **`ARMED` adds the tool's pill, bottom-centre.** Nothing is swapped, and the bottom row
-   and the left column stay where they were:
+2. **`ARMED` adds the completion row, above the hands.** A tool that has placed nothing
+   adds nothing at all; the first click (or, for a parameter tool, the field row) brings
+   the row in above the hands' bar:
 
    ```text
-   [ Undo ]   [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
-   [ Redo ]
-   [ Fit  ]                          [ ⬡ Box · Face6 (+N) │ W  20.00   L  20.00   H  20.00 mm │ ✗ │ ✓ ]
+   [ Undo ]   [ ⬡ Box · Face6 (+N) │ W  20.00   L  20.00   H  20.00 mm │ ✗ │ ✓ ]
+   [ Redo ]   [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
+   [ Fit  ]
    [──────]
    [ 🔍 Search (Ctrl+K) ]
    ```
 
-   The `✗`/`✓` pair is the pending half: a tool that has placed nothing shows its name,
-   count and hint and no buttons, exactly as an idle Modify hand shows coordinates and no
-   finish pair. The pair arrives with the first placed point — or immediately for a tool
-   that publishes fields, because its row is the pending value — so `ARMED` always looks
-   like "something is in progress" and never like a dialog nobody opened.
+   The `✗`/`✓` pair is the pending half. Before the row exists the only sign of the armed
+   tool is the hover ghost — for a two-click tool the anchor marker in the placement
+   plane — so pressing a pill equips a slot instead of opening a dialog.
 
-   The pill is an **absolute overlay**, not a row in a layout: a floating HUD would collide
-   with the Modify hand's docked coordinate row, the numbers stay in one fixed tabular pill
-   (`visual-language.md` §0.4), and the canvas rectangle never moves. The loadout the
+   The row is a row in the bottom-left column, not a floating HUD: the numbers stay in one
+   fixed tabular pill (`visual-language.md` §0.4), the column's rows grow upward, and the
+   canvas rectangle never moves. The loadout the
    session was started from stays in hand — the same reason the Modify bar keeps its slots
    while a move is pending.
    Entering `ARMED` hides and un-offers the hosted `GizmoSet` and the workbench
@@ -480,8 +483,9 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
 ## 9. What the tree already does
 
 - `Tool`, `ToolStatus` (label, point count, hint), `Tool::finish() ->
-  Option<InteractionCommit>` with `creates: true`, and the in-place bar swap
-  (`match active_tool { Some(tool) => tool_strip(tool), None => action_dock(model) }`).
+  Option<InteractionCommit>` with `creates: true`, and the shell's two surfaces: the hands'
+  row at the bottom-left and the tool's **completion row** above it, which only exists once
+  `chrome::tool_has_begun` (a point placed, or a field tool).
 - `Tool::completed()` — the **self-finishing** seam, defaulted to `false`. A tool that
   needs no more input (the two-click rectangle, circle and polygon, the three-click arc)
   says so, and the viewport finishes it on the event that completed it instead of waiting

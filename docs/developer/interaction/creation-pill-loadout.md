@@ -47,7 +47,7 @@ inventory, tool strip, tokens and slice plan are in
 | Chrome anchor | bottom row, right after the Modify bar (one pill per category) | loadout bar (bottom-left, `left: 16 px`, `bottom: 12 px`) |
 | Slots | a create dock of one pill per category (`5`–`9` arm them, in strip order) over 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
 | Governs | what you make, and which surface/edge it anchors to | what a pick targets, and which manipulator is hosted |
-| Active state | IDLE → HOVER → EXPANDED → ARMED (the tool's pill is added over the canvas' bottom) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
+| Active state | IDLE → HOVER → EXPANDED → ARMED (the completion row joins the bottom-left column) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
 | Topology binding | WP: place on the grid · Body: feature from a profile · Face: place on the face `+N` · Edge: place along the edge | Body: `TransformGizmo` · Face: `PushPullStem` · Edge: `DressUpScrubber` · Inspect: highlight only |
 | Commit | new shape added, selected, one undo step | transform/manipulator session committed (`✓`/`Enter`), one undo step |
 
@@ -103,13 +103,13 @@ their labels, glyphs and the handles they build all come from the slot rather th
 command. The docked numeric row carries the same toggle beside its fields, so the row and
 the bar can never disagree.
 
-The placement, ARMED (the tool's pill is an overlay; nothing is swapped and the canvas
-rectangle does not move):
+The placement, ARMED (the completion row joins the bottom-left column once the tool has
+begun; nothing is swapped and the canvas rectangle does not move):
 
 ```
-Left edge                    Bottom row (Modify, then Add)              Canvas bottom-centre
-[ Undo ]                     [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]
-[ Redo ]                     [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]   [ Box on WP:XY │ W 20.00  L 20.00  H 20.00 mm │ ✗ │ ✓ ]
+Left edge                    Bottom-left column
+[ Undo ]                     [ Box on WP:XY │ W 20.00  L 20.00  H 20.00 mm │ ✗ │ ✓ ]   ← the tool's row
+[ Redo ]                     [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ][ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
 [ Fit  ]
 [──────]
 [ 🔍 Search (Ctrl+K) ]
@@ -301,8 +301,10 @@ the label is `⊕ Box ▾` (the tool it arms) and there is no duplicate `Create 
 - **Context.** `StartTool` is refused while a move/rotation/manipulator is pending, and the
   status names the finish pair; arming a creation tool clears the gizmo set, the
   manipulators and the Move form; the radial does not open while the tool runs.
-- **Chrome.** Armed, the tool's pill is an **overlay** over the canvas' bottom-centre and
-  the viewport rect is identical before and after; the bottom row and the globals column
+- **Chrome.** Armed, the tool's completion row joins the bottom-left column above the
+  hands' bar — and only once the tool has begun, so a hovered or freshly armed tool shows
+  nothing but its ghost — and the viewport rect is identical before and after; the bottom
+  row and the globals column
   keep their places; every hand surface dims only while pending (and, if decided, while
   armed).
 - **Naming.** `PILL_HOLD` leaves nothing pending and gates no action; `SESSION_HOLD` keeps

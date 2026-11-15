@@ -616,14 +616,13 @@ Three follow-ups from the live window:
   `^` while its list is showing, and holding `Shift` peeks the equipped pill's list while
   the key is down. The wheel's `Create ▸` commits through the same path, so a flick
   loads the pill and arms the tool at the pointer.
-- **A session adds a pill; it does not take the dock.** The armed tool's pill (its label,
-  its `W/L/H` row or point count, its hint, `✗`/`✓`) is an **overlay over the canvas'
-  bottom-centre**, so the loadout, the create dock and the globals stay in place
-  while a tool runs. The pair is the **pending half**: it appears with the first placed
-  point (or at once for a tool whose fields are the input) and not before, so arming a
-  tool that has placed nothing is a readout, not a dialog. The canvas keeps its rectangle
-  (`chrome::globals_dock` owns the left column, `chrome::create_dock` the bottom row,
-  `chrome::tool_strip` the overlay).
+- **A session adds a row; it does not take the dock.** The armed tool's row (its label,
+  its `W/L/H` row or point count, its hint, `✗`/`✓`) joins the **bottom-left column,
+  directly above the hands' bar**, and only once the tool has begun: a click placed a
+  point, or its fields are the input. An armed tool that has placed nothing shows only its
+  hover ghost, so arming reads as equipping a slot, not as opening a dialog. The column
+  grows upward and the canvas keeps its rectangle (`chrome::globals_dock` owns the left
+  column, `chrome::create_dock` the bottom row, `chrome::tool_pill` the row above it).
 - **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
   `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
   `select at least 2 profiles` instead of `select at least 2 bodies`.

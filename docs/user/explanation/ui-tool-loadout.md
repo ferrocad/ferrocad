@@ -78,12 +78,12 @@ it was last left on. It is always there — nothing folds it away.
   tool in that category** — so `5`, `5`, `5` walks the sketch tools, wrapping round — and
   each press starts the one it lands on. A tool that needs a selection you do not have is
   skipped rather than selected.
-- Starting a tool does not take anything away: the tool's own pill (its name, its numbers
-  or point count, and its hint) appears **over the bottom-centre of the canvas**, so the
-  slots, the dock and Search stay where they were while you draw. The `✗`/`✓` pair on that
-  pill appears only once there is something to finish — the first placed point, or a tool
-  whose numbers are the input — so arming a tool that has done nothing looks like a
-  readout, not a dialog.
+- Starting a tool does not take anything away. An armed tool that has placed nothing shows
+  only its hover ghost — the anchor marker in the placement plane, for a two-click tool —
+  and no row at all; once a click places a point (or the tool's numbers are its input) its
+  **completion row** appears in the bottom-left column, directly above the slots, with the
+  tool's name, its numbers or point count, its hint and the `✗`/`✓` pair. The slots, the
+  dock and Search stay where they were while you draw.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that

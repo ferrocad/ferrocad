@@ -43,18 +43,20 @@ why it never grows when a workbench registers another tool.
 
 ## While a tool is running
 
-Starting a tool **adds a pill over the bottom-centre of the canvas**. Nothing is swapped:
-the dock keeps its column, and the bottom row keeps both hands, so the canvas rectangle
-does not move and the loadout the tool was started from stays in hand.
+Starting a tool **adds its completion row to the bottom-left column**, directly above the
+hands' bar — and only once the tool has begun: a click has placed a point, or its numbers
+are the input. An armed tool that has placed nothing
+shows only its hover ghost on the canvas, so pressing a pill never looks like opening a
+dialog. Nothing else moves, so the canvas rectangle does not change and the loadout the
+tool was started from stays in hand.
 
-The tool's pill shows:
+The tool's row shows:
 
 - the tool's name;
 - its numbers (when the tool has fields) or its point count;
 - a short hint;
-- **Cancel** and **Finish** — but only once there is something to finish: the first placed
-  point, or a tool whose numbers are the input. A tool that has placed nothing is a
-  readout, like the idle Modify hand's coordinate row.
+- **Cancel** and **Finish** — once the row is there, which is already "there is something to
+  finish". A tool that has placed nothing shows no row at all; `Esc` leaves it.
 
 **Finish** takes the same host path as `Enter`; **Cancel** takes the same path as `Esc`,
 so the buttons and the keys cannot drift. `Esc` also leaves a tool that has placed

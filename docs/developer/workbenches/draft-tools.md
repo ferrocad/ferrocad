@@ -342,7 +342,8 @@ stub, so only `Sketcher` is left.
   no longer holds and belongs to the Part track). Genuinely unknown ids still fail.
 
 `tools/conformance.py`'s `DRAFT_FILES` now also runs `test_creation`, `test_array`,
-`test_dwg`, `test_oca`, `test_svg` and `test_draftgeomutils`, all of which are green:
+`test_dwg`, `test_oca`, `test_svg`, `test_modification` and `test_draftgeomutils`, all of
+which are green:
 
 | `--draft` module | pass | fail | error | skip |
 | --- | --- | --- | --- | --- |
@@ -355,15 +356,18 @@ stub, so only `Sketcher` is left.
 | `test_array` | 1 | 0 | 0 | 0 |
 | `test_dwg` | 2 | 0 | 0 | 0 |
 | `test_oca` | 2 | 0 | 0 | 0 |
+| `test_modification` | 33 | 0 | 0 | 0 |
 | `test_svg` | 6 | 0 | 0 | 1 |
 | `test_draftgeomutils` | 10 | 0 | 0 | 0 |
-| **whole group** | **60** | **0** | **0** | **1** |
+| **whole group** | **93** | **0** | **0** | **1** |
 
 The one skip is honest: `test_get_svg_from_arch_space_with_zero_vector` says the BIM
-module is not installed, which it is not. `test_modification` stays a measured
-neighbour rather than a gate member: it is 32/0/1 and its error needs `Sketcher`
-(P4 SK3). `test_dxf` and `test_import_tools` also stay out, because each carries an
-out-of-scope error (below).
+module is not installed, which it is not. `test_modification` became a gate member when
+the sketch constraint model landed (P4 SK1-lite/SK3): `Draft.make_sketch` builds a
+`Sketcher::SketchObject`, adds geometry and constraints, detects the missing coincident
+and vertical relations, solves and `Draft.draftify`s the result back. The model and its
+limits are in [`sketch-constraints.md`](sketch-constraints.md). `test_dxf` and
+`test_import_tools` still stay out, because each carries an out-of-scope error (below).
 
 Neighbouring modules measured with `--files` (the rest of the headless Draft
 suite). "Before" is the pre-round image, "after" is this round's:
@@ -373,7 +377,7 @@ suite). "Before" is the pre-round image, "after" is this round's:
 | `test_svg` | 3/0/3/1 | 6/0/0/1 | `Part.OCC_VERSION` and the conic parameter ranges landed; the exporter takes its own edge/arc path |
 | `test_dxf` | 1/0/1/0 | 1/0/1/0 | blocker moved from `getHomePath` to `Import.readDXF` |
 | `test_draftgeomutils` | 0/0/10/0 | 10/0/0/0 | the wrapper (`Shape.copy`), wire-order and vertex-order work landed; the four extension-math failures are gone |
-| `test_modification` | 22/1/10/0 | 32/0/1/0 | quantity equality, the Part wrapper/Prism work, and the TechDraw page stub |
+| `test_modification` | 22/1/10/0 | 33/0/0/0 | quantity equality, the Part wrapper/Prism work, the TechDraw page stub, and the sketch constraint model behind `make_sketch` |
 | `test_import_tools` | 2/0/1/0 | 2/0/1/0 | GUI `UserInput.KeyShift` |
 | `test_import_gui` | 3/0/1/0 | 3/0/1/0 | GUI, out of scope |
 | `test_trimex_gui` | load error | load error | GUI `KeyShift`, out of scope |
@@ -386,9 +390,9 @@ suite). "Before" is the pre-round image, "after" is this round's:
 | --- | --- | --- |
 | `test_dxf.test_read_dxf_Issue24314` | The test now reaches `import Import` at `importDXF.py:2915`; the blocker is the object model the importer is contracted to produce. `DxfDraftPostProcessor` reads `Part::Line`/`Part::Circle`/`Part::Vertex` intermediates, `App::FeaturePython` placeholders with `DxfEntityType`, block `Part::Compound`s under `_BlockDefinitions`, and Draft layer groups — none of which FerroCAD registers. A three-object Python stub would measure the stub, not DXF support, so `Import.readDXF` is **out of surface** (recorded in the backlog). | Import workbench (deliberate gap) |
 | `test_import_tools.test_import_gui_draftedit`, `test_import_gui.test_import_gui_draft_tools` | `draftguitools.gui_tool_utils` reads `Gui.UserInput.KeyShift` at import (`gui_tool_utils.py:67`); our `FreeCADGui` exposes no `UserInput`. | GUI |
-| `test_modification.test_draft_to_sketch` | `ModuleNotFoundError: No module named 'Sketcher'` (`Draft/make_sketch.py:92`). A shim is not enough: `make_sketch` builds a real `Sketcher::SketchObject` with geometry, constraints and a solver, so this is the Draft M5 workbench layer. | Sketcher track (P4 SK3) |
 
-Closed this round: `test_draft_to_techdraw` (the `DrawPage`/`DrawSVGTemplate`/`DrawViewDraft`
+Closed this round: `test_draft_to_sketch` (`Draft.make_sketch`/`draftify` over the new sketch
+constraint model), `test_draft_to_techdraw` (the `DrawPage`/`DrawSVGTemplate`/`DrawViewDraft`
 document types, `DocumentObject.addView`, and `OutList` as every outbound link) and
 the whole `test_draftgeomutils` module (`Shape.copy` keeps its subclass; the vertex and
 wire order follow `WireExplorer`/`TopExp`). The earlier round closed the `test_svg`

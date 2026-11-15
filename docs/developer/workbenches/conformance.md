@@ -170,13 +170,18 @@ still skip honestly: four consumer shapes in `solids.rs` store an empty lineage,
 (`FaceMakerCheese` 10, `makeShellFromWires` 24) are composed-alias counts. See
 [`../../project/record/TODO-24-10-2026.md`](../../project/record/TODO-24-10-2026.md) §P0.
 
-### Current (2026-11-13, upstream `33adf61`, current tree)
+### Current (2026-11-15, upstream `33adf61`, current tree)
 
 | Group | Result |
 | --- | --- |
 | Part | **531 passed**, 0 failed, 0 errored, 12 skipped, **0 files failed to load** |
-| Draft | **50 passed**, 0 failed, 0 errored, 1 skipped, **0 load failures** |
+| Draft | **93 passed**, 0 failed, 0 errored, 1 skipped, **0 load failures** |
 | Draft M2 (`test_creation`, `test_array`) | **27 passed**, 0 failed, 0 errored, **0 load failures** |
+
+The Draft gate is green, not just the Part gate: the sketch constraint model (P4
+SK1-lite/SK3) took `test_modification` to **33/0/0/0**, which closes
+`test_draft_to_sketch` — the last error in the headless Draft suite. The model is
+[`sketch-constraints.md`](sketch-constraints.md); the one skip is the BIM-space SVG case.
 
 **The five Part errors found on 2026-11-13 are fixed.** `ColorPerFaceTest` passes
 `ViewObject.RootNode` to the **system** `pivy.coin` `SoSearchAction`; B20 had made

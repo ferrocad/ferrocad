@@ -105,6 +105,10 @@ breadth, not more Part surface for its own sake.
 
 - [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) — the active backlog and the
   measurement caveats at this rotation.
+- [`2026-11-15-p4-sketch-model.md`](2026-11-15-p4-sketch-model.md) — the sketch model
+  round: the constraint record and its Python surface, the three Part seams `Draft.make_sketch`
+  needed (`findPlane` on a wire, `LineSegment(curve, first, last)`, an angle quantity), the
+  `PropertyAngle` unit bug it exposed, and the Draft gate at 93/0/0/1.
 - [`2026-11-14-p2-boolean-seam.md`](2026-11-14-p2-boolean-seam.md) — the P2 boolean/seam
   round: one general-fuse build, vertex images, `Edge.Orientation`/`Placement`, the wire
   wrapper, `Face.addWire` and the circle frame, the signed boolean tolerance, the 25 SimpleCAD failures and

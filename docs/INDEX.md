@@ -176,6 +176,7 @@ here.
 - [developer/workbenches/actions-and-tools.md](developer/workbenches/actions-and-tools.md) — the workbench command model: registration, enablement, dialogs and the actions bar.
 - [developer/workbenches/conformance.md](developer/workbenches/conformance.md) — running the upstream FreeCAD suite against the facade.
 - [developer/workbenches/draft-tools.md](developer/workbenches/draft-tools.md) — the native Draft tool layer (Q4/Q5): Snapper, point sessions, line/wire and the snap bar.
+- [developer/workbenches/sketch-constraints.md](developer/workbenches/sketch-constraints.md) — the sketch constraint model: the `ConstraintData` encoding, the Python surface, the autoconstraint detection, and why `solve()` does not move geometry.
 - [developer/workbenches/grid-overlay-plan.md](developer/workbenches/grid-overlay-plan.md) — the grid-overlay decisions, the `FerroCAD.Grid` surface and G0–G6.
 - [developer/workbenches/mod-providers.md](developer/workbenches/mod-providers.md) — how a mod declares its providers and how the active backend is chosen.
 - [developer/workbenches/part-api-audit.md](developer/workbenches/part-api-audit.md) — the repeatable Part/OCCT surface audit and its `--check` contract.
@@ -240,6 +241,7 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Closed history
 
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
+- [project/record/2026-11-15-p4-sketch-model.md](project/record/2026-11-15-p4-sketch-model.md) — the sketch model round: the constraint record and its Python surface, the three Part seams `Draft.make_sketch` needed, the `PropertyAngle` unit bug and the green Draft gate.
 - [project/record/2026-11-14-p2-boolean-seam.md](project/record/2026-11-14-p2-boolean-seam.md) — the P2 boolean/seam round: one general-fuse build, vertex images, `Edge.Orientation`/`Placement`, the wire wrapper, `Face.addWire` and the circle frame, the signed boolean tolerance, and the reverted `close_holes` experiment.
 - [project/record/2026-11-13-november-round.md](project/record/2026-11-13-november-round.md) — the November round: the OCCT Rust boundary, the browser shell, the host/backend split, backend parity, the mod format, the two regressions found at rotation, and the manipulator editor round.
 - [project/record/TODO-14-11-2026.md](project/record/TODO-14-11-2026.md) — the closed 2026-11-14 backlog: the manipulator day, the startup sample, the boolean containers, the sub-shape seam and the open P2–P6 work.

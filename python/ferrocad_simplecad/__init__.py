@@ -270,15 +270,32 @@ class _DrawCommand:
     MENU = ""
     #: The one-line tooltip: what the user clicks.
     TIP = ""
+    #: Which chrome surface owns the command: `creation` (the split pill), `radial`
+    #: (a wheel wedge) or `palette` (Search only). It is never `dock`: the action dock
+    #: holds the globals, the pill and Search, and nothing else.
+    SURFACE_KIND = "creation"
+    #: The creation pill's tier for a `creation` command.
+    CATEGORY = "Sketch"
+    #: The context kinds a `radial` command applies to.
+    TARGET = ""
+    #: `structural`, `additive` or `destructive` (the wheel's tone order).
+    TONE = ""
 
     def GetResources(self):
-        return {
+        resources = {
             "MenuText": self.MENU,
             "ToolTip": self.TIP,
             "Group": SURFACE,
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": SURFACE,
+            "FerroCAD_Surface": self.SURFACE_KIND,
         }
+        if self.CATEGORY:
+            resources["FerroCAD_Category"] = self.CATEGORY
+        if self.TARGET:
+            resources["FerroCAD_Target"] = self.TARGET
+        if self.TONE:
+            resources["FerroCAD_Tone"] = self.TONE
+        return resources
 
     def IsActive(self):
         return True
@@ -669,9 +686,17 @@ FerroCAD.register_interaction_provider(_interaction)
 
 
 class _ElementCommand(_DrawCommand):
-    """A command that arms one element verb for the next pick."""
+    """A command that arms one element verb for the next pick.
+
+    It shares `_DrawCommand`'s resource plumbing but is a **wheel wedge**, not a
+    creation tool: the pick it follows is a curved face or a drawing's rim.
+    """
 
     VERB = OFFSET
+    SURFACE_KIND = "radial"
+    CATEGORY = ""
+    TARGET = "edge,face"
+    TONE = "structural"
 
     def Activated(self, iMsg=0):
         return _arm(self.VERB)
@@ -699,6 +724,7 @@ class _RotateElementCommand(_ElementCommand):
     VERB = ROTATE
     MENU = "Rotate edge"
     TIP = "Pick a drawing's arc, then drag (or type) the angle"
+    TARGET = "edge"
 
 
 for _name, _command in (
@@ -976,6 +1002,28 @@ _VERBS = {
     "Heal": (None, _verb_heal, "Align nearly parallel, coplanar or axis-aligned geometry"),
 }
 
+#: Verb -> (context kinds, tone) for the wheel. The ring is a **context** menu: a
+#: shell verb belongs on a face, a dress-up on an edge, and a combine verb on a body.
+#: `Delete` is the shell's own destructive slot and is always last.
+_VERB_WHEEL = {
+    "Shell": ("body,face", "structural"),
+    "Draft": ("face", "structural"),
+    "FillHole": ("face", "structural"),
+    "RemoveRounds": ("edge,face", "structural"),
+    "Unwrap": ("face", "structural"),
+    "Union": ("body", "additive"),
+    "Intersect": ("body", "additive"),
+    "Subdivide": ("face", "structural"),
+}
+
+#: Verbs with no context gesture to attach to: Search lists them, the wheel does not.
+#: A slice needs a plane and a heal needs a chosen body, so neither is a flick.
+_PALETTE_VERBS = {"Slice", "Cleanup", "Heal"}
+
+#: Verbs that **arm a shape** rather than act on the current pick. They are creation-pill
+#: tools, so they are reached the same way `Rectangle` is — from `⊕ <tool> ▾`.
+_CREATION_VERBS = {"Loft": "Surface", "Sweep": "Surface"}
+
 
 def _run_verb(verb, value=None):
     """Run one selection verb. A refusal is a status, never an exception."""
@@ -1005,13 +1053,23 @@ class _VerbCommand:
         tooltip = self.summary
         if self.default is not None:
             tooltip += " (%s by default)" % self.default
-        return {
+        resources = {
             "MenuText": self.verb,
             "ToolTip": tooltip,
             "Group": SURFACE,
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "radial",
         }
+        if self.verb in _CREATION_VERBS:
+            resources["FerroCAD_Surface"] = "creation"
+            resources["FerroCAD_Category"] = _CREATION_VERBS[self.verb]
+        elif self.verb in _PALETTE_VERBS:
+            resources["FerroCAD_Surface"] = "palette"
+        else:
+            target, tone = _VERB_WHEEL.get(self.verb, ("body", "structural"))
+            resources["FerroCAD_Target"] = target
+            resources["FerroCAD_Tone"] = tone
+        return resources
 
     def IsActive(self):
         return FreeCAD.ActiveDocument is not None and bool(_selection_pairs())

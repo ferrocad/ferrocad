@@ -1435,11 +1435,33 @@ fn gpu_row(
 /// The action dock: the `dock` surface as one centred strip over the bottom of the
 /// canvas.
 ///
-/// Rows come straight from the registry, so `IsActive` (driven by the selection) is
-/// what enables or greys them. Disabled commands stay visible: the dock shows what
-/// the workbench can do, not only what is possible right now.
-pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl IntoElement {
-    let dock = model.surfaces().dock;
+/// **The strict contract.** In the idle state this strip holds exactly
+///
+/// ```text
+/// [ Undo  Redo  Fit │ ⊕ <LastTool> ▾ │ Search (Ctrl+K) ]
+/// ```
+///
+/// — the `dock`-surface globals, the **creation pill** and Search. It never grows a
+/// horizontal list of creation or modification buttons: a creation tool declares
+/// `FerroCAD_Surface: "creation"` and appears inside the pill, a shape verb declares
+/// `"radial"` or `"palette"` and appears in the wheel or only in Search. A dock full of
+/// verbs is a toolbar, and the Add hand exists precisely so it is not one.
+///
+/// `active` is the last armed creation command (the pill's memory), `open` whether the
+/// pill's flyout is the open popover, `anchor` the pointer press that opened it, and
+/// `blocked` a pending transform or manipulator: the dock then dims to 45 % and its
+/// clicks are dropped, exactly as the hand column does, so a second command cannot be
+/// started underneath an uncommitted one.
+pub(crate) fn action_dock(
+    model: &ShellModel,
+    active: Option<&str>,
+    open: bool,
+    anchor: Option<Point<Pixels>>,
+    blocked: bool,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let groups = model.surfaces();
+    let dock = groups.dock;
     let mut panel = div()
         .id("action-dock")
         .debug_selector(|| "action-dock".to_string())
@@ -1459,7 +1481,8 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
         .rounded_md()
         .bg(rgba(DOCK_BG))
         .border_1()
-        .border_color(rgba(DOCK_BORDER));
+        .border_color(rgba(DOCK_BORDER))
+        .when(blocked, |el| el.opacity(0.45));
 
     // The dock is the **creation + global** surface: object verbs live in the
     // in-situ radial menu, so this strip never swaps width when the selection
@@ -1523,7 +1546,7 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
                 })
             })
             .child(content);
-        if enabled {
+        if enabled && !blocked {
             button = button.on_click(cx.listener(move |this, _event, _window, cx| {
                 this.run_command(&id, cx);
             }));
@@ -1533,6 +1556,12 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
 
     if rendered {
         panel = panel.child(dock_divider(2));
+    }
+    // The Add hand: one split pill, never a row of tools. An edition with no creation
+    // commands (a bare composition) simply has no pill.
+    if let Some(pill) = creation_pill(&groups.creation, active, open, anchor, blocked, cx) {
+        panel = panel.child(pill);
+        panel = panel.child(dock_divider(3));
     }
     panel = panel.child(
         div()
@@ -1578,6 +1607,151 @@ pub(crate) fn action_dock(model: &ShellModel, cx: &mut Context<Shell>) -> impl I
         .items_center()
         .justify_center()
         .child(panel)
+}
+
+/// The five creation tiers, in the order the flyout lists them.
+///
+/// The design's hierarchy (`creation-loadout.md` §1) is Spatial first — you draw
+/// before you solidify — and a mod that invents a sixth category sorts after all five
+/// rather than disappearing.
+const CREATION_CATEGORIES: [&str; 5] = ["Sketch", "Solid", "Surface", "Text", "Mesh"];
+
+fn creation_rank(category: Option<&str>) -> usize {
+    category
+        .and_then(|category| {
+            CREATION_CATEGORIES
+                .iter()
+                .position(|known| known.eq_ignore_ascii_case(category))
+        })
+        .unwrap_or(CREATION_CATEGORIES.len())
+}
+
+/// The memory split-pill: `⊕ <LastTool> ▾`.
+///
+/// The left segment arms the remembered creation tool (one click, no flyout); the caret
+/// opens the category flyout. The **default** is the first `Solid` tool when the edition
+/// registers one — Box — and the first tool otherwise, so a fresh document offers the
+/// primitive the old `Create Box` button did.
+fn creation_pill(
+    creation: &[&CommandInfo],
+    active: Option<&str>,
+    open: bool,
+    anchor: Option<Point<Pixels>>,
+    blocked: bool,
+    cx: &mut Context<Shell>,
+) -> Option<AnyElement> {
+    // Registry order is the edition's; the pill lists by category, stably.
+    let mut ordered: Vec<&CommandInfo> = creation
+        .iter()
+        .copied()
+        .filter(|command| !command.dev_only)
+        .collect();
+    ordered.sort_by_key(|command| creation_rank(command.category()));
+    let remembered = active
+        .and_then(|id| ordered.iter().find(|command| command.id == id).copied())
+        .or_else(|| {
+            ordered
+                .iter()
+                .find(|command| {
+                    command
+                        .category()
+                        .is_some_and(|category| category.eq_ignore_ascii_case("Solid"))
+                })
+                .copied()
+        })
+        .or_else(|| ordered.first().copied())?;
+
+    let arm_id = remembered.id.clone();
+    let arm_label = remembered.label().to_string();
+    let arm_enabled = remembered.enabled && !blocked;
+    let ink = if arm_enabled { FG } else { MUTED };
+
+    let container = div()
+        .id("creation-pill")
+        .debug_selector(|| "creation-pill".to_string())
+        .flex()
+        .flex_row()
+        .items_center()
+        .rounded_sm()
+        .child(
+            div()
+                .id("creation-pill-arm")
+                .debug_selector(|| "creation-pill-arm".to_string())
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .text_xs()
+                .text_color(rgb(ink))
+                .when(arm_enabled, |el| {
+                    el.cursor_pointer()
+                        .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
+                })
+                .child(format!("⊕ {arm_label}"))
+                .when(arm_enabled, |el| {
+                    el.on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.run_command(&arm_id, cx);
+                    }))
+                }),
+        )
+        .child(
+            {
+                let caret = div()
+                    .id("creation-pill-caret")
+                    .debug_selector(|| "creation-pill-caret".to_string())
+                    .px_1()
+                    .py_1()
+                    .rounded_sm()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("▾");
+                if blocked {
+                    caret
+                } else {
+                    caret.cursor_pointer().hover(|style| style.bg(rgba(ROW_HOVER))).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _window, _cx| {
+                            this.set_popover_anchor(event.position);
+                        }),
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| this.open_popover("create", cx)))
+                }
+            },
+        );
+
+    // The flyout: the categories as groups, in the design's order, each row the tool's
+    // own command so `IsActive` is what greys it.
+    let rows: Vec<PopoverRow> = {
+        let mut rows = Vec::with_capacity(ordered.len());
+        let mut previous = None;
+        for command in &ordered {
+            let rank = creation_rank(command.category());
+            let mut row = PopoverRow::of(command);
+            row.divider_before = previous.is_some_and(|previous| previous != rank);
+            previous = Some(rank);
+            rows.push(row);
+        }
+        rows
+    };
+
+    let mut pill = container;
+    if open && !rows.is_empty() {
+        // Above the pill: the dock is at the bottom, so the panel grows upward from just
+        // above the press (the header's menus grow downward by the same rule).
+        let position = anchor
+            .map(|pointer| point(pointer.x, pointer.y - px(34.)))
+            .unwrap_or_else(|| point(px(0.), px(0.)));
+        pill = pill.child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::BottomLeft)
+                    .position(position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(popover("create", rows, cx)),
+            )
+            .with_priority(1),
+        );
+    }
+    Some(pill.into_any_element())
 }
 
 /// The command ids owned by a backend that is **not** the active one for its feature,

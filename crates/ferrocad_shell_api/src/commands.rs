@@ -14,8 +14,9 @@ use serde::Deserialize;
 ///
 /// A command declares this in `GetResources()["FerroCAD_Surface"]`; the registry
 /// does not derive it from `Group`, because `Group` says how to sort, not where to
-/// put a button. An unannotated command lands on the **dock**, never nowhere: a mod
-/// that predates this extension must still be reachable.
+/// put a button. An unannotated command lands in the **palette**, never nowhere: a mod
+/// that predates this extension must still be reachable (Search and Dev Tools list it),
+/// and must never appear on a canvas strip it did not ask for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Surface {
     /// The grid split button in the viewport header.
@@ -32,8 +33,20 @@ pub enum Surface {
     Radial,
     /// The mods/provider control in the viewport header.
     Mods,
-    /// The selection-driven action dock over the canvas — the default.
+    /// The **creation pill**: a tool that creates new geometry, offered by the one
+    /// split control in the action dock and by the palette. It never becomes a dock
+    /// button of its own — a dock full of creation verbs is a toolbar, and the pill is
+    /// what the Add hand replaced it with.
+    Creation,
+    /// Search-only: registered and listed in the palette (and Dev Tools), offered by no
+    /// viewport surface. A utility that is not context-appropriate anywhere belongs
+    /// here rather than in the wheel — and it is the **default**, so a mod that declares
+    /// no surface cannot overflow a canvas strip.
     #[default]
+    Palette,
+    /// The selection-driven action dock over the canvas. Only the built-in globals
+    /// (`Undo`, `Redo`, `Fit`) declare it: the strip's other two controls are the
+    /// creation pill and Search, which are shell chrome rather than registry rows.
     Dock,
     /// Registered but not offered on a viewport surface. The Dev Tools command list
     /// always shows it, and the app menu may offer it explicitly (Dev Tools is the
@@ -52,6 +65,8 @@ impl Surface {
             "snap" | "snapping" | "header:snap" | "header:snapping" => Some(Self::Snap),
             "radial" | "wheel" => Some(Self::Radial),
             "mods" | "header:mods" => Some(Self::Mods),
+            "creation" | "pill" | "create" => Some(Self::Creation),
+            "palette" | "search" => Some(Self::Palette),
             // A capability surface with no chrome of its own: the gizmo's settings are
             // reached through the wheel's `Move`/`Rotate` verbs and the Settings tree,
             // never as a standalone toolbar entry.
@@ -71,6 +86,8 @@ impl Surface {
             Self::Snap => "snap",
             Self::Radial => "radial",
             Self::Mods => "mods",
+            Self::Creation => "creation",
+            Self::Palette => "palette",
             Self::Dock => "dock",
             Self::Hidden => "hidden",
         }
@@ -108,6 +125,16 @@ pub struct CommandInfo {
     /// `structural` (default), `additive` or `destructive` (P0.6 extension).
     #[serde(default)]
     pub tone: String,
+    /// `GetResources()["FerroCAD_Category"]` — the creation category a tool is offered
+    /// under in the creation pill (`Sketch`, `Solid`, `Surface`, `Text`, `Mesh`).
+    #[serde(default)]
+    pub category: String,
+    /// `GetResources()["FerroCAD_Target"]` — which context targets a radial verb
+    /// applies to: `body`, `face`, `edge`, or a comma-separated combination. Empty (or
+    /// `any`) means every context, which is the right default for a mod's object verb
+    /// and the wrong answer for a face-only tool, so the wheel's own verbs declare it.
+    #[serde(default)]
+    pub target: String,
     /// `GetResources()["FerroCAD_Parent"]` — the surface's primary command id, for a
     /// command offered in that control's popover (P0.6 extension).
     #[serde(default)]
@@ -158,7 +185,7 @@ impl CommandInfo {
         }
     }
 
-    /// The command's surface; an absent or unknown value defaults to the dock.
+    /// The command's surface; an absent or unknown value defaults to the palette.
     pub fn surface(&self) -> Surface {
         Surface::parse(&self.surface).unwrap_or_default()
     }
@@ -167,6 +194,60 @@ impl CommandInfo {
     pub fn parent(&self) -> Option<&str> {
         let parent = self.parent.trim();
         (!parent.is_empty()).then_some(parent)
+    }
+
+    /// The creation category, when the command declares one.
+    pub fn category(&self) -> Option<&str> {
+        let category = self.category.trim();
+        (!category.is_empty()).then_some(category)
+    }
+
+    /// The target kinds a radial verb applies to; `None` means "any".
+    pub fn targets(&self) -> Option<Vec<TargetKind>> {
+        let mut kinds = Vec::new();
+        for word in self.target.split(|c: char| c == ',' || c.is_whitespace()) {
+            match word.trim().to_ascii_lowercase().as_str() {
+                "body" | "object" | "solid" => kinds.push(TargetKind::Body),
+                "face" => kinds.push(TargetKind::Face),
+                "edge" | "wire" => kinds.push(TargetKind::Edge),
+                _ => {}
+            }
+        }
+        (!kinds.is_empty()).then_some(kinds)
+    }
+
+    /// Whether the verb is offered for a resolved context target.
+    pub fn applies_to(&self, kind: TargetKind) -> bool {
+        self.targets()
+            .is_none_or(|kinds| kinds.contains(&kind))
+    }
+}
+
+/// The kind of thing under the pointer, as the wheel contextualises it.
+///
+/// The wheel is a **context** menu, not a toolbar: a face has shell/draft verbs, an
+/// edge has dress-up verbs, and the ring stays a ring because each verb says which
+/// kinds it applies to (`FerroCAD_Target`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TargetKind {
+    /// A whole body (or several): object verbs.
+    Body,
+    /// A planar or curved face (`Face6`): surface verbs.
+    Face,
+    /// An edge (`Edge3`): dress-up verbs.
+    Edge,
+}
+
+impl TargetKind {
+    /// The kind a selected sub-element name names, if it names one.
+    pub fn of_element(element: &str) -> Option<Self> {
+        if element.starts_with("Face") {
+            Some(Self::Face)
+        } else if element.starts_with("Edge") {
+            Some(Self::Edge)
+        } else {
+            None
+        }
     }
 }
 
@@ -178,8 +259,10 @@ pub struct SurfaceGroups<'a> {
     pub workplane: Vec<&'a CommandInfo>,
     pub snap: Vec<&'a CommandInfo>,
     pub radial: Vec<&'a CommandInfo>,
+    pub creation: Vec<&'a CommandInfo>,
     pub mods: Vec<&'a CommandInfo>,
     pub dock: Vec<&'a CommandInfo>,
+    pub palette: Vec<&'a CommandInfo>,
     pub hidden: Vec<&'a CommandInfo>,
 }
 
@@ -193,6 +276,8 @@ impl<'a> SurfaceGroups<'a> {
             Surface::Snap => &self.snap,
             Surface::Radial => &self.radial,
             Surface::Mods => &self.mods,
+            Surface::Creation => &self.creation,
+            Surface::Palette => &self.palette,
             Surface::Dock => &self.dock,
             Surface::Hidden => &self.hidden,
         }
@@ -207,8 +292,10 @@ impl<'a> SurfaceGroups<'a> {
             self.workplane.as_slice(),
             self.snap.as_slice(),
             self.radial.as_slice(),
+            self.creation.as_slice(),
             self.mods.as_slice(),
             self.dock.as_slice(),
+            self.palette.as_slice(),
             self.hidden.as_slice(),
         ]
         .into_iter()
@@ -229,6 +316,8 @@ pub fn group_by_surface(commands: &[CommandInfo]) -> SurfaceGroups<'_> {
             Surface::Snap => groups.snap.push(command),
             Surface::Radial => groups.radial.push(command),
             Surface::Mods => groups.mods.push(command),
+            Surface::Creation => groups.creation.push(command),
+            Surface::Palette => groups.palette.push(command),
             Surface::Dock => groups.dock.push(command),
             Surface::Hidden => groups.hidden.push(command),
         }
@@ -426,11 +515,19 @@ mod tests {
         assert_eq!(Surface::parse("nowhere"), None);
 
         let bare: CommandInfo = serde_json::from_str(r#"{"id": "Mod_Foo"}"#).unwrap();
-        assert_eq!(bare.surface(), Surface::Dock, "unannotated never disappears");
+        assert_eq!(
+            bare.surface(),
+            Surface::Palette,
+            "unannotated never disappears, and never lands on a canvas strip"
+        );
         assert!(bare.parent().is_none());
 
         let odd = command("Mod_Bar", "nowhere", "");
-        assert_eq!(odd.surface(), Surface::Dock, "an unknown surface is the dock");
+        assert_eq!(
+            odd.surface(),
+            Surface::Palette,
+            "an unknown surface is the palette, not the dock"
+        );
 
         let annotated: CommandInfo = serde_json::from_str(
             r#"{"id":"View_GridSettings","surface":"grid","parent":"App_ToggleGrid"}"#,
@@ -480,8 +577,11 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), commands.len(), "nothing is on two surfaces");
         assert!(
-            groups.dock.iter().any(|command| command.id == "Mod_Unannotated"),
-            "the unannotated command is on the dock"
+            groups
+                .palette
+                .iter()
+                .any(|command| command.id == "Mod_Unannotated"),
+            "the unannotated command is searchable, not a dock button"
         );
         assert_eq!(groups.grid.len(), 2);
         assert_eq!(groups.workplane.len(), 2);

@@ -43,6 +43,9 @@ pub struct CommandDef {
     pub short: &'static str,
     /// `FerroCAD_Tone` — a radial slot's semantic class.
     pub tone: &'static str,
+    /// `FerroCAD_Target` — the context kinds a radial verb applies to (`"body"`, or a
+    /// comma-separated combination); empty means every context.
+    pub target: &'static str,
     /// `FerroCAD_Parent` — the surface's primary command id.
     pub parent: &'static str,
     /// `FerroCAD_Wheel` — also offer it in the radial menu.
@@ -72,6 +75,7 @@ const fn def(
         surface,
         short: "",
         tone: "",
+        target: "",
         parent: "",
         wheel: false,
         checkable: false,
@@ -206,6 +210,7 @@ pub const BUILTIN: &[CommandDef] = &[
     ),
     CommandDef {
         tone: "structural",
+        target: "body",
         wheel: true,
         ..def(
             MOVE,
@@ -219,6 +224,7 @@ pub const BUILTIN: &[CommandDef] = &[
     },
     CommandDef {
         tone: "structural",
+        target: "body",
         wheel: true,
         ..def(
             ROTATE,
@@ -258,6 +264,7 @@ pub const BUILTIN: &[CommandDef] = &[
         "dock",
     ),
     CommandDef {
+        target: "body",
         wheel: true,
         ..def(
             TOGGLE_VISIBILITY,
@@ -327,6 +334,8 @@ impl CommandDef {
             surface: self.surface.to_string(),
             short: self.short.to_string(),
             tone: self.tone.to_string(),
+            category: String::new(),
+            target: self.target.to_string(),
             parent: self.parent.to_string(),
             // Built-ins resolve through the curated table; a workbench or mod command
             // can override this with a vendored icon key or an upstream id.
@@ -404,6 +413,9 @@ fn commands_json() -> Value {
                 }
                 if !def.tone.is_empty() {
                     object.insert("tone".to_string(), json!(def.tone));
+                }
+                if !def.target.is_empty() {
+                    object.insert("target".to_string(), json!(def.target));
                 }
                 if !def.parent.is_empty() {
                     object.insert("parent".to_string(), json!(def.parent));

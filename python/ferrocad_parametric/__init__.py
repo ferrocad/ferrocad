@@ -1313,7 +1313,10 @@ class _MakeBoxCommand:
             "ToolTip": "Add a box to the document",
             "Group": "Part",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            # A creation tool: it lives in the split creation pill (`⊕ Box ▾`), never as
+            # its own dock button. The category is what the pill's flyout tiers by.
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Solid",
         }
 
     def IsActive(self):
@@ -1599,7 +1602,8 @@ class _PolylineCommand:
             "ToolTip": "Draw a polyline on the workplane; it is closed and extruded",
             "Group": "Draft",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Sketch",
         }
 
     def IsActive(self):
@@ -1778,7 +1782,8 @@ class _SketchPolylineCommand:
             "ToolTip": "Draw a closed sketch profile on the workplane and pad it",
             "Group": "Sketch",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Sketch",
         }
 
     def IsActive(self):
@@ -1802,7 +1807,9 @@ class _DimensionCommand:
             "ToolTip": "Add a driving dimension to the selected sketch edge",
             "Group": "Sketch",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            # Needs a sketch selection rather than a canvas gesture, and its pad is a
+            # dialog: a Search-only utility, not a wheel wedge.
+            "FerroCAD_Surface": "palette",
         }
 
     def IsActive(self):
@@ -1844,7 +1851,10 @@ class _BooleanCommand:
             "ToolTip": self.spec["tooltip"],
             "Group": "Part",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            # A combine verb over two or more bodies: a body-context wheel wedge.
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Target": "body",
+            "FerroCAD_Tone": "additive",
         }
 
     def IsActive(self):
@@ -1884,7 +1894,9 @@ class _CompoundCommand:
             "ToolTip": "Compounds the selected shapes",
             "Group": "Part",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            # A document-collection utility with no gesture of its own: Search-only, so
+            # the body ring stays the eight wedges the design calls for.
+            "FerroCAD_Surface": "palette",
         }
 
     def IsActive(self):
@@ -1929,6 +1941,7 @@ class _SaveDatumPlaneCommand:
             "FerroCAD_Parent": "App_Workplane",
             "FerroCAD_Short": "Save WP",
             "FerroCAD_Wheel": True,
+            "FerroCAD_Target": "body,face",
             "FerroCAD_Tone": "additive",
         }
 
@@ -2091,8 +2104,10 @@ class _HealFacesCommand:
             "ToolTip": "Remove the selected faces and close the body again",
             "Group": "Part",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
-            "FerroCAD_Tone": "destructive",
+            # A face-context repair: the neighbours grow until the body closes again.
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Target": "face",
+            "FerroCAD_Tone": "structural",
         }
 
     def IsActive(self):
@@ -2121,7 +2136,9 @@ class _ChamferCommand:
             "ToolTip": "Chamfer the selected edges (then drag the grip to tune it)",
             "Group": "Part",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            # An edge dress-up: the Slot 3 sibling of the fillet scrubber.
+            "FerroCAD_Surface": "radial",
+            "FerroCAD_Target": "edge",
             "FerroCAD_Tone": "additive",
         }
 

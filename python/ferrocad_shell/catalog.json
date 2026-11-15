@@ -81,6 +81,7 @@
       "id": "App_Move",
       "menu": "Move",
       "surface": "radial",
+      "target": "body",
       "tone": "structural",
       "tooltip": "Move the selected objects by a delta",
       "wheel": true
@@ -92,6 +93,7 @@
       "id": "App_Rotate",
       "menu": "Rotate",
       "surface": "radial",
+      "target": "body",
       "tone": "structural",
       "tooltip": "Rotate the selected objects about the gizmo origin",
       "wheel": true
@@ -128,6 +130,7 @@
       "id": "App_ToggleVisibility",
       "menu": "Toggle visibility",
       "surface": "radial",
+      "target": "body",
       "tooltip": "Hide or show the selected objects",
       "wheel": true
     }

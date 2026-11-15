@@ -83,7 +83,8 @@ class _CreateCage:
             "ToolTip": "Add a box cage and its Catmull-Clark preview",
             "Group": GROUP,
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Mesh",
         }
 
     def IsActive(self):
@@ -113,7 +114,8 @@ class _CreateSkin:
             "ToolTip": "Sew a cage into a solid",
             "Group": GROUP,
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Solid",
         }
 
     def _subject(self):
@@ -158,7 +160,8 @@ class _NestInBody:
             "ToolTip": "Put the selected cage and skin in a PartDesign body",
             "Group": GROUP,
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            # A document edit over a selection, not a canvas gesture: Search-only.
+            "FerroCAD_Surface": "palette",
         }
 
     def _subjects(self):

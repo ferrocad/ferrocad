@@ -2231,6 +2231,8 @@ fn row(id: &str, menu: &str, surface: &str) -> CommandInfo {
         surface: surface.to_string(),
         short: String::new(),
         tone: String::new(),
+        category: String::new(),
+        target: String::new(),
         parent: String::new(),
         wheel: false,
         enabled: true,

@@ -72,7 +72,11 @@ if "Test_Unannotated" not in FreeCADGui.listCommands():
         Surface::Hidden,
         "the pointer-hover verb is script-only; a menu click moves the pointer away"
     );
-    assert_eq!(find("Test_Unannotated").surface(), Surface::Dock);
+    assert_eq!(
+        find("Test_Unannotated").surface(),
+        Surface::Palette,
+        "an unannotated command is searchable, never a dock button"
+    );
 }
 
 /// T1/T2: the header split button's label runs the primary command; the caret

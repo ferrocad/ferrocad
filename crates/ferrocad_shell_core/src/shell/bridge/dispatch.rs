@@ -204,6 +204,22 @@ impl Shell {
         // Running any command dismisses the open popover: its menu has served its
         // purpose, and a new dialog should not sit under a still-open menu.
         self.open_popover = None;
+        // The creation pill's fast path repeats the **last armed creation tool**. Any
+        // command on the `creation` surface sets it; everything else (a selection verb,
+        // a view toggle) leaves the memory alone, so picking `Chamfer` off the wheel
+        // does not change what `⊕` offers next.
+        if self
+            .model
+            .lock()
+            .unwrap()
+            .commands
+            .iter()
+            .any(|command| {
+                command.id == id && command.surface() == commands::Surface::Creation
+            })
+        {
+            self.active_creation = Some(id.to_string());
+        }
         // Saving the active workplane as a datum plane is a frame the shell owns plus a
         // document object the edition owns; the interpreter function does not exist in
         // every build, so this path reports its error rather than going through the

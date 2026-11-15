@@ -979,15 +979,18 @@ def commands() -> str:
     ``docs/developer/workbenches/actions-and-tools.md``); this script only marshals the list, so the
     shell names no workbench either.
 
-    FerroCAD extends ``GetResources()`` with three optional keys the upstream facade
-    does not know about: ``FerroCAD_Surface`` (which chrome surface owns the command),
+    FerroCAD extends ``GetResources()`` with optional keys the upstream facade does
+    not know about: ``FerroCAD_Surface`` (which chrome surface owns the command —
+    ``dock``, ``creation``, ``radial``, ``palette``, ``hidden`` or a header control),
+    ``FerroCAD_Category`` (the creation pill's tier for a ``creation`` tool),
+    ``FerroCAD_Target`` (the context kinds a ``radial`` verb applies to),
     ``FerroCAD_Parent`` (the surface's primary command id, for a row in that control's
     popover) and ``FerroCAD_Short`` (a compact popover label, used when the full one
     repeats the control's name). They are added here, in the shell bridge, so
     ``FreeCADGui`` itself stays upstream-shaped; the JSON keeps the neutral field names
-    ``surface``/``parent``/``short``. A ``checkable`` flag is forwarded too, because
-    it changes row behaviour (a toggle keeps its popover open); it is true when the
-    command declares ``Checkable`` or implements ``IsChecked``.
+    ``surface``/``category``/``target``/``parent``/``short``. A ``checkable`` flag is
+    forwarded too, because it changes row behaviour (a toggle keeps its popover open);
+    it is true when the command declares ``Checkable`` or implements ``IsChecked``.
     """
     entries = FreeCADGui._command_list()
     registry = getattr(FreeCADGui, "_COMMANDS", {})
@@ -999,6 +1002,11 @@ def commands() -> str:
         entry["parent"] = str(resources.get("FerroCAD_Parent") or "")
         entry["short"] = str(resources.get("FerroCAD_Short") or "")
         entry["tone"] = str(resources.get("FerroCAD_Tone") or "")
+        # The creation pill's category (`Sketch`, `Solid`, …) and the context kinds a
+        # wheel verb applies to (`body`, `face`, `edge`). Both are optional: a
+        # command that names neither is a plain creation entry or an any-context verb.
+        entry["category"] = str(resources.get("FerroCAD_Category") or "")
+        entry["target"] = str(resources.get("FerroCAD_Target") or "")
         # Upstream's icon resource. The shell resolves it as a vendored icon key
         # first, so a mod can name a glyph directly, then as a curated command id.
         entry["pixmap"] = str(resources.get("Pixmap") or "")
@@ -1361,6 +1369,8 @@ _CATALOG_RESOURCES = (
     ("surface", "FerroCAD_Surface"),
     ("short", "FerroCAD_Short"),
     ("tone", "FerroCAD_Tone"),
+    ("category", "FerroCAD_Category"),
+    ("target", "FerroCAD_Target"),
     ("parent", "FerroCAD_Parent"),
 )
 
@@ -2493,6 +2503,7 @@ class _SetWorkplaneCommand:
             "FerroCAD_Surface": "workplane",
             "FerroCAD_Parent": "App_Workplane",
             "FerroCAD_Wheel": True,
+            "FerroCAD_Target": "face",
             "FerroCAD_Tone": "structural",
         }
 

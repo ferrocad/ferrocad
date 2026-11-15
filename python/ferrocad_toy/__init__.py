@@ -326,7 +326,8 @@ class _MakeSlabCommand:
             "Accel": "Ctrl+Shift+S",
             "Group": "Toy",
             "CmdType": "ForEdit",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Solid",
         }
 
     def IsActive(self):
@@ -393,7 +394,8 @@ class _PolylineCommand:
             "ToolTip": "Draw a polyline in the viewport",
             "Group": "Toy",
             "CmdType": "ForView",
-            "FerroCAD_Surface": "dock",
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Sketch",
         }
 
     def IsActive(self):

@@ -12,6 +12,26 @@ use ferrocad_stage::{
 /// The `Offset Workplane…` HUD's field that mirrors the session's pending offset.
 const WORKPLANE_FIELD: &str = "offset";
 
+/// The built-in delete verb.
+///
+/// The wheel keeps it in the **final destructive slot of every context**, so "flick
+/// down to delete" never moves as the ring's contents change with the target kind.
+const DELETE_ID: &str = "App_Delete";
+
+/// Which context kind a wheel target names.
+///
+/// A whole object — or a multi-element pick, where there is no single face or edge to
+/// speak of — is a **body**. One named sub-element is its own kind. `None` (the pointer
+/// is over empty space) means "do not filter", so a selection-driven ring still shows.
+fn target_kind(target: Option<&ferrocad_geom::SelectionRef>) -> Option<crate::commands::TargetKind> {
+    let target = target?;
+    Some(match target.elements.as_slice() {
+        [element] => crate::commands::TargetKind::of_element(element)
+            .unwrap_or(crate::commands::TargetKind::Body),
+        _ => crate::commands::TargetKind::Body,
+    })
+}
+
 impl Shell {
     /// Re-read the document's shapes into the viewport's stage.
     ///
@@ -364,9 +384,11 @@ impl Shell {
     /// The object verbs the radial menu shows, in compass order.
     ///
     /// `target` is the wheel's context target (the object under the pointer), or `None`
-    /// when the pointer is over empty space. The registry decides which commands are
-    /// object verbs (`Surface::Radial`); the shell only orders them so the destructive
-    /// slot is last (south) and a disabled slot stays visibly muted.
+    /// when the pointer is over empty space. The wheel is a **context** menu, not a
+    /// toolbar: a verb declares the kinds it applies to (`FerroCAD_Target`), so a face
+    /// offers shell/draft/heal and an edge offers chamfer/offset/rotate, and the ring
+    /// stays a ring instead of becoming a twenty-wedge circle. `Delete` keeps the last
+    /// destructive slot in every context.
     ///
     /// A target **outside** the current selection is not selected yet (opening a menu is
     /// not a mutation), so the registry's selection-dependent `IsActive` cannot be the
@@ -381,6 +403,14 @@ impl Shell {
                 .is_some_and(|name| model.selection.iter().any(|item| item.object == name))
         });
         let pending = target.is_some() && !target_selected;
+        let kind = target_kind(target);
+        let slot = |command: &crate::commands::CommandInfo, tone: WheelTone| WheelSlot {
+            id: command.id.clone().into(),
+            label: command.short_label().into(),
+            icon: command_icons::resolve(command).unwrap_or_default().into(),
+            tone,
+            enabled: command.enabled || pending,
+        };
         let mut slots: Vec<WheelSlot> = model
             .commands
             .iter()
@@ -389,41 +419,42 @@ impl Shell {
                 command.wheel
                     || commands::Surface::parse(&command.surface) == Some(commands::Surface::Radial)
             })
-            .map(|command| WheelSlot {
-                id: command.id.clone().into(),
-                label: command.short_label().into(),
-                icon: command_icons::resolve(command).unwrap_or_default().into(),
-                tone: match command.tone.as_str() {
+            .filter(|command| kind.is_none_or(|kind| command.applies_to(kind)))
+            .map(|command| {
+                let tone = match command.tone.as_str() {
                     "additive" => WheelTone::Additive,
                     "destructive" => WheelTone::Destructive,
                     _ => WheelTone::Structural,
-                },
-                enabled: command.enabled || pending,
+                };
+                slot(command, tone)
             })
             .collect();
         if !slots.iter().any(|slot| slot.enabled) {
-            // Context: nothing to manipulate. The same gesture still deserves a
-            // wheel, so offer the creation verbs from the dock (the "creation /
-            // global" context). With a selection, the object verbs above win.
-            slots = groups
-                .dock
+            // Context: nothing to manipulate. The same gesture still deserves a wheel,
+            // so offer the **creation** tools — the pill's own content — which is the
+            // "Add hand" context. With a selection, the object verbs above win.
+            let creation = if groups.creation.is_empty() {
+                groups.dock
+            } else {
+                groups.creation
+            };
+            slots = creation
                 .iter()
                 .filter(|command| !command.dev_only)
-                .map(|command| WheelSlot {
-                    id: command.id.clone().into(),
-                    label: command.short_label().into(),
-                    icon: command_icons::resolve(command).unwrap_or_default().into(),
-                    tone: WheelTone::Structural,
-                    enabled: command.enabled,
-                })
+                .map(|command| slot(command, WheelTone::Structural))
                 .collect();
         }
-        // Stable sort: structural, additive, destructive. With the two built-ins this
-        // puts Move north and Delete south, so "flick down to delete" never moves.
-        slots.sort_by_key(|slot| match slot.tone {
-            WheelTone::Structural => 0,
-            WheelTone::Additive => 1,
-            WheelTone::Destructive => 2,
+        // Stable sort: structural, additive, destructive, with the built-in delete last
+        // inside the destructive group. That puts Move north and Delete south in every
+        // context, so "flick down to delete" never moves as the ring's contents change.
+        slots.sort_by_key(|slot| {
+            let tone = match slot.tone {
+                WheelTone::Structural => 0,
+                WheelTone::Additive => 1,
+                WheelTone::Destructive => 2,
+            };
+            let delete = usize::from(slot.id.as_ref() == DELETE_ID);
+            (tone, delete)
         });
         slots
     }

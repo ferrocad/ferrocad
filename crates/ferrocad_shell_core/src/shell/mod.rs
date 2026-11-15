@@ -364,6 +364,10 @@ pub struct Shell {
     shortcuts: Vec<(Accelerator, String)>,
     /// The interactive tool the last `{"tool": id}` started (A5).
     active_tool: Option<String>,
+    /// The creation tool the pill's fast path arms (`⊕ <tool>`). Session state, not a
+    /// preference: arming any `creation`-surface command remembers it, and the dock's
+    /// left segment repeats it. `None` until the user arms one.
+    active_creation: Option<String>,
     /// The open command dialog (A3); one at a time.
     dialog: Option<OpenDialog>,
     /// Focus for the modal, so Esc cancels and Enter in a field accepts.
@@ -960,6 +964,7 @@ impl Shell {
             contributions: Contributions::new(),
             shortcuts,
             active_tool: None,
+            active_creation: None,
             dialog: None,
             dialog_focus: cx.focus_handle(),
             focus_dialog: false,
@@ -2050,7 +2055,10 @@ impl Render for Shell {
                     .child(crate::chrome::loadout_bar(
                         self.loadout,
                         self.gizmo_mode,
-                        self.move_is_pending(cx),
+                        // The hand cannot change under an uncommitted move **or** while an
+                        // armed creation tool owns the canvas: that is the mutual
+                        // exclusion the two hands promise.
+                        self.move_is_pending(cx) || self.active_tool.is_some(),
                         cx,
                     ))
             })
@@ -2058,7 +2066,15 @@ impl Render for Shell {
             // the tool surface, so a second command cannot be started underneath it.
             .child(match active_tool {
                 Some(tool) => tool_strip(tool, cx).into_any_element(),
-                None => crate::chrome::action_dock(&model, cx).into_any_element(),
+                None => crate::chrome::action_dock(
+                    &model,
+                    self.active_creation.as_deref(),
+                    self.popover_open("create"),
+                    self.popover_anchor,
+                    self.move_is_pending(cx) || self.pending_interaction.is_some(),
+                    cx,
+                )
+                .into_any_element(),
             })
             .child(self.wheel.clone().into_any_element());
         if let Some(note) = self.gpu_notice.clone() {

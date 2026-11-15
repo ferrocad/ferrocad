@@ -32,6 +32,8 @@ ferrocad = { workspace = true, features = ["part"] }
 ferrocad_combined_py.workspace = true
 # The Part workbench's manipulator (the edge dress-up arc), contributed to the shell.
 ferrocad_part_gui.workspace = true
+# The interactive tool the edition owns: the polyline that drafts a wire profile.
+ferrocad_stage.workspace = true
 pyo3 = { version = "0.25", features = ["auto-initialize"] }
 
 [dev-dependencies]
@@ -49,7 +51,6 @@ ferrocad_shell_pywasm = { path = "../ferrocad_shell_pywasm" }
 ferrocad_core.workspace = true
 ferrocad_geom.workspace = true
 ferrocad_graphics.workspace = true
-ferrocad_stage.workspace = true
 ferrocad_types.workspace = true
 ferrocad_viewport.workspace = true
 ferrocad_inventor.workspace = true

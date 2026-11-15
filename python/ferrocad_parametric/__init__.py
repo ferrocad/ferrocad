@@ -13,6 +13,10 @@ these commands:
   a placement change);
 * `Part_Box` — a dock command that creates a box in one transaction, the way the toy
   workbench's `Toy_MakeSlab` does;
+* `Part_Polyline` — the polyline tool (a native `polyline` session from the edition's
+  ``Contributions``) and the creating commit it finishes with: one transaction makes a
+  parametric `Part::FeaturePython` wire and the `Part::Extrusion` that links it, so
+  editing the wire's points moves the pad;
 * `Part_Fuse`, `Part_Cut`, `Part_Common` and `Part_Compound` — the selection-driven
   boolean and compound commands: one object per run, the operands hidden behind a
   boolean, and the shape work left to the object types;
@@ -54,6 +58,9 @@ from ferrocad_shell import bootstrap as _base_bootstrap
 DEFAULT_LENGTH = 20.0
 DEFAULT_WIDTH = 20.0
 DEFAULT_HEIGHT = 20.0
+#: The extrusion height a finished polyline gets (mm); editable on the wire's
+#: ``Thickness`` property.
+DEFAULT_WIRE_THICKNESS = 10.0
 # RGBA in the 0..1 range; alpha is unused. This is the opaque CAD grey the edition
 # has always given Part objects, now also the default of their `Color` property.
 #
@@ -355,6 +362,10 @@ def _interaction(obj, manipulator, action, element, values):
     is recomputed before returning, so the caller can re-read :func:`stage_meshes`
     straight away.
     """
+    if manipulator == "polyline" and action == "create":
+        # A creating commit: there is no target object, the points are the input.
+        return _create_polyline([float(value) for value in values])
+
     if manipulator == "transform" and action == "apply" and len(values) == 16:
         delta = FreeCAD.Placement(FreeCAD.Matrix(*values))
         doc = obj.Document
@@ -1230,6 +1241,139 @@ def _create_boolean(spec, objects):
         doc.abortTransaction()
         raise
     return result
+
+
+class _PolylineProxy:
+    """A polyline: ``Points``/``Closed`` in, a wire ``Shape`` out.
+
+    A real parametric object rather than a one-shot ``Part::Feature``: writing
+    ``Points`` (or ``Closed``) rebuilds the wire on the next recompute, and the
+    ``Part::Extrusion`` that links it follows — which is what makes editing the path
+    update the pad. The points are world-space, the plane they were drawn on.
+    """
+
+    def execute(self, obj):
+        points = _polyline_points(list(obj.Points))
+        if len(points) < 2:
+            obj.Shape = Part.Shape()
+            return
+        obj.Shape = Part.makePolygon(points, bool(obj.Closed))
+
+    def onDocumentRestored(self, obj):
+        self.execute(obj)
+
+
+def _polyline_points(values):
+    """The ``FreeCAD.Vector`` points in a flat ``x, y, z`` list.
+
+    A trailing partial triple is ignored rather than invented: the tool only emits
+    complete points, and a hand-edited property should not move a vertex to zero.
+    """
+    return [
+        FreeCAD.Vector(float(values[index]), float(values[index + 1]), float(values[index + 2]))
+        for index in range(0, len(values) - 2, 3)
+    ]
+
+
+def _polyline_normal(points):
+    """The unit normal of the plane the points span (the extrusion direction).
+
+    The first three non-collinear points define the plane. A straight polyline has
+    none, and the world +Z is the only honest guess left; the extrusion then fails
+    the same way it would for a profile drawn on a line.
+    """
+    origin = points[0]
+    for index in range(1, len(points) - 1):
+        normal = points[index].sub(origin).cross(points[index + 1].sub(origin))
+        if normal.Length > 1e-9:
+            return normal.normalize()
+    return FreeCAD.Vector(0.0, 0.0, 1.0)
+
+
+def _create_polyline(values):
+    """Create the wire and its extrusion from a finished polyline tool commit.
+
+    One named transaction holds both objects, so one undo removes them. The wire
+    closes its profile by default — that is what gives the extrusion a face to
+    sweep — and is hidden once the solid exists. Editing ``Points``/``Closed`` on
+    the wire later rebuilds it, and the linked extrusion follows on recompute.
+
+    An extrusion the kernel refuses does not lose the drawing: the wire is kept,
+    the invalid extrusion is removed, and the commit still succeeds.
+    """
+    if len(values) < 6 or len(values) % 3:
+        return {"ok": False, "error": "a polyline needs at least two complete points"}
+    points = _polyline_points(values)
+    doc = FreeCAD.ActiveDocument
+    if doc is None:
+        doc = FreeCAD.newDocument("Unnamed")
+    doc.openTransaction("Polyline")
+    try:
+        wire = doc.addObject("Part::FeaturePython", "Polyline", _PolylineProxy(), None)
+        wire.addProperty(
+            "App::PropertyFloatList", "Points", "Polyline", "World-space vertices"
+        )
+        wire.addProperty(
+            "App::PropertyBool", "Closed", "Polyline", "Close the profile to its start"
+        )
+        wire.addProperty(
+            "App::PropertyLength", "Thickness", "Polyline", "Extrusion height"
+        )
+        _add_appearance(wire)
+        wire.Points = [float(value) for value in values]
+        wire.Closed = True
+        wire.Thickness = DEFAULT_WIRE_THICKNESS
+
+        extrusion = doc.addObject("Part::Extrusion", f"{wire.Name}_Extrusion")
+        extrusion.Base = (wire, [])
+        extrusion.DirMode = "Custom"
+        extrusion.Dir = _polyline_normal(points)
+        extrusion.Solid = True
+        extrusion.LengthFwd = float(wire.Thickness)
+        _add_appearance(extrusion)
+        doc.recompute()
+        if _invalid(extrusion):
+            # Keep what the user drew; the pad is the part the kernel refused.
+            doc.removeObject(extrusion.Name)
+            extrusion = None
+            doc.recompute()
+        else:
+            wire.Visibility = False
+        if _invalid(wire):
+            doc.abortTransaction()
+            return {"ok": False, "error": "the polyline could not be built; nothing was added"}
+        doc.commitTransaction()
+    except Exception as exc:
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": extrusion.Name if extrusion is not None else wire.Name}
+
+
+class _PolylineCommand:
+    """``Part_Polyline`` — draw a polyline on the active workplane and pad it.
+
+    The drawing is the native ``polyline`` tool: clicks place points (snapped to the
+    active workplane and its grid), Backspace drops the last, Enter finishes. The
+    finished commit creates the wire and its extrusion in one transaction.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Polyline",
+            "ToolTip": "Draw a polyline on the workplane; it is closed and extruded",
+            "Group": "Draft",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+    def Activated(self, iMsg=0):
+        return {"tool": "polyline"}
+
+
+FreeCADGui.addCommand("Part_Polyline", _PolylineCommand())
 
 
 class _BooleanCommand:

@@ -63,6 +63,20 @@ assert boxed.Shape.ShapeType == "Solid", boxed.Shape.ShapeType
 FreeCAD.closeDocument(name)
 "#;
 
+/// The edition's shell contributions: Part's two manipulators and the polyline tool.
+///
+/// Factored out of `main` so the test can inspect the registry the window would use.
+fn contributions() -> ferrocad::Contributions {
+    ferrocad::base_contributions()
+        .with_manipulator(ferrocad_part_gui::fillet_manipulator)
+        .with_manipulator(ferrocad_part_gui::push_pull_manipulator)
+        // The `Part_Polyline` command starts this tool; its creating commit is applied by
+        // the app script, which builds the wire and the extrusion that links it.
+        .with_tool("polyline", || {
+            Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>
+        })
+}
+
 fn main() {
     // Register the workbench modules as built-ins, before the interpreter
     // initialises. All of them must share this process: `MeshPart` builds its wires
@@ -109,9 +123,7 @@ fn main() {
         return;
     }
 
-    let contributions = ferrocad::base_contributions()
-        .with_manipulator(ferrocad_part_gui::fillet_manipulator)
-        .with_manipulator(ferrocad_part_gui::push_pull_manipulator);
+    let contributions = contributions();
 
     if args.render.is_some() || args.stl.is_some() {
         match ferrocad::render_edition_headless(
@@ -158,4 +170,22 @@ fn main() {
         args.script_hosts,
         args.addons,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    /// The registry the window installs: the base tools survive, and `Part_Polyline`'s
+    /// `polyline` is the edition's own.
+    #[test]
+    fn the_edition_registers_the_polyline_tool() {
+        let contributions = super::contributions();
+        assert!(
+            contributions.tool_for("polyline").is_some(),
+            "Draft_Wire arms the polyline tool"
+        );
+        assert!(
+            contributions.tool_for("workplane_points").is_some(),
+            "the shared workplane pick is kept"
+        );
+    }
 }

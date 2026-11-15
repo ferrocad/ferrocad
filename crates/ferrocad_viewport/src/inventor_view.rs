@@ -759,15 +759,10 @@ struct OrbitDrag {
 ///
 /// A press with a creation tool armed is only a **click** if the pointer comes back up in
 /// place; dragged, it is the camera's. The tool therefore receives its press at the
-/// release, and the press's own pick and position travel with it so the click binds what
-/// was under the pointer when the button went down.
+/// release, at the point its ghost is showing then — the ghost keeps following the
+/// pointer while the decision is open.
 #[derive(Clone, Copy, Debug)]
-struct PendingPress {
-    /// The device-pixel position of the press (what the tool sees).
-    device: [i32; 2],
-    /// The CPU pick under the press, if it hit geometry.
-    hit: Option<Hit>,
-}
+struct PendingPress;
 
 /// An inertial orbit after the pointer was released: the last (smoothed) velocity in
 /// **logical pixels per second**, and when it was last integrated.
@@ -3445,8 +3440,14 @@ impl<V: InventorView> InventorViewport<V> {
         // `render`): a resting pointer sends no further moves.
         self.last_hover = Some((logical, modifiers));
         // An active drag is owned by `drag_move`: hovering here would rebuild the cube per
-        // event and can clear the ring's active state mid-scrub.
-        if self.ring_drag.is_some() || self.navicube_drag.is_some() || self.orbit_drag.is_some() {
+        // event and can clear the ring's active state mid-scrub. A press the host is still
+        // deciding is **not** a drag yet — the tool keeps its ghost under the pointer, so a
+        // click places exactly where the ghost sits when the button comes up (`pending_press`).
+        let orbiting = self.orbit_drag.as_ref().is_some_and(|drag| {
+            drag.moved >= navicube_drag_threshold(self.camera.viewport.device_pixel_ratio())
+                || self.pending_press.is_none()
+        });
+        if self.ring_drag.is_some() || self.navicube_drag.is_some() || orbiting {
             self.hover_report = HoverReport::default();
             return false;
         }
@@ -3738,24 +3739,27 @@ impl<V: InventorView> InventorViewport<V> {
         let mut delivered = false;
         if !down
             && button == 1
-            && let Some(press) = self.pending_press.take()
+            && self.pending_press.take().is_some()
             && orbit_clicked
             && self.tool.is_some()
         {
-            self.bind_face_for_tool(press.hit.as_ref());
+            // The release's own position and pick: the ghost kept following the pointer
+            // while the press was held, so the point lands where the ghost is now.
+            let hit = self.pick(device);
+            self.bind_face_for_tool(hit.as_ref());
             delivered = self.dispatch_tool(
                 PointerKind::Down,
-                press.device,
+                device,
                 Some(StageButton::Left),
-                press.hit.as_ref(),
+                hit.as_ref(),
             );
             delivered |= self.dispatch(
                 &Event::MouseButton {
-                    position: press.device,
+                    position: device,
                     button: 1,
                     down: true,
                 },
-                press.hit.as_ref(),
+                hit.as_ref(),
             );
         }
         if self.chrome_contains(logical) {
@@ -3962,7 +3966,7 @@ impl<V: InventorView> InventorViewport<V> {
             });
         }
         if down && button == 1 && !tool_takes_press && self.tool.is_some() {
-            self.pending_press = Some(PendingPress { device, hit });
+            self.pending_press = Some(PendingPress);
             return false;
         }
 
@@ -3995,6 +3999,61 @@ impl<V: InventorView> InventorViewport<V> {
             changed = true;
         }
         changed
+    }
+
+    /// End a pointer gesture from a mouse-up, in **window** pixels.
+    ///
+    /// gpui only delivers `mouse_up` to an element the pointer is still over, so the
+    /// viewport also binds this to `on_mouse_up_out`: a drag that is let go over the
+    /// chrome, another overlay or outside the window must still end what its press
+    /// began. A release nobody sees strands the orbit (and the armed tool's held press),
+    /// which reads as a frozen ghost and a dead pill.
+    fn release_pointer(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>)
+    where
+        V: 'static,
+    {
+        // A release off the canvas still **ends** the gesture, but its click decision
+        // belongs to the last place the pointer was on the canvas: a release over the
+        // chrome or outside the window must not select or place out in the scene.
+        let inside = self
+            .last_bounds
+            .is_none_or(|bounds| bounds.contains(&event.position));
+        let local = if inside {
+            self.to_local(event.position)
+        } else {
+            self.pointer
+                .map(|device| self.camera.viewport.to_logical(device))
+                .unwrap_or_else(|| self.to_local(event.position))
+        };
+        let modifiers = gizmo_modifiers(event.modifiers);
+        let changed = self.handle_button_with_modifiers(
+            local,
+            mouse_button(event.button),
+            false,
+            modifiers,
+        );
+        // Report what the click produced. `emit` queues the effect until this update
+        // returns, so the host may update this viewport in response.
+        let selection = self.take_selection();
+        let commit = self.take_interaction_commit();
+        let origin = self.take_gizmo_origin();
+        let tool_state = self.take_tool_state();
+        self.flush_transform_preview(cx);
+        if changed {
+            cx.notify();
+        }
+        if let Some(status) = tool_state {
+            cx.emit(ViewportEvent::ToolState(status));
+        }
+        if let Some(selection) = selection {
+            cx.emit(ViewportEvent::Selection(selection));
+        }
+        if let Some(commit) = commit {
+            cx.emit(ViewportEvent::Interaction(commit));
+        }
+        if let Some((point, kind)) = origin {
+            cx.emit(ViewportEvent::GizmoOrigin { point, kind });
+        }
     }
 
     /// Bind the session's plane to the face under a press, tier 1 of the creation
@@ -7063,38 +7122,25 @@ impl<V: InventorView + 'static> Render for InventorViewport<V> {
                     cx.notify();
                 }
             }))
+            // A release in bounds and a release anywhere else both end the gesture: gpui
+            // only delivers `mouse_up` to an element the pointer is still over, so the
+            // `_out` pair is what keeps a drag let go over the chrome, another overlay or
+            // outside the window from stranding the orbit and the tool's held press.
             .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                let local = this.to_local(event.position);
-                let modifiers = gizmo_modifiers(event.modifiers);
-                let changed = this.handle_button_with_modifiers(
-                    local,
-                    mouse_button(event.button),
-                    false,
-                    modifiers,
-                );
-                // Report what the click produced. `emit` queues the effect until this
-                // update returns, so the host may update this viewport in response.
-                let selection = this.take_selection();
-                let commit = this.take_interaction_commit();
-                let origin = this.take_gizmo_origin();
-                let tool_state = this.take_tool_state();
-                this.flush_transform_preview(cx);
-                if changed {
-                    cx.notify();
-                }
-                if let Some(status) = tool_state {
-                    cx.emit(ViewportEvent::ToolState(status));
-                }
-                if let Some(selection) = selection {
-                    cx.emit(ViewportEvent::Selection(selection));
-                }
-                if let Some(commit) = commit {
-                    cx.emit(ViewportEvent::Interaction(commit));
-                }
-                if let Some((point, kind)) = origin {
-                    cx.emit(ViewportEvent::GizmoOrigin { point, kind });
-                }
+                this.release_pointer(event, cx);
             }))
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.release_pointer(event, cx);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.release_pointer(event, cx);
+                }),
+            )
             .on_drag(ViewportDragMarker, |_, _, _, cx| {
                 cx.new(|_| ViewportDragPreview)
             })
@@ -9630,26 +9676,55 @@ mod tests {
             };
             let mut view =
                 InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+            // A grid on the plane, so a hover away from the origin resolves a point (the
+            // plane's own origin is the only candidate otherwise).
+            view.set_snap_grid(Some(0.25));
             view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
             view
         };
 
         // A click over the plane: the press is held for the camera, the release in place
-        // hands it to the tool, which places a point where the button went down.
+        // hands it to the tool, which places a point where the ghost is.
         let mut view = armed(-4.0);
         assert!(
             !view.handle_button([50.0, 50.0], 1, true),
             "the press is held back until the release decides"
         );
         assert!(view.orbit_drag.is_some(), "the press arms the camera");
+        // It is still a possible click, not a drag: the tool keeps its ghost under the
+        // pointer, which is where the point lands when the button comes up.
         assert!(
-            view.handle_button([50.0, 50.0], 1, false),
+            view.handle_pointer([70.0, 40.0]),
+            "the ghost still follows while the press is held"
+        );
+        assert!(!view.transient.is_empty(), "a held press draws the ghost");
+        let ghost = view
+            .tool()
+            .expect("armed")
+            .items()
+            .last()
+            .expect("the marker")
+            .positions()
+            .to_vec();
+        assert!(
+            view.handle_button([70.0, 40.0], 1, false),
             "the release in place delivers the click"
         );
         assert_eq!(
             view.tool_status().expect("an active tool").points,
             1,
             "a click places the point"
+        );
+        assert_eq!(
+            view.tool()
+                .expect("armed")
+                .items()
+                .last()
+                .expect("the marker")
+                .positions()
+                .to_vec(),
+            ghost,
+            "the point lands where the ghost was, not back at the press"
         );
 
         // The same press, dragged: the view orbits and the tool keeps its one point.

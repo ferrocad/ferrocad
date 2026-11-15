@@ -3051,3 +3051,207 @@ fn offsetting_a_workplane_drags_and_types_along_normal(cx: &mut TestAppContext) 
         "typing moves the stem with the plane"
     );
 }
+
+/// An armed creation tool never freezes the pointer pipeline, through the real gpui
+/// handlers: a hover follows the ghost, a click places a point, and a drag orbits.
+///
+/// This is the shape the user reported ("creating on the active workplane doesn't
+/// work; hover doesn't move the ghost"): the press is held back for the camera, so a
+/// click only reaches the tool on the release, and a hover must still reach it while no
+/// button is down.
+#[gpui::test]
+fn an_armed_creation_tool_hovers_clicks_and_orbit(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), claim_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(crate::Contributions::new().with_tool(
+                "test_polyline",
+                || Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>,
+            ));
+        })
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("test_polyline", cx);
+        })
+    });
+    draw(&mut cx);
+
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    // The ghost's marker, so a hover can be seen to move it.
+    let ghost = |cx: &VisualTestContext| -> Vec<[f32; 3]> {
+        viewport.read_with(cx, |viewport, _| {
+            viewport
+                .tool()
+                .expect("the pill is armed")
+                .items()
+                .last()
+                .expect("the marker slot")
+                .positions()
+                .to_vec()
+        })
+    };
+    let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    let centre = canvas.center();
+    let elsewhere = centre + gpui::point(px(-30.), px(20.));
+
+    // Hover: the tool's ghost follows the pointer over the workplane.
+    cx.simulate_mouse_move(centre, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    let first = ghost(&cx);
+    assert!(!first.is_empty(), "the armed tool draws a ghost");
+    cx.simulate_mouse_move(elsewhere, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_ne!(first, ghost(&cx), "the ghost follows the pointer");
+
+    // Click: the press is the camera's until the release, which hands it to the tool.
+    cx.simulate_mouse_down(centre, MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(centre, MouseButton::Left, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        model.lock().unwrap().tool.as_ref().map(|tool| tool.points),
+        Some(1),
+        "a click places a point"
+    );
+
+    // Drag: the same press, travelled, orbits the view and places nothing.
+    let before = viewport.read_with(&cx, |viewport, _| viewport.camera().view.m);
+    cx.simulate_mouse_down(elsewhere, MouseButton::Left, gpui::Modifiers::default());
+    for step in 1..=4 {
+        cx.simulate_mouse_move(
+            elsewhere + gpui::point(px(12. * step as f32), px(0.)),
+            Some(MouseButton::Left),
+            gpui::Modifiers::default(),
+        );
+    }
+    cx.simulate_mouse_up(
+        elsewhere + gpui::point(px(48.), px(0.)),
+        MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    draw(&mut cx);
+    assert_ne!(
+        before,
+        viewport.read_with(&cx, |viewport, _| viewport.camera().view.m),
+        "the drag orbits the camera"
+    );
+    assert_eq!(
+        model.lock().unwrap().tool.as_ref().map(|tool| tool.points),
+        Some(1),
+        "a drag places nothing"
+    );
+
+    // The drag's release must have ended the gesture: hovering still moves the ghost and
+    // the next click still places a point. A release the viewport never saw would leave
+    // the press "held", freezing the ghost and swallowing every later click.
+    cx.simulate_mouse_move(centre, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    let after_drag = ghost(&cx);
+    assert!(!after_drag.is_empty(), "the ghost is back after the drag");
+    cx.simulate_mouse_move(elsewhere, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_ne!(
+        after_drag,
+        ghost(&cx),
+        "the ghost follows the pointer after a drag"
+    );
+    cx.simulate_mouse_down(elsewhere, MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(elsewhere, MouseButton::Left, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        model.lock().unwrap().tool.as_ref().map(|tool| tool.points),
+        Some(2),
+        "the click after a drag still places a point"
+    );
+}
+
+/// A drag let go **outside** the canvas still ends the gesture.
+///
+/// gpui delivers `mouse_up` only to an element the pointer is still over, so a release
+/// over the chrome, another overlay or outside the window used to strand the orbit and
+/// the armed tool's held press: the ghost froze and the pill stopped responding until
+/// the next press. The viewport now ends the gesture from `on_mouse_up_out` too.
+#[gpui::test]
+fn a_drag_released_over_the_chrome_still_ends_the_gesture(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let Some((mut cx, shell)) = surface_shell(cx, model.clone(), claim_face) else {
+        return;
+    };
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.set_contributions(crate::Contributions::new().with_tool(
+                "test_polyline",
+                || Box::new(ferrocad_stage::PolylineTool::new()) as Box<dyn ferrocad_stage::Tool>,
+            ));
+        })
+    });
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.start_tool("test_polyline", cx);
+        })
+    });
+    draw(&mut cx);
+    let viewport = cx.update(|_window, cx| shell.read(cx).viewport.clone().expect("a viewport"));
+    let ghost = |cx: &VisualTestContext| -> Vec<[f32; 3]> {
+        viewport.read_with(cx, |viewport, _| {
+            viewport
+                .tool()
+                .expect("the pill is armed")
+                .items()
+                .last()
+                .expect("the marker slot")
+                .positions()
+                .to_vec()
+        })
+    };
+    let canvas = cx.debug_bounds("main-canvas").expect("the canvas");
+    let centre = canvas.center();
+    let bar = cx
+        .debug_bounds("loadout-bar")
+        .expect("the hands' bar")
+        .center();
+
+    // Drag from the canvas and let go over the hands' bar, which owns its own hitbox.
+    cx.simulate_mouse_down(centre, MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_move(
+        centre + gpui::point(px(30.), px(0.)),
+        Some(MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_move(bar, Some(MouseButton::Left), gpui::Modifiers::default());
+    cx.simulate_mouse_up(bar, MouseButton::Left, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        model.lock().unwrap().tool.as_ref().map(|tool| tool.points),
+        Some(0),
+        "a drag let go off the canvas places nothing"
+    );
+
+    // The gesture ended with it: the ghost is alive and follows the pointer again.
+    cx.simulate_mouse_move(centre, None::<MouseButton>, gpui::Modifiers::default());
+    draw(&mut cx);
+    let first = ghost(&cx);
+    assert!(!first.is_empty(), "the ghost is alive after the release");
+    cx.simulate_mouse_move(
+        centre + gpui::point(px(-30.), px(20.)),
+        None::<MouseButton>,
+        gpui::Modifiers::default(),
+    );
+    draw(&mut cx);
+    assert_ne!(first, ghost(&cx), "the ghost follows the pointer");
+
+    // And the next click on the canvas places its point.
+    cx.simulate_mouse_down(centre, MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(centre, MouseButton::Left, gpui::Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        model.lock().unwrap().tool.as_ref().map(|tool| tool.points),
+        Some(1),
+        "the click after the stranded drag still places a point"
+    );
+}

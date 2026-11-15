@@ -404,6 +404,13 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   **curved** face and for a **faceless** item's circular edge — never a planar face
   (`PushPullStem`) or a body's edge (`DressUpScrubber`), so one pick has exactly one
   handle, and the value lives in the docked row the declarative path already builds.
+- **The selection-verb table.** `SimpleCAD_Shell`/`Draft`/`FillHole`/`RemoveRounds`/`Unwrap`/
+  `Loft`/`Sweep`/`Union`/`Intersect`/`Slice`/`Subdivide`/`Cleanup`/`Heal` are one table in
+  the edition: a **gate** over the selection (the cheap half of `command_state`'s
+  `REQUIREMENTS`: object count, element kind), the reference package's **pure** function
+  (never the worker-dispatching `surfaces.operations`), and **one** transaction. A refusal is
+  a status sentence and writes nothing; each verb has a documented default number, which
+  `Activated(value)` overrides until the C2 `ToolField` strip can carry it.
 - A tool's first left press on a planar face binds the session workplane (sticky;
   `Tool::picks_workplane` opts a plane-picking tool out). The hover preview frame is new.
 - The parametric edition's `_push_pull` already commits `Part::Fuse`/`Part::Cut` with a

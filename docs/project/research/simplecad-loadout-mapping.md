@@ -298,10 +298,10 @@ Ranked by the loop it closes per unit of work, not by category order. The first 
    triad, a `chamfer_manipulator` beside the fillet). Two of the four Modify slots become
    complete rather than single-mode.
 4. **The selection-verb block** — `Shell`, `Draft`, `FillHole`, `Unwrap`, `RemoveRounds`,
-   `Loft`, `Sweep`, `Union`, `Intersect`, `Slice`, `Subdivide`, `Analytic`, `Cleanup`,
-   `Heal`, `Copy`/`Pattern`/`Mirror`/`Scale`. One shared `command → provider → kernel` table
-   with `IsActive` gating; each is a table row, and the palette is an acceptable home until
-   C1 lands.
+   `Loft`, `Sweep`, `Union`, `Intersect`, `Slice`, `Subdivide`, `Cleanup`, `Heal`. One
+   shared `command → provider → kernel` table with `IsActive` gating; each is a table row,
+   and the palette is an acceptable home until C1 lands. **Landed** (§8): thirteen verbs,
+   ten pinned by the round trip.
 5. **C4 — the face-hosted creation target.** Unlocks `Imprint`, `Draw: Surface` for the
    drawing tools, boss/pocket on a face, and the `Face` column of every Solid row. It is the
    one Rust slice that changes several categories at once.
@@ -349,10 +349,12 @@ script. Everything below is pinned by `crates/ferrocad_simplecad/tests/loadout_r
   valid, and writes one transaction. On a box, deleting a face leaves an **open surface**
   (5 faces) and one undo restores the solid; deleting the seam of two coplanar faces
   merges them into one.
-- **`Part_HealFaces`** is the same path with the open result disallowed: it succeeds when
-  the neighbours already close and refuses otherwise. **Limit, recorded**: growing the
-  neighbours across the opening (SimpleCAD's real heal) is not implemented — a pocket's
-  faces leave a hole in a planar face, which this refuses rather than fills.
+- **`Part_HealFaces`** is the same path with the open result disallowed. Step 4 upgraded it:
+  when the package is on the path it calls `surfaces.edit.remove_faces`, which lets the
+  neighbours **grow** until the body closes, so a pocket's floor and four walls heal back
+  into the box they were cut from (volume exactly 1000, one undo). The Part-only sewing
+  remains the fallback, and that fallback is what refuses a single face of a plain box —
+  the earlier "heal cannot grow" limit is gone.
 
 ### Step 2 — Offset / Elongate / OffsetFace as declared handles
 
@@ -401,11 +403,46 @@ script. Everything below is pinned by `crates/ferrocad_simplecad/tests/loadout_r
   compiled factory would shadow the fillet by hit priority, and a declared one would
   draw a second grip beside it.
 
+### Step 4 — the selection-verb block
+
+Thirteen verbs are wired as `command → gate → pure function → one transaction`, in one
+table in `ferrocad_simplecad`:
+
+| Verb | Function | Default |
+| --- | --- | --- |
+| `Shell` | `surfaces.offset.shell` | 1.0 mm |
+| `Draft` | `surfaces.offset.draft` (axis Z, hinge bottom) | 5° |
+| `FillHole` | `surfaces.edit.fill` | — |
+| `RemoveRounds` | `surfaces.edit.find_rounds` + `remove_faces` | 5 mm |
+| `Unwrap` | `surfaces.edit.unwrap` → a new object beside the part | — |
+| `Loft`, `Sweep` | `prepare_profiles` → `form_preview` → `commit_form` | — |
+| `Union` | `unite` | — |
+| `Intersect` | `intersect` | — |
+| `Slice` | `prepare_slicing` → `cut_plane("Main")` → `preview_slicing` → `separate` → `commit_slicing` | 0 mm |
+| `Subdivide` | `prepare_subdivision` → `preview_subdivision` → `commit_subdivision` | 3 × 3 |
+| `Cleanup`, `Heal` | `cleanup`, `heal` | — |
+
+- **The worker finding is now a rule, not an incident.** Step 2 learned that
+  `surfaces.operations` dispatches to a process pool; every verb here calls the *pure*
+  module instead, and `Slice` uses `slicing.separate` exactly as the GUI tool does (the
+  preview yields `(side, shape)` pairs; the commit wants shapes).
+- **The gate is the cheap half of `REQUIREMENTS`** — object count and element kind — and
+  it raises `_Refusal`, which `_run_verb` turns into `{ok: false, status}`. The deep
+  checks stay where they are (the functions' own `ValueError`s), so a refusal reads as a
+  sentence either way and no transaction was opened. Asserted: two faces for `Unwrap`,
+  an edge for `Shell`, a face for `Union` — and the document is untouched afterwards.
+- **The numeric surface is dense on purpose.** `ToolField` is still C2, so each verb runs
+  at a documented default, names the value in its status, and `Activated(value)` accepts
+  another (which is how the round trip drives `Shell` at 2 mm).
+- **Draft has a real gate the plan did not foresee**: the selected walls must share one
+  hinge — one side face alone is refused by the kernel with a sentence about the hinge
+  plane, so the command passes the selection through unchanged rather than guessing.
+
 ### Measured
 
 | Check | Result |
 | --- | --- |
-| `ferrocad_simplecad` | **8** loadout cases + the 6 drawing cases |
+| `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing cases |
 | `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (41 part_gui) |
 | `ferrocad_shell_core` | **290** (one run failed the known parallel-load HUD flake; green alone and on rerun) |
 | `run_tests.py --extension base` / `workbenches` | **718 / 0 / 0 / 8**, **881 / 0 / 0 / 3** |

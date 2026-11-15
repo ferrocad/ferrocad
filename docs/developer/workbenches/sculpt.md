@@ -108,6 +108,42 @@ Measured on the cube cage: `makeCage` + recompute is 5 ms at level 2, the skin's
 first rebuild is about 140 ms (level 2, 96 patches) and 520 ms at level 3, in the
 debug extension. Sewing dominates; the subdivision itself is milliseconds.
 
+## The cage grip
+
+Dragging a control point is the one interaction the bundle owns. It is split across
+two halves that never name each other's layer:
+
+**The display hook** (`python/Sculpt/display.py`). For a cage it answers one stage row
+in world space: the subdivision preview as the surface (part 0, no element name), the
+**control hull** as edges, and every control point as a stage *vertex* whose part is
+named `Point0`, `Point1`, … A Part object, a plain mesh or the toy slab produces no
+such row, so nothing else can accidentally arm the grip.
+
+**The manipulator** (`crates/ferrocad_sculpt/src/cage.rs`). A `ManipulatorFactory`
+is handed only the selection and the stage, so the stage is the only place the grip
+can learn where the control points are — hence the row above. It arms when any
+selection on the cage's item publishes `Point*` parts (a face pick is enough, as for
+the toy grip), draws a screen-invariant octahedron at every control point, and a drag
+moves the grabbed one in the plane through its press position that faces the camera
+(the right behaviour for a free vertex: no axis to choose). Its typed twin is X/Y/Z,
+so a coordinate can be typed or nudged instead of dragged.
+
+**The commit** is `cage_point` / `move`, element `Point3`, values `[x, y, z]` in
+world space. The release is data; whoever registered the verb applies it.
+`python/Sculpt/interaction.py` does: it inverts the cage's `Placement` to get the
+local coordinate, writes `CagePoints[3]`, recomputes and commits **one named
+transaction**. The skin is ordered after the cage by its `Cage` link, so that
+recompute rebuilds the preview mesh and the sewn solid together — one drag is one
+undo step, and the B-rep follows live.
+
+Returning `None` for every other verb is part of the contract: the facade asks its
+interaction providers in order and the first non-`None` answer owns the commit, so the
+Sculpt hook stays out of the way of Part's dress-up, push/pull and transform.
+
+Why not select a kernel vertex instead? A cage point is a *control* point: it has no
+`VertexN` name because it is not on the resulting shape (the subdivision moves it).
+The published `PointN` part is what gives the drag a stable name across a rebuild.
+
 ## Persistence
 
 Native `.ferrocad` documents keep each proxy by module and class name and restore
@@ -124,31 +160,41 @@ it re-attached.
 
 ## What this slice does not do
 
-- **No GUI commands.** There is no `InitGui.py`, no workbench switcher entry and
-  no cage-point manipulator; the bundle is headless, and the interaction seam
-  (selection, gizmo) is the next piece. A native cage drag belongs to
-  [`../../project/tasks/`](../../project/tasks/) work, not to this note.
-- **No edition descriptor or packaging.** A published `Sculpt` edition needs a
-  `HostConfig`, a payload and a release matrix: that is
-  [`../architecture/edition-publishing.md`](../architecture/edition-publishing.md)
-  work, and it is still open in the P3 backlog.
-- **No third-party add-on hosting.** `Curves`/`SubD` are not bundled; the
-  synthetic call surface they document is measured in
+- **No GUI commands beyond the six `Sculpt_*` ones**, and no workbench switcher
+  entry: the commands are registered and listed, but the shell's palette is the
+  only surface that shows them.
+- **No cage edge/face handles.** The grip moves one control point; extruding a cage
+  face or sliding a hull edge is the next interaction, and it needs a different
+  commit shape (a face needs two points, not one).
+- **No vendored add-ons.** `Curves`/`SubD` are not bundled; the payload records them
+  as `planned` and Silk as excluded, and the synthetic call surface they document is
+  measured in
   [`../../project/research/p3-addon-surface-spike.md`](../../project/research/p3-addon-surface-spike.md).
+  The **edition and packaging** are done: `ferrocad_sculpt` builds, `--edition sculpt`
+  stages a curated payload, and `release.yml` has the matrix legs
+  ([`../architecture/edition-publishing.md`](../architecture/edition-publishing.md)).
 - **No limit-surface patches** (G1/G2 continuity), no n-gon *output* (any polygon
   is accepted as input and comes back as quads), and no cage undo grouping beyond
   what the document already does per property write.
 
 ## Testing
 
-`tests/test_sculpt_workflow.py` (22 cases, `workbenches` extension set) covers the
-rules (a quad's corner stays, a crease vertex follows the curve rule, a closed
-cage refines closed and quad-for-quad), the objects (preview counts and volume, an
-edit re-running the proxy, placement), the solid (valid, closed, one solid, one
-face per refined quad, convergence over levels, an open cage reported), the body
-(support/base roles, the body shape being the skin, the body placement, a second
-base refused, a non-cage feature refused, a PartDesign feature taking the tip) and
-persistence (native round trip, `.FCStd` + `attach`).
+`tests/test_sculpt_workflow.py` (29 cases, `workbenches` extension set) covers the
+rules (a quad's corner stays, a crease vertex follows the curve rule, a closed cage
+refines closed and quad-for-quad), the objects (preview counts and volume, an edit
+re-running the proxy, placement), the solid (valid, closed, one solid, one face per
+refined quad, convergence over levels, an open cage reported), the body (support/base
+roles, the body shape being the skin, the body placement, a second base refused, a
+non-cage feature refused, a PartDesign feature taking the tip), the display row (the
+`Point*` parts, the hull edges, world space) and the interaction verb (one undo, the
+placement inverted, other verbs left alone, a bad element refused) and persistence
+(native round trip, `.FCStd` + `attach`).
+
+`crates/ferrocad_sculpt` adds six unit tests for the grip (arming, the marker overlay,
+the screen-parallel drag, the X/Y/Z twin, a miss) and three composition tests that
+boot the edition's own app script through the host: the startup sample, the command
+flow, and the grip's contract end to end (`FerroCAD.display_mesh` →
+`ferrocad_shell.interaction` → one undo).
 
 The body half is pinned twice: this module through the public API and
 `crates/ferrocad_part_py/tests/body_membership.rs`

@@ -29,6 +29,17 @@ preview rebuilds as a mesh and the solid is re-sewn.
 In a body the cage is a **support** member (it is not the body's shape) and the
 skin becomes the **BaseFeature**. A later PartDesign feature takes the `Tip`.
 
+## Dragging a control point
+
+Select the cage (any pick on it is enough) and drag one of the square markers: the point
+moves in the plane facing the camera, the preview mesh and the skin rebuild in the same
+recompute, and one undo puts both back. The marker's value is also in the numeric row as
+X/Y/Z, so a coordinate can be typed instead of dragged.
+
+The markers are the cage's **control points** (not vertices of the solid — the
+subdivision moves those). The app script publishes them to the viewport and applies the
+commit; see `Sculpt.display` and `Sculpt.interaction`.
+
 ## The knobs
 
 - `Levels` — Catmull-Clark refinements. Each level moves the surface toward the

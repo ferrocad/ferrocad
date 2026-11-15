@@ -883,6 +883,55 @@ SimpleCAD number moved.
 in, Silk out, licences recorded), and the cage manipulator — whose home is now the
 edition's `main`, beside the base triad.
 
+### 8.19 The cage grip, and the end of the packaging tail
+
+The last two pieces of P3's Sculpt line.
+
+**Packaging first, while the files were warm.** `release.yml`'s `edition` job now
+carries the edition name in its matrix, so the same legs build
+`ferrocad-sculpt-linux`/`-windows` beside Parametric, and the release-notes table
+counts the staged mods instead of assuming `mods/Draft`. The **curated payload** is a
+descriptor: `packaging/editions/sculpt.json` names the seven viewport-provider mods,
+the licence files to stage and the add-on review — SubD Modeler (MIT) and Curves
+(review open) as what the bundle is *for*, Silk (GPL-3.0) and the demo mods as what it
+deliberately does not ship — and `cargo xtask bundle` refuses a named mod that is
+absent instead of shipping a set the descriptor claims. Every payload now carries a
+`PAYLOAD.json` recording exactly that. Measured end to end:
+`cargo xtask bundle --edition sculpt --occt --check-init` staged 7 mods, 21 OCCT
+libraries and the manifest, and the staged payload booted.
+
+**Then the grip.** The interactive piece had one structural question: a
+`ManipulatorFactory` receives the selection and the stage, not the document, so where
+do the control points come from? The answer was already in the display contract: a
+stage row carries `vertices` and a part name per primitive. So `Sculpt`'s display
+hook now answers, for a cage only, a world-space row with the preview as the surface
+(part 0), the control hull as edges and every control point as a vertex named
+`Point0`, `Point1`, …. `ferrocad_sculpt::cage_manipulator` arms on any selection of
+that item, draws a screen-invariant octahedron per point, drags the grabbed one in the
+plane through it that faces the camera, and commits `cage_point/move` with the new
+world position (X/Y/Z as the typed twin). `python/Sculpt/interaction.py` inverts the
+cage's placement, writes `CagePoints[N]` and recomputes inside **one named
+transaction**, and because the skin links the cage it rebuilds in the same
+recompute — one drag, one undo, the B-rep following live.
+
+Why not pick a kernel vertex? A cage point is a *control* point; the subdivision
+moves it, so it never becomes a `VertexN` on the shape. The published `PointN` part is
+what gives the drag a name that survives a rebuild, and it is the same name the
+commit carries.
+
+**Measured.** `cargo test -p ferrocad_sculpt`: 6 unit + 3 composition (the startup
+sample, the command flow, and the grip's contract through `FerroCAD.display_mesh` →
+`ferrocad_shell.interaction` → one undo). `tests/test_sculpt_workflow.py` is 29/0/0/0
+and the `workbenches` extension set **823/0/0/3** over 52 modules. `--check-init`
+passes on the edition, `cargo xtask editions --check` is green
+(`ferrocad_sculpt`: 32 crates — the grip's dependencies were already in the
+composition), and `cargo test -p xtask` is 23/0/0. No Part, Draft or SimpleCAD number
+moved.
+
+**What is left in P3.** The rest of the cage vocabulary — hull-edge slide and face
+extrusion, which need a different commit shape — and vendoring the add-ons themselves
+(the Curves licence review is the gate, and the descriptor is where it lands).
+
 ## 9. Measurements at close
 
 Upstream `../freecad-upstream` @ `33adf61`; SimpleCAD `../simplecad` @ `9180c4b` (v0.38.0),

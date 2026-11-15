@@ -152,9 +152,12 @@ rather than stubbed.
   `PartDesign::Body` — cage as a support member, skin as the `BaseFeature` — which is what
   the declared capability was for. A cage edit moves both representations through the link
   graph, an open cage is reported instead of sewn, and a native save restores both proxies.
-  Pinned by 22 cases in `tests/test_sculpt_workflow.py`; the design note is
-  [`../developer/workbenches/sculpt.md`](../developer/workbenches/sculpt.md). What is still
-  missing is the edition descriptor, packaging and the GUI cage tools.
+  Pinned by 22 → 29 cases in `tests/test_sculpt_workflow.py`; the design note is
+  [`../developer/workbenches/sculpt.md`](../developer/workbenches/sculpt.md). The cage
+  point grip is in too: the display hook publishes the control hull and its `Point*`
+  vertices, the edition's manipulator drags one point in the camera plane, and the
+  interaction hook applies it in one transaction. What is still missing is the rest of
+  the cage vocabulary (hull-edge slide, face extrusion) and vendoring the add-ons.
 
 **The SimpleCAD record.** Every remaining record is attributed — **6 documented test
 assumptions and 2 errors, 0 unattributed** — and neither the P2 seam list nor P3 has a

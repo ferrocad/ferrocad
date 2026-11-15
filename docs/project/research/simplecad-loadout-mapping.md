@@ -596,14 +596,17 @@ Three follow-ups from the live window:
   `Create ▸` holds the creation categories and their tools, `Workplane ▸` the two
   workplane verbs. A category with no applicable child is omitted. The hollow centre now
   paints `◂ Back` beside the open category's name.
-- **The Add hand is two fixed slots.** The dock's single memory pill became
-  `⊕ Sketch: <tool> ▾` (Slot `4`) and `⊕ Solid: <tool> ▾` (Slot `5`, which also carries
-  Surface/Text/Mesh so a mod's tool has a home), with `4`/`5` arming the slot's tool and
-  a second press opening the flyout. The flyout shows **one category at a time** behind
-  a segmented header (`Sketch | Solid | Surface | …`, empty categories omitted), and
-  remembers the last tool per category: a tab click points the family's slot at it
-  without arming, a row click binds and runs it. The wheel's `Create ▸` commits through
-  the same path, so a flick loads the slot and arms the tool at the pointer.
+- **The Add hand is its own strip, one pill per category.** The dock's single memory
+  pill became a **create dock** above the action dock:
+  `⊕ Sketch: Rectangle ▾  ⊕ Solid: Box ▾  ⊕ Surface: Loft ▾  ⊕ Mesh: Mesh Box ▾`, one
+  per registered category (a category with no tool is not a pill). The dock keeps a
+  single `⊕ Create Dock ^` toggle, so its own row is still
+  `[ Undo Redo Fit │ ⊕ Create Dock │ Search ]` and never a list of tools. Each pill
+  remembers its category's tool; `4`, `5`, … arm the pill at that position and a second
+  press opens its flyout. The flyout shows **one category at a time** behind a segmented
+  header, with a tab click pointing the pill at the remembered tool and a row click
+  binding and running it. The wheel's `Create ▸` commits through the same path, so a
+  flick loads the pill and arms the tool at the pointer.
 - **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
   `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
   `select at least 2 profiles` instead of `select at least 2 bodies`.
@@ -615,7 +618,7 @@ is the invariant it means to test.
 
 **Measured.** `ferrocad_shell_core` **306** (`the_root_ring_is_stable_and_the_categories_carry_the_context`,
 `grouped_verbs_live_under_their_category`,
-`the_creation_slots_remember_a_tool_per_category`, plus three `CreationDock` unit cases);
+`each_creation_pill_remembers_its_own_tool`, plus three `CreationDock` unit cases);
 `ferrocad_widgets` **76** (13 wheel, incl. the centre-hub `◂ Back`); `ferrocad_shell_api`
 **75** (`a_profile_gate_names_profiles_and_accepts_any_closed_reference`);
 `ferrocad_simplecad` `chrome_surfaces` **6** (the profile gate and the `Surface` group);

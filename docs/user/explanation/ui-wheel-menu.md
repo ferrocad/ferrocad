@@ -21,8 +21,8 @@ category and reads `◂ Back`: click it (or press `Backspace`) to go back up.
 
 - `Workplane ▸` — `Set WP`, `Save WP`.
 - `Create ▸` — the Add hand: `Sketch ▸`, `Solid ▸`, `Surface ▸`, each holding that
-  category's tools. Running one binds it to its dock slot **and** arms it where you are
-  pointing, exactly as the creation pill does.
+  category's tools. Running one loads that category's pill in the create dock **and**
+  arms the tool where you are pointing, exactly as clicking the pill does.
 - `Modify ▸` — everything that edits what is already there (`Shell`, `Draft`,
   `FillHole`, the booleans, `Offset`, `Chamfer`…), filtered to what the thing under the
   pointer can actually use.

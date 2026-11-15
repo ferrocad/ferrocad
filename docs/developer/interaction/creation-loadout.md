@@ -28,36 +28,44 @@ there** versus **adding something new**.
   the mode is what the scrubber's commit — and the document's `Part::Fillet` /
   `Part::Chamfer` — follows). Slot 1 has the same shape for `Move`/`Rotate`.
 - **The Add hand** (bottom-centre action bar):
-  `[ Undo  Redo  Fit │ ⊕ Sketch: Line ▾ │ ⊕ Solid: Box ▾ │ Search (Ctrl+K) ]`.
-  Authoring-tied. It governs what new shape is created and how its placement frame snaps
-  to the scene, body, face or edge under the pointer. It is **two fixed slots**, not one
-  remembered tool: `4` is the Sketch family and `5` is Solid/Surface (plus any other
-  category an edition registers). Each slot names its tool's own category, so a Surface
-  tool reads `⊕ Surface: Loft ▾` while still living in Slot 5.
+  `[ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]` over a **create dock** of
+  one pill per category. Authoring-tied. It governs what new shape is created and how its
+  placement frame snaps to the scene, body, face or edge under the pointer.
 
 ```text
 Bottom-Left (Modify Hand)                                  Bottom-Centre (Add Hand — Idle)
-[ 1 ✥ Move │ 2 ↕ Push/Pull │ 3 ↱ Fillet │ 0 ⬚ Inspect ]    [ Undo  Redo  Fit │ ⊕ Sketch: Line ▾ │ ⊕ Solid: Box ▾ │ 🔍 Search (Ctrl+K) ]
+[ 1 ✥ Move │ 2 ↕ Push/Pull │ 3 ↱ Fillet │ 0 ⬚ Inspect ]    [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ 🔍 Search (Ctrl+K) ]
 ```
 
-### 0.1 The Add hand's slots and flyout
+### 0.1 The create dock and its flyout
 
-- **Slot `4` — Sketch.** The 2-D drawing tools (polyline, rectangle, circle, polygon,
-  arc, a sketch of their own). `4` arms the slot's tool; pressing `4` again while that
-  tool is running opens the flyout instead.
-- **Slot `5` — Solid/Surface.** Primitives, profiles and any other category (Text, Mesh),
-  so a mod's tool always has a home. `5` behaves exactly as `4` does.
-- **The flyout** (`▾`, or the second press) is one **category at a time** behind a
-  segmented header bar (`Sketch | Solid | Surface | …`; a category with no registered
-  tool is not a tab). The list used to be one flat column mixing drawing tools,
-  primitives and profile features.
-- **Per-category memory.** Picking a tool fills its family's slot *and* the category's
-  own memory, so returning to a tab restores the tool that category was left on. Clicking
-  a **tab** points the family's slot at that tool without arming anything, so the pill
-  behind the flyout already names what the next click would run.
-- **The wheel loads the same slots.** `Create ▸` in the radial menu holds the same
+The Add hand is its **own strip**, above the action dock, not a control inside it:
+
+```text
+[ ⊕ Sketch: Rectangle ▾  ⊕ Solid: Box ▾  ⊕ Surface: Loft ▾  ⊕ Mesh: Mesh Box ▾ ]   create dock
+[ Undo  Redo  Fit  │  ⊕ Create Dock ^  │  Search (Ctrl+K) ]                          action dock
+```
+
+- **One pill per category.** `Sketch`, `Solid`, `Surface`, `Text`, `Mesh` — in the
+  design's order, and a category with no registered tool is not a pill, so an edition's
+  strip is only as wide as its workbenches. Each pill reads
+  `⊕ <Category>: <Tool> ▾`.
+- **The pill is a loadout, not a menu.** It names the tool its category was left on, and
+  the left half arms that tool in one click; `4`, `5`, … arm the pill at that position,
+  and pressing the same key again opens that pill's flyout instead.
+- **The flyout** (`▾`, or the second press) shows one **category at a time** behind a
+  segmented header bar (`Sketch | Solid | Surface | …`). The list used to be one flat
+  column mixing drawing tools, primitives and profile features.
+- **Per-category memory.** Picking a tool binds it to its category's pill *and* runs it.
+  Clicking a **tab** only points that category's pill at the tool the category remembers,
+  so the pill behind the flyout already names what the next click would run.
+- **The dock keeps its contract.** The action dock holds a single
+  `⊕ Create Dock ^` toggle (and `▾` when the strip is folded away): the strip is shown by
+  default and the toggle is the only way it leaves, so the dock never grows a list of
+  tools.
+- **The wheel loads the same pills.** `Create ▸` in the radial menu holds the same
   categories and tools; committing one performs the same two actions a row click does —
-  bind the tool to its slot, then run it (which arms it at the pointer).
+  bind the tool to its category's pill, then run it (which arms it at the pointer).
 
 Both hands obey the same four invariants:
 

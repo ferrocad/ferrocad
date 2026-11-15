@@ -240,6 +240,56 @@ the shell starts `ferrocad_shell.tool_bridge("draft")` as a native
 `ferrocad_shell.tool_command("draft", …)`. The `Draft_Line`/`Draft_Wire` commands are
 registered by importing `FerroCADGui.tools` (the edition opts in).
 
+### The sketch-backed profile and its dimension (P4 SK6)
+
+`PolylineTool` is generic: it collects snapped points and commits them. The edition
+therefore encodes intent in the commit's **id**, not in the tool. `TaggedPolyline` wraps
+the tool and rewrites `commit.manipulator` on `finish()`, so one state machine backs two
+commands:
+
+| Command | Tool id | The finished drawing becomes |
+| --- | --- | --- |
+| `Part_Polyline` | `polyline` | a parametric `Part::FeaturePython` wire + its pad (§ above) |
+| `Sketch_Polyline` | `sketch_polyline` | a `Sketcher::SketchObject` + its pad |
+
+`Sketch_Polyline`'s creating hook is the parametric route into the sketcher
+(contract: [`sketch-constraints.md`](sketch-constraints.md#the-creation-path-and-the-dimension-command)):
+
+1. the points are world-space (they were snapped on the active workplane); the first
+   three non-collinear points give the plane `(origin, x, y, z)`, and every point is
+   projected onto it as a local `(u, v)`;
+2. the sketch's `Placement` is `Placement(origin, Rotation(x, y, z, "ZXY"))`, so a
+   profile drawn **on a face stays on that face**, and the autoconstraints' "horizontal"
+   means horizontal *in the sketch*;
+3. one `Part.LineSegment` per edge (the profile is closed if the user did not close it),
+   then the sketcher's own two-phase pair — `detectMissingPointOnPointConstraints(tol)` /
+   `makeMissingPointOnPointCoincident(True)`, `detectMissingVerticalHorizontalConstraints(tol)`
+   / `makeMissingVerticalHorizontal(True)` — then `solve()`;
+4. a `Part::Extrusion` linked to the sketch in the **same named transaction**,
+   `DirMode = "Custom"`, `Dir` the plane normal, `Solid = True`, length
+   `DEFAULT_WIRE_THICKNESS` (10 mm).
+
+A closed four-point profile comes out at **10 constraints** (4 shared corners, **2 origin
+pairs** — the autodetector stages the origin coincidence for *both* segments meeting at
+point 1 — and 2 `Horizontal` + 2 `Vertical`), `solve() == 2`, and
+`RedundantConstraints == [6]`: the second origin pair is redundant *in rank*, not in
+intent. The sketch is hidden and the pad visible; a pad the kernel refuses is removed and
+the sketch kept.
+
+`Sketch_Dimension` dimensions the selected sketch edge **at the value it already has**, so
+adding it moves nothing:
+
+| Selected edge | The constraint |
+| --- | --- |
+| a `Part::GeomCircle` | `Sketcher.Constraint("Radius", i, value)` |
+| anything else | `("Distance", i, 1, i, 2, value)` — endpoint to endpoint |
+
+`setDatum(index, value)` then resizes the profile, and the linked pad follows on the next
+recompute. Acceptance: `crates/ferrocad_parametric/tests/sketch_pad_round_trip.rs` — four
+snapped clicks on the plane `x = 5`, the counts above, the datum landing at index `10`,
+`setDatum(10, 20.0)` taking the pad's `YLength` from 10 to 20, and two undos (the
+dimension, then the sketch and pad together).
+
 ## 6. The Q5 forms (`FerroCADGui.forms`)
 
 | Command | Form | Accept path |
@@ -298,6 +348,9 @@ cargo test -q -p ferrocad_part_py --test draft_tools --offline
 
 # The native polyline → wire → extrusion path, through the edition's own hook
 cargo test -p ferrocad_parametric --no-default-features --test polyline_round_trip
+
+# The sketch-backed path: polyline → constrained sketch → dimension → pad
+cargo test -p ferrocad_parametric --no-default-features --test sketch_pad_round_trip
 ```
 
 The standalone pytest run uses a documented `Part.makePolygon` stub for the creation

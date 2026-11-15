@@ -161,6 +161,33 @@ The keywords `First`, `FirstPos`, `Second`, `SecondPos`, `Third`, `ThirdPos`, `V
 the numbering as class attributes, and `Sketcher.GeoUndef` (`-2000`) is the value of a
 reference the constraint does not use — not `0`, because geometry `0` is a real curve.
 
+## The creation path and the dimension command
+
+The workbench route into this model is the parametric edition's `Sketch_Polyline` and
+`Sketch_Dimension`, whose tool plumbing is in
+[`draft-tools.md`](draft-tools.md#the-sketch-backed-profile-and-its-dimension-p4-sk6).
+What matters for *this* contract is the order the calls land in and the numbers they
+produce:
+
+| Step | Calls | Why this order |
+| --- | --- | --- |
+| the profile | `addGeometry(segments, False)` | one `Part.LineSegment` per drawn edge, already in sketch-local `(u, v)` |
+| the vertices | `detectMissingPointOnPointConstraints(1e-6)` → `makeMissingPointOnPointCoincident(True)` | detection stages, `make` commits — upstream's two-phase shape |
+| the axes | `detectMissingVerticalHorizontalConstraints(1e-6)` → `makeMissingVerticalHorizontal(True)` | same pair, for the edges already aligned with a sketch axis |
+| the solve | `solve()` | returns the remaining DOF, which the linked pad then lives with |
+
+A closed four-point profile comes out at **10 constraints, `solve() == 2`,
+`RedundantConstraints == [6]`**. The extra constraint is the origin pair: the detector
+stages a root coincidence for *both* segments that meet at the first point, and the second
+one adds no rank. That is the detector being faithful, not a defect — the redundancy is
+reported honestly rather than suppressed.
+
+`Sketch_Dimension` then adds **one** driving datum at the value the edge already has:
+`Radius` for a `Part::GeomCircle`, otherwise the endpoint-to-endpoint `Distance`. Adding it
+is geometrically a no-op and drops the DOF to `1`; from there `setDatum(index, value)` is
+the whole editing interface, and the extrusion that names the sketch follows on the next
+recompute.
+
 ## The solve
 
 The solver is `ferrocad_sketch_solver`; the sketch object calls it from `solve()` and from

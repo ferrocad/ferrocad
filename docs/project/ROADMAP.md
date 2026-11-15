@@ -110,6 +110,12 @@ constrainable but not drawn, and `-1`/`-2` name the root axes. **The solve is re
 `RedundantConstraints`/`ConflictingConstraints` report 1-based indices. The contract — the
 encoding, the Python surface, the residual per kind and where the solver stops — is
 [`../developer/workbenches/sketch-constraints.md`](../developer/workbenches/sketch-constraints.md).
+**The 2-D → 3-D loop is closed end to end** (SK4–SK6): the parametric edition's polyline
+tool is registered under two ids, so `Part_Polyline` makes a parametric wire and
+`Sketch_Polyline` a constrained `Sketcher::SketchObject`, each padded by the
+`Part::Extrusion` created in the same undo transaction; `Sketch_Dimension` adds a driving
+datum at the edge's current value, so `setDatum` resizes the profile and the solid
+follows on recompute.
 - **The platform tail.** E1 mod events (first slice built), document-scoped settings, the
 gizmo-interface decision, and the backend-parity deferrals (§P5).
 
@@ -199,9 +205,11 @@ workbench, and compare results with upstream.
 
 ## Not on the roadmap (for now)
 
-PartDesign's feature tree, a from-scratch Sketcher solver (the P4 plan binds PlanGCS
-rather than writing one), FEM, CAM, the GUI workbenches, and full upstream `.FCStd`
-byte-for-byte compatibility. These are deliberately out of scope; the project measures a
+PartDesign's feature tree, FEM, CAM, the GUI workbenches, and full upstream `.FCStd`
+byte-for-byte compatibility. A complete Sketcher *workbench* is not committed either: the
+constraint model and a from-scratch solver are in (the P4 plan first named PlanGCS and the
+measurement chose a pure-Rust solver instead), but upstream's full tool and external-
+geometry surface is not. These are deliberately out of scope; the project measures a
 subset and says so.
 
 ## How progress is measured

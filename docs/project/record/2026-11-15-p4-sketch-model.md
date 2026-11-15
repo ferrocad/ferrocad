@@ -202,9 +202,41 @@ non-collinear points), so a profile on a tilted plane extrudes perpendicular to 
 it on the next recompute and the linked extrusion follows — SK5's acceptance. A profile
 the kernel refuses keeps the wire and drops only the pad.
 
+**The second rail: a sketch instead of a wire.** The tool itself is generic (it collects
+snapped points and commits), so intent has to travel in the commit. `TaggedPolyline`
+wraps `PolylineTool` and rewrites `commit.manipulator` on `finish()`, and the edition
+registers the same tool under two ids: `polyline` for `Part_Polyline` (the wire above)
+and `sketch_polyline` for `Sketch_Polyline`. The sketch hook projects the world points
+onto the plane their first three non-collinear members define, builds the sketch in that
+local `(u, v)`, and puts the plane back where the drawing was with
+`Placement(origin, Rotation(x, y, z, "ZXY"))` — so a profile drawn **on a face stays on
+the face**, and "horizontal" in the autoconstraints means horizontal in the sketch.
+The profile is closed, one `Part.LineSegment` per edge, and the coincidences and the
+axis relations come from the sketcher's own two-phase detect/make pair. The linked
+`Part::Extrusion` is created in the same named transaction, so undo takes the sketch and
+the pad together; a pad the kernel refuses is removed and the sketch kept.
+
+**The dimension, and with it the loop.** `Sketch_Dimension` reads the selected sketch
+edge and adds one *driving* datum **at the value the edge already has** — `Radius` for a
+`Part::GeomCircle`, otherwise the endpoint `Distance` — so adding it moves nothing. The
+chain is then complete end to end: draw → constrain → dimension → `setDatum` → the solid
+changes on the next recompute. The numbers a closed four-point profile pins down are
+worth stating because they are not guesses: **10 constraints** (4 shared corners, **2
+origin pairs** — the autodetector stages the origin coincidence for *both* segments
+meeting at the first point — and 2 `Horizontal` + 2 `Vertical`), `solve() == 2`,
+`RedundantConstraints == [6]`, the datum at index `10`, and `setDatum(10, 20.0)` moving
+the pad's `YLength` from 10 to 20. The second origin pair is redundant *in rank*, not in
+intent: that is reported rather than suppressed. `Part_Polyline` keeps its own id and
+its own path, so the two creation commands cannot collide — and `Draft_Wire` still
+belongs to the scripting facade, which is why the new ids live in a `Sketch_` namespace.
+
 **Measured.** `part_sketcher` **18/18** (two drag cases);
 `tests/test_sketch_constraints.py` **40/40** (four drag cases); the edition's
-`polyline_round_trip` **1/1** through the real tool and `Part::Extrusion`; the bin's
-registry test **1/1**; the rest of the parametric suite unchanged (9 + 11 + 1 + 3 + 2 +
-1 + 1 + 1 + 2). The Part API audit contract is re-pinned for the installed `drag`
-method (the audit tracks `installed_as_methods`).
+`polyline_round_trip` **1/1** through the real tool and `Part::Extrusion`; the sketch rail
+`sketch_pad_round_trip` **1/1** (draw, dimension, `setDatum`, two undos); the bin's
+registry test **1/1** (both tool ids present); the rest of the parametric suite unchanged
+(9 + 11 + 1 + 3 + 2 + 1 + 1 + 1 + 2). The Python `workbenches` set is **863 / 0 / 0 / 3**
+over 53 modules (11 workbench modules); it does not drive the new commands yet, which is
+the next widening. The
+Part API audit contract is re-pinned for the installed `drag` method (the audit tracks
+`installed_as_methods`).

@@ -55,17 +55,13 @@ way out, so a document now round-trips an angle as an angle in both directions.
 
 It stores a constraint, reports it back as a `Sketcher.Constraint`, edits a datum, deletes
 by index, detects the coincident/axis relations a wire already satisfies, and checks that
-every constraint names a geometry that exists.
+every constraint names a geometry or root that exists.
 
 It does **not** solve. `solve()` returns `0` when the references resolve and `-1` when one
 dangles; geometry never moves, so a datum that the geometry does not satisfy still reports
 `0`. `RedundantConstraints` is empty because there is no rank analysis to report. Those are
 the documented approximations at the call sites; P4 SK2 (the PlanGCS adapter) is what
 replaces them.
-
-Constraint indices address the `Geometry` list. Construction geometry is stored in its own
-list and is not addressable, and no constraint survives a reordering recompute, because
-SK1's stable geometry identity has not landed.
 
 ## 5. Measurement at close
 
@@ -85,3 +81,32 @@ was rebuilt before the Python and Draft runs.
 
 The extension-set contract gained exactly one module (`test_sketch_constraints`, 42 base /
 11 workbenches) via `python3 tools/run_tests.py --write-contract`.
+
+## 6. The identity and construction round (same day, P4 SK1)
+
+SK1's missing half was identity: a constraint addressed a curve by its index in `Geometry`,
+so deleting an earlier curve rebound it to a different one, and construction geometry —
+stored in a separate list — was not addressable at all.
+
+**What landed.** Each geometry element now carries a stable id (`GeometryIds`, a
+`StringList`) and a construction flag (`Construction`, a `BoolList`), both index-aligned
+with `Geometry`. A constraint record stores `#g3`, not `3`; the Python surface still speaks
+upstream's positional GeoId and translates at the boundary. `delGeometry(index)` removes the
+element, drops the constraints that named its id, and leaves the rest resolving — their
+positions shift, their references do not. `addGeometry(geo, construction=False)`,
+`toggleConstruction(index)` and `getConstruction(index)` are the construction surface;
+`Shape`/`InternalShape` build from the non-construction entries only, while `GeometryCount`
+counts all of them. `-1` and `-2` are the root axes in `addConstraint`, `solve` and the
+detection (an endpoint on the origin stages `Coincident(-1, start, …)`); external geometry
+(`-3` and below) is refused by name.
+
+**Two things this exposed.** `Sketcher.Constraint` had been defaulting unused references to
+`0`, which is a real geometry index; they default to `GeoUndef` (`-2000`) now, as upstream's
+`GeoEnum` does. And a document object's `__setattr__` turns an unknown name into a Python
+instance attribute, so a write to a pre-identity sketch's missing `GeometryIds` would have
+been silently lost — such a sketch gains the properties through `addProperty` on first use.
+
+**Measured.** `part_sketcher` **13 → 16** cases, `tests/test_sketch_constraints.py`
+**22 → 29** (including a `.FCStd` save/reload that checks the ids, the construction flags,
+the constraints and a root reference), `workbenches` **845 → 852** cases, the Draft gate
+unchanged at **93/0/0/1**, and Part conformance unchanged at **531/0/0/12**.

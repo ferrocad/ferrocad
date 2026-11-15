@@ -11,11 +11,11 @@ selectors and its diagnostics; the numerical solve comes from PlanGCS (2D) or
 OndselSolver (3D).** `TODO-15-11-2026.md` §P4 holds that decision and the slices.
 
 So `SketchObject.solve()` does **not** move geometry. It checks that every constraint
-names a geometry that exists and reports upstream's "converged" code (`0`), or `-1` when
-a reference dangles. A sketch whose dimensions are not yet satisfied by its geometry
-still reports `0`: the datum is the authored value, not a solved one. `RedundantConstraints`
-is empty for the same reason — with no solve there is no rank information to report, and
-an invented list would be worse than an empty one.
+names a geometry or root that exists and reports upstream's "converged" code (`0`), or
+`-1` when a reference dangles. A sketch whose dimensions are not yet satisfied by its
+geometry still reports `0`: the datum is the authored value, not a solved one.
+`RedundantConstraints` is empty for the same reason — with no solve there is no rank
+information to report, and an invented list would be worse than an empty one.
 
 This is the approximation the project rule asks to state at the call site (the Rust
 doc comments on `sketch_solve` and `sketch_redundant_constraints`) and here.
@@ -29,9 +29,36 @@ doc comments on `sketch_solve` and `sketch_redundant_constraints`) and here.
 | The `Part` seam `findPlane`/rotate/`LineSegment(curve, first, last)` support `Draft.make_sketch` needs | `crates/ferrocad_part_py/src/lib.rs`, `crates/ferrocad_part_py/src/curves.rs` |
 | Tests | `crates/ferrocad_part_py/tests/part_sketcher.rs`, `tests/test_sketch_constraints.py` |
 
-## Storage
+## Storage and identity
 
-A constraint is a record in the sketch's hidden `ConstraintData` property, an
+Three hidden properties stay index-aligned — entry `i` of each describes the same
+geometrical element:
+
+| Property | Type | Holds |
+| --- | --- | --- |
+| `Geometry` | `Part::PropertyTopoShapeList` | the edge each geometry object's `toShape()` returns |
+| `GeometryIds` | `App::PropertyStringList` | the stable id, `g1`, `g2`, … |
+| `Construction` | `App::PropertyBoolList` | whether the entry is construction geometry |
+
+**The id is what a constraint stores.** Upstream's Python surface is positional (a 0-based
+GeoId), and FerroCAD still speaks it at the boundary, but the record itself holds `#g3`.
+That is what makes `delGeometry` safe: the surviving elements' positions shift down, every
+surviving constraint still names the curve it was built on, and only the constraints that
+named the removed element are dropped.
+
+Ids are minted as `g<max + 1>` per sketch. They are **sketch-local**, not document-scope:
+a constraint belongs to one sketch, so a sketch-local id is enough; a document-scope UUID
+becomes necessary only when external geometry (`-3` and below) arrives. They are opaque
+rather than derived from the curve, because a content hash would change exactly when the
+geometry is edited — which is when the constraint must survive.
+
+The three lists are written geometry-first, and a reader truncates a longer metadata list
+or backfills a shorter one, never reorders. A torn undo therefore cannot pair a shape with
+the wrong id. A sketch written before the identity existed (in practice: before
+2026-11-15) gains the two properties through `addProperty` on first use, so its writes are
+real document properties rather than Python instance attributes.
+
+A constraint is a record in the sketch's `ConstraintData` property, an
 `App::PropertyStringList`. A string list keeps it persistable through both serializers
 without adding a value type, and it makes a corrupted record visible rather than silently
 dropped.
@@ -47,17 +74,24 @@ solver state.
 One record per entry, `;`-separated, first field the upstream type name:
 
 ```text
-Radius;first=0;value=5
-Equal;first=0;second=1
-Coincident;first=0;firstPos=2;second=1;secondPos=1
-Distance;first=0;firstPos=2;value=12.5;name=overall
+Radius;first=#g1;value=5
+Equal;first=#g1;second=#g3
+Coincident;first=#g2;firstPos=2;second=#g1;secondPos=1
+Distance;first=#g1;firstPos=2;value=12.5;name=overall
+Coincident;first=-1;firstPos=1;second=#g1;secondPos=1
 ```
 
+A reference is `#<id>` for a geometry element, or a bare negative int for the root:
+`-1` is the X axis (its start point is the root point) and `-2` the Y axis, upstream's
+`GeoEnum`. External geometry (`-3` and below) is out of surface. A bare **non-negative**
+int (`first=0`) is a record written before the ids existed: it is read as a position, so
+it cannot survive a deletion — which is why nothing writes it any more.
+
 Keys: `first`, `firstPos`, `second`, `secondPos`, `third`, `thirdPos`, `value`,
-`driving`, `active`, and a trailing `name=…`. `PointPos` uses upstream's numbering —
-`0` none, `1` start, `2` end, `3` mid. A key equal to its default is omitted, so decoding
-an entry without it yields the same record: `First`/`Second`/`Third` are `0`,
-positions are `none`, `Value` is `0`, `Driving`/`IsActive` are `true`.
+`driving`, `active`, and a trailing `name=…`. `second`/`third` are written only when the
+record uses them. `PointPos` uses upstream's numbering — `0` none, `1` start, `2` end,
+`3` mid. A key equal to its default is omitted, so decoding an entry without it yields the
+same record: positions are `none`, `Value` is `0`, `Driving`/`IsActive` are `true`.
 
 `name` is emitted **last** so a label may contain `;` or `=`: the decoder splits at the
 first `;name=` and takes the rest of the string as the name.
@@ -70,17 +104,20 @@ every other object type, exactly as if the attribute did not exist):
 
 | Name | Kind | Meaning |
 | --- | --- | --- |
-| `addGeometry(geometry, construction=False)` | method | Append one geometry object (or a sequence) to `Geometry`; returns the last index |
+| `addGeometry(geometry, construction=False)` | method | Append one geometry object (or a sequence); returns the last index |
+| `delGeometry(index)` | method | Remove one element and every constraint that named it |
+| `toggleConstruction(index)` | method | Flip one element's construction flag |
+| `getConstruction(index)` | method | Whether one element is construction geometry |
 | `addConstraint(constraint)` | method | Append one record or a sequence; returns the last index, `-1` for an empty sequence |
 | `delConstraint(index)` | method | Remove one record by zero-based index |
 | `setDatum(index, value)` | method | Write a dimensional constraint's datum |
 | `getDatum(index)` | method | Read it; a non-dimensional kind is a `ValueError` |
 | `solve()` | method | `0` when every reference resolves, `-1` otherwise |
-| `GeometryCount` | attribute | `len(Geometry)` |
+| `GeometryCount` | attribute | `len(Geometry)` — construction geometry is included |
 | `ConstraintCount` | attribute | number of stored records |
-| `Constraints` | attribute | the records as `Sketcher.Constraint` objects |
+| `Constraints` | attribute | the records as `Sketcher.Constraint` objects, in positional GeoIds |
 | `RedundantConstraints` | attribute | `[]` (no solver, no rank analysis) |
-| `detectMissingPointOnPointConstraints(tol)` | method | Stage endpoint pairs that coincide but carry no `Coincident` |
+| `detectMissingPointOnPointConstraints(tol)` | method | Stage coincidences (geometry pairs and the root point) that carry no `Coincident` |
 | `makeMissingPointOnPointCoincident(includeSecond=True)` | method | Commit the staged ones; returns how many were added |
 | `detectMissingVerticalHorizontalConstraints(tol)` | method | Stage straight edges already aligned with an axis |
 | `makeMissingVerticalHorizontal(includeSecond=True)` | method | Commit the staged ones; returns how many were added |
@@ -90,7 +127,11 @@ The four detection methods keep their staged records in the hidden
 the two-phase upstream call shape works without per-object Rust state. Detection reads
 the sketch's **local** geometry coordinates, which is the space upstream's constraints
 live in. It skips closed edges (one vertex, no endpoints) and only classifies an edge as
-vertical/horizontal when it is a straight segment.
+vertical/horizontal when it is a straight segment. Construction geometry is included: it
+is real geometry for a constraint.
+
+An endpoint on the sketch origin stages `Coincident(first=-1, firstPos=start, second=…,
+secondPos=…)` — upstream's coincidence with the root point.
 
 `includeSecond` is accepted for signature compatibility. Detection already emits each
 `(point, point)` pair explicitly, so `includeSecond=False` commits one constraint per
@@ -112,7 +153,8 @@ A data holder: `Constraint(type, *args, **kwargs)`. The positional shapes are up
 
 The keywords `First`, `FirstPos`, `Second`, `SecondPos`, `Third`, `ThirdPos`, `Value`,
 `Name`, `Driving` and `IsActive` override the positional form. `Sketcher.PointPos` carries
-the numbering as class attributes.
+the numbering as class attributes, and `Sketcher.GeoUndef` (`-2000`) is the value of a
+reference the constraint does not use — not `0`, because geometry `0` is a real curve.
 
 ## What it refuses, and why
 
@@ -121,13 +163,14 @@ the numbering as class attributes.
   `Parallel`, `Perpendicular`, `Tangent`, `TangentViaPoint`, `Equal`, `Symmetric`, `Block`,
   `Distance`, `DistanceX`, `DistanceY`, `Radius`, `Diameter`, `Angle`, `Weight`. Upstream's
   `InternalAlignment` family and `SnellsLaw` are outside this slice.
+- **A reference to a geometry that does not exist.** `IndexError`, raised while the record
+  is read (the positional index is resolved to an id there). A record that names a vanished
+  id — hand-edited or restored — is a `ValueError` from `solve()`'s point of view (`-1`) and
+  from the `Constraints` getter, which will not invent a position for it.
+- **External geometry.** `-3` and below is a `ValueError` naming the gap. `-1` and `-2`
+  are the supported root axes.
 - **Constraint labels.** `LabelPosition`/`LabelDistance` are a `TypeError` naming the gap:
   they place a drawing annotation and sketch constraint labels are not drawn.
-- **Construction geometry as a constraint target.** `ConstructionGeometry` is stored in its
-  own list and is not addressable; constraint indices address `Geometry`. Upstream keeps one
-  indexed list. This closes when SK1's stable geometry identity lands, which is also what a
-  constraint needs to survive a reordering recompute.
-- **A record written behind `addConstraint`'s back** is a `ValueError`, not a silent skip.
 
 ## What `Draft.make_sketch` needed from the Part seam
 
@@ -153,8 +196,11 @@ quantity, which is what the `.FCStd` writer already infers from the unit signatu
 
 - `Draft.make_sketch`/`Draft.draftify` for a three-point wire: `test_modification.py`
   **33/0/0/0**, and the `--draft` gate **93/0/0/1** (was 60/0/0/1).
-- `crates/ferrocad_part_py/tests/part_sketcher.rs`: the model, the datum edits, the
-  dangling reference, the autoconstraint detection and `findPlane` on a wire.
-- `tests/test_sketch_constraints.py` (22 cases): the record type, the document surface,
-  the refusals and the empty redundancy list.
+- `crates/ferrocad_part_py/tests/part_sketcher.rs` (**16** cases): the model, the datum
+  edits, the dangling record, the autoconstraint detection, identity across a deletion,
+  construction addressability/exclusion, the root axes and `findPlane` on a wire.
+- `tests/test_sketch_constraints.py` (**29** cases): the record type, the document surface,
+  the identity and construction surface, the migration of a sketch without the identity
+  properties, the refusals, the empty redundancy list and the `.FCStd` round trip (ids,
+  flags, constraints and a root reference all survive a reload).
 - Part conformance stayed **531/0/0/12** after the seam changes.

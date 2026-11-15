@@ -13,10 +13,10 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-    FontWeight, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, ScrollHandle, SharedString, Size, Subscription, Window,
-    WindowHandle, WindowId, anchored, canvas, deferred, div, point, prelude::*, px, rgb, rgba,
-    size,
+    FontWeight, IntoElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollHandle, SharedString, Size,
+    Subscription, Window, WindowHandle, WindowId, anchored, canvas, deferred, div, point,
+    prelude::*, px, rgb, rgba, size,
 };
 
 use ferrocad_geom::SelectionRef;
@@ -440,6 +440,11 @@ pub struct Shell {
     /// The flex header gives an `Anchored` child a negative layout origin, so the
     /// shell anchors from the actual event instead.
     popover_anchor: Option<Point<Pixels>>,
+    /// Whether the create dock's flyout is up because `Shift` is **held** rather than
+    /// because the user opened it (the caret or a press). The peek owns only what it
+    /// opened: releasing the key closes the flyout it borrowed, and never one the user
+    /// asked for. See `Shell::peek_creation_flyout`.
+    creation_peek: bool,
     /// The grid's provider and spacing, read once when its popover opens (T4).
     /// `None` until the first open, or after a settings edit invalidates it.
     grid_summary: Option<GridSummary>,
@@ -1008,6 +1013,7 @@ impl Shell {
             root_focus: cx.focus_handle(),
             open_popover: None,
             popover_anchor: None,
+            creation_peek: false,
             grid_summary: None,
             axis_summary: None,
             provider_features: None,
@@ -1255,25 +1261,9 @@ impl Shell {
         // shell exposed: natively the property editor lives in Dev Tools, whose body
         // takes the keys, but when the panels are docked in the main window the shell
         // root's handler runs first and would take every digit for a loadout slot.
-        let field_focused = self.dialog.as_ref().is_some_and(|dialog| {
-            dialog
-                .inputs
-                .iter()
-                .flatten()
-                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
-        }) || self.move_hud.as_ref().is_some_and(|hud| {
-            hud.inputs
-                .iter()
-                .chain(std::iter::once(&hud.angle))
-                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
-        }) || self.manipulator_form.as_ref().is_some_and(|form| {
-            form.inputs
-                .iter()
-                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
-        }) || self
-            .prop_inputs
-            .values()
-            .any(|input| input.state.read(cx).focus_handle(cx).is_focused(window));
+        // `Shell::typing_focused` is that whole question in one place, because the
+        // `Shift` peek asks it too.
+        let field_focused = self.typing_focused(window, cx);
         // `=` flips the Move form between offsets and coordinates. It is not a number
         // character, so it works whether a field owns the keyboard or the canvas does —
         // but another surface with a text field (a modal, the settings card, the palette)
@@ -2253,6 +2243,22 @@ impl Render for Shell {
                     cx.stop_propagation();
                 }
             }))
+            // The Add hand's peek: `Shift` down shows the equipped pill's flyout and `Shift`
+            // up gives it back. It is a **modifier** transition rather than a key press
+            // because the platform reports modifier keys through this event alone — a
+            // Wayland session sends no key event at all for `Shift` itself. The peek does
+            // not consume anything: the key still reaches the gizmo's plane drag and the
+            // fields' capitals, which is why `peek_creation_flyout` stands down whenever
+            // one of those owns the canvas.
+            .on_modifiers_changed(cx.listener(
+                |this, event: &ModifiersChangedEvent, window, cx| {
+                    if event.modifiers.shift {
+                        this.peek_creation_flyout(window, cx);
+                    } else {
+                        this.end_creation_peek(cx);
+                    }
+                },
+            ))
             // The settings card is dragged from its header, but the shell root sees
             // the moves so a fast drag does not stop at the card edge.
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {

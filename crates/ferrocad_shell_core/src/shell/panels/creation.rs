@@ -225,6 +225,73 @@ impl Shell {
         self.open_popover("create", cx);
     }
 
+    /// Show the equipped pill's flyout for as long as `Shift` is held.
+    ///
+    /// The peek is the keyboard's hover: a held key borrows the caret's flyout for the
+    /// slot the Add hand holds, so the category is one key away without a click, and
+    /// letting go gives it back. It is deliberately **narrow**, because `Shift` already
+    /// means something on this canvas — it turns a gizmo axis drag into a plane drag — so
+    /// the peek refuses whenever the canvas has its own use for the key:
+    ///
+    /// - a tool owns the canvas (`Shift` is inside the tool's gesture then),
+    /// - a handle is armed or a transform is open or pending (plane drag, `Shift`+`Tab`),
+    /// - a field owns the keyboard (a capital letter),
+    /// - a modal, the wheel or the settings card is up (they take their own keys).
+    ///
+    /// A flyout the user opened (the caret) is never adopted: releasing the key closes
+    /// only what the peek opened.
+    pub(crate) fn peek_creation_flyout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.creation_peek || self.popover_open("create") {
+            return;
+        }
+        if self.active_tool.is_some()
+            || self.modal_open()
+            || self.settings_card.is_some()
+            || self.wheel.read(cx).is_open()
+            || self.typing_focused(window, cx)
+        {
+            return;
+        }
+        if self.move_is_pending(cx)
+            || self.pending_interaction.is_some()
+            || self.session.is_some()
+            || self.model.lock().unwrap().gizmo_armed
+        {
+            return;
+        }
+        let Some(id) = self.creation.active().map(str::to_string) else {
+            return;
+        };
+        let Some(category) = self
+            .creation_pills()
+            .into_iter()
+            .find(|(_, command)| command.id == id)
+            .map(|(category, _)| category)
+        else {
+            return;
+        };
+        // The flyout grows upward from this point, so aim it at the pointer (where the
+        // user is looking) and fall back to just above the dock for a keyboard session.
+        let anchor = self.last_pointer.unwrap_or_else(|| {
+            let bounds = window.bounds();
+            point(bounds.center().x, bounds.bottom() - px(72.))
+        });
+        self.set_popover_anchor(anchor);
+        self.creation_peek = true;
+        self.open_creation_flyout(&category, cx);
+    }
+
+    /// Give the peek back (`Shift` released): close the flyout the peek opened, if it is
+    /// still the one on screen.
+    pub(crate) fn end_creation_peek(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.creation_peek) {
+            return;
+        }
+        if self.popover_open("create") {
+            self.close_popover(cx);
+        }
+    }
+
     /// Click a category tab: show that category's tools, and point its pill at the tool
     /// the category remembers.
     ///

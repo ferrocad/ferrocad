@@ -873,6 +873,34 @@ impl Shell {
     pub(in crate::shell) fn modal_open(&self) -> bool {
         self.dialog.is_some() || self.palette.is_some() || self.form_dialog.is_some()
     }
+
+    /// Whether a text field owns the keyboard: a dialog's, the Move form's, the
+    /// manipulator's or the property editor's.
+    ///
+    /// This is the one question "is the user typing right now", and it is asked twice:
+    /// `handle_key` must not steal a digit out of a focused field, and the `Shift` peek
+    /// must not open a menu because somebody typed a capital.
+    pub(in crate::shell) fn typing_focused(&self, window: &Window, cx: &App) -> bool {
+        self.dialog.as_ref().is_some_and(|dialog| {
+            dialog
+                .inputs
+                .iter()
+                .flatten()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        }) || self.move_hud.as_ref().is_some_and(|hud| {
+            hud.inputs
+                .iter()
+                .chain(std::iter::once(&hud.angle))
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        }) || self.manipulator_form.as_ref().is_some_and(|form| {
+            form.inputs
+                .iter()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        }) || self
+            .prop_inputs
+            .values()
+            .any(|input| input.state.read(cx).focus_handle(cx).is_focused(window))
+    }
 }
 
 /// The field index for a gizmo axis (X, Y, Z).

@@ -1142,3 +1142,152 @@ for _id, _command in (
     );
     assert!(cleanup.expect("remove the tools").ok);
 }
+
+/// `Shift` held borrows the equipped pill's flyout and gives it back.
+///
+/// The peek is the keyboard's hover, so it has to be shy: it stands down while a tool owns
+/// the canvas (`Shift` is inside the tool's gesture), while a handle is armed (the gizmo's
+/// plane drag), and when the user opened the flyout themselves — releasing the key must
+/// never close a menu somebody asked for.
+#[gpui::test]
+fn shift_peeks_the_equipped_pills_flyout(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let script = r#"
+import FreeCADGui
+def _tool(name, category):
+    class _Tool:
+        def GetResources(self):
+            return {
+                "MenuText": name,
+                "FerroCAD_Surface": "creation",
+                "FerroCAD_Category": category,
+            }
+        def IsActive(self):
+            return True
+        def Activated(self):
+            return {"status": name}
+    return _Tool()
+
+for _id, _command in (
+    ("Test_PeekSketch", _tool("Rectangle", "Sketch")),
+    ("Test_PeekSolid", _tool("Box", "Solid")),
+):
+    if _id not in FreeCADGui.listCommands():
+        FreeCADGui.addCommand(_id, _command)
+"#;
+    assert!(crate::python::evaluate(script).expect("register").ok);
+
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.refresh_commands(cx));
+    });
+    draw(&mut cx);
+
+    let peek = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| shell.peek_creation_flyout(window, cx));
+        });
+        draw(cx);
+    };
+    let release = |cx: &mut VisualTestContext| {
+        cx.update(|_window, cx| {
+            shell.update(cx, |shell, cx| shell.end_creation_peek(cx));
+        });
+        draw(cx);
+    };
+
+    // Nothing armed: there is no "current tool", so the key has nothing to show.
+    peek(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_none(),
+        "a fresh Add hand peeks nothing"
+    );
+
+    // `5` arms the Sketch pill, so the peek is the Sketch list.
+    press_root(&mut cx, &shell, "5");
+    peek(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_some(),
+        "Shift shows the equipped pill's list"
+    );
+    assert!(
+        cx.debug_bounds("create-row-Test_PeekSketch").is_some(),
+        "on the equipped pill's category"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.tab().map(str::to_string)),
+        Some("Sketch".to_string())
+    );
+    release(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_none(),
+        "releasing Shift gives the list back"
+    );
+
+    // A flyout the user opened is not the peek's to close.
+    click_at(&mut cx, "creation-pill-0-caret");
+    draw(&mut cx);
+    peek(&mut cx);
+    release(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_some(),
+        "a caret-opened flyout survives the key"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.close_popover(cx);
+        });
+    });
+    draw(&mut cx);
+    assert!(cx.debug_bounds("create-popover").is_none());
+
+    // A tool owns the canvas: `Shift` is part of the tool's own gestures there.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.active_tool = Some("Test_PeekSketch".to_string())
+        });
+    });
+    peek(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_none(),
+        "no peek while a tool holds the canvas"
+    );
+
+    // An armed gizmo: `Shift` turns an axis drag into a plane drag, so the key is the
+    // canvas' and not the dock's.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.active_tool = None;
+            shell.creation.remember("Test_PeekSolid", Some("Solid"));
+        });
+    });
+    model.lock().unwrap().gizmo_armed = true;
+    peek(&mut cx);
+    assert!(
+        cx.debug_bounds("create-popover").is_none(),
+        "no peek while a handle is armed"
+    );
+    model.lock().unwrap().gizmo_armed = false;
+
+    // With the canvas free again the peek names the newly equipped pill.
+    peek(&mut cx);
+    assert!(
+        cx.debug_bounds("create-row-Test_PeekSolid").is_some(),
+        "the peek follows the equipped pill"
+    );
+    release(&mut cx);
+
+    let cleanup = crate::python::evaluate(
+        "import FreeCADGui\nfor _id in ('Test_PeekSketch', 'Test_PeekSolid'):\n    FreeCADGui.removeCommand(_id)",
+    );
+    assert!(cleanup.expect("remove the tools").ok);
+}

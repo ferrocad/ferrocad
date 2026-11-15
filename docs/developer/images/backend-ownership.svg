@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" width="1100" height="720" role="img" aria-labelledby="title desc">
   <title id="title">One Gui app, one document half: who answers what</title>
-  <desc id="desc">FreeCAD's App/Gui split as ferrocad_shell_api's two traits enforce it. ferrocad_shell_core is the app (window, tree, panes, viewport) and a client of one AppBackend. The App half is RustAppBackend: documents, objects, property rows, meshes, edits, undo, visibility and the selection mirror, read from ferrocad_core. The Gui half is an optional ScriptHost: the command registry and execution, Settings nodes, providers and their claims, dialogs, tools, the scene and events, and the view state; it is PythonScriptHost (CPython), PywasmScriptHost (RustPython) or JsScriptHost, or absent. A table names the executor of every verb family, and one shared ferrocad_core registry under both halves is what makes FreeCAD.ActiveDocument and the model tree the same document.</desc>
+  <desc id="desc">FreeCAD's App/Gui split as ferrocad_shell_api's two traits enforce it. ferrocad_shell_core is the app (window, tree, panes, viewport) and a client of one AppBackend. The App half is DocumentBackend: documents, objects, property rows, meshes, edits, undo, visibility and the selection mirror, read from ferrocad_core. The Gui half is an optional ScriptHost: the command registry and execution, Settings nodes, providers and their claims, dialogs, tools, the scene and events, and the view state; it is PythonScriptHost (CPython), PywasmScriptHost (RustPython) or JsScriptHost, or absent. A table names the executor of every verb family, and one shared ferrocad_core registry under both halves is what makes FreeCAD.ActiveDocument and the model tree the same document.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -46,7 +46,7 @@
   <line class="dash" x1="804" y1="122" x2="804" y2="132" marker-end="url(#dash-arrow)" />
 
   <rect class="box" x="92" y="132" width="430" height="100" rx="6" fill="#dcb8e2" stroke="#b184b9" />
-  <text class="t box-title" x="307" y="152" text-anchor="middle">APP HALF — RustAppBackend</text>
+  <text class="t box-title" x="307" y="152" text-anchor="middle">APP HALF — DocumentBackend</text>
   <text class="t box-sub" x="307" y="170" text-anchor="middle">documents · objects · property rows · meshes · edits</text>
   <text class="t box-sub" x="307" y="186" text-anchor="middle">undo history · visibility · the selection mirror</text>
   <text class="t box-sub" x="307" y="202" text-anchor="middle">lists every document, marks the active one, switches on request</text>
@@ -127,7 +127,7 @@
   <text class="t note" x="96" y="624" text-anchor="start">CPython and RustPython answer the same script-visible rows over that document; <tspan class="note-italic">composition_surface.rs</tspan> compares them field for field.</text>
 
   <!-- footnotes -->
-  <text class="t note-italic" x="76" y="658" text-anchor="start">The seam is ferrocad_shell_api: AppBackend is the document half, ScriptHost the Gui half. RustAppBackend implements the first and holds the second (with_script_host).</text>
+  <text class="t note-italic" x="76" y="658" text-anchor="start">The seam is ferrocad_shell_api: AppBackend is the document half, ScriptHost the Gui half. DocumentBackend implements the first and holds the second (with_script_host).</text>
   <text class="t note-italic" x="76" y="676" text-anchor="start">A catalogue row keeps the catalogue's metadata and takes the script's live IsActive/IsChecked, so the palette greys exactly what the interpreter would.</text>
   <text class="t note-italic" x="76" y="694" text-anchor="start">Gates: ferrocad_shell_core's suite boots this composition; composition_surface.rs asserts its surface, the document switch, the transform commit and the two script halves.</text>
 </svg>

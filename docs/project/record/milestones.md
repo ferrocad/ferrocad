@@ -105,6 +105,11 @@ breadth, not more Part surface for its own sake.
 
 - [`../TODO-15-11-2026.md`](../TODO-15-11-2026.md) — the active backlog and the
   measurement caveats at this rotation.
+- [`2026-11-15-p5-document-half.md`](2026-11-15-p5-document-half.md) — the document
+  half split: `ferrocad_shell_doc` (kernel-free `DocumentBackend` plus the
+  `DocumentEngine` trait), `ferrocad_shell_rust` reduced to `PartEngine`, the `part`
+  feature the editions turn on, and the strict edition rule the base app and the toy now
+  pass.
 - [`2026-11-15-p4-sketch-model.md`](2026-11-15-p4-sketch-model.md) — the sketch model
   round: the constraint record and its Python surface, the three Part seams `Draft.make_sketch`
   needed (`findPlane` on a wire, `LineSegment(curve, first, last)`, an angle quantity), the

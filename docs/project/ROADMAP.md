@@ -2,7 +2,8 @@
 
 Status: roadmap (2026-11-15). The actionable backlog is
 [`TODO-15-11-2026.md`](TODO-15-11-2026.md); the measured history is
-[`record/milestones.md`](record/milestones.md), the latest round is
+[`record/milestones.md`](record/milestones.md), the latest rounds are
+[`record/2026-11-15-p5-document-half.md`](record/2026-11-15-p5-document-half.md) and
 [`record/2026-11-15-p4-sketch-model.md`](record/2026-11-15-p4-sketch-model.md), and the
 previous ones are
 [`record/2026-11-14-p2-boolean-seam.md`](record/2026-11-14-p2-boolean-seam.md) and
@@ -39,9 +40,13 @@ and the suite's errors are down to 3 (none needs a PartDesign workbench; the dra
 `Mesh::FeaturePython`).
 
 The platform picture did change materially: the **browser shell** runs the same
-`RustAppBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
-format. The remaining work is breadth and correctness on top of that platform, not a second
-architecture.
+`DocumentBackend` as the desktop, the OCCT seam is **Rust**, and mods are a shippable pack
+format. Since 2026-11-15 the document half itself is `ferrocad_shell_doc` — the graph,
+properties, undo, `.FCStd` I/O, the stage and the catalogue — with OCCT behind a
+`DocumentEngine`; `ferrocad_shell_rust` is just its Part plugin. The base app and the toy
+edition are therefore **literally kernel-free** (`cargo xtask editions` checks the strict
+rule), and an edition links Part by turning on `ferrocad/part`. The remaining work is
+breadth and correctness on top of that platform, not a second architecture.
 
 The **interaction surface** advanced on 2026-11-14: Push/Pull and Fillet are numeric
 editors that **re-open the feature they produced**. A cap or a fillet round (its face or a
@@ -81,8 +86,8 @@ the two documented limits.
 
 ### H2 — Workbench platform (built 2026-11-12)
 
-- **One document, four runtimes.** `RustAppBackend` is the document half of the desktop and
-the browser; `PythonScriptHost`, `PywasmScriptHost`, `JsScriptHost` and `runtime=plain` are
+- **One document, four runtimes.** `DocumentBackend` (over `PartEngine`) is the document
+half of the desktop and the browser; `PythonScriptHost`, `PywasmScriptHost`, `JsScriptHost` and `runtime=plain` are
 the script halves. The browser shell (M0–M6) runs the real shell in Chrome, and the
 backend-parity ledger (B0–B21) closed the legacy `PythonAppBackend` and made every shown
 command a real `FreeCADGui` command.

@@ -67,7 +67,7 @@ taskset -c 0 ./target/debug/ferrocad_parametric --script /tmp/open-only.py --ren
 ## 1a. The two backends, on the same file
 
 "It is blazing fast in `ferrocad_web_gpui`" was the report that started this round.
-Measured with `--example timing`, the browser's `RustAppBackend` is **not** faster at
+Measured with `--example timing`, the browser's `DocumentBackend` is **not** faster at
 this work; it was slower, because it re-meshed on every sync (4.0 s each time):
 
 | | `open` | first sync | every later sync |
@@ -284,7 +284,7 @@ frame (it recovers a third, see §2).
   coordinates (`FreeCAD` applies a `Part::Feature` placement when the shape is
   assigned, and the feature sync re-bakes it), so a host takes `positions` as given.
   Applying `obj.Placement` again scatters an opened document — that was a real bug,
-  found by comparing this backend's bounding boxes against `RustAppBackend`'s on the
+  found by comparing this backend's bounding boxes against `DocumentBackend`'s on the
   900a file (see §1a).
 - **The mesh crosses as packed arrays.** `stage_meshes()` keeps returning lists, so
   scripts and the docs tooling see the documented JSON shape

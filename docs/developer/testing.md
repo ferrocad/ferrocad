@@ -133,8 +133,8 @@ The rules themselves live in `crates/xtask/src/editions.rs`:
 
 | Crate | Rule |
 | --- | --- |
-| `ferrocad` (base), `ferrocad_toy` | must not reach `opencascade-sys`, `ferrocad_part_py`, `ferrocad_part_gui`, `ferrocad_mesh_py`, `ferrocad_mesh`, `ferrocad_text` **except through `ferrocad_shell_python`** (see below) |
-| `ferrocad_shell_python` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_part_gui`; must reach `ferrocad_shell_rust` (it composes the document half) |
+| `ferrocad` (base), `ferrocad_toy` | must not reach `opencascade-sys`, `ferrocad_part*`, `ferrocad_mesh*`, `ferrocad_occt`, `ferrocad_text`, `ferrocad_curves` or `ferrocad_shell_rust`: the base app and the toy edition are kernel-free, and their closures no longer contain any of them |
+| `ferrocad_shell_python` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_part_gui`; it composes `ferrocad_shell_doc`, and the Part engine is behind its `part` feature |
 | `ferrocad_stage`, `ferrocad_viewport`, `ferrocad_widgets`, `ferrocad_inventor`, `ferrocad_wgpu`, `ferrocad_ui` | must not reach the kernel-free list: they sit below Part |
 | `ferrocad_py` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_occt` (the App-only extension) |
 | `ferrocad_parametric` | must reach `ferrocad_part_py` and `ferrocad_occt` |
@@ -147,19 +147,22 @@ shell/renderer layer sits below Part. The check walks transitive edges, not just
 direct ones, because "the crate I added does not mention OCCT" is not the same as
 "OCCT is not reachable from my edition".
 
-### The composed-document-half carve-out
+### The document half is kernel-free
 
-Since `486a985` the shell's CPython host composes the document half
-(`ferrocad_shell_python` → `ferrocad_shell_rust`), and that half links
-`ferrocad_part` and the kernel. Every edition that embeds the host therefore
-reaches them, so for the base app and the toy edition the rule is **"not through a
-dependency of its own"**: `COMPOSED_DOCUMENT_HALF` names
-`ferrocad_shell_python` as the one intermediate those two editions may reach the
-kernel through, and a direct `ferrocad_part`/`opencascade-sys` edge is still
-reported with its path. Restoring a literally kernel-free base needs the document
-half split out of `ferrocad_shell_rust`; that is filed in
-[`../project/TODO-15-11-2026.md`](../project/TODO-15-11-2026.md) §P5 rather than
-pretended away here.
+The shell's document half is `ferrocad_shell_doc`: the document graph, the
+property rows, the undo history, `.FCStd` I/O, the model tree, the viewport stage
+and the command catalogue. It names no kernel. The four things that need one —
+registering an object type, building the startup sample, tessellating a stored
+shape, and constructing a Part feature edit — are the `DocumentEngine` trait, and
+`ferrocad_shell_rust` is the Part plugin (`PartEngine`) over it.
+
+`ferrocad_shell_python` composes `ferrocad_shell_doc` by default. Its `part`
+feature swaps `ferrocad_shell_rust::PartEngine` in, and only an edition that links
+the Part workbench turns it on (`ferrocad/part`, from `ferrocad_parametric` and
+`ferrocad_sculpt`). That is why the base app and the toy edition pass the
+*strict* rule above rather than a carve-out: neither reaches the engine by any
+route. The kernel-free backend still opens and saves documents, keeps undo, and
+draws whatever a script half meshes — the toy edition's whole display path.
 
 ### The geometry seam carve-out
 

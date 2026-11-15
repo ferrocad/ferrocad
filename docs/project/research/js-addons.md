@@ -18,7 +18,7 @@ Companions: [`../../developer/architecture/host-backends.md`](../../developer/ar
 
 `JsScriptHost` could call *out* to the page — `evaluate`, `commands`, `runCommand`,
 `onEvent` — but a JS workbench could not touch the **document**: the document is
-`RustAppBackend`'s, and a JS page cannot link `ferrocad_core`. It now can, through one
+`DocumentBackend`'s, and a JS page cannot link `ferrocad_core`. It now can, through one
 JSON API:
 
 ```text
@@ -273,9 +273,9 @@ the JavaScript chain without a browser, because the test's host is written exact
 the page's hook:
 
 - a script half that holds **no document** composes with
-  `RustAppBackend::from_shared_registry()` and reports the sample it booted;
+  `DocumentBackend::from_shared_registry()` and reports the sample it booted;
 - an `App::FeaturePython` created through the document API appears in
-  `RustAppBackend::stage_meshes()` **from the hook**, beside the document's own `Fillet`;
+  `DocumentBackend::stage_meshes()` **from the hook**, beside the document's own `Fillet`;
 - the hook is told `have = ["Fillet"]` and not its own object;
 - `set Toy.Height = 40 mm` through the document API changes the mesh the next sync returns.
 
@@ -337,7 +337,7 @@ The fixed vocabulary is `ferrocad_shell_api::events::DocumentEvent`
 `ScriptHost::on_document_event` has a default body
 (`crates/ferrocad_shell_api/src/app.rs:613`), so no existing host changed.
 
-`RustAppBackend` emits one pair per committed edit (`create`/`set` through the document API
+`DocumentBackend` emits one pair per committed edit (`create`/`set` through the document API
 are the other emitter): `announce`
 (`crates/ferrocad_shell_rust/src/backend.rs:229`) is called once by `edit`
 (`backend.rs:213`), and the document API emits from `create`/`set`/`recompute`

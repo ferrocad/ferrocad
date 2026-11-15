@@ -87,12 +87,12 @@ honestly emit: `document.edited` (`events.rs:28`) and `document.recomputed`
 (`crates/ferrocad_shell_api/src/app.rs:613`), so every existing host compiles unchanged.
 
 - **`document.edited`** — payload `{transaction, objects}` — after a transaction commits.
-  `RustAppBackend` emits it from `announce`
-  (`crates/ferrocad_shell_rust/src/backend.rs:229`), called once per edit through
-  `edit` (`backend.rs:213`); the document API emits it from `create`/`set`
+  `DocumentBackend` emits it from `announce`
+  (`crates/ferrocad_shell_doc/src/backend.rs`), called once per edit through
+  `edit`; the document API emits it from `create`/`set`
   (`crates/ferrocad_doc_api/src/lib.rs:181`, `:278`).
 - **`document.recomputed`** — payload `{objects}` — after `recompute()` returns `Ok`.
-  Same sites: `announce` (`crates/ferrocad_shell_rust/src/backend.rs:235`) and the
+  Same sites: `announce` (`crates/ferrocad_shell_doc/src/backend.rs`) and the
   document API (`crates/ferrocad_doc_api/src/lib.rs:182`, `:286`, `:299`).
 
 A refused write opens no transaction, so it emits nothing. A path that writes without

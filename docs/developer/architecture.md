@@ -22,18 +22,20 @@ The picture has four bands: **hosts** own the process entry and the window, the
 **seam** is shared, **backends** are named by the runtime they embed, and the
 **engine** is one. In code: **the seam** is `ferrocad_shell_core` (window, chrome,
 panels, viewport) over the `AppBackend`/`ScriptHost` traits in `ferrocad_shell_api`;
-neither depends on the engine. **A host backend** implements them:
-`RustAppBackend` links `ferrocad_core`/`ferrocad_part` directly and is the document
-half of every desktop and browser configuration; `PythonScriptHost` (over
-`ferrocad_py`) is the CPython script half. **The engine** is `ferrocad_core` +
-`ferrocad_part` over OCCT — the system library natively, the prebuilt wasm kernel in
-the browser.
+neither depends on the engine. **A host backend** implements them: `DocumentBackend`
+(in `ferrocad_shell_doc`) is the kernel-free document half, and
+`ferrocad_shell_rust`'s `PartEngine` supplies Part geometry when a build links it;
+together they are the document half of every desktop and browser configuration.
+`PythonScriptHost` (over `ferrocad_py`) is the CPython script half. **The engine** is
+`ferrocad_core` + `ferrocad_part` over OCCT — the system library natively, the
+prebuilt wasm kernel in the browser.
 
-Only the browser is missing CPython; that is why the `RustAppBackend` composition exists
-and why the seam is a trait rather than a Python module. The JS and wasm-Python
-configurations are the same shape with a different runtime, and all three browser
-configurations are `RustAppBackend` plus a `ScriptHost` — or plus none — rather than a
-second document implementation. `ferrocad_shell_web` is the browser's switch over them
+Only the browser is missing CPython; that is why the `DocumentBackend` composition
+exists and why the seam is a trait rather than a Python module. The JS and
+wasm-Python configurations are the same shape with a different runtime, and all
+three browser configurations are `DocumentBackend` plus a `ScriptHost` — or plus
+none — rather than a second document implementation. `ferrocad_shell_web` is the
+browser's switch over them
 (`?runtime=plain|pywasm|js`). The wasm-Python runtime is RustPython, and it does **not**
 reuse the `*_py` PyO3 modules — those are CPython C-ABI extensions — so it reaches the
 engine through its own native module; the layer that is shared is the
@@ -69,15 +71,16 @@ engine through its own native module; the layer that is shared is the
 | `ferrocad_shell_api` | `rlib` | The **contract**: `AppBackend` (the document half) and the optional `ScriptHost` (the scripting half), plus every view model they return (bootstrap, tree rows, property rows, stage meshes, commands, dialogs, view requests, selection items). Depends only on pure crates — no gpui, no CPython, no GPU. |
 | `ferrocad_shell_core` | `rlib` | The GPUI shell: `Shell`, the chrome, the panels, the viewport element, `DisplaySync`, the edition `Contributions` registry, and the file verbs with their host `FilePicker`. Platform-neutral, engine-neutral: it talks to an installed `AppBackend`. |
 | `ferrocad_shell_python` | `rlib` | The **native** assembly: boots CPython (`pyo3` embed), implements `AppBackend` over the `FreeCAD`/`FreeCADGui` facades, and exports `run`/`run_with`/`run_edition_with` and `HostConfig`. |
-| `ferrocad_shell_rust` | `rlib` | The **Rust document backend**: `RustAppBackend` over a real `ferrocad_core::Document`, Part features and the OCCT kernel, with no scripting runtime (it implements `AppBackend` only, never `ScriptHost`). Platform-neutral — no gpui, no CPython, no wasm-bindgen — so the browser host and a desktop edition install the *same* backend. Carries the sample document and the one `App_Move` form usage. |
+| `ferrocad_shell_doc` | `rlib` | The **kernel-free document half**: `DocumentBackend`, a real `ferrocad_core::Document` behind `AppBackend` — the graph, the property rows, undo, `.FCStd` I/O, the model tree, the viewport stage and the command catalogue. The four things that need a kernel (registering a type, the sample, tessellation, a Part feature edit) are the `DocumentEngine` trait; with the default `NoEngine` the backend boots an empty sample and draws no stored shape. Platform-neutral and kernel-free: no Part, no OCCT, no gpui, no CPython. |
+| `ferrocad_shell_rust` | `rlib` | The **Part backing** for the document half: `PartEngine`, the `DocumentEngine` that registers Part, decodes the embedded sample, tessellates through OCCT and builds the fillet/chamfer/push-pull features a manipulator commits. Small by design — everything the document must do without geometry lives in `ferrocad_shell_doc`. The browser host and a Part edition install it; the base app and the toy edition do not. |
 | `ferrocad_web_gpui` | `cdylib` (wasm32) | The **browser** host: `ferrocad_shell_core` on GPUI's WebGL2 backend, the engine through `ferrocad_shell_web`, and the page bridge (file picker, download, `ferrocad_open`) — **no CPython anywhere in the graph**. |
-| `ferrocad_shell_web` | `rlib` (wasm) | The browser's **runtime switch**: it composes `RustAppBackend` with no script half, with `JsScriptHost`, or with `PywasmScriptHost`, from the page's query string (`?runtime=plain\|pywasm\|js`; `?js=1` / `?pywasm=1` are the short forms). A failed runtime is logged and the host falls back to the document alone. |
+| `ferrocad_shell_web` | `rlib` (wasm) | The browser's **runtime switch**: it composes `PartEngine::backend()` with no script half, with `JsScriptHost`, or with `PywasmScriptHost`, from the page's query string (`?runtime=plain\|pywasm\|js`; `?js=1` / `?pywasm=1` are the short forms). A failed runtime is logged and the host falls back to the document alone. |
 | `ferrocad_doc_api` | `rlib` | The **document API** a non-Rust script runtime shares: `DocumentApi` over the process-wide registry, with JSON `document`/`properties`/`create`/`set`/`recompute` calls and the one payload presenter. Core-only — Part arrives through the registry the host populated — so a JS addon edits the host's one document instead of growing a second copy. |
 | `ferrocad_addon` | `rlib` | The **bundle ABI** both wasm addons share: the `(ptr, len)` / packed-`u64` memory contract, the allocator the loader writes into, and the `ferrocad.call` import. A bundle's `abi.rs` is then only its exported entry points, so the `unsafe` half exists once. |
 | `ferrocad_addon_toy` | `cdylib` + `rlib` | A **wasm workbench bundle**: the toy as a plain `wasm32` module that imports the document API (`ferrocad.call`) and holds no document. `toy.rs` is the workbench (pure, native tests against `DocApi`); `abi.rs` is the packed-string ABI. `www/addons/loader.js` instantiates it and the page serves it at `?addons=wasm`. |
 | `ferrocad_addon_spring` | `cdylib` + `rlib` | A **wasm workbench bundle that computes geometry**: `mods/Spring/` stores three parameters on an `App::FeaturePython` that has no `Shape`, and the bundle draws the helix from them (`stage_meshes`, `display: "wireframe"`). No kernel, no `ferrocad_core` link — it is the sandbox doing what a sandbox is for. |
-| `ferrocad_shell_js` | `rlib` (wasm32) | The **JS scripting surface**: `JsScriptHost` implements `ScriptHost` over the page's `window.__ferrocadJs` (an ES module: commands, `evaluate`, `runCommand`, `onEvent`). The JS backend is `RustAppBackend::with_script_host(JsScriptHost)`, not a second document implementation. `with_kernel` hands the page the document API (`window.ferrocad.call`), so a JS workbench edits the host's one document without linking `ferrocad_core`. A spike: not published, static command list. |
-| `ferrocad_shell_pywasm` | `rlib` | The **wasm-Python scripting surface**: `PywasmScriptHost` runs RustPython over the *same* `python/ferrocad_shell/__init__.py` and `catalog.json` (included as source), composed by `RustAppBackend::with_script_host`. Its `native.rs` binds `ferrocad_core` for RustPython (documents, quantity/unit, geometry values, the property rules); the App and Gui facades above it are the desktop's own Python, installed from source (`python/FreeCAD`, `python/FreeCADGui`, `python/FerroCADGui`, `python/FerroCAD`). `bootstrap.py` supplies only the host gaps (`io`, `contextlib`, `pathlib`, `traceback`, `importlib`, `os`, `tempfile`) and the wiring. The crate itself also builds natively so its tests run without a browser. Installed by the browser as `?pywasm=1`; not published. |
+| `ferrocad_shell_js` | `rlib` (wasm32) | The **JS scripting surface**: `JsScriptHost` implements `ScriptHost` over the page's `window.__ferrocadJs` (an ES module: commands, `evaluate`, `runCommand`, `onEvent`). The JS backend is `DocumentBackend::with_script_host(JsScriptHost)`, not a second document implementation. `with_kernel` hands the page the document API (`window.ferrocad.call`), so a JS workbench edits the host's one document without linking `ferrocad_core`. A spike: not published, static command list. |
+| `ferrocad_shell_pywasm` | `rlib` | The **wasm-Python scripting surface**: `PywasmScriptHost` runs RustPython over the *same* `python/ferrocad_shell/__init__.py` and `catalog.json` (included as source), composed by `DocumentBackend::with_script_host`. Its `native.rs` binds `ferrocad_core` for RustPython (documents, quantity/unit, geometry values, the property rules); the App and Gui facades above it are the desktop's own Python, installed from source (`python/FreeCAD`, `python/FreeCADGui`, `python/FerroCADGui`, `python/FerroCAD`). `bootstrap.py` supplies only the host gaps (`io`, `contextlib`, `pathlib`, `traceback`, `importlib`, `os`, `tempfile`) and the wiring. The crate itself also builds natively so its tests run without a browser. Installed by the browser as `?pywasm=1`; not published. |
 | `ferrocad` | `bin` | The base app (the general edition). Owns the app's Python entry module and, when packaged, its mods and interpreter; exposes `run`/`run_as`/`run_edition`/`run_edition_with`, which call `ferrocad_shell_python::run_with`. |
 | `ferrocad_toy` | `bin` + `rlib` | A **kernel-free edition** and testbed: it creates a typed object (`Height`/`Width`/`Depth`/`Placement`/`DisplayMode`/`Color`), represents it through the display hook, and manipulates it with a `HeightGrip` **and** the generic `TransformGizmo`. It links no geometry module; it exists to prove the whole workbench surface is generic and to run that loop in the fast CI job. See [`toy-workbench.md`](workbenches/toy-workbench.md). |
 | `python/FreeCAD` | package | The public, pure-Python `import FreeCAD` facade. |
@@ -128,8 +131,12 @@ ferrocad_shell_python/src/         the native assembly (core + CPython)
   events.rs    the SoEventCallback listener
   headless.rs  offscreen render / STL export
 
-ferrocad_shell_rust/src/         the Rust document backend (no gpui, no CPython)
-  backend.rs   RustAppBackend: AppBackend over ferrocad_core + Part + OCCT
+ferrocad_shell_doc/src/          the kernel-free document half (no gpui, no CPython)
+  backend.rs   DocumentBackend: AppBackend over ferrocad_core
+  lib.rs       DocumentEngine (the four kernel points) and NoEngine
+
+ferrocad_shell_rust/src/         the Part engine over ferrocad_shell_doc
+  lib.rs       PartEngine: registration, the sample, tessellation, the feature edits
   examples/    headless.rs (boot it with no window and print the document)
 
 ferrocad_web_gpui/src/           the browser host
@@ -320,14 +327,16 @@ ferrocad_shell_core -> ferrocad_shell_api, ferrocad_widgets,
                       ferrocad_inventor, bite-gpui     [the shell; no CPython]
 ferrocad_shell_python -> ferrocad_shell_core, ferrocad_viewport,
                       ferrocad_wgpu, ferrocad_inventor_py,
-                      ferrocad_stage_py, pyo3 (embed)  [native assembly: CPython backend]
+                      ferrocad_stage_py, ferrocad_shell_doc, pyo3 (embed)
+                                                     [native assembly: CPython backend]
                       must NOT -> ferrocad_py        [the *app* links it, not the shell]
-                      must NOT -> ferrocad_part/occt [the document side is Python]
+                      may    -> ferrocad_shell_rust  [only with the `part` feature: the edition links Part]
                       must NOT -> ferrocad_part_gui  [a workbench's manipulator is the edition's]
-                      may    -> ferrocad_shell_rust   [for a Rust-document desktop edition]
-ferrocad_shell_rust -> ferrocad_core, ferrocad_part, ferrocad_occt,
-                      ferrocad_geom, ferrocad_stage,
-                      ferrocad_shell_api, serde_json  [the Rust backend; same in both hosts]
+ferrocad_shell_doc -> ferrocad_core, ferrocad_stage, ferrocad_shell_api,
+                      serde_json                     [the document half; kernel-free]
+                      must NOT -> ferrocad_part, ferrocad_occt, gpui, pyo3
+ferrocad_shell_rust -> ferrocad_shell_doc, ferrocad_core, ferrocad_part,
+                      ferrocad_occt, ferrocad_geom   [the Part engine; same in both hosts]
                       must NOT -> gpui, pyo3, wasm-bindgen [it is not a host]
 ferrocad_web_gpui  -> ferrocad_shell_core, ferrocad_shell_web, wasm-bindgen
                       [browser host; no CPython]
@@ -352,7 +361,8 @@ ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core,
                                   ferrocad_part, ferrocad_occt
 ferrocad           -> ferrocad_shell_python, ferrocad_py     [base app: links the module in, embeds payload]
                                                      [run_edition: an edition's app script]
-ferrocad_parametric -> ferrocad, ferrocad_part_py,
+                                                     [features: `part` turns the OCCT document half on]
+ferrocad_parametric -> ferrocad (features = ["part"]), ferrocad_part_py,
                        ferrocad_mesh_py,
                        ferrocad_part_gui             [the edition registers Part and Mesh]
 ferrocad_toy       -> ferrocad, ferrocad_shell_python, ferrocad_stage,

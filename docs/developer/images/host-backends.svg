@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 866" width="1100" height="866" role="img" aria-labelledby="title desc">
   <title id="title">FerroCAD system architecture: hosts, the seam, one document half, four runtimes and the engine</title>
-  <desc id="desc">Four layers: the platform hosts that own the entry point, window and FilePicker (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); one RustAppBackend document half that every runtime instantiates, holding one of four scripting configurations (CPython's PythonScriptHost, RustPython's PywasmScriptHost, the JS JsScriptHost, or none), chosen in the browser by ferrocad_shell_web from the page's query string; both Python halves run the same python/ facade (FreeCADGui, FerroCADGui and FerroCAD installed from source), with bootstrap.py supplying only the host gaps, the document model and four bricks; and the shared ferrocad_core plus ferrocad_part engine over OCCT, which the JS half and wasm addons reach through ferrocad_doc_api's JSON doorway rather than by linking the engine. The synthetic Settings namespace is merged per feature: whichever half has rows for a node owns it, so the document half answers Settings/Grid from the shell's mirrored view state when no script half lists it.</desc>
+  <desc id="desc">Four layers: the platform hosts that own the entry point, window and FilePicker (native desktop, browser wasm); the platform-neutral seam (ferrocad_shell_core over ferrocad_shell_api's AppBackend document half and optional ScriptHost scripting half); one DocumentBackend document half that every runtime instantiates, holding one of four scripting configurations (CPython's PythonScriptHost, RustPython's PywasmScriptHost, the JS JsScriptHost, or none), chosen in the browser by ferrocad_shell_web from the page's query string; both Python halves run the same python/ facade (FreeCADGui, FerroCADGui and FerroCAD installed from source), with bootstrap.py supplying only the host gaps, the document model and four bricks; and the shared ferrocad_core plus ferrocad_part engine over OCCT, which the JS half and wasm addons reach through ferrocad_doc_api's JSON doorway rather than by linking the engine. The synthetic Settings namespace is merged per feature: whichever half has rows for a node owns it, so the document half answers Settings/Grid from the shell's mirrored view state when no script half lists it.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -51,7 +51,7 @@
 
   <line class="wire" x1="292" y1="148" x2="292" y2="184" marker-end="url(#arrow)" />
   <line class="wire" x1="808" y1="148" x2="808" y2="184" marker-end="url(#arrow)" />
-  <text class="t note-italic" x="302" y="170" text-anchor="start">installs a RustAppBackend (+ a ScriptHost) and a FilePicker, then boots the shell</text>
+  <text class="t note-italic" x="302" y="170" text-anchor="start">installs a DocumentBackend (+ a ScriptHost) and a FilePicker, then boots the shell</text>
 
   <!-- ============ layer 2: the seam ============ -->
   <rect class="band" x="76" y="186" width="1000" height="112" rx="10" fill="#dbe9f6" stroke="#8fb8d8" />
@@ -78,7 +78,7 @@
   <line class="dash" x1="697" y1="290" x2="697" y2="304" />
   <line class="dash" x1="397" y1="304" x2="697" y2="304" />
   <line class="dash" x1="570" y1="304" x2="570" y2="321" marker-end="url(#dash-arrow)" />
-  <text class="t note-italic" x="386" y="309" text-anchor="end">RustAppBackend implements the first and holds the second</text>
+  <text class="t note-italic" x="386" y="309" text-anchor="end">DocumentBackend implements the first and holds the second</text>
 
   <!-- ============ layer 3: one document half, four runtimes ============ -->
   <rect class="band" x="76" y="316" width="1000" height="276" rx="10" fill="#eef2f8" stroke="#b6c2d2" />
@@ -86,7 +86,7 @@
 
   <!-- the shared document half -->
   <rect class="box" x="92" y="322" width="956" height="44" rx="6" fill="#dcb8e2" stroke="#b184b9" />
-  <text class="t box-title" x="570" y="340" text-anchor="middle">RustAppBackend — the document half in every configuration</text>
+  <text class="t box-title" x="570" y="340" text-anchor="middle">DocumentBackend — the document half in every configuration</text>
   <text class="t box-sub" x="570" y="356" text-anchor="middle">ferrocad_shell_rust · the only AppBackend a host installs · the browser picks the script half with ferrocad_shell_web (?runtime=plain|pywasm|js)</text>
 
   <!-- fan-out to the four runtimes -->
@@ -184,14 +184,14 @@
   <rect x="280" y="718" width="16" height="12" rx="2" fill="#b9dcc2" stroke="#7fb391" />
   <text class="t note" x="303" y="728" text-anchor="start">RustPython + _ferrocad (wasm + native)</text>
   <rect x="520" y="718" width="16" height="12" rx="2" fill="#dcb8e2" stroke="#b184b9" />
-  <text class="t note" x="543" y="728" text-anchor="start">RustAppBackend (shared document half)</text>
+  <text class="t note" x="543" y="728" text-anchor="start">DocumentBackend (shared document half)</text>
   <rect x="770" y="718" width="16" height="12" rx="2" fill="#b9cde4" stroke="#7d9ec4" />
   <text class="t note" x="793" y="728" text-anchor="start">the shared CAD engine</text>
 
-  <text class="t note-italic" x="76" y="752" text-anchor="start">AppBackend is the document half; ScriptHost is optional. All four configurations are the same RustAppBackend with a different (or no) script half.</text>
+  <text class="t note-italic" x="76" y="752" text-anchor="start">AppBackend is the document half; ScriptHost is optional. All four configurations are the same DocumentBackend with a different (or no) script half.</text>
   <text class="t note-italic" x="76" y="770" text-anchor="start">Both Python script halves reach ferrocad_core through their VM's native module: CPython via ferrocad_py (PyO3), RustPython via _ferrocad.</text>
   <text class="t note-italic" x="76" y="788" text-anchor="start">The browser host installs one of the three wasm configurations through ferrocad_shell_web: ?runtime=plain|pywasm|js (?js=1 and ?pywasm=1 are the short forms).</text>
   <text class="t note-italic" x="76" y="806" text-anchor="start">A wasm addon (ferrocad_addon_toy → www/addons/toy.wasm) shares that doorway: a second ferrocad_core would be a second document, so it calls the host's one.</text>
   <text class="t note-italic" x="76" y="824" text-anchor="start">Which half runs which verb is backend-ownership.svg: the catalogue is one metadata source and catalog::executor names the executor of each id.</text>
-  <text class="t note-italic" x="76" y="842" text-anchor="start">Settings/* is merged per feature: whichever half has rows for a node owns it, so RustAppBackend answers Settings/Grid from the mirrored view state when no script half lists it.</text>
+  <text class="t note-italic" x="76" y="842" text-anchor="start">Settings/* is merged per feature: whichever half has rows for a node owns it, so DocumentBackend answers Settings/Grid from the mirrored view state when no script half lists it.</text>
 </svg>

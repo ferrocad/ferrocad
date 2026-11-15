@@ -3,7 +3,7 @@
 Status: implemented (2026-11-06). The shell/backend split, the `ScriptHost` seam, the
 file verbs and all four runtime configurations are in the tree and covered by CI —
 including the native one, which since S9 is the *same composition* as the two browser
-ones (`RustAppBackend` + a `ScriptHost`), not a second `AppBackend`. The browser
+ones (`DocumentBackend` + a `ScriptHost`), not a second `AppBackend`. The browser
 installs all four through one switch (`ferrocad_shell_web`, `?runtime=plain|pywasm|js`).
 Task record: [`host-backends.md`](../../project/record/tasks/host-backends.md) — the
 plan that delivered them, kept for its stage history and its `file:line` evidence.
@@ -26,17 +26,17 @@ Three things are regularly confused, so they are separated here:
 
 Platform is therefore a property of the host, and the document API is identical
 everywhere. That is what lets the browser and a desktop edition install the *same*
-`RustAppBackend`.
+`DocumentBackend`.
 
 ![The four layers: the hosts (native desktop, browser wasm) that own the entry point,
 window and FilePicker; the seam (`ferrocad_shell_core` over `AppBackend` plus an
-optional `ScriptHost`); one `RustAppBackend` composed with one `ScriptHost` per
+optional `ScriptHost`); one `DocumentBackend` composed with one `ScriptHost` per
 runtime (CPython, RustPython, JS, or none); and the shared
 `ferrocad_core`/`ferrocad_part` engine, which the JS half and wasm addons reach
 through `ferrocad_doc_api`'s JSON API](../images/host-backends.svg)
 
 The two browser configurations differ in **who runs the user's code**, not in what the
-shell sees. Both are `RustAppBackend` plus a script half —
+shell sees. Both are `DocumentBackend` plus a script half —
 `with_script_host(Box::new(JsScriptHost))` and
 `…(Box::new(PywasmScriptHost::live()?))` — and neither reimplements a document. The
 browser host does not choose either by hand: `ferrocad_shell_web` does, from the page's
@@ -49,8 +49,9 @@ Crates today:
 | Contract | `ferrocad_shell_api` | `AppBackend`, `ScriptHost`, and every view model |
 | Document document API | `ferrocad_doc_api` | the JSON calls a JS/wasm addon shares; core-only |
 | UI shell | `ferrocad_shell_core` | platform-neutral GPUI; no engine, no interpreter |
-| Backend · no runtime | `ferrocad_shell_rust` | `RustAppBackend`; desktop *or* wasm |
-| Backend · CPython | `ferrocad_shell_python` | `RustAppBackend` + `PythonScriptHost`; the crate is host **and** script half |
+| Document half | `ferrocad_shell_doc` | `DocumentBackend` — graph, properties, undo, `.FCStd`, stage; kernel-free |
+| Part engine | `ferrocad_shell_rust` | `PartEngine` (a `DocumentEngine`); desktop *or* wasm |
+| Backend · CPython | `ferrocad_shell_python` | `DocumentBackend` (+ `PartEngine` with `part`) + `PythonScriptHost`; the crate is host **and** script half |
 | Backend · JS modules | `ferrocad_shell_js` | `JsScriptHost`; wasm only |
 | Backend · wasm Python | `ferrocad_shell_pywasm` | `PywasmScriptHost`; RustPython |
 | Browser assembly | `ferrocad_shell_web` | the runtime switch: `?runtime=plain\|pywasm\|js` |
@@ -105,7 +106,7 @@ Rules that keep the split honest:
   or report differently about the same one. The default loads nothing — the honest answer
   from a half with no data loader (a JS surface) — and `HostChain` forwards both to the
   primary. This is what the browser uses: it has no `mods/` tree but it can `fetch`.
-- `script_host()` is `None` for a backend with no interpreter. `RustAppBackend` returns
+- `script_host()` is `None` for a backend with no interpreter. `DocumentBackend` returns
   `None` unless a host composed one in with `with_script_host`.
 - `commands()`/`run_command()` let a script contribute verbs to the palette. The
   document's `commands()` starts from the catalogue, takes each catalogue row's live
@@ -115,7 +116,7 @@ Rules that keep the split honest:
   script's, the edits are the document's, and a non-catalogue id goes to the script when
   the registry lists it.
 - The hooks that let a script **own part of a document answer** return `Option`:
-  `None` means "not mine, answer it yourself". `RustAppBackend` asks them before its
+  `None` means "not mine, answer it yourself". `DocumentBackend` asks them before its
   own answer for the five merged methods — `model_tree` (appends
   `extra_tree_nodes`), `properties`/`set_property` (the `Settings/*` namespace, which
   is not in the document at all), `dialog_accept`/`dialog_cancel` (tokens it did not
@@ -136,7 +137,7 @@ Rules that keep the split honest:
   single-host composition keeps its own facade's rows unchanged.
 - The `Settings` namespace is merged **per feature**, and a feature's owner is whoever
   has rows for it. A script half that lists `Settings/<feature>` owns that feature; the
-  document half adds the grid card (`ferrocad_shell_rust::grid_settings`) to whatever
+  document half adds the grid card (`ferrocad_shell_doc::grid_settings`) to whatever
   root exists when no one listed it, and builds the root when there is none. Both halves
   use the same test — "do I have rows for this node?" — so a node the pane renders is a
   node whose edits land in the same place. That is why `?runtime=plain` and
@@ -171,7 +172,7 @@ The split follows FreeCAD's own two applications, and this is the rule the
 | fallback | the Rust arms | Gui verbs **only** when no `ScriptHost` is installed (`?runtime=plain`) |
 
 ![The split drawn out: `ferrocad_shell_core` installs one `AppBackend` (the document
-half, `RustAppBackend`) and an optional `ScriptHost` (the Gui half); underneath, a
+half, `DocumentBackend`) and an optional `ScriptHost` (the Gui half); underneath, a
 "who runs what" table names the executor of each catalogue row; the bottom band is
 the one `ferrocad_core` registry both halves read](../images/backend-ownership.svg)
 
@@ -207,16 +208,18 @@ A backend therefore carries no file hooks and no platform knowledge.
 
 ## 4. The four configurations
 
-![The four runtime configurations behind one shell: RustAppBackend alone (no
-runtime), RustAppBackend + PythonScriptHost (embedded CPython, native), RustAppBackend
-+ JsScriptHost (wasm modules) and RustAppBackend + PywasmScriptHost (wasm Python), all
+![The four runtime configurations behind one shell: DocumentBackend alone (no
+runtime), DocumentBackend + PythonScriptHost (embedded CPython, native), DocumentBackend
++ JsScriptHost (wasm modules) and DocumentBackend + PywasmScriptHost (wasm Python), all
 on one `AppBackend`/`ScriptHost` seam; the browser picks among the wasm ones, and
 none, through `?runtime=`](../images/host-backends-columns.svg)
 
 ### Rust, no runtime
 
-`ferrocad_shell_rust::RustAppBackend` owns a real `ferrocad_core::Document` and
-tessellates through `ferrocad_part`/OCCT. It implements `AppBackend` only — never
+`ferrocad_shell_doc::DocumentBackend` owns a real `ferrocad_core::Document`; with
+`ferrocad_shell_rust::PartEngine` it tessellates through `ferrocad_part`/OCCT, and
+without it (the base app, the toy edition) it draws only what a script half meshes.
+It implements `AppBackend` only — never
 `ScriptHost` — so it is a viewer plus the document edits the shell itself performs.
 Platform-neutral by rule: no gpui, no pyo3, no wasm-bindgen. Same crate in the browser
 and on a desktop edition.
@@ -226,14 +229,15 @@ and on a desktop edition.
 Since **S9** this is the same composition as the two browser ones:
 
 ```text
-ferrocad_shell_rust::RustAppBackend                (document half)
-      + ferrocad_shell_python::PythonScriptHost   (script half)
+ferrocad_shell_doc::DocumentBackend              (document half)
+      + ferrocad_shell_rust::PartEngine          (geometry, when `part` is on)
+      + ferrocad_shell_python::PythonScriptHost  (script half)
       = the desktop backend
 ```
 
 Both halves point at **one document** — the one in
 `ferrocad_core::application::application()`, the registry `ferrocad_py` binds
-`FreeCAD.ActiveDocument` to. `RustAppBackend` reaches it through `DocSource::SharedRegistry`,
+`FreeCAD.ActiveDocument` to. `DocumentBackend` reaches it through `DocSource::SharedRegistry`,
 which caches no handle (a script may open or close documents at run time) and always
 releases the registry lock before locking a document. A re-open of an open name
 replaces the contents *inside* the existing `Arc<Mutex<Document>>`, so a `PyDocument`
@@ -309,7 +313,7 @@ protocol, the three shapes (static link, document API, copied engine), the overl
 description and the JS provider registry.
 
 The JS backend is the composition
-`RustAppBackend::from_shared_registry().with_script_host(JsScriptHost::with_kernel(..))`.
+`DocumentBackend::from_shared_registry().with_script_host(JsScriptHost::with_kernel(..))`.
 The registry source is what the document API reads.
 
 ### wasm Python (RustPython)
@@ -521,7 +525,7 @@ app's parameter file and answers the whole contract; the worker has a real POSIX
 operations, which is what makes it independent of the interpreter's `open` (B7d).
 
 **Installed by the browser, chosen by the page.** `ferrocad_shell_web` is the assembly:
-it composes `RustAppBackend` with no script half, with `JsScriptHost`, or with
+it composes `DocumentBackend` with no script half, with `JsScriptHost`, or with
 `PywasmScriptHost`, from the query string (`?runtime=plain|pywasm|js`, with `?js=1`
 and `?pywasm=1` as the short forms). The wasm-Python configuration must use
 `from_shared_registry()`: the facade reads `FreeCAD.ActiveDocument` from the same
@@ -681,11 +685,14 @@ test on each side fails when the two disagree.
 ## 8. Dependency rules
 
 ```text
-ferrocad_shell_rust   -> ferrocad_core, ferrocad_part, ferrocad_occt,
-                         ferrocad_stage, ferrocad_shell_api, serde_json
+ferrocad_shell_doc    -> ferrocad_core, ferrocad_stage, ferrocad_shell_api, serde_json
+                         must NOT -> ferrocad_part, ferrocad_occt, gpui, pyo3
+ferrocad_shell_rust   -> ferrocad_shell_doc, ferrocad_core, ferrocad_part,
+                         ferrocad_occt, ferrocad_geom
                          must NOT -> gpui, pyo3, wasm-bindgen
-ferrocad_shell_python   -> ferrocad_shell_core, ferrocad_py, pyo3, gpui
-                         may    -> ferrocad_shell_rust
+ferrocad_shell_python   -> ferrocad_shell_core, ferrocad_shell_doc, ferrocad_py,
+                         pyo3, gpui
+                         may (feature `part`) -> ferrocad_shell_rust
                          may (native, feature `js`) -> ferrocad_shell_js,
                                  ferrocad_doc_api
 ferrocad_web_gpui     -> ferrocad_shell_core, ferrocad_shell_web, wasm-bindgen
@@ -714,7 +721,7 @@ ferrocad_shell_pywasm -> ferrocad_shell_api, ferrocad_core, ferrocad_inventor,
 
 The asymmetry between the two script halves is the shape of each backend.
 `ferrocad_shell_js` must not name `ferrocad_core` at all: it calls out to the page and
-reports what comes back, so the document stays `RustAppBackend`'s, and a core edge would
+reports what comes back, so the document stays `DocumentBackend`'s, and a core edge would
 put a second document implementation one `use` away. `ferrocad_shell_pywasm` does name
 `ferrocad_core`, because the rows it feeds the interpreter come from `present` and its
 snapshot is a `Document`; it also names the kernel, because B18b item 2 binds `Part` and

@@ -167,17 +167,17 @@ priority tier is needed (see [`creation-loadout.md`](creation-loadout.md) §6.1)
 | Piece | Today | This slice |
 | --- | --- | --- |
 | Modify hand | `[1 Move][2 Push/Pull][3 Fillet][0 Inspect]` in `chrome::loadout_bar`, bottom-left 16 px; the slot's default filter is `Move`/`Inspect` → Body, `PushPull` → Face, `Fillet` → Edge | unchanged |
-| Add hand | the dock is a registry command strip; the only creation affordances are commands: `Part_Box` creates 20×20×20 immediately, `Toy_MakeSlab` opens a **modal** three-field form, `Toy_Polyline` starts a tool whose strip is label/points/hint/Cancel/Finish. **2026-11-15:** the dock is `[globals │ ⊕ <LastTool> ▾ │ Search]` and the pill's flyout lists the `creation` commands by `FerroCAD_Category` | [`creation-loadout.md`](creation-loadout.md): one split pill whose label arms a tool, one non-modal strip; the fields are still missing |
+| Add hand | the dock is a registry command strip; the only creation affordances are commands: `Part_Box` creates 20×20×20 immediately, `Toy_MakeSlab` opens a **modal** three-field form, `Toy_Polyline` starts a tool whose strip is label/points/hint/Cancel/Finish. **2026-11-15:** the dock is `[globals │ ⊕ <LastTool> ▾ │ Search]`, the pill's flyout lists the `creation` commands by `FerroCAD_Category` with an unmet `FerroCAD_Gate` greyed in `INACTIVE_STRUCTURAL`, and an armed Box shows its `W/L/H` strip (`Tab`, typed digits, `Enter` commits) | [`creation-loadout.md`](creation-loadout.md) |
 | Pending lock | `InteractionContext::{PendingMove, PendingRotation, PendingInteraction}` allow only view-only commands and the finish keys; `StartTool`, `SwitchHand`, `SwitchScope`, `Select` and edits are refused with a status line | keep; creation arms through the same gate |
 | Bar dim | `loadout_bar(blocked)` dims to 0.45 and drops clicks; `action_dock` takes no `blocked` and stays lit | **done 2026-11-15:** `action_dock(blocked)` dims the same way while a transform or manipulator is pending, and the hand column dims while a creation tool is armed |
 | Tool owns canvas | `start_tool` gates, closes the Move form, clears manipulators + gizmo, installs the tool, keeps the slot; the radial and hover-to-arm are already suppressed | already "Armed Add suspends Modify" |
 | Hit priority | navicube → manipulators → gizmo → tool → scene | with the set empty, the tool is already directly behind the cube |
 | Face binding | a creation tool's first left press on a planar face binds the session workplane (sticky; `Tool::picks_workplane` opts out) | add the hover preview frame; keep the sticky press binding |
-| Slot switch while pending | **refused**: `set_loadout_slot` calls `gate(Action::SwitchHand)` before `commit_pending_session`. The documented test `switching_the_slot_commits_a_pending_drag_first` is not in the tree | reconcile the docs to "refuse" (A4) or auto-commit — decision §6.2 |
-| Scope | `SelectFilter { Auto, Body, Face, Edge }`, label `Select: Body`, one store in `Loadout` | unchanged; the Add hand reads it (open question: may the scope change while armed? §6.6) |
-| Creation metadata | `Contributions` holds tools by id only; no category, label, icon, fields or enablement | add a `CreationTool` descriptor, supplied by the edition (creation-loadout §1, §3.2) |
-| `HoverReport` | `{ target, through: Option<&'static str> }`, `"navicube"` only, written by the viewport | `"creation_pill"` written by the shell (the viewport cannot see gpui chrome) |
-| `ToolStatus` | `{ id, label, active, points, hint }`, text-only; an inactive status hides the strip | add `fields: Vec<ToolField>` and a `Tool::set_field` write-back; a creation tool reports `active` from the moment it is armed (0 points), or the strip never appears |
+| Slot switch while pending | **refused**: `set_loadout_slot` calls `gate(Action::SwitchHand)` before `commit_pending_session`; `switching_the_slot_waits_for_a_pending_move` pins it (`loadout.rs`) | docs reconciled to "refuse" (§6.2) |
+| Scope | `SelectFilter { Auto, Body, Face, Edge }`, label `Select: Body`, one store in `Loadout` | **2026-11-15:** `SwitchScope` is refused while the armed creation tool's gate is unmet, with the status naming the tool (§6.6) |
+| Creation metadata | `Contributions` holds tools by id; the registry row carries `category`, `target`, `gate` and the tool's own `ToolStatus::fields` | **2026-11-15:** the gate travels as `FerroCAD_Gate` and is evaluated by the chrome against the selection; a descriptor struct would add only an icon and default fields, which no edition needs yet |
+| `HoverReport` | `{ target, through: Option<&'static str> }`, `"navicube"` written by the viewport; **2026-11-15:** the shell merges its own `creation_pill` note into the report it shows | done |
+| `ToolStatus` | **2026-11-15:** `{ id, label, active, points, hint, fields: Vec<ToolField> }`; `Tool::set_field` writes a typed value back, and the strip is tabular monospace, unfocused by default | done (C2) |
 
 The tree also still calls the last bar slot **`0 Idle`** in one doc comment while the slot
 is `Slot::Inspect` and the label is `Inspect`; the note keeps `Inspect`.
@@ -215,34 +215,30 @@ the label is `⊕ Box ▾` (the tool it arms) and there is no duplicate `Create 
 `PILL_HOLD` ends on pointer leave, `Esc` or a timeout; enablement is a
 `TopologyGate { kind: ElementKind, min_arity, max_arity }`.
 
-1. **`Part_Box`'s fate and the screenshot workflow.** `Part_Box` creates a default box
-   immediately and returns `created Box001`; the screenshot tool's `create` step and the
-   quickstart depend on that status. The Add hand removes the duplicate button but keeps
-   the zero-mouse path as "arm the pill, press `Enter`" (commit at the WP origin).
-   Recommend keeping `Part_Box` registered for Search/menu and updating the screenshot step
-   and quickstart to the two-step pill path; do not keep a second dock row.
-2. **Pending + slot switch.** The code refuses (`gate(Action::SwitchHand)`); two docs and
-   a named test say it commits first. Recommend refuse (A4's rule: an explicit unfinished
-   decision owns the context), delete the stale sentences, and add the missing test.
-3. **The disabled tool's ink.** `ui::INACTIVE_STRUCTURAL` does not exist; `MUTED`
-   (`#8B919A`) is the UI's muted text and the stage's `INACTIVE_COLOR` is `#94A3B8` @ 0.9.
-   Recommend adding `ui::INACTIVE_STRUCTURAL = #94A3B8` (the value the Add-hand note
-   already uses) rather than overloading `MUTED`.
-4. **Who reports `creation_pill` through the hover report?** The viewport cannot; either
-   the shell writes `HoverReport.through` for its own chrome or the status line grows a
-   separate chrome-through field. Recommend the latter: `HoverReport` stays a neutral
-   viewport type.
-5. **The loadout bar while ARMED.** It is parked but still clickable today. Recommend
-   dimming it to 45 % during ARMED (the same visual as the pending lock) and letting a
-   hand switch take effect when the tool ends, so "one hand owns the canvas" is visible.
-6. **May the scope change while ARMED?** The `Tool` context allows `SwitchScope`. A
-   creation tool whose `TopologyGate` depends on the selection kind can lose its
-   requirement mid-session if the user changes `Select ▾`. Recommend refusing
-   `SwitchScope` while a selection-gated tool is armed, with the status naming the tool;
-   the alternative is to re-evaluate and cancel the tool with a message.
-7. **The ghost's alpha.** The Add-hand note specifies a 35 % display-only ghost. That is a
-   new `ferrocad_stage` constant (the manipulator previews carry their own alpha today);
-   pin the value in the theme/stage tests rather than leaving a literal in the tool.
+1. **`Part_Box`'s fate and the screenshot workflow.** **Decided and landed:** `Part_Box`
+   stays registered for Search/the app menu and now returns `{"tool": "box"}`, arming the
+   Box tool; `Enter` commits at the placement origin, so the zero-mouse path survives as
+   "arm the pill, press `Enter`". The screenshot step and the quickstart describe that
+   two-step path; no second dock row exists. (`FerroCAD` 2026-11-15.)
+2. **Pending + slot switch.** **Settled: refuse** (`gate(Action::SwitchHand)`), as the
+   code always did. The stale "commits first" sentences are gone from the companion notes,
+   and `switching_the_slot_waits_for_a_pending_move` pins the refusal.
+3. **The disabled tool's ink.** **Landed:** `ui::INACTIVE_STRUCTURAL = #94A3B8`, used by a
+   disabled menu row (and so by the pill's flyout when a gate is unmet) and by the pill's
+   arm; `MUTED` keeps its meaning as the quiet text tone.
+4. **Who reports `creation_pill` through the hover report?** **Landed as recommended:** the
+   viewport's `HoverReport` is unchanged; when the creation flyout's negative space takes a
+   press, the shell notes the overlay and merges it into the report it shows, so the status
+   line reads `clicked through: creation_pill`.
+5. **The loadout bar while ARMED.** **Landed:** it dims to 45 % and drops clicks while a
+   creation tool is armed (`loadout_bar(blocked)`), the same visual as the pending lock, so
+   "one hand owns the canvas" is visible rather than implied.
+6. **May the scope change while ARMED?** **Landed: refused while the armed tool declares a
+   gate the selection does not meet**, with the status naming the tool and its requirement
+   (`Box needs select a face — finish it before changing the scope`). A tool with no gate
+   leaves the scope switch alone.
+7. **The ghost's alpha.** **Landed:** `ferrocad_stage::GHOST_SURFACE_ALPHA = 0.35`, used by
+   `ghost_item()` and pinned by the stage tests.
 
 ---
 

@@ -338,7 +338,7 @@ switch, reset or selection change spends a transaction the user did not see.
 | 6 | Rust `GizmoMode::default()` is `Translate` (`gizmo.rs:110-114`); the Python `TransformGizmo` binding defaults to `Universal` (`ferrocad_stage_py/src/gizmo.rs:104`) | Translate is the app default; align or document the binding default; §1 |
 | 7 | "The triad's centre remains pass-through" (`selection-gizmos-and-forms.md:260-261`; `gizmo-manipulators.md:192-198`) vs the origin drag | resolved: the centre is the 10 px origin handle; while that handle is disabled (the translation HUD) the centre passes through again; §3 |
 | 8 | §19 rejected a `Gizmo` header toggle (`gizmo-manipulators.md:767-771`) | the control that landed is **configuration** (show, providers, settings, reset), not a mode switch — consistent with “the header means how the viewport is drawn”; the wheel owns the verbs; §1 |
-| 9 | “A slot change commits a dirty session first” (`gizmo-manipulators.md` §9.2, `../project/record/tasks/tool-loadout.md`) vs the code's refusal (`gate(Action::SwitchHand)` before `commit_pending_session`) and A4's pending lock | refuse (A4): an undecided value owns the context; the “commits first” sentence and the named test are stale — see [`creation-pill-loadout.md`](creation-pill-loadout.md) §10.5 |
+| 9 | Whether a slot change may commit a dirty session | **settled: refuse.** An undecided value owns the context (A4's pending lock), so `set_loadout_slot` calls `gate(Action::SwitchHand)` before `commit_pending_session`; the old “commits first” wording is gone from the companion notes, and `switching_the_slot_waits_for_a_pending_move` pins the refusal — see [`creation-pill-loadout.md`](creation-pill-loadout.md) §10.5 |
 
 ## 7. Minimum implementation order
 

@@ -512,9 +512,39 @@ a twenty-button row that overflowed under the bottom-left loadout bar.
   ring is the design's five-to-eight wedges; `App_Delete` is pinned to the final destructive
   slot. The empty-space fallback is the **creation** row, not the dock globals.
 - **Limits, recorded.** The flyout is one flat list with dividers, not the two-tier
-  hierarchy; `TopologyGate` reasons are not shown; `ToolStatus` has no fields, so the armed
-  strip is still label / points / hint / `✗` / `✓` (`Tool::set_field` is C2); the primitive
-  tools do not exist, so `⊕ Add`/`⊖ Cut` on a hovered face waits on them.
+  hierarchy; the primitive placements beyond Box (`Cylinder`, `Cone`, `Sphere`) and the
+  Box's `⊕ Add`/`⊖ Cut` mode are later slices.
+
+### Step 7 — C1 and C2, the gate, the strip and `PILL_HOLD`
+
+The rest of the Add hand, on the same day:
+
+- **`FerroCAD_Gate` is data.** `CommandInfo.gate` parses `<kind>:<min>[:<max>]`
+  (`TopologyGate`, `ElementKind`) and the chrome evaluates it against the selection — not
+  the Modify hand's slot, so `Loft` is enabled by two profiles whatever slot is equipped.
+  An unmet gate paints the row in `ui::INACTIVE_STRUCTURAL` (`#94A3B8`) with the
+  requirement as its right-hand hint, and the pill's arm reports it on a click. Declared
+  on `SimpleCAD_Loft|Sweep|Shell|Draft|FillHole|Unwrap|RemoveRounds|Subdivide`,
+  `Part_Chamfer|HealFaces` and the booleans.
+- **The scope is protected while a tool is armed.** `Select ▾` refuses `SwitchScope` when
+  the armed creation tool's gate is unmet, naming the tool and what it needs.
+- **C2's strip.** `ToolStatus::fields` + `Tool::set_field` drive one tabular-monospace row
+  in the strip; `Tab` cycles, a digit replaces, `Backspace` edits, `Enter` commits, the
+  inner `Esc` drops the field. `ferrocad_viewport::set_tool_field` is the write path.
+- **The Box tool.** `Part_Box` now returns `{"tool": "box"}` and a new
+  `ferrocad_stage::BoxTool` previews a W×L×H box at the workplane (or the hovered face)
+  and commits on `Enter` — the zero-mouse path the old dock button had, without the
+  button. `makeBox` gained a `z` so the corner is the one the tool placed.
+- **`PILL_HOLD`** (1.2 s) accents the pill after a creating commit; it is not a context and
+  gates nothing. **Pass-through** is the shell's: a press through the open flyout merges
+  `creation_pill` into the report `hover_line` shows, so the viewport's `HoverReport` stays
+  pure.
+
+**Measured.** `ferrocad_stage` 303, `ferrocad_viewport` 237, `ferrocad_shell_core` 298;
+`chrome_surfaces` 5 cases; a new `ferrocad_parametric` `box_tool_round_trip` (3 cases:
+the command arms the tool, a typed width commits a 30 mm box, the zero-mouse `Enter`
+places it at the origin); the six `tool_fields` shell cases. `run_tests.py --extension
+base` **718/0/0/8** and `--extension workbenches` **881/0/0/3**, unchanged.
 
 ### Measured
 

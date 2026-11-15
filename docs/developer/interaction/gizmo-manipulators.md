@@ -445,7 +445,7 @@ its padded outline/area is pickable.
   `a_face_click_selects_the_body_in_the_move_slot`,
   `the_slot_sets_the_filter_and_select_overrides_it`,
   `the_wheel_verbs_equip_the_move_slot`,
-  `switching_the_slot_commits_a_pending_drag_first`, and (with a GPU)
+  `switching_the_slot_waits_for_a_pending_move`, and (with a GPU)
   `a_face_click_in_the_move_slot_arms_only_the_triad`,
   `a_claimed_sub_element_suppresses_the_shared_body_triad` /
   `an_unclaimed_sub_element_leaves_the_face_slot_empty`.

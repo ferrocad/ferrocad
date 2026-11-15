@@ -13,7 +13,7 @@ bar does not change width when the selection changes.
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
 <img src="../images/ui-action-bar-desktop-window.png" alt="The action bar highlighted in the desktop application window">
 <img class="fc-tabs__closeup" src="../images/ui-action-bar-desktop.png" alt="Close-up of the action bar">
-<figcaption><strong>Desktop</strong> — the bottom-centre strip: Undo, Redo, Fit, Create Box and Search. A running tool replaces this strip in the same slot.</figcaption>
+<figcaption><strong>Desktop</strong> — the bottom-centre strip: Undo, Redo, Fit, the creation pill (`⊕ Box ▾`) and Search. A running tool replaces this strip in the same slot with its docked fields.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-action-bar-web-window.png" alt="The action bar highlighted in the browser build">

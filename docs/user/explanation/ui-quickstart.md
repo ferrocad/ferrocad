@@ -75,7 +75,9 @@ natural surface:
 
 ![Create Box adds a box](../images/ui-create.gif)
 
-*Add: `Create Box` from the action bar; the status line confirms `created Box001`.*
+*Add: click `⊕ Box` in the action bar (or pick a tool from its `▾` menu), then press
+`Enter`. The armed tool replaces the strip with its `W`/`L`/`H` fields, and the status
+line confirms that the box was created.*
 
 ![Dragging the Push/Pull stem](../images/ui-pushpull.gif)
 

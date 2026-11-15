@@ -12,7 +12,8 @@ Move form surviving the loss of its selection.
 > has been **replaced** by one cumulative `TransformSession` with explicit
 > commit/checkpoint/rollback: there is one drag mode (a release reports a preview and never
 > commits), `Enter` commits one transaction, `Esc` drops the session and its ghost without
-> spending an undo entry, and a selection change commits a dirty session first. §4.2 and
+> spending an undo entry, and a selection change is **refused** while the session is
+> dirty (the undecided value owns the context — A4's pending lock). §4.2 and
 > §5.1–5.2 describe the built flow and §7 its invariant; the floating Move HUD remains only
 > as the session's numeric surface — since 2026-10-31 a single shape (three Δ fields plus
 > `✓`/`✗`), with the drag's numbers drawn on the 3-D tape's legs. The selection half — a
@@ -554,7 +555,7 @@ and prints the CPU and GPU pick at points around one edge.
 | selection-scoped form | `Shell::replace_selection`, `Shell::refresh` | `a_selection_change_closes_the_move_hud`, `a_competing_interaction_closes_the_move_hud` |
 | grip follows preview | `Manipulator::{anchor, set_anchor}` | `a_typed_preview_moves_the_gizmo_and_the_grips`, `a_grip_anchor_follows_the_object` |
 | topology filter (U4, 2026-10-31) | `shell/loadout.rs`, `Shell::replace_selection` | `a_face_click_selects_the_body_in_the_move_slot`, `the_slot_sets_the_filter_and_select_overrides_it`, `a_scripted_selection_reaches_the_shell` (with `Select: Auto`) |
-| loadout host + chrome (U4, 2026-10-31) | `Shell::arm`, `chrome::{loadout_bar, select_button}` | `the_loadout_bar_renders_and_equips_a_slot`, `the_wheel_verbs_equip_the_move_slot`, `switching_the_slot_commits_a_pending_drag_first`, `a_face_click_in_the_move_slot_arms_only_the_triad` |
+| loadout host + chrome (U4, 2026-10-31) | `Shell::arm`, `chrome::{loadout_bar, select_button}` | `the_loadout_bar_renders_and_equips_a_slot`, `the_wheel_verbs_equip_the_move_slot`, `switching_the_slot_waits_for_a_pending_move`, `a_face_click_in_the_move_slot_arms_only_the_triad` |
 
 ## 10. Open decisions
 

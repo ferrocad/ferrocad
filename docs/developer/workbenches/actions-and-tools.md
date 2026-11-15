@@ -204,6 +204,7 @@ The shell renders the **chrome** from `CommandInfo` (P0.6):
 | `surface` | `dock` / `creation` / `radial` / `palette` / `grid` / `axis` / `workplane` / `snap` / `mods` / `hidden` — the control that owns it; absent means `palette` |
 | `category` | the creation pill's tier for a `creation` tool: `Sketch`, `Solid`, `Surface`, `Text`, `Mesh` |
 | `target` | the context kinds a `radial` verb applies to: `body`, `face`, `edge`, or a comma-separated combination; absent means every context |
+| `gate` | `FerroCAD_Gate: "<kind>:<min>[:<max>]"` — the topology a creation command needs before it is offered (`body:2`, `face:1:1`); the chrome greys an unsatisfied tool in `INACTIVE_STRUCTURAL` and names the requirement |
 | `parent` | the surface's primary command id, for a row in that control's popover |
 | `short` | a compact popover label when `menu` repeats the control's name |
 

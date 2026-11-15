@@ -269,9 +269,11 @@ The tool strip's dimension fields (`W`, `L`, `H`, `R`) follow the keyboard contr
 - **`Enter` / `✓`** commits. With an anchor on the canvas, it commits at that anchor; with
   no anchor, it commits at the active workplane origin (`[0, 0, 0]`) with the typed
   dimensions, preserving the zero-mouse fast path of the old `Create Box` button.
-- The values live on the tool, not in the strip: `ToolStatus` gains a
-  `fields: Vec<ToolField { id, label, unit, value }>` and the host writes back through a
-  `Tool::set_field`. `ToolStatus` is text-only today, so this is a new seam.
+- The values live on the tool, not in the strip: `ToolStatus` carries
+  `fields: Vec<ToolField { id, label, value, unit, step, min, max }>` and the host writes
+  back through `Tool::set_field`. **Built 2026-11-15** — the strip is one tabular-monospace
+  row inside the tool strip, the field text is the tool's own value, and the Box tool is
+  the canonical case (`W/L/H`, 20 mm each).
 
 ### 4.3 Unified `Esc` cascade
 
@@ -367,9 +369,9 @@ reporting a name).
 
 | Slice | Deliverable | Acceptance |
 | --- | --- | --- |
-| **C1 — Split pill & flyout** | Replace the static `Create Box` dock row with `[ ⊕ <LastTool> ▾ ]`; two-tier `EXPANDED` flyout (five categories + tool row); `TopologyGate` evaluation and the status-bar disabled reason | Clicking `⊕ Box` arms `Box` in one click; `▾` opens the categories; with no sketch selected, `Prism` is `INACTIVE_STRUCTURAL` and its hover reports the requirement; a gap click reports `through: "creation_pill"`. **The pill landed 2026-11-15** as one split control in the action dock (left arm = the remembered `creation` command, `▾` = the flyout grouped by `FerroCAD_Category`, rows gated by `IsActive`); the two-tier hierarchy and the status-bar reason open with C2's strip |
-| **C2 — In-place tool strip & keyboard** | Swap the bar to the strip when `ARMED`; unfocused `W/L/H`; `Tab`/digit entry; `Enter`/`✓` at the anchor or the WP origin; `Esc` cascade | Arming `Box` hides `Undo/Redo/Fit/Search` and shows `[ ⬡ Box │ W L H │ ✗ │ ✓ ]`; `Enter` immediately creates a 20×20×20 box at the WP origin in one undo step; `Tab` focuses `W`; `Esc` restores the idle bar |
-| **C3 — Pending lock & gizmo suspension** | Dim `⊕ Box ▾` to 45 % and refuse clicks while a transform or manipulator is pending; suspend the `GizmoSet` and manipulators while `ARMED` | Dragging Move by `+10 mm` (uncommitted) and clicking `⊕ Box` refuses the tool and keeps `ΔX = 10`; arming `Box` with a body selected hides the Move triad until the tool commits or cancels |
+| **C1 — Split pill & flyout** | Replace the static `Create Box` dock row with `[ ⊕ <LastTool> ▾ ]`; two-tier `EXPANDED` flyout (five categories + tool row); `TopologyGate` evaluation and the status-bar disabled reason | Clicking `⊕ Box` arms `Box` in one click; `▾` opens the categories; with no face selected, a face-only tool is `INACTIVE_STRUCTURAL` and its row carries the requirement; a gap click reports `through: "creation_pill"`. **Landed 2026-11-15:** one split control in the action dock (left arm = the remembered `creation` command, `▾` = the flyout grouped by `FerroCAD_Category`), `FerroCAD_Gate` evaluated against the selection, `INACTIVE_STRUCTURAL`, `PILL_HOLD`, and the pass-through note. The flyout is one grouped column, not the two-tier hierarchy |
+| **C2 — In-place tool strip & keyboard** | Swap the bar to the strip when `ARMED`; unfocused `W/L/H`; `Tab`/digit entry; `Enter`/`✓` at the anchor or the WP origin; `Esc` cascade | **Landed 2026-11-15:** arming `Box` replaces the dock in place with `[ Box │ W 20.00 L 20.00 H 20.00 mm │ ✗ │ ✓ ]`; `Tab` focuses `W`, a digit replaces it, the tool's preview resizes, and `Enter` creates the box at the placement origin in one undo step; the inner `Esc` drops the field, the outer one cancels the tool. `ToolStatus` is no longer text-only |
+| **C3 — Pending lock & gizmo suspension** | Dim `⊕ Box ▾` to 45 % and refuse clicks while a transform or manipulator is pending; suspend the `GizmoSet` and manipulators while `ARMED` | **Landed 2026-11-15 for the dock and the hand column:** `action_dock(blocked)` dims to 45 % and drops clicks while a transform or manipulator is pending, `loadout_bar` dims while a tool is armed, `start_tool` refuses under a pending move, and `SwitchScope` is refused while a gated tool is armed. A pending `⊕ Box` click leaves `ΔX = 10` intact |
 | **C4 — Topology host (WP / Face / Edge)** | `TargetHost` frame solver reusing the planar face normal (`+N`) and the edge polyline; 3-D ghost via `Tool::items()`; `⊕ Add` / `⊖ Cut` boolean commit on a face | Hovering planar `Face6` aligns the ghost's `+Z` to the face normal; a click places the anchor; `✓` in Add mode fuses the box to the body in one transaction; Cut mode pockets it. **The frame solver, the ghost and the face-hosted commit landed 2026-11-15** (`HoverTarget`, `CreationHost`, `_imprint`); the Add/Cut half waits on a primitive tool (C1/C2) |
 
 C1 needs the `CreationTool` descriptors from the edition; C2–C4 are shell/stage work
@@ -440,9 +442,18 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   hidden intermediate extrusion, so the face-hosted Add/Cut mode has a working hook.
 - The `GizmoSet`/manipulator suspension, the radial suppression and the hover-to-arm
   suppression on `start_tool` are built.
-- Missing: the two-tier flyout (the categories are one flat list with dividers), the
-  `TopologyGate` evaluation and its disabled reason, **`ToolStatus` fields** (`W:`, `R:` —
-  the strip is still label / points / hint / `✗` / `✓`), `Tool::set_field` and the
-  type-ahead write-back, and the primitive placements. Only the four drawing tools are
-  stage tools, so `⊕ Add` / `⊖ Cut` on a hovered face has a frame and a commit path but no
-  box ghost or height handle yet.
+- **The tool strip's fields (C2, 2026-11-15).** `ToolStatus::fields` + `Tool::set_field`
+  drive one tabular-monospace row inside the strip; the Box tool publishes `W/L/H`, `Tab`
+  cycles them, a digit replaces the focused value, `Backspace` edits it, `Enter`/`✓`
+  commits and the inner `Esc` gives the keyboard back. `ferrocad_viewport::set_tool_field`
+  is the write path, so the preview and the row cannot disagree.
+- **The gate is data.** A creation command declares `FerroCAD_Gate: "<kind>:<min>[:<max>]"`
+  (`CommandInfo::topology_gate`); the chrome evaluates it against the selection (never the
+  Modify hand's slot), a disabled row is painted in `ui::INACTIVE_STRUCTURAL` with the
+  requirement as its hint, and the pill's arm reports the requirement on a click.
+- **`PILL_HOLD`** is a shell linger (`pill_hold`, 1.2 s) set by a creating commit: it
+  accents the pill and gates nothing — it is not an `InteractionContext`, unlike
+  `SESSION_HOLD`.
+- Missing: the two-tier flyout (the categories are one grouped column with dividers),
+  the Box's **`⊕ Add` / `⊖ Cut`** mode (the tool places a new body; fusing it into a hovered
+  face is the next slice), and the other primitive tools (`Cylinder`, `Cone`, `Sphere`).

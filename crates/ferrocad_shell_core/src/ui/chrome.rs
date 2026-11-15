@@ -1505,24 +1505,31 @@ fn action_label(
         .child(label)
 }
 
-/// The armed tool's pill: what is running, its numbers (or its point count), its hint,
-/// and — once there is something to finish — the `Cancel` / `Finish` pair.
+/// Whether the armed tool has **begun** — a click has placed something, or the tool's
+/// fields are its own input.
 ///
-/// It is a **new pill above the create dock**, not a replacement for the dock: the Add
-/// hand is a loadout, so a session adds a row and leaves the slots where the user's
-/// fingers expect them. The pill itself is the same glass as the rest of the column, so
-/// the session reads as part of the same instrument.
+/// This is the rule that keeps arming a tool quiet. Pressing a pill or a key equips the
+/// slot and lets the canvas show the hover ghost of what the next click would make; the
+/// completion row (the tool's name, its numbers and the `✗`/`✓` pair) is a response to a
+/// click, not to equipping, so it only appears once there is something to complete. A
+/// parameter tool is the one exception, because its fields *are* the pending value: there
+/// is nothing to place until they are set.
+pub(crate) fn tool_has_begun(status: &ToolStatus) -> bool {
+    !status.fields.is_empty() || status.points > 0
+}
+
+/// The armed tool's row: what is running, its numbers (or its point count), its hint and
+/// the `Cancel` / `Finish` pair — the **completion row**.
 ///
-/// At rest the pill is a **readout**, exactly like the Modify hand's coordinate row: a
-/// tool that has placed nothing has nothing to finish, so it shows its name, its count and
-/// its hint and no buttons at all. The pair appears with the first placed point (or with a
-/// tool that publishes fields, whose row *is* the pending value), which is the same rule
-/// the Modify hand follows for an uncommitted move.
+/// It is the row directly above the two hands' bar, in the same bottom-left column, so a
+/// session never takes the loadout, the create dock or the globals away, and the row reads
+/// as part of the same instrument. It only exists once [`tool_has_begun`]: an armed tool
+/// that has placed nothing shows a hover ghost on the canvas and no row at all.
 ///
 /// **Cancel** is neutral (no accent fill) and ends the session through
 /// [`Shell::cancel_tool`]; **Finish** is the accent action and takes the same host path
 /// as `Enter` ([`Shell::finish_active_tool`]), so the button and the key cannot drift.
-fn tool_pill(
+pub(crate) fn tool_pill(
     status: &ToolStatus,
     edit: Option<&crate::shell::panels::tool_fields::ToolFieldEdit>,
     cx: &mut Context<Shell>,
@@ -1600,19 +1607,14 @@ fn tool_pill(
         }
         pill = pill.child(fields);
     } else if status.points > 0 {
-        // The count is only worth a cell once there is one: at rest a two-click tool's
-        // "0 points" is noise, and the pill is meant to read as a readout, not a dialog.
         pill = pill.child(div().text_color(rgb(MUTED)).child(format!(
             "{} point{}",
             status.points,
             if status.points == 1 { "" } else { "s" }
         )));
     }
-    // Finish needs something to finish: at rest the pill is a readout (name, numbers or
-    // count, hint) and the pair arrives with the first placed point — or with a tool that
-    // publishes fields, whose row *is* the pending value. `Esc` and another pill are the
-    // ways out of a tool that has placed nothing, exactly as they are for an idle hand.
-    let finishable = !status.fields.is_empty() || status.points > 0;
+    // The row only exists once the tool has begun (`tool_has_begun`), so the pair is
+    // always offered here: the user has placed a point or has a parameter row to finish.
     pill = pill.child(
         div()
             .min_w_0()
@@ -1620,9 +1622,6 @@ fn tool_pill(
             .text_color(rgb(MUTED))
             .child(status.hint.clone()),
     );
-    if !finishable {
-        return pill.into_any_element();
-    }
     pill
         // The abort action is neutral: the accent fill belongs to Finish.
         .child(
@@ -1824,26 +1823,6 @@ pub(crate) fn globals_dock(
         .flex_col()
         .justify_center()
         .child(panel)
-}
-
-/// The armed tool's pill, centred over the bottom of the canvas.
-///
-/// The create dock now shares the bottom row with the Modify hand, so the tool's surface
-/// is the bottom-centre thing on its own: it appears while a session runs and takes no
-/// space otherwise. The wrapper is absolute, so the canvas rectangle never moves.
-pub(crate) fn tool_strip(
-    status: &ToolStatus,
-    edit: Option<&crate::shell::panels::tool_fields::ToolFieldEdit>,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    div()
-        .absolute()
-        .left(px(0.))
-        .right(px(0.))
-        .bottom(px(12.))
-        .flex()
-        .justify_center()
-        .child(tool_pill(status, edit, cx))
 }
 
 /// The creation flyout as its own overlay, anchored at the pointer that opened it.

@@ -2124,12 +2124,16 @@ impl Render for Shell {
             // The two hands share the bottom-left corner: the pending move's coordinates sit
             // directly above the row instead of floating over the handles, and the row grows
             // to the right — loadout first, then the create dock — so the pair reads as one
-            // loadout and the canvas' centre stays free for the armed tool's pill.
+            // loadout and the armed tool's completion row sits directly above them.
             .child({
                 let inspect_visible = self.loadout.slot().is_inspect()
                     && self.active_tool.is_none()
                     && !self.modal_open()
                     && !self.wheel.read(cx).is_open();
+                // The completion row is a **response to a click**, not to equipping: an
+                // armed tool that has placed nothing shows its hover ghost on the canvas
+                // and no row at all.
+                let begun = active_tool.filter(|tool| crate::chrome::tool_has_begun(tool));
                 div()
                     .absolute()
                     .bottom(px(12.))
@@ -2146,6 +2150,17 @@ impl Render for Shell {
                     .child(manipulator_fields_bar(self, cx))
                     .when(inspect_visible, |el| {
                         el.child(crate::chrome::inspect_bar(self.loadout, cx))
+                    })
+                    .when(begun.is_some(), |el| {
+                        el.child(match begun {
+                            Some(tool) => crate::chrome::tool_pill(
+                                tool,
+                                self.tool_field_edit(),
+                                cx,
+                            )
+                            .into_any_element(),
+                            None => div().into_any_element(),
+                        })
                     })
                     .child({
                         // One row, the loadout's own: the Modify hand's slots and then
@@ -2181,19 +2196,12 @@ impl Render for Shell {
                     })
             })
             // The globals (and Search) are a column on the canvas' left edge: the bottom
-            // belongs to the two hands and to the armed tool's pill.
+            // belongs to the two hands and the tool's completion row.
             .child(crate::chrome::globals_dock(
                 &model,
                 self.move_is_pending(cx) || self.pending_interaction.is_some(),
                 cx,
             ))
-            // The armed tool's own pill, bottom-centre, above nothing: the dock it used to
-            // sit over has moved to the left edge.
-            .child(match active_tool {
-                Some(tool) => crate::chrome::tool_strip(tool, self.tool_field_edit(), cx)
-                    .into_any_element(),
-                None => div().into_any_element(),
-            })
             // The creation flyout is a canvas overlay like the wheel: the pills it hangs
             // from live in the bottom-left row now, and the panel is placed by the press.
             .child(if self.popover_open("create") {

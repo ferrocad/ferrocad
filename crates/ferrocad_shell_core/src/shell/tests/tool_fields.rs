@@ -50,7 +50,7 @@ fn first_field(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<String> 
 }
 
 #[gpui::test]
-fn the_armed_box_adds_a_pill_above_the_dock_without_moving_the_canvas(cx: &mut TestAppContext) {
+fn the_armed_box_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let window = cx.update(|cx| {
@@ -94,13 +94,18 @@ fn the_armed_box_adds_a_pill_above_the_dock_without_moving_the_canvas(cx: &mut T
             "the {field} field is painted"
         );
     }
-    // The dock does not move, the pill is centred over the bottom of the canvas (which is
-    // where the dock used to be), and the canvas rectangle is untouched.
+    // The dock does not move, the completion row sits directly above the hands' bar sharing
+    // its left edge, and the canvas rectangle is untouched.
     let dock_after = cx.debug_bounds("globals-dock").expect("the dock");
     assert_eq!(dock_after.origin.y, dock.origin.y, "the dock does not move");
     assert_eq!(dock_after.center().x, dock.center().x, "and keeps its centre");
-    let strip = cx.debug_bounds("tool-strip").expect("the pill");
-    assert!(strip.center().x > dock_after.center().x, "the pill is not in the dock");
+    let strip = cx.debug_bounds("tool-strip").expect("the completion row");
+    let loadout = cx.debug_bounds("loadout-bar").expect("the hands' bar");
+    assert_eq!(strip.origin.x, loadout.origin.x, "same left edge as the hands");
+    assert!(
+        strip.origin.y + strip.size.height <= loadout.origin.y,
+        "the row is above the hands ({strip:?} / {loadout:?})"
+    );
     let canvas_after = cx.debug_bounds("main-canvas").expect("the canvas");
     assert_eq!(canvas_after.origin.y, canvas.origin.y, "the canvas does not move");
     assert_eq!(canvas_after.size.height, canvas.size.height);

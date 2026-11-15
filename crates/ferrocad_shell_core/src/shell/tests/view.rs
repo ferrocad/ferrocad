@@ -385,11 +385,11 @@ fn the_tool_strip_renders_without_a_display(cx: &mut TestAppContext) {
     });
 }
 
-/// §2.1: the active tool surface is an overlay in the canvas' bottom-centre slot, so
-/// the canvas rect is identical to the idle case, and the idle action dock is swapped
-/// out rather than stacked under it.
+/// The armed tool's **completion row** is a response to a click: an armed tool that has
+/// placed nothing shows the hover ghost on the canvas and no row at all, and once a point
+/// is placed the row appears directly above the hands' bar without moving the canvas.
 #[gpui::test]
-fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext) {
+fn an_active_tool_adds_a_completion_row_above_the_hands(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let window = cx.update(|cx| {
@@ -417,11 +417,26 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
             }));
         })
     });
+    // Arm the tool. Nothing is placed yet, so there is no completion row: hovering is the
+    // plane ghost, and the dialog must not appear until a click.
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             shell.start_tool("test_polyline", cx);
         })
     });
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("tool-strip").is_none(),
+        "no completion row before a click"
+    );
+
+    // A click places the first point. Now the row is drawn, above the hands' bar.
+    model.lock().unwrap().tool = Some(ToolStatus::new(
+        "test_polyline",
+        "Polyline",
+        1,
+        "click the next point",
+    ));
     draw(&mut cx);
 
     // No layout shift: the canvas keeps the same origin and size.
@@ -431,34 +446,12 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
     assert_eq!(active_canvas.size.width, idle_canvas.size.width);
     assert_eq!(active_canvas.size.height, idle_canvas.size.height);
 
-    // Stack, do not swap: the dock keeps its column and the tool's pill is added over the
-    // canvas' bottom, so activating a tool never takes the chrome off the screen.
+    // Stack, do not swap: the dock keeps its column and the hands keep their row, so a
+    // session never takes the chrome off the screen.
     assert!(
         cx.debug_bounds("globals-dock").is_some(),
         "the dock is still rendered during a session"
     );
-    assert!(
-        cx.debug_bounds("tool-strip").is_some(),
-        "the tool's pill is drawn"
-    );
-    // A tool that has placed nothing has nothing to finish: the pill is a readout, exactly
-    // as the Modify hand's coordinate row is at rest, and the pair arrives with the first
-    // placed point.
-    assert!(
-        cx.debug_bounds("tool-cancel").is_none(),
-        "no Cancel before a point is placed"
-    );
-    assert!(
-        cx.debug_bounds("tool-finish").is_none(),
-        "no Finish before a point is placed"
-    );
-    model.lock().unwrap().tool = Some(ToolStatus::new(
-        "test_polyline",
-        "Polyline",
-        2,
-        "Enter to finish",
-    ));
-    draw(&mut cx);
     assert!(cx.debug_bounds("tool-cancel").is_some(), "Cancel is a button");
     assert!(cx.debug_bounds("tool-finish").is_some(), "Finish is a button");
     // Both actions carry a glyph: an X to abort, a check to commit.
@@ -468,21 +461,15 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
             "{selector} is painted"
         );
     }
-    let strip = cx.debug_bounds("tool-strip").expect("the grown pill");
 
-    // Bottom-centre and inside the canvas: it overlays the scene, it does not sit above
-    // it in the column.
-    let strip_centre = strip.origin.x.0 + strip.size.width.0 / 2.0;
-    let canvas_centre = active_canvas.origin.x.0 + active_canvas.size.width.0 / 2.0;
+    // The row above the hands' bar, sharing its left edge: the completion row belongs to
+    // the bottom-left column, not to the canvas' centre.
+    let strip = cx.debug_bounds("tool-strip").expect("the completion row");
+    let loadout = cx.debug_bounds("loadout-bar").expect("the hands' bar");
+    assert_eq!(strip.origin.x, loadout.origin.x, "same left edge");
     assert!(
-        (strip_centre - canvas_centre).abs() <= 1.0,
-        "the surface is centred (strip {strip:?}, canvas {active_canvas:?})"
-    );
-    assert!(
-        strip.origin.y >= active_canvas.origin.y
-            && strip.origin.y + strip.size.height
-                <= active_canvas.origin.y + active_canvas.size.height,
-        "the surface stays inside the canvas (strip {strip:?}, canvas {active_canvas:?})"
+        strip.origin.y + strip.size.height <= loadout.origin.y,
+        "the row is above the hands (row {strip:?}, bar {loadout:?})"
     );
 }
 

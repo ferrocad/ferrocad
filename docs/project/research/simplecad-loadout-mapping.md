@@ -438,13 +438,61 @@ table in `ferrocad_simplecad`:
   hinge — one side face alone is refused by the kernel with a sentence about the hinge
   plane, so the command passes the selection through unchanged rather than guessing.
 
+### Step 5 — C4, the face-hosted creation target
+
+This is the one slice of §6 that is **Rust**: the stage learns where a creation tool is
+pointing, so the profile tools can draw on a face and the script can divide it.
+
+- **The stage's vocabulary.** `ferrocad_stage::HoverTarget { frame, host, kind }` is the
+  placement under the pointer: `ManipulatorFrame` plus the body it came from plus which of
+  the three rows of [`creation-loadout.md`] §3.1 resolved it (`TargetKind::{Workplane,
+  Face, Edge}`). `CreationHost { entity, element, object }` is the neutral record on
+  `InteractionCommit`: the stage writes the entity id and the element (`Face6`), the shell
+  writes the document name. A tool reads the placement through the new defaulted
+  `Tool::hover`, so a tool that does not care (the polyline) costs nothing.
+- **The hover frame is the press frame.** The viewport resolves it from the **snapped**
+  point — a planar face first, then an edge's polyline, then the active workplane — and
+  the first left press binds it as the session's placement. That is what makes the ghost,
+  the preview and the commit one geometry rather than three re-derivations.
+- **The ghost is real geometry, at the token alpha.** Each drawing tool gained a third
+  fixed slot, `ghost_item(CURSOR_COLOR)`: `ShadedWithEdges`, surface alpha
+  `GHOST_SURFACE_ALPHA` (0.35), blended (no depth write), not selectable. Until the anchor
+  is placed it holds a closed square in the placement plane
+  (`HoverTarget::marker`), which is the honest preview when the drag has no extent yet.
+- **The drawing plane follows the face.** `DragFrame::in_plane` builds the drag frame in the
+  bound face's `(u, v)` instead of the world plane `drag_axes` would pick, and
+  `rectangle_corners_in` does the same for the box. On a **workplane** hover the old
+  world-plane rule is untouched: a vertical drag still draws in `XZ`.
+- **The commit names its host, and the script imprints.** `on_interaction` resolves
+  `host.entity` to the document name before the backend sees the commit; `python::interaction`
+  passes it as a sixth value; `FerroCAD.interaction` offers it to providers **by keyword**
+  (a provider that predates it gets `TypeError: unexpected keyword argument 'host'`, is
+  retried with the five-argument form, and keeps working — only that exact refusal is
+  retried). `ferrocad_simplecad._imprint` rebuilds the profile from the commit, calls
+  `document.operations.draw_profile` (or `draw_arc` for an open arc), and asserts the host
+  gained a face: a profile that divides nothing is a refusal and wrote nothing.
+- **What stayed out, and why.**
+  - **Edges do not host a drawing commit.** An edge frame names a direction, not a plane; the
+    tool draws on the workplane and creates a separate object, which is the honest result
+    for "a profile along an edge". Documented as the rule rather than half-implemented.
+  - **No primitive placement yet.** `Box`/`Cylinder`/… have no stage tool, so the C4 row's
+    `⊕ Add` / `⊖ Cut` boolean commit — which needs a box ghost and a height handle — is C1/C2
+    work on top of this seam, not part of it. `_push_pull` remains the boolean hook.
+  - **The cue is a fixed 2 mm.** A screen-constant cue needs the camera in the tool; the
+    marker's world size is the cheap, honest version.
+  - **`ToolField` is still C2.** The tools keep their own numbers; nothing in this slice
+    publishes a docked field.
+
+[`creation-loadout.md`]: ../../developer/interaction/creation-loadout.md
+
 ### Measured
 
 | Check | Result |
 | --- | --- |
-| `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing cases |
-| `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (41 part_gui) |
-| `ferrocad_shell_core` | **290** (one run failed the known parallel-load HUD flake; green alone and on rerun) |
+| `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing + **4** face-hosted cases |
+| `ferrocad_stage` / `ferrocad_viewport` | **299** / **236** (the anchor-on-a-face case included) |
+| `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (41 part_gui, 18 toy unit) |
+| `ferrocad_shell_core` | **290** |
 | `run_tests.py --extension base` / `workbenches` | **718 / 0 / 0 / 8**, **881 / 0 / 0 / 3** |
 | `--check-init` (both editions) | `ferrocad: init OK` |
 | `xtask editions --check` | green, 14 editions (no dependency change) |

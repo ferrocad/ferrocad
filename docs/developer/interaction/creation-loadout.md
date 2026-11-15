@@ -370,7 +370,7 @@ reporting a name).
 | **C1 — Split pill & flyout** | Replace the static `Create Box` dock row with `[ ⊕ <LastTool> │ ▾ ]`; two-tier `EXPANDED` flyout (five categories + tool row); `TopologyGate` evaluation and the status-bar disabled reason | Clicking `⊕ Box` arms `Box` in one click; `▾` opens the categories; with no sketch selected, `Prism` is `INACTIVE_STRUCTURAL` and its hover reports the requirement; a gap click reports `through: "creation_pill"` |
 | **C2 — In-place tool strip & keyboard** | Swap the bar to the strip when `ARMED`; unfocused `W/L/H`; `Tab`/digit entry; `Enter`/`✓` at the anchor or the WP origin; `Esc` cascade | Arming `Box` hides `Undo/Redo/Fit/Search` and shows `[ ⬡ Box │ W L H │ ✗ │ ✓ ]`; `Enter` immediately creates a 20×20×20 box at the WP origin in one undo step; `Tab` focuses `W`; `Esc` restores the idle bar |
 | **C3 — Pending lock & gizmo suspension** | Dim `⊕ Box ▾` to 45 % and refuse clicks while a transform or manipulator is pending; suspend the `GizmoSet` and manipulators while `ARMED` | Dragging Move by `+10 mm` (uncommitted) and clicking `⊕ Box` refuses the tool and keeps `ΔX = 10`; arming `Box` with a body selected hides the Move triad until the tool commits or cancels |
-| **C4 — Topology host (WP / Face / Edge)** | `TargetHost` frame solver reusing the planar face normal (`+N`) and the edge polyline; 3-D ghost via `Tool::items()`; `⊕ Add` / `⊖ Cut` boolean commit on a face | Hovering planar `Face6` aligns the ghost's `+Z` to the face normal; a click places the anchor; `✓` in Add mode fuses the box to the body in one transaction; Cut mode pockets it |
+| **C4 — Topology host (WP / Face / Edge)** | `TargetHost` frame solver reusing the planar face normal (`+N`) and the edge polyline; 3-D ghost via `Tool::items()`; `⊕ Add` / `⊖ Cut` boolean commit on a face | Hovering planar `Face6` aligns the ghost's `+Z` to the face normal; a click places the anchor; `✓` in Add mode fuses the box to the body in one transaction; Cut mode pockets it. **The frame solver, the ghost and the face-hosted commit landed 2026-11-15** (`HoverTarget`, `CreationHost`, `_imprint`); the Add/Cut half waits on a primitive tool (C1/C2) |
 
 C1 needs the `CreationTool` descriptors from the edition; C2–C4 are shell/stage work
 against the existing `Tool` and `InteractionCommit::creating` paths. The theme gains the
@@ -412,11 +412,22 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   a status sentence and writes nothing; each verb has a documented default number, which
   `Activated(value)` overrides until the C2 `ToolField` strip can carry it.
 - A tool's first left press on a planar face binds the session workplane (sticky;
-  `Tool::picks_workplane` opts a plane-picking tool out). The hover preview frame is new.
+  `Tool::picks_workplane` opts a plane-picking tool out). **The hover preview frame is in**
+  (C4, 2026-11-15): `ferrocad_stage::HoverTarget` resolves the pointer into the face's
+  frame, the edge's direction, or the active workplane — from the snapped point, so the
+  ghost and the press agree — and hands it to the armed tool through the defaulted
+  `Tool::hover`. A tool that binds a **face** draws in that face's plane
+  (`DragFrame::in_plane`, `rectangle_corners_in`) and carries the body as a
+  `CreationHost` on its commit; the shell resolves the entity to a document name and the
+  script imprints the profile into the face (`draw_profile`/`draw_arc`, one transaction,
+  no new object). The ghost itself is a third fixed item slot, `ShadedWithEdges` at
+  `GHOST_SURFACE_ALPHA` (0.35) with `with_blended_surface()` and `selectable(false)`.
 - The parametric edition's `_push_pull` already commits `Part::Fuse`/`Part::Cut` with a
   hidden intermediate extrusion, so the face-hosted Add/Cut mode has a working hook.
 - The `GizmoSet`/manipulator suspension, the radial suppression and the hover-to-arm
   suppression on `start_tool` are built.
 - Missing: the `CreationTool`/`CreationCategory` descriptors, the flyout and its
   pass-through, the tool-strip fields (`ToolStatus` is text-only), the `TopologyGate`
-  evaluation, `INACTIVE_STRUCTURAL`, and the 35 % ghost constant.
+  evaluation and `INACTIVE_STRUCTURAL`. The primitive placements are missing too: only the
+  four drawing tools are stage tools, so `⊕ Add` / `⊖ Cut` on a hovered face has a frame
+  and a commit path but no box ghost or height handle yet.

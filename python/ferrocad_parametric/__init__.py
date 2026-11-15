@@ -376,6 +376,11 @@ def _interaction(obj, manipulator, action, element, values):
     if manipulator == "sketch_polyline" and action == "create":
         return _create_sketch_polyline([float(value) for value in values])
 
+    if manipulator == SKETCH_DRAG_ID and action == SKETCH_DRAG_ACTION:
+        # A plane grip on a sketch vertex: the two values are the drag's in-plane travel
+        # in the sketch's own frame, and the solver decides where the point really lands.
+        return _drag_sketch_point(obj, element, [float(value) for value in values])
+
     if manipulator == "transform" and action == "apply" and len(values) == 16:
         delta = FreeCAD.Placement(FreeCAD.Matrix(*values))
         doc = obj.Document
@@ -682,7 +687,7 @@ def _face_frame(obj, element):
     }
 
 
-#: The declared grip's mesh, in the handle frame's own units (the host scales it to its
+#: The declared grips' mesh, in the handle frame's own units (the host scales it to its
 #: pixel `size`). A double cone, so it reads as a handle from any camera.
 _GRIP_SHAPE = {
     "positions": [
@@ -709,17 +714,180 @@ _GRIP_SHAPE = {
 }
 
 
+#: The manipulator id the sketch vertex grips commit under, and its one operation.
+#:
+#: A grip is a *plane* handle: it drags in the sketch's own plane and commits the two
+#: frame-local coordinates, so the edit is the solver's — the manipulator never touches
+#: the document.
+SKETCH_DRAG_ID = "sketch_drag"
+SKETCH_DRAG_ACTION = "drag"
+
+#: How close a vertex must be to a geometry endpoint to be *that* endpoint, in mm. The
+#: answer comes from the same OCCT shape, so a shared vertex is exact; the tolerance only
+#: absorbs the projection through the placement.
+SKETCH_POINT_TOLERANCE = 1e-6
+
+
+def _sketch_axes(sketch):
+    """The sketch plane's world axes: local `(x, y, z)` mapped by its `Placement`.
+
+    A sketch's geometry lives in its own local XY plane; the placement puts that plane
+    into the model. The vertex grips live in the same frame, so a drag's two coordinates
+    are the sketch's own — which is exactly what `drag(geometry, pos, target)` takes.
+    """
+    rotation = sketch.Placement.Rotation
+    return [
+        tuple(rotation.multVec(FreeCAD.Vector(axis)))
+        for axis in ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    ]
+
+
+def _sketch_vertex_specs(obj, element):
+    """One plane grip per topological vertex of a sketch, as declarative handles.
+
+    The vertices are the **shape's**, so a corner shared by two segments is one grip (the
+    display dedups it the same way) and `VertexN` is the name a selection reports. The
+    grip sits on the vertex in the sketch's own plane; the drag is a pair of local
+    coordinates, and the constraint solve is what decides how far the point really goes.
+
+    A vertex that is fully constrained still gets a grip: the drag reports the degrees of
+    freedom it kept and moves nothing, which is the honest refusal rather than a grip
+    that silently disappears.
+    """
+    if str(getattr(obj, "TypeId", "")) != "Sketcher::SketchObject":
+        return None
+    shape = getattr(obj, "Shape", None)
+    vertexes = list(getattr(shape, "Vertexes", []) or []) if shape is not None else []
+    if not vertexes:
+        return None
+    axes = _sketch_axes(obj)
+    specs = []
+    for index, vertex in enumerate(vertexes):
+        name = "Vertex%d" % (index + 1)
+        if element and element != name:
+            continue
+        point = vertex.Point
+        specs.append(
+            {
+                "id": SKETCH_DRAG_ID,
+                "action": SKETCH_DRAG_ACTION,
+                "element": name,
+                "frame": {
+                    "origin": [point.x, point.y, point.z],
+                    "x": list(axes[0]),
+                    "y": list(axes[1]),
+                    "z": list(axes[2]),
+                },
+                "axis": "z",
+                "kind": "plane",
+                "value": 0.0,
+                "value_v": 0.0,
+                "size": 26.0,
+                "decimals": 2,
+                "label": "P",
+                "shape": _GRIP_SHAPE,
+                "readout": "{value}, {value_v} mm",
+            }
+        )
+    return specs or None
+
+
+def _sketch_vertex_target(obj, element):
+    """`(geometry index, PointPos, local point)` of the sketch vertex `element` names.
+
+    The vertex name resolves to a world point, which is un-placed into the sketch's local
+    frame; the nearest geometry endpoint (or a circle's centre) is the point
+    `drag(geometry, pos, target)` moves. A coincident corner has several matches —
+    segment *i*'s end and segment *i+1*'s start — and the lowest index wins: the
+    `Coincident` constraint is what drags the other half, so the choice does not change
+    the result.
+    """
+    if not element:
+        return None
+    shape = getattr(obj, "Shape", None)
+    if shape is None:
+        return None
+    try:
+        world = shape.getElement(element).Point
+    except Exception:
+        return None
+    local = obj.Placement.inverse().multVec(world)
+    best = None
+    for index, geometry in enumerate(getattr(obj, "Geometry", []) or []):
+        edges = list(getattr(geometry, "Edges", []) or [])
+        if not edges:
+            continue
+        edge = edges[0]
+        vertexes = list(getattr(edge, "Vertexes", []) or [])
+        if len(vertexes) >= 2:
+            candidates = [(1, vertexes[0].Point), (2, vertexes[-1].Point)]
+        elif len(vertexes) == 1 and hasattr(edge.Curve, "Center"):
+            # A full circle has one seam vertex and no endpoints; its centre is the
+            # point a constraint acts on.
+            candidates = [(3, edge.Curve.Center)]
+        else:
+            continue
+        for pos, candidate in candidates:
+            distance = candidate.sub(local).Length
+            if distance > SKETCH_POINT_TOLERANCE:
+                continue
+            if best is None or (index, pos) < (best[0], best[1]):
+                best = (index, pos, candidate)
+    return best
+
+
+def _drag_sketch_point(obj, element, values):
+    """Move one sketch vertex by the grip's in-plane travel, through the solver.
+
+    The grip reports where the pointer went in the sketch's own plane; the edit is
+    ``SketchObject.drag``, so every hard constraint still holds (a horizontal edge stays
+    horizontal, a datum keeps its value) and the linked `Part::Extrusion` follows on the
+    recompute in the same transaction.
+    """
+    if len(values) < 2:
+        return {"ok": False, "error": "a sketch drag needs two coordinates"}
+    target = _sketch_vertex_target(obj, element)
+    if target is None:
+        return {
+            "ok": False,
+            "error": "%s is not a point of the sketch" % (element or "the selection"),
+        }
+    index, pos, start = target
+    point = FreeCAD.Vector(start.x + float(values[0]), start.y + float(values[1]), 0.0)
+    doc = obj.Document
+    doc.openTransaction("Drag %s" % obj.Name)
+    try:
+        dof = obj.drag(index, pos, point)
+        if dof < 0:
+            doc.abortTransaction()
+            return {"ok": False, "error": "the sketch did not solve; nothing moved"}
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:  # noqa: BLE001 - a failed drag must leave the sketch solved
+        doc.abortTransaction()
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": obj.Name, "status": "%d DOF" % dof}
+
+
 def _manipulator_specs(obj, element):
     """Declared handles that the compiled factories cannot arm.
 
-    The compiled scrubber needs an *edge*, and an applied fillet's round is a *face*:
-    the edge it came from no longer exists. A declared grip at the round's centroid,
-    seeded with the radius the feature holds, re-opens it — and its commit is the same
-    ``dress_up``/``fillet`` the scrubber sends, so the edit path is shared. A round
-    *edge* needs no grip: the compiled scrubber arms there and its commit edits the
-    feature (see :func:`_dress_up_target`).
+    Two cases reach here, and neither can be a compiled Rust factory:
+
+    * a **sketch vertex** — the request needs the sketch's own plane and its vertex list,
+      which are document state. Each grip is a plane handle that commits the two local
+      coordinates of the drag, so the solver performs the edit;
+    * an applied fillet's **round**, which is a *face*: the edge it came from no longer
+      exists. A declared grip at the round's centroid, seeded with the radius the feature
+      holds, re-opens it — and its commit is the same ``dress_up``/``fillet`` the
+      compiled scrubber sends, so the edit path is shared. A round *edge* needs no grip:
+      the compiled scrubber arms there and its commit edits the feature (see
+      :func:`_dress_up_target`).
     """
-    if not element.startswith("Face"):
+    sketch = _sketch_vertex_specs(obj, element)
+    if sketch:
+        return sketch
+    if not element or not element.startswith("Face"):
         return None
     value = _dress_up_target(obj, element)
     if value is None:

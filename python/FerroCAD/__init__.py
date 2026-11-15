@@ -175,7 +175,10 @@ def register_manipulator_provider(provider):
 def manipulator_specs(obj, element=""):
     """The declarative handles every module declares for ``obj``, in order.
 
-    Each provider is called as ``provider(obj, element)``. A provider that
+    Each provider is called as ``provider(obj, element)``: ``obj`` is the selected
+    **document object**, the same one ``register_interaction_provider`` receives, so a
+    provider can read its type and its shape. A selection that names no live object is
+    ``None``. A provider that
     returns ``None`` or ``[]`` contributes nothing. A provider that raises is
     reported once to stderr and skipped, so one broken mod cannot break the
     shell's selection path; the remaining providers still run.

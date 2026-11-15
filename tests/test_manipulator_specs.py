@@ -135,7 +135,33 @@ class ManipulatorSpecTests(unittest.TestCase):
         self.assertEqual(
             json.loads(ferrocad_shell.manipulator_specs("{}")), {"specs": []}
         )
-        self.assertEqual(seen, [("", None)])
+        self.assertEqual(seen, [(None, None)])
+
+    def test_the_bridge_hands_the_provider_the_document_object(self):
+        import FreeCAD
+
+        doc = FreeCAD.newDocument("SpecDoc")
+        try:
+            thing = doc.addObject("App::FeaturePython", "Thing")
+            doc.recompute()
+            seen = []
+
+            def provider(obj, element):
+                seen.append(obj)
+                return []
+
+            FerroCAD.register_manipulator_provider(provider)
+
+            ferrocad_shell.manipulator_specs(
+                json.dumps({"object": "Thing", "element": "Face1"})
+            )
+            self.assertIs(seen[-1], thing, "the provider gets the object, not its name")
+
+            # A name with no live object is `None`: a provider cannot act on a string.
+            ferrocad_shell.manipulator_specs(json.dumps({"object": "Gone"}))
+            self.assertIsNone(seen[-1])
+        finally:
+            FreeCAD.closeDocument(doc.Name)
 
 
 if __name__ == "__main__":

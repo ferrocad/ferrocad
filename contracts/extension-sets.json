@@ -64,6 +64,7 @@
       "test_sculpt_workflow",
       "test_simplecad_workflow",
       "test_sketch_constraints",
+      "test_sketch_tools",
       "test_text_workflow"
     ]
   }

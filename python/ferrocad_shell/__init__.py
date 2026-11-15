@@ -858,8 +858,13 @@ def manipulator_specs(payload_json: str) -> str:
     """The handles the mods declare for the shell's current selection, as JSON.
 
     ``payload_json`` is ``{"object": "Slab", "element": "Face3"}``. A missing key
-    means ``""`` for the object and ``None`` for the element. The answer is
-    ``{"specs": [...]}`` with the declarations in provider order.
+    means no object and no element. The answer is ``{"specs": [...]}`` with the
+    declarations in provider order.
+
+    The selection arrives as a name; a provider receives the **document object** it
+    names, the same way :func:`manipulator_probe` and the ``interaction`` half do. A
+    provider cannot act on a string, so a name with no live object is passed as
+    ``None``.
 
     The selection path must not break because of a mod: a provider that raises is
     reported and skipped by ``FerroCAD.manipulator_specs``, and a spec that does
@@ -873,12 +878,17 @@ def manipulator_specs(payload_json: str) -> str:
         payload = {}
 
     object_name = payload.get("object")
-    if object_name is None:
-        object_name = ""
     element = payload.get("element")
 
+    base = None
+    if object_name:
+        try:
+            base = _active_doc().getObject(object_name)
+        except Exception:  # noqa: BLE001 - no document is not a failure here
+            base = None
+
     try:
-        specs = FerroCAD.manipulator_specs(object_name, element)
+        specs = FerroCAD.manipulator_specs(base, element)
     except Exception as exc:  # noqa: BLE001 - selection must never fail here
         print(
             "ferrocad_shell: manipulator specs failed: %s" % exc,

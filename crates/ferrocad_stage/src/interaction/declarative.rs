@@ -30,6 +30,7 @@ use crate::screen::{
     HIT_SLOP, camera_forward, point_segment_distance, project_device, scale_for, to3,
 };
 use crate::shape::{DrawMode, ShapeItem};
+use crate::workplane::{Workplane, WorkplaneKind};
 
 /// The default handle size, in device pixels.
 const DEFAULT_SIZE: f64 = 40.0;
@@ -78,6 +79,15 @@ pub enum DeclarativeKind {
     Axis,
     /// Rotate about `axis`: the value is degrees.
     Ring,
+    /// Drag in the frame's own `u`/`v` plane: the value is **two** world units.
+    ///
+    /// [`DeclarativeHandle::value`] is the `U` coordinate and
+    /// [`DeclarativeHandle::value_v`] the `V` one; `axis` names the plane's **normal**
+    /// (the direction a pointer can never drag along). The frame's origin is the plane
+    /// point the pair is measured from, so a handle at `(0, 0)` rests on the frame
+    /// origin. A pointer ray parallel to the plane cannot produce a point, so an
+    /// edge-on view drags nothing rather than guessing.
+    Plane,
 }
 
 /// Everything a mod declares about one handle.
@@ -101,7 +111,14 @@ pub struct DeclarativeHandle {
     /// How a drag converts into [`value`](Self::value).
     pub kind: DeclarativeKind,
     /// The drag axis value in world units (axis) or degrees about `axis` (ring).
+    ///
+    /// For a [`Plane`](DeclarativeKind::Plane) handle this is the in-plane `U`
+    /// coordinate; the `V` coordinate is [`value_v`](Self::value_v).
     pub value: f64,
+    /// The second in-plane coordinate of a [`Plane`](DeclarativeKind::Plane) handle.
+    ///
+    /// Unused (and zero) for an axis or ring handle.
+    pub value_v: f64,
     /// The lower bound of the dragged value, if any.
     pub min: Option<f64>,
     /// The upper bound of the dragged value, if any.
@@ -145,6 +162,7 @@ impl DeclarativeHandle {
             axis,
             kind: DeclarativeKind::Axis,
             value: 0.0,
+            value_v: 0.0,
             min: None,
             max: None,
             step: None,
@@ -170,6 +188,13 @@ impl DeclarativeHandle {
         self.radius = radius;
         self
     }
+
+    /// Set the second in-plane coordinate of a [`Plane`](DeclarativeKind::Plane)
+    /// handle.
+    pub fn with_value_v(mut self, value_v: f64) -> Self {
+        self.value_v = value_v;
+        self
+    }
 }
 
 /// The drag's captured press point, value and (for a ring) press angle.
@@ -177,28 +202,32 @@ impl DeclarativeHandle {
 struct DragState {
     press: [f64; 2],
     value: f64,
+    value_v: f64,
     /// The in-plane press angle, in radians. `None` for an axis handle.
     angle: Option<f64>,
+    /// The frame-local press point of a plane handle, in world units.
+    local: Option<[f64; 2]>,
 }
 
 /// A mod-supplied handle hosted by the native manipulator model.
 ///
-/// The declaration is fixed at construction; a drag only changes the scalar
-/// [`value`](Self::value). World geometry is rebuilt on [`refresh`](Self::refresh)
-/// when the camera or the value changes, and the projected axis converts pointer
-/// travel into world units.
+/// The declaration is fixed at construction; a drag only changes the value (one
+/// scalar, or the two coordinates of a plane handle). World geometry is rebuilt on
+/// [`refresh`](Self::refresh) when the camera or the value changes, and the projected
+/// axis converts pointer travel into world units.
 #[derive(Clone, Debug)]
 pub struct DeclarativeManipulator {
     target: u32,
     handle: DeclarativeHandle,
     value: f64,
+    value_v: f64,
     item: ShapeItem,
     drag: Option<DragState>,
     hovered: bool,
     style: GizmoStyle,
     /// The camera view and value the cached geometry was built for.
     view: Option<Matrix4>,
-    built: Option<f64>,
+    built: Option<(f64, f64)>,
 }
 
 impl DeclarativeManipulator {
@@ -218,10 +247,12 @@ impl DeclarativeManipulator {
             .with_ghost_alpha(style.ghost_alpha);
         item.set_program(handle.program.clone());
         let value = handle.value;
+        let value_v = handle.value_v;
         let mut manipulator = Self {
             target,
             handle,
             value,
+            value_v,
             item,
             drag: None,
             hovered: false,
@@ -239,8 +270,16 @@ impl DeclarativeManipulator {
     }
 
     /// The current value, in world units along the drag axis.
+    ///
+    /// For a plane handle this is the `U` coordinate; [`value_v`](Self::value_v) is the
+    /// other one.
     pub fn value(&self) -> f64 {
         self.value
+    }
+
+    /// The second in-plane coordinate of a plane handle (zero otherwise).
+    pub fn value_v(&self) -> f64 {
+        self.value_v
     }
 
     /// The declaration, as supplied by the mod.
@@ -337,7 +376,9 @@ impl DeclarativeManipulator {
     /// The world position the handle's mesh rides on.
     ///
     /// An axis handle sits at the frame origin plus the axis value. A ring handle sits
-    /// on the ring at the value's angle, so grabbing it follows the arc it turns.
+    /// on the ring at the value's angle, so grabbing it follows the arc it turns. A
+    /// plane handle sits at `origin + u·value + v·value_v`, so the mesh *is* the point
+    /// it edits.
     fn origin(&self, camera: &Camera) -> Vector3 {
         match self.handle.kind {
             DeclarativeKind::Axis => self
@@ -346,6 +387,14 @@ impl DeclarativeManipulator {
                 .origin
                 .add(&self.axis_world().scale(self.value)),
             DeclarativeKind::Ring => self.ring_point(camera, self.value),
+            DeclarativeKind::Plane => {
+                let basis = self.handle.frame.basis;
+                self.handle
+                    .frame
+                    .origin
+                    .add(&basis[0].scale(self.value))
+                    .add(&basis[1].scale(self.value_v))
+            }
         }
     }
 
@@ -366,11 +415,12 @@ impl DeclarativeManipulator {
     /// Rebuild the geometry for `camera` when the view or the value changed. Returns
     /// whether the geometry was rebuilt.
     pub fn update(&mut self, camera: &Camera) -> bool {
-        if self.view == Some(camera.view) && self.built == Some(self.value) {
+        let value = (self.value, self.value_v);
+        if self.view == Some(camera.view) && self.built == Some(value) {
             return false;
         }
         self.view = Some(camera.view);
-        self.built = Some(self.value);
+        self.built = Some(value);
         self.build(camera);
         true
     }
@@ -421,6 +471,8 @@ impl DeclarativeManipulator {
     ///   (`RING_SAMPLES` segments). A ring seen edge-on projects to a line, and the same
     ///   segment distance covers it. The central fraction of the projected ring is
     ///   excluded so the interior stays free to the scene behind it.
+    /// * **Plane** accepts the built mesh's projected bounding box: the handle marks a
+    ///   point rather than a line or an arc, so its own footprint is the whole target.
     ///
     /// The built geometry is cached, so the host calls [`refresh`](Self::refresh) before
     /// hit-testing (the viewport already does); a ring's analytic region does not need it.
@@ -428,6 +480,7 @@ impl DeclarativeManipulator {
         match self.handle.kind {
             DeclarativeKind::Axis => self.axis_hit(camera, device),
             DeclarativeKind::Ring => self.ring_hit(camera, device),
+            DeclarativeKind::Plane => self.mesh_hit(camera, device),
         }
     }
 
@@ -516,13 +569,14 @@ impl DeclarativeManipulator {
     }
 
     /// Begin a drag at `device`, if it hits. Records the press point, value and (for a
-    /// ring) the press angle so the value only moves by the pointer's travel from there.
+    /// ring) the press angle, or (for a plane) the frame-local press point, so the value
+    /// only moves by the pointer's travel from there.
     pub fn begin_drag(&mut self, camera: &Camera, device: [i32; 2]) -> bool {
         if !self.hit(camera, device) {
             return false;
         }
         let angle = match self.handle.kind {
-            DeclarativeKind::Axis => None,
+            DeclarativeKind::Axis | DeclarativeKind::Plane => None,
             DeclarativeKind::Ring => {
                 let Some(ray) = camera.ray_through(device) else {
                     return false;
@@ -538,13 +592,43 @@ impl DeclarativeManipulator {
                 Some(angle)
             }
         };
+        let local = match self.handle.kind {
+            DeclarativeKind::Plane => {
+                let Some(local) = self.plane_point(camera, device) else {
+                    return false;
+                };
+                Some(local)
+            }
+            _ => None,
+        };
         self.drag = Some(DragState {
             press: [f64::from(device[0]), f64::from(device[1])],
             value: self.value,
+            value_v: self.value_v,
             angle,
+            local,
         });
         self.apply_color();
         true
+    }
+
+    /// The frame-local point under `device`, in world units along the frame's `u`/`v`.
+    ///
+    /// The pointer ray is intersected with the handle's own plane (the one `u`/`v` span
+    /// through the frame origin). A ray parallel to that plane has no answer, so an
+    /// edge-on view refuses rather than sliding the value somewhere arbitrary.
+    fn plane_point(&self, camera: &Camera, device: [i32; 2]) -> Option<[f64; 2]> {
+        let frame = &self.handle.frame;
+        let plane = Workplane::new(
+            frame.origin,
+            frame.basis[0],
+            frame.basis[1],
+            WorkplaneKind::Custom,
+        )?;
+        let ray = camera.ray_through(device)?;
+        let origin = Vector3::new(ray.origin[0], ray.origin[1], ray.origin[2]);
+        let direction = Vector3::new(ray.direction[0], ray.direction[1], ray.direction[2]);
+        plane.ray_local(origin, direction)
     }
 
     /// Advance the drag. Returns whether the value moved.
@@ -558,6 +642,11 @@ impl DeclarativeManipulator {
     /// measured against the same basis the ring is drawn with. The value in degrees is
     /// the press value plus the angle delta, then snapped and clamped.
     ///
+    /// **Plane:** the pointer ray is intersected with the handle's plane and the two
+    /// coordinates move by the frame-local travel since the press. Each coordinate is
+    /// snapped and clamped by the declaration's `step`/`min`/`max`, which are the same
+    /// units for both axes.
+    ///
     /// `ring_detent` is not reused: it applies a *relative*
     /// detent driven by a Ctrl modifier the [`Manipulator`] trait does not carry, while a
     /// declaration's `step` snaps the absolute value. `wrap_pi` is not applied either:
@@ -567,7 +656,7 @@ impl DeclarativeManipulator {
         let Some(drag) = self.drag else {
             return false;
         };
-        let value = match self.handle.kind {
+        let (value, value_v) = match self.handle.kind {
             DeclarativeKind::Axis => {
                 let origin = self.handle.frame.origin;
                 let (Some(from), Some(to)) = (
@@ -584,7 +673,10 @@ impl DeclarativeManipulator {
                 let direction = [dx / pixels_per_world, dy / pixels_per_world];
                 let travel = (f64::from(device[0]) - drag.press[0]) * direction[0]
                     + (f64::from(device[1]) - drag.press[1]) * direction[1];
-                self.clamp(self.snap(drag.value + travel / pixels_per_world))
+                (
+                    self.clamp(self.snap(drag.value + travel / pixels_per_world)),
+                    drag.value_v,
+                )
             }
             DeclarativeKind::Ring => {
                 let Some(press_angle) = drag.angle else {
@@ -602,13 +694,26 @@ impl DeclarativeManipulator {
                     return false;
                 };
                 let delta = (angle - press_angle).to_degrees();
-                self.clamp(self.snap(drag.value + delta))
+                (self.clamp(self.snap(drag.value + delta)), drag.value_v)
+            }
+            DeclarativeKind::Plane => {
+                let Some(press_local) = drag.local else {
+                    return false;
+                };
+                let Some(local) = self.plane_point(camera, device) else {
+                    return false;
+                };
+                (
+                    self.clamp(self.snap(drag.value + (local[0] - press_local[0]))),
+                    self.clamp(self.snap(drag.value_v + (local[1] - press_local[1]))),
+                )
             }
         };
-        if (value - self.value).abs() <= 1e-12 {
+        if (value - self.value).abs() <= 1e-12 && (value_v - self.value_v).abs() <= 1e-12 {
             return false;
         }
         self.value = value;
+        self.value_v = value_v;
         true
     }
 
@@ -625,19 +730,24 @@ impl DeclarativeManipulator {
             return false;
         };
         self.value = drag.value;
+        self.value_v = drag.value_v;
         self.apply_color();
         true
     }
 
     /// The neutral commit for the current value. A ring commits `[degrees]`; an axis
-    /// commits `[world units]`.
+    /// commits `[world units]`; a plane commits `[u, v]` in world units.
     fn commit(&self) -> InteractionCommit {
+        let values = match self.handle.kind {
+            DeclarativeKind::Plane => vec![self.value, self.value_v],
+            _ => vec![self.value],
+        };
         let mut commit = InteractionCommit::new(
             self.handle.id.clone(),
             self.target,
             self.handle.action.clone(),
         )
-        .with_values([self.value])
+        .with_values(values)
         .with_readout(self.readout());
         if let Some(element) = &self.handle.element {
             commit = commit.with_element(element.clone());
@@ -645,12 +755,20 @@ impl DeclarativeManipulator {
         commit
     }
 
-    /// The numeric row's field for this handle, in the declaration's own units.
+    /// The numeric row's fields for this handle, in the declaration's own units.
     ///
-    /// A declared handle has exactly one scalar, so it publishes one field. The
+    /// An axis or ring handle has exactly one scalar, so it publishes one field. The
     /// declaration's `min`/`max` are the hard range the drag already clamps to, which
     /// makes a type-in and a drag agree.
+    ///
+    /// A [`Plane`](DeclarativeKind::Plane) handle publishes **none**: its value is two
+    /// coordinates that only mean something together, and a row of two unlabelled
+    /// millimetres would be a worse interface than the direct drag it already has. The
+    /// readout still reports both numbers, so the value stays legible while dragging.
     pub fn numeric_fields(&self) -> Vec<crate::interaction::NumericField> {
+        if self.handle.kind == DeclarativeKind::Plane {
+            return Vec::new();
+        }
         let mut field = crate::interaction::NumericField::millimetres(
             self.handle.label.clone(),
             self.value,
@@ -664,12 +782,10 @@ impl DeclarativeManipulator {
     /// Adopt a typed value: clamp and snap with the drag's own rules.
     ///
     /// Returns whether the value moved. A ring's value is degrees and an axis value is
-    /// world units, exactly as a drag would have produced.
+    /// world units, exactly as a drag would have produced. A plane handle takes both
+    /// coordinates (`[u, v]`) and refuses a short slice.
     pub fn set_values(&mut self, values: &[f64]) -> bool {
-        let Some(value) = values.first().copied() else {
-            return false;
-        };
-        self.adopt(value)
+        self.adopt_all(values)
     }
 
     /// Open at a value the handle did not produce (the document half's seed).
@@ -680,10 +796,7 @@ impl DeclarativeManipulator {
         if self.drag.is_some() {
             return false;
         }
-        let Some(value) = values.first().copied() else {
-            return false;
-        };
-        self.adopt(value)
+        self.adopt_all(values)
     }
 
     /// The neutral commit the current value would produce.
@@ -704,22 +817,38 @@ impl DeclarativeManipulator {
         self.handle.min = min;
         self.handle.max = max;
         let value = self.clamp(self.value);
-        if (value - self.value).abs() > 1e-12 {
+        let value_v = self.clamp(self.value_v);
+        if (value - self.value).abs() > 1e-12 || (value_v - self.value_v).abs() > 1e-12 {
             self.value = value;
+            self.value_v = value_v;
             self.built = None;
         }
         true
     }
 
-    fn adopt(&mut self, value: f64) -> bool {
+    /// Adopt one or two values with the drag's own clamping and snapping.
+    fn adopt_all(&mut self, values: &[f64]) -> bool {
+        let Some(value) = values.first().copied() else {
+            return false;
+        };
         let value = self.clamp(self.snap(value));
-        if (value - self.value).abs() <= 1e-12 {
+        let value_v = match self.handle.kind {
+            DeclarativeKind::Plane => {
+                let Some(value_v) = values.get(1).copied() else {
+                    return false;
+                };
+                self.clamp(self.snap(value_v))
+            }
+            _ => self.value_v,
+        };
+        if (value - self.value).abs() <= 1e-12 && (value_v - self.value_v).abs() <= 1e-12 {
             return false;
         }
         self.value = value;
+        self.value_v = value_v;
         self.apply_color();
-        // The handle mesh rides the value (an axis handle sits at `origin + axis*value`),
-        // so the cached build is stale.
+        // The handle mesh rides the value (an axis handle sits at `origin + axis*value`,
+        // a plane handle at `origin + u*value + v*value_v`), so the cached build is stale.
         self.built = None;
         true
     }
@@ -730,15 +859,26 @@ impl DeclarativeManipulator {
         format!("{:.*}", self.handle.decimals, self.value)
     }
 
-    /// The readout: the template with `{value}` replaced, or the bare number.
+    /// The formatted second coordinate, at the same decimals.
+    fn format_value_v(&self) -> String {
+        format!("{:.*}", self.handle.decimals, self.value_v)
+    }
+
+    /// The readout: the template with `{value}` and `{value_v}` replaced, or the bare
+    /// number (both numbers for a plane handle).
     pub fn readout(&self) -> String {
+        let value = self.format_value();
         if self.handle.readout.is_empty() {
-            self.format_value()
-        } else {
-            self.handle
-                .readout
-                .replace("{value}", &self.format_value())
+            return if self.handle.kind == DeclarativeKind::Plane {
+                format!("{value}, {}", self.format_value_v())
+            } else {
+                value
+            };
         }
+        self.handle
+            .readout
+            .replace("{value}", &value)
+            .replace("{value_v}", &self.format_value_v())
     }
 
     /// Where the readout sits, in device pixels: the handle's current world position
@@ -1498,5 +1638,129 @@ mod tests {
             Some(0.001),
             Some(1.0)
         ));
+    }
+
+    /// A plane handle at the world origin, dragging in world `XY`.
+    fn plane_handle(id: &str, action: &str) -> DeclarativeHandle {
+        let mut handle = DeclarativeHandle::new(
+            id,
+            action,
+            ManipulatorFrame::world(Vector3::zero()),
+            2,
+            marker(),
+        );
+        handle.kind = DeclarativeKind::Plane;
+        handle
+    }
+
+    /// A plane handle in the world `YZ` plane: edge-on to the test camera, which looks
+    /// along `+Z`.
+    fn edge_on_plane_handle(id: &str) -> DeclarativeHandle {
+        let mut handle = plane_handle(id, "drag");
+        handle.frame.basis = [
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        ];
+        handle
+    }
+
+    /// The frame-local `(u, v)` a pointer ray hits on the world `XY` plane.
+    fn plane_uv(camera: &Camera, device: [i32; 2]) -> [f64; 2] {
+        let ray = camera.ray_through(device).expect("a ray");
+        Workplane::world()
+            .ray_local(
+                Vector3::new(ray.origin[0], ray.origin[1], ray.origin[2]),
+                Vector3::new(ray.direction[0], ray.direction[1], ray.direction[2]),
+            )
+            .expect("the ray hits the plane")
+    }
+
+    #[test]
+    fn a_plane_handle_drags_in_its_own_plane_and_commits_two_values() {
+        let camera = camera(10.0);
+        let mut manipulator = DeclarativeManipulator::new(7, plane_handle("sketch_drag", "drag"));
+        manipulator.update(&camera);
+        let press = centre(&camera);
+        let release = [press[0] + 12, press[1] - 7];
+        assert!(manipulator.hit(&camera, press));
+        assert!(manipulator.begin_drag(&camera, press));
+        assert!(manipulator.drag_to(&camera, release));
+
+        // The value moves by the *frame-local* travel between the two pointer rays, not
+        // by a screen distance: that is what makes the drag follow the plane it is on.
+        let from = plane_uv(&camera, press);
+        let to = plane_uv(&camera, release);
+        assert!((manipulator.value() - (to[0] - from[0])).abs() < 1e-9);
+        assert!((manipulator.value_v() - (to[1] - from[1])).abs() < 1e-9);
+
+        let commit = manipulator.end_drag().expect("a commit");
+        assert_eq!(commit.manipulator, "sketch_drag");
+        assert_eq!(commit.action, "drag");
+        assert_eq!(commit.target, 7);
+        assert_eq!(commit.values.len(), 2, "a plane commits both coordinates");
+        assert!((commit.values[0] - manipulator.value()).abs() < 1e-12);
+        assert!((commit.values[1] - manipulator.value_v()).abs() < 1e-12);
+        assert!(!manipulator.is_dragging());
+    }
+
+    #[test]
+    fn a_plane_handle_refuses_a_pointer_ray_that_cannot_meet_its_plane() {
+        // The test camera looks along `+Z`, so a handle whose plane is world `YZ` is
+        // edge-on: the pointer ray lies in it and no in-plane point exists. The handle
+        // must refuse the press rather than invent a coordinate.
+        let camera = camera(10.0);
+        let mut manipulator =
+            DeclarativeManipulator::new(7, edge_on_plane_handle("sketch_drag"));
+        manipulator.update(&camera);
+        let press = centre(&camera);
+        assert!(!manipulator.begin_drag(&camera, press));
+        assert!(!manipulator.is_dragging());
+    }
+
+    #[test]
+    fn a_plane_handle_snaps_and_clamps_both_coordinates() {
+        let camera = camera(10.0);
+        let mut handle = plane_handle("sketch_drag", "drag");
+        handle.step = Some(1.0);
+        handle.min = Some(-2.0);
+        handle.max = Some(2.0);
+        let mut manipulator = DeclarativeManipulator::new(7, handle);
+        manipulator.update(&camera);
+        let press = centre(&camera);
+        assert!(manipulator.begin_drag(&camera, press));
+        // A big sweep in one direction: the step snaps each coordinate and the range
+        // holds it, the same rules an axis handle applies to its one value.
+        assert!(manipulator.drag_to(&camera, [press[0] + 400, press[1] - 400]));
+        assert_eq!(manipulator.value(), 2.0);
+        assert_eq!(manipulator.value_v(), -2.0);
+
+        // A plane handle publishes no numeric row: two unlabelled millimetres would be a
+        // worse interface than the drag it already has, and the readout carries both.
+        assert!(manipulator.numeric_fields().is_empty());
+        assert!(manipulator.readout().contains(','), "{},", manipulator.readout());
+    }
+
+    #[test]
+    fn a_typed_plane_value_needs_both_coordinates_and_moves_both() {
+        let mut manipulator = DeclarativeManipulator::new(7, plane_handle("sketch_drag", "drag"));
+        assert!(!manipulator.set_values(&[3.0]), "one coordinate is refused");
+        assert!(manipulator.set_values(&[3.0, -4.0]));
+        assert_eq!(manipulator.value(), 3.0);
+        assert_eq!(manipulator.value_v(), -4.0);
+        let commit = manipulator.pending_commit().expect("a commit");
+        assert_eq!(commit.values, vec![3.0, -4.0]);
+
+        // Cancel restores the press value on both coordinates.
+        let camera = camera(10.0);
+        manipulator.update(&camera);
+        let handle = project_device(&camera, Vector3::new(3.0, -4.0, 0.0))
+            .expect("the handle projects");
+        let press = [handle[0].round() as i32, handle[1].round() as i32];
+        assert!(manipulator.begin_drag(&camera, press));
+        assert!(manipulator.drag_to(&camera, [press[0] + 5, press[1] + 5]));
+        assert!(manipulator.cancel_drag());
+        assert_eq!(manipulator.value(), 3.0);
+        assert_eq!(manipulator.value_v(), -4.0);
     }
 }

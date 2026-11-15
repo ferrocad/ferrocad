@@ -16,6 +16,7 @@
 //!   "kind": "axis",
 //!   "radius": 66.0,
 //!   "value": 20.0,
+//!   "value_v": 0.0,
 //!   "min": -100.0,
 //!   "max": 100.0,
 //!   "step": 1.0,
@@ -73,6 +74,7 @@ struct HandleSpec {
     axis: Option<String>,
     kind: Option<String>,
     value: f64,
+    value_v: f64,
     min: Option<f64>,
     max: Option<f64>,
     step: Option<f64>,
@@ -153,6 +155,7 @@ fn convert(spec: HandleSpec, target: u32) -> Result<(u32, DeclarativeHandle), St
     let axis = convert_axis(spec.axis.as_deref(), &label)?;
     let kind = convert_kind(spec.kind.as_deref(), &label)?;
     let value = finite(spec.value, "value", &label)?;
+    let value_v = finite(spec.value_v, "value_v", &label)?;
     let min = optional_finite(spec.min, "min", &label)?;
     let max = optional_finite(spec.max, "max", &label)?;
     if let (Some(min), Some(max)) = (min, max) {
@@ -222,6 +225,7 @@ fn convert(spec: HandleSpec, target: u32) -> Result<(u32, DeclarativeHandle), St
     handle.element = element;
     handle.kind = kind;
     handle.value = value;
+    handle.value_v = value_v;
     handle.min = min;
     handle.max = max;
     handle.step = step;
@@ -270,8 +274,9 @@ fn convert_kind(kind: Option<&str>, label: &str) -> Result<DeclarativeKind, Stri
         Some(text) => match text.trim().to_ascii_lowercase().as_str() {
             "axis" => Ok(DeclarativeKind::Axis),
             "ring" => Ok(DeclarativeKind::Ring),
+            "plane" => Ok(DeclarativeKind::Plane),
             _ => Err(format!(
-                "{label}kind must be \"axis\" or \"ring\", got {text:?}"
+                "{label}kind must be \"axis\", \"ring\" or \"plane\", got {text:?}"
             )),
         },
     }
@@ -400,6 +405,7 @@ mod tests {
         assert_eq!(handle.element, None);
         assert_eq!(handle.axis, 2, "the default axis is z");
         assert_eq!(handle.value, 0.0);
+        assert_eq!(handle.value_v, 0.0, "a second coordinate defaults to zero");
         assert_eq!(handle.min, None);
         assert_eq!(handle.max, None);
         assert_eq!(handle.step, None);
@@ -509,12 +515,26 @@ mod tests {
     }
 
     #[test]
+    fn a_plane_handle_carries_both_coordinates() {
+        let mut value = minimal();
+        value["kind"] = serde_json::json!("plane");
+        value["value"] = serde_json::json!(3.5);
+        value["value_v"] = serde_json::json!(-1.25);
+        let (_, handle) = handle_from_value(&value, 1).expect("a valid plane handle");
+        assert_eq!(handle.kind, DeclarativeKind::Plane);
+        assert_close(handle.value, 3.5, "value");
+        assert_close(handle.value_v, -1.25, "value_v");
+    }
+
+    #[test]
     fn the_kind_is_case_insensitive_and_rejects_unknown_values() {
         for (text, expected) in [
             ("axis", DeclarativeKind::Axis),
             ("AXIS", DeclarativeKind::Axis),
             ("ring", DeclarativeKind::Ring),
             ("Ring", DeclarativeKind::Ring),
+            ("plane", DeclarativeKind::Plane),
+            ("Plane", DeclarativeKind::Plane),
         ] {
             let mut value = minimal();
             value["kind"] = serde_json::json!(text);

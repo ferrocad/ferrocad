@@ -89,9 +89,11 @@ slots, then one pill per category.
   hover ghost of what the first click would make (for a two-click tool, the anchor marker
   in the placement plane) and **no row at all**. The completion row — `Rectangle ·
   1 point · click the opposite corner · ✗ ✓` — is a response to a click, and appears
-  directly above the hands' bar in the bottom-left column. A parameter tool is the one
-  exception, because its fields *are* the pending value: there is nothing to place until
-  they are set. The tool stays armed throughout; `Esc` and another pill are the way out
+  directly above the hands' bar in the bottom-left column. That includes the parameter
+  tools: `BoxTool` anchors on the press and only then offers `W`/`L`/`H`, so its numbers
+  are typed *after* the placement — before the click there is no row and no live field for
+  a digit to fall into, which is what keeps `5`–`9` on the hand while a Solid pill is
+  merely equipped. The tool stays armed throughout; `Esc` and another pill are the way out
   of one that has placed nothing.
 - **The list is numbered.** Its rows carry `1`–`8` in a column of their own (separate
   from the gate's requirement hint, which a disabled row shows in the same menu), and
@@ -107,7 +109,7 @@ slots, then one pill per category.
   keys that address it would then address nothing. The globals dock holds `Undo`, `Redo`,
   `Fit` and Search and nothing else, so it never changes width with an edition.
 - **Activating a tool adds a row; it does not replace anything.** Once the tool has begun —
-  a click has placed a point, or its fields are its input — its **completion row**
+  a click has placed its anchor — its **completion row**
   (`[ ⬡ Box │ W 20.00 L 20.00 H 20.00 mm │ ✗ │ ✓ ]`) is drawn in the bottom-left column,
   directly **above the two hands' bar**. Arming alone adds nothing: an armed tool that has
   placed nothing shows only its hover ghost on the canvas (for a drawing tool, the plane
@@ -224,7 +226,7 @@ stateDiagram-v2
    the bottom row, and the Modify hand rests in its equipped slot (`1`–`3`, `0`) just to its
    left.
 2. **`ARMED` adds the completion row, above the hands.** A tool that has placed nothing
-   adds nothing at all; the first click (or, for a parameter tool, the field row) brings
+   adds nothing at all; the first click brings
    the row in above the hands' bar:
 
    ```text
@@ -485,7 +487,7 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
 - `Tool`, `ToolStatus` (label, point count, hint), `Tool::finish() ->
   Option<InteractionCommit>` with `creates: true`, and the shell's two surfaces: the hands'
   row at the bottom-left and the tool's **completion row** above it, which only exists once
-  `chrome::tool_has_begun` (a point placed, or a field tool).
+  `chrome::tool_has_begun` (the tool's first click).
 - `Tool::completed()` — the **self-finishing** seam, defaulted to `false`. A tool that
   needs no more input (the two-click rectangle, circle and polygon, the three-click arc)
   says so, and the viewport finishes it on the event that completed it instead of waiting

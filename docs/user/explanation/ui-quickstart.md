@@ -21,8 +21,8 @@ Also in the window:
 - **Dev Tools** — the application menu's second window, or the inspector column in the
   browser build.
 - **Tool row** — joins the bottom-left column above the hands' bar once a tool has begun
-  (a click placed a point, or its numbers are the input). Before that the armed tool only
-  shows a hover ghost on the canvas.
+  (its first click has placed the anchor). Before that the armed tool only shows a hover
+  ghost on the canvas.
 - **Pending-transform form** — the docked coordinate or angle row and the `✓`/`✗` pill.
 - **Dialogs, the settings card and popovers** — transient surfaces over the canvas;
   `Esc` closes the topmost one.

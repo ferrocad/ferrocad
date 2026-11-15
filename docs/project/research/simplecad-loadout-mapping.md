@@ -618,8 +618,9 @@ Three follow-ups from the live window:
   loads the pill and arms the tool at the pointer.
 - **A session adds a row; it does not take the dock.** The armed tool's row (its label,
   its `W/L/H` row or point count, its hint, `✗`/`✓`) joins the **bottom-left column,
-  directly above the hands' bar**, and only once the tool has begun: a click placed a
-  point, or its fields are the input. An armed tool that has placed nothing shows only its
+  directly above the hands' bar**, and only once the tool has begun: its first click
+  placed the anchor (the parameter tools too — `BoxTool` anchors on the press and only
+  then offers its numbers). An armed tool that has placed nothing shows only its
   hover ghost, so arming reads as equipping a slot, not as opening a dialog. The column
   grows upward and the canvas keeps its rectangle (`chrome::globals_dock` owns the left
   column, `chrome::create_dock` the bottom row, `chrome::tool_pill` the row above it).

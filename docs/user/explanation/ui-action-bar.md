@@ -44,8 +44,9 @@ why it never grows when a workbench registers another tool.
 ## While a tool is running
 
 Starting a tool **adds its completion row to the bottom-left column**, directly above the
-hands' bar — and only once the tool has begun: a click has placed a point, or its numbers
-are the input. An armed tool that has placed nothing
+hands' bar — and only once the tool has begun, which means its first click has placed the
+anchor (the box included: it anchors on the press and only then offers `W`/`L`/`H`). An
+armed tool that has placed nothing
 shows only its hover ghost on the canvas, so pressing a pill never looks like opening a
 dialog. Nothing else moves, so the canvas rectangle does not change and the loadout the
 tool was started from stays in hand.

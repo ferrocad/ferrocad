@@ -383,3 +383,137 @@ with this table, so **P1 is closed**. **Size:** S.
 - `osifont` or any GPL font.
 - FreeType, harfbuzz-rs, or any new C/C++ dependency for text.
 - A general text/markup engine: `makeWireString` is one name, producing wires.
+
+---
+
+# The UI bring-up (UI-1..UI-5)
+
+Status: open (opened 2026-11-15). The geometry and document surface is measured —
+**1039 / 6 / 2 / 7** over 88/88 modules on the clean checkout. This cut is the **UI**
+half: what SimpleCAD's own interface asks of a host, what this repository already answers,
+and the order to close the rest.
+
+## UI-0. What SimpleCAD's UI is
+
+`../simplecad` is one FreeCAD **workbench**, and almost all of it is Qt:
+
+| Piece | File(s) | Needs |
+| --- | --- | --- |
+| the workbench | `InitGui.py` (5 lines), `simplecad/gui/workbench.py` (36) | `Gui.Workbench`, `Gui.addWorkbench`, `appendToolbar`/`appendMenu`/`appendContextMenu`, `GetClassName` |
+| the controller | `simplecad/gui/controller.py` (1670) | a `QMainWindow` (`Gui.getMainWindow()`), `statusBar()`, a `QApplication` event filter, `QTimer`s, dock widgets, dialogs |
+| the tools' state machines | `simplecad/gui/tools/` (39 modules) | the controller + widgets for the numeric inputs |
+| the 3-D drawing | `display.py` (318), `surface_display.py` (254), `panels.py`, `face_browser.py` (619) | `pivy.coin` nodes under a Coin/SoQt scene graph |
+| the look | `viewport_style.py` (1084), `toolbar.py`, `status_bar.py`, `settings_dialog.py` | `QtGui` palettes/icons, a Coin scene |
+| the commands | `commands.py` (150), `command_state.py` (351) | `Gui.addCommand`, `Gui.runCommand`, `Gui.activeDocument`, `Gui.activateWorkbench` |
+
+`InitGui.py` itself is trivial and portable:
+
+```python
+import FreeCADGui as Gui
+from simplecad.gui.workbench import SimpleCADWorkbench
+Gui.addWorkbench(SimpleCADWorkbench())
+```
+
+Everything expensive happens in `Activated()`: it builds a Qt control dock on the real main
+window, installs an application event filter, starts three timers and starts the Coin
+display layers.
+
+## UI-1. The symbol surface, measured
+
+Counted over `simplecad/`, `tests/gui/` and `tests/unit/`.
+
+### `FreeCADGui`
+
+| Symbol | Uses | This repository |
+| --- | ---: | --- |
+| `Gui.Selection` | 387 | **have** |
+| `Gui.updateGui` | 142 | **have** |
+| `Gui.activeDocument` | 114 | **have** |
+| `Gui.activateWorkbench` | 89 | **missing** |
+| `Gui.getMainWindow` | 66 | returns the GPUI window handle, not a `QMainWindow` |
+| `Gui.runCommand` | 31 | **have** |
+| `Gui.listCommands` | 13 | **have** |
+| `Gui.addCommand` | 2 | **have** |
+| `Gui.Workbench`, `Gui.addWorkbench` | 1 each | **missing** |
+| `Gui.activeWorkbench` | 1 | **missing** |
+
+### Qt
+
+`QtCore.Qt` (290), `QtWidgets.QApplication` (169), `QtCore.QEvent` (149), then the widget
+vocabulary a modelling workbench needs: `QDialog`/`QLabel`/`QComboBox`/`QPushButton`/
+`QCheckBox`/`QVBoxLayout`/`QFormLayout`/`QDoubleSpinBox`/`QSlider`/`QTreeWidget`/
+`QDockWidget`/`QProgressBar`/`QMdiArea`/`QProcess`, and `QtGui.QKeyEvent`/`QIcon`/`QColor`/
+`QPalette`/`QImage`/`QGuiApplication`/`QPainter`/`QPixmap`.
+
+`python/PySide` ships a **name allowlist** (enough for upstream scripts to *import*), a
+`QApplication` that deliberately raises, and an opt-in
+`FERROCAD_PYSIDE_BACKEND=PySide6|PySide2` that aliases a real installation. Real **PySide6
+6.10.2 is present in the development image**.
+
+### `pivy.coin`
+
+38 modules `from pivy import coin`. Nodes used: `SoSeparator` (49), `SoCoordinate3` (24),
+`SoPickStyle`/`SoLightModel`/`SoDrawStyle`/`SoBaseColor`/`SoMaterialBinding`/`SoMaterial`
+(13–18 each), `SoLineSet`, `SoText2`, `SoPointSet`, `SoIndexedFaceSet`, `SoTranslation`,
+`SoShapeHints`, `SoSwitch`, `SoSearchAction`, the event classes (`SoMouseButtonEvent`,
+`SoButtonEvent`), `SoPerspectiveCamera`/`SoOrthographicCamera`, `SoFieldSensor`, `SbColor`,
+`SbVec2s`/`SbVec3f`. `python/` ships a `pivy.coin` facade that the Part tests already drive.
+
+## UI-2. Two routes, and what each can carry
+
+**(a) Host SimpleCAD's own UI through a `FreeCADGui`/Qt/Coin shim.** Portable: the
+workbench declaration (menus, toolbars, command ids), the command classes'
+`GetResources`/`Activated`, and every tool state machine that is pure Python over the
+document. **Not portable:** `controller.activate()` and everything under it — it needs a
+real `QMainWindow` (dock widgets, `statusBar()`), a `QApplication` event filter, `QTimer`s
+and a Coin/SoQt scene graph to draw into, and FerroCAD's shell is GPUI over wgpu. So route
+(a) is a **headless** route: exactly right for measurement, not for the shell.
+
+**(b) A native edition that re-exposes SimpleCAD's tools on our viewport.** The modelling
+layer (`simplecad/core`, `modeling`, `surfaces`, `mesh`, `repair`) is Qt-free and green.
+`ferrocad_simplecad` would be a Python workbench module in the Parametric/Sculpt shape that
+registers **our** command ids and tools, implementing each by calling that layer, with
+`ferrocad_stage` tools and the existing manipulators for the interaction. This is the
+product path and the only one that gives an interactive viewport; it is per-tool work.
+
+## UI-3. The slices
+
+| # | Slice | State |
+| --- | --- | --- |
+| **UI-1** | **Measure the Qt-blocked unit modules headlessly.** `--simplecad-gui` runs the five modules the main group skips (they build a `QApplication` in `setUpClass`) against real PySide6 with the offscreen platform, and self-skips when no distribution is installed. | **landed 2026-11-15**: **78 / 1 / 0 / 0** over five modules |
+| UI-2 | **The workbench host.** `Gui.Workbench`, `addWorkbench`, `listWorkbenches`, `activateWorkbench`, `activeWorkbench`, `appendToolbar`/`appendMenu`/`appendContextMenu` → the shell's command catalogue. `../simplecad/InitGui.py` imports and declares its five toolbars and menus; `--check-init` proves it headlessly. | next |
+| UI-3 | **The edition skeleton.** `ferrocad_simplecad` (module + `--edition simplecad`), `SimpleCAD_*` command ids, and the first three tools on our stage: Rectangle (two clicks), Line (the polyline tool), Push/Pull (the existing stem). Each pinned by a round-trip test in the Parametric mould. | after UI-2 |
+| UI-4 | **The rest of the tool surface, in use order.** Circle/Arc/Polygon, Round (the dress-up scrubber, already generic), Offset/Elongate, Move/Rotate, the surface tools (imprint/shell/fill-hole/unwrap) — each a command over `simplecad.modeling`. The 63 `tests/gui/gui_*.py` scripts are the behavioural reference: each is a state machine to translate into a stage-tool test. | incremental |
+| UI-5 | **The two windows that are not the viewport**: the face browser (a dock panel) and the numeric-input rows. The shell already has a properties panel and a manipulator numeric row; these are the same seams. | after UI-3 |
+
+## UI-4. UI-1, as measured
+
+```sh
+python3 tools/conformance.py --simplecad-gui
+```
+
+| Module | Tests | Result |
+| --- | ---: | --- |
+| `test_dense_drawing` | 27 | 26 pass, **1 fail** (`test_a_line_between_holes_reaches_them_where_their_display_mesh_falls_short`) |
+| `test_elongating` | 20 | 20 pass |
+| `test_measuring` | 13 | 13 pass |
+| `test_panel_placement` | 5 | 5 pass |
+| `test_push_pull_ui` | 14 | 14 pass |
+| **total** | **79** | **78 pass, 1 fail, 0 errored, 0 skipped** |
+
+The five "GUI" skips were never a widget-tree problem: four modules are green the moment a
+real `QApplication` exists, and the fifth is a `BoundBox` premise. The suite's Qt
+dependency is **five modules and one failing assertion**, not a surface.
+
+**The one failure, classified.** The case calls `plate.tessellate(1)` and then asserts each
+hole rim's `BoundBox` *stops short* of its facing point by more than
+`2 × BOUNDS_MARGIN` (`0.002` mm) — its comment says "a shape's BoundBox follows its display
+mesh and can be smaller than its curves". On this seam the bound is **exact**
+(`lower.BoundBox.YMax == 25.0`, so `25 − YMax == 0.0`). That is the same rule the upstream
+source states (`TopoShape::getBoundBox` is `BRepBndLib::Add` with `SetGap(0.0)`), so the
+premise cannot be derived from the checkout this repository measures. It is the same
+out-of-surface bucket SC8 already recorded ("Test assumption: exact `BoundBox`", 1). What
+the case is *about* — the new line closes the region through both rims — **works**: the
+operation after the failing assert gives 9 faces of 9, `isValid()`, `isClosed()`, and the
+volume unchanged (13 108.4073 mm³). Recorded, not "fixed": matching a mesh-derived bound
+would make `BoundBox` wrong for every other caller.

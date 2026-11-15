@@ -134,6 +134,25 @@ hermetic. `simplecad_conformance` is the same pattern: it boots `ferrocad`, `Par
 `FERROCAD_SIMPLECAD` or `../simplecad`, and skips when there is none.
 `FERROCAD_SIMPLECAD_FILES="test_mesh_slicing …"` narrows a run.
 
+### The SimpleCAD GUI group
+
+Five of the unit modules build a Qt widget tree in `setUpClass`, so the main group skips
+them (`QApplication() takes no arguments`, our stub's deliberate refusal). They are not a
+Qt *surface*: the only thing missing is a real `QApplication`. `--simplecad-gui` runs them
+against the installed PySide6 with the offscreen platform:
+
+```sh
+# 78 passed / 1 failed / 0 errored / 0 skipped over five modules (2026-11-15)
+python3 tools/conformance.py --simplecad-gui
+```
+
+The group self-skips when PySide6 is absent, so headless CI stays hermetic and keeps the
+five skips. `python/PySide`'s real-Qt mode is opt-in for exactly this: the *default* image
+never loads Qt, and this group is the one place that asks for it. The one failure is a
+`BoundBox` premise, classified in
+[`../../project/tasks/simplecad-bringup.md`](../../project/tasks/simplecad-bringup.md#the-ui-bring-up-ui-1ui-5)
+§UI-4 — the operation the case is about passes.
+
 ---
 
 ## 4. Baseline (2026-10-20, upstream `33adf61`, sparse `src/Mod/Test` + `src/Mod/Part`)

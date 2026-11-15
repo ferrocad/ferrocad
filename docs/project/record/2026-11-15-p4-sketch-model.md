@@ -278,3 +278,66 @@ ferrocad_shell_core -p ferrocad_toy --all-targets` clean.
 **What is still open, and is not a state question.** `SketchObject.drag` has no
 manipulator in front of it, and the Python suite does not drive `Sketch_Polyline` /
 `Sketch_Dimension` yet. Both are new surface on top of a contract that is now closed.
+
+## 10. The vertex grips (P4 SK6, interactive)
+
+The last piece the sketch rail was missing: `SketchObject.drag` behind a handle you can
+actually grab. The design question was where the handle lives, because a sketch grip
+needs two things a compiled Rust factory cannot see — the sketch's **plane** and its
+**vertex list** — both of which are document state, not stage state.
+
+**The answer is a declared plane handle.** `ferrocad_stage::DeclarativeKind` gained a
+third kind beside `Axis` and `Ring`:
+
+| Kind | Value | Drag |
+| --- | --- | --- |
+| `Axis` | one world unit along `axis` | projected axis travel |
+| `Ring` | degrees about `axis` | ray/ring-plane angle |
+| **`Plane`** | **two** world units, `[value, value_v]` | ray intersects the handle's own `u`/`v` plane; each coordinate moves by the frame-local travel since the press |
+
+A plane handle's `axis` names its **normal**, its mesh sits at
+`origin + u·value + v·value_v` (so the handle *is* the point it edits), and it publishes
+no numeric row: two unlabelled millimetres would be a worse interface than the drag it
+already has, so the readout carries both numbers instead. A pointer ray that cannot meet
+the plane (an edge-on view) refuses the press rather than inventing a coordinate. The
+transport accepts `"kind": "plane"` and `"value_v"`.
+
+**The provider.** The edition's `manipulator_specs` returns one grip per **topological
+vertex** of `sketch.Shape` — `Vertex1..VertexN`, so a corner shared by two segments is one
+grip and the name is the one a selection reports. Each spec's frame is the sketch's own
+(`Placement.Rotation` applied to local X/Y, `z` = the normal) with the origin on the
+vertex. The commit is `sketch_drag` / `drag`, `element = "VertexN"`, `values = [u, v]`.
+
+**The edit.** `VertexN` resolves to the nearest geometry endpoint (or a circle's centre)
+through `Placement.inverse()`, and `sketch.drag(index, pos, start + (u, v))` runs in one
+named transaction, so the constraints decide where the point lands and the linked
+`Part::Extrusion` follows on the same recompute.
+
+**A seam bug this exposed.** The declarative `manipulator_specs` bridge handed providers
+the selection's *name*, while `manipulator_probe` and the `interaction` half hand the
+**document object**. Any provider that read `obj.TypeId` was therefore silently inert —
+including the existing applied-fillet round grip. The bridge now resolves the name, and a
+selection with no live object is `None`. `tests/test_manipulator_specs.py` pins the
+argument (`ferrocad_shell.manipulator_specs` → the object, not `"Thing"`).
+
+**What the preview is, and is not.** The grip rides the pointer's target in the sketch
+plane; the *solved* geometry appears on commit, because the solve is a document operation
+and a manipulator never edits the document during a drag. The result is still
+constraint-correct: dragging `Vertex2` of a horizontal edge by `(5, 3)` moves it 5 across,
+leaves the height alone, and takes the pad's `YLength` from 10 to 15 with `ZLength` fixed
+at 10. A fully constrained vertex still gets a grip; its drag reports the DOF it kept
+(`0`) and moves nothing.
+
+**A note on undo.** `doc.undo()` restores the *inputs* (a `Geometry` list, a datum) but a
+derived `Shape` refreshes on the next recompute; the app's `App_Undo` command is the path
+that does both. The Python test therefore undoes through `App_Undo`, which is also what a
+user presses.
+
+**Measured.** `ferrocad_stage` **263** (four new plane-handle cases: the drag and its
+commit, an edge-on refusal, snap/clamp on both coordinates, and the typed two-value
+path); `ferrocad_shell_core` **290** (the plane wire form and its `value_v`);
+`ferrocad_parametric` `sketch_drag_round_trip` **1/1** through the real provider, transport,
+grip, commit and Python edit; `tests/test_sketch_tools.py` **7** (commands, creating
+commit, dimension, the provider's grips, the drag commit, and the two refusals). The Python
+`workbenches` set is **871 / 0 / 0 / 3** over 54 modules and `tests/test_manipulator_specs`
+is **8/0** with the argument pinned.

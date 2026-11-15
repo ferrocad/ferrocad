@@ -290,6 +290,15 @@ snapped clicks on the plane `x = 5`, the counts above, the datum landing at inde
 `setDatum(10, 20.0)` taking the pad's `YLength` from 10 to 20, and two undos (the
 dimension, then the sketch and pad together).
 
+**The grips.** A selected sketch also publishes one **plane handle** per vertex — a
+`DeclarativeKind::Plane` declaration from the edition's `manipulator_specs` provider, not
+a compiled manipulator — so a vertex can be dragged inside the sketch's own plane. Its
+commit is `sketch_drag`/`drag` and the edit is `SketchObject.drag`, so every hard
+constraint still holds. The frame, the `VertexN` → geometry mapping and the preview
+boundary are in
+[`sketch-constraints.md`](sketch-constraints.md#the-vertex-grips); the end-to-end path is
+`crates/ferrocad_parametric/tests/sketch_drag_round_trip.rs`.
+
 ## 6. The Q5 forms (`FerroCADGui.forms`)
 
 | Command | Form | Accept path |

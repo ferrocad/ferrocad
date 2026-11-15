@@ -952,7 +952,7 @@ shader, the drag axis and the commit, and the stage hosts it as an ordinary
 
 ```text
 selection armed
-  └─ FerroCAD.register_manipulator_provider(provider)   (called with object, element)
+  └─ FerroCAD.register_manipulator_provider(provider)   (called with the document object, element)
        └─ spec dicts            (the wire form below)
             └─ ferrocad_shell.manipulator_specs → ferrocad_shell_python::manipulators
                  └─ HandleSpec → DeclarativeHandle → DeclarativeManipulator
@@ -965,6 +965,11 @@ The **commit half is unchanged**: a declared handle commits through the same
 `interaction` hook a Rust workbench uses, so a mod needs no second document path. The
 only trait change is ownership: `Manipulator::id()` is `&str` and
 `InteractionCommit.manipulator` is a `String`, because a declared id comes from data.
+
+The provider receives the selected **document object**, not its name — the same argument
+the interaction half gets — and `None` when the selection names nothing live. (Until
+2026-11-15 the specs half passed the *name*; a provider that read `obj.TypeId` was
+silently inert, so a declared handle could never arm on a type-specific test.)
 
 ### The wire form
 
@@ -990,16 +995,18 @@ only trait change is ownership: `Manipulator::id()` is `&str` and
 }
 ```
 
-`kind` is `"axis"` (default) or `"ring"`. An axis drags along `axis` and commits world
-units; a ring rotates about `axis` and commits **degrees** (so `value`/`min`/`max`/`step`
-are degrees for it). `radius` is the ring's radius in device pixels and is ignored by an
-axis handle; `size` is always the handle mesh's screen size.
+`kind` is `"axis"` (default), `"ring"` or `"plane"`. An axis drags along `axis` and
+commits world units; a ring rotates about `axis` and commits **degrees** (so
+`value`/`min`/`max`/`step` are degrees for it); a plane drags in the frame's own `u`/`v`
+plane (`axis` names its **normal**) and commits **two** world units, `[value, value_v]`.
+`radius` is the ring's radius in device pixels and is ignored by an axis or plane handle;
+`size` is always the handle mesh's screen size.
 
 Defaults: `action` = `id`; `element` absent; `target` = the selected entity (a spec may
 name another); frame = identity at the origin; `kind` = `"axis"`; `axis` = `"z"`
-(`"x"`/`"y"`/`"z"`, case-insensitive); `value` = 0; unbounded travel; continuous drag;
-`radius` = 66 px; `size` = 40 px; `decimals` = 2; no program; the workspace style's ink;
-the bare number as the readout.
+(`"x"`/`"y"`/`"z"`, case-insensitive); `value` = 0; `value_v` = 0; unbounded travel;
+continuous drag; `radius` = 66 px; `size` = 40 px; `decimals` = 2; no program; the
+workspace style's ink; the bare number as the readout.
 
 Validation is atomic and names the field (`handle "toy.bolt": size must be > 0, got 0`):
 non-empty id, non-empty positions, normals matching positions when present, in-range
@@ -1014,8 +1021,9 @@ so a spec can carry its own metadata.
   constant on screen. An axis handle sits at `origin + axis·value + px·size·(x·X + y·Y +
   z·Z)`; a ring handle sits **on the ring** at `origin + radius_world·(cos θ·u + sin θ·v)`,
   with `θ = value`, `(u, v) = orthonormal_basis(axis)` and `radius_world = scale_for(camera,
-  origin, radius)`. The value offset is what moves the handle; there is no implicit stem,
-  so the mesh is the grab target.
+  origin, radius)`. A plane handle sits at `origin + u·value + v·value_v`, so the mesh is
+  the point it edits and the frame origin is the plane it stays on. The value offset is
+  what moves the handle; there is no implicit stem, so the mesh is the grab target.
 - **Hit is analytic, per kind.** An axis accepts a band of `GizmoStyle::hit_radius_px`
   around its projected stem (`origin → origin + axis·value`) **and** the projected bbox
   of its mesh, so a wide handle stays grabbable where the thin stem does not pass. A ring
@@ -1027,7 +1035,14 @@ so a spec can carry its own metadata.
   pixels_per_world`); an axis pointing at the camera has no screen direction and does not
   move. A ring intersects the pointer ray with the ring plane (falling back to a
   view-facing plane when it is edge-on) and accumulates the angle from the press; a
-  degenerate ray declines the drag. Both then snap to `step` and clamp to `min`/`max`.
+  degenerate ray declines the drag. A plane intersects the pointer ray with its own
+  plane and moves each coordinate by the frame-local travel since the press; a ray that
+  cannot meet the plane (an edge-on view) refuses the press rather than guessing. All of
+  them then snap to `step` and clamp to `min`/`max` — for a plane, both coordinates.
+- **The numeric row** belongs to one scalar. An axis or ring handle publishes one field;
+  a plane handle publishes **none** (two unlabelled millimetres are a worse interface
+  than the drag it already has), and its readout carries both numbers instead of the
+  `{value}`/`{value_v}` placeholders.
 - **Ink** is `color` when given, else the workspace style's `active`/`inactive` tokens;
   the style's `opacity` and `ghost_alpha` always apply, and `enabled`/`show_readout` are
   the viewport's gates, as for native handles. The handle's own `size` wins over

@@ -188,6 +188,38 @@ is geometrically a no-op and drops the DOF to `1`; from there `setDatum(index, v
 the whole editing interface, and the extrusion that names the sketch follows on the next
 recompute.
 
+## The vertex grips
+
+The interactive half of `drag()` is a **declared plane handle** per sketch vertex
+(`ferrocad_stage::DeclarativeKind::Plane`). Nothing about the sketch is compiled into the
+shell: the edition's `manipulator_specs` provider reads the document and declares the
+grips in data.
+
+| Step | What happens |
+| --- | --- |
+| arming | a `Sketcher::SketchObject` selection publishes one grip per **topological vertex** of `sketch.Shape` (`Vertex1..VertexN`); a `VertexN` selection narrows to that one |
+| the frame | the origin is the vertex, `u`/`v` are the sketch's own axes (`Placement.Rotation` applied to local X/Y), `z` is its normal |
+| the drag | the pointer ray is intersected with that plane, so the two committed coordinates are a motion **inside the sketch** |
+| the commit | `sketch_drag` / `drag`, `element = "VertexN"`, `values = [u, v]` |
+| the edit | `VertexN` resolves to the nearest geometry endpoint (or a circle's centre) through `Placement.inverse()`, and `sketch.drag(index, pos, start + (u, v))` runs in one named transaction |
+
+The vertices are the **shape's**, so a corner shared by two segments is one grip and
+`VertexN` is the name a selection reports. A coincident corner matches two geometry
+endpoints — segment *i*'s end and segment *i+1*'s start — and the lowest index wins; the
+`Coincident` constraint is what drags the other half, so the choice does not change the
+result.
+
+**What the preview shows, and what it does not.** The grip rides the pointer's target in
+the sketch plane; the *solved* geometry appears when the drag is committed, because the
+solve is a document operation and a manipulator never edits the document during a drag.
+The result is still the constraint-correct one: dragging `Vertex2` of a horizontal edge
+by `(5, 3)` moves it 5 across and leaves the height alone, and the pad's `YLength` grows
+while its `ZLength` does not.
+
+A **fully constrained** vertex still gets a grip. The drag then reports the degrees of
+freedom it kept (`0`) and moves nothing, which is the honest refusal — a grip that
+disappeared would look like a broken handle.
+
 ## The solve
 
 The solver is `ferrocad_sketch_solver`; the sketch object calls it from `solve()` and from

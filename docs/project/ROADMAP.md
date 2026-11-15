@@ -99,8 +99,11 @@ the remaining forms. `--draft` is **93/0/0/1 over twelve files** at the 2026-11-
 the sketch constraint model landed on the same day, so `test_modification` is **33/0/0/0**
 and `Draft.make_sketch`/`draftify` run headless. Geometry now carries a stable id and a
 construction flag, so a constraint survives a deletion, construction geometry is
-constrainable but not drawn, and `-1`/`-2` name the root axes. The model — its encoding, its
-Python surface and the honest absence of a solver — is
+constrainable but not drawn, and `-1`/`-2` name the root axes. **The solve is real:**
+`ferrocad_sketch_solver` is a pure-Rust Levenberg-Marquardt solver with a rank analysis, so
+`solve()` moves geometry and returns the remaining degrees of freedom, and
+`RedundantConstraints`/`ConflictingConstraints` report 1-based indices. The contract — the
+encoding, the Python surface, the residual per kind and where the solver stops — is
 [`../developer/workbenches/sketch-constraints.md`](../developer/workbenches/sketch-constraints.md).
 - **The platform tail.** E1 mod events (first slice built), document-scoped settings, the
 gizmo-interface decision, and the backend-parity deferrals (§P5).

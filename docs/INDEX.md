@@ -241,7 +241,7 @@ The folder landing page is the reading order for the spikes and assessments.
 ### Closed history
 
 - [project/record/milestones.md](project/record/milestones.md) — the compact timeline and the current assessment.
-- [project/record/2026-11-15-p4-sketch-model.md](project/record/2026-11-15-p4-sketch-model.md) — the sketch model round: the constraint record and its Python surface, the stable geometry ids and construction flags behind it, the three Part seams `Draft.make_sketch` needed, the `PropertyAngle` unit bug and the green Draft gate.
+- [project/record/2026-11-15-p4-sketch-model.md](project/record/2026-11-15-p4-sketch-model.md) — the sketch model round: the constraint record and its Python surface, the stable geometry ids and construction flags behind it, the pure-Rust solver that replaced the PlanGCS plan, the three Part seams `Draft.make_sketch` needed, the `PropertyAngle` unit bug and the green Draft gate.
 - [project/record/2026-11-14-p2-boolean-seam.md](project/record/2026-11-14-p2-boolean-seam.md) — the P2 boolean/seam round: one general-fuse build, vertex images, `Edge.Orientation`/`Placement`, the wire wrapper, `Face.addWire` and the circle frame, the signed boolean tolerance, and the reverted `close_holes` experiment.
 - [project/record/2026-11-13-november-round.md](project/record/2026-11-13-november-round.md) — the November round: the OCCT Rust boundary, the browser shell, the host/backend split, backend parity, the mod format, the two regressions found at rotation, and the manipulator editor round.
 - [project/record/TODO-14-11-2026.md](project/record/TODO-14-11-2026.md) — the closed 2026-11-14 backlog: the manipulator day, the startup sample, the boolean containers, the sub-shape seam and the open P2–P6 work.

@@ -1,33 +1,36 @@
-# Sketch constraints — the model, not the solver
+# Sketch constraints — the model and the solver
 
-Status: stable contract for the sketch constraint surface (`Sketcher::SketchObject` and
-`python/Sketcher`). It records what FerroCAD stores, what it diagnoses, and the decisions
-that keep it honest until P4 SK2 binds a solver.
+Status: stable contract for the sketch constraint surface (`Sketcher::SketchObject`,
+`python/Sketcher` and `ferrocad_sketch_solver`). It records what FerroCAD stores, how the
+solve works, what it diagnoses, and where it stops.
 
 ## The scope decision
 
-P4's scope is unchanged: **FerroCAD owns the constraint model, its storage, its
-selectors and its diagnostics; the numerical solve comes from PlanGCS (2D) or
-OndselSolver (3D).** `TODO-15-11-2026.md` §P4 holds that decision and the slices.
+P4's scope: **FerroCAD owns the constraint model, its storage, its selectors, its
+diagnostics and the solve.** The original plan was to bind upstream's C++ solver
+(PlanGCS for 2D, OndselSolver for 3D); SK2 replaced the 2D half with a pure-Rust solver
+instead, because PlanGCS would add an Eigen/Boost C++ closure to a workspace whose kernel
+is Rust, grow `target/` for a 30 MB sketch vocabulary, and is not even in the sparse
+upstream checkout this repository measures against. No contract gate required it. The
+stable API is behavioural — `solve()` returns degrees of freedom, `RedundantConstraints`
+and `ConflictingConstraints` name indices — so a later PlanGCS binding could replace the
+implementation behind the same contract. `TODO-15-11-2026.md` §P4 holds the decision.
 
-So `SketchObject.solve()` does **not** move geometry. It checks that every constraint
-names a geometry or root that exists and reports upstream's "converged" code (`0`), or
-`-1` when a reference dangles. A sketch whose dimensions are not yet satisfied by its
-geometry still reports `0`: the datum is the authored value, not a solved one.
-`RedundantConstraints` is empty for the same reason — with no solve there is no rank
-information to report, and an invented list would be worse than an empty one.
-
-This is the approximation the project rule asks to state at the call site (the Rust
-doc comments on `sketch_solve` and `sketch_redundant_constraints`) and here.
+`SketchObject.solve()` **moves geometry** and returns the remaining degrees of freedom
+(upstream's convention: `0` means fully constrained). `-1` means it did not solve — a
+dangling reference, a constraint the solver cannot apply, or a system that does not
+converge. Nothing is written in that case, so a failed solve never corrupts a sketch.
 
 ## Where it lives
 
 | Piece | File |
 | --- | --- |
+| The solver: parameterization, residuals, Levenberg-Marquardt, rank analysis | `crates/ferrocad_sketch_solver/` (depends only on `ferrocad_curves`) |
 | The document object, the model, the encoding and the Python descriptor | `crates/ferrocad_part_py/src/solids.rs` (the `Sketcher` section) |
+| The bridge between stored shapes/ids and the solver | `crates/ferrocad_part_py/src/sketch_solver.rs` |
 | The Python record type | `python/Sketcher/__init__.py` |
 | The `Part` seam `findPlane`/rotate/`LineSegment(curve, first, last)` support `Draft.make_sketch` needs | `crates/ferrocad_part_py/src/lib.rs`, `crates/ferrocad_part_py/src/curves.rs` |
-| Tests | `crates/ferrocad_part_py/tests/part_sketcher.rs`, `tests/test_sketch_constraints.py` |
+| Tests | `crates/ferrocad_sketch_solver/src/lib.rs`, `crates/ferrocad_part_py/tests/part_sketcher.rs`, `tests/test_sketch_constraints.py` |
 
 ## Storage and identity
 
@@ -112,11 +115,12 @@ every other object type, exactly as if the attribute did not exist):
 | `delConstraint(index)` | method | Remove one record by zero-based index |
 | `setDatum(index, value)` | method | Write a dimensional constraint's datum |
 | `getDatum(index)` | method | Read it; a non-dimensional kind is a `ValueError` |
-| `solve()` | method | `0` when every reference resolves, `-1` otherwise |
+| `solve()` | method | Solve; returns the remaining degrees of freedom (`0` = fully constrained) or `-1` |
 | `GeometryCount` | attribute | `len(Geometry)` — construction geometry is included |
 | `ConstraintCount` | attribute | number of stored records |
 | `Constraints` | attribute | the records as `Sketcher.Constraint` objects, in positional GeoIds |
-| `RedundantConstraints` | attribute | `[]` (no solver, no rank analysis) |
+| `RedundantConstraints` | attribute | 1-based indices of the constraints that add no rank (upstream's convention) |
+| `ConflictingConstraints` | attribute | 1-based indices of the constraints that cannot all hold |
 | `detectMissingPointOnPointConstraints(tol)` | method | Stage coincidences (geometry pairs and the root point) that carry no `Coincident` |
 | `makeMissingPointOnPointCoincident(includeSecond=True)` | method | Commit the staged ones; returns how many were added |
 | `detectMissingVerticalHorizontalConstraints(tol)` | method | Stage straight edges already aligned with an axis |
@@ -156,8 +160,90 @@ The keywords `First`, `FirstPos`, `Second`, `SecondPos`, `Third`, `ThirdPos`, `V
 the numbering as class attributes, and `Sketcher.GeoUndef` (`-2000`) is the value of a
 reference the constraint does not use — not `0`, because geometry `0` is a real curve.
 
+## The solve
+
+The solver is `ferrocad_sketch_solver`; the sketch object calls it from `solve()` and from
+`execute()` (a recompute keeps a sketch solved, as upstream's does).
+
+### Geometry and parameters
+
+| Stored geometry | Parameters |
+| --- | --- |
+| a point (`Part.Vertex`) | `(x, y)` |
+| a line segment | `(x1, y1, x2, y2)` |
+| a circle | `(cx, cy, r)` |
+| an arc | `(cx, cy, r, first, last)` |
+
+An edge reports its *basis* curve, so the edge's own parameter range is what turns a line
+into a segment and a circular edge into a circle (a whole turn) or an arc (anything
+shorter). Everything is solved in the sketch's local XY plane, which is the plane
+`Placement` moves afterwards. An ellipse, a spline or any other curve the solver does not
+parameterize is `Curve2d::Other`: it is carried through untouched, contributes no degrees
+of freedom, and is refused as a constraint reference by name.
+
+### Constraint equations
+
+Each constraint contributes one or more residual rows, built from values that carry their
+exact first derivatives (forward-mode accumulation, not a finite difference), so the
+Jacobian is analytic and two identical constraints give bit-identical rows — which is what
+makes the redundancy analysis trustworthy.
+
+| Kind | Row(s) |
+| --- | --- |
+| `Coincident` | `p − q` (two rows) |
+| `PointOnObject` | signed distance from the line, or `\|p − c\|² − r²` on a circle |
+| `Horizontal` / `Vertical` | `Δy` / `Δx` of a line, or of two points |
+| `Parallel` / `Perpendicular` | `cross(u, v) / (\|u\|\|v\|)` / `dot(u, v) / (\|u\|\|v\|)` |
+| `Tangent` | line·circle: `d² − r²`; circle·circle: `\|c₁ − c₂\|² − (r₁ + r₂)²` |
+| `Equal` | `\|u\| − \|v\|` for lines, `r₁ − r₂` for circles |
+| `Symmetric` | `p₁ + p₂ − 2p₃` (two rows) |
+| `Block` | one row per parameter: `xᵢ − xᵢ⁰` |
+| `Distance` | `\|p − q\|² − d²` (squared, so the row is smooth when the points meet) |
+| `DistanceX` / `DistanceY` | `Δx − d` / `Δy − d` |
+| `Radius` / `Diameter` | `r − d` / `2r − d` |
+| `Angle` | `cos θ(u, v) − cos(d)` |
+
+The iteration is Levenberg-Marquardt on the dense normal equations with a Cholesky solve
+and adaptive damping. It stops at `max\|r\| ≤ 1e-9`, at a vanishing step, or after 200
+iterations, whichever comes first.
+
+### Degrees of freedom, redundancy and conflicts
+
+* **DOF** = parameters − rank(J). The rank comes from Gram-Schmidt over the Jacobian rows
+  *in constraint order*, so a constraint that says nothing its predecessors did not say is
+  the one named.
+* **`RedundantConstraints`** is 1-based (Draft's `make_sketch` deletes with `idx - 1`). A
+  multi-row constraint is redundant only when *every* row is dependent; calling a partly
+  dependent constraint redundant would make deleting it destructive. The analysis runs
+  whether or not the system converges — redundancy is a statement about the equations.
+* **`ConflictingConstraints`** is also 1-based, and it is a diagnosis, not a residual
+  dump: when the system does not converge, the solver removes one constraint at a time and
+  names those whose removal lets the rest solve. That reports the constraint a user has to
+  change instead of the dozen rows a single bad datum drags off. If no single removal helps
+  (two independent conflicts), it falls back to the constraints still violated at the best
+  fit.
+
+`addConstraint` runs the solver's own residual code on the new record before storing it,
+so a constraint the solver could never apply is a `ValueError` at that point rather than a
+silent no-op in the next solve.
+
+### Where it stops
+
+* **A degenerate start.** The method is first-order. If the Jacobian is rank-deficient
+along the direction the solution needs — a horizontal line given `Vertical` *and* a length
+datum, where both rows are parallel at the start — the iteration cannot begin the rotation
+and reports `-1` with both constraints named. A sketch whose constraints are already
+nearly satisfied (the normal case, and the one `Draft.make_sketch` produces) has no such
+problem.
+* **A non-parameterized curve** is never moved and cannot be constrained.
+* **`Block`** pins a geometry at the position it had when the solve started, which is what
+  makes it idempotent across recomputes; it is not a stored reference point.
+
 ## What it refuses, and why
 
+- **A constraint that does not apply.** `addConstraint` runs the solver's residuals, so a
+  `Radius` on a line, a `Parallel` involving a circle, a `Tangent` without a circle or a
+  zero-length line is a `ValueError` naming the reason. Nothing is stored.
 - **Unknown constraint kinds.** `addConstraint` raises `ValueError` naming the type and
   listing the kinds it stores: `Coincident`, `PointOnObject`, `Vertical`, `Horizontal`,
   `Parallel`, `Perpendicular`, `Tangent`, `TangentViaPoint`, `Equal`, `Symmetric`, `Block`,
@@ -196,11 +282,18 @@ quantity, which is what the `.FCStd` writer already infers from the unit signatu
 
 - `Draft.make_sketch`/`Draft.draftify` for a three-point wire: `test_modification.py`
   **33/0/0/0**, and the `--draft` gate **93/0/0/1** (was 60/0/0/1).
+- `crates/ferrocad_sketch_solver/src/lib.rs` (**10** unit cases): a perturbed rectangle
+  closing, a distance and a radius datum, an arc radius, redundancy, a conflict, `Block`,
+  a refused radius-on-a-line, and unparameterized geometry carried through.
 - `crates/ferrocad_part_py/tests/part_sketcher.rs` (**16** cases): the model, the datum
   edits, the dangling record, the autoconstraint detection, identity across a deletion,
   construction addressability/exclusion, the root axes and `findPlane` on a wire.
-- `tests/test_sketch_constraints.py` (**29** cases): the record type, the document surface,
+- `tests/test_sketch_constraints.py` (**36** cases): the record type, the document surface,
   the identity and construction surface, the migration of a sketch without the identity
-  properties, the refusals, the empty redundancy list and the `.FCStd` round trip (ids,
-  flags, constraints and a root reference all survive a reload).
-- Part conformance stayed **531/0/0/12** after the seam changes.
+  properties, the refusals, the `.FCStd` round trip, and the end-to-end solve cases — a
+  rectangle closing with four degrees of freedom and honouring `DistanceX`/`DistanceY`, a
+  radius datum resizing a circle, a construction line driving the real profile, a redundant
+  duplicate at 1-based index 2, and a contradictory pair refused with the geometry left
+  untouched.
+- Part conformance stayed **531/0/0/12** after the seam changes; `workbenches` is
+  **859/0/0/3** and `base` **707/0/0/8**.

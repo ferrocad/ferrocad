@@ -110,3 +110,46 @@ been silently lost — such a sketch gains the properties through `addProperty` 
 **22 → 29** (including a `.FCStd` save/reload that checks the ids, the construction flags,
 the constraints and a root reference), `workbenches` **845 → 852** cases, the Draft gate
 unchanged at **93/0/0/1**, and Part conformance unchanged at **531/0/0/12**.
+
+## 7. The solver round (P4 SK2)
+
+SK2 was planned as a binding to upstream's PlanGCS. It became a **pure-Rust solver**
+instead:
+
+| | PlanGCS | `ferrocad_sketch_solver` |
+| --- | --- | --- |
+| Dependencies | C++ toolchain, Eigen headers, a Boost graph header | `ferrocad_curves` |
+| `target/` | the Eigen/Boost closure | a single small `rlib` |
+| Availability | not in the sparse upstream checkout this repo measures | in the workspace |
+| Licence | LGPL-2.1+ (compatible, but another obligation to track) | the workspace's own |
+| Contract | any | behaviour is the contract: `solve()`, DOF, redundancy, conflicts |
+
+No contract gate required PlanGCS. The crate parameterizes points, line segments,
+circles and arcs — the parameterization PlanGCS uses — builds one residual per constraint
+from values that carry exact first derivatives, iterates Levenberg-Marquardt with a dense
+Cholesky solve, and reports `DOF = parameters − rank(J)` from a Gram-Schmidt analysis in
+constraint order.
+
+**What changed for a caller.** `solve()` now moves geometry and returns the remaining
+degrees of freedom (upstream's convention: `0` is fully constrained); `-1` still means
+"not solved" and now also covers an unconverged system, and nothing is written in that
+case. `RedundantConstraints` reports real 1-based indices, and `ConflictingConstraints`
+joins it: a conflict is diagnosed by removing one constraint at a time, so a single bad
+datum names itself instead of dragging a dozen rows off. `addConstraint` runs the solver's
+own residual code, so a `Radius` on a line is refused at that point rather than ignored by
+the next solve. `SketchObject.execute` solves too, which is what keeps a recomputed sketch
+solved the way upstream's does.
+
+**Where it stops.** A first-order method cannot start from a configuration whose Jacobian
+is rank-deficient along the needed direction (a horizontal line given `Vertical` *and* a
+length datum); that reports `-1` with both constraints named. Ellipses and splines are
+stored, drawn and constrained-never: they are carried through the solve untouched. `Block`
+pins at the position the solve started from, which makes it idempotent rather than a stored
+reference point. All three are in the contract page.
+
+**Measured.** `ferrocad_sketch_solver` **10** unit cases; `part_sketcher` **16** (the
+DOF assertions replaced the old `solve() == 0`); `tests/test_sketch_constraints.py`
+**29 → 36** with the end-to-end solve cases (rectangle, datums, circle radius,
+construction-driven profile, redundancy, conflict refusal); `workbenches` **852 → 859**;
+the Draft gate still **93/0/0/1** (with `make_sketch` now solving for real) and Part still
+**531/0/0/12**.

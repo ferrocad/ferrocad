@@ -39,6 +39,7 @@ FerroCAD is one workspace that produces two kinds of deliverable.
 | `ferrocad_theme` | `rlib` | crates.io | yes (tokens shared by the shell and widgets) |
 | `ferrocad_lineage` | `rlib` | crates.io | yes (topological-naming vocabulary) |
 | `ferrocad_curves` | `rlib` | crates.io | yes (curve math) |
+| `ferrocad_sketch_solver` | `rlib` | crates.io | yes (the 2-D sketch solver) |
 | `ferrocad_geom` | `rlib` | crates.io | yes (the geometry seam) |
 | `ferrocad_graphics` | `rlib` | crates.io | yes (scene drawing primitives) |
 | `ferrocad_ui` | `rlib` | crates.io | yes (Qt-free form tree) |
@@ -92,43 +93,44 @@ Dependencies are published before their dependents:
 2. `ferrocad_theme`, `ferrocad_lineage`, `ferrocad_ui` (leaves; `ferrocad_ui` is
    deliberately Qt-, Python- and gpui-free).
 3. `ferrocad_curves` (depends on `ferrocad_types`).
-4. `ferrocad_core` (depends on `ferrocad_types`).
-5. `ferrocad_geom` (depends on `ferrocad_types`, `ferrocad_curves`,
+4. `ferrocad_sketch_solver` (depends on `ferrocad_curves`).
+5. `ferrocad_core` (depends on `ferrocad_types`).
+6. `ferrocad_geom` (depends on `ferrocad_types`, `ferrocad_curves`,
    `ferrocad_lineage`).
-6. `ferrocad_graphics` (depends on `ferrocad_types`, `ferrocad_theme`).
-7. `ferrocad_widgets` (depends on `ferrocad_theme` and `bite-gpui`).
-8. `ferrocad_inventor` (depends on `ferrocad_types`, `ferrocad_graphics`).
-9. `ferrocad_stage` (depends on `ferrocad_types`, `ferrocad_geom`,
-   `ferrocad_graphics`).
-10. `ferrocad_inventor_py`, `ferrocad_stage_py` (the Python bindings for the two
+7. `ferrocad_graphics` (depends on `ferrocad_types`, `ferrocad_theme`).
+8. `ferrocad_widgets` (depends on `ferrocad_theme` and `bite-gpui`).
+9. `ferrocad_inventor` (depends on `ferrocad_types`, `ferrocad_graphics`).
+10. `ferrocad_stage` (depends on `ferrocad_types`, `ferrocad_geom`,
+    `ferrocad_graphics`).
+11. `ferrocad_inventor_py`, `ferrocad_stage_py` (the Python bindings for the two
     above; `stage_py` is also a dev-dependency of `part_py`, so it must come
     first).
-11. `ferrocad_occt` (depends on `ferrocad_geom`, `ferrocad_curves`,
+12. `ferrocad_occt` (depends on `ferrocad_geom`, `ferrocad_curves`,
     `ferrocad_types`, and `ferrocad_part_cxx` from
     [`ferrocad/ferrocad_occt_cxx`](https://github.com/ferrocad/ferrocad_occt_cxx);
     **needs OCCT**). Publish `ferrocad_part_cxx` (and the sys crate it wraps)
     from the fork repository first.
-12. `ferrocad_part` (depends on `ferrocad_core`, `ferrocad_geom`,
+13. `ferrocad_part` (depends on `ferrocad_core`, `ferrocad_geom`,
     `ferrocad_curves`, `ferrocad_types`; OCCT is a *dev-dependency*, so publish
     `ferrocad_occt` first).
-13. `ferrocad_py` (depends on `ferrocad_core`; `rlib` + `cdylib`).
-14. `ferrocad_wgpu` (depends on `ferrocad_graphics`, `ferrocad_inventor`,
+14. `ferrocad_py` (depends on `ferrocad_core`; `rlib` + `cdylib`).
+15. `ferrocad_wgpu` (depends on `ferrocad_graphics`, `ferrocad_inventor`,
     `ferrocad_types`; `ferrocad_stage` is a dev-dependency).
-15. `ferrocad_viewport` (depends on `ferrocad_geom`, `ferrocad_graphics`,
+16. `ferrocad_viewport` (depends on `ferrocad_geom`, `ferrocad_graphics`,
     `ferrocad_inventor`, `ferrocad_stage`, `ferrocad_theme`, `ferrocad_types`).
-16. `ferrocad_part_py` (depends on `ferrocad_core`, `ferrocad_curves`,
-    `ferrocad_geom`, `ferrocad_occt`, `ferrocad_part`, `ferrocad_py`;
-    `ferrocad_stage_py` is a dev-dependency; **needs OCCT**).
-17. `ferrocad_shell_api` (depends on `ferrocad_types`, `ferrocad_stage`,
+17. `ferrocad_part_py` (depends on `ferrocad_core`, `ferrocad_curves`,
+    `ferrocad_geom`, `ferrocad_occt`, `ferrocad_part`, `ferrocad_py`,
+    `ferrocad_sketch_solver`; `ferrocad_stage_py` is a dev-dependency; **needs OCCT**).
+18. `ferrocad_shell_api` (depends on `ferrocad_types`, `ferrocad_stage`,
     `ferrocad_inventor`, `ferrocad_geom`; no gpui, no CPython).
-18. `ferrocad_shell_core` (depends on `ferrocad_shell_api`, the widgets, UI,
+19. `ferrocad_shell_core` (depends on `ferrocad_shell_api`, the widgets, UI,
     inventor, stage, viewport and wgpu crates).
-19. `ferrocad_shell_rust` (depends on `ferrocad_core`, `ferrocad_part`,
+20. `ferrocad_shell_rust` (depends on `ferrocad_core`, `ferrocad_part`,
     `ferrocad_occt`, `ferrocad_geom`, `ferrocad_stage`, `ferrocad_shell_api`;
     **needs OCCT**).
-20. `ferrocad_shell_python` (depends on `ferrocad_shell_core` and the Python
+21. `ferrocad_shell_python` (depends on `ferrocad_shell_core` and the Python
     bindings; links libpython).
-21. `ferrocad` (the app binary; depends on `ferrocad_shell_python` and `ferrocad_py`).
+22. `ferrocad` (the app binary; depends on `ferrocad_shell_python` and `ferrocad_py`).
 
 `ferrocad_occt`, `ferrocad_part_py` and `ferrocad_shell_rust` are the crates whose
 `cargo publish` verify-build compiles against a kernel, so the publish job fetches

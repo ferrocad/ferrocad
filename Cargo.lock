@@ -2988,6 +2988,7 @@ dependencies = [
  "ferrocad_part_gui",
  "ferrocad_shell_python",
  "ferrocad_stage",
+ "ferrocad_types",
  "pyo3",
  "serde_json",
 ]

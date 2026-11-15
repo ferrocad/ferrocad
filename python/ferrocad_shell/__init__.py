@@ -815,7 +815,12 @@ def active_document() -> str:
 
 
 def interaction(
-    object_name: str, manipulator: str, action: str, element: str, values_json: str
+    object_name: str,
+    manipulator: str,
+    action: str,
+    element: str,
+    values_json: str,
+    host_json: str = "",
 ) -> str:
     """Apply a manipulator commit through the module that supports it.
 
@@ -828,6 +833,11 @@ def interaction(
     An **empty** ``object_name`` marks a *creating* commit (a tool that finished a
     shape): there is no object to resolve yet, so the provider receives ``None`` and
     creates it.
+
+    ``host_json`` names the body a creating tool anchored on (``{"object": "Box",
+    "element": "Face6"}``), or is empty when the tool started on the workplane. The
+    provider receives the resolved document object, so a drawing tool can imprint its
+    profile into the face instead of adding an object.
     """
     try:
         doc = _active_doc()
@@ -844,8 +854,20 @@ def interaction(
         values = [float(value) for value in json.loads(values_json)]
     except Exception as exc:
         return _json({"ok": False, "error": f"bad values: {exc}"})
+    host = None
+    if host_json:
+        try:
+            named = json.loads(host_json)
+        except Exception as exc:
+            return _json({"ok": False, "error": f"bad host: {exc}"})
+        host_name = (named or {}).get("object") or ""
+        if host_name:
+            host_object = doc.getObject(host_name)
+            if host_object is None:
+                return _json({"ok": False, "error": f"no object named {host_name}"})
+            host = {"object": host_object, "element": named.get("element") or ""}
 
-    result = FerroCAD.interaction(base, manipulator, action, element, values)
+    result = FerroCAD.interaction(base, manipulator, action, element, values, host)
     if result is None:
         # No provider owns this `(manipulator, action)`. ``null`` says exactly that: the
         # document half's own implementation is what should run (the generic transform

@@ -127,6 +127,65 @@ pub struct InteractionCommit {
     /// finishes a shape has none yet — the host must route such a commit to the
     /// workbench without resolving an entity first (see [`InteractionCommit::creating`]).
     pub creates: bool,
+    /// The body a **creating** tool anchored on, when it bound one.
+    ///
+    /// A drawing tool can start on the workplane or on a body: pressing a planar
+    /// `Face6` binds that face's plane *and* names the face, so the workbench can
+    /// **imprint** the drawn profile onto it instead of adding a separate object. The
+    /// shell resolves [`CreationHost::entity`] to the document name the script receives,
+    /// and reports [`CreationHost::element`] as the element, so the two outcomes are one
+    /// call apart.
+    pub host: Option<CreationHost>,
+}
+
+/// The body (and sub-element) a creating tool anchored on.
+///
+/// The stage knows entities, not document names: this is the neutral record the shell
+/// turns into `("Box", "Face6")` for the app script.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreationHost {
+    /// The body's stage entity id.
+    pub entity: u32,
+    /// The sub-element that was bound (`Face6`), when the anchor was one.
+    pub element: Option<String>,
+    /// The document object the shell resolved [`entity`](Self::entity) to.
+    ///
+    /// The stage never sets this: [`entity`](Self::entity) is the stable handle, and the
+    /// name belongs to the document half. The shell writes it in when it hands the commit
+    /// to a backend, so the app script receives `("Box", "Face6")` without the stage
+    /// learning any document vocabulary.
+    pub object: Option<String>,
+}
+
+impl CreationHost {
+    /// A host on the whole body (`element` is `None`).
+    pub fn body(entity: u32) -> Self {
+        Self {
+            entity,
+            element: None,
+            object: None,
+        }
+    }
+
+    /// A host on one of the body's sub-elements.
+    pub fn element(entity: u32, element: impl Into<String>) -> Self {
+        Self {
+            entity,
+            element: Some(element.into()),
+            object: None,
+        }
+    }
+
+    /// The shell's resolution of [`entity`](Self::entity) to a document object name.
+    pub fn resolved(mut self, object: impl Into<String>) -> Self {
+        self.object = Some(object.into());
+        self
+    }
+
+    /// The element name, when the anchor was one.
+    pub fn element_name(&self) -> Option<&str> {
+        self.element.as_deref()
+    }
 }
 
 impl InteractionCommit {
@@ -143,6 +202,7 @@ impl InteractionCommit {
             values: Vec::new(),
             readout: String::new(),
             creates: false,
+            host: None,
         }
     }
 
@@ -158,6 +218,12 @@ impl InteractionCommit {
     /// The builder form of the sub-element.
     pub fn with_element(mut self, element: impl Into<String>) -> Self {
         self.element = Some(element.into());
+        self
+    }
+
+    /// Name the body a creating commit anchored on.
+    pub fn with_host(mut self, host: CreationHost) -> Self {
+        self.host = Some(host);
         self
     }
 

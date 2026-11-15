@@ -34,10 +34,10 @@ use ferrocad_stage::Stage;
 use ferrocad_stage::shape::{BLENDED_DEPTH, GHOST_DEPTH, OVERLAY_DEPTH, WIRE_DEPTH_BIAS};
 use ferrocad_stage::{
     AxisStyle, FaceFrame, GizmoMode, GizmoModifiers, GizmoSet, GizmoStyle, GizmoTarget, GizmoValue,
-    GridSpec, GridStyle, InteractionCommit, Manipulator, MouseButton as StageButton, NumericField,
-    PointerEvent, PointerKind, RingSweep, ShapeItem, SnapCandidate, SnapContext, SnapKind, Tool,
-    ToolStatus, TransformGizmo, TransformTape, ViewProjection, Workplane, axis, feedback, grid,
-    snap_to_geometry_with,
+    GridSpec, GridStyle, HoverTarget, InteractionCommit, Manipulator, MouseButton as StageButton,
+    NumericField, PointerEvent, PointerKind, RingSweep, ShapeItem, SnapCandidate, SnapContext,
+    SnapKind, Tool, ToolStatus, TransformGizmo, TransformTape, ViewProjection, Workplane, axis,
+    feedback, grid, snap_to_geometry_with,
 };
 use ferrocad_stage::screen::{camera_position, point_segment_distance, project_device, scale_for};
 use ferrocad_theme::ui::{CHROME_ACTIVE, CHROME_ACTIVE_BG, CHROME_LINE, FG, MUTED};
@@ -4123,7 +4123,24 @@ impl<V: InventorView> InventorViewport<V> {
         let candidates = self.snap_candidates(hit);
         let snap = snap_to_geometry_with(&event, &self.camera, context.as_ref(), &candidates);
         self.set_snap_feedback(snap, context.map(|context| context.workplane));
+        // A creation tool that has placed nothing yet follows the pointer with its
+        // placement frame: the face's plane, the edge's direction, or the active
+        // workplane. It is resolved from the **snapped** point, so the ghost sits where
+        // the press will land and on the same plane the press binds.
+        let hover = if kind != PointerKind::Up
+            && self
+                .tool
+                .as_ref()
+                .is_some_and(|tool| tool.status().points == 0 && !tool.picks_workplane())
+        {
+            Some(self.hover_target(hit, snap.map(|snap| snap.point)))
+        } else {
+            None
+        };
         if let Some(tool) = self.tool.as_mut() {
+            if let Some(target) = hover.as_ref() {
+                tool.hover(Some(target));
+            }
             tool.on_event(&event, snap);
         }
         // A tool that needs no more input ends itself here: the second rectangle
@@ -4154,6 +4171,49 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
         self.transient = queue;
+    }
+
+    /// The placement a creation tool would use at `hit` (or on the active workplane).
+    ///
+    /// A planar face wins, then an edge, then the active workplane — the three rows of
+    /// `docs/developer/interaction/creation-loadout.md` §3.1. The frame's origin is the
+    /// point the press would use (the snap, or the ray hit), so the ghost and the
+    /// committed geometry are the same placement; a face or edge also names its body,
+    /// which is what makes the commit an **imprint** rather than a separate object.
+    fn hover_target(&self, hit: Option<&Hit>, snapped: Option<[f32; 3]>) -> HoverTarget {
+        let origin = snapped.map(|[x, y, z]| {
+            Vector3::new(f64::from(x), f64::from(y), f64::from(z))
+        });
+        if let Some(hit) = hit {
+            if let Some(face) = self.face_frame_at(hit) {
+                let element = self.part_name(hit.id.0, hit.part).unwrap_or_default();
+                let mut target = HoverTarget::of_face(hit.id.0, element, &face);
+                if let Some(origin) = origin {
+                    target = target.with_origin(origin);
+                }
+                return target;
+            }
+            if let Some(name) = self.part_name(hit.id.0, hit.part)
+                && name.starts_with("Edge")
+                && let Some(points) = self
+                    .stage
+                    .items()
+                    .iter()
+                    .find(|item| item.entity_id() == hit.id.0)
+                    .and_then(|item| item.edge_polyline(name))
+                && let Some(mut target) = HoverTarget::of_edge(hit.id.0, name, &points)
+            {
+                if let Some(origin) = origin {
+                    target = target.with_origin(origin);
+                }
+                return target;
+            }
+        }
+        let mut target = HoverTarget::of_workplane(&self.active_workplane.plane);
+        if let Some(origin) = origin {
+            target = target.with_origin(origin);
+        }
+        target
     }
 
     /// The hosted gizmo entry and its target under a device position, if any. The set
@@ -12845,6 +12905,42 @@ mod tests {
             max_alpha(&view.grid_queue.packets[0]) < world_alpha * 0.5,
             "the world grid recedes under a local plane"
         );
+    }
+
+    #[test]
+    fn a_drawing_tool_anchors_on_the_face_under_the_pointer() {
+        use ferrocad_stage::{RectangleTool, Stage};
+
+        let mut view = identity_viewport(Scene::default());
+        view.set_stage(Stage::new().with_item(named_slab()));
+        view.set_tool(Some(Box::new(RectangleTool::new())));
+        view.refresh();
+
+        // Over Face1 (the negative-`x` half of the slab) with nothing placed: the ghost
+        // slot holds the anchor cue, and the cue lies in the face's plane.
+        assert!(view.handle_pointer([30.0, 50.0]));
+        let cue = view
+            .tool
+            .as_ref()
+            .expect("the tool is armed")
+            .items()[2]
+            .positions()
+            .to_vec();
+        assert_eq!(cue.len(), 4, "the marker's four corners");
+        for point in &cue {
+            assert!((point[2] - 0.5).abs() < 1e-5, "on the face: {point:?}");
+        }
+
+        // The first press binds Face1 as the session's host; the second completes the
+        // box, and the commit carries the face to the workbench.
+        assert!(view.handle_button([30.0, 50.0], 1, true));
+        assert!(view.handle_button([30.0, 50.0], 1, false));
+        assert!(view.handle_button([45.0, 62.0], 1, true));
+        let commit = view.take_interaction_commit().expect("a commit");
+        assert!(commit.creates);
+        let host = commit.host.as_ref().expect("the face rides on the commit");
+        assert_eq!(host.entity, 7);
+        assert_eq!(host.element_name(), Some("Face1"));
     }
 
     #[test]

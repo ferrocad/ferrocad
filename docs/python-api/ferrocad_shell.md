@@ -28,7 +28,7 @@ _Every entry point returns a JSON string._
 | `gpu_adapter() -> str` | The persisted viewport GPU adapter setting (``auto`` by default). |
 | `grid_summary() -> str` | The grid's provider and spacing for the shell's popover. |
 | `hello() -> str` | A first console line, proving the interpreter is live. |
-| `interaction(object_name: str, manipulator: str, action: str, element: str, values_json: str) -> str` | Apply a manipulator commit through the module that supports it. |
+| `interaction(object_name: str, manipulator: str, action: str, element: str, values_json: str, host_json: str = '') -> str` | Apply a manipulator commit through the module that supports it. |
 | `load_workbench_sources(payload_json: str = '[]') -> str` | Load workbench scripts **from data**: a fetched mod pack, with no filesystem. |
 | `load_workbenches(dirs_json: str = '[]') -> str` | Best-effort workbench loading. |
 | `manipulator_probe(payload_json: str) -> str` | What a workbench's kernel knows about one manipulator on one element, as JSON. |

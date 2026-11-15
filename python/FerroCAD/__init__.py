@@ -31,6 +31,7 @@ The document registry, the base value types and the parameters stay on
 
 from __future__ import annotations
 
+import re
 import sys
 
 import FreeCAD as _FreeCAD
@@ -132,28 +133,48 @@ def display_mesh_override(obj):
 
 
 def register_interaction_provider(provider):
-    """Let ``provider(obj, manipulator, action, element, values)`` apply an edit.
+    """Let ``provider(obj, manipulator, action, element, values, host=None)`` apply an edit.
 
     ``manipulator`` is the registry id of the manipulator that committed
     (``"dress_up"``), ``action`` the operation within it (``"fillet"``,
     ``"chamfer"``), ``element`` the sub-element name (or ``""``), and ``values``
-    the numbers in the manipulator's documented order. The provider returns a dict
+    the numbers in the manipulator's documented order. ``host`` is the body a
+    **creating** commit anchored on — ``{"object": <document object>, "element":
+    "Face6"}``, or ``None`` on the workplane — so a drawing tool can imprint its
+    profile into the face instead of adding an object. The provider returns a dict
     ``{"ok": bool, ...}`` (or ``None`` when it does not own the manipulator). The
     edit itself — creating the feature, wrapping it in a transaction, recomputing —
     belongs to the module, not to the shell.
+
+    A provider that predates ``host`` keeps working: the argument is passed **by name**,
+    so a provider whose signature does not take it refuses at the call's binding (no
+    positional slot can be captured by accident), and the older five-argument form is
+    retried. Only that exact refusal is retried — a ``TypeError`` from inside a provider
+    is still reported, not swallowed.
     """
     if provider not in _INTERACTION_PROVIDERS:
         _INTERACTION_PROVIDERS.append(provider)
 
 
-def interaction(obj, manipulator, action, element="", values=None):
+def interaction(obj, manipulator, action, element="", values=None, host=None):
     """Apply a manipulator commit through the first module that supports it."""
     values = list(values or [])
     for provider in _INTERACTION_PROVIDERS:
-        result = provider(obj, manipulator, action, element, values)
+        try:
+            result = provider(obj, manipulator, action, element, values, host=host)
+        except TypeError as exc:
+            if not _NO_HOST_ARGUMENT.search(str(exc)):
+                raise
+            result = provider(obj, manipulator, action, element, values)
         if result is not None:
             return result
     return None
+
+
+#: CPython's wording when a provider's signature has no ``host`` parameter. Matching on
+#: the message is what makes the fallback safe: a ``TypeError`` raised **inside** a
+#: provider does not mention the keyword, so it still surfaces instead of being retried.
+_NO_HOST_ARGUMENT = re.compile(r"unexpected keyword argument 'host'")
 
 
 def register_manipulator_provider(provider):

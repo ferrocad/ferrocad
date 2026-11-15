@@ -17,6 +17,7 @@ pub mod plane_points;
 pub mod polygon;
 pub mod rectangle;
 pub mod snap;
+pub mod target;
 pub mod tool;
 
 pub use arc::ArcTool;
@@ -26,7 +27,7 @@ pub use declarative::{
 };
 pub use frame::DragFrame;
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
-pub use manipulator::{InteractionCommit, Manipulator, NumericField};
+pub use manipulator::{CreationHost, InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
 pub use polygon::PolygonTool;
 pub use rectangle::RectangleTool;
@@ -34,4 +35,5 @@ pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,
     snap_to_geometry_with,
 };
+pub use target::{HoverTarget, TargetKind};
 pub use tool::{PolylineTool, TaggedPolyline, Tool, ToolStatus};

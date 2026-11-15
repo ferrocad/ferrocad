@@ -16,7 +16,9 @@ What this script adds:
 * the ``rectangle``, ``circle``, ``polygon`` and ``arc`` ``create`` interactions: the
   tool's world geometry in, one ``Part::Feature`` out, in one named transaction,
   through SimpleCAD's own builders (``simplecad.core.geometry``) when that package is
-  importable.
+  importable. The same commit **anchored on a planar face** imprints the profile into
+  the host body instead (``simplecad.document.operations.draw_profile`` / ``draw_arc``),
+  so the face divides into pickable sub-faces and no second object appears.
 
 That split is the point of the edition: **the tool collects world geometry, the
 script names the document object**. Every later SimpleCAD tool takes the same shape.
@@ -169,6 +171,45 @@ def _arc_edge(values):
     if not edge.isValid():
         raise ValueError("this arc could not be created; increase its radius")
     return edge
+
+
+def _imprint(host, element, name, shape_of, values, expected):
+    """Draw the committed profile **into** the face it was anchored on.
+
+    The tool committed world geometry that already lies in the face's plane, so the
+    modelling layer is the only judge of whether it fits: ``draw_profile`` (and
+    ``draw_arc`` for an open arc) re-derives the support face, divides it, and opens
+    **one** named transaction itself. No object is added and no view is rebuilt here:
+    the host gains faces, which is exactly what the next Slot 2 push/pull needs.
+
+    A profile that divides nothing is a refusal, not a silent success, and the
+    document is untouched (the package writes nothing when the split finds no face).
+    """
+    if _simplecad_operations is None:
+        return {
+            "ok": False,
+            "error": "imprinting needs the SimpleCAD modelling layer",
+        }
+    if len(values) < expected:
+        return {"ok": False, "error": "%s needs %d numbers" % (name, expected)}
+    try:
+        host.Shape.getElement(element)
+    except Exception as exc:  # noqa: BLE001 - an element the host cannot resolve
+        return {"ok": False, "error": str(exc)}
+    document = host.Document
+    try:
+        profile = shape_of(values)
+        before = len(host.Shape.Faces)
+        if name == "Arc":
+            _simplecad_operations.draw_arc(document, profile, preferred=host)
+        else:
+            _simplecad_operations.draw_profile(document, profile, host, name)
+        document.recompute()
+        if len(host.Shape.Faces) <= before:
+            raise ValueError("the profile did not divide %s" % element)
+    except Exception as exc:  # noqa: BLE001 - one bad commit must not break the shell
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "feature": host.Name}
 
 
 def _commit(name, shape_of, values, expected):
@@ -592,13 +633,14 @@ def _element_interaction(obj, manipulator, action, element, values):
 FerroCAD.register_manipulator_provider(_element_specs)
 
 
-def _interaction(obj, manipulator, action, element, values):
+def _interaction(obj, manipulator, action, element, values, host=None):
     """Apply one of this edition's commits, or defer (`None`).
 
-    Two families are ours: the drawing tools' `create` commits (below) and the element
-    verbs' `set` commits (`_element_interaction`). Every other manipulator belongs to
-    the Parametric script (the dress-up scrubber, the push/pull stem, the sketch
-    grips), whose provider runs beside this one.
+    Three families are ours: the drawing tools' `create` commits (below), the element
+    verbs' `set` commits (`_element_interaction`), and — when the tool anchored on a
+    body's **face** — the imprint of that commit into the host (`_imprint`). Every
+    other manipulator belongs to the Parametric script (the dress-up scrubber, the
+    push/pull stem, the sketch grips), whose provider runs beside this one.
 
     The name is underscored on purpose: ``interaction`` is the *shell* entry point
     (``ferrocad_shell.interaction``) the Python host calls by name, and shadowing it
@@ -613,7 +655,14 @@ def _interaction(obj, manipulator, action, element, values):
     if builder is None:
         return None
     name, shape_of, expected = builder
-    return _commit(name, shape_of, [float(value) for value in values], expected)
+    numbers = [float(value) for value in values]
+    host_object = (host or {}).get("object")
+    host_element = str((host or {}).get("element") or "")
+    if host_object is not None and host_element.startswith("Face"):
+        return _imprint(host_object, host_element, name, shape_of, numbers, expected)
+    # An edge host (or no host at all) creates a separate object: an outline drawn
+    # along an edge is a profile of its own, and a split needs a face to split.
+    return _commit(name, shape_of, numbers, expected)
 
 
 FerroCAD.register_interaction_provider(_interaction)

@@ -17,12 +17,15 @@ use std::f64::consts::{PI, TAU};
 
 use ferrocad_types::Vector3;
 
-use crate::frame::{DragFrame, MIN_DRAG, preview_frame, to_points, vector};
+use crate::frame::{DragFrame, MIN_DRAG, to_points, vector};
 use crate::input::{MouseButton, PointerEvent, PointerKind};
-use crate::interaction::InteractionCommit;
+use crate::interaction::{CreationHost, HoverTarget, InteractionCommit};
 use crate::shape::ShapeItem;
 use crate::snap::Snap;
-use crate::tool::{COMMITTED_COLOR, CURSOR_COLOR, Tool, ToolStatus, set_polyline, wire_item};
+use crate::tool::{
+    COMMITTED_COLOR, CURSOR_COLOR, HOVER_MARKER_HALF, Tool, ToolStatus, ghost_item,
+    set_ghost_loop, set_polyline, wire_item,
+};
 
 /// The tool's id in its status (the host's registry id is separate).
 pub const ARC_TOOL_ID: &str = "arc";
@@ -61,7 +64,12 @@ pub struct ArcTool {
     last_angle: Option<f64>,
     /// Three points on the arc — start, halfway, end — once the session is complete.
     placed: Option<[Vector3; 3]>,
-    /// Two fixed slots — `[committed, preview]` — whose mesh identities are stable.
+    /// The placement under the pointer while no centre is placed.
+    hover: Option<HoverTarget>,
+    /// The face placement the first press bound, if any.
+    session: Option<HoverTarget>,
+    /// Three fixed slots — `[committed, preview, ghost]` — whose mesh identities are
+    /// stable.
     items: Vec<ShapeItem>,
 }
 
@@ -81,7 +89,13 @@ impl ArcTool {
             sweep: 0.0,
             last_angle: None,
             placed: None,
-            items: vec![wire_item(COMMITTED_COLOR), wire_item(CURSOR_COLOR)],
+            hover: None,
+            session: None,
+            items: vec![
+                wire_item(COMMITTED_COLOR),
+                wire_item(CURSOR_COLOR),
+                ghost_item(CURSOR_COLOR),
+            ],
         }
     }
 
@@ -108,7 +122,22 @@ impl ArcTool {
         self.sweep = 0.0;
         self.last_angle = None;
         self.placed = None;
+        self.hover = None;
+        self.session = None;
         self.rebuild();
+    }
+
+    /// The frame the drag `center → cursor` names in this session's plane.
+    fn frame_at(&self, center: Vector3, cursor: Vector3) -> Option<DragFrame> {
+        match &self.session {
+            Some(session) => DragFrame::in_plane(center, cursor, &session.frame),
+            None => DragFrame::from_drag(center, cursor),
+        }
+    }
+
+    /// The body (and element) the session is anchored on, once the first press bound one.
+    pub fn host(&self) -> Option<&CreationHost> {
+        self.session.as_ref().and_then(|session| session.host.as_ref())
     }
 
     /// Turn the pointer's position into an accumulated sweep.
@@ -152,11 +181,21 @@ impl ArcTool {
             }
             return Some(to_points(&frame.arc(self.sweep)));
         }
-        preview_frame(self.center, self.cursor).map(|frame| to_points(&frame.ring()))
+        match (self.center, self.cursor) {
+            (Some(center), Some(cursor)) => self
+                .frame_at(center, vector(cursor))
+                .map(|frame| to_points(&frame.ring())),
+            _ => None,
+        }
     }
 
-    /// Rewrite the two slots from the current state.
+    /// Rewrite the slots from the current state.
     fn rebuild(&mut self) {
+        let marker = match (&self.hover, self.center.is_none()) {
+            (Some(target), true) => target.marker(HOVER_MARKER_HALF),
+            _ => Vec::new(),
+        };
+        set_ghost_loop(&mut self.items[2], &marker);
         let outline = self.outline();
         match (self.placed.is_some(), outline) {
             (true, Some(outline)) => {
@@ -192,13 +231,14 @@ impl Tool for ArcTool {
                 };
                 match self.center {
                     None => {
+                        self.session = self.hover.take().filter(HoverTarget::is_face);
                         self.center = Some(vector(point));
                         self.cursor = Some(point);
                     }
                     Some(center) if self.frame.is_none() => {
                         // The second click fixes the plane and the radius. A click
                         // that would make a hairline arc moves nothing.
-                        let Some(frame) = DragFrame::from_drag(center, vector(point)) else {
+                        let Some(frame) = self.frame_at(center, vector(point)) else {
                             return;
                         };
                         self.frame = Some(frame);
@@ -228,6 +268,14 @@ impl Tool for ArcTool {
 
     fn items(&self) -> &[ShapeItem] {
         &self.items
+    }
+
+    fn hover(&mut self, target: Option<&HoverTarget>) {
+        if self.center.is_some() {
+            return;
+        }
+        self.hover = target.cloned();
+        self.rebuild();
     }
 
     fn on_key(&mut self, key: &str, ctrl: bool) -> bool {
@@ -291,7 +339,7 @@ impl Tool for ArcTool {
         if frame.radius < ARC_MIN_RADIUS || self.sweep.abs() < ARC_MIN_SWEEP {
             return None;
         }
-        let commit = InteractionCommit::new(ARC_MANIPULATOR_ID, 0, ARC_ACTION_CREATE)
+        let mut commit = InteractionCommit::new(ARC_MANIPULATOR_ID, 0, ARC_ACTION_CREATE)
             .with_values(vec![
                 start.x, start.y, start.z, mid.x, mid.y, mid.z, end.x, end.y, end.z,
             ])
@@ -301,6 +349,9 @@ impl Tool for ArcTool {
                 frame.radius
             ))
             .creating();
+        if let Some(host) = self.host().cloned() {
+            commit = commit.with_host(host);
+        }
         // The commit owns the geometry: a second finish must not create a twin.
         self.clear();
         Some(commit)

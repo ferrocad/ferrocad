@@ -635,6 +635,16 @@ pub fn interaction(
 ) -> Result<Option<ApplyResult>, String> {
     let values = serde_json::to_string(&commit.values).map_err(|e| e.to_string())?;
     let element = commit.element.clone().unwrap_or_default();
+    // A creating commit may name the body it anchored on; the script receives the name
+    // and the element, never the stage's entity id. An empty string is "no host".
+    let host = match commit.host.as_ref() {
+        Some(host) => serde_json::json!({
+            "object": host.object.clone().unwrap_or_default(),
+            "element": host.element.clone().unwrap_or_default(),
+        })
+        .to_string(),
+        None => String::new(),
+    };
     let raw = Python::with_gil(|py| -> Result<String, String> {
         let module = py.import(entry_module()).map_err(|e| e.to_string())?;
         module
@@ -646,6 +656,7 @@ pub fn interaction(
                 commit.action.as_str(),
                 element,
                 values,
+                host,
             ))
             .map_err(|e| e.to_string())?
             .extract::<String>()

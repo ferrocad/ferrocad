@@ -10,15 +10,22 @@
 //!
 //! The commit carries the **centre, the exact first vertex, the plane's normal and the
 //! side count**.
+//!
+//! Anchored on a **planar face** the polygon is drawn in that face's plane (the
+//! [`HoverTarget`] the first press bound) and the commit names the face as its
+//! [`crate::interaction::CreationHost`], so the workbench can imprint it into the host.
 
 use ferrocad_types::Vector3;
 
-use crate::frame::{DragFrame, MIN_DRAG, preview_frame, to_points, vector};
+use crate::frame::{DragFrame, MIN_DRAG, to_points, vector};
 use crate::input::{MouseButton, PointerEvent, PointerKind};
-use crate::interaction::InteractionCommit;
+use crate::interaction::{CreationHost, HoverTarget, InteractionCommit};
 use crate::shape::ShapeItem;
 use crate::snap::Snap;
-use crate::tool::{COMMITTED_COLOR, CURSOR_COLOR, Tool, ToolStatus, set_polyline, wire_item};
+use crate::tool::{
+    COMMITTED_COLOR, CURSOR_COLOR, HOVER_MARKER_HALF, Tool, ToolStatus, ghost_item,
+    set_ghost_loop, set_polyline, wire_item,
+};
 
 /// The tool's id in its status (the host's registry id is separate).
 pub const POLYGON_TOOL_ID: &str = "polygon";
@@ -49,7 +56,12 @@ pub struct PolygonTool {
     /// The centre and the exact first vertex, once the session is complete.
     placed: Option<(Vector3, Vector3)>,
     sides: usize,
-    /// Two fixed slots — `[committed, preview]` — whose mesh identities are stable.
+    /// The placement under the pointer while nothing is placed.
+    hover: Option<HoverTarget>,
+    /// The face placement the first press bound, if any.
+    session: Option<HoverTarget>,
+    /// Three fixed slots — `[committed, preview, ghost]` — whose mesh identities are
+    /// stable.
     items: Vec<ShapeItem>,
 }
 
@@ -67,7 +79,13 @@ impl PolygonTool {
             cursor: None,
             placed: None,
             sides: DEFAULT_POLYGON_SIDES,
-            items: vec![wire_item(COMMITTED_COLOR), wire_item(CURSOR_COLOR)],
+            hover: None,
+            session: None,
+            items: vec![
+                wire_item(COMMITTED_COLOR),
+                wire_item(CURSOR_COLOR),
+                ghost_item(CURSOR_COLOR),
+            ],
         }
     }
 
@@ -88,7 +106,20 @@ impl PolygonTool {
 
     /// The frame the current state draws: `None` until the centre and a cursor exist.
     pub fn frame(&self) -> Option<DragFrame> {
-        preview_frame(self.center, self.cursor)
+        self.frame_at(self.center?, vector(self.cursor?))
+    }
+
+    /// The frame the drag `center → cursor` names in this session's plane.
+    fn frame_at(&self, center: Vector3, cursor: Vector3) -> Option<DragFrame> {
+        match &self.session {
+            Some(session) => DragFrame::in_plane(center, cursor, &session.frame),
+            None => DragFrame::from_drag(center, cursor),
+        }
+    }
+
+    /// The body (and element) the session is anchored on, once the first press bound one.
+    pub fn host(&self) -> Option<&CreationHost> {
+        self.session.as_ref().and_then(|session| session.host.as_ref())
     }
 
     /// Reset every piece of session state (the side count survives).
@@ -96,15 +127,22 @@ impl PolygonTool {
         self.center = None;
         self.cursor = None;
         self.placed = None;
+        self.hover = None;
+        self.session = None;
         self.rebuild();
     }
 
-    /// Rewrite the two slots from the current state.
+    /// Rewrite the slots from the current state.
     fn rebuild(&mut self) {
+        let marker = match (&self.hover, self.center.is_none()) {
+            (Some(target), true) => target.marker(HOVER_MARKER_HALF),
+            _ => Vec::new(),
+        };
+        set_ghost_loop(&mut self.items[2], &marker);
         let outline = match self.placed {
-            Some((center, vertex)) => {
-                DragFrame::from_drag(center, vertex).map(|frame| to_points(&frame.polygon(self.sides)))
-            }
+            Some((center, vertex)) => self
+                .frame_at(center, vertex)
+                .map(|frame| to_points(&frame.polygon(self.sides))),
             None => self
                 .frame()
                 .map(|frame| to_points(&frame.polygon(self.sides))),
@@ -142,12 +180,13 @@ impl Tool for PolygonTool {
                 };
                 match self.center {
                     None => {
+                        self.session = self.hover.take().filter(HoverTarget::is_face);
                         self.center = Some(vector(point));
                         self.cursor = Some(point);
                         self.rebuild();
                     }
                     Some(center) => {
-                        let Some(frame) = DragFrame::from_drag(center, vector(point)) else {
+                        let Some(frame) = self.frame_at(center, vector(point)) else {
                             return;
                         };
                         self.placed = Some((frame.center, frame.point(0.0)));
@@ -157,6 +196,14 @@ impl Tool for PolygonTool {
             }
             _ => {}
         }
+    }
+
+    fn hover(&mut self, target: Option<&HoverTarget>) {
+        if self.center.is_some() {
+            return;
+        }
+        self.hover = target.cloned();
+        self.rebuild();
     }
 
     fn items(&self) -> &[ShapeItem] {
@@ -204,12 +251,12 @@ impl Tool for PolygonTool {
 
     fn finish(&mut self) -> Option<InteractionCommit> {
         let (center, vertex) = self.placed?;
-        let frame = DragFrame::from_drag(center, vertex)?;
+        let frame = self.frame_at(center, vertex)?;
         if frame.radius < POLYGON_MIN_RADIUS {
             return None;
         }
         let normal = frame.normal();
-        let commit = InteractionCommit::new(POLYGON_MANIPULATOR_ID, 0, POLYGON_ACTION_CREATE)
+        let mut commit = InteractionCommit::new(POLYGON_MANIPULATOR_ID, 0, POLYGON_ACTION_CREATE)
             .with_values(vec![
                 center.x,
                 center.y,
@@ -224,6 +271,9 @@ impl Tool for PolygonTool {
             ])
             .with_readout(format!("{} sides · R {:.1} mm", self.sides, frame.radius))
             .creating();
+        if let Some(host) = self.host().cloned() {
+            commit = commit.with_host(host);
+        }
         // The commit owns the geometry: a second finish must not create a twin.
         self.clear();
         Some(commit)

@@ -847,6 +847,12 @@ impl Shell {
             cx.notify();
             return;
         };
+        // A creating commit that anchored on a body carries the stage's entity id; the
+        // document half speaks object names, so resolve it here, before the backend sees
+        // the commit. A host whose body no longer exists is dropped: the workbench then
+        // makes a separate object instead of imprinting on nothing.
+        let hosted = self.resolve_host(commit);
+        let commit = hosted.as_ref().unwrap_or(commit);
         let status = match crate::app::apply_interaction(cx, commit, &object) {
             Ok(result) if result.ok => {
                 self.after_document_edit(cx);
@@ -879,6 +885,22 @@ impl Shell {
         self.model.lock().unwrap().status = status.clone();
         self.console_line(status, cx);
         cx.notify();
+    }
+
+    /// The body (and element) the shell should name on a creating commit, as a copy of the
+    /// commit with the host resolved to a document object name.
+    ///
+    /// The stage records a `CreationHost` as an entity id plus an element; a script can
+    /// only act on names. `None` when the commit has no host, or when the entity has no
+    /// document object (a host that went away between the press and the commit).
+    fn resolve_host(&self, commit: &InteractionCommit) -> Option<InteractionCommit> {
+        let entity = commit.host.as_ref()?.entity;
+        let name = self.display.object_of(entity)?.to_string();
+        let mut resolved = commit.clone();
+        if let Some(host) = resolved.host.as_mut() {
+            host.object = Some(name);
+        }
+        Some(resolved)
     }
 
     /// A manipulator drag ended: **hold** its commit for the finish pair.

@@ -113,7 +113,9 @@ pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator
 pub use frame::DragFrame;
 pub use grid::{GridGeometry, GridSpec, GridStyle, Ground, MinorStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
-pub use interaction::{InteractionCommit, Manipulator, NumericField};
+pub use interaction::{
+    CreationHost, HoverTarget, InteractionCommit, Manipulator, NumericField, TargetKind,
+};
 pub use plane_points::PlanePointsTool;
 pub use rectangle::RectangleTool;
 pub use arc::ArcTool;

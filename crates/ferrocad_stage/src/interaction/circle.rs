@@ -9,15 +9,23 @@
 //! The commit carries the **centre, an exact rim point and the plane's normal**, so the
 //! workbench does not re-derive the plane from a rule: the circle the user saw is the
 //! circle that is committed.
+//!
+//! Anchored on a **planar face** the circle is drawn in that face's plane (the
+//! [`HoverTarget`] the first press bound) and the commit names the face as its
+//! [`crate::interaction::CreationHost`], so the workbench can imprint the rim into the
+//! host instead of making a second object.
 
 use ferrocad_types::Vector3;
 
-use crate::frame::{DragFrame, MIN_DRAG, preview_frame, to_points, vector};
+use crate::frame::{DragFrame, MIN_DRAG, to_points, vector};
 use crate::input::{MouseButton, PointerEvent, PointerKind};
-use crate::interaction::InteractionCommit;
+use crate::interaction::{CreationHost, HoverTarget, InteractionCommit};
 use crate::shape::ShapeItem;
 use crate::snap::Snap;
-use crate::tool::{COMMITTED_COLOR, CURSOR_COLOR, Tool, ToolStatus, set_polyline, wire_item};
+use crate::tool::{
+    COMMITTED_COLOR, CURSOR_COLOR, HOVER_MARKER_HALF, Tool, ToolStatus, ghost_item,
+    set_ghost_loop, set_polyline, wire_item,
+};
 
 /// The tool's id in its status (the host's registry id is separate).
 pub const CIRCLE_TOOL_ID: &str = "circle";
@@ -43,7 +51,12 @@ pub struct CircleTool {
     cursor: Option<[f32; 3]>,
     /// The centre and an exact in-plane rim point, once the session is complete.
     placed: Option<(Vector3, Vector3)>,
-    /// Two fixed slots — `[committed, preview]` — whose mesh identities are stable.
+    /// The placement under the pointer while nothing is placed.
+    hover: Option<HoverTarget>,
+    /// The face placement the first press bound, if any.
+    session: Option<HoverTarget>,
+    /// Three fixed slots — `[committed, preview, ghost]` — whose mesh identities are
+    /// stable.
     items: Vec<ShapeItem>,
 }
 
@@ -60,7 +73,13 @@ impl CircleTool {
             center: None,
             cursor: None,
             placed: None,
-            items: vec![wire_item(COMMITTED_COLOR), wire_item(CURSOR_COLOR)],
+            hover: None,
+            session: None,
+            items: vec![
+                wire_item(COMMITTED_COLOR),
+                wire_item(CURSOR_COLOR),
+                ghost_item(CURSOR_COLOR),
+            ],
         }
     }
 
@@ -71,7 +90,22 @@ impl CircleTool {
 
     /// The frame the current state draws: `None` until the centre and a cursor exist.
     pub fn frame(&self) -> Option<DragFrame> {
-        preview_frame(self.center, self.cursor)
+        let center = self.center?;
+        let cursor = self.cursor?;
+        self.frame_at(center, vector(cursor))
+    }
+
+    /// The frame the drag `center → cursor` names in this session's plane.
+    fn frame_at(&self, center: Vector3, cursor: Vector3) -> Option<DragFrame> {
+        match &self.session {
+            Some(session) => DragFrame::in_plane(center, cursor, &session.frame),
+            None => DragFrame::from_drag(center, cursor),
+        }
+    }
+
+    /// The body (and element) the session is anchored on, once the first press bound one.
+    pub fn host(&self) -> Option<&CreationHost> {
+        self.session.as_ref().and_then(|session| session.host.as_ref())
     }
 
     /// Reset every piece of session state.
@@ -79,13 +113,22 @@ impl CircleTool {
         self.center = None;
         self.cursor = None;
         self.placed = None;
+        self.hover = None;
+        self.session = None;
         self.rebuild();
     }
 
-    /// Rewrite the two slots from the current state.
+    /// Rewrite the slots from the current state.
     fn rebuild(&mut self) {
+        let marker = match (&self.hover, self.center.is_none()) {
+            (Some(target), true) => target.marker(HOVER_MARKER_HALF),
+            _ => Vec::new(),
+        };
+        set_ghost_loop(&mut self.items[2], &marker);
         let outline = match self.placed {
-            Some((center, rim)) => DragFrame::from_drag(center, rim).map(|frame| to_points(&frame.ring())),
+            Some((center, rim)) => self
+                .frame_at(center, rim)
+                .map(|frame| to_points(&frame.ring())),
             None => self.frame().map(|frame| to_points(&frame.ring())),
         };
         match (self.placed.is_some(), outline) {
@@ -121,6 +164,7 @@ impl Tool for CircleTool {
                 };
                 match self.center {
                     None => {
+                        self.session = self.hover.take().filter(HoverTarget::is_face);
                         self.center = Some(vector(point));
                         self.cursor = Some(point);
                         self.rebuild();
@@ -128,7 +172,7 @@ impl Tool for CircleTool {
                     Some(center) => {
                         // A click that would make a hairline circle moves nothing: the
                         // tool waits for a rim point that gives it a radius.
-                        let Some(frame) = DragFrame::from_drag(center, vector(point)) else {
+                        let Some(frame) = self.frame_at(center, vector(point)) else {
                             return;
                         };
                         self.placed = Some((frame.center, frame.point(0.0)));
@@ -138,6 +182,14 @@ impl Tool for CircleTool {
             }
             _ => {}
         }
+    }
+
+    fn hover(&mut self, target: Option<&HoverTarget>) {
+        if self.center.is_some() {
+            return;
+        }
+        self.hover = target.cloned();
+        self.rebuild();
     }
 
     fn items(&self) -> &[ShapeItem] {
@@ -182,17 +234,20 @@ impl Tool for CircleTool {
 
     fn finish(&mut self) -> Option<InteractionCommit> {
         let (center, rim) = self.placed?;
-        let frame = DragFrame::from_drag(center, rim)?;
+        let frame = self.frame_at(center, rim)?;
         if frame.radius < CIRCLE_MIN_RADIUS {
             return None;
         }
         let normal = frame.normal();
-        let commit = InteractionCommit::new(CIRCLE_MANIPULATOR_ID, 0, CIRCLE_ACTION_CREATE)
+        let mut commit = InteractionCommit::new(CIRCLE_MANIPULATOR_ID, 0, CIRCLE_ACTION_CREATE)
             .with_values(vec![
                 center.x, center.y, center.z, rim.x, rim.y, rim.z, normal.x, normal.y, normal.z,
             ])
             .with_readout(format!("Ø {:.1} mm", 2.0 * frame.radius))
             .creating();
+        if let Some(host) = self.host().cloned() {
+            commit = commit.with_host(host);
+        }
         // The commit owns the geometry: a second finish must not create a twin.
         self.clear();
         Some(commit)
@@ -202,7 +257,24 @@ impl Tool for CircleTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interaction::Tool;
+    use crate::gizmo::ManipulatorFrame;
+    use crate::interaction::{CreationHost, TargetKind, Tool};
+
+    /// A planar face target in the world `XZ` plane (`n = -Y`), hosted on `Face6`.
+    fn face_target() -> HoverTarget {
+        HoverTarget {
+            frame: ManipulatorFrame {
+                origin: Vector3::zero(),
+                basis: [
+                    Vector3::new(1.0, 0.0, 0.0),
+                    Vector3::new(0.0, 0.0, 1.0),
+                    Vector3::new(0.0, -1.0, 0.0),
+                ],
+            },
+            host: Some(CreationHost::element(7, "Face6")),
+            kind: TargetKind::Face,
+        }
+    }
 
     fn press(tool: &mut CircleTool, point: [f32; 3]) {
         tool.on_event(
@@ -303,5 +375,28 @@ mod tests {
         assert!(tool.cancel());
         assert!(!tool.completed(), "cancel drops the placed circle too");
         assert!(tool.finish().is_none());
+    }
+
+    #[test]
+    fn a_face_anchored_circle_is_drawn_in_the_faces_plane_and_names_it() {
+        let mut tool = CircleTool::new();
+        tool.hover(Some(&face_target()));
+        assert_eq!(tool.items()[2].positions().len(), 4, "the anchor cue");
+        press(&mut tool, [0.0, 0.0, 0.0]);
+        assert_eq!(tool.items()[2].positions().len(), 0, "the cue is spent");
+
+        // A rim point 3 across and 4 up the face, 9 out along its normal: the radius is
+        // the in-plane 5, and the other 9 is not part of the circle.
+        move_to(&mut tool, [3.0, 9.0, 4.0]);
+        assert_eq!(tool.frame().expect("a preview").radius, 5.0);
+        press(&mut tool, [3.0, 9.0, 4.0]);
+
+        let commit = tool.finish().expect("a commit");
+        assert_eq!(commit.values.len(), 9, "centre, rim, normal");
+        assert_eq!(&commit.values[6..9], &[0.0, -1.0, 0.0], "the face's normal");
+        assert_eq!(commit.readout, "Ø 10.0 mm");
+        let host = commit.host.as_ref().expect("the face rides on the commit");
+        assert_eq!(host.entity, 7);
+        assert_eq!(host.element_name(), Some("Face6"));
     }
 }

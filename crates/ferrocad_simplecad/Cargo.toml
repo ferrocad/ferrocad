@@ -49,6 +49,8 @@ pyo3 = { version = "0.25", features = ["auto-initialize"] }
 # The round trip boots the edition's own app script through the same host the shell
 # uses (one interpreter, one document registry).
 ferrocad_shell_python.workspace = true
+# The face-hosted round trip builds the placement frame the viewport resolves.
+ferrocad_types.workspace = true
 # The options tests read the declared handle dicts the script answers with.
 serde_json.workspace = true
 

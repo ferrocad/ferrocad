@@ -10,15 +10,23 @@
 //! The commit carries the **four corners** in world space, so the workbench that creates
 //! the face does not re-derive the plane: the geometry the user saw is the geometry that
 //! is committed.
+//!
+//! Anchored on a **planar face** the rule changes once: the first press binds that face's
+//! plane (the [`HoverTarget`] the viewport resolved), the box is drawn square to the
+//! face's own axes, and the commit names the face as its [`CreationHost`], so the
+//! workbench can imprint the outline into the host instead of making a second object.
 
 use ferrocad_types::Vector3;
 
 use crate::frame::drag_axes;
 use crate::input::{MouseButton, PointerEvent, PointerKind};
-use crate::interaction::InteractionCommit;
+use crate::interaction::{CreationHost, HoverTarget, InteractionCommit};
 use crate::shape::ShapeItem;
 use crate::snap::Snap;
-use crate::tool::{COMMITTED_COLOR, CURSOR_COLOR, Tool, ToolStatus, set_polyline, wire_item};
+use crate::tool::{
+    COMMITTED_COLOR, CURSOR_COLOR, HOVER_MARKER_HALF, Tool, ToolStatus, ghost_item,
+    set_ghost_loop, set_polyline, wire_item,
+};
 
 /// The tool's id in its status (the host's registry id is separate).
 pub const RECTANGLE_TOOL_ID: &str = "rectangle";
@@ -49,7 +57,14 @@ pub struct RectangleTool {
     cursor: Option<[f32; 3]>,
     /// The placed corners once the session is complete; read by [`Tool::completed`].
     placed: Option<([f32; 3], [f32; 3])>,
-    /// Two fixed slots — `[committed, preview]` — whose mesh identities are stable.
+    /// The placement under the pointer while nothing is placed.
+    hover: Option<HoverTarget>,
+    /// The placement the **first press** bound: its plane is the drawing plane and its
+    /// host is what the commit names. `None` on the workplane, where the drag's own
+    /// world plane decides.
+    session: Option<HoverTarget>,
+    /// Three fixed slots — `[committed, preview, ghost]` — whose mesh identities are
+    /// stable.
     items: Vec<ShapeItem>,
 }
 
@@ -66,7 +81,13 @@ impl RectangleTool {
             first: None,
             cursor: None,
             placed: None,
-            items: vec![wire_item(COMMITTED_COLOR), wire_item(CURSOR_COLOR)],
+            hover: None,
+            session: None,
+            items: vec![
+                wire_item(COMMITTED_COLOR),
+                wire_item(CURSOR_COLOR),
+                ghost_item(CURSOR_COLOR),
+            ],
         }
     }
 
@@ -76,8 +97,27 @@ impl RectangleTool {
     }
 
     /// The corners the current state would commit: `first` and the live cursor.
+    ///
+    /// Anchored on a face the box is square to the **face's** axes; on the workplane it
+    /// is square to the world axes of the plane the drag names.
     pub fn corners(&self) -> Option<[Vector3; 4]> {
-        rectangle_corners(self.first?, self.cursor?)
+        self.corners_at(self.first?, self.cursor?)
+    }
+
+    /// The corners two opposite points name, in this session's plane.
+    fn corners_at(&self, first: [f32; 3], second: [f32; 3]) -> Option<[Vector3; 4]> {
+        match &self.session {
+            Some(session) => {
+                let [u, v, _] = session.frame.basis;
+                rectangle_corners_in(first, second, &u, &v)
+            }
+            None => rectangle_corners(first, second),
+        }
+    }
+
+    /// The body (and element) the session is anchored on, once the first press bound one.
+    pub fn host(&self) -> Option<&CreationHost> {
+        self.session.as_ref().and_then(|session| session.host.as_ref())
     }
 
     /// Reset every piece of session state.
@@ -85,11 +125,20 @@ impl RectangleTool {
         self.first = None;
         self.cursor = None;
         self.placed = None;
+        self.hover = None;
+        self.session = None;
         self.rebuild();
     }
 
-    /// Rewrite the two slots from the current state.
+    /// Rewrite the slots from the current state.
     fn rebuild(&mut self) {
+        // The ghost is the anchor cue: a small square in the placement plane, shown
+        // until the first corner fixes the placement.
+        let marker = match (&self.hover, self.first.is_none()) {
+            (Some(target), true) => target.marker(HOVER_MARKER_HALF),
+            _ => Vec::new(),
+        };
+        set_ghost_loop(&mut self.items[2], &marker);
         match self.corners() {
             Some(corners) => {
                 let outline = outline(&corners);
@@ -125,6 +174,10 @@ impl Tool for RectangleTool {
                 };
                 match self.first {
                     None => {
+                        // The first press fixes the placement: a face target binds its
+                        // plane and names the body; the workplane leaves the drag's own
+                        // world plane to decide, as it always has.
+                        self.session = self.hover.take().filter(HoverTarget::is_face);
                         self.first = Some(point);
                         self.cursor = Some(point);
                         self.rebuild();
@@ -132,7 +185,7 @@ impl Tool for RectangleTool {
                     Some(first) => {
                         // A second click that would make a degenerate box moves nothing:
                         // the tool waits for a corner that gives it a width and a height.
-                        if rectangle_corners(first, point).is_none() {
+                        if self.corners_at(first, point).is_none() {
                             return;
                         }
                         self.placed = Some((first, point));
@@ -143,6 +196,14 @@ impl Tool for RectangleTool {
             }
             _ => {}
         }
+    }
+
+    fn hover(&mut self, target: Option<&HoverTarget>) {
+        if self.first.is_some() {
+            return;
+        }
+        self.hover = target.cloned();
+        self.rebuild();
     }
 
     fn items(&self) -> &[ShapeItem] {
@@ -181,18 +242,21 @@ impl Tool for RectangleTool {
     }
 
     fn finish(&mut self) -> Option<InteractionCommit> {
-        let (first, second) = self.placed?;
-        let corners = rectangle_corners(first, second)?;
+        self.placed?;
+        let corners = self.corners()?;
         let values = corners
             .iter()
             .flat_map(|corner| [corner.x, corner.y, corner.z])
             .collect::<Vec<_>>();
         let width = corners[1].sub(&corners[0]).length();
         let height = corners[3].sub(&corners[0]).length();
-        let commit = InteractionCommit::new(RECTANGLE_MANIPULATOR_ID, 0, RECTANGLE_ACTION_CREATE)
+        let mut commit = InteractionCommit::new(RECTANGLE_MANIPULATOR_ID, 0, RECTANGLE_ACTION_CREATE)
             .with_values(values)
             .with_readout(format!("{width:.1} × {height:.1} mm"))
             .creating();
+        if let Some(host) = self.host().cloned() {
+            commit = commit.with_host(host);
+        }
         // The commit owns the geometry: a second finish must not create a twin.
         self.clear();
         Some(commit)
@@ -206,21 +270,57 @@ impl Tool for RectangleTool {
 /// diagonal is dropped. `None` when that plane would make a side shorter than
 /// [`RECTANGLE_MIN_SIDE`] (a click, or a drag along the dropped axis only).
 pub fn rectangle_corners(first: [f32; 3], second: [f32; 3]) -> Option<[Vector3; 4]> {
-    let first = Vector3::new(f64::from(first[0]), f64::from(first[1]), f64::from(first[2]));
-    let second = Vector3::new(f64::from(second[0]), f64::from(second[1]), f64::from(second[2]));
+    let first = as_vector(first);
+    let second = as_vector(second);
     let delta = second.sub(&first);
     // The two world axes the box spans; the third is the plane's normal and is ignored, so
     // the rectangle is axis-square in the plane it was drawn in.
     let (u, v) = drag_axes(delta);
     let width = delta.dot(&u);
     let height = delta.dot(&v);
+    assemble(first, first.add(&u.scale(width)), width, &v, height)
+}
+
+/// The four corners of the box `first → second` drawn in the plane `(u, v)`.
+///
+/// This is the **face-anchored** rule: `u` and `v` are the bound face's own in-plane
+/// axes, so the box stays square to the face instead of to the world. `None` when a
+/// side would be shorter than [`RECTANGLE_MIN_SIDE`].
+pub fn rectangle_corners_in(
+    first: [f32; 3],
+    second: [f32; 3],
+    u: &Vector3,
+    v: &Vector3,
+) -> Option<[Vector3; 4]> {
+    let first = as_vector(first);
+    let delta = as_vector(second).sub(&first);
+    let width = delta.dot(u);
+    let height = delta.dot(v);
+    assemble(first, first.add(&u.scale(width)), width, v, height)
+}
+
+/// The four corners from the first corner, the first side's far point and the second
+/// in-plane axis, or `None` for a degenerate box.
+fn assemble(
+    first: Vector3,
+    along_end: Vector3,
+    width: f64,
+    v: &Vector3,
+    height: f64,
+) -> Option<[Vector3; 4]> {
     if width.abs() < RECTANGLE_MIN_SIDE || height.abs() < RECTANGLE_MIN_SIDE {
         return None;
     }
-    let along = u.scale(width);
-    let across = v.scale(height);
-    let far = first.add(&along).add(&across);
-    Some([first, first.add(&along), far, first.add(&across)])
+    let far = along_end.add(&v.scale(height));
+    Some([first, along_end, far, first.add(&v.scale(height))])
+}
+
+fn as_vector(point: [f32; 3]) -> Vector3 {
+    Vector3::new(
+        f64::from(point[0]),
+        f64::from(point[1]),
+        f64::from(point[2]),
+    )
 }
 
 /// The closed outline of four corners, as the polyline the preview and the ghost draw.
@@ -236,7 +336,24 @@ fn outline(corners: &[Vector3; 4]) -> Vec<[f32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interaction::Tool;
+    use crate::gizmo::ManipulatorFrame;
+    use crate::interaction::{CreationHost, TargetKind, Tool};
+
+    /// A planar face target in the world `XZ` plane (`n = -Y`), hosted on `Face6`.
+    fn face_target() -> HoverTarget {
+        HoverTarget {
+            frame: ManipulatorFrame {
+                origin: Vector3::zero(),
+                basis: [
+                    Vector3::new(1.0, 0.0, 0.0),
+                    Vector3::new(0.0, 0.0, 1.0),
+                    Vector3::new(0.0, -1.0, 0.0),
+                ],
+            },
+            host: Some(CreationHost::element(7, "Face6")),
+            kind: TargetKind::Face,
+        }
+    }
 
     fn click(tool: &mut RectangleTool, point: [f32; 3]) {
         tool.on_event(
@@ -338,5 +455,65 @@ mod tests {
         assert!(tool.cancel());
         assert!(!tool.completed(), "cancel drops the placed box too");
         assert!(tool.finish().is_none());
+    }
+
+    #[test]
+    fn hovering_a_face_draws_the_anchor_cue_and_clears_it_on_the_first_click() {
+        let mut tool = RectangleTool::new();
+        assert!(tool.items()[2].positions().is_empty(), "no cue before a hover");
+
+        tool.hover(Some(&face_target()));
+        assert_eq!(
+            tool.items()[2].positions().len(),
+            4,
+            "the ghost slot holds the marker's four corners"
+        );
+
+        click(&mut tool, [0.0, 0.0, 0.0]);
+        assert!(
+            tool.items()[2].positions().is_empty(),
+            "the anchor replaces the cue"
+        );
+        assert_eq!(
+            tool.host().and_then(|host| host.element_name()),
+            Some("Face6"),
+            "the first press binds the face"
+        );
+    }
+
+    #[test]
+    fn a_face_anchored_rectangle_is_square_to_the_face_not_the_world() {
+        let mut tool = RectangleTool::new();
+        tool.hover(Some(&face_target()));
+        click(&mut tool, [0.0, 0.0, 0.0]);
+        move_to(&mut tool, [10.0, 5.0, 4.0]);
+        // The drag has a `y` component, but the bound plane is `XZ`: the box has no
+        // depth into the face's normal. The world rule would have picked `XY`.
+        let corners = tool.corners().expect("a preview box");
+        for corner in corners {
+            assert_eq!(corner.y, 0.0, "{corner:?}");
+        }
+        assert_eq!(corners[2], Vector3::new(10.0, 0.0, 4.0));
+
+        click(&mut tool, [10.0, 5.0, 4.0]);
+        let commit = tool.finish().expect("a commit");
+        let host = commit.host.as_ref().expect("the face rides on the commit");
+        assert_eq!(host.entity, 7);
+        assert_eq!(host.element_name(), Some("Face6"));
+        assert_eq!(&commit.values[6..9], &[10.0, 0.0, 4.0]);
+    }
+
+    #[test]
+    fn a_workplane_hover_leaves_the_world_plane_rule_alone() {
+        let mut tool = RectangleTool::new();
+        tool.hover(Some(&HoverTarget::of_workplane(&crate::workplane::Workplane::world())));
+        click(&mut tool, [0.0, 0.0, 0.0]);
+        move_to(&mut tool, [10.0, 0.0, 6.0]);
+        // A vertical drag: the drag's own `XZ` plane, exactly as before the hover frame.
+        let corners = tool.corners().expect("a preview box");
+        assert_eq!(corners[2], Vector3::new(10.0, 0.0, 6.0));
+        click(&mut tool, [10.0, 0.0, 6.0]);
+        let commit = tool.finish().expect("a commit");
+        assert!(commit.host.is_none(), "the workplane is not a body");
     }
 }

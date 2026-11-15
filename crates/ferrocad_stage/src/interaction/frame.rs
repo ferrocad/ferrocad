@@ -15,6 +15,8 @@ use std::f64::consts::{PI, TAU};
 
 use ferrocad_types::Vector3;
 
+use crate::gizmo::ManipulatorFrame;
+
 /// The shortest drag, in millimetres, that names a plane or a radius.
 pub const MIN_DRAG: f64 = 1e-6;
 
@@ -79,6 +81,34 @@ impl DragFrame {
             radius,
             u,
             v: normal.cross(&u),
+            normal,
+        })
+    }
+
+    /// The frame `center → cursor` names **inside a given plane**, rather than the
+    /// world-axis plane [`drag_axes`] would pick.
+    ///
+    /// A tool anchored on a face draws in *that face's* plane: a circle on the top of a
+    /// tilted block is a circle on the block, not a circle on a world plane with the
+    /// pointer's sweep projected onto it. `plane` is the placement frame the hover
+    /// resolved (its `basis[0]`/`basis[1]` are in-plane, `basis[2]` the normal), and the
+    /// drag is measured in those two axes. `None` when the in-plane drag is too short to
+    /// have a radius.
+    pub fn in_plane(center: Vector3, cursor: Vector3, plane: &ManipulatorFrame) -> Option<Self> {
+        let [u, v, normal] = plane.basis;
+        let delta = cursor.sub(&center);
+        let along = delta.dot(&u);
+        let across = delta.dot(&v);
+        let radius = (along * along + across * across).sqrt();
+        if !radius.is_finite() || radius < MIN_DRAG {
+            return None;
+        }
+        let direction = u.scale(along).add(&v.scale(across)).scale(1.0 / radius);
+        Some(Self {
+            center,
+            radius,
+            u: direction,
+            v: normal.cross(&direction),
             normal,
         })
     }
@@ -190,6 +220,37 @@ mod tests {
     #[test]
     fn a_drag_straight_off_the_plane_is_refused() {
         assert!(DragFrame::from_drag(Vector3::zero(), Vector3::zero()).is_none());
+    }
+
+    #[test]
+    fn a_plane_drag_stays_on_that_plane_and_ignores_the_normal_component() {
+        // A face standing in world YZ: its `u` is +Y and `v` is +Z.
+        let plane = ManipulatorFrame {
+            origin: Vector3::zero(),
+            basis: [
+                Vector3::new(0.0, 1.0, 0.0),
+                Vector3::new(0.0, 0.0, 1.0),
+                Vector3::new(1.0, 0.0, 0.0),
+            ],
+        };
+        let frame = DragFrame::in_plane(
+            Vector3::zero(),
+            // A drag with an off-plane `x` component of 5.
+            Vector3::new(5.0, 3.0, 4.0),
+            &plane,
+        )
+        .expect("a frame");
+        assert_eq!(frame.radius, 5.0, "the in-plane length (3, 4)");
+        assert_eq!(frame.normal(), Vector3::new(1.0, 0.0, 0.0));
+        assert!(close(frame.u, Vector3::new(0.0, 0.6, 0.8)), "{:?}", frame.u);
+        // Every rim point stays in the plane, which is what makes the profile imprint.
+        for point in frame.ring() {
+            assert!(point.x.abs() < 1e-12, "{point:?}");
+        }
+        // A drag along the normal alone names no plane radius.
+        assert!(
+            DragFrame::in_plane(Vector3::zero(), Vector3::new(5.0, 0.0, 0.0), &plane).is_none()
+        );
     }
 
     #[test]

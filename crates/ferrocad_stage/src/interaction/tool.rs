@@ -7,6 +7,7 @@
 
 use crate::input::{MouseButton, PointerEvent, PointerKind};
 use crate::interaction::InteractionCommit;
+use crate::scene::shape::GHOST_SURFACE_ALPHA;
 use crate::shape::{DrawMode, ShapeItem};
 use crate::snap::Snap;
 use crate::workplane::Workplane;
@@ -146,6 +147,15 @@ pub trait Tool {
     fn completed(&self) -> bool {
         false
     }
+
+    /// The host under the pointer, while this tool is armed and has placed no point.
+    ///
+    /// A creation tool that draws a ghost can place it on the hovered plane before the
+    /// first press: the frame is the face's (or the edge's, or the active workplane's),
+    /// resolved from the same pick the press will bind. `None` when the pointer left the
+    /// scene. The default ignores it — a polyline anchors on its own clicks and needs no
+    /// placement frame — so a tool that does not care costs nothing.
+    fn hover(&mut self, _target: Option<&crate::interaction::HoverTarget>) {}
 }
 
 /// The polyline tool's id in its status (the host's registry id is separate).
@@ -181,6 +191,14 @@ pub const DRAG_THRESHOLD_PIXELS: f64 = 5.0;
 pub(crate) const COMMITTED_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 /// The default colour of the in-progress band, marker and plane preview.
 pub(crate) const CURSOR_COLOR: [f32; 4] = [1.0, 0.2, 1.0, 1.0];
+
+/// The half-width, in millimetres, of the anchor cue a creation tool shows on hover.
+///
+/// The cue is a small square in the placement plane, so its size is fixed in world
+/// space (a zoom-independent screen size would need the camera, which a tool does not
+/// have). Two millimetres reads on a hand-sized part and is small enough to sit inside
+/// a face's outline on a larger one.
+pub(crate) const HOVER_MARKER_HALF: f32 = 2.0;
 
 /// A left press on a placed vertex, remembered until the release that ends the gesture.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -605,6 +623,52 @@ pub(crate) fn wire_item(color: [f32; 4]) -> ShapeItem {
         .with_draw_mode(DrawMode::Wireframe)
         .with_edge_color(color)
         .with_selectable(false)
+}
+
+/// A non-selectable **ghost surface** item: a translucent fill with its outline.
+///
+/// This is the creation tools' preview look (C4): the fill is
+/// [`GHOST_SURFACE_ALPHA`](crate::scene::shape::GHOST_SURFACE_ALPHA) of the tool's ink and
+/// the pass blends rather than writing depth, so the ghost reads over the body it is
+/// about to imprint instead of hiding it.
+pub(crate) fn ghost_item(color: [f32; 4]) -> ShapeItem {
+    ShapeItem::new(0)
+        .with_draw_mode(DrawMode::ShadedWithEdges)
+        .with_surface_color([color[0], color[1], color[2], GHOST_SURFACE_ALPHA])
+        .with_edge_color(color)
+        .with_blended_surface()
+        .with_selectable(false)
+}
+
+/// Rewrite `item` as the filled ghost of closed loop `points`, plus its outline.
+///
+/// A loop repeats its first point; the repeated one is dropped from the fill so the fan
+/// does not carry a degenerate triangle, and a loop too short to enclose area falls back
+/// to a plain polyline (the fill is skipped, the outline is not).
+pub(crate) fn set_ghost_loop(item: &mut ShapeItem, points: &[[f32; 3]]) {
+    let mut loop_points = points.to_vec();
+    if loop_points.len() > 3
+        && loop_points
+            .first()
+            .zip(loop_points.last())
+            .is_some_and(|(first, last)| first == last)
+    {
+        loop_points.pop();
+    }
+    if loop_points.len() < 3 {
+        set_polyline(item, points);
+        return;
+    }
+    let count = loop_points.len() as u32;
+    let mut triangles = Vec::with_capacity(3 * (count as usize - 2));
+    for index in 1..count - 1 {
+        triangles.extend_from_slice(&[0, index, index + 1]);
+    }
+    let mut edges = Vec::with_capacity(2 * count as usize);
+    for index in 0..count {
+        edges.extend_from_slice(&[index, (index + 1) % count]);
+    }
+    item.set_shape(loop_points, Vec::new(), triangles, edges);
 }
 
 /// Rewrite `item` as polyline `points` (`edges = [0,1,1,2,…]`). Fewer than two points

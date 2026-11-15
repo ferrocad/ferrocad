@@ -45,10 +45,14 @@ import Part  # noqa: F401  (links the kernel; registers Part::Feature)
 try:  # The modelling layer lives in the sibling checkout or an installed add-on.
     from simplecad.core import geometry as _simplecad_geometry
     from simplecad.document import operations as _simplecad_operations
+    from simplecad.modeling import slicing as _simplecad_slicing
+    from simplecad.surfaces import edit as _simplecad_edit
     from simplecad.surfaces import offset as _simplecad_offset
 except Exception:  # noqa: BLE001 - the edition works without the package
     _simplecad_geometry = None
     _simplecad_operations = None
+    _simplecad_slicing = None
+    _simplecad_edit = None
     _simplecad_offset = None
 
 #: The tool ids the edition registers in its `Contributions` (see `src/lib.rs`).
@@ -655,6 +659,321 @@ for _name, _command in (
 ):
     FreeCADGui.addCommand("SimpleCAD_" + _name, _command)
 del _name, _command
+
+
+# ---------------------------------------------------------------------------
+# The selection verbs: one table, one gate, one transaction
+#
+# SimpleCAD's `SURFACE`, `Modify` and block operations act on a **selection** rather
+# than on a pointer gesture. Each is wired here as `command -> gate -> pure function ->
+# one transaction`:
+#
+# * the **gate** is the part of `command_state.REQUIREMENTS` that can be checked cheaply
+#   — the object count and the element kind — and it refuses with a sentence that names
+#   what to select, leaving the document untouched;
+# * the **function** is the package's *pure* half (`surfaces/offset.py`,
+#   `surfaces/edit.py`, `document/operations.py`), never the `surfaces.operations`
+#   wrapper: those dispatch to a worker pool that an embedded interpreter cannot start
+#   (the same reason `_offset_element` calls `offset_faces` directly);
+# * the **transaction** is one undo step, opened either here (`_replace_shape`) or by the
+#   document half itself (`commit_form`, `commit_slicing`, `unite`, `apply_plan`).
+#
+# The interface is deliberately dense: a selection plus one documented default number.
+# The docked numeric row that would carry the number is C2 work (`ToolField`), so each
+# verb names its value in the status line and `Activated(value)` accepts a better one —
+# which is also how the round trip drives them.
+# ---------------------------------------------------------------------------
+
+
+class _Refusal(ValueError):
+    """A selection the verb cannot serve; reported as the command's status."""
+
+
+def _selection_pairs():
+    """The live selection as ``(object, (element, …))`` pairs."""
+    return [
+        (item.Object, tuple(item.SubElementNames or ()))
+        for item in FreeCADGui.Selection.getSelectionEx()
+        if getattr(item, "Object", None) is not None
+    ]
+
+
+def _one_body(items, what, *, required=False):
+    """``(object, [names])`` for a single body's selection."""
+    if not items:
+        raise _Refusal("select %s first" % what)
+    if len({obj.Name for obj, _ in items}) != 1:
+        raise _Refusal("select %s on one body" % what)
+    obj, names = items[0]
+    names = [name for _, elements in items for name in elements]
+    if required and not names:
+        raise _Refusal("select %s first" % what)
+    return obj, names
+
+
+def _indices(items, kind, what):
+    """The 0-based indices of one element kind, refusing a mixed selection."""
+    names = [name for _, elements in items for name in elements]
+    other = "faces" if kind == "Face" else "edges"
+    if any(not name.startswith(kind) for name in names):
+        raise _Refusal("%s: select %s only" % (what, other))
+    return sorted({int(name[len(kind):]) - 1 for name in names})
+
+
+def _replace_shape(obj, shape, label):
+    """Write ``shape`` onto ``obj`` in one transaction, refusing an invalid result."""
+    if not shape.isValid():
+        raise _Refusal("the result is not a valid shape; nothing was written")
+    document = obj.Document
+    document.openTransaction(label)
+    try:
+        obj.Shape = shape
+        document.recompute()
+        if _invalid(obj):
+            raise _Refusal("the body refused the edit; nothing was written")
+        document.commitTransaction()
+    except Exception:  # noqa: BLE001 - one transaction, then re-raise
+        document.abortTransaction()
+        raise
+
+
+def _new_shape(document, shape, label):
+    """Add ``shape`` as its own one-transaction object and return it."""
+    document.openTransaction(label)
+    try:
+        feature = document.addObject("Part::Feature", label.replace(" ", ""))
+        feature.Label = label
+        feature.Shape = shape
+        _add_appearance(feature)
+        document.recompute()
+        if _invalid(feature):
+            raise _Refusal("the result is not a valid shape; nothing was written")
+        document.commitTransaction()
+    except Exception:  # noqa: BLE001 - one transaction, then re-raise
+        document.abortTransaction()
+        raise
+    return feature
+
+
+def _verb_shell(thickness):
+    items = _selection_pairs()
+    obj, _names = _one_body(items, "faces to leave open")
+    faces = _indices(items, "Face", "Shell")
+    result, report = _simplecad_offset.shell(obj.Shape, faces, float(thickness))
+    _replace_shape(obj, result, "Shell")
+    return "shelled %s at %s mm (%d face(s) open)" % (
+        obj.Name,
+        thickness,
+        report.get("open_faces", len(faces)),
+    )
+
+
+def _verb_draft(angle):
+    items = _selection_pairs()
+    obj, _names = _one_body(items, "the walls to draft", required=True)
+    faces = _indices(items, "Face", "Draft")
+    result, report = _simplecad_offset.draft(obj.Shape, faces, float(angle), (0, 0, 1))
+    _replace_shape(obj, result, "Draft")
+    return "drafted %d face(s) of %s by %s°" % (len(faces), obj.Name, angle)
+
+
+def _verb_fill(_value=None):
+    items = _selection_pairs()
+    obj, _names = _one_body(items, "the rim edges to fill")
+    edges = _indices(items, "Edge", "Fill hole")
+    result, report = _simplecad_edit.fill(obj.Shape, edges or None)
+    _replace_shape(obj, result, "Fill hole")
+    return "filled %d opening(s) of %s" % (report.get("filled", 0), obj.Name)
+
+
+def _verb_remove_rounds(max_radius):
+    items = _selection_pairs()
+    obj, names = _one_body(items, "the body to un-round")
+    within = set(_indices(items, "Face", "Remove rounds")) if names else None
+    found = _simplecad_edit.find_rounds(obj.Shape, float(max_radius), within=within)
+    if not found:
+        raise _Refusal(
+            "no rounds up to %s mm here; raise the radius or pick the body" % max_radius
+        )
+    result, report = _simplecad_edit.remove_faces(
+        obj.Shape, [round_info["index"] for round_info in found]
+    )
+    _replace_shape(obj, result, "Remove rounds")
+    return "removed %d round(s) from %s" % (report.get("removed", len(found)), obj.Name)
+
+
+def _verb_unwrap(_value=None):
+    items = _selection_pairs()
+    obj, _names = _one_body(items, "one face to unwrap", required=True)
+    faces = _indices(items, "Face", "Unwrap")
+    if len(faces) != 1:
+        raise _Refusal("Unwrap: select exactly one face")
+    flat, report = _simplecad_edit.unwrap(obj.Shape.Faces[faces[0]])
+    feature = _new_shape(obj.Document, flat, "%sUnwrap" % obj.Name)
+    return "unwrapped %s as %s (%s mm²)" % (
+        obj.Name,
+        feature.Label,
+        round(float(report.get("area", 0.0)), 1),
+    )
+
+
+def _form(items, mode):
+    """Loft or Sweep: the document half's prepare/form/commit trio."""
+    if not items:
+        raise _Refusal("select %s profile(s) first" % mode.lower())
+    targets = _simplecad_operations.prepare_profiles(items, mode)
+    result = _simplecad_operations.form_preview(targets, mode)
+    feature = _simplecad_operations.commit_form(targets, mode, result)
+    return "%s of %d profile(s) into %s" % (
+        mode.lower(),
+        len(targets),
+        feature.Name,
+    )
+
+
+def _verb_loft(_value=None):
+    return _form(_selection_pairs(), "Loft")
+
+
+def _verb_sweep(_value=None):
+    return _form(_selection_pairs(), "Sweep")
+
+
+def _verb_union(_value=None):
+    items = _selection_pairs()
+    if any(elements for _, elements in items):
+        raise _Refusal("Union: select whole objects, not faces or edges")
+    objects = [obj for obj, _ in items]
+    if len(objects) < 2:
+        raise _Refusal("Union: select at least two objects")
+    target = _simplecad_operations.unite(objects)
+    return "united %d object(s) into %s" % (len(objects), target.Name)
+
+
+def _verb_intersect(_value=None):
+    items = _selection_pairs()
+    if len(items) < 2:
+        raise _Refusal("Intersect: select at least two faces or objects")
+    _simplecad_operations.intersect(items)
+    return "intersected %d selection(s)" % len(items)
+
+
+def _verb_slice(offset):
+    items = _selection_pairs()
+    if any(elements for _, elements in items):
+        raise _Refusal("Slice: select whole objects")
+    if not items:
+        raise _Refusal("Slice: select an object first")
+    targets = _simplecad_operations.prepare_slicing(items)
+    plane = _simplecad_slicing.cut_plane([obj.Shape for obj, _ in items], "Main")
+    preview = _simplecad_operations.preview_slicing(targets, plane, float(offset))
+    # The preview keeps `(side, shape)` pairs; the commit wants the shapes, optionally
+    # spread apart. `separate` is the adapter the GUI tool uses for the same reason.
+    planned = [
+        (obj, _simplecad_slicing.separate(pieces, plane.normal, 0.0))
+        for obj, pieces in preview
+    ]
+    pieces = _simplecad_operations.commit_slicing(targets, planned)
+    return "sliced into %d piece(s)" % len(pieces)
+
+
+def _verb_subdivide(divisions):
+    items = _selection_pairs()
+    obj, _names = _one_body(items, "one flat face to subdivide")
+    faces = _indices(items, "Face", "Subdivide")
+    target = _simplecad_operations.prepare_subdivision([(obj, ["Face%d" % (index + 1) for index in faces])])
+    rows = columns = int(divisions)
+    planned, regions = _simplecad_operations.preview_subdivision(target, rows, columns)
+    count = len(regions) if hasattr(regions, "__len__") else rows * columns
+    _simplecad_operations.commit_subdivision(target, planned, rows, columns, region_count=count)
+    return "subdivided %s into %d region(s)" % (obj.Name, count)
+
+
+def _verb_cleanup(_value=None):
+    items = _selection_pairs()
+    objects = [obj for obj, _ in items] or [
+        obj for obj in FreeCAD.ActiveDocument.Objects if getattr(obj, "Shape", None) is not None
+    ]
+    if not objects:
+        raise _Refusal("Cleanup: nothing to clean")
+    _simplecad_operations.cleanup(FreeCAD.ActiveDocument, objects)
+    return "cleaned %d object(s)" % len(objects)
+
+
+def _verb_heal(_value=None):
+    items = _selection_pairs()
+    objects = [obj for obj, _ in items]
+    if not objects:
+        raise _Refusal("Heal: select the objects to heal")
+    _simplecad_operations.heal(FreeCAD.ActiveDocument, objects)
+    return "healed %d object(s)" % len(objects)
+
+
+#: Verb -> (default number, commit, summary). The number is the value the command uses,
+#: and what `Activated(value)` overrides; a verb with no number is `None`.
+_VERBS = {
+    "Shell": (1.0, _verb_shell, "Hollow the body, leaving the picked faces open"),
+    "Draft": (5.0, _verb_draft, "Tilt the selected walls by an angle"),
+    "FillHole": (None, _verb_fill, "Close the openings in a surface"),
+    "RemoveRounds": (5.0, _verb_remove_rounds, "Remove rounds up to a radius"),
+    "Unwrap": (None, _verb_unwrap, "Flatten one face beside the part"),
+    "Loft": (None, _verb_loft, "Loft the selected profiles in order"),
+    "Sweep": (None, _verb_sweep, "Sweep a profile along a path"),
+    "Union": (None, _verb_union, "Join the selected objects into one solid"),
+    "Intersect": (None, _verb_intersect, "Split the crossing faces or objects"),
+    "Slice": (0.0, _verb_slice, "Slice the selected objects across an axis"),
+    "Subdivide": (3, _verb_subdivide, "Divide one flat face into a grid"),
+    "Cleanup": (None, _verb_cleanup, "Merge duplicate and touching geometry"),
+    "Heal": (None, _verb_heal, "Align nearly parallel, coplanar or axis-aligned geometry"),
+}
+
+
+def _run_verb(verb, value=None):
+    """Run one selection verb. A refusal is a status, never an exception."""
+    spec = _VERBS.get(verb)
+    if spec is None:
+        return {"ok": False, "status": "no such verb %s" % verb}
+    default, commit, _summary = spec
+    if _simplecad_operations is None or _simplecad_edit is None or _simplecad_offset is None:
+        return {
+            "ok": False,
+            "status": "%s needs the SimpleCAD package on the path" % verb.lower(),
+        }
+    try:
+        return {"ok": True, "status": commit(default if value is None else value)}
+    except Exception as exc:  # noqa: BLE001 - one refusal must not break the shell
+        return {"ok": False, "status": str(exc) or "%s failed" % verb.lower()}
+
+
+class _VerbCommand:
+    """A ``SimpleCAD_*`` command that runs one selection verb on the current selection."""
+
+    def __init__(self, verb):
+        self.verb = verb
+        self.default, _commit, self.summary = _VERBS[verb]
+
+    def GetResources(self):
+        tooltip = self.summary
+        if self.default is not None:
+            tooltip += " (%s by default)" % self.default
+        return {
+            "MenuText": self.verb,
+            "ToolTip": tooltip,
+            "Group": SURFACE,
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selection_pairs())
+
+    def Activated(self, value=None):
+        return _run_verb(self.verb, value)
+
+
+for _verb in _VERBS:
+    FreeCADGui.addCommand("SimpleCAD_" + _verb, _VerbCommand(_verb))
+del _verb
 
 
 def bootstrap(doc_name: str = "Sample") -> str:

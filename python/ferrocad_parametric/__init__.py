@@ -57,6 +57,11 @@ import FerroCADGui
 import Part  # noqa: F401  (links the kernel; registers Part::Feature/Fillet/Chamfer)
 import Sketcher
 
+try:  # The reference modelling layer, when the sibling checkout is on the path.
+    from simplecad.surfaces import edit as _simplecad_edit
+except Exception:  # noqa: BLE001 - Part alone is enough for everything below
+    _simplecad_edit = None
+
 # The shell's data functions (`bootstrap`, `model_tree`, `properties`,
 # `set_property`, `evaluate`, `stage_meshes`, `interaction`, ...).
 from ferrocad_shell import *  # noqa: F401,F403
@@ -2020,7 +2025,16 @@ def _delete_subshape(obj, elements, close, label):
     try:
         shape = obj.Shape
         closed = True
-        if faces:
+        if faces and close and _simplecad_edit is not None:
+            # The reference "remove and let the neighbours grow" engine: a pocket's floor
+            # and walls taken together heal back to the body they were cut from. Part's
+            # own sewing cannot grow a face, so it is the fallback below, not the rule.
+            indices = [int(name[4:]) - 1 for name in faces if name[4:].isdigit()]
+            if len(indices) != len(faces):
+                raise ValueError("only FaceN names can be removed this way")
+            shape, _report = _simplecad_edit.remove_faces(shape, indices)
+            closed = bool(shape.isClosed())
+        elif faces:
             shape, closed = _without_faces(shape, faces)
         if edges:
             shape = _without_edges(shape, edges)

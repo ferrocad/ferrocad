@@ -160,12 +160,73 @@ print("ok")
     select("Body", &["Face1"]);
     // A refused heal is a refusal, not a failure of the command: read the status.
     let refused = python::run_command("Part_HealFaces").expect("the bridge");
+    let message = refused.status.to_lowercase();
     assert!(
-        refused.status.contains("cannot heal") || refused.status.contains("opening"),
+        message.contains("cannot heal")
+            || message.contains("opening")
+            || message.contains("grow")
+            || message.contains("close"),
         "{}",
         refused.status
     );
     assert_eq!(faces(), 6, "a refused heal leaves the body alone");
+}
+
+/// The heal SimpleCAD actually means: a pocket's floor and walls go, the body grows back.
+#[test]
+fn healing_a_pocket_closes_the_body_again() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    fresh_document("LoadoutPocket");
+    let pocket = evaluate(
+        r#"
+import Part
+doc = FreeCAD.ActiveDocument
+body = doc.addObject("Part::Feature", "Body")
+body.Shape = Part.makeBox(10, 10, 10)
+doc.recompute()
+# Cut a 4 mm pocket into the top face and drop the splitter the cut leaves behind.
+pocket = Part.makeBox(4, 4, 4, FreeCAD.Vector(3, 3, 6))
+body.Shape = body.Shape.cut(pocket).removeSplitter()
+doc.recompute()
+assert len(body.Shape.Faces) == 11, len(body.Shape.Faces)
+floor = next(
+    index for index, face in enumerate(body.Shape.Faces, 1)
+    if abs(face.CenterOfMass.z - 6.0) < 1e-6 and face.normalAt(0, 0).z > 0.9
+)
+walls = [
+    index for index, face in enumerate(body.Shape.Faces, 1)
+    if abs(face.Area - 16.0) < 1e-6 and face.CenterOfMass.z > 6.5
+]
+print(" ".join("Face%d" % index for index in [floor] + walls))
+"#,
+    );
+    let names: Vec<&str> = pocket.split_whitespace().collect();
+    assert_eq!(names.len(), 5, "a floor and four walls: {names:?}");
+    select("Body", &names);
+    let healed = python::run_command("Part_HealFaces").expect("the bridge");
+    assert!(healed.ok, "{}", healed.status);
+
+    let closed = evaluate(
+        r#"
+body = doc.getObject("Body")
+assert len(body.Shape.Faces) == 6, len(body.Shape.Faces)
+assert body.Shape.isClosed(), "the pocket healed back into the box"
+assert abs(body.Shape.Volume - 1000.0) < 1e-6, body.Shape.Volume
+print("ok")
+"#,
+    );
+    assert_eq!(closed.trim(), "ok", "{closed}");
+
+    let undone = evaluate(
+        r#"
+doc.undo()
+doc.recompute()
+assert len(doc.getObject("Body").Shape.Faces) == 11, len(doc.getObject("Body").Shape.Faces)
+print("ok")
+"#,
+    );
+    assert_eq!(undone.trim(), "ok", "{undone}");
 }
 
 /// Two coplanar faces share a seam; deleting it is *merging* them, not removing anything.

@@ -7,20 +7,28 @@
 //! form a Python mod can declare, and [`plane_points::PlanePointsTool`] is the
 //! three-point workplane pick.
 
+pub mod arc;
+pub mod circle;
 pub mod declarative;
+pub mod frame;
 pub mod input;
 pub mod manipulator;
 pub mod plane_points;
+pub mod polygon;
 pub mod rectangle;
 pub mod snap;
 pub mod tool;
 
+pub use arc::ArcTool;
+pub use circle::CircleTool;
 pub use declarative::{
     DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape,
 };
+pub use frame::DragFrame;
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use manipulator::{InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
+pub use polygon::PolygonTool;
 pub use rectangle::RectangleTool;
 pub use snap::{
     Snap, SnapCandidate, SnapContext, SnapKind, nearest_feature, snap_to_geometry,

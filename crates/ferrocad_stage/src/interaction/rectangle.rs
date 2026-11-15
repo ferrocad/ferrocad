@@ -13,6 +13,7 @@
 
 use ferrocad_types::Vector3;
 
+use crate::frame::drag_axes;
 use crate::input::{MouseButton, PointerEvent, PointerKind};
 use crate::interaction::InteractionCommit;
 use crate::shape::ShapeItem;
@@ -200,24 +201,17 @@ impl Tool for RectangleTool {
 
 /// The rectangle's four corners, in order, from two opposite corners of the drag.
 ///
-/// The plane is the axis-aligned one that keeps both sides square to the world axes: the
-/// axis least aligned with the diagonal is the one dropped. `None` when that plane would
-/// make a side shorter than [`RECTANGLE_MIN_SIDE`] (a click, or a drag along the dropped
-/// axis only).
+/// The plane is the axis-aligned one that keeps both sides square to the world axes —
+/// [`drag_axes`], the rule every creation tool shares: the axis least aligned with the
+/// diagonal is dropped. `None` when that plane would make a side shorter than
+/// [`RECTANGLE_MIN_SIDE`] (a click, or a drag along the dropped axis only).
 pub fn rectangle_corners(first: [f32; 3], second: [f32; 3]) -> Option<[Vector3; 4]> {
     let first = Vector3::new(f64::from(first[0]), f64::from(first[1]), f64::from(first[2]));
     let second = Vector3::new(f64::from(second[0]), f64::from(second[1]), f64::from(second[2]));
     let delta = second.sub(&first);
-    let (x, y, z) = (delta.x.abs(), delta.y.abs(), delta.z.abs());
     // The two world axes the box spans; the third is the plane's normal and is ignored, so
     // the rectangle is axis-square in the plane it was drawn in.
-    let (u, v) = if z <= x && z <= y {
-        (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0))
-    } else if y <= x {
-        (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 1.0))
-    } else {
-        (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0))
-    };
+    let (u, v) = drag_axes(delta);
     let width = delta.dot(&u);
     let height = delta.dot(&v);
     if width.abs() < RECTANGLE_MIN_SIDE || height.abs() < RECTANGLE_MIN_SIDE {

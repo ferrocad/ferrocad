@@ -95,7 +95,7 @@ pub mod workplane;
 // The flat module paths predate the folder hierarchy and remain part of the stable
 // library surface: `ferrocad_stage::gizmo::…` and
 // `ferrocad_stage::transform::gizmo::…` name the same module.
-pub use interaction::{declarative, input, plane_points, rectangle, snap, tool};
+pub use interaction::{arc, circle, declarative, frame, input, plane_points, polygon, rectangle, snap, tool};
 pub use render::{axis, feedback, grid, screen};
 pub use scene::{shape, stage};
 pub use transform::{gizmo, measure_tape, protractor, session};
@@ -110,11 +110,15 @@ pub use gizmo::{
 };
 pub use axis::AxisStyle;
 pub use declarative::{DeclarativeHandle, DeclarativeKind, DeclarativeManipulator, DeclarativeShape};
+pub use frame::DragFrame;
 pub use grid::{GridGeometry, GridSpec, GridStyle, Ground, MinorStyle};
 pub use input::{MouseButton, PointerEvent, PointerKind, ViewProjection};
 pub use interaction::{InteractionCommit, Manipulator, NumericField};
 pub use plane_points::PlanePointsTool;
 pub use rectangle::RectangleTool;
+pub use arc::ArcTool;
+pub use circle::CircleTool;
+pub use polygon::PolygonTool;
 pub use screen::{HIT_PADDING_PIXELS, HIT_SLOP, HIT_TOLERANCE_PIXELS, STROKE_PIXELS, scale_for};
 pub use session::{TransformSession, TransformTape};
 pub use shape::{DrawMode, ShapeGeometry, ShapeItem};

@@ -27,32 +27,53 @@
 //! The other flags are the base app's: `--open model.FCStd`, `--script-host=…`,
 //! `--addons …`, `--render out.png` and `--stl out.stl`.
 
-use ferrocad_stage::{
-    MouseButton, PointerEvent, PointerKind, RectangleTool, Snap, SnapKind, Tool,
-};
+use ferrocad_stage::{MouseButton, PointerEvent, PointerKind, Snap, SnapKind};
 use pyo3::prelude::*;
 
-/// The `--check-init` payload: one kernel across the modules, the rectangle drawn
-/// through the real tool and the real script hook, and the command registered.
+/// The `--check-init` payload: one kernel across the modules, one shape from each of
+/// the four drawing tools through the real registry and the real script hook, and the
+/// four commands registered.
 const CHECK_INIT_SCRIPT: &str = r#"
+import math
 import FreeCAD, FreeCADGui, Part, Mesh, MeshPart
-from ferrocad_check_tool import draw_rectangle
+from ferrocad_check_tool import draw
 assert FreeCAD._kernel_id == Part._kernel_id == Mesh._kernel_id == MeshPart._kernel_id, (
     "the modules do not share one kernel: %r != %r != %r != %r"
     % (FreeCAD._kernel_id, Part._kernel_id, Mesh._kernel_id, MeshPart._kernel_id)
 )
-commands = FreeCADGui.listCommands()
-assert "SimpleCAD_Rectangle" in commands, [c for c in commands if c.startswith("SimpleCAD_")]
+missing = [
+    command for command in
+    ("SimpleCAD_Rectangle", "SimpleCAD_Circle", "SimpleCAD_Polygon", "SimpleCAD_Arc")
+    if command not in FreeCADGui.listCommands()
+]
+assert not missing, missing
 name = "__ferrocad_simplecad_check__"
 if FreeCAD.getDocument(name) is not None:
     FreeCAD.closeDocument(name)
 FreeCAD.newDocument(name)
-face = draw_rectangle()
+
+face = draw("rectangle", [(0, 0, 0), (10, 4, 0)])
 assert face.ShapeType == "Face", face.ShapeType
 assert face.isValid(), "the rectangle is not a valid face"
 assert abs(face.Area - 40.0) < 1e-6, face.Area
 assert abs(face.BoundBox.XLength - 10.0) < 1e-6, face.BoundBox
 assert abs(face.BoundBox.YLength - 4.0) < 1e-6, face.BoundBox
+
+circle = draw("circle", [(0, 0, 0), (5, 0, 0)])
+assert circle.ShapeType == "Face", circle.ShapeType
+assert abs(circle.Area - 25.0 * math.pi) < 1e-6, circle.Area
+
+# The default polygon has six sides at radius 10.
+polygon = draw("polygon", [(0, 0, 0), (10, 0, 0)])
+assert polygon.ShapeType == "Face", polygon.ShapeType
+assert abs(polygon.Area - 300.0 * math.sin(math.pi / 3.0)) < 1e-6, polygon.Area
+
+arc = draw("arc", [(0, 0, 0), (10, 0, 0), (0, 10, 0)])
+assert arc.ShapeType == "Edge", arc.ShapeType
+assert abs(arc.Length - 5.0 * math.pi) < 1e-6, arc.Length
+
+objects = sorted(obj.Name for obj in FreeCAD.ActiveDocument.Objects)
+assert len(objects) == 4, objects
 FreeCAD.closeDocument(name)
 "#;
 
@@ -76,12 +97,12 @@ fn main() {
         let result = ferrocad::check_init_args(&args).and_then(|()| {
             pyo3::Python::with_gil(|py| -> pyo3::PyResult<()> {
                 py.import("ferrocad_simplecad")?;
-                // The tool is Rust, so the check script reaches it as a small module:
-                // `DrawRectangle()` presses two world points through `Tool::on_event`,
-                // finishes through `Tool::finish`, and hands the commit to the real
-                // `interaction` hook. Nothing is reimplemented.
+                // The tools are Rust, so the check script reaches them as a small
+                // module: `draw(id, points)` presses the world points through
+                // `Tool::on_event`, finishes through `Tool::finish`, and hands the
+                // commit to the real `interaction` hook. Nothing is reimplemented.
                 let module = pyo3::types::PyModule::new(py, "ferrocad_check_tool")?;
-                module.add_function(wrap_pyfunction!(draw_rectangle, &module)?)?;
+                module.add_function(wrap_pyfunction!(draw, &module)?)?;
                 py.import("sys")?
                     .getattr("modules")?
                     .set_item("ferrocad_check_tool", module)?;
@@ -149,36 +170,44 @@ fn main() {
     );
 }
 
-/// `--check-init`'s window on the tool: two presses, the commit, the script's
-/// `interaction` hook, and the new object's `Shape`.
+/// `--check-init`'s window on a drawing tool: the pointer's moves and presses, the
+/// commit, the script's `interaction` hook, and the new object's `Shape`.
 ///
-/// This is the sequence the viewport drives — `Tool::on_event` for a press,
-/// `Tool::finish` for the commit, the `interaction` entry for the edit — so the
-/// check proves the tool rather than a parallel implementation of it.
+/// The tool comes from the edition's own registry, and this is the sequence the
+/// viewport drives — `Tool::on_event` for a move and a press, `Tool::finish` for the
+/// commit, the `interaction` entry for the edit — so the check proves the shipped tool
+/// rather than a parallel implementation of it. Each point is moved to before it is
+/// pressed, because a tool that measures a sweep (the arc) reads it from the pointer's
+/// motion.
 #[pyfunction]
-fn draw_rectangle(py: Python<'_>) -> PyResult<PyObject> {
-    let mut tool = RectangleTool::new();
-    for point in [[0.0_f32, 0.0, 0.0], [10.0, 4.0, 0.0]] {
-        let event = PointerEvent {
-            kind: PointerKind::Down,
-            position: [0, 0],
-            button: Some(MouseButton::Left),
-            hit: None,
-            projection: None,
-        };
-        tool.on_event(
-            &event,
-            Some(Snap {
-                point,
-                kind: SnapKind::Point,
-                local: None,
-                major: false,
-            }),
-        );
+fn draw(py: Python<'_>, tool: &str, points: Vec<(f32, f32, f32)>) -> PyResult<PyObject> {
+    let mut session = ferrocad_simplecad::contributions()
+        .tool_for(tool)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("no such tool {tool}"))
+        })?;
+    for (x, y, z) in points {
+        let point = [x, y, z];
+        let snap = Some(Snap {
+            point,
+            kind: SnapKind::Point,
+            local: None,
+            major: false,
+        });
+        for kind in [PointerKind::Move, PointerKind::Down] {
+            let event = PointerEvent {
+                kind,
+                position: [0, 0],
+                button: (kind == PointerKind::Down).then_some(MouseButton::Left),
+                hit: None,
+                projection: None,
+            };
+            session.on_event(&event, snap);
+        }
     }
-    let commit = tool.finish().ok_or_else(|| {
-        pyo3::exceptions::PyRuntimeError::new_err("the rectangle tool committed nothing")
-    })?;
+    let commit = session
+        .finish()
+        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(format!("the {tool} tool committed nothing")))?;
     // The shell sends `values` as JSON text, so the check does too.
     let values = format!(
         "[{}]",
@@ -200,16 +229,17 @@ fn draw_rectangle(py: Python<'_>) -> PyResult<PyObject> {
     let raw: String = answer.extract()?;
     let answer = py.import("json")?.call_method1("loads", (raw,))?;
     if answer.is_none() {
-        return Err(pyo3::exceptions::PyRuntimeError::new_err(
-            "no provider handled rectangle/create",
-        ));
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "no provider handled {}/{}",
+            commit.manipulator, commit.action
+        )));
     }
     let ok: bool = answer.get_item("ok")?.extract()?;
     if !ok {
         let error: String = answer
             .get_item("error")
             .and_then(|error| error.extract())
-            .unwrap_or_else(|_| "the script refused the rectangle".to_string());
+            .unwrap_or_else(|_| format!("the script refused the {tool}"));
         return Err(pyo3::exceptions::PyRuntimeError::new_err(error));
     }
     let name: String = answer.get_item("feature")?.extract()?;

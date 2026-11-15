@@ -179,14 +179,18 @@ The contract, matching FreeCAD (see the assessment and `InputDevice`/
 - **Viewport navigation**: a left-button drag on the scene (or a middle-button drag)
   orbits the camera around its pivot once past the click threshold, and the wheel
   zooms by scaling the eye distance. An armed creation tool never takes the drag: the
-  press is **held back** and the release decides. Back in place it is a click and the
-  tool receives it at the press position, so its point lands where the button went
-  down; past the threshold it is an orbit and the tool hears nothing (`PendingPress`).
-  A press the tool claims as its own gesture — dragging a vertex it placed, reported by
-  `Tool::owns_press` — is delivered at once and starts no orbit. The navigation cube's
-  own drag/snap keeps priority. Pointer positions are made surface-local the same way
+  press is **held back** and the release decides. Under the threshold it is a click and
+  the tool receives it at the **release** position — its ghost keeps following the
+  pointer while the button is down, so the point lands where the ghost is; past the
+  threshold it is an orbit and the tool hears nothing (`PendingPress`). A press the tool
+  claims as its own gesture — dragging a vertex it placed, reported by `Tool::owns_press`
+  — is delivered at once and starts no orbit. The navigation cube's own drag/snap keeps
+  priority. Pointer positions are made surface-local the same way
   `gpui_interop::surface_input` does it, and gpui's drag keeps delivering a gesture's
-  moves after the pointer leaves the viewport.
+  moves after the pointer leaves the viewport. A release **anywhere** ends the gesture:
+  gpui delivers `mouse_up` only to an element the pointer is still over, so the viewport
+  also binds `on_mouse_up_out`, and a drag let go over the chrome or outside the window
+  strands neither the orbit nor the tool's held press.
 - **Hardware G-buffer picking** (`ferrocad_wgpu::pick`): `WgpuRenderer::pick_at` renders
   the `[entity_id, part_idx]` / `[normal, topology]` / depth targets and reads one texel
   back, unprojecting the world point via the inverse view-projection. Exposed through

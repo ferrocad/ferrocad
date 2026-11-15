@@ -95,9 +95,11 @@ skipped rather than selected.
   dock and Search stay where they were while you draw.
 - **The camera still works while a pill is armed.** Dragging anywhere — over the plane,
   over a body, over empty space — orbits the view exactly as it does with no tool: a press
-  is only a click once you let go without moving. Release in place and the tool places its
-  next point; drag and the view turns and nothing is placed. The middle button navigates
-  anywhere, including mid-session.
+  is only a click once you let go without moving. The tool's ghost follows the pointer the
+  whole time, so release in place and the point lands where you see it; drag and the view
+  turns and nothing is placed. Letting go anywhere ends the drag — over the chrome or
+  outside the window too, not only over the canvas. The middle button navigates anywhere,
+  including mid-session.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that

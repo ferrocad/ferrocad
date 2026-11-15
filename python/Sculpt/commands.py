@@ -16,6 +16,7 @@ import FreeCAD
 import FreeCADGui
 
 from . import DEFAULT_BOX, DEFAULT_LEVELS, attach, box_cage, makeCage, makeSkin, nest
+from .objects import is_cage, is_skin
 
 GROUP = "Sculpt"
 
@@ -29,22 +30,6 @@ NEST_IN_BODY = "Sculpt_NestInBody"
 LEVEL_UP = "Sculpt_LevelUp"
 LEVEL_DOWN = "Sculpt_LevelDown"
 ATTACH_PROXIES = "Sculpt_AttachProxies"
-
-
-def is_cage(obj):
-    """Whether ``obj`` is a Sculpt cage (a `Mesh::FeaturePython` with `CagePoints`)."""
-    return bool(getattr(obj, "TypeId", "") == "Mesh::FeaturePython") and (
-        obj.getPropertyByName("CagePoints") is not None
-    )
-
-
-def is_skin(obj):
-    """Whether ``obj`` is a Sculpt skin (a `Part::FeaturePython` linking a cage)."""
-    return (
-        bool(getattr(obj, "TypeId", "") == "Part::FeaturePython")
-        and obj.getPropertyByName("Cage") is not None
-        and obj.getPropertyByName("Tolerance") is not None
-    )
 
 
 def cages(document):

@@ -30,6 +30,8 @@ import FreeCAD
 import Mesh
 import Part
 import Sculpt
+from Sculpt import display as cage_display
+from Sculpt import interaction as cage_interaction
 
 V = FreeCAD.Vector
 
@@ -303,6 +305,108 @@ class BodyTests(SculptCase):
         self.assertEqual(body.BaseFeature.Name, base.Name)
         self.assertEqual(Sculpt.role_of(body, feature), "tip")
         self.assertEqual(Sculpt.role_of(body, base), "base")
+
+
+class CageDisplayTests(SculptCase):
+    def test_the_row_publishes_the_control_points_it_draws(self):
+        points, faces = Sculpt.box_cage(20, 20, 20)
+        cage = Sculpt.makeCage(self.doc, "Cage", points, faces, levels=1)
+        self.doc.recompute()
+
+        row = cage_display.cage_display(cage)
+        self.assertIsNotNone(row)
+        base = len(row["positions"]) - len(cage.CagePoints)
+        self.assertEqual(base, cage.Mesh.CountPoints)
+        # Every control point is a stage vertex, and its part names it.
+        self.assertEqual(row["vertices"], list(range(base, base + 8)))
+        self.assertEqual(
+            row["parts"][1:], ["Point%d" % index for index in range(8)]
+        )
+        self.assertEqual(row["vertex_parts"], list(range(1, 9)))
+        # The preview is the surface and the hull is the edge set (12 edges).
+        self.assertEqual(len(row["triangles"]), 3 * cage.Mesh.CountFacets)
+        self.assertEqual(len(row["edges"]), 24)
+        self.assertEqual(row["display"], "shaded_edges")
+
+    def test_a_part_object_has_no_cage_row(self):
+        part = self.doc.addObject("Part::Feature", "Plain")
+        part.Shape = Part.makeBox(10, 10, 10)
+        self.assertIsNone(cage_display.cage_display(part))
+
+    def test_the_row_is_in_world_space(self):
+        points, faces = Sculpt.box_cage(20, 20, 20)
+        cage = Sculpt.makeCage(self.doc, "Cage", points, faces, levels=0)
+        cage.Placement = FreeCAD.Placement(V(100, 0, 0), FreeCAD.Rotation())
+        self.doc.recompute()
+        row = cage_display.cage_display(cage)
+        # The first control point is the box corner at the origin, now at x = 100.
+        self.assertAlmostEqual(row["positions"][-len(cage.CagePoints)][0], 100.0, places=6)
+
+
+class CageInteractionTests(SculptCase):
+    def make_bundle(self):
+        points, faces = Sculpt.box_cage(20, 20, 20)
+        cage = Sculpt.makeCage(self.doc, "Cage", points, faces, levels=1)
+        skin = Sculpt.makeSkin(self.doc, "Skin", cage)
+        self.doc.recompute()
+        return cage, skin
+
+    def test_a_point_move_is_one_undo_and_rebuilds_the_skin(self):
+        cage, skin = self.make_bundle()
+        before = skin.Shape.Volume
+
+        result = cage_interaction.interaction(
+            cage, "cage_point", "move", "Point6", [40.0, 20.0, 20.0]
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["point"], 6)
+        self.assertGreater(skin.Shape.Volume, before, "the skin followed the cage")
+        self.assertTrue(skin.Shape.isValid())
+
+        # One transaction, so one undo puts the point and the skin back.
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertAlmostEqual(skin.Shape.Volume, before, places=6)
+
+    def test_the_world_position_is_inverted_through_the_placement(self):
+        cage, _skin = self.make_bundle()
+        cage.Placement = FreeCAD.Placement(V(100, 0, 0), FreeCAD.Rotation())
+        self.doc.recompute()
+
+        result = cage_interaction.interaction(
+            cage, "cage_point", "move", "Point6", [140.0, 20.0, 20.0]
+        )
+        self.assertTrue(result["ok"], result)
+        # The stored point is local; the object's frame puts it back at 140.
+        self.assertAlmostEqual(cage.CagePoints[6].x, 40.0, places=6)
+        world = cage.Placement.multVec(cage.CagePoints[6])
+        self.assertAlmostEqual(world.x, 140.0, places=6)
+
+    def test_other_verbs_are_left_to_their_workbench(self):
+        cage, _skin = self.make_bundle()
+        self.assertIsNone(
+            cage_interaction.interaction(cage, "dress_up", "fillet", "Edge1", [2.0])
+        )
+        self.assertIsNone(
+            cage_interaction.interaction(cage, "push_pull", "extrude", "Face1", [5.0])
+        )
+
+    def test_a_bad_element_or_index_is_refused(self):
+        cage, _skin = self.make_bundle()
+        bad_element = cage_interaction.interaction(
+            cage, "cage_point", "move", "Face1", [0.0, 0.0, 0.0]
+        )
+        self.assertFalse(bad_element["ok"])
+        out_of_range = cage_interaction.interaction(
+            cage, "cage_point", "move", "Point99", [0.0, 0.0, 0.0]
+        )
+        self.assertFalse(out_of_range["ok"])
+        self.assertIn("Point99", out_of_range["error"])
+        # A Part object is not a cage.
+        part = self.doc.addObject("Part::Feature", "Plain")
+        self.assertFalse(
+            cage_interaction.interaction(part, "cage_point", "move", "Point0", [0.0] * 3)["ok"]
+        )
 
 
 class PersistenceTests(SculptCase):

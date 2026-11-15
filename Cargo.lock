@@ -2794,7 +2794,11 @@ version = "0.1.5"
 dependencies = [
  "ferrocad",
  "ferrocad_combined_py",
+ "ferrocad_geom",
+ "ferrocad_graphics",
  "ferrocad_shell_python",
+ "ferrocad_stage",
+ "ferrocad_types",
  "pyo3",
 ]
 

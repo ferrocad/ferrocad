@@ -34,8 +34,11 @@ import FreeCAD
 from ferrocad_parametric import *  # noqa: F401,F403
 from ferrocad_parametric import bootstrap as _parametric_bootstrap
 
+import FerroCAD
 import Sculpt
 import Sculpt.commands
+import Sculpt.display
+import Sculpt.interaction
 
 #: The demo objects this edition adds to the canonical sample.
 SAMPLE_CAGE = "SculptCage"
@@ -82,3 +85,8 @@ def seed_sample():
 
 # The command surface is part of importing the edition, as it is for Parametric.
 Sculpt.commands.register()
+# The cage grip's two halves: the display hook publishes the control points as stage
+# vertices (`Point0`…), and the interaction hook applies `cage_point/move`. Both are
+# idempotent and both defer to the Parametric hooks for everything else.
+FerroCAD.register_display_provider(Sculpt.display.cage_display)
+FerroCAD.register_interaction_provider(Sculpt.interaction.interaction)

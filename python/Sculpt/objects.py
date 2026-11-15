@@ -22,6 +22,25 @@ from .patches import patch_solid
 from .subdivision import cage_quads, catmull_clark, triangles
 
 
+def is_cage(obj):
+    """Whether ``obj`` is a Sculpt cage (a `Mesh::FeaturePython` with `CagePoints`)."""
+    return (
+        obj is not None
+        and getattr(obj, "TypeId", "") == "Mesh::FeaturePython"
+        and obj.getPropertyByName("CagePoints") is not None
+    )
+
+
+def is_skin(obj):
+    """Whether ``obj`` is a Sculpt skin (a `Part::FeaturePython` linking a cage)."""
+    return (
+        obj is not None
+        and getattr(obj, "TypeId", "") == "Part::FeaturePython"
+        and obj.getPropertyByName("Cage") is not None
+        and obj.getPropertyByName("Tolerance") is not None
+    )
+
+
 class CageProxy:
     """`execute` turns the control hull into a Catmull-Clark preview mesh."""
 

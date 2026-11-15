@@ -11,10 +11,13 @@
 //! display hooks; re-exporting the Parametric script is what keeps one definition
 //! of them instead of two that can drift.
 //!
-//! The edition contributes **no manipulator of its own yet**: the cage
-//! point/edge drag is the next piece, and this is where it will be added —
-//! `ferrocad::base_contributions().with_manipulator(…)` — the same way the
-//! Parametric edition contributes the edge dress-up and the push/pull stem.
+//! The edition contributes **one manipulator of its own**: the cage point grip
+//! ([`ferrocad_sculpt::cage_manipulator`]). It arms on a cage selection, draws a
+//! marker at every control point, and a drag commits `cage_point/move` with the
+//! point's new world position; the app script applies it in one transaction, so the
+//! preview mesh and the linked skin rebuild together. That is the same
+//! `with_manipulator` route the Parametric edition uses for the edge dress-up and
+//! the push/pull stem.
 //!
 //! Run it with `cargo run -p ferrocad_sculpt` (needs a display and OCCT).
 //!
@@ -94,9 +97,10 @@ fn main() {
         return;
     }
 
-    // The cage manipulator will be contributed here (see the crate doc); until
-    // then the edition is the base contributions and the script surface.
-    let contributions = ferrocad::base_contributions();
+    // The cage grip joins the base triad; the shell hosts it through the generic
+    // `Manipulator` seam and routes its commits to the app script.
+    let contributions =
+        ferrocad::base_contributions().with_manipulator(ferrocad_sculpt::cage_manipulator);
 
     if args.render.is_some() || args.stl.is_some() {
         match ferrocad::render_edition_headless("FerroCAD: Sculpt", "ferrocad_sculpt", &args) {

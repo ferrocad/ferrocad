@@ -15,6 +15,12 @@ What is here
     and the datum value. It is a data holder. The document object stores it and
     reports it back; nothing is solved.
 
+    ``First``/``Second``/``Third`` are upstream's GeoIds: a 0-based index into
+    the sketch's geometry list, ``-1`` for the X axis (whose start point is the
+    sketch root point) or ``-2`` for the Y axis. An unused reference is
+    :data:`GeoUndef` (``-2000``), as upstream's ``GeoEnum``; it is *not* ``0``,
+    because geometry ``0`` is a real curve.
+
     Accepted positional shapes, matching upstream:
 
     ``(type, geometry)``
@@ -40,6 +46,10 @@ What is here
     Upstream's point-position numbering as plain class attributes:
     ``none = 0``, ``start = 1``, ``end = 2``, ``mid = 3``.
 
+``GeoUndef``
+    Upstream's ``GeoEnum::GeoUndef`` (``-2000``): the value of a reference the
+    constraint does not use.
+
 What is deliberately **not** here
 ---------------------------------
 
@@ -57,7 +67,10 @@ What is deliberately **not** here
 
 from __future__ import annotations
 
-__all__ = ["Constraint", "PointPos"]
+__all__ = ["Constraint", "GeoUndef", "PointPos"]
+
+#: Upstream's ``GeoEnum::GeoUndef``: the reference a constraint does not use.
+GeoUndef = -2000
 
 
 class PointPos:
@@ -113,11 +126,11 @@ class Constraint:
             )
 
         self.Type = type_name
-        self.First = 0
+        self.First = GeoUndef
         self.FirstPos = PointPos.none
-        self.Second = 0
+        self.Second = GeoUndef
         self.SecondPos = PointPos.none
-        self.Third = 0
+        self.Third = GeoUndef
         self.ThirdPos = PointPos.none
         self.Value = 0.0
         self.Name = ""
@@ -198,11 +211,11 @@ class Constraint:
         parts = [repr(self.Type), f"first={self.First}"]
         if self.FirstPos:
             parts.append(f"firstPos={self.FirstPos}")
-        if self.Second or self.SecondPos:
+        if self.Second != GeoUndef or self.SecondPos:
             parts.append(f"second={self.Second}")
         if self.SecondPos:
             parts.append(f"secondPos={self.SecondPos}")
-        if self.Third or self.ThirdPos:
+        if self.Third != GeoUndef or self.ThirdPos:
             parts.append(f"third={self.Third}")
         if self.ThirdPos:
             parts.append(f"thirdPos={self.ThirdPos}")

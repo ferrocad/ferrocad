@@ -1150,7 +1150,7 @@
     "files": 12,
     "functions": {
       "registered": 39,
-      "defined": 53,
+      "defined": 56,
       "names": [
         "Part.Precision::angular",
         "Part.Precision::confusion",
@@ -1201,15 +1201,18 @@
         "sketch_constraint_count",
         "sketch_constraint_objects",
         "sketch_del_constraint",
+        "sketch_del_geometry",
         "sketch_detect_point_on_point",
         "sketch_detect_vertical_horizontal",
         "sketch_geometry_count",
+        "sketch_get_construction",
         "sketch_get_datum",
         "sketch_make_point_on_point",
         "sketch_make_vertical_horizontal",
         "sketch_redundant_constraints",
         "sketch_set_datum",
-        "sketch_solve"
+        "sketch_solve",
+        "sketch_toggle_construction"
       ],
       "by_module": {
         "Part": 35,

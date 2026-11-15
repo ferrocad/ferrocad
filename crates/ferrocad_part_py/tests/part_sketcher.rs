@@ -197,14 +197,43 @@ fn sketch_geometry_builds_a_wire_shape() {
 /// record by attribute, and the pure-Python `Sketcher` module is not on this test
 /// image's `sys.path`. The Python suite covers the real class.
 fn fake_constraint(kind: &str, first: i64, value: f64) -> PyResult<Py<PyAny>> {
+    fake_record(kind, &[("First", first)], value)
+}
+
+/// A two-geometry stand-in (`Equal`, `Parallel`, `Coincident`, …).
+fn fake_pair(kind: &str, first: i64, second: i64) -> PyResult<Py<PyAny>> {
+    fake_record(kind, &[("First", first), ("Second", second)], 0.0)
+}
+
+fn fake_record(kind: &str, fields: &[(&str, i64)], value: f64) -> PyResult<Py<PyAny>> {
     Python::with_gil(|py| {
         let kwargs = PyDict::new(py);
         kwargs.set_item("Type", kind)?;
-        kwargs.set_item("First", first)?;
+        for (name, number) in fields {
+            kwargs.set_item(*name, *number)?;
+        }
         kwargs.set_item("Value", value)?;
         let namespace = py.import("types")?.getattr("SimpleNamespace")?;
         Ok(namespace.call((), Some(&kwargs))?.unbind())
     })
+}
+
+/// The raw `ConstraintData` entries: the stored form, which names stable ids.
+fn stored_constraints(sketch: &Bound<'_, PyAny>) -> Vec<String> {
+    sketch
+        .getattr("ConstraintData")
+        .expect("ConstraintData")
+        .extract()
+        .expect("a string list")
+}
+
+/// The stable ids, in positional order.
+fn geometry_ids(sketch: &Bound<'_, PyAny>) -> Vec<String> {
+    sketch
+        .getattr("GeometryIds")
+        .expect("GeometryIds")
+        .extract()
+        .expect("a string list")
 }
 
 #[test]
@@ -269,13 +298,22 @@ fn sketch_constraints_are_stored_diagnosed_and_editable() {
             .expect("delConstraint");
         assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 1);
 
-        // A constraint that names a geometry which does not exist is a model
-        // error, which is what `solve` reports (it does not move geometry).
+        // A constraint cannot be added against a geometry that does not exist:
+        // the positional index is resolved to an id while the record is read.
         let dangling = fake_constraint("Vertical", 9, 0.0).expect("dangling");
-        sketch
+        let error = sketch
             .call_method1("addConstraint", (&dangling,))
-            .expect("addConstraint");
-        assert_eq!(attribute::<i64>(&sketch, "solve"), -1, "dangling reference");
+            .expect_err("out-of-range reference");
+        assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
+
+        // A record that names an id the sketch no longer has (a hand-edited or
+        // restored property) is a model error: `solve` reports it. The decoded
+        // `Constraints` getter refuses it too, which the Python suite pins (the
+        // `Sketcher.Constraint` class this image needs is not on its `sys.path`).
+        sketch
+            .setattr("ConstraintData", vec!["Vertical;first=#gone"])
+            .expect("ConstraintData");
+        assert_eq!(attribute::<i64>(&sketch, "solve"), -1, "dangling id");
 
         close_document(py, "RustSketchConstraints");
     });
@@ -303,7 +341,8 @@ fn autoconstraints_find_coincidence_and_verticality() {
                 .expect("detect coincident")
                 .extract::<usize>()
                 .expect("count"),
-            1
+            2,
+            "the pair, plus the first edge's start on the root point"
         );
         assert_eq!(
             sketch
@@ -311,7 +350,7 @@ fn autoconstraints_find_coincidence_and_verticality() {
                 .expect("make coincident")
                 .extract::<usize>()
                 .expect("count"),
-            1
+            2
         );
         assert_eq!(
             sketch
@@ -329,10 +368,31 @@ fn autoconstraints_find_coincidence_and_verticality() {
                 .expect("count"),
             1
         );
-        assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 2);
+        assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 3);
 
-        // Running the detection again finds nothing new: the coincident pair and
-        // the axis are already constrained, and the pending lists were cleared.
+        // The staged records name stable ids, and the origin coincidence names
+        // the root point (`-1`, `PointPos.start`) rather than a geometry index.
+        let stored = stored_constraints(&sketch);
+        assert!(
+            stored
+                .iter()
+                .any(|entry| entry == "Coincident;first=#g1;firstPos=2;second=#g2;secondPos=1"),
+            "the pair is stored by id: {stored:?}"
+        );
+        assert!(
+            stored
+                .iter()
+                .any(|entry| entry == "Coincident;first=-1;firstPos=1;second=#g1;secondPos=1"),
+            "the origin coincidence names the root: {stored:?}"
+        );
+        assert!(
+            stored.iter().any(|entry| entry == "Vertical;first=#g2"),
+            "the axis constraint is stored by id: {stored:?}"
+        );
+
+        // Running the detection again finds nothing new: the coincident pair, the
+        // root coincidence and the axis are already constrained, and the pending
+        // lists were cleared.
         assert_eq!(
             sketch
                 .call_method1("detectMissingPointOnPointConstraints", (1e-3,))
@@ -343,6 +403,180 @@ fn autoconstraints_find_coincidence_and_verticality() {
         );
 
         close_document(py, "RustSketchAutoconstraints");
+    });
+}
+
+#[test]
+fn geometry_identity_survives_a_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let doc = new_document(py, "RustSketchIdentity");
+        let sketch = doc
+            .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
+            .expect("add sketch");
+        for (start, end) in [
+            ((0.0, 0.0), (1.0, 0.0)),
+            ((1.0, 0.0), (2.0, 0.0)),
+            ((2.0, 0.0), (3.0, 0.0)),
+        ] {
+            sketch
+                .call_method1("addGeometry", (line_segment(py, start, end), false))
+                .expect("addGeometry");
+        }
+        assert_eq!(geometry_ids(&sketch), vec!["g1", "g2", "g3"]);
+
+        // Two constraints, one of which names the element that is about to go.
+        sketch
+            .call_method1(
+                "addConstraint",
+                (fake_pair("Equal", 0, 2).expect("equal"),),
+            )
+            .expect("addConstraint Equal(0, 2)");
+        sketch
+            .call_method1(
+                "addConstraint",
+                (fake_pair("Equal", 1, 2).expect("equal"),),
+            )
+            .expect("addConstraint Equal(1, 2)");
+
+        sketch.call_method1("delGeometry", (1,)).expect("delGeometry");
+
+        assert_eq!(attribute::<usize>(&sketch, "GeometryCount"), 2);
+        assert_eq!(geometry_ids(&sketch), vec!["g1", "g3"]);
+        assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 1);
+        // The survivor still names g1 and g3; only its positional index moved.
+        assert_eq!(stored_constraints(&sketch), vec!["Equal;first=#g1;second=#g3"]);
+        assert_eq!(attribute::<i64>(&sketch, "solve"), 0, "still resolves");
+
+        close_document(py, "RustSketchIdentity");
+    });
+}
+
+#[test]
+fn construction_geometry_is_addressable_but_not_drawn() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let doc = new_document(py, "RustSketchConstruction");
+        let sketch = doc
+            .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
+            .expect("add sketch");
+        sketch
+            .call_method1(
+                "addGeometry",
+                (line_segment(py, (0.0, 0.0), (1.0, 0.0)), false),
+            )
+            .expect("visible geometry");
+        sketch
+            .call_method1(
+                "addGeometry",
+                (line_segment(py, (0.0, 1.0), (0.0, 2.0)), true),
+            )
+            .expect("construction geometry");
+        doc.call_method0("recompute").expect("recompute");
+
+        assert_eq!(attribute::<usize>(&sketch, "GeometryCount"), 2);
+        assert!(!sketch
+            .call_method1("getConstruction", (0,))
+            .expect("getConstruction(0)")
+            .extract::<bool>()
+            .expect("flag"));
+        assert!(sketch
+            .call_method1("getConstruction", (1,))
+            .expect("getConstruction(1)")
+            .extract::<bool>()
+            .expect("flag"));
+        // Only the visible edge reaches the output shape.
+        assert_eq!(count(&sketch.getattr("Shape").expect("Shape"), "Edges"), 1);
+
+        // A construction element is still a constraint target.
+        sketch
+            .call_method1(
+                "addConstraint",
+                (fake_constraint("Vertical", 1, 0.0).expect("vertical"),),
+            )
+            .expect("constrain construction geometry");
+        assert_eq!(attribute::<i64>(&sketch, "solve"), 0);
+
+        // Toggling the flag is what changes the drawing, not the identity.
+        sketch
+            .call_method1("toggleConstruction", (1,))
+            .expect("toggleConstruction");
+        doc.call_method0("recompute").expect("recompute");
+        assert!(!sketch
+            .call_method1("getConstruction", (1,))
+            .expect("getConstruction(1)")
+            .extract::<bool>()
+            .expect("flag"));
+        assert_eq!(count(&sketch.getattr("Shape").expect("Shape"), "Edges"), 2);
+        assert_eq!(geometry_ids(&sketch), vec!["g1", "g2"], "toggling keeps ids");
+        assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 1);
+
+        // Out-of-range indices are refused by name.
+        let error = sketch
+            .call_method1("getConstruction", (9,))
+            .expect_err("out of range");
+        assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
+
+        close_document(py, "RustSketchConstruction");
+    });
+}
+
+#[test]
+fn root_axis_references_are_valid_and_external_ones_are_refused() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let doc = new_document(py, "RustSketchRootAxis");
+        let sketch = doc
+            .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
+            .expect("add sketch");
+        sketch
+            .call_method1(
+                "addGeometry",
+                (line_segment(py, (0.0, 0.0), (1.0, 0.0)), false),
+            )
+            .expect("addGeometry");
+
+        // `Coincident(root, start, geometry 0, start)`: the origin is the root
+        // point, i.e. the start of the X axis.
+        let mut kwargs = PyDict::new(py);
+        kwargs.set_item("Type", "Coincident").expect("Type");
+        kwargs.set_item("First", -1).expect("First");
+        kwargs.set_item("FirstPos", 1).expect("FirstPos");
+        kwargs.set_item("Second", 0).expect("Second");
+        kwargs.set_item("SecondPos", 1).expect("SecondPos");
+        let constraint = py
+            .import("types")
+            .expect("types")
+            .getattr("SimpleNamespace")
+            .expect("SimpleNamespace")
+            .call((), Some(&kwargs))
+            .expect("a root constraint");
+        sketch
+            .call_method1("addConstraint", (&constraint,))
+            .expect("a root reference is valid");
+        assert_eq!(attribute::<i64>(&sketch, "solve"), 0);
+        assert_eq!(
+            stored_constraints(&sketch),
+            vec!["Coincident;first=-1;firstPos=1;second=#g1;secondPos=1"]
+        );
+
+        // External geometry (`-3` and below) is out of surface, and says so.
+        let error = sketch
+            .call_method1(
+                "addConstraint",
+                (fake_constraint("Vertical", -3, 0.0).expect("external"),),
+            )
+            .expect_err("external geometry");
+        assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+        assert!(
+            format!("{error}").contains("external geometry"),
+            "{error}"
+        );
+
+        close_document(py, "RustSketchRootAxis");
     });
 }
 
@@ -447,11 +681,11 @@ fn make_internals_builds_faces_from_the_wires() {
 }
 
 #[test]
-fn construction_geometry_stays_out_of_the_shape() {
+fn a_construction_only_sketch_has_no_shape() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     boot();
     Python::with_gil(|py| {
-        let doc = new_document(py, "RustSketchConstruction");
+        let doc = new_document(py, "RustSketchConstructionOnly");
         let sketch = doc
             .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
             .expect("add sketch");
@@ -466,15 +700,13 @@ fn construction_geometry_stays_out_of_the_shape() {
             is_null(&sketch.getattr("Shape").expect("Shape")),
             "construction geometry does not build the sketch shape"
         );
-        assert_eq!(
-            sketch
-                .getattr("ConstructionGeometry")
-                .expect("ConstructionGeometry")
-                .len()
-                .expect("len"),
-            1
-        );
-        close_document(py, "RustSketchConstruction");
+        assert_eq!(attribute::<usize>(&sketch, "GeometryCount"), 1);
+        assert!(sketch
+            .call_method1("getConstruction", (0,))
+            .expect("getConstruction")
+            .extract::<bool>()
+            .expect("flag"));
+        close_document(py, "RustSketchConstructionOnly");
     });
 }
 

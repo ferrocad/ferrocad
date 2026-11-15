@@ -2096,34 +2096,51 @@ impl PyPlaneSurface {
 }
 
 // ---------------------------------------------------------------------------
-// Sketcher: `Sketcher::SketchObject` (geometry, constraints, no solver)
+// Sketcher: `Sketcher::SketchObject` (identity, geometry, constraints)
 // ---------------------------------------------------------------------------
 //
 // The Part tests need four things from a sketch: `addGeometry` (so a sketch
 // participates in a document at all), `Shape` (a wire/compound of the geometry
 // edges, moved by `Placement`), `InternalShape` (the bounded faces built from
-// those wires when `MakeInternals` is set) and — since P4 SK3 — a constraint
-// model that a Draft `make_sketch` script can drive.
+// those wires when `MakeInternals` is set) and a constraint model that a Draft
+// `make_sketch` script can drive.
+//
+// **Identity.** Every geometry element carries a stable id (`GeometryIds`, an
+// `g1`, `g2`, … `StringList` index-aligned with `Geometry`) and a construction
+// flag (`Construction`, a `BoolList`). A constraint record stores those ids, not
+// positions, so deleting or reordering geometry cannot rebind it to the wrong
+// curve; the Python surface still speaks upstream's 0-based positional GeoId and
+// translates at the boundary. `delGeometry` drops the constraints that named the
+// removed element and leaves the rest alone — their ids still resolve.
+//
+// **Root references.** Constraints may name the sketch's root instead of a
+// geometry: `-1` is the X axis (its start point is the root point) and `-2` the
+// Y axis, as upstream's `GeoEnum`. External geometry (`-3` and below) is out of
+// surface and is refused by name.
+//
+// **Construction.** Construction geometry is ordinary geometry with its flag
+// set: it is counted by `GeometryCount`, addressable by a constraint, and
+// excluded from `Shape`/`InternalShape`.
 //
 // The model is FerroCAD's, not upstream's C++ solver front end. A constraint is a
-/// record in a `ConstraintData` property (a `StringList`, so it persists through
-/// the native and `.FCStd` serializers without a new value type): kind, geometry
-/// and point references, datum. `addConstraint`/`delConstraint`/`setDatum`/`getDatum`
-/// edit that list, `Constraints` decodes it into `Sketcher.Constraint` objects,
-/// `solve` checks the references, and `RedundantConstraints` is empty because there
-/// is no rank analysis to report. **No numerical solve happens** — geometry is
-/// authored, not moved — which is the documented approximation for this slice
-/// (P4 SK2 binds PlanGCS).
+// record in a `ConstraintData` property (a `StringList`, so it persists through
+// the native and `.FCStd` serializers without a new value type): kind, geometry
+// and point references, datum. `addConstraint`/`delConstraint`/`setDatum`/`getDatum`
+// edit that list, `Constraints` decodes it into `Sketcher.Constraint` objects,
+// `solve` checks the references, and `RedundantConstraints` is empty because there
+// is no rank analysis to report. **No numerical solve happens** — geometry is
+// authored, not moved — which is the documented approximation for this slice
+// (P4 SK2 binds PlanGCS).
 //
-// The encoding is `kind;first=0;firstPos=2;second=1;secondPos=1` with a trailing
-// `;name=…` when named; see `docs/developer/workbenches/sketch-constraints.md`.
+// The encoding is `kind;first=#g2;firstPos=2;second=#g1;secondPos=1` with a
+// trailing `;name=…` when named; a root reference is a bare negative int and a
+// record written before the ids existed (`first=0`) is read as a position. See
+// `docs/developer/workbenches/sketch-constraints.md`.
 //
 // The geometry list is stored as the edges each geometry object's `toShape()`
 // returns (`Part::PropertyTopoShapeList`), not as upstream's `Geom...` objects:
 // FerroCAD has no geometry-list property type yet. The kernel still builds every
-// edge and every wire/face, so nothing here is synthesized. Constraints address
-// the `Geometry` list by index; construction geometry is stored separately and is
-// not addressable by a constraint until SK1's stable geometry identity lands.
+// edge and every wire/face, so nothing here is synthesized.
 
 /// `Sketcher::SketchObject`.
 pub const SKETCH_TYPE: &str = "Sketcher::SketchObject";
@@ -2137,7 +2154,10 @@ pub const ADDITIVE_BOX_TYPE: &str = "PartDesign::AdditiveBox";
 pub const MIRRORING_TYPE: &str = "Part::Mirroring";
 
 const GEOMETRY: &str = "Geometry";
-const CONSTRUCTION_GEOMETRY: &str = "ConstructionGeometry";
+/// Stable geometry identity, index-aligned with `Geometry` (`g1`, `g2`, …).
+const GEOMETRY_IDS: &str = "GeometryIds";
+/// Construction flag per geometry entry, index-aligned with `Geometry`.
+const CONSTRUCTION: &str = "Construction";
 const INTERNAL_SHAPE: &str = "InternalShape";
 /// The hidden property that stores the constraints, one encoded record per
 /// entry. It is deliberately not called `Constraints`: that name is the Python
@@ -2151,6 +2171,14 @@ const CONSTRAINT_DATA: &str = "ConstraintData";
 /// survives a save/restore without inventing per-object Rust state.
 const MISSING_POINT_ON_POINT: &str = "MissingPointOnPointConstraints";
 const MISSING_VERTICAL_HORIZONTAL: &str = "MissingVerticalHorizontalConstraints";
+
+/// Upstream's `GeoEnum::GeoUndef`: the reference a constraint field carries when
+/// it names nothing. It is not `0`, because geometry 0 is a real geometry.
+const GEO_UNDEF: i64 = -2000;
+/// `GeoEnum::HAxis` / `RtPnt`: the X axis, whose start point is the root point.
+const ROOT_X_AXIS: i64 = -1;
+/// `GeoEnum::VAxis`: the Y axis.
+const ROOT_Y_AXIS: i64 = -2;
 
 /// The constraint kinds the sketch model stores. Upstream has a few more (the
 /// `InternalAlignment` family and `SnellsLaw`); a kind outside this list is
@@ -2248,6 +2276,15 @@ fn sketch_geometry(doc: &Document, id: ObjectId, name: &str) -> Vec<Shape> {
         .and_then(shape_list_of)
         .map(ShapeListProperty::shapes)
         .unwrap_or_default()
+}
+
+/// The stored bool list of a sketch property (empty when it is absent, so a
+/// sketch with no construction flags reads as "nothing is construction").
+fn sketch_bool_property(doc: &Document, id: ObjectId, name: &str) -> Vec<bool> {
+    match doc.object(id).and_then(|object| object.properties.get(name)) {
+        Some(Property::BoolList(values)) => values.clone(),
+        _ => Vec::new(),
+    }
 }
 
 /// The two endpoints of an open edge. `None` for a closed edge (a full circle or
@@ -2359,20 +2396,63 @@ fn sketch_placement(doc: &Document, id: ObjectId) -> Option<Placement> {
 
 // --- The constraint model -------------------------------------------------
 
-/// One sketch constraint as the `Constraints` property stores it.
+/// One geometry reference in a constraint record.
+///
+/// The stored form is the stable identity, not the position: a constraint keeps
+/// pointing at the same curve after an earlier one is deleted or the list is
+/// reordered. Upstream's positional GeoId and its root-axis constants live on the
+/// Python side and are translated at the boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GeoRef {
+    /// A geometry element by its stable id; encoded `#g3`.
+    Id(String),
+    /// A root reference: `-1` is the X axis (its start is the root point) and
+    /// `-2` the Y axis.
+    Root(i64),
+    /// A position recorded before the ids existed (`@0`, and a bare `0` is read
+    /// the same way). It resolves against the geometry list when read, so it
+    /// cannot survive a deletion — which is exactly why new records never use it.
+    Position(usize),
+}
+
+impl GeoRef {
+    fn encode(&self) -> String {
+        match self {
+            GeoRef::Id(id) => format!("#{id}"),
+            GeoRef::Root(axis) => axis.to_string(),
+            GeoRef::Position(at) => format!("@{at}"),
+        }
+    }
+
+    fn decode(raw: &str) -> Option<Self> {
+        if let Some(id) = raw.strip_prefix('#') {
+            return (!id.is_empty()).then(|| GeoRef::Id(id.to_string()));
+        }
+        if let Some(at) = raw.strip_prefix('@') {
+            return at.parse().ok().map(GeoRef::Position);
+        }
+        let value: i64 = raw.parse().ok()?;
+        Some(if value < 0 {
+            GeoRef::Root(value)
+        } else {
+            GeoRef::Position(value as usize)
+        })
+    }
+}
+
+/// One sketch constraint as the `ConstraintData` property stores it.
 ///
 /// Field names mirror upstream's `Sketcher.Constraint` attributes so the
-/// `Sketcher.Constraint` round trip is exact. `driving`/`active` default to
-/// `true`, and every other field to the value upstream gives an unset one, so an
-/// omitted key in the encoding decodes to the same record.
+/// `Sketcher.Constraint` round trip is exact. `second`/`third` are `None` where
+/// upstream carries `GeoUndef`; `driving`/`active` default to `true`.
 #[derive(Clone, Debug, PartialEq)]
 struct SketchConstraint {
     kind: String,
-    first: i64,
+    first: GeoRef,
     first_pos: i64,
-    second: i64,
+    second: Option<GeoRef>,
     second_pos: i64,
-    third: i64,
+    third: Option<GeoRef>,
     third_pos: i64,
     value: f64,
     name: String,
@@ -2381,14 +2461,14 @@ struct SketchConstraint {
 }
 
 impl SketchConstraint {
-    fn new(kind: &str) -> Self {
+    fn new(kind: &str, first: GeoRef) -> Self {
         Self {
             kind: kind.to_string(),
-            first: 0,
+            first,
             first_pos: POINT_POS_NONE,
-            second: 0,
+            second: None,
             second_pos: POINT_POS_NONE,
-            third: 0,
+            third: None,
             third_pos: POINT_POS_NONE,
             value: 0.0,
             name: String::new(),
@@ -2397,24 +2477,42 @@ impl SketchConstraint {
         }
     }
 
+    /// Every reference this record carries, in order.
+    fn references(&self) -> impl Iterator<Item = &GeoRef> {
+        std::iter::once(&self.first)
+            .chain(self.second.iter())
+            .chain(self.third.iter())
+    }
+
+    /// Whether the constraint names `id` or the geometry now at `position`.
+    fn touches(&self, id: &str, position: usize) -> bool {
+        self.references().any(|reference| match reference {
+            GeoRef::Id(have) => have == id,
+            GeoRef::Root(_) => false,
+            // A positional record cannot be re-bound safely: it would silently
+            // start describing a different curve, so a deletion drops it.
+            GeoRef::Position(at) => *at >= position,
+        })
+    }
+
     /// The `;`-separated record. `name` is emitted last so a name may contain
     /// `;` or `=`; every other key is `<key>=<value>`.
     fn encode(&self) -> String {
-        let mut out = format!("{};first={}", self.kind, self.first);
+        let mut out = format!("{};first={}", self.kind, self.first.encode());
         if self.first_pos != POINT_POS_NONE {
             out.push_str(&format!(";firstPos={}", self.first_pos));
         }
-        if self.second != 0 || self.second_pos != POINT_POS_NONE {
-            out.push_str(&format!(";second={}", self.second));
+        if let Some(second) = &self.second {
+            out.push_str(&format!(";second={}", second.encode()));
+            if self.second_pos != POINT_POS_NONE {
+                out.push_str(&format!(";secondPos={}", self.second_pos));
+            }
         }
-        if self.second_pos != POINT_POS_NONE {
-            out.push_str(&format!(";secondPos={}", self.second_pos));
-        }
-        if self.third != 0 || self.third_pos != POINT_POS_NONE {
-            out.push_str(&format!(";third={}", self.third));
-        }
-        if self.third_pos != POINT_POS_NONE {
-            out.push_str(&format!(";thirdPos={}", self.third_pos));
+        if let Some(third) = &self.third {
+            out.push_str(&format!(";third={}", third.encode()));
+            if self.third_pos != POINT_POS_NONE {
+                out.push_str(&format!(";thirdPos={}", self.third_pos));
+            }
         }
         if self.value != 0.0 {
             out.push_str(&format!(";value={}", self.value));
@@ -2443,27 +2541,168 @@ impl SketchConstraint {
         if !CONSTRAINT_KINDS.contains(&kind) {
             return None;
         }
-        let mut constraint = Self::new(kind);
+        let mut first = None;
+        let mut first_pos = POINT_POS_NONE;
+        let mut second = None;
+        let mut second_pos = POINT_POS_NONE;
+        let mut third = None;
+        let mut third_pos = POINT_POS_NONE;
+        let mut value = 0.0;
+        let mut driving = true;
+        let mut active = true;
         for field in fields {
             let (key, raw) = field.split_once('=')?;
             match key {
-                "first" => constraint.first = raw.parse().ok()?,
-                "firstPos" => constraint.first_pos = raw.parse().ok()?,
-                "second" => constraint.second = raw.parse().ok()?,
-                "secondPos" => constraint.second_pos = raw.parse().ok()?,
-                "third" => constraint.third = raw.parse().ok()?,
-                "thirdPos" => constraint.third_pos = raw.parse().ok()?,
-                "value" => constraint.value = raw.parse().ok()?,
-                "driving" => constraint.driving = raw != "0",
-                "active" => constraint.active = raw != "0",
+                "first" => first = Some(GeoRef::decode(raw)?),
+                "firstPos" => first_pos = raw.parse().ok()?,
+                "second" => second = Some(GeoRef::decode(raw)?),
+                "secondPos" => second_pos = raw.parse().ok()?,
+                "third" => third = Some(GeoRef::decode(raw)?),
+                "thirdPos" => third_pos = raw.parse().ok()?,
+                "value" => value = raw.parse().ok()?,
+                "driving" => driving = raw != "0",
+                "active" => active = raw != "0",
                 _ => return None,
             }
         }
-        if let Some(name) = name {
-            constraint.name = name.to_string();
-        }
-        Some(constraint)
+        Some(Self {
+            kind: kind.to_string(),
+            first: first?,
+            first_pos,
+            second,
+            second_pos,
+            third,
+            third_pos,
+            value,
+            name: name.unwrap_or_default().to_string(),
+            driving,
+            active,
+        })
     }
+}
+
+// --- The identity, the construction flags and the geometry list -------------
+
+/// The sketch's geometry, its stable ids and its construction flags, kept
+/// index-aligned: entry `i` of each list describes the same geometrical element.
+struct SketchGeometryState {
+    shapes: Vec<Shape>,
+    ids: Vec<String>,
+    construction: Vec<bool>,
+}
+
+impl SketchGeometryState {
+    fn len(&self) -> usize {
+        self.shapes.len()
+    }
+
+    fn position_of_id(&self, id: &str) -> Option<usize> {
+        self.ids.iter().position(|have| have == id)
+    }
+
+    /// The positional GeoId a reference names, in upstream's numbering: a root
+    /// reference stays negative, a geometry reference becomes its current index.
+    fn surface_index(&self, reference: &GeoRef) -> Result<i64, String> {
+        match reference {
+            GeoRef::Id(id) => self.position_of_id(id).map(|at| at as i64).ok_or_else(|| {
+                format!("a constraint references geometry {id:?}, which this sketch no longer has")
+            }),
+            GeoRef::Root(axis) => Ok(*axis),
+            GeoRef::Position(at) if *at < self.len() => Ok(*at as i64),
+            GeoRef::Position(at) => Err(format!(
+                "a constraint references position {at}, but the sketch has {n} geometry elements",
+                n = self.len()
+            )),
+        }
+    }
+
+    /// Whether every reference of the constraint still names something.
+    fn resolves(&self, constraint: &SketchConstraint) -> bool {
+        constraint.references().all(|reference| match reference {
+            GeoRef::Id(id) => self.position_of_id(id).is_some(),
+            GeoRef::Root(axis) => *axis == ROOT_X_AXIS || *axis == ROOT_Y_AXIS,
+            GeoRef::Position(at) => *at < self.len(),
+        })
+    }
+}
+
+/// The next free id: `g<max + 1>`. Ids are never reused while one is alive, and
+/// reusing the first one after every element is gone is safe because no
+/// constraint can still name it.
+fn next_geometry_id(ids: &[String]) -> String {
+    let highest = ids
+        .iter()
+        .filter_map(|id| id.strip_prefix('g')?.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("g{}", highest + 1)
+}
+
+/// Add the identity and construction properties to a sketch that predates them.
+///
+/// `DocumentObject.__setattr__` turns an unknown name into a Python instance
+/// attribute rather than a document property, so a write to a missing
+/// `GeometryIds` would be silently lost. Migrating here keeps the lists real
+/// (and persisted) instead of pretending they are.
+fn ensure_geometry_identity(object: &Bound<'_, PyAny>) -> PyResult<()> {
+    let names: Vec<String> = object.getattr("PropertiesList")?.extract()?;
+    for (name, type_id, description) in [
+        (
+            GEOMETRY_IDS,
+            "App::PropertyStringList",
+            "Stable identity of each geometry element",
+        ),
+        (
+            CONSTRUCTION,
+            "App::PropertyBoolList",
+            "Construction geometry flag",
+        ),
+    ] {
+        if !names.iter().any(|have| have == name) {
+            object.call_method1("addProperty", (type_id, name, "Sketch", description))?;
+        }
+    }
+    Ok(())
+}
+
+/// Read the three aligned lists.
+///
+/// A torn undo (the geometry list is written before its metadata) or a document
+/// written before the identity existed can leave the metadata shorter than the
+/// geometry: it is padded, never reordered, so an existing id stays paired with
+/// its own shape. Newly minted ids are stored immediately, because a constraint
+/// written after this read has to resolve them on the next one.
+fn read_geometry(object: &Bound<'_, PyAny>) -> PyResult<SketchGeometryState> {
+    ensure_geometry_identity(object)?;
+    let shapes = sketch_stored_geometry(object, GEOMETRY)?;
+    let mut ids = sketch_string_list(object, GEOMETRY_IDS)?;
+    let mut construction = sketch_bool_list(object, CONSTRUCTION)?;
+    ids.truncate(shapes.len());
+    construction.truncate(shapes.len());
+    let minted = ids.len() < shapes.len();
+    while ids.len() < shapes.len() {
+        ids.push(next_geometry_id(&ids));
+    }
+    while construction.len() < shapes.len() {
+        construction.push(false);
+    }
+    if minted {
+        store_sketch_string_list(object, GEOMETRY_IDS, &ids)?;
+    }
+    Ok(SketchGeometryState {
+        shapes,
+        ids,
+        construction,
+    })
+}
+
+fn write_geometry(object: &Bound<'_, PyAny>, state: &SketchGeometryState) -> PyResult<()> {
+    // Geometry first: if a later write is lost, the metadata is longer than the
+    // geometry and the reader truncates it, rather than a shape losing its id.
+    sketch_store_geometry(object, GEOMETRY, &state.shapes)?;
+    store_sketch_string_list(object, GEOMETRY_IDS, &state.ids)?;
+    let flags = PyList::new(object.py(), state.construction.iter().copied())?;
+    object.setattr(CONSTRUCTION, flags)
 }
 
 /// Refuse a method on an object that is not a sketch (the descriptor already
@@ -2497,6 +2736,16 @@ fn store_sketch_string_list(
     object.setattr(name, list)
 }
 
+/// The stored bool list of a property (empty when the property is absent).
+fn sketch_bool_list(object: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<bool>> {
+    let value = object.getattr(name)?;
+    let mut out = Vec::new();
+    for item in value.try_iter()? {
+        out.push(item?.extract::<bool>()?);
+    }
+    Ok(out)
+}
+
 /// The committed constraints, decoded. An entry this model cannot decode is a
 /// `ValueError` naming it: it means something wrote the property behind
 /// `addConstraint`'s back.
@@ -2523,7 +2772,10 @@ fn store_sketch_constraints(
 
 /// One `addConstraint` argument: a `Sketcher.Constraint` (or anything with its
 /// attributes), or a sequence of them.
-fn constraint_arguments(value: &Bound<'_, PyAny>) -> PyResult<Vec<SketchConstraint>> {
+fn constraint_arguments(
+    value: &Bound<'_, PyAny>,
+    state: &SketchGeometryState,
+) -> PyResult<Vec<SketchConstraint>> {
     if value.downcast::<pyo3::types::PyString>().is_ok() {
         return Err(PyTypeError::new_err(
             "addConstraint expects a Sketcher.Constraint, not a string",
@@ -2532,14 +2784,21 @@ fn constraint_arguments(value: &Bound<'_, PyAny>) -> PyResult<Vec<SketchConstrai
     if let Ok(items) = value.try_iter() {
         let mut constraints = Vec::new();
         for item in items {
-            constraints.push(constraint_argument(&item?)?);
+            constraints.push(constraint_argument(&item?, state)?);
         }
         return Ok(constraints);
     }
-    Ok(vec![constraint_argument(value)?])
+    Ok(vec![constraint_argument(value, state)?])
 }
 
-fn constraint_argument(value: &Bound<'_, PyAny>) -> PyResult<SketchConstraint> {
+/// Read one constraint and resolve its positional references to stable ids.
+///
+/// This is the boundary between upstream's Python surface (0-based geometry
+/// index, `-1`/`-2` for the root axes) and the stored model (ids and roots).
+fn constraint_argument(
+    value: &Bound<'_, PyAny>,
+    state: &SketchGeometryState,
+) -> PyResult<SketchConstraint> {
     let kind: String = value.getattr("Type").and_then(|t| t.extract()).map_err(|_| {
         PyTypeError::new_err(
             "addConstraint expects a Sketcher.Constraint (an object with a string `Type`)",
@@ -2551,12 +2810,16 @@ fn constraint_argument(value: &Bound<'_, PyAny>) -> PyResult<SketchConstraint> {
             CONSTRAINT_KINDS.join(", ")
         )));
     }
-    let mut constraint = SketchConstraint::new(&kind);
-    constraint.first = int_attribute(value, "First")?;
+    let first = reference_from_index(
+        state,
+        int_attribute_or(value, "First", GEO_UNDEF)?,
+        "First",
+    )?;
+    let mut constraint = SketchConstraint::new(&kind, first);
     constraint.first_pos = int_attribute(value, "FirstPos")?;
-    constraint.second = int_attribute(value, "Second")?;
+    constraint.second = optional_reference(value, "Second", state)?;
     constraint.second_pos = int_attribute(value, "SecondPos")?;
-    constraint.third = int_attribute(value, "Third")?;
+    constraint.third = optional_reference(value, "Third", state)?;
     constraint.third_pos = int_attribute(value, "ThirdPos")?;
     constraint.value = match value.getattr("Value") {
         Ok(item) if !item.is_none() => item.extract().map_err(|_| {
@@ -2575,12 +2838,58 @@ fn constraint_argument(value: &Bound<'_, PyAny>) -> PyResult<SketchConstraint> {
     Ok(constraint)
 }
 
+/// The stored reference an upstream GeoId names.
+fn reference_from_index(
+    state: &SketchGeometryState,
+    index: i64,
+    field: &str,
+) -> PyResult<GeoRef> {
+    if index >= 0 {
+        let Some(id) = state.ids.get(index as usize) else {
+            return Err(PyIndexError::new_err(format!(
+                "{field} references geometry {index}, but the sketch has {n} geometry element(s)",
+                n = state.len()
+            )));
+        };
+        return Ok(GeoRef::Id(id.clone()));
+    }
+    if index == ROOT_X_AXIS || index == ROOT_Y_AXIS {
+        return Ok(GeoRef::Root(index));
+    }
+    if index == GEO_UNDEF {
+        return Err(PyValueError::new_err(format!(
+            "{field} names no geometry; a sketch constraint needs a geometry index or a root \
+             axis ({ROOT_X_AXIS} X, {ROOT_Y_AXIS} Y)"
+        )));
+    }
+    Err(PyValueError::new_err(format!(
+        "{field} references {index}; FerroCAD supports the root axes ({ROOT_X_AXIS} X, \
+         {ROOT_Y_AXIS} Y) but not external geometry"
+    )))
+}
+
+fn optional_reference(
+    value: &Bound<'_, PyAny>,
+    field: &str,
+    state: &SketchGeometryState,
+) -> PyResult<Option<GeoRef>> {
+    let index = int_attribute_or(value, field, GEO_UNDEF)?;
+    if index == GEO_UNDEF {
+        return Ok(None);
+    }
+    reference_from_index(state, index, field).map(Some)
+}
+
 fn int_attribute(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
+    int_attribute_or(value, name, 0)
+}
+
+fn int_attribute_or(value: &Bound<'_, PyAny>, name: &str, default: i64) -> PyResult<i64> {
     match value.getattr(name) {
-        Ok(item) if !item.is_none() => item
-            .extract()
-            .map_err(|_| PyTypeError::new_err(format!("a sketch constraint's {name} must be an int"))),
-        _ => Ok(0),
+        Ok(item) if !item.is_none() => item.extract().map_err(|_| {
+            PyTypeError::new_err(format!("a sketch constraint's {name} must be an int"))
+        }),
+        _ => Ok(default),
     }
 }
 
@@ -2605,19 +2914,22 @@ fn same_constraint(a: &SketchConstraint, b: &SketchConstraint) -> bool {
         && a.second_pos == b.second_pos
         && a.third == b.third
         && a.third_pos == b.third_pos;
-    let backward = a.first == b.second
-        && a.first_pos == b.second_pos
-        && a.second == b.first
-        && a.second_pos == b.first_pos
-        && a.third == b.third
-        && a.third_pos == b.third_pos;
+    let backward = match (&a.second, &b.second) {
+        (Some(a_second), Some(b_second)) => {
+            a.first == *b_second
+                && a.first_pos == b.second_pos
+                && *a_second == b.first
+                && a.second_pos == b.first_pos
+                && a.third == b.third
+                && a.third_pos == b.third_pos
+        }
+        _ => false,
+    };
     forward || backward
 }
 
 /// The number of geometry edges a sketch holds (upstream's `GeometryCount`).
-/// Construction geometry is stored in its own list and is not counted: a
-/// constraint index addresses the `Geometry` list until SK1's stable identity
-/// lands.
+/// Construction geometry is counted: it is addressable, it just is not drawn.
 fn sketch_geometry_len(object: &Bound<'_, PyAny>) -> PyResult<usize> {
     Ok(object.getattr(GEOMETRY)?.len()?)
 }
@@ -2652,6 +2964,11 @@ fn store_pending_constraints(
     store_sketch_string_list(object, name, &encoded)
 }
 
+/// The positional GeoId `reference` names, for the Python surface.
+fn surface_index_of(state: &SketchGeometryState, reference: &GeoRef) -> PyResult<i64> {
+    state.surface_index(reference).map_err(PyValueError::new_err)
+}
+
 /// Commit the pending constraints of `pending_name` into `Constraints`.
 ///
 /// `include_second` is upstream's flag. Detection here already emits each
@@ -2663,10 +2980,17 @@ fn commit_pending(
     pending_name: &str,
     include_second: bool,
 ) -> PyResult<usize> {
+    let state = read_geometry(object)?;
     let pending = pending_constraints(object, pending_name)?;
     let mut constraints = sketch_constraints(object)?;
     let mut added = 0;
     for candidate in pending {
+        // A staged record names ids. If the geometry was deleted between the
+        // detection and the commit it no longer resolves; drop it rather than
+        // store a dangling reference.
+        if !state.resolves(&candidate) {
+            continue;
+        }
         let duplicate = constraints.iter().any(|have| same_constraint(have, &candidate));
         let already_referenced = !include_second
             && constraints
@@ -2683,9 +3007,11 @@ fn commit_pending(
     Ok(added)
 }
 
-/// Build `Sketcher.Constraint` objects from the stored records.
+/// Build `Sketcher.Constraint` objects from the stored records, translating the
+/// stable ids back to upstream's positional GeoIds.
 fn constraint_objects(
     py: Python<'_>,
+    state: &SketchGeometryState,
     constraints: &[SketchConstraint],
 ) -> PyResult<PyObject> {
     let module = py.import("Sketcher").map_err(|_| {
@@ -2697,12 +3023,16 @@ fn constraint_objects(
     let mut items = Vec::with_capacity(constraints.len());
     for constraint in constraints {
         let kwargs = PyDict::new(py);
-        kwargs.set_item("First", constraint.first)?;
+        kwargs.set_item("First", surface_index_of(state, &constraint.first)?)?;
         kwargs.set_item("FirstPos", constraint.first_pos)?;
-        kwargs.set_item("Second", constraint.second)?;
-        kwargs.set_item("SecondPos", constraint.second_pos)?;
-        kwargs.set_item("Third", constraint.third)?;
-        kwargs.set_item("ThirdPos", constraint.third_pos)?;
+        if let Some(second) = &constraint.second {
+            kwargs.set_item("Second", surface_index_of(state, second)?)?;
+            kwargs.set_item("SecondPos", constraint.second_pos)?;
+        }
+        if let Some(third) = &constraint.third {
+            kwargs.set_item("Third", surface_index_of(state, third)?)?;
+            kwargs.set_item("ThirdPos", constraint.third_pos)?;
+        }
         kwargs.set_item("Value", constraint.value)?;
         kwargs.set_item("Name", constraint.name.as_str())?;
         kwargs.set_item("Driving", constraint.driving)?;
@@ -2741,8 +3071,13 @@ impl ObjectType for SketchObject {
                 prop_status::HIDDEN,
             ),
             (
-                CONSTRUCTION_GEOMETRY.to_string(),
-                make_shape_list_property(ShapeListProperty::empty()),
+                GEOMETRY_IDS.to_string(),
+                Property::StringList(Vec::new()),
+                prop_status::HIDDEN,
+            ),
+            (
+                CONSTRUCTION.to_string(),
+                Property::BoolList(Vec::new()),
                 prop_status::HIDDEN,
             ),
             (
@@ -2779,7 +3114,16 @@ impl ObjectType for SketchObject {
     }
 
     fn execute(&self, doc: &mut Document, id: ObjectId) {
+        // Construction geometry is addressable and counted, but it never reaches
+        // the output Shape: that is the whole point of the flag.
         let geometry = sketch_geometry(doc, id, GEOMETRY);
+        let construction = sketch_bool_property(doc, id, CONSTRUCTION);
+        let geometry: Vec<Shape> = geometry
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| !construction.get(*index).copied().unwrap_or(false))
+            .map(|(_, shape)| shape)
+            .collect();
         let placement = sketch_placement(doc, id);
         if geometry.is_empty() {
             doc.set_property_raw(id, SHAPE, output_shape());
@@ -2804,9 +3148,9 @@ impl ObjectType for SketchObject {
 ///
 /// A geometry object is anything exposing `toShape()` (`Part.LineSegment`,
 /// `Part.Circle`, `Part.Ellipse`, `Part.Point`, …); a sequence of them is
-/// accepted too, as upstream's `SketchObjectPy::addGeometry` does. The edges are
-/// appended to the sketch's geometry list, which touches the object so the next
-/// recompute rebuilds `Shape`.
+/// accepted too, as upstream's `SketchObjectPy::addGeometry` does. Each added
+/// edge gets the next stable id and the requested construction flag; the object
+/// is touched so the next recompute rebuilds `Shape`.
 #[pyfunction]
 #[pyo3(signature = (object, geometry, construction = false))]
 fn sketch_add_geometry(
@@ -2814,26 +3158,88 @@ fn sketch_add_geometry(
     geometry: &Bound<'_, PyAny>,
     construction: bool,
 ) -> PyResult<usize> {
-    let type_id: String = object.getattr("TypeId")?.extract()?;
-    if type_id != SKETCH_TYPE {
-        return Err(PyAttributeError::new_err(format!(
-            "'{type_id}' object has no attribute 'addGeometry'"
-        )));
-    }
+    require_sketch(object, "addGeometry")?;
     let added = sketch_geometry_edges(geometry)?;
-    let name = if construction {
-        CONSTRUCTION_GEOMETRY
-    } else {
-        GEOMETRY
-    };
-    let mut shapes = sketch_stored_geometry(object, name)?;
-    let first = shapes.len();
-    shapes.extend(added.iter().cloned());
-    sketch_store_geometry(object, name, &shapes)?;
-    Ok(if added.is_empty() {
+    let mut state = read_geometry(object)?;
+    let first = state.len();
+    for edge in added {
+        state.shapes.push(edge);
+        state.ids.push(next_geometry_id(&state.ids));
+        state.construction.push(construction);
+    }
+    write_geometry(object, &state)?;
+    Ok(if state.len() == first {
         first
     } else {
-        first + added.len() - 1
+        state.len() - 1
+    })
+}
+
+/// `delGeometry(index)`: remove one geometry element and the constraints that
+/// named it.
+///
+/// The positional GeoIds of the surviving elements shift down, which is why a
+/// constraint stores an id rather than a position: every surviving constraint
+/// still points at the curve it was built on, and only the ones that named the
+/// removed element are dropped.
+#[pyfunction]
+fn sketch_del_geometry(object: &Bound<'_, PyAny>, index: usize) -> PyResult<()> {
+    require_sketch(object, "delGeometry")?;
+    let mut state = read_geometry(object)?;
+    if index >= state.len() {
+        return Err(PyIndexError::new_err(format!(
+            "geometry index {index} is out of range ({n} geometry element(s))",
+            n = state.len()
+        )));
+    }
+    let removed = state.ids[index].clone();
+    state.shapes.remove(index);
+    state.ids.remove(index);
+    state.construction.remove(index);
+    write_geometry(object, &state)?;
+
+    let constraints = sketch_constraints(object)?;
+    let kept: Vec<SketchConstraint> = constraints
+        .into_iter()
+        .filter(|constraint| !constraint.touches(&removed, index))
+        .collect();
+    store_sketch_constraints(object, &kept)?;
+    for name in [MISSING_POINT_ON_POINT, MISSING_VERTICAL_HORIZONTAL] {
+        let pending = pending_constraints(object, name)?;
+        let kept: Vec<SketchConstraint> = pending
+            .into_iter()
+            .filter(|constraint| !constraint.touches(&removed, index))
+            .collect();
+        store_pending_constraints(object, name, &kept)?;
+    }
+    Ok(())
+}
+
+/// `toggleConstruction(index)`: flip one element's construction flag.
+#[pyfunction]
+fn sketch_toggle_construction(object: &Bound<'_, PyAny>, index: usize) -> PyResult<()> {
+    require_sketch(object, "toggleConstruction")?;
+    let mut state = read_geometry(object)?;
+    let count = state.len();
+    let flag = state.construction.get_mut(index).ok_or_else(|| {
+        PyIndexError::new_err(format!(
+            "geometry index {index} is out of range ({count} geometry element(s))"
+        ))
+    })?;
+    *flag = !*flag;
+    write_geometry(object, &state)
+}
+
+/// `getConstruction(index)`: whether one element is construction geometry.
+#[pyfunction]
+fn sketch_get_construction(object: &Bound<'_, PyAny>, index: usize) -> PyResult<bool> {
+    require_sketch(object, "getConstruction")?;
+    let state = read_geometry(object)?;
+    state.construction.get(index).copied().ok_or_else(|| {
+        PyIndexError::new_err(format!(
+            "geometry index {index} is out of range ({n} geometry element(s))",
+            n = state.len()
+        ))
     })
 }
 
@@ -2888,8 +3294,7 @@ fn sketch_store_geometry(object: &Bound<'_, PyAny>, name: &str, shapes: &[Shape]
     object.setattr(name, PyList::new(py, items)?)
 }
 
-/// `GeometryCount`: the number of entries in the constraint-addressable geometry
-/// list.
+/// `GeometryCount`: the number of geometry elements, construction included.
 #[pyfunction]
 fn sketch_geometry_count(object: &Bound<'_, PyAny>) -> PyResult<usize> {
     require_sketch(object, "GeometryCount")?;
@@ -2903,12 +3308,14 @@ fn sketch_constraint_count(object: &Bound<'_, PyAny>) -> PyResult<usize> {
     Ok(sketch_string_list(object, CONSTRAINT_DATA)?.len())
 }
 
-/// `Constraints`: the stored constraints as `Sketcher.Constraint` objects.
+/// `Constraints`: the stored constraints as `Sketcher.Constraint` objects,
+/// translated to upstream's positional GeoIds.
 #[pyfunction]
 fn sketch_constraint_objects(object: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     require_sketch(object, "Constraints")?;
+    let state = read_geometry(object)?;
     let constraints = sketch_constraints(object)?;
-    constraint_objects(object.py(), &constraints)
+    constraint_objects(object.py(), &state, &constraints)
 }
 
 /// `RedundantConstraints`: upstream's one-based indices of the redundant set.
@@ -2924,15 +3331,17 @@ fn sketch_redundant_constraints(object: &Bound<'_, PyAny>) -> PyResult<Vec<usize
 
 /// `addConstraint(constraint)`: append one constraint or a sequence of them.
 ///
-/// Returns the index of the last constraint added, or `-1` when the argument was
-/// an empty sequence (upstream's return convention).
+/// The argument speaks upstream's positional GeoIds; the stored record keeps the
+/// stable ids. Returns the index of the last constraint added, or `-1` when the
+/// argument was an empty sequence (upstream's return convention).
 #[pyfunction]
 fn sketch_add_constraint(
     object: &Bound<'_, PyAny>,
     constraint: &Bound<'_, PyAny>,
 ) -> PyResult<isize> {
     require_sketch(object, "addConstraint")?;
-    let added = constraint_arguments(constraint)?;
+    let state = read_geometry(object)?;
+    let added = constraint_arguments(constraint, &state)?;
     if added.is_empty() {
         return Ok(-1);
     }
@@ -3000,7 +3409,8 @@ fn sketch_get_datum(object: &Bound<'_, PyAny>, index: usize) -> PyResult<f64> {
 }
 
 /// `solve()`: check the model, and report `0` when every constraint names a
-/// geometry that exists (upstream's "converged" code) or `-1` when one does not.
+/// geometry or root that exists (upstream's "converged" code) or `-1` when one
+/// does not.
 ///
 /// **This does not move geometry.** FerroCAD stores the constraint model and
 /// diagnoses its references; the numerical solve is P4 SK2's PlanGCS binding.
@@ -3009,18 +3419,38 @@ fn sketch_get_datum(object: &Bound<'_, PyAny>, index: usize) -> PyResult<f64> {
 #[pyfunction]
 fn sketch_solve(object: &Bound<'_, PyAny>) -> PyResult<i32> {
     require_sketch(object, "solve")?;
-    let count = sketch_geometry_len(object)? as i64;
+    let state = read_geometry(object)?;
     for constraint in sketch_constraints(object)? {
-        if constraint.first < 0 || constraint.first >= count {
+        if !state.resolves(&constraint) {
             return Ok(-1);
         }
     }
     Ok(0)
 }
 
+/// Add a staged constraint unless the sketch already says the same thing.
+fn stage_constraint(
+    found: &mut Vec<SketchConstraint>,
+    existing: &[SketchConstraint],
+    candidate: SketchConstraint,
+) {
+    let known = existing
+        .iter()
+        .chain(found.iter())
+        .any(|have| same_constraint(have, &candidate));
+    if !known {
+        found.push(candidate);
+    }
+}
+
 /// `detectMissingPointOnPointConstraints(tol)`: find endpoint pairs that
 /// coincide but carry no `Coincident` constraint yet, and stage them for
 /// `makeMissingPointOnPointCoincident`.
+///
+/// Two kinds of coincidence are found: a pair of geometry endpoints (including
+/// construction geometry, which is real geometry for a constraint) and an
+/// endpoint sitting on the sketch origin, which is upstream's coincidence with
+/// the root point (`-1`, `PointPos.start`).
 #[pyfunction]
 #[pyo3(signature = (object, tolerance = SKETCH_TOLERANCE))]
 fn sketch_detect_point_on_point(
@@ -3028,16 +3458,16 @@ fn sketch_detect_point_on_point(
     tolerance: f64,
 ) -> PyResult<usize> {
     require_sketch(object, "detectMissingPointOnPointConstraints")?;
-    let edges = sketch_stored_geometry(object, GEOMETRY)?;
+    let state = read_geometry(object)?;
     let endpoints: Vec<Option<(Vector3, Vector3)>> =
-        edges.iter().map(edge_endpoints).collect();
+        state.shapes.iter().map(edge_endpoints).collect();
     let existing = sketch_constraints(object)?;
     let mut found: Vec<SketchConstraint> = Vec::new();
-    for i in 0..edges.len() {
+    for i in 0..state.len() {
         let Some((i_start, i_end)) = endpoints[i] else {
             continue;
         };
-        for j in (i + 1)..edges.len() {
+        for j in (i + 1)..state.len() {
             let Some((j_start, j_end)) = endpoints[j] else {
                 continue;
             };
@@ -3050,20 +3480,31 @@ fn sketch_detect_point_on_point(
                     if first_point.sub(&second_point).length() > tolerance {
                         continue;
                     }
-                    let mut candidate = SketchConstraint::new("Coincident");
-                    candidate.first = i as i64;
+                    let mut candidate = SketchConstraint::new(
+                        "Coincident",
+                        GeoRef::Id(state.ids[i].clone()),
+                    );
                     candidate.first_pos = first_pos;
-                    candidate.second = j as i64;
+                    candidate.second = Some(GeoRef::Id(state.ids[j].clone()));
                     candidate.second_pos = second_pos;
-                    let known = existing
-                        .iter()
-                        .chain(found.iter())
-                        .any(|have| same_constraint(have, &candidate));
-                    if !known {
-                        found.push(candidate);
-                    }
+                    stage_constraint(&mut found, &existing, candidate);
                 }
             }
+        }
+    }
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let Some((start, end)) = endpoint else {
+            continue;
+        };
+        for (point_pos, point) in [(POINT_POS_START, start), (POINT_POS_END, end)] {
+            if point.length() > tolerance {
+                continue;
+            }
+            let mut candidate = SketchConstraint::new("Coincident", GeoRef::Root(ROOT_X_AXIS));
+            candidate.first_pos = POINT_POS_START;
+            candidate.second = Some(GeoRef::Id(state.ids[index].clone()));
+            candidate.second_pos = point_pos;
+            stage_constraint(&mut found, &existing, candidate);
         }
     }
     store_pending_constraints(object, MISSING_POINT_ON_POINT, &found)?;
@@ -3092,13 +3533,13 @@ fn sketch_detect_vertical_horizontal(
     tolerance: f64,
 ) -> PyResult<usize> {
     require_sketch(object, "detectMissingVerticalHorizontalConstraints")?;
-    let edges = sketch_stored_geometry(object, GEOMETRY)?;
+    let state = read_geometry(object)?;
     let existing = sketch_constraints(object)?;
     let mut found: Vec<SketchConstraint> = Vec::new();
-    for (index, edge) in edges.iter().enumerate() {
-        let index = index as i64;
+    for (index, edge) in state.shapes.iter().enumerate() {
+        let id = GeoRef::Id(state.ids[index].clone());
         let already = existing.iter().any(|have| {
-            have.first == index && (have.kind == "Vertical" || have.kind == "Horizontal")
+            have.first == id && (have.kind == "Vertical" || have.kind == "Horizontal")
         });
         if already || !is_straight_edge(edge) {
             continue;
@@ -3119,9 +3560,7 @@ fn sketch_detect_vertical_horizontal(
         } else {
             continue;
         };
-        let mut candidate = SketchConstraint::new(kind);
-        candidate.first = index;
-        found.push(candidate);
+        found.push(SketchConstraint::new(kind, id));
     }
     store_pending_constraints(object, MISSING_VERTICAL_HORIZONTAL, &found)?;
     Ok(found.len())
@@ -3171,6 +3610,15 @@ fn install_sketch_methods(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let methods = PyDict::new(py);
     methods.set_item("addGeometry", wrap_pyfunction!(sketch_add_geometry, m)?)?;
+    methods.set_item("delGeometry", wrap_pyfunction!(sketch_del_geometry, m)?)?;
+    methods.set_item(
+        "toggleConstruction",
+        wrap_pyfunction!(sketch_toggle_construction, m)?,
+    )?;
+    methods.set_item(
+        "getConstruction",
+        wrap_pyfunction!(sketch_get_construction, m)?,
+    )?;
     methods.set_item("addConstraint", wrap_pyfunction!(sketch_add_constraint, m)?)?;
     methods.set_item("delConstraint", wrap_pyfunction!(sketch_del_constraint, m)?)?;
     methods.set_item("setDatum", wrap_pyfunction!(sketch_set_datum, m)?)?;

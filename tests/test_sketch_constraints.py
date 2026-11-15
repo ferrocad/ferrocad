@@ -13,6 +13,7 @@ Run::
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 
 import FreeCAD as App
@@ -160,37 +161,147 @@ class SketchDocumentTests(unittest.TestCase):
         with self.assertRaises(IndexError):
             self.sketch.delConstraint(4)
 
-    def test_solve_reports_a_dangling_reference_but_moves_nothing(self):
+    def test_unused_references_are_geoundef_and_roots_are_negative(self):
+        vertical = Sketcher.Constraint("Vertical", 0)
+        self.assertEqual(vertical.Second, Sketcher.GeoUndef)
+        self.assertEqual(vertical.Third, Sketcher.GeoUndef)
+        self.assertEqual(Sketcher.GeoUndef, -2000)
+
+        root = Sketcher.Constraint(
+            "Coincident", -1, Sketcher.PointPos.start, 0, Sketcher.PointPos.start
+        )
+        self.assertEqual(root.First, -1)
+        self.assertEqual(root.Second, 0)
+
+    def test_solve_reports_a_dangling_record_but_moves_nothing(self):
         self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
         self.sketch.addConstraint(Sketcher.Constraint("Vertical", 0))
         self.assertEqual(self.sketch.solve(), 0)
-        # A geometry index that does not exist is a model error.
-        self.sketch.addConstraint(Sketcher.Constraint("Horizontal", 7))
+
+        # An index that names no geometry is refused while the record is read.
+        with self.assertRaises(IndexError):
+            self.sketch.addConstraint(Sketcher.Constraint("Horizontal", 7))
+
+        # A record already in the property that names a vanished id is a model
+        # error: `solve` reports it and the getter refuses to invent a position.
+        self.sketch.ConstraintData = ["Vertical;first=#gone"]
         self.assertEqual(self.sketch.solve(), -1)
+        with self.assertRaises(ValueError) as caught:
+            self.sketch.Constraints  # noqa: B018 - the getter is the assertion
+        self.assertIn("gone", str(caught.exception))
 
     def test_redundant_constraints_is_empty_without_a_solver(self):
         self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
         self.sketch.addConstraint(Sketcher.Constraint("Vertical", 0))
         self.assertEqual(self.sketch.RedundantConstraints, [])
 
-    def test_autoconstraints_find_the_coincidence_and_the_axis(self):
+    def test_autoconstraints_find_the_pair_the_axis_and_the_root(self):
         self.sketch.addGeometry(_segment((0, 0), (2, 2)), False)
         self.sketch.addGeometry(_segment((2, 2), (2, 4)), False)
-        self.assertEqual(self.sketch.detectMissingPointOnPointConstraints(1e-3), 1)
-        self.assertEqual(self.sketch.makeMissingPointOnPointCoincident(False), 1)
+        # The pair, plus the first edge's start on the origin (the root point).
+        self.assertEqual(self.sketch.detectMissingPointOnPointConstraints(1e-3), 2)
+        self.assertEqual(self.sketch.makeMissingPointOnPointCoincident(False), 2)
         self.assertEqual(self.sketch.detectMissingVerticalHorizontalConstraints(1e-3), 1)
         self.assertEqual(self.sketch.makeMissingVerticalHorizontal(False), 1)
 
-        kinds = [c.Type for c in self.sketch.Constraints]
-        self.assertEqual(kinds, ["Coincident", "Vertical"])
-        coincident = self.sketch.Constraints[0]
+        constraints = self.sketch.Constraints
+        self.assertEqual([c.Type for c in constraints], ["Coincident", "Coincident", "Vertical"])
+        pair = constraints[0]
         self.assertEqual(
-            (coincident.First, coincident.FirstPos, coincident.Second, coincident.SecondPos),
+            (pair.First, pair.FirstPos, pair.Second, pair.SecondPos),
             (0, Sketcher.PointPos.end, 1, Sketcher.PointPos.start),
+        )
+        root = constraints[1]
+        self.assertEqual(
+            (root.First, root.FirstPos, root.Second, root.SecondPos),
+            (-1, Sketcher.PointPos.start, 0, Sketcher.PointPos.start),
+            "an endpoint on the origin is a coincidence with the root point",
         )
 
         # The pending lists were consumed, so a second pass finds nothing.
         self.assertEqual(self.sketch.detectMissingPointOnPointConstraints(1e-3), 0)
+
+    def test_deleting_geometry_keeps_the_surviving_constraints(self):
+        for start, end in [((0, 0), (1, 0)), ((1, 0), (2, 0)), ((2, 0), (3, 0))]:
+            self.sketch.addGeometry(_segment(start, end), False)
+        self.assertEqual(list(self.sketch.GeometryIds), ["g1", "g2", "g3"])
+
+        self.sketch.addConstraint(Sketcher.Constraint("Equal", 0, 2))
+        self.sketch.addConstraint(Sketcher.Constraint("Equal", 1, 2))
+        self.sketch.delGeometry(1)
+
+        self.assertEqual(self.sketch.GeometryCount, 2)
+        self.assertEqual(list(self.sketch.GeometryIds), ["g1", "g3"])
+        self.assertEqual(self.sketch.ConstraintCount, 1)
+        survivor = self.sketch.Constraints[0]
+        self.assertEqual(
+            (survivor.First, survivor.Second),
+            (0, 1),
+            "the surviving constraint is re-indexed, not scrambled",
+        )
+        self.assertEqual(self.sketch.solve(), 0)
+        with self.assertRaises(IndexError):
+            self.sketch.delGeometry(5)
+
+    def test_construction_geometry_is_addressable_but_not_drawn(self):
+        self.sketch.addGeometry(_segment((0, 0), (1, 0)), False)
+        self.sketch.addGeometry(_segment((0, 1), (0, 2)), True)
+        self.document.recompute()
+
+        self.assertEqual(self.sketch.GeometryCount, 2)
+        self.assertFalse(self.sketch.getConstruction(0))
+        self.assertTrue(self.sketch.getConstruction(1))
+        self.assertEqual(len(self.sketch.Shape.Edges), 1, "only the visible edge is drawn")
+
+        # A construction element is a valid constraint target.
+        self.sketch.addConstraint(Sketcher.Constraint("Vertical", 1))
+        self.assertEqual(self.sketch.solve(), 0)
+
+        self.sketch.toggleConstruction(1)
+        self.document.recompute()
+        self.assertFalse(self.sketch.getConstruction(1))
+        self.assertEqual(len(self.sketch.Shape.Edges), 2)
+        self.assertEqual(list(self.sketch.GeometryIds), ["g1", "g2"], "toggling keeps ids")
+        self.assertEqual(self.sketch.ConstraintCount, 1)
+
+        with self.assertRaises(IndexError):
+            self.sketch.getConstruction(9)
+        with self.assertRaises(IndexError):
+            self.sketch.toggleConstruction(9)
+
+    def test_a_sketch_without_the_identity_properties_is_migrated(self):
+        self.sketch.addGeometry(_segment((0, 0), (1, 0)), False)
+        # Drop the pair the way a document written before the identity would
+        # lack them, then make the sketch recreate them.
+        self.sketch.removeProperty("GeometryIds")
+        self.sketch.removeProperty("Construction")
+        self.sketch.addGeometry(_segment((0, 1), (0, 2)), True)
+
+        self.assertEqual(list(self.sketch.GeometryIds), ["g1", "g2"])
+        self.assertTrue(self.sketch.getConstruction(1))
+        self.assertEqual(self.sketch.solve(), 0)
+
+    def test_root_axis_references_are_valid_and_external_ones_are_not(self):
+        self.sketch.addGeometry(_segment((0, 0), (1, 0)), False)
+        self.sketch.addConstraint(
+            Sketcher.Constraint(
+                "Coincident", -1, Sketcher.PointPos.start, 0, Sketcher.PointPos.start
+            )
+        )
+        self.assertEqual(self.sketch.solve(), 0)
+        self.assertEqual(self.sketch.ConstraintData, [
+            "Coincident;first=-1;firstPos=1;second=#g1;secondPos=1"
+        ])
+        self.assertEqual(self.sketch.Constraints[0].First, -1)
+
+        with self.assertRaises(ValueError) as caught:
+            self.sketch.addConstraint(Sketcher.Constraint("Vertical", -3))
+        self.assertIn("external geometry", str(caught.exception))
+
+    def test_a_constraint_needs_a_geometric_reference(self):
+        with self.assertRaises(ValueError) as caught:
+            self.sketch.addConstraint(Sketcher.Constraint("Vertical", Sketcher.GeoUndef))
+        self.assertIn("names no geometry", str(caught.exception))
 
     def test_an_unknown_constraint_type_is_refused_with_the_list(self):
         class _Record:
@@ -208,6 +319,39 @@ class SketchDocumentTests(unittest.TestCase):
         for name in ("addConstraint", "solve", "ConstraintCount"):
             with self.assertRaises(AttributeError):
                 getattr(box, name)
+
+
+class SketchPersistenceTests(unittest.TestCase):
+    """The identity, the flags and the constraints are ordinary properties."""
+
+    def test_identity_construction_and_constraints_survive_a_reload(self):
+        document, sketch = _document("SketchPersistence")
+        reopened = None
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/sketch.FCStd"
+            try:
+                sketch.addGeometry(_segment((0, 0), (1, 0)), False)
+                sketch.addGeometry(_segment((0, 1), (0, 2)), True)
+                sketch.addConstraint(Sketcher.Constraint("Equal", 0, 1))
+                sketch.addConstraint(
+                    Sketcher.Constraint(
+                        "Coincident", -1, Sketcher.PointPos.start, 0, Sketcher.PointPos.start
+                    )
+                )
+                document.saveAs(path)
+
+                reopened = App.openDocument(path)
+                loaded = reopened.getObject("Sketch")
+                self.assertEqual(list(loaded.GeometryIds), ["g1", "g2"])
+                self.assertEqual(list(loaded.Construction), [False, True])
+                self.assertEqual(loaded.solve(), 0)
+                constraints = loaded.Constraints
+                self.assertEqual([c.Type for c in constraints], ["Equal", "Coincident"])
+                self.assertEqual(constraints[1].First, -1, "a root reference survives")
+            finally:
+                App.closeDocument(document.Name)
+                if reopened is not None:
+                    App.closeDocument(reopened.Name)
 
 
 class SketchPlaneTests(unittest.TestCase):

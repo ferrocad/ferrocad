@@ -482,7 +482,7 @@ product path and the only one that gives an interactive viewport; it is per-tool
 | --- | --- | --- |
 | **UI-1** | **Measure the Qt-blocked unit modules headlessly.** `--simplecad-gui` runs the five modules the main group skips (they build a `QApplication` in `setUpClass`) against real PySide6 with the offscreen platform, and self-skips when no distribution is installed. | **landed 2026-11-15**: **78 / 1 / 0 / 0** over five modules |
 | UI-2 | **The workbench host.** `Gui.Workbench`, `addWorkbench`, `listWorkbenches`, `activateWorkbench`, `activeWorkbench`, `appendToolbar`/`appendMenu`/`appendContextMenu` → the shell's command catalogue. `../simplecad/InitGui.py` imports and declares its five toolbars and menus; `--check-init` proves it headlessly. | **landed 2026-11-15**: five toolbars, six menus, 49 ids; see UI-5 |
-| UI-3 | **The edition skeleton.** `ferrocad_simplecad` (module + `--edition simplecad`), `SimpleCAD_*` command ids, and the first three tools on our stage: Rectangle (two clicks), Line (the polyline tool), Push/Pull (the existing stem). Each pinned by a round-trip test in the Parametric mould. | after UI-2 |
+| UI-3 | **The edition skeleton.** `ferrocad_simplecad` (crate, app script, `--check-init`), the `SimpleCAD_Rectangle` id and the two-click rectangle on our stage, and the Parametric tool/manipulator ids re-registered beside it so the inherited command set resolves. Pinned by a round-trip test in the Parametric mould. | **landed 2026-11-15**: edition + first native tool; see UI-6 |
 | UI-4 | **The rest of the tool surface, in use order.** Circle/Arc/Polygon, Round (the dress-up scrubber, already generic), Offset/Elongate, Move/Rotate, the surface tools (imprint/shell/fill-hole/unwrap) — each a command over `simplecad.modeling`. The 63 `tests/gui/gui_*.py` scripts are the behavioural reference: each is a state machine to translate into a stage-tool test. | incremental |
 | UI-5 | **The two windows that are not the viewport**: the face browser (a dock panel) and the numeric-input rows. The shell already has a properties panel and a manipulator numeric row; these are the same seams. | after UI-3 |
 
@@ -559,3 +559,61 @@ toolbar's `SimpleCAD_SmartSelect` is reported as a group.
 This is the **declaration** half of route (a) — it is the part that is genuinely portable.
 The next slice (UI-3) is the first native tool: `ferrocad_simplecad` registering our own
 command ids and a two-click Rectangle on the GPUI stage.
+
+## UI-6. UI-3, as measured
+
+```sh
+cargo test -p ferrocad_simplecad            # 3: the rectangle round trip
+cargo run  -p ferrocad_simplecad -- --check-init   # ferrocad: init OK
+```
+
+The edition exists as a crate in the Sculpt/Parametric mould: `ferrocad_combined_py`'s
+built-ins registered before the interpreter starts, `ferrocad::edition_args()` for the
+flags, `--check-init` / `--render` / the window each on their own branch, and
+`run_edition_with_script("FerroCAD: SimpleCAD", "ferrocad_simplecad", …)`. Three pieces
+are worth naming:
+
+**The contributions are Parametric's plus one tool.** `contributions()` is
+`ferrocad::base_contributions()` + the two Part manipulators (`fillet_manipulator`,
+`push_pull_manipulator`) + the two polyline tools (`polyline`, `sketch_polyline`) +
+`rectangle`. The first four are not decoration: the app script re-exports
+`ferrocad_parametric`, so the edition's command set **is** the Part one, and a command
+whose `{"tool": id}` the host cannot resolve reports `no such tool <id>` the moment it is
+clicked. Registering the ids is what makes the inherited surface honest, and
+`cargo xtask editions --check` now *requires* `ferrocad_part_gui` in this edition's
+closure so the push/pull stem cannot silently disappear. `TaggedPolyline` (the polyline
+tool under a workbench-specific manipulator id) moved from
+`ferrocad_parametric/src/main.rs` into `ferrocad_stage`, so the two editions share one
+definition of it instead of two copies.
+
+**`Tool::completed()` is the new lifecycle seam.** A two-click rectangle needs no
+`Enter`; the host should finish it on the press that completed it. `Tool` gained a
+defaulted `completed() -> bool` (default `false`, so a polyline is unchanged), and the
+viewport's `dispatch_tool` calls `finish_tool()` when it turns true — which is the same
+path `Enter` takes, so there is one commit route rather than a second one. The pointer-up
+that follows the press emits the commit.
+
+**The script names the object, the tool collects the geometry.** `_create_rectangle`
+turns the twelve committed numbers into one `Part::Feature` in one named transaction,
+through `simplecad.core.geometry.rectangle` when the package is importable and
+`Part.Face(Part.makePolygon(…))` when it is not — the round trip asserts both build the
+same face (area 40, bbox 10 × 4). The provider is registered as `_interaction`, not
+`interaction`: `interaction` is the *shell* entry point the Python host calls by name,
+and shadowing it hands the hook a JSON string where the host expects a list.
+
+| Check | Result |
+| --- | --- |
+| `ferrocad_stage --lib` | **268** (4 rectangle cases + the tag case) |
+| `ferrocad_viewport` | **235 / 0 / 1 ignored** (the auto-finish is on the existing dispatch path) |
+| `ferrocad_simplecad` | **3**: the two-click chain through the real registry, a degenerate click, a vertical drag |
+| `ferrocad_parametric` | all suites green (the `TaggedPolyline` move) |
+| `run_tests.py --extension base` | **718 / 0 / 0 / 8** |
+| `run_tests.py --extension workbenches` | **881 / 0 / 0 / 3** |
+| `conformance.py --simplecad-gui` | **78 / 1 / 0 / 0** (unchanged; the 1 is UI-4's classified `BoundBox` case) |
+| `cargo xtask editions --check` | green over **14 editions** (`ferrocad_simplecad`: 35 crates) |
+
+**Not done, deliberately.** Packaging is not wired (`xtask bundle` still knows
+`parametric` and `sculpt`; no `packaging/editions/simplecad.json`, no release-matrix
+row), and the rest of the tool surface — Circle/Arc/Polygon, Round, Offset,
+Move/Rotate, the surface tools — is UI-4. Line and Push/Pull already work here because
+they are the Parametric edition's tools, not new ones.

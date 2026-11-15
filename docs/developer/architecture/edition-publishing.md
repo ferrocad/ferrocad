@@ -43,6 +43,19 @@ app script: `ferrocad_sculpt` re-exports `ferrocad_parametric` (so a
 and adds the `Sculpt_*` commands and a sculpted startup sample. A published
 Sculpt artifact is therefore a naming/selection change, not new packaging work.
 
+`FerroCAD: SimpleCAD` is the third edition, and the first whose Rust composition
+differs from Parametric's by *adding* rather than by dropping a crate: it is
+`ferrocad::base_contributions()` plus the two Part manipulators and the two
+polyline tools (the ids its re-exported Parametric command set names) plus its own
+two-click rectangle. `contracts/editions.json` therefore records it as Parametric's
+closure plus `ferrocad_simplecad` itself, and `cargo xtask editions --check`
+requires `ferrocad_part_gui` so the edition cannot lose the push/pull stem its own
+command set assumes. Packaging is **not** wired: the `xtask` edition selector
+knows `parametric` and `sculpt` only, and `packaging/editions/simplecad.json`,
+the AppImage/portable cases and the release-matrix row are the release-round
+work. Until then the edition runs from the checkout
+(`cargo run -p ferrocad_simplecad`, or `-- --check-init` headlessly).
+
 ## 2. The moving parts
 
 Everything below already exists for the base app; the edition extends each.

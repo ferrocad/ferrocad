@@ -383,6 +383,12 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
 - `Tool`, `ToolStatus` (label, point count, hint), `Tool::finish() ->
   Option<InteractionCommit>` with `creates: true`, and the in-place bar swap
   (`match active_tool { Some(tool) => tool_strip(tool), None => action_dock(model) }`).
+- `Tool::completed()` — the **self-finishing** seam, defaulted to `false`. A tool that
+  needs no more input (the two-click rectangle) says so, and the viewport finishes it on
+  the event that completed it instead of waiting for `Enter`; the commit still travels
+  the `Enter` path, so there is one route, not two. A polyline keeps the default (its
+  length is the user's call). `ferrocad_simplecad`'s `SimpleCAD_Rectangle` is the first
+  tool to use it.
 - A tool's first left press on a planar face binds the session workplane (sticky;
   `Tool::picks_workplane` opts a plane-picking tool out). The hover preview frame is new.
 - The parametric edition's `_push_pull` already commits `Part::Fuse`/`Part::Cut` with a

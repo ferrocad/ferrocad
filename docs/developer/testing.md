@@ -139,6 +139,7 @@ The rules themselves live in `crates/xtask/src/editions.rs`:
 | `ferrocad_py` | must not reach `ferrocad_part_py`, `ferrocad_mesh_py`, `ferrocad_occt` (the App-only extension) |
 | `ferrocad_parametric` | must reach `ferrocad_part_py` and `ferrocad_occt` |
 | `ferrocad_sculpt` | must reach `ferrocad_part_py`, `ferrocad_mesh_py` and `ferrocad_occt` |
+| `ferrocad_simplecad` | must reach `ferrocad_part_py`, `ferrocad_part_gui` and `ferrocad_occt` (it re-exports the Parametric command set, so the push/pull and dress-up manipulators behind those ids have to be linked) |
 | `ferrocad_combined_py` | must reach `ferrocad_part_py` and `ferrocad_mesh_py` |
 
 The purpose is narrow and deliberate: a lightweight edition must not silently
@@ -158,8 +159,8 @@ shape, and constructing a Part feature edit — are the `DocumentEngine` trait, 
 
 `ferrocad_shell_python` composes `ferrocad_shell_doc` by default. Its `part`
 feature swaps `ferrocad_shell_rust::PartEngine` in, and only an edition that links
-the Part workbench turns it on (`ferrocad/part`, from `ferrocad_parametric` and
-`ferrocad_sculpt`). That is why the base app and the toy edition pass the
+the Part workbench turns it on (`ferrocad/part`, from `ferrocad_parametric`,
+`ferrocad_sculpt` and `ferrocad_simplecad`). That is why the base app and the toy edition pass the
 *strict* rule above rather than a carve-out: neither reaches the engine by any
 route. The kernel-free backend still opens and saves documents, keeps undo, and
 draws whatever a script half meshes — the toy edition's whole display path.

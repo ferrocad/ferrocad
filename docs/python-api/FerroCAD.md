@@ -13,11 +13,13 @@ _A mod that imports this depends on FerroCAD; it is not upstream API._
 
 | Function | Summary |
 | --- | --- |
+| `delete_selection(items, remove_objects)` | Apply a delete through the first module that owns the selection. |
 | `display_mesh(obj)` | The display mesh for `obj`, from the first module that claims it. |
 | `interaction(obj, manipulator, action, element='', values=None)` | Apply a manipulator commit through the first module that supports it. |
 | `manipulator_probe(obj, element='', manipulator='')` | The first module's answer for ``(obj, element, manipulator)``, or ``None``. |
 | `manipulator_specs(obj, element='')` | The declarative handles every module declares for ``obj``, in order. |
 | `parameter_file()` | The parameter file in use, or ``None`` while the store is memory-only. |
+| `register_delete_provider(provider)` | Let ``provider(items)`` take over a delete the selection asks for. |
 | `register_display_provider(provider, default=False)` | Let ``provider(obj)`` supply the display mesh of a document object. |
 | `register_interaction_provider(provider)` | Let ``provider(obj, manipulator, action, element, values)`` apply an edit. |
 | `register_manipulator_probe(provider)` | Let ``provider(obj, element, manipulator)`` answer for the kernel's side. |

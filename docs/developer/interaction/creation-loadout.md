@@ -393,6 +393,17 @@ against the existing `Tool` and `InteractionCommit::creating` paths. The theme g
   aligned with it is the normal), with the ring/polygon/arc sampling the round tools
   preview with. `rectangle_corners` uses the same `drag_axes`, so "the plane the user drew
   in" has one definition and no tool needs active-workplane state to preview honestly.
+- **`App_Delete` has a sub-element half.** The shell's edit command offers a selection that
+  names `FaceN`/`EdgeN` to `FerroCAD.register_delete_provider` before falling back to its
+  own whole-object delete, which is what keeps a kernel-free build unchanged. The Part
+  workbench answers by removing the faces/edges and re-sewing the body in one transaction
+  (`Part_HealFaces` is the same path refusing an open result), so the `Delete`/`Backspace`
+  verb the Modify hand names is real for geometry, not only for objects.
+- **Declared element handles** carry the one-scalar verbs the compiled manipulators refuse:
+  `ferrocad_simplecad` publishes `simplecad_element` (`offset`, `elongate`, `rotate`) for a
+  **curved** face and for a **faceless** item's circular edge — never a planar face
+  (`PushPullStem`) or a body's edge (`DressUpScrubber`), so one pick has exactly one
+  handle, and the value lives in the docked row the declarative path already builds.
 - A tool's first left press on a planar face binds the session workplane (sticky;
   `Tool::picks_workplane` opts a plane-picking tool out). The hover preview frame is new.
 - The parametric edition's `_push_pull` already commits `Part::Fuse`/`Part::Cut` with a

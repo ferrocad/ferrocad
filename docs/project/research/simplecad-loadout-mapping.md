@@ -158,7 +158,7 @@ entry box.
 | SimpleCAD | Ours | Scope | Status |
 | --- | --- | --- | --- |
 | `Move` (whole objects) | translate gizmo + `transform/apply` | `Body` | **wired** |
-| `Rotate` (whole objects) | `TransformGizmo::rotate` exists; only the translate factory is registered | `Body` | **hook**: one `rotate_gizmo` factory + `with_gizmo_kinds` |
+| `Rotate` (whole objects) | the base `translate_gizmo` declares `GizmoKind::ALL`, so the set already carries a Rotate entry; `Gizmo ▾` narrows to it | `Body` | **wired** (verified by the loadout round trip) |
 | `Rotate` (selected lines/arcs/faces) | a declared `Ring` handle at the selection's centroid, commit `rotate/apply` | `Face`/`Edge` | **hook**: `document.operations.commit_rotation`, one provider case |
 | `Elongate` | a declared `Axis` handle: the drag *is* the elongation | `Face`/`Edge` | **hook**: `document.operations.elongate` |
 | `VertexMove` | a declared `Plane` handle at a vertex | `Vertex` | **hook** on the kernel; **rust** for a Vertex pick scope (`SelectFilter` has no `Vertex`) |
@@ -248,7 +248,7 @@ command whose `IsActive` does the gating. What is missing is a provider case, at
 | `Elongate` | `document.operations.elongate` | declared `Axis` handle |
 | `Shell`, `Draft`, `FillHole`, `Unwrap`, `RemoveRounds` | `surfaces.operations.shell`/`draft`/`fill_holes`/`unwrap`/`remove_rounds` | declared handle for the one scalar; command for the rest |
 | `Rotate` sub-shape | `document.operations.commit_rotation` | declared `Ring` handle |
-| `Rotate` whole objects | `TransformGizmo::rotate` | one gizmo factory |
+| `Rotate` whole objects | the base factory's `GizmoKind::ALL` | already served; no factory needed |
 | Chamfer | `dress_up/chamfer` | one manipulator factory |
 | `VertexMove` | `document.operations.move_vertex` | declared `Plane` handle (**blocked** on a Vertex pick scope) |
 | `Loft`, `Sweep` | `document.operations.prepare_profiles`/`commit_form` | command + `IsActive` |
@@ -329,7 +329,90 @@ reference, and the SimpleCAD suite (1039 / 6 / 2 / 7) as the kernel gate.
 - **No new palette entries for their own sake**: a command that a slot or the pill can carry
   should not also get a toolbar row.
 
-## 8. Open questions
+## 8. What landed (2026-11-15)
+
+Steps 1–3 of §6 are in, **Python-only** except for one new provider seam in the shell
+script. Everything below is pinned by `crates/ferrocad_simplecad/tests/loadout_round_trip.rs`
+(8 cases) and by the unchanged suites (`ferrocad_parametric`, `ferrocad_toy`, `base`
+718/0/0/8, `workbenches` 881/0/0/3).
+
+### Step 1 — sub-element delete and heal
+
+- **The seam is a provider, not a fork of the command.** `python/FerroCAD/__init__.py`
+  gained `register_delete_provider` / `delete_selection(items, remove_objects)`;
+  `App_Delete` builds `[(object, sub-elements)]` and offers it to the providers, falling
+  back to its own whole-object path when none claims it. A kernel-free build (the toy
+  edition) is therefore unchanged, byte for byte: the fallback *is* the old code.
+- **The Part implementation is Part-only.** `ferrocad_parametric._delete_subshape`
+  removes faces by re-sewing the rest (`Part.makeShell` → `Part.Solid` when it closes),
+  merges edges by unifying coplanar faces (`removeSplitter`), refuses a result that is not
+  valid, and writes one transaction. On a box, deleting a face leaves an **open surface**
+  (5 faces) and one undo restores the solid; deleting the seam of two coplanar faces
+  merges them into one.
+- **`Part_HealFaces`** is the same path with the open result disallowed: it succeeds when
+  the neighbours already close and refuses otherwise. **Limit, recorded**: growing the
+  neighbours across the opening (SimpleCAD's real heal) is not implemented — a pocket's
+  faces leave a hole in a planar face, which this refuses rather than fills.
+
+### Step 2 — Offset / Elongate / OffsetFace as declared handles
+
+- `ferrocad_simplecad` registered a `FerroCAD.register_manipulator_provider` and three
+  commands (`SimpleCAD_Offset`, `_Elongate`, `_RotateEdge`) that arm the verb; the next
+  pick arms the handle, which publishes the **docked** `NumericField` the declarative
+  path already builds (no pointer-following input anywhere).
+- **The disambiguation, as implemented** (the table in §1 of the module, asserted by the
+  test):
+
+| Pick | Manipulator | Why |
+| --- | --- | --- |
+| planar `FaceN` | `PushPullStem` (compiled, slot 2) | an offset of a plane *is* push/pull; the provider returns **no spec** for it |
+| `EdgeN` of a body with faces | `DressUpScrubber` (compiled, slot 3) | a dress-up is the edge edit; the provider declines it |
+| **curved** `FaceN` | `simplecad_element` (`offset`/`elongate`) | `push_pull_stem_for` refuses a non-planar face |
+| circular `EdgeN` of a **faceless** item | `simplecad_element` (`offset`/`elongate`/`rotate`) | `dress_up_scrubber_for` refuses a faceless item |
+
+  The test asserts exactly this: `manipulator_specs("Box", "Face1")` and
+  `("Box", "Edge1")` are empty, the cylinder wall and the drawing rim each carry one
+  spec. Two manipulators cannot fight over one pick because the families never share
+  one.
+- Commits: a face goes to `surfaces.offset.offset_faces` (the *moving* operation) and is
+  committed here, because the package's wrapper hands the job to a worker process the
+  embedded interpreter cannot spawn; an edge goes to `document.operations.offset`, and
+  `elongate` to `document.operations.elongate`. Each is one undo step (asserted for the
+  face offset and for the profile elongate).
+
+### Step 3 — Rotate and Chamfer
+
+- **Rotate needed no factory.** The base `translate_gizmo` already declares
+  `GizmoKind::ALL`, so the registry emits a Rotate entry and `Gizmo ▾`'s Rotate verb
+  narrows the set to rings — the recorded claim in §5 is corrected here. What was
+  missing was the **sub-element** case: a declared `ring` handle on a drawing's circular
+  edge, committing degrees. `Rotate` of an arc about its own centre is asserted
+  (45° moves the start from `(10, 0, 0)` to `(7.07, 7.07, 0)`, length unchanged, undo
+  restores).
+- **Chamfer** is wired two ways, both conflict-free with the Fillet scrubber:
+  - `Part_Chamfer` applies a chamfer to the selected edges through `_apply_dress_up` — the
+    same feature the scrubber writes, so the declared grip re-opens it;
+  - `_dress_up_target` now answers a **chamfer** as well as a fillet: its band is the one
+    face whose *every* edge the feature added, so picking it re-opens the chamfer as a
+    chamfer instead of silently converting it to a fillet (which is what the old
+    fillet-only answer would have done). Only a **symmetric** chamfer re-opens: one
+    declared field cannot carry two distances. **Limit, recorded.**
+- A persistent Slot 3 *mode* switch (scrubber as chamfer) is still C2 work: a second
+  compiled factory would shadow the fillet by hit priority, and a declared one would
+  draw a second grip beside it.
+
+### Measured
+
+| Check | Result |
+| --- | --- |
+| `ferrocad_simplecad` | **8** loadout cases + the 6 drawing cases |
+| `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (41 part_gui) |
+| `ferrocad_shell_core` | **290** (one run failed the known parallel-load HUD flake; green alone and on rerun) |
+| `run_tests.py --extension base` / `workbenches` | **718 / 0 / 0 / 8**, **881 / 0 / 0 / 3** |
+| `--check-init` (both editions) | `ferrocad: init OK` |
+| `xtask editions --check` | green, 14 editions (no dependency change) |
+
+## 9. Open questions
 
 1. **`Draw: Surface` vs the `Face` target.** SimpleCAD makes it an explicit combo; the
    two-hand design makes it the hovered target. Keeping both is honest (the combo also

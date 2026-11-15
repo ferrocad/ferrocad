@@ -177,6 +177,17 @@ pub trait Tool {
         false
     }
 
+    /// Whether a **left press** at this event is the tool's own gesture — dragging a
+    /// vertex it placed, say — rather than a click to place the next point.
+    ///
+    /// The host holds every other left press back until the release: released in place
+    /// it is a click and the tool receives it then, but dragged it is the **camera's**, so
+    /// an armed tool never locks the view. A tool that drags its own geometry reports it
+    /// here, and the press reaches it immediately (no orbit can start from it).
+    fn owns_press(&self, _event: &PointerEvent) -> bool {
+        false
+    }
+
     /// The tool's live status for the host's tool strip. A tool with no state reports
     /// [`ToolStatus::inactive`].
     fn status(&self) -> ToolStatus {
@@ -596,6 +607,14 @@ impl Tool for PolylineTool {
         }
     }
 
+    /// A press on a placed vertex starts the vertex **drag**, so it is the tool's press
+    /// and never the camera's; a press anywhere else is a click to place another point.
+    fn owns_press(&self, event: &PointerEvent) -> bool {
+        event.kind == PointerKind::Down
+            && event.button == Some(MouseButton::Left)
+            && self.vertex_at(event).is_some()
+    }
+
     fn cancel(&mut self) -> bool {
         let cancelled = !self.points.is_empty()
             || self.cursor.is_some()
@@ -685,6 +704,10 @@ impl Tool for TaggedPolyline {
 
     fn on_key(&mut self, key: &str, ctrl: bool) -> bool {
         self.inner.on_key(key, ctrl)
+    }
+
+    fn owns_press(&self, event: &PointerEvent) -> bool {
+        self.inner.owns_press(event)
     }
 
     fn status(&self) -> ToolStatus {

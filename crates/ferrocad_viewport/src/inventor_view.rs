@@ -586,6 +586,9 @@ pub struct InventorViewport<V: InventorView> {
     navicube_drag: Option<NavicubeDrag>,
     /// An in-progress main-camera orbit drag, started by a press on the scene.
     orbit_drag: Option<OrbitDrag>,
+    /// A left press held back until the release decides click-or-drag (see
+    /// [`PendingPress`]).
+    pending_press: Option<PendingPress>,
     /// An in-progress compass-ring scrub.
     ring_drag: Option<RingDrag>,
     /// The smoothed orbit velocity while dragging (logical px/s).
@@ -750,6 +753,20 @@ struct OrbitDrag {
     last: [f32; 2],
     /// Accumulated movement, so a click is not treated as a drag.
     moved: f32,
+}
+
+/// A left press the host is holding back while the pointer is down.
+///
+/// A press with a creation tool armed is only a **click** if the pointer comes back up in
+/// place; dragged, it is the camera's. The tool therefore receives its press at the
+/// release, and the press's own pick and position travel with it so the click binds what
+/// was under the pointer when the button went down.
+#[derive(Clone, Copy, Debug)]
+struct PendingPress {
+    /// The device-pixel position of the press (what the tool sees).
+    device: [i32; 2],
+    /// The CPU pick under the press, if it hit geometry.
+    hit: Option<Hit>,
 }
 
 /// An inertial orbit after the pointer was released: the last (smoothed) velocity in
@@ -1696,6 +1713,7 @@ impl<V: InventorView> InventorViewport<V> {
             directive_cubes: Vec::new(),
             navicube_drag: None,
             orbit_drag: None,
+            pending_press: None,
             ring_drag: None,
             orbit_velocity: [0.0, 0.0],
             last_drag_time: None,
@@ -1802,6 +1820,9 @@ impl<V: InventorView> InventorViewport<V> {
     /// Replace (or clear) the active tool. Starting one queues its
     /// [`ToolStatus`] for the host's strip.
     pub fn set_tool(&mut self, tool: Option<Box<dyn Tool>>) {
+        // A press held back for the camera belongs to the session that was armed when it
+        // went down: a new session must not receive it.
+        self.pending_press = None;
         if tool.is_none() {
             self.set_snap_feedback(None, None);
             self.restore_ephemeral_workplane();
@@ -1867,6 +1888,7 @@ impl<V: InventorView> InventorViewport<V> {
         let status = tool.status().ended();
         tool.cancel();
         self.tool = None;
+        self.pending_press = None;
         self.restore_ephemeral_workplane();
         self.set_snap_feedback(None, None);
         self.rebuild_transient();
@@ -1892,6 +1914,7 @@ impl<V: InventorView> InventorViewport<V> {
         // The tool owns its geometry until it ends; this is where it hands it over.
         self.interaction_commit = tool.finish();
         self.tool = None;
+        self.pending_press = None;
         self.restore_ephemeral_workplane();
         if let Some(plane) = plane {
             // This does not fight `restore_ephemeral_workplane` above: that restore only
@@ -3706,8 +3729,37 @@ impl<V: InventorView> InventorViewport<V> {
             self.update_gizmo_origin_drag(device);
             return self.finish_gizmo_origin_drag();
         }
+        // The release that ends a held-back press (see the press path below): in place it is
+        // a click, so the tool receives the press it never saw; travelled, it was an orbit
+        // and the tool hears nothing. A session that ended while the button was down (Esc,
+        // the host's Cancel) hears nothing either. The delivery is resolved before the
+        // chrome/cube/scene branches so a release that strays over the chrome still
+        // completes the click it began on the canvas.
+        let mut delivered = false;
+        if !down
+            && button == 1
+            && let Some(press) = self.pending_press.take()
+            && orbit_clicked
+            && self.tool.is_some()
+        {
+            self.bind_face_for_tool(press.hit.as_ref());
+            delivered = self.dispatch_tool(
+                PointerKind::Down,
+                press.device,
+                Some(StageButton::Left),
+                press.hit.as_ref(),
+            );
+            delivered |= self.dispatch(
+                &Event::MouseButton {
+                    position: press.device,
+                    button: 1,
+                    down: true,
+                },
+                press.hit.as_ref(),
+            );
+        }
         if self.chrome_contains(logical) {
-            return false;
+            return delivered;
         }
         let in_cube = self
             .navicube
@@ -3888,13 +3940,30 @@ impl<V: InventorView> InventorViewport<V> {
             }
         }
 
-        // A scene drag orbits the camera. The left button leaves the gesture to an
-        // active tool; the middle button always navigates.
-        if down && (button == 2 || (button == 1 && self.tool.is_none())) {
+        // A left press with a creation tool armed is **held back**: released in place it is
+        // a click and the tool places its point then; dragged it is the camera's, so a
+        // drag orbits the view instead of being swallowed by an armed pill. A press the
+        // tool claims as its own gesture (dragging a placed vertex) is delivered now and
+        // starts no orbit. The middle button always navigates.
+        let hit = self.pick(device);
+        let event = PointerEvent {
+            kind: PointerKind::Down,
+            position: device,
+            button: Some(StageButton::Left),
+            hit,
+            projection: Some(ViewProjection::from_camera(&self.camera)),
+        };
+        let tool_takes_press =
+            down && button == 1 && self.tool.as_ref().is_some_and(|tool| tool.owns_press(&event));
+        if down && (button == 2 || (button == 1 && !tool_takes_press)) {
             self.orbit_drag = Some(OrbitDrag {
                 last: logical,
                 moved: 0.0,
             });
+        }
+        if down && button == 1 && !tool_takes_press && self.tool.is_some() {
+            self.pending_press = Some(PendingPress { device, hit });
+            return false;
         }
 
         let kind = if down {
@@ -3902,26 +3971,13 @@ impl<V: InventorView> InventorViewport<V> {
         } else {
             PointerKind::Up
         };
-        let hit = self.pick(device);
         // Tier 1: a creation tool that starts on a planar face binds that face for the
-        // session, with no explicit activation step. Only the session's **first** press
-        // binds — a later click on another face must not slide the plane out from under
-        // points already placed. An explicitly bound plane is sticky and is never
-        // overridden by a click. A **plane-picking** tool is excluded: its points are the
-        // input, so binding the first face would flatten the other two onto its plane.
-        if down
-            && button == 1
-            && self.active_workplane.is_default()
-            && self
-                .tool
-                .as_ref()
-                .is_some_and(|tool| tool.status().points == 0 && !tool.picks_workplane())
-            && let Some(frame) = hit.as_ref().and_then(|hit| self.face_frame_at(hit))
-        {
-            self.ephemeral_restore = Some(self.active_workplane.clone());
-            self.set_active_workplane(ActiveWorkplane::of(&frame));
+        // session, with no explicit activation step.
+        if down && button == 1 {
+            self.bind_face_for_tool(hit.as_ref());
         }
         let mut changed = self.dispatch_tool(kind, device, stage_button(button), hit.as_ref());
+        changed |= delivered;
         let event = Event::MouseButton {
             position: device,
             button,
@@ -3939,6 +3995,31 @@ impl<V: InventorView> InventorViewport<V> {
             changed = true;
         }
         changed
+    }
+
+    /// Bind the session's plane to the face under a press, tier 1 of the creation
+    /// placement.
+    ///
+    /// Only the session's **first** press binds — a later click on another face must not
+    /// slide the plane out from under points already placed. An explicitly bound plane is
+    /// sticky and is never overridden by a click. A **plane-picking** tool is excluded:
+    /// its points are the input, so binding the first face would flatten the other two
+    /// onto its plane.
+    fn bind_face_for_tool(&mut self, hit: Option<&Hit>) -> bool {
+        if !self.active_workplane.is_default()
+            || !self
+                .tool
+                .as_ref()
+                .is_some_and(|tool| tool.status().points == 0 && !tool.picks_workplane())
+        {
+            return false;
+        }
+        let Some(frame) = hit.and_then(|hit| self.face_frame_at(hit)) else {
+            return false;
+        };
+        self.ephemeral_restore = Some(self.active_workplane.clone());
+        self.set_active_workplane(ActiveWorkplane::of(&frame));
+        true
     }
 
     /// Turn a pick into the host-facing selection event.
@@ -9529,6 +9610,63 @@ mod tests {
         view.handle_button([35.0, 5.0], 1, false);
     }
 
+    /// An armed creation tool never locks the camera: a press is decided on the release.
+    ///
+    /// Held and dragged, the left button orbits the view — even with the pointer over the
+    /// plane the tool would place on, which covers every pixel below the horizon. Released
+    /// back in place, it is a click, and the tool places its point **at the press**.
+    #[test]
+    fn an_armed_tool_leaves_the_camera_the_drag() {
+        let armed = |eye: f64| {
+            let camera = Camera {
+                view: Placement::new(Vector3::new(0.0, 0.0, eye), Rotation::identity())
+                    .to_matrix(),
+                projection: Projection::Perspective {
+                    fov_y: 0.8,
+                    near: 0.1,
+                    far: 100.0,
+                },
+                viewport: Viewport::new([100, 100], 1.0),
+            };
+            let mut view =
+                InventorViewport::new(fake(ImageData::default()), camera, Scene::default());
+            view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
+            view
+        };
+
+        // A click over the plane: the press is held for the camera, the release in place
+        // hands it to the tool, which places a point where the button went down.
+        let mut view = armed(-4.0);
+        assert!(
+            !view.handle_button([50.0, 50.0], 1, true),
+            "the press is held back until the release decides"
+        );
+        assert!(view.orbit_drag.is_some(), "the press arms the camera");
+        assert!(
+            view.handle_button([50.0, 50.0], 1, false),
+            "the release in place delivers the click"
+        );
+        assert_eq!(
+            view.tool_status().expect("an active tool").points,
+            1,
+            "a click places the point"
+        );
+
+        // The same press, dragged: the view orbits and the tool keeps its one point.
+        // The press is taken away from the placed vertex, so it is not the tool's own
+        // vertex drag.
+        let before = view.camera.view.m;
+        assert!(!view.handle_button([30.0, 30.0], 1, true));
+        assert!(view.drag_move([60.0, 30.0]), "the drag orbits the camera");
+        assert_ne!(view.camera.view.m, before, "the view actually rotated");
+        assert!(view.handle_button([60.0, 30.0], 1, false));
+        assert_eq!(
+            view.tool_status().expect("an active tool").points,
+            1,
+            "a drag places nothing"
+        );
+    }
+
     #[test]
     fn scrolling_zooms_the_camera() {
         let camera = Camera {
@@ -9827,9 +9965,12 @@ mod tests {
         // Nothing transient is drawn until the tool sees an event.
         assert!(viewport.transient.is_empty());
 
-        // A left press over the scene is dispatched to the tool, which emits a band and a
+        // A left **press** is held back for the camera (see
+        // `an_armed_tool_leaves_the_camera_the_drag`), so it draws nothing yet;
+        // the release back in place delivers the click, and the tool emits a band and a
         // marker (wireframe) for the overlay.
-        assert!(viewport.handle_button([50.0, 50.0], 1, true));
+        assert!(!viewport.handle_button([50.0, 50.0], 1, true));
+        assert!(viewport.handle_button([50.0, 50.0], 1, false));
         assert!(
             !viewport.transient.is_empty(),
             "the tool should emit transient visuals"
@@ -12949,11 +13090,12 @@ mod tests {
             assert!((point[2] - 0.5).abs() < 1e-5, "on the face: {point:?}");
         }
 
-        // The first press binds Face1 as the session's host; the second completes the
+        // The first click binds Face1 as the session's host; the second completes the
         // box, and the commit carries the face to the workbench.
-        assert!(view.handle_button([30.0, 50.0], 1, true));
+        assert!(!view.handle_button([30.0, 50.0], 1, true), "a press is held back");
         assert!(view.handle_button([30.0, 50.0], 1, false));
-        assert!(view.handle_button([45.0, 62.0], 1, true));
+        assert!(!view.handle_button([45.0, 62.0], 1, true), "a press is held back");
+        assert!(view.handle_button([45.0, 62.0], 1, false));
         let commit = view.take_interaction_commit().expect("a commit");
         assert!(commit.creates);
         let host = commit.host.as_ref().expect("the face rides on the commit");
@@ -13863,6 +14005,16 @@ mod tests {
         view
     }
 
+    /// A left click at `logical`: a press and a release in place.
+    ///
+    /// This is how a creation tool receives its input: the host holds the press until the
+    /// release decides click-versus-orbit (see [`PendingPress`]), so a bare press places
+    /// nothing.
+    fn click(view: &mut InventorViewport<FakeView>, logical: [f32; 2]) {
+        view.handle_button(logical, 1, true);
+        view.handle_button(logical, 1, false);
+    }
+
     /// C2: the strip's field write-back reaches the tool and its preview, and a refused
     /// value changes nothing.
     #[test]
@@ -14043,14 +14195,14 @@ mod tests {
         assert_eq!(started.points, 0);
         assert!(started.hint.contains("Esc to cancel"), "{}", started.hint);
 
-        // A press places a point, so the next status counts it and advertises Enter.
-        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        // A click places a point, so the next status counts it and advertises Enter.
+        click(&mut view, identity_logical([-0.25, -0.25]));
         let added = view.take_tool_state().expect("an add status");
         assert_eq!(added.points, 1);
         assert!(added.hint.contains("Enter to finish"), "{}", added.hint);
 
-        // A drag-style press adds another; a move does not change the status.
-        view.handle_button(identity_logical([0.25, 0.25]), 1, true);
+        // A second click adds another; a move does not change the status.
+        click(&mut view, identity_logical([0.25, 0.25]));
         assert_eq!(view.take_tool_state().expect("an add status").points, 2);
         view.handle_pointer(identity_logical([0.1, 0.1]));
         assert!(view.take_tool_state().is_none(), "a cursor move is not a state change");
@@ -14073,7 +14225,7 @@ mod tests {
         // One point is not a polyline: finishing it writes nothing.
         view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
         let _ = view.take_tool_state();
-        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        click(&mut view, identity_logical([-0.25, -0.25]));
         assert!(view.handle_key(&key("enter")));
         assert!(
             view.take_interaction_commit().is_none(),
@@ -14092,9 +14244,9 @@ mod tests {
     fn escape_cancels_the_tool_leaving_no_points_and_no_commit() {
         let mut view = tool_view();
         let _ = view.take_tool_state();
-        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
+        click(&mut view, identity_logical([-0.25, -0.25]));
         view.handle_pointer(identity_logical([0.25, 0.25]));
-        view.handle_button(identity_logical([0.25, 0.25]), 1, true);
+        click(&mut view, identity_logical([0.25, 0.25]));
 
         let status = view.tool_status().expect("an active tool");
         assert!(status.active);
@@ -14157,8 +14309,8 @@ mod tests {
     fn backspace_and_ctrl_z_reach_the_active_tool() {
         let mut view = tool_view();
         let _ = view.take_tool_state();
-        view.handle_button(identity_logical([-0.25, -0.25]), 1, true);
-        view.handle_button(identity_logical([0.25, 0.25]), 1, true);
+        click(&mut view, identity_logical([-0.25, -0.25]));
+        click(&mut view, identity_logical([0.25, 0.25]));
         assert_eq!(view.tool_status().expect("an active tool").points, 2);
 
         assert!(view.handle_key(&key("backspace")), "the tool takes Backspace");
@@ -14186,7 +14338,7 @@ mod tests {
     /// Press the three corners of an axis-aligned triangle in the world `XY` plane.
     fn pick_triangle(view: &mut InventorViewport<FakeView>) {
         for corner in [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25]] {
-            view.handle_button(identity_logical(corner), 1, true);
+            click(view, identity_logical(corner));
         }
     }
 
@@ -14229,7 +14381,7 @@ mod tests {
         // its points are the input, so the other two must not be flattened onto that
         // face's plane.
         view.handle_pointer([30.0, 50.0]);
-        view.handle_button([30.0, 50.0], 1, true);
+        click(&mut view, [30.0, 50.0]);
         assert!(
             view.active_workplane().is_default(),
             "a plane pick leaves the session plane alone"
@@ -14929,7 +15081,7 @@ mod tests {
         // A click in empty space still projects onto that plane, so both committed
         // points keep the face's z.
         view.handle_pointer([10.0, 10.0]);
-        view.handle_button([10.0, 10.0], 1, true);
+        click(&mut view, [10.0, 10.0]);
         assert_eq!(view.tool_status().expect("an active tool").points, 2);
 
         assert!(view.handle_key(&key("enter")));
@@ -14984,13 +15136,13 @@ mod tests {
 
         // The session starts on Face1…
         view.handle_pointer([30.0, 50.0]);
-        view.handle_button([30.0, 50.0], 1, true);
+        click(&mut view, [30.0, 50.0]);
         assert_eq!(view.active_workplane().label, "Face1");
 
         // …and a click on the neighbouring face mid-session must not rebind: the points
         // already placed belong to the first plane.
         view.handle_pointer([70.0, 50.0]);
-        view.handle_button([70.0, 50.0], 1, true);
+        click(&mut view, [70.0, 50.0]);
         assert_eq!(view.active_workplane().label, "Face1");
         assert_eq!(view.tool_status().expect("an active tool").points, 2);
     }
@@ -15004,14 +15156,14 @@ mod tests {
         view.set_snap_grid(Some(0.25));
 
         view.handle_pointer([10.0, 10.0]);
-        view.handle_button([10.0, 10.0], 1, true);
+        click(&mut view, [10.0, 10.0]);
         assert!(
             view.active_workplane().is_default(),
             "the first click was empty, so the session stays on World XY"
         );
 
         view.handle_pointer([30.0, 50.0]);
-        view.handle_button([30.0, 50.0], 1, true);
+        click(&mut view, [30.0, 50.0]);
         assert!(
             view.active_workplane().is_default(),
             "the first point settles the session's plane"
@@ -15029,7 +15181,7 @@ mod tests {
         // the explicit plane alone.
         view.set_tool(Some(Box::new(ferrocad_stage::PolylineTool::new())));
         view.handle_pointer([70.0, 50.0]);
-        view.handle_button([70.0, 50.0], 1, true);
+        click(&mut view, [70.0, 50.0]);
         assert_eq!(
             view.active_workplane(),
             &explicit,

@@ -23,7 +23,10 @@ there** versus **adding something new**.
 - **The Modify hand** (bottom-left loadout bar):
   `[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]`. Selection-tied. It governs what a
   hover or click targets on existing geometry and which manipulator is hosted
-  (`TransformGizmo`, `PushPullStem`, `DressUpScrubber`).
+  (`TransformGizmo`, `PushPullStem`, `DressUpScrubber`). Slot 3 is one hand with two
+  dress-ups: it reads `3 Fillet` until pressed again, which toggles it to `3 Chamfer` (and
+  the mode is what the scrubber's commit — and the document's `Part::Fillet` /
+  `Part::Chamfer` — follows). Slot 1 has the same shape for `Move`/`Rotate`.
 - **The Add hand** (bottom-centre action bar):
   `[ Undo  Redo  Fit │ ⊕ Box ▾ │ Search (Ctrl+K) ]`. Authoring-tied. It governs what new
   shape is created and how its placement frame snaps to the scene, body, face or edge
@@ -283,7 +286,7 @@ The tool strip's dimension fields (`W`, `L`, `H`, `R`) follow the keyboard contr
 | --- | --- |
 | **1. `ARMED` with a placed anchor** (preview dirty) | Drops the anchor and returns to `ARMED`; the ghost follows the pointer again. No undo step. |
 | **2. `ARMED` unanchored, or `EXPANDED`** | Cancels the tool, restores the default centre bar (`IDLE`), and re-offers the Modify hand's gizmo/manipulator on the current selection. |
-| **3. Creation `IDLE`, Modify pending (`Δ ≠ 0`)** | Rolls the pending Move / Rotate / Push-Pull / Fillet back to its pre-drag datum. |
+| 3. Creation `IDLE`, Modify pending (`Δ ≠ 0`) | Rolls the pending Move / Rotate / Push-Pull / Fillet (or Chamfer) step back to its pre-drag datum. |
 | **4. Both hands clean, selection non-empty** | Clears the selection (hiding the triad and the docked coordinate row). |
 
 ---

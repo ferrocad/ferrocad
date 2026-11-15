@@ -180,13 +180,18 @@ Colour rule unchanged: `gizmo::PUSH_PULL_COLOR` `#F59E0B` for `+N`, `gizmo::SUBT
 `#EF4444` for `-N` (`visual-language.md` §68–69), and the ghost at
 `GHOST_SURFACE_ALPHA = 0.35`.
 
-### Slot `3` — Fillet
+### Slot `3` — Fillet **and** Chamfer
+
+Slot 3 owns both dress-ups. Pressing `3` (or clicking the pill) equips the slot; pressing
+it again toggles `3 Fillet` ⇄ `3 Chamfer`, and the bar's label, its glyph and the handle
+the factory builds all follow. There is no separate Chamfer button: `Part_Chamfer` stays
+registered for Search and for scripts, and its surface is `palette`.
 
 | SimpleCAD | Ours | Status |
 | --- | --- | --- |
 | `Round` one edge | `DressUpScrubber` + `dress_up/fillet` | **wired** (incl. re-opening a feature) |
 | `Round` a **face boundary** or a whole solid | the scrubber arms on one `Edge…` element | **hook**: the provider expands a boundary/solid selection into its edges (`document.operations.commit_rounding` already takes a target set), one handle drives `R` |
-| Chamfer | `DressUpMode::Chamfer` exists and the provider handles `dress_up/chamfer` | **hook**: one `chamfer_manipulator` factory |
+| Chamfer | Slot 3's `DressUpKind::Chamfer` → `DressUpMode::Chamfer` (two distances, `D1`/`D2`) → `dress_up/chamfer` → `Part::Chamfer` | **wired** |
 | `RemoveRounds` | — | **hook**: `surfaces.operations.remove_rounds` with an `R` field |
 
 ### `Delete` / `Backspace`
@@ -546,14 +551,44 @@ the command arms the tool, a typed width commits a 30 mm box, the zero-mouse `En
 places it at the origin); the six `tool_fields` shell cases. `run_tests.py --extension
 base` **718/0/0/8** and `--extension workbenches` **881/0/0/3**, unchanged.
 
+### Step 8 — the hierarchical wheel and Slot 3's two dress-ups
+
+Two defects the live window showed, and the fix for each:
+
+- **The wheel was a twenty-wedge circle.** Every SimpleCAD/Part verb was a root wedge, so
+  the labels overlapped. A radial verb may now declare `FerroCAD_WheelGroup`
+  (`Workplane`, `Booleans`, `Surface`, `Edge`, `Modify`) and the group is **one** wedge:
+  `radial_slots` partitions the offered verbs, drops a disabled child, omits an empty
+  group, and collapses a one-child group into that child (so the base edition's ring is
+  unchanged). `wheel_ring`/`WheelMenu` keep the ring hierarchical — a click (latched),
+  a ~140 ms dwell, or a drag past the outer rim (armed) opens the children; the deadzone
+  and `Backspace` climb back out, `Esc` closes from any depth — and both rings are clamped
+  to `MAX_WEDGES = 8` so a label can never collide. The root is the direct verbs only:
+  `Move`, `Rotate`, `Toggle visibility`, the categories, and `Delete` last.
+- **`Fillet` and `Chamfer` were two competing controls.** Slot 3 now owns both:
+  `DressUpKind { Fillet (default), Chamfer }` lives on the `Loadout`, `3` on an equipped
+  Slot 3 toggles it, and `manipulator_for(selection, stage, dress_up)` hands the mode to
+  the factory (`fillet_manipulator` maps it to `DressUpMode`). The commit's action is the
+  mode, so the document writes a `Part::Fillet` or a `Part::Chamfer` in one transaction.
+  Picking a feature's band or one of its edges reports its **kind** in the manipulator
+  probe (`ManipulatorProbe::mode`), so re-opening a chamfer syncs Slot 3 to `3 Chamfer`
+  (`R`/`D` in the declared grip) instead of rebuilding a fillet over it.
+
+**Measured.** `ferrocad_widgets` **76** (13 wheel cases, 5 of them new: descend, commit a
+child, flick past the rim, dwell, the eight-wedge guard); `ferrocad_shell_core` **302**
+(`slot_three_toggles_between_fillet_and_chamfer`, `grouped_verbs_share_one_wedge`,
+`backspace_dismisses_the_root_ring`); `ferrocad_part_gui` **42**
+(`the_factory_builds_the_dress_up_slot_three_names`); `ferrocad_parametric` gained
+`the_slot_three_chamfer_mode_drives_the_document`; `chrome_surfaces` **6** cases.
+
 ### Measured
 
 | Check | Result |
 | --- | --- |
-| `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing + **4** face-hosted + **4** chrome-surface cases |
-| `ferrocad_stage` / `ferrocad_viewport` / `ferrocad_shell_api` | **299** / **236** / **74** |
-| `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (41 part_gui, 18 toy unit) |
-| `ferrocad_shell_core` | **292** (the wheel-filter and dock-contract cases included) |
+| `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing + **4** face-hosted + **6** chrome-surface cases |
+| `ferrocad_stage` / `ferrocad_viewport` / `ferrocad_shell_api` | **303** / **237** / **74** |
+| `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (42 part_gui, 18 toy unit) |
+| `ferrocad_shell_core` / `ferrocad_widgets` | **302** / **76** (the wheel-hierarchy and Slot 3 cases included) |
 | `run_tests.py --extension base` / `workbenches` | **718 / 0 / 0 / 8**, **881 / 0 / 0 / 3** |
 | `--check-init` (both editions) | `ferrocad: init OK` |
 | `xtask editions --check` | green, 14 editions (no dependency change) |

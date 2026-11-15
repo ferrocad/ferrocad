@@ -37,13 +37,20 @@ Slot 1 hosts both handle sets, so its label names the one you will actually get:
 for the translation arrows, `Rotate` for the rotation rings. Pressing `1` while Move is
 already equipped toggles between them.
 
+Slot 3 hosts both dress-ups the same way. It reads `3 Fillet`; pressing `3` (or clicking
+the pill) again switches it to `3 Chamfer`, and once more brings the fillet back. The
+label, the glyph and the handle you get all follow, and the docked numeric row shows the
+same switch beside its fields: a fillet offers one radius (`R`), a chamfer two distances
+(`D1`, `D2`). Picking an existing fillet's or chamfer's face sets the slot to that
+feature's kind, so re-opening it edits it rather than stacking a second dress-up on top.
+
 ## The slots
 
 | Key | Slot | A drag with this hand | `Select ▾` default |
 | --- | --- | --- | --- |
-| `1` | **Move** | moves or rotates the selected body with the transform triad | Body |
+| `1` | **Move** / **Rotate** | moves or rotates the selected body with the transform triad | Body |
 | `2` | **Push/Pull** | extrudes or pockets the face under the pointer | Face |
-| `3` | **Fillet** | fillets or chamfers the edge under the pointer | Edge |
+| `3` | **Fillet** / **Chamfer** | rounds or bevels the edge under the pointer; `3` again toggles which | Edge |
 | `0` | **Inspect** | selects and inspects; no handles appear, and the highlighted scope follows the pointer | Body |
 
 The bar always lists all four slots. Push/Pull and Fillet do something where the edition

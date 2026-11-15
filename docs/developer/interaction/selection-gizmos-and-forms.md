@@ -125,30 +125,51 @@ selection. The rule is therefore:
                  right-press / Space
         Closed ───────────────────────► Armed / Latched
           ▲                                │  hover: active = wedge | None
+          │                                │  wedge with children (Armed):
+          │                                │    past the rim, or dwell ~140 ms
+          │                                │    ──► descend one ring
           │                                │
           │  Esc, selection change,       │  release (Armed):
-          │  document prune, canvas        │    wedge → Selected(id) → Closed (commit)
-          │  dialog opens                 │    else tap (<200 ms, <12 px) → Latched
+          │  document prune, canvas        │    verb → Selected(id) → Closed (commit)
+          │  dialog opens                 │    category → descend, stay Latched
+          │                                │    deadzone at depth > 0 → ascend, stay
+          │                                │    else tap (<200 ms, <12 px) → Latched
           │                                │    else → Closed (cancel)
           └────────────────────────────────┤  left click (Latched):
-                                           │    wedge → Selected(id) → Closed
-                                           │    deadzone/outside → Closed
-                                           └─ Space (wheel open): commit hovered or close
+                                           │    verb → Selected(id) → Closed
+                                           │    category → descend
+                                           │    deadzone → ascend, else Closed
+                                           │    outside → Closed
+                                           └─ Space (wheel open): commit hovered,
+                                              descend a category, or close
 ```
 
 | Phase | Pointer | Keyboard |
 | --- | --- | --- |
 | `Armed` | right button held: move highlights, release commits/latches/cancels | — |
-| `Latched` | no button: move highlights, primary click commits/cancels | `Space` commits the hovered wedge or closes; `Esc` closes |
+| `Latched` | no button: move highlights, primary click commits/cancels | `Space` commits the hovered wedge (or opens a category) or closes; `Backspace` climbs out of a category; `Esc` closes from any depth |
 
 - **Tap vs flick:** a release within **200 ms** and **12 px** of the press latches (the
   trackpad case). A release over a wedge commits regardless of time. A long hold
   released in the deadzone cancels.
+- **Categories.** A ring is capped at `MAX_WEDGES` (8) so its labels cannot collide, which
+  means a workbench's verbs are grouped rather than listed: a radial command may declare
+  `FerroCAD_WheelGroup`, and the group is one wedge (`Booleans`, `Surface`, `Edge`,
+  `Modify`, `Workplane`). The shell partitions the offered verbs, drops a disabled child,
+  omits an empty group, and collapses a group with one child into that child. A category
+  wedge paints a `▸`; the open group's name sits in the hollow centre. Committing a
+  category descends instead of emitting an id, so a group id never reaches the registry.
 - **Overlay:** the sidecar's overlay `occlude`s only its own square, so the canvas is
   still live around it. It carries its own `on_mouse_move` because occlusion hides the
   canvas hover.
 - **Target lifetime** is exactly the open wheel. The wheel has no target of its own;
-  the shell holds it and discards it on `Closed`.
+  the shell holds it and discards it on `Closed`. Descending does **not** discard it:
+  the context target stays until a verb is chosen or the wheel closes.
+- **Picking a dress-up's feature.** Re-opening an existing `Part::Fillet` or
+  `Part::Chamfer` needs Slot 3's mode to match the feature, so the manipulator probe
+  reports its kind (`ManipulatorProbe::mode`). Applying a probe whose mode differs from
+  the equipped slot sets the slot's `DressUpKind` and re-arms the scrubber — the bar and
+  the handle cannot disagree about what the next edit writes.
 
 ## 4. The gizmo state machine
 
@@ -479,7 +500,7 @@ rendered form dialog (backdrop occludes everything)
 
 1. A rendered form dialog owns every key.
 2. Palette `Esc`, then the palette shortcut.
-3. Wheel `Esc`.
+3. Wheel `Esc`, then wheel `Backspace` (climb out of a category, or close at the root).
 4. Command dialog `Esc` (needed when focus moved to the viewport).
 5. The Move HUD while **no field is focused**: `Enter` accepts, `Tab` opens a field on
    the remembered drag axis, and a numeric key other than `0`–`3` focuses the field and
@@ -498,6 +519,7 @@ rendered form dialog (backdrop occludes everything)
 | context target | `open_radial` / `space_radial` | `commit_wheel`, `radial_slots` |
 | wheel phases | `WheelMenu` | shell (events) |
 | loadout slot/filter | `Shell::set_loadout_slot` / `set_select_filter` (the bar, `0`–`3`, `Select ▾`) | `Shell::arm`, `replace_selection`, the bar/header |
+| Slot 3's dress-up | `Loadout::set_dress_up` (a second press on `3`, the docked row, a probe that re-opened a feature) | `manipulator_for` (the factory), the bar's label/glyph |
 | pointer highlight | `Shell::sync_inspect_highlight` (from the hover report and the selection) | the stage's per-part highlight |
 | hover preview | `Shell::sync_hover_arm` (from the viewport's hover report) | `Shell::arm`, the viewport's idle scale |
 | pending transform | `Shell` (`TransformSession`; `commit_session` / `drop_session`) | `preview_transform`, the Δ fields, the commit |
@@ -545,8 +567,9 @@ and prints the CPU and GPU pick at points around one edge.
 | Piece | Where | Tests |
 | --- | --- | --- |
 | pick → selection + anchor | `InventorViewport::selection_event`, `SelectionAnchor` | `a_click_selects_the_named_sub_element_under_the_pointer` |
-| context target / promotion | `Shell::{wheel_target_at, radial_slots, commit_wheel}` | `the_radial_gesture_opens_hovers_and_runs`, `space_opens_a_latched_wheel_and_commits` |
-| wheel phases/overlay | `ferrocad_widgets::wheel::WheelMenu` | `the_sidecar_latches_flicks_and_reports_events` |
+| context target / promotion | `Shell::{wheel_target_at, radial_slots, commit_wheel}` | `the_radial_gesture_opens_hovers_and_runs`, `space_opens_a_latched_wheel_and_commits`, `grouped_verbs_share_one_wedge`, `the_wheel_is_filtered_by_the_context_target` |
+| wheel phases/overlay | `ferrocad_widgets::wheel::WheelMenu` | `the_sidecar_latches_flicks_and_reports_events`, `a_category_wedge_opens_its_ring_and_the_deadzone_climbs_back`, `a_child_wedge_commits_its_own_id`, `dragging_past_the_rim_opens_the_category_in_one_gesture`, `dwelling_on_a_category_opens_it`, `a_ring_never_holds_more_than_eight_wedges` |
+| Slot 3's two dress-ups | `Loadout::dress_up`, `fillet_manipulator`, `ManipulatorProbe::mode` | `slot_three_toggles_between_fillet_and_chamfer`, `the_factory_builds_the_dress_up_slot_three_names`, `the_slot_three_chamfer_mode_drives_the_document` |
 | gizmo anchor + re-arm | `Shell::arm`, `contributions::body_corner`, `rearm_selection` | `the_default_translate_gizmo_sits_at_a_whole_objects_base_corner`, `a_window_position_repicks_through_the_element_origin` |
 | display offset | `TransformGizmo::set_display_offset` | `a_display_offset_moves_the_drawing_not_the_drag_frame` |
 | preview + pending session | `InventorViewport::preview_transform`, `Shell::on_transform_preview` (opens the shell's session) | `a_typed_translation_previews_only_the_named_entities`, `a_move_hud_drag_survives_its_release`, `a_plain_drag_is_pending_until_enter_or_escape`, `a_gizmo_drag_updates_the_move_fields` |

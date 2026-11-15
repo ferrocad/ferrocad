@@ -43,7 +43,7 @@ inventory, tool strip, tokens and slice plan are in
 | | Add hand (creation pill) | Modify hand (transform loadout) |
 | --- | --- | --- |
 | Chrome anchor | centre action bar (bottom-centre) | loadout bar (bottom-left, `left: 16 px`, `bottom: 12 px`) |
-| Slots | 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet, `0` Inspect) |
+| Slots | 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
 | Governs | what you make, and which surface/edge it anchors to | what a pick targets, and which manipulator is hosted |
 | Active state | IDLE → HOVER → EXPANDED → ARMED (the action bar swaps to the tool strip) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
 | Topology binding | WP: place on the grid · Body: feature from a profile · Face: place on the face `+N` · Edge: place along the edge | Body: `TransformGizmo` · Face: `PushPullStem` · Edge: `DressUpScrubber` · Inspect: highlight only |
@@ -55,6 +55,13 @@ The placement, idle:
 Bottom-left (Modify)                                  Bottom-centre (Add, idle)
 [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]      [ Undo  Redo  Fit │ ⊕ Box ▾ │ Search (Ctrl+K) ]
 ```
+
+Slot 3 reads `3 Fillet` until you press `3` again, which toggles it to `3 Chamfer` (and
+back). The other slots keep one verb each; Slot 1 (`Move`/`Rotate`) and Slot 3
+(`Fillet`/`Chamfer`) are the two that name the sub-mode they currently arm, which is why
+their labels, glyphs and the handles they build all come from the slot rather than the
+command. The docked numeric row carries the same toggle beside its fields, so the row and
+the bar can never disagree.
 
 The placement, ARMED (the two never stack, and the canvas rectangle does not move):
 

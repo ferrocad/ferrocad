@@ -714,9 +714,14 @@ and `ferrocad_toy`'s `the_toy_workbench_creates_represents_manipulates_and_recor
   `ferrocad_part_gui::DressUpScrubber`, and the host wiring
   (`Contributions` factory → viewport → neutral commit → app script's `interaction`
   hook → `Part::Fillet` → recompute → re-sync). The numeric twin is built (2026-11-13):
-  one radius field, or two chamfer distances. What remains is an **`Alt` asymmetric
-  split** (two distance handles) and a chrome control to choose fillet vs chamfer (the
-  factory picks fillet).
+  one radius field, or two chamfer distances. **Which of the two it is comes from the
+  loadout**: `DressUpKind { Fillet, Chamfer }` lives on the `Loadout` (Slot 3), `3` on an
+  equipped Slot 3 toggles it, `manipulator_for(selection, stage, dress_up)` hands it to
+  `fillet_manipulator` (→ `DressUpMode`), and the commit's `action` is the mode. Picking a
+  feature's band or one of its edges reports its kind in the probe
+  (`ManipulatorProbe::mode`), so a re-opened chamfer syncs Slot 3 before the handle is
+  built. What remains is an **`Alt` asymmetric split** (two distance handles on one
+  scrubber rather than the `D1`/`D2` fields).
 - **Draft** additionally needs a wall-face selection, a pull direction and an angular
   offset operation; its protractor arc is a ring-like scrub (T1) with a degree readout
   (T3).
@@ -1057,7 +1062,9 @@ The **hand** is visible and chosen explicitly (U4, built 2026-10-31):
 
 - The bottom-left bar over the canvas is `[1 Move] [2 Push/Pull] [3 Fillet]`; the
   active slot is accented over `CHROME_ACTIVE_BG`, and a click equips exactly what its
-  key does. It shares the creation dock's baseline and glass.
+  key does. It shares the creation dock's baseline and glass. Slot 3's label is the
+  dress-up it currently arms (`3 Fillet` or `3 Chamfer`), and a second press on an
+  equipped Slot 3 toggles it — the docked numeric row carries the same switch.
 - The header carries a `Select: <filter> ▾` selector between `Gizmo ▾` and `Snap ▾`.
   The filter is the slot's preset (`Body` / `Face` / `Edge`) unless overridden; the
   label turns `CHROME_ACTIVE` while it differs from the slot's default. Both the bar

@@ -619,9 +619,11 @@ Three follow-ups from the live window:
 - **A session adds a pill; it does not take the dock.** The armed tool's pill (its label,
   its `W/L/H` row or point count, its hint, `✗`/`✓`) is the top row of the same
   bottom-centre column, above the create dock, so the loadout and the dock stay in place
-  while a tool runs. The column is bottom-anchored and grows upward: the dock keeps its
-  baseline and the canvas keeps its rectangle (`chrome::action_dock` owns the column,
-  `chrome::tool_pill` the row).
+  while a tool runs. The pair is the **pending half**: it appears with the first placed
+  point (or at once for a tool whose fields are the input) and not before, so arming a
+  tool that has placed nothing is a readout, not a dialog. The column is bottom-anchored
+  and grows upward: the dock keeps its baseline and the canvas keeps its rectangle
+  (`chrome::action_dock` owns the column, `chrome::tool_pill` the row).
 - **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
   `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
   `select at least 2 profiles` instead of `select at least 2 bodies`.

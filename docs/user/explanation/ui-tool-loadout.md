@@ -78,9 +78,12 @@ the tool it was last left on.
   tool in that category** — so `5`, `5`, `5` walks the sketch tools, wrapping round — and
   each press starts the one it lands on. A tool that needs a selection you do not have is
   skipped rather than selected.
-- Starting a tool does not take the dock away: the tool's own pill (its name, its numbers,
-  its `✗`/`✓`) appears **above** the create dock, so the slots, the dock and Search stay
-  where they were while you draw.
+- Starting a tool does not take the dock away: the tool's own pill (its name, its numbers
+  or point count, and its hint) appears **above** the create dock, so the slots, the dock
+  and Search stay where they were while you draw. The `✗`/`✓` pair on that pill appears
+  only once there is something to finish — the first placed point, or a tool whose numbers
+  are the input — so arming a tool that has done nothing looks like a readout, not a
+dialog.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that
@@ -91,8 +94,9 @@ the tool it was last left on.
   example `select at least 2 profiles` for Loft). The caret reads `^` while a pill's list
   is open.
 - **Hold `Shift`** to peek that list: the equipped pill's menu appears while the key is
-  held and disappears when you let go, so you can look before you leap without a click.
-  It stays out of the way when `Shift` is busy elsewhere (drawing, dragging a handle,
+  held and disappears when you let go, so you can look before you leap without a click —
+  including while a drawing tool is armed, which is how you hop to another pill. It stays
+  out of the way when `Shift` is busy elsewhere (dragging a handle, editing a number,
   typing in a field), and it never closes a list you opened yourself.
 - The dock's `⊕ Create Dock ^` button folds the strip away (and `▾` brings it back), so
   the bottom bar stays `Undo · Redo · Fit · Create Dock · Search` however many tools an

@@ -68,16 +68,25 @@ The Add hand is its **own strip**, above the action dock, not a control inside i
   bar (`Sketch | Solid | Surface | …`). The list used to be one flat column mixing drawing
   tools, primitives and profile features. The caret reads `^` while that pill's flyout is
   open, so the row says which list is showing.
-- **Hold `Shift` to peek.** While the canvas has nothing else for the key, holding `Shift`
-  shows the equipped pill's flyout and releasing it gives the flyout back — the keyboard's
-  hover over the slot, the list without the click. It stands down whenever `Shift` already
-  means something, which on this canvas it usually does: a running tool, an armed gizmo
-  (plane drag), a pending or open transform (`Shift`+`Tab`), a focused field (a capital) or
-  a modal, the wheel or the settings card. A flyout the user opened with the caret is never
-  adopted, so letting go never closes a menu somebody asked for. The peek rides the
-  platform's **modifier** transition (`on_modifiers_changed`) rather than a key press: a
-  modifier key emits no key event of its own — a Wayland session sends none at all — so a
-  key-up hook would work on some desktops and silently not on others.
+- **Hold `Shift` to peek.** While `Shift` is free, holding it shows the equipped pill's
+  flyout and releasing it gives the flyout back — the keyboard's hover over the slot, the
+  list without the click. A tool that is **drawing** does not stand down: a two-click
+  tool publishes no fields, so `Shift` is spare and hopping to another pill mid-session is
+  the point of a loadout. It does stand down wherever `Shift` already means something: an
+  armed gizmo (plane drag), a pending or open transform or a tool with a numeric row
+  (`Shift`+`Tab`), a focused field (a capital), and a modal, the wheel or the settings
+  card. A flyout the user opened with the caret is never adopted, so letting go never
+  closes a menu somebody asked for. The peek rides the platform's **modifier** transition
+  (`on_modifiers_changed`) rather than a key press: a modifier key emits no key event of
+  its own — a Wayland session sends none at all — so a key-up hook would work on some
+  desktops and silently not on others.
+- **Nothing placed, nothing to finish.** The armed tool's pill is a **readout** at rest —
+  `Rectangle · 0 points · click two corners` — and the `✗`/`✓` pair appears with the first
+  placed point (or at once for a tool that publishes fields, whose row *is* the pending
+  value). That is the Modify hand's own rule: an idle hand shows its coordinates and no
+  finish pair, because there is nothing to finish. The tool stays armed throughout, so
+  the hover ghost is exactly where it was; `Esc` and another pill are the way out of a
+  tool that has placed nothing.
 - **The list is numbered.** Its rows carry `1`–`8` in a column of their own (separate
   from the gate's requirement hint, which a disabled row shows in the same menu), and
   pressing a number while the flyout is open picks that row into its pill: the same
@@ -208,6 +217,12 @@ stateDiagram-v2
    [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]   create dock
    [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]                 action dock
    ```
+
+   The `✗`/`✓` pair is the pending half: a tool that has placed nothing shows its name,
+   count and hint and no buttons, exactly as an idle Modify hand shows coordinates and no
+   finish pair. The pair arrives with the first placed point — or immediately for a tool
+   that publishes fields, because its row is the pending value — so `ARMED` always looks
+   like "something is in progress" and never like a dialog nobody opened.
 
    One column, not a second floating HUD: the numbers stay in one fixed tabular pill
    (`visual-language.md` §0.4), the column grows upward from a fixed bottom baseline so

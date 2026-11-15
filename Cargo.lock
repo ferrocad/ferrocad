@@ -2989,6 +2989,7 @@ dependencies = [
  "ferrocad_shell_python",
  "ferrocad_stage",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]

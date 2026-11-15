@@ -1377,12 +1377,21 @@ def _selection() -> list:
 
 
 class _DeleteCommand:
-    """``App_Delete`` — remove the selected objects as one undo step."""
+    """``App_Delete`` — remove the selected objects, or the selected sub-elements.
+
+    Two deletes share this verb. A selection of **whole objects** (``Select: Body``) is
+    the shell's own: one transaction, ``removeObject`` per object. A selection that
+    names a sub-element (``Face6``, ``Edge3``) is a *shape* edit — the face or edge goes
+    and the body heals — which only a workbench with a kernel can do, so it is offered
+    to the registered delete providers first and falls back to the object delete when
+    none claims it. The fallback is what keeps a kernel-free build (the toy edition)
+    working unchanged.
+    """
 
     def GetResources(self):
         return {
             "MenuText": "Delete",
-            "ToolTip": "Delete the selected objects",
+            "ToolTip": "Delete the selected objects, or the selected faces and edges",
             "Accel": "Del",
             "Group": "Edit",
             "CmdType": "ForEdit",
@@ -1398,16 +1407,29 @@ class _DeleteCommand:
         objects = _selection()
         if not objects:
             return {"status": "nothing selected"}
-        doc.openTransaction("Delete")
-        try:
-            for obj in objects:
-                doc.removeObject(obj.Name)
-            doc.recompute()
-            doc.commitTransaction()
-        except Exception as exc:  # noqa: BLE001 - one transaction, then report
-            doc.abortTransaction()
-            return {"status": f"delete failed: {exc}"}
-        return {"status": f"deleted {len(objects)} object(s)"}
+        items = [
+            (item.Object, tuple(item.SubElementNames or ()))
+            for item in FreeCADGui.Selection.getSelectionEx()
+            if getattr(item, "Object", None) is not None
+            and item.Object.Document is doc
+        ]
+        if any(elements for _, elements in items):
+            return FerroCAD.delete_selection(items, lambda: _delete_objects(doc, objects))
+        return _delete_objects(doc, objects)
+
+
+def _delete_objects(doc, objects):
+    """Remove whole objects as one undo step (``App_Delete``'s original body)."""
+    doc.openTransaction("Delete")
+    try:
+        for obj in objects:
+            doc.removeObject(obj.Name)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception as exc:  # noqa: BLE001 - one transaction, then report
+        doc.abortTransaction()
+        return {"status": f"delete failed: {exc}"}
+    return {"status": f"deleted {len(objects)} object(s)"}
 
 
 class _MoveCommand:

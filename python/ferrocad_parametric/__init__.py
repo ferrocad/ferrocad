@@ -406,17 +406,27 @@ def _interaction(obj, manipulator, action, element, values):
     first = float(values[0]) if values else 0.0
     second = float(values[1]) if len(values) > 1 else 0.0
 
-    # A dress-up whose own face or round edge was picked is that feature: editing it is
-    # the change the user asked for, not a second feature over its result (which the
-    # kernel often refuses, emptying the viewport). Any *other* element of the result is
-    # a new fillet, as it should be.
-    if (
-        element
-        and str(getattr(obj, "TypeId", "")) == f"Part::{mode}"
-        and _dress_up_target(obj, element) is not None
-    ):
-        return _edit_dress_up(obj, mode, first, second)
+    # A dress-up whose own face or edge was picked is that feature: editing it is the
+    # change the user asked for, not a second feature over its result (which the kernel
+    # often refuses, emptying the viewport). Any *other* element of the result is a new
+    # dress-up, as it should be.
+    if element and str(getattr(obj, "TypeId", "")) == f"Part::{mode}":
+        target = _dress_up_target(obj, element)
+        if target is not None and target[0] == mode:
+            # A declared handle carries one number; a chamfer's two distances are the
+            # same when the feature is symmetric (the only chamfer it re-opens).
+            return _edit_dress_up(obj, mode, first, second or first)
 
+    return _apply_dress_up(obj, mode, edges, first, second)
+
+
+def _apply_dress_up(obj, mode, edges, first, second):
+    """Add a fillet or chamfer feature over ``edges`` as one transaction.
+
+    Shared by the scrubber's commit and by the ``Part_Chamfer`` command, so a chamfer
+    applied from a command and one applied from a handle are the same feature, and a
+    later scrub or declared grip re-opens either.
+    """
     doc = obj.Document
     feature_name = f"{obj.Name}_{mode}"
     doc.openTransaction(f"{mode} {obj.Name}")
@@ -424,18 +434,18 @@ def _interaction(obj, manipulator, action, element, values):
         feature = doc.getObject(feature_name)
         if feature is None:
             feature = doc.addObject(f"Part::{mode}", feature_name)
-        feature.Base = (obj, edges)
+        feature.Base = (obj, list(edges))
         if mode == "Fillet":
             feature.Radius = first
         else:
             feature.Distance = first
-            feature.Distance2 = second
+            feature.Distance2 = second or first
         doc.recompute()
         if _invalid(feature):
             doc.abortTransaction()
             return {
                 "ok": False,
-                "error": f"{mode.lower()} on {element or 'the selection'} failed; the body is unchanged",
+                "error": f"{mode.lower()} on {edges[0] if edges else 'the selection'} failed; the body is unchanged",
             }
         doc.commitTransaction()
     except Exception as exc:
@@ -574,45 +584,86 @@ def _fillet_rounds(obj, base_obj, edges, radius):
 
 
 def _dress_up_target(obj, element):
-    """The radius an existing ``Part::Fillet`` holds, when ``element`` belongs to it.
+    """``(mode, first, second)`` when ``element`` belongs to an existing dress-up.
 
-    Two selections re-open the feature: the **round face** it created, and any **edge of
-    that round**. The second matters because the compiled edge scrubber arms there, and
-    a new fillet on one of the round's own seams is exactly the edit the kernel refuses —
-    leaving an invalid feature and an empty viewport. The round's boundary edges are read
-    from the face itself (`Face.Edges`), so the test is exact rather than positional.
+    Two selections re-open a feature: the **face it created**, and any **edge of that
+    face**. The second matters because the compiled edge scrubber arms there, and a new
+    fillet on one of the round's own seams is exactly the edit the kernel refuses —
+    leaving an invalid feature and an empty viewport. The boundaries are read from the
+    face itself (`Face.Edges`), so the test is exact rather than positional.
 
-    A chamfer is deliberately not answered: its distances are not the radius the armed
-    scrubber edits.
+    A fillet answers `("Fillet", radius, 0)`. A chamfer answers
+    `("Chamfer", d1, d1)` **only when it is symmetric**: the declared handle publishes one
+    numeric field, so an asymmetric chamfer's two distances cannot both survive an edit
+    and is declined rather than silently squared. A fillet's round is a cylinder at
+    `Radius`; a chamfer's is a band of planes, so it is recognised by the edges the
+    feature **added** to its base (its own boundary edges), which is exact and needs no
+    radius.
     """
-    if str(getattr(obj, "TypeId", "")) != "Part::Fillet":
+    type_id = str(getattr(obj, "TypeId", ""))
+    if type_id not in ("Part::Fillet", "Part::Chamfer"):
         return None
     linked = _link_sub(obj)
-    if linked is None or not linked[1]:
+    if linked is None or not linked[1] or not element:
         return None
     base_obj, edges = linked
-    radius = float(getattr(obj, "Radius", 0.0) or 0.0)
-    if radius <= 0.0 or not element:
+
+    if type_id == "Part::Fillet":
+        radius = float(getattr(obj, "Radius", 0.0) or 0.0)
+        if radius <= 0.0:
+            return None
+        rounds = _fillet_rounds(obj, base_obj, edges, radius)
+        if not rounds:
+            return None
+        if element in rounds:
+            return ("Fillet", radius, 0.0)
+        if not element.startswith("Edge"):
+            return None
+        try:
+            picked = obj.Shape.getElement(element)
+        except Exception:  # noqa: BLE001 - an element the shape cannot resolve
+            return None
+        for name in rounds:
+            try:
+                boundary = obj.Shape.getElement(name).Edges
+            except Exception:  # noqa: BLE001 - a face without edges is not a round
+                continue
+            if any(picked.isSame(edge) for edge in boundary):
+                return ("Fillet", radius, 0.0)
         return None
-    rounds = _fillet_rounds(obj, base_obj, edges, radius)
-    if not rounds:
+
+    # A chamfer: the picked element must be the band the feature added over its base.
+    distance = float(getattr(obj, "Distance", 0.0) or 0.0)
+    second = float(getattr(obj, "Distance2", distance) or distance)
+    if distance <= 0.0 or abs(distance - second) > 1e-9:
         return None
-    if element in rounds:
-        return radius
+    try:
+        base_edges = base_obj.Shape.Edges
+    except Exception:  # noqa: BLE001 - a base without a shape is not a chamfer
+        return None
+
+    def added(edge):
+        return not any(edge.isSame(candidate) for candidate in base_edges)
+
+    if element.startswith("Face"):
+        # The band is the one face whose **every** edge is new: a neighbouring face keeps
+        # most of its boundary and gains only the band's own edge, so it is not mistaken
+        # for the feature.
+        try:
+            picked = obj.Shape.getElement(element)
+            edges = picked.Edges
+        except Exception:  # noqa: BLE001 - a face without edges is not the band
+            return None
+        if edges and all(added(edge) for edge in edges):
+            return ("Chamfer", distance, second)
+        return None
     if not element.startswith("Edge"):
         return None
     try:
         picked = obj.Shape.getElement(element)
     except Exception:  # noqa: BLE001 - an element the shape cannot resolve
         return None
-    for name in rounds:
-        try:
-            boundary = obj.Shape.getElement(name).Edges
-        except Exception:  # noqa: BLE001 - a face without edges is not a round
-            continue
-        if any(picked.isSame(edge) for edge in boundary):
-            return radius
-    return None
+    return ("Chamfer", distance, second) if added(picked) else None
 
 
 def _face_frame(obj, element):
@@ -877,29 +928,31 @@ def _manipulator_specs(obj, element):
     * a **sketch vertex** — the request needs the sketch's own plane and its vertex list,
       which are document state. Each grip is a plane handle that commits the two local
       coordinates of the drag, so the solver performs the edit;
-    * an applied fillet's **round**, which is a *face*: the edge it came from no longer
-      exists. A declared grip at the round's centroid, seeded with the radius the feature
-      holds, re-opens it — and its commit is the same ``dress_up``/``fillet`` the
-      compiled scrubber sends, so the edit path is shared. A round *edge* needs no grip:
-      the compiled scrubber arms there and its commit edits the feature (see
-      :func:`_dress_up_target`).
+    * an applied dress-up's **face**, which is: the edge it came from no longer exists. A
+      declared grip at the face's centroid, seeded with the value the feature holds,
+      re-opens it — and its commit is the same ``dress_up``/``fillet`` or
+      ``dress_up``/``chamfer`` the compiled scrubber sends, so the edit path is shared. A
+      round *edge* needs no grip: the compiled scrubber arms there and its commit edits
+      the feature (see :func:`_dress_up_target`).
     """
     sketch = _sketch_vertex_specs(obj, element)
     if sketch:
         return sketch
     if not element or not element.startswith("Face"):
         return None
-    value = _dress_up_target(obj, element)
-    if value is None:
+    target = _dress_up_target(obj, element)
+    if target is None:
         return None
+    mode, value, _second = target
     frame = _face_frame(obj, element)
     if frame is None:
         return None
     linked = _link_sub(obj)
+    label = "R" if mode == "Fillet" else "D"
     return [
         {
             "id": "dress_up",
-            "action": "fillet",
+            "action": mode.lower(),
             "element": linked[1][0] if linked and linked[1] else element,
             "frame": frame,
             "axis": "z",
@@ -907,10 +960,10 @@ def _manipulator_specs(obj, element):
             "value": value,
             "min": _PROBE_FLOOR,
             "decimals": 3,
-            "label": "R",
+            "label": label,
             "size": 42.0,
             "shape": _GRIP_SHAPE,
-            "readout": "R {value} mm",
+            "readout": "%s {value} mm" % label,
         }
     ]
 
@@ -1044,15 +1097,15 @@ def _manipulator_probe(obj, element, manipulator):
     if manipulator != "dress_up":
         return None
     answer = {}
-    value = _dress_up_target(obj, element)
-    if value is not None:
-        answer["values"] = [value]
-        answer["note"] = "editing the existing fillet"
+    target = _dress_up_target(obj, element)
+    if target is not None:
+        answer["values"] = [target[1]]
+        answer["note"] = "editing the existing %s" % target[0].lower()
     bounds = _fillet_bounds(obj, element)
     if bounds is not None:
         answer["min"] = bounds["min"]
         answer["max"] = bounds["max"]
-        if value is None:
+        if target is None:
             answer["note"] = bounds["note"]
     return answer or None
 
@@ -1882,6 +1935,230 @@ class _SaveDatumPlaneCommand:
 
 
 FreeCADGui.addCommand("App_SaveDatumPlane", _SaveDatumPlaneCommand())
+
+
+# ---------------------------------------------------------------------------
+# Sub-element edits: delete and heal
+#
+# `App_Delete` deletes *objects*. Removing a face or an edge is a shape edit, and it
+# is the one removal verb the two-hand loadout names but does not have. The shell
+# offers a sub-element selection to the registered delete providers (see
+# `FerroCAD.register_delete_provider`); this workbench answers with the kernel path
+# below. Everything here is Part-only: no `simplecad` checkout is needed.
+# ---------------------------------------------------------------------------
+
+
+def _without_faces(shape, names):
+    """``(shape, closed)`` without the named faces.
+
+    The remaining faces are sewn into a shell and, when that closes, a solid — so
+    deleting one face of a box leaves a *surface* (the five faces, honestly) while
+    deleting the two halves of a coplanar pair leaves the solid it still is. A body whose
+    faces merely *look* closed but do not sew is refused, never written.
+    """
+    doomed = {int(name[4:]) for name in names if name.startswith("Face") and name[4:].isdigit()}
+    if len(doomed) != len(names):
+        raise ValueError("only FaceN names can be removed this way")
+    keep = [face for index, face in enumerate(shape.Faces, 1) if index not in doomed]
+    if not keep:
+        raise ValueError("that would remove every face")
+    if len(keep) == len(shape.Faces):
+        raise ValueError("the shape has no such face")
+    shell = Part.makeShell(keep)
+    closed = False
+    closed_shape = None
+    try:
+        candidate = Part.Solid(shell)
+        if candidate.isValid() and candidate.isClosed():
+            closed_shape = candidate
+            closed = True
+    except Exception:  # noqa: BLE001 - an open shell is the answer, not an error
+        closed_shape = None
+    result = closed_shape if closed_shape is not None else shell
+    try:
+        result = result.removeSplitter()
+    except Exception:  # noqa: BLE001 - unification is a refinement, not a requirement
+        pass
+    return result, closed
+
+
+def _without_edges(shape, names):
+    """``shape`` with the named edges gone, by merging the faces across them.
+
+    An edge cannot be *removed* from a body: it is the seam between two faces. What the
+    user means is that the seam should not be there, which is exactly what unifying
+    coplanar faces does. When nothing merges, the faces are not coplanar and the request
+    is refused rather than silently ignored.
+    """
+    doomed = {int(name[4:]) for name in names if name.startswith("Edge") and name[4:].isdigit()}
+    if len(doomed) != len(names):
+        raise ValueError("only EdgeN names can be removed this way")
+    if len(doomed) >= len(shape.Edges):
+        raise ValueError("that would remove every edge")
+    unified = shape.removeSplitter()
+    if len(unified.Edges) >= len(shape.Edges):
+        raise ValueError(
+            "those edges join faces that are not coplanar; nothing merged"
+        )
+    return unified
+
+
+def _delete_subshape(obj, elements, close, label):
+    """Remove ``elements`` from ``obj`` and heal the body, as one transaction.
+
+    ``close`` is the difference between the two verbs this seam serves: **delete**
+    accepts an open result (a body minus a face is a surface, and the user can see
+    that), while **heal** requires the neighbours to close again — the operation the
+    ``HealFaces`` command names.
+    """
+    faces = [name for name in elements if name.startswith("Face")]
+    edges = [name for name in elements if name.startswith("Edge")]
+    if not faces and not edges:
+        return None
+    doc = obj.Document
+    doc.openTransaction(label)
+    try:
+        shape = obj.Shape
+        closed = True
+        if faces:
+            shape, closed = _without_faces(shape, faces)
+        if edges:
+            shape = _without_edges(shape, edges)
+        if close and not closed:
+            raise ValueError("those faces leave an opening; the body cannot heal")
+        if not shape.isValid():
+            raise ValueError("the result is not a valid shape")
+        obj.Shape = shape
+        doc.recompute()
+        if _invalid(obj):
+            raise ValueError("the body refused the edit")
+        doc.commitTransaction()
+    except Exception as exc:  # noqa: BLE001 - one transaction, then report
+        doc.abortTransaction()
+        return {"ok": False, "status": "%s failed: %s" % (label.lower(), exc)}
+    what = ", ".join(faces + edges)
+    state = "closed" if closed else "open surface"
+    return {"ok": True, "status": "%s: removed %s (%s)" % (label.lower(), what, state)}
+
+
+def _delete_provider(items):
+    """``App_Delete``'s sub-element half: remove the picked faces/edges and heal.
+
+    A feature (``Part::Fillet``/``Part::Chamfer``/``Part::Extrusion``) is declined: its
+    sub-elements are its *result*, not an editable body, and the whole-object delete is
+    the honest answer there. A multi-object selection is declined for the same reason —
+    a sub-element belongs to exactly one body.
+    """
+    if not any(elements for _, elements in items):
+        return None
+    if len(items) != 1:
+        return None
+    obj, elements = items[0]
+    if str(getattr(obj, "TypeId", "")) != "Part::Feature":
+        return None
+    return _delete_subshape(obj, elements, close=False, label="Delete")
+
+
+FerroCAD.register_delete_provider(_delete_provider)
+
+
+class _HealFacesCommand:
+    """``Part_HealFaces`` — remove the selected faces and close the body again.
+
+    SimpleCAD's ``HealFaces``: deleting a boss, a pocket or a round leaves an opening;
+    healing takes the faces away and keeps the result **closed**, refusing when the
+    neighbours do not meet. The same kernel path as the sub-element delete, with the
+    open result disallowed.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Heal faces",
+            "ToolTip": "Remove the selected faces and close the body again",
+            "Group": "Part",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+            "FerroCAD_Tone": "destructive",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_sub_elements())
+
+    def Activated(self, iMsg=0):
+        obj, elements = _sub_elements()
+        if obj is None:
+            return {"status": "select one body's faces to heal"}
+        return _delete_subshape(obj, elements, close=True, label="HealFaces")
+
+
+class _ChamferCommand:
+    """``Part_Chamfer`` — chamfer the selected edges in one step.
+
+    The chamfer is the same feature the scrubber writes (``Part::Chamfer`` through
+    :func:`_apply_dress_up`), so the declared grip re-opens it afterwards and the edit
+    path does not fork. The distance starts at :data:`_CHAMFER_DISTANCE`; the scrubber's
+    numeric row and the grip are where it is tuned, which is why this command needs no
+    second field of its own.
+    """
+
+    def GetResources(self):
+        return {
+            "MenuText": "Chamfer",
+            "ToolTip": "Chamfer the selected edges (then drag the grip to tune it)",
+            "Group": "Part",
+            "CmdType": "ForEdit",
+            "FerroCAD_Surface": "dock",
+            "FerroCAD_Tone": "additive",
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None and bool(_selected_edges())
+
+    def Activated(self, iMsg=0):
+        obj, edges = _selected_edges()
+        if obj is None:
+            return {"status": "select one body's edges to chamfer"}
+        result = _apply_dress_up(obj, "Chamfer", edges, _CHAMFER_DISTANCE, _CHAMFER_DISTANCE)
+        if result.get("ok"):
+            return {"status": "chamfered %d edge(s) on %s" % (len(edges), obj.Name)}
+        return {"status": "chamfer failed: %s" % result.get("error", "unknown")}
+
+
+#: The chamfer a command applies before the user tunes it; the probe's floor is the
+#: smallest value the scrubber holds, and this is a visible default rather than that.
+_CHAMFER_DISTANCE = 1.0
+
+
+def _sub_elements():
+    """``(object, [FaceN…])`` for a one-body sub-element selection, else ``(None, [])``."""
+    obj, elements = _one_body_elements()
+    faces = [name for name in elements if name.startswith("Face")]
+    return (obj, faces) if obj is not None and faces else (None, [])
+
+
+def _selected_edges():
+    """``(object, [EdgeN…])`` for a one-body sub-element selection, else ``(None, [])``."""
+    obj, elements = _one_body_elements()
+    edges = [name for name in elements if name.startswith("Edge")]
+    return (obj, edges) if obj is not None and edges else (None, [])
+
+
+def _one_body_elements():
+    """``(object, elements)`` when the selection names sub-elements of one body."""
+    items = [
+        (item.Object, tuple(item.SubElementNames or ()))
+        for item in FreeCADGui.Selection.getSelectionEx()
+    ]
+    items = [(obj, elements) for obj, elements in items if elements]
+    if not items or len({obj.Name for obj, _ in items}) != 1:
+        return None, []
+    obj = items[0][0]
+    elements = [name for _, names in items for name in names]
+    return obj, elements
+
+
+FreeCADGui.addCommand("Part_HealFaces", _HealFacesCommand())
+FreeCADGui.addCommand("Part_Chamfer", _ChamferCommand())
 
 
 def bootstrap(doc_name: str = "Sample") -> str:

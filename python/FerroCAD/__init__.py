@@ -82,6 +82,8 @@ _INTERACTION_PROVIDERS = []
 _MANIPULATOR_PROVIDERS = []
 # ``provider(obj, element, manipulator)`` → the value range the kernel keeps, or None.
 _PROBE_PROVIDERS = []
+# ``provider(items)`` → a status dict when it took over a sub-element delete, else None.
+_DELETE_PROVIDERS = []
 
 
 def register_display_provider(provider, default=False):
@@ -208,6 +210,48 @@ def manipulator_specs(obj, element=""):
     return list(specs)
 
 
+def register_delete_provider(provider):
+    """Let ``provider(items)`` take over a delete the selection asks for.
+
+    ``App_Delete`` is the shell's own edit command: without a provider it removes the
+    selected **objects**, which is all a kernel-free build can do. A workbench that can
+    edit shape adds a provider here and answers for a **sub-element** selection —
+    ``Face6``/``Edge3`` — where deleting means removing geometry from the body and
+    healing the result, not removing the object.
+
+    ``items`` is ``[(object, (sub_element_name, …)), …]`` for the current selection.
+    The provider returns ``{"status": …}`` (the command's answer) when it handled the
+    delete, or ``None`` to defer — in which case the shell removes the objects as it
+    always has. It must open and close exactly one transaction itself, and must not
+    raise (a raised exception is reported and the next provider still runs).
+    Registration is idempotent.
+    """
+    if provider not in _DELETE_PROVIDERS:
+        _DELETE_PROVIDERS.append(provider)
+
+
+def delete_selection(items, remove_objects):
+    """Apply a delete through the first module that owns the selection.
+
+    ``remove_objects`` is the shell's own whole-object delete, called only when no
+    provider claims the selection. This is deliberately a *callback* rather than a
+    return value: the shell owns that path and the provider has no business running it.
+    """
+    for provider in _DELETE_PROVIDERS:
+        try:
+            result = provider(items)
+        except Exception as exc:  # noqa: BLE001 - one bad provider must not block a delete
+            name = getattr(provider, "__name__", repr(provider))
+            print(
+                "FerroCAD: delete provider %s raised: %s" % (name, exc),
+                file=sys.stderr,
+            )
+            continue
+        if result is not None:
+            return result
+    return remove_objects()
+
+
 def register_manipulator_probe(provider):
     """Let ``provider(obj, element, manipulator)`` answer for the kernel's side.
 
@@ -308,6 +352,8 @@ __all__ = [
     "manipulator_specs",
     "register_manipulator_probe",
     "manipulator_probe",
+    "register_delete_provider",
+    "delete_selection",
     "set_parameter_file",
     "parameter_file",
 ]

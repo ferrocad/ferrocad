@@ -1105,9 +1105,10 @@ the header: *how the viewport is drawn*.
 
 ### What is still open (G3b)
 
-- Handle **kinds**: `axis` and `ring` are in; a **plane** drag (two values in the frame
-  plane) reuses the same vocabulary but needs its own value mapping and a two-number
-  commit.
+- Handle **kinds**: `axis`, `ring` and **`plane`** are in. A plane handle drags in the
+  frame's own `u`/`v` plane, commits **two** world units (`[value, value_v]`), names its
+  normal with `axis`, and publishes no numeric row; the parametric edition declares one per
+  sketch vertex (`kind: "plane"`, 2026-11-15).
 - **Shape-API input**: a spec's mesh is JSON arrays today (the same payload
   `FerroCAD.display_mesh` carries). Accepting a `ferrocad.stage.ShapeItem` (or a Part
   shape) directly is a Python-side helper, not an ABI change.

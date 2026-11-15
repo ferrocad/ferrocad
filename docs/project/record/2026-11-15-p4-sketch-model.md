@@ -163,7 +163,7 @@ convergence test or the rank analysis, so a prior steers the free degrees of fre
 instead of fighting a hard constraint — dragging a pinned point moves nothing and reports
 nothing. One prior-free pass runs afterwards to restore hard feasibility, so the result is
 a hard-feasible point near the prior's constrained optimum rather than an exact QP
-solution. A prior on a root axis is refused. No Python surface calls it yet.
+solution. A prior on a root axis is refused. §8 gives it a Python consumer.
 
 **Measured.** `ferrocad_sketch_solver` **14** unit cases (four for the island split, the
 tier fast paths and the prior seam); `part_sketcher` **16** (the DOF assertions replaced
@@ -171,3 +171,40 @@ the old `solve() == 0`); `tests/test_sketch_constraints.py` **29 → 36** with t
 solve cases (rectangle, datums, circle radius, construction-driven profile, redundancy,
 conflict refusal); `workbenches` **852 → 859**; the Draft gate still **93/0/0/1** (with
 `make_sketch` now solving for real) and Part still **531/0/0/12**.
+
+## 8. The interactive half (P4 SK6 drag, SK4 and SK5)
+
+**The drag seam gets its Python consumer.** `SketchObject.drag(geometry, pos, target)`
+solves with one `SoftPrior`, writes the moved geometry back, and returns the remaining
+degrees of freedom. The contract is the prior's, not a constraint's:
+
+- `dof` and `RedundantConstraints` are the same as `solve()` reports, because the prior
+  rows never enter the rank analysis;
+- a hard constraint wins — a pinned point reports `0` and does not move, where a hard
+  constraint would have reported a conflict;
+- a root axis raises `ValueError`, a missing index raises `IndexError`, and a system the
+  solver cannot build or converge returns `-1` with `Geometry` untouched.
+
+One shared write-back now skips the property write when the solve changed nothing, so a
+drag that loses to the constraints does not dirty the document.
+
+**Drawing on a workplane.** The parametric edition contributes the stage's
+`PolylineTool` under the id `polyline`, and its app script registers `Draft_Wire` (whose
+`Activated()` returns `{"tool": "polyline"}`). Four snapped clicks on the tilted plane
+`x = 5` finish a **creating** commit; the edition's hook builds, in one named
+transaction, a parametric `Part::FeaturePython` wire (`Points`, `Closed`, `Thickness`)
+and the `Part::Extrusion` that links it. Every vertex survives the tool to f32
+precision, and one undo removes both objects.
+
+**The pad.** The extrusion's `Dir` is the profile's own plane normal (the first three
+non-collinear points), so a profile on a tilted plane extrudes perpendicular to itself;
+`Solid = True` and `DirMode = "Custom"`. Editing the wire's `Points`/`Closed` rebuilds
+it on the next recompute and the linked extrusion follows — SK5's acceptance. A profile
+the kernel refuses keeps the wire and drops only the pad.
+
+**Measured.** `part_sketcher` **18/18** (two drag cases);
+`tests/test_sketch_constraints.py` **40/40** (four drag cases); the edition's
+`polyline_round_trip` **1/1** through the real tool and `Part::Extrusion`; the bin's
+registry test **1/1**; the rest of the parametric suite unchanged (9 + 11 + 1 + 3 + 2 +
+1 + 1 + 1 + 2). The Part API audit contract is re-pinned for the installed `drag`
+method (the audit tracks `installed_as_methods`).

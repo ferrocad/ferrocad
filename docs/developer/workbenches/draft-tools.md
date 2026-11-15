@@ -201,6 +201,37 @@ The commit goes through `FerroCADGui.tools.make_line` / `make_wire`, which is al
 installed on `Draft` when that module lacks them. The upstream `gui_lines` path is
 **not** used; `tools.upstream_report()` explains why (see §7).
 
+### The native polyline and its pad (P4 SK4/SK5)
+
+The scripting route above is the Qt-tools facade. The **parametric edition** has a
+second, native route that does not go through `python/Draft` at all:
+
+1. `ferrocad_parametric` adds the stage's `PolylineTool` to its `Contributions` under
+   the id `polyline`; the app script registers `Part_Polyline`, whose `Activated()` returns
+   `{"tool": "polyline"}`. (It is not named `Draft_Wire`: that id belongs to the
+   scripting facade in `python/FerroCADGui/tools.py` above, and both modules can be
+   imported into one interpreter.)
+2. The tool places snapped points on the active workplane (that binding is the stage's
+   `SnapContext`; the tool itself only keeps world-space points). Enter finishes it.
+3. `finish()` emits a **creating** commit — `polyline` / `create`, with the points as
+   flat `x, y, z` values and an empty object name. A creating commit is the one path
+   where the workbench makes the object instead of editing one.
+4. The edition's `interaction` hook builds, in one named transaction:
+   * a `Part::FeaturePython` **wire** with `Points` (`App::PropertyFloatList`),
+     `Closed` (default `True`: a pad needs a profile) and `Thickness`
+     (`App::PropertyLength`, the extrusion height); its proxy `execute` rebuilds the
+     wire from the points;
+   * a `Part::Extrusion` whose `Base` is that wire, `Solid = True`, `DirMode =
+     "Custom"`, and `Dir` the profile's own plane normal (the first three non-collinear
+     points, so a profile on a tilted plane extrudes perpendicular to itself).
+
+The wire is hidden once the pad exists; editing `Points`/`Closed` rebuilds it and the
+linked extrusion follows on the next recompute. An extrusion the kernel refuses does
+not lose the drawing: the invalid pad is removed and the wire remains. Acceptance:
+`crates/ferrocad_parametric/tests/polyline_round_trip.rs` (four snapped clicks on a
+tilted plane, every vertex to f32, one undo removes both objects, and an edited
+profile moves the pad).
+
 **Viewport routing (2026-10-27).** `Creator.Activated` asks the shell for
 `python:draft` (`FreeCADGui._request_tool`); the command payload carries that id and
 the shell starts `ferrocad_shell.tool_bridge("draft")` as a native
@@ -264,6 +295,9 @@ cargo test -q -p ferrocad_stage -p ferrocad_stage_py --offline
 
 # The line/wire suite against the real Part kernel (a standalone pytest run has no Part)
 cargo test -q -p ferrocad_part_py --test draft_tools --offline
+
+# The native polyline → wire → extrusion path, through the edition's own hook
+cargo test -p ferrocad_parametric --no-default-features --test polyline_round_trip
 ```
 
 The standalone pytest run uses a documented `Part.makePolygon` stub for the creation

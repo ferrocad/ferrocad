@@ -43,7 +43,7 @@ inventory, tool strip, tokens and slice plan are in
 | | Add hand (creation pill) | Modify hand (transform loadout) |
 | --- | --- | --- |
 | Chrome anchor | centre action bar (bottom-centre) | loadout bar (bottom-left, `left: 16 px`, `bottom: 12 px`) |
-| Slots | a create dock of one pill per category (`4`, `5`, … arm them) over 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
+| Slots | a create dock of one pill per category (`5`–`9` arm them, in strip order) over 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
 | Governs | what you make, and which surface/edge it anchors to | what a pick targets, and which manipulator is hosted |
 | Active state | IDLE → HOVER → EXPANDED → ARMED (the action bar swaps to the tool strip) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
 | Topology binding | WP: place on the grid · Body: feature from a profile · Face: place on the face `+N` · Edge: place along the edge | Body: `TransformGizmo` · Face: `PushPullStem` · Edge: `DressUpScrubber` · Inspect: highlight only |
@@ -55,19 +55,26 @@ The placement, idle:
 Bottom-left (Modify)                                  Bottom-centre (Add, idle)
 [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]      [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
 
-[ ⊕ Sketch: Rectangle ▾ │ ⊕ Solid: Box ▾ │ ⊕ Surface: Loft ▾ ]     ← the create dock, above
+[ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]     ← the create dock, above
 ```
 
 The Add hand is its **own strip**, one pill per category, sitting above the action dock:
 the dock carries a single `⊕ Create Dock ^` toggle and never a list of tools. Each pill
-reads `⊕ <Category>: <Tool> ▾` and remembers its category's tool; the left half arms it
-and `4`/`5`/… arm the pill at that position (a second press opens its flyout). The
-flyout shows one category at a time behind a segmented header (`Sketch | Solid | Surface |
+reads `<key> ⊕ <Category>: <Tool> ▾` and remembers its category's tool; the left half
+arms it. The keys are the **one digit space both hands share**: `0`–`3` equip the
+Modify hand's slots and `5`–`9` arm the pills at those positions, so a press means the
+same kind of thing in either hand (`5` Sketch, `6` Solid, `7` Surface, `8` Text,
+`9` Mesh). Pressing a pill's key again while **that pill's** tool is the running one
+opens its flyout instead of re-arming it, which is the Add hand's counterpart of Slot
+1's re-press. `4` stays unbound: it is the gap between the two runs.
+
+The flyout shows one category at a time behind a segmented header (`Sketch | Solid | Surface |
 …`, empty categories omitted); picking a tool binds it to its pill and runs it, and
 clicking a tab only points the pill at that category's remembered tool. The rows are
 numbered `1`–`8` in their own right-hand column, and a number pressed while the flyout is
-open picks that row — the panel owns the digits while it is up. The pill's caret reads `^`
-while its flyout is open, `▾` otherwise. The first press from another
+open picks that row — the panel owns the digits while it is up, so `5` is the fifth tool
+there and the Sketch pill otherwise. The pill's caret reads `^` while its flyout is open,
+`▾` otherwise. The first press from another
 hand is not a toggle — the slot keeps the tool it was left on.
 
 Slot 3 reads `3 Fillet` until you press `3` again, which toggles it to `3 Chamfer` (and

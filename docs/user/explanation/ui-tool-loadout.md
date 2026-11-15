@@ -64,12 +64,16 @@ Above the bottom-centre bar sits the **create dock**: one pill per category, eac
 the tool it was last left on.
 
 ```
-[ ⊕ Sketch: Rectangle ▾ │ ⊕ Solid: Box ▾ │ ⊕ Surface: Loft ▾ │ ⊕ Mesh: Mesh Box ▾ ]
+[ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ │ 9 ⊕ Mesh: Mesh Box ▾ ]
 [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
 ```
 
-- The **left half** of a pill arms that tool in one click. `4`, `5`, … arm the pill at
-  that position; pressing the same key again opens its category list instead.
+- The **left half** of a pill arms that tool in one click. Each pill shows its key in
+  front of the `⊕` (`5 Sketch: Rectangle`), the way the Modify bar shows `1 Move`: the two
+  hands are **one set of digits**. `1`–`3` and `0` equip the Modify hand's slots, and
+  `5`–`9` arm the pills at those positions — `5` Sketch, `6` Solid, `7` Surface, `8` Text,
+  `9` Mesh. Pressing a pill's key again while that tool is the one running opens its
+  category list instead of arming it again. `4` is not bound to anything.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that

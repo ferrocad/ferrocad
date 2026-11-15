@@ -598,12 +598,15 @@ Three follow-ups from the live window:
   paints `◂ Back` beside the open category's name.
 - **The Add hand is its own strip, one pill per category.** The dock's single memory
   pill became a **create dock** above the action dock:
-  `⊕ Sketch: Rectangle ▾  ⊕ Solid: Box ▾  ⊕ Surface: Loft ▾  ⊕ Mesh: Mesh Box ▾`, one
-  per registered category (a category with no tool is not a pill). The dock keeps a
+  `5 ⊕ Sketch: Rectangle ▾  6 ⊕ Solid: Box ▾  7 ⊕ Surface: Loft ▾  9 ⊕ Mesh: Mesh Box ▾`,
+  one per registered category (a category with no tool is not a pill). The dock keeps a
   single `⊕ Create Dock ^` toggle, so its own row is still
   `[ Undo Redo Fit │ ⊕ Create Dock │ Search ]` and never a list of tools. Each pill
-  remembers its category's tool; `4`, `5`, … arm the pill at that position and a second
-  press opens its flyout. The flyout shows **one category at a time** behind a segmented
+  remembers its category's tool and leads with its key, as the Modify bar does — `5`–`9`
+  are the Add hand's, continuing the Modify hand's `0`–`3` so one digit space addresses
+  both hands (`4` is left unbound), and a second press while that pill's tool is the one
+  running opens its flyout instead of re-arming it. The flyout shows **one category at a
+  time** behind a segmented
   header, with a tab click pointing the pill at the remembered tool and a row click
   binding and running it. The rows carry `1`–`8` in their own column and those digits
   pick a row while the flyout is open (the panel owns the keyboard, as the wheel does),

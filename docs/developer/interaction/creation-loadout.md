@@ -42,17 +42,23 @@ Bottom-Left (Modify Hand)                                  Bottom-Centre (Add Ha
 The Add hand is its **own strip**, above the action dock, not a control inside it:
 
 ```text
-[ ⊕ Sketch: Rectangle ▾  ⊕ Solid: Box ▾  ⊕ Surface: Loft ▾  ⊕ Mesh: Mesh Box ▾ ]   create dock
-[ Undo  Redo  Fit  │  ⊕ Create Dock ^  │  Search (Ctrl+K) ]                          action dock
+[ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ │ 9 ⊕ Mesh: Mesh Box ▾ ]   create dock
+[ Undo  Redo  Fit  │  ⊕ Create Dock ^  │  Search (Ctrl+K) ]                                     action dock
 ```
 
 - **One pill per category.** `Sketch`, `Solid`, `Surface`, `Text`, `Mesh` — in the
   design's order, and a category with no registered tool is not a pill, so an edition's
   strip is only as wide as its workbenches. Each pill reads
-  `⊕ <Category>: <Tool> ▾`.
+  `<key> ⊕ <Category>: <Tool> ▾`.
 - **The pill is a loadout, not a menu.** It names the tool its category was left on, and
-  the left half arms that tool in one click; `4`, `5`, … arm the pill at that position,
-  and pressing the same key again opens that pill's flyout instead.
+  the left half arms that tool in one click. The key leads, muted, in front of the `⊕`
+  (`5 Sketch: Rectangle`), exactly as the Modify bar leads with `1 Move`: the two hands
+  are **one digit space**. `0`–`3` equip the Modify hand's slots and `5`–`9` arm the
+  Add hand's pills, in strip order, so the digits run on past `3` instead of restarting
+  beside it. Pressing a pill's key again while **that pill's** tool is the one running
+  opens its flyout instead of re-arming it — the Add hand's counterpart of Slot 1's
+  re-press (`1` Move ⇄ Rotate). `4` is deliberately unbound: it is the one digit between
+  the two runs, left to whatever owns the canvas.
 - **The flyout** (`▾`, or the second press) shows one **category at a time** behind a
   segmented header bar (`Sketch | Solid | Surface | …`). The list used to be one flat
   column mixing drawing tools, primitives and profile features. The caret reads `^`
@@ -60,8 +66,9 @@ The Add hand is its **own strip**, above the action dock, not a control inside i
 - **The list is numbered.** Its rows carry `1`–`8` in a column of their own (separate
   from the gate's requirement hint, which a disabled row shows in the same menu), and
   pressing a number while the flyout is open picks that row into its pill: the same
-  bind-and-run a click does. The panel owns the digits while it is open — `4` means "the
-  fourth tool" there and "the fourth pill" otherwise.
+  bind-and-run a click does. The panel owns the digits while it is open — `5` is the
+  fifth row there and the Sketch pill otherwise — so a key never means two things at
+  once.
 - **Per-category memory.** Picking a tool binds it to its category's pill *and* runs it.
   Clicking a **tab** only points that category's pill at the tool the category remembers,
   so the pill behind the flyout already names what the next click would run.

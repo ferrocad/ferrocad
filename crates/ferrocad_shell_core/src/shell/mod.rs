@@ -1220,6 +1220,18 @@ impl Shell {
             self.back_radial(cx);
             return true;
         }
+        // The creation flyout is a **numbered list**: `1`–`8` pick that tool into its
+        // pill, exactly as clicking the row does. The panel owns the digits while it is
+        // open, so a number means the list here and a pill (`4`, `5`, …) otherwise.
+        if !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && let Ok(row) = event.keystroke.key.parse::<usize>()
+            && (1..=crate::chrome::CREATION_ROW_KEYS).contains(&row)
+            && self.select_creation_row(row - 1, cx)
+        {
+            return true;
+        }
         // A floating dialog does not own the keyboard once the pointer clicks the
         // canvas (the viewport focuses itself), so dismiss it here as well: `Esc` must
         // cancel from anywhere while the HUD is open. A panel that already handled the

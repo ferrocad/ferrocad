@@ -83,6 +83,11 @@ struct PopoverRow {
     /// follow. A one-shot action row still dismisses it.
     keep_open: bool,
     accel: String,
+    /// The row's **selection key** (`1`, `2`, …), empty when it has none.
+    ///
+    /// Only the creation flyout uses it: a category is a short list, so it is also a
+    /// numbered one, and the number is what picks the tool into its pill.
+    key: String,
     /// Draw a 1 px hairline above this row (a group boundary).
     divider_before: bool,
 }
@@ -105,6 +110,7 @@ impl PopoverRow {
             toggle: command.checkable,
             keep_open: command.checkable,
             accel: command.accel.clone(),
+            key: String::new(),
             divider_before: false,
         }
     }
@@ -135,6 +141,7 @@ fn provider_rows(feature: &str, providers: &[crate::types::GridProvider]) -> Vec
             toggle: true,
             keep_open: true,
             accel: String::new(),
+            key: String::new(),
             divider_before: false,
         })
         .collect()
@@ -307,6 +314,7 @@ fn gizmo_rows(feature: Option<&ProviderFeature>, commands: &[CommandInfo]) -> Ve
             toggle: false,
             keep_open: false,
             accel: command.accel.clone(),
+            key: String::new(),
             divider_before: false,
         });
     }
@@ -507,6 +515,7 @@ fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
         toggle: false,
         keep_open: false,
         accel: String::new(),
+        key: String::new(),
         divider_before: !rows.is_empty(),
     });
     if let Some(command) = commands::find(&model.commands, DEV_TOOLS) {
@@ -522,6 +531,7 @@ fn app_rows(model: &ShellModel, dev_tools_open: bool) -> Vec<PopoverRow> {
             toggle: true,
             keep_open: false,
             accel: command.accel.clone(),
+            key: String::new(),
             // The diagnostics row is a different section from the file verbs.
             divider_before: !rows.is_empty(),
         });
@@ -736,6 +746,7 @@ fn select_button(
             toggle: true,
             keep_open: true,
             accel: String::new(),
+            key: String::new(),
             divider_before: false,
         })
         .collect();
@@ -1180,6 +1191,7 @@ fn popover_with_tabs(
             checked: row.checked,
             toggle: row.toggle,
             accel: (!row.accel.is_empty()).then(|| row.accel.into()),
+            key: (!row.key.is_empty()).then(|| row.key.into()),
             divider_before: row.divider_before,
         })
         .collect();
@@ -1692,6 +1704,10 @@ pub(crate) fn action_dock(
     column
 }
 
+/// How many tools a category's flyout numbers. A category is a short list, and the top
+/// digit row runs out at nine.
+pub(crate) const CREATION_ROW_KEYS: usize = 8;
+
 /// The five creation tiers, in the order the flyout lists them.
 ///
 /// The design's hierarchy (`creation-loadout.md` §1) is Spatial first — you draw
@@ -1814,8 +1830,11 @@ fn create_dock(
         .text_xs()
         .when(blocked, |el| el.opacity(0.45));
     for (index, (category, command)) in pills.iter().enumerate() {
+        let open = dock
+            .tab()
+            .is_some_and(|tab| tab.eq_ignore_ascii_case(category));
         row = row.child(creation_pill(
-            index, category, command, model, blocked, holding, cx,
+            index, category, command, open, model, blocked, holding, cx,
         ));
     }
     Some(row.into_any_element())
@@ -1830,6 +1849,7 @@ fn creation_pill(
     index: usize,
     category: &str,
     command: &CommandInfo,
+    open: bool,
     model: &ShellModel,
     blocked: bool,
     holding: bool,
@@ -1920,7 +1940,9 @@ fn creation_pill(
                 .rounded_sm()
                 .text_xs()
                 .text_color(rgb(MUTED))
-                .child("▾");
+                // `^` while this pill's flyout is open: the caret names the state of
+                // the list it owns, not the direction of a drop-down.
+                .child(if open { "^" } else { "▾" });
             if blocked {
                 caret
             } else {
@@ -1990,10 +2012,15 @@ fn creation_flyout(
         if !command
             .category()
             .is_some_and(|name| name.eq_ignore_ascii_case(&active))
+            || rows.len() >= CREATION_ROW_KEYS
         {
             continue;
         }
         let mut row = PopoverRow::of(command);
+        // The list is **numbered**: `1`–`8` pick the tool into its pill without moving
+        // the pointer. The number is a separate column from the gate's hint, so a row
+        // can say both "not yet" and "this is 3".
+        row.key = (rows.len() + 1).to_string();
         if !gate_satisfied(model, command)
             && let Some(gate) = command.topology_gate()
         {

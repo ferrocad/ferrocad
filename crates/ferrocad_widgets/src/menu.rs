@@ -45,6 +45,12 @@ pub struct MenuRow {
     pub toggle: bool,
     /// An optional shortcut or hint, right-aligned in [`MUTED`].
     pub accel: Option<SharedString>,
+    /// A **selection key** (`1`, `2`, …) carried in its own right-hand column.
+    ///
+    /// It is separate from `accel` on purpose: a row can carry both a reason it is
+    /// disabled (`select at least 2 profiles`) and the number that would pick it once
+    /// the reason is gone, and the two must not run together into one cell.
+    pub key: Option<SharedString>,
     /// Draw a 1 px group hairline above this row.
     pub divider_before: bool,
 }
@@ -213,6 +219,7 @@ pub fn menu_with_tabs(
             checked,
             toggle,
             accel,
+            key: hotspot,
             divider_before,
         } = row;
 
@@ -300,6 +307,22 @@ pub fn menu_with_tabs(
         if let Some(accel) = accel {
             el = el.child(div().text_color(rgb(MUTED)).child(accel));
         }
+        if let Some(hotspot) = hotspot {
+            // The far-right column: the same narrow, right-aligned cell a menu's
+            // shortcuts use everywhere else, so a column of digits lines up.
+            el = el.child(
+                div()
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("{key}-row-{id}-key")
+                    })
+                    .w(px(14.))
+                    .flex_shrink_0()
+                    .text_right()
+                    .text_color(rgb(MUTED))
+                    .child(hotspot),
+            );
+        }
 
         if enabled {
             let on_row = on_row.clone();
@@ -367,6 +390,7 @@ mod tests {
             checked: false,
             toggle,
             accel: None,
+            key: None,
             divider_before: false,
         }
     }

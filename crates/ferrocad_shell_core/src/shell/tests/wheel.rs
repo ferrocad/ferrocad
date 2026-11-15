@@ -1009,6 +1009,25 @@ for _id, _command in (
         cx.debug_bounds("create-row-Test_SketchTool").is_some(),
         "on the Sketch tab"
     );
+    // The list is **numbered** (`1`–`8`, in a column of its own), and a number picks
+    // that row into its pill without touching the pointer.
+    assert!(
+        cx.debug_bounds("create-row-Test_SketchTool-key").is_some(),
+        "the row carries its selection key"
+    );
+    model.lock().unwrap().status.clear();
+    press_root(&mut cx, &shell, "1");
+    draw(&mut cx);
+    assert!(
+        model.lock().unwrap().status.contains("Rectangle"),
+        "`1` runs the first row's tool: {}",
+        model.lock().unwrap().status
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.memory("Sketch").map(str::to_string)),
+        Some("Test_SketchTool".to_string()),
+        "and loads its pill"
+    );
     cx.update(|_window, cx| {
         shell.update(cx, |shell, cx| {
             shell.close_popover(cx);

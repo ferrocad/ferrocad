@@ -201,6 +201,59 @@ impl Shell {
         cx.notify();
     }
 
+    /// The tools of one creation category, in the order the flyout lists them.
+    ///
+    /// The flyout numbers its rows `1`–`8`; this is the same list, so `3` is the third
+    /// row whatever the edition registers.
+    pub(crate) fn creation_category_tools(&self, category: &str) -> Vec<crate::commands::CommandInfo> {
+        let model = self.model.lock().unwrap();
+        let surfaces = model.surfaces();
+        surfaces
+            .creation
+            .iter()
+            .copied()
+            .filter(|command| !command.dev_only)
+            .filter(|command| {
+                command
+                    .category()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(category))
+            })
+            .take(crate::chrome::CREATION_ROW_KEYS)
+            .cloned()
+            .collect()
+    }
+
+    /// Pick the flyout row at `index` (0-based) into its category's pill.
+    ///
+    /// This is the numbered list's key path: it does exactly what clicking the row does
+    /// — bind the tool to its category and run it, which arms it — and it only exists
+    /// while the flyout is open, so the digits mean the list here and the pills
+    /// otherwise. Returns whether the key was the list's.
+    pub(crate) fn select_creation_row(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        if !self.popover_open("create") {
+            return false;
+        }
+        let Some(category) = self.creation.tab().map(str::to_string) else {
+            return false;
+        };
+        let Some(command) = self.creation_category_tools(&category).into_iter().nth(index) else {
+            return false;
+        };
+        if let Some(gate) = command.topology_gate() {
+            let (count, kind) = {
+                let model = self.model.lock().unwrap();
+                crate::chrome::selection_topology(&model.selection)
+            };
+            if !gate.satisfied(count, kind) {
+                let label = command.label().to_string();
+                self.report_tool_requirement(&label, &gate.requirement(), cx);
+                return true;
+            }
+        }
+        self.run_command(&command.id, cx);
+        true
+    }
+
     /// Show or hide the create dock (the strip of pills above the action dock).
     ///
     /// Hiding it closes the flyout too: the flyout hangs from a pill that is no longer

@@ -604,15 +604,24 @@ Three follow-ups from the live window:
   `[ Undo Redo Fit │ ⊕ Create Dock │ Search ]` and never a list of tools. Each pill
   remembers its category's tool and leads with its key, as the Modify bar does — `5`–`9`
   are the Add hand's, continuing the Modify hand's `0`–`3` so one digit space addresses
-  both hands (`4` is left unbound), and a second press while that pill's tool is the one
-  running opens its flyout instead of re-arming it. The flyout shows **one category at a
-  time** behind a segmented
-  header, with a tab click pointing the pill at the remembered tool and a row click
-  binding and running it. The rows carry `1`–`8` in their own column and those digits
+  both hands (`4` is left unbound). A key press **selects** the pill and starts the tool
+  it names (the pill takes the accent, like the Modify bar's hand) and a press on the pill
+  that already holds the armed tool **steps to the next tool of that category**, wrapping
+  and skipping a tool the selection cannot use — the slot-with-variants shape Slot 1 has
+  for Move ⇄ Rotate. The key never opens the menu. The flyout shows **one category at a
+  time** behind a segmented header, with a tab click pointing the pill at the remembered
+  tool and a row click binding and running it. The rows carry `1`–`8` in their own column
+  and those digits
   pick a row while the flyout is open (the panel owns the keyboard, as the wheel does),
   so a category is navigable without the pointer; the pill's caret reads `^` while its
   list is showing. The wheel's `Create ▸` commits through the same path, so a flick
   loads the pill and arms the tool at the pointer.
+- **A session adds a pill; it does not take the dock.** The armed tool's pill (its label,
+  its `W/L/H` row or point count, its hint, `✗`/`✓`) is the top row of the same
+  bottom-centre column, above the create dock, so the loadout and the dock stay in place
+  while a tool runs. The column is bottom-anchored and grows upward: the dock keeps its
+  baseline and the canvas keeps its rectangle (`chrome::action_dock` owns the column,
+  `chrome::tool_pill` the row).
 - **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
   `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
   `select at least 2 profiles` instead of `select at least 2 bodies`.

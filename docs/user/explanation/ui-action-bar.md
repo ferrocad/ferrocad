@@ -39,19 +39,20 @@ disables without anyone telling the button to.
 
 ## While a tool is running
 
-Starting a tool **replaces** the action bar with the **tool strip** in the same
-bottom-centre slot. The two are never stacked, and the canvas rectangle does not move.
+Starting a tool **adds a pill above** the action bar's column: the tool's own pill sits on
+top of the create dock, which sits on top of the bar. The dock and the create dock stay
+where they were — the column grows upward from a fixed bottom edge — so the canvas
+rectangle does not move and the loadout the tool was started from stays in hand.
 
-The tool strip shows:
+The tool's pill shows:
 
 - the tool's name;
-- its point count;
+- its numbers (when the tool has fields) or its point count;
 - a short hint;
 - **Cancel** and **Finish**.
 
 **Finish** takes the same host path as `Enter`; **Cancel** takes the same path as `Esc`,
-so the buttons and the keys cannot drift. While a tool owns the canvas, a second command
-cannot be started underneath it.
+so the buttons and the keys cannot drift.
 
 ## Dialogs and the palette
 

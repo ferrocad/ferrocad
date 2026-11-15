@@ -45,7 +45,7 @@ inventory, tool strip, tokens and slice plan are in
 | Chrome anchor | centre action bar (bottom-centre) | loadout bar (bottom-left, `left: 16 px`, `bottom: 12 px`) |
 | Slots | a create dock of one pill per category (`5`–`9` arm them, in strip order) over 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
 | Governs | what you make, and which surface/edge it anchors to | what a pick targets, and which manipulator is hosted |
-| Active state | IDLE → HOVER → EXPANDED → ARMED (the action bar swaps to the tool strip) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
+| Active state | IDLE → HOVER → EXPANDED → ARMED (the tool's pill is added above the create dock) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
 | Topology binding | WP: place on the grid · Body: feature from a profile · Face: place on the face `+N` · Edge: place along the edge | Body: `TransformGizmo` · Face: `PushPullStem` · Edge: `DressUpScrubber` · Inspect: highlight only |
 | Commit | new shape added, selected, one undo step | transform/manipulator session committed (`✓`/`Enter`), one undo step |
 
@@ -58,17 +58,23 @@ Bottom-left (Modify)                                  Bottom-centre (Add, idle)
 [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ │ 7 ⊕ Surface: Loft ▾ ]     ← the create dock, above
 ```
 
-The Add hand is its **own strip**, one pill per category, sitting above the action dock:
-the dock carries a single `⊕ Create Dock ^` toggle and never a list of tools. Each pill
-reads `<key> ⊕ <Category>: <Tool> ▾` and remembers its category's tool; the left half
-arms it. The keys are the **one digit space both hands share**: `0`–`3` equip the
-Modify hand's slots and `5`–`9` arm the pills at those positions, so a press means the
-same kind of thing in either hand (`5` Sketch, `6` Solid, `7` Surface, `8` Text,
-`9` Mesh). Pressing a pill's key again while **that pill's** tool is the running one
-opens its flyout instead of re-arming it, which is the Add hand's counterpart of Slot
-1's re-press. `4` stays unbound: it is the gap between the two runs.
+The Add hand is its **own strip**, one pill per category, sitting above the action dock —
+the **continuation of the action loadout**, not a separate tray: the dock carries a single
+`⊕ Create Dock ^` toggle and never a list of tools. Each pill reads
+`<key> ⊕ <Category>: <Tool> ▾` and remembers its category's tool; its left half is the
+**slot**, the same gesture as its key. The keys are the **one digit space both hands
+share**: `0`–`3` equip the Modify hand's slots and `5`–`9` are the Add hand's pills at
+those positions (`5` Sketch, `6` Solid, `7` Surface, `8` Text, `9` Mesh). `4` stays
+unbound: it is the gap between the two runs.
 
-The flyout shows one category at a time behind a segmented header (`Sketch | Solid | Surface |
+A press **selects** the pill and arms the tool it names — the pill lights with the accent,
+as the Modify bar lights its hand — and a press on the pill that already holds the armed
+tool **steps to the next tool of that category**, wrapping round and skipping a tool the
+selection cannot use. That is Slot 1's `1` Move ⇄ Rotate shape applied to a category's
+tools, and it is why the key never opens a menu: browsing a list is what the slot exists
+to save.
+
+The flyout (`▾`) shows one category at a time behind a segmented header (`Sketch | Solid | Surface |
 …`, empty categories omitted); picking a tool binds it to its pill and runs it, and
 clicking a tab only points the pill at that category's remembered tool. The rows are
 numbered `1`–`8` in their own right-hand column, and a number pressed while the flyout is
@@ -84,11 +90,14 @@ their labels, glyphs and the handles they build all come from the slot rather th
 command. The docked numeric row carries the same toggle beside its fields, so the row and
 the bar can never disagree.
 
-The placement, ARMED (the two never stack, and the canvas rectangle does not move):
+The placement, ARMED (the tool's pill is added above the strip; nothing is swapped and the
+canvas rectangle does not move):
 
 ```
 Bottom-left (Modify, parked)                          Bottom-centre (Add, armed)
 [ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]      [ Box on WP:XY │ W 20.00  L 20.00  H 20.00 mm │ ✗ │ ✓ ]
+                                                     [ 5 ⊕ Sketch: Rectangle ▾ │ 6 ⊕ Solid: Box ▾ ]
+                                                     [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
 ```
 
 **Mutual exclusion.** The two hands are exclusive only through the existing context:
@@ -277,9 +286,9 @@ the label is `⊕ Box ▾` (the tool it arms) and there is no duplicate `Create 
 - **Context.** `StartTool` is refused while a move/rotation/manipulator is pending, and the
   status names the finish pair; arming a creation tool clears the gizmo set, the
   manipulators and the Move form; the radial does not open while the tool runs.
-- **Chrome.** The action dock swaps to the strip in place and the viewport rect is
-  identical before and after; the loadout bar dims only while pending (and, if decided,
-  while armed).
+- **Chrome.** Armed, the tool's pill is **added above** the create dock and the viewport
+  rect is identical before and after; the dock and the strip keep their rows; the loadout
+  bar dims only while pending (and, if decided, while armed).
 - **Naming.** `PILL_HOLD` leaves nothing pending and gates no action; `SESSION_HOLD` keeps
   its uncommitted-transform meaning.
 - **Topology.** A face hover aligns the preview's `+Z` with the face normal; an edge hover

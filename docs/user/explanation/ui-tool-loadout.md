@@ -68,12 +68,19 @@ the tool it was last left on.
 [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
 ```
 
-- The **left half** of a pill arms that tool in one click. Each pill shows its key in
-  front of the `⊕` (`5 Sketch: Rectangle`), the way the Modify bar shows `1 Move`: the two
-  hands are **one set of digits**. `1`–`3` and `0` equip the Modify hand's slots, and
-  `5`–`9` arm the pills at those positions — `5` Sketch, `6` Solid, `7` Surface, `8` Text,
-  `9` Mesh. Pressing a pill's key again while that tool is the one running opens its
-  category list instead of arming it again. `4` is not bound to anything.
+- The **left half** of a pill is that pill's *slot*: pressing its key and clicking it do
+  the same thing. Each pill shows its key in front of the `⊕` (`5 Sketch: Rectangle`), the
+  way the Modify bar shows `1 Move`, because the two hands are **one set of digits**: `1`–`3`
+  and `0` equip the Modify hand, and `5`–`9` are the create dock's pills — `5` Sketch,
+  `6` Solid, `7` Surface, `8` Text, `9` Mesh. `4` is not bound to anything.
+- Pressing a pill's key **selects** it and starts the tool it names; the pill lights up,
+  like the hand the Modify bar is holding. Pressing the same key again **steps to the next
+  tool in that category** — so `5`, `5`, `5` walks the sketch tools, wrapping round — and
+  each press starts the one it lands on. A tool that needs a selection you do not have is
+  skipped rather than selected.
+- Starting a tool does not take the dock away: the tool's own pill (its name, its numbers,
+  its `✗`/`✓`) appears **above** the create dock, so the slots, the dock and Search stay
+  where they were while you draw.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that

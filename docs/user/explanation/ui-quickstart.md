@@ -10,7 +10,7 @@ then use the linked pages as the reference.
 | --- | --- | --- | --- |
 | **Window chrome** | around the canvas | the title bar and application menu, the status line, and the Dev Tools window | [Window chrome](ui-chrome.md) |
 | **Toolbar** | floating pill at the top-left | Grid, Axes, WP, Gizmo, Select and Snap | [The viewport toolbar](ui-toolbars.md) |
-| **Action bar** | bottom-centre | the workbench's creation and global commands, and Search; a running tool replaces it with the tool strip | [The action bar](ui-action-bar.md) |
+| **Action bar** | bottom-centre | the workbench's global commands, the create dock's toggle and Search; a running tool adds its own pill above them | [The action bar](ui-action-bar.md) |
 | **Wheel menu** | at the pointer, on demand | the verbs for the object under the pointer: Move, Rotate, visibility, workplane and Delete in the built-in set | [The wheel menu](ui-wheel-menu.md) |
 | **Tool loadout** | bottom-left | the one hand the pointer carries: `1 Move`/`Rotate`, `2 Push/Pull`, `3 Fillet`, `0 Inspect` | [The tool loadout](ui-tool-loadout.md) |
 
@@ -97,7 +97,7 @@ boolean whose inputs are not final. In those states "add" and "modify" blur, and
 is least sure what comes next. The window handles them with explicit state rather than by
 guessing:
 
-- a running tool replaces the action bar with the **tool strip** in the same slot;
+- a running tool adds its pill above the action bar instead of replacing it, so the dock and the create dock stay put;
 - a pending transform owns the context until `Enter`/`✓` or `Esc`/`✗`;
 - the wheel does not open while a tool or dialog owns the canvas;
 - `Esc` closes the topmost transient surface first.

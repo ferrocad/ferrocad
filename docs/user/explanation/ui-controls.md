@@ -68,8 +68,8 @@ status line name the same scope.*
 
 - **The canvas comes first.** The toolbar is an overlay, not a pane header, so the
   scene reaches the title bar. Opening a tool or a dialog does not move the canvas
-  rectangle either: the action bar and the active tool strip share one bottom-centre
-  slot.
+  rectangle either: the bottom-centre column (tool pill, create dock, action bar) is
+  bottom-anchored and grows upward.
 - **State is ink, not a box.** An active tool, a checked command and a custom
   workplane are drawn in accent ink. A background is kept for hover, the active loadout
   slot and a selected segment, so the scene stays visually dominant.

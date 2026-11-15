@@ -339,5 +339,5 @@ path); `ferrocad_shell_core` **290** (the plane wire form and its `value_v`);
 `ferrocad_parametric` `sketch_drag_round_trip` **1/1** through the real provider, transport,
 grip, commit and Python edit; `tests/test_sketch_tools.py` **7** (commands, creating
 commit, dimension, the provider's grips, the drag commit, and the two refusals). The Python
-`workbenches` set is **871 / 0 / 0 / 3** over 54 modules and `tests/test_manipulator_specs`
-is **8/0** with the argument pinned.
+`workbenches` set is **871 / 0 / 0 / 3** over 54 modules, `base` is **708 / 0 / 0 / 8**, and
+`tests/test_manipulator_specs` is **8/0** with the argument pinned.

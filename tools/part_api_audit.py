@@ -17,6 +17,11 @@ What is derived
                             ``Part.Precision``)
 ``functions.defined``       every ``#[pyfunction]`` declaration, registered or
                             not (``defined_not_registered`` names the latter)
+``functions.installed_as_methods``
+                            declared and wrapped by ``wrap_pyfunction!`` but not
+                            added to a module: installed as a descriptor on
+                            ``ferrocad.DocumentObject`` (the SketchObject
+                            surface), so it *is* reachable
 ``classes``                 ``#[pyclass(name = "...", module = "...")]``
 ``object_types``            registered object types from both
                             ``crates/ferrocad_part/src`` and ``ferrocad_part_py``:
@@ -108,6 +113,10 @@ ATTR_EXTENDS = re.compile(r'\bextends\s*=\s*([A-Za-z_]\w*)')
 ADD_FUNCTION = re.compile(
     r"([A-Za-z_]\w*)\s*\.add_function\s*\(\s*wrap_pyfunction!\s*\(\s*([A-Za-z_]\w*)"
 )
+#: A declared function that is wrapped somewhere, even when it is not added to a
+#: module: the sketch surface installs its functions as descriptors on
+#: ``ferrocad.DocumentObject`` rather than as ``Part`` module functions.
+WRAP_PYFUNCTION = re.compile(r"wrap_pyfunction!\s*\(\s*([A-Za-z_]\w*)")
 #: ``let precision = PyModule::new(py, "Part.Precision")?;``
 PYMODULE_NEW = re.compile(
     r'\blet\s+([A-Za-z_]\w*)\s*=\s*PyModule::new\([^,]+,\s*"([^"]+)"\)'
@@ -392,8 +401,18 @@ def derive_ours() -> dict:
             module = receivers.get(receiver, "Part")
             registered_functions.add(f"{module}::{python_names.get(rust_name, rust_name)}")
 
+    wrapped: set[str] = set()
+    for text in binding_texts.values():
+        wrapped.update(WRAP_PYFUNCTION.findall(text))
+
     defined = set(python_names.values())
     registered_python_names = {name.split("::", 1)[1] for name in registered_functions}
+    installed_as_methods = {
+        python_names[rust_name]
+        for rust_name in wrapped
+        if rust_name in python_names
+        and python_names[rust_name] not in registered_python_names
+    }
 
     classes: set[str] = set()
     for text in binding_texts.values():
@@ -454,7 +473,10 @@ def derive_ours() -> dict:
             "registered": len(registered_functions),
             "defined": len(defined),
             "names": sorted(registered_functions),
-            "defined_not_registered": sorted(defined - registered_python_names),
+            "defined_not_registered": sorted(
+                defined - registered_python_names - installed_as_methods
+            ),
+            "installed_as_methods": sorted(installed_as_methods),
             "by_module": {key: function_modules[key] for key in sorted(function_modules)},
         },
         "classes": {

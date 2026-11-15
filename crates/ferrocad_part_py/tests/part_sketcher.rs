@@ -1,9 +1,10 @@
 //! `Sketcher::SketchObject`, `PartDesign::Body` and `Part::Mirroring`, end to end.
 //!
 //! These are the three runtime surfaces the upstream Part tests reach through
-//! `TestPartApp.py` and `parttests/TestPartMirror.py`. The sketch here is the
-//! geometry/`Shape` half only: there is no solver and no constraint API, so
-//! `addConstraint`/`solve` are absent by design.
+//! `TestPartApp.py` and `parttests/TestPartMirror.py`. The sketch here covers the
+//! geometry/`Shape` half and the constraint model: constraints are stored,
+//! diagnosed and reported, but nothing is solved (see
+//! `docs/developer/workbenches/sketch-constraints.md`).
 //!
 //! Same one-image boot as the other Part tests: `ferrocad` + `Part` as built-ins,
 //! one OCCT backend. It needs OCCT (see `docs/developer/architecture/occt-bundling.md`).
@@ -12,7 +13,7 @@ use std::sync::{Mutex, Once};
 
 use pyo3::exceptions::PyAttributeError;
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyDict, PyModule};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -188,14 +189,207 @@ fn sketch_geometry_builds_a_wire_shape() {
         shape.getattr("Edge1").expect("Shape.Edge1");
         shape.getattr("Edge4").expect("Shape.Edge4");
 
-        // The sketch has no solver/constraint surface in this slice.
-        assert!(
-            !sketch.hasattr("addConstraint").expect("hasattr"),
-            "constraints are not implemented"
-        );
-
         close_document(py, "RustSketchShape");
     });
+}
+
+/// A stand-in for `Sketcher.Constraint`: the document surface duck-types the
+/// record by attribute, and the pure-Python `Sketcher` module is not on this test
+/// image's `sys.path`. The Python suite covers the real class.
+fn fake_constraint(kind: &str, first: i64, value: f64) -> PyResult<Py<PyAny>> {
+    Python::with_gil(|py| {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("Type", kind)?;
+        kwargs.set_item("First", first)?;
+        kwargs.set_item("Value", value)?;
+        let namespace = py.import("types")?.getattr("SimpleNamespace")?;
+        Ok(namespace.call((), Some(&kwargs))?.unbind())
+    })
+}
+
+#[test]
+fn sketch_constraints_are_stored_diagnosed_and_editable() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let doc = new_document(py, "RustSketchConstraints");
+        let sketch = doc
+            .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
+            .expect("add sketch");
+        add_unit_square(&sketch);
+
+        let radius = fake_constraint("Radius", 0, 5.0).expect("radius constraint");
+        let equal = fake_constraint("Equal", 0, 0.0).expect("equal constraint");
+        assert_eq!(
+            sketch
+                .call_method1("addConstraint", (&radius,))
+                .expect("addConstraint")
+                .extract::<i64>()
+                .expect("index"),
+            0
+        );
+        assert_eq!(
+            sketch
+                .call_method1("addConstraint", (vec![equal],))
+                .expect("addConstraint(list)")
+                .extract::<i64>()
+                .expect("index"),
+            1
+        );
+        assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 2);
+        assert_eq!(attribute::<i64>(&sketch, "solve"), 0, "the model resolves");
+        assert_eq!(
+            sketch
+                .call_method1("getDatum", (0,))
+                .expect("getDatum")
+                .extract::<f64>()
+                .expect("value"),
+            5.0
+        );
+        sketch
+            .call_method1("setDatum", (0, 12.5))
+            .expect("setDatum");
+        assert_eq!(
+            sketch
+                .call_method1("getDatum", (0,))
+                .expect("getDatum")
+                .extract::<f64>()
+                .expect("value"),
+            12.5
+        );
+
+        // A non-dimensional constraint has no datum to read or write.
+        let error = sketch
+            .call_method1("getDatum", (1,))
+            .expect_err("Equal carries no datum");
+        assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+
+        sketch
+            .call_method1("delConstraint", (0,))
+            .expect("delConstraint");
+        assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 1);
+
+        // A constraint that names a geometry which does not exist is a model
+        // error, which is what `solve` reports (it does not move geometry).
+        let dangling = fake_constraint("Vertical", 9, 0.0).expect("dangling");
+        sketch
+            .call_method1("addConstraint", (&dangling,))
+            .expect("addConstraint");
+        assert_eq!(attribute::<i64>(&sketch, "solve"), -1, "dangling reference");
+
+        close_document(py, "RustSketchConstraints");
+    });
+}
+
+#[test]
+fn autoconstraints_find_coincidence_and_verticality() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let doc = new_document(py, "RustSketchAutoconstraints");
+        let sketch = doc
+            .call_method1("addObject", ("Sketcher::SketchObject", "Sketch"))
+            .expect("add sketch");
+        // (0,0) -> (2,2) -> (2,4): the second edge is vertical and the two meet.
+        for (start, end) in [((0.0, 0.0), (2.0, 2.0)), ((2.0, 2.0), (2.0, 4.0))] {
+            sketch
+                .call_method1("addGeometry", (line_segment(py, start, end), false))
+                .expect("addGeometry");
+        }
+
+        assert_eq!(
+            sketch
+                .call_method1("detectMissingPointOnPointConstraints", (1e-3,))
+                .expect("detect coincident")
+                .extract::<usize>()
+                .expect("count"),
+            1
+        );
+        assert_eq!(
+            sketch
+                .call_method1("makeMissingPointOnPointCoincident", (false,))
+                .expect("make coincident")
+                .extract::<usize>()
+                .expect("count"),
+            1
+        );
+        assert_eq!(
+            sketch
+                .call_method1("detectMissingVerticalHorizontalConstraints", (1e-3,))
+                .expect("detect axis")
+                .extract::<usize>()
+                .expect("count"),
+            1
+        );
+        assert_eq!(
+            sketch
+                .call_method1("makeMissingVerticalHorizontal", (false,))
+                .expect("make axis")
+                .extract::<usize>()
+                .expect("count"),
+            1
+        );
+        assert_eq!(attribute::<usize>(&sketch, "ConstraintCount"), 2);
+
+        // Running the detection again finds nothing new: the coincident pair and
+        // the axis are already constrained, and the pending lists were cleared.
+        assert_eq!(
+            sketch
+                .call_method1("detectMissingPointOnPointConstraints", (1e-3,))
+                .expect("detect again")
+                .extract::<usize>()
+                .expect("count"),
+            0
+        );
+
+        close_document(py, "RustSketchAutoconstraints");
+    });
+}
+
+#[test]
+fn find_plane_answers_for_a_wire_and_refuses_a_straight_edge() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    boot();
+    Python::with_gil(|py| {
+        let part = PyModule::import(py, "Part").expect("import Part");
+        let first = line_segment(py, (0.0, 0.0), (2.0, 2.0))
+            .call_method0("toShape")
+            .expect("toShape");
+        let second = line_segment(py, (2.0, 2.0), (2.0, 4.0))
+            .call_method0("toShape")
+            .expect("toShape");
+        let wire = part
+            .getattr("Wire")
+            .expect("Part.Wire")
+            .call1((vec![first.clone(), second],))
+            .expect("a wire");
+
+        let plane = wire
+            .call_method1("findPlane", (1e-3,))
+            .expect("findPlane");
+        assert!(!plane.is_none(), "a bent wire lies in a plane");
+        let axis = plane.getattr("Axis").expect("Axis");
+        let z: f64 = axis.getattr("z").expect("z").extract().expect("z");
+        assert!((z.abs() - 1.0).abs() < 1e-9, "wire normal was {axis:?}");
+
+        // A single straight edge has no second direction, so no plane.
+        let straight = first
+            .call_method1("findPlane", (1e-3,))
+            .expect("findPlane");
+        assert!(straight.is_none(), "a straight edge has no plane normal");
+    });
+}
+
+/// Read an int-like attribute that may be a method call's result (`solve`,
+/// `getDatum`) or a plain property (`ConstraintCount`) through one path.
+fn attribute<T: for<'py> FromPyObject<'py>>(object: &Bound<'_, PyAny>, name: &str) -> T {
+    let value = object.getattr(name).expect("attribute");
+    let value = if value.is_callable() {
+        value.call0().expect("call")
+    } else {
+        value
+    };
+    value.extract().expect("value")
 }
 
 #[test]

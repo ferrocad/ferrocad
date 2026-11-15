@@ -1047,17 +1047,32 @@ impl PyQuantity {
     }
 
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
-        let o = other
-            .extract::<PyRef<'_, PyQuantity>>()
-            .map_err(|_| PyTypeError::new_err("can only multiply Quantity by Quantity"))?;
-        Ok(PyQuantity { inner: self.inner.mul(&o.inner) })
+        if let Ok(o) = other.extract::<PyRef<'_, PyQuantity>>() {
+            return Ok(PyQuantity { inner: self.inner.mul(&o.inner) });
+        }
+        // A plain number is a dimensionless factor, as upstream: `2 * 45 deg`
+        // and `radians * App.Units.Radian` both scale the value in its own unit.
+        let factor: f64 = other.extract().map_err(|_| {
+            PyTypeError::new_err("can only multiply a Quantity by a Quantity or a number")
+        })?;
+        Ok(PyQuantity { inner: self.inner.mul(&Quantity::dimensionless(factor)) })
+    }
+
+    fn __rmul__(&self, factor: f64) -> PyQuantity {
+        PyQuantity { inner: Quantity::dimensionless(factor).mul(&self.inner) }
     }
 
     fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
-        let o = other
-            .extract::<PyRef<'_, PyQuantity>>()
-            .map_err(|_| PyTypeError::new_err("can only divide Quantity by Quantity"))?;
-        Ok(PyQuantity { inner: self.inner.div(&o.inner) })
+        if let Ok(o) = other.extract::<PyRef<'_, PyQuantity>>() {
+            return Ok(PyQuantity { inner: self.inner.div(&o.inner) });
+        }
+        let factor: f64 = other.extract().map_err(|_| {
+            PyTypeError::new_err("can only divide a Quantity by a Quantity or a number")
+        })?;
+        if factor == 0.0 {
+            return Err(PyValueError::new_err("division by zero"));
+        }
+        Ok(PyQuantity { inner: self.inner.mul(&Quantity::dimensionless(1.0 / factor)) })
     }
 
     fn __pow__(&self, e: i32, _modulo: Option<&Bound<'_, PyAny>>) -> PyQuantity {

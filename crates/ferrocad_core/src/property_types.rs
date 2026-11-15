@@ -110,6 +110,14 @@ fn seed(map: &mut BTreeMap<String, PropertyFactory>) {
     fn length() -> Property {
         Property::Quantity(Quantity::new(0.0, Unit::Millimeter))
     }
+    /// An angle is not a length: its value is expressed in degrees (FerroCAD's
+    /// canonical angle unit), so `obj.Rotation = 45` reads back as `45 deg` and
+    /// `Quantity.getValueAs("deg")` is the identity. A length-quantity default
+    /// here made every angle property report millimetres.
+    fn angle() -> Property {
+        let degree = crate::quantity::parse_unit("deg").expect("'deg' is a unit");
+        Property::Quantity(Quantity::new(0.0, degree))
+    }
     fn insert(
         map: &mut BTreeMap<String, PropertyFactory>,
         name: &str,
@@ -133,7 +141,6 @@ fn seed(map: &mut BTreeMap<String, PropertyFactory>) {
         "App::PropertyLength",
         "App::PropertyDistance",
         "App::PropertyQuantity",
-        "App::PropertyAngle",
         "App::PropertyArea",
         "App::PropertyPressure",
         "App::PropertySpeed",
@@ -142,6 +149,7 @@ fn seed(map: &mut BTreeMap<String, PropertyFactory>) {
     ] {
         insert(map, name, length);
     }
+    insert(map, "App::PropertyAngle", angle);
 
     // Geometry.
     insert(map, "App::PropertyVector", || Property::Vector(Vector3::zero()));

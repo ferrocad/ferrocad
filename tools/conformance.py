@@ -100,15 +100,16 @@ DRAFT_FILES = [
     "test_airfoildat",
     "test_import",
     # M2/M3 modules that now run green in this group (they need the combined
-    # App+Part image, as `test_import` already did). `test_modification` runs
-    # 32/0/1 but stays out: its remaining error needs `Sketcher`, which this
-    # image does not ship. `test_dxf` also stays out (no `Import.readDXF`). The
-    # import modules are green where they can be: see
-    # docs/developer/workbenches/draft-tools.md.
+    # App+Part image, as `test_import` already did). The import modules are green
+    # where they can be: see docs/developer/workbenches/draft-tools.md.
     "test_creation",
     "test_array",
     "test_dwg",
     "test_oca",
+    # `test_modification` went green with the sketch constraint model (P4 SK3):
+    # `Draft.make_sketch` builds a `Sketcher::SketchObject`, adds geometry and
+    # constraints, solves and `Draft.draftify`s it back.
+    "test_modification",
     # SVG export runs green once `Part.OCC_VERSION` and the conic parameter
     # ranges exist; its one skip is honest (the BIM module is not shipped).
     "test_svg",

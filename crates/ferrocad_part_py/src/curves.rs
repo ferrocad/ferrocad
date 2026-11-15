@@ -220,7 +220,56 @@ impl PyLineSegment {
     }
 
     #[new]
-    fn new(start: &Bound<'_, PyAny>, end: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (start, end = None, last = None))]
+    fn new(
+        start: &Bound<'_, PyAny>,
+        end: Option<&Bound<'_, PyAny>>,
+        last: Option<f64>,
+    ) -> PyResult<Self> {
+        // `LineSegment(curve, first, last)`: the piece of `curve` between two of
+        // its parameters. Draft's `orientEdge` builds every oriented line this
+        // way (`Part.LineSegment(edge.Curve, edge.FirstParameter, edge.LastParameter)`).
+        if let Some(last) = last {
+            let first: f64 = end
+                .ok_or_else(|| {
+                    PyTypeError::new_err(
+                        "LineSegment(curve, first, last) needs the first parameter too",
+                    )
+                })?
+                .extract()
+                .map_err(|_| {
+                    PyTypeError::new_err("LineSegment(curve, first, last): first must be a number")
+                })?;
+            let basis = if let Ok(line) = start.downcast::<PyLine>() {
+                EdgeCurve::Line(line.borrow().curve.clone())
+            } else if let Ok(segment) = start.downcast::<PyLineSegment>() {
+                EdgeCurve::LineSegment(segment.borrow().curve.clone())
+            } else {
+                return Err(PyTypeError::new_err(
+                    "LineSegment(curve, first, last): curve must be a Part.Line or a \
+                     Part.LineSegment",
+                ));
+            };
+            let Some(EdgeCurve::LineSegment(curve)) = basis.trimmed(first, last) else {
+                return Err(OCCError::new_err(
+                    "LineSegment(curve, first, last): the parameter range is empty",
+                ));
+            };
+            return Ok(Self { curve });
+        }
+        let Some(end) = end else {
+            // `LineSegment(segment)`: an independent copy, as upstream's
+            // `GeomLineSegment(GeomLineSegment)` copy constructor.
+            if let Ok(segment) = start.downcast::<PyLineSegment>() {
+                return Ok(Self {
+                    curve: segment.borrow().curve.clone(),
+                });
+            }
+            return Err(PyTypeError::new_err(
+                "LineSegment() expects (start, end) points, (curve, first, last), or a \
+                 LineSegment to copy",
+            ));
+        };
         let curve = LineSegment::new(vector(start)?, vector(end)?).map_err(curve_error)?;
         Ok(Self { curve })
     }

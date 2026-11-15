@@ -794,6 +794,25 @@ fn rotation_placement(
     ))
 }
 
+/// An angle argument in degrees (`Shape.rotate`'s third parameter).
+///
+/// Upstream accepts a plain number of degrees *or* an angle `Quantity`, and Draft
+/// passes the latter: `DraftVecUtils.angle(...) * App.Units.Radian` is a
+/// quantity holding the angle in degrees. Reading the quantity's numeric value
+/// would be right for that spelling but wrong for a quantity built in radians, so
+/// a quantity is converted through `getValueAs("deg")`.
+fn degrees_argument(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    if value.hasattr("getValueAs")? {
+        let degrees = value.call_method1("getValueAs", ("deg",))?;
+        return degrees.extract().map_err(|_| {
+            PyTypeError::new_err("an angle Quantity must convert to degrees")
+        });
+    }
+    value.extract::<f64>().map_err(|_| {
+        PyTypeError::new_err("an angle must be a number of degrees or an angle Quantity")
+    })
+}
+
 /// Re-bake the geometry so it matches `new`, then store the placement.
 ///
 /// The geometry always equals `placement · base`, so moving from the old
@@ -1345,11 +1364,11 @@ impl PartShape {
         slf: &Bound<'_, Self>,
         center: &Bound<'_, PyAny>,
         axis: &Bound<'_, PyAny>,
-        angle: f64,
+        angle: &Bound<'_, PyAny>,
     ) -> PyResult<PyObject> {
         let center = curves::vector(center)?;
         let axis = curves::vector(axis)?;
-        let about = rotation_placement(center, axis, angle)?;
+        let about = rotation_placement(center, axis, degrees_argument(angle)?)?;
         slf.borrow().apply_global_placement(about);
         Ok(slf.clone().into_any().unbind())
     }
@@ -2058,20 +2077,24 @@ impl PartShape {
         }
     }
 
-    /// The plane a planar face lies in (`Shape.findPlane`), or `None`.
+    /// The plane a shape lies in (`Shape.findPlane`), or `None`.
     ///
-    /// The normal comes from the outer wire (the same derivation as
-    /// [`normalAt`](Self::normalAt)) and the origin is one of the face's
+    /// A planar face's normal comes from its outer wire (the same derivation as
+    /// [`normalAt`](Self::normalAt)). A wire or an edge has no surface, so its
+    /// normal is the cross product of the first pair of non-parallel edge
+    /// tangents — upstream's `findPlane` answers for those shapes too, and
+    /// Draft's `make_sketch` depends on it. The origin is one of the shape's
     /// vertices. `tol` bounds every vertex's distance from the plane, so a shape
     /// that is only nearly planar reports `None`. A boundary with fewer than two
-    /// distinct straight tangents (a full circle, for example) has no derivable
-    /// normal yet and also reports `None`.
+    /// distinct straight tangents (a full circle, a single straight edge) has no
+    /// derivable normal and also reports `None`.
     #[pyo3(signature = (tol = 1e-7))]
     fn findPlane(&self, py: Python<'_>, tol: f64) -> PyResult<PyObject> {
         let Some(shape) = self.shape() else {
             return Ok(py.None());
         };
-        let Some(normal) = planar_face_normal(&shape) else {
+        let normal = planar_face_normal(&shape).or_else(|| planar_wire_normal(&shape));
+        let Some(normal) = normal else {
             return Ok(py.None());
         };
         let points = vertex_points(&shape);
@@ -3367,11 +3390,11 @@ impl PartShape {
         &self,
         center: &Bound<'_, PyAny>,
         axis: &Bound<'_, PyAny>,
-        degree: f64,
+        degree: &Bound<'_, PyAny>,
     ) -> PyResult<PartShape> {
         let center = curves::vector(center)?;
         let axis = curves::vector(axis)?;
-        let about = rotation_placement(center, axis, degree)?;
+        let about = rotation_placement(center, axis, degrees_argument(degree)?)?;
         let result = self.copy_handle();
         result.apply_global_placement(about);
         Ok(result)
@@ -3805,6 +3828,34 @@ fn planar_face_normal(shape: &Shape) -> Option<ferrocad_curves::Vector3> {
         normal = normal.neg();
     }
     Some(normal)
+}
+
+/// The normal of a shape that has no planar face but lies in a plane: a wire, an
+/// edge or a compound of them.
+///
+/// Upstream's `Shape.findPlane` works on a wire (it builds the plane through the
+/// edges' geometry), and Draft's `make_sketch` feeds a wire straight into it. The
+/// normal is the cross product of the first pair of non-parallel edge tangents,
+/// which is the same derivation [`planar_surface_normal`] uses on a face's outer
+/// wire. `None` when every edge is parallel (a straight wire, which upstream also
+/// refuses to give an axis) or when there are fewer than two edge directions.
+fn planar_wire_normal(shape: &Shape) -> Option<ferrocad_curves::Vector3> {
+    let backend = ferrocad_part::backend();
+    let mut directions = Vec::new();
+    for edge in backend.elements(shape, ElementKind::Edge) {
+        if let Ok(curve) = backend.curve_of(&edge.shape) {
+            directions.push(curve.tangent_at(0.0));
+        }
+    }
+    for (index, first) in directions.iter().enumerate() {
+        for second in directions.iter().skip(index + 1) {
+            let normal = first.cross(second);
+            if normal.length() > 1e-9 {
+                return Some(normal.normalize());
+            }
+        }
+    }
+    None
 }
 
 /// The points of a shape's vertices, in the kernel's order.

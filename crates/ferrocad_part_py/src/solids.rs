@@ -2096,22 +2096,34 @@ impl PyPlaneSurface {
 }
 
 // ---------------------------------------------------------------------------
-// Sketcher: `Sketcher::SketchObject` (geometry + Shape/InternalShape only)
+// Sketcher: `Sketcher::SketchObject` (geometry, constraints, no solver)
 // ---------------------------------------------------------------------------
 //
-// The Part tests need three things from a sketch: `addGeometry` (so a sketch
+// The Part tests need four things from a sketch: `addGeometry` (so a sketch
 // participates in a document at all), `Shape` (a wire/compound of the geometry
-// edges, moved by `Placement`) and `InternalShape` (the bounded faces built from
-// those wires when `MakeInternals` is set). Upstream's sketch is a full solver
-// front end; none of that is here. There is no solver, no constraint API and no
-// DOF bookkeeping, so `addConstraint`/`solve`/`delConstraint` are deliberately
-// absent: a test that needs them gets an `AttributeError` naming the missing
-// method rather than a silently wrong result.
+// edges, moved by `Placement`), `InternalShape` (the bounded faces built from
+// those wires when `MakeInternals` is set) and — since P4 SK3 — a constraint
+// model that a Draft `make_sketch` script can drive.
+//
+// The model is FerroCAD's, not upstream's C++ solver front end. A constraint is a
+/// record in a `ConstraintData` property (a `StringList`, so it persists through
+/// the native and `.FCStd` serializers without a new value type): kind, geometry
+/// and point references, datum. `addConstraint`/`delConstraint`/`setDatum`/`getDatum`
+/// edit that list, `Constraints` decodes it into `Sketcher.Constraint` objects,
+/// `solve` checks the references, and `RedundantConstraints` is empty because there
+/// is no rank analysis to report. **No numerical solve happens** — geometry is
+/// authored, not moved — which is the documented approximation for this slice
+/// (P4 SK2 binds PlanGCS).
+//
+// The encoding is `kind;first=0;firstPos=2;second=1;secondPos=1` with a trailing
+// `;name=…` when named; see `docs/developer/workbenches/sketch-constraints.md`.
 //
 // The geometry list is stored as the edges each geometry object's `toShape()`
 // returns (`Part::PropertyTopoShapeList`), not as upstream's `Geom...` objects:
 // FerroCAD has no geometry-list property type yet. The kernel still builds every
-// edge and every wire/face, so nothing here is synthesized.
+// edge and every wire/face, so nothing here is synthesized. Constraints address
+// the `Geometry` list by index; construction geometry is stored separately and is
+// not addressable by a constraint until SK1's stable geometry identity lands.
 
 /// `Sketcher::SketchObject`.
 pub const SKETCH_TYPE: &str = "Sketcher::SketchObject";
@@ -2127,6 +2139,59 @@ pub const MIRRORING_TYPE: &str = "Part::Mirroring";
 const GEOMETRY: &str = "Geometry";
 const CONSTRUCTION_GEOMETRY: &str = "ConstructionGeometry";
 const INTERNAL_SHAPE: &str = "InternalShape";
+/// The hidden property that stores the constraints, one encoded record per
+/// entry. It is deliberately not called `Constraints`: that name is the Python
+/// surface (a getter that decodes these records into `Sketcher.Constraint`
+/// objects), and a class attribute of that name would shadow a property of the
+/// same name. Upstream has no `Constraints` *property* either — the list is
+/// computed from the solver state.
+const CONSTRAINT_DATA: &str = "ConstraintData";
+/// The constraints `detectMissing…` found but has not committed yet. Upstream
+/// keeps them in C++ members; a hidden property keeps them inspectable and
+/// survives a save/restore without inventing per-object Rust state.
+const MISSING_POINT_ON_POINT: &str = "MissingPointOnPointConstraints";
+const MISSING_VERTICAL_HORIZONTAL: &str = "MissingVerticalHorizontalConstraints";
+
+/// The constraint kinds the sketch model stores. Upstream has a few more (the
+/// `InternalAlignment` family and `SnellsLaw`); a kind outside this list is
+/// refused by `addConstraint` rather than stored as an opaque string that no
+/// later reader understands.
+const CONSTRAINT_KINDS: &[&str] = &[
+    "Coincident",
+    "PointOnObject",
+    "Vertical",
+    "Horizontal",
+    "Parallel",
+    "Perpendicular",
+    "Tangent",
+    "TangentViaPoint",
+    "Equal",
+    "Symmetric",
+    "Block",
+    "Distance",
+    "DistanceX",
+    "DistanceY",
+    "Radius",
+    "Diameter",
+    "Angle",
+    "Weight",
+];
+
+/// The kinds whose datum (`setDatum`/`getDatum`) is meaningful.
+const DIMENSIONAL_KINDS: &[&str] = &[
+    "Distance",
+    "DistanceX",
+    "DistanceY",
+    "Radius",
+    "Diameter",
+    "Angle",
+    "Weight",
+];
+
+/// Upstream's `PointPos` numbering, as the API carries it.
+const POINT_POS_NONE: i64 = 0;
+const POINT_POS_START: i64 = 1;
+const POINT_POS_END: i64 = 2;
 
 /// How close two edge endpoints must be to be joined into one wire (OCCT's
 /// `Precision::Confusion`, loosened slightly for coordinates reached through a
@@ -2292,6 +2357,361 @@ fn sketch_placement(doc: &Document, id: ObjectId) -> Option<Placement> {
     }
 }
 
+// --- The constraint model -------------------------------------------------
+
+/// One sketch constraint as the `Constraints` property stores it.
+///
+/// Field names mirror upstream's `Sketcher.Constraint` attributes so the
+/// `Sketcher.Constraint` round trip is exact. `driving`/`active` default to
+/// `true`, and every other field to the value upstream gives an unset one, so an
+/// omitted key in the encoding decodes to the same record.
+#[derive(Clone, Debug, PartialEq)]
+struct SketchConstraint {
+    kind: String,
+    first: i64,
+    first_pos: i64,
+    second: i64,
+    second_pos: i64,
+    third: i64,
+    third_pos: i64,
+    value: f64,
+    name: String,
+    driving: bool,
+    active: bool,
+}
+
+impl SketchConstraint {
+    fn new(kind: &str) -> Self {
+        Self {
+            kind: kind.to_string(),
+            first: 0,
+            first_pos: POINT_POS_NONE,
+            second: 0,
+            second_pos: POINT_POS_NONE,
+            third: 0,
+            third_pos: POINT_POS_NONE,
+            value: 0.0,
+            name: String::new(),
+            driving: true,
+            active: true,
+        }
+    }
+
+    /// The `;`-separated record. `name` is emitted last so a name may contain
+    /// `;` or `=`; every other key is `<key>=<value>`.
+    fn encode(&self) -> String {
+        let mut out = format!("{};first={}", self.kind, self.first);
+        if self.first_pos != POINT_POS_NONE {
+            out.push_str(&format!(";firstPos={}", self.first_pos));
+        }
+        if self.second != 0 || self.second_pos != POINT_POS_NONE {
+            out.push_str(&format!(";second={}", self.second));
+        }
+        if self.second_pos != POINT_POS_NONE {
+            out.push_str(&format!(";secondPos={}", self.second_pos));
+        }
+        if self.third != 0 || self.third_pos != POINT_POS_NONE {
+            out.push_str(&format!(";third={}", self.third));
+        }
+        if self.third_pos != POINT_POS_NONE {
+            out.push_str(&format!(";thirdPos={}", self.third_pos));
+        }
+        if self.value != 0.0 {
+            out.push_str(&format!(";value={}", self.value));
+        }
+        if !self.driving {
+            out.push_str(";driving=0");
+        }
+        if !self.active {
+            out.push_str(";active=0");
+        }
+        if !self.name.is_empty() {
+            out.push_str(";name=");
+            out.push_str(&self.name);
+        }
+        out
+    }
+
+    /// Decode one record; `None` for a record this model did not write.
+    fn decode(entry: &str) -> Option<Self> {
+        let (body, name) = match entry.find(";name=") {
+            Some(at) => (&entry[..at], Some(&entry[at + ";name=".len()..])),
+            None => (entry, None),
+        };
+        let mut fields = body.split(';');
+        let kind = fields.next()?;
+        if !CONSTRAINT_KINDS.contains(&kind) {
+            return None;
+        }
+        let mut constraint = Self::new(kind);
+        for field in fields {
+            let (key, raw) = field.split_once('=')?;
+            match key {
+                "first" => constraint.first = raw.parse().ok()?,
+                "firstPos" => constraint.first_pos = raw.parse().ok()?,
+                "second" => constraint.second = raw.parse().ok()?,
+                "secondPos" => constraint.second_pos = raw.parse().ok()?,
+                "third" => constraint.third = raw.parse().ok()?,
+                "thirdPos" => constraint.third_pos = raw.parse().ok()?,
+                "value" => constraint.value = raw.parse().ok()?,
+                "driving" => constraint.driving = raw != "0",
+                "active" => constraint.active = raw != "0",
+                _ => return None,
+            }
+        }
+        if let Some(name) = name {
+            constraint.name = name.to_string();
+        }
+        Some(constraint)
+    }
+}
+
+/// Refuse a method on an object that is not a sketch (the descriptor already
+/// gates this; a direct `wrap_pyfunction` call reaches here too).
+fn require_sketch(object: &Bound<'_, PyAny>, method: &str) -> PyResult<()> {
+    let type_id: String = object.getattr("TypeId")?.extract()?;
+    if type_id != SKETCH_TYPE {
+        return Err(PyAttributeError::new_err(format!(
+            "'{type_id}' object has no attribute '{method}'"
+        )));
+    }
+    Ok(())
+}
+
+/// The stored string list of a property (empty when the property is absent).
+fn sketch_string_list(object: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<String>> {
+    let value = object.getattr(name)?;
+    let mut out = Vec::new();
+    for item in value.try_iter()? {
+        out.push(item?.extract::<String>()?);
+    }
+    Ok(out)
+}
+
+fn store_sketch_string_list(
+    object: &Bound<'_, PyAny>,
+    name: &str,
+    values: &[String],
+) -> PyResult<()> {
+    let list = PyList::new(object.py(), values.iter().map(String::as_str))?;
+    object.setattr(name, list)
+}
+
+/// The committed constraints, decoded. An entry this model cannot decode is a
+/// `ValueError` naming it: it means something wrote the property behind
+/// `addConstraint`'s back.
+fn sketch_constraints(object: &Bound<'_, PyAny>) -> PyResult<Vec<SketchConstraint>> {
+    sketch_string_list(object, CONSTRAINT_DATA)?
+        .iter()
+        .map(|entry| {
+            SketchConstraint::decode(entry).ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "{CONSTRAINT_DATA} holds an entry this sketch model cannot read: {entry:?}"
+                ))
+            })
+        })
+        .collect()
+}
+
+fn store_sketch_constraints(
+    object: &Bound<'_, PyAny>,
+    constraints: &[SketchConstraint],
+) -> PyResult<()> {
+    let encoded: Vec<String> = constraints.iter().map(SketchConstraint::encode).collect();
+    store_sketch_string_list(object, CONSTRAINT_DATA, &encoded)
+}
+
+/// One `addConstraint` argument: a `Sketcher.Constraint` (or anything with its
+/// attributes), or a sequence of them.
+fn constraint_arguments(value: &Bound<'_, PyAny>) -> PyResult<Vec<SketchConstraint>> {
+    if value.downcast::<pyo3::types::PyString>().is_ok() {
+        return Err(PyTypeError::new_err(
+            "addConstraint expects a Sketcher.Constraint, not a string",
+        ));
+    }
+    if let Ok(items) = value.try_iter() {
+        let mut constraints = Vec::new();
+        for item in items {
+            constraints.push(constraint_argument(&item?)?);
+        }
+        return Ok(constraints);
+    }
+    Ok(vec![constraint_argument(value)?])
+}
+
+fn constraint_argument(value: &Bound<'_, PyAny>) -> PyResult<SketchConstraint> {
+    let kind: String = value.getattr("Type").and_then(|t| t.extract()).map_err(|_| {
+        PyTypeError::new_err(
+            "addConstraint expects a Sketcher.Constraint (an object with a string `Type`)",
+        )
+    })?;
+    if !CONSTRAINT_KINDS.contains(&kind.as_str()) {
+        return Err(PyValueError::new_err(format!(
+            "unsupported sketch constraint type {kind:?}; this sketch model stores {}",
+            CONSTRAINT_KINDS.join(", ")
+        )));
+    }
+    let mut constraint = SketchConstraint::new(&kind);
+    constraint.first = int_attribute(value, "First")?;
+    constraint.first_pos = int_attribute(value, "FirstPos")?;
+    constraint.second = int_attribute(value, "Second")?;
+    constraint.second_pos = int_attribute(value, "SecondPos")?;
+    constraint.third = int_attribute(value, "Third")?;
+    constraint.third_pos = int_attribute(value, "ThirdPos")?;
+    constraint.value = match value.getattr("Value") {
+        Ok(item) if !item.is_none() => item.extract().map_err(|_| {
+            PyTypeError::new_err("a sketch constraint's Value must be a number")
+        })?,
+        _ => 0.0,
+    };
+    constraint.name = match value.getattr("Name") {
+        Ok(item) if !item.is_none() => item.extract().map_err(|_| {
+            PyTypeError::new_err("a sketch constraint's Name must be a string")
+        })?,
+        _ => String::new(),
+    };
+    constraint.driving = bool_attribute(value, "Driving", true)?;
+    constraint.active = bool_attribute(value, "IsActive", true)?;
+    Ok(constraint)
+}
+
+fn int_attribute(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
+    match value.getattr(name) {
+        Ok(item) if !item.is_none() => item
+            .extract()
+            .map_err(|_| PyTypeError::new_err(format!("a sketch constraint's {name} must be an int"))),
+        _ => Ok(0),
+    }
+}
+
+fn bool_attribute(value: &Bound<'_, PyAny>, name: &str, default: bool) -> PyResult<bool> {
+    match value.getattr(name) {
+        Ok(item) if !item.is_none() => item
+            .extract()
+            .map_err(|_| PyTypeError::new_err(format!("a sketch constraint's {name} must be a bool"))),
+        _ => Ok(default),
+    }
+}
+
+/// Whether two constraints say the same thing, ignoring the order of a
+/// two-point reference (`(0,end)-(1,start)` == `(1,start)-(0,end)`).
+fn same_constraint(a: &SketchConstraint, b: &SketchConstraint) -> bool {
+    if a.kind != b.kind {
+        return false;
+    }
+    let forward = a.first == b.first
+        && a.first_pos == b.first_pos
+        && a.second == b.second
+        && a.second_pos == b.second_pos
+        && a.third == b.third
+        && a.third_pos == b.third_pos;
+    let backward = a.first == b.second
+        && a.first_pos == b.second_pos
+        && a.second == b.first
+        && a.second_pos == b.first_pos
+        && a.third == b.third
+        && a.third_pos == b.third_pos;
+    forward || backward
+}
+
+/// The number of geometry edges a sketch holds (upstream's `GeometryCount`).
+/// Construction geometry is stored in its own list and is not counted: a
+/// constraint index addresses the `Geometry` list until SK1's stable identity
+/// lands.
+fn sketch_geometry_len(object: &Bound<'_, PyAny>) -> PyResult<usize> {
+    Ok(object.getattr(GEOMETRY)?.len()?)
+}
+
+/// Whether an edge is a straight segment (the only kind the vertical/horizontal
+/// detection can classify).
+fn is_straight_edge(edge: &Shape) -> bool {
+    matches!(
+        ferrocad_part::backend().curve_of(edge),
+        Ok(EdgeCurve::Line(_) | EdgeCurve::LineSegment(_))
+    )
+}
+
+/// The pending detections, decoded; `[]` when the property is empty.
+fn pending_constraints(object: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<SketchConstraint>> {
+    sketch_string_list(object, name)?
+        .iter()
+        .map(|entry| {
+            SketchConstraint::decode(entry).ok_or_else(|| {
+                PyValueError::new_err(format!("{name} holds an unreadable entry: {entry:?}"))
+            })
+        })
+        .collect()
+}
+
+fn store_pending_constraints(
+    object: &Bound<'_, PyAny>,
+    name: &str,
+    constraints: &[SketchConstraint],
+) -> PyResult<()> {
+    let encoded: Vec<String> = constraints.iter().map(SketchConstraint::encode).collect();
+    store_sketch_string_list(object, name, &encoded)
+}
+
+/// Commit the pending constraints of `pending_name` into `Constraints`.
+///
+/// `include_second` is upstream's flag. Detection here already emits each
+/// `(point, point)` pair explicitly, so when the flag is `false` this keeps one
+/// coincident/axis constraint per *first* reference — which is the property the
+/// flag names — instead of skipping the second half of every pair.
+fn commit_pending(
+    object: &Bound<'_, PyAny>,
+    pending_name: &str,
+    include_second: bool,
+) -> PyResult<usize> {
+    let pending = pending_constraints(object, pending_name)?;
+    let mut constraints = sketch_constraints(object)?;
+    let mut added = 0;
+    for candidate in pending {
+        let duplicate = constraints.iter().any(|have| same_constraint(have, &candidate));
+        let already_referenced = !include_second
+            && constraints
+                .iter()
+                .any(|have| have.kind == candidate.kind && have.first == candidate.first);
+        if duplicate || already_referenced {
+            continue;
+        }
+        constraints.push(candidate);
+        added += 1;
+    }
+    store_sketch_constraints(object, &constraints)?;
+    store_pending_constraints(object, pending_name, &[])?;
+    Ok(added)
+}
+
+/// Build `Sketcher.Constraint` objects from the stored records.
+fn constraint_objects(
+    py: Python<'_>,
+    constraints: &[SketchConstraint],
+) -> PyResult<PyObject> {
+    let module = py.import("Sketcher").map_err(|_| {
+        PyRuntimeError::new_err(
+            "Sketcher.Constraint is unavailable: the Sketcher module is not importable",
+        )
+    })?;
+    let class = module.getattr("Constraint")?;
+    let mut items = Vec::with_capacity(constraints.len());
+    for constraint in constraints {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("First", constraint.first)?;
+        kwargs.set_item("FirstPos", constraint.first_pos)?;
+        kwargs.set_item("Second", constraint.second)?;
+        kwargs.set_item("SecondPos", constraint.second_pos)?;
+        kwargs.set_item("Third", constraint.third)?;
+        kwargs.set_item("ThirdPos", constraint.third_pos)?;
+        kwargs.set_item("Value", constraint.value)?;
+        kwargs.set_item("Name", constraint.name.as_str())?;
+        kwargs.set_item("Driving", constraint.driving)?;
+        kwargs.set_item("IsActive", constraint.active)?;
+        items.push(class.call((constraint.kind.as_str(),), Some(&kwargs))?);
+    }
+    Ok(PyList::new(py, items)?.into_any().unbind())
+}
+
 struct SketchObject;
 
 impl ObjectType for SketchObject {
@@ -2323,6 +2743,21 @@ impl ObjectType for SketchObject {
             (
                 CONSTRUCTION_GEOMETRY.to_string(),
                 make_shape_list_property(ShapeListProperty::empty()),
+                prop_status::HIDDEN,
+            ),
+            (
+                CONSTRAINT_DATA.to_string(),
+                Property::StringList(Vec::new()),
+                prop_status::HIDDEN,
+            ),
+            (
+                MISSING_POINT_ON_POINT.to_string(),
+                Property::StringList(Vec::new()),
+                prop_status::HIDDEN,
+            ),
+            (
+                MISSING_VERTICAL_HORIZONTAL.to_string(),
+                Property::StringList(Vec::new()),
                 prop_status::HIDDEN,
             ),
             output_property(),
@@ -2453,13 +2888,265 @@ fn sketch_store_geometry(object: &Bound<'_, PyAny>, name: &str, shapes: &[Shape]
     object.setattr(name, PyList::new(py, items)?)
 }
 
-/// Install `addGeometry` on `ferrocad.DocumentObject` at `Part` import time.
+/// `GeometryCount`: the number of entries in the constraint-addressable geometry
+/// list.
+#[pyfunction]
+fn sketch_geometry_count(object: &Bound<'_, PyAny>) -> PyResult<usize> {
+    require_sketch(object, "GeometryCount")?;
+    sketch_geometry_len(object)
+}
+
+/// `ConstraintCount`: the number of stored constraints.
+#[pyfunction]
+fn sketch_constraint_count(object: &Bound<'_, PyAny>) -> PyResult<usize> {
+    require_sketch(object, "ConstraintCount")?;
+    Ok(sketch_string_list(object, CONSTRAINT_DATA)?.len())
+}
+
+/// `Constraints`: the stored constraints as `Sketcher.Constraint` objects.
+#[pyfunction]
+fn sketch_constraint_objects(object: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    require_sketch(object, "Constraints")?;
+    let constraints = sketch_constraints(object)?;
+    constraint_objects(object.py(), &constraints)
+}
+
+/// `RedundantConstraints`: upstream's one-based indices of the redundant set.
+///
+/// FerroCAD has no solver and therefore no rank analysis, so there is nothing to
+/// report and the list is empty rather than invented. A script that filters with
+/// this list (Draft's `make_sketch` does) keeps every constraint it added.
+#[pyfunction]
+fn sketch_redundant_constraints(object: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    require_sketch(object, "RedundantConstraints")?;
+    Ok(Vec::new())
+}
+
+/// `addConstraint(constraint)`: append one constraint or a sequence of them.
+///
+/// Returns the index of the last constraint added, or `-1` when the argument was
+/// an empty sequence (upstream's return convention).
+#[pyfunction]
+fn sketch_add_constraint(
+    object: &Bound<'_, PyAny>,
+    constraint: &Bound<'_, PyAny>,
+) -> PyResult<isize> {
+    require_sketch(object, "addConstraint")?;
+    let added = constraint_arguments(constraint)?;
+    if added.is_empty() {
+        return Ok(-1);
+    }
+    let mut constraints = sketch_constraints(object)?;
+    let first = constraints.len();
+    constraints.extend(added.iter().cloned());
+    store_sketch_constraints(object, &constraints)?;
+    Ok((first + added.len() - 1) as isize)
+}
+
+/// `delConstraint(index)`: drop one constraint by its zero-based index.
+#[pyfunction]
+fn sketch_del_constraint(object: &Bound<'_, PyAny>, index: usize) -> PyResult<()> {
+    require_sketch(object, "delConstraint")?;
+    let mut constraints = sketch_constraints(object)?;
+    if index >= constraints.len() {
+        return Err(PyIndexError::new_err(format!(
+            "constraint index {index} is out of range ({n} constraints)",
+            n = constraints.len()
+        )));
+    }
+    constraints.remove(index);
+    store_sketch_constraints(object, &constraints)
+}
+
+/// `setDatum(index, value)`: change a dimensional constraint's datum.
+#[pyfunction]
+fn sketch_set_datum(object: &Bound<'_, PyAny>, index: usize, value: f64) -> PyResult<()> {
+    require_sketch(object, "setDatum")?;
+    let mut constraints = sketch_constraints(object)?;
+    let count = constraints.len();
+    let constraint = constraints.get_mut(index).ok_or_else(|| {
+        PyIndexError::new_err(format!(
+            "constraint index {index} is out of range ({count} constraints)"
+        ))
+    })?;
+    if !DIMENSIONAL_KINDS.contains(&constraint.kind.as_str()) {
+        return Err(PyValueError::new_err(format!(
+            "constraint {index} is {:?}, which carries no datum",
+            constraint.kind
+        )));
+    }
+    constraint.value = value;
+    store_sketch_constraints(object, &constraints)
+}
+
+/// `getDatum(index)`: a dimensional constraint's datum.
+#[pyfunction]
+fn sketch_get_datum(object: &Bound<'_, PyAny>, index: usize) -> PyResult<f64> {
+    require_sketch(object, "getDatum")?;
+    let constraints = sketch_constraints(object)?;
+    let constraint = constraints.get(index).ok_or_else(|| {
+        PyIndexError::new_err(format!(
+            "constraint index {index} is out of range ({n} constraints)",
+            n = constraints.len()
+        ))
+    })?;
+    if !DIMENSIONAL_KINDS.contains(&constraint.kind.as_str()) {
+        return Err(PyValueError::new_err(format!(
+            "constraint {index} is {:?}, which carries no datum",
+            constraint.kind
+        )));
+    }
+    Ok(constraint.value)
+}
+
+/// `solve()`: check the model, and report `0` when every constraint names a
+/// geometry that exists (upstream's "converged" code) or `-1` when one does not.
+///
+/// **This does not move geometry.** FerroCAD stores the constraint model and
+/// diagnoses its references; the numerical solve is P4 SK2's PlanGCS binding.
+/// A sketch whose constraints are not yet satisfied by its geometry therefore
+/// still reports `0` — the datum is the authored value, not a solved one.
+#[pyfunction]
+fn sketch_solve(object: &Bound<'_, PyAny>) -> PyResult<i32> {
+    require_sketch(object, "solve")?;
+    let count = sketch_geometry_len(object)? as i64;
+    for constraint in sketch_constraints(object)? {
+        if constraint.first < 0 || constraint.first >= count {
+            return Ok(-1);
+        }
+    }
+    Ok(0)
+}
+
+/// `detectMissingPointOnPointConstraints(tol)`: find endpoint pairs that
+/// coincide but carry no `Coincident` constraint yet, and stage them for
+/// `makeMissingPointOnPointCoincident`.
+#[pyfunction]
+#[pyo3(signature = (object, tolerance = SKETCH_TOLERANCE))]
+fn sketch_detect_point_on_point(
+    object: &Bound<'_, PyAny>,
+    tolerance: f64,
+) -> PyResult<usize> {
+    require_sketch(object, "detectMissingPointOnPointConstraints")?;
+    let edges = sketch_stored_geometry(object, GEOMETRY)?;
+    let endpoints: Vec<Option<(Vector3, Vector3)>> =
+        edges.iter().map(edge_endpoints).collect();
+    let existing = sketch_constraints(object)?;
+    let mut found: Vec<SketchConstraint> = Vec::new();
+    for i in 0..edges.len() {
+        let Some((i_start, i_end)) = endpoints[i] else {
+            continue;
+        };
+        for j in (i + 1)..edges.len() {
+            let Some((j_start, j_end)) = endpoints[j] else {
+                continue;
+            };
+            for (first_pos, first_point) in
+                [(POINT_POS_START, i_start), (POINT_POS_END, i_end)]
+            {
+                for (second_pos, second_point) in
+                    [(POINT_POS_START, j_start), (POINT_POS_END, j_end)]
+                {
+                    if first_point.sub(&second_point).length() > tolerance {
+                        continue;
+                    }
+                    let mut candidate = SketchConstraint::new("Coincident");
+                    candidate.first = i as i64;
+                    candidate.first_pos = first_pos;
+                    candidate.second = j as i64;
+                    candidate.second_pos = second_pos;
+                    let known = existing
+                        .iter()
+                        .chain(found.iter())
+                        .any(|have| same_constraint(have, &candidate));
+                    if !known {
+                        found.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+    store_pending_constraints(object, MISSING_POINT_ON_POINT, &found)?;
+    Ok(found.len())
+}
+
+/// `makeMissingPointOnPointCoincident(includeSecond=True)`: commit the staged
+/// `Coincident` constraints. Returns how many were added.
+#[pyfunction]
+#[pyo3(signature = (object, include_second = true))]
+fn sketch_make_point_on_point(
+    object: &Bound<'_, PyAny>,
+    include_second: bool,
+) -> PyResult<usize> {
+    require_sketch(object, "makeMissingPointOnPointCoincident")?;
+    commit_pending(object, MISSING_POINT_ON_POINT, include_second)
+}
+
+/// `detectMissingVerticalHorizontalConstraints(tol)`: find straight edges that
+/// are already axis-aligned (in sketch coordinates) but carry no `Vertical` /
+/// `Horizontal` constraint, and stage them.
+#[pyfunction]
+#[pyo3(signature = (object, tolerance = SKETCH_TOLERANCE))]
+fn sketch_detect_vertical_horizontal(
+    object: &Bound<'_, PyAny>,
+    tolerance: f64,
+) -> PyResult<usize> {
+    require_sketch(object, "detectMissingVerticalHorizontalConstraints")?;
+    let edges = sketch_stored_geometry(object, GEOMETRY)?;
+    let existing = sketch_constraints(object)?;
+    let mut found: Vec<SketchConstraint> = Vec::new();
+    for (index, edge) in edges.iter().enumerate() {
+        let index = index as i64;
+        let already = existing.iter().any(|have| {
+            have.first == index && (have.kind == "Vertical" || have.kind == "Horizontal")
+        });
+        if already || !is_straight_edge(edge) {
+            continue;
+        }
+        let Some((start, end)) = edge_endpoints(edge) else {
+            continue;
+        };
+        let dx = (end.x - start.x).abs();
+        let dy = (end.y - start.y).abs();
+        let kind = if dx <= tolerance {
+            if dy <= tolerance {
+                // A degenerate edge: neither horizontal nor vertical.
+                continue;
+            }
+            "Vertical"
+        } else if dy <= tolerance {
+            "Horizontal"
+        } else {
+            continue;
+        };
+        let mut candidate = SketchConstraint::new(kind);
+        candidate.first = index;
+        found.push(candidate);
+    }
+    store_pending_constraints(object, MISSING_VERTICAL_HORIZONTAL, &found)?;
+    Ok(found.len())
+}
+
+/// `makeMissingVerticalHorizontal(includeSecond=True)`: commit the staged
+/// axis-alignment constraints. Returns how many were added.
+#[pyfunction]
+#[pyo3(signature = (object, include_second = true))]
+fn sketch_make_vertical_horizontal(
+    object: &Bound<'_, PyAny>,
+    include_second: bool,
+) -> PyResult<usize> {
+    require_sketch(object, "makeMissingVerticalHorizontal")?;
+    commit_pending(object, MISSING_VERTICAL_HORIZONTAL, include_second)
+}
+
+/// Install the sketch surface on `ferrocad.DocumentObject` at `Part` import
+/// time.
 ///
 /// A document object is the core's `PyDocumentObject`, whose methods live in
 /// `ferrocad_py`; a module cannot add `#[pymethods]` to it. The class is a heap
-/// type, so a descriptor can still be installed on it: it hands sketches the
-/// bound `addGeometry` and raises `AttributeError` for every other type, exactly
-/// as if the method did not exist. Skipped when `ferrocad` is not importable
+/// type, so descriptors can still be installed on it: each hands a sketch the
+/// bound function and raises `AttributeError` for every other type, exactly as
+/// if the attribute did not exist. Skipped when `ferrocad` is not importable
 /// (a standalone `Part` build has no document object to extend).
 fn install_sketch_methods(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
@@ -2469,35 +3156,94 @@ fn install_sketch_methods(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let Ok(document_object) = ferrocad.getattr("DocumentObject") else {
         return Ok(());
     };
-    let add_geometry = wrap_pyfunction!(sketch_add_geometry, m)?;
     let globals = PyDict::new(py);
     globals.set_item("_document_object", document_object)?;
-    globals.set_item("_add_geometry", add_geometry)?;
+
+    let attributes = PyDict::new(py);
+    attributes.set_item("GeometryCount", wrap_pyfunction!(sketch_geometry_count, m)?)?;
+    attributes.set_item("ConstraintCount", wrap_pyfunction!(sketch_constraint_count, m)?)?;
+    attributes.set_item("Constraints", wrap_pyfunction!(sketch_constraint_objects, m)?)?;
+    attributes.set_item(
+        "RedundantConstraints",
+        wrap_pyfunction!(sketch_redundant_constraints, m)?,
+    )?;
+    globals.set_item("_SKETCH_ATTRIBUTES", attributes)?;
+
+    let methods = PyDict::new(py);
+    methods.set_item("addGeometry", wrap_pyfunction!(sketch_add_geometry, m)?)?;
+    methods.set_item("addConstraint", wrap_pyfunction!(sketch_add_constraint, m)?)?;
+    methods.set_item("delConstraint", wrap_pyfunction!(sketch_del_constraint, m)?)?;
+    methods.set_item("setDatum", wrap_pyfunction!(sketch_set_datum, m)?)?;
+    methods.set_item("getDatum", wrap_pyfunction!(sketch_get_datum, m)?)?;
+    methods.set_item("solve", wrap_pyfunction!(sketch_solve, m)?)?;
+    methods.set_item(
+        "detectMissingPointOnPointConstraints",
+        wrap_pyfunction!(sketch_detect_point_on_point, m)?,
+    )?;
+    methods.set_item(
+        "makeMissingPointOnPointCoincident",
+        wrap_pyfunction!(sketch_make_point_on_point, m)?,
+    )?;
+    methods.set_item(
+        "detectMissingVerticalHorizontalConstraints",
+        wrap_pyfunction!(sketch_detect_vertical_horizontal, m)?,
+    )?;
+    methods.set_item(
+        "makeMissingVerticalHorizontal",
+        wrap_pyfunction!(sketch_make_vertical_horizontal, m)?,
+    )?;
+    globals.set_item("_SKETCH_METHODS", methods)?;
+
     let source = CString::new(SKETCH_METHODS).expect("no NUL");
     py.run(source.as_c_str(), Some(&globals), None)?;
     Ok(())
 }
 
 const SKETCH_METHODS: &str = r#"
-class _SketchMethods:
-    __slots__ = ()
+class _SketchAttribute:
+    __slots__ = ("_name", "_getter")
+
+    def __init__(self, name, getter):
+        self._name = name
+        self._getter = getter
 
     def __get__(self, obj, objtype=None):
         if obj is None:
             return self
-        if obj.TypeId != "Sketcher::SketchObject":
-            raise AttributeError(
-                "'%s' object has no attribute 'addGeometry'" % obj.TypeId
-            )
-
-        def addGeometry(geometry, construction=False):
-            return _add_geometry(obj, geometry, construction)
-
-        addGeometry.__name__ = "addGeometry"
-        return addGeometry
+        _require_sketch(obj, self._name)
+        return self._getter(obj)
 
 
-_document_object.addGeometry = _SketchMethods()
+class _SketchMethod:
+    __slots__ = ("_name", "_call")
+
+    def __init__(self, name, call):
+        self._name = name
+        self._call = call
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        _require_sketch(obj, self._name)
+        call = self._call
+
+        def method(*args, **kwargs):
+            return call(obj, *args, **kwargs)
+
+        method.__name__ = self._name
+        return method
+
+
+def _require_sketch(obj, name):
+    if obj.TypeId != "Sketcher::SketchObject":
+        raise AttributeError("'%s' object has no attribute '%s'" % (obj.TypeId, name))
+
+
+for _name, _getter in _SKETCH_ATTRIBUTES.items():
+    setattr(_document_object, _name, _SketchAttribute(_name, _getter))
+
+for _name, _call in _SKETCH_METHODS.items():
+    setattr(_document_object, _name, _SketchMethod(_name, _call))
 "#;
 
 // ---------------------------------------------------------------------------

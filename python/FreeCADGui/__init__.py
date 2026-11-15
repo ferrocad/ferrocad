@@ -37,6 +37,12 @@ What is here today:
 * the **headless form loader** — ``PySideUic.loadUi`` returns a proxy tree from
   ``ferrocad_ui_py`` (Q2a). The extension is imported lazily, so this module
   stays Qt-free and importable before it is built;
+* the **workbench host** — ``Workbench`` (the declaration base), ``addWorkbench`` /
+  ``listWorkbenches`` / ``getWorkbench`` / ``activateWorkbench`` / ``activeWorkbench``, and
+  the split lifecycle: ``Initialize`` is the Qt-free half (commands + ``append*``) and runs
+  once, ``Activated`` runs only when a host adopts a real Qt window
+  (``_set_gui_host``). An upstream ``InitGui.py`` therefore loads in a build with no Qt;
+  see ``docs/developer/workbenches/qt-strategy.md`` §9;
 * the **selection** — ``Selection.getSelection`` / ``getSelectionEx`` read the
   shell's snapshot, each entry a ``SelectionObject`` with ``Object``,
   ``SubElementNames``, ``PickedPoints`` and ``ObjectName``; the writable half
@@ -1207,13 +1213,17 @@ def doCommand(text: str):
 
 
 def getMainWindow():
-    """The headless main window (a stable singleton).
+    """The main window: the adopted Qt one when a host has it, else the headless seam.
 
     ``getActiveWindow()`` returns the active document's view when there is one,
     else a view with ``getSceneGraph() is None``. The view protocol includes the
     event-callback slots, ``fitAll``, ``redraw`` and ``getPoint``.
+
+    A host that can actually show Qt widgets adopts its window with
+    :func:`_set_gui_host`; until then this is the headless seam, which is also what
+    makes a workbench's ``Activated()`` a no-op here.
     """
-    return _MAIN_WINDOW
+    return _GUI_HOST if _GUI_HOST is not None else _MAIN_WINDOW
 
 
 #: Repaint requests made through ``FreeCADGui.updateGui`` since the host last took
@@ -1271,12 +1281,19 @@ def __getattr__(name):
 def addCommand(name: str, command) -> None:
     """Register ``command`` under ``name`` (``"<Workbench>_<Action>"``).
 
-    A duplicate id raises: a silent overwrite would hide workbench collisions.
+    A **command** implements ``Activated``; a **command group** (a toolbar dropdown)
+    implements ``GetCommands`` instead and lists the ids it offers. Upstream registers
+    both through this one call, so the requirement is either callable. A duplicate id
+    raises: a silent overwrite would hide workbench collisions.
     """
     if not isinstance(name, str) or not name:
         raise ValueError("a command name must be a non-empty string")
-    if not callable(getattr(command, "Activated", None)):
-        raise TypeError(f"command {name!r} has no callable Activated")
+    if not callable(getattr(command, "Activated", None)) and not callable(
+        getattr(command, "GetCommands", None)
+    ):
+        raise TypeError(
+            f"command {name!r} has neither a callable Activated nor GetCommands"
+        )
     if name in _COMMANDS:
         raise ValueError(f"command {name!r} is already registered")
     _COMMANDS[name] = command
@@ -1351,11 +1368,24 @@ def _checked(name: str, command) -> bool:
         return False
 
 
+def _group_commands(command) -> list:
+    """The command ids a **group** offers, or ``[]`` for an ordinary command."""
+    get_commands = getattr(command, "GetCommands", None)
+    if get_commands is None:
+        return []
+    try:
+        return [str(entry) for entry in get_commands()]
+    except Exception as exc:  # noqa: BLE001 - a broken group is an empty dropdown
+        _report_once(_name_of(command), "GetCommands", exc)
+        return []
+
+
 def _command_list() -> list:
     """Every command with its resources and live state, for the shell's bar."""
     commands = []
     for name, command in _COMMANDS.items():
         resources = _resources(command)
+        members = _group_commands(command)
         commands.append(
             {
                 "id": name,
@@ -1367,6 +1397,10 @@ def _command_list() -> list:
                 "enabled": _enabled(name, command),
                 "checked": _checked(name, command),
                 "dev_only": bool(resources.get("FerroCAD_DevOnly")),
+                # A command *group* is a toolbar dropdown: it runs nothing itself and
+                # lists the ids it offers (`SmartSelectGroup` in SimpleCAD is one).
+                "commands": members,
+                "is_group": bool(members),
             }
         )
     return commands
@@ -1383,6 +1417,14 @@ def _run(name: str) -> dict:
     command = _COMMANDS.get(name)
     if command is None:
         return {"ok": False, "error": f"unknown command {name!r}"}
+    # A group is a dropdown, not an action: it has no `Activated` to run, and running
+    # its default would guess what the click meant.
+    members = _group_commands(command)
+    if members:
+        return {
+            "ok": False,
+            "error": f"{name!r} is a command group; run one of {', '.join(members)}",
+        }
     # A request from an earlier direct ``Activated`` call must not attach to this
     # command. Read the flag *after* the call, below.
     _pending_tool = None
@@ -1406,6 +1448,260 @@ def _request_tool(tool_id: str) -> None:
     """
     global _pending_tool
     _pending_tool = str(tool_id)
+
+
+# ---------------------------------------------------------------------------
+# Workbenches
+# ---------------------------------------------------------------------------
+
+
+class Workbench:
+    """The base every workbench subclasses (upstream's ``Gui.Workbench``).
+
+    A workbench is a **declaration**, not a window: it names itself for a menu,
+    initialises once (which is where it registers its commands) and appends toolbars,
+    menus and context menus as ordered lists of command ids. The shell reads those
+    through :func:`_workbench_catalogue` and owns the chrome.
+
+    The lifecycle is split the way the two halves actually differ:
+
+    * :meth:`Initialize` is the Qt-free half — ``Gui.addCommand`` plus ``append*`` —
+      and runs once, on first activation, in every configuration;
+    * :meth:`Activated` is the half that manipulates Qt widgets (a dock on the main
+      window, an event filter, timers), so it runs **only** when a host has adopted a
+      real Qt main window with :func:`_set_gui_host`. The headless shell skips it
+      rather than letting it fail, and the declarations are what it uses.
+    """
+
+    #: The row text in a workbench switcher.
+    MenuText = ""
+    #: The one-line hint.
+    ToolTip = ""
+    #: An absolute icon path (normally the workbench's own ``Resources/``).
+    Icon = ""
+    #: The status-bar text, when a workbench sets it (upstream's optional ``StatusTip``).
+    StatusTip = ""
+
+    def __init__(self):
+        self._workbench_clear()
+
+    # -- the declaration tables -------------------------------------------------
+
+    def _workbench_clear(self) -> None:
+        self._toolbars = []
+        self._menus = []
+        self._context_menus = []
+        self._initialized = False
+        #: Whether this workbench's Qt half ran. `Deactivated` mirrors `Activated`,
+        #: so a workbench activated headlessly has nothing to undo.
+        self._activated = False
+
+    def _workbench_table(self, attribute: str) -> list:
+        """The ``(name, commands)`` table ``attribute``, created on first use.
+
+        An upstream subclass may define ``__init__`` without calling ``super()`` (and
+        most define none at all), so every accessor tolerates a missing table.
+        """
+        table = getattr(self, attribute, None)
+        if table is None:
+            table = []
+            setattr(self, attribute, table)
+        return table
+
+    def appendToolbar(self, name, commands) -> None:
+        """Declare a toolbar row: ``commands`` in order, with ``"Separator"`` entries."""
+        self._workbench_table("_toolbars").append((str(name), list(commands)))
+
+    def appendMenu(self, path, commands) -> None:
+        """Declare a menu row; ``path`` is a string or a list of levels."""
+        if isinstance(path, str):
+            path = [path]
+        self._workbench_table("_menus").append(
+            ([str(part) for part in path], list(commands))
+        )
+
+    def appendContextMenu(self, path, commands) -> None:
+        """Declare a context-menu row; the same ``path``/``commands`` shape."""
+        if isinstance(path, str):
+            path = [path]
+        self._workbench_table("_context_menus").append(
+            ([str(part) for part in path], list(commands))
+        )
+
+    def listCommands(self) -> list:
+        """Every command id this workbench declared, first occurrence first.
+
+        Duplicates are kept out (a command can sit in a toolbar *and* a menu), and
+        ``"Separator"`` is not a command.
+        """
+        seen = []
+        for table in ("_toolbars", "_menus", "_context_menus"):
+            for _, commands in self._workbench_table(table):
+                for command in commands:
+                    if command != "Separator" and command not in seen:
+                        seen.append(command)
+        return seen
+
+    # -- the lifecycle ----------------------------------------------------------
+
+    def Initialize(self):
+        """Register the workbench's commands and append its rows. Runs once."""
+
+    def Activated(self):
+        """The Qt half: runs only where a real Qt main window is hosted."""
+
+    def Deactivated(self):
+        """Undo what :meth:`Activated` did. Runs only if that half ran."""
+
+    def ContextMenu(self, recipient):
+        """Declare the context menu for ``recipient`` on demand."""
+
+    def GetClassName(self):
+        """The upstream class name; a Python workbench reports this one."""
+        return "Gui::PythonWorkbench"
+
+
+#: Registered workbenches, by the name :func:`addWorkbench` derived.
+_WORKBENCHES: dict = {}
+
+#: The active workbench, or ``None``. There is no default: a workbench acts only
+#: after :func:`activateWorkbench`, exactly as upstream.
+_ACTIVE_WORKBENCH = None
+
+#: The real Qt main window, when a host has one. ``None`` is the headless shell.
+_GUI_HOST = None
+
+
+def _workbench_name(workbench) -> str:
+    """The registry key for ``workbench``: its class name, or its ``MenuText``."""
+    name = type(workbench).__name__
+    if name and name != "Workbench":
+        return name
+    menu = str(getattr(workbench, "MenuText", "") or "")
+    if not menu:
+        raise ValueError("a workbench needs a class name (or a MenuText)")
+    return menu
+
+
+def addWorkbench(workbench) -> None:
+    """Register ``workbench`` under its class name; a second one replaces it."""
+    if not isinstance(workbench, Workbench):
+        raise TypeError(
+            f"addWorkbench needs a FreeCADGui.Workbench; got {type(workbench).__name__}"
+        )
+    _WORKBENCHES[_workbench_name(workbench)] = workbench
+
+
+def removeWorkbench(name: str) -> bool:
+    """Drop ``name`` from the registry (deactivating it first). Returns whether it existed."""
+    global _ACTIVE_WORKBENCH
+    if name not in _WORKBENCHES:
+        return False
+    if _ACTIVE_WORKBENCH is _WORKBENCHES[name]:
+        _deactivate_active_workbench()
+    del _WORKBENCHES[name]
+    return True
+
+
+def listWorkbenches() -> dict:
+    """``{name: workbench}``, in registration order (upstream's dict)."""
+    return dict(_WORKBENCHES)
+
+
+def getWorkbench(name: str):
+    """The workbench registered as ``name``, or ``None``."""
+    return _WORKBENCHES.get(name)
+
+
+def activeWorkbench():
+    """The active workbench, or ``None``."""
+    return _ACTIVE_WORKBENCH
+
+
+def activateWorkbench(name: str):
+    """Make ``name`` the active workbench and return it.
+
+    ``Initialize`` runs once per workbench, on its first activation, so a command's
+    registration cannot happen twice. The previous workbench's ``Deactivated`` runs
+    first when its ``Activated`` had run. An unknown name raises ``KeyError`` naming
+    what *is* registered — a silent no-op would make a typo look like a missing
+    workbench.
+    """
+    global _ACTIVE_WORKBENCH
+    workbench = _WORKBENCHES.get(name)
+    if workbench is None:
+        raise KeyError(
+            "no workbench named %r (registered: %s)"
+            % (name, ", ".join(sorted(_WORKBENCHES)) or "none")
+        )
+    if _ACTIVE_WORKBENCH is workbench:
+        return workbench
+    _deactivate_active_workbench()
+    if not getattr(workbench, "_initialized", False):
+        workbench.Initialize()
+        workbench._initialized = True
+    _ACTIVE_WORKBENCH = workbench
+    if _GUI_HOST is not None:
+        workbench.Activated()
+        workbench._activated = True
+    return workbench
+
+
+def _deactivate_active_workbench() -> bool:
+    """Run the active workbench's ``Deactivated`` if its ``Activated`` had run."""
+    global _ACTIVE_WORKBENCH
+    workbench, _ACTIVE_WORKBENCH = _ACTIVE_WORKBENCH, None
+    if workbench is None:
+        return False
+    if getattr(workbench, "_activated", False):
+        workbench._activated = False
+        workbench.Deactivated()
+    return True
+
+
+def _set_gui_host(window) -> bool:
+    """Adopt (or clear, with ``None``) the real Qt main window.
+
+    A host that can put a workbench's Qt half on screen calls this; the headless shell
+    never does, so ``Activated`` is skipped and only the declarations are used.
+    """
+    global _GUI_HOST
+    _GUI_HOST = window
+    return window is not None
+
+
+def _workbench_catalogue() -> dict:
+    """Every registered workbench and what it declares, for the shell's JSON.
+
+    An uninitialised workbench has empty tables and ``initialized: false``: its
+    declarations appear when the shell activates it, which is when ``Initialize``
+    registers the commands and appends the rows.
+    """
+    active = _workbench_name(_ACTIVE_WORKBENCH) if _ACTIVE_WORKBENCH is not None else ""
+    entries = []
+    for name, workbench in _WORKBENCHES.items():
+        entries.append(
+            {
+                "name": name,
+                "menu": str(getattr(workbench, "MenuText", "") or name),
+                "tooltip": str(getattr(workbench, "ToolTip", "") or ""),
+                "icon": str(getattr(workbench, "Icon", "") or ""),
+                "initialized": bool(getattr(workbench, "_initialized", False)),
+                "toolbars": [
+                    {"name": row, "commands": list(commands)}
+                    for row, commands in workbench._workbench_table("_toolbars")
+                ],
+                "menus": [
+                    {"path": list(path), "commands": list(commands)}
+                    for path, commands in workbench._workbench_table("_menus")
+                ],
+                "context": [
+                    {"path": list(path), "commands": list(commands)}
+                    for path, commands in workbench._workbench_table("_context_menus")
+                ],
+            }
+        )
+    return {"active": active, "workbenches": entries}
     return None
 
 

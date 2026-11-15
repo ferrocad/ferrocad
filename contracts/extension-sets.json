@@ -51,7 +51,8 @@
       "test_settings_model",
       "test_stage_py",
       "test_ui_loader",
-      "test_view_tools"
+      "test_view_tools",
+      "test_workbench_host"
     ],
     "workbenches": [
       "test_datum_plane",

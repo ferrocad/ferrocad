@@ -996,6 +996,47 @@ def run_command(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Workbenches
+# ---------------------------------------------------------------------------
+
+
+def workbenches() -> str:
+    """Every registered workbench and what it declares, as JSON.
+
+    ``{"active": name-or-"", "workbenches": [{name, menu, tooltip, icon, initialized,
+    toolbars: [{name, commands}], menus: [{path, commands}], context: [...]}]}``.
+    A workbench that has not been activated yet has ``initialized: false`` and empty
+    tables: ``Initialize`` is where it registers its commands and appends its rows.
+    """
+    return _json(FreeCADGui._workbench_catalogue())
+
+
+def activate_workbench(payload_json: str) -> str:
+    """Activate a workbench by name and return the catalogue.
+
+    ``payload_json`` is ``{"name": "SimpleCADWorkbench"}``. Activation runs the
+    workbench's ``Initialize`` once — that is what registers its commands and appends
+    its toolbars and menus — and the Qt half (``Activated``) only where the host has
+    adopted a real Qt main window. The answer is the whole catalogue with ``ok``, so a
+    caller can check ``active`` and read the declarations in one call.
+    """
+    try:
+        payload = json.loads(payload_json or "{}")
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    name = payload.get("name") or ""
+    try:
+        FreeCADGui.activateWorkbench(name)
+    except Exception as exc:  # noqa: BLE001 - report, do not raise into the shell
+        return _json({"ok": False, "error": str(exc)})
+    answer = FreeCADGui._workbench_catalogue()
+    answer["ok"] = True
+    return _json(answer)
+
+
+# ---------------------------------------------------------------------------
 # Python-backed interactive tools (the viewport bridge)
 # ---------------------------------------------------------------------------
 

@@ -5,6 +5,7 @@
 //! pending value (see [`crate::shell::context`]).
 
 pub mod about;
+pub mod creation;
 pub mod devtools;
 pub mod dialogs;
 pub mod forms;

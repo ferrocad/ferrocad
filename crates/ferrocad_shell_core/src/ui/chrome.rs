@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use ferrocad_stage::{DressUpKind, GizmoMode};
 use ferrocad_wgpu::{AdapterChoice, AdapterSummary};
 use ferrocad_widgets::icon;
-use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, menu};
+use ferrocad_widgets::menu::{MenuInfoRow, MenuRow, MenuTab, menu_with_tabs};
 use ferrocad_widgets::scroll::scroll_area;
 
 use ferrocad_theme::ui::{
@@ -37,7 +37,10 @@ use ferrocad_theme::ui::{
 };
 use crate::commands::{self, CommandInfo, Surface};
 use crate::types::{AxisSummary, GridSummary, ProviderFeature};
-use crate::shell::{ACCENT, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell, ShellModel, Slot};
+use crate::shell::{
+    ACCENT, CREATION_SLOTS, CreationDock, FG, Loadout, MUTED, PANEL, PANEL_ALT, SelectFilter, Shell,
+    ShellModel, Slot,
+};
 
 use super::command_icons;
 
@@ -1139,6 +1142,22 @@ fn popover_with_info(
     pass_through: Option<&'static str>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
+    popover_with_tabs(key, info, Vec::new(), rows, pass_through, cx)
+}
+
+/// [`popover_with_info`] with a segmented tab bar above its rows.
+///
+/// The tabs are how a panel presents several short lists instead of one long one (the
+/// creation flyout's categories); every other popover passes none, so its panel is the
+/// same column it always was.
+fn popover_with_tabs(
+    key: &'static str,
+    info: Vec<PopoverInfo>,
+    tabs: Vec<MenuTab>,
+    rows: Vec<PopoverRow>,
+    pass_through: Option<&'static str>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let keep_open: HashSet<String> = rows
         .iter()
         .filter(|row| row.keep_open)
@@ -1180,6 +1199,11 @@ fn popover_with_info(
         });
     };
     let shell = cx.entity().downgrade();
+    let on_tab = move |id: &str, _event: &ClickEvent, _window: &mut Window, cx: &mut App| {
+        let id = id.to_string();
+        let _ = shell.update(cx, |shell, cx| shell.set_creation_tab(&id, cx));
+    };
+    let shell = cx.entity().downgrade();
     let on_dismiss = move |_window: &mut Window, cx: &mut App| {
         let _ = shell.update(cx, |shell, cx| {
             if let Some(overlay) = pass_through {
@@ -1189,7 +1213,7 @@ fn popover_with_info(
         });
     };
 
-    menu(key, info, rows, on_row, on_dismiss)
+    menu_with_tabs(key, info, tabs, rows, on_tab, on_row, on_dismiss)
 }
 
 /// A vertical 1 px divider between dock groups.
@@ -1468,7 +1492,7 @@ fn gpu_row(
 /// started underneath an uncommitted one.
 pub(crate) fn action_dock(
     model: &ShellModel,
-    active: Option<&str>,
+    creation: &CreationDock,
     open: bool,
     anchor: Option<Point<Pixels>>,
     blocked: bool,
@@ -1572,19 +1596,13 @@ pub(crate) fn action_dock(
     if rendered {
         panel = panel.child(dock_divider(2));
     }
-    // The Add hand: one split pill, never a row of tools. An edition with no creation
-    // commands (a bare composition) simply has no pill.
-    if let Some(pill) = creation_pill(
-        &groups.creation,
-        model,
-        active,
-        open,
-        anchor,
-        blocked,
-        holding,
-        cx,
-    ) {
-        panel = panel.child(pill);
+    // The Add hand: two fixed slots (`4` Sketch, `5` Solid/Surface), never a row of
+    // tools. An edition with no creation commands (a bare composition) has no pills.
+    let pills = creation_pills(&groups.creation, creation, model, blocked, holding, cx);
+    if !pills.is_empty() {
+        for pill in pills {
+            panel = panel.child(pill);
+        }
         panel = panel.child(dock_divider(3));
     }
     panel = panel.child(
@@ -1619,7 +1637,7 @@ pub(crate) fn action_dock(
             .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx))),
     );
 
-    div()
+    let mut dock = div()
         .absolute()
         .left(px(0.))
         .right(px(0.))
@@ -1630,7 +1648,13 @@ pub(crate) fn action_dock(
         // strip cannot stretch over the bottom-left hand column (see `flex_none` above).
         .items_center()
         .justify_center()
-        .child(panel)
+        .child(panel);
+    // The flyout hangs off the dock rather than off one pill: two pills must not draw
+    // two copies of it, and it is positioned by the press, not by the pill's box.
+    if open && let Some(flyout) = creation_flyout(&groups.creation, creation, model, anchor, cx) {
+        dock = dock.child(flyout);
+    }
+    dock
 }
 
 /// The five creation tiers, in the order the flyout lists them.
@@ -1638,9 +1662,9 @@ pub(crate) fn action_dock(
 /// The design's hierarchy (`creation-loadout.md` §1) is Spatial first — you draw
 /// before you solidify — and a mod that invents a sixth category sorts after all five
 /// rather than disappearing.
-const CREATION_CATEGORIES: [&str; 5] = ["Sketch", "Solid", "Surface", "Text", "Mesh"];
+pub(crate) const CREATION_CATEGORIES: [&str; 5] = ["Sketch", "Solid", "Surface", "Text", "Mesh"];
 
-fn creation_rank(category: Option<&str>) -> usize {
+pub(crate) fn creation_rank(category: Option<&str>) -> usize {
     category
         .and_then(|category| {
             CREATION_CATEGORIES
@@ -1673,55 +1697,73 @@ fn gate_satisfied(model: &ShellModel, command: &CommandInfo) -> bool {
     gate.satisfied(count, kind)
 }
 
-/// The memory split-pill: `⊕ <LastTool> ▾`.
+/// The Add hand's creation slots: `⊕ <Category>: <Tool> ▾`.
 ///
-/// The left segment arms the remembered creation tool (one click, no flyout); the caret
-/// opens the category flyout. The **default** is the first `Solid` tool when the edition
-/// registers one — Box — and the first tool otherwise, so a fresh document offers the
-/// primitive the old `Create Box` button did.
-fn creation_pill(
+/// Two pills, one per **family** (see [`crate::shell::creation`]): Slot `4` is the
+/// Sketch hand and Slot `5` is Solid/Surface plus every other category an edition
+/// invents. A pill names its tool's own category, so a Surface tool reads
+/// `⊕ Surface: Loft ▾` while still living in Slot 5. The left segment arms the tool; the
+/// caret opens the flyout.
+fn creation_pills(
     creation: &[&CommandInfo],
+    dock: &CreationDock,
     model: &ShellModel,
-    active: Option<&str>,
-    open: bool,
-    anchor: Option<Point<Pixels>>,
     blocked: bool,
     holding: bool,
     cx: &mut Context<Shell>,
-) -> Option<AnyElement> {
-    // Registry order is the edition's; the pill lists by category, stably.
-    let mut ordered: Vec<&CommandInfo> = creation
+) -> Vec<AnyElement> {
+    let mut pills = Vec::new();
+    for index in 0..CREATION_SLOTS {
+        let Some(command) = creation_slot_command(creation, dock, index) else {
+            continue;
+        };
+        pills.push(creation_pill(index, command, model, blocked, holding, cx));
+    }
+    pills
+}
+
+/// The tool a creation slot offers: its memory when that still names a live tool of the
+/// slot's family, else the family's first tool in registry order.
+///
+/// The fallback is what keeps a fresh session's pill useful: nothing has been armed yet,
+/// so Slot 4 offers the edition's first Sketch tool and Slot 5 its first solid or
+/// surface tool.
+pub(crate) fn creation_slot_command<'a>(
+    creation: &[&'a CommandInfo],
+    dock: &CreationDock,
+    index: usize,
+) -> Option<&'a CommandInfo> {
+    let mut tools = creation
         .iter()
         .copied()
         .filter(|command| !command.dev_only)
-        .collect();
-    ordered.sort_by_key(|command| creation_rank(command.category()));
-    let remembered = active
-        .and_then(|id| ordered.iter().find(|command| command.id == id).copied())
-        .or_else(|| {
-            ordered
-                .iter()
-                .find(|command| {
-                    command
-                        .category()
-                        .is_some_and(|category| category.eq_ignore_ascii_case("Solid"))
-                })
-                .copied()
-        })
-        .or_else(|| ordered.first().copied())?;
+        .filter(|command| crate::shell::creation::slot_of_category(command.category()) == index);
+    dock.slot(index)
+        .and_then(|id| tools.clone().find(|command| command.id == id))
+        .or_else(|| tools.next())
+}
 
-    let arm_id = remembered.id.clone();
-    let arm_label = remembered.label().to_string();
+/// One creation slot.
+fn creation_pill(
+    index: usize,
+    command: &CommandInfo,
+    model: &ShellModel,
+    blocked: bool,
+    holding: bool,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let category = command.category().unwrap_or("Tool").to_string();
+    let label = format!("⊕ {category}: {}", command.label());
     // A tool whose selection-dependent gate is unmet stays **visible and clickable**: a
     // click reports what it needs rather than doing nothing, which is the same refusal
-    // the pill's row shows. A command disabled by its own `IsActive` is not clickable.
-    let gate = remembered.topology_gate();
-    let gated = gate.is_some_and(|gate| {
-        let (count, kind) = selection_topology(&model.selection);
-        !gate.satisfied(count, kind)
-    });
-    let requirement = gate.map(|gate| gate.requirement()).unwrap_or_default();
-    let arm_enabled = remembered.enabled && !blocked;
+    // the flyout's row shows. A command disabled by its own `IsActive` is not clickable.
+    let gated = !gate_satisfied(model, command);
+    let requirement = command
+        .topology_gate()
+        .filter(|_| gated)
+        .map(|gate| gate.requirement())
+        .unwrap_or_default();
+    let arm_enabled = command.enabled && !blocked;
     let ink = if gated {
         INACTIVE_STRUCTURAL
     } else if arm_enabled {
@@ -1731,8 +1773,11 @@ fn creation_pill(
     };
 
     let container = div()
-        .id("creation-pill")
-        .debug_selector(|| "creation-pill".to_string())
+        .id(SharedString::from(format!("creation-slot-{index}")))
+        .debug_selector({
+            let selector = format!("creation-slot-{index}");
+            move || selector
+        })
         .flex()
         .flex_row()
         .items_center()
@@ -1740,101 +1785,169 @@ fn creation_pill(
         // `PILL_HOLD`: the accent fill lingers for a moment after a creation commit. It
         // is decoration, not a state — the dock still accepts every click.
         .when(holding && !blocked, |el| el.bg(rgba(CHROME_ACTIVE_BG)))
-        .child(
-            div()
-                .id("creation-pill-arm")
-                .debug_selector(|| "creation-pill-arm".to_string())
+        .child({
+            let arm_id = command.id.clone();
+            let arm_label = command.label().to_string();
+            let mut arm = div()
+                .id(SharedString::from(format!("creation-slot-{index}-arm")))
+                .debug_selector({
+                    let selector = format!("creation-slot-{index}-arm");
+                    move || selector
+                })
                 .px_2()
                 .py_1()
                 .rounded_sm()
                 .text_xs()
                 .text_color(rgb(ink))
-                .when(arm_enabled, |el| {
-                    el.cursor_pointer()
-                        .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
+                .child(label);
+            if arm_enabled {
+                arm = arm
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)));
+                let requirement = requirement.clone();
+                arm = arm.on_click(cx.listener(move |this, _event, _window, cx| {
+                    if !requirement.is_empty() {
+                        this.report_tool_requirement(&arm_label, &requirement, cx);
+                        return;
+                    }
+                    this.run_command(&arm_id, cx);
+                }));
+            }
+            arm
+        })
+        .child({
+            let caret = div()
+                .id(SharedString::from(format!("creation-slot-{index}-caret")))
+                .debug_selector({
+                    let selector = format!("creation-slot-{index}-caret");
+                    move || selector
                 })
-                .child(format!("⊕ {arm_label}"))
-                .when(arm_enabled, |el| {
-                    let requirement = requirement.clone();
-                    let arm_label = arm_label.clone();
-                    el.on_click(cx.listener(move |this, _event, _window, cx| {
-                        if !requirement.is_empty() {
-                            this.report_tool_requirement(&arm_label, &requirement, cx);
-                            return;
-                        }
-                        this.run_command(&arm_id, cx);
-                    }))
-                }),
-        )
-        .child(
-            {
-                let caret = div()
-                    .id("creation-pill-caret")
-                    .debug_selector(|| "creation-pill-caret".to_string())
-                    .px_1()
-                    .py_1()
-                    .rounded_sm()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child("▾");
-                if blocked {
-                    caret
-                } else {
-                    caret.cursor_pointer().hover(|style| style.bg(rgba(ROW_HOVER))).on_mouse_down(
+                .px_1()
+                .py_1()
+                .rounded_sm()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("▾");
+            if blocked {
+                caret
+            } else {
+                caret
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgba(ROW_HOVER)))
+                    .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _window, _cx| {
+                        cx.listener(|this, event: &MouseDownEvent, _window, _cx| {
                             this.set_popover_anchor(event.position);
                         }),
                     )
-                    .on_click(cx.listener(|this, _event, _window, cx| this.open_popover("create", cx)))
-                }
-            },
-        );
-
-    // The flyout: the categories as groups, in the design's order, each row the tool's
-    // own command so `IsActive` is what greys it.
-    let rows: Vec<PopoverRow> = {
-        let mut rows = Vec::with_capacity(ordered.len());
-        let mut previous = None;
-        for command in &ordered {
-            let rank = creation_rank(command.category());
-            let mut row = PopoverRow::of(command);
-            row.divider_before = previous.is_some_and(|previous| previous != rank);
-            let gate = command.topology_gate();
-            if let Some(gate) = gate {
-                let (count, kind) = selection_topology(&model.selection);
-                if !gate.satisfied(count, kind) {
-                    // Disabled in `INACTIVE_STRUCTURAL`, with the requirement as the
-                    // row's right-hand hint: the reason is visible before the click.
-                    row.enabled = false;
-                    row.accel = gate.requirement();
-                }
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_creation_flyout(index, cx);
+                    }))
             }
-            previous = Some(rank);
-            rows.push(row);
-        }
-        rows
-    };
+        });
+    container.into_any_element()
+}
 
-    let mut pill = container;
-    if open && !rows.is_empty() {
-        // Above the pill: the dock is at the bottom, so the panel grows upward from just
-        // above the press (the header's menus grow downward by the same rule).
-        let position = anchor
-            .map(|pointer| point(pointer.x, pointer.y - px(34.)))
-            .unwrap_or_else(|| point(px(0.), px(0.)));
-        pill = pill.child(
-            deferred(
-                anchored()
-                    .anchor(Anchor::BottomLeft)
-                    .position(position)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(popover_with_info("create", Vec::new(), rows, Some("creation_pill"), cx)),
-            )
-            .with_priority(1),
-        );
+/// The creation flyout: a segmented category header over **one** category's tools.
+///
+/// The header is the dock's own category vocabulary (`Sketch`, `Solid`, `Surface`, …),
+/// and a category with no registered tool is not a tab at all. Showing one category at a
+/// time is what keeps the panel four or five rows instead of the fifteen-tool column it
+/// used to be.
+fn creation_flyout(
+    creation: &[&CommandInfo],
+    dock: &CreationDock,
+    model: &ShellModel,
+    anchor: Option<Point<Pixels>>,
+    cx: &mut Context<Shell>,
+) -> Option<AnyElement> {
+    let tools: Vec<&CommandInfo> = creation
+        .iter()
+        .copied()
+        .filter(|command| !command.dev_only)
+        .collect();
+    if tools.is_empty() {
+        return None;
     }
-    Some(pill.into_any_element())
+    // The categories the edition registers, in the design's order.
+    let mut categories: Vec<&str> = Vec::new();
+    for command in &tools {
+        if let Some(name) = command.category()
+            && !categories
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(name))
+        {
+            categories.push(name);
+        }
+    }
+    categories.sort_by_key(|name| creation_rank(Some(name)));
+
+    // The open tab: the dock's, else the armed tool's category, else the first.
+    let active = dock
+        .tab()
+        .filter(|tab| categories.iter().any(|name| name.eq_ignore_ascii_case(tab)))
+        .map(str::to_string)
+        .or_else(|| {
+            let armed = dock.active()?;
+            let command = tools.iter().find(|command| command.id == armed)?;
+            command.category().map(str::to_string)
+        })
+        .or_else(|| categories.first().map(|name| name.to_string()))?;
+
+    let tabs: Vec<MenuTab> = categories
+        .iter()
+        .map(|name| MenuTab {
+            id: (*name).to_string().into(),
+            label: (*name).to_string().into(),
+            active: name.eq_ignore_ascii_case(&active),
+        })
+        .collect();
+
+    let mut rows = Vec::new();
+    for command in &tools {
+        if !command
+            .category()
+            .is_some_and(|name| name.eq_ignore_ascii_case(&active))
+        {
+            continue;
+        }
+        let mut row = PopoverRow::of(command);
+        if !gate_satisfied(model, command)
+            && let Some(gate) = command.topology_gate()
+        {
+            // Disabled in `INACTIVE_STRUCTURAL`, with the requirement as the row's
+            // right-hand hint: the reason is visible before the click.
+            row.enabled = false;
+            row.accel = gate.requirement();
+        }
+        rows.push(row);
+    }
+
+    // Above the dock: the strip is at the bottom, so the panel grows upward from just
+    // above the press (the header's menus grow downward by the same rule).
+    let position = anchor
+        .map(|pointer| point(pointer.x, pointer.y - px(34.)))
+        .unwrap_or_else(|| point(px(0.), px(0.)));
+    Some(
+        deferred(
+            anchored()
+                .anchor(Anchor::BottomLeft)
+                .position(position)
+                .snap_to_window_with_margin(px(8.))
+                .child(creation_popover(tabs, rows, cx)),
+        )
+        .with_priority(1)
+        .into_any_element(),
+    )
+}
+
+/// The flyout's panel: the reusable menu with a tab bar, wired back to the shell.
+fn creation_popover(
+    tabs: Vec<MenuTab>,
+    rows: Vec<PopoverRow>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    popover_with_tabs("create", Vec::new(), tabs, rows, Some("creation_pill"), cx)
 }
 
 /// The command ids owned by a backend that is **not** the active one for its feature,

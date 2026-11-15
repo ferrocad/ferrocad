@@ -253,8 +253,9 @@ impl CommandInfo {
 /// What a creation command needs selected before it can run.
 ///
 /// Declared as `FerroCAD_Gate: "<kind>:<min>[:<max>]"` — `body:2` (two or more
-/// references), `face:1:1` (exactly one face), `edge:1`. A **reference** is one selected
-/// object or sub-element, so a whole-object selection counts as one.
+/// references), `face:1:1` (exactly one face), `edge:1`, `profile:2` (a sweep needs two
+/// closed profiles). A **reference** is one selected object or sub-element, so a
+/// whole-object selection counts as one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TopologyGate {
     /// The kind of reference required.
@@ -275,9 +276,13 @@ impl TopologyGate {
         let mut parts = value.split(':');
         let kind = match parts.next()?.trim().to_ascii_lowercase().as_str() {
             "any" | "" => ElementKind::Any,
-            "body" | "object" | "solid" | "profile" => ElementKind::Body,
+            "body" | "object" | "solid" => ElementKind::Body,
             "face" => ElementKind::Face,
             "edge" | "wire" => ElementKind::Edge,
+            // A profile is what a loft or a sweep consumes — a closed wire, a face or a
+            // whole solid. It is its own kind so the hint can say *profiles* while any
+            // of the three still satisfies it.
+            "profile" | "profiles" => ElementKind::Profile,
             _ => return None,
         };
         let min_arity = parts.next().and_then(|min| min.trim().parse().ok()).unwrap_or(0);
@@ -291,7 +296,12 @@ impl TopologyGate {
 
     /// Whether `count` references of `kind` satisfy the gate.
     pub fn satisfied(&self, count: usize, kind: ElementKind) -> bool {
-        let kind_ok = self.kind == ElementKind::Any || kind == ElementKind::Any || self.kind == kind;
+        let kind_ok = match self.kind {
+            // A profile is any closed reference the kernel can loft: a whole body, a
+            // face, or a wire (which a selection reports as an edge).
+            ElementKind::Profile => kind != ElementKind::Profile || count > 0,
+            mine => mine == ElementKind::Any || kind == ElementKind::Any || kind == mine,
+        };
         kind_ok && count >= self.min_arity && self.max_arity.is_none_or(|max| count <= max)
     }
 
@@ -305,6 +315,7 @@ impl TopologyGate {
             ElementKind::Body => ("body", "bodies"),
             ElementKind::Face => ("face", "faces"),
             ElementKind::Edge => ("edge", "edges"),
+            ElementKind::Profile => ("profile", "profiles"),
         };
         match self.max_arity {
             Some(max) if max == self.min_arity => {
@@ -328,6 +339,10 @@ pub enum ElementKind {
     Face,
     /// An edge (`Edge3`).
     Edge,
+    /// A closed profile a loft or a sweep consumes: a wire, a face, or a whole solid.
+    /// Any of the three satisfies it; the kind exists so the requirement can say
+    /// "select at least 2 profiles" instead of naming one of them.
+    Profile,
 }
 
 impl ElementKind {
@@ -756,5 +771,29 @@ mod tests {
             "the command is still grouped on its surface"
         );
         assert_eq!(groups.all().len(), commands.len());
+    }
+
+    /// A **profile** gate is what a loft or a sweep consumes: two closed references,
+    /// whatever they are (wires, faces, solids). The requirement has to say "profiles"
+    /// rather than claiming two whole bodies.
+    #[test]
+    fn a_profile_gate_names_profiles_and_accepts_any_closed_reference() {
+        let gate = TopologyGate::parse("profile:2").expect("a profile gate");
+        assert_eq!(gate.kind, ElementKind::Profile);
+        assert_eq!(gate.requirement(), "select at least 2 profiles");
+        for kind in [
+            ElementKind::Body,
+            ElementKind::Face,
+            ElementKind::Edge,
+            ElementKind::Any,
+        ] {
+            assert!(!gate.satisfied(1, kind), "one {kind:?} is not two profiles");
+            assert!(gate.satisfied(2, kind), "two {kind:?} are two profiles");
+        }
+        // The single kind that is not a reference at all.
+        assert_eq!(
+            TopologyGate::parse("face:1:1").map(|gate| gate.requirement()),
+            Some("select 1 face".to_string())
+        );
     }
 }

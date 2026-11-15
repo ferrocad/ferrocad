@@ -56,6 +56,9 @@ impl Shell {
     /// Close whichever popover is open; returns whether one was open.
     pub(crate) fn close_popover(&mut self, cx: &mut Context<Self>) -> bool {
         self.popover_anchor = None;
+        // The creation flyout's tab is part of the flyout, not of the pill: closing the
+        // panel forgets which category was open (the slot keeps its tool either way).
+        self.creation.close_tab();
         if self.open_popover.take().is_some() {
             cx.notify();
             true

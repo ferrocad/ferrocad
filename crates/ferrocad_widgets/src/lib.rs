@@ -49,7 +49,7 @@ pub use decision::{DecisionButton, DecisionOptions, DecisionRole, decision_pill}
 pub use events::{ChangeEvent, RejectedChar, SubmitEvent};
 pub use form::{choice_list, select_box, toggle};
 pub use icon::{axes, bug, gizmo, grid, snap, workplane};
-pub use menu::{MenuInfoRow, MenuRow, menu};
+pub use menu::{MenuInfoRow, MenuRow, MenuTab, menu, menu_with_tabs};
 pub use scroll::{scroll_area, scroll_thumb, thumb_bounds};
 pub use scrub::{Scale, Scrub, Tick};
 pub use slider::{fraction as slider_fraction, trigger as slider_trigger};

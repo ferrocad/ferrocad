@@ -1040,7 +1040,8 @@ _VERB_GROUP = {
     "FillHole": "Surface",
     "Unwrap": "Surface",
     "RemoveRounds": "Edge",
-    "Subdivide": "Modify",
+    # Subdivide divides a face, so it is a surface verb like Shell and Draft.
+    "Subdivide": "Surface",
     "Union": "Booleans",
     "Intersect": "Booleans",
 }
@@ -1057,8 +1058,10 @@ _VERB_GATE = {
     "Subdivide": "face:1:1",
     "Union": "body:2",
     "Intersect": "body:2",
-    "Loft": "body:2",
-    "Sweep": "body:2",
+    # A loft or a sweep consumes *profiles* — closed wires, faces or solids — so its
+    # requirement names them instead of claiming two whole bodies.
+    "Loft": "profile:2",
+    "Sweep": "profile:2",
 }
 
 

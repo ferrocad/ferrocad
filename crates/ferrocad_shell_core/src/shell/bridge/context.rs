@@ -233,7 +233,7 @@ impl Shell {
         if self.active_tool.is_none() {
             return None;
         }
-        let id = self.active_creation.as_deref()?;
+        let id = self.creation.active()?;
         let model = self.model.lock().unwrap();
         let command = commands::find(&model.commands, id)?;
         let gate = command.topology_gate()?;

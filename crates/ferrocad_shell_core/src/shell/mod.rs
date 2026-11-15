@@ -73,11 +73,14 @@ pub(crate) mod prefs;
 // `shell::move_hud` and `shell::hud::move_hud` work.
 pub use bridge::{context, dispatch, picking, viewport};
 pub use hud::{manipulator_form, move_hud, pill};
-pub use panels::{devtools, dialogs, forms, loadout, palette, popovers, properties, tool_fields};
+pub use panels::{
+    creation, devtools, dialogs, forms, loadout, palette, popovers, properties, tool_fields,
+};
 
 // The context gate: every action entry point asks `Shell::gate` (see `shell/bridge/context.rs`).
 pub(crate) use context::Action;
 
+pub(crate) use creation::{CREATION_KEYS, CREATION_SLOTS, CreationDock};
 pub(crate) use loadout::{Loadout, SelectFilter, Slot};
 
 mod render;
@@ -374,10 +377,10 @@ pub struct Shell {
     shortcuts: Vec<(Accelerator, String)>,
     /// The interactive tool the last `{"tool": id}` started (A5).
     active_tool: Option<String>,
-    /// The creation tool the pill's fast path arms (`⊕ <tool>`). Session state, not a
-    /// preference: arming any `creation`-surface command remembers it, and the dock's
-    /// left segment repeats it. `None` until the user arms one.
-    active_creation: Option<String>,
+    /// The Add hand: the two creation slots, the last tool armed and the flyout's tab.
+    /// Session state, not a preference: arming any `creation`-surface command remembers
+    /// it in its slot, and the dock's pills repeat it.
+    creation: CreationDock,
     /// The tool strip's numeric field being edited (C2). `None` while every field is
     /// resting, which is the default: the canvas keeps the keyboard.
     tool_field: Option<tool_fields::ToolFieldEdit>,
@@ -984,7 +987,7 @@ impl Shell {
             contributions: Contributions::new(),
             shortcuts,
             active_tool: None,
-            active_creation: None,
+            creation: CreationDock::default(),
             tool_field: None,
             pill_hold: None,
             pass_through: None,
@@ -1387,6 +1390,25 @@ impl Shell {
             && let Some(slot) = Slot::from_key(&event.keystroke.key)
         {
             self.activate_loadout_slot(slot, cx);
+            return true;
+        }
+        // The Add hand's slots: `4` arms the Sketch family's tool and `5` the
+        // Solid/Surface one; a second press while that tool is running opens the
+        // category flyout. Unlike the loadout digits these are offered while a tool is
+        // armed — that is where the "again" in "press `4` again" lives — but a tool that
+        // publishes no numbers still wins the digit for its own shortcuts, which
+        // `activate_creation_slot` decides.
+        if !editing
+            && !self.modal_open()
+            && !self.wheel.read(cx).is_open()
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && let Some(index) = CREATION_KEYS
+                .iter()
+                .position(|key| *key == event.keystroke.key)
+            && self.activate_creation_slot(index, cx)
+        {
             return true;
         }
         // Space in the **tree** window toggles the selected object's `Visibility`
@@ -2132,7 +2154,7 @@ impl Render for Shell {
                 Some(tool) => tool_strip(tool, self.tool_field_edit(), cx).into_any_element(),
                 None => crate::chrome::action_dock(
                     &model,
-                    self.active_creation.as_deref(),
+                    &self.creation,
                     self.popover_open("create"),
                     self.popover_anchor,
                     self.move_is_pending(cx) || self.pending_interaction.is_some(),

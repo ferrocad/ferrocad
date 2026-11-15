@@ -204,21 +204,22 @@ impl Shell {
         // Running any command dismisses the open popover: its menu has served its
         // purpose, and a new dialog should not sit under a still-open menu.
         self.open_popover = None;
-        // The creation pill's fast path repeats the **last armed creation tool**. Any
-        // command on the `creation` surface sets it; everything else (a selection verb,
-        // a view toggle) leaves the memory alone, so picking `Chamfer` off the wheel
-        // does not change what `⊕` offers next.
-        if self
-            .model
-            .lock()
-            .unwrap()
-            .commands
-            .iter()
-            .any(|command| {
-                command.id == id && command.surface() == commands::Surface::Creation
-            })
-        {
-            self.active_creation = Some(id.to_string());
+        // The Add hand's slots repeat the **last armed creation tool**. Any command on
+        // the `creation` surface fills its family's slot; everything else (a selection
+        // verb, a view toggle) leaves the memory alone, so picking `Chamfer` off the
+        // wheel does not change what the pills offer next.
+        let creation_category = {
+            let model = self.model.lock().unwrap();
+            model
+                .commands
+                .iter()
+                .find(|command| {
+                    command.id == id && command.surface() == commands::Surface::Creation
+                })
+                .map(|command| command.category().map(str::to_string))
+        };
+        if let Some(category) = creation_category {
+            self.creation.remember(id, category.as_deref());
         }
         // Saving the active workplane as a datum plane is a frame the shell owns plus a
         // document object the edition owns; the interpreter function does not exist in

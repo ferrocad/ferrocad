@@ -264,20 +264,33 @@ pub fn wheel_ring(
         root = root.child(chip);
     }
     if let Some(centre) = centre {
+        // The hollow centre is the **hub**: it names the open category and says how to
+        // leave it. Clicking it (the deadzone) goes back one ring, which is why the
+        // affordance is painted rather than only documented.
         root = root.child(
             div()
                 .absolute()
                 .left(px(0.0))
-                .top(px(centre_px.0 - LABEL_LINE / 2.0))
+                .top(px(centre_px.0 - LABEL_LINE))
                 .w(px(SIZE))
                 .flex()
+                .flex_col()
+                .items_center()
                 .justify_center()
+                .gap(px(1.0))
                 .child(
                     div()
                         .debug_selector(|| format!("{key}-centre"))
                         .text_xs()
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(FG))
                         .child(centre),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| format!("{key}-centre-back"))
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child("◂ Back"),
                 ),
         );
     }
@@ -1252,6 +1265,20 @@ mod tests {
             }),
             Some("Booleans".to_string()),
             "the centre names the open category"
+        );
+
+        // The hollow centre is the hub: it names the open category and paints the way
+        // back (`◂ Back`), which is the affordance the deadzone click performs.
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            visual.debug_bounds("radial-centre").is_some(),
+            "the centre names the open category"
+        );
+        assert!(
+            visual.debug_bounds("radial-centre-back").is_some(),
+            "the centre says how to leave it"
         );
 
         // The deadzone climbs out rather than closing.

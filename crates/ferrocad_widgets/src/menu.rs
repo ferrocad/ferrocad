@@ -49,6 +49,14 @@ pub struct MenuRow {
     pub divider_before: bool,
 }
 
+/// One tab of a menu's header bar (a segmented category selector).
+#[derive(Clone, Debug)]
+pub struct MenuTab {
+    pub id: SharedString,
+    pub label: SharedString,
+    pub active: bool,
+}
+
 /// Render a menu panel.
 ///
 /// `key` namespaces the debug selectors: `{key}-popover`, `{key}-row-{id}`,
@@ -62,7 +70,33 @@ pub fn menu(
     on_row: impl Fn(&str, &ClickEvent, &mut Window, &mut App) + 'static,
     on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    menu_with_tabs(
+        key,
+        info,
+        Vec::new(),
+        rows,
+        |_id, _event, _window, _cx| {},
+        on_row,
+        on_dismiss,
+    )
+}
+
+/// A menu with a **segmented tab bar** above its rows.
+///
+/// The tabs are categories (`{key}-tab-{id}`): the caller keeps which one is active and
+/// swaps the rows, so one menu can present several short lists instead of one long one.
+/// A tab click is a row click with a different verb — it does not dismiss the panel.
+pub fn menu_with_tabs(
+    key: &'static str,
+    info: Vec<MenuInfoRow>,
+    tabs: Vec<MenuTab>,
+    rows: Vec<MenuRow>,
+    on_tab: impl Fn(&str, &ClickEvent, &mut Window, &mut App) + 'static,
+    on_row: impl Fn(&str, &ClickEvent, &mut Window, &mut App) + 'static,
+    on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let on_row: Rc<dyn Fn(&str, &ClickEvent, &mut Window, &mut App)> = Rc::new(on_row);
+    let on_tab: Rc<dyn Fn(&str, &ClickEvent, &mut Window, &mut App)> = Rc::new(on_tab);
 
     let mut panel = div()
         .id(SharedString::from(format!("{key}-popover")))
@@ -86,6 +120,52 @@ pub fn menu(
     let info_present = !info.is_empty();
     let rows_present = !rows.is_empty();
     let mut hairline = 1usize;
+
+    if !tabs.is_empty() {
+        // A segmented bar: equal-width cells, the active one accented over a tinted
+        // background, exactly like the loadout bar's slots.
+        let mut bar = div()
+            .id(SharedString::from(format!("{key}-tabs")))
+            .debug_selector(move || format!("{key}-tabs"))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .pt_1()
+            .pb_1();
+        for tab in tabs {
+            let MenuTab { id, label, active } = tab;
+            let mut cell = div()
+                .id(SharedString::from(format!("{key}-tab-{id}")))
+                .debug_selector({
+                    let id = id.clone();
+                    move || format!("{key}-tab-{id}")
+                })
+                .flex_1()
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .text_xs()
+                .text_center()
+                .text_color(rgb(if active { ACTIVE_ACCENT } else { MUTED }))
+                .when(active, |el| el.bg(rgba(ROW_HOVER)))
+                .child(label);
+            if !active {
+                let on_tab = on_tab.clone();
+                cell = cell
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
+                    .on_click(move |event, window, cx| on_tab(&id, event, window, cx));
+            }
+            bar = bar.child(cell);
+        }
+        panel = panel.child(bar);
+        if !empty {
+            panel = panel.child(hairline_element(key, hairline));
+            hairline += 1;
+        }
+    }
 
     if empty {
         panel = panel.child(

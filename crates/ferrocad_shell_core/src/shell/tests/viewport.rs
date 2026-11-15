@@ -1801,7 +1801,14 @@ fn the_move_hud_anchors_to_the_gizmo_not_the_pointer(cx: &mut TestAppContext) {
     let after = cx.update(|window, cx| {
         shell.read_with(cx, |shell, cx| shell.dialog_anchor(window, cx))
     });
-    assert_eq!(after, gizmo, "the pointer does not move the anchor");
+    // The anchor is the **current** gizmo, not the pointer: a status-line change on the
+    // hover can re-lay-out the canvas, so the projection is re-read rather than compared
+    // with the pre-move sample.
+    let gizmo_after = cx
+        .update(|_window, cx| viewport.read(cx).gizmo_anchor())
+        .expect("the triad still projects");
+    assert_eq!(after, gizmo_after, "the pointer does not move the anchor");
+    assert_ne!(after, far, "the HUD is not parked on the pointer");
 
     // The placement offset is up and to the right, so a low body keeps its HUD
     // beside the handles instead of in the bottom-right clamp.

@@ -49,6 +49,152 @@ fn sort_wheel_slots(slots: &mut [WheelSlot]) {
     });
 }
 
+/// The wheel's fixed categories beside the direct verbs.
+///
+/// `Workplane` is its own wedge (Set/Save WP); every object and sub-shape verb lives
+/// under `Modify`, and the Add hand lives under `Create`. That is what keeps the root at
+/// six or seven labels: the number of *verbs* grows, the number of *wedges* does not.
+const WORKPLANE_GROUP: &str = "Workplane";
+const MODIFY_GROUP: &str = "Modify";
+const CREATE_GROUP: &str = "Create";
+/// The family label for a creation tool that declares no `FerroCAD_Category`.
+const TOOL_GROUP: &str = "Tool";
+
+fn wheel_tone(command: &crate::commands::CommandInfo) -> WheelTone {
+    match command.tone.as_str() {
+        "additive" => WheelTone::Additive,
+        "destructive" => WheelTone::Destructive,
+        _ => WheelTone::Structural,
+    }
+}
+
+/// One verb as a wedge.
+fn wheel_slot_of(command: &crate::commands::CommandInfo, pending: bool) -> WheelSlot {
+    WheelSlot {
+        id: command.id.clone().into(),
+        label: command.short_label().into(),
+        icon: command_icons::resolve(command).unwrap_or_default().into(),
+        tone: wheel_tone(command),
+        // A target outside the selection is offered before it is selected; the command
+        // validates after the commit promotes it.
+        enabled: command.enabled || pending,
+        children: Vec::new(),
+    }
+}
+
+/// A category wedge over `children`. Its tone is the most emphatic child's, so a
+/// category of additive verbs carries the amber arc.
+fn category_slot(name: &str, children: Vec<WheelSlot>) -> WheelSlot {
+    let tone = children
+        .iter()
+        .map(|child| child.tone)
+        .max_by_key(|tone| match tone {
+            WheelTone::Structural => 0,
+            WheelTone::Additive => 1,
+            WheelTone::Destructive => 2,
+        })
+        .unwrap_or(WheelTone::Structural);
+    WheelSlot {
+        id: format!("group:{name}").into(),
+        label: name.into(),
+        icon: wheel_group_icon(name).into(),
+        tone,
+        enabled: true,
+        children,
+    }
+}
+
+/// One ring of `verbs`: the verbs themselves when they fit, otherwise one wedge per
+/// declared group.
+///
+/// A disabled verb is not offered at all — the wheel is a choice, not a greyed spec
+/// sheet; the pill's flyout is where a gate explains itself. The bucketing is one level
+/// deep: a group too large for a ring is clamped by the widget rather than nested
+/// without end, and a verb that declares no group is never lost to the overflow.
+fn verb_ring(verbs: &[&crate::commands::CommandInfo], pending: bool) -> Vec<WheelSlot> {
+    let mut slots: Vec<WheelSlot> = verbs
+        .iter()
+        .filter(|command| command.enabled || pending)
+        .map(|command| wheel_slot_of(command, pending))
+        .collect();
+    if slots.len() <= ferrocad_widgets::wheel::MAX_WEDGES {
+        sort_wheel_slots(&mut slots);
+        return slots;
+    }
+    let mut groups: Vec<(&str, Vec<&crate::commands::CommandInfo>)> = Vec::new();
+    let mut loose: Vec<WheelSlot> = Vec::new();
+    for command in verbs.iter().filter(|command| command.enabled || pending) {
+        match command.wheel_group() {
+            Some(name) => match groups
+                .iter_mut()
+                .find(|(existing, _)| existing.eq_ignore_ascii_case(name))
+            {
+                Some((_, members)) => members.push(command),
+                None => groups.push((name, vec![command])),
+            },
+            None => loose.push(wheel_slot_of(command, pending)),
+        }
+    }
+    let mut out = loose;
+    for (name, members) in groups {
+        let children: Vec<WheelSlot> = members
+            .iter()
+            .map(|command| wheel_slot_of(command, pending))
+            .collect();
+        if children.is_empty() {
+            continue;
+        }
+        out.push(category_slot(name, children));
+    }
+    if out.is_empty() {
+        out = slots;
+    }
+    sort_wheel_slots(&mut out);
+    out
+}
+
+/// A category wedge over `verbs`, or `None` when none of them applies.
+fn category(
+    name: &str,
+    verbs: &[&crate::commands::CommandInfo],
+    pending: bool,
+) -> Option<WheelSlot> {
+    let children = verb_ring(verbs, pending);
+    (!children.is_empty()).then(|| category_slot(name, children))
+}
+
+/// `Create ▸` — the Add hand, one wedge per creation category.
+///
+/// The children are the categories rather than a flat list of tools because the tools
+/// already outnumber a ring (nine in the SimpleCAD edition); a category with no tool is
+/// omitted, so an edition that draws nothing offers no `Create` at all.
+fn create_category(
+    creation: &[&crate::commands::CommandInfo],
+    pending: bool,
+) -> Option<WheelSlot> {
+    let mut families: Vec<(&str, Vec<&crate::commands::CommandInfo>)> = Vec::new();
+    for command in creation.iter().filter(|command| !command.dev_only) {
+        let name = command.category().unwrap_or(TOOL_GROUP);
+        match families
+            .iter_mut()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(name))
+        {
+            Some((_, members)) => members.push(command),
+            None => families.push((name, vec![command])),
+        }
+    }
+    families.sort_by_key(|(name, _)| crate::chrome::creation_rank(Some(name)));
+    let mut children = Vec::new();
+    for (name, verbs) in families {
+        let ring = verb_ring(&verbs, pending);
+        if ring.is_empty() {
+            continue;
+        }
+        children.push(category_slot(name, ring));
+    }
+    (!children.is_empty()).then(|| category_slot(CREATE_GROUP, children))
+}
+
 /// The glyph a category wedge carries: the family of verbs inside it.
 ///
 /// A category's label already says which verbs it holds; the glyph says it at a glance
@@ -56,10 +202,16 @@ fn sort_wheel_slots(slots: &mut [WheelSlot]) {
 fn wheel_group_icon(group: &str) -> &'static str {
     match group.to_ascii_lowercase().as_str() {
         "workplane" => "axes-3d",
+        "create" => "make-solid",
+        "modify" => "resize-handle",
         "booleans" => "merge",
         "surface" => "make-face",
         "edge" => "corner-radius",
-        "modify" => "resize-handle",
+        // The creation categories, when one is large enough to need its own ring.
+        "sketch" => "pencil-ruler",
+        "solid" => "cube",
+        "text" => "letter-block",
+        "mesh" => "grid-4x4",
         _ => "",
     }
 }
@@ -416,17 +568,23 @@ impl Shell {
     /// The object verbs the radial menu shows, in compass order.
     ///
     /// `target` is the wheel's context target (the object under the pointer), or `None`
-    /// when the pointer is over empty space. The wheel is a **context** menu, not a
-    /// toolbar: a verb declares the kinds it applies to (`FerroCAD_Target`), so a face
-    /// offers shell/draft/heal and an edge offers offset/rotate, and `Delete` keeps the
-    /// last destructive slot in every context.
+    /// when the pointer is over empty space.
     ///
-    /// The ring is also **hierarchical**: a verb may declare a wheel group
-    /// (`FerroCAD_WheelGroup`), and the group is one wedge that opens its verbs. That is
-    /// what keeps the root six to eight readable labels however many verbs a workbench
-    /// registers — a flat ring of them is the twenty-wedge circle this replaced. A group
-    /// with one offered verb collapses into that verb (a category of one is not a
-    /// category), and a group with no offered verb is omitted entirely.
+    /// The root ring is **fixed**: the direct verbs (no `FerroCAD_WheelGroup`) are always
+    /// there whatever the target kind, so `Move` is north and `Delete` south in every
+    /// context and the compass never reflows. What the target changes is what the
+    /// **categories** offer:
+    ///
+    /// - `Workplane ▸` — `Set WP` / `Save WP`;
+    /// - `Create ▸` — the Add hand, one wedge per creation category (`Sketch`, `Solid`,
+    ///   `Surface`, …), each holding that category's tools;
+    /// - `Modify ▸` — the object and sub-shape verbs (`Surface ▸`/`Edge ▸`/`Booleans ▸`
+    ///   when there are more than a ring holds).
+    ///
+    /// A child that does not apply to the target, or whose `IsActive` is false, is not
+    /// offered; a category with nothing left is omitted. That is what keeps the ring six
+    /// or seven readable labels however many verbs a workbench registers — a flat ring is
+    /// the twenty-wedge circle this replaced.
     ///
     /// A target **outside** the current selection is not selected yet (opening a menu is
     /// not a mutation), so the registry's selection-dependent `IsActive` cannot be the
@@ -442,93 +600,57 @@ impl Shell {
         });
         let pending = target.is_some() && !target_selected;
         let kind = target_kind(target);
-        let slot = |command: &crate::commands::CommandInfo, tone: WheelTone| WheelSlot {
-            id: command.id.clone().into(),
-            label: command.short_label().into(),
-            icon: command_icons::resolve(command).unwrap_or_default().into(),
-            tone,
-            enabled: command.enabled || pending,
-            children: Vec::new(),
-        };
-        let mut roots: Vec<WheelSlot> = Vec::new();
-        let mut grouped: Vec<(String, Vec<WheelSlot>)> = Vec::new();
-        for command in model
+
+        let wheel_commands = model
             .commands
             .iter()
             .filter(|command| !command.dev_only)
             .filter(|command| {
                 command.wheel
                     || commands::Surface::parse(&command.surface) == Some(commands::Surface::Radial)
-            })
-            .filter(|command| kind.is_none_or(|kind| command.applies_to(kind)))
-        {
-            let tone = match command.tone.as_str() {
-                "additive" => WheelTone::Additive,
-                "destructive" => WheelTone::Destructive,
-                _ => WheelTone::Structural,
-            };
-            let wedge = slot(command, tone);
+            });
+
+        // The direct verbs. They are **not** filtered by the target kind: the root is the
+        // wheel's compass, and `Move` on a face target still moves the body the face
+        // belongs to. A group decides what its own children may be offered on.
+        let mut roots: Vec<WheelSlot> = Vec::new();
+        let mut workplane: Vec<&crate::commands::CommandInfo> = Vec::new();
+        let mut object: Vec<&crate::commands::CommandInfo> = Vec::new();
+        for command in wheel_commands {
             match command.wheel_group() {
-                Some(group) => match grouped
-                    .iter_mut()
-                    .find(|(name, _)| name.eq_ignore_ascii_case(group))
-                {
-                    Some((_, children)) => children.push(wedge),
-                    None => grouped.push((group.to_string(), vec![wedge])),
-                },
-                None => roots.push(wedge),
+                None => roots.push(wheel_slot_of(command, pending)),
+                Some(group) if group.eq_ignore_ascii_case(WORKPLANE_GROUP) => workplane.push(command),
+                Some(_) => object.push(command),
             }
         }
-        for (group, children) in grouped {
-            // A disabled verb is not offered at all: the wheel is a choice, not a greyed
-            // spec sheet. (The pill's flyout is where a gate explains itself.)
-            let mut children: Vec<WheelSlot> =
-                children.into_iter().filter(|child| child.enabled).collect();
-            sort_wheel_slots(&mut children);
-            match children.len() {
-                0 => {}
-                1 => roots.push(children.remove(0)),
-                _ => {
-                    let tone = children
-                        .iter()
-                        .map(|child| child.tone)
-                        .max_by_key(|tone| match tone {
-                            WheelTone::Structural => 0,
-                            WheelTone::Additive => 1,
-                            WheelTone::Destructive => 2,
-                        })
-                        .unwrap_or(WheelTone::Structural);
-                    roots.push(WheelSlot {
-                        id: format!("group:{group}").into(),
-                        label: group.as_str().into(),
-                        icon: wheel_group_icon(&group).into(),
-                        tone,
-                        enabled: true,
-                        children,
-                    });
-                }
-            }
+        // Grouped verbs obey the target: a verb that does not apply is not offered.
+        let applies = |command: &&crate::commands::CommandInfo| {
+            kind.is_none_or(|kind| command.applies_to(kind))
+        };
+        let workplane: Vec<&crate::commands::CommandInfo> =
+            workplane.into_iter().filter(applies).collect();
+        let object: Vec<&crate::commands::CommandInfo> = object.into_iter().filter(applies).collect();
+
+        // `Workplane ▸`: one category, never collapsed — the root must not reflow when
+        // the target turns a two-verb group into one.
+        if let Some(children) = category(WORKPLANE_GROUP, &workplane, pending) {
+            roots.push(children);
         }
-        if !roots.iter().any(|slot| slot.enabled) {
-            // Context: nothing to manipulate. The same gesture still deserves a wheel,
-            // so offer the **creation** tools — the pill's own content — which is the
-            // "Add hand" context. With a selection, the object verbs above win.
-            let creation = if groups.creation.is_empty() {
-                groups.dock
-            } else {
-                groups.creation
-            };
-            roots = creation
-                .iter()
-                .filter(|command| !command.dev_only)
-                .map(|command| slot(command, WheelTone::Structural))
-                .collect();
+        // `Create ▸`: the Add hand. Its children are the creation categories, so the
+        // wheel and the pill's flyout describe the same tools.
+        if let Some(create) = create_category(&groups.creation, pending) {
+            roots.push(create);
         }
+        // `Modify ▸`: everything that edits what is already there.
+        if let Some(children) = category(MODIFY_GROUP, &object, pending) {
+            roots.push(children);
+        }
+
         // Stable sort: structural, additive, destructive, with the built-in delete last
         // inside the destructive group. That puts Move north and Delete south in every
         // context, so "flick down to delete" never moves as the ring's contents change.
-        // The widget clamps a ring to `MAX_WEDGES`, and a test asserts the built-in set
-        // stays inside it; this is the ordering, not the cap.
+        // The widget clamps a ring to `MAX_WEDGES`; a test asserts the built-in set stays
+        // inside it, which is the ordering's contract, not the cap.
         sort_wheel_slots(&mut roots);
         roots
     }

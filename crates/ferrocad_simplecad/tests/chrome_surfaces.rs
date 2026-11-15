@@ -288,7 +288,7 @@ fn the_wheel_verbs_declare_their_category() {
         ("SimpleCAD_Elongate", "Surface"),
         ("SimpleCAD_RotateEdge", "Edge"),
         ("SimpleCAD_RemoveRounds", "Edge"),
-        ("SimpleCAD_Subdivide", "Modify"),
+        ("SimpleCAD_Subdivide", "Surface"),
         ("SimpleCAD_Union", "Booleans"),
         ("SimpleCAD_Intersect", "Booleans"),
         ("Part_Fuse", "Booleans"),
@@ -333,7 +333,16 @@ fn the_gated_tools_declare_what_they_need() {
         loft.requirement()
     );
     assert!(loft.satisfied(2, ElementKind::Body), "two profiles are");
-    assert_eq!(loft.requirement(), "select at least 2 bodies");
+    // A loft consumes **profiles** — wires, faces or solids — so the hint says so
+    // instead of claiming two whole bodies.
+    assert_eq!(loft.requirement(), "select at least 2 profiles");
+    assert!(loft.satisfied(2, ElementKind::Face), "two faces are profiles too");
+    assert!(
+        !loft.satisfied(1, ElementKind::Edge),
+        "one wire is not a loft"
+    );
+    let sweep = gate(&registry, "SimpleCAD_Sweep").expect("Sweep declares a gate");
+    assert_eq!(sweep.requirement(), "select at least 2 profiles");
 
     let shell = gate(&registry, "SimpleCAD_Shell").expect("Shell declares a gate");
     assert!(!shell.satisfied(1, ElementKind::Body), "a body is not a face");

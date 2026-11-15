@@ -395,10 +395,14 @@ for _id, _command in (
     });
     draw(&mut cx);
 
-    // The globals and the pill are dock controls; the tool and the verb are not.
+    // The globals and the pills are dock controls; the tool and the verb are not.
     assert!(cx.debug_bounds("dock-App_Undo").is_some());
     assert!(cx.debug_bounds("dock-App_Fit").is_some());
-    assert!(cx.debug_bounds("creation-pill").is_some(), "the pill is in the dock");
+    // The probe is a `Solid` tool, so it belongs to the second (Solid/Surface) slot.
+    assert!(
+        cx.debug_bounds("creation-slot-1").is_some(),
+        "the Solid slot is in the dock"
+    );
     assert!(
         cx.debug_bounds("dock-Test_CreationProbe").is_none(),
         "a creation tool is not a dock button"
@@ -425,9 +429,13 @@ for _id, _command in (
     assert!(!intersect, "the bars do not overlap ({dock:?} / {loadout:?})");
 
     // The caret opens the category flyout: the creation tool is a row, the verb is not.
-    click_at(&mut cx, "creation-pill-caret");
+    click_at(&mut cx, "creation-slot-1-caret");
     draw(&mut cx);
     assert!(cx.debug_bounds("create-popover").is_some(), "the flyout opened");
+    assert!(
+        cx.debug_bounds("create-tabs").is_some(),
+        "the flyout has a category header"
+    );
     assert!(cx.debug_bounds("create-row-Test_CreationProbe").is_some());
     assert!(
         cx.debug_bounds("create-row-Test_FaceProbe").is_none(),
@@ -440,20 +448,42 @@ for _id, _command in (
         "the flyout sits above the dock ({popover:?} / {dock:?})"
     );
 
-    // Running a row arms the tool and becomes the pill's memory.
-    cx.update(|_window, cx| {
-        shell.update(cx, |shell, cx| shell.close_popover(cx));
-    });
-    click_at(&mut cx, "creation-pill-arm");
+    // Picking the row loads the slot: the tool runs (it arms), and the pill behind the
+    // flyout now names it, so the next click of the left half repeats it.
+    click_at(&mut cx, "create-row-Test_CreationProbe");
     draw(&mut cx);
     assert!(
         model.lock().unwrap().status.contains("creation probe ran"),
-        "the fast path runs the remembered tool"
+        "the row arms the tool"
     );
     assert_eq!(
-        shell.read_with(&cx, |shell, _| shell.active_creation.clone()),
+        shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
         Some("Test_CreationProbe".to_string())
     );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.slot(1).map(str::to_string)),
+        Some("Test_CreationProbe".to_string()),
+        "the pick fills its family's slot"
+    );
+    assert!(
+        cx.debug_bounds("creation-slot-1").is_some(),
+        "the slot survives the commit"
+    );
+    // The left half repeats the slot's tool.
+    model.lock().unwrap().status.clear();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.cancel_tool(cx));
+    });
+    draw(&mut cx);
+    click_at(&mut cx, "creation-slot-1-arm");
+    draw(&mut cx);
+    assert!(
+        model.lock().unwrap().status.contains("creation probe ran"),
+        "the pill's left half arms the slot's tool"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.cancel_tool(cx));
+    });
 
     let cleanup = crate::python::evaluate(
         "import FreeCADGui\nFreeCADGui.removeCommand('Test_CreationProbe')\nFreeCADGui.removeCommand('Test_FaceProbe')",
@@ -461,36 +491,52 @@ for _id, _command in (
     assert!(cleanup.expect("remove the probes").ok);
 }
 
-/// The wheel is a **context** menu: the ring holds the verbs the target kind can use,
-/// and `Delete` keeps the last destructive slot in every context.
+/// The wheel's **root is stable** and its **categories are the context**.
+///
+/// `Move`, `Rotate`, `Toggle visibility` and `Delete` are root wedges on every target —
+/// that is the bug where picking a face made Move and Rotate vanish — while the object
+/// verbs inside `Modify ▸` are the ones the target filters.
 #[gpui::test]
-fn the_wheel_is_filtered_by_the_context_target(cx: &mut TestAppContext) {
+fn the_root_ring_is_stable_and_the_categories_carry_the_context(cx: &mut TestAppContext) {
     use ferrocad_geom::SelectionRef;
 
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let script = r#"
 import FreeCADGui
-def _probe(name, surface, target, tone):
+def _probe(name, target, group, tone):
     class _Probe:
         def GetResources(self):
-            resources = {"MenuText": name, "FerroCAD_Surface": surface}
-            if target:
-                resources["FerroCAD_Target"] = target
-            if tone:
-                resources["FerroCAD_Tone"] = tone
-            return resources
+            return {
+                "MenuText": name,
+                "FerroCAD_Surface": "radial",
+                "FerroCAD_Target": target,
+                "FerroCAD_WheelGroup": group,
+                "FerroCAD_Tone": tone,
+            }
         def IsActive(self):
             return True
         def Activated(self):
             return {"status": name}
     return _Probe()
 
+class _CreateProbe:
+    def GetResources(self):
+        return {
+            "MenuText": "Line",
+            "FerroCAD_Surface": "creation",
+            "FerroCAD_Category": "Sketch",
+        }
+    def IsActive(self):
+        return True
+    def Activated(self):
+        return {"status": "create probe"}
+
 for _id, _command in (
-    ("Test_BodyProbe", _probe("Body probe", "radial", "body", "")),
-    ("Test_FaceProbe", _probe("Face probe", "radial", "face", "")),
-    ("Test_EdgeProbe", _probe("Edge probe", "radial", "edge", "additive")),
-    ("Test_DeleteProbe", _probe("Delete probe", "radial", "", "destructive")),
+    ("Test_BodyProbe", _probe("Body probe", "body", "Booleans", "additive")),
+    ("Test_FaceProbe", _probe("Face probe", "face", "Surface", "structural")),
+    ("Test_EdgeProbe", _probe("Edge probe", "edge", "Surface", "structural")),
+    ("Test_CreateProbe", _CreateProbe()),
 ):
     if _id not in FreeCADGui.listCommands():
         FreeCADGui.addCommand(_id, _command)
@@ -512,8 +558,7 @@ for _id, _command in (
     });
     draw(&mut cx);
 
-    // `(root wedge id, child ids)` per ring. A category is one root wedge, so a verb
-    // inside one is found by looking into its children.
+    // `(root wedge id, child ids)` per ring.
     let ids = |target: Option<SelectionRef>| -> Vec<(String, Vec<String>)> {
         shell.read_with(&cx, |shell, _| {
             shell
@@ -531,78 +576,107 @@ for _id, _command in (
                 .collect()
         })
     };
+    let roots = |ids: &[(String, Vec<String>)]| -> Vec<String> {
+        ids.iter().map(|(root, _)| root.clone()).collect()
+    };
+    // Whether `id` is reachable in the ring: a root wedge, or a child of one (one level).
     let has = |ids: &[(String, Vec<String>)], id: &str| {
         ids.iter()
             .any(|(root, children)| root == id || children.iter().any(|child| child == id))
     };
-    let roots = |ids: &[(String, Vec<String>)]| -> Vec<String> {
-        ids.iter().map(|(root, _)| root.clone()).collect()
-    };
 
-    // A body target: the object verbs and the body-only probe; no face/edge wedges.
     let body = ids(Some(SelectionRef::whole(0)));
+    let face = ids(Some(SelectionRef::element(0, "Face6")));
+    let edge = ids(Some(SelectionRef::element(0, "Edge3")));
+    let empty = ids(None);
+
+    // The root is the same compass everywhere: the three object verbs and Delete.
+    for (label, ring) in [("body", &body), ("face", &face), ("edge", &edge), ("empty", &empty)] {
+        let names = roots(ring);
+        for id in ["App_Move", "App_Rotate", "App_ToggleVisibility", "App_Delete"] {
+            assert!(
+                names.iter().any(|root| root == id),
+                "{id} is a root wedge on a {label} target: {names:?}"
+            );
+        }
+        assert_eq!(
+            names.last().map(String::as_str),
+            Some("App_Delete"),
+            "Delete keeps the last destructive slot on a {label} target: {names:?}"
+        );
+        assert!(
+            names.len() <= ferrocad_widgets::wheel::MAX_WEDGES,
+            "the root ring is {} wedges on a {label} target: {names:?}",
+            names.len()
+        );
+        // Every category wedge has children, and no category is empty.
+        for (root, children) in ring {
+            if root.starts_with("group:") {
+                assert!(!children.is_empty(), "{root} is not an empty category");
+            }
+        }
+    }
+
+    // The body verbs that a target filters live **inside** `Modify`, not at the root.
     assert!(has(&body, "Test_BodyProbe"), "{body:?}");
-    assert!(has(&body, "App_Move"), "{body:?}");
     assert!(!has(&body, "Test_FaceProbe"), "no face verb on a body: {body:?}");
     assert!(!has(&body, "Test_EdgeProbe"), "no edge verb on a body: {body:?}");
-    assert_eq!(
-        roots(&body).last().map(String::as_str),
-        Some("App_Delete"),
-        "the built-in Delete is the final destructive slot: {body:?}"
-    );
-    assert!(
-        !has(&body, "App_SetWorkplane"),
-        "Set WP needs a face, so it is not a body wedge: {body:?}"
-    );
-
-    // A face target: face verbs only (plus the any-context Delete), and no Move.
-    let face = ids(Some(SelectionRef::element(0, "Face6")));
     assert!(has(&face, "Test_FaceProbe"), "{face:?}");
     assert!(!has(&face, "Test_BodyProbe"), "no body verb on a face: {face:?}");
     assert!(!has(&face, "Test_EdgeProbe"), "no edge verb on a face: {face:?}");
-    assert!(!has(&face, "App_Move"), "Move is a body verb: {face:?}");
-    assert!(
-        has(&face, "App_SetWorkplane"),
-        "Set WP is a face verb, in its own category: {face:?}"
-    );
-    assert_eq!(roots(&face).last().map(String::as_str), Some("App_Delete"));
-
-    // An edge target: the edge verb, the any-context Save WP is face/body only, Delete
-    // last.
-    let edge = ids(Some(SelectionRef::element(0, "Edge3")));
     assert!(has(&edge, "Test_EdgeProbe"), "{edge:?}");
     assert!(!has(&edge, "Test_FaceProbe"), "no face verb on an edge: {edge:?}");
     assert!(!has(&edge, "Test_BodyProbe"), "no body verb on an edge: {edge:?}");
-    assert!(!has(&edge, "App_SetWorkplane"), "Set WP is a face verb: {edge:?}");
-    assert_eq!(roots(&edge).last().map(String::as_str), Some("App_Delete"));
 
-    // The additive edge probe sorts after the structural ones, before Delete.
-    let edge_roots = roots(&edge);
-    let edge_probe = edge_roots
-        .iter()
-        .position(|id| id == "Test_EdgeProbe")
-        .unwrap();
-    let structural = edge_roots
-        .iter()
-        .take_while(|id| *id != "Test_EdgeProbe")
-        .count();
-    assert_eq!(edge_probe, structural, "tone order is structural → additive");
-    assert!(
-        edge_roots.len() <= ferrocad_widgets::wheel::MAX_WEDGES,
-        "a ring is never more than eight wedges: {edge_roots:?}"
-    );
+    // `Create` is the Add hand: a root category on every target (it used to be a flat
+    // fallback list of every creation tool, which is the ring that overflowed), and its
+    // children are the creation categories, not the tools.
+    for (label, ring) in [("body", &body), ("face", &face), ("edge", &edge)] {
+        assert!(
+            roots(ring).iter().any(|root| root == "group:Create"),
+            "Create is a root category on a {label} target"
+        );
+    }
+    let create = shell.read_with(&cx, |shell, _| {
+        shell
+            .radial_slots(Some(&SelectionRef::whole(0)))
+            .iter()
+            .find(|slot| slot.id.as_ref() == "group:Create")
+            .map(|slot| {
+                slot.children
+                    .iter()
+                    .map(|category| {
+                        (
+                            category.id.to_string(),
+                            category
+                                .children
+                                .iter()
+                                .map(|tool| tool.id.to_string())
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .expect("the Create category")
+    });
+    assert_eq!(create.len(), 1, "one creation category: {create:?}");
+    assert_eq!(create[0].0, "group:Sketch", "{create:?}");
+    assert_eq!(create[0].1, vec!["Test_CreateProbe".to_string()], "{create:?}");
 
     let cleanup = crate::python::evaluate(
-        "import FreeCADGui\nfor _id in ('Test_BodyProbe', 'Test_FaceProbe', 'Test_EdgeProbe', 'Test_DeleteProbe'):\n    FreeCADGui.removeCommand(_id)",
+        "import FreeCADGui\nfor _id in ('Test_BodyProbe', 'Test_FaceProbe', 'Test_EdgeProbe', 'Test_CreateProbe'):\n    FreeCADGui.removeCommand(_id)",
     );
     assert!(cleanup.expect("remove the probes").ok);
 }
 
-/// The ring is **hierarchical**: verbs that declare the same `FerroCAD_WheelGroup` share
-/// one wedge, and the group's children are the verbs. That is the fix for the
-/// twenty-wedge circle: the ring stays a ring however many verbs a workbench registers.
+/// The ring is **hierarchical**: a verb that declares a `FerroCAD_WheelGroup` is not a
+/// root wedge, and the groups that would overflow a ring are bucketed one level deeper.
+///
+/// That is the fix for the twenty-wedge circle — and for the nine-wedge panic: the root
+/// is `Move`, `Rotate`, `Toggle visibility`, `Workplane ▸`, `Create ▸`, `Modify ▸`,
+/// `Delete`, whatever the edition registers.
 #[gpui::test]
-fn grouped_verbs_share_one_wedge(cx: &mut TestAppContext) {
+fn grouped_verbs_live_under_their_category(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let model = boot_shell(cx);
     let script = r#"
@@ -648,53 +722,74 @@ for _id, _command in (
     });
     draw(&mut cx);
 
-    let rings = shell.read_with(&cx, |shell, _| {
+    let ring = |id: &str| -> Vec<(String, Vec<(String, Vec<String>)>)> {
+        shell.read_with(&cx, |shell, _| {
+            let slots = shell.radial_slots(Some(&ferrocad_geom::SelectionRef::whole(0)));
+            let Some(slot) = slots.iter().find(|slot| slot.id.as_ref() == id) else {
+                return Vec::new();
+            };
+            slot.children
+                .iter()
+                .map(|child| {
+                    (
+                        child.id.to_string(),
+                        child
+                            .children
+                            .iter()
+                            .map(|grandchild| {
+                                (
+                                    grandchild.id.to_string(),
+                                    grandchild
+                                        .children
+                                        .iter()
+                                        .map(|verb| verb.id.to_string())
+                                        .collect(),
+                                )
+                            })
+                            .collect(),
+                    )
+                })
+                .collect()
+        })
+    };
+    let roots: Vec<String> = shell.read_with(&cx, |shell, _| {
         shell
             .radial_slots(Some(&ferrocad_geom::SelectionRef::whole(0)))
             .iter()
-            .map(|slot| {
-                (
-                    slot.id.to_string(),
-                    slot.children
-                        .iter()
-                        .map(|child| child.id.to_string())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>()
+            .map(|slot| slot.id.to_string())
+            .collect()
     });
-    let roots: Vec<&str> = rings.iter().map(|(id, _)| id.as_str()).collect();
+
+    // The booleans are **behind** `Modify`, never at the root.
     assert!(
-        roots.contains(&"group:Booleans"),
-        "the two booleans are one wedge: {roots:?}"
-    );
-    assert!(
-        !roots.contains(&"Test_UnionProbe") && !roots.contains(&"Test_CutProbe"),
+        !roots.iter().any(|root| root == "Test_UnionProbe"),
         "a grouped verb is not a root wedge: {roots:?}"
     );
-    let booleans = rings
-        .iter()
-        .find(|(id, _)| id == "group:Booleans")
-        .expect("the group");
-    assert_eq!(
-        booleans.1,
-        vec!["Test_UnionProbe".to_string(), "Test_CutProbe".to_string()],
-        "the children are the verbs, in registry order"
-    );
-    // A group with one verb is not a category: it collapses into that verb.
+    let modify = ring("group:Modify");
+    let flat: Vec<&str> = modify.iter().map(|(id, _)| id.as_str()).collect();
     assert!(
-        roots.contains(&"Test_SoloProbe"),
-        "a one-verb group is its verb: {roots:?}"
+        flat.contains(&"Test_UnionProbe") && flat.contains(&"Test_CutProbe"),
+        "the booleans are Modify's children: {flat:?}"
     );
-    assert!(!roots.contains(&"group:Workplane"), "{roots:?}");
-    // The ring is a ring: it never grows past the widget's eight readable labels.
+
+    // The workplane pair is its own root category; a probe that joins it is a child.
+    let workplane = ring("group:Workplane");
+    let workplane_verbs: Vec<&str> = workplane.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(
+        workplane_verbs.contains(&"Test_SoloProbe"),
+        "the workplane category holds its verbs: {workplane_verbs:?}"
+    );
+    assert!(!roots.iter().any(|root| root == "Test_SoloProbe"), "{roots:?}");
+
+    // The ring is a ring: it never grows past the widget's eight readable labels, and
+    // Delete keeps the last destructive slot.
     assert!(
         roots.len() <= ferrocad_widgets::wheel::MAX_WEDGES,
         "the root ring is {} wedges: {roots:?}",
         roots.len()
     );
     assert_eq!(
-        roots.last().copied(),
+        roots.last().map(String::as_str),
         Some("App_Delete"),
         "Delete keeps the last destructive slot: {roots:?}"
     );
@@ -730,4 +825,203 @@ fn backspace_dismisses_the_root_ring(cx: &mut TestAppContext) {
         !wheel.read_with(&cx, |wheel, _| wheel.is_open()),
         "Backspace at the root is the dismiss"
     );
+}
+
+/// The Add hand is **two slots with a remembered tool per category**.
+///
+/// Slot `4` is the Sketch family and Slot `5` Solid/Surface; the flyout shows one
+/// category at a time behind a segmented header, and a tab click loads that family's
+/// slot without arming anything. Picking a row both **binds** the tool to its slot and
+/// **runs** it, which is the same pair of actions a wheel flick performs.
+#[gpui::test]
+fn the_creation_slots_remember_a_tool_per_category(cx: &mut TestAppContext) {
+    let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let model = boot_shell(cx);
+    let script = r#"
+import FreeCADGui
+def _tool(name, category):
+    class _Tool:
+        def GetResources(self):
+            return {
+                "MenuText": name,
+                "FerroCAD_Surface": "creation",
+                "FerroCAD_Category": category,
+            }
+        def IsActive(self):
+            return True
+        def Activated(self):
+            return {"status": name}
+    return _Tool()
+
+for _id, _command in (
+    ("Test_SketchTool", _tool("Rectangle", "Sketch")),
+    ("Test_SolidTool", _tool("Box", "Solid")),
+    ("Test_SurfaceTool", _tool("Loft", "Surface")),
+):
+    if _id not in FreeCADGui.listCommands():
+        FreeCADGui.addCommand(_id, _command)
+"#;
+    let registered = crate::python::evaluate(script).expect("register the tools");
+    assert!(registered.ok, "{}", registered.output);
+
+    let window = cx.update(|cx| {
+        let model = model.clone();
+        cx.open_window(Default::default(), move |_window, cx| {
+            cx.new(|cx| Shell::from_model(model.clone(), cx))
+        })
+        .unwrap()
+    });
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+    let shell: Entity<Shell> = window.root(&mut cx).unwrap();
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.refresh_commands(cx));
+    });
+    draw(&mut cx);
+
+    // Both slots are in the dock, and each names a tool of its own family.
+    assert!(cx.debug_bounds("creation-slot-0").is_some(), "Slot 4 is drawn");
+    assert!(cx.debug_bounds("creation-slot-1").is_some(), "Slot 5 is drawn");
+    let family = |index: usize| {
+        shell.read_with(&cx, |shell, _| {
+            shell
+                .creation
+                .slot(index)
+                .map(str::to_string)
+                .or_else(|| {
+                    // The slot has no memory yet: the pill shows the family's first tool.
+                    None
+                })
+        })
+    };
+    assert_eq!(family(0), None, "a fresh session remembers nothing yet");
+
+    // The flyout has a tab per registered category, and opening it from Slot 5 starts on
+    // the slot's own category.
+    click_at(&mut cx, "creation-slot-1-caret");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("create-popover").is_some());
+    for tab in ["create-tab-Sketch", "create-tab-Solid", "create-tab-Surface"] {
+        assert!(cx.debug_bounds(tab).is_some(), "{tab} is a category tab");
+    }
+    assert!(
+        cx.debug_bounds("create-row-Test_SolidTool").is_some(),
+        "the Solid tab lists the solid tools"
+    );
+    assert!(
+        cx.debug_bounds("create-row-Test_SketchTool").is_none(),
+        "one category at a time"
+    );
+
+    // A tab click shows that category's tools and points Slot 5 at the remembered one.
+    click_at(&mut cx, "create-tab-Surface");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("create-row-Test_SurfaceTool").is_some());
+    assert!(cx.debug_bounds("create-row-Test_SolidTool").is_none());
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.slot(1).map(str::to_string)),
+        Some("Test_SurfaceTool".to_string()),
+        "browsing Surface loads it into Slot 5"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
+        None,
+        "browsing arms nothing"
+    );
+
+    // Picking the row runs (arms) the tool and keeps it in the slot.
+    click_at(&mut cx, "create-row-Test_SurfaceTool");
+    draw(&mut cx);
+    assert!(
+        model.lock().unwrap().status.contains("Loft"),
+        "the row runs the tool"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.active().map(str::to_string)),
+        Some("Test_SurfaceTool".to_string())
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.cancel_tool(cx));
+    });
+
+    // A Sketch pick fills **Slot 4** and leaves Slot 5 where it was.
+    click_at(&mut cx, "creation-slot-1-caret");
+    draw(&mut cx);
+    click_at(&mut cx, "create-tab-Sketch");
+    draw(&mut cx);
+    click_at(&mut cx, "create-row-Test_SketchTool");
+    draw(&mut cx);
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| (
+            shell.creation.slot(0).map(str::to_string),
+            shell.creation.slot(1).map(str::to_string)
+        )),
+        (
+            Some("Test_SketchTool".to_string()),
+            Some("Test_SurfaceTool".to_string())
+        ),
+        "each category keeps its own slot"
+    );
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.memory("Surface").map(str::to_string)),
+        Some("Test_SurfaceTool".to_string()),
+        "Surface still remembers its own tool"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.cancel_tool(cx));
+    });
+
+    // `4` runs Slot 4's tool; pressed again while that tool is the running one it opens
+    // the flyout instead. (No edition in this harness ships a real tool, so the
+    // "running" half — which the key path only reads — is set directly.)
+    model.lock().unwrap().status.clear();
+    press_root(&mut cx, &shell, "4");
+    assert!(
+        model.lock().unwrap().status.contains("Rectangle"),
+        "`4` runs the Sketch slot's tool: {}",
+        model.lock().unwrap().status
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, _| {
+            shell.active_tool = Some("Test_SketchTool".to_string())
+        });
+    });
+    press_root(&mut cx, &shell, "4");
+    assert!(
+        cx.debug_bounds("create-popover").is_some(),
+        "a second `4` opens the category list"
+    );
+    assert!(
+        cx.debug_bounds("create-row-Test_SketchTool").is_some(),
+        "on the Sketch tab"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.close_popover(cx);
+            shell.cancel_tool(cx);
+            shell.active_tool = None;
+        });
+    });
+
+    // The wheel's commit is the *same* seam: a tool chosen from `Create ▸` fills its
+    // slot and runs, so the next flick down the ring starts from what it loaded.
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.commit_wheel("Test_SolidTool", cx));
+    });
+    assert_eq!(
+        shell.read_with(&cx, |shell, _| shell.creation.slot(1).map(str::to_string)),
+        Some("Test_SolidTool".to_string()),
+        "the wheel loads the solid slot"
+    );
+    assert!(
+        model.lock().unwrap().status.contains("Box"),
+        "and runs the tool"
+    );
+    cx.update(|_window, cx| {
+        shell.update(cx, |shell, cx| shell.cancel_tool(cx));
+    });
+
+    let cleanup = crate::python::evaluate(
+        "import FreeCADGui\nfor _id in ('Test_SketchTool', 'Test_SolidTool', 'Test_SurfaceTool'):\n    FreeCADGui.removeCommand(_id)",
+    );
+    assert!(cleanup.expect("remove the tools").ok);
 }

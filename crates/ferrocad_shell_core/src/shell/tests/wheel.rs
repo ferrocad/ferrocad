@@ -2,8 +2,8 @@
 
 use super::*;
 
-/// T3: the action dock sits over the bottom-centre of the canvas, lists the dock
-/// surface, and its rows follow `IsActive` while staying visible when disabled.
+/// T3: the globals dock is a column on the canvas' left edge, lists the dock surface, and
+/// its rows follow `IsActive` while staying visible when disabled.
 #[gpui::test]
 fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
     let _guard = crate::PYTHON_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -20,17 +20,30 @@ fn the_action_dock_follows_the_selection(cx: &mut TestAppContext) {
     draw(&mut cx);
 
     let size = cx.update(|window, _| window.viewport_size());
-    let dock = cx.debug_bounds("action-dock").expect("the dock");
+    let dock = cx.debug_bounds("globals-dock").expect("the dock");
     assert!(
-        dock.origin.y > size.height * 0.6,
-        "the dock is at the bottom of the canvas"
+        dock.origin.x < size.width * 0.2,
+        "the dock is on the left edge (at {:?})",
+        dock.origin.x
     );
-    let centre = dock.center().x;
+    let centre = dock.center().y;
     assert!(
-        centre > size.width * 0.4 && centre < size.width * 0.6,
-        "the dock is centred (at {centre:?}, width {:?})",
-        size.width
+        centre > size.height * 0.3 && centre < size.height * 0.7,
+        "the dock is centred down the edge (at {centre:?}, height {:?})",
+        size.height
     );
+    assert!(
+        dock.size.height > dock.size.width / 2.0,
+        "it is a column, not a strip ({dock:?})"
+    );
+    // The rows stack down the edge in one column rather than running across it.
+    let undo = cx.debug_bounds("dock-App_Undo").expect("Undo");
+    let fit = cx.debug_bounds("dock-App_Fit").expect("Fit");
+    assert!(
+        undo.origin.y < fit.origin.y,
+        "the globals stack down (undo {undo:?}, fit {fit:?})"
+    );
+    assert_eq!(undo.origin.x, fit.origin.x, "in one column");
     assert!(
         cx.debug_bounds("dock-App_Delete").is_none(),
         "object verbs left the dock for the radial menu"
@@ -400,12 +413,12 @@ for _id, _command in (
     assert!(cx.debug_bounds("dock-App_Undo").is_some());
     assert!(cx.debug_bounds("dock-App_Fit").is_some());
     assert!(
-        cx.debug_bounds("dock-create-toggle").is_some(),
-        "the dock carries one Create Dock toggle, not the pills"
+        cx.debug_bounds("dock-create-toggle").is_none(),
+        "the create dock is permanent: nothing in the chrome folds it away"
     );
     assert!(
         cx.debug_bounds("create-dock").is_some(),
-        "the pills live in their own strip"
+        "the pills sit in the bottom row"
     );
     // The probe is a `Solid` tool, and it is the only creation tool here.
     assert!(
@@ -421,28 +434,29 @@ for _id, _command in (
         "a face verb is not a dock button"
     );
     assert!(cx.debug_bounds("dock-search").is_some());
-    // The strip sits **above** the dock, not inside it.
-    let strip = cx.debug_bounds("create-dock").expect("the strip");
-    let dock_row = cx.debug_bounds("action-dock").expect("the dock");
-    assert!(
-        strip.origin.y + strip.size.height <= dock_row.origin.y,
-        "the strip is above the dock ({strip:?} / {dock_row:?})"
-    );
 
-    // The two bottom bars must not collide. They share a baseline by design (the dock
-    // is centred, the hand column is bottom-left), so it is the **horizontal** gap that
-    // keeps them apart — this is the assertion the overflowing strip failed.
-    let dock = cx.debug_bounds("action-dock").expect("the dock");
+    // One bottom row, read left to right: the Modify hand's bar and then the Add hand's
+    // pills, which is what "one digit space" means on screen. The globals dock is the
+    // column on the left edge and must not sit on either of them.
+    let strip = cx.debug_bounds("create-dock").expect("the strip");
     let loadout = cx.debug_bounds("loadout-bar").expect("the hand column");
     assert!(
-        dock.origin.x >= loadout.origin.x + loadout.size.width,
-        "the dock ({dock:?}) clears the loadout bar ({loadout:?})"
+        strip.origin.x >= loadout.origin.x + loadout.size.width,
+        "the pills follow the loadout bar ({strip:?} / {loadout:?})"
     );
-    let intersect = dock.origin.x < loadout.origin.x + loadout.size.width
-        && loadout.origin.x < dock.origin.x + dock.size.width
-        && dock.origin.y < loadout.origin.y + loadout.size.height
-        && loadout.origin.y < dock.origin.y + dock.size.height;
-    assert!(!intersect, "the bars do not overlap ({dock:?} / {loadout:?})");
+    assert_eq!(
+        strip.center().y,
+        loadout.center().y,
+        "and share its baseline: one row, two hands"
+    );
+    let dock = cx.debug_bounds("globals-dock").expect("the dock");
+    for bar in [strip, loadout] {
+        let intersect = dock.origin.x < bar.origin.x + bar.size.width
+            && bar.origin.x < dock.origin.x + dock.size.width
+            && dock.origin.y < bar.origin.y + bar.size.height
+            && bar.origin.y < dock.origin.y + dock.size.height;
+        assert!(!intersect, "the dock clears the bottom row ({dock:?} / {bar:?})");
+    }
 
     // The caret opens the category flyout: the creation tool is a row, the verb is not.
     click_at(&mut cx, "creation-pill-0-caret");
@@ -1118,23 +1132,15 @@ for _id, _command in (
         shell.update(cx, |shell, cx| shell.cancel_tool(cx));
     });
 
-    // The dock's toggle hides the strip (and closes the flyout); the dock itself stays.
-    click_at(&mut cx, "dock-create-toggle");
-    draw(&mut cx);
-    assert!(
-        cx.debug_bounds("create-dock").is_none(),
-        "the toggle hides the strip"
-    );
-    assert!(
-        cx.debug_bounds("action-dock").is_some(),
-        "the dock is still there"
-    );
-    assert!(!shell.read_with(&cx, |shell, _| shell.creation.expanded()));
-    click_at(&mut cx, "dock-create-toggle");
-    draw(&mut cx);
+    // The strip is permanent: it is part of the bottom row and no control folds it away,
+    // so the six keys that address it always address something on screen.
     assert!(
         cx.debug_bounds("create-dock").is_some(),
-        "and shows it again"
+        "the strip is always drawn"
+    );
+    assert!(
+        cx.debug_bounds("dock-create-toggle").is_none(),
+        "and nothing on the chrome hides it"
     );
 
     let cleanup = crate::python::evaluate(

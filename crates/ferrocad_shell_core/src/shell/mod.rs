@@ -2121,11 +2121,10 @@ impl Render for Shell {
                         cx,
                     )),
             )
-            // The hand and the Move form share the dock's baseline, bottom-left: the
-            // loadout is switchable by key, click and the wheel alike, and the pending
-            // move's coordinates sit directly above it instead of floating over the
-            // handles. A column, not a row: stacked to the left, the pair never reaches
-            // the centred action dock on a narrower window.
+            // The two hands share the bottom-left corner: the pending move's coordinates sit
+            // directly above the row instead of floating over the handles, and the row grows
+            // to the right — loadout first, then the create dock — so the pair reads as one
+            // loadout and the canvas' centre stays free for the armed tool's pill.
             .child({
                 let inspect_visible = self.loadout.slot().is_inspect()
                     && self.active_tool.is_none()
@@ -2135,6 +2134,10 @@ impl Render for Shell {
                     .absolute()
                     .bottom(px(12.))
                     .left(px(16.))
+                    // A definite width, so the row can wrap when an edition registers more
+                    // categories than the canvas has room for. The column paints nothing of
+                    // its own, so this only bounds its children.
+                    .right(px(16.))
                     .flex()
                     .flex_col()
                     .items_start()
@@ -2144,32 +2147,66 @@ impl Render for Shell {
                     .when(inspect_visible, |el| {
                         el.child(crate::chrome::inspect_bar(self.loadout, cx))
                     })
-                    .child(crate::chrome::loadout_bar(
-                        self.loadout,
-                        self.gizmo_mode,
-                        // The hand cannot change under an uncommitted move **or** while an
-                        // armed creation tool owns the canvas: that is the mutual
-                        // exclusion the two hands promise.
-                        self.move_is_pending(cx) || self.active_tool.is_some(),
-                        cx,
-                    ))
+                    .child({
+                        // One row, the loadout's own: the Modify hand's slots and then
+                        // the Add hand's pills, which is what "the same digit space"
+                        // means on screen. The row wraps only when an edition registers
+                        // so many categories that it would leave the canvas.
+                        let mut row = div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(6.));
+                        row = row.child(crate::chrome::loadout_bar(
+                            self.loadout,
+                            self.gizmo_mode,
+                            // The hand cannot change under an uncommitted move **or** while
+                            // an armed creation tool owns the canvas: that is the mutual
+                            // exclusion the two hands promise.
+                            self.move_is_pending(cx) || self.active_tool.is_some(),
+                            cx,
+                        ));
+                        if let Some(strip) = crate::chrome::create_dock(
+                            &model.surfaces().creation,
+                            &self.creation,
+                            &model,
+                            self.move_is_pending(cx) || self.pending_interaction.is_some(),
+                            self.pill_holding(),
+                            cx,
+                        ) {
+                            row = row.child(strip);
+                        }
+                        row
+                    })
             })
-            // Stack, do not swap: the tool's pill goes above the create dock above the
-            // dock, so the loadout stays in place and the column grows upward from a
-            // fixed baseline.
-            .child(
-                crate::chrome::action_dock(
+            // The globals (and Search) are a column on the canvas' left edge: the bottom
+            // belongs to the two hands and to the armed tool's pill.
+            .child(crate::chrome::globals_dock(
+                &model,
+                self.move_is_pending(cx) || self.pending_interaction.is_some(),
+                cx,
+            ))
+            // The armed tool's own pill, bottom-centre, above nothing: the dock it used to
+            // sit over has moved to the left edge.
+            .child(match active_tool {
+                Some(tool) => crate::chrome::tool_strip(tool, self.tool_field_edit(), cx)
+                    .into_any_element(),
+                None => div().into_any_element(),
+            })
+            // The creation flyout is a canvas overlay like the wheel: the pills it hangs
+            // from live in the bottom-left row now, and the panel is placed by the press.
+            .child(if self.popover_open("create") {
+                crate::chrome::creation_flyout_overlay(
                     &model,
                     &self.creation,
-                    self.popover_open("create"),
                     self.popover_anchor,
-                    self.move_is_pending(cx) || self.pending_interaction.is_some(),
-                    self.pill_holding(),
-                    active_tool.map(|tool| (tool, self.tool_field_edit())),
                     cx,
                 )
-                .into_any_element(),
-            )
+                .unwrap_or_else(|| div().into_any_element())
+            } else {
+                div().into_any_element()
+            })
             .child(self.wheel.clone().into_any_element());
         if let Some(note) = self.gpu_notice.clone() {
             canvas = canvas.child(gpu_notice_banner(note, cx));

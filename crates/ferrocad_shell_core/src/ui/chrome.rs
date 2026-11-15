@@ -1228,14 +1228,13 @@ fn popover_with_tabs(
     menu_with_tabs(key, info, tabs, rows, on_tab, on_row, on_dismiss)
 }
 
-/// A vertical 1 px divider between dock groups.
-fn dock_divider(id: usize) -> impl IntoElement {
+/// The hairline that separates groups in the **vertical** globals dock.
+fn dock_rule(id: usize) -> impl IntoElement {
     div()
-        .id(SharedString::from(format!("dock-divider-{id}")))
-        .debug_selector(move || format!("dock-divider-{id}"))
-        .w(px(1.))
-        .h(px(16.))
-        .mx_1()
+        .id(SharedString::from(format!("dock-rule-{id}")))
+        .debug_selector(move || format!("dock-rule-{id}"))
+        .h(px(1.))
+        .my_1()
         .bg(rgba(CHROME_LINE))
 }
 
@@ -1663,67 +1662,54 @@ fn tool_pill(
         .into_any_element()
 }
 
-/// The bottom-centre column: the armed tool's pill, the create dock, and the action
-/// dock, bottom-anchored in that order (top to bottom).
+/// The globals dock: `Undo`, `Redo`, `Fit` and Search, as a vertical pill on the
+/// canvas' **left edge**, centred down it.
 ///
-/// **The strict contract.** The dock row itself holds exactly
+/// **The strict contract.** It holds exactly the `dock`-surface globals and Search:
 ///
 /// ```text
-/// [ Undo  Redo  Fit │ ⊕ Create Dock ^ │ Search (Ctrl+K) ]
+/// [ Undo ]
+/// [ Redo ]
+/// [ Fit  ]
+/// [------]
+/// [ Search (Ctrl+K) ]
 /// ```
 ///
-/// — the `dock`-surface globals, the strip's toggle and Search. It never grows a
-/// horizontal list of creation or modification buttons: a creation tool declares
-/// `FerroCAD_Surface: "creation"` and gets a pill of its own in the create dock above, a
-/// shape verb declares `"radial"` or `"palette"` and appears in the wheel or only in
-/// Search. A dock full of verbs is a toolbar, and the Add hand exists precisely so it is
-/// not one.
+/// It never grows a list of creation or modification buttons — a creation tool declares
+/// `FerroCAD_Surface: "creation"` and gets a pill of its own in the create dock beside the
+/// Modify hand, a shape verb declares `"radial"` or `"palette"` and appears in the wheel or
+/// only in Search. A dock full of verbs is a toolbar.
 ///
-/// `blocked` is a pending transform or manipulator: the dock then dims to 45 % and its
-/// clicks are dropped, exactly as the hand column does, so a second command cannot be
-/// started underneath an uncommitted one. `tool` is the armed tool's status (with the
-/// field being typed into, if any): its pill is **added above** the strip rather than
-/// swapped for it, so a session never takes the loadout out of the user's hands.
-pub(crate) fn action_dock(
+/// It is a column on the left because the bottom of the canvas belongs to the two hands:
+/// the Modify bar and the create dock share one row down there, and the armed tool's pill
+/// takes the centre. `blocked` (a pending transform or manipulator) dims the dock to 45 %
+/// and drops its clicks, exactly as the hand column dims.
+pub(crate) fn globals_dock(
     model: &ShellModel,
-    creation: &CreationDock,
-    open: bool,
-    anchor: Option<Point<Pixels>>,
     blocked: bool,
-    holding: bool,
-    tool: Option<(
-        &ToolStatus,
-        Option<&crate::shell::panels::tool_fields::ToolFieldEdit>,
-    )>,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let groups = model.surfaces();
-    let dock = groups.dock;
+    let dock = model.surfaces().dock;
     let mut panel = div()
-        .id("action-dock")
-        .debug_selector(|| "action-dock".to_string())
-        // Only the pill owns the hitbox; the wrapper stays transparent so clicks
-        // beside it still reach the canvas.
+        .id("globals-dock")
+        .debug_selector(|| "globals-dock".to_string())
+        // The pill owns the hitbox: the wrapper below is only a placement box, so clicks
+        // beside the glass still reach the canvas.
         .occlude()
-        // A flex item may grow to its parent's width; the dock is a strip whose width
-        // is its content, so the bottom-left hand column is never covered.
         .flex_none()
         .flex()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
+        .flex_col()
+        .items_start()
         .gap_1()
-        .px_2()
+        .px_1()
         .py_1()
         .rounded_md()
         .bg(rgba(DOCK_BG))
         .border_1()
         .border_color(rgba(DOCK_BORDER))
+        .text_xs()
         .when(blocked, |el| el.opacity(0.45));
 
-    // The dock is the **creation + global** surface: object verbs live in the
-    // in-situ radial menu, so this strip never swaps width when the selection
-    // changes.
     let mut rendered = false;
     for command in dock {
         // A dev-only command is a diagnostics entry: the Dev Tools list and the app
@@ -1738,8 +1724,8 @@ pub(crate) fn action_dock(
         let id = command.id.clone();
         let enabled = command.enabled;
         let checked = command.checked;
-        // The dock is a command strip, not a checklist: checked/live state is
-        // **accent ink**, and the background is reserved for an additive hover.
+        // The dock is a command strip, not a checklist: checked/live state is **accent
+        // ink**, and the background is reserved for an additive hover.
         let ink = if !enabled {
             MUTED
         } else if checked {
@@ -1748,8 +1734,8 @@ pub(crate) fn action_dock(
             FG
         };
         let hover_ink = if checked { ACTIVE_ACCENT } else { FG };
-        // The glyph is a secondary mark beside the label, so it takes the same ink
-        // as the text: muted when disabled, accented when the command is live.
+        // The glyph is a secondary mark beside the label, so it takes the same ink as the
+        // text: muted when disabled, accented when the command is live.
         let glyph = command_glyph(command, icon::ROW, ink).map(|glyph| {
             div()
                 .debug_selector({
@@ -1792,47 +1778,7 @@ pub(crate) fn action_dock(
     }
 
     if rendered {
-        panel = panel.child(dock_divider(2));
-    }
-    // The Add hand: **one** control in the dock. The pills themselves are their own
-    // strip above this one (`create_dock`), so the dock stays the strict contract
-    // `[ Undo Redo Fit │ ⊕ Create Dock │ Search ]` however many tools an edition has.
-    if creation_pill_tools(&groups.creation, creation).is_empty() {
-        // No creation tools at all (a bare composition): the toggle would do nothing.
-    } else {
-        let expanded = creation.expanded();
-        panel = panel.child(
-            div()
-                .id("dock-create-toggle")
-                .debug_selector(|| "dock-create-toggle".to_string())
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_1()
-                .px_2()
-                .py_1()
-                .rounded_sm()
-                .text_xs()
-                .text_color(rgb(if expanded { FG } else { MUTED }))
-                .when(!blocked, |el| {
-                    el.cursor_pointer()
-                        .hover(|style| style.bg(rgba(ROW_HOVER)).text_color(rgb(FG)))
-                })
-                .child("⊕")
-                .child("Create Dock")
-                .child(
-                    div()
-                        .debug_selector(|| "dock-create-toggle-caret".to_string())
-                        .text_color(rgb(MUTED))
-                        .child(if expanded { "^" } else { "▾" }),
-                )
-                .when(!blocked, |el| {
-                    el.on_click(cx.listener(|this, _event, _window, cx| {
-                        this.toggle_create_dock(cx);
-                    }))
-                }),
-        );
-        panel = panel.child(dock_divider(3));
+        panel = panel.child(dock_rule(1));
     }
     panel = panel.child(
         div()
@@ -1866,34 +1812,52 @@ pub(crate) fn action_dock(
             .on_click(cx.listener(|this, _event, _window, cx| this.open_palette(cx))),
     );
 
-    // A column, bottom-anchored: the armed tool's pill sits **above** the create dock,
-    // which sits above the action dock. A row is added upward when a session starts, so
-    // the dock keeps its baseline and the strip keeps its own row — activating a tool
-    // never swaps the loadout away.
-    let mut column = div()
+    // The placement box: full height on the left edge, transparent and with no hitbox of
+    // its own, so the canvas behind it still takes the pointer. The pill inside is
+    // content-sized and centred vertically, above the hand column at the bottom.
+    div()
+        .absolute()
+        .left(px(16.))
+        .top(px(0.))
+        .bottom(px(0.))
+        .flex()
+        .flex_col()
+        .justify_center()
+        .child(panel)
+}
+
+/// The armed tool's pill, centred over the bottom of the canvas.
+///
+/// The create dock now shares the bottom row with the Modify hand, so the tool's surface
+/// is the bottom-centre thing on its own: it appears while a session runs and takes no
+/// space otherwise. The wrapper is absolute, so the canvas rectangle never moves.
+pub(crate) fn tool_strip(
+    status: &ToolStatus,
+    edit: Option<&crate::shell::panels::tool_fields::ToolFieldEdit>,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    div()
         .absolute()
         .left(px(0.))
         .right(px(0.))
         .bottom(px(12.))
         .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(6.));
-    if let Some((status, edit)) = tool {
-        column = column.child(tool_pill(status, edit, cx));
-    }
-    if creation.expanded()
-        && let Some(strip) = create_dock(&groups.creation, creation, model, blocked, holding, cx)
-    {
-        column = column.child(strip);
-    }
-    column = column.child(panel);
-    // The flyout hangs off the dock rather than off one pill: the strip and the dock
-    // must not each draw a copy, and it is positioned by the press, not by a pill's box.
-    if open && let Some(flyout) = creation_flyout(&groups.creation, creation, model, anchor, cx) {
-        column = column.child(flyout);
-    }
-    column
+        .justify_center()
+        .child(tool_pill(status, edit, cx))
+}
+
+/// The creation flyout as its own overlay, anchored at the pointer that opened it.
+///
+/// It used to hang off the bottom-centre column; now that the create dock lives beside the
+/// Modify hand, the flyout is a canvas overlay like the wheel.
+pub(crate) fn creation_flyout_overlay(
+    model: &ShellModel,
+    creation: &CreationDock,
+    anchor: Option<Point<Pixels>>,
+    cx: &mut Context<Shell>,
+) -> Option<AnyElement> {
+    let groups = model.surfaces();
+    creation_flyout(&groups.creation, creation, model, anchor, cx)
 }
 
 /// How many tools a category's flyout numbers. A category is a short list, and the top
@@ -1986,14 +1950,17 @@ pub(crate) fn creation_pill_tools<'a>(
         .collect()
 }
 
-/// The create dock: one pill per creation category, in a strip of its own above the
-/// action dock.
+/// The create dock: one pill per creation category, in the bottom row right after the
+/// Modify hand's bar.
 ///
-/// It is a **loadout**, not a menu: each pill names the tool its category was left on,
-/// so an edition's whole creation set is visible in one row and one click away. The row
-/// lives here rather than inside the action dock so the dock keeps its strict contract
-/// (`[ Undo Redo Fit │ ⊕ Create Dock │ Search ]`) and never grows a list of tools.
-fn create_dock(
+/// It is a **loadout**, not a menu: each pill names the tool its category was left on, so
+/// an edition's whole creation set is visible in one row and one click away. The row is
+/// permanent — there is no control that folds it away, because a loadout that can be put
+/// away is not a loadout, and the six keys that address it would then address nothing.
+///
+/// It is deliberately **not** part of the globals dock: that pill holds `Undo`/`Redo`/`Fit`
+/// and Search and nothing else, so the globals never change width with an edition.
+pub(crate) fn create_dock(
     creation: &[&CommandInfo],
     dock: &CreationDock,
     model: &ShellModel,

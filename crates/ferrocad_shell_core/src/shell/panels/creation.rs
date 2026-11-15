@@ -16,9 +16,9 @@
 //!   digit space addresses both hands. Pressing a key arms that pill's tool; pressing it
 //!   again steps the pill to the next tool of its category, so a key walks a slot the way
 //!   `1` walks Move ⇄ Rotate. The strip is the **continuation** of the action loadout, and
-//!   arming a tool adds a pill of its own above it rather than replacing it. The action
-//!   dock carries a single `⊕ Create Dock ^` toggle, which shows and hides the strip, so
-//!   the strip is never mixed into the dock's own row.
+//!   arming a tool adds a pill of its own above it rather than replacing it. The strip is
+//!   always on screen: it sits in the bottom row right after the Modify hand's bar, and no
+//!   control hides it — a loadout that can be put away is not a loadout.
 //!
 //! The radial menu's `Create ▸` commits through the same path, so a wheel flick loads a
 //! pill and arms the tool at the pointer.
@@ -41,20 +41,17 @@ pub(crate) const CREATION_SLOTS: usize = 5;
 /// the canvas rather than inventing a meaning for it.
 pub(crate) const CREATION_KEYS: [&str; CREATION_SLOTS] = ["5", "6", "7", "8", "9"];
 
-/// The Add hand's state: which tool each category remembers, the last tool armed, the
-/// flyout's tab, and whether the strip is showing.
+/// The Add hand's state: which tool each category remembers, the last tool armed, and the
+/// flyout's tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CreationDock {
     /// The tool each category remembers, by command id.
     memory: HashMap<String, String>,
     /// The tool last armed overall: the pill's accent, `PILL_HOLD`, and the key re-press
-    /// (a second press opens that pill's flyout instead of re-arming).
+    /// (a second press steps the slot instead of re-arming it).
     active: Option<String>,
     /// The flyout's category tab while it is open.
     tab: Option<String>,
-    /// Whether the create dock (the strip of pills) is showing. View state: the dock's
-    /// `⊕ Create Dock` toggle flips it, and it is not saved with the document.
-    expanded: bool,
 }
 
 impl Default for CreationDock {
@@ -63,7 +60,6 @@ impl Default for CreationDock {
             memory: HashMap::new(),
             active: None,
             tab: None,
-            expanded: true,
         }
     }
 }
@@ -82,20 +78,6 @@ impl CreationDock {
     /// The flyout's open tab.
     pub(crate) fn tab(&self) -> Option<&str> {
         self.tab.as_deref()
-    }
-
-    /// Whether the create dock is showing.
-    pub(crate) fn expanded(&self) -> bool {
-        self.expanded
-    }
-
-    /// Show or hide the create dock; returns the new state.
-    pub(crate) fn toggle_expanded(&mut self) -> bool {
-        self.expanded = !self.expanded;
-        if !self.expanded {
-            self.tab = None;
-        }
-        self.expanded
     }
 
     /// Record that `id` (in `category`) is now the armed tool.
@@ -391,18 +373,6 @@ impl Shell {
         self.run_command(&command.id, cx);
         true
     }
-
-    /// Show or hide the create dock (the strip of pills above the action dock).
-    ///
-    /// Hiding it closes the flyout too: the flyout hangs from a pill that is no longer
-    /// on screen.
-    pub(crate) fn toggle_create_dock(&mut self, cx: &mut Context<Self>) {
-        let expanded = self.creation.toggle_expanded();
-        if !expanded {
-            self.close_popover(cx);
-        }
-        cx.notify();
-    }
 }
 
 #[cfg(test)]
@@ -437,19 +407,6 @@ mod tests {
 
         dock.close_tab();
         assert_eq!(dock.tab(), None);
-    }
-
-    /// The strip is view state: the dock's `⊕ Create Dock` toggle flips it, and hiding
-    /// it closes the flyout (which hangs from a pill that is no longer on screen).
-    #[test]
-    fn the_strip_is_shown_by_default_and_toggles() {
-        let mut dock = CreationDock::default();
-        assert!(dock.expanded(), "a fresh session shows the strip");
-        dock.open_tab("Sketch");
-        assert!(!dock.toggle_expanded());
-        assert_eq!(dock.tab(), None, "hiding the strip closes its flyout");
-        assert!(dock.toggle_expanded());
-        assert_eq!(dock.tab(), None, "showing it again starts closed");
     }
 
     /// The Add hand's keys continue the Modify hand's: the loadout bar owns `0`–`3`, so

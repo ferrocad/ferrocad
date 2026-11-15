@@ -404,7 +404,7 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
     draw(&mut cx);
 
     let idle_canvas = cx.debug_bounds("main-canvas").expect("the canvas");
-    assert!(cx.debug_bounds("action-dock").is_some(), "the idle dock");
+    assert!(cx.debug_bounds("globals-dock").is_some(), "the idle dock");
     assert!(
         cx.debug_bounds("tool-strip").is_none(),
         "no active-action surface while idle"
@@ -431,10 +431,10 @@ fn an_active_tool_overlays_the_canvas_without_moving_it(cx: &mut TestAppContext)
     assert_eq!(active_canvas.size.width, idle_canvas.size.width);
     assert_eq!(active_canvas.size.height, idle_canvas.size.height);
 
-    // Stack, do not swap: the idle dock stays and the tool's pill is added above it, so
-    // activating a tool never takes the loadout (or `Search`) off the screen.
+    // Stack, do not swap: the dock keeps its column and the tool's pill is added over the
+    // canvas' bottom, so activating a tool never takes the chrome off the screen.
     assert!(
-        cx.debug_bounds("action-dock").is_some(),
+        cx.debug_bounds("globals-dock").is_some(),
         "the dock is still rendered during a session"
     );
     assert!(

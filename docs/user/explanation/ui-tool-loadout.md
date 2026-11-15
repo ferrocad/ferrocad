@@ -93,6 +93,11 @@ skipped rather than selected.
   **completion row** appears in the bottom-left column, directly above the slots, with the
   tool's name, its numbers or point count, its hint and the `✗`/`✓` pair. The slots, the
   dock and Search stay where they were while you draw.
+- **The camera still works while a pill is armed.** Dragging anywhere — over the plane,
+  over a body, over empty space — orbits the view exactly as it does with no tool: a press
+  is only a click once you let go without moving. Release in place and the tool places its
+  next point; drag and the view turns and nothing is placed. The middle button navigates
+  anywhere, including mid-session.
 - Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
   category with no tools is not shown) and only that category's tools below it. Picking a
   tool puts it in its pill and starts it; clicking a **category** tab just shows that

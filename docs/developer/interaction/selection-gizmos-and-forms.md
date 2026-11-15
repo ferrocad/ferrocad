@@ -152,13 +152,25 @@ selection. The rule is therefore:
 - **Tap vs flick:** a release within **200 ms** and **12 px** of the press latches (the
   trackpad case). A release over a wedge commits regardless of time. A long hold
   released in the deadzone cancels.
-- **Categories.** A ring is capped at `MAX_WEDGES` (8) so its labels cannot collide, which
-  means a workbench's verbs are grouped rather than listed: a radial command may declare
-  `FerroCAD_WheelGroup`, and the group is one wedge (`Booleans`, `Surface`, `Edge`,
-  `Modify`, `Workplane`). The shell partitions the offered verbs, drops a disabled child,
-  omits an empty group, and collapses a group with one child into that child. A category
-  wedge paints a `▸`; the open group's name sits in the hollow centre. Committing a
-  category descends instead of emitting an id, so a group id never reaches the registry.
+- **A stable root.** The direct verbs (a radial command with no `FerroCAD_WheelGroup`)
+  are root wedges **whatever the target kind**, so `Move` is north and `Delete` south in
+  every context: picking a face must not make the object verbs vanish. The root is
+  therefore at most seven labels — `Move`, `Rotate`, `Toggle visibility`,
+  `Workplane ▸`, `Create ▸`, `Modify ▸`, `Delete` — however many verbs a workbench
+  registers.
+- **Categories carry the context.** `Workplane ▸` holds `Set WP`/`Save WP`;
+  `Create ▸` holds the Add hand's categories (`Sketch ▸`, `Solid ▸`, `Surface ▸`, …) and
+  their tools; `Modify ▸` holds every object and sub-shape verb, bucketed one level
+  deeper (`Surface ▸`, `Edge ▸`, `Booleans ▸`) only when the verbs do not fit a ring.
+  A child that does not apply to the target, or whose `IsActive` is false, is not
+  offered; a category with nothing left is omitted.
+- **The cap.** A ring is clamped to `MAX_WEDGES` (8) by the widget, and the shell's
+  grouping keeps the built-in sets inside it, so labels cannot collide. A category wedge
+  paints a `▸`, and committing one descends instead of emitting an id — a group id never
+  reaches the registry.
+- **The hub.** At depth > 0 the hollow centre names the open category and paints
+  `◂ Back`: the deadzone click and `Backspace` both ascend, so the hierarchy is
+  discoverable without a second chrome layer.
 - **Overlay:** the sidecar's overlay `occlude`s only its own square, so the canvas is
   still live around it. It carries its own `on_mouse_move` because occlusion hides the
   canvas hover.

@@ -581,14 +581,55 @@ child, flick past the rim, dwell, the eight-wedge guard); `ferrocad_shell_core` 
 (`the_factory_builds_the_dress_up_slot_three_names`); `ferrocad_parametric` gained
 `the_slot_three_chamfer_mode_drives_the_document`; `chrome_surfaces` **6** cases.
 
+### Step 9 — a stable wheel root, the Add hand's two slots, and profile gates
+
+Three follow-ups from the live window:
+
+- **The wheel's root stopped reflowing.** Every root verb was filtered by the target
+  kind, so picking a **face** made `Move` and `Rotate` disappear; and the no-selection
+  fallback offered every creation tool flat, which was nine wedges — over the eight-wedge
+  cap (a debug build asserted on it). The root is now the *direct* verbs (no
+  `FerroCAD_WheelGroup`) on every target: `Move`, `Rotate`, `Toggle visibility`,
+  `Workplane ▸`, `Create ▸`, `Modify ▸`, `Delete` — seven, whatever the edition
+  registers. The target filters the **children**: `Modify ▸` holds the object/sub-shape
+  verbs (bucketed into `Surface ▸`/`Edge ▸`/`Booleans ▸` only when they exceed a ring),
+  `Create ▸` holds the creation categories and their tools, `Workplane ▸` the two
+  workplane verbs. A category with no applicable child is omitted. The hollow centre now
+  paints `◂ Back` beside the open category's name.
+- **The Add hand is two fixed slots.** The dock's single memory pill became
+  `⊕ Sketch: <tool> ▾` (Slot `4`) and `⊕ Solid: <tool> ▾` (Slot `5`, which also carries
+  Surface/Text/Mesh so a mod's tool has a home), with `4`/`5` arming the slot's tool and
+  a second press opening the flyout. The flyout shows **one category at a time** behind
+  a segmented header (`Sketch | Solid | Surface | …`, empty categories omitted), and
+  remembers the last tool per category: a tab click points the family's slot at it
+  without arming, a row click binds and runs it. The wheel's `Create ▸` commits through
+  the same path, so a flick loads the slot and arms the tool at the pointer.
+- **`Loft`/`Sweep` say what they need.** Their gate is `profile:2`, a new
+  `ElementKind::Profile` that a body, a face **or** a wire satisfies, and the hint reads
+  `select at least 2 profiles` instead of `select at least 2 bodies`.
+
+Also fixed: `the_move_hud_anchors_to_the_gizmo_not_the_pointer` compared a projection
+across a re-layout (the hover changes the status line, which can move the canvas) and
+failed once the dock grew; it now re-reads the gizmo's projection after the move, which
+is the invariant it means to test.
+
+**Measured.** `ferrocad_shell_core` **306** (`the_root_ring_is_stable_and_the_categories_carry_the_context`,
+`grouped_verbs_live_under_their_category`,
+`the_creation_slots_remember_a_tool_per_category`, plus three `CreationDock` unit cases);
+`ferrocad_widgets` **76** (13 wheel, incl. the centre-hub `◂ Back`); `ferrocad_shell_api`
+**75** (`a_profile_gate_names_profiles_and_accepts_any_closed_reference`);
+`ferrocad_simplecad` `chrome_surfaces` **6** (the profile gate and the `Surface` group);
+`run_tests.py --extension base` **718/0/0/8** and `--extension workbenches` **881/0/0/3**,
+unchanged; `--check-init` OK, `xtask editions --check` green.
+
 ### Measured
 
 | Check | Result |
 | --- | --- |
 | `ferrocad_simplecad` | **10** selection verbs + **9** loadout + **6** drawing + **4** face-hosted + **6** chrome-surface cases |
-| `ferrocad_stage` / `ferrocad_viewport` / `ferrocad_shell_api` | **303** / **237** / **74** |
+| `ferrocad_stage` / `ferrocad_viewport` / `ferrocad_shell_api` | **303** / **237** / **75** |
 | `ferrocad_parametric` / `ferrocad_toy` / `ferrocad_part_gui` | all green (42 part_gui, 18 toy unit) |
-| `ferrocad_shell_core` / `ferrocad_widgets` | **302** / **76** (the wheel-hierarchy and Slot 3 cases included) |
+| `ferrocad_shell_core` / `ferrocad_widgets` | **306** / **76** (the wheel hierarchy, the Add hand's slots and Slot 3) |
 | `run_tests.py --extension base` / `workbenches` | **718 / 0 / 0 / 8**, **881 / 0 / 0 / 3** |
 | `--check-init` (both editions) | `ferrocad: init OK` |
 | `xtask editions --check` | green, 14 editions (no dependency change) |

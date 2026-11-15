@@ -43,7 +43,7 @@ inventory, tool strip, tokens and slice plan are in
 | | Add hand (creation pill) | Modify hand (transform loadout) |
 | --- | --- | --- |
 | Chrome anchor | centre action bar (bottom-centre) | loadout bar (bottom-left, `left: 16 px`, `bottom: 12 px`) |
-| Slots | 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
+| Slots | 2 fixed creation slots (`4` Sketch, `5` Solid/Surface) over 5 categories (Sketch / Solid / Surface / Text / Mesh) | 4 slots (`1` Move/Rotate, `2` Push/Pull, `3` Fillet⇄Chamfer, `0` Inspect) |
 | Governs | what you make, and which surface/edge it anchors to | what a pick targets, and which manipulator is hosted |
 | Active state | IDLE → HOVER → EXPANDED → ARMED (the action bar swaps to the tool strip) | Equipped → hover-to-arm (30 %) → Pending (the context gate refuses a switch) |
 | Topology binding | WP: place on the grid · Body: feature from a profile · Face: place on the face `+N` · Edge: place along the edge | Body: `TransformGizmo` · Face: `PushPullStem` · Edge: `DressUpScrubber` · Inspect: highlight only |
@@ -53,8 +53,17 @@ The placement, idle:
 
 ```
 Bottom-left (Modify)                                  Bottom-centre (Add, idle)
-[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]      [ Undo  Redo  Fit │ ⊕ Box ▾ │ Search (Ctrl+K) ]
+[ 1 Move │ 2 Push/Pull │ 3 Fillet │ 0 Inspect ]      [ Undo  Redo  Fit │ ⊕ Sketch: Line ▾ │ ⊕ Solid: Box ▾ │ Search (Ctrl+K) ]
 ```
+
+The Add hand is **two slots**, not one remembered tool: `4` is the Sketch family and
+`5` is Solid/Surface (plus any other category an edition registers, so a mod's tool has a
+home). Each slot's `▾` opens the flyout, which shows one category at a time behind a
+segmented header (`Sketch | Solid | Surface | …`, empty categories omitted); picking a
+tool fills its family's slot and its category's memory, and clicking a tab points the
+slot at that category's remembered tool without arming anything. `4`/`5` arm the slot's
+tool, and a second press while it runs opens the flyout. The first press from another
+hand is not a toggle — the slot keeps the tool it was left on.
 
 Slot 3 reads `3 Fillet` until you press `3` again, which toggles it to `3 Chamfer` (and
 back). The other slots keep one verb each; Slot 1 (`Move`/`Rotate`) and Slot 3
@@ -110,7 +119,9 @@ reads. Enablement is a `TopologyGate` over `(kind, arity)` derived from the sele
 
 - Profile-consuming tools (`Prism`, `Revolution`, `Loft`, `Sweep`, `Face from Wire`) are
   enabled iff the selection resolves to a closed profile (`Wire`) with enough references
-  (2 for `Loft`/`Sweep`).
+  (2 for `Loft`/`Sweep`). The declaration is `FerroCAD_Gate: "profile:2"`: a **profile** is
+  a whole body, a face or a wire — any of the three satisfies it — and the hint says
+  `select at least 2 profiles` rather than claiming two bodies.
 - A body tool is enabled for a body; a spatial tool places on a face, an edge, or the
   workplane fallback.
 - **The slot is irrelevant.** A tool does not fail because the Modify hand is parked in

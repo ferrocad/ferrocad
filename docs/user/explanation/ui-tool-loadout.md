@@ -58,6 +58,26 @@ supplies the matching manipulator (the Part workbench does); Move and Inspect ar
 available. Inspect is its own selection hand, not a paused Move: it shows no handles and
 adds no numeric surface.
 
+## The Add hand
+
+The bottom-centre bar carries **two creation slots** beside the globals and Search:
+
+```
+[ Undo  Redo  Fit │ ⊕ Sketch: Line ▾ │ ⊕ Solid: Box ▾ │ Search (Ctrl+K) ]
+```
+
+- **Slot `4`** is the Sketch family: the drawing tools. `4` arms the slot's tool; `4`
+  again opens its category list.
+- **Slot `5`** is Solid/Surface (and anything else an edition registers). `5` behaves the
+  same way, and the pill names its tool's own category, so a Surface tool reads
+  `⊕ Surface: Loft ▾`.
+
+Clicking `▾` opens a flyout with a category header (`Sketch | Solid | Surface | …`; a
+category with no tools is not shown) and only that category's tools below it. Picking a
+tool puts it in its slot and starts it; clicking a **category** tab just shows that
+category's tools and points the slot at the tool it was last left on, so nothing starts
+until you pick one.
+
 Each hand has its own page: [Move](ui-move.md), [Rotate](ui-rotate.md), [Extrude](ui-extrude.md)
 and [Fillet](ui-fillet.md).
 

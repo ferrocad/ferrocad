@@ -10,10 +10,22 @@ with the destructive slot last, so the dangerous verb never moves when a new one
 added. In a four-slot wheel that puts it at the south position. A hand-changing verb
 such as `Rotate` equips the new hand immediately; its handles re-arm on the next pick.
 
-A ring never holds more than **eight** wedges, so verbs that belong together share one:
-a wedge whose label ends in `▸` is a **category** (`Workplane ▸`, `Booleans ▸`,
-`Surface ▸`), and opening it shows its verbs in the same ring position. The open
-category's name sits in the hollow centre.
+The **root ring always shows the same compass** — `Move`, `Rotate`, `Toggle visibility`
+and `Delete` — whatever you point at, plus the categories that apply. Its verbs never
+disappear because you picked a face instead of a body.
+
+A ring never holds more than **eight** wedges, so verbs that belong together share one: a
+wedge whose label ends in `▸` is a **category** (`Workplane ▸`, `Create ▸`, `Modify ▸`),
+and opening it swaps the ring in place to its verbs. The hollow centre then names the
+category and reads `◂ Back`: click it (or press `Backspace`) to go back up.
+
+- `Workplane ▸` — `Set WP`, `Save WP`.
+- `Create ▸` — the Add hand: `Sketch ▸`, `Solid ▸`, `Surface ▸`, each holding that
+  category's tools. Running one binds it to its dock slot **and** arms it where you are
+  pointing, exactly as the creation pill does.
+- `Modify ▸` — everything that edits what is already there (`Shell`, `Draft`,
+  `FillHole`, the booleans, `Offset`, `Chamfer`…), filtered to what the thing under the
+  pointer can actually use.
 
 <div class="fc-tabs" data-fc-tabs>
 <div class="fc-tabs__bar" role="tablist" aria-label="Which host draws the figure">
@@ -23,7 +35,7 @@ category's name sits in the hollow centre.
 <figure class="fc-tabs__panel" data-fc-panel="desktop" role="tabpanel">
 <img src="../images/ui-wheel-menu-window.png" alt="The wheel menu highlighted in the desktop application window">
 <img class="fc-tabs__closeup" src="../images/ui-wheel-menu.png" alt="Close-up of the wheel menu">
-<figcaption><strong>Desktop</strong> — the wheel opened over the canvas, with the toolbar, loadout and action bar around it. The structural verbs are Move, Rotate, Toggle visibility and `Workplane ▸` (which opens Set WP and Save WP); Delete is the destructive slot, ordered last.</figcaption>
+<figcaption><strong>Desktop</strong> — the wheel opened over the canvas, with the toolbar, loadout and action bar around it. Move, Rotate and Toggle visibility are root verbs beside the `Workplane ▸`, `Create ▸` and `Modify ▸` categories; Delete is the destructive slot, ordered last.</figcaption>
 </figure>
 <figure class="fc-tabs__panel" data-fc-panel="web" role="tabpanel">
 <img src="../images/ui-wheel-menu-web-window.png" alt="The wheel menu highlighted in the browser build">
